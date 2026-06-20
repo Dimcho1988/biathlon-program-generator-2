@@ -215,9 +215,12 @@ def render_team_page(bundle: dict[str, Any]) -> None:
                 unsafe_allow_html=True,
             )
             if st.button("Отвори профила", key=f"open_{athlete_id}", width="stretch"):
-                st.session_state.athlete_id = athlete_id
-                st.session_state.nav_page = "dashboard"
-                st.query_params.from_dict({"page": "dashboard", "athlete": athlete_id})
+                # Не променяме директно st.session_state.athlete_id/nav_page тук,
+                # защото тези ключове вече са свързани със sidebar widgets.
+                # Променяме само URL параметрите и при следващия rerun sync_navigation()
+                # ще синхронизира избрания спортист и страницата преди widget-ите да се създадат.
+                st.query_params["page"] = "dashboard"
+                st.query_params["athlete"] = athlete_id
                 st.rerun()
 
     st.info(
