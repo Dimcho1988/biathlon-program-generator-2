@@ -11,6 +11,8 @@ import streamlit as st
 
 from biathlon.charts import (
     activity_stream_figure,
+    annual_goal_figure,
+    calendar_timeline_figure,
     effective_load_figure,
     index_7_40_figure,
     monitoring_history_figure,
@@ -33,6 +35,17 @@ from biathlon.constants import (
 from biathlon.demo_data import DEMO_SEED, generate_activity_stream, generate_demo_bundle
 from biathlon.explanations import EXPLANATIONS, explanation_titles, help_text
 from biathlon.physiology import analyze_activity_stream
+from biathlon.preferences import (
+    EVENT_TYPE_LABELS,
+    WEEKDAY_BY_LABEL,
+    WEEKDAY_LABELS,
+    build_week_structure,
+    daily_history_from_activities,
+    daily_table_to_activities,
+    history_template,
+    normalize_preferences,
+    weekly_totals_to_activities,
+)
 from biathlon.service import analyze_athlete, team_summary
 from biathlon.ui_helpers import (
     audit_entry,
@@ -45,7 +58,7 @@ from biathlon.ui_helpers import (
 )
 
 st.set_page_config(
-    page_title="Biathlon LoadLab · MVP",
+    page_title="Biathlon LoadLab · MVP 0.3",
     page_icon="🎯",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -58,6 +71,8 @@ PAGES = {
     "load": "Натоварване и 7/40",
     "recovery": "Възстановяване",
     "plan": "Адаптивна програма",
+    "calendar": "Календар и цели",
+    "history": "История и начални данни",
     "monitoring": "Дневен мониторинг",
     "tests": "Контролни тестове",
     "simulator": "Симулатор „Какво ако“",
@@ -72,6 +87,8 @@ PAGE_ICONS = {
     "load": "📈",
     "recovery": "🔄",
     "plan": "📅",
+    "calendar": "🗓️",
+    "history": "🧾",
     "monitoring": "🫀",
     "tests": "🧪",
     "simulator": "🧭",
@@ -171,14 +188,23 @@ def render_team_page(bundle: dict[str, Any]) -> None:
     summary = team_summary(bundle)
     mean_readiness = float(summary["Интегрирана готовност"].mean())
     flags = int((summary["Твърд флаг"] == "Да").sum())
-    main_events = bundle["calendar"].loc[bundle["calendar"]["type"] == "MAIN_RACE"]
-    days_to_main = int((pd.to_datetime(main_events["start_date"]).min().date() - date.today()).days)
+    main_events = bundle["calendar"].loc[
+        (bundle["calendar"]["type"] == "MAIN_RACE")
+        & (pd.to_datetime(bundle["calendar"]["start_date"]).dt.normalize() >= pd.Timestamp.today().normalize())
+    ].copy()
+    days_to_main = None
+    if not main_events.empty:
+        days_to_main = int((pd.to_datetime(main_events["start_date"]).min().date() - date.today()).days)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Спортисти", len(summary))
     c2.metric("Средна готовност", f"{mean_readiness:.0f}/100", help=help_text("integrated_readiness"))
     c3.metric("Твърди флагове", flags, help=help_text("monitoring"))
-    c4.metric("До основния старт", f"{days_to_main} дни", help=help_text("periodization"))
+    c4.metric(
+        "До основния старт",
+        f"{days_to_main} дни" if days_to_main is not None else "Не е зададен",
+        help=help_text("periodization"),
+    )
 
     display = summary.drop(columns=["athlete_id"]).copy()
     st.dataframe(
@@ -365,6 +391,14 @@ def render_load_page(analysis: dict[str, Any]) -> None:
 
     st.subheader("Детайл на изпълнена тестова активност")
     summaries = analysis["activity_summaries"].sort_values("date", ascending=False).head(40).copy()
+    if summaries.empty:
+        st.info(
+            "Все още няма въведена тренировъчна история за този спортист. "
+            "Добави дневни или седмични данни от страницата „История и начални данни“; "
+            "след това тук ще се появи анализът реално време → Q → E."
+        )
+        return
+
     label_map = {
         row["activity_id"]: f"{pd.Timestamp(row['date']).date()} · {row['sport']} · {row['moving_min']:.0f} мин"
         for _, row in summaries.iterrows()
@@ -456,7 +490,33 @@ def render_recovery_page(analysis: dict[str, Any]) -> None:
 
 
 def render_plan_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit: bool) -> None:
-    page_header("Адаптивна тренировъчна програма", "Седмична компонентна цел → директен товар → реално време → конкретен метод.")
+    page_header(
+        "Адаптивна тренировъчна програма",
+        "Седмична компонентна цел → годишен контекст → седмична структура → директен товар → реално време → конкретен метод.",
+    )
+    plan = analysis["plan"].copy()
+    training_rows = plan.loc[plan["focus"] != "REST"] if not plan.empty else plan
+    snapshot = analysis["decision_snapshot"].get("plan", {})
+    preferences = analysis["planning_preferences"]
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(
+        "Тренировъчни сесии",
+        f"{len(training_rows)}/{preferences['sessions_per_week']}",
+        help=help_text("weekly_structure"),
+    )
+    c2.metric("Планиран обем", f"{training_rows['total_real_min'].sum() / 60.0:.1f} h")
+    rest_labels = [WEEKDAY_LABELS[day] for day in preferences["rest_days"]]
+    c3.metric("Почивни дни", ", ".join(rest_labels) if rest_labels else "Няма")
+    c4.metric(
+        "Двойна прагова",
+        "Активна" if snapshot.get("double_threshold_active") else "Неактивна",
+        help=help_text("double_threshold"),
+    )
+
+    for warning in snapshot.get("warnings", []):
+        st.warning(warning)
+
     tab_wave, tab_week = st.tabs(["Дългосрочна динамика", "Следващи 7 дни"])
 
     with tab_wave:
@@ -468,8 +528,26 @@ def render_plan_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit:
             key="weekly_chart_metric",
         )
         st.plotly_chart(weekly_targets_figure(analysis["weekly_targets"], metric), width="stretch")
-        events = bundle["calendar"].loc[bundle["calendar"]["athlete_id"] == str(analysis["athlete"]["athlete_id"])].copy()
-        st.dataframe(events[["type", "name", "start_date", "end_date", "priority", "goal"]], width="stretch", hide_index=True)
+        first_week = analysis["weekly_targets"].loc[analysis["weekly_targets"]["week_no"] == 1].copy()
+        factor_cols = [
+            "component",
+            "target_index",
+            "target_effective_week",
+            "annual_goal_factor",
+            "adaptive_factor",
+            "calendar_factor",
+            "taper_factor",
+            "status",
+        ]
+        st.dataframe(first_week[factor_cols], width="stretch", hide_index=True)
+        events = bundle["calendar"].loc[
+            bundle["calendar"]["athlete_id"] == str(analysis["athlete"]["athlete_id"])
+        ].copy()
+        st.dataframe(
+            events[["type", "name", "start_date", "end_date", "priority", "goal"]],
+            width="stretch",
+            hide_index=True,
+        )
 
     with tab_week:
         st.plotly_chart(plan_comparison_figure(analysis["plan_comparison"]), width="stretch")
@@ -491,19 +569,33 @@ def render_plan_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit:
             column_config={"Изпълнение %": st.column_config.ProgressColumn(min_value=0, max_value=130, format="%.0f")},
         )
 
-        editable = analysis["plan"][["date", "day", "focus", "method", "total_real_min", "status", "locked", "coach_note"]].copy()
+        editor_columns = [
+            "date",
+            "day",
+            "session_no",
+            "time_of_day",
+            "focus",
+            "method",
+            "total_real_min",
+            "status",
+            "locked",
+            "coach_note",
+        ]
+        editable = plan[editor_columns].copy()
         edited = st.data_editor(
             editable,
             width="stretch",
             hide_index=True,
             key=f"plan_editor_{analysis['athlete']['athlete_id']}_{bundle['version']}",
-            disabled=["date", "day", "focus", "method"] if can_edit else list(editable.columns),
+            disabled=["date", "day", "session_no", "time_of_day", "focus", "method"] if can_edit else list(editable.columns),
             column_config={
                 "date": st.column_config.DateColumn("Дата", format="DD.MM.YYYY"),
                 "day": "Ден",
+                "session_no": st.column_config.NumberColumn("Сесия", format="%d"),
+                "time_of_day": "Част на деня",
                 "focus": "Фокус",
                 "method": "Метод",
-                "total_real_min": st.column_config.NumberColumn("Общо реални минути", min_value=0.0, max_value=300.0, step=5.0),
+                "total_real_min": st.column_config.NumberColumn("Реални минути", min_value=0.0, max_value=360.0, step=5.0),
                 "status": st.column_config.SelectboxColumn("Статус", options=["Предложена", "Одобрена", "Отхвърлена"]),
                 "locked": st.column_config.CheckboxColumn("Заключена"),
                 "coach_note": st.column_config.TextColumn("Бележка на треньора"),
@@ -512,27 +604,52 @@ def render_plan_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit:
         b1, b2, b3 = st.columns([1, 1, 2])
         if b1.button("Запази редакциите", disabled=not can_edit, width="stretch"):
             for _, row in edited.iterrows():
-                key = f"{analysis['athlete']['athlete_id']}|{pd.Timestamp(row['date']).date().isoformat()}"
+                key = (
+                    f"{analysis['athlete']['athlete_id']}|"
+                    f"{pd.Timestamp(row['date']).date().isoformat()}|{int(row['session_no'])}"
+                )
                 bundle["plan_overrides"][key] = {
                     "status": row["status"],
                     "locked": bool(row["locked"]),
                     "coach_note": str(row["coach_note"]),
                     "total_real_min": float(row["total_real_min"]),
                 }
-            commit_bundle(bundle, "plan_edit", "Редакциите на седмичната програма са записани като нова версия.", str(analysis["athlete"]["athlete_id"]))
-        if b2.button("Одобри всички дни", disabled=not can_edit, width="stretch"):
-            for _, row in analysis["plan"].iterrows():
-                key = f"{analysis['athlete']['athlete_id']}|{pd.Timestamp(row['date']).date().isoformat()}"
+            commit_bundle(
+                bundle,
+                "plan_edit",
+                "Редакциите на седмичната програма са записани като нова версия.",
+                str(analysis["athlete"]["athlete_id"]),
+            )
+        if b2.button("Одобри всички сесии", disabled=not can_edit, width="stretch"):
+            for _, row in plan.iterrows():
+                key = (
+                    f"{analysis['athlete']['athlete_id']}|"
+                    f"{pd.Timestamp(row['date']).date().isoformat()}|{int(row['session_no'])}"
+                )
                 current = bundle["plan_overrides"].get(key, {})
-                current.update({"status": "Одобрена", "locked": bool(current.get("locked", False)), "coach_note": current.get("coach_note", "")})
+                current.update(
+                    {
+                        "status": "Одобрена",
+                        "locked": bool(current.get("locked", False)),
+                        "coach_note": current.get("coach_note", ""),
+                    }
+                )
                 bundle["plan_overrides"][key] = current
-            commit_bundle(bundle, "plan_approve", "Всички дни от текущата програма са одобрени.", str(analysis["athlete"]["athlete_id"]))
-        b3.caption("Заключените/одобрени записи се пазят като треньорски override и се прилагат върху следващото преизчисляване.")
+            commit_bundle(
+                bundle,
+                "plan_approve",
+                "Всички сесии от текущата програма са одобрени.",
+                str(analysis["athlete"]["athlete_id"]),
+            )
+        b3.caption(
+            "Броят сесии, почивните дни и двойните тренировки се управляват от „Календар и цели“. "
+            "Заключените записи се пазят като треньорски override."
+        )
 
         d1, d2 = st.columns(2)
         d1.download_button(
             "Изтегли програмата · CSV",
-            dataframe_csv_bytes(analysis["plan"]),
+            dataframe_csv_bytes(plan),
             file_name=f"plan_{analysis['athlete']['athlete_id']}_{date.today().isoformat()}.csv",
             mime="text/csv",
             width="stretch",
@@ -545,12 +662,15 @@ def render_plan_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit:
             width="stretch",
         )
 
-        st.subheader("Описание по дни")
-        for _, row in analysis["plan"].iterrows():
-            with st.expander(f"{pd.Timestamp(row['date']).strftime('%d.%m')} · {row['day']} · {row['focus']} · {row['method']}"):
+        st.subheader("Описание по сесии")
+        for _, row in plan.iterrows():
+            label = (
+                f"{pd.Timestamp(row['date']).strftime('%d.%m')} · {row['day']} · "
+                f"{row['time_of_day']} · {row['focus']} · {row['method']}"
+            )
+            with st.expander(label):
                 st.write(row["description"])
                 st.markdown(f"**Обяснение на решението:** {row['explanation']}")
-                load_cols = [f"real_{c}" for c in COMPONENTS] + [f"q_{c}" for c in COMPONENTS]
                 details = pd.DataFrame(
                     {
                         "Компонент": COMPONENTS,
@@ -560,6 +680,660 @@ def render_plan_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit:
                     }
                 )
                 st.dataframe(details, width="stretch", hide_index=True)
+
+
+def render_calendar_goals_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit: bool) -> None:
+    athlete_id = str(analysis["athlete"]["athlete_id"])
+    profile_code = str(analysis["athlete"].get("profile_code", "A"))
+    preferences = normalize_preferences(
+        bundle.setdefault("planning_preferences", {}).get(athlete_id),
+        profile_code,
+        date.today(),
+    )
+    bundle["planning_preferences"][athlete_id] = preferences
+    context = analysis["annual_context"]
+
+    page_header(
+        "Календар, сезонни цели и седмична структура",
+        "Редактирай основни и контролни стартове, лагери, годишната обемна цел и правилата за разпределение на сесиите.",
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Сезонна цел", f"{context['target_hours']:.0f} h", help=help_text("annual_goal"))
+    c2.metric("Изпълнено", f"{context['completed_hours']:.1f} h", f"{context['progress_pct']:.1f}%")
+    c3.metric("Нужно средно до края", f"{context['required_weekly_hours']:.1f} h/седм.")
+    c4.metric("Обемен фактор", f"{context['volume_factor']:.3f}", help=help_text("annual_goal"))
+
+    tab_goal, tab_calendar, tab_structure = st.tabs(
+        ["Сезонна цел", "Стартове, лагери и тестове", "Седмична структура"]
+    )
+
+    with tab_goal:
+        left, right = st.columns([1, 1.25])
+        with left:
+            with st.form(f"season_goal_{athlete_id}"):
+                season_start = st.date_input(
+                    "Начало на отчетния сезон",
+                    value=pd.Timestamp(preferences["season_start"]).date(),
+                    disabled=not can_edit,
+                    help=help_text("annual_goal"),
+                )
+                season_end = st.date_input(
+                    "Край на отчетния сезон",
+                    value=pd.Timestamp(preferences["season_end"]).date(),
+                    disabled=not can_edit,
+                )
+                annual_target = st.number_input(
+                    "Целеви обем за сезона · часове",
+                    min_value=50.0,
+                    max_value=1500.0,
+                    value=float(preferences["annual_target_hours"]),
+                    step=10.0,
+                    disabled=not can_edit,
+                    help="Например 600 часа за една година. Целта влияе ограничено и основно върху Z1–Z2.",
+                )
+                goal_influence = st.slider(
+                    "Тежест на годишната цел",
+                    0.0,
+                    0.70,
+                    float(preferences["annual_goal_influence"]),
+                    0.05,
+                    disabled=not can_edit,
+                    help="0 означава само информационна цел; по-висока стойност допуска ограничена корекция на седмичния обем.",
+                )
+                max_factor = st.slider(
+                    "Максимално увеличение от годишната цел",
+                    1.00,
+                    1.30,
+                    float(preferences["max_volume_factor"]),
+                    0.01,
+                    disabled=not can_edit,
+                )
+                submit_goal = st.form_submit_button("Запази сезонната цел", disabled=not can_edit, width="stretch")
+            if submit_goal:
+                if pd.Timestamp(season_end) <= pd.Timestamp(season_start):
+                    st.error("Краят на сезона трябва да е след началото.")
+                else:
+                    preferences["season_start"] = pd.Timestamp(season_start)
+                    preferences["season_end"] = pd.Timestamp(season_end)
+                    preferences["annual_target_hours"] = float(annual_target)
+                    preferences["annual_goal_influence"] = float(goal_influence)
+                    preferences["max_volume_factor"] = float(max_factor)
+                    bundle["planning_preferences"][athlete_id] = normalize_preferences(
+                        preferences, profile_code, date.today()
+                    )
+                    commit_bundle(
+                        bundle,
+                        "season_goal_update",
+                        "Сезонната обемна цел и отчетният период са актуализирани.",
+                        athlete_id,
+                    )
+        with right:
+            st.plotly_chart(annual_goal_figure(context), width="stretch")
+            st.info(
+                f"Статус: **{context['status']}**. При запазване на последния 4-седмичен обем "
+                f"прогнозата е около **{context['forecast_hours']:.0f} h** до края на периода. "
+                f"Въведената история покрива приблизително **{context['season_history_coverage'] * 100:.0f}%** "
+                "от изминалата част на сезона. При непълно покритие годишната цел влияе по-слабо. "
+                "Системата не увеличава високите интензивности само за да достигне часовата цел."
+            )
+
+    with tab_calendar:
+        athlete_calendar = bundle["calendar"].loc[
+            bundle["calendar"]["athlete_id"].astype(str) == athlete_id
+        ].copy().sort_values("start_date")
+        st.plotly_chart(calendar_timeline_figure(athlete_calendar), width="stretch")
+
+        type_to_label = EVENT_TYPE_LABELS
+        label_to_type = {label: code for code, label in type_to_label.items()}
+        display = athlete_calendar.copy()
+        display["type_label"] = display["type"].map(type_to_label).fillna(display["type"])
+        display = display[
+            ["event_id", "type_label", "name", "start_date", "end_date", "priority", "goal", "locked", "note"]
+        ].rename(columns={"type_label": "Тип"}).reset_index(drop=True)
+        edited = st.data_editor(
+            display,
+            width="stretch",
+            hide_index=True,
+            num_rows="dynamic" if can_edit else "fixed",
+            disabled=["event_id"] if can_edit else list(display.columns),
+            key=f"calendar_editor_{athlete_id}_{bundle['version']}",
+            column_config={
+                "event_id": st.column_config.TextColumn("ID", help="Създава се автоматично за нов ред."),
+                "Тип": st.column_config.SelectboxColumn("Тип", options=list(type_to_label.values()), required=True),
+                "name": st.column_config.TextColumn("Име", required=True),
+                "start_date": st.column_config.DateColumn("Начало", format="DD.MM.YYYY", required=True),
+                "end_date": st.column_config.DateColumn("Край", format="DD.MM.YYYY", required=True),
+                "priority": st.column_config.SelectboxColumn("Приоритет", options=["A", "B", "C"]),
+                "goal": st.column_config.TextColumn("Цел / акцент"),
+                "locked": st.column_config.CheckboxColumn("Заключено"),
+                "note": st.column_config.TextColumn("Бележка"),
+            },
+        )
+        st.caption(
+            "Редовете могат да се добавят и изтриват. Промяната на основния старт преизчислява фазата, "
+            "мезоцикличната динамика и тейпъра; лагерите и контролните стартове променят календарния фактор."
+        )
+        if st.button("Запази календара и преизчисли", disabled=not can_edit, width="stretch"):
+            rows: list[dict[str, Any]] = []
+            errors: list[str] = []
+            for row_index, row in edited.iterrows():
+                name = str(row.get("name", "") or "").strip()
+                if not name:
+                    continue
+                start_value = pd.to_datetime(row.get("start_date"), errors="coerce")
+                end_value = pd.to_datetime(row.get("end_date"), errors="coerce")
+                if pd.isna(start_value) or pd.isna(end_value):
+                    errors.append(f"Ред {row_index + 1}: липсва валидна дата.")
+                    continue
+                if end_value < start_value:
+                    errors.append(f"Ред {row_index + 1}: крайната дата е преди началната.")
+                    continue
+                label = str(row.get("Тип", ""))
+                event_type = label_to_type.get(label, label if label in type_to_label else "TEST")
+                event_id = str(row.get("event_id", "") or "").strip()
+                if not event_id or event_id.lower() == "nan":
+                    event_id = f"{athlete_id}-EV-{start_value.strftime('%Y%m%d')}-{row_index + 1}"
+                locked_value = row.get("locked", False)
+                locked = False if pd.isna(locked_value) else bool(locked_value)
+                rows.append(
+                    {
+                        "event_id": event_id,
+                        "athlete_id": athlete_id,
+                        "type": event_type,
+                        "name": name,
+                        "start_date": pd.Timestamp(start_value).normalize(),
+                        "end_date": pd.Timestamp(end_value).normalize(),
+                        "priority": str(row.get("priority", "B") or "B"),
+                        "goal": str(row.get("goal", "") or ""),
+                        "locked": locked,
+                        "note": str(row.get("note", "") or ""),
+                    }
+                )
+            if errors:
+                for error in errors:
+                    st.error(error)
+            else:
+                other = bundle["calendar"].loc[
+                    bundle["calendar"]["athlete_id"].astype(str) != athlete_id
+                ].copy()
+                athlete_new = pd.DataFrame(rows, columns=bundle["calendar"].columns)
+                bundle["calendar"] = pd.concat([other, athlete_new], ignore_index=True).sort_values(
+                    ["athlete_id", "start_date"]
+                ).reset_index(drop=True)
+                future_main = athlete_new.loc[
+                    (athlete_new["type"] == "MAIN_RACE")
+                    & (pd.to_datetime(athlete_new["start_date"]) >= pd.Timestamp.today().normalize())
+                ]
+                reason = "Календарът е актуализиран и планът е преизчислен."
+                if future_main.empty:
+                    reason += " Няма бъдещ основен старт; временно се използва виртуален 16-седмичен хоризонт."
+                commit_bundle(bundle, "calendar_update", reason, athlete_id)
+
+    with tab_structure:
+        weekday_options = list(WEEKDAY_LABELS.values())
+        with st.form(f"weekly_structure_{athlete_id}"):
+            c1, c2, c3 = st.columns(3)
+            sessions_per_week = c1.number_input(
+                "Брой тренировъчни сесии седмично",
+                min_value=1,
+                max_value=14,
+                value=int(preferences["sessions_per_week"]),
+                step=1,
+                disabled=not can_edit,
+                help=help_text("weekly_structure"),
+            )
+            rest_days_labels = c1.multiselect(
+                "Дни за пълна почивка",
+                weekday_options,
+                default=[WEEKDAY_LABELS[day] for day in preferences["rest_days"]],
+                disabled=not can_edit,
+            )
+            long_day_label = c1.selectbox(
+                "Ден за дълга аеробна тренировка",
+                weekday_options,
+                index=weekday_options.index(WEEKDAY_LABELS[preferences["long_session_day"]]),
+                disabled=not can_edit,
+            )
+
+            double_days_labels = c2.multiselect(
+                "Разрешени дни с две сесии",
+                weekday_options,
+                default=[WEEKDAY_LABELS[day] for day in preferences["double_session_days"]],
+                disabled=not can_edit,
+            )
+            intensity_days_labels = c2.multiselect(
+                "Предпочитани интензивни дни",
+                weekday_options,
+                default=[WEEKDAY_LABELS[day] for day in preferences["intensity_days"]],
+                disabled=not can_edit,
+            )
+            strength_days_labels = c2.multiselect(
+                "Предпочитани силови дни",
+                weekday_options,
+                default=[WEEKDAY_LABELS[day] for day in preferences["strength_days"]],
+                disabled=not can_edit,
+            )
+            max_key = c2.number_input(
+                "Максимум ключови сесии седмично",
+                min_value=0,
+                max_value=8,
+                value=int(preferences["max_key_sessions_per_week"]),
+                step=1,
+                disabled=not can_edit,
+            )
+
+            double_threshold = c3.checkbox(
+                "Разреши двойна прагова тренировка",
+                value=bool(preferences["double_threshold_enabled"]),
+                disabled=not can_edit,
+                help=help_text("double_threshold"),
+            )
+            dt_day_label = c3.selectbox(
+                "Ден за двойна прагова",
+                weekday_options,
+                index=weekday_options.index(WEEKDAY_LABELS[preferences["double_threshold_day"]]),
+                disabled=not can_edit,
+            )
+            dt_components = c3.multiselect(
+                "Прагова комбинация",
+                ["Z3", "Z4"],
+                default=preferences["double_threshold_components"],
+                disabled=not can_edit,
+            )
+            dt_readiness = c3.slider(
+                "Минимална интегрирана готовност",
+                70.0,
+                100.0,
+                float(preferences["double_threshold_min_readiness"]),
+                1.0,
+                disabled=not can_edit,
+            )
+            dt_phase = c3.slider(
+                "Допустима част от подготовката",
+                0.0,
+                1.0,
+                (
+                    float(preferences["double_threshold_phase_min"]),
+                    float(preferences["double_threshold_phase_max"]),
+                ),
+                0.05,
+                disabled=not can_edit,
+                help="0 = начало на подготовката; 1 = основен старт.",
+            )
+            submit_structure = st.form_submit_button(
+                "Запази седмичната структура", disabled=not can_edit, width="stretch"
+            )
+
+        if submit_structure:
+            rest_codes = [WEEKDAY_BY_LABEL[label] for label in rest_days_labels]
+            max_possible = 2 * (7 - len(rest_codes))
+            dt_code = WEEKDAY_BY_LABEL[dt_day_label]
+            errors: list[str] = []
+            if max_possible < 1:
+                errors.append("Не може всички дни да бъдат зададени като пълна почивка.")
+            if int(sessions_per_week) > max_possible:
+                errors.append(
+                    f"При избраните почивни дни са възможни максимум {max_possible} сесии (до две на ден)."
+                )
+            if double_threshold and dt_code in rest_codes:
+                errors.append("Денят за двойна прагова не може едновременно да е ден за пълна почивка.")
+            if double_threshold and int(max_key) < 2:
+                errors.append("За двойна прагова са нужни поне две разрешени ключови сесии.")
+            if errors:
+                for error in errors:
+                    st.error(error)
+            else:
+                preferences.update(
+                    {
+                        "sessions_per_week": int(sessions_per_week),
+                        "rest_days": rest_codes,
+                        "double_session_days": [WEEKDAY_BY_LABEL[label] for label in double_days_labels],
+                        "long_session_day": WEEKDAY_BY_LABEL[long_day_label],
+                        "intensity_days": [WEEKDAY_BY_LABEL[label] for label in intensity_days_labels],
+                        "strength_days": [WEEKDAY_BY_LABEL[label] for label in strength_days_labels],
+                        "max_key_sessions_per_week": int(max_key),
+                        "double_threshold_enabled": bool(double_threshold),
+                        "double_threshold_day": dt_code,
+                        "double_threshold_components": dt_components or ["Z3", "Z4"],
+                        "double_threshold_min_readiness": float(dt_readiness),
+                        "double_threshold_phase_min": float(dt_phase[0]),
+                        "double_threshold_phase_max": float(dt_phase[1]),
+                    }
+                )
+                bundle["planning_preferences"][athlete_id] = normalize_preferences(
+                    preferences, profile_code, date.today()
+                )
+                commit_bundle(
+                    bundle,
+                    "weekly_structure_update",
+                    "Броят сесии, почивните дни и правилата за двойни тренировки са актуализирани.",
+                    athlete_id,
+                )
+
+        st.subheader("Предварителен седмичен скелет")
+        preview = build_week_structure(date.today(), preferences).copy()
+        preview["Тренировка"] = preview["planned_training"].map({True: "Да", False: "Почивка"})
+        st.dataframe(
+            preview[["date", "day", "session_no", "time_of_day", "slot_type", "Тренировка"]],
+            width="stretch",
+            hide_index=True,
+            column_config={"date": st.column_config.DateColumn("Дата", format="DD.MM.YYYY")},
+        )
+        st.caption(
+            "Това е структурният скелет. Конкретният фокус и обем се определят след проверка на 7/40, "
+            "възстановяването, мониторинга, тестовете, фазата и календарните събития."
+        )
+
+
+def render_history_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit: bool) -> None:
+    athlete_id = str(analysis["athlete"]["athlete_id"])
+    preferences = analysis["planning_preferences"]
+    activities = bundle["activities"].loc[
+        bundle["activities"]["athlete_id"].astype(str) == athlete_id
+    ].copy()
+    daily_history = daily_history_from_activities(bundle["activities"], athlete_id)
+    total_minutes = 0.0
+    if not daily_history.empty:
+        total_minutes = float(daily_history[COMPONENTS].sum().sum())
+    history_days = int((daily_history[COMPONENTS].sum(axis=1) > 0).sum()) if not daily_history.empty else 0
+
+    page_header(
+        "История на натоварването и начални данни",
+        "Въведи реални минути по зони и сила. Историята създава 40-дневната адаптационна база, Tref, 7/40 и началната програма.",
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Активности", len(activities))
+    c2.metric("Дни с натоварване", history_days)
+    c3.metric("Общо въведен обем", f"{total_minutes / 60.0:.1f} h")
+    c4.metric(
+        "Надеждност на 40-дневната база",
+        f"{analysis['annual_context']['history_reliability'] * 100:.0f}%",
+        help=help_text("manual_history"),
+    )
+    if history_days < 40:
+        st.warning(
+            "Има по-малко от 40 дни с история. Системата ще работи със стабилизиращите базови товари, "
+            "но надеждността на индивидуалния 7/40 и Tref ще бъде по-ниска."
+        )
+
+    tab_add, tab_table, tab_weekly = st.tabs(
+        ["Добави тренировка", "Таблица и CSV", "Бързо въвеждане по седмици"]
+    )
+
+    with tab_add:
+        with st.form(f"manual_activity_{athlete_id}"):
+            c1, c2, c3 = st.columns(3)
+            activity_date = c1.date_input(
+                "Дата",
+                value=date.today() - timedelta(days=1),
+                disabled=not can_edit,
+            )
+            sport = c1.text_input("Средство / спорт", value="Ролкови ски", disabled=not can_edit)
+            rpe = c1.slider("RPE на сесията", 0.0, 10.0, 4.0, 0.5, disabled=not can_edit)
+            z1 = c2.number_input("Z1 · реални минути", 0.0, 600.0, 20.0, 5.0, disabled=not can_edit)
+            z2 = c2.number_input("Z2 · реални минути", 0.0, 600.0, 60.0, 5.0, disabled=not can_edit)
+            z3 = c2.number_input("Z3 · реални минути", 0.0, 180.0, 0.0, 2.0, disabled=not can_edit)
+            z4 = c3.number_input("Z4 · реални минути", 0.0, 120.0, 0.0, 1.0, disabled=not can_edit)
+            z5 = c3.number_input("Z5 · реални минути", 0.0, 90.0, 0.0, 1.0, disabled=not can_edit)
+            strength = c3.number_input("Сила · реални минути", 0.0, 180.0, 0.0, 5.0, disabled=not can_edit)
+            note = st.text_area("Бележка", value="Ръчно въведена тренировка.", disabled=not can_edit)
+            submit_activity = st.form_submit_button("Добави към историята", disabled=not can_edit, width="stretch")
+        if submit_activity:
+            table = pd.DataFrame(
+                [
+                    {
+                        "date": activity_date,
+                        "sport": sport,
+                        "rpe": rpe,
+                        "Z1": z1,
+                        "Z2": z2,
+                        "Z3": z3,
+                        "Z4": z4,
+                        "Z5": z5,
+                        "STR": strength,
+                        "note": note,
+                    }
+                ]
+            )
+            new_activity = daily_table_to_activities(
+                table, athlete_id, preferences, source="manual_single_entry"
+            )
+            if new_activity.empty:
+                st.error("Въведи поне една минута натоварване.")
+            else:
+                new_activity.loc[:, "activity_id"] = (
+                    f"{athlete_id}-MAN-{pd.Timestamp(activity_date).strftime('%Y%m%d')}-V{bundle['version'] + 1}"
+                )
+                bundle["activities"] = pd.concat(
+                    [bundle["activities"], new_activity], ignore_index=True
+                ).sort_values(["athlete_id", "date"]).reset_index(drop=True)
+                commit_bundle(
+                    bundle,
+                    "manual_activity_add",
+                    "Ръчната тренировка е добавена и всички модели са преизчислени.",
+                    athlete_id,
+                )
+
+    with tab_table:
+        period = st.selectbox(
+            "Период за редакция",
+            [40, 90, 180, 0],
+            format_func=lambda value: "Цялата история" if value == 0 else f"Последни {value} дни",
+            key=f"history_period_{athlete_id}",
+        )
+        if period == 0 or daily_history.empty:
+            period_start = pd.Timestamp(daily_history["date"].min()).normalize() if not daily_history.empty else pd.Timestamp.today().normalize() - pd.Timedelta(days=39)
+        else:
+            period_start = pd.Timestamp.today().normalize() - pd.Timedelta(days=period - 1)
+        period_end = pd.Timestamp.today().normalize()
+        display_history = daily_history.loc[
+            (pd.to_datetime(daily_history["date"]) >= period_start)
+            & (pd.to_datetime(daily_history["date"]) <= period_end)
+        ].copy().reset_index(drop=True)
+        edited_history = st.data_editor(
+            display_history,
+            width="stretch",
+            hide_index=True,
+            num_rows="dynamic" if can_edit else "fixed",
+            disabled=not can_edit,
+            key=f"history_editor_{athlete_id}_{period}_{bundle['version']}",
+            column_config={
+                "date": st.column_config.DateColumn("Дата", format="DD.MM.YYYY", required=True),
+                "sport": st.column_config.TextColumn("Средство / спорт"),
+                "rpe": st.column_config.NumberColumn("RPE", min_value=0.0, max_value=10.0, step=0.5),
+                **{
+                    component: st.column_config.NumberColumn(
+                        f"{component} · мин", min_value=0.0, max_value=700.0, step=1.0
+                    )
+                    for component in COMPONENTS
+                },
+                "note": st.column_config.TextColumn("Бележка"),
+            },
+        )
+        st.caption(
+            f"„Запази таблицата“ заменя историята на спортиста за периода {period_start.date()} – {period_end.date()}. "
+            "Един ред представлява сумарното реално време за деня."
+        )
+        if st.button("Запази таблицата и преизчисли", disabled=not can_edit, width="stretch"):
+            try:
+                normalized = daily_table_to_activities(
+                    edited_history, athlete_id, preferences, source="manual_daily_table"
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                all_activities = bundle["activities"].copy()
+                dates = pd.to_datetime(all_activities["date"]).dt.normalize()
+                remove_mask = (
+                    (all_activities["athlete_id"].astype(str) == athlete_id)
+                    & (dates >= period_start)
+                    & (dates <= period_end)
+                )
+                bundle["activities"] = pd.concat(
+                    [all_activities.loc[~remove_mask], normalized], ignore_index=True
+                ).sort_values(["athlete_id", "date"]).reset_index(drop=True)
+                commit_bundle(
+                    bundle,
+                    "manual_history_replace",
+                    "Дневната история за избрания период е заменена и моделът е преизчислен.",
+                    athlete_id,
+                )
+
+        st.divider()
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            st.download_button(
+                "Изтегли CSV шаблон",
+                dataframe_csv_bytes(history_template()),
+                file_name="biathlon_history_template.csv",
+                mime="text/csv",
+                width="stretch",
+            )
+        with c2:
+            uploaded = st.file_uploader(
+                "Качи CSV история",
+                type=["csv"],
+                key=f"history_upload_{athlete_id}",
+                disabled=not can_edit,
+            )
+        if uploaded is not None:
+            try:
+                uploaded_df = pd.read_csv(uploaded)
+            except Exception as exc:
+                st.error(f"CSV файлът не може да бъде прочетен: {exc}")
+            else:
+                st.dataframe(uploaded_df.head(20), width="stretch", hide_index=True)
+                import_mode = st.radio(
+                    "Режим на импорта",
+                    ["Добави", "Замени датите от файла", "Замени цялата история на спортиста"],
+                    horizontal=True,
+                    key=f"history_import_mode_{athlete_id}",
+                )
+                if st.button("Импортирай CSV", disabled=not can_edit, width="stretch"):
+                    try:
+                        imported = daily_table_to_activities(
+                            uploaded_df, athlete_id, preferences, source="manual_csv_import"
+                        )
+                    except Exception as exc:
+                        st.error(f"Невалиден формат: {exc}")
+                    else:
+                        all_activities = bundle["activities"].copy()
+                        keep = pd.Series(True, index=all_activities.index)
+                        if import_mode == "Замени цялата история на спортиста":
+                            keep &= all_activities["athlete_id"].astype(str) != athlete_id
+                        elif import_mode == "Замени датите от файла" and not imported.empty:
+                            imported_dates = set(pd.to_datetime(imported["date"]).dt.normalize())
+                            keep &= ~(
+                                (all_activities["athlete_id"].astype(str) == athlete_id)
+                                & pd.to_datetime(all_activities["date"]).dt.normalize().isin(imported_dates)
+                            )
+                        bundle["activities"] = pd.concat(
+                            [all_activities.loc[keep], imported], ignore_index=True
+                        ).sort_values(["athlete_id", "date"]).reset_index(drop=True)
+                        commit_bundle(
+                            bundle,
+                            "history_csv_import",
+                            f"CSV историята е импортирана в режим „{import_mode}“.",
+                            athlete_id,
+                        )
+
+        with st.expander("Изчистване на историята"):
+            confirm_clear = st.checkbox(
+                "Потвърждавам изтриването на историята за този спортист",
+                key=f"clear_history_confirm_{athlete_id}",
+                disabled=not can_edit,
+            )
+            if st.button(
+                "Изтрий историята на спортиста",
+                disabled=not can_edit or not confirm_clear,
+                width="stretch",
+            ):
+                bundle["activities"] = bundle["activities"].loc[
+                    bundle["activities"]["athlete_id"].astype(str) != athlete_id
+                ].copy().reset_index(drop=True)
+                commit_bundle(
+                    bundle,
+                    "history_clear",
+                    "Историята на спортиста е изтрита. Планът временно използва стабилизиращи базови товари.",
+                    athlete_id,
+                )
+
+    with tab_weekly:
+        st.warning(
+            "Този режим е за бързо първоначално стартиране, когато разполагаш само със седмични тотали. "
+            "Системата ги разпределя детерминирано по дни и маркира източника като приблизителен. "
+            "За най-точен 7/40 използвай реални дневни данни."
+        )
+        last_monday = pd.Timestamp.today().normalize() - pd.Timedelta(days=pd.Timestamp.today().weekday() + 7)
+        initial_weekly = pd.DataFrame(
+            [
+                {
+                    "week_start": last_monday.date(),
+                    "sessions": int(preferences["sessions_per_week"]),
+                    "Z1": 120.0,
+                    "Z2": 360.0,
+                    "Z3": 30.0,
+                    "Z4": 15.0,
+                    "Z5": 6.0,
+                    "STR": 45.0,
+                    "rpe": 4.5,
+                    "note": "Примерна седмица — промени стойностите.",
+                }
+            ]
+        )
+        weekly_editor = st.data_editor(
+            initial_weekly,
+            width="stretch",
+            hide_index=True,
+            num_rows="dynamic" if can_edit else "fixed",
+            disabled=not can_edit,
+            key=f"weekly_history_editor_{athlete_id}_{bundle['version']}",
+            column_config={
+                "week_start": st.column_config.DateColumn("Начало на седмицата", format="DD.MM.YYYY"),
+                "sessions": st.column_config.NumberColumn("Сесии", min_value=1, max_value=14, step=1),
+                **{
+                    component: st.column_config.NumberColumn(
+                        f"{component} · общо мин", min_value=0.0, max_value=3000.0, step=5.0
+                    )
+                    for component in COMPONENTS
+                },
+                "rpe": st.column_config.NumberColumn("Средно RPE", min_value=0.0, max_value=10.0, step=0.5),
+                "note": st.column_config.TextColumn("Бележка"),
+            },
+        )
+        weekly_mode = st.radio(
+            "Режим",
+            ["Добави", "Замени седмиците от таблицата"],
+            horizontal=True,
+            key=f"weekly_history_mode_{athlete_id}",
+        )
+        if st.button("Създай дневна история от седмичните обеми", disabled=not can_edit, width="stretch"):
+            try:
+                generated = weekly_totals_to_activities(weekly_editor, athlete_id, preferences)
+            except Exception as exc:
+                st.error(f"Седмичните данни не могат да бъдат преобразувани: {exc}")
+            else:
+                all_activities = bundle["activities"].copy()
+                keep = pd.Series(True, index=all_activities.index)
+                if weekly_mode == "Замени седмиците от таблицата" and not generated.empty:
+                    min_date = pd.to_datetime(generated["date"]).min().normalize()
+                    max_date = pd.to_datetime(generated["date"]).max().normalize()
+                    dates = pd.to_datetime(all_activities["date"]).dt.normalize()
+                    keep &= ~(
+                        (all_activities["athlete_id"].astype(str) == athlete_id)
+                        & (dates >= min_date)
+                        & (dates <= max_date)
+                    )
+                bundle["activities"] = pd.concat(
+                    [all_activities.loc[keep], generated], ignore_index=True
+                ).sort_values(["athlete_id", "date"]).reset_index(drop=True)
+                commit_bundle(
+                    bundle,
+                    "weekly_history_import",
+                    "Седмичните обеми са разпределени в дневна история и моделът е преизчислен.",
+                    athlete_id,
+                )
 
 
 def render_monitoring_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit: bool) -> None:
@@ -738,13 +1512,28 @@ def comparison_metrics(before: dict[str, Any], after: dict[str, Any], component:
 
 
 def plan_diff(before: dict[str, Any], after: dict[str, Any]) -> pd.DataFrame:
-    left = before["plan"][["date", "focus", "method", "total_real_min"]].rename(
-        columns={"focus": "Фокус · преди", "method": "Метод · преди", "total_real_min": "Минути · преди"}
+    """Сравнява сесия със съответната сесия, без декартово умножение при двойни дни."""
+
+    keys = ["date", "session_no"]
+    left = before["plan"][[*keys, "time_of_day", "focus", "method", "total_real_min"]].rename(
+        columns={
+            "time_of_day": "Част на деня · преди",
+            "focus": "Фокус · преди",
+            "method": "Метод · преди",
+            "total_real_min": "Минути · преди",
+        }
     )
-    right = after["plan"][["date", "focus", "method", "total_real_min"]].rename(
-        columns={"focus": "Фокус · след", "method": "Метод · след", "total_real_min": "Минути · след"}
+    right = after["plan"][[*keys, "time_of_day", "focus", "method", "total_real_min"]].rename(
+        columns={
+            "time_of_day": "Част на деня · след",
+            "focus": "Фокус · след",
+            "method": "Метод · след",
+            "total_real_min": "Минути · след",
+        }
     )
-    merged = left.merge(right, on="date", how="outer")
+    merged = left.merge(right, on=keys, how="outer").sort_values(keys).reset_index(drop=True)
+    merged["Минути · преди"] = pd.to_numeric(merged["Минути · преди"], errors="coerce").fillna(0.0)
+    merged["Минути · след"] = pd.to_numeric(merged["Минути · след"], errors="coerce").fillna(0.0)
     merged["Δ мин"] = merged["Минути · след"] - merged["Минути · преди"]
     return merged
 
@@ -806,13 +1595,43 @@ def render_simulator_page(bundle: dict[str, Any], before: dict[str, Any], can_ed
         scenario_description = f"Последният тест е променен с посочно подобрение {change:+.1f}% и сравнимост {comparability:.2f}."
         focus_component = "Z3" if test_code == "Z3_20MIN" else "Z5"
     else:
-        main_mask = (scenario_bundle["calendar"]["athlete_id"] == athlete_id) & (scenario_bundle["calendar"]["type"] == "MAIN_RACE")
-        current_date = pd.Timestamp(scenario_bundle["calendar"].loc[main_mask, "start_date"].iloc[0]).date()
-        weeks = st.slider("Седмици до основния старт", 6, 24, max(6, int(round((current_date - date.today()).days / 7))), 1)
+        main_mask = (
+            (scenario_bundle["calendar"]["athlete_id"].astype(str) == athlete_id)
+            & (scenario_bundle["calendar"]["type"] == "MAIN_RACE")
+        )
+        future_main = scenario_bundle["calendar"].loc[main_mask].copy()
+        if not future_main.empty:
+            future_main["start_date"] = pd.to_datetime(future_main["start_date"]).dt.normalize()
+            future_main = future_main.loc[future_main["start_date"] >= pd.Timestamp.today().normalize()]
+        current_date = (
+            pd.Timestamp(future_main.sort_values("start_date").iloc[0]["start_date"]).date()
+            if not future_main.empty
+            else date.today() + timedelta(weeks=16)
+        )
+        initial_weeks = int(np.clip(round((current_date - date.today()).days / 7), 6, 24))
+        weeks = st.slider("Седмици до основния старт", 6, 24, initial_weeks, 1)
         new_date = date.today() + timedelta(weeks=weeks)
-        scenario_bundle["calendar"].loc[main_mask, "start_date"] = pd.Timestamp(new_date)
-        scenario_bundle["calendar"].loc[main_mask, "end_date"] = pd.Timestamp(new_date)
-        scenario_description = f"Основният старт е преместен на {new_date.strftime('%d.%m.%Y')} ({weeks} седмици)."
+        if main_mask.any():
+            first_index = scenario_bundle["calendar"].loc[main_mask].index[0]
+            scenario_bundle["calendar"].loc[first_index, "start_date"] = pd.Timestamp(new_date)
+            scenario_bundle["calendar"].loc[first_index, "end_date"] = pd.Timestamp(new_date)
+        else:
+            new_row = {
+                "event_id": f"{athlete_id}-SIM-MAIN",
+                "athlete_id": athlete_id,
+                "type": "MAIN_RACE",
+                "name": "Симулационен основен старт",
+                "start_date": pd.Timestamp(new_date),
+                "end_date": pd.Timestamp(new_date),
+                "priority": "A",
+                "goal": "Пикова готовност",
+                "locked": False,
+                "note": "Добавен от симулатора.",
+            }
+            scenario_bundle["calendar"] = pd.concat(
+                [scenario_bundle["calendar"], pd.DataFrame([new_row])], ignore_index=True
+            )
+        scenario_description = f"Основният старт е преместен/зададен на {new_date.strftime('%d.%m.%Y')} ({weeks} седмици)."
         focus_component = "Z4"
 
     scenario_bundle["version"] = int(bundle["version"]) + 1
@@ -1096,6 +1915,10 @@ else:
         render_recovery_page(analysis)
     elif page == "plan":
         render_plan_page(bundle, analysis, can_edit)
+    elif page == "calendar":
+        render_calendar_goals_page(bundle, analysis, can_edit)
+    elif page == "history":
+        render_history_page(bundle, analysis, can_edit)
     elif page == "monitoring":
         render_monitoring_page(bundle, analysis, can_edit)
     elif page == "tests":

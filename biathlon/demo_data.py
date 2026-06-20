@@ -15,6 +15,7 @@ from .constants import (
     DEFAULT_ZONE_PROFILE,
     fresh_parameters,
 )
+from .preferences import default_planning_preferences
 
 DEMO_SEED = 20260620
 
@@ -557,6 +558,10 @@ def generate_demo_bundle(seed: int = DEMO_SEED, history_days: int = 150) -> dict
     wellness = _generate_wellness(athletes, activities, start_date, end_date, seed)
     tests = _generate_tests(athletes, end_date, seed)
     calendar = _generate_calendar(athletes, today)
+    planning_preferences = {
+        str(row["athlete_id"]): default_planning_preferences(str(row["profile_code"]), today)
+        for _, row in athletes.iterrows()
+    }
 
     return {
         "seed": seed,
@@ -570,6 +575,7 @@ def generate_demo_bundle(seed: int = DEMO_SEED, history_days: int = 150) -> dict
         "calendar": calendar,
         "methods": _training_methods(),
         "parameters": fresh_parameters(),
+        "planning_preferences": planning_preferences,
         "audit_log": [],
         "plan_overrides": {},
     }

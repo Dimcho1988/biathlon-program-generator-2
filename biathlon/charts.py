@@ -7,6 +7,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from .constants import COMPONENT_LABELS, COMPONENTS, METRIC_DEFINITIONS, TEST_DEFINITIONS
+from .preferences import EVENT_TYPE_LABELS
 
 
 def index_7_40_figure(rolling_load: pd.DataFrame, component: str) -> go.Figure:
@@ -193,4 +194,67 @@ def plan_comparison_figure(comparison: pd.DataFrame) -> go.Figure:
         title="Целеви срещу планиран ефективен товар",
     )
     fig.update_layout(height=390, margin=dict(l=20, r=20, t=55, b=25))
+    return fig
+
+
+def calendar_timeline_figure(calendar: pd.DataFrame) -> go.Figure:
+    """Компактна хоризонтална времева линия за стартове, лагери и тестове."""
+
+    data = calendar.copy()
+    fig = go.Figure()
+    if data.empty:
+        fig.update_layout(
+            title="Календар на подготовката",
+            height=300,
+            annotations=[dict(text="Няма въведени събития", x=0.5, y=0.5, showarrow=False)],
+        )
+        return fig
+    data["start_date"] = pd.to_datetime(data["start_date"]).dt.normalize()
+    data["end_date"] = pd.to_datetime(data["end_date"]).dt.normalize()
+    data["duration_days"] = (data["end_date"] - data["start_date"]).dt.days.clip(lower=0) + 1
+    for event_type, subset in data.groupby("type", sort=False):
+        fig.add_trace(
+            go.Bar(
+                y=subset["name"],
+                x=subset["duration_days"] * 24 * 60 * 60 * 1000,
+                base=subset["start_date"],
+                orientation="h",
+                name=EVENT_TYPE_LABELS.get(str(event_type), str(event_type)),
+                customdata=subset[["start_date", "end_date", "priority", "goal"]],
+                hovertemplate=(
+                    "%{y}<br>%{customdata[0]|%d.%m.%Y} – %{customdata[1]|%d.%m.%Y}"
+                    "<br>Приоритет: %{customdata[2]}<br>Цел: %{customdata[3]}<extra></extra>"
+                ),
+            )
+        )
+    fig.update_layout(
+        title="Календар на подготовката",
+        xaxis_title="Дата",
+        yaxis_title="",
+        barmode="overlay",
+        height=max(330, 55 * len(data) + 120),
+        margin=dict(l=20, r=20, t=55, b=25),
+        legend_title="Тип",
+    )
+    return fig
+
+
+def annual_goal_figure(context: dict) -> go.Figure:
+    """Показва изпълнен, очакван и оставащ обем спрямо сезонната цел."""
+
+    completed = float(context.get("completed_hours", 0.0))
+    expected = float(context.get("expected_hours_to_date", 0.0))
+    target = float(context.get("target_hours", 0.0))
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=["Към днешна дата"], y=[completed], name="Изпълнено"))
+    fig.add_trace(go.Bar(x=["Към днешна дата"], y=[max(0.0, expected - completed)], name="Разлика до линейната цел"))
+    fig.add_hline(y=expected, line_dash="dot", annotation_text=f"Очаквано: {expected:.0f} h")
+    fig.add_hline(y=target, line_dash="dash", annotation_text=f"Сезонна цел: {target:.0f} h")
+    fig.update_layout(
+        title="Прогрес към сезонната обемна цел",
+        yaxis_title="Часове",
+        barmode="stack",
+        height=390,
+        margin=dict(l=20, r=20, t=55, b=25),
+    )
     return fig

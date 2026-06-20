@@ -21,6 +21,7 @@ from .physiology import (
     rolling_load_statistics,
 )
 from .planning import apply_plan_overrides, build_weekly_targets, generate_week_plan
+from .preferences import annual_volume_context, default_planning_preferences, normalize_preferences
 from .testing import analyze_tests
 
 
@@ -31,6 +32,8 @@ def _hash_inputs(bundle: dict[str, Any], athlete_id: str) -> str:
         "activity_rows": int((bundle["activities"]["athlete_id"] == athlete_id).sum()),
         "wellness_rows": int((bundle["wellness"]["athlete_id"] == athlete_id).sum()),
         "test_rows": int((bundle["tests"]["athlete_id"] == athlete_id).sum()),
+        "calendar_rows": int((bundle["calendar"]["athlete_id"] == athlete_id).sum()),
+        "planning_preferences": bundle.get("planning_preferences", {}).get(athlete_id, {}),
         "parameters": bundle["parameters"],
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
@@ -49,10 +52,20 @@ def analyze_athlete(
     athlete = athlete_row.iloc[0]
     zone_profile = bundle["zone_profiles"][athlete_id].copy()
     parameters = bundle["parameters"]
+    profile_code = str(athlete.get("profile_code", "A"))
+    raw_preferences = bundle.setdefault("planning_preferences", {}).get(athlete_id)
+    if raw_preferences is None:
+        raw_preferences = default_planning_preferences(profile_code, today)
+        bundle["planning_preferences"][athlete_id] = raw_preferences
+    planning_preferences = normalize_preferences(raw_preferences, profile_code, today)
 
     activities = bundle["activities"].loc[bundle["activities"]["athlete_id"] == athlete_id].copy()
     activity_summaries = activities_to_activity_summaries(activities, zone_profile)
-    history_end = min(today - pd.Timedelta(days=1), pd.Timestamp(activity_summaries["date"].max()).normalize())
+    if activity_summaries.empty:
+        history_end = today - pd.Timedelta(days=1)
+    else:
+        latest_history = pd.Timestamp(activity_summaries["date"].max())
+        history_end = today - pd.Timedelta(days=1) if pd.isna(latest_history) else min(today - pd.Timedelta(days=1), latest_history.normalize())
     daily_loads = compute_daily_load_history(activity_summaries, parameters, end_date=history_end)
     load_stats = compute_load_statistics(daily_loads, parameters, as_of=history_end)
     rolling_load = rolling_load_statistics(daily_loads, parameters)
@@ -64,6 +77,7 @@ def analyze_athlete(
     )
     test_details, test_adjustments = analyze_tests(bundle["tests"], athlete_id, parameters, as_of=today)
     integrated = integrate_component_readiness(load_readiness, monitoring_by_component, test_adjustments)
+    annual_context = annual_volume_context(activity_summaries, planning_preferences, as_of=today)
 
     weekly_targets = build_weekly_targets(
         load_stats,
@@ -73,6 +87,8 @@ def analyze_athlete(
         parameters,
         start_date=today,
         minimum_weeks=16,
+        planning_preferences=planning_preferences,
+        annual_context=annual_context,
     )
 
     plan = pd.DataFrame()
@@ -89,6 +105,7 @@ def analyze_athlete(
             athlete_id,
             parameters,
             start_date=today,
+            planning_preferences=planning_preferences,
         )
         plan = apply_plan_overrides(plan, bundle.get("plan_overrides", {}), athlete_id)
 
@@ -138,12 +155,14 @@ def analyze_athlete(
         "athlete_id": athlete_id,
         "athlete_name": str(athlete["name"]),
         "data_version": int(bundle.get("version", 1)),
-        "algorithm_version": "streamlit-demo-0.1.0",
+        "algorithm_version": "streamlit-demo-0.3.0",
         "parameter_version": int(bundle.get("version", 1)),
         "inputs_hash": _hash_inputs(bundle, athlete_id),
         "global_readiness": global_readiness,
         "status": status,
         "hard_reasons": hard_reasons,
+        "annual_volume_context": annual_context,
+        "planning_preferences": planning_preferences,
         "components": decision_reasons,
         "plan": plan_snapshot,
     }
@@ -165,6 +184,8 @@ def analyze_athlete(
         "test_adjustments": test_adjustments,
         "integrated": integrated,
         "weekly_targets": weekly_targets,
+        "planning_preferences": planning_preferences,
+        "annual_context": annual_context,
         "plan": plan,
         "plan_comparison": plan_comparison,
         "decision_snapshot": decision_snapshot,
