@@ -239,22 +239,141 @@ def calendar_timeline_figure(calendar: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def annual_goal_figure(context: dict) -> go.Figure:
-    """Показва изпълнен, очакван и оставащ обем спрямо сезонната цел."""
+def weekly_plan_vs_actual_figure(trajectory: pd.DataFrame) -> go.Figure:
+    """Показва отделно реалния исторически и бъдещия планиран седмичен обем."""
 
-    completed = float(context.get("completed_hours", 0.0))
-    expected = float(context.get("expected_hours_to_date", 0.0))
-    target = float(context.get("target_hours", 0.0))
+    data = trajectory.copy()
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=["Към днешна дата"], y=[completed], name="Изпълнено"))
-    fig.add_trace(go.Bar(x=["Към днешна дата"], y=[max(0.0, expected - completed)], name="Разлика до линейната цел"))
-    fig.add_hline(y=expected, line_dash="dot", annotation_text=f"Очаквано: {expected:.0f} h")
-    fig.add_hline(y=target, line_dash="dash", annotation_text=f"Сезонна цел: {target:.0f} h")
+    if data.empty:
+        fig.update_layout(
+            title="Реален срещу планиран седмичен обем",
+            height=390,
+            annotations=[dict(text="Няма налични данни", x=0.5, y=0.5, showarrow=False)],
+        )
+        return fig
+
+    data["date"] = pd.to_datetime(data["date"])
+    actual = data.loc[data["series_type"] == "actual"].sort_values("date")
+    plan = data.loc[data["series_type"] == "plan"].sort_values("date")
+    anchor = data.loc[data["series_type"] == "anchor"].sort_values("date")
+
+    if not actual.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=actual["date"],
+                y=actual["actual_weekly_hours"],
+                mode="lines+markers",
+                name="Реално изпълнено",
+                hovertemplate="%{x|%d.%m.%Y}<br>Реално: %{y:.1f} h<extra></extra>",
+            )
+        )
+    if not plan.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=plan["date"],
+                y=plan["planned_weekly_hours"],
+                mode="lines+markers",
+                name="Адаптивен план",
+                hovertemplate="%{x|%d.%m.%Y}<br>План: %{y:.1f} h<extra></extra>",
+            )
+        )
+
+    required = float(data["required_weekly_hours"].dropna().iloc[-1]) if data["required_weekly_hours"].notna().any() else 0.0
+    target_average = float(data["target_average_weekly_hours"].dropna().iloc[-1]) if data["target_average_weekly_hours"].notna().any() else 0.0
+    if required > 0:
+        fig.add_hline(y=required, line_dash="dash", annotation_text=f"Нужно до края: {required:.1f} h/седм.")
+    if target_average > 0 and abs(target_average - required) > 0.2:
+        fig.add_hline(y=target_average, line_dash="dot", annotation_text=f"Средна сезонна цел: {target_average:.1f} h/седм.")
+    if not anchor.empty:
+        today_marker = pd.Timestamp(anchor["date"].iloc[-1]).to_pydatetime()
+        fig.add_vline(x=today_marker, line_dash="dot")
+        fig.add_annotation(x=today_marker, y=1.0, yref="paper", text="Днес", showarrow=False, yshift=10)
+
     fig.update_layout(
-        title="Прогрес към сезонната обемна цел",
-        yaxis_title="Часове",
-        barmode="stack",
-        height=390,
+        title="Реален срещу планиран седмичен обем",
+        xaxis_title="Край на 7-дневния прозорец",
+        yaxis_title="Реални часове",
+        height=420,
+        hovermode="x unified",
         margin=dict(l=20, r=20, t=55, b=25),
     )
     return fig
+
+
+def annual_goal_figure(context: dict, trajectory: pd.DataFrame | None = None) -> go.Figure:
+    """Показва натрупан реален обем, адаптивен план и линейна сезонна цел."""
+
+    data = trajectory.copy() if trajectory is not None else pd.DataFrame()
+    if data.empty:
+        completed = float(context.get("completed_hours", 0.0))
+        expected = float(context.get("expected_hours_to_date", 0.0))
+        target = float(context.get("target_hours", 0.0))
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=["Към днешна дата"], y=[completed], name="Изпълнено"))
+        fig.add_trace(go.Bar(x=["Към днешна дата"], y=[max(0.0, expected - completed)], name="Разлика до линейната цел"))
+        fig.add_hline(y=expected, line_dash="dot", annotation_text=f"Очаквано: {expected:.0f} h")
+        fig.add_hline(y=target, line_dash="dash", annotation_text=f"Сезонна цел: {target:.0f} h")
+        fig.update_layout(
+            title="Прогрес към сезонната обемна цел",
+            yaxis_title="Часове",
+            barmode="stack",
+            height=390,
+            margin=dict(l=20, r=20, t=55, b=25),
+        )
+        return fig
+
+    data["date"] = pd.to_datetime(data["date"])
+    actual = data.loc[data["series_type"].isin(["actual", "anchor"])].sort_values("date")
+    plan = data.loc[data["series_type"].isin(["anchor", "plan"])].sort_values("date")
+    season_start = pd.Timestamp(context["season_start"])
+    season_end = pd.Timestamp(context["season_end"])
+    target_hours = float(context.get("target_hours", 0.0))
+
+    fig = go.Figure()
+    if not actual.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=actual["date"],
+                y=actual["actual_cumulative_hours"],
+                mode="lines+markers",
+                name="Реално натрупано",
+                connectgaps=False,
+                hovertemplate="%{x|%d.%m.%Y}<br>Реално: %{y:.1f} h<extra></extra>",
+            )
+        )
+    if not plan.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=plan["date"],
+                y=plan["planned_cumulative_hours"],
+                mode="lines+markers",
+                name="Натрупано при текущия план",
+                connectgaps=False,
+                hovertemplate="%{x|%d.%m.%Y}<br>Реално + план: %{y:.1f} h<extra></extra>",
+            )
+        )
+    fig.add_trace(
+        go.Scatter(
+            x=[season_start, season_end],
+            y=[0.0, target_hours],
+            mode="lines",
+            line=dict(dash="dash"),
+            name="Линейна целева траектория",
+            hovertemplate="%{x|%d.%m.%Y}<br>Целева траектория: %{y:.1f} h<extra></extra>",
+        )
+    )
+    anchor = data.loc[data["series_type"] == "anchor"]
+    if not anchor.empty:
+        today_marker = pd.Timestamp(anchor["date"].iloc[-1]).to_pydatetime()
+        fig.add_vline(x=today_marker, line_dash="dot")
+        fig.add_annotation(x=today_marker, y=1.0, yref="paper", text="Днес", showarrow=False, yshift=10)
+    fig.update_layout(
+        title="Натрупан обем: реално, план и сезонна цел",
+        xaxis_title="Дата",
+        yaxis_title="Часове",
+        height=430,
+        hovermode="x unified",
+        margin=dict(l=20, r=20, t=55, b=25),
+    )
+    return fig
+

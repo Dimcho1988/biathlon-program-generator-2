@@ -104,3 +104,47 @@ def test_annual_goal_factor_is_bounded_and_history_weighted():
     assert 0.90 <= context["volume_factor"] <= 1.12
     assert context["history_reliability"] == pytest.approx(1.0)
     assert context["target_hours"] == 600.0
+
+
+def test_annual_goal_changes_plan_but_never_rewrites_history():
+    from copy import deepcopy
+
+    base = generate_demo_bundle(seed=20250315, history_days=150)
+    low_bundle = deepcopy(base)
+    high_bundle = deepcopy(base)
+    low_bundle["planning_preferences"]["A"]["annual_target_hours"] = 500.0
+    high_bundle["planning_preferences"]["A"]["annual_target_hours"] = 700.0
+
+    low = analyze_athlete(low_bundle, "A", as_of=date(2026, 6, 20), generate_plan=True)
+    high = analyze_athlete(high_bundle, "A", as_of=date(2026, 6, 20), generate_plan=True)
+
+    low_actual = (
+        low["volume_trajectory"]
+        .loc[lambda frame: frame["series_type"] == "actual", ["date", "actual_weekly_hours"]]
+        .reset_index(drop=True)
+    )
+    high_actual = (
+        high["volume_trajectory"]
+        .loc[lambda frame: frame["series_type"] == "actual", ["date", "actual_weekly_hours"]]
+        .reset_index(drop=True)
+    )
+    pd.testing.assert_frame_equal(low_actual, high_actual)
+
+    low_plan_hours = float(low["plan"]["total_real_min"].sum()) / 60.0
+    high_plan_hours = float(high["plan"]["total_real_min"].sum()) / 60.0
+    assert high["annual_context"]["volume_factor"] > low["annual_context"]["volume_factor"]
+    assert high_plan_hours > low_plan_hours + 0.5
+
+
+def test_goal_factor_changes_progressively_before_safety_cap():
+    from copy import deepcopy
+
+    base = generate_demo_bundle(seed=20250315, history_days=150)
+    factors = []
+    for target in (500.0, 600.0, 700.0):
+        bundle = deepcopy(base)
+        bundle["planning_preferences"]["A"]["annual_target_hours"] = target
+        analysis = analyze_athlete(bundle, "A", as_of=date(2026, 6, 20), generate_plan=False)
+        factors.append(float(analysis["annual_context"]["volume_factor"]))
+
+    assert factors[0] < factors[1] < factors[2]

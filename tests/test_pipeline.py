@@ -16,7 +16,7 @@ def test_full_pipeline_generates_real_plan():
     assert set(analysis["load_stats"].index) == {"Z1", "Z2", "Z3", "Z4", "Z5", "STR"}
     assert analysis["integrated"]["integrated_readiness"].between(0, 100).all()
     assert analysis["decision_snapshot"]["snapshot_type"] == "DecisionSnapshot"
-    assert analysis["decision_snapshot"]["algorithm_version"] == "streamlit-demo-0.3.0"
+    assert analysis["decision_snapshot"]["algorithm_version"] == "streamlit-demo-0.4.0"
 
 
 def test_profiles_produce_different_adaptation():

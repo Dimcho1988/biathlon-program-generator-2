@@ -20,7 +20,7 @@ from .physiology import (
     current_readiness,
     rolling_load_statistics,
 )
-from .planning import apply_plan_overrides, build_weekly_targets, generate_week_plan
+from .planning import apply_plan_overrides, build_volume_trajectory, build_weekly_targets, generate_week_plan
 from .preferences import annual_volume_context, default_planning_preferences, normalize_preferences
 from .testing import analyze_tests
 
@@ -109,6 +109,17 @@ def analyze_athlete(
         )
         plan = apply_plan_overrides(plan, bundle.get("plan_overrides", {}), athlete_id)
 
+    volume_trajectory = build_volume_trajectory(
+        activity_summaries,
+        weekly_targets,
+        load_stats,
+        parameters,
+        planning_preferences,
+        annual_context,
+        as_of=today,
+        generated_plan=plan if generate_plan else None,
+    )
+
     global_readiness = float(integrated["integrated_readiness"].mean())
     hard_flag = bool(integrated["hard_flag"].any())
     if hard_flag:
@@ -155,7 +166,7 @@ def analyze_athlete(
         "athlete_id": athlete_id,
         "athlete_name": str(athlete["name"]),
         "data_version": int(bundle.get("version", 1)),
-        "algorithm_version": "streamlit-demo-0.3.0",
+        "algorithm_version": "streamlit-demo-0.4.0",
         "parameter_version": int(bundle.get("version", 1)),
         "inputs_hash": _hash_inputs(bundle, athlete_id),
         "global_readiness": global_readiness,
@@ -186,6 +197,7 @@ def analyze_athlete(
         "weekly_targets": weekly_targets,
         "planning_preferences": planning_preferences,
         "annual_context": annual_context,
+        "volume_trajectory": volume_trajectory,
         "plan": plan,
         "plan_comparison": plan_comparison,
         "decision_snapshot": decision_snapshot,

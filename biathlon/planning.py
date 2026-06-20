@@ -148,18 +148,36 @@ def build_weekly_targets(
                 status = "Тейпър"
 
             # Годишната цел е ограничен контекст, а не заместител на 7/40.
-            # Тя влияе основно върху нискоинтензивния обем и се затихва
-            # в бъдещето и в тейпъра.
-            goal_decay = float(np.exp(-week_index / 10.0))
-            goal_taper_damping = 0.20 if weeks_to_race <= 2 else 1.0
-            goal_factor = 1.0 + (annual_volume_factor - 1.0) * float(goal_weights.get(component, 0.0)) * goal_decay * goal_taper_damping
+            # В предишната версия влиянието затихваше много бързо и различни
+            # годишни цели изглеждаха почти еднакво. Тук то остава видимо в
+            # целия показан хоризонт, но се намалява в тейпъра.
+            goal_horizon_weight = 1.0 if week_index < 8 else 0.85 + 0.15 * float(np.exp(-(week_index - 8) / 12.0))
+            goal_taper_damping = 0.25 if weeks_to_race <= 2 else 1.0
+            goal_factor = (
+                1.0
+                + (annual_volume_factor - 1.0)
+                * float(goal_weights.get(component, 0.0))
+                * goal_horizon_weight
+                * goal_taper_damping
+            )
 
             adaptive = float(integrated.loc[component, "adaptive_multiplier"])
             adaptive_near_term = 1.0 + (adaptive - 1.0) * float(np.exp(-week_index / 2.0))
             test_adjustment = float(integrated.loc[component, "test_adjustment"])
             test_factor = 1.0 + test_adjustment * float(np.exp(-week_index / 4.0))
             index *= calendar_factor * taper_factor * goal_factor * adaptive_near_term * test_factor
-            index = float(np.clip(index, 0.65, 1.35))
+            # Компонентно специфичен горен лимит: нискоинтензивният обем може
+            # да реагира по-видимо на сезонната цел, докато високите зони
+            # остават по-строго ограничени.
+            upper_index = {
+                "Z1": 1.55,
+                "Z2": 1.50,
+                "Z3": 1.40,
+                "Z4": 1.35,
+                "Z5": 1.30,
+                "STR": 1.40,
+            }[component]
+            index = float(np.clip(index, 0.65, upper_index))
             indices[component] = index
             metadata[component] = {
                 "status": status,
@@ -272,6 +290,172 @@ def _focus_schedule(target_q: pd.Series, tref: pd.Series) -> list[str]:
 
 def _default_k(component: str) -> float:
     return {"Z1": 1.06, "Z2": 1.12, "Z3": 1.28, "Z4": 1.24, "Z5": 1.22, "STR": 1.10}[component]
+
+
+def _individual_k_profile(
+    activity_summaries: pd.DataFrame,
+    as_of: date | pd.Timestamp,
+    lookback_days: int = 120,
+) -> dict[str, float]:
+    """Оценява индивидуален Q/реално време коефициент за сезонната прогноза."""
+
+    current = pd.Timestamp(as_of).normalize()
+    data = activity_summaries.copy()
+    if not data.empty and "date" in data:
+        data["date"] = pd.to_datetime(data["date"]).dt.normalize()
+        data = data.loc[data["date"] >= current - pd.Timedelta(days=lookback_days - 1)]
+
+    profile: dict[str, float] = {}
+    for component in COMPONENTS:
+        default = _default_k(component)
+        real_col = f"real_{component}"
+        q_col = f"q_{component}"
+        if data.empty or real_col not in data or q_col not in data:
+            profile[component] = default
+            continue
+        real_total = float(pd.to_numeric(data[real_col], errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+        q_total = float(pd.to_numeric(data[q_col], errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+        if real_total <= 1.0 or q_total <= 0.0:
+            profile[component] = default
+            continue
+        historical = float(np.clip(q_total / real_total, 0.80, 1.80))
+        history_weight = float(np.clip(real_total / 360.0, 0.0, 1.0))
+        profile[component] = (1.0 - history_weight) * default + history_weight * historical
+    return profile
+
+
+def build_volume_trajectory(
+    activity_summaries: pd.DataFrame,
+    weekly_targets: pd.DataFrame,
+    load_stats: pd.DataFrame,
+    parameters: dict[str, Any],
+    planning_preferences: dict[str, Any],
+    annual_context: dict[str, Any],
+    as_of: date | pd.Timestamp,
+    generated_plan: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Създава обща времева линия „реално → план → сезонна цел“.
+
+    Историческата линия се изчислява само от реалните минути и не се променя
+    при редакция на целта. Плановата линия се получава от бъдещите компонентни
+    цели E, обратното преобразуване E→Q и индивидуалните Q/реално време
+    коефициенти.
+    """
+
+    current = pd.Timestamp(as_of).normalize()
+    prefs = normalize_preferences(planning_preferences, today=current)
+    season_start = pd.Timestamp(prefs["season_start"]).normalize()
+    season_end = pd.Timestamp(prefs["season_end"]).normalize()
+    total_days = max(1, (season_end - season_start).days + 1)
+    target_hours = float(annual_context.get("target_hours", prefs["annual_target_hours"]))
+    required_weekly_hours = float(annual_context.get("required_weekly_hours", 0.0))
+    target_average_weekly_hours = float(annual_context.get("target_average_weekly_hours", 0.0))
+
+    rows: list[dict[str, Any]] = []
+    data = activity_summaries.copy()
+    if not data.empty and "date" in data:
+        data["date"] = pd.to_datetime(data["date"]).dt.normalize()
+        real_cols = [f"real_{component}" for component in COMPONENTS if f"real_{component}" in data]
+        for col in real_cols:
+            data[col] = pd.to_numeric(data[col], errors="coerce").fillna(0.0).clip(lower=0.0)
+        data["real_total"] = data[real_cols].sum(axis=1) if real_cols else 0.0
+        data = data.loc[(data["date"] >= season_start) & (data["date"] < current)]
+        if not data.empty:
+            data["week_start"] = data["date"] - pd.to_timedelta(data["date"].dt.weekday, unit="D")
+            first_week = pd.Timestamp(data["week_start"].min()).normalize()
+            last_week = pd.Timestamp(data["week_start"].max()).normalize()
+            complete_index = pd.date_range(first_week, last_week, freq="7D")
+            weekly_actual = (
+                data.groupby("week_start", as_index=True)["real_total"].sum()
+                .reindex(complete_index, fill_value=0.0)
+                .rename_axis("week_start")
+            )
+            cumulative = 0.0
+            for week_start, minutes in weekly_actual.items():
+                hours = float(minutes) / 60.0
+                cumulative += hours
+                plot_date = min(pd.Timestamp(week_start) + pd.Timedelta(days=6), current)
+                target_cumulative = target_hours * float(np.clip((plot_date - season_start).days + 1, 0, total_days)) / total_days
+                rows.append(
+                    {
+                        "date": plot_date,
+                        "week_start": pd.Timestamp(week_start),
+                        "series_type": "actual",
+                        "actual_weekly_hours": hours,
+                        "planned_weekly_hours": np.nan,
+                        "actual_cumulative_hours": cumulative,
+                        "planned_cumulative_hours": np.nan,
+                        "target_cumulative_hours": target_cumulative,
+                        "required_weekly_hours": required_weekly_hours,
+                        "target_average_weekly_hours": target_average_weekly_hours,
+                        "inversion_error": np.nan,
+                    }
+                )
+
+    completed_hours = float(annual_context.get("completed_hours", 0.0))
+    target_at_current = target_hours * float(np.clip((current - season_start).days + 1, 0, total_days)) / total_days
+    rows.append(
+        {
+            "date": current,
+            "week_start": current,
+            "series_type": "anchor",
+            "actual_weekly_hours": np.nan,
+            "planned_weekly_hours": np.nan,
+            "actual_cumulative_hours": completed_hours,
+            "planned_cumulative_hours": completed_hours,
+            "target_cumulative_hours": target_at_current,
+            "required_weekly_hours": required_weekly_hours,
+            "target_average_weekly_hours": target_average_weekly_hours,
+            "inversion_error": 0.0,
+        }
+    )
+
+    k_profile = _individual_k_profile(activity_summaries, current)
+    tref = load_stats["Tref"].reindex(COMPONENTS).astype(float)
+    generated_first_week_hours = np.nan
+    if generated_plan is not None and not generated_plan.empty and "total_real_min" in generated_plan:
+        generated_first_week_hours = float(
+            pd.to_numeric(generated_plan["total_real_min"], errors="coerce").fillna(0.0).clip(lower=0.0).sum()
+        ) / 60.0
+
+    cumulative_plan = completed_hours
+    future = weekly_targets.copy()
+    if not future.empty:
+        future["week_start"] = pd.to_datetime(future["week_start"]).dt.normalize()
+        future = future.loc[(future["week_start"] >= current) & (future["week_start"] <= season_end)]
+        for plan_index, (week_start, group) in enumerate(future.groupby("week_start", sort=True)):
+            target_e = (
+                group.set_index("component")["target_effective_week"]
+                .reindex(COMPONENTS)
+                .fillna(0.0)
+                .astype(float)
+            )
+            target_q, inversion_error = solve_direct_load(target_e, tref, parameters)
+            planned_hours = float(
+                sum(float(target_q[component]) / max(k_profile[component], EPS) for component in COMPONENTS)
+            ) / 60.0
+            if plan_index == 0 and np.isfinite(generated_first_week_hours):
+                planned_hours = generated_first_week_hours
+            cumulative_plan += planned_hours
+            plot_date = min(pd.Timestamp(week_start) + pd.Timedelta(days=6), season_end)
+            target_cumulative = target_hours * float(np.clip((plot_date - season_start).days + 1, 0, total_days)) / total_days
+            rows.append(
+                {
+                    "date": plot_date,
+                    "week_start": pd.Timestamp(week_start),
+                    "series_type": "plan",
+                    "actual_weekly_hours": np.nan,
+                    "planned_weekly_hours": planned_hours,
+                    "actual_cumulative_hours": np.nan,
+                    "planned_cumulative_hours": cumulative_plan,
+                    "target_cumulative_hours": target_cumulative,
+                    "required_weekly_hours": required_weekly_hours,
+                    "target_average_weekly_hours": target_average_weekly_hours,
+                    "inversion_error": float(inversion_error),
+                }
+            )
+
+    return pd.DataFrame(rows).sort_values(["date", "series_type"]).reset_index(drop=True)
 
 
 def _ranked_high_components(target_q: pd.Series, tref: pd.Series) -> list[str]:

@@ -20,6 +20,7 @@ from biathlon.charts import (
     readiness_figure,
     real_vs_equivalent_figure,
     test_history_figure,
+    weekly_plan_vs_actual_figure,
     weekly_targets_figure,
 )
 from biathlon.constants import (
@@ -58,7 +59,7 @@ from biathlon.ui_helpers import (
 )
 
 st.set_page_config(
-    page_title="Biathlon LoadLab · MVP 0.3",
+    page_title="Biathlon LoadLab · MVP 0.4",
     page_icon="🎯",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -517,7 +518,25 @@ def render_plan_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit:
     for warning in snapshot.get("warnings", []):
         st.warning(warning)
 
-    tab_wave, tab_week = st.tabs(["Дългосрочна динамика", "Следващи 7 дни"])
+    tab_volume, tab_wave, tab_week = st.tabs(
+        ["Реално срещу план", "Дългосрочна динамика", "Следващи 7 дни"]
+    )
+
+    with tab_volume:
+        st.plotly_chart(weekly_plan_vs_actual_figure(analysis["volume_trajectory"]), width="stretch")
+        context = analysis["annual_context"]
+        v1, v2, v3, v4 = st.columns(4)
+        v1.metric("Последни 4 седмици", f"{context['recent_weekly_hours']:.1f} h/седм.")
+        v2.metric("План · следващи 7 дни", f"{training_rows['total_real_min'].sum() / 60.0:.1f} h")
+        v3.metric("Нужно средно до края", f"{context['required_weekly_hours']:.1f} h/седм.")
+        v4.metric("Корекция от сезонната цел", f"×{context['volume_factor']:.3f}")
+        st.caption(
+            "Линията „Реално изпълнено“ се формира само от историята и не се променя при редакция "
+            "на сезонната цел. Линията „Адаптивен план“ се преизчислява след всяка промяна на целта, "
+            "календара, readiness или историята."
+        )
+        if context.get("factor_limited"):
+            st.warning(context.get("feasibility_status", "Корекцията е ограничена от защитен лимит."))
 
     with tab_wave:
         metric = st.radio(
@@ -730,12 +749,15 @@ def render_calendar_goals_page(bundle: dict[str, Any], analysis: dict[str, Any],
                     value=float(preferences["annual_target_hours"]),
                     step=10.0,
                     disabled=not can_edit,
-                    help="Например 600 часа за една година. Целта влияе ограничено и основно върху Z1–Z2.",
+                    help=(
+                        "Например 600 часа за една година. Реалната линия остава непроменена, "
+                        "а плановата линия се преизчислява плавно, основно чрез Z1–Z2."
+                    ),
                 )
                 goal_influence = st.slider(
                     "Тежест на годишната цел",
                     0.0,
-                    0.70,
+                    1.00,
                     float(preferences["annual_goal_influence"]),
                     0.05,
                     disabled=not can_edit,
@@ -744,7 +766,7 @@ def render_calendar_goals_page(bundle: dict[str, Any], analysis: dict[str, Any],
                 max_factor = st.slider(
                     "Максимално увеличение от годишната цел",
                     1.00,
-                    1.30,
+                    1.50,
                     float(preferences["max_volume_factor"]),
                     0.01,
                     disabled=not can_edit,
@@ -769,13 +791,16 @@ def render_calendar_goals_page(bundle: dict[str, Any], analysis: dict[str, Any],
                         athlete_id,
                     )
         with right:
-            st.plotly_chart(annual_goal_figure(context), width="stretch")
+            st.plotly_chart(annual_goal_figure(context, analysis["volume_trajectory"]), width="stretch")
+            st.plotly_chart(weekly_plan_vs_actual_figure(analysis["volume_trajectory"]), width="stretch")
             st.info(
-                f"Статус: **{context['status']}**. При запазване на последния 4-седмичен обем "
-                f"прогнозата е около **{context['forecast_hours']:.0f} h** до края на периода. "
+                f"Статус: **{context['status']}**. {context.get('feasibility_status', '')}. "
+                f"При запазване на последния 4-седмичен обем прогнозата е около "
+                f"**{context['forecast_hours']:.0f} h** до края на периода. "
                 f"Въведената история покрива приблизително **{context['season_history_coverage'] * 100:.0f}%** "
-                "от изминалата част на сезона. При непълно покритие годишната цел влияе по-слабо. "
-                "Системата не увеличава високите интензивности само за да достигне часовата цел."
+                "от изминалата част на сезона. Синята историческа линия не се променя от целта; "
+                "променят се бъдещият адаптивен план и целевата траектория. Високите интензивности "
+                "не се увеличават само за достигане на часовата цел."
             )
 
     with tab_calendar:

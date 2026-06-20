@@ -59,9 +59,9 @@ def default_planning_preferences(profile_code: str = "A", today: date | pd.Times
         "season_start": season_start,
         "season_end": season_end,
         "annual_target_hours": annual_targets.get(str(profile_code), 550.0),
-        "annual_goal_influence": 0.35,
-        "min_volume_factor": 0.88,
-        "max_volume_factor": 1.15,
+        "annual_goal_influence": 0.40,
+        "min_volume_factor": 0.82,
+        "max_volume_factor": 1.35,
         "annual_goal_component_weights": {
             "Z1": 1.00,
             "Z2": 0.80,
@@ -109,9 +109,9 @@ def normalize_preferences(
         result["season_end"] = result["season_start"] + pd.Timedelta(days=364)
 
     result["annual_target_hours"] = max(1.0, float(result.get("annual_target_hours", 550.0)))
-    result["annual_goal_influence"] = float(np.clip(result.get("annual_goal_influence", 0.35), 0.0, 1.0))
-    result["min_volume_factor"] = float(np.clip(result.get("min_volume_factor", 0.88), 0.50, 1.0))
-    result["max_volume_factor"] = float(np.clip(result.get("max_volume_factor", 1.15), 1.0, 1.50))
+    result["annual_goal_influence"] = float(np.clip(result.get("annual_goal_influence", 0.40), 0.0, 1.0))
+    result["min_volume_factor"] = float(np.clip(result.get("min_volume_factor", 0.82), 0.50, 1.0))
+    result["max_volume_factor"] = float(np.clip(result.get("max_volume_factor", 1.35), 1.0, 1.50))
 
     result["rest_days"] = sorted({int(day) for day in result.get("rest_days", []) if 0 <= int(day) <= 6})
     # Оставяме поне един активен ден. Това предпазва генератора от невъзможна
@@ -161,10 +161,12 @@ def annual_volume_context(
     preferences: dict[str, Any],
     as_of: date | pd.Timestamp | None = None,
 ) -> dict[str, Any]:
-    """Изчислява изпълнение и безопасен коригиращ фактор към годишната обемна цел.
+    """Изчислява сезонния прогрес и плавен коригиращ фактор към плана.
 
-    Годишната цел не замества 7/40. Тя създава ограничен контекстен фактор, който
-    влияе най-силно върху Z1/Z2 и много слабо върху високите интензивности.
+    Годишната цел не замества 7/40, readiness или календара. Тя сравнява
+    необходимия оставащ седмичен обем с последните четири седмици и прави
+    геометрично (а не линейно) смесване. Така различни цели дават различен
+    резултат, без да предизвикват скок, пропорционален на целия дефицит.
     """
 
     prefs = normalize_preferences(preferences, today=as_of)
@@ -209,22 +211,28 @@ def annual_volume_context(
     required_weekly = remaining_target / remaining_weeks if remaining_days > 0 else 0.0
     target_average_weekly = target_minutes / (total_season_days / 7.0)
 
+    reliability = float(np.clip(unique_history_days / 40.0, 0.0, 1.0))
+    coverage_weight = 0.20 + 0.80 * season_history_coverage
+    effective_influence = (
+        float(prefs["annual_goal_influence"])
+        * (0.35 + 0.65 * reliability)
+        * coverage_weight
+    )
+
     if recent_weekly_minutes > 1.0 and remaining_days > 0:
         raw_ratio = required_weekly / recent_weekly_minutes
-        bounded_ratio = float(np.clip(raw_ratio, 0.70, 1.30))
-        reliability = float(np.clip(unique_history_days / 40.0, 0.0, 1.0))
-        # Ако потребителят е въвел само последните 40 дни, не приемаме, че
-        # липсващите месеци са били нулеви. Покритието на сезона намалява
-        # влиянието на часовата цел, докато не бъде въведена по-пълна история.
-        coverage_weight = 0.20 + 0.80 * season_history_coverage
-        influence = float(prefs["annual_goal_influence"]) * (0.35 + 0.65 * reliability) * coverage_weight
-        factor = 1.0 + influence * (bounded_ratio - 1.0)
+        # По-широк диапазон от предишния 0.70–1.30. Ограничението остава,
+        # но различни реалистични цели не се сливат в един и същ резултат.
+        ratio_used = float(np.clip(raw_ratio, 0.55, 3.00))
+        unbounded_factor = float(np.exp(effective_influence * np.log(max(ratio_used, 1e-9))))
+        factor = float(np.clip(unbounded_factor, prefs["min_volume_factor"], prefs["max_volume_factor"]))
     else:
         raw_ratio = 1.0
-        reliability = float(np.clip(unique_history_days / 40.0, 0.0, 1.0))
+        ratio_used = 1.0
+        unbounded_factor = 1.0
         factor = 1.0
 
-    factor = float(np.clip(factor, prefs["min_volume_factor"], prefs["max_volume_factor"]))
+    factor_limited = not np.isclose(factor, unbounded_factor, rtol=0.0, atol=1e-9)
     forecast_minutes = completed_minutes + recent_weekly_minutes * max(0.0, remaining_days / 7.0)
     progress_pct = 100.0 * completed_minutes / max(target_minutes, 1e-9)
     expected_pct = 100.0 * expected_to_date / max(target_minutes, 1e-9)
@@ -236,6 +244,15 @@ def annual_volume_context(
         status = "Под линейната цел"
     else:
         status = "В рамките на целта"
+
+    if factor_limited and raw_ratio > 1.0:
+        feasibility_status = "Целта изисква по-голям скок от разрешения безопасен лимит"
+    elif factor_limited and raw_ratio < 1.0:
+        feasibility_status = "Намалението е ограничено от минималния защитен лимит"
+    elif reliability < 0.50:
+        feasibility_status = "Влиянието е ограничено поради недостатъчна история"
+    else:
+        feasibility_status = "Целта влияе плавно върху бъдещия план"
 
     return {
         "season_start": start,
@@ -254,10 +271,15 @@ def annual_volume_context(
         "recent_weekly_hours": recent_weekly_minutes / 60.0,
         "forecast_hours": forecast_minutes / 60.0,
         "raw_required_to_recent_ratio": raw_ratio,
+        "ratio_used_for_plan": ratio_used,
+        "effective_goal_influence": effective_influence,
+        "unbounded_volume_factor": unbounded_factor,
         "volume_factor": factor,
+        "factor_limited": factor_limited,
         "history_reliability": reliability,
         "season_history_coverage": season_history_coverage,
         "status": status,
+        "feasibility_status": feasibility_status,
     }
 
 
