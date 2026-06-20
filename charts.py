@@ -1,0 +1,196 @@
+"""Plotly графики за демонстрационния интерфейс."""
+
+from __future__ import annotations
+
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+
+from .constants import COMPONENT_LABELS, COMPONENTS, METRIC_DEFINITIONS, TEST_DEFINITIONS
+
+
+def index_7_40_figure(rolling_load: pd.DataFrame, component: str) -> go.Figure:
+    data = rolling_load.loc[rolling_load["component"] == component].copy()
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=data["date"],
+            y=data["index_7_40"],
+            mode="lines",
+            name="7/40",
+            hovertemplate="%{x|%d.%m.%Y}<br>7/40=%{y:.2f}<extra></extra>",
+        )
+    )
+    for value, label in [(0.80, "разтоварване"), (1.00, "поддържане"), (1.15, "силно изграждане"), (1.30, "проверка")]:
+        fig.add_hline(y=value, line_dash="dot", annotation_text=label, annotation_position="top left")
+    fig.update_layout(
+        title=f"Индекс 7/40 · {COMPONENT_LABELS[component]}",
+        xaxis_title="Дата",
+        yaxis_title="Индекс",
+        yaxis_range=[0.55, max(1.45, float(data["index_7_40"].max()) + 0.1 if not data.empty else 1.45)],
+        hovermode="x unified",
+        height=390,
+        margin=dict(l=20, r=20, t=55, b=25),
+    )
+    return fig
+
+
+def effective_load_figure(rolling_load: pd.DataFrame, component: str, days: int = 60) -> go.Figure:
+    data = rolling_load.loc[rolling_load["component"] == component].tail(days).copy()
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=data["date"], y=data["effective"], name="Дневен E"))
+    fig.add_trace(go.Scatter(x=data["date"], y=data["E7_daily"], mode="lines", name="E7 средно/ден"))
+    fig.add_trace(go.Scatter(x=data["date"], y=data["E40_daily"], mode="lines", name="E40 средно/ден"))
+    fig.update_layout(
+        title=f"Ефективен товар · {COMPONENT_LABELS[component]}",
+        xaxis_title="Дата",
+        yaxis_title="Еквивалентни минути",
+        barmode="overlay",
+        hovermode="x unified",
+        height=390,
+        margin=dict(l=20, r=20, t=55, b=25),
+    )
+    return fig
+
+
+def readiness_figure(readiness_history: pd.DataFrame, components: list[str] | None = None, days: int = 45) -> go.Figure:
+    components = components or COMPONENTS
+    data = readiness_history.loc[readiness_history["component"].isin(components)].copy()
+    if not data.empty:
+        cutoff = pd.to_datetime(data["date"]).max() - pd.Timedelta(days=days - 1)
+        data = data.loc[pd.to_datetime(data["date"]) >= cutoff]
+    fig = px.line(
+        data,
+        x="date",
+        y="readiness_after",
+        color="component",
+        labels={"date": "Дата", "readiness_after": "Readiness %", "component": "Компонент"},
+        title="Компонентна readiness и възстановяване",
+    )
+    fig.add_hline(y=90, line_dash="dot", annotation_text="ключова сесия")
+    fig.add_hline(y=65, line_dash="dot", annotation_text="възстановяване")
+    fig.update_layout(height=420, hovermode="x unified", margin=dict(l=20, r=20, t=55, b=25), yaxis_range=[0, 105])
+    return fig
+
+
+def weekly_targets_figure(weekly_targets: pd.DataFrame, metric: str = "target_effective_week") -> go.Figure:
+    labels = {
+        "target_effective_week": "Целеви ефективен седмичен товар",
+        "target_index": "Целеви 7/40",
+    }
+    fig = px.line(
+        weekly_targets,
+        x="week_start",
+        y=metric,
+        color="component",
+        markers=True,
+        hover_data=["phase", "status", "events", "weeks_to_main_race"],
+        labels={"week_start": "Начало на седмицата", metric: labels[metric], "component": "Компонент"},
+        title=f"Вълнообразна динамика · {labels[metric]}",
+    )
+    fig.update_layout(height=470, hovermode="x unified", margin=dict(l=20, r=20, t=55, b=25))
+    return fig
+
+
+def real_vs_equivalent_figure(activity_summary: pd.Series) -> go.Figure:
+    rows = []
+    for component in COMPONENTS:
+        rows.append({"component": component, "Тип": "Реално време", "Минути": float(activity_summary.get(f"real_{component}", 0.0))})
+        rows.append({"component": component, "Тип": "Директно Q", "Минути": float(activity_summary.get(f"q_{component}", 0.0))})
+    data = pd.DataFrame(rows)
+    fig = px.bar(
+        data,
+        x="component",
+        y="Минути",
+        color="Тип",
+        barmode="group",
+        title="Реално срещу физиологично еквивалентно време",
+        labels={"component": "Компонент"},
+    )
+    fig.update_layout(height=390, margin=dict(l=20, r=20, t=55, b=25))
+    return fig
+
+
+def activity_stream_figure(stream: pd.DataFrame, zone_profile: pd.DataFrame) -> go.Figure:
+    display = stream.iloc[:: max(1, len(stream) // 1800)].copy() if len(stream) > 1800 else stream.copy()
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=display["offset_sec"] / 60.0, y=display["hr"], mode="lines", name="Пулс"))
+    for _, zone in zone_profile.sort_values("hr_low").iterrows():
+        fig.add_hrect(
+            y0=float(zone["hr_low"]),
+            y1=float(zone["hr_high"]),
+            opacity=0.08,
+            line_width=0,
+            annotation_text=str(zone["component"]),
+            annotation_position="top left",
+        )
+    fig.update_layout(
+        title="1-секунден тестов пулсов профил",
+        xaxis_title="Минута",
+        yaxis_title="Пулс (уд./мин)",
+        height=390,
+        margin=dict(l=20, r=20, t=55, b=25),
+    )
+    return fig
+
+
+def monitoring_history_figure(wellness: pd.DataFrame, athlete_id: str, metric: str, days: int = 60) -> go.Figure:
+    definition = METRIC_DEFINITIONS[metric]
+    data = wellness.loc[wellness["athlete_id"] == athlete_id, ["date", metric]].copy().sort_values("date").tail(days)
+    data["mean7"] = data[metric].rolling(7, min_periods=1).mean()
+    data["mean40"] = data[metric].rolling(40, min_periods=1).mean()
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=data["date"], y=data[metric], mode="lines+markers", name="Реална стойност"))
+    fig.add_trace(go.Scatter(x=data["date"], y=data["mean7"], mode="lines", name="7 дни"))
+    fig.add_trace(go.Scatter(x=data["date"], y=data["mean40"], mode="lines", name="40 дни"))
+    fig.update_layout(
+        title=f"{definition['label']} · реална стойност и тенденции",
+        xaxis_title="Дата",
+        yaxis_title=definition["unit"],
+        height=390,
+        hovermode="x unified",
+        margin=dict(l=20, r=20, t=55, b=25),
+    )
+    return fig
+
+
+def test_history_figure(tests: pd.DataFrame, athlete_id: str, test_code: str) -> go.Figure:
+    definition = TEST_DEFINITIONS[test_code]
+    data = tests.loc[(tests["athlete_id"] == athlete_id) & (tests["test_code"] == test_code)].copy().sort_values("date")
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=data["date"],
+            y=data["primary_value"],
+            mode="lines+markers",
+            name=f"{definition['primary_label']} ({definition['primary_unit']})",
+        )
+    )
+    fig.update_layout(
+        title=definition["label"],
+        xaxis_title="Дата",
+        yaxis_title=f"{definition['primary_label']} · {definition['primary_unit']}",
+        height=390,
+        margin=dict(l=20, r=20, t=55, b=25),
+    )
+    return fig
+
+
+def plan_comparison_figure(comparison: pd.DataFrame) -> go.Figure:
+    data = comparison.reset_index().melt(
+        id_vars="component",
+        value_vars=["target_effective", "planned_effective"],
+        var_name="Тип",
+        value_name="Еквивалентни минути",
+    )
+    data["Тип"] = data["Тип"].map({"target_effective": "Цел", "planned_effective": "План"})
+    fig = px.bar(
+        data,
+        x="component",
+        y="Еквивалентни минути",
+        color="Тип",
+        barmode="group",
+        title="Целеви срещу планиран ефективен товар",
+    )
+    fig.update_layout(height=390, margin=dict(l=20, r=20, t=55, b=25))
+    return fig
