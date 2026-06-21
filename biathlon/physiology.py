@@ -9,9 +9,23 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import least_squares
 
-from .constants import AEROBIC_COMPONENTS, COMPONENTS
+from .constants import (
+    AEROBIC_COMPONENTS,
+    COMPONENTS,
+    DEFAULT_STRENGTH_TYPE,
+    STRENGTH_COEFFICIENTS,
+    STRENGTH_TYPES,
+)
 
 EPS = 1e-9
+
+
+def _numeric_series(frame: pd.DataFrame, column: str, default: float = 0.0) -> pd.Series:
+    """Връща числова Series и работи и когато колоната липсва."""
+
+    if column in frame.columns:
+        return pd.to_numeric(frame[column], errors="coerce").fillna(default)
+    return pd.Series(float(default), index=frame.index, dtype=float)
 
 
 def intrazone_coefficient(position: float, weight_low: float, weight_high: float, power: float) -> float:
@@ -79,33 +93,108 @@ def analyze_activity_stream(stream: pd.DataFrame, zone_profile: pd.DataFrame) ->
     return pd.DataFrame(rows)
 
 
+def strength_equivalent_minutes(
+    real_minutes: dict[str, float] | pd.Series,
+) -> tuple[float, float, float]:
+    """Връща общо реални минути, силови еквивалентни минути и среден k.
+
+    Силата няма пулсови граници. Вместо това всяка реална минута се
+    претегля с коефициента на избрания вид силова работа.
+    """
+
+    values = {
+        strength_type: max(0.0, float(real_minutes.get(strength_type, 0.0)))
+        for strength_type in STRENGTH_TYPES
+    }
+    real_total = float(sum(values.values()))
+    equivalent = float(
+        sum(values[strength_type] * STRENGTH_COEFFICIENTS[strength_type] for strength_type in STRENGTH_TYPES)
+    )
+    average_k = equivalent / real_total if real_total > EPS else 0.0
+    return real_total, equivalent, average_k
+
+
 def activities_to_activity_summaries(
     activities: pd.DataFrame,
     zone_profile: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Преобразува реални минути и средна позиция в зоната до директен Q."""
+    """Преобразува реални минути до директен Q.
+
+    За Z1–Z5 се използва вътрешнозоново претегляне. За силата се пазят
+    четири вида реално време и се прилагат фиксираните коефициенти:
+    стабилизация 0.8, обща силова издръжливост 1.0, максимална сила 1.2
+    и плиометрия 1.4. В модела 7/40 те се сумират в общ компонент STR.
+    """
 
     if activities.empty:
-        columns = ["activity_id", "date", *[f"real_{c}" for c in COMPONENTS], *[f"q_{c}" for c in COMPONENTS]]
+        columns = [
+            "activity_id",
+            "date",
+            *[f"real_{c}" for c in COMPONENTS],
+            *[f"real_{c}" for c in STRENGTH_TYPES],
+            *[f"q_{c}" for c in COMPONENTS],
+            *[f"q_{c}" for c in STRENGTH_TYPES],
+        ]
         return pd.DataFrame(columns=columns)
 
     profile = zone_profile.set_index("component")
     result = activities.copy()
     for component in AEROBIC_COMPONENTS:
         zone = profile.loc[component]
-        position = pd.to_numeric(result.get(f"pos_{component}", 0.0), errors="coerce").fillna(0.0).clip(0, 1)
+        position = _numeric_series(result, f"pos_{component}", 0.0).clip(0, 1)
         k = (
             float(zone["weight_low"])
             + (float(zone["weight_high"]) - float(zone["weight_low"])) * (position ** float(zone["power"]))
         ) / max(float(zone["weight_low"]), EPS)
-        real = pd.to_numeric(result.get(f"real_{component}", 0.0), errors="coerce").fillna(0.0).clip(lower=0)
+        real = _numeric_series(result, f"real_{component}", 0.0).clip(lower=0)
         result[f"k_{component}"] = k
         result[f"q_{component}"] = real * k
 
-    real_str = pd.to_numeric(result.get("real_STR", 0.0), errors="coerce").fillna(0.0).clip(lower=0)
-    strength_k = pd.to_numeric(result.get("strength_k", 1.0), errors="coerce").fillna(1.0).clip(lower=0.5, upper=2.0)
-    result["k_STR"] = strength_k
-    result["q_STR"] = real_str * strength_k
+    # Новият формат пази реалното време по четири вида. За стари CSV/данни
+    # с една колона real_STR се използва обратно съвместим fallback.
+    legacy_real = _numeric_series(result, "real_STR", 0.0).clip(lower=0)
+    legacy_k = _numeric_series(result, "strength_k", 1.0).clip(lower=0.5, upper=2.0)
+
+    typed_real: dict[str, pd.Series] = {}
+    for strength_type in STRENGTH_TYPES:
+        typed_real[strength_type] = _numeric_series(
+            result, f"real_{strength_type}", 0.0
+        ).clip(lower=0)
+    typed_total = sum(typed_real.values())
+    use_legacy = (typed_total <= EPS) & (legacy_real > EPS)
+
+    # За визуализация старият общ силов обем се отнася към обща силова
+    # издръжливост, но Q се запазва чрез стария strength_k.
+    typed_real[DEFAULT_STRENGTH_TYPE] = typed_real[DEFAULT_STRENGTH_TYPE].where(~use_legacy, legacy_real)
+    typed_total = sum(typed_real.values())
+
+    typed_q: dict[str, pd.Series] = {}
+    for strength_type in STRENGTH_TYPES:
+        coefficient = float(STRENGTH_COEFFICIENTS[strength_type])
+        result[f"real_{strength_type}"] = typed_real[strength_type]
+        result[f"k_{strength_type}"] = coefficient
+        typed_q[strength_type] = typed_real[strength_type] * coefficient
+        result[f"q_{strength_type}"] = typed_q[strength_type]
+
+    strength_q_from_types = sum(typed_q.values())
+    strength_q = strength_q_from_types.where(~use_legacy, legacy_real * legacy_k)
+    result["real_STR"] = typed_total
+    result["q_STR"] = strength_q
+    result["k_STR"] = np.where(typed_total > EPS, strength_q / typed_total, 0.0)
+    result["strength_k"] = result["k_STR"]
+    result["strength_type"] = result.apply(
+        lambda row: next(
+            (
+                strength_type
+                for strength_type in STRENGTH_TYPES
+                if float(row.get(f"real_{strength_type}", 0.0)) > EPS
+            ),
+            "",
+        )
+        if sum(float(row.get(f"real_{strength_type}", 0.0)) > EPS for strength_type in STRENGTH_TYPES) <= 1
+        else "MIX",
+        axis=1,
+    )
     result["date"] = pd.to_datetime(result["date"]).dt.normalize()
     return result
 

@@ -7,13 +7,55 @@ from copy import deepcopy
 COMPONENTS = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"]
 AEROBIC_COMPONENTS = COMPONENTS[:5]
 
+# Силата остава един физиологичен компонент в модела 7/40, но реалното
+# време се съхранява по четири вида. Всеки вид има собствен фиксиран
+# коефициент за преобразуване към силови еквивалентни минути.
+STRENGTH_TYPES = ["STR_STAB", "STR_END", "STR_MAX", "STR_PLY"]
+STRENGTH_TYPE_DEFINITIONS = {
+    "STR_STAB": {
+        "label": "Стабилизация / кор",
+        "short": "Стабилизация",
+        "coefficient": 0.80,
+        "description": "Стабилизация, кор, профилактика и контролираща работа.",
+    },
+    "STR_END": {
+        "label": "Обща силова издръжливост",
+        "short": "Силова издръжливост",
+        "coefficient": 1.00,
+        "description": "Кръгова и общоразвиваща силова работа с продължително усилие.",
+    },
+    "STR_MAX": {
+        "label": "Максимална сила",
+        "short": "Максимална сила",
+        "coefficient": 1.20,
+        "description": "Работа с висока относителна тежест и малък брой повторения.",
+    },
+    "STR_PLY": {
+        "label": "Плиометрия",
+        "short": "Плиометрия",
+        "coefficient": 1.40,
+        "description": "Скокова и експлозивна работа с висока нервно-мускулна цена.",
+    },
+}
+STRENGTH_COEFFICIENTS = {
+    code: float(definition["coefficient"]) for code, definition in STRENGTH_TYPE_DEFINITIONS.items()
+}
+STRENGTH_LABELS = {
+    code: str(definition["label"]) for code, definition in STRENGTH_TYPE_DEFINITIONS.items()
+}
+STRENGTH_SHORT = {
+    code: str(definition["short"]) for code, definition in STRENGTH_TYPE_DEFINITIONS.items()
+}
+DEFAULT_STRENGTH_TYPE = "STR_END"
+REAL_INPUT_COMPONENTS = [*AEROBIC_COMPONENTS, *STRENGTH_TYPES]
+
 COMPONENT_LABELS = {
     "Z1": "Z1 · възстановителна / ниска интензивност",
     "Z2": "Z2 · основна аеробна издръжливост",
     "Z3": "Z3 · темпова / смесена издръжливост",
     "Z4": "Z4 · прагова / надпрагова работа",
     "Z5": "Z5 · VO₂max / висока интензивност",
-    "STR": "STR · силова подготовка",
+    "STR": "STR · силова подготовка (4 вида)",
 }
 
 COMPONENT_SHORT = {

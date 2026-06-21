@@ -6,7 +6,15 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-from .constants import COMPONENT_LABELS, COMPONENTS, METRIC_DEFINITIONS, TEST_DEFINITIONS
+from .constants import (
+    COMPONENT_LABELS,
+    COMPONENTS,
+    METRIC_DEFINITIONS,
+    STRENGTH_COEFFICIENTS,
+    STRENGTH_LABELS,
+    STRENGTH_TYPES,
+    TEST_DEFINITIONS,
+)
 from .preferences import EVENT_TYPE_LABELS
 
 
@@ -107,6 +115,47 @@ def real_vs_equivalent_figure(activity_summary: pd.Series) -> go.Figure:
         barmode="group",
         title="Реално срещу физиологично еквивалентно време",
         labels={"component": "Компонент"},
+    )
+    fig.update_layout(height=390, margin=dict(l=20, r=20, t=55, b=25))
+    return fig
+
+
+def strength_breakdown_figure(activity_summary: pd.Series) -> go.Figure:
+    """Реално и претеглено силово време по четирите вида сила."""
+
+    rows = []
+    for strength_type in STRENGTH_TYPES:
+        real = float(activity_summary.get(f"real_{strength_type}", 0.0) or 0.0)
+        coefficient = float(STRENGTH_COEFFICIENTS[strength_type])
+        equivalent = float(activity_summary.get(f"q_{strength_type}", real * coefficient) or 0.0)
+        rows.append(
+            {
+                "Вид сила": STRENGTH_LABELS[strength_type],
+                "Тип": "Реални минути",
+                "Минути": real,
+                "Коефициент": coefficient,
+            }
+        )
+        rows.append(
+            {
+                "Вид сила": STRENGTH_LABELS[strength_type],
+                "Тип": "Еквивалентни минути",
+                "Минути": equivalent,
+                "Коефициент": coefficient,
+            }
+        )
+    data = pd.DataFrame(rows)
+    fig = px.bar(
+        data,
+        x="Вид сила",
+        y="Минути",
+        color="Тип",
+        barmode="group",
+        custom_data=["Коефициент"],
+        title="Силова работа · реално време и претеглен товар",
+    )
+    fig.update_traces(
+        hovertemplate="%{x}<br>%{fullData.name}: %{y:.1f} мин<br>k=%{customdata[0]:.1f}<extra></extra>"
     )
     fig.update_layout(height=390, margin=dict(l=20, r=20, t=55, b=25))
     return fig

@@ -13,7 +13,9 @@ activity_id, athlete_id, date, start_time, sport, moving_min, source
 За обобщения MVP използва и:
 
 ```text
-real_Z1 ... real_Z5, real_STR
+real_Z1 ... real_Z5
+real_STR_STAB, real_STR_END, real_STR_MAX, real_STR_PLY
+real_STR, q_STR_STAB, q_STR_END, q_STR_MAX, q_STR_PLY, q_STR
 pos_Z1 ... pos_Z5
 ```
 
@@ -76,15 +78,20 @@ double_threshold_phase_max, between_sessions_recovery_days
 Минималният CSV формат е:
 
 ```text
-date, sport, rpe, Z1, Z2, Z3, Z4, Z5, STR, note
+date, sport, rpe, Z1, Z2, Z3, Z4, Z5, STR_STAB, STR_END, STR_MAX, STR_PLY, note
 ```
 
-Всеки ред е сумарен реален дневен обем. При импорт се добавят нормализирани полета `source`, `status`, `moving_min`, `elapsed_min`, `quality_score`, `real_Zx`, `pos_Zx` и уникален `activity_id`.
+Всеки ред е сумарен реален дневен обем. Силовите колони са реални минути; коефициентите 0.8/1.0/1.2/1.4 се прилагат автоматично. При импорт се добавят нормализирани полета `source`, `status`, `moving_min`, `elapsed_min`, `quality_score`, `real_Zx`, `pos_Zx` и уникален `activity_id`.
 
 ## Бърз седмичен onboarding
 
 ```text
-week_start, sessions, Z1, Z2, Z3, Z4, Z5, STR, rpe, note
+week_start, sessions, Z1, Z2, Z3, Z4, Z5, STR_STAB, STR_END, STR_MAX, STR_PLY, rpe, note
 ```
 
 Седмичните тотали се разпределят до дневни/сесийни редове според избраните почивни, двусесийни, интензивни, силови и дълги дни. Източникът се записва като `manual_weekly_distribution`, за да не се смесва с реално измерена едносекундна история.
+
+
+## Обратна съвместимост на силовия вход
+
+Стар файл с една колона `STR` или `real_STR` остава валиден. При липса на новите четири колони системата отнася тези реални минути към `STR_END` (обща силова издръжливост, `k=1.0`). Ако има и старо поле `strength_k`, старият директен `q_STR` се запазва при анализа.

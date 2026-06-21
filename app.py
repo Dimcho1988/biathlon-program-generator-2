@@ -19,11 +19,13 @@ from biathlon.charts import (
     plan_comparison_figure,
     readiness_figure,
     real_vs_equivalent_figure,
+    strength_breakdown_figure,
     test_history_figure,
     weekly_plan_vs_actual_figure,
     weekly_targets_figure,
 )
 from biathlon.constants import (
+    AEROBIC_COMPONENTS,
     COMPONENT_LABELS,
     COMPONENT_SHORT,
     COMPONENTS,
@@ -31,11 +33,14 @@ from biathlon.constants import (
     EXPERT_ROLES,
     METRIC_DEFINITIONS,
     ROLE_LABELS,
+    STRENGTH_COEFFICIENTS,
+    STRENGTH_LABELS,
+    STRENGTH_TYPES,
     TEST_DEFINITIONS,
 )
 from biathlon.demo_data import DEMO_SEED, generate_activity_stream, generate_demo_bundle
 from biathlon.explanations import EXPLANATIONS, explanation_titles, help_text
-from biathlon.physiology import analyze_activity_stream
+from biathlon.physiology import analyze_activity_stream, strength_equivalent_minutes
 from biathlon.preferences import (
     EVENT_TYPE_LABELS,
     WEEKDAY_BY_LABEL,
@@ -59,7 +64,7 @@ from biathlon.ui_helpers import (
 )
 
 st.set_page_config(
-    page_title="Biathlon LoadLab · MVP 0.4",
+    page_title="Biathlon LoadLab · MVP 0.5",
     page_icon="🎯",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -373,8 +378,16 @@ def render_dashboard_page(analysis: dict[str, Any]) -> None:
 
 
 def render_load_page(analysis: dict[str, Any]) -> None:
-    page_header("Натоварване и индекс 7/40", "Реално време, вътрешнозоново претегляне, директен и ефективен товар.")
-    component = st.selectbox("Компонент", COMPONENTS, format_func=lambda c: COMPONENT_LABELS[c], key="load_component")
+    page_header(
+        "Натоварване и индекс 7/40",
+        "Реално време, вътрешнозоново претегляне, силови коефициенти, директен и ефективен товар.",
+    )
+    component = st.selectbox(
+        "Компонент",
+        COMPONENTS,
+        format_func=lambda c: COMPONENT_LABELS[c],
+        key="load_component",
+    )
     row = analysis["load_stats"].loc[component]
     readiness = analysis["load_readiness"].loc[component]
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -383,6 +396,33 @@ def render_load_page(analysis: dict[str, Any]) -> None:
     c3.metric("E40 · средно/ден", f"{row['E40_daily']:.1f}", help=help_text("effective_load"))
     c4.metric("Tref", f"{row['Tref']:.1f}", help=help_text("tref"))
     c5.metric("Readiness", f"{readiness['readiness']:.0f}%", help=help_text("readiness"))
+
+    if component == "STR":
+        st.info(
+            "STR е общият силов физиологичен компонент. Реалното време се пази по четири вида, "
+            "а силовият Q се получава чрез коефициентите по-долу.",
+            icon="🏋️",
+        )
+        strength_model = pd.DataFrame(
+            [
+                {
+                    "Код": strength_type,
+                    "Вид сила": STRENGTH_LABELS[strength_type],
+                    "Коефициент": STRENGTH_COEFFICIENTS[strength_type],
+                    "Пример · 30 реални мин": 30.0 * STRENGTH_COEFFICIENTS[strength_type],
+                }
+                for strength_type in STRENGTH_TYPES
+            ]
+        )
+        st.dataframe(
+            strength_model,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Коефициент": st.column_config.NumberColumn(format="%.1f", help=help_text("strength_load")),
+                "Пример · 30 реални мин": st.column_config.NumberColumn("Екв. мин при 30 реални", format="%.1f"),
+            },
+        )
 
     left, right = st.columns(2)
     with left:
@@ -404,7 +444,12 @@ def render_load_page(analysis: dict[str, Any]) -> None:
         row["activity_id"]: f"{pd.Timestamp(row['date']).date()} · {row['sport']} · {row['moving_min']:.0f} мин"
         for _, row in summaries.iterrows()
     }
-    selected_id = st.selectbox("Активност", summaries["activity_id"].tolist(), format_func=lambda value: label_map[value], key="activity_detail")
+    selected_id = st.selectbox(
+        "Активност",
+        summaries["activity_id"].tolist(),
+        format_func=lambda value: label_map[value],
+        key="activity_detail",
+    )
     selected = summaries.loc[summaries["activity_id"] == selected_id].iloc[0]
     stream = generate_activity_stream(selected, analysis["zone_profile"])
     stream_summary = analyze_activity_stream(stream, analysis["zone_profile"])
@@ -433,8 +478,47 @@ def render_load_page(analysis: dict[str, Any]) -> None:
             "Среден k": st.column_config.NumberColumn(format="%.3f", help=help_text("real_equivalent")),
         },
     )
-    st.caption("Потокът е синтетичен, но е на едносекундна решетка и преминава през същата аналитична функция, която може да обработва бъдещ реален входен адаптер.")
 
+    strength_rows = []
+    for strength_type in STRENGTH_TYPES:
+        real_min = float(selected.get(f"real_{strength_type}", 0.0) or 0.0)
+        coefficient = float(STRENGTH_COEFFICIENTS[strength_type])
+        equivalent_min = float(selected.get(f"q_{strength_type}", real_min * coefficient) or 0.0)
+        strength_rows.append(
+            {
+                "Вид сила": STRENGTH_LABELS[strength_type],
+                "Реални минути": real_min,
+                "Коефициент": coefficient,
+                "Еквивалентни минути": equivalent_min,
+            }
+        )
+    strength_detail = pd.DataFrame(strength_rows)
+    if float(strength_detail["Реални минути"].sum()) > 0:
+        st.subheader("Силов детайл на активността")
+        scol1, scol2 = st.columns([1.2, 1])
+        with scol1:
+            st.plotly_chart(strength_breakdown_figure(selected), width="stretch")
+        with scol2:
+            st.dataframe(
+                strength_detail,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Реални минути": st.column_config.NumberColumn(format="%.1f"),
+                    "Коефициент": st.column_config.NumberColumn(format="%.1f", help=help_text("strength_load")),
+                    "Еквивалентни минути": st.column_config.NumberColumn(format="%.1f"),
+                },
+            )
+            real_total = float(strength_detail["Реални минути"].sum())
+            q_total = float(strength_detail["Еквивалентни минути"].sum())
+            average_k = q_total / real_total if real_total > 0 else 0.0
+            st.metric("Сила · общо реално време", f"{real_total:.1f} мин")
+            st.metric("Сила · общ Q", f"{q_total:.1f} екв. мин", delta=f"среден k = {average_k:.2f}", delta_color="off")
+
+    st.caption(
+        "Пулсовият поток е синтетичен и се отнася за Z1–Z5. Силовата работа се анализира "
+        "отделно чрез вида, реалните минути и фиксирания коефициент."
+    )
 
 def render_recovery_page(analysis: dict[str, Any]) -> None:
     page_header("Динамика на възстановяването", "Остатъчна умора, експоненциално затихване и прогнозен момент за следващ ключов стимул.")
@@ -595,6 +679,10 @@ def render_plan_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit:
             "time_of_day",
             "focus",
             "method",
+            "strength_label",
+            "strength_coefficient",
+            "strength_real_min",
+            "strength_equivalent_min",
             "total_real_min",
             "status",
             "locked",
@@ -606,7 +694,18 @@ def render_plan_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit:
             width="stretch",
             hide_index=True,
             key=f"plan_editor_{analysis['athlete']['athlete_id']}_{bundle['version']}",
-            disabled=["date", "day", "session_no", "time_of_day", "focus", "method"] if can_edit else list(editable.columns),
+            disabled=[
+                "date",
+                "day",
+                "session_no",
+                "time_of_day",
+                "focus",
+                "method",
+                "strength_label",
+                "strength_coefficient",
+                "strength_real_min",
+                "strength_equivalent_min",
+            ] if can_edit else list(editable.columns),
             column_config={
                 "date": st.column_config.DateColumn("Дата", format="DD.MM.YYYY"),
                 "day": "Ден",
@@ -614,7 +713,11 @@ def render_plan_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit:
                 "time_of_day": "Част на деня",
                 "focus": "Фокус",
                 "method": "Метод",
-                "total_real_min": st.column_config.NumberColumn("Реални минути", min_value=0.0, max_value=360.0, step=5.0),
+                "strength_label": st.column_config.TextColumn("Вид сила"),
+                "strength_coefficient": st.column_config.NumberColumn("Силов k", format="%.1f", help=help_text("strength_load")),
+                "strength_real_min": st.column_config.NumberColumn("Сила · реални мин", format="%.1f"),
+                "strength_equivalent_min": st.column_config.NumberColumn("Сила · екв. мин", format="%.1f"),
+                "total_real_min": st.column_config.NumberColumn("Общо реални минути", min_value=0.0, max_value=360.0, step=5.0),
                 "status": st.column_config.SelectboxColumn("Статус", options=["Предложена", "Одобрена", "Отхвърлена"]),
                 "locked": st.column_config.CheckboxColumn("Заключена"),
                 "coach_note": st.column_config.TextColumn("Бележка на треньора"),
@@ -699,6 +802,29 @@ def render_plan_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit:
                     }
                 )
                 st.dataframe(details, width="stretch", hide_index=True)
+                if str(row.get("focus", "")) == "STR":
+                    strength_type = str(row.get("strength_type", ""))
+                    strength_table = pd.DataFrame(
+                        [
+                            {
+                                "Вид сила": row.get("strength_label", STRENGTH_LABELS.get(strength_type, "")),
+                                "Реални минути": float(row.get("strength_real_min", 0.0)),
+                                "Коефициент": float(row.get("strength_coefficient", 0.0)),
+                                "Еквивалентни минути": float(row.get("strength_equivalent_min", 0.0)),
+                            }
+                        ]
+                    )
+                    st.markdown("**Силово преобразуване**", help=help_text("strength_load"))
+                    st.dataframe(
+                        strength_table,
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            "Реални минути": st.column_config.NumberColumn(format="%.1f"),
+                            "Коефициент": st.column_config.NumberColumn(format="%.1f"),
+                            "Еквивалентни минути": st.column_config.NumberColumn(format="%.1f"),
+                        },
+                    )
 
 
 def render_calendar_goals_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit: bool) -> None:
@@ -1101,7 +1227,57 @@ def render_history_page(bundle: dict[str, Any], analysis: dict[str, Any], can_ed
             z3 = c2.number_input("Z3 · реални минути", 0.0, 180.0, 0.0, 2.0, disabled=not can_edit)
             z4 = c3.number_input("Z4 · реални минути", 0.0, 120.0, 0.0, 1.0, disabled=not can_edit)
             z5 = c3.number_input("Z5 · реални минути", 0.0, 90.0, 0.0, 1.0, disabled=not can_edit)
-            strength = c3.number_input("Сила · реални минути", 0.0, 180.0, 0.0, 5.0, disabled=not can_edit)
+
+            st.markdown("**Силова работа · реални минути по вид**", help=help_text("strength_load"))
+            s1, s2, s3, s4 = st.columns(4)
+            str_stab = s1.number_input(
+                "Стабилизация · k 0.8",
+                0.0,
+                180.0,
+                0.0,
+                5.0,
+                disabled=not can_edit,
+                help="Реални минути × 0.8.",
+            )
+            str_end = s2.number_input(
+                "Силова издръжливост · k 1.0",
+                0.0,
+                180.0,
+                0.0,
+                5.0,
+                disabled=not can_edit,
+                help="Реални минути × 1.0.",
+            )
+            str_max = s3.number_input(
+                "Максимална сила · k 1.2",
+                0.0,
+                180.0,
+                0.0,
+                5.0,
+                disabled=not can_edit,
+                help="Реални минути × 1.2.",
+            )
+            str_ply = s4.number_input(
+                "Плиометрия · k 1.4",
+                0.0,
+                120.0,
+                0.0,
+                5.0,
+                disabled=not can_edit,
+                help="Реални минути × 1.4.",
+            )
+            strength_real, strength_q, strength_k = strength_equivalent_minutes(
+                {
+                    "STR_STAB": str_stab,
+                    "STR_END": str_end,
+                    "STR_MAX": str_max,
+                    "STR_PLY": str_ply,
+                }
+            )
+            st.caption(
+                f"Сила: {strength_real:.1f} реални мин → {strength_q:.1f} еквивалентни мин "
+                f"(среден k {strength_k:.2f})."
+            )
             note = st.text_area("Бележка", value="Ръчно въведена тренировка.", disabled=not can_edit)
             submit_activity = st.form_submit_button("Добави към историята", disabled=not can_edit, width="stretch")
         if submit_activity:
@@ -1116,7 +1292,10 @@ def render_history_page(bundle: dict[str, Any], analysis: dict[str, Any], can_ed
                         "Z3": z3,
                         "Z4": z4,
                         "Z5": z5,
-                        "STR": strength,
+                        "STR_STAB": str_stab,
+                        "STR_END": str_end,
+                        "STR_MAX": str_max,
+                        "STR_PLY": str_ply,
                         "note": note,
                     }
                 ]
@@ -1161,7 +1340,7 @@ def render_history_page(bundle: dict[str, Any], analysis: dict[str, Any], can_ed
             width="stretch",
             hide_index=True,
             num_rows="dynamic" if can_edit else "fixed",
-            disabled=not can_edit,
+            disabled=["STR", "STR_Q"] if can_edit else True,
             key=f"history_editor_{athlete_id}_{period}_{bundle['version']}",
             column_config={
                 "date": st.column_config.DateColumn("Дата", format="DD.MM.YYYY", required=True),
@@ -1169,16 +1348,38 @@ def render_history_page(bundle: dict[str, Any], analysis: dict[str, Any], can_ed
                 "rpe": st.column_config.NumberColumn("RPE", min_value=0.0, max_value=10.0, step=0.5),
                 **{
                     component: st.column_config.NumberColumn(
-                        f"{component} · мин", min_value=0.0, max_value=700.0, step=1.0
+                        f"{component} · реални мин", min_value=0.0, max_value=700.0, step=1.0
                     )
-                    for component in COMPONENTS
+                    for component in AEROBIC_COMPONENTS
                 },
+                "STR_STAB": st.column_config.NumberColumn(
+                    "Стабилизация · мин", min_value=0.0, max_value=300.0, step=1.0,
+                    help="Коефициент 0.8.",
+                ),
+                "STR_END": st.column_config.NumberColumn(
+                    "Силова издръжливост · мин", min_value=0.0, max_value=300.0, step=1.0,
+                    help="Коефициент 1.0.",
+                ),
+                "STR_MAX": st.column_config.NumberColumn(
+                    "Максимална сила · мин", min_value=0.0, max_value=240.0, step=1.0,
+                    help="Коефициент 1.2.",
+                ),
+                "STR_PLY": st.column_config.NumberColumn(
+                    "Плиометрия · мин", min_value=0.0, max_value=180.0, step=1.0,
+                    help="Коефициент 1.4.",
+                ),
+                "STR": st.column_config.NumberColumn(
+                    "Сила · общо реални мин", format="%.1f", help=help_text("strength_load")
+                ),
+                "STR_Q": st.column_config.NumberColumn(
+                    "Сила · екв. мин", format="%.1f", help=help_text("strength_load")
+                ),
                 "note": st.column_config.TextColumn("Бележка"),
             },
         )
         st.caption(
             f"„Запази таблицата“ заменя историята на спортиста за периода {period_start.date()} – {period_end.date()}. "
-            "Един ред представлява сумарното реално време за деня."
+            "Редактират се реалните минути по зони и по вид сила. Колоните „Сила · общо“ и „Сила · екв.“ се изчисляват автоматично."
         )
         if st.button("Запази таблицата и преизчисли", disabled=not can_edit, width="stretch"):
             try:
@@ -1301,7 +1502,10 @@ def render_history_page(bundle: dict[str, Any], analysis: dict[str, Any], can_ed
                     "Z3": 30.0,
                     "Z4": 15.0,
                     "Z5": 6.0,
-                    "STR": 45.0,
+                    "STR_STAB": 10.0,
+                    "STR_END": 25.0,
+                    "STR_MAX": 10.0,
+                    "STR_PLY": 0.0,
                     "rpe": 4.5,
                     "note": "Примерна седмица — промени стойностите.",
                 }
@@ -1319,13 +1523,39 @@ def render_history_page(bundle: dict[str, Any], analysis: dict[str, Any], can_ed
                 "sessions": st.column_config.NumberColumn("Сесии", min_value=1, max_value=14, step=1),
                 **{
                     component: st.column_config.NumberColumn(
-                        f"{component} · общо мин", min_value=0.0, max_value=3000.0, step=5.0
+                        f"{component} · общо реални мин", min_value=0.0, max_value=3000.0, step=5.0
                     )
-                    for component in COMPONENTS
+                    for component in AEROBIC_COMPONENTS
                 },
+                "STR_STAB": st.column_config.NumberColumn(
+                    "Стабилизация · общо мин", min_value=0.0, max_value=1000.0, step=5.0,
+                    help="k = 0.8",
+                ),
+                "STR_END": st.column_config.NumberColumn(
+                    "Силова издръжливост · общо мин", min_value=0.0, max_value=1000.0, step=5.0,
+                    help="k = 1.0",
+                ),
+                "STR_MAX": st.column_config.NumberColumn(
+                    "Максимална сила · общо мин", min_value=0.0, max_value=600.0, step=5.0,
+                    help="k = 1.2",
+                ),
+                "STR_PLY": st.column_config.NumberColumn(
+                    "Плиометрия · общо мин", min_value=0.0, max_value=400.0, step=5.0,
+                    help="k = 1.4",
+                ),
                 "rpe": st.column_config.NumberColumn("Средно RPE", min_value=0.0, max_value=10.0, step=0.5),
                 "note": st.column_config.TextColumn("Бележка"),
             },
+        )
+        weekly_strength_real, weekly_strength_q, weekly_strength_k = strength_equivalent_minutes(
+            {
+                strength_type: float(weekly_editor[strength_type].fillna(0.0).sum())
+                for strength_type in STRENGTH_TYPES
+            }
+        )
+        st.caption(
+            f"Силов сбор в таблицата: {weekly_strength_real:.1f} реални мин → "
+            f"{weekly_strength_q:.1f} екв. мин (среден k {weekly_strength_k:.2f})."
         )
         weekly_mode = st.radio(
             "Режим",
@@ -1749,6 +1979,31 @@ def render_profile_page(bundle: dict[str, Any], analysis: dict[str, Any], can_ed
                 st.warning("Има прекъсване между горното тегло на една зона и долното тегло на следващата. Това е допустимо за тест, но може да създаде изкуствен скок.")
                 break
 
+        st.subheader("Силови коефициенти")
+        st.caption(
+            "При силата няма пулсови граници. Реалните минути се въвеждат по вид и се умножават по фиксирания коефициент."
+        )
+        strength_coefficients = pd.DataFrame(
+            [
+                {
+                    "Код": strength_type,
+                    "Вид сила": STRENGTH_LABELS[strength_type],
+                    "Коефициент": STRENGTH_COEFFICIENTS[strength_type],
+                    "10 реални минути дават": 10.0 * STRENGTH_COEFFICIENTS[strength_type],
+                }
+                for strength_type in STRENGTH_TYPES
+            ]
+        )
+        st.dataframe(
+            strength_coefficients,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Коефициент": st.column_config.NumberColumn(format="%.1f", help=help_text("strength_load")),
+                "10 реални минути дават": st.column_config.NumberColumn("Екв. мин при 10 реални", format="%.1f"),
+            },
+        )
+
     with tab_tolerance:
         rows = []
         for component in COMPONENTS:
@@ -1786,8 +2041,9 @@ def render_models_page() -> None:
     st.divider()
     st.subheader("Последователност на изчислителния pipeline")
     st.markdown(
-        "1. Нормализиране на активността → 2. зониране на всяка секунда → 3. `T`, `k`, `Q` → "
-        "4. каскада и разлив до `E` → 5. `E7`, `E40`, `B`, `7/40`, `Tref` → 6. умора и readiness → "
+        "1. Нормализиране на активността → 2. зониране на всяка секунда и класифициране на силовия вид → "
+        "3. реално време, коефициенти и `Q` → 4. каскада и разлив до `E` → "
+        "5. `E7`, `E40`, `B`, `7/40`, `Tref` → 6. умора и readiness → "
         "7. мониторинг → 8. контролни тестове → 9. интегрирана готовност → 10. периодизационна цел → "
         "11. адаптивен множител → 12. обратно решение `E → Q` → 13. разпределение по дни → "
         "14. избор и дозиране на метод → 15. проверка на ограниченията → 16. DecisionSnapshot."

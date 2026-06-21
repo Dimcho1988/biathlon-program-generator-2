@@ -3,7 +3,7 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from biathlon.constants import COMPONENTS
+from biathlon.constants import AEROBIC_COMPONENTS, COMPONENTS, STRENGTH_TYPES
 from biathlon.demo_data import generate_demo_bundle
 from biathlon.preferences import (
     annual_volume_context,
@@ -70,7 +70,17 @@ def test_double_threshold_can_activate_when_rules_are_met():
 
 def test_weekly_totals_are_preserved_by_onboarding_distribution():
     prefs = default_planning_preferences("A", date(2026, 6, 20))
-    totals = {"Z1": 120.0, "Z2": 360.0, "Z3": 30.0, "Z4": 15.0, "Z5": 6.0, "STR": 45.0}
+    totals = {
+        "Z1": 120.0,
+        "Z2": 360.0,
+        "Z3": 30.0,
+        "Z4": 15.0,
+        "Z5": 6.0,
+        "STR_STAB": 10.0,
+        "STR_END": 20.0,
+        "STR_MAX": 10.0,
+        "STR_PLY": 5.0,
+    }
     weekly = pd.DataFrame(
         [
             {
@@ -85,8 +95,11 @@ def test_weekly_totals_are_preserved_by_onboarding_distribution():
 
     assert len(activities) == 9
     assert activities["activity_id"].is_unique
-    for component in COMPONENTS:
+    for component in AEROBIC_COMPONENTS:
         assert activities[f"real_{component}"].sum() == pytest.approx(totals[component], abs=0.15)
+    for strength_type in STRENGTH_TYPES:
+        assert activities[f"real_{strength_type}"].sum() == pytest.approx(totals[strength_type], abs=0.15)
+    assert activities["real_STR"].sum() == pytest.approx(45.0, abs=0.15)
 
 
 def test_annual_goal_factor_is_bounded_and_history_weighted():
@@ -148,3 +161,37 @@ def test_goal_factor_changes_progressively_before_safety_cap():
         factors.append(float(analysis["annual_context"]["volume_factor"]))
 
     assert factors[0] < factors[1] < factors[2]
+
+
+def test_old_single_str_column_is_backward_compatible():
+    from biathlon.preferences import daily_table_to_activities
+
+    prefs = default_planning_preferences("A", date(2026, 6, 20))
+    table = pd.DataFrame([{"date": "2026-06-19", "Z2": 30.0, "STR": 40.0}])
+    activities = daily_table_to_activities(table, "A", prefs)
+
+    assert float(activities.iloc[0]["real_STR_END"]) == pytest.approx(40.0)
+    assert float(activities.iloc[0]["real_STR"]) == pytest.approx(40.0)
+
+
+def test_zeroed_typed_strength_does_not_reuse_read_only_str_total():
+    from biathlon.preferences import daily_table_to_activities
+
+    prefs = default_planning_preferences("A", date(2026, 6, 20))
+    table = pd.DataFrame(
+        [
+            {
+                "date": "2026-06-19",
+                "Z2": 30.0,
+                "STR_STAB": 0.0,
+                "STR_END": 0.0,
+                "STR_MAX": 0.0,
+                "STR_PLY": 0.0,
+                "STR": 40.0,
+                "STR_Q": 40.0,
+            }
+        ]
+    )
+    activities = daily_table_to_activities(table, "A", prefs)
+
+    assert float(activities.iloc[0]["real_STR"]) == pytest.approx(0.0)

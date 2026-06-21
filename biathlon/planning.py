@@ -13,6 +13,9 @@ from .constants import (
     COMPONENT_LABELS,
     COMPONENTS,
     PERIODIZATION_CENTERS,
+    STRENGTH_COEFFICIENTS,
+    STRENGTH_LABELS,
+    STRENGTH_TYPES,
 )
 from .physiology import (
     apply_training_impulse,
@@ -260,8 +263,31 @@ def _method_description(method: pd.Series, focus: str, main_real: float, readine
         work = main_real / repeats if repeats else 0
         main = f"Основна част: {repeats} × {work:.1f} мин Z5, контролирано възстановяване."
     elif focus == "STR":
-        rounds = max(3, int(round(main_real / 8.0)))
-        main = f"Основна част: {rounds} кръга/серии, общо около {main_real:.0f} мин силова работа."
+        strength_type = str(method.get("strength_type", "STR_END"))
+        strength_label = STRENGTH_LABELS.get(strength_type, str(method.get("title", "Силова работа")))
+        coefficient = float(method.get("expected_k", STRENGTH_COEFFICIENTS.get(strength_type, 1.0)))
+        equivalent = main_real * coefficient
+        if strength_type == "STR_STAB":
+            main = (
+                f"Основна част: около {main_real:.0f} реални мин стабилизация/кор; "
+                f"{main_real:.0f} × {coefficient:.1f} = {equivalent:.1f} силови еквивалентни минути."
+            )
+        elif strength_type == "STR_END":
+            rounds = max(3, int(round(main_real / 8.0)))
+            main = (
+                f"Основна част: {rounds} кръга обща силова издръжливост, около {main_real:.0f} реални мин; "
+                f"{main_real:.0f} × {coefficient:.1f} = {equivalent:.1f} силови еквивалентни минути."
+            )
+        elif strength_type == "STR_MAX":
+            main = (
+                f"Основна част: {strength_label}, около {main_real:.0f} реални мин работа с пълни почивки; "
+                f"{main_real:.0f} × {coefficient:.1f} = {equivalent:.1f} силови еквивалентни минути."
+            )
+        else:
+            main = (
+                f"Основна част: {strength_label}, около {main_real:.0f} реални мин висококачествена работа; "
+                f"{main_real:.0f} × {coefficient:.1f} = {equivalent:.1f} силови еквивалентни минути."
+            )
     elif focus == "Z2":
         main = f"Основна част: {main_real:.0f} мин равномерно в Z2 с технически контрол."
     else:
@@ -289,7 +315,25 @@ def _focus_schedule(target_q: pd.Series, tref: pd.Series) -> list[str]:
 
 
 def _default_k(component: str) -> float:
-    return {"Z1": 1.06, "Z2": 1.12, "Z3": 1.28, "Z4": 1.24, "Z5": 1.22, "STR": 1.10}[component]
+    return {"Z1": 1.06, "Z2": 1.12, "Z3": 1.28, "Z4": 1.24, "Z5": 1.22, "STR": 1.00}[component]
+
+
+def _strength_k_for_progress(progress: float, historical_k: float) -> float:
+    """Очакван силов коефициент за бъдещите седмици.
+
+    Историческият профил се смесва с методическия акцент на фазата, за да
+    може сезонната линия да превръща STR Q в реални минути по-реалистично.
+    """
+
+    if progress < 0.20:
+        phase_k = 0.95  # стабилизация + обща силова издръжливост
+    elif progress < 0.55:
+        phase_k = 1.05  # обща силова издръжливост + максимална сила
+    elif progress < 0.80:
+        phase_k = 1.18  # максимална сила с ограничена плиометрия
+    else:
+        phase_k = 1.28  # по-голям дял плиометрия/експлозивна работа
+    return float(np.clip(0.45 * historical_k + 0.55 * phase_k, 0.80, 1.40))
 
 
 def _individual_k_profile(
@@ -431,8 +475,11 @@ def build_volume_trajectory(
                 .astype(float)
             )
             target_q, inversion_error = solve_direct_load(target_e, tref, parameters)
+            phase_progress = float(group["phase_progress"].iloc[0]) if "phase_progress" in group else 0.5
+            future_k = dict(k_profile)
+            future_k["STR"] = _strength_k_for_progress(phase_progress, k_profile["STR"])
             planned_hours = float(
-                sum(float(target_q[component]) / max(k_profile[component], EPS) for component in COMPONENTS)
+                sum(float(target_q[component]) / max(future_k[component], EPS) for component in COMPONENTS)
             ) / 60.0
             if plan_index == 0 and np.isfinite(generated_first_week_hours):
                 planned_hours = generated_first_week_hours
@@ -600,6 +647,11 @@ def _rest_plan_row(
         "focus_label": "Пълна почивка / активно възстановяване",
         "method_code": "REST",
         "method": "Почивка",
+        "strength_type": "",
+        "strength_label": "",
+        "strength_coefficient": 0.0,
+        "strength_real_min": 0.0,
+        "strength_equivalent_min": 0.0,
         "description": "Пълна почивка. Допуска се само кратка мобилност, разходка или възстановителна процедура според треньорското решение.",
         "total_real_min": 0.0,
         "readiness_before": round(overall_readiness, 1),
@@ -616,6 +668,9 @@ def _rest_plan_row(
         row[f"q_{component}"] = 0.0
         row[f"e_{component}"] = 0.0
         row[f"real_{component}"] = 0.0
+    for strength_component in STRENGTH_TYPES:
+        row[f"real_{strength_component}"] = 0.0
+        row[f"q_{strength_component}"] = 0.0
     return row
 
 
@@ -876,6 +931,22 @@ def generate_week_plan(
         if not day_events.empty:
             explanation_parts.append("календар: " + ", ".join(day_events["name"].astype(str).tolist()))
 
+        strength_type = ""
+        strength_label = ""
+        strength_coefficient = 0.0
+        strength_real_min = 0.0
+        strength_equivalent_min = 0.0
+        if focus == "STR":
+            strength_type = str(method.get("strength_type", "STR_END"))
+            strength_label = STRENGTH_LABELS.get(strength_type, str(method.get("title", "Силова работа")))
+            strength_coefficient = float(method.get("expected_k", STRENGTH_COEFFICIENTS.get(strength_type, 1.0)))
+            strength_real_min = float(real_by_component["STR"])
+            strength_equivalent_min = float(session_q["STR"])
+            explanation_parts.append(
+                f"силов вид = {strength_label}; {strength_real_min:.1f} реални мин × "
+                f"{strength_coefficient:.1f} = {strength_equivalent_min:.1f} екв. мин"
+            )
+
         row: dict[str, Any] = {
             "session_id": f"{current_date.date().isoformat()}-{session_no}",
             "date": current_date,
@@ -888,6 +959,11 @@ def generate_week_plan(
             "focus_label": COMPONENT_LABELS[focus],
             "method_code": str(method["method_code"]),
             "method": str(race_event["name"]) if race_event is not None and session_no == 1 else str(method["title"]),
+            "strength_type": strength_type,
+            "strength_label": strength_label,
+            "strength_coefficient": round(strength_coefficient, 2),
+            "strength_real_min": round(strength_real_min, 1),
+            "strength_equivalent_min": round(strength_equivalent_min, 1),
             "description": description,
             "total_real_min": round(total_real, 1),
             "readiness_before": round(readiness_before_focus, 1),
@@ -904,6 +980,13 @@ def generate_week_plan(
             row[f"q_{component}"] = round(float(session_q[component]), 2)
             row[f"e_{component}"] = round(float(effective[COMPONENTS.index(component)]), 2)
             row[f"real_{component}"] = round(float(real_by_component[component]), 1)
+        for strength_component in STRENGTH_TYPES:
+            row[f"real_{strength_component}"] = (
+                round(strength_real_min, 1) if strength_component == strength_type else 0.0
+            )
+            row[f"q_{strength_component}"] = (
+                round(strength_equivalent_min, 2) if strength_component == strength_type else 0.0
+            )
         rows.append(row)
 
     plan = pd.DataFrame(rows).sort_values(["date", "session_no"]).reset_index(drop=True)
@@ -940,6 +1023,13 @@ def generate_week_plan(
         "double_threshold_requested": bool(preferences["double_threshold_enabled"]),
         "double_threshold_active": double_threshold_active,
         "double_threshold_day": WEEKDAY_LABELS[preferences["double_threshold_day"]],
+        "strength_model": {
+            strength_type: {
+                "label": STRENGTH_LABELS[strength_type],
+                "coefficient": STRENGTH_COEFFICIENTS[strength_type],
+            }
+            for strength_type in STRENGTH_TYPES
+        },
         "warnings": [
             f"Остатък {component}: {value:.1f} екв. мин"
             for component, value in remaining.items()

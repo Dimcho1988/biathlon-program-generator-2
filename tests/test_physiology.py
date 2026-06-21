@@ -2,10 +2,12 @@ from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
+import pytest
 
-from biathlon.constants import COMPONENTS, fresh_parameters
+from biathlon.constants import COMPONENTS, STRENGTH_COEFFICIENTS, fresh_parameters
 from biathlon.demo_data import generate_demo_bundle, generate_activity_stream
 from biathlon.physiology import (
+    activities_to_activity_summaries,
     analyze_activity_stream,
     compute_daily_load_history,
     compute_load_statistics,
@@ -61,3 +63,25 @@ def test_uniform_load_gives_index_near_one():
     history = compute_daily_load_history(summaries, params)
     stats = compute_load_statistics(history, params)
     assert 0.98 <= stats.loc["Z1", "index_7_40"] <= 1.02
+
+
+def test_four_strength_types_convert_to_aggregate_str_q():
+    bundle = generate_demo_bundle(history_days=30)
+    row = bundle["activities"].iloc[[0]].copy()
+    row["real_STR_STAB"] = 10.0
+    row["real_STR_END"] = 20.0
+    row["real_STR_MAX"] = 15.0
+    row["real_STR_PLY"] = 5.0
+    row["real_STR"] = 50.0
+    summaries = activities_to_activity_summaries(row, bundle["zone_profiles"][str(row.iloc[0]["athlete_id"])])
+    result = summaries.iloc[0]
+
+    expected = (
+        10.0 * STRENGTH_COEFFICIENTS["STR_STAB"]
+        + 20.0 * STRENGTH_COEFFICIENTS["STR_END"]
+        + 15.0 * STRENGTH_COEFFICIENTS["STR_MAX"]
+        + 5.0 * STRENGTH_COEFFICIENTS["STR_PLY"]
+    )
+    assert result["real_STR"] == pytest.approx(50.0)
+    assert result["q_STR"] == pytest.approx(expected)
+    assert result["k_STR"] == pytest.approx(expected / 50.0)

@@ -13,6 +13,8 @@ from .constants import (
     AEROBIC_COMPONENTS,
     COMPONENTS,
     DEFAULT_ZONE_PROFILE,
+    STRENGTH_COEFFICIENTS,
+    STRENGTH_TYPES,
     fresh_parameters,
 )
 from .preferences import default_planning_preferences
@@ -87,6 +89,42 @@ def _base_day_load(weekday: int, phase: float, rng: np.random.Generator) -> dict
     return load
 
 
+def _strength_type_distribution(
+    total_minutes: float,
+    phase: float,
+    rng: np.random.Generator,
+) -> dict[str, float]:
+    """Разпределя синтетичния силов обем по четирите вида."""
+
+    total = max(0.0, float(total_minutes))
+    values = {strength_type: 0.0 for strength_type in STRENGTH_TYPES}
+    if total <= 0:
+        return values
+
+    if phase < 0.22:
+        mix = {"STR_STAB": 0.35, "STR_END": 0.65, "STR_MAX": 0.0, "STR_PLY": 0.0}
+    elif phase < 0.55:
+        mix = {"STR_STAB": 0.15, "STR_END": 0.65, "STR_MAX": 0.20, "STR_PLY": 0.0}
+    elif phase < 0.80:
+        mix = {"STR_STAB": 0.10, "STR_END": 0.45, "STR_MAX": 0.35, "STR_PLY": 0.10}
+    else:
+        mix = {"STR_STAB": 0.15, "STR_END": 0.20, "STR_MAX": 0.30, "STR_PLY": 0.35}
+
+    # Малка детерминирана вариация, без да се променя общото реално време.
+    raw = {
+        strength_type: max(0.0, weight * float(np.clip(rng.normal(1.0, 0.06), 0.82, 1.18)))
+        for strength_type, weight in mix.items()
+    }
+    denominator = sum(raw.values()) or 1.0
+    remaining = total
+    for strength_type in STRENGTH_TYPES[:-1]:
+        value = round(total * raw[strength_type] / denominator, 1)
+        values[strength_type] = max(0.0, value)
+        remaining -= values[strength_type]
+    values[STRENGTH_TYPES[-1]] = max(0.0, round(remaining, 1))
+    return values
+
+
 def _activity_positions(load: dict[str, float], phase: float, rng: np.random.Generator) -> dict[str, float]:
     positions: dict[str, float] = {}
     means = {"Z1": 0.28, "Z2": 0.42, "Z3": 0.60, "Z4": 0.66, "Z5": 0.72}
@@ -135,6 +173,12 @@ def _generate_activities(
                 continue
 
             positions = _activity_positions(load, phase, rng)
+            strength_real = _strength_type_distribution(load["STR"], phase, rng)
+            strength_q = sum(
+                strength_real[strength_type] * STRENGTH_COEFFICIENTS[strength_type]
+                for strength_type in STRENGTH_TYPES
+            )
+            strength_k = strength_q / load["STR"] if load["STR"] > 0 else 0.0
             moving = sum(load[c] for c in AEROBIC_COMPONENTS) + load["STR"]
             elapsed = moving + (5 if moving > 45 else 2)
             intensity = (
@@ -143,7 +187,7 @@ def _generate_activities(
                 + 2.0 * load["Z3"]
                 + 3.0 * load["Z4"]
                 + 4.2 * load["Z5"]
-                + 2.2 * load["STR"]
+                + 2.2 * strength_q
             ) / max(moving, 1)
             rpe = float(np.clip(1.5 + 1.25 * intensity + rng.normal(0, 0.6), 1, 10))
 
@@ -157,12 +201,14 @@ def _generate_activities(
                 "moving_min": round(moving, 1),
                 "elapsed_min": round(elapsed, 1),
                 "rpe": round(rpe, 1),
-                "strength_k": 1.0 + 0.08 * max(0.0, rpe - 5.0),
+                "strength_k": round(strength_k, 4),
                 "quality_score": round(float(np.clip(rng.normal(0.95, 0.035), 0.78, 1.0)), 2),
                 "notes": "Синтетична активност с едносекунден профил при отваряне.",
             }
             for component in COMPONENTS:
                 row[f"real_{component}"] = load[component]
+            for strength_type in STRENGTH_TYPES:
+                row[f"real_{strength_type}"] = strength_real[strength_type]
             for component in AEROBIC_COMPONENTS:
                 row[f"pos_{component}"] = round(positions[component], 3)
             rows.append(row)
@@ -477,28 +523,56 @@ def _training_methods() -> pd.DataFrame:
             "description": "Кратки повторения за скорост и специфична мощност без голям обем.",
         },
         {
-            "method_code": "STR_GENERAL",
-            "title": "Обща силова издръжливост",
+            "method_code": "STR_STAB",
+            "title": "Стабилизация / кор",
             "component": "STR",
+            "strength_type": "STR_STAB",
             "phase_min": 0.0,
-            "phase_max": 0.70,
-            "min_readiness": 75,
-            "expected_k": 1.08,
-            "warmup_min": 12,
-            "cooldown_min": 8,
-            "description": "Кръгова силова тренировка със стабилна техника и контрол на RPE.",
+            "phase_max": 1.0,
+            "min_readiness": 60,
+            "expected_k": 0.80,
+            "warmup_min": 8,
+            "cooldown_min": 5,
+            "description": "Стабилизация, кор, профилактика и контролираща работа.",
         },
         {
-            "method_code": "STR_SPECIAL",
-            "title": "Специална силова издръжливост",
+            "method_code": "STR_END",
+            "title": "Обща силова издръжливост",
             "component": "STR",
-            "phase_min": 0.35,
-            "phase_max": 0.92,
-            "min_readiness": 84,
-            "expected_k": 1.15,
+            "strength_type": "STR_END",
+            "phase_min": 0.0,
+            "phase_max": 0.78,
+            "min_readiness": 72,
+            "expected_k": 1.00,
+            "warmup_min": 12,
+            "cooldown_min": 8,
+            "description": "Кръгова общоразвиваща силова работа с контролирано темпо.",
+        },
+        {
+            "method_code": "STR_MAX",
+            "title": "Максимална сила",
+            "component": "STR",
+            "strength_type": "STR_MAX",
+            "phase_min": 0.22,
+            "phase_max": 0.94,
+            "min_readiness": 82,
+            "expected_k": 1.20,
             "warmup_min": 15,
             "cooldown_min": 10,
-            "description": "SkiErg/ролки със силов акцент и дозирани работни серии.",
+            "description": "Висока относителна тежест, малък брой повторения и пълно възстановяване.",
+        },
+        {
+            "method_code": "STR_PLY",
+            "title": "Плиометрия",
+            "component": "STR",
+            "strength_type": "STR_PLY",
+            "phase_min": 0.58,
+            "phase_max": 1.0,
+            "min_readiness": 88,
+            "expected_k": 1.40,
+            "warmup_min": 18,
+            "cooldown_min": 10,
+            "description": "Кратка скокова и експлозивна работа с пълен контрол на качеството.",
         },
     ]
     return pd.DataFrame(rows)

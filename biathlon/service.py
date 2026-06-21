@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .constants import COMPONENTS
+from .constants import COMPONENTS, STRENGTH_COEFFICIENTS, STRENGTH_LABELS, STRENGTH_TYPES
 from .monitoring import analyze_wellness, integrate_component_readiness
 from .physiology import (
     activities_to_activity_summaries,
@@ -141,6 +141,30 @@ def analyze_athlete(
     next_event = upcoming_events.sort_values("start_date").iloc[0].to_dict() if not upcoming_events.empty else None
 
     latest_activity = activity_summaries.sort_values("date").iloc[-1] if not activity_summaries.empty else None
+    strength_summary_rows: list[dict[str, Any]] = []
+    for strength_type in STRENGTH_TYPES:
+        real_col = f"real_{strength_type}"
+        q_col = f"q_{strength_type}"
+        real_total = (
+            float(pd.to_numeric(activity_summaries[real_col], errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+            if real_col in activity_summaries
+            else 0.0
+        )
+        q_total = (
+            float(pd.to_numeric(activity_summaries[q_col], errors="coerce").fillna(0.0).clip(lower=0.0).sum())
+            if q_col in activity_summaries
+            else real_total * float(STRENGTH_COEFFICIENTS[strength_type])
+        )
+        strength_summary_rows.append(
+            {
+                "strength_type": strength_type,
+                "label": STRENGTH_LABELS[strength_type],
+                "coefficient": float(STRENGTH_COEFFICIENTS[strength_type]),
+                "real_min": real_total,
+                "equivalent_min": q_total,
+            }
+        )
+    strength_summary = pd.DataFrame(strength_summary_rows)
     first_week = weekly_targets.loc[weekly_targets["week_no"] == 1].set_index("component")
     decision_reasons = []
     for component in COMPONENTS:
@@ -166,7 +190,7 @@ def analyze_athlete(
         "athlete_id": athlete_id,
         "athlete_name": str(athlete["name"]),
         "data_version": int(bundle.get("version", 1)),
-        "algorithm_version": "streamlit-demo-0.4.0",
+        "algorithm_version": "streamlit-demo-0.5.0",
         "parameter_version": int(bundle.get("version", 1)),
         "inputs_hash": _hash_inputs(bundle, athlete_id),
         "global_readiness": global_readiness,
@@ -174,6 +198,13 @@ def analyze_athlete(
         "hard_reasons": hard_reasons,
         "annual_volume_context": annual_context,
         "planning_preferences": planning_preferences,
+        "strength_model": {
+            strength_type: {
+                "label": STRENGTH_LABELS[strength_type],
+                "coefficient": STRENGTH_COEFFICIENTS[strength_type],
+            }
+            for strength_type in STRENGTH_TYPES
+        },
         "components": decision_reasons,
         "plan": plan_snapshot,
     }
@@ -206,6 +237,7 @@ def analyze_athlete(
         "hard_flag": hard_flag,
         "next_event": next_event,
         "latest_activity": latest_activity,
+        "strength_summary": strength_summary,
         "as_of": today,
     }
 

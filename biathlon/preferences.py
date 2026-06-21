@@ -14,7 +14,13 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
-from .constants import AEROBIC_COMPONENTS, COMPONENTS
+from .constants import (
+    AEROBIC_COMPONENTS,
+    COMPONENTS,
+    DEFAULT_STRENGTH_TYPE,
+    STRENGTH_COEFFICIENTS,
+    STRENGTH_TYPES,
+)
 
 WEEKDAY_LABELS = {
     0: "Понеделник",
@@ -416,30 +422,74 @@ def build_week_structure(
 
 
 def daily_history_from_activities(activities: pd.DataFrame, athlete_id: str) -> pd.DataFrame:
-    """Агрегира активностите до удобна за ръчна редакция дневна таблица."""
+    """Агрегира активностите до удобна за ръчна редакция дневна таблица.
 
-    columns = ["date", "sport", "rpe", *COMPONENTS, "note"]
+    Силовото време се показва по четири вида. ``STR`` е изчислен общ
+    реален обем, а ``STR_Q`` е претегленият силов товар в еквивалентни
+    минути и не се въвежда ръчно.
+    """
+
+    columns = [
+        "date",
+        "sport",
+        "rpe",
+        *AEROBIC_COMPONENTS,
+        *STRENGTH_TYPES,
+        "STR",
+        "STR_Q",
+        "note",
+    ]
     if activities.empty or "athlete_id" not in activities:
         return pd.DataFrame(columns=columns)
     data = activities.loc[activities["athlete_id"].astype(str) == str(athlete_id)].copy()
     if data.empty:
         return pd.DataFrame(columns=columns)
+
     data["date"] = pd.to_datetime(data["date"]).dt.normalize()
-    for component in COMPONENTS:
-        data[f"real_{component}"] = pd.to_numeric(data.get(f"real_{component}", 0.0), errors="coerce").fillna(0.0)
+    for component in AEROBIC_COMPONENTS:
+        column = f"real_{component}"
+        data[column] = (
+            pd.to_numeric(data[column], errors="coerce").fillna(0.0).clip(lower=0.0)
+            if column in data
+            else 0.0
+        )
+
+    legacy_real = (
+        pd.to_numeric(data["real_STR"], errors="coerce").fillna(0.0).clip(lower=0.0)
+        if "real_STR" in data
+        else pd.Series(0.0, index=data.index)
+    )
+    typed_total = pd.Series(0.0, index=data.index)
+    for strength_type in STRENGTH_TYPES:
+        column = f"real_{strength_type}"
+        data[column] = (
+            pd.to_numeric(data[column], errors="coerce").fillna(0.0).clip(lower=0.0)
+            if column in data
+            else 0.0
+        )
+        typed_total = typed_total + data[column]
+    legacy_mask = (typed_total <= 1e-9) & (legacy_real > 0)
+    data.loc[legacy_mask, f"real_{DEFAULT_STRENGTH_TYPE}"] = legacy_real.loc[legacy_mask]
+
     data["rpe"] = pd.to_numeric(data.get("rpe", np.nan), errors="coerce")
     data["sport"] = data.get("sport", "Ръчно въведена").fillna("Ръчно въведена").astype(str)
     data["notes"] = data.get("notes", "").fillna("").astype(str)
 
-    grouped = data.groupby("date", as_index=False).agg(
-        sport=("sport", lambda values: " + ".join(dict.fromkeys(values))[:80]),
-        rpe=("rpe", "mean"),
-        note=("notes", lambda values: " | ".join(v for v in values if v)[:180]),
-        **{component: (f"real_{component}", "sum") for component in COMPONENTS},
-    )
+    aggregation: dict[str, tuple[str, str | Any]] = {
+        "sport": ("sport", lambda values: " + ".join(dict.fromkeys(values))[:80]),
+        "rpe": ("rpe", "mean"),
+        "note": ("notes", lambda values: " | ".join(v for v in values if v)[:180]),
+    }
+    aggregation.update({component: (f"real_{component}", "sum") for component in AEROBIC_COMPONENTS})
+    aggregation.update({strength_type: (f"real_{strength_type}", "sum") for strength_type in STRENGTH_TYPES})
+    grouped = data.groupby("date", as_index=False).agg(**aggregation)
     grouped["rpe"] = grouped["rpe"].fillna(4.0).round(1)
+    grouped["STR"] = grouped[STRENGTH_TYPES].sum(axis=1)
+    grouped["STR_Q"] = sum(
+        grouped[strength_type] * float(STRENGTH_COEFFICIENTS[strength_type])
+        for strength_type in STRENGTH_TYPES
+    )
     return grouped[columns].sort_values("date").reset_index(drop=True)
-
 
 def _manual_activity_row(
     athlete_id: str,
@@ -449,8 +499,37 @@ def _manual_activity_row(
 ) -> dict[str, Any]:
     values = dict(row)
     timestamp = pd.Timestamp(values["date"]).normalize()
-    real = {component: max(0.0, float(values.get(component, values.get(f"real_{component}", 0.0)) or 0.0)) for component in COMPONENTS}
-    moving = sum(real.values())
+    aerobic_real = {
+        component: max(0.0, float(values.get(component, values.get(f"real_{component}", 0.0)) or 0.0))
+        for component in AEROBIC_COMPONENTS
+    }
+    typed_strength_fields_present = any(
+        strength_type in values or f"real_{strength_type}" in values
+        for strength_type in STRENGTH_TYPES
+    )
+    strength_real = {
+        strength_type: max(
+            0.0,
+            float(values.get(strength_type, values.get(f"real_{strength_type}", 0.0)) or 0.0),
+        )
+        for strength_type in STRENGTH_TYPES
+    }
+    # Старият формат с една колона STR се приема като обща силова
+    # издръжливост, защото нейният коефициент е 1.0. Fallback се използва
+    # само когато колоните по вид изобщо липсват.
+    if not typed_strength_fields_present:
+        legacy_strength = max(0.0, float(values.get("STR", values.get("real_STR", 0.0)) or 0.0))
+        strength_real[DEFAULT_STRENGTH_TYPE] = legacy_strength
+
+    strength_total = float(sum(strength_real.values()))
+    strength_q = float(
+        sum(
+            strength_real[strength_type] * float(STRENGTH_COEFFICIENTS[strength_type])
+            for strength_type in STRENGTH_TYPES
+        )
+    )
+    strength_k = strength_q / strength_total if strength_total > 1e-9 else 0.0
+    moving = float(sum(aerobic_real.values()) + strength_total)
     rpe = float(np.clip(values.get("rpe", 4.0) or 4.0, 0.0, 10.0))
     result: dict[str, Any] = {
         "activity_id": f"{athlete_id}-MAN-{timestamp.strftime('%Y%m%d')}-{suffix}",
@@ -462,18 +541,20 @@ def _manual_activity_row(
         "moving_min": round(moving, 2),
         "elapsed_min": round(moving + (5.0 if moving >= 45 else 2.0 if moving > 0 else 0.0), 2),
         "rpe": rpe,
-        "strength_k": float(np.clip(values.get("strength_k", 1.0 + 0.06 * max(0.0, rpe - 5.0)), 0.5, 2.0)),
+        "real_STR": round(strength_total, 2),
+        "strength_k": round(strength_k, 4),
         "quality_score": float(np.clip(values.get("quality_score", 1.0), 0.0, 1.0)),
         "notes": str(values.get("note", values.get("notes", "Ръчно въведена история."))),
     }
-    for component in COMPONENTS:
-        result[f"real_{component}"] = round(real[component], 2)
+    for component in AEROBIC_COMPONENTS:
+        result[f"real_{component}"] = round(aerobic_real[component], 2)
+    for strength_type in STRENGTH_TYPES:
+        result[f"real_{strength_type}"] = round(strength_real[strength_type], 2)
     for component in AEROBIC_COMPONENTS:
         result[f"pos_{component}"] = float(
             np.clip(values.get(f"pos_{component}", positions.get(component, DEFAULT_MANUAL_POSITIONS[component])), 0.0, 1.0)
         )
     return result
-
 
 def daily_table_to_activities(
     table: pd.DataFrame,
@@ -481,7 +562,7 @@ def daily_table_to_activities(
     preferences: dict[str, Any],
     source: str = "manual_daily_table",
 ) -> pd.DataFrame:
-    """Преобразува една дневна редица в нормализирани активности."""
+    """Преобразува дневна таблица в нормализирани активности."""
 
     prefs = normalize_preferences(preferences)
     if table is None or table.empty:
@@ -492,7 +573,8 @@ def daily_table_to_activities(
         "Спорт": "sport",
         "Бележка": "note",
         "RPE": "rpe",
-        **{f"real_{component}": component for component in COMPONENTS},
+        **{f"real_{component}": component for component in AEROBIC_COMPONENTS},
+        **{f"real_{strength_type}": strength_type for strength_type in STRENGTH_TYPES},
     }
     data = data.rename(columns={key: value for key, value in rename.items() if key in data.columns})
     if "date" not in data:
@@ -500,25 +582,28 @@ def daily_table_to_activities(
     data["date"] = pd.to_datetime(data["date"], errors="coerce").dt.normalize()
     data = data.dropna(subset=["date"])
     rows: list[dict[str, Any]] = []
+    typed_columns_present = any(strength_type in data.columns for strength_type in STRENGTH_TYPES)
     for index, row in data.iterrows():
-        if sum(max(0.0, float(row.get(component, 0.0) or 0.0)) for component in COMPONENTS) <= 0:
+        aerobic = sum(max(0.0, float(row.get(component, 0.0) or 0.0)) for component in AEROBIC_COMPONENTS)
+        typed_strength = sum(max(0.0, float(row.get(st, 0.0) or 0.0)) for st in STRENGTH_TYPES)
+        legacy_strength = (
+            max(0.0, float(row.get("STR", 0.0) or 0.0))
+            if not typed_columns_present
+            else 0.0
+        )
+        if aerobic + typed_strength + legacy_strength <= 0:
             continue
         values = row.to_dict()
         values["source"] = source
         rows.append(_manual_activity_row(athlete_id, values, prefs["manual_positions"], f"D{index+1:03d}"))
     return pd.DataFrame(rows)
 
-
 def weekly_totals_to_activities(
     weekly_table: pd.DataFrame,
     athlete_id: str,
     preferences: dict[str, Any],
 ) -> pd.DataFrame:
-    """Разпределя седмични тотали в детерминирана начална дневна история.
-
-    Това е onboarding удобство. Маркира се с отделен source, защото дневното
-    разпределение е приблизително и не трябва да се представя като секундни данни.
-    """
+    """Разпределя седмични тотали в детерминирана начална дневна история."""
 
     prefs = normalize_preferences(preferences)
     if weekly_table is None or weekly_table.empty:
@@ -548,15 +633,31 @@ def weekly_totals_to_activities(
         weights["Z4"] = np.where(intensity_mask, 1.0, 0.03)
         weights["Z5"] = np.where(intensity_mask & (slots["session_no"].to_numpy() == 1), 1.0, 0.01)
         strength_mask = np.isin(day_idx, prefs["strength_days"]) | (slot_type == "strength")
-        weights["STR"] = np.where(strength_mask, 1.0, 0.03)
+        for strength_type in STRENGTH_TYPES:
+            weights[strength_type] = np.where(strength_mask, 1.0, 0.03)
 
-        allocated = pd.DataFrame(0.0, index=slots.index, columns=COMPONENTS)
-        for component in COMPONENTS:
+        allocation_columns = [*AEROBIC_COMPONENTS, *STRENGTH_TYPES]
+        allocated = pd.DataFrame(0.0, index=slots.index, columns=allocation_columns)
+        for component in AEROBIC_COMPONENTS:
             total = max(0.0, float(weekly.get(component, weekly.get(f"real_{component}", 0.0)) or 0.0))
             component_weights = weights[component]
             denominator = float(component_weights.sum())
             if total > 0 and denominator > 0:
                 allocated[component] = total * component_weights / denominator
+
+        typed_strength_total = sum(max(0.0, float(weekly.get(st, weekly.get(f"real_{st}", 0.0)) or 0.0)) for st in STRENGTH_TYPES)
+        strength_totals = {
+            st: max(0.0, float(weekly.get(st, weekly.get(f"real_{st}", 0.0)) or 0.0))
+            for st in STRENGTH_TYPES
+        }
+        if typed_strength_total <= 1e-9:
+            strength_totals[DEFAULT_STRENGTH_TYPE] = max(0.0, float(weekly.get("STR", 0.0) or 0.0))
+        for strength_type in STRENGTH_TYPES:
+            total = strength_totals[strength_type]
+            component_weights = weights[strength_type]
+            denominator = float(component_weights.sum())
+            if total > 0 and denominator > 0:
+                allocated[strength_type] = total * component_weights / denominator
 
         for slot_index, slot in slots.iterrows():
             values: dict[str, Any] = {
@@ -566,7 +667,7 @@ def weekly_totals_to_activities(
                 "note": str(weekly.get("note", "Разпределено от седмичен обем.")),
                 "source": "manual_weekly_distribution",
             }
-            for component in COMPONENTS:
+            for component in allocation_columns:
                 values[component] = float(allocated.loc[slot_index, component])
             rows.append(
                 _manual_activity_row(
@@ -578,7 +679,6 @@ def weekly_totals_to_activities(
             )
     return pd.DataFrame(rows)
 
-
 def history_template() -> pd.DataFrame:
     """Минимален CSV шаблон за ръчно въвеждане на дневна история."""
 
@@ -587,15 +687,19 @@ def history_template() -> pd.DataFrame:
         [
             {
                 "date": today.date().isoformat(),
-                "sport": "Ролкови ски",
+                "sport": "Ролкови ски + сила",
                 "rpe": 4.0,
                 "Z1": 25.0,
                 "Z2": 65.0,
                 "Z3": 0.0,
                 "Z4": 0.0,
                 "Z5": 0.0,
-                "STR": 0.0,
-                "note": "Примерен ред — изтрий или промени.",
+                "STR_STAB": 10.0,
+                "STR_END": 20.0,
+                "STR_MAX": 0.0,
+                "STR_PLY": 0.0,
+                "note": "Примерен ред — силовият Q е 10×0.8 + 20×1.0 = 28 екв. мин.",
             }
         ]
     )
+
