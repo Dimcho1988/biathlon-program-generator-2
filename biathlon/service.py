@@ -39,6 +39,48 @@ def _hash_inputs(bundle: dict[str, Any], athlete_id: str) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
 
 
+def _append_current_readiness_snapshot(
+    readiness_history: pd.DataFrame,
+    load_readiness: pd.DataFrame,
+    load_stats: pd.DataFrame,
+    today: pd.Timestamp,
+) -> pd.DataFrame:
+    """Add the current morning state to the historical recovery curve.
+
+    Daily training load is considered complete through yesterday.  The current
+    point therefore represents recovery up to today, with no invented training
+    impulse.  This keeps the chart moving with the calendar even when the most
+    recent activity was several days ago.
+    """
+
+    current_rows = []
+    for component in COMPONENTS:
+        fatigue = float(load_readiness.loc[component, "fatigue"])
+        readiness = float(load_readiness.loc[component, "readiness"])
+        current_rows.append(
+            {
+                "date": today,
+                "component": component,
+                "fatigue_before": fatigue,
+                "fatigue_after": fatigue,
+                "readiness_before": readiness,
+                "readiness_after": readiness,
+                "impulse": 0.0,
+                "Tref": float(load_stats.loc[component, "Tref"]),
+                "effective": 0.0,
+            }
+        )
+
+    current = pd.DataFrame(current_rows)
+    if readiness_history.empty:
+        return current
+
+    history = readiness_history.loc[
+        pd.to_datetime(readiness_history["date"]).dt.normalize() < today
+    ].copy()
+    return pd.concat([history, current], ignore_index=True)
+
+
 def analyze_athlete(
     bundle: dict[str, Any],
     athlete_id: str,
@@ -61,16 +103,21 @@ def analyze_athlete(
 
     activities = bundle["activities"].loc[bundle["activities"]["athlete_id"] == athlete_id].copy()
     activity_summaries = activities_to_activity_summaries(activities, zone_profile)
-    if activity_summaries.empty:
-        history_end = today - pd.Timedelta(days=1)
-    else:
-        latest_history = pd.Timestamp(activity_summaries["date"].max())
-        history_end = today - pd.Timedelta(days=1) if pd.isna(latest_history) else min(today - pd.Timedelta(days=1), latest_history.normalize())
+    # A day without an activity is still a real recovery day.  Always extend
+    # the zero-load series through yesterday instead of stopping the simulation
+    # at the date of the last recorded workout.
+    history_end = today - pd.Timedelta(days=1)
     daily_loads = compute_daily_load_history(activity_summaries, parameters, end_date=history_end)
     load_stats = compute_load_statistics(daily_loads, parameters, as_of=history_end)
     rolling_load = rolling_load_statistics(daily_loads, parameters)
     readiness_history = compute_readiness_history(daily_loads, parameters)
     load_readiness = current_readiness(readiness_history, parameters, target_date=today)
+    readiness_history = _append_current_readiness_snapshot(
+        readiness_history,
+        load_readiness,
+        load_stats,
+        today,
+    )
 
     metric_details, monitoring_by_component, hard_reasons = analyze_wellness(
         bundle["wellness"], athlete_id, parameters, as_of=today
