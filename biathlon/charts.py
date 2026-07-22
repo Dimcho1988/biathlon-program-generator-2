@@ -66,6 +66,7 @@ def readiness_figure(readiness_history: pd.DataFrame, components: list[str] | No
     components = components or COMPONENTS
     data = readiness_history.loc[readiness_history["component"].isin(components)].copy()
     if not data.empty:
+        data["date"] = pd.to_datetime(data["date"]).dt.normalize()
         cutoff = pd.to_datetime(data["date"]).max() - pd.Timedelta(days=days - 1)
         data = data.loc[pd.to_datetime(data["date"]) >= cutoff]
     fig = px.line(
@@ -78,6 +79,27 @@ def readiness_figure(readiness_history: pd.DataFrame, components: list[str] | No
     )
     fig.add_hline(y=90, line_dash="dot", annotation_text="ключова сесия")
     fig.add_hline(y=65, line_dash="dot", annotation_text="възстановяване")
+    if not data.empty:
+        curve_end = pd.Timestamp(data["date"].max()).normalize()
+        # Make the moving calendar anchor explicit. Plotly otherwise chooses
+        # weekly tick labels, so a curve ending on 22 July can still show
+        # 19 July as the last labelled tick and appear stale.
+        fig.add_vline(x=curve_end.to_pydatetime(), line_dash="dash", line_color="#6B7280")
+        fig.add_annotation(
+            x=curve_end.to_pydatetime(),
+            y=1.0,
+            yref="paper",
+            text=f"Днес · {curve_end.strftime('%d.%m')}",
+            showarrow=False,
+            xanchor="right",
+            yshift=12,
+        )
+        fig.update_xaxes(
+            range=[
+                pd.Timestamp(data["date"].min()).to_pydatetime(),
+                (curve_end + pd.Timedelta(hours=12)).to_pydatetime(),
+            ]
+        )
     fig.update_layout(height=420, hovermode="x unified", margin=dict(l=20, r=20, t=55, b=25), yaxis_range=[0, 105])
     return fig
 
@@ -425,4 +447,3 @@ def annual_goal_figure(context: dict, trajectory: pd.DataFrame | None = None) ->
         margin=dict(l=20, r=20, t=55, b=25),
     )
     return fig
-
