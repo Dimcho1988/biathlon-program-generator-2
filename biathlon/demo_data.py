@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from copy import deepcopy
 from datetime import date, timedelta
 from typing import Any
@@ -663,7 +664,13 @@ def generate_activity_stream(
     """Генерира детерминиран 1-секунден пулсов поток от обобщена активност."""
 
     row = dict(activity)
-    rng = np.random.default_rng(seed + abs(hash(str(row.get("activity_id", "activity")))) % 100_000)
+    activity_key = str(row.get("activity_id", "activity")).encode("utf-8")
+    stable_offset = int.from_bytes(
+        hashlib.sha256(activity_key).digest()[:8],
+        byteorder="big",
+        signed=False,
+    ) % 100_000
+    rng = np.random.default_rng(seed + stable_offset)
     profile = zone_profile.set_index("component")
 
     segments: list[tuple[str, int]] = []

@@ -2,7 +2,7 @@ from datetime import date
 
 from biathlon.demo_data import generate_demo_bundle
 from biathlon.monitoring import analyze_wellness
-from biathlon.testing import analyze_tests
+from biathlon.testing import aggregate_test_effects, analyze_tests
 
 
 def test_pain_creates_hard_flag():
@@ -16,7 +16,12 @@ def test_pain_creates_hard_flag():
 
 def test_test_adjustments_are_capped():
     bundle = generate_demo_bundle(history_days=60)
-    details, adjustments = analyze_tests(bundle["tests"], "A", bundle["parameters"])
+    details, effects = analyze_tests(bundle["tests"], "A", bundle["parameters"])
+    adjustments = aggregate_test_effects(
+        effects,
+        bundle["parameters"],
+        channel="planning",
+    )
     assert not details.empty
     assert adjustments.max() <= bundle["parameters"]["max_positive_test_adjustment"] + 1e-9
     assert adjustments.min() >= bundle["parameters"]["max_negative_test_adjustment"] - 1e-9

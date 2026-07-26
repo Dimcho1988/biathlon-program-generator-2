@@ -62,7 +62,12 @@ def effective_load_figure(rolling_load: pd.DataFrame, component: str, days: int 
     return fig
 
 
-def readiness_figure(readiness_history: pd.DataFrame, components: list[str] | None = None, days: int = 45) -> go.Figure:
+def readiness_figure(
+    readiness_history: pd.DataFrame,
+    components: list[str] | None = None,
+    days: int = 45,
+    key_readiness_threshold: float = 90.0,
+) -> go.Figure:
     components = components or COMPONENTS
     data = readiness_history.loc[readiness_history["component"].isin(components)].copy()
     if not data.empty:
@@ -77,7 +82,11 @@ def readiness_figure(readiness_history: pd.DataFrame, components: list[str] | No
         labels={"date": "Дата", "readiness_after": "Readiness %", "component": "Компонент"},
         title="Компонентна readiness и възстановяване",
     )
-    fig.add_hline(y=90, line_dash="dot", annotation_text="ключова сесия")
+    fig.add_hline(
+        y=float(key_readiness_threshold),
+        line_dash="dot",
+        annotation_text="ключова сесия",
+    )
     fig.add_hline(y=65, line_dash="dot", annotation_text="възстановяване")
     if not data.empty:
         curve_end = pd.Timestamp(data["date"].max()).normalize()

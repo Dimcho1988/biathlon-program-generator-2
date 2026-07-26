@@ -22,21 +22,86 @@ from .physiology import (
 )
 from .planning import apply_plan_overrides, build_volume_trajectory, build_weekly_targets, generate_week_plan
 from .preferences import annual_volume_context, default_planning_preferences, normalize_preferences
-from .testing import analyze_tests
+from .testing import aggregate_test_effects, analyze_tests
+
+
+def _canonical_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _canonical_value(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_canonical_value(item) for item in value]
+    if isinstance(value, (pd.Timestamp, date)):
+        return pd.Timestamp(value).isoformat()
+    if isinstance(value, np.generic):
+        return _canonical_value(value.item())
+    if value is None:
+        return None
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    return value
+
+
+def _canonical_frame(frame: pd.DataFrame) -> dict[str, Any]:
+    columns = sorted(str(column) for column in frame.columns)
+    if frame.empty:
+        return {"columns": columns, "records": []}
+
+    normalized = frame.reindex(columns=columns)
+    records = [
+        {
+            column: _canonical_value(row[column])
+            for column in columns
+        }
+        for _, row in normalized.iterrows()
+    ]
+    records.sort(
+        key=lambda record: json.dumps(
+            record,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+    return {"columns": columns, "records": records}
 
 
 def _hash_inputs(bundle: dict[str, Any], athlete_id: str) -> str:
+    athlete_filter = bundle["athletes"]["athlete_id"].astype(str) == athlete_id
+    activity_filter = bundle["activities"]["athlete_id"].astype(str) == athlete_id
+    wellness_filter = bundle["wellness"]["athlete_id"].astype(str) == athlete_id
+    test_filter = bundle["tests"]["athlete_id"].astype(str) == athlete_id
+    calendar_filter = bundle["calendar"]["athlete_id"].astype(str) == athlete_id
+    relevant_overrides = {
+        str(key): value
+        for key, value in bundle.get("plan_overrides", {}).items()
+        if str(key).startswith(f"{athlete_id}|")
+    }
     payload = {
         "athlete_id": athlete_id,
         "version": int(bundle.get("version", 1)),
-        "activity_rows": int((bundle["activities"]["athlete_id"] == athlete_id).sum()),
-        "wellness_rows": int((bundle["wellness"]["athlete_id"] == athlete_id).sum()),
-        "test_rows": int((bundle["tests"]["athlete_id"] == athlete_id).sum()),
-        "calendar_rows": int((bundle["calendar"]["athlete_id"] == athlete_id).sum()),
-        "planning_preferences": bundle.get("planning_preferences", {}).get(athlete_id, {}),
-        "parameters": bundle["parameters"],
+        "athlete": _canonical_frame(bundle["athletes"].loc[athlete_filter]),
+        "zone_profile": _canonical_frame(bundle["zone_profiles"][athlete_id]),
+        "activities": _canonical_frame(bundle["activities"].loc[activity_filter]),
+        "wellness": _canonical_frame(bundle["wellness"].loc[wellness_filter]),
+        "tests": _canonical_frame(bundle["tests"].loc[test_filter]),
+        "calendar": _canonical_frame(bundle["calendar"].loc[calendar_filter]),
+        "methods": _canonical_frame(bundle["methods"]),
+        "planning_preferences": _canonical_value(
+            bundle.get("planning_preferences", {}).get(athlete_id, {})
+        ),
+        "parameters": _canonical_value(bundle["parameters"]),
+        "plan_overrides": _canonical_value(relevant_overrides),
     }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
 
 
 def _append_current_readiness_snapshot(
@@ -122,8 +187,22 @@ def analyze_athlete(
     metric_details, monitoring_by_component, hard_reasons = analyze_wellness(
         bundle["wellness"], athlete_id, parameters, as_of=today
     )
-    test_details, test_adjustments = analyze_tests(bundle["tests"], athlete_id, parameters, as_of=today)
-    integrated = integrate_component_readiness(load_readiness, monitoring_by_component, test_adjustments)
+    test_details, test_effects = analyze_tests(bundle["tests"], athlete_id, parameters, as_of=today)
+    readiness_test_adjustments = aggregate_test_effects(
+        test_effects,
+        parameters,
+        channel="readiness",
+    )
+    planning_test_adjustments = aggregate_test_effects(
+        test_effects,
+        parameters,
+        channel="planning",
+    )
+    integrated = integrate_component_readiness(
+        load_readiness,
+        monitoring_by_component,
+        readiness_test_adjustments,
+    )
     annual_context = annual_volume_context(activity_summaries, planning_preferences, as_of=today)
 
     weekly_targets = build_weekly_targets(
@@ -136,6 +215,7 @@ def analyze_athlete(
         minimum_weeks=16,
         planning_preferences=planning_preferences,
         annual_context=annual_context,
+        test_effects=test_effects,
     )
 
     plan = pd.DataFrame()
@@ -222,7 +302,8 @@ def analyze_athlete(
                 "Tref": float(load_stats.loc[component, "Tref"]),
                 "load_readiness": float(load_readiness.loc[component, "readiness"]),
                 "monitoring_score": float(monitoring_by_component.loc[component, "monitoring_score"]),
-                "test_adjustment": float(test_adjustments.get(component, 0.0)),
+                "readiness_test_adjustment": float(readiness_test_adjustments.get(component, 0.0)),
+                "planning_test_adjustment": float(planning_test_adjustments.get(component, 0.0)),
                 "integrated_readiness": float(integrated.loc[component, "integrated_readiness"]),
                 "adaptive_multiplier": float(integrated.loc[component, "adaptive_multiplier"]),
                 "target_index": float(first_week.loc[component, "target_index"]),
@@ -270,7 +351,10 @@ def analyze_athlete(
         "monitoring_by_component": monitoring_by_component,
         "hard_reasons": hard_reasons,
         "test_details": test_details,
-        "test_adjustments": test_adjustments,
+        "test_effects": test_effects,
+        "test_readiness_adjustments": readiness_test_adjustments,
+        "test_planning_adjustments": planning_test_adjustments,
+        "test_adjustments": planning_test_adjustments,
         "integrated": integrated,
         "weekly_targets": weekly_targets,
         "planning_preferences": planning_preferences,

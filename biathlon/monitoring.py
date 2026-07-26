@@ -66,11 +66,15 @@ def analyze_metric(
             "score": 70.0,
             "reliability": 0.0,
             "critical": False,
+            "current_date": pd.NaT,
+            "age_days": np.nan,
             "n7": 0,
             "n40": 0,
         }
 
     current = float(series.iloc[-1])
+    current_date = pd.Timestamp(series.index[-1]).normalize()
+    age_days = max(0, int((end - current_date).days))
     s7 = _window(series, end, 7)
     s40 = _window(series, end, 40)
     mean7 = float(s7.mean()) if not s7.empty else current
@@ -123,6 +127,8 @@ def analyze_metric(
         "score": float(np.clip(score, 0.0, 100.0)),
         "reliability": float(np.clip(reliability, 0.0, 1.0)),
         "critical": critical,
+        "current_date": current_date,
+        "age_days": age_days,
         "n7": n7,
         "n40": n40,
     }
@@ -143,12 +149,26 @@ def analyze_wellness(
 
     end = pd.Timestamp(as_of if as_of is not None else athlete["date"].max()).normalize() if not athlete.empty else pd.Timestamp(date.today())
     hard_reasons: list[str] = []
+    hard_flag_max_age_days = max(
+        0,
+        int(parameters.get("hard_flag_max_age_days", 3)),
+    )
     if not athlete.empty:
         latest = athlete.loc[pd.to_datetime(athlete["date"]).dt.normalize() <= end].sort_values("date").tail(1)
-        if not latest.empty and bool(latest.iloc[0].get("illness", False)):
-            hard_reasons.append("Отбелязани симптоми/заболяване")
+        if not latest.empty:
+            latest_date = pd.Timestamp(latest.iloc[0]["date"]).normalize()
+            latest_age_days = max(0, int((end - latest_date).days))
+            if (
+                latest_age_days <= hard_flag_max_age_days
+                and bool(latest.iloc[0].get("illness", False))
+            ):
+                hard_reasons.append("Отбелязани симптоми/заболяване")
     for metric, row in metric_details.iterrows():
-        if bool(row["critical"]):
+        if (
+            bool(row["critical"])
+            and pd.notna(row["age_days"])
+            and int(row["age_days"]) <= hard_flag_max_age_days
+        ):
             hard_reasons.append(f"Критична стойност: {row['label']}")
 
     component_rows: list[dict[str, Any]] = []
@@ -165,7 +185,12 @@ def analyze_wellness(
             reliability_weight = max(0.15, float(row["reliability"]))
             weighted_sum += float(row["score"]) * influence * reliability_weight
             weight_total += influence * reliability_weight
-            if bool(row["critical"]) and influence >= 0.8:
+            hard_flag_is_current = (
+                bool(row["critical"])
+                and pd.notna(row["age_days"])
+                and int(row["age_days"]) <= hard_flag_max_age_days
+            )
+            if hard_flag_is_current and influence >= 0.8:
                 critical_for_component = True
                 critical_labels.append(str(row["label"]))
         score = weighted_sum / weight_total if weight_total > 0 else 70.0
@@ -201,7 +226,7 @@ def adaptive_multiplier_from_score(score: float, hard_flag: bool = False) -> flo
 def integrate_component_readiness(
     load_readiness: pd.DataFrame,
     monitoring_by_component: pd.DataFrame,
-    test_adjustments: pd.Series,
+    readiness_test_adjustments: pd.Series,
 ) -> pd.DataFrame:
     """Прозрачна интеграция на товарна готовност, мониторинг и тестове."""
 
@@ -209,7 +234,7 @@ def integrate_component_readiness(
     for component in COMPONENTS:
         load_score = float(load_readiness.loc[component, "readiness"])
         monitoring_score = float(monitoring_by_component.loc[component, "monitoring_score"])
-        adjustment = float(test_adjustments.get(component, 0.0))
+        adjustment = float(readiness_test_adjustments.get(component, 0.0))
         test_score = float(np.clip(75.0 + 250.0 * adjustment, 45.0, 90.0))
         integrated = 0.55 * load_score + 0.35 * monitoring_score + 0.10 * test_score
         hard_flag = bool(monitoring_by_component.loc[component, "hard_flag"])
@@ -236,6 +261,7 @@ def integrate_component_readiness(
                 "monitoring_score": monitoring_score,
                 "test_score": test_score,
                 "test_adjustment": adjustment,
+                "readiness_test_adjustment": adjustment,
                 "integrated_readiness": float(np.clip(integrated, 0.0, 100.0)),
                 "adaptive_multiplier": multiplier,
                 "hard_flag": hard_flag,

@@ -54,6 +54,7 @@ from biathlon.preferences import (
 )
 from biathlon.reporting import work_report_xlsx_bytes
 from biathlon.service import analyze_athlete, team_summary
+from biathlon.testing import resolved_test_settings
 from biathlon.ui_helpers import (
     audit_entry,
     dataframe_csv_bytes,
@@ -287,6 +288,10 @@ def render_team_page(bundle: dict[str, Any]) -> None:
 def component_summary_table(analysis: dict[str, Any]) -> pd.DataFrame:
     first_week = analysis["weekly_targets"].loc[analysis["weekly_targets"]["week_no"] == 1].set_index("component")
     table = analysis["load_stats"].join(analysis["integrated"], how="left")
+    table = table.join(
+        analysis["test_planning_adjustments"].rename("planning_test_adjustment"),
+        how="left",
+    )
     table = table.join(first_week[["target_index", "target_effective_week", "status"]], how="left", rsuffix="_target")
     table = table.reset_index().rename(
         columns={
@@ -295,7 +300,8 @@ def component_summary_table(analysis: dict[str, Any]) -> pd.DataFrame:
             "Tref": "Tref",
             "load_readiness": "Readiness",
             "monitoring_score": "Мониторинг",
-            "test_adjustment": "Тестова корекция",
+            "test_adjustment": "Тест → readiness",
+            "planning_test_adjustment": "Тест → план",
             "integrated_readiness": "Интегрирана готовност",
             "adaptive_multiplier": "Множител",
             "target_index": "Целеви 7/40",
@@ -303,7 +309,8 @@ def component_summary_table(analysis: dict[str, Any]) -> pd.DataFrame:
             "status": "Роля в мезоцикъла",
         }
     )
-    table["Тестова корекция"] = table["Тестова корекция"] * 100.0
+    table["Тест → readiness"] = table["Тест → readiness"] * 100.0
+    table["Тест → план"] = table["Тест → план"] * 100.0
     return table[
         [
             "Компонент",
@@ -311,7 +318,8 @@ def component_summary_table(analysis: dict[str, Any]) -> pd.DataFrame:
             "Tref",
             "Readiness",
             "Мониторинг",
-            "Тестова корекция",
+            "Тест → readiness",
+            "Тест → план",
             "Интегрирана готовност",
             "Множител",
             "Целеви 7/40",
@@ -394,7 +402,16 @@ def render_dashboard_page(analysis: dict[str, Any]) -> None:
 
     left, right = st.columns(2)
     with left:
-        st.plotly_chart(readiness_figure(analysis["readiness_history"], days=35), width="stretch")
+        st.plotly_chart(
+            readiness_figure(
+                analysis["readiness_history"],
+                days=35,
+                key_readiness_threshold=float(
+                    st.session_state.bundle["parameters"]["key_readiness_threshold"]
+                ),
+            ),
+            width="stretch",
+        )
     with right:
         first_six = analysis["weekly_targets"].loc[analysis["weekly_targets"]["week_no"] <= 6]
         st.plotly_chart(weekly_targets_figure(first_six, "target_index"), width="stretch")
@@ -552,7 +569,18 @@ def render_recovery_page(analysis: dict[str, Any]) -> None:
         format_func=lambda c: COMPONENT_SHORT[c],
         key="recovery_components",
     )
-    st.plotly_chart(readiness_figure(analysis["readiness_history"], selected_components or COMPONENTS, days=60), width="stretch")
+    key_readiness_threshold = float(
+        st.session_state.bundle["parameters"]["key_readiness_threshold"]
+    )
+    st.plotly_chart(
+        readiness_figure(
+            analysis["readiness_history"],
+            selected_components or COMPONENTS,
+            days=60,
+            key_readiness_threshold=key_readiness_threshold,
+        ),
+        width="stretch",
+    )
 
     current = analysis["load_readiness"].join(analysis["integrated"][["integrated_readiness", "hard_flag"]]).reset_index()
     current = current.rename(
@@ -584,7 +612,11 @@ def render_recovery_page(analysis: dict[str, Any]) -> None:
     days = np.linspace(0, 7, 57)
     forecast = 100.0 - fatigue * np.exp(-days / max(tau, 1e-9))
     fig = go.Figure(go.Scatter(x=days, y=forecast, mode="lines", name=component))
-    fig.add_hline(y=90, line_dash="dot", annotation_text="ключов стимул")
+    fig.add_hline(
+        y=key_readiness_threshold,
+        line_dash="dot",
+        annotation_text="ключов стимул",
+    )
     fig.add_hline(y=float(st.session_state.bundle["parameters"]["practical_full_recovery"]), line_dash="dot", annotation_text="практически възстановен")
     fig.update_layout(title=f"Прогнозна крива без ново натоварване · {component}", xaxis_title="Дни", yaxis_title="Readiness %", yaxis_range=[0, 102], height=380)
     st.plotly_chart(fig, width="stretch")
@@ -1618,7 +1650,28 @@ def render_monitoring_page(bundle: dict[str, Any], analysis: dict[str, Any], can
     athlete_id = str(analysis["athlete"]["athlete_id"])
     page_header("Дневен мониторинг", "Ръчни субективни и обективни показатели с текуща стойност, 7/40 тенденция и критични флагове.")
     athlete_wellness = bundle["wellness"].loc[bundle["wellness"]["athlete_id"] == athlete_id].sort_values("date")
-    latest = athlete_wellness.iloc[-1]
+    if athlete_wellness.empty:
+        latest = pd.Series(
+            {
+                "sleep_quality": 7.0,
+                "fatigue": 3.0,
+                "soreness_legs": 1.0,
+                "soreness_upper": 1.0,
+                "stress": 3.0,
+                "motivation": 7.0,
+                "pain": 0.0,
+                "illness": False,
+                "morning_hr": 60.0,
+                "hrv": 60.0,
+                "sleep_hours": 7.5,
+                "weight_kg": float(analysis["athlete"]["weight_kg"]),
+                "session_rpe": 0.0,
+                "execution_quality": 4,
+            }
+        )
+        st.info("Няма предишни wellness записи. Формулярът използва неутрални начални стойности.")
+    else:
+        latest = athlete_wellness.iloc[-1]
 
     with st.form("wellness_form"):
         st.subheader(f"Сутрешен запис · {date.today().strftime('%d.%m.%Y')}")
@@ -1709,7 +1762,16 @@ def render_tests_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit
     st.plotly_chart(test_history_figure(bundle["tests"], athlete_id, test_code), width="stretch")
 
     history = bundle["tests"].loc[(bundle["tests"]["athlete_id"] == athlete_id) & (bundle["tests"]["test_code"] == test_code)].sort_values("date")
-    latest = history.iloc[-1]
+    if history.empty:
+        latest = pd.Series(
+            {
+                "primary_value": 0.0,
+                "secondary_value": 0.0,
+            }
+        )
+        st.info("Няма предишен резултат за този тест. Въведи първо базово измерване.")
+    else:
+        latest = history.iloc[-1]
     with st.form("test_entry_form"):
         c1, c2, c3 = st.columns(3)
         test_date = c1.date_input("Дата", value=date.today(), disabled=not can_edit)
@@ -1758,17 +1820,47 @@ def render_tests_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit
                 "date": "Дата",
                 "primary_change_pct": "Промяна · основен %",
                 "secondary_change_pct": "Промяна · вторичен %",
-                "composite_change_pct": "Комплексна промяна %",
+                "raw_composite_change_pct": "Сурова комплексна промяна %",
+                "effective_change_pct": "Ефективна промяна %",
                 "comparability": "Сравнимост",
                 "reliability": "Надеждност",
                 "valid": "Валиден",
+                "age_days": "Възраст · дни",
+                "active": "Активен",
             }
         )
-        st.dataframe(display[["Тест", "Дата", "Промяна · основен %", "Промяна · вторичен %", "Комплексна промяна %", "Сравнимост", "Надеждност", "Валиден"]], width="stretch", hide_index=True)
-    adjustments = analysis["test_adjustments"].rename("Корекция").reset_index().rename(columns={"index": "Компонент"})
-    adjustments["Корекция"] *= 100.0
+        st.dataframe(
+            display[
+                [
+                    "Тест",
+                    "Дата",
+                    "Промяна · основен %",
+                    "Промяна · вторичен %",
+                    "Сурова комплексна промяна %",
+                    "Ефективна промяна %",
+                    "Сравнимост",
+                    "Надеждност",
+                    "Възраст · дни",
+                    "Активен",
+                    "Валиден",
+                ]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+    adjustments = pd.concat(
+        [
+            analysis["test_readiness_adjustments"].rename("Readiness корекция"),
+            analysis["test_planning_adjustments"].rename("Planning корекция"),
+        ],
+        axis=1,
+    ).reset_index().rename(columns={"index": "Компонент"})
+    adjustments[["Readiness корекция", "Planning корекция"]] *= 100.0
     st.dataframe(adjustments, width="stretch", hide_index=True)
-    st.caption("Положителната корекция е ограничена до +5%, отрицателната — до −10%, и се прилага само в контекста на текущата готовност.")
+    st.caption(
+        "Readiness и planning са отделни експертни канали. Компонентните множители, "
+        "актуалността, half-life и границите се управляват от „Експертни настройки → Тестове“."
+    )
 
 
 def comparison_metrics(before: dict[str, Any], after: dict[str, Any], component: str) -> None:
@@ -1861,17 +1953,21 @@ def render_simulator_page(bundle: dict[str, Any], before: dict[str, Any], can_ed
     elif scenario_type.startswith("Контролен"):
         test_code = st.selectbox("Тест", list(TEST_DEFINITIONS), format_func=lambda c: TEST_DEFINITIONS[c]["label"], key="scenario_test")
         subset = scenario_bundle["tests"].loc[(scenario_bundle["tests"]["athlete_id"] == athlete_id) & (scenario_bundle["tests"]["test_code"] == test_code)].sort_values("date")
-        latest = subset.iloc[-1]
-        c1, c2 = st.columns(2)
-        change = c1.slider("Промяна на основния резултат · %", -12.0, 12.0, 4.0, 0.5)
-        comparability = c2.slider("Сравнимост", 0.4, 1.0, 0.95, 0.05)
-        direction = TEST_DEFINITIONS[test_code]["primary_direction"]
-        new_value = float(latest["primary_value"]) * (1.0 + change / 100.0 * direction)
-        mask = scenario_bundle["tests"]["test_id"] == latest["test_id"]
-        scenario_bundle["tests"].loc[mask, "primary_value"] = new_value
-        scenario_bundle["tests"].loc[mask, "comparability"] = comparability
-        scenario_description = f"Последният тест е променен с посочно подобрение {change:+.1f}% и сравнимост {comparability:.2f}."
         focus_component = "Z3" if test_code == "Z3_20MIN" else "Z5"
+        if subset.empty:
+            st.info("Няма записан резултат за избрания тест. Сценарият остава без промяна, докато не бъде добавено базово измерване.")
+            scenario_description = f"Няма наличен резултат за {TEST_DEFINITIONS[test_code]['label']}; не е приложена тестова промяна."
+        else:
+            latest = subset.iloc[-1]
+            c1, c2 = st.columns(2)
+            change = c1.slider("Промяна на основния резултат · %", -12.0, 12.0, 4.0, 0.5)
+            comparability = c2.slider("Сравнимост", 0.4, 1.0, 0.95, 0.05)
+            direction = TEST_DEFINITIONS[test_code]["primary_direction"]
+            new_value = float(latest["primary_value"]) * (1.0 + change / 100.0 * direction)
+            mask = scenario_bundle["tests"]["test_id"] == latest["test_id"]
+            scenario_bundle["tests"].loc[mask, "primary_value"] = new_value
+            scenario_bundle["tests"].loc[mask, "comparability"] = comparability
+            scenario_description = f"Последният тест е променен с посочно подобрение {change:+.1f}% и сравнимост {comparability:.2f}."
     else:
         main_mask = (
             (scenario_bundle["calendar"]["athlete_id"].astype(str) == athlete_id)
@@ -2040,7 +2136,8 @@ def render_profile_page(bundle: dict[str, Any], analysis: dict[str, Any], can_ed
                     "τ · дни": rec["tau_days"],
                     "Товарна readiness": analysis["load_readiness"].loc[component, "readiness"],
                     "Мониторинг": analysis["monitoring_by_component"].loc[component, "monitoring_score"],
-                    "Тестова корекция %": analysis["test_adjustments"].get(component, 0.0) * 100,
+                    "Тест → readiness %": analysis["test_readiness_adjustments"].get(component, 0.0) * 100,
+                    "Тест → план %": analysis["test_planning_adjustments"].get(component, 0.0) * 100,
                     "Интегрирана готовност": analysis["integrated"].loc[component, "integrated_readiness"],
                 }
             )
@@ -2085,8 +2182,8 @@ def render_settings_page(bundle: dict[str, Any], role: str, athlete_id: str) -> 
     if not can_edit:
         st.info("Редакцията на експертните коефициенти е достъпна само за ролята „Главен треньор“. Данните по-долу са в режим преглед.")
     params = bundle["parameters"]
-    tab_general, tab_components, tab_cascade, tab_methods, tab_audit = st.tabs(
-        ["Общи правила", "Компонентни параметри", "Каскада", "Методи", "Журнал"]
+    tab_general, tab_components, tab_cascade, tab_tests, tab_methods, tab_audit = st.tabs(
+        ["Общи правила", "Компонентни параметри", "Каскада", "Тестове", "Методи", "Журнал"]
     )
 
     with tab_general:
@@ -2098,6 +2195,15 @@ def render_settings_page(bundle: dict[str, Any], role: str, athlete_id: str) -> 
             key_readiness = c2.slider("Readiness за ключова сесия", 70.0, 100.0, float(params["key_readiness_threshold"]), 1.0, disabled=not can_edit)
             full_recovery = c3.slider("Практическо пълно възстановяване", 90.0, 99.0, float(params["practical_full_recovery"]), 1.0, disabled=not can_edit)
             current_weight = c3.slider("Тежест на текущия показател", 0.30, 0.90, float(params["current_metric_weight"]), 0.05, disabled=not can_edit)
+            hard_flag_max_age_days = c3.number_input(
+                "Актуалност на hard flag · дни",
+                min_value=0,
+                max_value=30,
+                value=int(params.get("hard_flag_max_age_days", 3)),
+                step=1,
+                disabled=not can_edit,
+                help="Критична стойност или заболяване създава hard flag само докато последният запис е в този период.",
+            )
             submit = st.form_submit_button("Запази общите правила", disabled=not can_edit, width="stretch")
         if submit:
             params["spill_threshold_fraction"] = spill_threshold
@@ -2106,6 +2212,7 @@ def render_settings_page(bundle: dict[str, Any], role: str, athlete_id: str) -> 
             params["key_readiness_threshold"] = key_readiness
             params["practical_full_recovery"] = full_recovery
             params["current_metric_weight"] = current_weight
+            params["hard_flag_max_age_days"] = int(hard_flag_max_age_days)
             commit_bundle(bundle, "parameter_update", "Общите алгоритмични параметри са актуализирани.", athlete_id)
 
     with tab_components:
@@ -2164,6 +2271,98 @@ def render_settings_page(bundle: dict[str, Any], role: str, athlete_id: str) -> 
                 receiver: {source: float(edited.loc[receiver, source]) for source in COMPONENTS} for receiver in COMPONENTS
             }
             commit_bundle(bundle, "cascade_update", "Матрицата на физиологичните взаимодействия е актуализирана.", athlete_id)
+
+    with tab_tests:
+        st.caption(
+            "Readiness strength управлява острото влияние върху интегрираната готовност. "
+            "Planning strength управлява компонентния седмичен товар. Множител 1.0 означава "
+            "пълното тестово влияние за компонента; 0.0 го изключва."
+        )
+        resolved = resolved_test_settings(params)
+        test_rows = []
+        for test_code, settings in resolved.items():
+            test_rows.append(
+                {
+                    "test_code": test_code,
+                    "label": TEST_DEFINITIONS[test_code]["label"],
+                    "enabled": settings["enabled"],
+                    "primary_weight": settings["primary_weight"],
+                    "secondary_weight": settings["secondary_weight"],
+                    "min_comparability": settings["min_comparability"],
+                    "readiness_strength": settings["readiness_strength"],
+                    "planning_strength": settings["planning_strength"],
+                    "max_age_days": settings["max_age_days"],
+                    "half_life_days": settings["half_life_days"],
+                    "max_negative_adjustment": settings["max_negative_adjustment"],
+                    "max_positive_adjustment": settings["max_positive_adjustment"],
+                    **settings["component_multipliers"],
+                }
+            )
+        test_settings_editor = st.data_editor(
+            pd.DataFrame(test_rows),
+            width="stretch",
+            hide_index=True,
+            disabled=["test_code", "label"] if can_edit else list(pd.DataFrame(test_rows).columns),
+            key=f"test_settings_{bundle['version']}",
+            column_config={
+                "test_code": "Код",
+                "label": "Тест",
+                "enabled": st.column_config.CheckboxColumn("Активен"),
+                "primary_weight": st.column_config.NumberColumn("Тегло · основен", min_value=0.0, max_value=1.0, step=0.05),
+                "secondary_weight": st.column_config.NumberColumn("Тегло · вторичен", min_value=0.0, max_value=1.0, step=0.05),
+                "min_comparability": st.column_config.NumberColumn("Мин. сравнимост", min_value=0.0, max_value=1.0, step=0.05),
+                "readiness_strength": st.column_config.NumberColumn("Readiness strength", min_value=0.0, max_value=2.0, step=0.05),
+                "planning_strength": st.column_config.NumberColumn("Planning strength", min_value=0.0, max_value=2.0, step=0.05),
+                "max_age_days": st.column_config.NumberColumn("Актуалност · дни", min_value=0, max_value=365, step=1),
+                "half_life_days": st.column_config.NumberColumn("Half-life · дни", min_value=1.0, max_value=365.0, step=1.0),
+                "max_negative_adjustment": st.column_config.NumberColumn("Мин. корекция", min_value=-0.50, max_value=0.0, step=0.01),
+                "max_positive_adjustment": st.column_config.NumberColumn("Макс. корекция", min_value=0.0, max_value=0.50, step=0.01),
+                **{
+                    component: st.column_config.NumberColumn(
+                        f"{component} множител",
+                        min_value=0.0,
+                        max_value=2.0,
+                        step=0.05,
+                    )
+                    for component in COMPONENTS
+                },
+            },
+        )
+        if st.button("Запази настройките на тестовете", disabled=not can_edit, width="stretch"):
+            errors = []
+            configured_tests: dict[str, Any] = {}
+            for row_index, row in test_settings_editor.iterrows():
+                test_code = str(row["test_code"])
+                if float(row["primary_weight"]) + float(row["secondary_weight"]) <= 0:
+                    errors.append(f"{test_code}: поне едно тегло на резултат трябва да е положително.")
+                    continue
+                configured_tests[test_code] = {
+                    "enabled": bool(row["enabled"]),
+                    "primary_weight": float(row["primary_weight"]),
+                    "secondary_weight": float(row["secondary_weight"]),
+                    "min_comparability": float(row["min_comparability"]),
+                    "readiness_strength": float(row["readiness_strength"]),
+                    "planning_strength": float(row["planning_strength"]),
+                    "max_age_days": int(row["max_age_days"]),
+                    "half_life_days": float(row["half_life_days"]),
+                    "max_negative_adjustment": float(row["max_negative_adjustment"]),
+                    "max_positive_adjustment": float(row["max_positive_adjustment"]),
+                    "component_multipliers": {
+                        component: float(row[component])
+                        for component in COMPONENTS
+                    },
+                }
+            if errors:
+                for error in errors:
+                    st.error(error)
+            else:
+                params["test_settings"] = configured_tests
+                commit_bundle(
+                    bundle,
+                    "test_settings_update",
+                    "Readiness и planning влиянието на контролните тестове е актуализирано.",
+                    athlete_id,
+                )
 
     with tab_methods:
         component = st.selectbox("Филтър по компонент", COMPONENTS, key="method_component")

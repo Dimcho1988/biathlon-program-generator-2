@@ -153,6 +153,7 @@ DEFAULT_PARAMETERS = {
     "spill_fraction": 0.20,
     "key_stimulus_fraction": 0.40,
     "key_readiness_threshold": 90.0,
+    "hard_flag_max_age_days": 3,
     "practical_full_recovery": 95.0,
     "current_metric_weight": 0.60,
     "min_valid_days_7": 4,
@@ -313,6 +314,69 @@ TEST_DEFINITIONS = {
     },
 }
 
+DEFAULT_TEST_SETTINGS = {
+    "SKIERG_3MIN": {
+        "enabled": True,
+        "primary_weight": 0.75,
+        "secondary_weight": 0.25,
+        "min_comparability": 0.50,
+        "readiness_strength": 0.0,
+        "planning_strength": 1.0,
+        "max_age_days": 56,
+        "half_life_days": 28.0,
+        "max_positive_adjustment": 0.05,
+        "max_negative_adjustment": -0.10,
+        "component_multipliers": {
+            "Z1": 0.0,
+            "Z2": 0.0,
+            "Z3": 0.0,
+            "Z4": 0.0,
+            "Z5": 1.0,
+            "STR": 0.45 / 0.55,
+        },
+    },
+    "Z3_20MIN": {
+        "enabled": True,
+        "primary_weight": 0.70,
+        "secondary_weight": 0.30,
+        "min_comparability": 0.50,
+        "readiness_strength": 0.0,
+        "planning_strength": 1.0,
+        "max_age_days": 56,
+        "half_life_days": 28.0,
+        "max_positive_adjustment": 0.05,
+        "max_negative_adjustment": -0.10,
+        "component_multipliers": {
+            "Z1": 0.0,
+            "Z2": 0.35 / 0.65,
+            "Z3": 1.0,
+            "Z4": 0.0,
+            "Z5": 0.0,
+            "STR": 0.0,
+        },
+    },
+    "SPRINT_200M": {
+        "enabled": True,
+        "primary_weight": 0.80,
+        "secondary_weight": 0.20,
+        "min_comparability": 0.50,
+        "readiness_strength": 0.0,
+        "planning_strength": 1.0,
+        "max_age_days": 56,
+        "half_life_days": 28.0,
+        "max_positive_adjustment": 0.05,
+        "max_negative_adjustment": -0.10,
+        "component_multipliers": {
+            "Z1": 0.0,
+            "Z2": 0.0,
+            "Z3": 0.0,
+            "Z4": 0.0,
+            "Z5": 0.45 / 0.55,
+            "STR": 1.0,
+        },
+    },
+}
+
 PERIODIZATION_CENTERS = {
     "Z1": (0.20, 0.28),
     "Z2": (0.35, 0.26),
@@ -336,4 +400,6 @@ EXPERT_ROLES = {"Главен треньор"}
 def fresh_parameters() -> dict:
     """Връща независим набор от начални параметри."""
 
-    return deepcopy(DEFAULT_PARAMETERS)
+    parameters = deepcopy(DEFAULT_PARAMETERS)
+    parameters["test_settings"] = deepcopy(DEFAULT_TEST_SETTINGS)
+    return parameters

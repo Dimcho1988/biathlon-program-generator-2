@@ -25,6 +25,7 @@ from .physiology import (
     target_weekly_effective,
 )
 from .preferences import WEEKDAY_LABELS, build_week_structure, normalize_preferences
+from .testing import aggregate_test_effects
 
 EPS = 1e-9
 
@@ -81,6 +82,7 @@ def build_weekly_targets(
     minimum_weeks: int = 16,
     planning_preferences: dict[str, Any] | None = None,
     annual_context: dict[str, Any] | None = None,
+    test_effects: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Изгражда компонентна вълна до основния старт."""
 
@@ -110,6 +112,12 @@ def build_weekly_targets(
         accent_components = sorted(COMPONENTS, key=lambda c: envelopes[c], reverse=True)[:2]
         events = _events_in_week(calendar, athlete_id, week_start)
         event_names = ", ".join(events["name"].astype(str).tolist()) if not events.empty else ""
+        planning_test_adjustments = aggregate_test_effects(
+            test_effects if test_effects is not None else pd.DataFrame(),
+            parameters,
+            channel="planning",
+            future_days=7 * week_index,
+        )
 
         indices: dict[str, float] = {}
         metadata: dict[str, dict[str, Any]] = {}
@@ -166,8 +174,8 @@ def build_weekly_targets(
 
             adaptive = float(integrated.loc[component, "adaptive_multiplier"])
             adaptive_near_term = 1.0 + (adaptive - 1.0) * float(np.exp(-week_index / 2.0))
-            test_adjustment = float(integrated.loc[component, "test_adjustment"])
-            test_factor = 1.0 + test_adjustment * float(np.exp(-week_index / 4.0))
+            test_adjustment = float(planning_test_adjustments.get(component, 0.0))
+            test_factor = 1.0 + test_adjustment
             index *= calendar_factor * taper_factor * goal_factor * adaptive_near_term * test_factor
             # Компонентно специфичен горен лимит: нискоинтензивният обем може
             # да реагира по-видимо на сезонната цел, докато високите зони
@@ -525,6 +533,7 @@ def _focus_schedule_for_structure(
     preferences: dict[str, Any],
     progress: float,
     integrated: pd.DataFrame,
+    key_readiness_threshold: float,
 ) -> tuple[dict[int, str], bool]:
     """Задава методически фокус на всеки тренировъчен слот."""
 
@@ -539,6 +548,11 @@ def _focus_schedule_for_structure(
         component
         for component in prefs["double_threshold_components"]
         if component in {"Z3", "Z4"}
+        and min(
+            float(target_q.get(component, 0.0)),
+            0.30 * float(tref.get(component, 0.0)),
+        )
+        >= 4.0
     ]
     threshold_components = sorted(
         threshold_components,
@@ -553,7 +567,11 @@ def _focus_schedule_for_structure(
     double_threshold_active = bool(
         prefs["double_threshold_enabled"]
         and prefs["double_threshold_phase_min"] <= progress <= prefs["double_threshold_phase_max"]
-        and threshold_ready >= prefs["double_threshold_min_readiness"]
+        and threshold_ready
+        >= max(
+            float(prefs["double_threshold_min_readiness"]),
+            float(key_readiness_threshold),
+        )
         and not threshold_hard
         and len(structure.loc[structure["slot_type"] == "double_threshold"]) >= 2
         and prefs["max_key_sessions_per_week"] >= 2
@@ -694,6 +712,7 @@ def generate_week_plan(
     first_week = weekly_targets.loc[weekly_targets["week_start"] == first_week_start].set_index("component")
     target_e = first_week["target_effective_week"].reindex(COMPONENTS).astype(float)
     tref = load_stats["Tref"].reindex(COMPONENTS).astype(float)
+    key_readiness_threshold = float(parameters["key_readiness_threshold"])
     target_q, inversion_error = solve_direct_load(target_e, tref, parameters)
     remaining = target_q.copy()
 
@@ -701,7 +720,13 @@ def generate_week_plan(
     phase = str(first_week["phase"].iloc[0])
     structure = build_week_structure(plan_start, preferences)
     focus_assignments, double_threshold_active = _focus_schedule_for_structure(
-        structure, target_q, tref, preferences, progress, integrated
+        structure,
+        target_q,
+        tref,
+        preferences,
+        progress,
+        integrated,
+        key_readiness_threshold,
     )
     occurrence_source = [focus_assignments[idx] for idx in structure.index if idx in focus_assignments]
     occurrences_left = {component: occurrence_source.count(component) for component in COMPONENTS}
@@ -709,6 +734,8 @@ def generate_week_plan(
     rows: list[dict[str, Any]] = []
     planned_q_total = pd.Series(0.0, index=COMPONENTS)
     planned_e_total = pd.Series(0.0, index=COMPONENTS)
+    generated_key_count = 0
+    key_limit_reductions: list[str] = []
     training_slots = int(structure["planned_training"].sum())
     processed_training_slots = 0
     last_day_offset: int | None = None
@@ -800,10 +827,13 @@ def generate_week_plan(
             focus = "Z1"
         if readiness_map[focus] < 65 and focus in {"Z3", "Z4", "Z5", "STR"} and race_event is None:
             focus = "Z1"
+        if is_double_threshold and focus not in {"Z3", "Z4"}:
+            is_double_threshold = False
         if is_double_threshold:
-            threshold_floor = float(preferences["double_threshold_min_readiness"])
-            # Втората сесия може да стартира малко по-ниско, но не под 75%.
-            required = threshold_floor if session_no == 1 else max(75.0, threshold_floor - 8.0)
+            required = max(
+                float(preferences["double_threshold_min_readiness"]),
+                key_readiness_threshold,
+            )
             if readiness_map[focus] < required:
                 focus = "Z1"
                 is_double_threshold = False
@@ -816,7 +846,14 @@ def generate_week_plan(
         if focus in {"Z3", "Z4", "Z5"}:
             count = max(1, occurrences_left.get(focus, 1))
             ideal_share = float(remaining[focus]) / count
-            readiness_factor = 1.0 if readiness_map[focus] >= 90 else 0.75 if readiness_map[focus] >= 80 else 0.45
+            reduced_readiness_threshold = max(65.0, key_readiness_threshold - 10.0)
+            readiness_factor = (
+                1.0
+                if readiness_map[focus] >= key_readiness_threshold
+                else 0.75
+                if readiness_map[focus] >= reduced_readiness_threshold
+                else 0.45
+            )
             cap = _phase_key_fraction(progress) * float(tref[focus]) * readiness_factor
             if is_double_threshold:
                 cap = min(cap, (0.34 if session_no == 1 else 0.30) * float(tref[focus]))
@@ -835,7 +872,7 @@ def generate_week_plan(
             count = max(1, occurrences_left.get("STR", 1))
             ideal_share = float(remaining["STR"]) / count
             main_q = min(float(remaining["STR"]), max(6.0, ideal_share), 0.45 * float(tref["STR"]))
-            if readiness_map["STR"] < 75 or hard_flag:
+            if readiness_map["STR"] < max(65.0, key_readiness_threshold - 15.0) or hard_flag:
                 main_q *= 0.55
             if main_q < 3.0:
                 focus = "Z1"
@@ -891,8 +928,43 @@ def generate_week_plan(
             if session_q.sum() > max_q:
                 session_q *= max_q / max(session_q.sum(), EPS)
 
-        effective = effective_from_direct_vector(session_q.values, tref.values, parameters)
+        if is_double_threshold and focus not in {"Z3", "Z4"}:
+            is_double_threshold = False
+
         readiness_before_focus = readiness_map[focus]
+        key_q_threshold = float(parameters["key_stimulus_fraction"]) * float(tref[focus])
+        if (
+            session_q[focus] >= key_q_threshold
+            and readiness_before_focus < key_readiness_threshold
+        ):
+            reduced_q = max(0.0, key_q_threshold * (1.0 - 1e-3))
+            returned_q = max(0.0, float(session_q[focus]) - reduced_q)
+            session_q[focus] = reduced_q
+            remaining[focus] = float(remaining[focus]) + returned_q
+
+        key_stimulus = bool(
+            session_q[focus] >= key_q_threshold
+            and readiness_before_focus >= key_readiness_threshold
+            and not hard_flag
+        )
+        key_limit_applied = False
+        if (
+            key_stimulus
+            and generated_key_count >= int(preferences["max_key_sessions_per_week"])
+        ):
+            reduced_q = max(0.0, key_q_threshold * (1.0 - 1e-3))
+            returned_q = max(0.0, float(session_q[focus]) - reduced_q)
+            session_q[focus] = reduced_q
+            remaining[focus] = float(remaining[focus]) + returned_q
+            key_stimulus = False
+            key_limit_applied = True
+            key_limit_reductions.append(
+                f"{current_date.date().isoformat()} · сесия {session_no} · {focus}"
+            )
+        elif key_stimulus:
+            generated_key_count += 1
+
+        effective = effective_from_direct_vector(session_q.values, tref.values, parameters)
         fatigue = apply_training_impulse(fatigue, effective, tref, parameters)
         readiness_after_focus = float(np.clip(100.0 - fatigue[focus], 0.0, 100.0))
 
@@ -924,6 +996,10 @@ def generate_week_plan(
             explanation_parts.append(f"първоначалният фокус {planned_focus} е заменен с {focus}")
         if hard_flag:
             explanation_parts.append("има твърд флаг за първоначално планирания компонент")
+        if key_limit_applied:
+            explanation_parts.append(
+                "дозата е ограничена от максималния брой ключови сесии"
+            )
         if unavailable:
             explanation_parts.append("дозата е ограничена от календарна недостъпност")
         if race_event is not None:
@@ -968,7 +1044,7 @@ def generate_week_plan(
             "total_real_min": round(total_real, 1),
             "readiness_before": round(readiness_before_focus, 1),
             "readiness_after": round(readiness_after_focus, 1),
-            "key_stimulus": bool(session_q[focus] >= float(parameters["key_stimulus_fraction"]) * float(tref[focus])),
+            "key_stimulus": key_stimulus,
             "double_threshold": is_double_threshold,
             "status": "Предложена",
             "locked": False,
@@ -1019,6 +1095,8 @@ def generate_week_plan(
         "unallocated_direct_q": remaining.to_dict(),
         "sessions_requested": int(preferences["sessions_per_week"]),
         "sessions_generated": int((plan["focus"] != "REST").sum()),
+        "key_sessions_generated": int(plan["key_stimulus"].sum()),
+        "max_key_sessions_per_week": int(preferences["max_key_sessions_per_week"]),
         "rest_days": [WEEKDAY_LABELS[day] for day in preferences["rest_days"]],
         "double_threshold_requested": bool(preferences["double_threshold_enabled"]),
         "double_threshold_active": double_threshold_active,
@@ -1039,6 +1117,12 @@ def generate_week_plan(
     if preferences["double_threshold_enabled"] and not double_threshold_active:
         snapshot["warnings"].append(
             "Двойната прагова тренировка е заявена, но не е активирана поради фаза, readiness, твърд флаг или лимит за ключови сесии."
+        )
+    if key_limit_reductions:
+        snapshot["warnings"].append(
+            "Лимитът за ключови сесии намали дозата на: "
+            + "; ".join(key_limit_reductions)
+            + "."
         )
     return plan, comparison, snapshot
 
