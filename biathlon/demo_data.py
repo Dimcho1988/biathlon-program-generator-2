@@ -18,6 +18,10 @@ from .constants import (
     STRENGTH_TYPES,
     fresh_parameters,
 )
+from .mesocycles import (
+    CAMP_PRESCRIPTION_COLUMNS,
+    default_camp_prescription,
+)
 from .preferences import default_planning_preferences
 
 DEMO_SEED = 20260620
@@ -401,6 +405,33 @@ def _generate_calendar(athletes: pd.DataFrame, today: date) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values(["athlete_id", "start_date"]).reset_index(drop=True)
 
 
+def _generate_camp_prescriptions(calendar: pd.DataFrame) -> pd.DataFrame:
+    """Create explicit demo directives instead of relying on hidden CAMP rules."""
+
+    rows: list[dict[str, Any]] = []
+    camps = calendar.loc[calendar["type"] == "CAMP"]
+    for _, camp in camps.iterrows():
+        row = default_camp_prescription(
+            str(camp["event_id"]),
+            str(camp["athlete_id"]),
+            mesocycle_type="BUILD",
+            mesocycle_length_weeks=4,
+            accent_mode="MANUAL",
+            accent_limit=4,
+            accent_Z1=1.0,
+            accent_Z3=1.0,
+            accent_Z5=1.0,
+            accent_STR=1.0,
+            post_camp_behavior="AUTO",
+            note=(
+                "Демо задание: изграждащ лагер с акценти "
+                "Z1, Z3, Z5 и сила; recovery при натрупан дълг."
+            ),
+        )
+        rows.append(row)
+    return pd.DataFrame(rows, columns=CAMP_PRESCRIPTION_COLUMNS)
+
+
 def _training_methods() -> pd.DataFrame:
     rows = [
         {
@@ -633,6 +664,7 @@ def generate_demo_bundle(seed: int = DEMO_SEED, history_days: int = 150) -> dict
     wellness = _generate_wellness(athletes, activities, start_date, end_date, seed)
     tests = _generate_tests(athletes, end_date, seed)
     calendar = _generate_calendar(athletes, today)
+    camp_prescriptions = _generate_camp_prescriptions(calendar)
     planning_preferences = {
         str(row["athlete_id"]): default_planning_preferences(str(row["profile_code"]), today)
         for _, row in athletes.iterrows()
@@ -648,6 +680,7 @@ def generate_demo_bundle(seed: int = DEMO_SEED, history_days: int = 150) -> dict
         "wellness": wellness,
         "tests": tests,
         "calendar": calendar,
+        "camp_prescriptions": camp_prescriptions,
         "methods": _training_methods(),
         "parameters": fresh_parameters(),
         "planning_preferences": planning_preferences,

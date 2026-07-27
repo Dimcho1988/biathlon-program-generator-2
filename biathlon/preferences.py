@@ -83,6 +83,9 @@ def default_planning_preferences(profile_code: str = "A", today: date | pd.Times
         "intensity_days": [2, 5],
         "strength_days": [1, 4],
         "max_key_sessions_per_week": 3,
+        "mesocycle_anchor_date": current,
+        "mesocycle_length_weeks": 4,
+        "camp_default_accent_limit": 2,
         "double_threshold_enabled": False,
         "double_threshold_day": 2,
         "double_threshold_components": ["Z3", "Z4"],
@@ -101,6 +104,7 @@ def normalize_preferences(
 ) -> dict[str, Any]:
     """Добавя липсващи полета и нормализира типовете след редакция от интерфейса."""
 
+    current = pd.Timestamp(today or date.today()).normalize()
     result = default_planning_preferences(profile_code, today)
     if preferences:
         for key, value in preferences.items():
@@ -135,6 +139,15 @@ def normalize_preferences(
     max_possible = max(1, 2 * (7 - len(result["rest_days"])))
     result["sessions_per_week"] = int(np.clip(result.get("sessions_per_week", 8), 1, max_possible))
     result["max_key_sessions_per_week"] = int(np.clip(result.get("max_key_sessions_per_week", 3), 0, 8))
+    result["mesocycle_anchor_date"] = pd.Timestamp(
+        result.get("mesocycle_anchor_date", current)
+    ).normalize()
+    result["mesocycle_length_weeks"] = int(
+        np.clip(result.get("mesocycle_length_weeks", 4), 2, 6)
+    )
+    result["camp_default_accent_limit"] = int(
+        np.clip(result.get("camp_default_accent_limit", 2), 1, len(COMPONENTS))
+    )
     result["double_threshold_enabled"] = bool(result.get("double_threshold_enabled", False))
     result["double_threshold_min_readiness"] = float(
         np.clip(result.get("double_threshold_min_readiness", 88.0), 60.0, 100.0)

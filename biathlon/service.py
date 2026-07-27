@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from .constants import COMPONENTS, STRENGTH_COEFFICIENTS, STRENGTH_LABELS, STRENGTH_TYPES
+from .mesocycles import empty_camp_prescriptions, normalize_camp_prescriptions
 from .monitoring import analyze_wellness, integrate_component_readiness
 from .physiology import (
     activities_to_activity_summaries,
@@ -68,12 +69,28 @@ def _canonical_frame(frame: pd.DataFrame) -> dict[str, Any]:
     return {"columns": columns, "records": records}
 
 
-def _hash_inputs(bundle: dict[str, Any], athlete_id: str) -> str:
+def _hash_inputs(
+    bundle: dict[str, Any],
+    athlete_id: str,
+    *,
+    effective_preferences: dict[str, Any] | None = None,
+    effective_camp_prescriptions: pd.DataFrame | None = None,
+) -> str:
     athlete_filter = bundle["athletes"]["athlete_id"].astype(str) == athlete_id
     activity_filter = bundle["activities"]["athlete_id"].astype(str) == athlete_id
     wellness_filter = bundle["wellness"]["athlete_id"].astype(str) == athlete_id
     test_filter = bundle["tests"]["athlete_id"].astype(str) == athlete_id
     calendar_filter = bundle["calendar"]["athlete_id"].astype(str) == athlete_id
+    camp_prescriptions = normalize_camp_prescriptions(
+        effective_camp_prescriptions
+        if effective_camp_prescriptions is not None
+        else bundle.get("camp_prescriptions")
+    )
+    camp_filter = (
+        camp_prescriptions["athlete_id"].astype(str) == athlete_id
+        if not camp_prescriptions.empty
+        else pd.Series(False, index=camp_prescriptions.index, dtype=bool)
+    )
     relevant_overrides = {
         str(key): value
         for key, value in bundle.get("plan_overrides", {}).items()
@@ -88,9 +105,14 @@ def _hash_inputs(bundle: dict[str, Any], athlete_id: str) -> str:
         "wellness": _canonical_frame(bundle["wellness"].loc[wellness_filter]),
         "tests": _canonical_frame(bundle["tests"].loc[test_filter]),
         "calendar": _canonical_frame(bundle["calendar"].loc[calendar_filter]),
+        "camp_prescriptions": _canonical_frame(
+            camp_prescriptions.loc[camp_filter]
+        ),
         "methods": _canonical_frame(bundle["methods"]),
         "planning_preferences": _canonical_value(
-            bundle.get("planning_preferences", {}).get(athlete_id, {})
+            effective_preferences
+            if effective_preferences is not None
+            else bundle.get("planning_preferences", {}).get(athlete_id, {})
         ),
         "parameters": _canonical_value(bundle["parameters"]),
         "plan_overrides": _canonical_value(relevant_overrides),
@@ -160,11 +182,13 @@ def analyze_athlete(
     zone_profile = bundle["zone_profiles"][athlete_id].copy()
     parameters = bundle["parameters"]
     profile_code = str(athlete.get("profile_code", "A"))
-    raw_preferences = bundle.setdefault("planning_preferences", {}).get(athlete_id)
+    raw_preferences = bundle.get("planning_preferences", {}).get(athlete_id)
     if raw_preferences is None:
         raw_preferences = default_planning_preferences(profile_code, today)
-        bundle["planning_preferences"][athlete_id] = raw_preferences
     planning_preferences = normalize_preferences(raw_preferences, profile_code, today)
+    camp_prescriptions = normalize_camp_prescriptions(
+        bundle.get("camp_prescriptions", empty_camp_prescriptions())
+    )
 
     activities = bundle["activities"].loc[bundle["activities"]["athlete_id"] == athlete_id].copy()
     activity_summaries = activities_to_activity_summaries(activities, zone_profile)
@@ -216,6 +240,7 @@ def analyze_athlete(
         planning_preferences=planning_preferences,
         annual_context=annual_context,
         test_effects=test_effects,
+        camp_prescriptions=camp_prescriptions,
     )
 
     plan = pd.DataFrame()
@@ -318,14 +343,22 @@ def analyze_athlete(
         "athlete_id": athlete_id,
         "athlete_name": str(athlete["name"]),
         "data_version": int(bundle.get("version", 1)),
-        "algorithm_version": "streamlit-demo-0.5.0",
+        "algorithm_version": "streamlit-demo-0.6.0",
         "parameter_version": int(bundle.get("version", 1)),
-        "inputs_hash": _hash_inputs(bundle, athlete_id),
+        "inputs_hash": _hash_inputs(
+            bundle,
+            athlete_id,
+            effective_preferences=planning_preferences,
+            effective_camp_prescriptions=camp_prescriptions,
+        ),
         "global_readiness": global_readiness,
         "status": status,
         "hard_reasons": hard_reasons,
         "annual_volume_context": annual_context,
         "planning_preferences": planning_preferences,
+        "camp_prescriptions": camp_prescriptions.loc[
+            camp_prescriptions["athlete_id"].astype(str) == athlete_id
+        ].to_dict(orient="records"),
         "strength_model": {
             strength_type: {
                 "label": STRENGTH_LABELS[strength_type],
@@ -358,6 +391,9 @@ def analyze_athlete(
         "integrated": integrated,
         "weekly_targets": weekly_targets,
         "planning_preferences": planning_preferences,
+        "camp_prescriptions": camp_prescriptions.loc[
+            camp_prescriptions["athlete_id"].astype(str) == athlete_id
+        ].copy(),
         "annual_context": annual_context,
         "volume_trajectory": volume_trajectory,
         "plan": plan,

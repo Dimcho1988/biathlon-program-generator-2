@@ -17,6 +17,10 @@ from .constants import (
     STRENGTH_LABELS,
     STRENGTH_TYPES,
 )
+from .mesocycles import (
+    build_mesocycle_schedule,
+    normalize_camp_prescriptions,
+)
 from .physiology import (
     apply_training_impulse,
     effective_from_direct_vector,
@@ -43,7 +47,7 @@ def _future_main_event(calendar: pd.DataFrame, athlete_id: str, start: pd.Timest
 
 
 def _phase_name(progress: float, weeks_to_race: int) -> str:
-    if weeks_to_race <= 2:
+    if 0 <= weeks_to_race <= 2:
         return "Тейпър"
     if progress < 1 / 3:
         return "Първа третина"
@@ -69,7 +73,88 @@ def _events_in_week(calendar: pd.DataFrame, athlete_id: str, week_start: pd.Time
     subset = calendar.loc[calendar["athlete_id"] == athlete_id].copy()
     subset["start_date"] = pd.to_datetime(subset["start_date"]).dt.normalize()
     subset["end_date"] = pd.to_datetime(subset["end_date"]).dt.normalize()
-    return subset.loc[(subset["start_date"] <= week_end) & (subset["end_date"] >= week_start)]
+    return (
+        subset.loc[
+            (subset["start_date"] <= week_end)
+            & (subset["end_date"] >= week_start)
+        ]
+        .drop_duplicates(subset=["athlete_id", "event_id"], keep="last")
+        .copy()
+    )
+
+
+def _resolved_accent_components(
+    schedule_row: pd.Series,
+    envelopes: dict[str, float],
+) -> tuple[list[str], list[str], dict[str, float]]:
+    """Resolve manual, automatic, or complementary component priorities."""
+
+    limit = int(np.clip(schedule_row.get("accent_limit", 2), 1, len(COMPONENTS)))
+    manual_weights = {
+        component: float(
+            np.clip(schedule_row.get(f"accent_{component}", 0.0), 0.0, 1.0)
+        )
+        for component in COMPONENTS
+    }
+    manual = [
+        component
+        for component in COMPONENTS
+        if manual_weights[component] > 0.0
+    ]
+    manual.sort(
+        key=lambda component: (
+            -manual_weights[component],
+            COMPONENTS.index(component),
+        )
+    )
+    automatic = sorted(
+        COMPONENTS,
+        key=lambda component: (
+            -float(envelopes[component]),
+            COMPONENTS.index(component),
+        ),
+    )
+
+    strategy = str(schedule_row.get("accent_strategy", "AUTO"))
+    mode = str(schedule_row.get("accent_mode", "AUTO"))
+    if strategy == "COMPLEMENT":
+        excluded = (
+            manual[:limit]
+            if mode == "MANUAL" and manual
+            else automatic[:limit]
+        )
+        candidates = [component for component in automatic if component not in excluded]
+        if not candidates:
+            candidates = automatic
+        accents = candidates[:limit]
+        return accents, excluded, manual_weights
+
+    if strategy == "CAMP" and mode == "MANUAL" and manual:
+        accents = manual[:limit]
+        return accents, [], manual_weights
+    return automatic[:limit], [], manual_weights
+
+
+def _structured_component_factor(
+    component: str,
+    accents: list[str],
+    manual_weights: dict[str, float],
+    schedule_row: pd.Series,
+) -> float:
+    if component not in accents:
+        return float(schedule_row.get("maintenance_factor", 1.0))
+    weight = float(manual_weights.get(component, 0.0))
+    if str(schedule_row.get("accent_mode", "AUTO")) != "MANUAL" or weight <= 0.0:
+        weight = 1.0
+    target = float(
+        schedule_row.get(
+            "volume_factor"
+            if component in {"Z1", "Z2", "Z3"}
+            else "stress_factor",
+            1.0,
+        )
+    )
+    return 1.0 + weight * (target - 1.0)
 
 
 def build_weekly_targets(
@@ -83,6 +168,7 @@ def build_weekly_targets(
     planning_preferences: dict[str, Any] | None = None,
     annual_context: dict[str, Any] | None = None,
     test_effects: pd.DataFrame | None = None,
+    camp_prescriptions: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Изгражда компонентна вълна до основния старт."""
 
@@ -99,17 +185,84 @@ def build_weekly_targets(
         main_date = pd.Timestamp(main_event["start_date"]).normalize()
         main_name = str(main_event["name"])
     weeks = max(minimum_weeks, int(np.ceil((main_date - start).days / 7.0)) + 1)
+    week_starts = [
+        start + pd.Timedelta(days=7 * week_index)
+        for week_index in range(weeks)
+    ]
+    normalized_camp_prescriptions = normalize_camp_prescriptions(
+        camp_prescriptions
+    )
+    normalized_camp_prescriptions = normalized_camp_prescriptions.loc[
+        normalized_camp_prescriptions["athlete_id"].astype(str)
+        == str(athlete_id)
+    ].copy()
+    prescribed_camp_ids = set(
+        normalized_camp_prescriptions["event_id"].astype(str)
+    )
+    future_main_events = calendar.loc[
+        (calendar["athlete_id"].astype(str) == str(athlete_id))
+        & (calendar["type"].astype(str) == "MAIN_RACE")
+    ].copy()
+    if not future_main_events.empty:
+        future_main_events["start_date"] = pd.to_datetime(
+            future_main_events["start_date"],
+            errors="coerce",
+        ).dt.normalize()
+        future_main_events = (
+            future_main_events.dropna(subset=["start_date"])
+            .sort_values(["start_date", "event_id"], kind="stable")
+            .reset_index(drop=True)
+        )
+    mesocycle_schedule = build_mesocycle_schedule(
+        week_starts,
+        calendar,
+        normalized_camp_prescriptions,
+        athlete_id,
+        parameters,
+        preferences,
+    )
 
     rows: list[dict[str, Any]] = []
-    for week_index in range(weeks):
-        week_start = start + pd.Timedelta(days=7 * week_index)
-        weeks_to_race = max(0, int(np.ceil((main_date - week_start).days / 7.0)))
-        progress = float(np.clip((week_start - start).days / max((main_date - start).days, 1), 0.0, 1.0))
+    for week_index, week_start in enumerate(week_starts):
+        upcoming_main = future_main_events.loc[
+            future_main_events["start_date"] >= week_start
+        ]
+        if upcoming_main.empty:
+            active_main_date = main_date
+            active_main_name = main_name
+        else:
+            active_main = upcoming_main.iloc[0]
+            active_main_date = pd.Timestamp(
+                active_main["start_date"]
+            ).normalize()
+            active_main_name = str(active_main["name"])
+        weeks_to_race = int(
+            np.ceil((active_main_date - week_start).days / 7.0)
+        )
+        taper_active = 0 <= weeks_to_race <= 2
+        progress = float(
+            np.clip(
+                (week_start - start).days
+                / max((main_date - start).days, 1),
+                0.0,
+                1.0,
+            )
+        )
         global_factor = _global_progression(prog := progress)
-        meso_position = week_index % 4
-        meso_factor = float(parameters["mesocycle_pattern"][meso_position])
+        mesocycle_row = mesocycle_schedule.iloc[week_index]
+        meso_factor = float(mesocycle_row["mesocycle_factor"])
+        mesocycle_type = str(mesocycle_row["mesocycle_type"])
         envelopes = {component: _component_envelope(component, progress) for component in COMPONENTS}
-        accent_components = sorted(COMPONENTS, key=lambda c: envelopes[c], reverse=True)[:2]
+        accent_components, previous_accents, manual_accent_weights = (
+            _resolved_accent_components(mesocycle_row, envelopes)
+        )
+        base_schedule_row = mesocycle_row.copy()
+        base_schedule_row["accent_strategy"] = "AUTO"
+        base_schedule_row["accent_mode"] = "AUTO"
+        base_accent_components, _, _ = _resolved_accent_components(
+            base_schedule_row,
+            envelopes,
+        )
         events = _events_in_week(calendar, athlete_id, week_start)
         event_names = ", ".join(events["name"].astype(str).tolist()) if not events.empty else ""
         planning_test_adjustments = aggregate_test_effects(
@@ -122,40 +275,154 @@ def build_weekly_targets(
         indices: dict[str, float] = {}
         metadata: dict[str, dict[str, Any]] = {}
         for component in COMPONENTS:
-            status = "Акцент" if component in accent_components else "Поддържане"
-            if envelopes[component] < 0.98:
+            hard_flag = bool(
+                integrated.loc[component].get("hard_flag", False)
+            )
+            component_role = (
+                "Допълващ акцент"
+                if str(mesocycle_row["accent_strategy"]) == "COMPLEMENT"
+                and component in accent_components
+                else "Акцент"
+                if component in accent_components
+                else "Поддържане"
+            )
+            status = component_role
+            if (
+                envelopes[component] < 0.98
+                and str(mesocycle_row["accent_strategy"]) == "AUTO"
+            ):
                 status = "Относително възстановяване"
 
-            index = global_factor * meso_factor * envelopes[component]
-            if meso_position == 3:
-                if status == "Акцент":
-                    index *= 0.72
-                elif status == "Поддържане":
-                    index *= 0.85
+            applied_meso_factor = meso_factor
+            applied_mesocycle_type = mesocycle_type
+            if (
+                hard_flag
+                and bool(mesocycle_row["camp_event_id"])
+                and not bool(mesocycle_row["taper_locked"])
+            ):
+                applied_mesocycle_type = str(
+                    mesocycle_row["base_mesocycle_type"]
+                )
+                applied_meso_factor = min(
+                    applied_meso_factor,
+                    float(
+                        mesocycle_row.get(
+                            "base_mesocycle_factor",
+                            applied_meso_factor,
+                        )
+                    ),
+                )
+            index = (
+                global_factor
+                * applied_meso_factor
+                * envelopes[component]
+            )
+            if applied_mesocycle_type == "RECOVERY":
+                recovery_accents = (
+                    base_accent_components
+                    if hard_flag and bool(mesocycle_row["camp_event_id"])
+                    else accent_components
+                )
+                recovery_status = status
+                if hard_flag and bool(mesocycle_row["camp_event_id"]):
+                    recovery_status = (
+                        "Акцент"
+                        if component in base_accent_components
+                        else "Поддържане"
+                    )
+                    if envelopes[component] < 0.98:
+                        recovery_status = "Относително възстановяване"
+                if str(mesocycle_row["accent_strategy"]) == "COMPLEMENT":
+                    if component in recovery_accents:
+                        index *= 0.98
+                        status = "Възстановителна седмица · допълващ акцент"
+                    elif component in previous_accents:
+                        index *= 0.72
+                        status = "Възстановителна седмица · разтоварване след лагер"
+                    else:
+                        index *= 0.85
+                        status = "Възстановителна седмица · поддържане"
                 else:
-                    index *= 0.98
-                status = "Възстановителна седмица · " + status.lower()
+                    if component in recovery_accents:
+                        index *= 0.72
+                    elif recovery_status == "Поддържане":
+                        index *= 0.85
+                    else:
+                        index *= 0.98
+                    status = (
+                        "Възстановителна седмица · "
+                        + recovery_status.lower()
+                    )
+            elif str(mesocycle_row["camp_event_id"]):
+                status = (
+                    "Лагер · изграждащ · " + component_role.lower()
+                    if mesocycle_type == "BUILD"
+                    else "Лагер · поддържащ · " + component_role.lower()
+                )
 
             calendar_factor = 1.0
             if not events.empty:
                 for _, event in events.iterrows():
                     event_type = str(event["type"])
                     if event_type == "CAMP":
-                        calendar_factor *= 1.07 if component in {"Z1", "Z2", "Z3", "STR"} else 0.98
+                        event_id = str(event.get("event_id", ""))
+                        if bool(mesocycle_row["taper_locked"]):
+                            continue
+                        if (
+                            event_id in prescribed_camp_ids
+                            and event_id == str(mesocycle_row["camp_event_id"])
+                        ):
+                            raw_factor = _structured_component_factor(
+                                component,
+                                accent_components,
+                                manual_accent_weights,
+                                mesocycle_row,
+                            )
+                            coverage = float(
+                                np.clip(
+                                    float(mesocycle_row["camp_overlap_days"]) / 7.0,
+                                    0.0,
+                                    1.0,
+                                )
+                            )
+                            calendar_factor *= 1.0 + (raw_factor - 1.0) * coverage
+                        elif event_id not in prescribed_camp_ids:
+                            calendar_factor *= (
+                                1.07
+                                if component in {"Z1", "Z2", "Z3", "STR"}
+                                else 0.98
+                            )
                     elif event_type == "CONTROL_RACE":
                         calendar_factor *= 0.90 if component in {"Z1", "Z2", "STR"} else 0.98
                     elif event_type == "UNAVAILABLE":
                         calendar_factor *= 0.85
                     elif event_type == "TEST":
                         calendar_factor *= 0.96
+            if hard_flag and bool(mesocycle_row["camp_event_id"]):
+                calendar_factor = min(calendar_factor, 1.0)
+
+            accent_factor = 1.0
+            if (
+                str(mesocycle_row["accent_strategy"]) == "COMPLEMENT"
+                and mesocycle_type not in {"RECOVERY", "TAPER"}
+            ):
+                accent_factor = _structured_component_factor(
+                    component,
+                    accent_components,
+                    manual_accent_weights,
+                    mesocycle_row,
+                )
+            if hard_flag and bool(mesocycle_row["camp_event_id"]):
+                accent_factor = min(accent_factor, 1.0)
+                status = "Ограничение по wellness · " + status.lower()
 
             # Тейпър: редуцира обема, но пази специфичните компоненти.
             taper_factor = 1.0
             if weeks_to_race == 2:
                 taper_factor = 0.84 if component in {"Z1", "Z2", "STR"} else 0.94
-            elif weeks_to_race <= 1:
+            elif 0 <= weeks_to_race <= 1:
                 taper_factor = 0.66 if component in {"Z1", "Z2", "STR"} else 0.90
-            if weeks_to_race <= 2:
+            if taper_active:
                 status = "Тейпър"
 
             # Годишната цел е ограничен контекст, а не заместител на 7/40.
@@ -163,7 +430,7 @@ def build_weekly_targets(
             # годишни цели изглеждаха почти еднакво. Тук то остава видимо в
             # целия показан хоризонт, но се намалява в тейпъра.
             goal_horizon_weight = 1.0 if week_index < 8 else 0.85 + 0.15 * float(np.exp(-(week_index - 8) / 12.0))
-            goal_taper_damping = 0.25 if weeks_to_race <= 2 else 1.0
+            goal_taper_damping = 0.25 if taper_active else 1.0
             goal_factor = (
                 1.0
                 + (annual_volume_factor - 1.0)
@@ -176,7 +443,14 @@ def build_weekly_targets(
             adaptive_near_term = 1.0 + (adaptive - 1.0) * float(np.exp(-week_index / 2.0))
             test_adjustment = float(planning_test_adjustments.get(component, 0.0))
             test_factor = 1.0 + test_adjustment
-            index *= calendar_factor * taper_factor * goal_factor * adaptive_near_term * test_factor
+            index *= (
+                calendar_factor
+                * accent_factor
+                * taper_factor
+                * goal_factor
+                * adaptive_near_term
+                * test_factor
+            )
             # Компонентно специфичен горен лимит: нискоинтензивният обем може
             # да реагира по-видимо на сезонната цел, докато високите зони
             # остават по-строго ограничени.
@@ -192,12 +466,20 @@ def build_weekly_targets(
             indices[component] = index
             metadata[component] = {
                 "status": status,
+                "component_role": component_role,
                 "calendar_factor": calendar_factor,
+                "accent_factor": accent_factor,
                 "taper_factor": taper_factor,
                 "annual_goal_factor": goal_factor,
                 "adaptive_near_term": adaptive_near_term,
                 "test_factor": test_factor,
                 "envelope": envelopes[component],
+                "applied_mesocycle_factor": applied_meso_factor,
+                "applied_mesocycle_type": applied_mesocycle_type,
+                "safety_limited": bool(
+                    hard_flag
+                    and bool(mesocycle_row["camp_event_id"])
+                ),
             }
 
         weekly_effective = target_weekly_effective(load_stats, indices)
@@ -206,11 +488,55 @@ def build_weekly_targets(
                 "week_start": week_start,
                 "week_no": week_index + 1,
                 "weeks_to_main_race": weeks_to_race,
-                "main_race": main_name,
-                "main_race_date": main_date,
+                "main_race": active_main_name,
+                "main_race_date": active_main_date,
                 "phase_progress": progress,
                 "phase": _phase_name(progress, weeks_to_race),
-                "mesocycle_week": meso_position + 1,
+                "mesocycle_id": str(mesocycle_row["mesocycle_id"]),
+                "base_mesocycle_week": int(
+                    mesocycle_row["base_mesocycle_week"]
+                ),
+                "mesocycle_week": int(mesocycle_row["mesocycle_week"]),
+                "base_mesocycle_type": str(
+                    mesocycle_row["base_mesocycle_type"]
+                ),
+                "base_mesocycle_factor": float(
+                    mesocycle_row.get(
+                        "base_mesocycle_factor",
+                        meso_factor,
+                    )
+                ),
+                "mesocycle_type": mesocycle_type,
+                "mesocycle_length_weeks": int(
+                    mesocycle_row["mesocycle_length_weeks"]
+                ),
+                "mesocycle_factor": meso_factor,
+                "applied_mesocycle_factor": metadata[component][
+                    "applied_mesocycle_factor"
+                ],
+                "applied_mesocycle_type": metadata[component][
+                    "applied_mesocycle_type"
+                ],
+                "component_role": metadata[component]["component_role"],
+                "accent_components": ", ".join(accent_components),
+                "complemented_components": ", ".join(previous_accents),
+                "accent_strategy": str(mesocycle_row["accent_strategy"]),
+                "camp_event_id": str(mesocycle_row["camp_event_id"]),
+                "camp_ids": str(mesocycle_row["camp_ids"]),
+                "camp_overlap_days": int(mesocycle_row["camp_overlap_days"]),
+                "camp_has_prescription": bool(
+                    mesocycle_row.get("camp_has_prescription", False)
+                ),
+                "camp_directive_note": str(
+                    mesocycle_row["camp_directive_note"]
+                ),
+                "recovery_displaced": bool(
+                    mesocycle_row["recovery_displaced"]
+                ),
+                "recovery_origin": str(mesocycle_row["recovery_origin"]),
+                "override_reason": str(mesocycle_row["override_reason"]),
+                "taper_locked": bool(mesocycle_row["taper_locked"]),
+                "safety_limited": metadata[component]["safety_limited"],
                 "component": component,
                 "target_index": indices[component],
                 "target_effective_week": float(weekly_effective[component]),
@@ -218,6 +544,7 @@ def build_weekly_targets(
                 "global_factor": global_factor,
                 "component_envelope": metadata[component]["envelope"],
                 "calendar_factor": metadata[component]["calendar_factor"],
+                "accent_factor": metadata[component]["accent_factor"],
                 "taper_factor": metadata[component]["taper_factor"],
                 "annual_goal_factor": metadata[component]["annual_goal_factor"],
                 "adaptive_factor": metadata[component]["adaptive_near_term"],
@@ -718,6 +1045,17 @@ def generate_week_plan(
 
     progress = float(first_week["phase_progress"].iloc[0])
     phase = str(first_week["phase"].iloc[0])
+    mesocycle_type = str(first_week.get("mesocycle_type", pd.Series(["—"])).iloc[0])
+    mesocycle_week = int(first_week.get("mesocycle_week", pd.Series([1])).iloc[0])
+    mesocycle_length = int(
+        first_week.get("mesocycle_length_weeks", pd.Series([4])).iloc[0]
+    )
+    accent_summary = str(
+        first_week.get("accent_components", pd.Series([""])).iloc[0]
+    )
+    mesocycle_reason = str(
+        first_week.get("override_reason", pd.Series([""])).iloc[0]
+    )
     structure = build_week_structure(plan_start, preferences)
     focus_assignments, double_threshold_active = _focus_schedule_for_structure(
         structure,
@@ -989,7 +1327,15 @@ def generate_week_plan(
             f"интегрирана готовност = {float(integrated.loc[focus, 'integrated_readiness']):.0f}/100",
             f"адаптивен множител = {float(integrated.loc[focus, 'adaptive_multiplier']):.2f}",
             f"седмична структура = {preferences['sessions_per_week']} сесии",
+            (
+                f"мезоцикъл = {mesocycle_type}, седмица "
+                f"{mesocycle_week}/{mesocycle_length}"
+            ),
         ]
+        if accent_summary:
+            explanation_parts.append(f"мезоциклични акценти = {accent_summary}")
+        if mesocycle_reason:
+            explanation_parts.append(f"мезоциклична причина = {mesocycle_reason}")
         if is_double_threshold:
             explanation_parts.append("слотът е част от разрешена двойна прагова тренировка")
         if focus != planned_focus:
@@ -1088,6 +1434,11 @@ def generate_week_plan(
         "plan_start": str(plan_start.date()),
         "phase": phase,
         "phase_progress": progress,
+        "mesocycle_type": mesocycle_type,
+        "mesocycle_week": mesocycle_week,
+        "mesocycle_length_weeks": mesocycle_length,
+        "accent_components": accent_summary,
+        "mesocycle_reason": mesocycle_reason,
         "target_indices": first_week["target_index"].to_dict(),
         "target_effective": target_e.to_dict(),
         "target_direct_q": target_q.to_dict(),

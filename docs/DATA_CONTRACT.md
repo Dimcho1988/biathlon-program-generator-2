@@ -51,6 +51,35 @@ event_id, athlete_id, type, name, start_date, end_date,
 priority, goal, locked, note
 ```
 
+## Структурирано лагерно задание
+
+Календарът остава общ и backwards-compatible. Изчислителните настройки само
+за събития от тип `CAMP` се пазят в отделна таблица, свързана чрез `event_id`:
+
+```text
+event_id, athlete_id, schema_version, mesocycle_type,
+mesocycle_length_weeks, accent_mode, accent_limit,
+accent_Z1, accent_Z2, accent_Z3, accent_Z4, accent_Z5, accent_STR,
+volume_factor, stress_factor, maintenance_factor,
+post_camp_behavior, post_camp_recovery_weeks, note
+```
+
+Ключът е съставен: `(athlete_id, event_id)`. `mesocycle_type` приема `AUTO`,
+`BUILD`, `MAINTAIN` или `RECOVERY`. `RECOVERY` е валиден само с непразна
+обяснителна `note`; иначе нормализаторът използва безопасен `AUTO`.
+`accent_Z*` е нормализирана ръчна сила `[0, 1]`; при `AUTO` компонентите се
+избират по фазовата крива. `volume_factor` управлява избраните Z1–Z3,
+`stress_factor` — избраните Z4–Z5 и силата, а `maintenance_factor` —
+неакцентните компоненти. При частична седмица факторът се прилага
+пропорционално на лагерните дни. Свободната бележка е одитно обяснение и не се
+интерпретира като машинна команда.
+
+`post_camp_behavior` приема `AUTO`, `RECOVERY` или `COMPLEMENT`.
+Невалидни, празни, `NaN` или безкрайни числови стойности се заменят с
+документирания default преди ограничаване. CAMP без ред в тази таблица остава
+валиден: scheduler-ът използва `AUTO → MAINTAIN`, а числовите му множители
+остават legacy до изрично записване на експертно задание.
+
 ## Принцип за бъдещ адаптер
 
 1. Изтегля суровите записи.
@@ -66,6 +95,8 @@ season_start, season_end, annual_target_hours, annual_goal_influence,
 min_volume_factor, max_volume_factor, sessions_per_week, rest_days,
 double_session_days, long_session_day, intensity_days, strength_days,
 max_key_sessions_per_week, double_threshold_enabled,
+mesocycle_anchor_date, mesocycle_length_weeks,
+camp_default_accent_limit,
 double_threshold_day, double_threshold_components,
 double_threshold_min_readiness, double_threshold_phase_min,
 double_threshold_phase_max, between_sessions_recovery_days

@@ -118,13 +118,29 @@ def weekly_targets_figure(weekly_targets: pd.DataFrame, metric: str = "target_ef
         "target_effective_week": "Целеви ефективен седмичен товар",
         "target_index": "Целеви 7/40",
     }
+    hover_candidates = [
+        "phase",
+        "mesocycle_type",
+        "mesocycle_week",
+        "component_role",
+        "accent_components",
+        "camp_overlap_days",
+        "recovery_displaced",
+        "override_reason",
+        "status",
+        "events",
+        "weeks_to_main_race",
+    ]
+    hover_data = [
+        column for column in hover_candidates if column in weekly_targets
+    ]
     fig = px.line(
         weekly_targets,
         x="week_start",
         y=metric,
         color="component",
         markers=True,
-        hover_data=["phase", "status", "events", "weeks_to_main_race"],
+        hover_data=hover_data,
         labels={"week_start": "Начало на седмицата", metric: labels[metric], "component": "Компонент"},
         title=f"Вълнообразна динамика · {labels[metric]}",
     )

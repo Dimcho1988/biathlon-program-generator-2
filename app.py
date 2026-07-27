@@ -40,6 +40,16 @@ from biathlon.constants import (
 )
 from biathlon.demo_data import DEMO_SEED, generate_activity_stream, generate_demo_bundle
 from biathlon.explanations import EXPLANATIONS, explanation_titles, help_text
+from biathlon.mesocycles import (
+    CAMP_ACCENT_MODES,
+    CAMP_MODES,
+    CAMP_POST_BEHAVIORS,
+    CAMP_PRESCRIPTION_COLUMNS,
+    default_camp_prescription,
+    empty_camp_prescriptions,
+    normalize_camp_prescriptions,
+    prescription_for_event,
+)
 from biathlon.physiology import analyze_activity_stream, strength_equivalent_minutes
 from biathlon.preferences import (
     EVENT_TYPE_LABELS,
@@ -66,7 +76,7 @@ from biathlon.ui_helpers import (
 )
 
 st.set_page_config(
-    page_title="Biathlon LoadLab · MVP 0.5",
+    page_title="Biathlon LoadLab · MVP 0.6",
     page_icon="🎯",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -104,6 +114,24 @@ PAGE_ICONS = {
     "models": "❓",
     "settings": "⚙️",
 }
+
+
+def _camp_editor_rows_for_storage(
+    edited_prescriptions: pd.DataFrame,
+    athlete_id: str,
+) -> list[dict[str, Any]]:
+    """Restore identity fields that are intentionally hidden from the editor."""
+
+    rows: list[dict[str, Any]] = []
+    for _, row in edited_prescriptions.iterrows():
+        stored = {
+            column: row.get(column)
+            for column in CAMP_PRESCRIPTION_COLUMNS
+        }
+        stored["athlete_id"] = str(athlete_id)
+        stored["schema_version"] = 1
+        rows.append(stored)
+    return rows
 
 
 def initialize_state() -> None:
@@ -689,13 +717,20 @@ def render_plan_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit:
         first_week = analysis["weekly_targets"].loc[analysis["weekly_targets"]["week_no"] == 1].copy()
         factor_cols = [
             "component",
+            "mesocycle_type",
+            "mesocycle_week",
+            "component_role",
+            "accent_components",
             "target_index",
             "target_effective_week",
+            "mesocycle_factor",
+            "accent_factor",
             "annual_goal_factor",
             "adaptive_factor",
             "calendar_factor",
             "taper_factor",
             "status",
+            "override_reason",
         ]
         st.dataframe(first_week[factor_cols], width="stretch", hide_index=True)
         events = bundle["calendar"].loc[
@@ -886,11 +921,11 @@ def render_calendar_goals_page(bundle: dict[str, Any], analysis: dict[str, Any],
     athlete_id = str(analysis["athlete"]["athlete_id"])
     profile_code = str(analysis["athlete"].get("profile_code", "A"))
     preferences = normalize_preferences(
-        bundle.setdefault("planning_preferences", {}).get(athlete_id),
+        analysis.get("planning_preferences")
+        or bundle.setdefault("planning_preferences", {}).get(athlete_id),
         profile_code,
         date.today(),
     )
-    bundle["planning_preferences"][athlete_id] = preferences
     context = analysis["annual_context"]
 
     page_header(
@@ -904,8 +939,13 @@ def render_calendar_goals_page(bundle: dict[str, Any], analysis: dict[str, Any],
     c3.metric("Нужно средно до края", f"{context['required_weekly_hours']:.1f} h/седм.")
     c4.metric("Обемен фактор", f"{context['volume_factor']:.3f}", help=help_text("annual_goal"))
 
-    tab_goal, tab_calendar, tab_structure = st.tabs(
-        ["Сезонна цел", "Стартове, лагери и тестове", "Седмична структура"]
+    tab_goal, tab_calendar, tab_mesocycles, tab_structure = st.tabs(
+        [
+            "Сезонна цел",
+            "Стартове, лагери и тестове",
+            "Мезоцикли и лагери",
+            "Седмична структура",
+        ]
     )
 
     with tab_goal:
@@ -1056,6 +1096,19 @@ def render_calendar_goals_page(bundle: dict[str, Any], analysis: dict[str, Any],
                         "note": str(row.get("note", "") or ""),
                     }
                 )
+            event_ids = [str(row["event_id"]) for row in rows]
+            duplicate_ids = sorted(
+                {
+                    event_id
+                    for event_id in event_ids
+                    if event_ids.count(event_id) > 1
+                }
+            )
+            if duplicate_ids:
+                errors.append(
+                    "ID на календарно събитие трябва да е уникално: "
+                    + ", ".join(duplicate_ids)
+                )
             if errors:
                 for error in errors:
                     st.error(error)
@@ -1067,6 +1120,28 @@ def render_calendar_goals_page(bundle: dict[str, Any], analysis: dict[str, Any],
                 bundle["calendar"] = pd.concat([other, athlete_new], ignore_index=True).sort_values(
                     ["athlete_id", "start_date"]
                 ).reset_index(drop=True)
+                prescriptions = normalize_camp_prescriptions(
+                    bundle.get("camp_prescriptions", empty_camp_prescriptions())
+                )
+                valid_camps = bundle["calendar"].loc[
+                    bundle["calendar"]["type"].astype(str) == "CAMP",
+                    ["event_id", "athlete_id"],
+                ].copy()
+                valid_pairs = set(
+                    valid_camps[["athlete_id", "event_id"]]
+                    .astype(str)
+                    .itertuples(index=False, name=None)
+                )
+                prescriptions = prescriptions.loc[
+                    [
+                        (str(row["athlete_id"]), str(row["event_id"]))
+                        in valid_pairs
+                        for _, row in prescriptions.iterrows()
+                    ]
+                ].copy()
+                bundle["camp_prescriptions"] = normalize_camp_prescriptions(
+                    prescriptions
+                )
                 future_main = athlete_new.loc[
                     (athlete_new["type"] == "MAIN_RACE")
                     & (pd.to_datetime(athlete_new["start_date"]) >= pd.Timestamp.today().normalize())
@@ -1075,6 +1150,309 @@ def render_calendar_goals_page(bundle: dict[str, Any], analysis: dict[str, Any],
                 if future_main.empty:
                     reason += " Няма бъдещ основен старт; временно се използва виртуален 16-седмичен хоризонт."
                 commit_bundle(bundle, "calendar_update", reason, athlete_id)
+
+    with tab_mesocycles:
+        st.caption(
+            "Мезоцикълът използва стабилна опорна дата. Структурираното "
+            "лагерно задание управлява изчисленията; свободната бележка е "
+            "обяснение и не се интерпретира автоматично."
+        )
+        with st.form(f"mesocycle_defaults_{athlete_id}"):
+            m1, m2, m3 = st.columns(3)
+            mesocycle_anchor = m1.date_input(
+                "Опорна дата на мезоцикъла",
+                value=pd.Timestamp(
+                    preferences.get("mesocycle_anchor_date", date.today())
+                ).date(),
+                disabled=not can_edit,
+                help=(
+                    "Седмиците се броят устойчиво от тази дата и вече не "
+                    "се рестартират при всяко преизчисление."
+                ),
+            )
+            mesocycle_length = m2.number_input(
+                "Стандартна продължителност · седмици",
+                min_value=2,
+                max_value=6,
+                value=int(preferences.get("mesocycle_length_weeks", 4)),
+                step=1,
+                disabled=not can_edit,
+            )
+            default_accent_limit = m3.number_input(
+                "Стандартен брой автоматични акценти",
+                min_value=1,
+                max_value=len(COMPONENTS),
+                value=int(preferences.get("camp_default_accent_limit", 2)),
+                step=1,
+                disabled=not can_edit,
+            )
+            submit_mesocycle_defaults = st.form_submit_button(
+                "Запази мезоцикличните настройки",
+                disabled=not can_edit,
+                width="stretch",
+            )
+        if submit_mesocycle_defaults:
+            preferences.update(
+                {
+                    "mesocycle_anchor_date": pd.Timestamp(mesocycle_anchor),
+                    "mesocycle_length_weeks": int(mesocycle_length),
+                    "camp_default_accent_limit": int(default_accent_limit),
+                }
+            )
+            bundle["planning_preferences"][athlete_id] = normalize_preferences(
+                preferences,
+                profile_code,
+                date.today(),
+            )
+            commit_bundle(
+                bundle,
+                "mesocycle_settings_update",
+                "Опорната дата и продължителността на мезоцикъла са актуализирани.",
+                athlete_id,
+            )
+
+        camps = athlete_calendar.loc[athlete_calendar["type"] == "CAMP"].copy()
+        prescriptions = normalize_camp_prescriptions(
+            bundle.get("camp_prescriptions", empty_camp_prescriptions())
+        )
+        editor_rows: list[dict[str, Any]] = []
+        for _, camp in camps.iterrows():
+            event_id = str(camp["event_id"])
+            explicit_prescription = prescription_for_event(
+                prescriptions,
+                event_id,
+                athlete_id,
+            )
+            resolved = explicit_prescription or default_camp_prescription(
+                event_id,
+                athlete_id,
+                accent_limit=int(
+                    preferences.get("camp_default_accent_limit", 2)
+                ),
+            )
+            editor_rows.append(
+                {
+                    **resolved,
+                    "assignment_status": (
+                        "Експертно задание"
+                        if explicit_prescription is not None
+                        else "Автоматично безопасно правило"
+                    ),
+                    "camp_name": str(camp["name"]),
+                    "camp_start": pd.Timestamp(camp["start_date"]),
+                    "camp_end": pd.Timestamp(camp["end_date"]),
+                }
+            )
+
+        if not editor_rows:
+            st.info(
+                "Няма лагер в календара. Добави събитие от тип „Лагер“, "
+                "за да създадеш структурирано задание."
+            )
+        else:
+            prescription_display = pd.DataFrame(editor_rows)
+            ordered = [
+                "event_id",
+                "assignment_status",
+                "camp_name",
+                "camp_start",
+                "camp_end",
+                "mesocycle_type",
+                "mesocycle_length_weeks",
+                "accent_mode",
+                "accent_limit",
+                *[f"accent_{component}" for component in COMPONENTS],
+                "volume_factor",
+                "stress_factor",
+                "maintenance_factor",
+                "post_camp_behavior",
+                "post_camp_recovery_weeks",
+                "note",
+            ]
+            edited_prescriptions = st.data_editor(
+                prescription_display[ordered],
+                width="stretch",
+                hide_index=True,
+                disabled=(
+                    [
+                        "event_id",
+                        "assignment_status",
+                        "camp_name",
+                        "camp_start",
+                        "camp_end",
+                    ]
+                    if can_edit
+                    else ordered
+                ),
+                key=f"camp_prescriptions_{athlete_id}_{bundle['version']}",
+                column_config={
+                    "event_id": st.column_config.TextColumn("ID"),
+                    "assignment_status": st.column_config.TextColumn(
+                        "Статус"
+                    ),
+                    "camp_name": st.column_config.TextColumn("Лагер"),
+                    "camp_start": st.column_config.DateColumn(
+                        "Начало", format="DD.MM.YYYY"
+                    ),
+                    "camp_end": st.column_config.DateColumn(
+                        "Край", format="DD.MM.YYYY"
+                    ),
+                    "mesocycle_type": st.column_config.SelectboxColumn(
+                        "Тип",
+                        options=list(CAMP_MODES),
+                        help="AUTO е безопасно поддържане; RECOVERY изисква бележка.",
+                    ),
+                    "mesocycle_length_weeks": st.column_config.NumberColumn(
+                        "Седмици",
+                        min_value=0,
+                        max_value=6,
+                        step=1,
+                        help="0 наследява стандартната продължителност.",
+                    ),
+                    "accent_mode": st.column_config.SelectboxColumn(
+                        "Акценти",
+                        options=list(CAMP_ACCENT_MODES),
+                    ),
+                    "accent_limit": st.column_config.NumberColumn(
+                        "Брой",
+                        min_value=1,
+                        max_value=len(COMPONENTS),
+                        step=1,
+                    ),
+                    **{
+                        f"accent_{component}": st.column_config.NumberColumn(
+                            component,
+                            min_value=0.0,
+                            max_value=1.0,
+                            step=0.05,
+                            format="%.2f",
+                            help=(
+                                "0 = без ръчен акцент; 1 = пълната "
+                                "зададена величина."
+                            ),
+                        )
+                        for component in COMPONENTS
+                    },
+                    "volume_factor": st.column_config.NumberColumn(
+                        "Обем Z1–Z3",
+                        min_value=0.75,
+                        max_value=1.25,
+                        step=0.01,
+                        format="%.2f",
+                    ),
+                    "stress_factor": st.column_config.NumberColumn(
+                        "Стрес Z4–Z5/сила",
+                        min_value=0.75,
+                        max_value=1.25,
+                        step=0.01,
+                        format="%.2f",
+                    ),
+                    "maintenance_factor": st.column_config.NumberColumn(
+                        "Неакцентни",
+                        min_value=0.75,
+                        max_value=1.10,
+                        step=0.01,
+                        format="%.2f",
+                    ),
+                    "post_camp_behavior": st.column_config.SelectboxColumn(
+                        "След лагера",
+                        options=list(CAMP_POST_BEHAVIORS),
+                    ),
+                    "post_camp_recovery_weeks": st.column_config.NumberColumn(
+                        "Recovery седм.",
+                        min_value=0,
+                        max_value=2,
+                        step=1,
+                    ),
+                    "note": st.column_config.TextColumn(
+                        "Треньорско задание / причина"
+                    ),
+                },
+            )
+            st.caption(
+                "„Автоматично безопасно правило“ означава MAINTAIN с наследени "
+                "defaults; то не създава скрит sidecar запис. Записването в този "
+                "раздел превръща показаните стойности в изрично експертно задание. "
+                "При MANUAL положителните стойности избират компонентите и "
+                "задават относителната сила на акцента. Обемът управлява Z1–Z3; "
+                "стресът управлява Z4–Z5 и силата. Частична лагерна седмица "
+                "прилага пропорционален фактор."
+            )
+            if st.button(
+                "Запази лагерните задания и преизчисли",
+                disabled=not can_edit,
+                width="stretch",
+            ):
+                errors: list[str] = []
+                for row_index, row in edited_prescriptions.iterrows():
+                    if (
+                        str(row.get("mesocycle_type", "AUTO")).upper()
+                        == "RECOVERY"
+                        and not str(row.get("note", "") or "").strip()
+                    ):
+                        errors.append(
+                            f"Ред {row_index + 1}: възстановителният лагер "
+                            "изисква треньорска бележка."
+                        )
+                rows = _camp_editor_rows_for_storage(
+                    edited_prescriptions,
+                    athlete_id,
+                )
+                if errors:
+                    for error in errors:
+                        st.error(error)
+                else:
+                    other = prescriptions.loc[
+                        prescriptions["athlete_id"].astype(str) != athlete_id
+                    ].copy()
+                    athlete_rows = pd.DataFrame(
+                        rows,
+                        columns=CAMP_PRESCRIPTION_COLUMNS,
+                    )
+                    bundle["camp_prescriptions"] = normalize_camp_prescriptions(
+                        pd.concat([other, athlete_rows], ignore_index=True)
+                    )
+                    commit_bundle(
+                        bundle,
+                        "camp_prescriptions_update",
+                        "Лагерните мезоцикли, акценти и величини са актуализирани.",
+                        athlete_id,
+                    )
+
+        preview_columns = [
+            "week_start",
+            "mesocycle_id",
+            "mesocycle_week",
+            "mesocycle_type",
+            "accent_components",
+            "camp_ids",
+            "recovery_displaced",
+            "override_reason",
+        ]
+        if all(column in analysis["weekly_targets"] for column in preview_columns):
+            st.subheader("Преизчислена мезоциклична динамика")
+            preview = (
+                analysis["weekly_targets"][preview_columns]
+                .drop_duplicates(subset=["week_start"])
+                .head(12)
+            )
+            st.dataframe(
+                preview,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "week_start": st.column_config.DateColumn(
+                        "Седмица от", format="DD.MM.YYYY"
+                    ),
+                    "mesocycle_id": "Мезоцикъл",
+                    "mesocycle_week": "Седмица №",
+                    "mesocycle_type": "Тип",
+                    "accent_components": "Акценти",
+                    "camp_ids": "Лагер",
+                    "recovery_displaced": "Преместено recovery",
+                    "override_reason": "Причина",
+                },
+            )
 
     with tab_structure:
         weekday_options = list(WEEKDAY_LABELS.values())
