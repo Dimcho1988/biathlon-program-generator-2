@@ -20,6 +20,18 @@ from .constants import (
 EPS = 1e-9
 
 
+def _empty_daily_load_history() -> pd.DataFrame:
+    columns = [
+        *[f"q_{component}" for component in COMPONENTS],
+        *[f"e_{component}" for component in COMPONENTS],
+        *[f"tref_used_{component}" for component in COMPONENTS],
+    ]
+    return pd.DataFrame(
+        columns=columns,
+        index=pd.DatetimeIndex([], name="date"),
+    )
+
+
 def _numeric_series(frame: pd.DataFrame, column: str, default: float = 0.0) -> pd.Series:
     """Връща числова Series и работи и когато колоната липсва."""
 
@@ -243,12 +255,14 @@ def compute_daily_load_history(
     """
 
     if activity_summaries.empty:
-        return pd.DataFrame(columns=[*[f"q_{c}" for c in COMPONENTS], *[f"e_{c}" for c in COMPONENTS]])
+        return _empty_daily_load_history()
 
     q_columns = [f"q_{component}" for component in COMPONENTS]
     grouped = activity_summaries.groupby("date", as_index=True)[q_columns].sum().sort_index()
     start = pd.Timestamp(grouped.index.min()).normalize()
     end = pd.Timestamp(end_date if end_date is not None else grouped.index.max()).normalize()
+    if end < start:
+        return _empty_daily_load_history()
     all_dates = pd.date_range(start, end, freq="D")
     direct = grouped.reindex(all_dates, fill_value=0.0)
     direct.index.name = "date"
@@ -282,8 +296,11 @@ def compute_daily_load_history(
 
 def _window_mean(series: pd.Series, end: pd.Timestamp, days: int) -> float:
     start = end - pd.Timedelta(days=days - 1)
-    window_index = pd.date_range(start, end, freq="D")
-    return float(series.reindex(window_index, fill_value=0.0).mean())
+    available = series.loc[
+        (pd.to_datetime(series.index) >= start)
+        & (pd.to_datetime(series.index) <= end)
+    ]
+    return float(available.mean()) if not available.empty else 0.0
 
 
 def compute_load_statistics(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from copy import deepcopy
 from datetime import date, timedelta
 from typing import Any
@@ -16,6 +17,10 @@ from .constants import (
     STRENGTH_COEFFICIENTS,
     STRENGTH_TYPES,
     fresh_parameters,
+)
+from .mesocycles import (
+    CAMP_PRESCRIPTION_COLUMNS,
+    default_camp_prescription,
 )
 from .preferences import default_planning_preferences
 
@@ -400,6 +405,33 @@ def _generate_calendar(athletes: pd.DataFrame, today: date) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values(["athlete_id", "start_date"]).reset_index(drop=True)
 
 
+def _generate_camp_prescriptions(calendar: pd.DataFrame) -> pd.DataFrame:
+    """Create explicit demo directives instead of relying on hidden CAMP rules."""
+
+    rows: list[dict[str, Any]] = []
+    camps = calendar.loc[calendar["type"] == "CAMP"]
+    for _, camp in camps.iterrows():
+        row = default_camp_prescription(
+            str(camp["event_id"]),
+            str(camp["athlete_id"]),
+            mesocycle_type="BUILD",
+            mesocycle_length_weeks=4,
+            accent_mode="MANUAL",
+            accent_limit=4,
+            accent_Z1=1.0,
+            accent_Z3=1.0,
+            accent_Z5=1.0,
+            accent_STR=1.0,
+            post_camp_behavior="AUTO",
+            note=(
+                "Демо задание: изграждащ лагер с акценти "
+                "Z1, Z3, Z5 и сила; recovery при натрупан дълг."
+            ),
+        )
+        rows.append(row)
+    return pd.DataFrame(rows, columns=CAMP_PRESCRIPTION_COLUMNS)
+
+
 def _training_methods() -> pd.DataFrame:
     rows = [
         {
@@ -632,6 +664,7 @@ def generate_demo_bundle(seed: int = DEMO_SEED, history_days: int = 150) -> dict
     wellness = _generate_wellness(athletes, activities, start_date, end_date, seed)
     tests = _generate_tests(athletes, end_date, seed)
     calendar = _generate_calendar(athletes, today)
+    camp_prescriptions = _generate_camp_prescriptions(calendar)
     planning_preferences = {
         str(row["athlete_id"]): default_planning_preferences(str(row["profile_code"]), today)
         for _, row in athletes.iterrows()
@@ -647,6 +680,7 @@ def generate_demo_bundle(seed: int = DEMO_SEED, history_days: int = 150) -> dict
         "wellness": wellness,
         "tests": tests,
         "calendar": calendar,
+        "camp_prescriptions": camp_prescriptions,
         "methods": _training_methods(),
         "parameters": fresh_parameters(),
         "planning_preferences": planning_preferences,
@@ -663,7 +697,13 @@ def generate_activity_stream(
     """Генерира детерминиран 1-секунден пулсов поток от обобщена активност."""
 
     row = dict(activity)
-    rng = np.random.default_rng(seed + abs(hash(str(row.get("activity_id", "activity")))) % 100_000)
+    activity_key = str(row.get("activity_id", "activity")).encode("utf-8")
+    stable_offset = int.from_bytes(
+        hashlib.sha256(activity_key).digest()[:8],
+        byteorder="big",
+        signed=False,
+    ) % 100_000
+    rng = np.random.default_rng(seed + stable_offset)
     profile = zone_profile.set_index("component")
 
     segments: list[tuple[str, int]] = []

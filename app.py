@@ -40,6 +40,16 @@ from biathlon.constants import (
 )
 from biathlon.demo_data import DEMO_SEED, generate_activity_stream, generate_demo_bundle
 from biathlon.explanations import EXPLANATIONS, explanation_titles, help_text
+from biathlon.mesocycles import (
+    CAMP_ACCENT_MODES,
+    CAMP_MODES,
+    CAMP_POST_BEHAVIORS,
+    CAMP_PRESCRIPTION_COLUMNS,
+    default_camp_prescription,
+    empty_camp_prescriptions,
+    normalize_camp_prescriptions,
+    prescription_for_event,
+)
 from biathlon.physiology import analyze_activity_stream, strength_equivalent_minutes
 from biathlon.preferences import (
     EVENT_TYPE_LABELS,
@@ -54,6 +64,7 @@ from biathlon.preferences import (
 )
 from biathlon.reporting import work_report_xlsx_bytes
 from biathlon.service import analyze_athlete, team_summary
+from biathlon.testing import resolved_test_settings
 from biathlon.ui_helpers import (
     audit_entry,
     dataframe_csv_bytes,
@@ -65,7 +76,7 @@ from biathlon.ui_helpers import (
 )
 
 st.set_page_config(
-    page_title="Biathlon LoadLab · MVP 0.5",
+    page_title="Biathlon LoadLab · MVP 0.6",
     page_icon="🎯",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -103,6 +114,24 @@ PAGE_ICONS = {
     "models": "❓",
     "settings": "⚙️",
 }
+
+
+def _camp_editor_rows_for_storage(
+    edited_prescriptions: pd.DataFrame,
+    athlete_id: str,
+) -> list[dict[str, Any]]:
+    """Restore identity fields that are intentionally hidden from the editor."""
+
+    rows: list[dict[str, Any]] = []
+    for _, row in edited_prescriptions.iterrows():
+        stored = {
+            column: row.get(column)
+            for column in CAMP_PRESCRIPTION_COLUMNS
+        }
+        stored["athlete_id"] = str(athlete_id)
+        stored["schema_version"] = 1
+        rows.append(stored)
+    return rows
 
 
 def initialize_state() -> None:
@@ -287,6 +316,10 @@ def render_team_page(bundle: dict[str, Any]) -> None:
 def component_summary_table(analysis: dict[str, Any]) -> pd.DataFrame:
     first_week = analysis["weekly_targets"].loc[analysis["weekly_targets"]["week_no"] == 1].set_index("component")
     table = analysis["load_stats"].join(analysis["integrated"], how="left")
+    table = table.join(
+        analysis["test_planning_adjustments"].rename("planning_test_adjustment"),
+        how="left",
+    )
     table = table.join(first_week[["target_index", "target_effective_week", "status"]], how="left", rsuffix="_target")
     table = table.reset_index().rename(
         columns={
@@ -295,7 +328,8 @@ def component_summary_table(analysis: dict[str, Any]) -> pd.DataFrame:
             "Tref": "Tref",
             "load_readiness": "Readiness",
             "monitoring_score": "Мониторинг",
-            "test_adjustment": "Тестова корекция",
+            "test_adjustment": "Тест → readiness",
+            "planning_test_adjustment": "Тест → план",
             "integrated_readiness": "Интегрирана готовност",
             "adaptive_multiplier": "Множител",
             "target_index": "Целеви 7/40",
@@ -303,7 +337,8 @@ def component_summary_table(analysis: dict[str, Any]) -> pd.DataFrame:
             "status": "Роля в мезоцикъла",
         }
     )
-    table["Тестова корекция"] = table["Тестова корекция"] * 100.0
+    table["Тест → readiness"] = table["Тест → readiness"] * 100.0
+    table["Тест → план"] = table["Тест → план"] * 100.0
     return table[
         [
             "Компонент",
@@ -311,7 +346,8 @@ def component_summary_table(analysis: dict[str, Any]) -> pd.DataFrame:
             "Tref",
             "Readiness",
             "Мониторинг",
-            "Тестова корекция",
+            "Тест → readiness",
+            "Тест → план",
             "Интегрирана готовност",
             "Множител",
             "Целеви 7/40",
@@ -394,7 +430,16 @@ def render_dashboard_page(analysis: dict[str, Any]) -> None:
 
     left, right = st.columns(2)
     with left:
-        st.plotly_chart(readiness_figure(analysis["readiness_history"], days=35), width="stretch")
+        st.plotly_chart(
+            readiness_figure(
+                analysis["readiness_history"],
+                days=35,
+                key_readiness_threshold=float(
+                    st.session_state.bundle["parameters"]["key_readiness_threshold"]
+                ),
+            ),
+            width="stretch",
+        )
     with right:
         first_six = analysis["weekly_targets"].loc[analysis["weekly_targets"]["week_no"] <= 6]
         st.plotly_chart(weekly_targets_figure(first_six, "target_index"), width="stretch")
@@ -552,7 +597,18 @@ def render_recovery_page(analysis: dict[str, Any]) -> None:
         format_func=lambda c: COMPONENT_SHORT[c],
         key="recovery_components",
     )
-    st.plotly_chart(readiness_figure(analysis["readiness_history"], selected_components or COMPONENTS, days=60), width="stretch")
+    key_readiness_threshold = float(
+        st.session_state.bundle["parameters"]["key_readiness_threshold"]
+    )
+    st.plotly_chart(
+        readiness_figure(
+            analysis["readiness_history"],
+            selected_components or COMPONENTS,
+            days=60,
+            key_readiness_threshold=key_readiness_threshold,
+        ),
+        width="stretch",
+    )
 
     current = analysis["load_readiness"].join(analysis["integrated"][["integrated_readiness", "hard_flag"]]).reset_index()
     current = current.rename(
@@ -584,7 +640,11 @@ def render_recovery_page(analysis: dict[str, Any]) -> None:
     days = np.linspace(0, 7, 57)
     forecast = 100.0 - fatigue * np.exp(-days / max(tau, 1e-9))
     fig = go.Figure(go.Scatter(x=days, y=forecast, mode="lines", name=component))
-    fig.add_hline(y=90, line_dash="dot", annotation_text="ключов стимул")
+    fig.add_hline(
+        y=key_readiness_threshold,
+        line_dash="dot",
+        annotation_text="ключов стимул",
+    )
     fig.add_hline(y=float(st.session_state.bundle["parameters"]["practical_full_recovery"]), line_dash="dot", annotation_text="практически възстановен")
     fig.update_layout(title=f"Прогнозна крива без ново натоварване · {component}", xaxis_title="Дни", yaxis_title="Readiness %", yaxis_range=[0, 102], height=380)
     st.plotly_chart(fig, width="stretch")
@@ -657,13 +717,20 @@ def render_plan_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit:
         first_week = analysis["weekly_targets"].loc[analysis["weekly_targets"]["week_no"] == 1].copy()
         factor_cols = [
             "component",
+            "mesocycle_type",
+            "mesocycle_week",
+            "component_role",
+            "accent_components",
             "target_index",
             "target_effective_week",
+            "mesocycle_factor",
+            "accent_factor",
             "annual_goal_factor",
             "adaptive_factor",
             "calendar_factor",
             "taper_factor",
             "status",
+            "override_reason",
         ]
         st.dataframe(first_week[factor_cols], width="stretch", hide_index=True)
         events = bundle["calendar"].loc[
@@ -854,11 +921,11 @@ def render_calendar_goals_page(bundle: dict[str, Any], analysis: dict[str, Any],
     athlete_id = str(analysis["athlete"]["athlete_id"])
     profile_code = str(analysis["athlete"].get("profile_code", "A"))
     preferences = normalize_preferences(
-        bundle.setdefault("planning_preferences", {}).get(athlete_id),
+        analysis.get("planning_preferences")
+        or bundle.setdefault("planning_preferences", {}).get(athlete_id),
         profile_code,
         date.today(),
     )
-    bundle["planning_preferences"][athlete_id] = preferences
     context = analysis["annual_context"]
 
     page_header(
@@ -872,8 +939,13 @@ def render_calendar_goals_page(bundle: dict[str, Any], analysis: dict[str, Any],
     c3.metric("Нужно средно до края", f"{context['required_weekly_hours']:.1f} h/седм.")
     c4.metric("Обемен фактор", f"{context['volume_factor']:.3f}", help=help_text("annual_goal"))
 
-    tab_goal, tab_calendar, tab_structure = st.tabs(
-        ["Сезонна цел", "Стартове, лагери и тестове", "Седмична структура"]
+    tab_goal, tab_calendar, tab_mesocycles, tab_structure = st.tabs(
+        [
+            "Сезонна цел",
+            "Стартове, лагери и тестове",
+            "Мезоцикли и лагери",
+            "Седмична структура",
+        ]
     )
 
     with tab_goal:
@@ -1024,6 +1096,19 @@ def render_calendar_goals_page(bundle: dict[str, Any], analysis: dict[str, Any],
                         "note": str(row.get("note", "") or ""),
                     }
                 )
+            event_ids = [str(row["event_id"]) for row in rows]
+            duplicate_ids = sorted(
+                {
+                    event_id
+                    for event_id in event_ids
+                    if event_ids.count(event_id) > 1
+                }
+            )
+            if duplicate_ids:
+                errors.append(
+                    "ID на календарно събитие трябва да е уникално: "
+                    + ", ".join(duplicate_ids)
+                )
             if errors:
                 for error in errors:
                     st.error(error)
@@ -1035,6 +1120,28 @@ def render_calendar_goals_page(bundle: dict[str, Any], analysis: dict[str, Any],
                 bundle["calendar"] = pd.concat([other, athlete_new], ignore_index=True).sort_values(
                     ["athlete_id", "start_date"]
                 ).reset_index(drop=True)
+                prescriptions = normalize_camp_prescriptions(
+                    bundle.get("camp_prescriptions", empty_camp_prescriptions())
+                )
+                valid_camps = bundle["calendar"].loc[
+                    bundle["calendar"]["type"].astype(str) == "CAMP",
+                    ["event_id", "athlete_id"],
+                ].copy()
+                valid_pairs = set(
+                    valid_camps[["athlete_id", "event_id"]]
+                    .astype(str)
+                    .itertuples(index=False, name=None)
+                )
+                prescriptions = prescriptions.loc[
+                    [
+                        (str(row["athlete_id"]), str(row["event_id"]))
+                        in valid_pairs
+                        for _, row in prescriptions.iterrows()
+                    ]
+                ].copy()
+                bundle["camp_prescriptions"] = normalize_camp_prescriptions(
+                    prescriptions
+                )
                 future_main = athlete_new.loc[
                     (athlete_new["type"] == "MAIN_RACE")
                     & (pd.to_datetime(athlete_new["start_date"]) >= pd.Timestamp.today().normalize())
@@ -1043,6 +1150,309 @@ def render_calendar_goals_page(bundle: dict[str, Any], analysis: dict[str, Any],
                 if future_main.empty:
                     reason += " Няма бъдещ основен старт; временно се използва виртуален 16-седмичен хоризонт."
                 commit_bundle(bundle, "calendar_update", reason, athlete_id)
+
+    with tab_mesocycles:
+        st.caption(
+            "Мезоцикълът използва стабилна опорна дата. Структурираното "
+            "лагерно задание управлява изчисленията; свободната бележка е "
+            "обяснение и не се интерпретира автоматично."
+        )
+        with st.form(f"mesocycle_defaults_{athlete_id}"):
+            m1, m2, m3 = st.columns(3)
+            mesocycle_anchor = m1.date_input(
+                "Опорна дата на мезоцикъла",
+                value=pd.Timestamp(
+                    preferences.get("mesocycle_anchor_date", date.today())
+                ).date(),
+                disabled=not can_edit,
+                help=(
+                    "Седмиците се броят устойчиво от тази дата и вече не "
+                    "се рестартират при всяко преизчисление."
+                ),
+            )
+            mesocycle_length = m2.number_input(
+                "Стандартна продължителност · седмици",
+                min_value=2,
+                max_value=6,
+                value=int(preferences.get("mesocycle_length_weeks", 4)),
+                step=1,
+                disabled=not can_edit,
+            )
+            default_accent_limit = m3.number_input(
+                "Стандартен брой автоматични акценти",
+                min_value=1,
+                max_value=len(COMPONENTS),
+                value=int(preferences.get("camp_default_accent_limit", 2)),
+                step=1,
+                disabled=not can_edit,
+            )
+            submit_mesocycle_defaults = st.form_submit_button(
+                "Запази мезоцикличните настройки",
+                disabled=not can_edit,
+                width="stretch",
+            )
+        if submit_mesocycle_defaults:
+            preferences.update(
+                {
+                    "mesocycle_anchor_date": pd.Timestamp(mesocycle_anchor),
+                    "mesocycle_length_weeks": int(mesocycle_length),
+                    "camp_default_accent_limit": int(default_accent_limit),
+                }
+            )
+            bundle["planning_preferences"][athlete_id] = normalize_preferences(
+                preferences,
+                profile_code,
+                date.today(),
+            )
+            commit_bundle(
+                bundle,
+                "mesocycle_settings_update",
+                "Опорната дата и продължителността на мезоцикъла са актуализирани.",
+                athlete_id,
+            )
+
+        camps = athlete_calendar.loc[athlete_calendar["type"] == "CAMP"].copy()
+        prescriptions = normalize_camp_prescriptions(
+            bundle.get("camp_prescriptions", empty_camp_prescriptions())
+        )
+        editor_rows: list[dict[str, Any]] = []
+        for _, camp in camps.iterrows():
+            event_id = str(camp["event_id"])
+            explicit_prescription = prescription_for_event(
+                prescriptions,
+                event_id,
+                athlete_id,
+            )
+            resolved = explicit_prescription or default_camp_prescription(
+                event_id,
+                athlete_id,
+                accent_limit=int(
+                    preferences.get("camp_default_accent_limit", 2)
+                ),
+            )
+            editor_rows.append(
+                {
+                    **resolved,
+                    "assignment_status": (
+                        "Експертно задание"
+                        if explicit_prescription is not None
+                        else "Автоматично безопасно правило"
+                    ),
+                    "camp_name": str(camp["name"]),
+                    "camp_start": pd.Timestamp(camp["start_date"]),
+                    "camp_end": pd.Timestamp(camp["end_date"]),
+                }
+            )
+
+        if not editor_rows:
+            st.info(
+                "Няма лагер в календара. Добави събитие от тип „Лагер“, "
+                "за да създадеш структурирано задание."
+            )
+        else:
+            prescription_display = pd.DataFrame(editor_rows)
+            ordered = [
+                "event_id",
+                "assignment_status",
+                "camp_name",
+                "camp_start",
+                "camp_end",
+                "mesocycle_type",
+                "mesocycle_length_weeks",
+                "accent_mode",
+                "accent_limit",
+                *[f"accent_{component}" for component in COMPONENTS],
+                "volume_factor",
+                "stress_factor",
+                "maintenance_factor",
+                "post_camp_behavior",
+                "post_camp_recovery_weeks",
+                "note",
+            ]
+            edited_prescriptions = st.data_editor(
+                prescription_display[ordered],
+                width="stretch",
+                hide_index=True,
+                disabled=(
+                    [
+                        "event_id",
+                        "assignment_status",
+                        "camp_name",
+                        "camp_start",
+                        "camp_end",
+                    ]
+                    if can_edit
+                    else ordered
+                ),
+                key=f"camp_prescriptions_{athlete_id}_{bundle['version']}",
+                column_config={
+                    "event_id": st.column_config.TextColumn("ID"),
+                    "assignment_status": st.column_config.TextColumn(
+                        "Статус"
+                    ),
+                    "camp_name": st.column_config.TextColumn("Лагер"),
+                    "camp_start": st.column_config.DateColumn(
+                        "Начало", format="DD.MM.YYYY"
+                    ),
+                    "camp_end": st.column_config.DateColumn(
+                        "Край", format="DD.MM.YYYY"
+                    ),
+                    "mesocycle_type": st.column_config.SelectboxColumn(
+                        "Тип",
+                        options=list(CAMP_MODES),
+                        help="AUTO е безопасно поддържане; RECOVERY изисква бележка.",
+                    ),
+                    "mesocycle_length_weeks": st.column_config.NumberColumn(
+                        "Седмици",
+                        min_value=0,
+                        max_value=6,
+                        step=1,
+                        help="0 наследява стандартната продължителност.",
+                    ),
+                    "accent_mode": st.column_config.SelectboxColumn(
+                        "Акценти",
+                        options=list(CAMP_ACCENT_MODES),
+                    ),
+                    "accent_limit": st.column_config.NumberColumn(
+                        "Брой",
+                        min_value=1,
+                        max_value=len(COMPONENTS),
+                        step=1,
+                    ),
+                    **{
+                        f"accent_{component}": st.column_config.NumberColumn(
+                            component,
+                            min_value=0.0,
+                            max_value=1.0,
+                            step=0.05,
+                            format="%.2f",
+                            help=(
+                                "0 = без ръчен акцент; 1 = пълната "
+                                "зададена величина."
+                            ),
+                        )
+                        for component in COMPONENTS
+                    },
+                    "volume_factor": st.column_config.NumberColumn(
+                        "Обем Z1–Z3",
+                        min_value=0.75,
+                        max_value=1.25,
+                        step=0.01,
+                        format="%.2f",
+                    ),
+                    "stress_factor": st.column_config.NumberColumn(
+                        "Стрес Z4–Z5/сила",
+                        min_value=0.75,
+                        max_value=1.25,
+                        step=0.01,
+                        format="%.2f",
+                    ),
+                    "maintenance_factor": st.column_config.NumberColumn(
+                        "Неакцентни",
+                        min_value=0.75,
+                        max_value=1.10,
+                        step=0.01,
+                        format="%.2f",
+                    ),
+                    "post_camp_behavior": st.column_config.SelectboxColumn(
+                        "След лагера",
+                        options=list(CAMP_POST_BEHAVIORS),
+                    ),
+                    "post_camp_recovery_weeks": st.column_config.NumberColumn(
+                        "Recovery седм.",
+                        min_value=0,
+                        max_value=2,
+                        step=1,
+                    ),
+                    "note": st.column_config.TextColumn(
+                        "Треньорско задание / причина"
+                    ),
+                },
+            )
+            st.caption(
+                "„Автоматично безопасно правило“ означава MAINTAIN с наследени "
+                "defaults; то не създава скрит sidecar запис. Записването в този "
+                "раздел превръща показаните стойности в изрично експертно задание. "
+                "При MANUAL положителните стойности избират компонентите и "
+                "задават относителната сила на акцента. Обемът управлява Z1–Z3; "
+                "стресът управлява Z4–Z5 и силата. Частична лагерна седмица "
+                "прилага пропорционален фактор."
+            )
+            if st.button(
+                "Запази лагерните задания и преизчисли",
+                disabled=not can_edit,
+                width="stretch",
+            ):
+                errors: list[str] = []
+                for row_index, row in edited_prescriptions.iterrows():
+                    if (
+                        str(row.get("mesocycle_type", "AUTO")).upper()
+                        == "RECOVERY"
+                        and not str(row.get("note", "") or "").strip()
+                    ):
+                        errors.append(
+                            f"Ред {row_index + 1}: възстановителният лагер "
+                            "изисква треньорска бележка."
+                        )
+                rows = _camp_editor_rows_for_storage(
+                    edited_prescriptions,
+                    athlete_id,
+                )
+                if errors:
+                    for error in errors:
+                        st.error(error)
+                else:
+                    other = prescriptions.loc[
+                        prescriptions["athlete_id"].astype(str) != athlete_id
+                    ].copy()
+                    athlete_rows = pd.DataFrame(
+                        rows,
+                        columns=CAMP_PRESCRIPTION_COLUMNS,
+                    )
+                    bundle["camp_prescriptions"] = normalize_camp_prescriptions(
+                        pd.concat([other, athlete_rows], ignore_index=True)
+                    )
+                    commit_bundle(
+                        bundle,
+                        "camp_prescriptions_update",
+                        "Лагерните мезоцикли, акценти и величини са актуализирани.",
+                        athlete_id,
+                    )
+
+        preview_columns = [
+            "week_start",
+            "mesocycle_id",
+            "mesocycle_week",
+            "mesocycle_type",
+            "accent_components",
+            "camp_ids",
+            "recovery_displaced",
+            "override_reason",
+        ]
+        if all(column in analysis["weekly_targets"] for column in preview_columns):
+            st.subheader("Преизчислена мезоциклична динамика")
+            preview = (
+                analysis["weekly_targets"][preview_columns]
+                .drop_duplicates(subset=["week_start"])
+                .head(12)
+            )
+            st.dataframe(
+                preview,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "week_start": st.column_config.DateColumn(
+                        "Седмица от", format="DD.MM.YYYY"
+                    ),
+                    "mesocycle_id": "Мезоцикъл",
+                    "mesocycle_week": "Седмица №",
+                    "mesocycle_type": "Тип",
+                    "accent_components": "Акценти",
+                    "camp_ids": "Лагер",
+                    "recovery_displaced": "Преместено recovery",
+                    "override_reason": "Причина",
+                },
+            )
 
     with tab_structure:
         weekday_options = list(WEEKDAY_LABELS.values())
@@ -1618,7 +2028,28 @@ def render_monitoring_page(bundle: dict[str, Any], analysis: dict[str, Any], can
     athlete_id = str(analysis["athlete"]["athlete_id"])
     page_header("Дневен мониторинг", "Ръчни субективни и обективни показатели с текуща стойност, 7/40 тенденция и критични флагове.")
     athlete_wellness = bundle["wellness"].loc[bundle["wellness"]["athlete_id"] == athlete_id].sort_values("date")
-    latest = athlete_wellness.iloc[-1]
+    if athlete_wellness.empty:
+        latest = pd.Series(
+            {
+                "sleep_quality": 7.0,
+                "fatigue": 3.0,
+                "soreness_legs": 1.0,
+                "soreness_upper": 1.0,
+                "stress": 3.0,
+                "motivation": 7.0,
+                "pain": 0.0,
+                "illness": False,
+                "morning_hr": 60.0,
+                "hrv": 60.0,
+                "sleep_hours": 7.5,
+                "weight_kg": float(analysis["athlete"]["weight_kg"]),
+                "session_rpe": 0.0,
+                "execution_quality": 4,
+            }
+        )
+        st.info("Няма предишни wellness записи. Формулярът използва неутрални начални стойности.")
+    else:
+        latest = athlete_wellness.iloc[-1]
 
     with st.form("wellness_form"):
         st.subheader(f"Сутрешен запис · {date.today().strftime('%d.%m.%Y')}")
@@ -1709,7 +2140,16 @@ def render_tests_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit
     st.plotly_chart(test_history_figure(bundle["tests"], athlete_id, test_code), width="stretch")
 
     history = bundle["tests"].loc[(bundle["tests"]["athlete_id"] == athlete_id) & (bundle["tests"]["test_code"] == test_code)].sort_values("date")
-    latest = history.iloc[-1]
+    if history.empty:
+        latest = pd.Series(
+            {
+                "primary_value": 0.0,
+                "secondary_value": 0.0,
+            }
+        )
+        st.info("Няма предишен резултат за този тест. Въведи първо базово измерване.")
+    else:
+        latest = history.iloc[-1]
     with st.form("test_entry_form"):
         c1, c2, c3 = st.columns(3)
         test_date = c1.date_input("Дата", value=date.today(), disabled=not can_edit)
@@ -1758,17 +2198,47 @@ def render_tests_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit
                 "date": "Дата",
                 "primary_change_pct": "Промяна · основен %",
                 "secondary_change_pct": "Промяна · вторичен %",
-                "composite_change_pct": "Комплексна промяна %",
+                "raw_composite_change_pct": "Сурова комплексна промяна %",
+                "effective_change_pct": "Ефективна промяна %",
                 "comparability": "Сравнимост",
                 "reliability": "Надеждност",
                 "valid": "Валиден",
+                "age_days": "Възраст · дни",
+                "active": "Активен",
             }
         )
-        st.dataframe(display[["Тест", "Дата", "Промяна · основен %", "Промяна · вторичен %", "Комплексна промяна %", "Сравнимост", "Надеждност", "Валиден"]], width="stretch", hide_index=True)
-    adjustments = analysis["test_adjustments"].rename("Корекция").reset_index().rename(columns={"index": "Компонент"})
-    adjustments["Корекция"] *= 100.0
+        st.dataframe(
+            display[
+                [
+                    "Тест",
+                    "Дата",
+                    "Промяна · основен %",
+                    "Промяна · вторичен %",
+                    "Сурова комплексна промяна %",
+                    "Ефективна промяна %",
+                    "Сравнимост",
+                    "Надеждност",
+                    "Възраст · дни",
+                    "Активен",
+                    "Валиден",
+                ]
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+    adjustments = pd.concat(
+        [
+            analysis["test_readiness_adjustments"].rename("Readiness корекция"),
+            analysis["test_planning_adjustments"].rename("Planning корекция"),
+        ],
+        axis=1,
+    ).reset_index().rename(columns={"index": "Компонент"})
+    adjustments[["Readiness корекция", "Planning корекция"]] *= 100.0
     st.dataframe(adjustments, width="stretch", hide_index=True)
-    st.caption("Положителната корекция е ограничена до +5%, отрицателната — до −10%, и се прилага само в контекста на текущата готовност.")
+    st.caption(
+        "Readiness и planning са отделни експертни канали. Компонентните множители, "
+        "актуалността, half-life и границите се управляват от „Експертни настройки → Тестове“."
+    )
 
 
 def comparison_metrics(before: dict[str, Any], after: dict[str, Any], component: str) -> None:
@@ -1861,17 +2331,21 @@ def render_simulator_page(bundle: dict[str, Any], before: dict[str, Any], can_ed
     elif scenario_type.startswith("Контролен"):
         test_code = st.selectbox("Тест", list(TEST_DEFINITIONS), format_func=lambda c: TEST_DEFINITIONS[c]["label"], key="scenario_test")
         subset = scenario_bundle["tests"].loc[(scenario_bundle["tests"]["athlete_id"] == athlete_id) & (scenario_bundle["tests"]["test_code"] == test_code)].sort_values("date")
-        latest = subset.iloc[-1]
-        c1, c2 = st.columns(2)
-        change = c1.slider("Промяна на основния резултат · %", -12.0, 12.0, 4.0, 0.5)
-        comparability = c2.slider("Сравнимост", 0.4, 1.0, 0.95, 0.05)
-        direction = TEST_DEFINITIONS[test_code]["primary_direction"]
-        new_value = float(latest["primary_value"]) * (1.0 + change / 100.0 * direction)
-        mask = scenario_bundle["tests"]["test_id"] == latest["test_id"]
-        scenario_bundle["tests"].loc[mask, "primary_value"] = new_value
-        scenario_bundle["tests"].loc[mask, "comparability"] = comparability
-        scenario_description = f"Последният тест е променен с посочно подобрение {change:+.1f}% и сравнимост {comparability:.2f}."
         focus_component = "Z3" if test_code == "Z3_20MIN" else "Z5"
+        if subset.empty:
+            st.info("Няма записан резултат за избрания тест. Сценарият остава без промяна, докато не бъде добавено базово измерване.")
+            scenario_description = f"Няма наличен резултат за {TEST_DEFINITIONS[test_code]['label']}; не е приложена тестова промяна."
+        else:
+            latest = subset.iloc[-1]
+            c1, c2 = st.columns(2)
+            change = c1.slider("Промяна на основния резултат · %", -12.0, 12.0, 4.0, 0.5)
+            comparability = c2.slider("Сравнимост", 0.4, 1.0, 0.95, 0.05)
+            direction = TEST_DEFINITIONS[test_code]["primary_direction"]
+            new_value = float(latest["primary_value"]) * (1.0 + change / 100.0 * direction)
+            mask = scenario_bundle["tests"]["test_id"] == latest["test_id"]
+            scenario_bundle["tests"].loc[mask, "primary_value"] = new_value
+            scenario_bundle["tests"].loc[mask, "comparability"] = comparability
+            scenario_description = f"Последният тест е променен с посочно подобрение {change:+.1f}% и сравнимост {comparability:.2f}."
     else:
         main_mask = (
             (scenario_bundle["calendar"]["athlete_id"].astype(str) == athlete_id)
@@ -2040,7 +2514,8 @@ def render_profile_page(bundle: dict[str, Any], analysis: dict[str, Any], can_ed
                     "τ · дни": rec["tau_days"],
                     "Товарна readiness": analysis["load_readiness"].loc[component, "readiness"],
                     "Мониторинг": analysis["monitoring_by_component"].loc[component, "monitoring_score"],
-                    "Тестова корекция %": analysis["test_adjustments"].get(component, 0.0) * 100,
+                    "Тест → readiness %": analysis["test_readiness_adjustments"].get(component, 0.0) * 100,
+                    "Тест → план %": analysis["test_planning_adjustments"].get(component, 0.0) * 100,
                     "Интегрирана готовност": analysis["integrated"].loc[component, "integrated_readiness"],
                 }
             )
@@ -2085,8 +2560,8 @@ def render_settings_page(bundle: dict[str, Any], role: str, athlete_id: str) -> 
     if not can_edit:
         st.info("Редакцията на експертните коефициенти е достъпна само за ролята „Главен треньор“. Данните по-долу са в режим преглед.")
     params = bundle["parameters"]
-    tab_general, tab_components, tab_cascade, tab_methods, tab_audit = st.tabs(
-        ["Общи правила", "Компонентни параметри", "Каскада", "Методи", "Журнал"]
+    tab_general, tab_components, tab_cascade, tab_tests, tab_methods, tab_audit = st.tabs(
+        ["Общи правила", "Компонентни параметри", "Каскада", "Тестове", "Методи", "Журнал"]
     )
 
     with tab_general:
@@ -2098,6 +2573,15 @@ def render_settings_page(bundle: dict[str, Any], role: str, athlete_id: str) -> 
             key_readiness = c2.slider("Readiness за ключова сесия", 70.0, 100.0, float(params["key_readiness_threshold"]), 1.0, disabled=not can_edit)
             full_recovery = c3.slider("Практическо пълно възстановяване", 90.0, 99.0, float(params["practical_full_recovery"]), 1.0, disabled=not can_edit)
             current_weight = c3.slider("Тежест на текущия показател", 0.30, 0.90, float(params["current_metric_weight"]), 0.05, disabled=not can_edit)
+            hard_flag_max_age_days = c3.number_input(
+                "Актуалност на hard flag · дни",
+                min_value=0,
+                max_value=30,
+                value=int(params.get("hard_flag_max_age_days", 3)),
+                step=1,
+                disabled=not can_edit,
+                help="Критична стойност или заболяване създава hard flag само докато последният запис е в този период.",
+            )
             submit = st.form_submit_button("Запази общите правила", disabled=not can_edit, width="stretch")
         if submit:
             params["spill_threshold_fraction"] = spill_threshold
@@ -2106,6 +2590,7 @@ def render_settings_page(bundle: dict[str, Any], role: str, athlete_id: str) -> 
             params["key_readiness_threshold"] = key_readiness
             params["practical_full_recovery"] = full_recovery
             params["current_metric_weight"] = current_weight
+            params["hard_flag_max_age_days"] = int(hard_flag_max_age_days)
             commit_bundle(bundle, "parameter_update", "Общите алгоритмични параметри са актуализирани.", athlete_id)
 
     with tab_components:
@@ -2164,6 +2649,98 @@ def render_settings_page(bundle: dict[str, Any], role: str, athlete_id: str) -> 
                 receiver: {source: float(edited.loc[receiver, source]) for source in COMPONENTS} for receiver in COMPONENTS
             }
             commit_bundle(bundle, "cascade_update", "Матрицата на физиологичните взаимодействия е актуализирана.", athlete_id)
+
+    with tab_tests:
+        st.caption(
+            "Readiness strength управлява острото влияние върху интегрираната готовност. "
+            "Planning strength управлява компонентния седмичен товар. Множител 1.0 означава "
+            "пълното тестово влияние за компонента; 0.0 го изключва."
+        )
+        resolved = resolved_test_settings(params)
+        test_rows = []
+        for test_code, settings in resolved.items():
+            test_rows.append(
+                {
+                    "test_code": test_code,
+                    "label": TEST_DEFINITIONS[test_code]["label"],
+                    "enabled": settings["enabled"],
+                    "primary_weight": settings["primary_weight"],
+                    "secondary_weight": settings["secondary_weight"],
+                    "min_comparability": settings["min_comparability"],
+                    "readiness_strength": settings["readiness_strength"],
+                    "planning_strength": settings["planning_strength"],
+                    "max_age_days": settings["max_age_days"],
+                    "half_life_days": settings["half_life_days"],
+                    "max_negative_adjustment": settings["max_negative_adjustment"],
+                    "max_positive_adjustment": settings["max_positive_adjustment"],
+                    **settings["component_multipliers"],
+                }
+            )
+        test_settings_editor = st.data_editor(
+            pd.DataFrame(test_rows),
+            width="stretch",
+            hide_index=True,
+            disabled=["test_code", "label"] if can_edit else list(pd.DataFrame(test_rows).columns),
+            key=f"test_settings_{bundle['version']}",
+            column_config={
+                "test_code": "Код",
+                "label": "Тест",
+                "enabled": st.column_config.CheckboxColumn("Активен"),
+                "primary_weight": st.column_config.NumberColumn("Тегло · основен", min_value=0.0, max_value=1.0, step=0.05),
+                "secondary_weight": st.column_config.NumberColumn("Тегло · вторичен", min_value=0.0, max_value=1.0, step=0.05),
+                "min_comparability": st.column_config.NumberColumn("Мин. сравнимост", min_value=0.0, max_value=1.0, step=0.05),
+                "readiness_strength": st.column_config.NumberColumn("Readiness strength", min_value=0.0, max_value=2.0, step=0.05),
+                "planning_strength": st.column_config.NumberColumn("Planning strength", min_value=0.0, max_value=2.0, step=0.05),
+                "max_age_days": st.column_config.NumberColumn("Актуалност · дни", min_value=0, max_value=365, step=1),
+                "half_life_days": st.column_config.NumberColumn("Half-life · дни", min_value=1.0, max_value=365.0, step=1.0),
+                "max_negative_adjustment": st.column_config.NumberColumn("Мин. корекция", min_value=-0.50, max_value=0.0, step=0.01),
+                "max_positive_adjustment": st.column_config.NumberColumn("Макс. корекция", min_value=0.0, max_value=0.50, step=0.01),
+                **{
+                    component: st.column_config.NumberColumn(
+                        f"{component} множител",
+                        min_value=0.0,
+                        max_value=2.0,
+                        step=0.05,
+                    )
+                    for component in COMPONENTS
+                },
+            },
+        )
+        if st.button("Запази настройките на тестовете", disabled=not can_edit, width="stretch"):
+            errors = []
+            configured_tests: dict[str, Any] = {}
+            for row_index, row in test_settings_editor.iterrows():
+                test_code = str(row["test_code"])
+                if float(row["primary_weight"]) + float(row["secondary_weight"]) <= 0:
+                    errors.append(f"{test_code}: поне едно тегло на резултат трябва да е положително.")
+                    continue
+                configured_tests[test_code] = {
+                    "enabled": bool(row["enabled"]),
+                    "primary_weight": float(row["primary_weight"]),
+                    "secondary_weight": float(row["secondary_weight"]),
+                    "min_comparability": float(row["min_comparability"]),
+                    "readiness_strength": float(row["readiness_strength"]),
+                    "planning_strength": float(row["planning_strength"]),
+                    "max_age_days": int(row["max_age_days"]),
+                    "half_life_days": float(row["half_life_days"]),
+                    "max_negative_adjustment": float(row["max_negative_adjustment"]),
+                    "max_positive_adjustment": float(row["max_positive_adjustment"]),
+                    "component_multipliers": {
+                        component: float(row[component])
+                        for component in COMPONENTS
+                    },
+                }
+            if errors:
+                for error in errors:
+                    st.error(error)
+            else:
+                params["test_settings"] = configured_tests
+                commit_bundle(
+                    bundle,
+                    "test_settings_update",
+                    "Readiness и planning влиянието на контролните тестове е актуализирано.",
+                    athlete_id,
+                )
 
     with tab_methods:
         component = st.selectbox("Филтър по компонент", COMPONENTS, key="method_component")
