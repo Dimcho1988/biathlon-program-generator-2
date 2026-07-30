@@ -12,13 +12,21 @@ from streamlit.testing.v1 import AppTest
 from intervals_inspector import app as inspector_app
 from intervals_inspector.oauth import OAuthGrant
 from intervals_inspector.oauth_state_store import (
+    PendingConsentEvidence,
     clear_pending_states_for_tests,
     is_pending_state,
+)
+from intervals_inspector.public_pages import (
+    PRIVACY_POLICY_URL,
+    PRIVACY_POLICY_VERSION,
+    PRIVACY_URL_PATH,
 )
 from intervals_inspector.security import create_signed_state
 
 
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
+ABOUT_PAGE_PATH = "views/about.py"
+PRIVACY_PAGE_PATH = "views/privacy-policy.py"
 SETTING_NAMES = (
     "INTERVALS_CLIENT_ID",
     "INTERVALS_CLIENT_SECRET",
@@ -47,6 +55,27 @@ def _new_app(
 ) -> AppTest:
     app = AppTest.from_file(str(APP_PATH), default_timeout=10)
     app.secrets.update(FAKE_SECRETS if secrets is None else secrets)
+    return app
+
+
+def _consent_evidence(
+    *,
+    policy_version: str = PRIVACY_POLICY_VERSION,
+) -> PendingConsentEvidence:
+    return PendingConsentEvidence(
+        policy_version=policy_version,
+        confirmed_at=time.time(),
+        privacy_and_general_consent=True,
+        wellness_health_explicit_consent=True,
+        adult_confirmed=True,
+    )
+
+
+def _complete_oauth_confirmations(app: AppTest) -> AppTest:
+    assert len(app.checkbox) == 3
+    for checkbox in app.checkbox:
+        checkbox.set_value(True)
+    app.run()
     return app
 
 
@@ -104,6 +133,42 @@ def test_streamlit_smoke_shows_password_gate_without_network():
     assert app.button[0].label == "Вход"
 
 
+@pytest.mark.parametrize(
+    ("page_path", "expected_title", "expected_public_text"),
+    (
+        (ABOUT_PAGE_PATH, "About onFlows", "DataCape Ltd"),
+        (
+            PRIVACY_PAGE_PATH,
+            "Privacy Policy / Политика за поверителност",
+            "ДейтаКейп ЕООД",
+        ),
+    ),
+)
+def test_public_pages_open_without_secrets_password_or_oauth(
+    page_path: str,
+    expected_title: str,
+    expected_public_text: str,
+):
+    app = _new_app({}).run()
+    app.switch_page(page_path).run()
+
+    assert not app.exception
+    assert app.title[0].value == expected_title
+    assert not app.text_input
+    assert not app.get("link_button")
+    assert not app.code
+    rendered_markdown = "\n".join(item.value for item in app.markdown)
+    assert expected_public_text in rendered_markdown
+    assert "INTERVALS_CLIENT_SECRET" not in rendered_markdown
+
+
+def test_privacy_policy_has_stable_public_route() -> None:
+    assert PRIVACY_URL_PATH == "privacy-policy"
+    assert PRIVACY_POLICY_URL == (
+        "https://onflows-pilot.streamlit.app/privacy-policy"
+    )
+
+
 def test_unicode_access_password_is_supported():
     secrets = dict(FAKE_SECRETS)
     secrets["INSPECTOR_ACCESS_PASSWORD"] = "сигурна-парола-🔒"
@@ -124,6 +189,7 @@ def test_pending_state_survives_two_real_apptest_sessions():
     issuing_app = _new_app()
     issuing_app.session_state["_inspector_authenticated"] = True
     issuing_app.run()
+    _complete_oauth_confirmations(issuing_app)
 
     assert not issuing_app.exception
     link_buttons = issuing_app.get("link_button")
@@ -233,7 +299,50 @@ def test_access_tokens_are_isolated_between_apptest_sessions():
         == "isolated-session-A"
     )
     assert "isolated-session-A" not in repr(second.session_state)
-    assert len(second.get("link_button")) == 1
+    assert len(second.checkbox) == 3
+    assert not second.get("link_button")
+    assert any(
+        item.label == "Свържи Intervals.icu" and item.disabled
+        for item in second.button
+    )
+
+
+def test_oauth_link_requires_all_three_separate_confirmations():
+    app = _new_app()
+    app.session_state[inspector_app.SESSION_AUTHENTICATED] = True
+    app.run()
+
+    assert not app.exception
+    assert len(app.checkbox) == 3
+    assert all(checkbox.value is False for checkbox in app.checkbox)
+    assert not app.get("link_button")
+    assert any(
+        item.label
+        == "Privacy Policy / Политика за поверителност"
+        for item in app.get("page_link")
+    )
+
+    app.checkbox[0].set_value(True)
+    app.checkbox[1].set_value(True)
+    app.run()
+
+    assert not app.get("link_button")
+    assert any(
+        item.label == "Свържи Intervals.icu" and item.disabled
+        for item in app.button
+    )
+
+    app.checkbox[2].set_value(True)
+    app.run()
+
+    link_buttons = app.get("link_button")
+    assert len(link_buttons) == 1
+    query = parse_qs(urlparse(link_buttons[0].url).query)
+    assert query["scope"] == [
+        "ACTIVITY:READ,WELLNESS:READ,SETTINGS:READ,CALENDAR:READ"
+    ]
+    state = query["state"][0]
+    assert is_pending_state(state)
 
 
 def test_connected_report_renders_bounded_periods_and_summary_table():
@@ -393,6 +502,59 @@ def test_unissued_callback_state_never_exchanges_and_is_cleared(monkeypatch):
     assert inspector_app.SESSION_TOKEN not in session
 
 
+def test_callback_state_without_required_consent_never_exchanges(
+    monkeypatch,
+):
+    config = _callback_config()
+    state = create_signed_state(
+        config.state_secret,
+        redirect_uri=config.redirect_uri,
+    )
+    inspector_app.register_pending_state(state)
+    query = {"code": "one-time-code", "state": state}
+    session = _patch_callback_streamlit(monkeypatch, query)
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        inspector_app,
+        "exchange_authorization_code",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    inspector_app._process_callback(config)
+
+    assert calls == []
+    assert query == {}
+    assert not is_pending_state(state)
+    assert inspector_app.SESSION_TOKEN not in session
+
+
+def test_callback_state_for_old_policy_version_never_exchanges(
+    monkeypatch,
+):
+    config = _callback_config()
+    state = inspector_app._oauth_state(
+        config,
+        consent=_consent_evidence(policy_version="0.9"),
+    )
+    query = {"code": "one-time-code", "state": state}
+    session = _patch_callback_streamlit(monkeypatch, query)
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        inspector_app,
+        "exchange_authorization_code",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    inspector_app._process_callback(config)
+
+    assert calls == []
+    assert query == {}
+    assert not is_pending_state(state)
+    assert inspector_app.SESSION_TOKEN not in session
+
+
 def test_issued_state_exchanges_once_in_fresh_session_and_cannot_replay(
     monkeypatch,
 ):
@@ -401,7 +563,10 @@ def test_issued_state_exchanges_once_in_fresh_session_and_cannot_replay(
     monkeypatch.setattr(
         inspector_app.st, "session_state", issuing_session, raising=False
     )
-    state = inspector_app._oauth_state(config)
+    state = inspector_app._oauth_state(
+        config,
+        consent=_consent_evidence(),
+    )
     assert issuing_session == {}
 
     query = {"code": "one-time-code", "state": state}
@@ -428,6 +593,12 @@ def test_issued_state_exchanges_once_in_fresh_session_and_cannot_replay(
     assert query == {}
     assert session[inspector_app.SESSION_TOKEN] == "session-token-not-real"
     assert session[inspector_app.SESSION_ATHLETE_ID] == "test-athlete"
+    consent_record = session[inspector_app.SESSION_CONSENT]
+    assert consent_record["policy_version"] == PRIVACY_POLICY_VERSION
+    assert consent_record["confirmed_at_utc"].endswith("+00:00")
+    assert consent_record["privacy_and_general_consent"] is True
+    assert consent_record["wellness_health_explicit_consent"] is True
+    assert consent_record["adult_confirmed"] is True
     assert inspector_app.SESSION_AUTHENTICATED not in session
     rendered_session = repr(session)
     assert "one-time-code" not in rendered_session
@@ -445,7 +616,10 @@ def test_issued_state_exchanges_once_in_fresh_session_and_cannot_replay(
 
 def test_denied_callback_consumes_issued_state(monkeypatch):
     config = _callback_config()
-    state = inspector_app._oauth_state(config)
+    state = inspector_app._oauth_state(
+        config,
+        consent=_consent_evidence(),
+    )
     query = {"error": "access_denied", "state": state}
     session = _patch_callback_streamlit(monkeypatch, query)
 
@@ -486,7 +660,10 @@ def test_documented_denial_without_state_is_clear_and_never_exchanges(
 
 def test_app_rejects_write_scope_before_storing_token(monkeypatch):
     config = _callback_config()
-    state = inspector_app._oauth_state(config)
+    state = inspector_app._oauth_state(
+        config,
+        consent=_consent_evidence(),
+    )
     query = {"code": "one-time-code", "state": state}
     session = _patch_callback_streamlit(monkeypatch, query)
 
@@ -513,7 +690,10 @@ def test_tampered_state_never_exchanges_and_does_not_consume_original(
     monkeypatch,
 ):
     config = _callback_config()
-    state = inspector_app._oauth_state(config)
+    state = inspector_app._oauth_state(
+        config,
+        consent=_consent_evidence(),
+    )
     payload, signature = state.split(".")
     replacement = "A" if signature[-1] != "A" else "B"
     tampered = f"{payload}.{signature[:-1]}{replacement}"
@@ -542,7 +722,10 @@ def test_expired_signed_state_never_exchanges(monkeypatch):
         redirect_uri=config.redirect_uri,
         now=int(time.time()) - inspector_app.STATE_MAX_AGE_SECONDS - 1,
     )
-    inspector_app.register_pending_state(state)
+    inspector_app.register_pending_state(
+        state,
+        consent=_consent_evidence(),
+    )
     query = {"code": "one-time-code", "state": state}
     session = _patch_callback_streamlit(monkeypatch, query)
     calls = []
@@ -562,7 +745,10 @@ def test_expired_signed_state_never_exchanges(monkeypatch):
 
 def test_failed_exchange_consumes_state_and_is_not_retried(monkeypatch):
     config = _callback_config()
-    state = inspector_app._oauth_state(config)
+    state = inspector_app._oauth_state(
+        config,
+        consent=_consent_evidence(),
+    )
     query = {"code": "one-time-code", "state": state}
     first_session = _patch_callback_streamlit(monkeypatch, query)
     calls = []
@@ -592,7 +778,10 @@ def test_failed_exchange_consumes_state_and_is_not_retried(monkeypatch):
 
 def test_exchange_failure_notice_is_sanitized_and_actionable(monkeypatch):
     config = _callback_config()
-    state = inspector_app._oauth_state(config)
+    state = inspector_app._oauth_state(
+        config,
+        consent=_consent_evidence(),
+    )
     query = {"code": "one-time-code", "state": state}
     session = _patch_callback_streamlit(monkeypatch, query)
 
@@ -620,10 +809,11 @@ def test_exchange_failure_notice_is_sanitized_and_actionable(monkeypatch):
     assert config.client_secret not in rendered
 
 
-def test_main_processes_callback_before_password_gate() -> None:
+def test_inspector_processes_callback_before_password_gate() -> None:
     source = Path(inspector_app.__file__).read_text(encoding="utf-8")
-    main_source = source[source.index("def main()") :]
+    inspector_source = source[source.index("def _render_inspector()") :]
+    inspector_source = inspector_source[: inspector_source.index("def main()")]
 
-    assert main_source.index("_process_callback(config)") < main_source.index(
-        "_password_gate(config)"
-    )
+    assert inspector_source.index(
+        "_process_callback(config)"
+    ) < inspector_source.index("_password_gate(config)")

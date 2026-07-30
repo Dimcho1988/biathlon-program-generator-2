@@ -1,6 +1,21 @@
 from __future__ import annotations
 
-from intervals_inspector.oauth_state_store import PendingStateStore
+import pytest
+
+from intervals_inspector.oauth_state_store import (
+    PendingConsentEvidence,
+    PendingStateStore,
+)
+
+
+def _complete_consent() -> PendingConsentEvidence:
+    return PendingConsentEvidence(
+        policy_version="1.0",
+        confirmed_at=1_000.0,
+        privacy_and_general_consent=True,
+        wellness_health_explicit_consent=True,
+        adult_confirmed=True,
+    )
 
 
 def test_pending_state_is_consumed_exactly_once() -> None:
@@ -53,3 +68,57 @@ def test_store_is_bounded_and_evicts_oldest_pending_state() -> None:
     assert not store.is_pending("state-one")
     assert store.is_pending("state-two")
     assert store.is_pending("state-three")
+
+
+def test_consent_evidence_is_returned_once_with_consumed_state() -> None:
+    store = PendingStateStore(clock=lambda: 1_000.0)
+    consent = _complete_consent()
+
+    store.register("consented-state", consent=consent)
+
+    assert store.consume_with_consent("consented-state") == consent
+    assert store.consume_with_consent("consented-state") is None
+
+
+@pytest.mark.parametrize(
+    "incomplete_consent",
+    (
+        PendingConsentEvidence(
+            policy_version="",
+            confirmed_at=1_000.0,
+            privacy_and_general_consent=True,
+            wellness_health_explicit_consent=True,
+            adult_confirmed=True,
+        ),
+        PendingConsentEvidence(
+            policy_version="1.0",
+            confirmed_at=1_000.0,
+            privacy_and_general_consent=False,
+            wellness_health_explicit_consent=True,
+            adult_confirmed=True,
+        ),
+        PendingConsentEvidence(
+            policy_version="1.0",
+            confirmed_at=1_000.0,
+            privacy_and_general_consent=True,
+            wellness_health_explicit_consent=False,
+            adult_confirmed=True,
+        ),
+        PendingConsentEvidence(
+            policy_version="1.0",
+            confirmed_at=1_000.0,
+            privacy_and_general_consent=True,
+            wellness_health_explicit_consent=True,
+            adult_confirmed=False,
+        ),
+    ),
+)
+def test_incomplete_consent_evidence_cannot_be_registered(
+    incomplete_consent: PendingConsentEvidence,
+) -> None:
+    store = PendingStateStore(clock=lambda: 1_000.0)
+
+    with pytest.raises(ValueError, match="consent evidence"):
+        store.register("state", consent=incomplete_consent)
+
+    assert not store.is_pending("state")

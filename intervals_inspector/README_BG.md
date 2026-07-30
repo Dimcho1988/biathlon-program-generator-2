@@ -70,6 +70,24 @@ Main file path: intervals_inspector/app.py
 Не променяйте съществуващото Streamlit приложение. Добавете петте настройки
 по-горе само в Secrets на новия deployment.
 
+Публичната навигация на отделния pilot deployment има следните стабилни
+маршрути, които не изискват паролата на инспектора или OAuth:
+
+```text
+About onFlows: https://onflows-pilot.streamlit.app/about
+Privacy Policy: https://onflows-pilot.streamlit.app/privacy-policy
+```
+
+За регистрацията на съществуващото OAuth приложение в Intervals.icu използвайте
+точно втория адрес като Privacy Policy URL. OAuth callback-ът продължава да е
+кореновият адрес, зададен чрез `INTERVALS_REDIRECT_URI`.
+
+Преди издаване на OAuth state инспекторът изисква три отделни, неотметнати по
+подразбиране потвърждения: прочит и съгласие с политиката, изрично съгласие за
+wellness/health-related данни и навършени 18 години. Версията и времето на
+потвържденията се свързват само с краткотрайния pending state и след успешен
+callback остават в текущата сесия; не се поддържа постоянен consent регистър.
+
 Production Redirect URL не трябва да се предполага предварително. След като
 новото приложение бъде deploy-нато и окончателният му canonical HTTPS адрес е
 избран:

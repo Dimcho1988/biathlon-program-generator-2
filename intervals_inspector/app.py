@@ -50,8 +50,14 @@ from intervals_inspector.oauth import (
     verify_signed_state,
 )
 from intervals_inspector.oauth_state_store import (
-    consume_pending_state,
+    PendingConsentEvidence,
+    consume_pending_state_with_consent,
     register_pending_state,
+)
+from intervals_inspector.public_pages import (
+    ABOUT_URL_PATH,
+    PRIVACY_POLICY_VERSION,
+    PRIVACY_URL_PATH,
 )
 
 
@@ -78,6 +84,7 @@ SESSION_ACTIVITY_CHOICES = "_intervals_activity_choices"
 SESSION_ACTIVITY_REPORT = "_intervals_activity_report"
 SESSION_ACTIVITY_REPORT_ID = "_intervals_activity_report_id"
 SESSION_AUTHENTICATED = "_inspector_authenticated"
+SESSION_CONSENT = "_pilot_consent_evidence"
 SESSION_NOTICE = "_inspector_notice"
 
 
@@ -353,9 +360,20 @@ def _process_callback(config: InspectorConfig) -> None:
             expected_redirect_uri=config.redirect_uri,
             max_age_seconds=STATE_MAX_AGE_SECONDS,
         )
-        if not consume_pending_state(callback_state):
+        consent_evidence = consume_pending_state_with_consent(
+            callback_state
+        )
+        if (
+            consent_evidence is None
+            or not consent_evidence.is_complete
+            or not hmac.compare_digest(
+                consent_evidence.policy_version,
+                PRIVACY_POLICY_VERSION,
+            )
+        ):
             raise OAuthCallbackError(
-                "OAuth state не е издаден или вече е използван."
+                "OAuth state не е издаден след необходимите потвърждения "
+                "или вече е използван."
             )
         callback = parse_callback(query)
 
@@ -380,6 +398,16 @@ def _process_callback(config: InspectorConfig) -> None:
         st.session_state[SESSION_SCOPES] = [
             scope for scope in READ_ONLY_SCOPES if scope in granted_scopes
         ]
+        st.session_state[SESSION_CONSENT] = {
+            "policy_version": consent_evidence.policy_version,
+            "confirmed_at_utc": datetime.fromtimestamp(
+                consent_evidence.confirmed_at,
+                tz=timezone.utc,
+            ).isoformat(),
+            "privacy_and_general_consent": True,
+            "wellness_health_explicit_consent": True,
+            "adult_confirmed": True,
+        }
         st.session_state.pop(SESSION_REPORT, None)
         st.session_state.pop(SESSION_ACTIVITY_CHOICES, None)
         st.session_state.pop(SESSION_ACTIVITY_REPORT, None)
@@ -432,12 +460,16 @@ def _password_gate(config: InspectorConfig) -> bool:
     return False
 
 
-def _oauth_state(config: InspectorConfig) -> str:
+def _oauth_state(
+    config: InspectorConfig,
+    *,
+    consent: PendingConsentEvidence,
+) -> str:
     state = create_signed_state(
         config.state_secret,
         redirect_uri=config.redirect_uri,
     )
-    register_pending_state(state)
+    register_pending_state(state, consent=consent)
     return state
 
 
@@ -976,12 +1008,7 @@ def _disconnect() -> None:
     st.rerun()
 
 
-def main() -> None:
-    st.set_page_config(
-        page_title="onFlows — Intervals.icu Data Inspector",
-        page_icon="🔎",
-        layout="wide",
-    )
+def _render_inspector() -> None:
     st.title("onFlows — Intervals.icu Data Inspector (TEST ONLY)")
     st.warning(
         "Изследователски read-only инструмент. Данните не се записват в "
@@ -1018,7 +1045,58 @@ def main() -> None:
     )
     if not connected:
         st.info("OAuth статус: няма свързан Intervals.icu профил.")
-        state = _oauth_state(config)
+        st.page_link(
+            "views/privacy-policy.py",
+            label="Privacy Policy / Политика за поверителност",
+            icon="🔐",
+        )
+        st.warning(
+            "Пилотът засега е предназначен само за пълнолетни "
+            "потребители (18+)."
+        )
+        privacy_consent = st.checkbox(
+            "Прочетох Privacy Policy и давам доброволното си съгласие "
+            "за описаното обработване на профилни, спортни, activity, "
+            "settings и calendar данни.",
+            value=False,
+            key="_privacy_and_general_consent",
+        )
+        health_consent = st.checkbox(
+            "Давам отделно и изрично съгласие за обработване на wellness "
+            "и свързани със здравето данни, включително пулс, HRV, сън, "
+            "умора и други налични health-related полета.",
+            value=False,
+            key="_wellness_health_explicit_consent",
+        )
+        adult_confirmed = st.checkbox(
+            "Потвърждавам, че съм навършил/а 18 години.",
+            value=False,
+            key="_adult_confirmed",
+        )
+        all_confirmed = (
+            privacy_consent and health_consent and adult_confirmed
+        )
+        if not all_confirmed:
+            st.button(
+                "Свържи Intervals.icu",
+                type="primary",
+                width="stretch",
+                disabled=True,
+            )
+            st.caption(
+                "И трите потвърждения са задължителни преди започване "
+                "на OAuth връзката."
+            )
+            return
+
+        consent_evidence = PendingConsentEvidence(
+            policy_version=PRIVACY_POLICY_VERSION,
+            confirmed_at=datetime.now(timezone.utc).timestamp(),
+            privacy_and_general_consent=True,
+            wellness_health_explicit_consent=True,
+            adult_confirmed=True,
+        )
+        state = _oauth_state(config, consent=consent_evidence)
         authorization_url = build_authorization_url(
             client_id=config.client_id,
             redirect_uri=config.redirect_uri,
@@ -1131,6 +1209,36 @@ def main() -> None:
         width="stretch",
     ):
         _disconnect()
+
+
+def main() -> None:
+    st.set_page_config(
+        page_title="onFlows Pilot",
+        page_icon="🔎",
+        layout="wide",
+    )
+    inspector_page = st.Page(
+        _render_inspector,
+        title="Intervals Data Inspector",
+        icon="🔎",
+        default=True,
+    )
+    about_page = st.Page(
+        "views/about.py",
+        title="About onFlows",
+        icon="ℹ️",
+        url_path=ABOUT_URL_PATH,
+    )
+    privacy_page = st.Page(
+        "views/privacy-policy.py",
+        title="Privacy Policy",
+        icon="🔐",
+        url_path=PRIVACY_URL_PATH,
+    )
+    st.navigation(
+        [inspector_page, about_page, privacy_page],
+        position="top",
+    ).run()
 
 
 if __name__ == "__main__":
