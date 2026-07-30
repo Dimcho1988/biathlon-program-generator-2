@@ -169,6 +169,55 @@ def test_privacy_policy_has_stable_public_route() -> None:
     )
 
 
+def test_about_page_presents_platform_vision_and_current_pilot_status():
+    app = _new_app({}).run()
+    app.switch_page(ABOUT_PAGE_PATH).run()
+
+    assert not app.exception
+    rendered_markdown = "\n".join(item.value for item in app.markdown)
+    for expected_text in (
+        "is being developed as a platform",
+        "individual analysis of training load by training zone",
+        "assessment of training stress",
+        "zone-specific modelling of recovery and readiness",
+        "microcycles and mesocycles",
+        "adaptive planning guided by the coach's methodology",
+        "athletes, coaches and teams",
+        "other endurance sports",
+        "## Current pilot status",
+        "validates the read-only OAuth integration with Intervals.icu",
+        "се разработва като платформа",
+        "анализ на натоварването по тренировъчни зони",
+        "оценяване на тренировъчния стрес",
+        "моделиране на възстановяването и готовността",
+        "микроцикли и мезоцикли",
+        "адаптивно планиране според методиката",
+        "спортисти, треньори и отбори",
+        "спортове за издръжливост",
+        "## Статус на пилотната версия",
+        "валидира read-only OAuth интеграцията с Intervals.icu",
+    ):
+        assert expected_text in rendered_markdown
+
+    for transient_detail in (
+        "7, 14 or 30",
+        "7, 14 или 30",
+        "data adapter",
+        "Supabase",
+        "next intended stage",
+        "Следващият планиран етап",
+        "90 days",
+        "90 дни",
+    ):
+        assert transient_detail not in rendered_markdown
+
+    assert any(
+        item.label
+        == "Privacy Policy / Политика за поверителност"
+        for item in app.get("page_link")
+    )
+
+
 def test_unicode_access_password_is_supported():
     secrets = dict(FAKE_SECRETS)
     secrets["INSPECTOR_ACCESS_PASSWORD"] = "сигурна-парола-🔒"

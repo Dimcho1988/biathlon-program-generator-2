@@ -26,39 +26,55 @@ def render_about() -> None:
     """Render the public About page without reading secrets or session data."""
 
     st.title("About onFlows")
-    st.caption("Public information about the separate Intervals.icu pilot")
+    st.caption(
+        "A developing platform for endurance training analysis and "
+        "coach-led planning / Развиваща се платформа за анализ на "
+        "тренировките и планиране, водено от треньора"
+    )
 
     english, bulgarian = st.tabs(["English", "Български"])
 
     with english:
         st.markdown(
             """
-            ## What this pilot is
+            ## A coach-led platform for endurance performance
 
-            onFlows is developing a separate research pilot that connects to
-            Intervals.icu through OAuth. The current pilot is a read-only data
-            inspector: it checks which profile, activity, activity-stream,
-            wellness, calendar, planned-workout, zone and settings fields are
-            available to the connected adult user.
+            onFlows is being developed as a platform for integrating training
+            and wellness information into one coherent view. It is designed to
+            turn those data into individual analysis and planning support while
+            keeping the coach's methodology, judgment and decisions at the
+            centre of the process.
 
-            The inspector uses short, user-selected periods of 7, 14 or 30
-            days. Activity details and streams are loaded only for an activity
-            the user selects. It does not write to Intervals.icu, activate
-            webhooks, use Supabase, change a training plan, or run the existing
-            onFlows models.
+            ## What onFlows is designed to support
 
-            ## Where the pilot is going
+            - integration of training and wellness data;
+            - individual analysis of training load by training zone and within
+              each zone;
+            - assessment of training stress;
+            - zone-specific modelling of recovery and readiness;
+            - tracking changes across microcycles and mesocycles;
+            - adaptive planning guided by the coach's methodology and
+              decisions;
+            - reports designed for athletes, coaches and teams; and
+            - an initial application in biathlon, with future expansion to
+              other endurance sports.
 
-            The next intended stage is a separate data adapter that maps
-            available Intervals.icu fields to the existing onFlows model input
-            format. Models would initially run only in read-only “shadow” mode,
-            with an explicitly selected period of no more than 90 days. Any
-            future persistent storage or plan-changing feature would require a
-            separate implementation and privacy review.
+            onFlows is designed as a decision-support platform. It is not
+            intended to replace the coach's professional judgment or medical
+            advice.
 
-            This pilot is an experimental training-analysis tool, not medical
-            advice, and it does not make automated decisions with legal or
-            similarly significant effects.
+            ## Current pilot status
+
+            The current pilot is a focused validation environment. It:
+
+            - validates the read-only OAuth integration with Intervals.icu;
+            - checks the availability and structure of real training and
+              wellness data; and
+            - prepares their safe connection to the analytical models being
+              developed for onFlows.
+
+            The broader platform capabilities described above are being
+            developed and are not presented as fully completed features.
 
             ## Operator
 
@@ -73,32 +89,44 @@ def render_about() -> None:
     with bulgarian:
         st.markdown(
             """
-            ## Какво представлява пилотът
+            ## Платформа, развивана около решенията на треньора
 
-            onFlows разработва отделен изследователски пилот, който се свързва
-            с Intervals.icu чрез OAuth. В настоящия си вид пилотът е read-only
-            инспектор: той проверява кои полета за профил, активности, потоци
-            към активности, wellness, календар, планирани тренировки, зони и
-            настройки са достъпни за свързания пълнолетен потребител.
+            onFlows се разработва като платформа, която обединява тренировъчни
+            и wellness данни в единна картина. Тя е предназначена да превръща
+            тези данни в индивидуален анализ и подкрепа за планирането, като
+            методиката, професионалната преценка и решенията на треньора остават
+            в центъра на процеса.
 
-            Инспекторът използва кратък избран от потребителя период от 7, 14
-            или 30 дни. Детайли и потоци се зареждат само за изрично избрана
-            активност. Той не записва в Intervals.icu, не активира webhooks, не
-            използва Supabase, не променя тренировъчен план и не изпълнява
-            съществуващите модели на onFlows.
+            ## Какво е предназначена да подпомага платформата onFlows
 
-            ## Накъде се развива пилотът
+            - интегриране на тренировъчни и wellness данни;
+            - индивидуален анализ на натоварването по тренировъчни зони и вътре
+              в самите зони;
+            - оценяване на тренировъчния стрес;
+            - моделиране на възстановяването и готовността по отделни зони;
+            - проследяване на динамиката в микроцикли и мезоцикли;
+            - адаптивно планиране според методиката и решенията на треньора;
+            - създаване на отчети за спортисти, треньори и отбори; и
+            - първоначално приложение в биатлона с бъдещо разширяване към други
+              спортове за издръжливост.
 
-            Следващият планиран етап е отделен data adapter, който да преобразува
-            достъпните Intervals.icu полета към входния формат на съществуващите
-            onFlows модели. Първоначално моделите биха работили единствено в
-            read-only „shadow“ режим с изрично избран период до 90 дни. Всяко
-            бъдещо постоянно съхранение или функция, която променя план, ще
-            изисква отделна реализация и нов преглед на поверителността.
+            onFlows е замислена като платформа за подпомагане на решенията. Тя
+            не е предназначена да замества професионалната преценка на треньора
+            или медицински съвет.
 
-            Пилотът е експериментален инструмент за анализ на тренировки, не е
-            медицински съвет и не взема автоматизирани решения с правни или
-            сходни значими последици.
+            ## Статус на пилотната версия
+
+            Настоящият пилот е фокусирана среда за валидиране. Той:
+
+            - валидира read-only OAuth интеграцията с Intervals.icu;
+            - проверява наличността и структурата на реалните тренировъчни и
+              wellness данни; и
+            - подготвя безопасното им свързване с аналитичните модели, които се
+              разработват за onFlows.
+
+            По-широките възможности на платформата, описани по-горе, са в
+            процес на разработване и не се представят като напълно завършени
+            функции.
 
             ## Оператор
 
