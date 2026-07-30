@@ -35,6 +35,28 @@ _STREAM_EXPORT_COLUMNS = (
     "total_points",
     "estimated_frequency_hz",
 )
+_ENDPOINT_EXPORT_COLUMNS = (
+    "category",
+    "endpoint",
+    "http_status",
+    "available",
+    "record_count",
+    "field_names",
+    "safe_error",
+)
+_MAPPING_EXPORT_COLUMNS = (
+    "target_field",
+    "status",
+    "matched_source_fields",
+    "missing_source_fields",
+    "model_consumers",
+    "note",
+)
+_MODEL_EXPORT_COLUMNS = (
+    "model",
+    "readiness",
+    "missing_or_limit",
+)
 
 _TYPE_ORDER = {
     "null": 0,
@@ -167,7 +189,8 @@ _SENSITIVE_COMPACT_KEYS = {
 _BEARER_RE = re.compile(r"(?i)\b(Bearer)\s+[A-Za-z0-9._~+/=-]+")
 _SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)(\b(?:access_token|refresh_token|id_token|token|client_secret|"
-    r"authorization_code|auth_code|code|password|api_key|secret)=)[^&#\s]+"
+    r"authorization_code|auth_code|code|state|password|icu_api_key|api_key|"
+    r"secret)=)[^&#\s]+"
 )
 _EMAIL_RE = re.compile(
     r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"
@@ -181,6 +204,15 @@ _SAFE_JSON_PATH_RE = re.compile(
     r"(?:\.(?:[A-Za-z_][A-Za-z0-9_-]{0,127})(?:\[\])?)*$"
 )
 _SAFE_ENDPOINT_RE = re.compile(r"^[A-Za-z0-9_{}./:-]{1,256}$")
+_SAFE_LOCATION_STREAM_NAMES = {
+    "gps",
+    "lat",
+    "latitude",
+    "latlng",
+    "lng",
+    "lon",
+    "longitude",
+}
 
 
 def _key_parts(value: Any) -> tuple[str, ...]:
@@ -218,7 +250,11 @@ def _is_sensitive_key(key: Any, ancestors: Sequence[str] = ()) -> bool:
         return True
     if compact in _ALWAYS_PROFILE_SENSITIVE_KEYS:
         return True
-    if compact.endswith("token") or compact.endswith("secret"):
+    if (
+        compact.endswith("token")
+        or compact.endswith("secret")
+        or compact.endswith("apikey")
+    ):
         return True
     if compact in {"auth", "oauth"}:
         return True
@@ -545,6 +581,18 @@ def _safe_metadata_label(value: Any) -> str | None:
     return label
 
 
+def _safe_stream_name(value: Any) -> str | None:
+    if value is None:
+        return None
+    label = str(value).strip()
+    if not label or not _SAFE_METADATA_RE.fullmatch(label):
+        return None
+    compact = _compact_key(label)
+    if compact in _SAFE_LOCATION_STREAM_NAMES:
+        return label
+    return _safe_metadata_label(label)
+
+
 def _stream_from_object(
     value: Mapping[str, Any],
     fallback_name: str | None = None,
@@ -560,8 +608,8 @@ def _stream_from_object(
         name_value = value.get("type")
         type_is_name = True
 
-    name = _safe_metadata_label(name_value)
-    if not name or _is_sensitive_key(name):
+    name = _safe_stream_name(name_value)
+    if not name:
         return None
 
     value_type = (
@@ -598,18 +646,19 @@ def _parse_streams(
 
         for raw_name, raw_value in container.items():
             name = str(raw_name)
-            if _is_sensitive_key(name):
+            safe_name = _safe_stream_name(name)
+            if safe_name is None:
                 continue
             if isinstance(raw_value, Mapping):
-                item = _stream_from_object(raw_value, fallback_name=name)
+                item = _stream_from_object(
+                    raw_value, fallback_name=safe_name
+                )
                 if item is not None:
                     parsed.append(item)
             else:
-                safe_name = _safe_metadata_label(name)
-                if safe_name:
-                    parsed.append(
-                        (safe_name, _point_values(raw_value), None, None)
-                    )
+                parsed.append(
+                    (safe_name, _point_values(raw_value), None, None)
+                )
         return parsed
 
     if isinstance(container, Sequence) and not isinstance(
@@ -830,8 +879,8 @@ def _project_coverage_row(row: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def _project_stream_row(row: Mapping[str, Any]) -> dict[str, Any] | None:
-    name = _safe_metadata_label(row.get("stream_name"))
-    if not name or _is_sensitive_key(name):
+    name = _safe_stream_name(row.get("stream_name"))
+    if not name:
         return None
     return {
         "stream_name": name,
@@ -841,6 +890,92 @@ def _project_stream_row(row: Mapping[str, Any]) -> dict[str, Any] | None:
         "total_points": _safe_int(row.get("total_points")),
         "estimated_frequency_hz": _safe_float(
             row.get("estimated_frequency_hz")
+        ),
+    }
+
+
+def _safe_report_text(value: Any, *, maximum: int = 500) -> str:
+    rendered = _redact_embedded_secrets(str(value or ""))
+    rendered = "".join(
+        character for character in rendered if ord(character) >= 32
+    ).strip()
+    return rendered[:maximum]
+
+
+def _project_endpoint_row(
+    row: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    category = _safe_metadata_label(row.get("category"))
+    if not category:
+        return None
+    raw_status = row.get("http_status")
+    status = (
+        int(raw_status)
+        if isinstance(raw_status, int) and 100 <= raw_status <= 599
+        else None
+    )
+    raw_fields = row.get("field_names", ())
+    if isinstance(raw_fields, str):
+        raw_fields = [item.strip() for item in raw_fields.split(",")]
+    if not isinstance(raw_fields, Sequence):
+        raw_fields = ()
+    field_names = sorted(
+        {
+            safe_path
+            for item in raw_fields
+            if (safe_path := _safe_path(item)) is not None
+        }
+    )
+    return {
+        "category": category,
+        "endpoint": _safe_source_endpoint(row.get("endpoint")),
+        "http_status": status,
+        "available": bool(row.get("available")),
+        "record_count": _safe_int(row.get("record_count")),
+        "field_names": ", ".join(field_names),
+        "safe_error": _safe_report_text(row.get("safe_error")),
+    }
+
+
+def _project_mapping_row(
+    row: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    target_field = _safe_report_text(row.get("target_field"), maximum=96)
+    if not target_field:
+        return None
+    status = str(row.get("status", "")).casefold()
+    if status not in {"direct", "derived", "manual", "missing"}:
+        status = "missing"
+    return {
+        "target_field": target_field,
+        "status": status,
+        "matched_source_fields": _safe_report_text(
+            row.get("matched_source_fields"), maximum=500
+        ),
+        "missing_source_fields": _safe_report_text(
+            row.get("missing_source_fields"), maximum=500
+        ),
+        "model_consumers": _safe_report_text(
+            row.get("model_consumers"), maximum=300
+        ),
+        "note": _safe_report_text(row.get("note"), maximum=500),
+    }
+
+
+def _project_model_row(
+    row: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    model = _safe_report_text(row.get("model"), maximum=160)
+    if not model:
+        return None
+    readiness = str(row.get("readiness", "")).casefold()
+    if readiness not in {"ready", "partial", "blocked"}:
+        readiness = "blocked"
+    return {
+        "model": model,
+        "readiness": readiness,
+        "missing_or_limit": _safe_report_text(
+            row.get("missing_or_limit"), maximum=500
         ),
     }
 
@@ -865,15 +1000,36 @@ def _safe_export_rows(
 def export_inventory_json(
     field_coverage: Iterable[Mapping[str, Any]],
     stream_summary: Iterable[Mapping[str, Any]] | None = None,
+    endpoint_checks: Iterable[Mapping[str, Any]] | None = None,
+    mapping_report: Iterable[Mapping[str, Any]] | None = None,
+    model_readiness: Iterable[Mapping[str, Any]] | None = None,
 ) -> str:
     """Return a JSON report containing only approved inventory columns."""
 
     safe_fields, safe_streams = _safe_export_rows(
         field_coverage, stream_summary
     )
+    safe_endpoints = [
+        projected
+        for row in (endpoint_checks or ())
+        if (projected := _project_endpoint_row(row)) is not None
+    ]
+    safe_mappings = [
+        projected
+        for row in (mapping_report or ())
+        if (projected := _project_mapping_row(row)) is not None
+    ]
+    safe_models = [
+        projected
+        for row in (model_readiness or ())
+        if (projected := _project_model_row(row)) is not None
+    ]
     return json.dumps(
         {
+            "endpoint_checks": safe_endpoints,
             "field_coverage": safe_fields,
+            "mapping_report": safe_mappings,
+            "model_readiness": safe_models,
             "streams": safe_streams,
         },
         ensure_ascii=False,
@@ -885,13 +1041,38 @@ def export_inventory_json(
 def export_inventory_csv(
     field_coverage: Iterable[Mapping[str, Any]],
     stream_summary: Iterable[Mapping[str, Any]] | None = None,
+    endpoint_checks: Iterable[Mapping[str, Any]] | None = None,
+    mapping_report: Iterable[Mapping[str, Any]] | None = None,
+    model_readiness: Iterable[Mapping[str, Any]] | None = None,
 ) -> str:
     """Return one CSV with separate field-coverage and stream rows."""
 
     safe_fields, safe_streams = _safe_export_rows(
         field_coverage, stream_summary
     )
-    columns = ("report_section", *_FIELD_EXPORT_COLUMNS, *_STREAM_EXPORT_COLUMNS)
+    safe_endpoints = [
+        projected
+        for row in (endpoint_checks or ())
+        if (projected := _project_endpoint_row(row)) is not None
+    ]
+    safe_mappings = [
+        projected
+        for row in (mapping_report or ())
+        if (projected := _project_mapping_row(row)) is not None
+    ]
+    safe_models = [
+        projected
+        for row in (model_readiness or ())
+        if (projected := _project_model_row(row)) is not None
+    ]
+    columns = (
+        "report_section",
+        *_FIELD_EXPORT_COLUMNS,
+        *_STREAM_EXPORT_COLUMNS,
+        *_ENDPOINT_EXPORT_COLUMNS,
+        *_MAPPING_EXPORT_COLUMNS,
+        *_MODEL_EXPORT_COLUMNS,
+    )
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=columns, extrasaction="ignore")
     writer.writeheader()
@@ -902,6 +1083,21 @@ def export_inventory_csv(
         )
     for row in safe_streams:
         csv_row = {"report_section": "streams", **row}
+        writer.writerow(
+            {key: _neutralize_csv_formula(value) for key, value in csv_row.items()}
+        )
+    for row in safe_endpoints:
+        csv_row = {"report_section": "endpoint_checks", **row}
+        writer.writerow(
+            {key: _neutralize_csv_formula(value) for key, value in csv_row.items()}
+        )
+    for row in safe_mappings:
+        csv_row = {"report_section": "mapping_report", **row}
+        writer.writerow(
+            {key: _neutralize_csv_formula(value) for key, value in csv_row.items()}
+        )
+    for row in safe_models:
+        csv_row = {"report_section": "model_readiness", **row}
         writer.writerow(
             {key: _neutralize_csv_formula(value) for key, value in csv_row.items()}
         )

@@ -24,6 +24,13 @@ SETTING_NAMES = (
     "OAUTH_STATE_SECRET",
     "INSPECTOR_ACCESS_PASSWORD",
 )
+FAKE_SECRETS = {
+    "INTERVALS_CLIENT_ID": "test-client",
+    "INTERVALS_CLIENT_SECRET": "test-client-secret-not-real",
+    "INTERVALS_REDIRECT_URI": "https://pilot.example/",
+    "OAUTH_STATE_SECRET": "test-state-secret-not-real",
+    "INSPECTOR_ACCESS_PASSWORD": "test-password-not-real",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -33,11 +40,19 @@ def _isolated_pending_state_store():
     clear_pending_states_for_tests()
 
 
+def _new_app(
+    secrets: dict[str, str] | None = None,
+) -> AppTest:
+    app = AppTest.from_file(str(APP_PATH), default_timeout=10)
+    app.secrets.update(FAKE_SECRETS if secrets is None else secrets)
+    return app
+
+
 def test_streamlit_smoke_reports_missing_configuration(monkeypatch):
     for name in SETTING_NAMES:
-        monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv(name, f"ignored-environment-{name}")
 
-    app = AppTest.from_file(str(APP_PATH), default_timeout=10).run()
+    app = _new_app({}).run()
 
     assert not app.exception
     assert app.title[0].value == (
@@ -47,36 +62,45 @@ def test_streamlit_smoke_reports_missing_configuration(monkeypatch):
     assert set(SETTING_NAMES) <= rendered_codes
 
 
-def test_streamlit_smoke_shows_password_gate_without_network(monkeypatch):
-    fake_values = {
-        "INTERVALS_CLIENT_ID": "test-client",
-        "INTERVALS_CLIENT_SECRET": "test-client-secret-not-real",
-        "INTERVALS_REDIRECT_URI": "http://localhost:8501/",
-        "OAUTH_STATE_SECRET": "test-state-secret-not-real",
-        "INSPECTOR_ACCESS_PASSWORD": "test-password-not-real",
-    }
-    for name, value in fake_values.items():
-        monkeypatch.setenv(name, value)
+def test_blank_streamlit_secrets_are_reported_missing():
+    app = _new_app(
+        {
+            name: "618" if name == "INTERVALS_CLIENT_ID" else ""
+            for name in SETTING_NAMES
+        }
+    ).run()
 
-    app = AppTest.from_file(str(APP_PATH), default_timeout=10).run()
+    rendered_codes = {item.value for item in app.code}
+    assert set(SETTING_NAMES) - {"INTERVALS_CLIENT_ID"} <= rendered_codes
+    assert "INTERVALS_CLIENT_ID" not in rendered_codes
+
+
+def test_streamlit_smoke_shows_password_gate_without_network():
+    app = _new_app().run()
 
     assert not app.exception
     assert app.text_input[0].label == "Парола"
     assert app.button[0].label == "Вход"
 
 
-def test_pending_state_survives_two_real_apptest_sessions(monkeypatch):
-    fake_values = {
-        "INTERVALS_CLIENT_ID": "test-client",
-        "INTERVALS_CLIENT_SECRET": "test-client-secret-not-real",
-        "INTERVALS_REDIRECT_URI": "http://localhost:8501/",
-        "OAUTH_STATE_SECRET": "test-state-secret-not-real",
-        "INSPECTOR_ACCESS_PASSWORD": "test-password-not-real",
-    }
-    for name, value in fake_values.items():
-        monkeypatch.setenv(name, value)
+def test_unicode_access_password_is_supported():
+    secrets = dict(FAKE_SECRETS)
+    secrets["INSPECTOR_ACCESS_PASSWORD"] = "сигурна-парола-🔒"
+    app = _new_app(secrets).run()
 
-    issuing_app = AppTest.from_file(str(APP_PATH), default_timeout=10)
+    app.text_input[0].set_value("сигурна-парола-🔒")
+    app.button[0].click()
+    app.run()
+
+    assert not app.exception
+    assert (
+        app.session_state[inspector_app.SESSION_AUTHENTICATED]
+        is True
+    )
+
+
+def test_pending_state_survives_two_real_apptest_sessions():
+    issuing_app = _new_app()
     issuing_app.session_state["_inspector_authenticated"] = True
     issuing_app.run()
 
@@ -86,7 +110,7 @@ def test_pending_state_survives_two_real_apptest_sessions(monkeypatch):
     query = parse_qs(urlparse(link_buttons[0].url).query)
     state = query["state"][0]
 
-    callback_app = AppTest.from_file(str(APP_PATH), default_timeout=10)
+    callback_app = _new_app()
     callback_app.query_params["error"] = "access_denied"
     callback_app.query_params["state"] = state
     callback_app.run()
@@ -102,19 +126,9 @@ def test_pending_state_survives_two_real_apptest_sessions(monkeypatch):
     )
 
 
-def test_connected_profile_name_is_rendered_as_literal_text(monkeypatch):
-    fake_values = {
-        "INTERVALS_CLIENT_ID": "test-client",
-        "INTERVALS_CLIENT_SECRET": "test-client-secret-not-real",
-        "INTERVALS_REDIRECT_URI": "http://localhost:8501/",
-        "OAUTH_STATE_SECRET": "test-state-secret-not-real",
-        "INSPECTOR_ACCESS_PASSWORD": "test-password-not-real",
-    }
-    for name, value in fake_values.items():
-        monkeypatch.setenv(name, value)
-
+def test_connected_profile_name_and_athlete_id_render_as_literal_text():
     untrusted_name = "![pixel](https://attacker.invalid/tracker)"
-    app = AppTest.from_file(str(APP_PATH), default_timeout=10)
+    app = _new_app()
     app.session_state["_inspector_authenticated"] = True
     app.session_state["_intervals_access_token"] = "test-token-not-real"
     app.session_state["_intervals_athlete_id"] = "test-athlete"
@@ -133,24 +147,18 @@ def test_connected_profile_name_is_rendered_as_literal_text(monkeypatch):
         item.value == f"Свързан профил: {untrusted_name}"
         for item in app.text
     )
+    assert any(
+        item.value == "Intervals athlete ID: test-athlete"
+        for item in app.text
+    )
     assert all(
         untrusted_name not in item.value
         for item in app.markdown
     )
 
 
-def test_password_reentry_preserves_token_received_before_login(monkeypatch):
-    fake_values = {
-        "INTERVALS_CLIENT_ID": "test-client",
-        "INTERVALS_CLIENT_SECRET": "test-client-secret-not-real",
-        "INTERVALS_REDIRECT_URI": "http://localhost:8501/",
-        "OAUTH_STATE_SECRET": "test-state-secret-not-real",
-        "INSPECTOR_ACCESS_PASSWORD": "test-password-not-real",
-    }
-    for name, value in fake_values.items():
-        monkeypatch.setenv(name, value)
-
-    app = AppTest.from_file(str(APP_PATH), default_timeout=10)
+def test_password_reentry_preserves_token_received_before_login():
+    app = _new_app()
     app.session_state["_intervals_access_token"] = "session-token-not-real"
     app.session_state["_intervals_athlete_id"] = "test-athlete"
     app.session_state["_intervals_athlete_name"] = "Test Athlete"
@@ -182,11 +190,143 @@ def test_password_reentry_preserves_token_received_before_login(monkeypatch):
     assert any(item.value == "OAuth статус: свързан." for item in app.success)
 
 
+def test_access_tokens_are_isolated_between_apptest_sessions():
+    first = _new_app()
+    first.session_state[inspector_app.SESSION_AUTHENTICATED] = True
+    first.session_state[inspector_app.SESSION_TOKEN] = "isolated-session-A"
+    first.session_state[inspector_app.SESSION_ATHLETE_ID] = "athlete-A"
+    first.session_state[inspector_app.SESSION_ATHLETE_NAME] = "Athlete A"
+    first.session_state[inspector_app.SESSION_SCOPES] = list(
+        inspector_app.READ_ONLY_SCOPES
+    )
+    first.run()
+
+    second = _new_app()
+    second.session_state[inspector_app.SESSION_AUTHENTICATED] = True
+    second.run()
+
+    assert not first.exception
+    assert not second.exception
+    assert (
+        first.session_state[inspector_app.SESSION_TOKEN]
+        == "isolated-session-A"
+    )
+    assert "isolated-session-A" not in repr(second.session_state)
+    assert len(second.get("link_button")) == 1
+
+
+def test_connected_report_renders_bounded_periods_and_summary_table():
+    app = _new_app()
+    app.session_state[inspector_app.SESSION_AUTHENTICATED] = True
+    app.session_state[inspector_app.SESSION_TOKEN] = "test-token-not-real"
+    app.session_state[inspector_app.SESSION_ATHLETE_ID] = "test-athlete"
+    app.session_state[inspector_app.SESSION_ATHLETE_NAME] = "Test Athlete"
+    app.session_state[inspector_app.SESSION_SCOPES] = list(
+        inspector_app.READ_ONLY_SCOPES
+    )
+    app.session_state[inspector_app.SESSION_REPORT] = {
+        "period_days": 7,
+        "counts": {
+            "activities": 0,
+            "wellness": 0,
+            "calendar": 0,
+            "planned_workouts": 0,
+        },
+        "coverage": {
+            "profile": [],
+            "sport_settings": [],
+            "activities": [],
+            "wellness": [],
+            "calendar": [],
+            "planned_workouts": [],
+        },
+        "streams": [],
+        "endpoint_checks": [
+            {
+                "category": "Профил",
+                "endpoint": "/api/v1/athlete/{athlete_id}",
+                "http_status": 200,
+                "available": True,
+                "record_count": 1,
+                "field_names": ["timezone"],
+                "safe_error": "",
+            }
+        ],
+    }
+    app.session_state[inspector_app.SESSION_ACTIVITY_CHOICES] = []
+
+    app.run()
+
+    assert not app.exception
+    assert tuple(app.radio[0].options) == (
+        "7 дни",
+        "14 дни",
+        "30 дни",
+    )
+    assert len(app.dataframe) >= 1
+    assert any(
+        tab.label == "API проверки" for tab in app.tabs
+    )
+
+
+def test_disconnect_clears_only_current_session_and_callback_query(
+    monkeypatch,
+):
+    session = {
+        inspector_app.SESSION_TOKEN: "session-token-not-real",
+        inspector_app.SESSION_ATHLETE_ID: "test-athlete",
+        inspector_app.SESSION_AUTHENTICATED: True,
+    }
+    query = {"code": "must-be-cleared", "state": "must-be-cleared"}
+    reruns: list[bool] = []
+    monkeypatch.setattr(
+        inspector_app.st, "session_state", session, raising=False
+    )
+    monkeypatch.setattr(
+        inspector_app.st, "query_params", query, raising=False
+    )
+    monkeypatch.setattr(
+        inspector_app.st, "rerun", lambda: reruns.append(True)
+    )
+
+    inspector_app._disconnect()
+
+    assert session == {}
+    assert query == {}
+    assert reruns == [True]
+
+
+def test_changing_selected_activity_discards_previous_activity_report(
+    monkeypatch,
+):
+    previous_report = {
+        "coverage": {"activity_detail": [{"json_path": "id"}]}
+    }
+    session = {
+        inspector_app.SESSION_ACTIVITY_REPORT_ID: "activity-A",
+        inspector_app.SESSION_ACTIVITY_REPORT: previous_report,
+    }
+    monkeypatch.setattr(
+        inspector_app.st, "session_state", session, raising=False
+    )
+
+    assert (
+        inspector_app._activity_report_for_selection("activity-A")
+        is previous_report
+    )
+    assert (
+        inspector_app._activity_report_for_selection("activity-B")
+        is None
+    )
+    assert inspector_app.SESSION_ACTIVITY_REPORT not in session
+    assert inspector_app.SESSION_ACTIVITY_REPORT_ID not in session
+
+
 def _callback_config() -> inspector_app.InspectorConfig:
     return inspector_app.InspectorConfig(
         client_id="test-client",
         client_secret="test-client-secret-not-real",
-        redirect_uri="http://localhost:8501/",
+        redirect_uri="https://pilot.example/",
         state_secret="test-state-secret-not-real",
         access_password="test-password-not-real",
     )

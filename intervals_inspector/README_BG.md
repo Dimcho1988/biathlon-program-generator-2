@@ -18,14 +18,13 @@
 - Изпълняват се само документирани GET заявки. Не се изтеглят оригинални
   FIT/TCX/GPX файлове.
 - Експортите съдържат само имена/пътища, типове и статистика за покритие.
-  Реални стойности, GPS/маршрути, бележки и удостоверителни данни се
-  отстраняват.
+  Наличието на GPS/`latlng` stream може да се отчете, но реални координати,
+  други стойности, маршрути, бележки и удостоверителни данни се отстраняват.
 - „Прекрати връзката“ изчиства цялото състояние на текущата сесия.
 
 ## Необходими настройки
 
-Конфигурацията се подава само чрез Streamlit Secrets или едноименни
-environment variables:
+Конфигурацията се подава само чрез Streamlit Secrets:
 
 - `INTERVALS_CLIENT_ID`
 - `INTERVALS_CLIENT_SECRET`
@@ -37,23 +36,22 @@ environment variables:
 логове. `OAUTH_STATE_SECRET` трябва да е независимо, криптографски случайно
 секретно значение. Client ID трябва да е този на съществуващото onFlows
 приложение, а не новорегистриран клиент.
+За този пилот `INTERVALS_CLIENT_ID` е точно `618`.
 
 При липсваща настройка интерфейсът показва само нейното име.
 
 ## Локална проверка
 
-Разрешеният localhost callback за тази конфигурация е точно:
-
-```text
-http://localhost:8501/
-```
-
-Задайте същия низ като `INTERVALS_REDIRECT_URI`, след което от корена на
-хранилището изпълнете:
+Копирайте безопасния шаблон
+`intervals_inspector/.streamlit/secrets.toml.example` като локален
+`intervals_inspector/.streamlit/secrets.toml` и попълнете стойностите лично.
+Реалният файл е изключен от Git. Задайте като `INTERVALS_REDIRECT_URI`
+точния разрешен localhost callback за избрания порт, след което от корена на
+хранилището изпълнете например:
 
 ```bash
 python -m pip install -r intervals_inspector/requirements.txt
-python -m streamlit run intervals_inspector/app.py --server.port 8501
+python -m streamlit run intervals_inspector/app.py --server.port 8517
 ```
 
 След вход с паролата на инспектора използвайте „Свържи Intervals.icu“.
@@ -92,15 +90,25 @@ Production Redirect URL не трябва да се предполага пре�
 - `GET /api/v1/athlete/{id}/activities`
 - `GET /api/v1/athlete/{id}/wellness`
 - `GET /api/v1/athlete/{id}/events`
+- `GET /api/v1/athlete/{id}/events?category=WORKOUT`
+- `GET /api/v1/activity/{id}?intervals=false`
 - `GET /api/v1/activity/{id}/streams.json`
 
-`id` винаги е `athlete.id`, върнат при OAuth token exchange.
+При athlete маршрутите `{id}` е `athlete.id`, върнат при OAuth token
+exchange. При activity detail и streams `{id}` е ID на изрично избраната
+активност.
 
 Сверено с:
 
 - `https://forum.intervals.icu/t/intervals-icu-oauth-support/2759`
 - `https://forum.intervals.icu/t/intervals-icu-api-integration-cookbook/80090`
-- `https://intervals.icu/api/v1/docs`
+- `https://intervals.icu/api-docs.html`
+
+Основната проверка започва с 7 дни и може да бъде разширена до 30 дни.
+Detail endpoint-ът и streams се извикват само за изрично избрана активност.
+Бъдещият shadow-model слой е ограничен до максимум 90 дни и е описан в
+`PILOT_ARCHITECTURE_BG.md`; настоящият инспектор не изпълнява модели и не
+променя планове.
 
 ## Тестове
 

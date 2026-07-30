@@ -2,5 +2,5 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.streamlit/secrets.toml
+**/.streamlit/secrets.toml
 .DS_Store

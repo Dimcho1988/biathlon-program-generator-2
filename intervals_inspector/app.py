@@ -6,14 +6,20 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 import hmac
-import os
+import re
 from typing import Any
 
 import streamlit as st
 
+from intervals_inspector.data_adapter import (
+    build_mapping_report,
+    build_model_readiness,
+    validate_shadow_period,
+)
 from intervals_inspector.intervals_client import (
     IntervalsAPIError,
     IntervalsClient,
+    IntervalsResponse,
 )
 from intervals_inspector.inventory import (
     build_field_coverage,
@@ -47,14 +53,20 @@ CONFIG_NAMES = (
     "INSPECTOR_ACCESS_PASSWORD",
 )
 CALLBACK_QUERY_KEYS = ("code", "state", "error", "error_description")
-MAX_STREAM_ACTIVITIES = 3
+INSPECTION_PERIOD_OPTIONS = (7, 14, 30)
+SHADOW_PERIOD_OPTIONS = (30, 60, 90)
+MAX_ACTIVITY_CHOICES = 200
 STATE_MAX_AGE_SECONDS = 10 * 60
+_SAFE_ACTIVITY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 SESSION_TOKEN = "_intervals_access_token"
 SESSION_ATHLETE_ID = "_intervals_athlete_id"
 SESSION_ATHLETE_NAME = "_intervals_athlete_name"
 SESSION_SCOPES = "_intervals_granted_scopes"
 SESSION_REPORT = "_intervals_inventory_report"
+SESSION_ACTIVITY_CHOICES = "_intervals_activity_choices"
+SESSION_ACTIVITY_REPORT = "_intervals_activity_report"
+SESSION_ACTIVITY_REPORT_ID = "_intervals_activity_report_id"
 SESSION_AUTHENTICATED = "_inspector_authenticated"
 SESSION_NOTICE = "_inspector_notice"
 
@@ -128,6 +140,30 @@ STANDARD_FIELDS: dict[str, set[str]] = {
         "created",
         "updated",
     },
+    "activity_detail": {
+        "id",
+        "name",
+        "type",
+        "sub_type",
+        "start_date",
+        "start_date_local",
+        "moving_time",
+        "elapsed_time",
+        "distance",
+        "icu_training_load",
+        "icu_average_watts",
+        "icu_weighted_avg_watts",
+        "icu_hr_zone_times",
+        "icu_zone_times",
+        "pace_zone_times",
+        "stream_types",
+        "total_elevation_gain",
+        "perceived_exertion",
+        "icu_rpe",
+        "feel",
+        "created",
+        "updated",
+    },
     "wellness": {
         "id",
         "updated",
@@ -170,6 +206,24 @@ STANDARD_FIELDS: dict[str, set[str]] = {
         "created",
         "updated",
     },
+    "planned_workouts": {
+        "id",
+        "category",
+        "start_date_local",
+        "end_date_local",
+        "type",
+        "name",
+        "moving_time",
+        "distance",
+        "icu_training_load",
+        "workout_doc",
+        "load_target",
+        "time_target",
+        "distance_target",
+        "training_availability",
+        "created",
+        "updated",
+    },
 }
 
 SOURCE_ENDPOINTS = {
@@ -178,15 +232,13 @@ SOURCE_ENDPOINTS = {
     "activities": "/api/v1/athlete/{athlete_id}/activities",
     "wellness": "/api/v1/athlete/{athlete_id}/wellness",
     "calendar": "/api/v1/athlete/{athlete_id}/events",
+    "planned_workouts": "/api/v1/athlete/{athlete_id}/events",
+    "activity_detail": "/api/v1/activity/{activity_id}",
     "streams": "/api/v1/activity/{activity_id}/streams.json",
 }
 
 
 def _configuration_value(name: str) -> str | None:
-    environment_value = os.environ.get(name)
-    if environment_value is not None and environment_value.strip():
-        return environment_value
-
     try:
         secret_value = st.secrets[name]
     except Exception:
@@ -319,6 +371,9 @@ def _process_callback(config: InspectorConfig) -> None:
             scope for scope in READ_ONLY_SCOPES if scope in granted_scopes
         ]
         st.session_state.pop(SESSION_REPORT, None)
+        st.session_state.pop(SESSION_ACTIVITY_CHOICES, None)
+        st.session_state.pop(SESSION_ACTIVITY_REPORT, None)
+        st.session_state.pop(SESSION_ACTIVITY_REPORT_ID, None)
         _remember_notice("success", "Intervals.icu профилът е свързан.")
     except OAuthAccessDenied:
         _remember_notice(
@@ -357,7 +412,10 @@ def _password_gate(config: InspectorConfig) -> bool:
         submitted = st.form_submit_button("Вход", type="primary")
 
     if submitted:
-        if hmac.compare_digest(attempted_password, config.access_password):
+        if hmac.compare_digest(
+            attempted_password.encode("utf-8"),
+            config.access_password.encode("utf-8"),
+        ):
             st.session_state[SESSION_AUTHENTICATED] = True
             st.rerun()
         st.error("Невалидна парола.")
@@ -384,22 +442,137 @@ def _normalise_records(payload: Any) -> list[Mapping[str, Any]]:
 
 
 def _inspect_source(
-    errors: dict[str, str],
-    label: str,
-    operation: Callable[[], Any],
+    endpoint_checks: list[dict[str, Any]],
     *,
+    category: str,
+    endpoint: str,
+    operation: Callable[[], IntervalsResponse],
+    standard_fields: set[str] | None,
     empty: Any,
-) -> Any:
+) -> tuple[Any, list[dict[str, Any]]]:
     try:
-        return operation()
+        response = operation()
+        if not isinstance(response, IntervalsResponse):
+            raise TypeError("unexpected Intervals response envelope")
+        records = _normalise_records(response.payload)
+        coverage = build_field_coverage(
+            records,
+            endpoint,
+            standard_fields,
+        )
     except IntervalsAPIError as exc:
-        errors[label] = str(exc)
+        endpoint_checks.append(
+            {
+                "category": category,
+                "endpoint": endpoint,
+                "http_status": exc.status_code,
+                "available": False,
+                "record_count": 0,
+                "field_names": [],
+                "safe_error": str(exc),
+            }
+        )
     except Exception:
-        errors[label] = "Локална грешка при обработката на отговора."
-    return empty
+        endpoint_checks.append(
+            {
+                "category": category,
+                "endpoint": endpoint,
+                "http_status": None,
+                "available": False,
+                "record_count": 0,
+                "field_names": [],
+                "safe_error": "Локална грешка при обработката на отговора.",
+            }
+        )
+    else:
+        endpoint_checks.append(
+            {
+                "category": category,
+                "endpoint": endpoint,
+                "http_status": response.status_code,
+                "available": True,
+                "record_count": len(records),
+                "field_names": [
+                    str(row["json_path"]) for row in coverage
+                ],
+                "safe_error": "",
+            }
+        )
+        return response.payload, coverage
+    return empty, []
 
 
-def _run_inspection(period_days: int) -> dict[str, Any]:
+def _validate_inspection_period(period_days: int) -> int:
+    validated = validate_shadow_period(period_days)
+    if validated > max(INSPECTION_PERIOD_OPTIONS):
+        raise ValueError("inspection period must not exceed 30 days")
+    return validated
+
+
+def _activity_choices(
+    activities: Sequence[Mapping[str, Any]],
+) -> list[dict[str, str]]:
+    choices: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    label_counts: dict[str, int] = {}
+    for activity in activities:
+        if len(choices) >= MAX_ACTIVITY_CHOICES:
+            break
+        activity_id = str(activity.get("id", "")).strip()
+        if (
+            not _SAFE_ACTIVITY_ID.fullmatch(activity_id)
+            or activity_id in seen_ids
+        ):
+            continue
+        seen_ids.add(activity_id)
+
+        raw_date = str(
+            activity.get("start_date_local")
+            or activity.get("start_date")
+            or ""
+        )
+        rendered_date = (
+            raw_date[:10]
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_date[:10])
+            else "Без дата"
+        )
+        rendered_time = (
+            raw_date[11:16]
+            if len(raw_date) >= 16
+            and re.fullmatch(r"\d{2}:\d{2}", raw_date[11:16])
+            else ""
+        )
+        raw_sport = str(
+            activity.get("type") or activity.get("sub_type") or "Активност"
+        )
+        rendered_sport = re.sub(
+            r"[^\w /+.-]", "", raw_sport, flags=re.UNICODE
+        ).strip()[:40] or "Активност"
+        base_label = (
+            f"{rendered_date} {rendered_time} · {rendered_sport}"
+            if rendered_time
+            else f"{rendered_date} · {rendered_sport}"
+        )
+        label_counts[base_label] = label_counts.get(base_label, 0) + 1
+        occurrence = label_counts[base_label]
+        label = (
+            base_label
+            if occurrence == 1
+            else f"{base_label} · #{occurrence}"
+        )
+        choices.append(
+            {
+                "activity_id": activity_id,
+                "label": label,
+            }
+        )
+    return choices
+
+
+def _run_inspection(
+    period_days: int,
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    period_days = _validate_inspection_period(period_days)
     athlete_id = str(st.session_state[SESSION_ATHLETE_ID])
     token = str(st.session_state[SESSION_TOKEN])
     client = IntervalsClient(access_token=token, athlete_id=athlete_id)
@@ -408,33 +581,62 @@ def _run_inspection(period_days: int) -> dict[str, Any]:
     oldest = newest - timedelta(days=period_days - 1)
     oldest_iso = oldest.isoformat()
     newest_iso = newest.isoformat()
-    errors: dict[str, str] = {}
+    endpoint_checks: list[dict[str, Any]] = []
 
-    profile_payload = _inspect_source(
-        errors, "Профил", client.get_athlete, empty={}
+    profile_payload, profile_coverage = _inspect_source(
+        endpoint_checks,
+        category="Профил",
+        endpoint=SOURCE_ENDPOINTS["profile"],
+        operation=client.get_athlete_result,
+        standard_fields=STANDARD_FIELDS["profile"],
+        empty={},
     )
-    settings_payload = _inspect_source(
-        errors,
-        "Спортни настройки",
-        client.get_sport_settings,
+    settings_payload, settings_coverage = _inspect_source(
+        endpoint_checks,
+        category="Спортни настройки и зони",
+        endpoint=SOURCE_ENDPOINTS["sport_settings"],
+        operation=client.get_sport_settings_result,
+        standard_fields=STANDARD_FIELDS["sport_settings"],
         empty=[],
     )
-    activities_payload = _inspect_source(
-        errors,
-        "Активности",
-        lambda: client.get_activities(oldest_iso, newest_iso),
+    activities_payload, activities_coverage = _inspect_source(
+        endpoint_checks,
+        category="Списък активности",
+        endpoint=SOURCE_ENDPOINTS["activities"],
+        operation=lambda: client.get_activities_result(
+            oldest_iso, newest_iso
+        ),
+        standard_fields=STANDARD_FIELDS["activities"],
         empty=[],
     )
-    wellness_payload = _inspect_source(
-        errors,
-        "Wellness",
-        lambda: client.get_wellness(oldest_iso, newest_iso),
+    wellness_payload, wellness_coverage = _inspect_source(
+        endpoint_checks,
+        category="Wellness",
+        endpoint=SOURCE_ENDPOINTS["wellness"],
+        operation=lambda: client.get_wellness_result(
+            oldest_iso, newest_iso
+        ),
+        standard_fields=STANDARD_FIELDS["wellness"],
         empty=[],
     )
-    calendar_payload = _inspect_source(
-        errors,
-        "Календар",
-        lambda: client.get_events(oldest_iso, newest_iso),
+    calendar_payload, calendar_coverage = _inspect_source(
+        endpoint_checks,
+        category="Календар",
+        endpoint=SOURCE_ENDPOINTS["calendar"],
+        operation=lambda: client.get_events_result(
+            oldest_iso, newest_iso
+        ),
+        standard_fields=STANDARD_FIELDS["calendar"],
+        empty=[],
+    )
+    planned_payload, planned_coverage = _inspect_source(
+        endpoint_checks,
+        category="Планирани тренировки (WORKOUT)",
+        endpoint=SOURCE_ENDPOINTS["planned_workouts"],
+        operation=lambda: client.get_events_result(
+            oldest_iso, newest_iso, category="WORKOUT"
+        ),
+        standard_fields=STANDARD_FIELDS["planned_workouts"],
         empty=[],
     )
 
@@ -444,107 +646,253 @@ def _run_inspection(period_days: int) -> dict[str, Any]:
         "activities": _normalise_records(activities_payload),
         "wellness": _normalise_records(wellness_payload),
         "calendar": _normalise_records(calendar_payload),
+        "planned_workouts": _normalise_records(planned_payload),
     }
-
-    stream_payloads: list[dict[str, Any]] = []
-    for activity in records["activities"]:
-        if len(stream_payloads) >= MAX_STREAM_ACTIVITIES:
-            break
-        activity_id = activity.get("id")
-        if activity_id in (None, ""):
-            continue
-        streams = _inspect_source(
-            errors,
-            "Streams",
-            lambda activity_id=str(activity_id): client.get_streams(
-                activity_id
-            ),
-            empty=None,
-        )
-        if streams is not None:
-            stream_payloads.append({"streams": streams})
 
     coverage = {
-        group: build_field_coverage(
-            group_records,
-            SOURCE_ENDPOINTS[group],
-            STANDARD_FIELDS[group],
-        )
-        for group, group_records in records.items()
+        "profile": profile_coverage,
+        "sport_settings": settings_coverage,
+        "activities": activities_coverage,
+        "wellness": wellness_coverage,
+        "calendar": calendar_coverage,
+        "planned_workouts": planned_coverage,
     }
-    stream_summary = summarize_streams(
-        stream_payloads, max_activities=MAX_STREAM_ACTIVITIES
-    )
+    mapping_report = build_mapping_report(coverage)
+    model_readiness = build_model_readiness(mapping_report)
 
     # Raw API responses go out of scope here. Session state receives metadata
-    # only, never athlete values or stream samples.
+    # only. The bounded activity choices contain only ID/date/sport and stay in
+    # this user's session so detail and streams remain strictly on demand.
+    return (
+        {
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "period_days": period_days,
+            "counts": {
+                group: len(group_records)
+                for group, group_records in records.items()
+            },
+            "coverage": coverage,
+            "streams": [],
+            "endpoint_checks": endpoint_checks,
+            "mapping_report": mapping_report,
+            "model_readiness": model_readiness,
+        },
+        _activity_choices(records["activities"]),
+    )
+
+
+def _run_activity_inspection(activity_id: str) -> dict[str, Any]:
+    athlete_id = str(st.session_state[SESSION_ATHLETE_ID])
+    token = str(st.session_state[SESSION_TOKEN])
+    client = IntervalsClient(access_token=token, athlete_id=athlete_id)
+    endpoint_checks: list[dict[str, Any]] = []
+
+    detail_payload, detail_coverage = _inspect_source(
+        endpoint_checks,
+        category="Детайли на избрана активност",
+        endpoint=SOURCE_ENDPOINTS["activity_detail"],
+        operation=lambda: client.get_activity_result(
+            activity_id, include_intervals=False
+        ),
+        standard_fields=STANDARD_FIELDS["activity_detail"],
+        empty={},
+    )
+    streams_payload, _stream_coverage = _inspect_source(
+        endpoint_checks,
+        category="Streams на избрана активност",
+        endpoint=SOURCE_ENDPOINTS["streams"],
+        operation=lambda: client.get_streams_result(activity_id),
+        standard_fields=None,
+        empty=[],
+    )
+    stream_summary = summarize_streams(
+        [{"streams": streams_payload}],
+        max_activities=1,
+    )
+
+    # detail_payload is deliberately discarded after its field inventory is
+    # built. No activity values or stream samples enter session state.
+    del detail_payload, streams_payload
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "period_days": period_days,
-        "counts": {
-            group: len(group_records)
-            for group, group_records in records.items()
-        },
-        "coverage": coverage,
+        "coverage": {"activity_detail": detail_coverage},
         "streams": stream_summary,
-        "stream_activities_checked": len(stream_payloads),
-        "errors": errors,
+        "endpoint_checks": endpoint_checks,
     }
+
+
+def _combined_diagnostics(
+    report: Mapping[str, Any],
+    activity_report: Mapping[str, Any] | None,
+) -> tuple[
+    dict[str, list[dict[str, Any]]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, str]],
+    list[dict[str, Any]],
+]:
+    coverage = {
+        str(group): list(rows)
+        for group, rows in dict(report.get("coverage", {})).items()
+    }
+    endpoint_checks = list(report.get("endpoint_checks", []))
+    streams = list(report.get("streams", []))
+    if isinstance(activity_report, Mapping):
+        for group, rows in dict(
+            activity_report.get("coverage", {})
+        ).items():
+            coverage[str(group)] = list(rows)
+        endpoint_checks.extend(activity_report.get("endpoint_checks", []))
+        streams = list(activity_report.get("streams", []))
+
+    mapping_coverage = dict(coverage)
+    mapping_coverage["activities"] = [
+        *coverage.get("activities", []),
+        *coverage.get("activity_detail", []),
+    ]
+    mapping_coverage["calendar"] = [
+        *coverage.get("calendar", []),
+        *coverage.get("planned_workouts", []),
+    ]
+    mapping_report = build_mapping_report(mapping_coverage, streams)
+    model_readiness = build_model_readiness(mapping_report)
+    return (
+        coverage,
+        streams,
+        mapping_report,
+        model_readiness,
+        endpoint_checks,
+    )
+
+
+def _activity_report_for_selection(
+    selected_activity_id: str,
+) -> Mapping[str, Any] | None:
+    if (
+        st.session_state.get(SESSION_ACTIVITY_REPORT_ID)
+        != selected_activity_id
+    ):
+        st.session_state.pop(SESSION_ACTIVITY_REPORT, None)
+        st.session_state.pop(SESSION_ACTIVITY_REPORT_ID, None)
+        return None
+    report = st.session_state.get(SESSION_ACTIVITY_REPORT)
+    return report if isinstance(report, Mapping) else None
 
 
 def _render_table(rows: list[dict[str, Any]], empty_message: str) -> None:
     if not rows:
         st.info(empty_message)
         return
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.dataframe(rows, width="stretch", hide_index=True)
 
 
-def _render_report(report: Mapping[str, Any]) -> None:
+def _render_report(
+    report: Mapping[str, Any],
+    activity_report: Mapping[str, Any] | None = None,
+) -> None:
     counts = report.get("counts", {})
-    coverage = report.get("coverage", {})
-    errors = report.get("errors", {})
-    streams = list(report.get("streams", []))
+    (
+        coverage,
+        streams,
+        mapping_report,
+        model_readiness,
+        endpoint_checks,
+    ) = _combined_diagnostics(report, activity_report)
 
-    if isinstance(errors, Mapping):
-        for source, message in errors.items():
-            st.warning(f"{source}: {message}")
+    for check in endpoint_checks:
+        if not check.get("available") and check.get("safe_error"):
+            st.warning(
+                f"{check.get('category', 'API')}: "
+                f"{check.get('safe_error')}"
+            )
 
     tabs = st.tabs(
         [
+            "API проверки",
             "Активности",
             "Wellness",
             "Streams",
+            "Картографиране към onFlows",
             "Настройки и календар",
             "Обезличен отчет",
         ]
     )
     with tabs[0]:
+        summary_rows = [
+            {
+                "endpoint/категория": str(check.get("category", "")),
+                "endpoint": str(check.get("endpoint", "")),
+                "HTTP статус": check.get("http_status"),
+                "достъпно": (
+                    "да" if check.get("available") else "не"
+                ),
+                "брой записи": int(check.get("record_count", 0)),
+                "налични полета": ", ".join(
+                    str(item) for item in check.get("field_names", [])
+                ),
+                "безопасна грешка": str(check.get("safe_error", "")),
+            }
+            for check in endpoint_checks
+        ]
+        _render_table(
+            summary_rows,
+            "Все още няма изпълнени API проверки.",
+        )
+
+    with tabs[1]:
         st.metric("Получени записи", int(counts.get("activities", 0)))
         _render_table(
             list(coverage.get("activities", [])),
             "Няма налични полета за активности в избрания период.",
         )
+        st.subheader("Детайли на избраната активност")
+        _render_table(
+            list(coverage.get("activity_detail", [])),
+            "Изберете активност, за да проверите detail endpoint-а.",
+        )
 
-    with tabs[1]:
+    with tabs[2]:
         st.metric("Получени записи", int(counts.get("wellness", 0)))
         _render_table(
             list(coverage.get("wellness", [])),
             "Няма налични wellness полета в избрания период.",
         )
 
-    with tabs[2]:
+    with tabs[3]:
         st.caption(
-            "Streams са проверени за най-много "
-            f"{MAX_STREAM_ACTIVITIES} активности. Точки и GPS стойности не "
-            "се показват."
+            "Streams се зареждат само за изрично избраната активност. "
+            "Точки, GPS координати и други стойности не се показват."
         )
         st.metric(
             "Проверени активности",
-            int(report.get("stream_activities_checked", 0)),
+            1 if streams else 0,
         )
         _render_table(streams, "Не са открити достъпни streams.")
 
-    with tabs[3]:
+    with tabs[4]:
+        st.subheader("Схемна готовност и оставащи model inputs")
+        _render_table(
+            model_readiness,
+            "Няма достатъчно данни за оценка на моделите.",
+        )
+        st.subheader("Intervals → вътрешен onFlows формат")
+        _render_table(
+            mapping_report,
+            "Няма налична карта на полетата.",
+        )
+        shadow_period = st.select_slider(
+            "Предвиден прозорец за бъдещ shadow run",
+            options=SHADOW_PERIOD_OPTIONS,
+            value=90,
+            format_func=lambda value: f"{value} дни",
+        )
+        validate_shadow_period(int(shadow_period))
+        st.caption(
+            "Този избор описва ограничения до 90 дни за следващия етап. "
+            "На тази страница не се изпълняват модели и не се променят планове."
+        )
+
+    with tabs[5]:
         st.subheader("Профилна структура")
         _render_table(
             list(coverage.get("profile", [])),
@@ -561,8 +909,17 @@ def _render_report(report: Mapping[str, Any]) -> None:
             list(coverage.get("calendar", [])),
             "Няма календарни полета в избрания период.",
         )
+        st.subheader("Планирани тренировки (WORKOUT)")
+        st.metric(
+            "Получени планирани тренировки",
+            int(counts.get("planned_workouts", 0)),
+        )
+        _render_table(
+            list(coverage.get("planned_workouts", [])),
+            "Няма планирани тренировки в избрания период.",
+        )
 
-    with tabs[4]:
+    with tabs[6]:
         all_coverage = [
             row
             for group_rows in coverage.values()
@@ -571,23 +928,35 @@ def _render_report(report: Mapping[str, Any]) -> None:
         st.caption(
             "Отчетите съдържат само структура и покритие. В тях няма token, "
             "authorization code, идентификатор/име на спортиста, реални "
-            "примерни стойности, GPS, маршрути или бележки."
+            "примерни стойности, GPS координати/стойности, маршрути или бележки."
         )
-        json_report = export_inventory_json(all_coverage, streams)
-        csv_report = export_inventory_csv(all_coverage, streams)
+        json_report = export_inventory_json(
+            all_coverage,
+            streams,
+            endpoint_checks,
+            mapping_report,
+            model_readiness,
+        )
+        csv_report = export_inventory_csv(
+            all_coverage,
+            streams,
+            endpoint_checks,
+            mapping_report,
+            model_readiness,
+        )
         st.download_button(
             "Изтегли обезличен JSON",
             data=json_report,
             file_name="intervals_field_inventory.json",
             mime="application/json",
-            use_container_width=True,
+            width="stretch",
         )
         st.download_button(
             "Изтегли обезличен CSV",
             data=csv_report,
             file_name="intervals_field_inventory.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
 
 
@@ -649,7 +1018,7 @@ def main() -> None:
             "Свържи Intervals.icu",
             authorization_url,
             type="primary",
-            use_container_width=True,
+            width="stretch",
         )
         st.caption(
             "Заявяват се само ACTIVITY:READ, WELLNESS:READ, SETTINGS:READ "
@@ -661,7 +1030,9 @@ def main() -> None:
     athlete_name = str(
         st.session_state.get(SESSION_ATHLETE_NAME) or "Intervals.icu профил"
     )
+    athlete_id = str(st.session_state[SESSION_ATHLETE_ID])
     st.text(f"Свързан профил: {athlete_name}")
+    st.text(f"Intervals athlete ID: {athlete_id}")
 
     granted = {
         str(scope).upper()
@@ -678,8 +1049,8 @@ def main() -> None:
         )
 
     period_days = st.radio(
-        "Период",
-        options=(30, 60, 90),
+        "Период за API инспекция",
+        options=INSPECTION_PERIOD_OPTIONS,
         index=0,
         horizontal=True,
         format_func=lambda value: f"{value} дни",
@@ -688,20 +1059,66 @@ def main() -> None:
         "Провери наличните данни",
         type="primary",
         disabled=bool(missing_scopes),
-        use_container_width=True,
+        width="stretch",
     ):
         with st.spinner("Проверка на read-only API данните…"):
-            st.session_state[SESSION_REPORT] = _run_inspection(period_days)
+            report, activity_choices = _run_inspection(period_days)
+            st.session_state[SESSION_REPORT] = report
+            st.session_state[SESSION_ACTIVITY_CHOICES] = activity_choices
+            st.session_state.pop(SESSION_ACTIVITY_REPORT, None)
+            st.session_state.pop(SESSION_ACTIVITY_REPORT_ID, None)
 
     report = st.session_state.get(SESSION_REPORT)
     if isinstance(report, Mapping):
-        _render_report(report)
+        activity_report: Mapping[str, Any] | None = None
+        activity_choices = st.session_state.get(
+            SESSION_ACTIVITY_CHOICES, []
+        )
+        if isinstance(activity_choices, list) and activity_choices:
+            selected_index = st.selectbox(
+                "Избрана активност за detail и streams",
+                options=range(len(activity_choices)),
+                format_func=lambda index: activity_choices[index]["label"],
+            )
+            selected = activity_choices[int(selected_index)]
+            selected_activity_id = str(selected["activity_id"])
+            activity_report = _activity_report_for_selection(
+                selected_activity_id
+            )
+            if st.button(
+                "Провери избраната активност",
+                type="secondary",
+                width="stretch",
+            ):
+                with st.spinner(
+                    "Проверка на детайлите и наличните streams…"
+                ):
+                    st.session_state[SESSION_ACTIVITY_REPORT] = (
+                        _run_activity_inspection(selected_activity_id)
+                    )
+                    st.session_state[SESSION_ACTIVITY_REPORT_ID] = (
+                        selected_activity_id
+                    )
+                    activity_report = st.session_state[
+                        SESSION_ACTIVITY_REPORT
+                    ]
+        elif int(report.get("counts", {}).get("activities", 0)) == 0:
+            st.info(
+                "Няма активности в периода за отделна detail/streams проверка."
+            )
+
+        _render_report(
+            report,
+            activity_report
+            if isinstance(activity_report, Mapping)
+            else None,
+        )
 
     st.divider()
     if st.button(
         "Прекрати връзката",
         type="secondary",
-        use_container_width=True,
+        width="stretch",
     ):
         _disconnect()
 

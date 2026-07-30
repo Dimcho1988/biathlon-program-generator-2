@@ -10,6 +10,7 @@ import requests
 from intervals_inspector.intervals_client import (
     IntervalsAPIError,
     IntervalsClient,
+    IntervalsResponse,
 )
 
 
@@ -111,6 +112,59 @@ def test_get_streams_uses_documented_json_endpoint() -> None:
     )
 
 
+def test_result_envelope_preserves_status_without_repr_payload_leak() -> None:
+    client, _session = _client(
+        [_response(status=200, payload={"private": TOKEN})]
+    )
+
+    result = client.get_athlete_result()
+
+    assert isinstance(result, IntervalsResponse)
+    assert result.status_code == 200
+    assert result.payload == {"private": TOKEN}
+    assert TOKEN not in repr(result)
+
+
+@pytest.mark.parametrize(
+    ("include_intervals", "expected_value"),
+    [(False, "false"), (True, "true")],
+)
+def test_activity_detail_is_read_only_and_explicitly_bounds_intervals(
+    include_intervals: bool, expected_value: str
+) -> None:
+    client, session = _client([_response(payload={"id": "i98765"})])
+
+    result = client.get_activity(
+        "i98765", include_intervals=include_intervals
+    )
+
+    assert result == {"id": "i98765"}
+    assert (
+        session.get.call_args.args[0]
+        == "https://intervals.icu/api/v1/activity/i98765"
+    )
+    assert session.get.call_args.kwargs["params"] == {
+        "intervals": expected_value
+    }
+
+
+def test_planned_workouts_add_only_documented_category_filter() -> None:
+    client, session = _client([_response(payload=[])])
+
+    result = client.get_events(
+        "2026-06-01",
+        "2026-06-30",
+        category="WORKOUT",
+    )
+
+    assert result == []
+    assert session.get.call_args.kwargs["params"] == {
+        "oldest": "2026-06-01",
+        "newest": "2026-06-30",
+        "category": "WORKOUT",
+    }
+
+
 @pytest.mark.parametrize(
     ("athlete_id", "message_fragment"),
     [
@@ -137,6 +191,19 @@ def test_rejects_unsafe_activity_id_before_http(activity_id: str) -> None:
 
     with pytest.raises(ValueError, match="activity_id"):
         client.get_streams(activity_id)
+
+    session.get.assert_not_called()
+
+
+def test_rejects_unknown_event_category_before_http() -> None:
+    client, session = _client()
+
+    with pytest.raises(ValueError, match="WORKOUT"):
+        client.get_events(
+            "2026-06-01",
+            "2026-06-30",
+            category="RACE",
+        )
 
     session.get.assert_not_called()
 
@@ -252,6 +319,20 @@ def test_invalid_json_does_not_include_response_payload() -> None:
 
     assert TOKEN not in str(caught.value)
     assert "JSON" in str(caught.value)
+    assert caught.value.status_code == 200
+
+
+def test_no_content_is_a_successful_empty_result() -> None:
+    response = _response(204)
+    response.json.side_effect = AssertionError("JSON must not be parsed")
+    client, _session = _client([response])
+
+    result = client.get_wellness_result(
+        "2026-06-01", "2026-06-30"
+    )
+
+    assert result.status_code == 204
+    assert result.payload is None
 
 
 @pytest.mark.parametrize(
