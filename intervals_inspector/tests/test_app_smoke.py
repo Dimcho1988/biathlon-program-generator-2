@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import sys
 import time
 from urllib.parse import parse_qs, urlparse
 
@@ -46,6 +48,25 @@ def _new_app(
     app = AppTest.from_file(str(APP_PATH), default_timeout=10)
     app.secrets.update(FAKE_SECRETS if secrets is None else secrets)
     return app
+
+
+def test_cloud_style_direct_entrypoint_can_import_package() -> None:
+    probe = (
+        "import runpy; "
+        "namespace = runpy.run_path('app.py', run_name='cloud_probe'); "
+        "assert callable(namespace['main'])"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", probe],
+        cwd=APP_PATH.parent,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_streamlit_smoke_reports_missing_configuration(monkeypatch):

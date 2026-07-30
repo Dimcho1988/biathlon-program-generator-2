@@ -6,10 +6,20 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 import hmac
+from pathlib import Path
 import re
+import sys
 from typing import Any
 
 import streamlit as st
+
+# Streamlit Cloud adds the main file's directory to ``sys.path``. Because the
+# main file lives inside the package, add the repository root when this file is
+# executed directly so the same absolute imports work locally and in Cloud.
+if __package__ in (None, ""):
+    repository_root = str(Path(__file__).resolve().parent.parent)
+    if repository_root not in sys.path:
+        sys.path.insert(0, repository_root)
 
 from intervals_inspector.data_adapter import (
     build_mapping_report,
