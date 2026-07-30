@@ -329,11 +329,12 @@ def _process_callback(config: InspectorConfig) -> None:
             "OAuth state-ът е невалиден, изтекъл или вече използван. "
             "Стартирайте ново свързване.",
         )
-    except OAuthExchangeError:
+    except OAuthExchangeError as exc:
         _remember_notice(
             "error",
             "Валидният OAuth callback беше приет, но authorization code-ът "
-            "не можа да бъде обменен. Стартирайте ново свързване.",
+            "не можа да бъде обменен. "
+            f"{exc} Стартирайте ново свързване.",
         )
     finally:
         # Authorization codes are short-lived credentials. Remove every

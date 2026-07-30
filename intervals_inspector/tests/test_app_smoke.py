@@ -428,6 +428,32 @@ def test_failed_exchange_consumes_state_and_is_not_retried(monkeypatch):
     assert inspector_app.SESSION_TOKEN not in replay_session
 
 
+def test_exchange_failure_notice_is_sanitized_and_actionable(monkeypatch):
+    config = _callback_config()
+    state = inspector_app._oauth_state(config)
+    query = {"code": "one-time-code", "state": state}
+    session = _patch_callback_streamlit(monkeypatch, query)
+
+    def failed_exchange(**kwargs):
+        raise inspector_app.OAuthExchangeError(
+            "Intervals.icu отказа OAuth token заявката (HTTP 400)."
+        )
+
+    monkeypatch.setattr(
+        inspector_app, "exchange_authorization_code", failed_exchange
+    )
+
+    inspector_app._process_callback(config)
+
+    notice = session[inspector_app.SESSION_NOTICE]
+    assert notice["level"] == "error"
+    assert "HTTP 400" in notice["message"]
+    rendered = repr(session)
+    assert "one-time-code" not in rendered
+    assert state not in rendered
+    assert config.client_secret not in rendered
+
+
 def test_main_processes_callback_before_password_gate() -> None:
     source = Path(inspector_app.__file__).read_text(encoding="utf-8")
     main_source = source[source.index("def main()") :]

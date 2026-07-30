@@ -171,8 +171,14 @@ def exchange_authorization_code(
 
     status_code = getattr(response, "status_code", None)
     if not isinstance(status_code, int) or not 200 <= status_code < 300:
+        status_suffix = (
+            f" (HTTP {status_code})"
+            if isinstance(status_code, int)
+            else ""
+        )
         raise OAuthExchangeError(
-            "Intervals.icu отказа OAuth token заявката."
+            "Intervals.icu отказа OAuth token заявката"
+            f"{status_suffix}."
         )
     try:
         payload = response.json()

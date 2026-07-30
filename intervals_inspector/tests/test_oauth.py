@@ -235,6 +235,7 @@ def test_token_exchange_http_failures_are_sanitized(
             http_post=post,
         )
     message = str(caught.value)
+    assert f"HTTP {status_code}" in message
     assert "do-not-leak" not in message
     assert "secret provider detail" not in message
 
