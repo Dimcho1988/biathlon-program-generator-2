@@ -5,11 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-import hashlib
 import hmac
 import os
-import threading
-import time
 from typing import Any
 
 import streamlit as st
@@ -36,6 +33,10 @@ from intervals_inspector.oauth import (
     parse_callback,
     verify_signed_state,
 )
+from intervals_inspector.oauth_state_store import (
+    consume_pending_state,
+    register_pending_state,
+)
 
 
 CONFIG_NAMES = (
@@ -48,7 +49,6 @@ CONFIG_NAMES = (
 CALLBACK_QUERY_KEYS = ("code", "state", "error", "error_description")
 MAX_STREAM_ACTIVITIES = 3
 STATE_MAX_AGE_SECONDS = 10 * 60
-STATE_REFRESH_SECONDS = 8 * 60
 
 SESSION_TOKEN = "_intervals_access_token"
 SESSION_ATHLETE_ID = "_intervals_athlete_id"
@@ -56,10 +56,6 @@ SESSION_ATHLETE_NAME = "_intervals_athlete_name"
 SESSION_SCOPES = "_intervals_granted_scopes"
 SESSION_REPORT = "_intervals_inventory_report"
 SESSION_AUTHENTICATED = "_inspector_authenticated"
-SESSION_PENDING_STATE = "_oauth_pending_state"
-SESSION_PENDING_STATE_DIGEST = "_oauth_pending_state_digest"
-SESSION_PENDING_STATE_CREATED = "_oauth_pending_state_created"
-SESSION_CONSUMED_STATE_DIGESTS = "_oauth_consumed_state_digests"
 SESSION_NOTICE = "_inspector_notice"
 
 
@@ -262,61 +258,6 @@ def _render_notice() -> None:
     renderer(message)
 
 
-def _state_digest(state: str) -> str:
-    return hashlib.sha256(state.encode("utf-8")).hexdigest()
-
-
-@st.cache_resource(show_spinner=False)
-def _pending_state_registry() -> dict[str, Any]:
-    """Cross-session, metadata-only one-time state registry.
-
-    Streamlit can create a fresh session after an external OAuth round trip.
-    The registry stores only SHA-256 digests and issue times—never a token,
-    athlete data, state secret, authorization code, or raw state value.
-    """
-
-    return {"lock": threading.Lock(), "issued": {}}
-
-
-def _register_pending_state(digest: str, issued_at: float) -> None:
-    registry = _pending_state_registry()
-    now = time.time()
-    with registry["lock"]:
-        issued = registry["issued"]
-        expired = [
-            candidate
-            for candidate, created in issued.items()
-            if now - float(created) > STATE_MAX_AGE_SECONDS
-        ]
-        for candidate in expired:
-            issued.pop(candidate, None)
-        issued[digest] = issued_at
-
-
-def _consume_pending_state(digest: str) -> bool:
-    registry = _pending_state_registry()
-    now = time.time()
-    with registry["lock"]:
-        issued_at = registry["issued"].pop(digest, None)
-    if issued_at is None:
-        return False
-    age = now - float(issued_at)
-    return 0 <= age <= STATE_MAX_AGE_SECONDS
-
-
-def _pending_state_is_issued(digest: str) -> bool:
-    registry = _pending_state_registry()
-    now = time.time()
-    with registry["lock"]:
-        issued_at = registry["issued"].get(digest)
-        if issued_at is None:
-            return False
-        if not 0 <= now - float(issued_at) <= STATE_MAX_AGE_SECONDS:
-            registry["issued"].pop(digest, None)
-            return False
-        return True
-
-
 def _process_callback(config: InspectorConfig) -> None:
     query = _callback_query()
     if not query:
@@ -334,9 +275,6 @@ def _process_callback(config: InspectorConfig) -> None:
             "warning", "OAuth достъпът беше отказан в Intervals.icu."
         )
         _clear_callback_query()
-        st.session_state.pop(SESSION_PENDING_STATE, None)
-        st.session_state.pop(SESSION_PENDING_STATE_DIGEST, None)
-        st.session_state.pop(SESSION_PENDING_STATE_CREATED, None)
         st.rerun()
         return
 
@@ -353,19 +291,7 @@ def _process_callback(config: InspectorConfig) -> None:
             expected_redirect_uri=config.redirect_uri,
             max_age_seconds=STATE_MAX_AGE_SECONDS,
         )
-        state_digest = _state_digest(callback_state)
-        consumed = list(
-            st.session_state.get(SESSION_CONSUMED_STATE_DIGESTS, [])
-        )
-        if state_digest in consumed:
-            raise OAuthCallbackError("OAuth state вече е използван.")
-
-        expected_digest = st.session_state.get(SESSION_PENDING_STATE_DIGEST)
-        if expected_digest is not None and not hmac.compare_digest(
-            str(expected_digest), state_digest
-        ):
-            raise OAuthCallbackError("OAuth state не съвпада с текущата сесия.")
-        if not _consume_pending_state(state_digest):
+        if not consume_pending_state(callback_state):
             raise OAuthCallbackError(
                 "OAuth state не е издаден или вече е използван."
             )
@@ -392,29 +318,27 @@ def _process_callback(config: InspectorConfig) -> None:
             scope for scope in READ_ONLY_SCOPES if scope in granted_scopes
         ]
         st.session_state.pop(SESSION_REPORT, None)
-        consumed.append(state_digest)
-        st.session_state[SESSION_CONSUMED_STATE_DIGESTS] = consumed[-5:]
-        st.session_state.pop(SESSION_PENDING_STATE_DIGEST, None)
-        st.session_state.pop(SESSION_PENDING_STATE_CREATED, None)
-        st.session_state.pop(SESSION_PENDING_STATE, None)
         _remember_notice("success", "Intervals.icu профилът е свързан.")
     except OAuthAccessDenied:
         _remember_notice(
             "warning", "OAuth достъпът беше отказан в Intervals.icu."
         )
-    except (OAuthCallbackError, OAuthExchangeError, StateValidationError):
+    except (OAuthCallbackError, StateValidationError):
         _remember_notice(
             "error",
-            "OAuth callback-ът не можа да бъде потвърден. Стартирайте ново "
-            "свързване.",
+            "OAuth state-ът е невалиден, изтекъл или вече използван. "
+            "Стартирайте ново свързване.",
+        )
+    except OAuthExchangeError:
+        _remember_notice(
+            "error",
+            "Валидният OAuth callback беше приет, но authorization code-ът "
+            "не можа да бъде обменен. Стартирайте ново свързване.",
         )
     finally:
         # Authorization codes are short-lived credentials. Remove every
         # callback value before any UI rerun, successful or not.
         _clear_callback_query()
-        st.session_state.pop(SESSION_PENDING_STATE, None)
-        st.session_state.pop(SESSION_PENDING_STATE_DIGEST, None)
-        st.session_state.pop(SESSION_PENDING_STATE_CREATED, None)
 
     st.rerun()
 
@@ -439,26 +363,11 @@ def _password_gate(config: InspectorConfig) -> bool:
 
 
 def _oauth_state(config: InspectorConfig) -> str:
-    now = time.time()
-    created = float(
-        st.session_state.get(SESSION_PENDING_STATE_CREATED, 0.0) or 0.0
-    )
-    stored_state = st.session_state.get(SESSION_PENDING_STATE)
-    if (
-        isinstance(stored_state, str)
-        and now - created < STATE_REFRESH_SECONDS
-        and _pending_state_is_issued(_state_digest(stored_state))
-    ):
-        return stored_state
-
     state = create_signed_state(
         config.state_secret,
         redirect_uri=config.redirect_uri,
     )
-    st.session_state[SESSION_PENDING_STATE] = state
-    st.session_state[SESSION_PENDING_STATE_DIGEST] = _state_digest(state)
-    st.session_state[SESSION_PENDING_STATE_CREATED] = now
-    _register_pending_state(_state_digest(state), now)
+    register_pending_state(state)
     return state
 
 

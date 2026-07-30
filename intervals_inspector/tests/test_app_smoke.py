@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
+from urllib.parse import parse_qs, urlparse
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from intervals_inspector import app as inspector_app
 from intervals_inspector.oauth import OAuthGrant
+from intervals_inspector.oauth_state_store import (
+    clear_pending_states_for_tests,
+    is_pending_state,
+)
 from intervals_inspector.security import create_signed_state
 
 
@@ -17,6 +24,13 @@ SETTING_NAMES = (
     "OAUTH_STATE_SECRET",
     "INSPECTOR_ACCESS_PASSWORD",
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_pending_state_store():
+    clear_pending_states_for_tests()
+    yield
+    clear_pending_states_for_tests()
 
 
 def test_streamlit_smoke_reports_missing_configuration(monkeypatch):
@@ -49,6 +63,43 @@ def test_streamlit_smoke_shows_password_gate_without_network(monkeypatch):
     assert not app.exception
     assert app.text_input[0].label == "Парола"
     assert app.button[0].label == "Вход"
+
+
+def test_pending_state_survives_two_real_apptest_sessions(monkeypatch):
+    fake_values = {
+        "INTERVALS_CLIENT_ID": "test-client",
+        "INTERVALS_CLIENT_SECRET": "test-client-secret-not-real",
+        "INTERVALS_REDIRECT_URI": "http://localhost:8501/",
+        "OAUTH_STATE_SECRET": "test-state-secret-not-real",
+        "INSPECTOR_ACCESS_PASSWORD": "test-password-not-real",
+    }
+    for name, value in fake_values.items():
+        monkeypatch.setenv(name, value)
+
+    issuing_app = AppTest.from_file(str(APP_PATH), default_timeout=10)
+    issuing_app.session_state["_inspector_authenticated"] = True
+    issuing_app.run()
+
+    assert not issuing_app.exception
+    link_buttons = issuing_app.get("link_button")
+    assert len(link_buttons) == 1
+    query = parse_qs(urlparse(link_buttons[0].url).query)
+    state = query["state"][0]
+
+    callback_app = AppTest.from_file(str(APP_PATH), default_timeout=10)
+    callback_app.query_params["error"] = "access_denied"
+    callback_app.query_params["state"] = state
+    callback_app.run()
+
+    assert not callback_app.exception
+    assert any(
+        "OAuth достъпът беше отказан" in item.value
+        for item in callback_app.warning
+    )
+    assert all(
+        "state-ът е невалиден" not in item.value
+        for item in callback_app.error
+    )
 
 
 def test_connected_profile_name_is_rendered_as_literal_text(monkeypatch):
@@ -88,17 +139,47 @@ def test_connected_profile_name_is_rendered_as_literal_text(monkeypatch):
     )
 
 
-def test_pending_state_registry_is_one_time(monkeypatch):
-    now = 1_000.0
-    monkeypatch.setattr(inspector_app.time, "time", lambda: now)
-    inspector_app._pending_state_registry.clear()
+def test_password_reentry_preserves_token_received_before_login(monkeypatch):
+    fake_values = {
+        "INTERVALS_CLIENT_ID": "test-client",
+        "INTERVALS_CLIENT_SECRET": "test-client-secret-not-real",
+        "INTERVALS_REDIRECT_URI": "http://localhost:8501/",
+        "OAUTH_STATE_SECRET": "test-state-secret-not-real",
+        "INSPECTOR_ACCESS_PASSWORD": "test-password-not-real",
+    }
+    for name, value in fake_values.items():
+        monkeypatch.setenv(name, value)
 
-    inspector_app._register_pending_state("state-digest", now)
+    app = AppTest.from_file(str(APP_PATH), default_timeout=10)
+    app.session_state["_intervals_access_token"] = "session-token-not-real"
+    app.session_state["_intervals_athlete_id"] = "test-athlete"
+    app.session_state["_intervals_athlete_name"] = "Test Athlete"
+    app.session_state["_intervals_granted_scopes"] = [
+        "ACTIVITY:READ",
+        "WELLNESS:READ",
+        "SETTINGS:READ",
+        "CALENDAR:READ",
+    ]
 
-    assert inspector_app._pending_state_is_issued("state-digest")
-    assert inspector_app._consume_pending_state("state-digest")
-    assert not inspector_app._pending_state_is_issued("state-digest")
-    assert not inspector_app._consume_pending_state("state-digest")
+    app.run()
+
+    assert not app.exception
+    assert app.text_input[0].label == "Парола"
+    assert (
+        app.session_state["_intervals_access_token"]
+        == "session-token-not-real"
+    )
+
+    app.text_input[0].set_value("test-password-not-real")
+    app.button[0].click()
+    app.run()
+
+    assert not app.exception
+    assert (
+        app.session_state["_intervals_access_token"]
+        == "session-token-not-real"
+    )
+    assert any(item.value == "OAuth статус: свързан." for item in app.success)
 
 
 def _callback_config() -> inspector_app.InspectorConfig:
@@ -143,7 +224,6 @@ def test_unissued_callback_state_never_exchanges_and_is_cleared(monkeypatch):
     monkeypatch.setattr(
         inspector_app, "exchange_authorization_code", exchange
     )
-    inspector_app._pending_state_registry.clear()
 
     inspector_app._process_callback(config)
 
@@ -156,11 +236,13 @@ def test_issued_state_exchanges_once_in_fresh_session_and_cannot_replay(
     monkeypatch,
 ):
     config = _callback_config()
-    state = create_signed_state(
-        config.state_secret,
-        redirect_uri=config.redirect_uri,
+    issuing_session: dict[str, object] = {}
+    monkeypatch.setattr(
+        inspector_app.st, "session_state", issuing_session, raising=False
     )
-    digest = inspector_app._state_digest(state)
+    state = inspector_app._oauth_state(config)
+    assert issuing_session == {}
+
     query = {"code": "one-time-code", "state": state}
     session = _patch_callback_streamlit(monkeypatch, query)
     calls = []
@@ -177,8 +259,6 @@ def test_issued_state_exchanges_once_in_fresh_session_and_cannot_replay(
     monkeypatch.setattr(
         inspector_app, "exchange_authorization_code", exchange
     )
-    inspector_app._pending_state_registry.clear()
-    inspector_app._register_pending_state(digest, inspector_app.time.time())
 
     inspector_app._process_callback(config)
 
@@ -186,34 +266,31 @@ def test_issued_state_exchanges_once_in_fresh_session_and_cannot_replay(
     assert query == {}
     assert session[inspector_app.SESSION_TOKEN] == "session-token-not-real"
     assert session[inspector_app.SESSION_ATHLETE_ID] == "test-athlete"
+    assert inspector_app.SESSION_AUTHENTICATED not in session
     rendered_session = repr(session)
     assert "one-time-code" not in rendered_session
     assert config.client_secret not in rendered_session
     assert state not in rendered_session
 
-    query.update({"code": "second-code", "state": state})
+    replay_query = {"code": "second-code", "state": state}
+    replay_session = _patch_callback_streamlit(monkeypatch, replay_query)
     inspector_app._process_callback(config)
 
     assert len(calls) == 1
-    assert query == {}
+    assert replay_query == {}
+    assert inspector_app.SESSION_TOKEN not in replay_session
 
 
 def test_denied_callback_consumes_issued_state(monkeypatch):
     config = _callback_config()
-    state = create_signed_state(
-        config.state_secret,
-        redirect_uri=config.redirect_uri,
-    )
-    digest = inspector_app._state_digest(state)
+    state = inspector_app._oauth_state(config)
     query = {"error": "access_denied", "state": state}
     session = _patch_callback_streamlit(monkeypatch, query)
-    inspector_app._pending_state_registry.clear()
-    inspector_app._register_pending_state(digest, inspector_app.time.time())
 
     inspector_app._process_callback(config)
 
     assert query == {}
-    assert not inspector_app._pending_state_is_issued(digest)
+    assert not is_pending_state(state)
     assert inspector_app.SESSION_TOKEN not in session
     assert session[inspector_app.SESSION_NOTICE]["level"] == "warning"
 
@@ -247,11 +324,7 @@ def test_documented_denial_without_state_is_clear_and_never_exchanges(
 
 def test_app_rejects_write_scope_before_storing_token(monkeypatch):
     config = _callback_config()
-    state = create_signed_state(
-        config.state_secret,
-        redirect_uri=config.redirect_uri,
-    )
-    digest = inspector_app._state_digest(state)
+    state = inspector_app._oauth_state(config)
     query = {"code": "one-time-code", "state": state}
     session = _patch_callback_streamlit(monkeypatch, query)
 
@@ -266,11 +339,99 @@ def test_app_rejects_write_scope_before_storing_token(monkeypatch):
     monkeypatch.setattr(
         inspector_app, "exchange_authorization_code", exchange
     )
-    inspector_app._pending_state_registry.clear()
-    inspector_app._register_pending_state(digest, inspector_app.time.time())
 
     inspector_app._process_callback(config)
 
     assert query == {}
     assert inspector_app.SESSION_TOKEN not in session
     assert "overprivileged-token" not in repr(session)
+
+
+def test_tampered_state_never_exchanges_and_does_not_consume_original(
+    monkeypatch,
+):
+    config = _callback_config()
+    state = inspector_app._oauth_state(config)
+    payload, signature = state.split(".")
+    replacement = "A" if signature[-1] != "A" else "B"
+    tampered = f"{payload}.{signature[:-1]}{replacement}"
+    query = {"code": "one-time-code", "state": tampered}
+    session = _patch_callback_streamlit(monkeypatch, query)
+    calls = []
+
+    monkeypatch.setattr(
+        inspector_app,
+        "exchange_authorization_code",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    inspector_app._process_callback(config)
+
+    assert calls == []
+    assert query == {}
+    assert inspector_app.SESSION_TOKEN not in session
+    assert is_pending_state(state)
+
+
+def test_expired_signed_state_never_exchanges(monkeypatch):
+    config = _callback_config()
+    state = create_signed_state(
+        config.state_secret,
+        redirect_uri=config.redirect_uri,
+        now=int(time.time()) - inspector_app.STATE_MAX_AGE_SECONDS - 1,
+    )
+    inspector_app.register_pending_state(state)
+    query = {"code": "one-time-code", "state": state}
+    session = _patch_callback_streamlit(monkeypatch, query)
+    calls = []
+
+    monkeypatch.setattr(
+        inspector_app,
+        "exchange_authorization_code",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    inspector_app._process_callback(config)
+
+    assert calls == []
+    assert query == {}
+    assert inspector_app.SESSION_TOKEN not in session
+
+
+def test_failed_exchange_consumes_state_and_is_not_retried(monkeypatch):
+    config = _callback_config()
+    state = inspector_app._oauth_state(config)
+    query = {"code": "one-time-code", "state": state}
+    first_session = _patch_callback_streamlit(monkeypatch, query)
+    calls = []
+
+    def failed_exchange(**kwargs):
+        calls.append(kwargs)
+        raise inspector_app.OAuthExchangeError("sanitized failure")
+
+    monkeypatch.setattr(
+        inspector_app, "exchange_authorization_code", failed_exchange
+    )
+
+    inspector_app._process_callback(config)
+
+    replay_query = {"code": "one-time-code", "state": state}
+    replay_session = _patch_callback_streamlit(
+        monkeypatch, replay_query
+    )
+    inspector_app._process_callback(config)
+
+    assert len(calls) == 1
+    assert query == {}
+    assert replay_query == {}
+    assert inspector_app.SESSION_TOKEN not in first_session
+    assert inspector_app.SESSION_TOKEN not in replay_session
+
+
+def test_main_processes_callback_before_password_gate() -> None:
+    source = Path(inspector_app.__file__).read_text(encoding="utf-8")
+    main_source = source[source.index("def main()") :]
+
+    assert main_source.index("_process_callback(config)") < main_source.index(
+        "_password_gate(config)"
+    )
