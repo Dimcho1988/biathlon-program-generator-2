@@ -28,6 +28,23 @@ READ_ONLY_SCOPES = (
     "CALENDAR:READ",
 )
 _SAFE_ATHLETE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+_PROVIDER_ERROR_MAX_LENGTH = 240
+_CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_SENSITIVE_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b("
+    r"authorization[_ -]?code|code|state|client[_ -]?secret|"
+    r"access[_ -]?token|refresh[_ -]?token|id[_ -]?token|token"
+    r")\b\s*[:=]\s*[^\s,;]+"
+)
+_BEARER_VALUE_RE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
+_TOKEN_LABEL_VALUE_RE = re.compile(
+    r"(?i)\b((?:access|refresh|id)[_ -]?token|token)\b\s+[^\s,;]+"
+)
+_OPAQUE_CREDENTIAL_RE = re.compile(
+    r"(?<![A-Za-z0-9._~+/=-])[A-Za-z0-9._~+/=-]{32,}"
+    r"(?![A-Za-z0-9._~+/=-])"
+)
+_MARKDOWN_META_RE = re.compile(r"([\\`*\[\]()<>!])")
 
 
 class OAuthCallbackError(ValueError):
@@ -64,6 +81,95 @@ def _required_text(value: Any, field_name: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{field_name} трябва да е непразен текст.")
     return value
+
+
+def _safe_provider_error_value(
+    value: Any,
+    *,
+    redactions: tuple[str, ...],
+) -> str | None:
+    """Return one bounded provider error field with credentials redacted."""
+
+    if not isinstance(value, str):
+        return None
+    sensitive_values = sorted(
+        (item for item in redactions if item),
+        key=len,
+        reverse=True,
+    )
+    safe_value = value
+    for sensitive_value in sensitive_values:
+        safe_value = safe_value.replace(sensitive_value, "[redacted]")
+    safe_value = _CONTROL_CHARACTER_RE.sub("", safe_value)
+    safe_value = " ".join(safe_value.split())
+    for sensitive_value in sensitive_values:
+        normalized_sensitive_value = _CONTROL_CHARACTER_RE.sub(
+            "",
+            sensitive_value,
+        )
+        normalized_sensitive_value = " ".join(
+            normalized_sensitive_value.split()
+        )
+        if normalized_sensitive_value:
+            safe_value = safe_value.replace(
+                normalized_sensitive_value,
+                "[redacted]",
+            )
+    safe_value = _SENSITIVE_ASSIGNMENT_RE.sub(
+        lambda match: f"{match.group(1)}=[redacted]",
+        safe_value,
+    )
+    safe_value = _BEARER_VALUE_RE.sub("Bearer [redacted]", safe_value)
+    safe_value = _TOKEN_LABEL_VALUE_RE.sub(
+        lambda match: f"{match.group(1)}=[redacted]",
+        safe_value,
+    )
+    safe_value = _OPAQUE_CREDENTIAL_RE.sub("[redacted]", safe_value)
+    if len(safe_value) > _PROVIDER_ERROR_MAX_LENGTH:
+        safe_value = (
+            safe_value[:_PROVIDER_ERROR_MAX_LENGTH].rstrip() + "…"
+        )
+    safe_value = _MARKDOWN_META_RE.sub(r"\\\1", safe_value)
+    return safe_value or None
+
+
+def _provider_token_error_details(
+    response: Any,
+    *,
+    redactions: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Extract only safe OAuth error fields from a failed token response."""
+
+    try:
+        payload = response.json()
+    except Exception:
+        return ()
+    if not isinstance(payload, Mapping):
+        return ()
+
+    provider_redactions = list(redactions)
+    for sensitive_field in (
+        "code",
+        "state",
+        "client_secret",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "token",
+    ):
+        sensitive_value = payload.get(sensitive_field)
+        if isinstance(sensitive_value, str) and sensitive_value:
+            provider_redactions.append(sensitive_value)
+
+    details: list[str] = []
+    for field_name in ("error", "error_description"):
+        safe_value = _safe_provider_error_value(
+            payload.get(field_name),
+            redactions=tuple(provider_redactions),
+        )
+        if safe_value:
+            details.append(f"{field_name}={safe_value}")
+    return tuple(details)
 
 
 def _first_query_value(value: Any) -> str:
@@ -144,6 +250,7 @@ def exchange_authorization_code(
     code: str,
     http_post: Callable[..., Any] | None = None,
     timeout: tuple[float, float] = (3.05, 15.0),
+    redact_values: tuple[str, ...] = (),
 ) -> OAuthGrant:
     """Exchange a short-lived code and return only a session grant object."""
 
@@ -171,14 +278,26 @@ def exchange_authorization_code(
 
     status_code = getattr(response, "status_code", None)
     if not isinstance(status_code, int) or not 200 <= status_code < 300:
-        status_suffix = (
-            f" (HTTP {status_code})"
-            if isinstance(status_code, int)
+        safe_details = _provider_token_error_details(
+            response,
+            redactions=(
+                form["client_secret"],
+                form["code"],
+                *redact_values,
+            ),
+        )
+        diagnostic_parts = (
+            ([f"HTTP {status_code}"] if isinstance(status_code, int) else [])
+            + list(safe_details)
+        )
+        diagnostic_suffix = (
+            f" ({'; '.join(diagnostic_parts)})"
+            if diagnostic_parts
             else ""
         )
         raise OAuthExchangeError(
             "Intervals.icu отказа OAuth token заявката"
-            f"{status_suffix}."
+            f"{diagnostic_suffix}."
         )
     try:
         payload = response.json()

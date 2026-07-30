@@ -101,12 +101,14 @@ def test_token_exchange_posts_form_and_requires_oauth_athlete_id() -> None:
         http_post=post,
     )
 
-    assert observed["url"] == TOKEN_ENDPOINT
+    assert observed["url"] == "https://intervals.icu/api/oauth/token"
+    assert TOKEN_ENDPOINT == "https://intervals.icu/api/oauth/token"
     assert observed["data"] == {
         "client_id": "test-client",
         "client_secret": "test-secret",
         "code": "one-time-code",
     }
+    assert "json" not in observed
     assert observed["allow_redirects"] is False
     assert grant.access_token == "session-token"
     assert grant.athlete_id == "i123"
@@ -222,8 +224,13 @@ def test_token_exchange_http_failures_are_sanitized(
         return FakeResponse(
             status_code,
             {
-                "error": "provider_error",
-                "error_description": "secret provider detail",
+                "error": "invalid_grant",
+                "error_description": "Authorization code is invalid or expired.",
+                "access_token": "provider-token-must-not-leak",
+                "code": "provider-code-must-not-leak",
+                "state": "provider-state-must-not-leak",
+                "client_secret": "provider-secret-must-not-leak",
+                "unexpected": "provider detail must not leak",
             },
         )
 
@@ -236,8 +243,171 @@ def test_token_exchange_http_failures_are_sanitized(
         )
     message = str(caught.value)
     assert f"HTTP {status_code}" in message
+    assert "error=invalid_grant" in message
+    assert (
+        "error_description=Authorization code is invalid or expired."
+        in message
+    )
     assert "do-not-leak" not in message
-    assert "secret provider detail" not in message
+    assert "one-time-code" not in message
+    assert "provider-token-must-not-leak" not in message
+    assert "provider-code-must-not-leak" not in message
+    assert "provider-state-must-not-leak" not in message
+    assert "provider-secret-must-not-leak" not in message
+    assert "provider detail must not leak" not in message
+
+
+def test_token_exchange_redacts_sensitive_values_in_provider_error_fields() -> None:
+    def post(url: str, **kwargs: object) -> FakeResponse:
+        return FakeResponse(
+            400,
+            {
+                "error": "invalid_grant",
+                "error_description": (
+                    "code=one-time-code state state-value "
+                    "client_secret=do-not-leak "
+                    "token echo bare-provider-token "
+                    "access token abc123 id_token=short-id-token "
+                    "Bearer bearer-token-value"
+                ),
+                "access_token": "bare-provider-token",
+                "state": "state-value",
+            },
+        )
+
+    with pytest.raises(OAuthExchangeError) as caught:
+        exchange_authorization_code(
+            client_id="test-client",
+            client_secret="do-not-leak",
+            code="one-time-code",
+            http_post=post,
+            redact_values=("state-value",),
+        )
+
+    message = str(caught.value)
+    assert "HTTP 400" in message
+    assert "error=invalid_grant" in message
+    assert "error_description=" in message
+    assert "one-time-code" not in message
+    assert "state-value" not in message
+    assert "do-not-leak" not in message
+    assert "bare-provider-token" not in message
+    assert "abc123" not in message
+    assert "short-id-token" not in message
+    assert "bearer-token-value" not in message
+    assert "redacted" in message
+
+
+def test_token_exchange_escapes_markdown_in_provider_error_fields() -> None:
+    def post(url: str, **kwargs: object) -> FakeResponse:
+        return FakeResponse(
+            400,
+            {
+                "error": "invalid_grant",
+                "error_description": (
+                    "![pixel](https://attacker.invalid/track) "
+                    "<script>alert(1)</script>"
+                ),
+            },
+        )
+
+    with pytest.raises(OAuthExchangeError) as caught:
+        exchange_authorization_code(
+            client_id="test-client",
+            client_secret="do-not-leak",
+            code="one-time-code",
+            http_post=post,
+        )
+
+    message = str(caught.value)
+    assert "![pixel](https://attacker.invalid/track)" not in message
+    assert r"\!\[pixel\]\(https://attacker.invalid/track\)" in message
+    assert "<script>" not in message
+    assert r"\<script\>" in message
+
+
+def test_sensitive_redaction_happens_before_whitespace_normalization() -> None:
+    def post(url: str, **kwargs: object) -> FakeResponse:
+        return FakeResponse(
+            400,
+            {
+                "error": "invalid_grant",
+                "error_description": (
+                    "secret\tvalue code\nvalue state  value"
+                ),
+            },
+        )
+
+    with pytest.raises(OAuthExchangeError) as caught:
+        exchange_authorization_code(
+            client_id="test-client",
+            client_secret="secret\tvalue",
+            code="code\nvalue",
+            http_post=post,
+            redact_values=("state  value",),
+        )
+
+    message = str(caught.value)
+    assert "secret value" not in message
+    assert "code value" not in message
+    assert "state value" not in message
+    assert "redacted" in message
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        [],
+        "not-json-mapping",
+        {"error": ["invalid_grant"], "error_description": 123},
+    ],
+)
+def test_token_exchange_non_mapping_failure_shows_http_status_only(
+    payload: object,
+) -> None:
+    def post(url: str, **kwargs: object) -> FakeResponse:
+        return FakeResponse(400, payload)
+
+    with pytest.raises(OAuthExchangeError) as caught:
+        exchange_authorization_code(
+            client_id="test-client",
+            client_secret="do-not-leak",
+            code="one-time-code",
+            http_post=post,
+        )
+
+    message = str(caught.value)
+    assert "HTTP 400" in message
+    assert "error=" not in message
+    assert "error_description=" not in message
+    assert "do-not-leak" not in message
+    assert "one-time-code" not in message
+
+
+def test_token_exchange_malformed_error_json_shows_http_status_only() -> None:
+    class MalformedResponse:
+        status_code = 400
+
+        def json(self) -> object:
+            raise ValueError("body details must not leak")
+
+    def post(url: str, **kwargs: object) -> MalformedResponse:
+        return MalformedResponse()
+
+    with pytest.raises(OAuthExchangeError) as caught:
+        exchange_authorization_code(
+            client_id="test-client",
+            client_secret="do-not-leak",
+            code="one-time-code",
+            http_post=post,
+        )
+
+    message = str(caught.value)
+    assert "HTTP 400" in message
+    assert "error=" not in message
+    assert "error_description=" not in message
+    assert "body details must not leak" not in message
 
 
 def test_token_exchange_network_failure_is_sanitized() -> None:

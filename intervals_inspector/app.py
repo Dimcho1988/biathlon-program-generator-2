@@ -301,6 +301,7 @@ def _process_callback(config: InspectorConfig) -> None:
             client_id=config.client_id,
             client_secret=config.client_secret,
             code=callback.code,
+            redact_values=(callback.state,),
         )
         granted_scopes = {
             str(scope).upper() for scope in grant.scopes

@@ -263,6 +263,7 @@ def test_issued_state_exchanges_once_in_fresh_session_and_cannot_replay(
     inspector_app._process_callback(config)
 
     assert len(calls) == 1
+    assert calls[0]["redact_values"] == (state,)
     assert query == {}
     assert session[inspector_app.SESSION_TOKEN] == "session-token-not-real"
     assert session[inspector_app.SESSION_ATHLETE_ID] == "test-athlete"
@@ -436,7 +437,9 @@ def test_exchange_failure_notice_is_sanitized_and_actionable(monkeypatch):
 
     def failed_exchange(**kwargs):
         raise inspector_app.OAuthExchangeError(
-            "Intervals.icu отказа OAuth token заявката (HTTP 400)."
+            "Intervals.icu отказа OAuth token заявката "
+            "(HTTP 400; error=invalid_grant; "
+            "error_description=Authorization code expired)."
         )
 
     monkeypatch.setattr(
@@ -448,6 +451,8 @@ def test_exchange_failure_notice_is_sanitized_and_actionable(monkeypatch):
     notice = session[inspector_app.SESSION_NOTICE]
     assert notice["level"] == "error"
     assert "HTTP 400" in notice["message"]
+    assert "error=invalid_grant" in notice["message"]
+    assert "error_description=Authorization code expired" in notice["message"]
     rendered = repr(session)
     assert "one-time-code" not in rendered
     assert state not in rendered
