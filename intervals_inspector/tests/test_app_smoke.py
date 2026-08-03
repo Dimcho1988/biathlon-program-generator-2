@@ -441,10 +441,15 @@ def test_connected_report_renders_bounded_periods_and_summary_table():
         "7 дни",
         "14 дни",
         "30 дни",
+        "60 дни",
+        "90 дни",
     )
     assert len(app.dataframe) >= 1
     assert any(
         tab.label == "API проверки" for tab in app.tabs
+    )
+    assert any(
+        tab.label == "Качество на реалните streams" for tab in app.tabs
     )
 
 

@@ -30,6 +30,34 @@ timestamp, offset_sec, hr, valid
 
 По-късно могат да се добавят `speed`, `power`, `cadence`, `altitude`, `distance`, `temperature` и GPS полета. Функцията `analyze_activity_stream` използва само нормализираните колони и индивидуалния профил на зоните.
 
+## Потвърдени структурни находки от реални streams
+
+Проверени са две реални обезличени активности. В repository-то не се добавят
+техните JSON payload-и, идентификатори, timestamps, координати или сурови
+стойности.
+
+- При първата активност са налични 2822 точки във всеки от осемте streams:
+  `altitude`, `distance`, `heartrate`, `latlng`, `respiration`, `temp`, `time`
+  и `velocity_smooth`. Структурната оценка за `estimated_frequency_hz` е
+  `null`, а activity detail съдържа поле `recording_stops`.
+- При Run активността са налични 2994 точки във всеки от 16 streams и е
+  потвърдена честота `1.0 Hz`. Налични са `heartrate`, `time`,
+  `velocity_smooth`, `cadence`, `altitude`, `fixed_altitude` и running-dynamics
+  streams. Activity detail не съдържа `recording_stops`.
+
+Тези находки потвърждават само структура и реални варианти на времевата
+решетка. Те още не фиксират правила за нормализиране, moving status, единици,
+gap/pause интерпретация или избор между raw/fixed streams. На този етап не се
+изчисляват `T`, `k`, `Q`, `E`, `7/40`, `Tref`, зони или readiness.
+
+Диагностичният договор за избрана активност е aggregate-only: stream имена и
+брой точки, числови min/median/max и coverage, `dt_sec` статистика, gaps,
+сравнение на относителни продължителности, HR/скорост/optional coverage и само
+наличие/брой на `recording_stops`. `latlng` може да се отчете само като stream
+име и брой точки; `data`, `data2` и GPS координати не се включват в резултата.
+При липса на експлицитен надежден `moving` stream статусът остава unavailable и
+не се извежда от `velocity_smooth`.
+
 ## Дневен мониторинг
 
 ```text

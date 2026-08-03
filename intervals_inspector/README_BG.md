@@ -17,7 +17,9 @@
   преди еднократната обмяна на authorization code.
 - Изпълняват се само документирани GET заявки. Не се изтеглят оригинални
   FIT/TCX/GPX файлове.
-- Експортите съдържат само имена/пътища, типове и статистика за покритие.
+- Структурният export съдържа само имена/пътища, типове и статистика за
+  покритие. Отделният stream-quality export съдържа само агрегирани counts,
+  min/median/max, coverage, относителни продължителности и gap статистика.
   Наличието на GPS/`latlng` stream може да се отчете, но реални координати,
   други стойности, маршрути, бележки и удостоверителни данни се отстраняват.
 - „Прекрати връзката“ изчиства цялото състояние на текущата сесия.
@@ -63,12 +65,16 @@ Authorization code се обменя веднага след callback и се п
 
 ```text
 Repository: Dimcho1988/biathlon-program-generator-2
-Branch: codex/intervals-oauth-inspector
+Branch: codex/real-data-shadow-diagnostics
 Main file path: intervals_inspector/app.py
 ```
 
-Не променяйте съществуващото Streamlit приложение. Добавете петте настройки
-по-горе само в Secrets на новия deployment.
+Не променяйте съществуващото Streamlit приложение. Новият deployment използва
+същите пет имена на Secrets. `INTERVALS_CLIENT_ID` и
+`INTERVALS_CLIENT_SECRET` са за съществуващия onFlows OAuth client;
+`INTERVALS_REDIRECT_URI` трябва да е новият точен canonical URL, а
+`OAUTH_STATE_SECRET` е добре да бъде ново независимо случайно значение.
+`INSPECTOR_ACCESS_PASSWORD` може да следва същата политика за достъп.
 
 Публичната навигация на отделния pilot deployment има следните стабилни
 маршрути, които не изискват паролата на инспектора или OAuth:
@@ -122,8 +128,10 @@ exchange. При activity detail и streams `{id}` е ID на изрично и�
 - `https://forum.intervals.icu/t/intervals-icu-api-integration-cookbook/80090`
 - `https://intervals.icu/api-docs.html`
 
-Основната проверка започва с 7 дни и може да бъде разширена до 30 дни.
-Detail endpoint-ът и streams се извикват само за изрично избрана активност.
+Списъкът с активности започва с 7 дни и може да бъде избран за 14, 30, 60 или
+90 дни. Само този списък се разширява над 30 дни; wellness, calendar и planned
+workout проверките остават ограничени до максимум 30 дни. Detail endpoint-ът и
+streams се извикват само on-demand за изрично избрана активност.
 Бъдещият shadow-model слой е ограничен до максимум 90 дни и е описан в
 `PILOT_ARCHITECTURE_BG.md`; настоящият инспектор не изпълнява модели и не
 променя планове.

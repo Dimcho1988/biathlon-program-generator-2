@@ -193,7 +193,8 @@ def render_privacy_policy() -> None:
               and an access token;
             - profile and sport settings: timezone, locale, sport settings,
               heart-rate, power and pace zones;
-            - activity data for a selected 7-, 14- or 30-day period, such as
+            - activity data for a selected 7-, 14-, 30-, 60- or 90-day list
+              period, such as
               activity ID, name, type, dates, duration, distance, training
               load, calories, heart rate, power, speed, cadence, elevation,
               perceived exertion and feel;
@@ -383,7 +384,8 @@ def render_privacy_policy() -> None:
               права и access token;
             - профил и спортни настройки: часова зона, locale, настройки за
               спорт и зони за пулс, мощност и темпо;
-            - данни за активности за избран период от 7, 14 или 30 дни, като
+            - данни за списъка с активности за избран период от 7, 14, 30, 60
+              или 90 дни, като
               ID, име, тип, дати, продължителност, разстояние, тренировъчно
               натоварване, калории, пулс, мощност, скорост, каданс, денивелация,
               субективно усилие и усещане;

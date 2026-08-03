@@ -35,7 +35,6 @@ from intervals_inspector.inventory import (
     build_field_coverage,
     export_inventory_csv,
     export_inventory_json,
-    summarize_streams,
 )
 from intervals_inspector.oauth import (
     READ_ONLY_SCOPES,
@@ -59,6 +58,10 @@ from intervals_inspector.public_pages import (
     PRIVACY_POLICY_VERSION,
     PRIVACY_URL_PATH,
 )
+from intervals_inspector.stream_quality import (
+    analyze_stream_quality,
+    export_stream_quality_json,
+)
 
 
 CONFIG_NAMES = (
@@ -69,7 +72,8 @@ CONFIG_NAMES = (
     "INSPECTOR_ACCESS_PASSWORD",
 )
 CALLBACK_QUERY_KEYS = ("code", "state", "error", "error_description")
-INSPECTION_PERIOD_OPTIONS = (7, 14, 30)
+INSPECTION_PERIOD_OPTIONS = (7, 14, 30, 60, 90)
+MAX_SUPPORTING_DATA_PERIOD_DAYS = 30
 SHADOW_PERIOD_OPTIONS = (30, 60, 90)
 MAX_ACTIVITY_CHOICES = 200
 STATE_MAX_AGE_SECONDS = 10 * 60
@@ -547,7 +551,7 @@ def _inspect_source(
 def _validate_inspection_period(period_days: int) -> int:
     validated = validate_shadow_period(period_days)
     if validated > max(INSPECTION_PERIOD_OPTIONS):
-        raise ValueError("inspection period must not exceed 30 days")
+        raise ValueError("inspection period must not exceed 90 days")
     return validated
 
 
@@ -620,8 +624,13 @@ def _run_inspection(
     client = IntervalsClient(access_token=token, athlete_id=athlete_id)
 
     newest = date.today()
-    oldest = newest - timedelta(days=period_days - 1)
-    oldest_iso = oldest.isoformat()
+    activity_oldest = newest - timedelta(days=period_days - 1)
+    activity_oldest_iso = activity_oldest.isoformat()
+    supporting_period_days = min(
+        period_days, MAX_SUPPORTING_DATA_PERIOD_DAYS
+    )
+    supporting_oldest = newest - timedelta(days=supporting_period_days - 1)
+    supporting_oldest_iso = supporting_oldest.isoformat()
     newest_iso = newest.isoformat()
     endpoint_checks: list[dict[str, Any]] = []
 
@@ -646,7 +655,7 @@ def _run_inspection(
         category="Списък активности",
         endpoint=SOURCE_ENDPOINTS["activities"],
         operation=lambda: client.get_activities_result(
-            oldest_iso, newest_iso
+            activity_oldest_iso, newest_iso
         ),
         standard_fields=STANDARD_FIELDS["activities"],
         empty=[],
@@ -656,7 +665,7 @@ def _run_inspection(
         category="Wellness",
         endpoint=SOURCE_ENDPOINTS["wellness"],
         operation=lambda: client.get_wellness_result(
-            oldest_iso, newest_iso
+            supporting_oldest_iso, newest_iso
         ),
         standard_fields=STANDARD_FIELDS["wellness"],
         empty=[],
@@ -666,7 +675,7 @@ def _run_inspection(
         category="Календар",
         endpoint=SOURCE_ENDPOINTS["calendar"],
         operation=lambda: client.get_events_result(
-            oldest_iso, newest_iso
+            supporting_oldest_iso, newest_iso
         ),
         standard_fields=STANDARD_FIELDS["calendar"],
         empty=[],
@@ -676,7 +685,7 @@ def _run_inspection(
         category="Планирани тренировки (WORKOUT)",
         endpoint=SOURCE_ENDPOINTS["planned_workouts"],
         operation=lambda: client.get_events_result(
-            oldest_iso, newest_iso, category="WORKOUT"
+            supporting_oldest_iso, newest_iso, category="WORKOUT"
         ),
         standard_fields=STANDARD_FIELDS["planned_workouts"],
         empty=[],
@@ -747,18 +756,34 @@ def _run_activity_inspection(activity_id: str) -> dict[str, Any]:
         standard_fields=None,
         empty=[],
     )
-    stream_summary = summarize_streams(
-        [{"streams": streams_payload}],
-        max_activities=1,
-    )
+    stream_quality = analyze_stream_quality(detail_payload, streams_payload)
+    timing = dict(stream_quality.get("timing", {}))
+    time_point_count = int(timing.get("point_count", 0))
+    frequency = timing.get("estimated_frequency_hz")
+    stream_summary = [
+        {
+            "stream_name": str(row.get("stream_name", "")),
+            "value_type": None,
+            "unit": None,
+            "activity_count": 1,
+            "total_points": int(row.get("point_count", 0)),
+            "estimated_frequency_hz": (
+                frequency
+                if int(row.get("point_count", 0)) == time_point_count
+                else None
+            ),
+        }
+        for row in stream_quality.get("streams", [])
+        if str(row.get("stream_name", ""))
+    ]
 
-    # detail_payload is deliberately discarded after its field inventory is
-    # built. No activity values or stream samples enter session state.
+    # Raw detail and stream payloads, including any latlng coordinates, are
+    # discarded immediately after the deidentified aggregates are built.
     del detail_payload, streams_payload
     return {
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "coverage": {"activity_detail": detail_coverage},
         "streams": stream_summary,
+        "stream_quality": stream_quality,
         "endpoint_checks": endpoint_checks,
     }
 
@@ -840,6 +865,11 @@ def _render_report(
         model_readiness,
         endpoint_checks,
     ) = _combined_diagnostics(report, activity_report)
+    stream_quality = (
+        activity_report.get("stream_quality")
+        if isinstance(activity_report, Mapping)
+        else None
+    )
 
     for check in endpoint_checks:
         if not check.get("available") and check.get("safe_error"):
@@ -854,6 +884,7 @@ def _render_report(
             "Активности",
             "Wellness",
             "Streams",
+            "Качество на реалните streams",
             "Картографиране към onFlows",
             "Настройки и календар",
             "Обезличен отчет",
@@ -912,6 +943,30 @@ def _render_report(
         _render_table(streams, "Не са открити достъпни streams.")
 
     with tabs[4]:
+        st.caption(
+            "Стойностна диагностика само за изрично избраната активност. "
+            "Показват се агрегати; няма ID, token, абсолютни timestamps, "
+            "GPS координати или сурови точки."
+        )
+        if isinstance(stream_quality, Mapping):
+            for warning in stream_quality.get("warnings", []):
+                if isinstance(warning, Mapping) and warning.get("message"):
+                    st.warning(str(warning["message"]))
+            st.json(dict(stream_quality), expanded=False)
+            st.download_button(
+                "Изтегли безопасна диагностика JSON",
+                data=export_stream_quality_json(stream_quality),
+                file_name="intervals_stream_quality.json",
+                mime="application/json",
+                width="stretch",
+            )
+        else:
+            st.info(
+                "Изберете активност и натиснете „Провери избраната "
+                "активност“, за да се изчисли диагностиката."
+            )
+
+    with tabs[5]:
         st.subheader("Схемна готовност и оставащи model inputs")
         _render_table(
             model_readiness,
@@ -934,7 +989,7 @@ def _render_report(
             "На тази страница не се изпълняват модели и не се променят планове."
         )
 
-    with tabs[5]:
+    with tabs[6]:
         st.subheader("Профилна структура")
         _render_table(
             list(coverage.get("profile", [])),
@@ -961,7 +1016,7 @@ def _render_report(
             "Няма планирани тренировки в избрания период.",
         )
 
-    with tabs[6]:
+    with tabs[7]:
         all_coverage = [
             row
             for group_rows in coverage.values()
@@ -1137,11 +1192,17 @@ def _render_inspector() -> None:
         )
 
     period_days = st.radio(
-        "Период за API инспекция",
+        "Период за списъка с активности",
         options=INSPECTION_PERIOD_OPTIONS,
         index=0,
         horizontal=True,
         format_func=lambda value: f"{value} дни",
+    )
+    st.caption(
+        "Само списъкът с активности се разширява до избрания период. "
+        "Останалите периодични API проверки остават ограничени до максимум "
+        "30 дни, а detail и streams се зареждат on-demand само за избраната "
+        "активност."
     )
     if st.button(
         "Провери наличните данни",

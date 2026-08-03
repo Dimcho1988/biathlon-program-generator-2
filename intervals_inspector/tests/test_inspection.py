@@ -21,6 +21,8 @@ class FakeClient:
         assert access_token == TOKEN
         assert athlete_id == "athlete-123"
         self.activity_range: tuple[str, str] | None = None
+        self.wellness_range: tuple[str, str] | None = None
+        self.event_ranges: list[tuple[str, str, str | None]] = []
         FakeClient.last_instance = self
 
     def get_athlete_result(self) -> IntervalsResponse:
@@ -60,6 +62,7 @@ class FakeClient:
     def get_wellness_result(
         self, oldest: str, newest: str
     ) -> IntervalsResponse:
+        self.wellness_range = (oldest, newest)
         return IntervalsResponse(
             200,
             [{"id": newest, "fatigue": 2, "comments": "Private note"}],
@@ -73,6 +76,7 @@ class FakeClient:
         category: str | None = None,
     ) -> IntervalsResponse:
         assert category in {None, "WORKOUT"}
+        self.event_ranges.append((oldest, newest, category))
         return IntervalsResponse(200, [])
 
     def get_activity_result(
@@ -86,6 +90,10 @@ class FakeClient:
                 "id": "i123",
                 "name": "Private activity name",
                 "stream_types": ["time", "heartrate"],
+                "elapsed_time": 2,
+                "moving_time": 2,
+                "icu_recording_time": 2,
+                "recording_stops": [],
             },
         )
 
@@ -146,7 +154,7 @@ def test_overview_inspection_is_bounded_and_value_free(
     assert "Private note" not in rendered
 
 
-@pytest.mark.parametrize("period_days", [0, 31, 90, True])
+@pytest.mark.parametrize("period_days", [0, 91, True])
 def test_inspection_period_rejects_unbounded_values(
     monkeypatch: pytest.MonkeyPatch,
     period_days: Any,
@@ -155,6 +163,33 @@ def test_inspection_period_rejects_unbounded_values(
 
     with pytest.raises(ValueError):
         inspector_app._run_inspection(period_days)
+
+
+def test_ninety_days_expands_only_activity_list_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _session(monkeypatch)
+
+    inspector_app._run_inspection(90)
+
+    client = FakeClient.last_instance
+    assert client is not None
+    activity_oldest, newest = client.activity_range or ("", "")
+    supporting_oldest, supporting_newest = client.wellness_range or ("", "")
+    assert (
+        inspector_app.date.fromisoformat(newest)
+        - inspector_app.date.fromisoformat(activity_oldest)
+    ).days == 89
+    assert supporting_newest == newest
+    assert (
+        inspector_app.date.fromisoformat(supporting_newest)
+        - inspector_app.date.fromisoformat(supporting_oldest)
+    ).days == 29
+    assert len(client.event_ranges) == 2
+    assert all(
+        oldest == supporting_oldest and event_newest == newest
+        for oldest, event_newest, _category in client.event_ranges
+    )
 
 
 def test_selected_activity_detail_and_stream_report_excludes_values(
@@ -172,9 +207,14 @@ def test_selected_activity_detail_and_stream_report_excludes_values(
         row["stream_name"] for row in report["streams"]
     }
     assert stream_names == {"heartrate", "time"}
+    assert report["stream_quality"]["timing"]["estimated_frequency_hz"] == 1.0
+    assert report["stream_quality"]["recording_stops"] == {
+        "present": True,
+        "count": 0,
+    }
     rendered = repr(report)
     assert "Private activity name" not in rendered
-    assert "120" not in rendered
+    assert "[120, 121, 122]" not in rendered
     assert TOKEN not in rendered
 
 
