@@ -949,10 +949,174 @@ def _render_report(
             "GPS координати или сурови точки."
         )
         if isinstance(stream_quality, Mapping):
+            stream_lengths = stream_quality.get("stream_lengths", {})
+            timing = stream_quality.get("timing", {})
+            dt_distribution = (
+                timing.get("dt_distribution", {})
+                if isinstance(timing, Mapping)
+                else {}
+            )
+            recording_stops = stream_quality.get("recording_stops", {})
+            recording_segments = stream_quality.get(
+                "recording_segments", {}
+            )
+            speed = stream_quality.get("speed", {})
+
+            st.subheader("Streams и числово покритие")
+            _render_table(
+                list(stream_quality.get("streams", [])),
+                "Няма безопасни числови stream агрегати.",
+            )
+            _render_table(
+                [
+                    {
+                        "еднаква дължина": stream_lengths.get("all_equal"),
+                        "различни дължини": stream_lengths.get(
+                            "distinct_point_counts"
+                        ),
+                        "min точки": stream_lengths.get("min_point_count"),
+                        "max точки": stream_lengths.get("max_point_count"),
+                        "референтни точки": stream_lengths.get(
+                            "reference_point_count"
+                        ),
+                        "изключени location streams": stream_quality.get(
+                            "location_stream_excluded_count", 0
+                        ),
+                    }
+                ],
+                "Няма информация за дължините на streams.",
+            )
+
+            st.subheader("Времева решетка и dt")
+            st.caption(
+                "dt е разликата между два съседни offsets в оригиналния "
+                "time stream: right_offset_sec − left_offset_sec. "
+                "Bucket процентите са спрямо всички числови съседни dt; "
+                "percentiles използват само положителните dt."
+            )
+            _render_table(
+                [
+                    {
+                        "точки": timing.get("point_count"),
+                        "валидни offsets": timing.get("valid_offset_count"),
+                        "dt интервали": timing.get("dt_interval_count"),
+                        "median dt (s)": timing.get("median_dt_sec"),
+                        "mode dt (s)": timing.get("mode_dt_sec"),
+                        "min dt (s)": timing.get("min_dt_sec"),
+                        "max dt (s)": timing.get("max_dt_sec"),
+                        "точно 1 s (%)": timing.get(
+                            "exactly_1s_interval_percent"
+                        ),
+                        "повторени offsets": timing.get(
+                            "repeated_offset_count"
+                        ),
+                        "non-monotonic offsets": timing.get(
+                            "non_monotonic_offset_count"
+                        ),
+                        "gaps > 1.5 s": timing.get("gap_count_over_1_5s"),
+                        "stream duration (s)": timing.get(
+                            "stream_duration_sec"
+                        ),
+                    }
+                ],
+                "Няма time stream за времева диагностика.",
+            )
+            _render_table(
+                list(dt_distribution.get("buckets", []))
+                if isinstance(dt_distribution, Mapping)
+                else [],
+                "Няма dt buckets.",
+            )
+            percentiles = (
+                dt_distribution.get("percentiles_sec", {})
+                if isinstance(dt_distribution, Mapping)
+                else {}
+            )
+            _render_table(
+                [dict(percentiles)] if isinstance(percentiles, Mapping) else [],
+                "Няма dt percentiles.",
+            )
+
+            st.subheader("Recording stops и gaps")
+            _render_table(
+                [dict(recording_stops)]
+                if isinstance(recording_stops, Mapping)
+                else [],
+                "Няма recording-stop диагностика.",
+            )
+
+            st.subheader("Непрекъснати recording сегменти")
+            if isinstance(recording_segments, Mapping):
+                segment_summary = {
+                    key: value
+                    for key, value in recording_segments.items()
+                    if key != "dt_distribution"
+                }
+                _render_table(
+                    [segment_summary],
+                    "Няма recording сегменти.",
+                )
+                segment_distribution = recording_segments.get(
+                    "dt_distribution", {}
+                )
+                _render_table(
+                    list(segment_distribution.get("buckets", []))
+                    if isinstance(segment_distribution, Mapping)
+                    else [],
+                    "Няма вътрешни segment dt buckets.",
+                )
+
+            st.subheader("Speed и състояние на крайните точки")
+            if isinstance(speed, Mapping):
+                speed_summary = {
+                    key: value
+                    for key, value in speed.items()
+                    if key != "dt_buckets"
+                }
+                _render_table(
+                    [speed_summary],
+                    "Няма speed stream.",
+                )
+                _render_table(
+                    list(speed.get("dt_buckets", [])),
+                    "Няма speed агрегати по dt bucket.",
+                )
+
+            st.subheader("Duration reconciliation")
+            reconciliation = stream_quality.get(
+                "duration_reconciliation", {}
+            )
+            _render_table(
+                [dict(reconciliation)]
+                if isinstance(reconciliation, Mapping)
+                else [],
+                "Няма достатъчно durations за reconciliation.",
+            )
+
+            st.subheader("HR и допълнително покритие")
+            heart_rate = stream_quality.get("heart_rate", {})
+            metric_coverage = stream_quality.get("metric_coverage", {})
+            _render_table(
+                [dict(heart_rate)]
+                if isinstance(heart_rate, Mapping)
+                else [],
+                "Няма HR stream.",
+            )
+            _render_table(
+                [
+                    {"metric": metric, **dict(values)}
+                    for metric, values in metric_coverage.items()
+                    if isinstance(values, Mapping)
+                ]
+                if isinstance(metric_coverage, Mapping)
+                else [],
+                "Няма cadence, altitude или power streams.",
+            )
+
+            st.subheader("Диагностични предупреждения")
             for warning in stream_quality.get("warnings", []):
                 if isinstance(warning, Mapping) and warning.get("message"):
                     st.warning(str(warning["message"]))
-            st.json(dict(stream_quality), expanded=False)
             st.download_button(
                 "Изтегли безопасна диагностика JSON",
                 data=export_stream_quality_json(stream_quality),

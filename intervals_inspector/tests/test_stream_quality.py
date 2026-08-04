@@ -42,7 +42,9 @@ def test_uniform_one_hz_stream_reports_stable_timing_and_aggregates() -> None:
         ),
     )
 
-    assert report["timing"] == {
+    timing = dict(report["timing"])
+    distribution = timing.pop("dt_distribution")
+    assert timing == {
         "stream_present": True,
         "stream_name": "time",
         "point_count": 5,
@@ -65,6 +67,10 @@ def test_uniform_one_hz_stream_reports_stable_timing_and_aggregates() -> None:
         "stream_duration_sec": 4.0,
         "estimated_frequency_hz": 1.0,
     }
+    assert distribution["dt_definition"] == (
+        "right_offset_sec - left_offset_sec for adjacent time-stream points"
+    )
+    assert distribution["buckets"][0]["count"] == 4
     assert report["duration_comparison"]["elapsed_time_minus_stream_sec"] == 0.0
     assert report["heart_rate"]["coverage_percent"] == 100.0
     assert report["metric_coverage"]["cadence"]["best_coverage_percent"] == 100.0
@@ -115,9 +121,16 @@ def test_pause_is_reported_only_as_recording_stop_count() -> None:
         _streams(time=[0, 1, 5, 6], velocity_smooth=[1, 0, 0, 1]),
     )
 
-    assert report["recording_stops"] == {"present": True, "count": 2}
+    assert report["recording_stops"]["present"] is True
+    assert report["recording_stops"]["count"] == 2
+    assert report["recording_stops"]["invalid_entry_count"] == 2
+    assert report["recording_stops"]["total_duration_sec"] is None
     assert report["moving_status"]["available"] is False
     assert report["warnings"][0]["code"] == "moving_status_unavailable"
+    assert any(
+        warning["code"] == "recording_stop_structure_unresolved"
+        for warning in report["warnings"]
+    )
     assert "private" not in export_stream_quality_json(report)
 
 
@@ -236,22 +249,24 @@ def test_latlng_coordinates_are_fully_excluded_but_presence_is_counted() -> None
             "data": [latitude, latitude + 0.01],
             "data2": [longitude, longitude + 0.01],
         },
+        {
+            "type": "gps_coordinates",
+            "data": [latitude + 0.02, longitude + 0.02],
+        },
     ]
 
     report = analyze_stream_quality({}, streams)
-    latlng = _by_stream(report)["latlng"]
     exported = export_stream_quality_json(report)
 
-    assert latlng == {
-        "stream_name": "latlng",
-        "point_count": 2,
-        "location_values_excluded": True,
-    }
-    assert "latlng" in report["available_stream_names"]
+    assert "latlng" not in _by_stream(report)
+    assert "latlng" not in report["available_stream_names"]
+    assert "gps_coordinates" not in _by_stream(report)
+    assert report["location_stream_excluded_count"] == 2
     assert str(latitude) not in repr(report)
     assert str(longitude) not in repr(report)
     assert str(latitude) not in exported
     assert str(longitude) not in exported
+    assert "latlng" not in exported.casefold()
 
 
 def test_export_has_no_ids_tokens_absolute_timestamps_or_raw_points() -> None:
@@ -307,6 +322,234 @@ def test_export_has_no_ids_tokens_absolute_timestamps_or_raw_points() -> None:
         "point_count": 3,
         "absolute_timestamp_values_excluded": True,
     }
+
+
+def test_smart_recording_dt_one_to_five_seconds_is_bucketed() -> None:
+    report = analyze_stream_quality(
+        {},
+        _streams(time=[0, 1, 3, 6, 10, 15]),
+    )
+    buckets = {
+        row["bucket"]: row
+        for row in report["timing"]["dt_distribution"]["buckets"]
+    }
+
+    for second in range(1, 6):
+        assert buckets[f"dt_eq_{second}s"]["count"] == 1
+        assert buckets[f"dt_eq_{second}s"]["percent"] == 20.0
+    assert report["recording_segments"]["segment_count"] == 1
+
+
+def test_all_dt_buckets_and_percentiles_are_reported() -> None:
+    deltas = [1, 2, 3, 4, 5, 6, 10, 11, 30, 31, 60, 61, 300, 301]
+    offsets = [0]
+    for delta in deltas:
+        offsets.append(offsets[-1] + delta)
+
+    report = analyze_stream_quality({}, _streams(time=offsets))
+    distribution = report["timing"]["dt_distribution"]
+    counts = {
+        row["bucket"]: row["count"] for row in distribution["buckets"]
+    }
+
+    assert counts == {
+        "dt_eq_1s": 1,
+        "dt_eq_2s": 1,
+        "dt_eq_3s": 1,
+        "dt_eq_4s": 1,
+        "dt_eq_5s": 1,
+        "dt_6_to_10s": 2,
+        "dt_11_to_30s": 2,
+        "dt_31_to_60s": 2,
+        "dt_61_to_300s": 2,
+        "dt_over_300s": 1,
+        "other_positive_dt": 0,
+    }
+    assert distribution["percentiles_sec"] == {
+        "p50": 10.5,
+        "p75": 52.75,
+        "p90": 228.3,
+        "p95": 300.35,
+        "p99": 300.87,
+    }
+
+
+def test_one_integer_recording_stop_matches_stream_gap() -> None:
+    report = analyze_stream_quality(
+        {
+            "elapsed_time": 12,
+            "icu_recording_time": 2,
+            "moving_time": 2,
+            "recording_stops": [1],
+        },
+        _streams(time=[0, 1, 11, 12]),
+    )
+    stops = report["recording_stops"]
+
+    assert stops["structure_type"] == "integer_marker_list"
+    assert stops["marker_interpretation"] == "stream_left_point_index"
+    assert stops["start_end_mapping_status"] == "all"
+    assert stops["mapped_stop_count"] == 1
+    assert stops["matched_gap_count"] == 1
+    assert stops["total_duration_sec"] == 10.0
+    assert stops["min_duration_sec"] == 10.0
+    assert stops["median_duration_sec"] == 10.0
+    assert stops["max_duration_sec"] == 10.0
+
+
+def test_multiple_recording_stops_create_multiple_recording_segments() -> None:
+    report = analyze_stream_quality(
+        {
+            "elapsed_time": 33,
+            "icu_recording_time": 3,
+            "moving_time": 3,
+            "recording_stops": [1, 3],
+        },
+        _streams(time=[0, 1, 11, 12, 32, 33]),
+    )
+    stops = report["recording_stops"]
+    segments = report["recording_segments"]
+
+    assert stops["count"] == 2
+    assert stops["matched_gap_count"] == 2
+    assert stops["total_duration_sec"] == 30.0
+    assert stops["median_duration_sec"] == 15.0
+    assert stops["outside_recording_stop_gap_count"] == 0
+    assert segments["segment_count"] == 3
+    assert segments["min_duration_sec"] == 1.0
+    assert segments["median_duration_sec"] == 1.0
+    assert segments["max_duration_sec"] == 1.0
+    assert segments["total_duration_sec"] == 3.0
+    assert segments["min_point_count"] == 2
+    assert segments["median_point_count"] == 2.0
+    assert segments["max_point_count"] == 2
+    assert segments["total_point_count"] == 6
+    assert segments["effective_average_frequency_hz"] == 1.0
+
+
+def test_absolute_integer_stop_marker_is_mapped_without_exporting_timestamp() -> None:
+    start_epoch = 1_700_000_000
+    report = analyze_stream_quality(
+        {
+            "start_date": "2023-11-14T22:13:20Z",
+            "recording_stops": [start_epoch + 1],
+        },
+        _streams(time=[0, 1, 11, 12]),
+    )
+    exported = export_stream_quality_json(report)
+
+    assert report["recording_stops"]["marker_interpretation"] == "unix_epoch_sec"
+    assert report["recording_stops"]["matched_gap_count"] == 1
+    assert str(start_epoch + 1) not in repr(report)
+    assert str(start_epoch + 1) not in exported
+    assert "2023-11-14" not in exported
+
+
+def test_partial_pair_overlap_is_not_treated_as_matched_stop_gap() -> None:
+    report = analyze_stream_quality(
+        {"recording_stops": [{"start": 4, "end": 8}]},
+        _streams(time=[0, 1, 11, 12]),
+    )
+    stops = report["recording_stops"]
+
+    assert stops["structure_type"] == "start_end_pair_list"
+    assert stops["start_end_mapping_status"] == "partial"
+    assert stops["partially_overlapping_stop_count"] == 1
+    assert stops["matched_gap_count"] == 0
+    assert stops["outside_recording_stop_gap_count"] == 1
+
+
+def test_large_gap_without_recording_stop_remains_unexplained() -> None:
+    report = analyze_stream_quality(
+        {
+            "elapsed_time": 102,
+            "icu_recording_time": 2,
+            "moving_time": 2,
+        },
+        _streams(time=[0, 1, 101, 102]),
+    )
+    codes = {warning["code"] for warning in report["warnings"]}
+
+    assert report["recording_stops"]["matched_gap_count"] == 0
+    assert report["recording_stops"]["outside_recording_stop_large_gap_count"] == 1
+    assert "unexplained_large_gaps" in codes
+    assert "stream_explained_time_mismatch" in codes
+
+
+def test_speed_states_and_endpoint_counts_are_aggregated_by_dt_bucket() -> None:
+    report = analyze_stream_quality(
+        {},
+        _streams(
+            time=[0, 1, 3, 6, 10],
+            velocity_smooth=[1.0, 0.0, None, 2.0, 3.0],
+        ),
+    )
+    speed = report["speed"]
+    buckets = {row["bucket"]: row for row in speed["dt_buckets"]}
+
+    assert speed["null_count"] == 1
+    assert speed["null_percent"] == 20.0
+    assert speed["zero_count"] == 1
+    assert speed["zero_percent"] == 20.0
+    assert speed["positive_count"] == 3
+    assert speed["positive_percent"] == 60.0
+    assert speed["invalid_count"] == 0
+    assert buckets["dt_eq_1s"]["at_least_one_zero_speed_count"] == 1
+    assert buckets["dt_eq_2s"]["at_least_one_zero_speed_count"] == 1
+    assert buckets["dt_eq_2s"]["at_least_one_null_speed_count"] == 1
+    assert buckets["dt_eq_3s"]["at_least_one_null_speed_count"] == 1
+    assert buckets["dt_eq_4s"]["positive_speed_at_both_endpoints_count"] == 1
+
+
+def test_duration_reconciliation_explains_recording_stop_and_moving_time() -> None:
+    report = analyze_stream_quality(
+        {
+            "elapsed_time": 12,
+            "icu_recording_time": 2,
+            "moving_time": 1,
+            "recording_stops": [1],
+        },
+        _streams(time=[0, 1, 11, 12]),
+    )
+    reconciliation = report["duration_reconciliation"]
+
+    assert reconciliation["elapsed_minus_icu_recording_sec"] == 10.0
+    assert reconciliation["icu_recording_minus_moving_sec"] == 1.0
+    assert reconciliation["elapsed_recording_difference_minus_stop_time_sec"] == 0.0
+    assert reconciliation["stream_minus_recording_plus_matched_stops_sec"] == 0.0
+    assert reconciliation["within_tolerance"] is True
+
+
+def test_safe_export_rejects_full_payload_injection_and_location_stream() -> None:
+    report = analyze_stream_quality(
+        {"activity_id": "private-id"},
+        [
+            {"type": "time", "data": [0, 1]},
+            {"type": "latlng", "data": [42.1, 42.2], "data2": [23.1, 23.2]},
+        ],
+    )
+    report["full_api_payload"] = {
+        "id": "private-id",
+        "name": "Private Name",
+        "access_token": "private-token",
+        "data": [999_991, 999_992],
+    }
+    exported = export_stream_quality_json(report)
+
+    for forbidden in (
+        "private-id",
+        "Private Name",
+        "private-token",
+        "999991",
+        "999992",
+        "42.1",
+        "23.1",
+        "latlng",
+        "full_api_payload",
+        "start_offset_sec",
+        "end_offset_sec",
+    ):
+        assert forbidden not in exported
 
 
 @pytest.mark.parametrize("recording_stops", [None, [], 0])

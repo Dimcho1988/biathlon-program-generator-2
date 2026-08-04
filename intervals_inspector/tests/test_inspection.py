@@ -208,10 +208,11 @@ def test_selected_activity_detail_and_stream_report_excludes_values(
     }
     assert stream_names == {"heartrate", "time"}
     assert report["stream_quality"]["timing"]["estimated_frequency_hz"] == 1.0
-    assert report["stream_quality"]["recording_stops"] == {
-        "present": True,
-        "count": 0,
-    }
+    recording_stops = report["stream_quality"]["recording_stops"]
+    assert recording_stops["present"] is True
+    assert recording_stops["count"] == 0
+    assert recording_stops["structure_type"] == "integer_marker_list"
+    assert recording_stops["matched_gap_count"] == 0
     rendered = repr(report)
     assert "Private activity name" not in rendered
     assert "[120, 121, 122]" not in rendered
