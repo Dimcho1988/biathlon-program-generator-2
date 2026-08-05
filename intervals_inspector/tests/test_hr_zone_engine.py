@@ -19,6 +19,13 @@ from intervals_inspector.stream_normalizer import (
     NormalizerInput,
     normalize_stream_intervals,
 )
+from intervals_inspector.onflows_intrazone_load import (
+    calculate_onflows_intrazone_load,
+)
+from intervals_inspector.onflows_zone_profile import (
+    default_onflows_zone_profile,
+    safe_profile_dict,
+)
 from intervals_inspector.stream_quality import (
     analyze_stream_quality,
     export_stream_quality_json,
@@ -290,6 +297,12 @@ def test_safe_export_contains_only_aggregate_top_level_zone_analysis() -> None:
     summary = {
         "algorithm_version": "normalizer-test",
         "zone_analysis": zone_analysis,
+        "onflows_load_analysis": calculate_onflows_intrazone_load(
+            result, default_onflows_zone_profile()
+        ),
+        "onflows_zone_profile": safe_profile_dict(
+            default_onflows_zone_profile()
+        ),
         "intervals": [{"values": [987_654_321]}],
         "one_hz_points": [987_654_322],
         "activity_id": "private-activity",
@@ -297,6 +310,8 @@ def test_safe_export_contains_only_aggregate_top_level_zone_analysis() -> None:
         "timestamp": "2026-08-05T12:34:56Z",
         "latlng": [[42.0, 23.0]],
     }
+    summary["onflows_load_analysis"]["raw_points"] = [987_654_323]
+    summary["onflows_load_analysis"]["activity_id"] = "nested-private"
     quality = analyze_stream_quality(
         {},
         [
@@ -311,10 +326,18 @@ def test_safe_export_contains_only_aggregate_top_level_zone_analysis() -> None:
     assert "zone_analysis" in parsed
     assert "zone_analysis" not in parsed["normalizer"]
     assert parsed["zone_analysis"]["classified_hr_sec"] == 2.0
+    assert "onflows_load_analysis" in parsed
+    assert "onflows_zone_profile" in parsed
+    assert "onflows_load_analysis" not in parsed["normalizer"]
+    assert "onflows_zone_profile" not in parsed["normalizer"]
+    assert parsed["onflows_load_analysis"]["total_real_sec"] == 2.0
+    assert len(parsed["onflows_zone_profile"]["fingerprint"]) == 64
     for forbidden in (
         "987654321",
         "987654322",
+        "987654323",
         "private-activity",
+        "nested-private",
         "private-token",
         "2026-08-05",
         "latlng",

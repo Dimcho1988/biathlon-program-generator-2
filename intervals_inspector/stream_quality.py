@@ -1450,6 +1450,8 @@ _QUALITY_EXPORT_TOP_KEYS = {
     "metric_coverage",
     "moving_status",
     "normalizer",
+    "onflows_load_analysis",
+    "onflows_zone_profile",
     "recording_segments",
     "recording_stops",
     "schema_version",
@@ -1540,14 +1542,20 @@ def export_stream_quality_json(
         if key in analysis
     }
     if isinstance(normalizer_summary, Mapping):
+        separate_aggregates = (
+            "zone_analysis",
+            "onflows_load_analysis",
+            "onflows_zone_profile",
+        )
         projected["normalizer"] = {
             key: value
             for key, value in normalizer_summary.items()
-            if key != "zone_analysis"
+            if key not in separate_aggregates
         }
-        zone_analysis = normalizer_summary.get("zone_analysis")
-        if isinstance(zone_analysis, Mapping):
-            projected["zone_analysis"] = zone_analysis
+        for aggregate_key in separate_aggregates:
+            aggregate = normalizer_summary.get(aggregate_key)
+            if isinstance(aggregate, Mapping):
+                projected[aggregate_key] = aggregate
     safe = _safe_export_copy(projected)
     _assert_safe_export_tree(safe)
     return json.dumps(

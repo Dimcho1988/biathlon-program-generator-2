@@ -65,8 +65,9 @@ Token не се подава извън API gateway-а. Суровият payload
 | Компонент | Intervals вход | Статус след adapter |
 |---|---|---|
 | Activity metadata | `id`, дата, `type`, `moving_time` | Схемно картографиран; value adapter предстои |
-| HR зониране | `time`, `heartrate`, `moving`/`velocity_smooth`, спортни `hr_zones` | Кандидат при реални streams; нужни са unit/alignment/zone проверки |
-| Q/E, 7/40, Tref и load readiness | `real_Z1..real_Z5`, производни от HR зонирането | Заключен до value adapter и многодневна нормализирана история |
+| HR зониране | `time`, `heartrate`, interval-aware normalizer, activity-specific `icu_hr_zones` | Диагностично реализирано; Intervals зоните остават само сравнителна референция |
+| onFlows T/k/Q | interval-aware active segments + регулируем `onflows-zone-profile-v1` | Диагностично реализирано с аналитично интегриране; Q не е Stress |
+| E, cascade/spillover, 7/40, Tref и load readiness | бъдеща многодневна нормализирана история | Изрично извън текущия диагностичен слой |
 | Wellness | sleep, fatigue, stress, motivation, resting HR, HRV | Частичен |
 | Интегрирана готовност | load + wellness + safety полета | Само shadow с предупреждение |
 | Сезонен/годишен обем | нормализирани активности + годишна цел | Частичен заради 90-дневния таван |

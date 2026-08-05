@@ -57,6 +57,18 @@ from intervals_inspector.oauth_state_store import (
     consume_pending_state_with_consent,
     register_pending_state,
 )
+from intervals_inspector.onflows_intrazone_load import (
+    calculate_onflows_intrazone_load,
+)
+from intervals_inspector.onflows_zone_profile import (
+    MANUAL_PROFILE_SOURCE,
+    OnFlowsZoneProfile,
+    build_onflows_zone_profile,
+    default_onflows_zone_profile,
+    profile_edit_rows,
+    profile_from_safe_dict,
+    safe_profile_dict,
+)
 from intervals_inspector.public_pages import (
     ABOUT_URL_PATH,
     PRIVACY_POLICY_VERSION,
@@ -99,6 +111,9 @@ SESSION_ACTIVITY_REPORT = "_intervals_activity_report"
 SESSION_ACTIVITY_REPORT_ID = "_intervals_activity_report_id"
 SESSION_NORMALIZER_REPORT = "_intervals_normalizer_report"
 SESSION_NORMALIZER_REPORT_ID = "_intervals_normalizer_report_id"
+SESSION_ONFLOWS_PROFILE = "_onflows_zone_profile"
+SESSION_ONFLOWS_PROFILE_FINGERPRINT = "_onflows_zone_profile_fingerprint"
+ONFLOWS_PROFILE_EDITOR_KEY = "_onflows_zone_profile_editor"
 SESSION_AUTHENTICATED = "_inspector_authenticated"
 SESSION_CONSENT = "_pilot_consent_evidence"
 SESSION_NOTICE = "_inspector_notice"
@@ -809,9 +824,11 @@ def _run_activity_normalizer(
     activity_id: str,
     *,
     include_1hz_preview: bool,
+    onflows_profile: OnFlowsZoneProfile | None = None,
 ) -> dict[str, Any]:
     """Run one transient normalization and retain aggregate diagnostics only."""
 
+    profile = onflows_profile or default_onflows_zone_profile()
     athlete_id = str(st.session_state[SESSION_ATHLETE_ID])
     token = str(st.session_state[SESSION_TOKEN])
     client = IntervalsClient(access_token=token, athlete_id=athlete_id)
@@ -847,14 +864,62 @@ def _run_activity_normalizer(
         adapted_zones,
         unavailable_reason=zone_adapter_reason,
     )
+    summary["onflows_zone_profile"] = safe_profile_dict(profile)
+    summary["onflows_load_analysis"] = calculate_onflows_intrazone_load(
+        interval_result,
+        profile,
+    )
     # Interval objects and optional 1 Hz samples are intentionally transient.
     del (
         normalizer_input,
         interval_result,
         one_hz_result,
         adapted_zones,
+        profile,
     )
     return summary
+
+
+def _store_onflows_profile(profile: OnFlowsZoneProfile) -> None:
+    st.session_state[SESSION_ONFLOWS_PROFILE] = safe_profile_dict(profile)
+    st.session_state[SESSION_ONFLOWS_PROFILE_FINGERPRINT] = (
+        profile.fingerprint
+    )
+
+
+def _session_onflows_profile() -> OnFlowsZoneProfile:
+    raw_profile = st.session_state.get(SESSION_ONFLOWS_PROFILE)
+    try:
+        profile = profile_from_safe_dict(raw_profile)
+    except ValueError:
+        profile = default_onflows_zone_profile()
+    _store_onflows_profile(profile)
+    return profile
+
+
+def _profile_editor_records(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [dict(row) for row in value if isinstance(row, Mapping)]
+    converter = getattr(value, "to_dict", None)
+    if callable(converter):
+        records = converter(orient="records")
+        if isinstance(records, list):
+            return [
+                dict(row) for row in records if isinstance(row, Mapping)
+            ]
+    return []
+
+
+def _onflows_analysis_is_stale(
+    analysis: Any,
+    profile: OnFlowsZoneProfile | None,
+) -> bool:
+    if not isinstance(analysis, Mapping):
+        return False
+    return (
+        profile is None
+        or analysis.get("profile_fingerprint") != profile.fingerprint
+    )
 
 
 def _combined_diagnostics(
@@ -943,6 +1008,7 @@ def _render_report(
     activity_report: Mapping[str, Any] | None = None,
 ) -> None:
     counts = report.get("counts", {})
+    onflows_profile = _session_onflows_profile()
     (
         coverage,
         streams,
@@ -1232,6 +1298,7 @@ def _render_report(
                             normalizer_summary = _run_activity_normalizer(
                                 selected_activity_id,
                                 include_1hz_preview=False,
+                                onflows_profile=onflows_profile,
                             )
                         st.session_state[SESSION_NORMALIZER_REPORT] = (
                             normalizer_summary
@@ -1258,6 +1325,7 @@ def _render_report(
                             normalizer_summary = _run_activity_normalizer(
                                 selected_activity_id,
                                 include_1hz_preview=True,
+                                onflows_profile=onflows_profile,
                             )
                         st.session_state[SESSION_NORMALIZER_REPORT] = (
                             normalizer_summary
@@ -1358,6 +1426,207 @@ def _render_report(
                     "Normalizer-ът още не е стартиран за избраната "
                     "активност."
                 )
+
+            st.subheader("onFlows вътрешнозоново претегляне")
+            st.caption(
+                "Този слой използва собствен регулируем onFlows профил и "
+                "аналитично интегрира k = W / W_low директно върху "
+                "interval-aware резултата. Не използва icu_hr_zones и не "
+                "изисква временен 1 Hz preview."
+            )
+            if st.button(
+                "Възстанови стандартния onFlows профил",
+                key="_restore_default_onflows_profile",
+                width="stretch",
+            ):
+                onflows_profile = default_onflows_zone_profile()
+                _store_onflows_profile(onflows_profile)
+                st.session_state.pop(ONFLOWS_PROFILE_EDITOR_KEY, None)
+                st.rerun()
+
+            edited_profile_value = st.data_editor(
+                profile_edit_rows(onflows_profile),
+                key=ONFLOWS_PROFILE_EDITOR_KEY,
+                num_rows="dynamic",
+                hide_index=True,
+                width="stretch",
+                column_order=(
+                    "zone",
+                    "hr_low",
+                    "hr_high",
+                    "weight_low",
+                    "weight_high",
+                    "power",
+                ),
+                column_config={
+                    "zone": st.column_config.TextColumn("Зона"),
+                    "hr_low": st.column_config.NumberColumn(
+                        "HR low", format="%.2f"
+                    ),
+                    "hr_high": st.column_config.NumberColumn(
+                        "HR high", format="%.2f"
+                    ),
+                    "weight_low": st.column_config.NumberColumn(
+                        "W low", min_value=0.01, format="%.3f"
+                    ),
+                    "weight_high": st.column_config.NumberColumn(
+                        "W high", min_value=0.01, format="%.3f"
+                    ),
+                    "power": st.column_config.NumberColumn(
+                        "p",
+                        min_value=0.20,
+                        max_value=4.00,
+                        step=0.05,
+                        format="%.2f",
+                    ),
+                },
+            )
+            current_onflows_profile: OnFlowsZoneProfile | None = None
+            try:
+                candidate_profile = build_onflows_zone_profile(
+                    _profile_editor_records(edited_profile_value),
+                    source=MANUAL_PROFILE_SOURCE,
+                )
+                current_onflows_profile = (
+                    onflows_profile
+                    if candidate_profile.fingerprint
+                    == onflows_profile.fingerprint
+                    else candidate_profile
+                )
+                _store_onflows_profile(current_onflows_profile)
+            except ValueError as exc:
+                st.error(f"Невалиден onFlows профил: {exc}")
+
+            if current_onflows_profile is not None:
+                for warning in current_onflows_profile.warnings:
+                    st.warning(
+                        f"{warning.zone}: {warning.message} "
+                        "Профилът е валиден, но може да има изкуствен скок."
+                    )
+
+            if selected_activity_id and st.button(
+                "Преизчисли normalizer и onFlows Q с текущия профил",
+                key="_recalculate_onflows_intrazone_load",
+                disabled=current_onflows_profile is None,
+                width="stretch",
+            ):
+                try:
+                    with st.spinner(
+                        "Interval-aware нормализация и аналитично onFlows "
+                        "вътрешнозоново претегляне…"
+                    ):
+                        normalizer_summary = _run_activity_normalizer(
+                            selected_activity_id,
+                            include_1hz_preview=False,
+                            onflows_profile=current_onflows_profile,
+                        )
+                    st.session_state[SESSION_NORMALIZER_REPORT] = (
+                        normalizer_summary
+                    )
+                    st.session_state[SESSION_NORMALIZER_REPORT_ID] = (
+                        selected_activity_id
+                    )
+                except IntervalsAPIError as exc:
+                    st.warning(str(exc))
+                except Exception:
+                    st.error(
+                        "Локална грешка при onFlows вътрешнозоновото "
+                        "изчисление."
+                    )
+
+            onflows_load_analysis = (
+                normalizer_summary.get("onflows_load_analysis")
+                if isinstance(normalizer_summary, Mapping)
+                else None
+            )
+            analysis_is_stale = _onflows_analysis_is_stale(
+                onflows_load_analysis,
+                current_onflows_profile,
+            )
+            if analysis_is_stale:
+                st.warning(
+                    "Показаният onFlows резултат е изчислен с предишен "
+                    "профил. Използвайте бутона за преизчисление."
+                )
+
+            if isinstance(onflows_load_analysis, Mapping):
+                _render_table(
+                    [
+                        {
+                            "зона": row.get("zone"),
+                            "HR диапазон": (
+                                f"{row.get('hr_low')}–{row.get('hr_high')}"
+                            ),
+                            "W_low": row.get("weight_low"),
+                            "W_high": row.get("weight_high"),
+                            "p": row.get("power"),
+                            "реално време T_z (s)": row.get(
+                                "real_seconds"
+                            ),
+                            "претеглено време Q_z (s)": row.get(
+                                "weighted_seconds"
+                            ),
+                            "среден k_z": row.get("average_k"),
+                            "% от класифицираното T": row.get(
+                                "percent_of_classified_hr_time"
+                            ),
+                        }
+                        for row in onflows_load_analysis.get("zones", [])
+                        if isinstance(row, Mapping)
+                    ],
+                    "Няма onFlows вътрешнозонови агрегати.",
+                )
+                _render_table(
+                    [
+                        {
+                            "активно време (s)": onflows_load_analysis.get(
+                                "active_duration_sec"
+                            ),
+                            "класифицирано HR време (s)": (
+                                onflows_load_analysis.get("classified_hr_sec")
+                            ),
+                            "неопределено HR време (s)": (
+                                onflows_load_analysis.get(
+                                    "unclassified_hr_sec"
+                                )
+                            ),
+                            "HR coverage (%)": onflows_load_analysis.get(
+                                "hr_coverage_percent"
+                            ),
+                            "изключено време (s)": onflows_load_analysis.get(
+                                "excluded_duration_sec"
+                            ),
+                            "общо реално T (s)": onflows_load_analysis.get(
+                                "total_real_sec"
+                            ),
+                            "диагностичен сбор Q (s)": (
+                                onflows_load_analysis.get(
+                                    "total_weighted_sec"
+                                )
+                            ),
+                            "среден коефициент": onflows_load_analysis.get(
+                                "overall_average_k"
+                            ),
+                            "profile version": onflows_load_analysis.get(
+                                "profile_schema_version"
+                            ),
+                            "profile fingerprint": onflows_load_analysis.get(
+                                "profile_fingerprint"
+                            ),
+                        }
+                    ],
+                    "Няма onFlows summary.",
+                )
+            else:
+                st.info(
+                    "Стартирайте interval-aware normalizer или "
+                    "преизчислението с текущия профил."
+                )
+            st.info(
+                "Q е вътрешнозоново претеглено еквивалентно време. На този "
+                "етап то не включва cascade/spillover, 7/40, Tref, stress "
+                "или readiness."
+            )
 
             st.subheader("Експериментално време по HR зони")
             st.caption(

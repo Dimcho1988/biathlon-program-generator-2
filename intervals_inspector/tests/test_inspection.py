@@ -250,6 +250,16 @@ def test_selected_activity_normalizer_keeps_only_aggregate_summary(
         0,
     ]
     assert zone_analysis["intervals_reference_available"] is True
+    onflows = summary["onflows_load_analysis"]
+    assert onflows["algorithm_version"] == (
+        "onflows-intrazone-load-interval-aware-v1"
+    )
+    assert onflows["profile_schema_version"] == "onflows-zone-profile-v1"
+    assert len(onflows["zones"]) == 5
+    assert onflows["active_duration_sec"] == 2
+    assert onflows["classified_hr_sec"] == 2
+    assert onflows["total_weighted_sec"] >= onflows["total_real_sec"]
+    assert len(summary["onflows_zone_profile"]["fingerprint"]) == 64
     rendered = repr(summary)
     assert TOKEN not in rendered
     assert "i123" not in rendered
@@ -276,6 +286,8 @@ def test_zone_path_does_not_materialize_1hz(
 
     assert summary["materialize_1hz"]["requested"] is False
     assert summary["zone_analysis"]["classified_hr_sec"] == 2
+    assert summary["onflows_load_analysis"]["classified_hr_sec"] == 2
+    assert summary["onflows_load_analysis"]["total_weighted_sec"] > 0
 
 
 def test_endpoint_failure_exposes_only_safe_status_and_message(

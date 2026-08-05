@@ -455,6 +455,7 @@ def test_connected_report_renders_bounded_periods_and_summary_table():
 
 def test_connected_diagnostics_render_interval_aware_hr_zone_section():
     app = _new_app()
+    onflows_profile = inspector_app.default_onflows_zone_profile()
     app.session_state[inspector_app.SESSION_AUTHENTICATED] = True
     app.session_state[inspector_app.SESSION_TOKEN] = "test-token-not-real"
     app.session_state[inspector_app.SESSION_ATHLETE_ID] = "test-athlete"
@@ -504,6 +505,39 @@ def test_connected_diagnostics_render_interval_aware_hr_zone_section():
         "classifications": {},
         "materialize_1hz": {"requested": False, "point_count": 0},
         "warnings": [],
+        "onflows_zone_profile": inspector_app.safe_profile_dict(
+            onflows_profile
+        ),
+        "onflows_load_analysis": {
+            "algorithm_version": (
+                "onflows-intrazone-load-interval-aware-v1"
+            ),
+            "profile_schema_version": onflows_profile.schema_version,
+            "profile_fingerprint": onflows_profile.fingerprint,
+            "profile_source": onflows_profile.source,
+            "zones": [
+                {
+                    "zone": "Z2",
+                    "hr_low": 126.0,
+                    "hr_high": 145.0,
+                    "weight_low": 120.0,
+                    "weight_high": 150.0,
+                    "power": 1.1,
+                    "real_seconds": 2.0,
+                    "weighted_seconds": 2.2,
+                    "average_k": 1.1,
+                    "percent_of_classified_hr_time": 100.0,
+                }
+            ],
+            "active_duration_sec": 2.0,
+            "classified_hr_sec": 2.0,
+            "unclassified_hr_sec": 0.0,
+            "hr_coverage_percent": 100.0,
+            "excluded_duration_sec": 0.0,
+            "total_real_sec": 2.0,
+            "total_weighted_sec": 2.2,
+            "overall_average_k": 1.1,
+        },
         "zone_analysis": {
             "available": True,
             "zones": [
@@ -535,11 +569,64 @@ def test_connected_diagnostics_render_interval_aware_hr_zone_section():
         item.value == "Експериментално време по HR зони"
         for item in app.subheader
     )
+    assert any(
+        item.value == "onFlows вътрешнозоново претегляне"
+        for item in app.subheader
+    )
+    assert any(
+        button.label == "Възстанови стандартния onFlows профил"
+        for button in app.button
+    )
     rendered_tables = "\n".join(
         dataframe.value.to_string() for dataframe in app.dataframe
     )
+    assert "реално време T_z (s)" in rendered_tables
+    assert "претеглено време Q_z (s)" in rendered_tables
     assert "onFlows interval-aware време (s)" in rendered_tables
     assert "Intervals време (s)" in rendered_tables
+
+
+def test_onflows_session_state_keeps_only_safe_profile_configuration(
+    monkeypatch,
+):
+    session: dict[str, object] = {}
+    monkeypatch.setattr(
+        inspector_app.st, "session_state", session, raising=False
+    )
+
+    profile = inspector_app._session_onflows_profile()
+
+    assert session[inspector_app.SESSION_ONFLOWS_PROFILE_FINGERPRINT] == (
+        profile.fingerprint
+    )
+    safe = session[inspector_app.SESSION_ONFLOWS_PROFILE]
+    assert isinstance(safe, dict)
+    assert len(safe["zones"]) == 5
+    rendered = repr(session).casefold()
+    for forbidden in (
+        "activity_id",
+        "athlete_id",
+        "access_token",
+        "latlng",
+        "raw_points",
+        "one_hz_points",
+        "intervals",
+    ):
+        assert forbidden not in rendered
+
+
+def test_onflows_result_is_marked_stale_after_profile_change() -> None:
+    original = inspector_app.default_onflows_zone_profile()
+    rows = inspector_app.profile_edit_rows(original)
+    rows[0]["power"] = 1.25
+    changed = inspector_app.build_onflows_zone_profile(
+        rows,
+        source=inspector_app.MANUAL_PROFILE_SOURCE,
+    )
+    analysis = {"profile_fingerprint": original.fingerprint}
+
+    assert inspector_app._onflows_analysis_is_stale(analysis, changed) is True
+    assert inspector_app._onflows_analysis_is_stale(analysis, original) is False
 
 
 def test_disconnect_clears_only_current_session_and_callback_query(
