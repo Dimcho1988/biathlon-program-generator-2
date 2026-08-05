@@ -219,6 +219,32 @@ def test_selected_activity_detail_and_stream_report_excludes_values(
     assert TOKEN not in rendered
 
 
+@pytest.mark.parametrize("include_1hz_preview", [False, True])
+def test_selected_activity_normalizer_keeps_only_aggregate_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    include_1hz_preview: bool,
+) -> None:
+    _session(monkeypatch)
+
+    summary = inspector_app._run_activity_normalizer(
+        "i123",
+        include_1hz_preview=include_1hz_preview,
+    )
+
+    assert summary["fast_path_used"] is True
+    assert summary["input_point_count"] == 3
+    assert summary["active_duration_sec"] == 2
+    assert summary["materialize_1hz"]["requested"] is include_1hz_preview
+    assert summary["materialize_1hz"]["point_count"] == (
+        3 if include_1hz_preview else 0
+    )
+    rendered = repr(summary)
+    assert TOKEN not in rendered
+    assert "i123" not in rendered
+    assert "Private activity name" not in rendered
+    assert "[120, 121, 122]" not in rendered
+
+
 def test_endpoint_failure_exposes_only_safe_status_and_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

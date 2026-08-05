@@ -489,6 +489,8 @@ def test_changing_selected_activity_discards_previous_activity_report(
     session = {
         inspector_app.SESSION_ACTIVITY_REPORT_ID: "activity-A",
         inspector_app.SESSION_ACTIVITY_REPORT: previous_report,
+        inspector_app.SESSION_NORMALIZER_REPORT_ID: "activity-A",
+        inspector_app.SESSION_NORMALIZER_REPORT: {"fast_path_used": True},
     }
     monkeypatch.setattr(
         inspector_app.st, "session_state", session, raising=False
@@ -504,6 +506,8 @@ def test_changing_selected_activity_discards_previous_activity_report(
     )
     assert inspector_app.SESSION_ACTIVITY_REPORT not in session
     assert inspector_app.SESSION_ACTIVITY_REPORT_ID not in session
+    assert inspector_app.SESSION_NORMALIZER_REPORT not in session
+    assert inspector_app.SESSION_NORMALIZER_REPORT_ID not in session
 
 
 def _callback_config() -> inspector_app.InspectorConfig:

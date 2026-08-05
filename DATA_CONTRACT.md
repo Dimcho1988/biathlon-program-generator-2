@@ -74,6 +74,64 @@ Intervals.icu продължителност с премахнати recording g
 `velocity_smooth`. Recording сегменти се разделят само по stop gaps, които са
 реално съпоставени; не се експортира масив с отделни сегменти.
 
+## Консервативен interval-aware normalizer v1
+
+Първата версия на normalizer-а приема само временен, минимизиран вход:
+относителни `time` offsets, разрешени числови stream показатели, безопасно
+съпоставени относителни граници на recording stops, агрегатите `elapsed_time`,
+`icu_recording_time` и `moving_time`, и незадължителен безопасен sport code.
+Преди извикването се изключват GPS/location streams, абсолютни timestamps,
+дати, имена, athlete/activity ID, OAuth данни и останалата част от API payload-а.
+Входният обект не се променя.
+
+Основният резултат е временна interval-aware структура, а не материализиран
+1 Hz поток. Всеки интервал реферира валидираните си крайни точки и съдържа
+начален/краен относителен offset, реално `dt_sec`, класификация,
+interpolation-eligibility/source, confidence, quality flags и идентификатор на
+активния recording сегмент. Подреденият нормален път е линеен. Само при
+разместен вход се изпълнява еднократно stable sorting по offset; това е
+неизбежният `O(n log n)` fallback.
+
+Предварителната валидация отстранява отрицателни, нечислови, `NaN` и infinite
+offsets. Duplicate offsets се обединяват детерминирано: за всеки показател
+печели последната валидна стойност в стабилния оригинален входен ред. `NaN`,
+infinite, нечислови и структурно невъзможни отрицателни стойности се заменят с
+липсваща стойност и се броят по показател. Не се прилагат окончателни
+физиологични или sport-specific outlier граници.
+
+Консервативните правила са централизирани във версирана конфигурация:
+
+- `dt = 1 s` → `original_1hz`, без интерполация;
+- `1 < dt <= 5 s` → `smart_recording`, разрешена линейна интерполация с
+  `interpolated_short`;
+- `5 < dt <= 10 s` → `smart_recording` с `interpolated_extended` само при
+  валидна положителна speed и в двата края; иначе `uncertain_gap`;
+- `10 < dt <= 30 s` → `uncertain_gap`, прекъсва сегмента и не се запълва;
+- `dt > 30 s` → `recording_stop` при надеждно съвпадение, `probable_pause` при
+  нулева крайна speed или достатъчно duration-reconciliation evidence, иначе
+  `technical_or_unexplained_gap`;
+- всяко надеждно stop съвпадение прекъсва сегмента независимо от размера на
+  `dt` и никога не се интерполира.
+
+Линейната интерполация се извършва само между две валидни крайни стойности.
+Липсващ край не се замества, стойности не се пренасят сляпо и няма
+extrapolation преди първата или след последната точка. Вътрешните source/quality
+flags включват `original`, `interpolated_short`, `interpolated_extended`,
+`missing_value` и `invalid_source_value`.
+
+`materialize_1hz` е отделно изрично извикване. То създава само временен изглед
+в паметта върху разрешените активни сегменти и не създава точки в stops,
+pauses, uncertain или unexplained gaps. При чист подреден 1 Hz поток без
+дубликати, невалидни offsets, stops или gaps fast path запазва original
+endpoints и изричният 1 Hz изглед ги реферира без resampling или копиране.
+Interval structures и 1 Hz точки не се показват, експортират или записват във
+файл, база или Supabase. Safe JSON съдържа само агрегатни summaries, включително
+отделни времена и приблизителна временна памет за interval-aware и изрично
+поискания materialization режим.
+
+Тази версия не определя физиологични зони, не изчислява training load, `T`,
+`k`, `Q` или readiness и не е worker или persistence слой.
+
 ## Дневен мониторинг
 
 ```text

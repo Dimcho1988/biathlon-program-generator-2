@@ -1419,19 +1419,25 @@ _FORBIDDEN_EXPORT_KEYS = {
     "latitude",
     "latlng",
     "longitude",
+    "materialized_points",
     "name",
+    "normalized_points",
     "oauth_token",
     "payload",
     "points",
     "raw_points",
     "refresh_token",
     "samples",
+    "segment_slices",
+    "source_index",
     "start_date",
     "start_date_local",
     "timestamp",
     "timestamps",
     "token",
     "values",
+    "intervals",
+    "one_hz_points",
 }
 
 _QUALITY_EXPORT_TOP_KEYS = {
@@ -1443,6 +1449,7 @@ _QUALITY_EXPORT_TOP_KEYS = {
     "location_stream_excluded_count",
     "metric_coverage",
     "moving_status",
+    "normalizer",
     "recording_segments",
     "recording_stops",
     "schema_version",
@@ -1498,7 +1505,32 @@ def _safe_export_copy(value: Any, *, key: str | None = None) -> Any:
     return None
 
 
-def export_stream_quality_json(analysis: Mapping[str, Any]) -> str:
+def _assert_safe_export_tree(value: Any) -> None:
+    """Recursively verify that the sanitized export contains no private form."""
+
+    if isinstance(value, Mapping):
+        for child_key, child in value.items():
+            if _forbidden_export_key(child_key):
+                raise ValueError("unsafe key survived stream-quality export")
+            _assert_safe_export_tree(child)
+        return
+    if _is_sequence(value):
+        for child in value:
+            _assert_safe_export_tree(child)
+        return
+    if isinstance(value, str):
+        if _ISO_TIMESTAMP_RE.fullmatch(value.strip()):
+            raise ValueError("absolute timestamp survived stream-quality export")
+        if _is_location_stream(value):
+            raise ValueError("location data survived stream-quality export")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("non-finite value survived stream-quality export")
+
+
+def export_stream_quality_json(
+    analysis: Mapping[str, Any],
+    normalizer_summary: Mapping[str, Any] | None = None,
+) -> str:
     """Serialize a quality analysis with an additional export safety pass."""
 
     projected = {
@@ -1506,7 +1538,10 @@ def export_stream_quality_json(analysis: Mapping[str, Any]) -> str:
         for key in _QUALITY_EXPORT_TOP_KEYS
         if key in analysis
     }
+    if isinstance(normalizer_summary, Mapping):
+        projected["normalizer"] = normalizer_summary
     safe = _safe_export_copy(projected)
+    _assert_safe_export_tree(safe)
     return json.dumps(
         safe,
         ensure_ascii=False,

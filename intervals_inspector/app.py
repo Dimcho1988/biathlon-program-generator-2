@@ -62,6 +62,12 @@ from intervals_inspector.stream_quality import (
     analyze_stream_quality,
     export_stream_quality_json,
 )
+from intervals_inspector.stream_normalizer import (
+    build_normalizer_input,
+    build_normalizer_summary,
+    materialize_1hz,
+    normalize_stream_intervals,
+)
 
 
 CONFIG_NAMES = (
@@ -87,6 +93,8 @@ SESSION_REPORT = "_intervals_inventory_report"
 SESSION_ACTIVITY_CHOICES = "_intervals_activity_choices"
 SESSION_ACTIVITY_REPORT = "_intervals_activity_report"
 SESSION_ACTIVITY_REPORT_ID = "_intervals_activity_report_id"
+SESSION_NORMALIZER_REPORT = "_intervals_normalizer_report"
+SESSION_NORMALIZER_REPORT_ID = "_intervals_normalizer_report_id"
 SESSION_AUTHENTICATED = "_inspector_authenticated"
 SESSION_CONSENT = "_pilot_consent_evidence"
 SESSION_NOTICE = "_inspector_notice"
@@ -170,6 +178,8 @@ STANDARD_FIELDS: dict[str, set[str]] = {
         "start_date_local",
         "moving_time",
         "elapsed_time",
+        "icu_recording_time",
+        "recording_stops",
         "distance",
         "icu_training_load",
         "icu_average_watts",
@@ -416,6 +426,8 @@ def _process_callback(config: InspectorConfig) -> None:
         st.session_state.pop(SESSION_ACTIVITY_CHOICES, None)
         st.session_state.pop(SESSION_ACTIVITY_REPORT, None)
         st.session_state.pop(SESSION_ACTIVITY_REPORT_ID, None)
+        st.session_state.pop(SESSION_NORMALIZER_REPORT, None)
+        st.session_state.pop(SESSION_NORMALIZER_REPORT_ID, None)
         _remember_notice("success", "Intervals.icu профилът е свързан.")
     except OAuthAccessDenied:
         _remember_notice(
@@ -788,6 +800,45 @@ def _run_activity_inspection(activity_id: str) -> dict[str, Any]:
     }
 
 
+def _run_activity_normalizer(
+    activity_id: str,
+    *,
+    include_1hz_preview: bool,
+) -> dict[str, Any]:
+    """Run one transient normalization and retain aggregate diagnostics only."""
+
+    athlete_id = str(st.session_state[SESSION_ATHLETE_ID])
+    token = str(st.session_state[SESSION_TOKEN])
+    client = IntervalsClient(access_token=token, athlete_id=athlete_id)
+    detail_response = client.get_activity_result(
+        activity_id, include_intervals=False
+    )
+    streams_response = client.get_streams_result(activity_id)
+    if not isinstance(detail_response, IntervalsResponse) or not isinstance(
+        streams_response, IntervalsResponse
+    ):
+        raise TypeError("unexpected Intervals response envelope")
+
+    detail_payload = detail_response.payload
+    streams_payload = streams_response.payload
+    normalizer_input = build_normalizer_input(
+        detail_payload,
+        streams_payload,
+    )
+    # The full payloads, including any location stream, go out of scope before
+    # the core normalizer is invoked. Only the privacy-minimized input remains.
+    del detail_payload, streams_payload, detail_response, streams_response
+
+    interval_result = normalize_stream_intervals(normalizer_input)
+    one_hz_result = (
+        materialize_1hz(interval_result) if include_1hz_preview else None
+    )
+    summary = build_normalizer_summary(interval_result, one_hz_result)
+    # Interval objects and optional 1 Hz samples are intentionally transient.
+    del normalizer_input, interval_result, one_hz_result
+    return summary
+
+
 def _combined_diagnostics(
     report: Mapping[str, Any],
     activity_report: Mapping[str, Any] | None,
@@ -841,8 +892,24 @@ def _activity_report_for_selection(
     ):
         st.session_state.pop(SESSION_ACTIVITY_REPORT, None)
         st.session_state.pop(SESSION_ACTIVITY_REPORT_ID, None)
+        st.session_state.pop(SESSION_NORMALIZER_REPORT, None)
+        st.session_state.pop(SESSION_NORMALIZER_REPORT_ID, None)
         return None
     report = st.session_state.get(SESSION_ACTIVITY_REPORT)
+    return report if isinstance(report, Mapping) else None
+
+
+def _normalizer_report_for_selection(
+    selected_activity_id: str,
+) -> Mapping[str, Any] | None:
+    if (
+        st.session_state.get(SESSION_NORMALIZER_REPORT_ID)
+        != selected_activity_id
+    ):
+        st.session_state.pop(SESSION_NORMALIZER_REPORT, None)
+        st.session_state.pop(SESSION_NORMALIZER_REPORT_ID, None)
+        return None
+    report = st.session_state.get(SESSION_NORMALIZER_REPORT)
     return report if isinstance(report, Mapping) else None
 
 
@@ -868,6 +935,14 @@ def _render_report(
     stream_quality = (
         activity_report.get("stream_quality")
         if isinstance(activity_report, Mapping)
+        else None
+    )
+    selected_activity_id = str(
+        st.session_state.get(SESSION_ACTIVITY_REPORT_ID) or ""
+    )
+    normalizer_summary = (
+        _normalizer_report_for_selection(selected_activity_id)
+        if selected_activity_id and isinstance(activity_report, Mapping)
         else None
     )
 
@@ -1117,9 +1192,162 @@ def _render_report(
             for warning in stream_quality.get("warnings", []):
                 if isinstance(warning, Mapping) and warning.get("message"):
                     st.warning(str(warning["message"]))
+
+            st.subheader("Консервативна 1 Hz нормализация")
+            st.caption(
+                "Основният режим създава лека interval-aware структура. "
+                "Временен 1 Hz изглед се създава само от втория изричен "
+                "бутон, само в паметта, и точките никога не се показват, "
+                "изтеглят или записват. Processing time е само техническа "
+                "диагностика."
+            )
+            if selected_activity_id:
+                if st.button(
+                    "Стартирай interval-aware normalizer",
+                    key="_run_interval_aware_normalizer",
+                    width="stretch",
+                ):
+                    try:
+                        with st.spinner(
+                            "Консервативна interval-aware нормализация…"
+                        ):
+                            normalizer_summary = _run_activity_normalizer(
+                                selected_activity_id,
+                                include_1hz_preview=False,
+                            )
+                        st.session_state[SESSION_NORMALIZER_REPORT] = (
+                            normalizer_summary
+                        )
+                        st.session_state[SESSION_NORMALIZER_REPORT_ID] = (
+                            selected_activity_id
+                        )
+                    except IntervalsAPIError as exc:
+                        st.warning(str(exc))
+                    except Exception:
+                        st.error(
+                            "Локална грешка при normalizer диагностиката."
+                        )
+                if st.button(
+                    "Създай временен 1 Hz preview и агрегати",
+                    key="_run_materialized_1hz_preview",
+                    width="stretch",
+                ):
+                    try:
+                        with st.spinner(
+                            "Interval-aware нормализация и временен 1 Hz "
+                            "preview…"
+                        ):
+                            normalizer_summary = _run_activity_normalizer(
+                                selected_activity_id,
+                                include_1hz_preview=True,
+                            )
+                        st.session_state[SESSION_NORMALIZER_REPORT] = (
+                            normalizer_summary
+                        )
+                        st.session_state[SESSION_NORMALIZER_REPORT_ID] = (
+                            selected_activity_id
+                        )
+                    except IntervalsAPIError as exc:
+                        st.warning(str(exc))
+                    except Exception:
+                        st.error(
+                            "Локална грешка при временния 1 Hz preview."
+                        )
+
+            if isinstance(normalizer_summary, Mapping):
+                summary_fields = (
+                    "algorithm_version",
+                    "path",
+                    "fast_path_used",
+                    "input_point_count",
+                    "valid_offset_point_count",
+                    "unique_valid_point_count",
+                    "interval_count",
+                    "normalized_second_count_estimate",
+                    "original_second_count",
+                    "interpolated_short_second_count",
+                    "interpolated_extended_second_count",
+                    "points_with_missing_metrics_estimate",
+                    "recording_segment_count",
+                    "active_duration_sec",
+                    "duplicate_offset_count",
+                    "invalid_offset_count",
+                    "original_point_percent",
+                    "interpolated_point_percent",
+                    "processing_time_ms",
+                    "approximate_interval_result_size_bytes",
+                )
+                _render_table(
+                    [
+                        {
+                            key: normalizer_summary.get(key)
+                            for key in summary_fields
+                        }
+                    ],
+                    "Няма interval-aware normalizer summary.",
+                )
+                classifications = normalizer_summary.get(
+                    "classifications", {}
+                )
+                _render_table(
+                    [
+                        {"classification": name, **dict(values)}
+                        for name, values in classifications.items()
+                        if isinstance(values, Mapping)
+                    ]
+                    if isinstance(classifications, Mapping)
+                    else [],
+                    "Няма класифицирани интервали.",
+                )
+                invalid_values = normalizer_summary.get(
+                    "invalid_values_by_metric", {}
+                )
+                _render_table(
+                    [
+                        {
+                            "metric": metric,
+                            "invalid_value_count": count,
+                        }
+                        for metric, count in invalid_values.items()
+                    ]
+                    if isinstance(invalid_values, Mapping)
+                    else [],
+                    "Няма структурно невалидни stream стойности.",
+                )
+                reconciliation = normalizer_summary.get(
+                    "reconciliation", {}
+                )
+                _render_table(
+                    [dict(reconciliation)]
+                    if isinstance(reconciliation, Mapping)
+                    else [],
+                    "Няма normalizer duration reconciliation.",
+                )
+                materialization = normalizer_summary.get(
+                    "materialize_1hz", {}
+                )
+                _render_table(
+                    [dict(materialization)]
+                    if isinstance(materialization, Mapping)
+                    else [],
+                    "Не е поискан временен 1 Hz preview.",
+                )
+                for warning in normalizer_summary.get("warnings", []):
+                    if isinstance(warning, Mapping) and warning.get("message"):
+                        st.warning(str(warning["message"]))
+            else:
+                st.info(
+                    "Normalizer-ът още не е стартиран за избраната "
+                    "активност."
+                )
             st.download_button(
                 "Изтегли безопасна диагностика JSON",
-                data=export_stream_quality_json(stream_quality),
+                data=export_stream_quality_json(
+                    stream_quality,
+                    normalizer_summary
+                    if isinstance(normalizer_summary, Mapping)
+                    else None,
+                ),
                 file_name="intervals_stream_quality.json",
                 mime="application/json",
                 width="stretch",
@@ -1380,6 +1608,8 @@ def _render_inspector() -> None:
             st.session_state[SESSION_ACTIVITY_CHOICES] = activity_choices
             st.session_state.pop(SESSION_ACTIVITY_REPORT, None)
             st.session_state.pop(SESSION_ACTIVITY_REPORT_ID, None)
+            st.session_state.pop(SESSION_NORMALIZER_REPORT, None)
+            st.session_state.pop(SESSION_NORMALIZER_REPORT_ID, None)
 
     report = st.session_state.get(SESSION_REPORT)
     if isinstance(report, Mapping):
@@ -1412,6 +1642,8 @@ def _render_inspector() -> None:
                     st.session_state[SESSION_ACTIVITY_REPORT_ID] = (
                         selected_activity_id
                     )
+                    st.session_state.pop(SESSION_NORMALIZER_REPORT, None)
+                    st.session_state.pop(SESSION_NORMALIZER_REPORT_ID, None)
                     activity_report = st.session_state[
                         SESSION_ACTIVITY_REPORT
                     ]
