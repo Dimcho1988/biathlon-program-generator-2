@@ -31,6 +31,10 @@ from intervals_inspector.intervals_client import (
     IntervalsClient,
     IntervalsResponse,
 )
+from intervals_inspector.intervals_hr_adapter import (
+    adapt_intervals_hr_zones,
+    build_intervals_zone_analysis,
+)
 from intervals_inspector.inventory import (
     build_field_coverage,
     export_inventory_csv,
@@ -184,6 +188,7 @@ STANDARD_FIELDS: dict[str, set[str]] = {
         "icu_training_load",
         "icu_average_watts",
         "icu_weighted_avg_watts",
+        "icu_hr_zones",
         "icu_hr_zone_times",
         "icu_zone_times",
         "pace_zone_times",
@@ -821,6 +826,9 @@ def _run_activity_normalizer(
 
     detail_payload = detail_response.payload
     streams_payload = streams_response.payload
+    adapted_zones, zone_adapter_reason = adapt_intervals_hr_zones(
+        detail_payload
+    )
     normalizer_input = build_normalizer_input(
         detail_payload,
         streams_payload,
@@ -834,8 +842,18 @@ def _run_activity_normalizer(
         materialize_1hz(interval_result) if include_1hz_preview else None
     )
     summary = build_normalizer_summary(interval_result, one_hz_result)
+    summary["zone_analysis"] = build_intervals_zone_analysis(
+        interval_result,
+        adapted_zones,
+        unavailable_reason=zone_adapter_reason,
+    )
     # Interval objects and optional 1 Hz samples are intentionally transient.
-    del normalizer_input, interval_result, one_hz_result
+    del (
+        normalizer_input,
+        interval_result,
+        one_hz_result,
+        adapted_zones,
+    )
     return summary
 
 
@@ -1339,6 +1357,124 @@ def _render_report(
                 st.info(
                     "Normalizer-ът още не е стартиран за избраната "
                     "активност."
+                )
+
+            st.subheader("Експериментално време по HR зони")
+            st.caption(
+                "Изчислението използва директно надеждните активни "
+                "interval-aware интервали и линейна промяна на HR между "
+                "валидни крайни стойности. Не се създава 1 Hz поток. "
+                "Intervals времената са само сравнителна референция, не "
+                "ground truth и не участват в onFlows изчислението."
+            )
+            zone_analysis = (
+                normalizer_summary.get("zone_analysis")
+                if isinstance(normalizer_summary, Mapping)
+                else None
+            )
+            if isinstance(zone_analysis, Mapping):
+                reason_messages = {
+                    "hr_stream_unavailable": "Липсва HR stream.",
+                    "icu_hr_zones_missing": (
+                        "Activity detail не съдържа icu_hr_zones."
+                    ),
+                    "icu_hr_zones_invalid_structure": (
+                        "icu_hr_zones не е поддържаният масив от граници."
+                    ),
+                    "icu_hr_zones_invalid_boundaries": (
+                        "icu_hr_zones съдържа невалидни HR граници."
+                    ),
+                    "icu_hr_zones_not_strictly_increasing": (
+                        "HR границите не са строго нарастващи."
+                    ),
+                }
+                if not zone_analysis.get("available"):
+                    reason = str(zone_analysis.get("reason") or "")
+                    st.warning(
+                        reason_messages.get(
+                            reason,
+                            "HR zone диагностиката не е налична.",
+                        )
+                    )
+
+                zone_rows: list[dict[str, Any]] = []
+                for row in zone_analysis.get("zones", []):
+                    if not isinstance(row, Mapping):
+                        continue
+                    left_bracket = (
+                        "[" if row.get("lower_inclusive") else "("
+                    )
+                    right_bracket = (
+                        "]" if row.get("upper_inclusive") else ")"
+                    )
+                    zone_rows.append(
+                        {
+                            "зона": row.get("zone"),
+                            "HR граници": (
+                                f"{left_bracket}{row.get('lower_bpm')}, "
+                                f"{row.get('upper_bpm')}{right_bracket}"
+                            ),
+                            "onFlows interval-aware време (s)": row.get(
+                                "seconds"
+                            ),
+                            "% от класифицираното време": row.get(
+                                "percent_of_classified_hr_time"
+                            ),
+                            "Intervals време (s)": row.get(
+                                "intervals_reference_sec"
+                            ),
+                            "разлика (s)": row.get("difference_sec"),
+                        }
+                    )
+                _render_table(
+                    zone_rows,
+                    "Няма валидни HR зони за сравнение.",
+                )
+                _render_table(
+                    [
+                        {
+                            "активно време (s)": zone_analysis.get(
+                                "active_duration_sec"
+                            ),
+                            "класифицирано HR време (s)": zone_analysis.get(
+                                "classified_hr_sec"
+                            ),
+                            "неопределено HR време (s)": zone_analysis.get(
+                                "unclassified_hr_sec"
+                            ),
+                            "HR coverage (%)": zone_analysis.get(
+                                "hr_coverage_percent"
+                            ),
+                            "изключено stops/pauses/gaps време (s)": (
+                                zone_analysis.get("excluded_duration_sec")
+                            ),
+                        }
+                    ],
+                    "Няма HR zone агрегати.",
+                )
+                excluded_by_classification = zone_analysis.get(
+                    "excluded_duration_by_classification", {}
+                )
+                _render_table(
+                    [
+                        {
+                            "изключена класификация": classification,
+                            "време (s)": seconds,
+                        }
+                        for classification, seconds in (
+                            excluded_by_classification.items()
+                            if isinstance(
+                                excluded_by_classification, Mapping
+                            )
+                            else []
+                        )
+                    ],
+                    "Няма изключено време от stops, pauses или gaps.",
+                )
+            else:
+                st.info(
+                    "Стартирайте interval-aware normalizer, за да се "
+                    "изчисли експерименталното време по HR зони."
                 )
             st.download_button(
                 "Изтегли безопасна диагностика JSON",

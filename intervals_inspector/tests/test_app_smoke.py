@@ -453,6 +453,95 @@ def test_connected_report_renders_bounded_periods_and_summary_table():
     )
 
 
+def test_connected_diagnostics_render_interval_aware_hr_zone_section():
+    app = _new_app()
+    app.session_state[inspector_app.SESSION_AUTHENTICATED] = True
+    app.session_state[inspector_app.SESSION_TOKEN] = "test-token-not-real"
+    app.session_state[inspector_app.SESSION_ATHLETE_ID] = "test-athlete"
+    app.session_state[inspector_app.SESSION_ATHLETE_NAME] = "Test Athlete"
+    app.session_state[inspector_app.SESSION_SCOPES] = list(
+        inspector_app.READ_ONLY_SCOPES
+    )
+    app.session_state[inspector_app.SESSION_REPORT] = {
+        "period_days": 7,
+        "counts": {
+            "activities": 1,
+            "wellness": 0,
+            "calendar": 0,
+            "planned_workouts": 0,
+        },
+        "coverage": {},
+        "streams": [],
+        "endpoint_checks": [],
+    }
+    app.session_state[inspector_app.SESSION_ACTIVITY_CHOICES] = [
+        {
+            "activity_id": "synthetic-activity",
+            "label": "Безлична синтетична активност",
+        }
+    ]
+    app.session_state[inspector_app.SESSION_ACTIVITY_REPORT_ID] = (
+        "synthetic-activity"
+    )
+    app.session_state[inspector_app.SESSION_ACTIVITY_REPORT] = {
+        "coverage": {},
+        "streams": [],
+        "endpoint_checks": [],
+        "stream_quality": inspector_app.analyze_stream_quality(
+            {},
+            [
+                {"type": "time", "data": [0, 1, 2]},
+                {"type": "heartrate", "data": [130, 131, 132]},
+            ],
+        ),
+    }
+    app.session_state[inspector_app.SESSION_NORMALIZER_REPORT_ID] = (
+        "synthetic-activity"
+    )
+    app.session_state[inspector_app.SESSION_NORMALIZER_REPORT] = {
+        "algorithm_version": "conservative-interval-aware-v1",
+        "active_duration_sec": 2.0,
+        "classifications": {},
+        "materialize_1hz": {"requested": False, "point_count": 0},
+        "warnings": [],
+        "zone_analysis": {
+            "available": True,
+            "zones": [
+                {
+                    "zone": "Z1",
+                    "lower_bpm": 0.0,
+                    "upper_bpm": 140.0,
+                    "lower_inclusive": False,
+                    "upper_inclusive": True,
+                    "seconds": 2.0,
+                    "percent_of_classified_hr_time": 100.0,
+                    "intervals_reference_sec": 2.0,
+                    "difference_sec": 0.0,
+                }
+            ],
+            "active_duration_sec": 2.0,
+            "classified_hr_sec": 2.0,
+            "unclassified_hr_sec": 0.0,
+            "hr_coverage_percent": 100.0,
+            "excluded_duration_sec": 0.0,
+            "excluded_duration_by_classification": {},
+        },
+    }
+
+    app.run()
+
+    assert not app.exception
+    assert any(
+        item.value == "Експериментално време по HR зони"
+        for item in app.subheader
+    )
+    rendered_tables = "\n".join(
+        dataframe.value.to_string() for dataframe in app.dataframe
+    )
+    assert "onFlows interval-aware време (s)" in rendered_tables
+    assert "Intervals време (s)" in rendered_tables
+
+
 def test_disconnect_clears_only_current_session_and_callback_query(
     monkeypatch,
 ):

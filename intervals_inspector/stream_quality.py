@@ -1459,6 +1459,7 @@ _QUALITY_EXPORT_TOP_KEYS = {
     "streams",
     "timing",
     "warnings",
+    "zone_analysis",
 }
 
 
@@ -1539,7 +1540,14 @@ def export_stream_quality_json(
         if key in analysis
     }
     if isinstance(normalizer_summary, Mapping):
-        projected["normalizer"] = normalizer_summary
+        projected["normalizer"] = {
+            key: value
+            for key, value in normalizer_summary.items()
+            if key != "zone_analysis"
+        }
+        zone_analysis = normalizer_summary.get("zone_analysis")
+        if isinstance(zone_analysis, Mapping):
+            projected["zone_analysis"] = zone_analysis
     safe = _safe_export_copy(projected)
     _assert_safe_export_tree(safe)
     return json.dumps(

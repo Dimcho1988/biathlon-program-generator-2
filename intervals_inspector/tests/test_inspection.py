@@ -94,6 +94,8 @@ class FakeClient:
                 "moving_time": 2,
                 "icu_recording_time": 2,
                 "recording_stops": [],
+                "icu_hr_zones": [119, 140, 180],
+                "icu_hr_zone_times": [0, 2, 0],
             },
         )
 
@@ -238,11 +240,42 @@ def test_selected_activity_normalizer_keeps_only_aggregate_summary(
     assert summary["materialize_1hz"]["point_count"] == (
         3 if include_1hz_preview else 0
     )
+    zone_analysis = summary["zone_analysis"]
+    assert zone_analysis["available"] is True
+    assert zone_analysis["active_duration_sec"] == 2
+    assert zone_analysis["classified_hr_sec"] == 2
+    assert [row["seconds"] for row in zone_analysis["zones"]] == [
+        0,
+        2,
+        0,
+    ]
+    assert zone_analysis["intervals_reference_available"] is True
     rendered = repr(summary)
     assert TOKEN not in rendered
     assert "i123" not in rendered
     assert "Private activity name" not in rendered
     assert "[120, 121, 122]" not in rendered
+
+
+def test_zone_path_does_not_materialize_1hz(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _session(monkeypatch)
+    monkeypatch.setattr(
+        inspector_app,
+        "materialize_1hz",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("zone path must not materialize 1 Hz")
+        ),
+    )
+
+    summary = inspector_app._run_activity_normalizer(
+        "i123",
+        include_1hz_preview=False,
+    )
+
+    assert summary["materialize_1hz"]["requested"] is False
+    assert summary["zone_analysis"]["classified_hr_sec"] == 2
 
 
 def test_endpoint_failure_exposes_only_safe_status_and_message(
