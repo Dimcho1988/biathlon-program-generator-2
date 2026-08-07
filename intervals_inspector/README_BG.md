@@ -132,9 +132,12 @@ exchange. При activity detail и streams `{id}` е ID на изрично и�
 90 дни. Само този списък се разширява над 30 дни; wellness, calendar и planned
 workout проверките остават ограничени до максимум 30 дни. Detail endpoint-ът и
 streams се извикват само on-demand за изрично избрана активност.
-Бъдещият shadow-model слой е ограничен до максимум 90 дни и е описан в
-`PILOT_ARCHITECTURE_BG.md`; настоящият инспектор не изпълнява модели и не
-променя планове.
+Реализираният on-demand shadow-model слой е описан в
+`PILOT_ARCHITECTURE_BG.md` и `SHADOW_MODEL_SETTINGS_BG.md`. Той изчислява
+агрегирани `T_z`, `Q_z`, cascade/spillover, `E_z`, `tref_raw` и
+`tref_effective` само за диагностично baseline/experimental сравнение. Не
+променя планове и не записва резултати. Многодневното автоматично зареждане
+остава ограничено като бъдещ етап до максимум 90 дни.
 
 ## Тестове
 

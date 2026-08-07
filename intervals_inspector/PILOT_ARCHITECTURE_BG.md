@@ -10,7 +10,8 @@
    7, 14, 30, 60 или 90 дни, а останалите периодични източници са до 30 дни;
 3. зарежда detail и streams само за една изрично избрана активност;
 4. създава обезличен отчет за endpoints, полета и готовност на моделите;
-5. не изпълнява модели, не записва данни и не променя планове.
+5. изпълнява само on-demand `T/Q/cascade/spillover/E/Tref` shadow сравнение
+   за избраната активност, без запис и без промяна на планове.
 
 API payload-ите се използват само за построяване на структурния отчет и
 излизат от обхват веднага. Access token-ът остава само в Streamlit сесията.
@@ -38,8 +39,9 @@ OAuth session
   ще произведе таблиците от `docs/DATA_CONTRACT.md`, без да знае за Streamlit
   или хранилище.
 - съществуващите функции в `biathlon/` остават непроменени;
-- бъдещият `ShadowModelRunner` извиква отделни моделни етапи само при покрити
-  входове и връща резултати за визуализация, без странични ефекти;
+- първият `shadow_model.py` слой извиква отделни `T/Q/cascade/spillover/E/Tref`
+  етапи само върху privacy-minimized вход и връща агрегати без странични
+  ефекти; многодневният runner остава бъдещ етап;
 - планиран бъдещ интерфейс `NormalizedSnapshotRepository` ще отдели
   съхранението. Първата му реализация трябва да е `Null`/in-memory. Supabase
   не е част от този етап.
@@ -67,7 +69,8 @@ Token не се подава извън API gateway-а. Суровият payload
 | Activity metadata | `id`, дата, `type`, `moving_time` | Схемно картографиран; value adapter предстои |
 | HR зониране | `time`, `heartrate`, interval-aware normalizer, activity-specific `icu_hr_zones` | Диагностично реализирано; Intervals зоните остават само сравнителна референция |
 | onFlows T/k/Q | interval-aware active segments + регулируем `onflows-zone-profile-v1` | Диагностично реализирано с аналитично интегриране; Q не е Stress |
-| E, cascade/spillover, 7/40, Tref и load readiness | бъдеща многодневна нормализирана история | Изрично извън текущия диагностичен слой |
+| E, cascade/spillover и Tref | избран реален interval-aware резултат + налична предходна агрегирана история | On-demand shadow baseline/experimental сравнение; при липса на история показва явен fallback и предупреждение |
+| 7/40 и load readiness | бъдеща многодневна нормализирана история | Извън текущия on-demand слой |
 | Wellness | sleep, fatigue, stress, motivation, resting HR, HRV | Частичен |
 | Интегрирана готовност | load + wellness + safety полета | Само shadow с предупреждение |
 | Сезонен/годишен обем | нормализирани активности + годишна цел | Частичен заради 90-дневния таван |

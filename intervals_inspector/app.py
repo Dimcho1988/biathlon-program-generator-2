@@ -69,6 +69,27 @@ from intervals_inspector.onflows_zone_profile import (
     profile_from_safe_dict,
     safe_profile_dict,
 )
+from intervals_inspector.model_registry import (
+    explanation_text,
+    validate_registry_items,
+)
+from intervals_inspector.shadow_model import (
+    EDITABLE_FIELDS,
+    FIELD_RANGES,
+    FIELD_UNITS,
+    READ_ONLY_FIELDS,
+    ShadowModelConfiguration,
+    build_model_registry,
+    calculate_shadow_comparison,
+    configuration_from_profile,
+    configuration_from_safe_dict,
+    configuration_to_safe_dict,
+    configuration_with_overrides,
+    default_shadow_configuration,
+    export_shadow_diagnostics_json,
+    profile_from_configuration,
+    reset_shadow_configuration,
+)
 from intervals_inspector.public_pages import (
     ABOUT_URL_PATH,
     PRIVACY_POLICY_VERSION,
@@ -114,6 +135,8 @@ SESSION_NORMALIZER_REPORT_ID = "_intervals_normalizer_report_id"
 SESSION_ONFLOWS_PROFILE = "_onflows_zone_profile"
 SESSION_ONFLOWS_PROFILE_FINGERPRINT = "_onflows_zone_profile_fingerprint"
 ONFLOWS_PROFILE_EDITOR_KEY = "_onflows_zone_profile_editor"
+SESSION_SHADOW_CONFIGURATION = "_shadow_model_configuration"
+SHADOW_SETTING_KEY_PREFIX = "_shadow_setting_"
 SESSION_AUTHENTICATED = "_inspector_authenticated"
 SESSION_CONSENT = "_pilot_consent_evidence"
 SESSION_NOTICE = "_inspector_notice"
@@ -825,10 +848,15 @@ def _run_activity_normalizer(
     *,
     include_1hz_preview: bool,
     onflows_profile: OnFlowsZoneProfile | None = None,
+    shadow_configuration: ShadowModelConfiguration | None = None,
 ) -> dict[str, Any]:
     """Run one transient normalization and retain aggregate diagnostics only."""
 
     profile = onflows_profile or default_onflows_zone_profile()
+    model_configuration = (
+        shadow_configuration
+        or configuration_from_profile(profile)
+    )
     athlete_id = str(st.session_state[SESSION_ATHLETE_ID])
     token = str(st.session_state[SESSION_TOKEN])
     client = IntervalsClient(access_token=token, athlete_id=athlete_id)
@@ -869,6 +897,10 @@ def _run_activity_normalizer(
         interval_result,
         profile,
     )
+    summary["shadow_model_comparison"] = calculate_shadow_comparison(
+        interval_result,
+        experimental_configuration=model_configuration,
+    )
     # Interval objects and optional 1 Hz samples are intentionally transient.
     del (
         normalizer_input,
@@ -876,6 +908,7 @@ def _run_activity_normalizer(
         one_hz_result,
         adapted_zones,
         profile,
+        model_configuration,
     )
     return summary
 
@@ -895,6 +928,26 @@ def _session_onflows_profile() -> OnFlowsZoneProfile:
         profile = default_onflows_zone_profile()
     _store_onflows_profile(profile)
     return profile
+
+
+def _store_shadow_configuration(
+    configuration: ShadowModelConfiguration,
+) -> None:
+    """Keep only aggregate-safe, session-local experimental settings."""
+
+    st.session_state[SESSION_SHADOW_CONFIGURATION] = (
+        configuration_to_safe_dict(configuration)
+    )
+
+
+def _session_shadow_configuration() -> ShadowModelConfiguration:
+    raw = st.session_state.get(SESSION_SHADOW_CONFIGURATION)
+    try:
+        configuration = configuration_from_safe_dict(raw)
+    except ValueError:
+        configuration = default_shadow_configuration()
+    _store_shadow_configuration(configuration)
+    return configuration
 
 
 def _profile_editor_records(value: Any) -> list[dict[str, Any]]:
@@ -1003,12 +1056,308 @@ def _render_table(rows: list[dict[str, Any]], empty_message: str) -> None:
     st.dataframe(rows, width="stretch", hide_index=True)
 
 
+def _render_registry_help(
+    definition: Mapping[str, Any], *, key: str
+) -> None:
+    """Render a click/keyboard accessible explanation, not a hover tooltip."""
+
+    with st.popover(
+        "?",
+        key=key,
+    ):
+        st.markdown(explanation_text(definition))
+
+
+def _render_model_help_strip(
+    registry: Mapping[str, Mapping[str, Any]],
+    item_ids: Sequence[str],
+    *,
+    key_prefix: str,
+) -> None:
+    validate_registry_items(item_ids, registry)
+    help_columns = st.columns(4)
+    for index, item_id in enumerate(item_ids):
+        definition = registry[item_id]
+        with help_columns[index % len(help_columns)]:
+            label_columns = st.columns([0.8, 0.2])
+            label_columns[0].text(str(definition["short_name"]))
+            with label_columns[1]:
+                _render_registry_help(
+                    definition,
+                    key=f"{key_prefix}_{item_id.replace('.', '_')}",
+                )
+
+
+def _clear_shadow_setting_widgets() -> None:
+    for key in list(st.session_state):
+        if str(key).startswith(SHADOW_SETTING_KEY_PREFIX):
+            st.session_state.pop(key, None)
+
+
+def _render_shadow_settings_panel(
+    selected_activity_id: str,
+    normalizer_summary: Mapping[str, Any] | None,
+) -> tuple[ShadowModelConfiguration, Mapping[str, Any] | None]:
+    """Render validated session-only settings and recalculate on submit."""
+
+    baseline = default_shadow_configuration()
+    configuration = _session_shadow_configuration()
+    registry = build_model_registry(configuration, baseline=baseline)
+    parameter_ids = [
+        item_id for item_id in registry if item_id.startswith("parameter.")
+    ]
+    validate_registry_items(parameter_ids, registry)
+
+    with st.expander("Моделни настройки", expanded=False):
+        st.caption(
+            "Промените са временни, само в паметта на този TEST shadow "
+            "изглед. Те не се записват, не променят main и не участват в "
+            "реални тренировъчни планове. Само tester/administrator може "
+            "да редактира разрешените полета в настоящия пилот."
+        )
+        if configuration.is_experimental:
+            st.warning(
+                "ЕКСПЕРИМЕНТАЛНА КОНФИГУРАЦИЯ: показаните текущи "
+                "стойности се различават от началните."
+            )
+        else:
+            st.info("Използват се началните shadow моделни стойности.")
+
+        submitted_values: dict[str, float] = {}
+        with st.form("_shadow_model_settings_form", clear_on_submit=False):
+            zone_tabs = st.tabs([zone.zone for zone in configuration.zones])
+            for zone_index, (zone, initial_zone) in enumerate(
+                zip(configuration.zones, baseline.zones)
+            ):
+                with zone_tabs[zone_index]:
+                    headings = st.columns([1.45, 0.8, 1.1, 1.35, 0.35])
+                    headings[0].markdown("**Параметър**")
+                    headings[1].markdown("**Начална**")
+                    headings[2].markdown("**Текуща**")
+                    headings[3].markdown("**Единица · източник · версия**")
+                    headings[4].markdown("**?**")
+                    for field in EDITABLE_FIELDS:
+                        item_id = f"parameter.{zone.zone}.{field}"
+                        definition = registry[item_id]
+                        columns = st.columns([1.45, 0.8, 1.1, 1.35, 0.35])
+                        columns[0].text(str(definition["short_name"]))
+                        percent = field.startswith("spill_")
+                        scale = 100.0 if percent else 1.0
+                        initial_value = float(getattr(initial_zone, field)) * scale
+                        current_value = float(getattr(zone, field)) * scale
+                        minimum, maximum = FIELD_RANGES[field]
+                        columns[1].text(f"{initial_value:.3f}".rstrip("0").rstrip("."))
+                        with columns[2]:
+                            rendered = st.number_input(
+                                str(definition["full_name"]),
+                                min_value=float(minimum * scale),
+                                max_value=float(maximum * scale),
+                                value=float(current_value),
+                                step=(
+                                    1.0
+                                    if percent
+                                    else 0.05
+                                    if field in {"power", "bounds_factor"}
+                                    else 1.0
+                                ),
+                                key=(
+                                    f"{SHADOW_SETTING_KEY_PREFIX}"
+                                    f"{zone.zone}_{field}"
+                                ),
+                                label_visibility="collapsed",
+                            )
+                        submitted_values[item_id] = float(rendered) / scale
+                        columns[3].caption(
+                            f"{FIELD_UNITS[field]} · {definition['value_source']} · "
+                            f"{definition['version']}"
+                        )
+                        with columns[4]:
+                            _render_registry_help(
+                                definition,
+                                key=f"_shadow_help_{zone.zone}_{field}",
+                            )
+
+                    for field in READ_ONLY_FIELDS:
+                        item_id = f"parameter.{zone.zone}.{field}"
+                        definition = registry[item_id]
+                        columns = st.columns([1.45, 0.8, 1.1, 1.35, 0.35])
+                        columns[0].text(str(definition["short_name"]))
+                        columns[1].text(str(definition["initial_value"]))
+                        columns[2].text(str(definition["current_value"]))
+                        columns[3].caption(
+                            f"{FIELD_UNITS[field]} · {definition['value_source']} · "
+                            f"{definition['version']} · само за четене"
+                        )
+                        with columns[4]:
+                            _render_registry_help(
+                                definition,
+                                key=f"_shadow_help_{zone.zone}_{field}",
+                            )
+
+            apply_settings = st.form_submit_button(
+                "Приложи временно и преизчисли",
+                type="primary",
+                width="stretch",
+            )
+
+        reset_columns = st.columns(2)
+        reset_requested = reset_columns[0].button(
+            "Върни началните стойности",
+            key="_reset_shadow_model_settings",
+            width="stretch",
+        )
+        legacy_reset_requested = reset_columns[1].button(
+            "Възстанови стандартния onFlows профил",
+            key="_restore_default_onflows_profile",
+            width="stretch",
+        )
+
+        candidate: ShadowModelConfiguration | None = None
+        if apply_settings:
+            try:
+                candidate = configuration_with_overrides(
+                    submitted_values,
+                    baseline=baseline,
+                )
+            except ValueError as exc:
+                st.error(f"Невалидна експериментална стойност: {exc}")
+        elif reset_requested or legacy_reset_requested:
+            candidate = reset_shadow_configuration()
+            _clear_shadow_setting_widgets()
+
+        if candidate is not None:
+            _store_shadow_configuration(candidate)
+            configuration = candidate
+            if selected_activity_id:
+                try:
+                    with st.spinner(
+                        "Преизчисляване на baseline и experimental shadow резултатите…"
+                    ):
+                        normalizer_summary = _run_activity_normalizer(
+                            selected_activity_id,
+                            include_1hz_preview=False,
+                            onflows_profile=profile_from_configuration(candidate),
+                            shadow_configuration=candidate,
+                        )
+                    st.session_state[SESSION_NORMALIZER_REPORT] = normalizer_summary
+                    st.session_state[SESSION_NORMALIZER_REPORT_ID] = selected_activity_id
+                    st.success("Shadow резултатите са преизчислени само в паметта.")
+                except IntervalsAPIError as exc:
+                    st.warning(str(exc))
+                except Exception:
+                    st.error("Локална грешка при shadow преизчислението.")
+            else:
+                st.info(
+                    "Настройките са приложени. Изберете активност, за да се "
+                    "изчислят реалните baseline и experimental резултати."
+                )
+            if reset_requested or legacy_reset_requested:
+                st.rerun()
+
+    return configuration, normalizer_summary
+
+
+def _render_shadow_comparison(
+    comparison: Mapping[str, Any] | None,
+) -> None:
+    st.subheader("Baseline ↔ experimental shadow сравнение")
+    if not isinstance(comparison, Mapping):
+        st.info(
+            "Стартирайте interval-aware normalizer, за да се запазят "
+            "едновременно началният и експерименталният резултат."
+        )
+        return
+
+    experimental_configuration = comparison.get("experimental_configuration")
+    try:
+        configuration = configuration_from_safe_dict(experimental_configuration)
+    except ValueError:
+        st.error("Shadow сравнението съдържа невалидна моделна конфигурация.")
+        return
+    registry = comparison.get("registry")
+    if not isinstance(registry, Mapping):
+        registry = build_model_registry(configuration)
+    result_ids = (
+        "result.t",
+        "result.q",
+        "result.cascade",
+        "result.spillover",
+        "result.e",
+        "result.tref_raw",
+        "result.tref_effective",
+        "result.hr_coverage",
+    )
+    validate_registry_items(result_ids, registry)
+
+    if configuration.is_experimental:
+        st.warning(
+            "ЕКСПЕРИМЕНТАЛНА КОНФИГУРАЦИЯ — сравнението е диагностично "
+            "и не влияе на планове или на основния демонстратор."
+        )
+    else:
+        st.info("Baseline и experimental конфигурацията са идентични.")
+
+    _render_model_help_strip(
+        registry,
+        result_ids,
+        key_prefix="_shadow_result_help",
+    )
+
+    rows = []
+    for row in comparison.get("comparison_rows", []):
+        if not isinstance(row, Mapping):
+            continue
+        rendered: dict[str, Any] = {"зона": row.get("zone")}
+        for field, label in (
+            ("T_z", "T_z"),
+            ("Q_z", "Q_z"),
+            ("cascade", "cascade"),
+            ("spillover_received", "spillover"),
+            ("E_z", "E_z"),
+            ("tref_raw", "tref_raw"),
+            ("tref_effective", "tref_effective"),
+        ):
+            rendered[f"начален {label}"] = row.get(f"baseline_{field}")
+            rendered[f"експериментален {label}"] = row.get(
+                f"experimental_{field}"
+            )
+            rendered[f"Δ {label}"] = row.get(f"delta_{field}")
+        rows.append(rendered)
+    _render_table(rows, "Няма изчислени shadow резултати по зони.")
+
+    experimental_result = comparison.get("experimental")
+    if isinstance(experimental_result, Mapping):
+        for index, warning in enumerate(experimental_result.get("warnings", [])):
+            if not isinstance(warning, Mapping):
+                continue
+            warning_id = str(warning.get("id") or "")
+            definition = registry.get(warning_id)
+            if not isinstance(definition, Mapping):
+                continue
+            columns = st.columns([0.94, 0.06])
+            columns[0].warning(str(warning.get("message") or definition["description"]))
+            with columns[1]:
+                _render_registry_help(
+                    definition,
+                    key=f"_shadow_warning_help_{index}_{warning_id.replace('.', '_')}",
+                )
+
+    st.download_button(
+        "Изтегли безопасно shadow моделно сравнение JSON",
+        data=export_shadow_diagnostics_json(comparison),
+        file_name="onflows_shadow_model_comparison.json",
+        mime="application/json",
+        width="stretch",
+    )
+
+
 def _render_report(
     report: Mapping[str, Any],
     activity_report: Mapping[str, Any] | None = None,
 ) -> None:
     counts = report.get("counts", {})
-    onflows_profile = _session_onflows_profile()
+    shadow_configuration = _session_shadow_configuration()
+    onflows_profile = profile_from_configuration(shadow_configuration)
     (
         coverage,
         streams,
@@ -1299,6 +1648,7 @@ def _render_report(
                                 selected_activity_id,
                                 include_1hz_preview=False,
                                 onflows_profile=onflows_profile,
+                                shadow_configuration=shadow_configuration,
                             )
                         st.session_state[SESSION_NORMALIZER_REPORT] = (
                             normalizer_summary
@@ -1326,6 +1676,7 @@ def _render_report(
                                 selected_activity_id,
                                 include_1hz_preview=True,
                                 onflows_profile=onflows_profile,
+                                shadow_configuration=shadow_configuration,
                             )
                         st.session_state[SESSION_NORMALIZER_REPORT] = (
                             normalizer_summary
@@ -1434,105 +1785,17 @@ def _render_report(
                 "interval-aware резултата. Не използва icu_hr_zones и не "
                 "изисква временен 1 Hz preview."
             )
-            if st.button(
-                "Възстанови стандартния onFlows профил",
-                key="_restore_default_onflows_profile",
-                width="stretch",
-            ):
-                onflows_profile = default_onflows_zone_profile()
-                _store_onflows_profile(onflows_profile)
-                st.session_state.pop(ONFLOWS_PROFILE_EDITOR_KEY, None)
-                st.rerun()
-
-            edited_profile_value = st.data_editor(
-                profile_edit_rows(onflows_profile),
-                key=ONFLOWS_PROFILE_EDITOR_KEY,
-                num_rows="dynamic",
-                hide_index=True,
-                width="stretch",
-                column_order=(
-                    "zone",
-                    "hr_low",
-                    "hr_high",
-                    "weight_low",
-                    "weight_high",
-                    "power",
-                ),
-                column_config={
-                    "zone": st.column_config.TextColumn("Зона"),
-                    "hr_low": st.column_config.NumberColumn(
-                        "HR low", format="%.2f"
-                    ),
-                    "hr_high": st.column_config.NumberColumn(
-                        "HR high", format="%.2f"
-                    ),
-                    "weight_low": st.column_config.NumberColumn(
-                        "W low", min_value=0.01, format="%.3f"
-                    ),
-                    "weight_high": st.column_config.NumberColumn(
-                        "W high", min_value=0.01, format="%.3f"
-                    ),
-                    "power": st.column_config.NumberColumn(
-                        "p",
-                        min_value=0.20,
-                        max_value=4.00,
-                        step=0.05,
-                        format="%.2f",
-                    ),
-                },
+            shadow_configuration, normalizer_summary = (
+                _render_shadow_settings_panel(
+                    selected_activity_id,
+                    normalizer_summary
+                    if isinstance(normalizer_summary, Mapping)
+                    else None,
+                )
             )
-            current_onflows_profile: OnFlowsZoneProfile | None = None
-            try:
-                candidate_profile = build_onflows_zone_profile(
-                    _profile_editor_records(edited_profile_value),
-                    source=MANUAL_PROFILE_SOURCE,
-                )
-                current_onflows_profile = (
-                    onflows_profile
-                    if candidate_profile.fingerprint
-                    == onflows_profile.fingerprint
-                    else candidate_profile
-                )
-                _store_onflows_profile(current_onflows_profile)
-            except ValueError as exc:
-                st.error(f"Невалиден onFlows профил: {exc}")
-
-            if current_onflows_profile is not None:
-                for warning in current_onflows_profile.warnings:
-                    st.warning(
-                        f"{warning.zone}: {warning.message} "
-                        "Профилът е валиден, но може да има изкуствен скок."
-                    )
-
-            if selected_activity_id and st.button(
-                "Преизчисли normalizer и onFlows Q с текущия профил",
-                key="_recalculate_onflows_intrazone_load",
-                disabled=current_onflows_profile is None,
-                width="stretch",
-            ):
-                try:
-                    with st.spinner(
-                        "Interval-aware нормализация и аналитично onFlows "
-                        "вътрешнозоново претегляне…"
-                    ):
-                        normalizer_summary = _run_activity_normalizer(
-                            selected_activity_id,
-                            include_1hz_preview=False,
-                            onflows_profile=current_onflows_profile,
-                        )
-                    st.session_state[SESSION_NORMALIZER_REPORT] = (
-                        normalizer_summary
-                    )
-                    st.session_state[SESSION_NORMALIZER_REPORT_ID] = (
-                        selected_activity_id
-                    )
-                except IntervalsAPIError as exc:
-                    st.warning(str(exc))
-                except Exception:
-                    st.error(
-                        "Локална грешка при onFlows вътрешнозоновото "
-                        "изчисление."
-                    )
+            current_onflows_profile = profile_from_configuration(
+                shadow_configuration
+            )
 
             onflows_load_analysis = (
                 normalizer_summary.get("onflows_load_analysis")
@@ -1550,6 +1813,29 @@ def _render_report(
                 )
 
             if isinstance(onflows_load_analysis, Mapping):
+                legacy_registry = build_model_registry(
+                    shadow_configuration,
+                    baseline=default_shadow_configuration(),
+                )
+                _render_model_help_strip(
+                    legacy_registry,
+                    (
+                        "parameter.Z1.weight_low",
+                        "parameter.Z1.weight_high",
+                        "parameter.Z1.power",
+                        "result.t",
+                        "result.q",
+                        "result.average_k",
+                        "result.zone_share",
+                        "result.active_duration",
+                        "result.classified_hr",
+                        "result.unclassified_hr",
+                        "result.hr_coverage",
+                        "result.excluded_duration",
+                        "model.profile_fingerprint",
+                    ),
+                    key_prefix="_onflows_table_help",
+                )
                 _render_table(
                     [
                         {
@@ -1622,10 +1908,15 @@ def _render_report(
                     "Стартирайте interval-aware normalizer или "
                     "преизчислението с текущия профил."
                 )
-            st.info(
-                "Q е вътрешнозоново претеглено еквивалентно време. На този "
-                "етап то не включва cascade/spillover, 7/40, Tref, stress "
-                "или readiness."
+            shadow_comparison = (
+                normalizer_summary.get("shadow_model_comparison")
+                if isinstance(normalizer_summary, Mapping)
+                else None
+            )
+            _render_shadow_comparison(
+                shadow_comparison
+                if isinstance(shadow_comparison, Mapping)
+                else None
             )
 
             st.subheader("Експериментално време по HR зони")
