@@ -97,6 +97,7 @@ PAGES = {
     "profile": "Профил и зони",
     "models": "Модели и обяснения",
     "settings": "Експертни настройки",
+    "real_data": "Реални данни · shadow",
 }
 
 PAGE_ICONS = {
@@ -113,6 +114,7 @@ PAGE_ICONS = {
     "profile": "👤",
     "models": "❓",
     "settings": "⚙️",
+    "real_data": "🔎",
 }
 
 
@@ -171,6 +173,11 @@ def render_flash() -> None:
 
 def sync_navigation(bundle: dict[str, Any]) -> tuple[str, str, str]:
     requested_page = str(st.query_params.get("page", "team"))
+    if any(
+        key in st.query_params
+        for key in ("code", "state", "error", "error_description")
+    ):
+        requested_page = "real_data"
     if requested_page not in PAGES:
         requested_page = "team"
     if st.session_state.get("_last_query_page") != requested_page:
@@ -2786,6 +2793,10 @@ elif page == "models":
     render_models_page()
 elif page == "settings":
     render_settings_page(bundle, role, athlete_id)
+elif page == "real_data":
+    from intervals_inspector.app import render_integrated_page
+
+    render_integrated_page()
 else:
     analysis = analyze_athlete(bundle, athlete_id, generate_plan=True)
     if page == "dashboard":

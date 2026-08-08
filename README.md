@@ -79,6 +79,9 @@
 - роли, треньорски overrides, версии, журнал и DecisionSnapshot;
 - CSV/JSON експорти;
 - страница „Модели и обяснения“. Основните показатели имат `?` tooltip и подробно обяснение.
+- отделна страница „Реални данни · shadow“ за read-only Intervals.icu OAuth,
+  quality validation, нормализация и диагностично baseline/experimental сравнение;
+  синтетичното демо остава непроменено.
 
 ## Стартиране
 
@@ -108,6 +111,14 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 python -m streamlit run app.py
 ```
+
+За режима с реални данни копирайте имената от
+`intervals_inspector/.streamlit/secrets.toml.example` в локалния
+`.streamlit/secrets.toml` (самият secrets файл не се commit-ва). След OAuth
+връзката отворете „Реални данни · shadow“, заредете списъка, изберете активност,
+проверете detail/streams и стартирайте interval-aware normalizer. Pipeline-ът
+използва само read-only scopes и зарежда реално наличните предходни до 40
+календарни дни за Tref.
 
 След стартиране приложението обикновено се отваря на `http://localhost:8501`.
 
