@@ -21,6 +21,7 @@ PAGES = [
     "profile",
     "models",
     "settings",
+    "real_data",
 ]
 
 

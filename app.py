@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+import secrets
 from typing import Any
 
 import numpy as np
@@ -74,6 +75,25 @@ from biathlon.ui_helpers import (
     page_header,
     status_badge,
 )
+from intervals_inspector.app import (
+    SESSION_ATHLETE_ID as INTERVALS_SESSION_ATHLETE_ID,
+    SESSION_TOKEN as INTERVALS_SESSION_TOKEN,
+)
+from intervals_inspector.intervals_client import IntervalsAPIError, IntervalsClient
+from intervals_inspector.real_data_source import (
+    DEFAULT_HISTORY_DAYS,
+    DEMO_DATA_SOURCE,
+    REAL_DATA_SOURCE,
+    RealHistoryDataset,
+    build_history_cache_key,
+    build_real_load_view,
+    build_real_recovery_view,
+    load_real_history,
+    recovery_parameter_fingerprint,
+    resolve_real_dataset,
+    validate_data_source,
+)
+from intervals_inspector.shadow_model import default_shadow_configuration
 
 st.set_page_config(
     page_title="Biathlon LoadLab · MVP 0.6",
@@ -117,6 +137,13 @@ PAGE_ICONS = {
     "real_data": "🔎",
 }
 
+DATA_SOURCE_LABELS = {
+    DEMO_DATA_SOURCE: "Тестови данни",
+    REAL_DATA_SOURCE: "Реални данни от Intervals.icu",
+}
+REAL_DATASET_SESSION = "_real_history_dataset"
+REAL_CACHE_SALT_SESSION = "_real_history_cache_salt"
+
 
 def _camp_editor_rows_for_storage(
     edited_prescriptions: pd.DataFrame,
@@ -147,6 +174,10 @@ def initialize_state() -> None:
         st.session_state.nav_page = "team"
     if "flash" not in st.session_state:
         st.session_state.flash = None
+    if "data_source_mode" not in st.session_state:
+        st.session_state.data_source_mode = DEMO_DATA_SOURCE
+    if REAL_CACHE_SALT_SESSION not in st.session_state:
+        st.session_state[REAL_CACHE_SALT_SESSION] = secrets.token_hex(32)
 
 
 def commit_bundle(bundle: dict[str, Any], action: str, reason: str, athlete_id: str | None = None) -> None:
@@ -171,7 +202,127 @@ def render_flash() -> None:
     st.session_state.flash = None
 
 
+def _real_history_configuration():
+    # The main pages use the fixed baseline bridge. Experimental shadow-page
+    # overrides remain diagnostic and must not alter the main demonstrator.
+    return default_shadow_configuration()
+
+
+def _real_history_cache_key(bundle: dict[str, Any]) -> str:
+    profile_identifier = str(
+        st.session_state.get(INTERVALS_SESSION_ATHLETE_ID) or ""
+    )
+    session_salt = str(st.session_state.get(REAL_CACHE_SALT_SESSION) or "")
+    period_end = date.today()
+    return build_history_cache_key(
+        profile_identifier=profile_identifier,
+        session_salt=session_salt,
+        period_start=period_end - timedelta(days=DEFAULT_HISTORY_DAYS - 1),
+        period_end=period_end,
+        configuration=_real_history_configuration(),
+        parameter_fingerprint=recovery_parameter_fingerprint(bundle["parameters"]),
+    )
+
+
+def _current_real_dataset(bundle: dict[str, Any]) -> RealHistoryDataset | None:
+    if not st.session_state.get(INTERVALS_SESSION_TOKEN) or not st.session_state.get(
+        INTERVALS_SESSION_ATHLETE_ID
+    ):
+        return None
+    try:
+        return resolve_real_dataset(
+            st.session_state.get(REAL_DATASET_SESSION),
+            expected_cache_key=_real_history_cache_key(bundle),
+        )
+    except ValueError:
+        return None
+
+
+def _render_real_history_sidebar(bundle: dict[str, Any]) -> None:
+    st.sidebar.subheader("Intervals.icu история")
+    token = str(st.session_state.get(INTERVALS_SESSION_TOKEN) or "")
+    profile_identifier = str(
+        st.session_state.get(INTERVALS_SESSION_ATHLETE_ID) or ""
+    )
+    if not token or not profile_identifier:
+        st.sidebar.warning(
+            "Няма свързан Intervals.icu профил. Отворете „Реални данни · shadow“, "
+            "за да завършите read-only OAuth свързването."
+        )
+        return
+
+    st.sidebar.caption("Свързан read-only Intervals.icu профил")
+    expected_key = _real_history_cache_key(bundle)
+    try:
+        dataset = resolve_real_dataset(
+            st.session_state.get(REAL_DATASET_SESSION),
+            expected_cache_key=expected_key,
+        )
+    except ValueError:
+        dataset = None
+
+    previous_dataset = dataset
+    if st.sidebar.button("Зареди/обнови реалната история", width="stretch"):
+        try:
+            with st.spinner("Зареждане и моделиране на последните 90 дни…"):
+                dataset = load_real_history(
+                    IntervalsClient(token, profile_identifier),
+                    profile_identifier=profile_identifier,
+                    session_salt=str(
+                        st.session_state[REAL_CACHE_SALT_SESSION]
+                    ),
+                    parameters=bundle["parameters"],
+                    period_end=date.today(),
+                    days=DEFAULT_HISTORY_DAYS,
+                    configuration=_real_history_configuration(),
+                )
+            st.session_state[REAL_DATASET_SESSION] = dataset
+            st.sidebar.success("Реалната история е обновена в текущата сесия.")
+        except IntervalsAPIError as exc:
+            st.sidebar.error(str(exc))
+            dataset = previous_dataset
+        except Exception:
+            st.sidebar.error(
+                "Историята не можа да бъде обработена безопасно. "
+                "Няма използвани тестови данни като заместител."
+            )
+            dataset = previous_dataset
+
+    if dataset is None:
+        if st.session_state.get(REAL_DATASET_SESSION) is not None:
+            st.sidebar.warning(
+                "Кешът е остарял за текущия профил, период или модел. "
+                "Заредете историята отново."
+            )
+        else:
+            st.sidebar.info(
+                "Натоварването и възстановяването ще се покажат след еднократно "
+                "зареждане на последните 90 дни."
+            )
+        return
+
+    loaded_at = datetime.fromisoformat(dataset.loaded_at_utc).astimezone(
+        timezone.utc
+    )
+    st.sidebar.caption(
+        f"{dataset.period_start} → {dataset.period_end} · "
+        f"обновено {loaded_at:%Y-%m-%d %H:%M} UTC"
+    )
+    st.sidebar.caption(
+        f"Активности: {dataset.processed_activities} · "
+        f"ограничени: {dataset.limited_activities} · "
+        f"изключени: {dataset.excluded_activities}"
+    )
+
+
 def sync_navigation(bundle: dict[str, Any]) -> tuple[str, str, str]:
+    data_source = st.sidebar.radio(
+        "Източник на данни",
+        [DEMO_DATA_SOURCE, REAL_DATA_SOURCE],
+        key="data_source_mode",
+        format_func=lambda value: DATA_SOURCE_LABELS[value],
+    )
+    data_source = validate_data_source(data_source)
     requested_page = str(st.query_params.get("page", "team"))
     if any(
         key in st.query_params
@@ -184,21 +335,37 @@ def sync_navigation(bundle: dict[str, Any]) -> tuple[str, str, str]:
         st.session_state.nav_page = requested_page
         st.session_state._last_query_page = requested_page
 
-    requested_athlete = str(st.query_params.get("athlete", st.session_state.athlete_id))
     valid_athletes = bundle["athletes"]["athlete_id"].astype(str).tolist()
-    if requested_athlete in valid_athletes and st.session_state.get("_last_query_athlete") != requested_athlete:
-        st.session_state.athlete_id = requested_athlete
-        st.session_state._last_query_athlete = requested_athlete
+    if data_source == DEMO_DATA_SOURCE:
+        requested_athlete = str(
+            st.query_params.get("athlete", st.session_state.athlete_id)
+        )
+        if (
+            requested_athlete in valid_athletes
+            and st.session_state.get("_last_query_athlete") != requested_athlete
+        ):
+            st.session_state.athlete_id = requested_athlete
+            st.session_state._last_query_athlete = requested_athlete
 
-    role = st.sidebar.selectbox("Роля", ROLE_LABELS, key="role", help="Ролята променя правото за редакция. Наблюдателят работи само в режим преглед.")
-
-    name_map = bundle["athletes"].set_index("athlete_id")["name"].to_dict()
-    athlete_id = st.sidebar.selectbox(
-        "Спортист",
-        valid_athletes,
-        key="athlete_id",
-        format_func=lambda value: f"{value} · {name_map[value]}",
-    )
+        role = st.sidebar.selectbox(
+            "Роля",
+            ROLE_LABELS,
+            key="role",
+            help=(
+                "Ролята променя правото за редакция. Наблюдателят работи само "
+                "в режим преглед."
+            ),
+        )
+        name_map = bundle["athletes"].set_index("athlete_id")["name"].to_dict()
+        athlete_id = st.sidebar.selectbox(
+            "Спортист",
+            valid_athletes,
+            key="athlete_id",
+            format_func=lambda value: f"{value} · {name_map[value]}",
+        )
+    else:
+        role = str(st.session_state.role)
+        athlete_id = str(st.session_state.athlete_id)
 
     page = st.sidebar.radio(
         "Навигация",
@@ -209,20 +376,40 @@ def sync_navigation(bundle: dict[str, Any]) -> tuple[str, str, str]:
 
     if str(st.query_params.get("page", "")) != page:
         st.query_params["page"] = page
-    if str(st.query_params.get("athlete", "")) != athlete_id:
+    if (
+        data_source == DEMO_DATA_SOURCE
+        and str(st.query_params.get("athlete", "")) != athlete_id
+    ):
         st.query_params["athlete"] = athlete_id
     st.session_state._last_query_page = page
-    st.session_state._last_query_athlete = athlete_id
+    if data_source == DEMO_DATA_SOURCE:
+        st.session_state._last_query_athlete = athlete_id
 
     st.sidebar.divider()
-    st.sidebar.caption(f"Версия на данните: {bundle['version']} · seed: {bundle['seed']}")
-    st.sidebar.caption("Решенията са тренировъчна подкрепа, не медицинска диагноза.")
-    with st.sidebar.expander("Управление на демото"):
-        confirmed = st.checkbox("Потвърждавам нулиране", key="reset_confirm")
-        if st.button("Нулирай всички тестови данни", disabled=not confirmed, width="stretch"):
-            st.session_state.bundle = generate_demo_bundle(seed=DEMO_SEED, history_days=150)
-            st.session_state.flash = ("success", "Демото е върнато към началния повторяем сценарий.")
-            st.rerun()
+    if data_source == DEMO_DATA_SOURCE:
+        st.sidebar.caption(
+            f"Версия на данните: {bundle['version']} · seed: {bundle['seed']}"
+        )
+        with st.sidebar.expander("Управление на демото"):
+            confirmed = st.checkbox("Потвърждавам нулиране", key="reset_confirm")
+            if st.button(
+                "Нулирай всички тестови данни",
+                disabled=not confirmed,
+                width="stretch",
+            ):
+                st.session_state.bundle = generate_demo_bundle(
+                    seed=DEMO_SEED, history_days=150
+                )
+                st.session_state.flash = (
+                    "success",
+                    "Демото е върнато към началния повторяем сценарий.",
+                )
+                st.rerun()
+    else:
+        _render_real_history_sidebar(bundle)
+    st.sidebar.caption(
+        "Решенията са тренировъчна подкрепа, не медицинска диагноза."
+    )
     return page, athlete_id, role
 
 
@@ -662,6 +849,287 @@ def render_recovery_page(analysis: dict[str, Any]) -> None:
     recent = recent.loc[recent["impulse"] > 0.05].sort_values(["date", "component"], ascending=[False, True]).head(30)
     with st.expander("Последни тренировъчни импулси"):
         st.dataframe(recent, width="stretch", hide_index=True)
+
+
+def _render_real_source_banner(dataset: RealHistoryDataset) -> None:
+    loaded_at = datetime.fromisoformat(dataset.loaded_at_utc).astimezone(
+        timezone.utc
+    )
+    st.info(
+        "Източник: Реални данни от Intervals.icu · "
+        f"период {dataset.period_start} → {dataset.period_end} · "
+        f"изчислено {loaded_at:%Y-%m-%d %H:%M} UTC"
+    )
+    st.caption(
+        f"Нормализатор: {dataset.normalization_version} · "
+        f"zone profile: {dataset.zone_profile_fingerprint[:12]}… · "
+        f"config: {dataset.configuration_fingerprint[:12]}… · "
+        f"модел: {dataset.model_version} · "
+        f"Tref bounds: {dataset.tref_bounds_profile_version} "
+        "(физиологично некалибриран)"
+    )
+    st.caption(
+        f"Обработени активности: {dataset.processed_activities} · "
+        f"валидни/ограничени: {dataset.modeled_activity_count} · "
+        f"ограничени: {dataset.limited_activities} · "
+        f"изключени: {dataset.excluded_activities}"
+    )
+    for warning in dataset.warnings:
+        st.warning(warning)
+
+
+def render_real_load_page(dataset: RealHistoryDataset) -> None:
+    page_header(
+        "Натоварване и индекс 7/40",
+        "Реални Intervals.icu активности → нормализиран HR → T/Q → cascade/spillover → E.",
+    )
+    _render_real_source_banner(dataset)
+    if dataset.modeled_activity_count == 0:
+        st.error(
+            "Недостатъчно данни: в периода няма активност с използваем HR "
+            "резултат. 7/40 и дневният E не се публикуват."
+        )
+        return
+    view = build_real_load_view(dataset)
+    component = st.selectbox(
+        "Компонент",
+        AEROBIC_COMPONENTS,
+        format_func=lambda value: COMPONENT_LABELS[value],
+        key="real_load_component",
+    )
+    row = view["load_stats"].loc[component]
+    readiness = view["load_readiness"].loc[component]
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("7/40", f"{row['index_7_40']:.2f}", help=help_text("seven_forty"))
+    c2.metric("E7 · средно/ден", f"{row['E7_daily']:.1f}")
+    c3.metric("E40 · средно/ден", f"{row['E40_daily']:.1f}")
+    c4.metric("Tref", f"{row['Tref']:.1f}", help=help_text("tref"))
+    c5.metric("Readiness", f"{readiness['readiness']:.0f}%")
+    if float(row["reliability"]) < 1.0:
+        st.warning(
+            "Историята още не покрива целия 40-дневен прозорец; 7/40 и Tref "
+            "са отбелязани като ограничени."
+        )
+
+    left, right = st.columns(2)
+    with left:
+        st.plotly_chart(
+            index_7_40_figure(view["rolling_load"], component),
+            width="stretch",
+        )
+    with right:
+        st.plotly_chart(
+            effective_load_figure(view["rolling_load"], component),
+            width="stretch",
+        )
+
+    with st.expander("Дневен ефективен товар по зони · последни 21 дни"):
+        daily_by_zone = (
+            view["daily_zones"]
+            .pivot(index="date", columns="zone", values="E_z")
+            .reindex(columns=AEROBIC_COMPONENTS, fill_value=0.0)
+            .sort_index()
+            .tail(21)
+            .reset_index()
+        )
+        st.dataframe(daily_by_zone, width="stretch", hide_index=True)
+
+    st.subheader("Детайл на реална активност")
+    activities = view["activities"].sort_values(
+        ["date", "activity_ref"], ascending=[False, False]
+    )
+    if activities.empty:
+        st.info("За избрания период няма налични реални активности.")
+        return
+
+    def activity_label(activity_ref: str) -> str:
+        selected_row = activities.loc[
+            activities["activity_ref"] == activity_ref
+        ].iloc[0]
+        duration = selected_row["duration_min"]
+        duration_text = (
+            f" · {float(duration):.0f} мин"
+            if pd.notna(duration)
+            else ""
+        )
+        return (
+            f"{pd.Timestamp(selected_row['date']).date()} · "
+            f"{selected_row['sport']}{duration_text} · "
+            f"{selected_row['quality_status']}"
+        )
+
+    selected_ref = st.selectbox(
+        "Активност",
+        activities["activity_ref"].tolist(),
+        format_func=activity_label,
+        key="real_activity_detail",
+    )
+    selected_activity = activities.loc[
+        activities["activity_ref"] == selected_ref
+    ].iloc[0]
+    quality_status = str(selected_activity["quality_status"])
+    if quality_status == "excluded":
+        st.error(
+            "Недостатъчно данни: тази активност е изключена от модела. "
+            f"{selected_activity['status_reason']}"
+        )
+        return
+    if quality_status == "limited":
+        st.warning(
+            "Ограничен резултат: активността участва в агрегацията, но HR "
+            f"покритието е {float(selected_activity['hr_coverage_percent']):.1f}%."
+        )
+    else:
+        st.success(
+            "Валиден HR резултат · "
+            f"покритие {float(selected_activity['hr_coverage_percent']):.1f}%."
+        )
+
+    zones = view["activity_zones"].loc[
+        view["activity_zones"]["activity_ref"] == selected_ref
+    ].copy()
+    chart_values: dict[str, float] = {}
+    by_zone = zones.set_index("zone") if not zones.empty else pd.DataFrame()
+    for zone in AEROBIC_COMPONENTS:
+        chart_values[f"real_{zone}"] = (
+            float(by_zone.loc[zone, "T_z"]) if zone in by_zone.index else 0.0
+        )
+        chart_values[f"q_{zone}"] = (
+            float(by_zone.loc[zone, "Q_z"]) if zone in by_zone.index else 0.0
+        )
+    chart_values["real_STR"] = np.nan
+    chart_values["q_STR"] = np.nan
+    st.plotly_chart(
+        real_vs_equivalent_figure(pd.Series(chart_values)),
+        width="stretch",
+    )
+    detail = zones.rename(
+        columns={
+            "zone": "Зона",
+            "T_z": "Реално T",
+            "Q_z": "Директно Q",
+            "cascade": "Cascade",
+            "spillover": "Spillover",
+            "E_z": "Ефективно E",
+            "tref_raw": "Tref raw",
+            "tref_effective": "Tref effective",
+            "quality_status": "Качество",
+        }
+    )[
+        [
+            "Зона",
+            "Реално T",
+            "Директно Q",
+            "Cascade",
+            "Spillover",
+            "Ефективно E",
+            "Tref raw",
+            "Tref effective",
+            "Качество",
+        ]
+    ]
+    st.dataframe(detail, width="stretch", hide_index=True)
+    st.caption(
+        "Активностите се моделират поотделно. Едва след това T, Q, cascade, "
+        "spillover и E се сумират на дневно ниво."
+    )
+
+
+def render_real_recovery_page(dataset: RealHistoryDataset) -> None:
+    page_header(
+        "Динамика на възстановяването",
+        "Товарна readiness от реалния ефективен товар E и съществуващия модел за затихване.",
+    )
+    _render_real_source_banner(dataset)
+    if dataset.modeled_activity_count == 0:
+        st.error(
+            "Недостатъчно данни: в периода няма активност с използваем HR "
+            "резултат. Възстановяването не се публикува."
+        )
+        return
+    st.warning(
+        "Този изглед е load-only: wellness и контролни тестове не се смесват "
+        "с реалната история, докато нямат отделна завършена интеграция."
+    )
+    view = build_real_recovery_view(dataset)
+    selected_components = st.multiselect(
+        "Компоненти",
+        AEROBIC_COMPONENTS,
+        default=["Z2", "Z3", "Z4", "Z5"],
+        format_func=lambda value: COMPONENT_SHORT[value],
+        key="real_recovery_components",
+    )
+    st.plotly_chart(
+        readiness_figure(
+            view["readiness_history"],
+            selected_components or AEROBIC_COMPONENTS,
+            days=60,
+            key_readiness_threshold=float(
+                st.session_state.bundle["parameters"]["key_readiness_threshold"]
+            ),
+        ),
+        width="stretch",
+    )
+    current = (
+        view["load_readiness"]
+        .loc[list(AEROBIC_COMPONENTS)]
+        .reset_index()
+        .rename(
+            columns={
+                "component": "Компонент",
+                "fatigue": "Остатъчна умора",
+                "readiness": "Товарна readiness",
+                "days_to_full": "Дни до практическо възстановяване",
+            }
+        )
+    )
+    st.dataframe(
+        current,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Товарна readiness": st.column_config.ProgressColumn(
+                min_value=0, max_value=100, format="%.1f"
+            ),
+            "Дни до практическо възстановяване": (
+                st.column_config.NumberColumn(format="%.2f")
+            ),
+        },
+    )
+
+    recent = view["readiness_history"].copy()
+    recent["date"] = pd.to_datetime(recent["date"])
+    cutoff = pd.Timestamp(dataset.period_end) - pd.Timedelta(days=13)
+    recent = recent.loc[
+        (recent["component"].isin(AEROBIC_COMPONENTS))
+        & (recent["date"] >= cutoff)
+        & (recent["impulse"] > 0.05)
+    ].sort_values(["date", "component"], ascending=[False, True])
+    with st.expander("Последни реални тренировъчни импулси"):
+        st.dataframe(recent.head(40), width="stretch", hide_index=True)
+
+
+def render_real_unconnected_page(
+    page: str, dataset: RealHistoryDataset | None
+) -> None:
+    page_header(PAGES[page], "Режим с реални данни от Intervals.icu")
+    if dataset is not None:
+        _render_real_source_banner(dataset)
+    else:
+        st.info("Източник: Реални данни от Intervals.icu · историята не е заредена.")
+    st.warning(
+        "Тази страница все още не е свързана с реалния източник на данни."
+    )
+
+
+def render_real_dataset_required_page(page: str) -> None:
+    page_header(PAGES[page], "Режим с реални данни от Intervals.icu")
+    st.info("Източник: Реални данни от Intervals.icu · историята не е заредена.")
+    st.error(
+        "Свържете Intervals.icu през „Реални данни · shadow“ и използвайте "
+        "„Зареди/обнови реалната история“ в страничното меню. Тестови данни "
+        "не се използват като заместител."
+    )
 
 
 def render_plan_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit: bool) -> None:
@@ -2783,39 +3251,56 @@ def render_settings_page(bundle: dict[str, Any], role: str, athlete_id: str) -> 
 initialize_state()
 bundle = st.session_state.bundle
 page, athlete_id, role = sync_navigation(bundle)
-demo_banner(bundle["version"])
+data_source = validate_data_source(st.session_state.data_source_mode)
+if data_source == DEMO_DATA_SOURCE:
+    demo_banner(bundle["version"])
 render_flash()
 
 can_edit = role in EDIT_ROLES
-if page == "team":
-    render_team_page(bundle)
-elif page == "models":
-    render_models_page()
-elif page == "settings":
-    render_settings_page(bundle, role, athlete_id)
-elif page == "real_data":
+if page == "real_data":
     from intervals_inspector.app import render_integrated_page
 
     render_integrated_page()
-else:
-    analysis = analyze_athlete(bundle, athlete_id, generate_plan=True)
-    if page == "dashboard":
-        render_dashboard_page(analysis)
-    elif page == "load":
-        render_load_page(analysis)
+elif data_source == REAL_DATA_SOURCE:
+    real_dataset = _current_real_dataset(bundle)
+    if page == "load":
+        if real_dataset is None:
+            render_real_dataset_required_page(page)
+        else:
+            render_real_load_page(real_dataset)
     elif page == "recovery":
-        render_recovery_page(analysis)
-    elif page == "plan":
-        render_plan_page(bundle, analysis, can_edit)
-    elif page == "calendar":
-        render_calendar_goals_page(bundle, analysis, can_edit)
-    elif page == "history":
-        render_history_page(bundle, analysis, can_edit)
-    elif page == "monitoring":
-        render_monitoring_page(bundle, analysis, can_edit)
-    elif page == "tests":
-        render_tests_page(bundle, analysis, can_edit)
-    elif page == "simulator":
-        render_simulator_page(bundle, analysis, can_edit)
-    elif page == "profile":
-        render_profile_page(bundle, analysis, can_edit)
+        if real_dataset is None:
+            render_real_dataset_required_page(page)
+        else:
+            render_real_recovery_page(real_dataset)
+    else:
+        render_real_unconnected_page(page, real_dataset)
+else:
+    if page == "team":
+        render_team_page(bundle)
+    elif page == "models":
+        render_models_page()
+    elif page == "settings":
+        render_settings_page(bundle, role, athlete_id)
+    else:
+        analysis = analyze_athlete(bundle, athlete_id, generate_plan=True)
+        if page == "dashboard":
+            render_dashboard_page(analysis)
+        elif page == "load":
+            render_load_page(analysis)
+        elif page == "recovery":
+            render_recovery_page(analysis)
+        elif page == "plan":
+            render_plan_page(bundle, analysis, can_edit)
+        elif page == "calendar":
+            render_calendar_goals_page(bundle, analysis, can_edit)
+        elif page == "history":
+            render_history_page(bundle, analysis, can_edit)
+        elif page == "monitoring":
+            render_monitoring_page(bundle, analysis, can_edit)
+        elif page == "tests":
+            render_tests_page(bundle, analysis, can_edit)
+        elif page == "simulator":
+            render_simulator_page(bundle, analysis, can_edit)
+        elif page == "profile":
+            render_profile_page(bundle, analysis, can_edit)

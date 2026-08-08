@@ -459,6 +459,9 @@ def _process_callback(config: InspectorConfig) -> None:
         st.session_state.pop(SESSION_ACTIVITY_REPORT_ID, None)
         st.session_state.pop(SESSION_NORMALIZER_REPORT, None)
         st.session_state.pop(SESSION_NORMALIZER_REPORT_ID, None)
+        for key in list(st.session_state):
+            if str(key).startswith("_real_history_"):
+                st.session_state.pop(key, None)
         _remember_notice("success", "Intervals.icu профилът е свързан.")
     except OAuthAccessDenied:
         _remember_notice(
@@ -2151,6 +2154,7 @@ def _disconnect(*, preserve_host_state: bool = False) -> None:
             "_adult_",
             "_shadow_",
             "_onflows_",
+            "_real_history_",
         )
         for key in list(st.session_state):
             if str(key).startswith(inspector_prefixes):
