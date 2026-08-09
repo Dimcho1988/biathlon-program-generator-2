@@ -94,10 +94,13 @@ def test_dated_methods_send_required_date_params(
     assert result == []
     call = session.get.call_args
     assert call.args[0] == f"https://intervals.icu{expected_path}"
-    assert call.kwargs["params"] == {
+    expected_params = {
         "oldest": "2026-06-01",
         "newest": "2026-06-30",
     }
+    if method_name == "get_activities":
+        expected_params["limit"] = "20000"
+    assert call.kwargs["params"] == expected_params
 
 
 def test_get_streams_uses_documented_json_endpoint() -> None:

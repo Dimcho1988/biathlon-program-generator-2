@@ -20,6 +20,7 @@ import requests
 
 
 API_BASE_URL = "https://intervals.icu"
+ACTIVITY_LIST_LIMIT = 20_000
 DEFAULT_TIMEOUT = (5.0, 30.0)
 DEFAULT_MAX_RETRIES = 2
 MAX_RETRY_DELAY_SECONDS = 5.0
@@ -101,6 +102,7 @@ class IntervalsClient:
             f"/api/v1/athlete/{_path_segment(self._athlete_id)}/activities",
             oldest,
             newest,
+            extra_params={"limit": str(ACTIVITY_LIST_LIMIT)},
         )
 
     def get_wellness(self, oldest: str, newest: str) -> Any:
