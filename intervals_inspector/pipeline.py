@@ -35,6 +35,7 @@ from intervals_inspector.shadow_model import (
     ShadowModelConfiguration,
     calculate_shadow_comparison,
     configuration_from_profile,
+    default_shadow_configuration,
 )
 from intervals_inspector.stream_normalizer import (
     ALGORITHM_VERSION as NORMALIZATION_VERSION,
@@ -47,7 +48,7 @@ from intervals_inspector.stream_normalizer import (
 from intervals_inspector.stream_quality import analyze_stream_quality
 
 
-CANONICAL_INPUT_VERSION = "canonical-real-activity-v1"
+CANONICAL_INPUT_VERSION = "canonical-real-activity-v2-qref"
 MAX_HISTORY_ACTIVITIES = 200
 _SAFE_ACTIVITY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
@@ -70,8 +71,8 @@ class CanonicalModelInput:
 
     normalized_activity: IntervalAwareResult
     activity_date: date | None
-    prior_baseline_effective: tuple[Mapping[str, Any], ...] = ()
-    prior_experimental_effective: tuple[Mapping[str, Any], ...] = ()
+    prior_baseline_qref: tuple[Mapping[str, Any], ...] = ()
+    prior_experimental_qref: tuple[Mapping[str, Any], ...] = ()
     schema_version: str = CANONICAL_INPUT_VERSION
     normalization_version: str = NORMALIZATION_VERSION
 
@@ -80,8 +81,8 @@ def build_canonical_model_input(
     normalized_activity: IntervalAwareResult,
     *,
     activity_date: date | None = None,
-    prior_baseline_effective: Sequence[Mapping[str, Any]] = (),
-    prior_experimental_effective: Sequence[Mapping[str, Any]] = (),
+    prior_baseline_qref: Sequence[Mapping[str, Any]] = (),
+    prior_experimental_qref: Sequence[Mapping[str, Any]] = (),
 ) -> CanonicalModelInput:
     """Adapt one normalized activity without copying or re-normalizing it."""
 
@@ -90,8 +91,8 @@ def build_canonical_model_input(
     return CanonicalModelInput(
         normalized_activity=normalized_activity,
         activity_date=activity_date,
-        prior_baseline_effective=tuple(prior_baseline_effective),
-        prior_experimental_effective=tuple(prior_experimental_effective),
+        prior_baseline_qref=tuple(prior_baseline_qref),
+        prior_experimental_qref=tuple(prior_experimental_qref),
     )
 
 
@@ -175,8 +176,8 @@ def run_physiological_models(
     comparison = calculate_shadow_comparison(
         canonical_input.normalized_activity,
         experimental_configuration=experimental_configuration,
-        prior_baseline_effective=canonical_input.prior_baseline_effective,
-        prior_experimental_effective=canonical_input.prior_experimental_effective,
+        prior_baseline_qref=canonical_input.prior_baseline_qref,
+        prior_experimental_qref=canonical_input.prior_experimental_qref,
         activity_date=canonical_input.activity_date,
     )
     if coverage < LOW_HR_COVERAGE_PERCENT:
@@ -202,8 +203,8 @@ def process_activity_payloads(
     include_1hz_preview: bool = False,
     profile: OnFlowsZoneProfile | None = None,
     experimental_configuration: ShadowModelConfiguration | None = None,
-    prior_baseline_effective: Sequence[Mapping[str, Any]] = (),
-    prior_experimental_effective: Sequence[Mapping[str, Any]] = (),
+    prior_baseline_qref: Sequence[Mapping[str, Any]] = (),
+    prior_experimental_qref: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Validate, normalize, adapt, and model one already-loaded activity."""
 
@@ -221,8 +222,8 @@ def process_activity_payloads(
     canonical_input = build_canonical_model_input(
         interval_result,
         activity_date=_activity_date(detail_payload),
-        prior_baseline_effective=prior_baseline_effective,
-        prior_experimental_effective=prior_experimental_effective,
+        prior_baseline_qref=prior_baseline_qref,
+        prior_experimental_qref=prior_experimental_qref,
     )
     onflows_analysis, comparison, model_status = run_physiological_models(
         canonical_input,
@@ -255,7 +256,7 @@ def process_activity_payloads(
     return summary
 
 
-def _history_rows_from_result(result: Mapping[str, Any] | None) -> dict[str, float] | None:
+def _qref_rows_from_result(result: Mapping[str, Any] | None) -> dict[str, float] | None:
     if not isinstance(result, Mapping):
         return None
     rows = result.get("rows")
@@ -266,7 +267,7 @@ def _history_rows_from_result(result: Mapping[str, Any] | None) -> dict[str, flo
         if not isinstance(row, Mapping):
             continue
         zone = str(row.get("zone") or "")
-        value = row.get("E_z")
+        value = row.get("Qref_z")
         if zone and isinstance(value, (int, float)) and not isinstance(value, bool):
             values[zone] = max(0.0, float(value))
     return values or None
@@ -326,10 +327,14 @@ def _load_history(
 
     processed_activities = 0
     skipped_activities = 0
-    for activity_day in sorted(grouped):
-        baseline_day: dict[str, float] = defaultdict(float)
-        experimental_day: dict[str, float] = defaultdict(float)
-        day_has_result = False
+    for day_offset in range(HISTORY_WINDOW_DAYS):
+        activity_day = oldest + timedelta(days=day_offset)
+        baseline_day: dict[str, float] = {
+            zone.zone: 0.0 for zone in default_shadow_configuration().zones
+        }
+        experimental_day: dict[str, float] = {
+            zone.zone: 0.0 for zone in experimental_configuration.zones
+        }
         for activity_id in sorted(set(grouped[activity_day])):
             if processed_activities + skipped_activities >= MAX_HISTORY_ACTIVITIES:
                 skipped_activities += 1
@@ -349,8 +354,8 @@ def _load_history(
                 canonical = build_canonical_model_input(
                     interval_result,
                     activity_date=activity_day,
-                    prior_baseline_effective=baseline_history,
-                    prior_experimental_effective=experimental_history,
+                    prior_baseline_qref=baseline_history,
+                    prior_experimental_qref=experimental_history,
                 )
                 _analysis, comparison, status = run_physiological_models(
                     canonical,
@@ -360,8 +365,8 @@ def _load_history(
                 if comparison is None or status["status"] == "not_run":
                     skipped_activities += 1
                     continue
-                baseline_values = _history_rows_from_result(comparison.get("baseline"))
-                experimental_values = _history_rows_from_result(
+                baseline_values = _qref_rows_from_result(comparison.get("baseline"))
+                experimental_values = _qref_rows_from_result(
                     comparison.get("experimental")
                 )
                 if not baseline_values or not experimental_values:
@@ -372,18 +377,16 @@ def _load_history(
                 for zone, value in experimental_values.items():
                     experimental_day[zone] += value
                 processed_activities += 1
-                day_has_result = True
             except Exception:
                 # Fail closed: no provider payload, identifier, or exception text
                 # is retained in diagnostics.
                 skipped_activities += 1
-        if day_has_result:
-            baseline_history.append(
-                {"date": activity_day.isoformat(), **dict(baseline_day)}
-            )
-            experimental_history.append(
-                {"date": activity_day.isoformat(), **dict(experimental_day)}
-            )
+        baseline_history.append(
+            {"date": activity_day.isoformat(), **dict(baseline_day)}
+        )
+        experimental_history.append(
+            {"date": activity_day.isoformat(), **dict(experimental_day)}
+        )
 
     diagnostics.update(
         {
@@ -396,16 +399,12 @@ def _load_history(
             "period_end": (
                 baseline_history[-1]["date"] if baseline_history else None
             ),
-            "limited_by_available_data": len(baseline_history) < HISTORY_WINDOW_DAYS,
+            "limited_by_available_data": False,
         }
     )
     if skipped_activities:
         diagnostics["warnings"].append(
             f"Пропуснати исторически активности без използваем HR резултат: {skipped_activities}."
-        )
-    if len(baseline_history) < HISTORY_WINDOW_DAYS:
-        diagnostics["warnings"].append(
-            f"Използвани са {len(baseline_history)}/{HISTORY_WINDOW_DAYS} реално налични предходни дни."
         )
     return baseline_history, experimental_history, diagnostics
 
@@ -461,8 +460,8 @@ def run_activity_pipeline(
         include_1hz_preview=include_1hz_preview,
         profile=selected_profile,
         experimental_configuration=configuration,
-        prior_baseline_effective=baseline_history,
-        prior_experimental_effective=experimental_history,
+        prior_baseline_qref=baseline_history,
+        prior_experimental_qref=experimental_history,
     )
     summary["history"] = history
     return summary

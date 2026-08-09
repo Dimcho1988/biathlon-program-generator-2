@@ -93,7 +93,24 @@ from intervals_inspector.real_data_source import (
     resolve_real_dataset,
     validate_data_source,
 )
-from intervals_inspector.shadow_model import default_shadow_configuration
+from intervals_inspector.qref_planning import (
+    DEFAULT_PLANNING_SETTINGS,
+    SESSION_DOSE_RANGES,
+    WEEKLY_PHASE_MULTIPLIERS,
+    adjust_target_for_recovery,
+    limiting_secondary_zones,
+    session_dose_range,
+    validate_planning_settings,
+    weekly_target,
+)
+from intervals_inspector.shadow_model import (
+    PROFILE_LEVELS,
+    configuration_from_safe_dict,
+    configuration_to_safe_dict,
+    configuration_with_overrides,
+    configuration_with_profile_level,
+    default_shadow_configuration,
+)
 
 st.set_page_config(
     page_title="Biathlon LoadLab · MVP 0.6",
@@ -143,6 +160,8 @@ DATA_SOURCE_LABELS = {
 }
 REAL_DATASET_SESSION = "_real_history_dataset"
 REAL_CACHE_SALT_SESSION = "_real_history_cache_salt"
+REAL_TREF_CONFIGURATION_SESSION = "_real_tref_configuration"
+REAL_QREF_PLANNING_SESSION = "_real_qref_planning_settings"
 
 
 def _camp_editor_rows_for_storage(
@@ -203,9 +222,27 @@ def render_flash() -> None:
 
 
 def _real_history_configuration():
-    # The main pages use the fixed baseline bridge. Experimental shadow-page
-    # overrides remain diagnostic and must not alter the main demonstrator.
-    return default_shadow_configuration()
+    """Return validated, session-only Tref settings for the real-data bridge."""
+
+    value = st.session_state.get(REAL_TREF_CONFIGURATION_SESSION)
+    try:
+        return configuration_from_safe_dict(value)
+    except ValueError:
+        configuration = default_shadow_configuration()
+        st.session_state[REAL_TREF_CONFIGURATION_SESSION] = (
+            configuration_to_safe_dict(configuration)
+        )
+        return configuration
+
+
+def _real_qref_planning_settings() -> dict[str, float]:
+    value = st.session_state.get(REAL_QREF_PLANNING_SESSION)
+    try:
+        return validate_planning_settings(value)
+    except ValueError:
+        settings = dict(DEFAULT_PLANNING_SETTINGS)
+        st.session_state[REAL_QREF_PLANNING_SESSION] = settings
+        return settings
 
 
 def _real_history_cache_key(bundle: dict[str, Any]) -> str:
@@ -865,7 +902,8 @@ def _render_real_source_banner(dataset: RealHistoryDataset) -> None:
         f"zone profile: {dataset.zone_profile_fingerprint[:12]}… · "
         f"config: {dataset.configuration_fingerprint[:12]}… · "
         f"модел: {dataset.model_version} · "
-        f"Tref bounds: {dataset.tref_bounds_profile_version} "
+        f"Tref bounds: {dataset.tref_bounds_profile_version} · "
+        f"profile level: {dataset.profile_level} "
         "(физиологично некалибриран)"
     )
     st.caption(
@@ -911,6 +949,37 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
             "са отбелязани като ограничени."
         )
 
+    latest_tref = view["daily_zones"].loc[
+        view["daily_zones"]["date"] == pd.Timestamp(dataset.period_end),
+        [
+            "zone",
+            "tref_history_value",
+            "tref_effective",
+            "tref_source",
+            "tref_history_days",
+        ],
+    ].copy()
+    latest_tref = latest_tref.rename(
+        columns={
+            "zone": "Зона",
+            "tref_history_value": "Hn/H40",
+            "tref_effective": "Краен Tref",
+            "tref_source": "Източник",
+            "tref_history_days": "Завършени дни",
+        }
+    )
+    with st.expander("Текущ Tref по зони · Z1–Z5", expanded=True):
+        st.dataframe(latest_tref, width="stretch", hide_index=True)
+        st.caption(
+            "Tref използва само завършени календарни дни преди текущия ден. "
+            "Почивните дни участват с Qref=0; текущи и бъдещи данни не участват."
+        )
+        st.caption(
+            "Tref е капацитет при референтната граница на зоната. Qref "
+            "приравнява различните позиции вътре в зоната чрез същия W(HR); "
+            "затова реалните минути T и референтните минути Qref не са едно и също."
+        )
+
     left, right = st.columns(2)
     with left:
         st.plotly_chart(
@@ -921,6 +990,92 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
         st.plotly_chart(
             effective_load_figure(view["rolling_load"], component),
             width="stretch",
+        )
+
+    planning_settings = _real_qref_planning_settings()
+    phase_multipliers = {
+        phase: planning_settings[f"weekly_{phase}"]
+        for phase in WEEKLY_PHASE_MULTIPLIERS
+    }
+    configured_dose_ranges = {
+        kind: (
+            planning_settings[f"{kind}_low"],
+            planning_settings[f"{kind}_high"],
+        )
+        for kind in SESSION_DOSE_RANGES
+    }
+    with st.expander("Shadow/diagnostic · Qref планиране", expanded=False):
+        st.warning(
+            "Диагностичен изглед, не финален тренировъчен план. Не променя "
+            "„Адаптивна програма“ и не записва нищо в Intervals.icu."
+        )
+        phase = st.selectbox(
+            "Седмична фаза",
+            tuple(WEEKLY_PHASE_MULTIPLIERS),
+            index=1,
+            format_func=lambda value: {
+                "recovery": (
+                    f"Възстановителна · {phase_multipliers['recovery']:.2f} × Tref"
+                ),
+                "maintenance": (
+                    f"Поддържаща · {phase_multipliers['maintenance']:.2f} × Tref"
+                ),
+                "accent": (
+                    f"Акцентна · {phase_multipliers['accent']:.2f} × Tref"
+                ),
+            }[value],
+            key="real_qref_phase",
+        )
+        session_kind = st.selectbox(
+            "Тип диагностична сесия",
+            tuple(SESSION_DOSE_RANGES),
+            format_func=lambda value: {
+                "building": (
+                    "Развиваща · "
+                    f"{configured_dose_ranges['building'][0]:.2f}–"
+                    f"{configured_dose_ranges['building'][1]:.2f} × Tref"
+                ),
+                "maintenance": (
+                    "Поддържаща · "
+                    f"{configured_dose_ranges['maintenance'][0]:.2f}–"
+                    f"{configured_dose_ranges['maintenance'][1]:.2f} × Tref"
+                ),
+            }[value],
+            key="real_qref_session_kind",
+        )
+        capacity = float(row["Tref"])
+        recovery_fraction = min(
+            1.0, max(0.0, float(readiness["readiness"]) / 100.0)
+        )
+        base_weekly = weekly_target(
+            capacity,
+            phase_multipliers[phase],
+            maximum_multiplier=planning_settings["weekly_max"],
+        )
+        adjusted_weekly = adjust_target_for_recovery(
+            base_weekly, recovery_fraction
+        )
+        base_session_low, base_session_high = session_dose_range(
+            capacity,
+            session_kind,
+            dose_ranges=configured_dose_ranges,
+        )
+        adjusted_session_low = adjust_target_for_recovery(
+            base_session_low, recovery_fraction
+        )
+        adjusted_session_high = adjust_target_for_recovery(
+            base_session_high, recovery_fraction
+        )
+        d1, d2, d3 = st.columns(3)
+        d1.metric("Базова седмична цел", f"{base_weekly:.1f} Qref")
+        d2.metric("Коригирана веднъж", f"{adjusted_weekly:.1f} Qref")
+        d3.metric("Recovery дял", f"{100.0 * recovery_fraction:.0f}%")
+        st.caption(
+            f"Базов сесиен диапазон: {base_session_low:.1f}–{base_session_high:.1f} Qref · "
+            f"след еднократно умножение по recovery: "
+            f"{adjusted_session_low:.1f}–{adjusted_session_high:.1f} Qref. "
+            "Диагностичната горна седмична граница е "
+            f"{planning_settings['weekly_max']:.2f} × Tref."
         )
 
     with st.expander("Дневен ефективен товар по зони · последни 21 дни"):
@@ -1003,16 +1158,21 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
         real_vs_equivalent_figure(pd.Series(chart_values)),
         width="stretch",
     )
+    zones["Qref/Tref %"] = 100.0 * zones["direct_ratio"]
+    zones["HR покритие %"] = float(selected_activity["hr_coverage_percent"])
     detail = zones.rename(
         columns={
             "zone": "Зона",
             "T_z": "Реално T",
             "Q_z": "Директно Q",
+            "Qref_z": "Директно Qref",
             "cascade": "Cascade",
             "spillover": "Spillover",
             "E_z": "Ефективно E",
-            "tref_raw": "Tref raw",
-            "tref_effective": "Tref effective",
+            "tref_history_value": "Hn/H40",
+            "tref_effective": "Краен Tref",
+            "tref_source": "Tref източник",
+            "tref_history_days": "Исторически дни",
             "quality_status": "Качество",
         }
     )[
@@ -1020,15 +1180,38 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
             "Зона",
             "Реално T",
             "Директно Q",
+            "Директно Qref",
+            "Qref/Tref %",
             "Cascade",
             "Spillover",
             "Ефективно E",
-            "Tref raw",
-            "Tref effective",
+            "Hn/H40",
+            "Краен Tref",
+            "Tref източник",
+            "Исторически дни",
+            "HR покритие %",
             "Качество",
         ]
     ]
     st.dataframe(detail, width="stretch", hide_index=True)
+    if not zones.empty:
+        qref_by_zone = zones.set_index("zone")["Qref_z"].to_dict()
+        tref_by_zone = zones.set_index("zone")["tref_effective"].to_dict()
+        limiting = limiting_secondary_zones(
+            qref_by_zone,
+            tref_by_zone,
+            primary_zone=component,
+        )
+        if limiting:
+            st.warning(
+                "Shadow/diagnostic: вторични зони на или над директния "
+                f"праг Qref/Tref ≥ 0.50: {', '.join(limiting)}."
+            )
+        else:
+            st.caption(
+                "Shadow/diagnostic: няма вторична зона на директния праг "
+                "Qref/Tref ≥ 0.50."
+            )
     st.caption(
         "Активностите се моделират поотделно. Едва след това T, Q, cascade, "
         "spillover и E се сумират на дневно ниво."
@@ -1107,6 +1290,206 @@ def render_real_recovery_page(dataset: RealHistoryDataset) -> None:
     ].sort_values(["date", "component"], ascending=[False, True])
     with st.expander("Последни реални тренировъчни импулси"):
         st.dataframe(recent.head(40), width="stretch", hide_index=True)
+
+
+def render_real_tref_settings_page(
+    dataset: RealHistoryDataset | None,
+) -> None:
+    page_header(
+        "Експертни настройки · Tref",
+        "Сесийни Qref/Tref граници и начален профил за режима с реални данни.",
+    )
+    if dataset is not None:
+        _render_real_source_banner(dataset)
+    else:
+        st.info(
+            "Настройките могат да се подготвят преди зареждане на историята. "
+            "След промяна реалната история трябва да се зареди отново."
+        )
+    configuration = _real_history_configuration()
+    st.warning(
+        "Некалибрирани начални физиологични граници. Промените са само в "
+        "текущата сесия; W(HR), cascade и spillover коефициентите остават непроменени."
+    )
+    st.caption(
+        f"Модел: {configuration.physiology_profile_version} · "
+        f"Tref bounds: {configuration.tref_bounds_profile_version} · "
+        f"config: {configuration.fingerprint[:12]}…"
+    )
+    submitted_bounds: dict[str, float] = {}
+    with st.form("real_tref_settings_form", clear_on_submit=False):
+        profile_level = st.selectbox(
+            "Начален профил при 0–6 завършени дни",
+            PROFILE_LEVELS,
+            index=PROFILE_LEVELS.index(configuration.profile_level),
+            format_func=lambda value: {
+                "low": "Нисък · Tref = min",
+                "medium": "Среден · Tref = (min + max) / 2",
+                "high": "Висок · Tref = max",
+            }[value],
+            key="_real_tref_profile_level",
+        )
+        headings = st.columns([0.8, 1.2, 1.2])
+        headings[0].markdown("**Зона**")
+        headings[1].markdown("**Tref min**")
+        headings[2].markdown("**Tref max**")
+        for zone in configuration.zones:
+            columns = st.columns([0.8, 1.2, 1.2])
+            columns[0].markdown(f"**{zone.zone}**")
+            with columns[1]:
+                submitted_bounds[f"parameter.{zone.zone}.tref_min"] = (
+                    st.number_input(
+                        f"{zone.zone} Tref min",
+                        min_value=1.0,
+                        max_value=10080.0,
+                        value=float(zone.tref_min),
+                        step=1.0,
+                        key=f"_real_tref_{zone.zone}_min",
+                        label_visibility="collapsed",
+                    )
+                )
+            with columns[2]:
+                submitted_bounds[f"parameter.{zone.zone}.tref_max"] = (
+                    st.number_input(
+                        f"{zone.zone} Tref max",
+                        min_value=1.0,
+                        max_value=10080.0,
+                        value=float(zone.tref_max),
+                        step=1.0,
+                        key=f"_real_tref_{zone.zone}_max",
+                        label_visibility="collapsed",
+                    )
+                )
+        save_requested = st.form_submit_button(
+            "Запази в сесията и маркирай историята за преизчисляване",
+            type="primary",
+            width="stretch",
+        )
+
+    reset_requested = st.button(
+        "Върни началните Tref граници и среден профил",
+        key="real_tref_reset",
+        width="stretch",
+    )
+
+    st.subheader("Shadow/diagnostic множители")
+    st.caption(
+        "Регулируеми начални стойности за диагностиката; не променят "
+        "защитената „Адаптивна програма“."
+    )
+    planning = _real_qref_planning_settings()
+    with st.form("real_qref_planning_settings_form", clear_on_submit=False):
+        weekly_columns = st.columns(4)
+        planning_values = {
+            "weekly_recovery": weekly_columns[0].number_input(
+                "Възстановителна седмица × Tref",
+                min_value=0.0,
+                value=planning["weekly_recovery"],
+                step=0.05,
+                key="_real_qref_weekly_recovery",
+            ),
+            "weekly_maintenance": weekly_columns[1].number_input(
+                "Поддържаща седмица × Tref",
+                min_value=0.0,
+                value=planning["weekly_maintenance"],
+                step=0.05,
+                key="_real_qref_weekly_maintenance",
+            ),
+            "weekly_accent": weekly_columns[2].number_input(
+                "Акцентна седмица × Tref",
+                min_value=0.0,
+                value=planning["weekly_accent"],
+                step=0.05,
+                key="_real_qref_weekly_accent",
+            ),
+            "weekly_max": weekly_columns[3].number_input(
+                "Горен диагностичен диапазон × Tref",
+                min_value=0.05,
+                value=planning["weekly_max"],
+                step=0.05,
+                key="_real_qref_weekly_max",
+            ),
+        }
+        dose_columns = st.columns(4)
+        planning_values.update(
+            {
+                "building_low": dose_columns[0].number_input(
+                    "Развиваща min × Tref",
+                    min_value=0.0,
+                    value=planning["building_low"],
+                    step=0.05,
+                    key="_real_qref_building_low",
+                ),
+                "building_high": dose_columns[1].number_input(
+                    "Развиваща max × Tref",
+                    min_value=0.0,
+                    value=planning["building_high"],
+                    step=0.05,
+                    key="_real_qref_building_high",
+                ),
+                "maintenance_low": dose_columns[2].number_input(
+                    "Поддържаща min × Tref",
+                    min_value=0.0,
+                    value=planning["maintenance_low"],
+                    step=0.05,
+                    key="_real_qref_maintenance_low",
+                ),
+                "maintenance_high": dose_columns[3].number_input(
+                    "Поддържаща max × Tref",
+                    min_value=0.0,
+                    value=planning["maintenance_high"],
+                    step=0.05,
+                    key="_real_qref_maintenance_high",
+                ),
+            }
+        )
+        planning_save_requested = st.form_submit_button(
+            "Запази диагностичните множители в сесията",
+            width="stretch",
+        )
+    candidate = None
+    if save_requested:
+        try:
+            candidate = configuration_with_overrides(
+                submitted_bounds,
+                baseline=default_shadow_configuration(),
+            )
+            candidate = configuration_with_profile_level(
+                profile_level,
+                baseline=candidate,
+            )
+        except ValueError as exc:
+            st.error(f"Невалидни Tref настройки: {exc}")
+    elif reset_requested:
+        candidate = default_shadow_configuration()
+        for key in list(st.session_state):
+            if str(key).startswith("_real_tref_") and key != (
+                REAL_TREF_CONFIGURATION_SESSION
+            ):
+                st.session_state.pop(key, None)
+
+    if candidate is not None:
+        st.session_state[REAL_TREF_CONFIGURATION_SESSION] = (
+            configuration_to_safe_dict(candidate)
+        )
+        st.session_state.pop(REAL_DATASET_SESSION, None)
+        st.session_state.flash = (
+            "success",
+            "Tref настройките са обновени само в сесията. Заредете реалната история отново.",
+        )
+        st.rerun()
+    if planning_save_requested:
+        try:
+            validated_planning = validate_planning_settings(planning_values)
+        except ValueError as exc:
+            st.error(f"Невалидни диагностични множители: {exc}")
+        else:
+            st.session_state[REAL_QREF_PLANNING_SESSION] = validated_planning
+            st.session_state.flash = (
+                "success",
+                "Диагностичните Qref множители са обновени само в сесията.",
+            )
+            st.rerun()
 
 
 def render_real_unconnected_page(
@@ -3273,6 +3656,8 @@ elif data_source == REAL_DATA_SOURCE:
             render_real_dataset_required_page(page)
         else:
             render_real_recovery_page(real_dataset)
+    elif page == "settings":
+        render_real_tref_settings_page(real_dataset)
     else:
         render_real_unconnected_page(page, real_dataset)
 else:

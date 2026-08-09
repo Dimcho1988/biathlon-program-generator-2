@@ -15,7 +15,6 @@ import math
 from numbers import Real
 from typing import Any, Mapping, Sequence
 
-from biathlon.constants import DEFAULT_BASE_LOADS
 from intervals_inspector.model_registry import (
     RESULT_DEFINITIONS,
     WARNING_DEFINITIONS,
@@ -32,13 +31,21 @@ from intervals_inspector.onflows_zone_profile import (
 )
 
 
-SHADOW_MODEL_VERSION = "real-data-shadow-physiology-v1"
-TREF_BOUNDS_PROFILE_VERSION = "tref-bounds-safety-v1-uncalibrated"
-CONFIG_SCHEMA_VERSION = "shadow-model-config-v1"
-RESULT_SCHEMA_VERSION = "shadow-model-comparison-v1"
+SHADOW_MODEL_VERSION = "real-data-shadow-physiology-v2-qref-tref"
+TREF_BOUNDS_PROFILE_VERSION = "tref-capacity-qref-v2-uncalibrated"
+CONFIG_SCHEMA_VERSION = "shadow-model-config-v2"
+RESULT_SCHEMA_VERSION = "shadow-model-comparison-v2"
 MAX_TREF_MINUTES_PER_WEEK = 7.0 * 24.0 * 60.0
 HISTORY_WINDOW_DAYS = 40
 LOW_HR_COVERAGE_PERCENT = 80.0
+PROFILE_LEVELS = ("low", "medium", "high")
+DEFAULT_TREF_BOUNDS = {
+    "Z1": (180.0, 300.0),
+    "Z2": (90.0, 180.0),
+    "Z3": (40.0, 70.0),
+    "Z4": (10.0, 20.0),
+    "Z5": (10.0, 20.0),
+}
 
 EDITABLE_FIELDS = (
     "weight_low",
@@ -49,9 +56,12 @@ EDITABLE_FIELDS = (
     "spill_up_fraction",
     "tref_min",
     "tref_max",
-    "bounds_factor",
 )
-READ_ONLY_FIELDS = ("profile_version", "tref_bounds_profile_version")
+READ_ONLY_FIELDS = (
+    "bounds_factor",
+    "profile_version",
+    "tref_bounds_profile_version",
+)
 FIELD_UNITS = {
     "weight_low": "относителна тежест",
     "weight_high": "относителна тежест",
@@ -59,8 +69,8 @@ FIELD_UNITS = {
     "spill_threshold_fraction": "% от Tref",
     "spill_down_fraction": "% от превишението",
     "spill_up_fraction": "% от превишението",
-    "tref_min": "еквивалентни минути/седмица",
-    "tref_max": "еквивалентни минути/седмица",
+    "tref_min": "референтни минути",
+    "tref_max": "референтни минути",
     "bounds_factor": "без единица",
     "profile_version": "версия",
     "tref_bounds_profile_version": "версия",
@@ -72,9 +82,9 @@ FIELD_RANGES = {
     "spill_threshold_fraction": (0.0, 1.0),
     "spill_down_fraction": (0.0, 1.0),
     "spill_up_fraction": (0.0, 1.0),
-    "tref_min": (0.0, MAX_TREF_MINUTES_PER_WEEK),
-    "tref_max": (0.0, MAX_TREF_MINUTES_PER_WEEK),
-    "bounds_factor": (0.5, 1.5),
+    "tref_min": (1.0, MAX_TREF_MINUTES_PER_WEEK),
+    "tref_max": (1.0, MAX_TREF_MINUTES_PER_WEEK),
+    "bounds_factor": (1.0, 1.0),
 }
 
 
@@ -99,6 +109,7 @@ class ShadowModelConfiguration:
     schema_version: str
     physiology_profile_version: str
     tref_bounds_profile_version: str
+    profile_level: str
     zones: tuple[ZoneModelSettings, ...]
     overrides: tuple[str, ...]
     fingerprint: str
@@ -118,12 +129,15 @@ def _finite(value: Any, field: str) -> float:
 
 
 def _payload(
-    zones: Sequence[ZoneModelSettings], overrides: Sequence[str]
+    zones: Sequence[ZoneModelSettings],
+    overrides: Sequence[str],
+    profile_level: str,
 ) -> dict[str, Any]:
     return {
         "schema_version": CONFIG_SCHEMA_VERSION,
         "physiology_profile_version": SHADOW_MODEL_VERSION,
         "tref_bounds_profile_version": TREF_BOUNDS_PROFILE_VERSION,
+        "profile_level": profile_level,
         "zones": [
             {field: getattr(zone, field) for field in zone.__dataclass_fields__}
             for zone in zones
@@ -144,14 +158,20 @@ def _fingerprint(payload: Mapping[str, Any]) -> str:
 
 
 def _build_configuration(
-    zones: Sequence[ZoneModelSettings], overrides: Sequence[str] = ()
+    zones: Sequence[ZoneModelSettings],
+    overrides: Sequence[str] = (),
+    *,
+    profile_level: str = "medium",
 ) -> ShadowModelConfiguration:
+    if profile_level not in PROFILE_LEVELS:
+        raise ValueError("profile_level must be low, medium, or high")
     validate_zone_settings(zones)
-    payload = _payload(zones, overrides)
+    payload = _payload(zones, overrides, profile_level)
     return ShadowModelConfiguration(
         schema_version=CONFIG_SCHEMA_VERSION,
         physiology_profile_version=SHADOW_MODEL_VERSION,
         tref_bounds_profile_version=TREF_BOUNDS_PROFILE_VERSION,
+        profile_level=profile_level,
         zones=tuple(zones),
         overrides=tuple(payload["overrides"]),
         fingerprint=_fingerprint(payload),
@@ -164,9 +184,7 @@ def default_shadow_configuration() -> ShadowModelConfiguration:
     zones = []
     for row in DEFAULT_PROFILE_ROWS:
         zone = str(row["zone"])
-        # These are transparent safety bounds, not claimed physiological
-        # limits.  The main model's visible base load remains the fallback for
-        # tref_raw when no prior real-data history is available.
+        tref_min, tref_max = DEFAULT_TREF_BOUNDS[zone]
         zones.append(
             ZoneModelSettings(
                 zone=zone,
@@ -178,8 +196,8 @@ def default_shadow_configuration() -> ShadowModelConfiguration:
                 spill_threshold_fraction=0.50,
                 spill_down_fraction=0.20,
                 spill_up_fraction=0.10,
-                tref_min=0.0,
-                tref_max=MAX_TREF_MINUTES_PER_WEEK,
+                tref_min=tref_min,
+                tref_max=tref_max,
                 bounds_factor=1.0,
             )
         )
@@ -226,7 +244,9 @@ def configuration_with_overrides(
         }
         for zone in initial.zones
     }
-    changed: list[str] = []
+    changed: list[str] = (
+        ["profile.level"] if initial.profile_level != "medium" else []
+    )
     for item_id, raw_value in overrides.items():
         parts = str(item_id).split(".")
         if len(parts) != 3 or parts[0] != "parameter":
@@ -244,13 +264,38 @@ def configuration_with_overrides(
     return _build_configuration(
         [ZoneModelSettings(**by_zone[zone.zone]) for zone in initial.zones],
         changed,
+        profile_level=initial.profile_level,
+    )
+
+
+def configuration_with_profile_level(
+    profile_level: str,
+    *,
+    baseline: ShadowModelConfiguration | None = None,
+) -> ShadowModelConfiguration:
+    """Apply the subjective coach level without changing zone coefficients."""
+
+    initial = baseline or default_shadow_configuration()
+    overrides = [
+        item for item in initial.overrides if item != "profile.level"
+    ]
+    if profile_level != "medium":
+        overrides.append("profile.level")
+    return _build_configuration(
+        initial.zones,
+        overrides,
+        profile_level=profile_level,
     )
 
 
 def configuration_to_safe_dict(
     configuration: ShadowModelConfiguration,
 ) -> dict[str, Any]:
-    payload = _payload(configuration.zones, configuration.overrides)
+    payload = _payload(
+        configuration.zones,
+        configuration.overrides,
+        configuration.profile_level,
+    )
     return {**payload, "fingerprint": configuration.fingerprint}
 
 
@@ -263,6 +308,9 @@ def configuration_from_safe_dict(value: Any) -> ShadowModelConfiguration:
         raise ValueError("physiology profile version is unsupported")
     if value.get("tref_bounds_profile_version") != TREF_BOUNDS_PROFILE_VERSION:
         raise ValueError("Tref bounds profile version is unsupported")
+    profile_level = str(value.get("profile_level") or "")
+    if profile_level not in PROFILE_LEVELS:
+        raise ValueError("profile level is unsupported")
     rows = value.get("zones")
     if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
         raise ValueError("configuration zones are missing")
@@ -275,6 +323,9 @@ def configuration_from_safe_dict(value: Any) -> ShadowModelConfiguration:
                 zone=str(row.get("zone") or ""),
                 hr_low=_finite(row.get("hr_low"), "hr_low"),
                 hr_high=_finite(row.get("hr_high"), "hr_high"),
+                bounds_factor=_finite(
+                    row.get("bounds_factor"), "bounds_factor"
+                ),
                 **{
                     field: _finite(row.get(field), field)
                     for field in EDITABLE_FIELDS
@@ -284,7 +335,11 @@ def configuration_from_safe_dict(value: Any) -> ShadowModelConfiguration:
     overrides = value.get("overrides") or []
     if not isinstance(overrides, Sequence) or isinstance(overrides, (str, bytes, bytearray)):
         raise ValueError("configuration overrides are invalid")
-    configuration = _build_configuration(zones, list(map(str, overrides)))
+    configuration = _build_configuration(
+        zones,
+        list(map(str, overrides)),
+        profile_level=profile_level,
+    )
     expected = value.get("fingerprint")
     if expected is not None and expected != configuration.fingerprint:
         raise ValueError("configuration fingerprint mismatch")
@@ -393,12 +448,21 @@ def _tref_values(
     zones: Sequence[ZoneModelSettings],
     history: Sequence[Mapping[str, Any]],
     *,
+    profile_level: str,
     activity_date: date | None = None,
-) -> tuple[dict[str, float], int, bool, str | None, str | None]:
+) -> tuple[
+    dict[str, float],
+    dict[str, float | None],
+    str,
+    int,
+    bool,
+    str | None,
+    str | None,
+]:
     candidates = [row for row in history if isinstance(row, Mapping)]
     if activity_date is not None:
         oldest = activity_date - timedelta(days=HISTORY_WINDOW_DAYS)
-        dated: list[tuple[date, Mapping[str, Any]]] = []
+        dated: dict[date, Mapping[str, Any]] = {}
         for row in candidates:
             raw_date = row.get("date")
             try:
@@ -406,24 +470,45 @@ def _tref_values(
             except ValueError:
                 continue
             if oldest <= row_date < activity_date:
-                dated.append((row_date, row))
-        dated.sort(key=lambda item: item[0])
-        usable = [row for _row_date, row in dated]
+                dated[row_date] = row
+        usable = [dated[row_date] for row_date in sorted(dated)]
     else:
         usable = candidates[-HISTORY_WINDOW_DAYS:]
     history_days = len(usable)
-    fallback_used = history_days == 0
+    if history_days <= 6:
+        source = "profile"
+    elif history_days < HISTORY_WINDOW_DAYS:
+        source = "provisional history"
+    else:
+        source = "40-day history"
+    fallback_used = source == "profile"
     values: dict[str, float] = {}
+    historical_values: dict[str, float | None] = {}
     for zone in zones:
-        samples = []
-        for row in usable:
-            raw = row.get(zone.zone)
-            if isinstance(raw, Real) and not isinstance(raw, bool) and math.isfinite(float(raw)):
-                samples.append(max(0.0, float(raw)))
-        if samples:
-            values[zone.zone] = 7.0 * math.fsum(samples) / len(samples)
+        if source == "profile":
+            if profile_level == "low":
+                profile_value = zone.tref_min
+            elif profile_level == "high":
+                profile_value = zone.tref_max
+            else:
+                profile_value = (zone.tref_min + zone.tref_max) / 2.0
+            values[zone.zone] = profile_value
+            historical_values[zone.zone] = None
         else:
-            values[zone.zone] = 7.0 * float(DEFAULT_BASE_LOADS.get(zone.zone, 0.0))
+            samples = []
+            for row in usable:
+                raw = row.get(zone.zone, 0.0)
+                if (
+                    isinstance(raw, Real)
+                    and not isinstance(raw, bool)
+                    and math.isfinite(float(raw))
+                ):
+                    samples.append(max(0.0, float(raw)))
+                else:
+                    samples.append(0.0)
+            historical = 7.0 * math.fsum(samples) / history_days
+            values[zone.zone] = historical
+            historical_values[zone.zone] = historical
     history_dates = [
         str(row.get("date"))[:10]
         for row in usable
@@ -431,6 +516,8 @@ def _tref_values(
     ]
     return (
         values,
+        historical_values,
+        source,
         history_days,
         fallback_used,
         min(history_dates) if history_dates else None,
@@ -442,7 +529,7 @@ def calculate_shadow_result(
     intrazone_analysis: Mapping[str, Any],
     configuration: ShadowModelConfiguration,
     *,
-    prior_daily_effective: Sequence[Mapping[str, Any]] = (),
+    prior_daily_qref: Sequence[Mapping[str, Any]] = (),
     activity_date: date | None = None,
 ) -> dict[str, Any]:
     """Calculate transparent T/Q/cascade/spill/E/Tref aggregates."""
@@ -461,22 +548,33 @@ def calculate_shadow_result(
         zone: max(0.0, float(source_rows.get(zone, {}).get("weighted_seconds") or 0.0)) / 60.0
         for zone in settings
     }
+    qref = {
+        zone: max(
+            0.0,
+            float(source_rows.get(zone, {}).get("qref_seconds") or 0.0),
+        )
+        / 60.0
+        for zone in settings
+    }
     (
         tref_raw,
+        tref_history_value,
+        tref_source,
         history_days,
         fallback_used,
         history_period_start,
         history_period_end,
     ) = _tref_values(
         configuration.zones,
-        prior_daily_effective,
+        prior_daily_qref,
+        profile_level=configuration.profile_level,
         activity_date=activity_date,
     )
     tref_effective: dict[str, float] = {}
     bound_applied: dict[str, str] = {}
     for zone, config in settings.items():
-        lower = config.bounds_factor * config.tref_min
-        upper = config.bounds_factor * config.tref_max
+        lower = config.tref_min
+        upper = config.tref_max
         raw = tref_raw[zone]
         tref_effective[zone] = min(max(raw, lower), upper)
         bound_applied[zone] = "lower" if raw < lower else "upper" if raw > upper else "none"
@@ -494,7 +592,7 @@ def calculate_shadow_result(
         config = settings[zone]
         excess[zone] = max(
             0.0,
-            q[zone]
+            qref[zone]
             - config.spill_threshold_fraction * tref_effective[zone],
         )
         if index > 0:
@@ -514,6 +612,8 @@ def calculate_shadow_result(
                 "zone": zone,
                 "T_z": t[zone],
                 "Q_z": q[zone],
+                "Qref_z": qref[zone],
+                "direct_ratio": qref[zone] / max(tref_effective[zone], 1e-12),
                 "cascade": cascade[zone],
                 "spillover_excess": excess[zone],
                 "spillover_down_out": spill_down_out[zone],
@@ -522,8 +622,11 @@ def calculate_shadow_result(
                 "E_z": q[zone] + cascade[zone] + spill_received[zone],
                 "tref_raw": tref_raw[zone],
                 "tref_effective": tref_effective[zone],
-                "tref_min_effective": settings[zone].bounds_factor * settings[zone].tref_min,
-                "tref_max_effective": settings[zone].bounds_factor * settings[zone].tref_max,
+                "tref_history_value": tref_history_value[zone],
+                "tref_source": tref_source,
+                "tref_history_days": history_days,
+                "tref_min_effective": settings[zone].tref_min,
+                "tref_max_effective": settings[zone].tref_max,
                 "tref_bound_applied": bound_applied[zone],
             }
         )
@@ -554,6 +657,8 @@ def calculate_shadow_result(
         "tref_bounds_profile_version": configuration.tref_bounds_profile_version,
         "configuration_fingerprint": configuration.fingerprint,
         "experimental": configuration.is_experimental,
+        "profile_level": configuration.profile_level,
+        "tref_source": tref_source,
         "history_days": history_days,
         "history_window_days": HISTORY_WINDOW_DAYS,
         "history_period_start": history_period_start,
@@ -570,8 +675,8 @@ def calculate_shadow_comparison(
     interval_result: Any,
     *,
     experimental_configuration: ShadowModelConfiguration | None = None,
-    prior_baseline_effective: Sequence[Mapping[str, Any]] = (),
-    prior_experimental_effective: Sequence[Mapping[str, Any]] = (),
+    prior_baseline_qref: Sequence[Mapping[str, Any]] = (),
+    prior_experimental_qref: Sequence[Mapping[str, Any]] = (),
     activity_date: date | None = None,
 ) -> dict[str, Any]:
     baseline_configuration = default_shadow_configuration()
@@ -585,13 +690,13 @@ def calculate_shadow_comparison(
     baseline_result = calculate_shadow_result(
         baseline_analysis,
         baseline_configuration,
-        prior_daily_effective=prior_baseline_effective,
+        prior_daily_qref=prior_baseline_qref,
         activity_date=activity_date,
     )
     experimental_result = calculate_shadow_result(
         experimental_analysis,
         experimental,
-        prior_daily_effective=prior_experimental_effective,
+        prior_daily_qref=prior_experimental_qref,
         activity_date=activity_date,
     )
     baseline_rows = {row["zone"]: row for row in baseline_result["rows"]}
@@ -604,19 +709,19 @@ def calculate_shadow_comparison(
                 **{
                     f"baseline_{field}": original[field]
                     for field in (
-                        "T_z", "Q_z", "cascade", "spillover_received", "E_z", "tref_raw", "tref_effective"
+                        "T_z", "Q_z", "Qref_z", "direct_ratio", "cascade", "spillover_received", "E_z", "tref_raw", "tref_effective"
                     )
                 },
                 **{
                     f"experimental_{field}": current[field]
                     for field in (
-                        "T_z", "Q_z", "cascade", "spillover_received", "E_z", "tref_raw", "tref_effective"
+                        "T_z", "Q_z", "Qref_z", "direct_ratio", "cascade", "spillover_received", "E_z", "tref_raw", "tref_effective"
                     )
                 },
                 **{
                     f"delta_{field}": current[field] - original[field]
                     for field in (
-                        "T_z", "Q_z", "cascade", "spillover_received", "E_z", "tref_raw", "tref_effective"
+                        "T_z", "Q_z", "Qref_z", "direct_ratio", "cascade", "spillover_received", "E_z", "tref_raw", "tref_effective"
                     )
                 },
             }

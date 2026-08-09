@@ -49,8 +49,8 @@ from intervals_inspector.stream_normalizer import (
 REAL_DATA_SOURCE = "intervals"
 DEMO_DATA_SOURCE = "demo"
 DATA_SOURCE_VALUES = (DEMO_DATA_SOURCE, REAL_DATA_SOURCE)
-REAL_HISTORY_SCHEMA_VERSION = "onflows-real-history-dataset-v1"
-RECOVERY_MODEL_VERSION = f"main-load-recovery-v{MAIN_MODEL_VERSION}"
+REAL_HISTORY_SCHEMA_VERSION = "onflows-real-history-dataset-v2-qref-tref"
+RECOVERY_MODEL_VERSION = f"main-load-recovery-v{MAIN_MODEL_VERSION}-qref-tref"
 DEFAULT_HISTORY_DAYS = 90
 MIN_HISTORY_DAYS = 41
 MAX_HISTORY_DAYS = 180
@@ -76,6 +76,7 @@ class RealHistoryDataset:
     configuration_fingerprint: str
     model_version: str
     tref_bounds_profile_version: str
+    profile_level: str
     recovery_model_version: str
     parameter_fingerprint: str
     activities: pd.DataFrame
@@ -202,7 +203,12 @@ def _empty_intrazone_analysis(
     return {
         "hr_coverage_percent": 0.0,
         "zones": [
-            {"zone": zone.zone, "real_seconds": 0.0, "weighted_seconds": 0.0}
+            {
+                "zone": zone.zone,
+                "real_seconds": 0.0,
+                "weighted_seconds": 0.0,
+                "qref_seconds": 0.0,
+            }
             for zone in configuration.zones
         ],
     }
@@ -246,11 +252,16 @@ def _zone_columns(*, daily: bool = False) -> list[str]:
         *prefix,
         "T_z",
         "Q_z",
+        "Qref_z",
+        "direct_ratio",
         "cascade",
         "spillover",
         "E_z",
         "tref_raw",
         "tref_effective",
+        "tref_history_value",
+        "tref_source",
+        "tref_history_days",
         "quality_status",
     ]
 
@@ -316,8 +327,8 @@ def load_real_history(
     activity_zone_records: list[dict[str, Any]] = []
     daily_zone_records: list[dict[str, Any]] = []
     daily_load_records: list[dict[str, Any]] = []
-    prior_baseline_effective: list[dict[str, Any]] = []
-    prior_experimental_effective: list[dict[str, Any]] = []
+    prior_baseline_qref: list[dict[str, Any]] = []
+    prior_experimental_qref: list[dict[str, Any]] = []
     warnings: list[str] = []
     processed = 0
     limited = 0
@@ -333,13 +344,14 @@ def load_real_history(
             zone.zone: {
                 "T_z": 0.0,
                 "Q_z": 0.0,
+                "Qref_z": 0.0,
                 "cascade": 0.0,
                 "spillover": 0.0,
                 "E_z": 0.0,
             }
             for zone in selected_configuration.zones
         }
-        day_baseline_effective = {
+        day_baseline_qref = {
             zone.zone: 0.0 for zone in selected_configuration.zones
         }
         day_reference_rows: list[Mapping[str, Any]] | None = None
@@ -363,8 +375,8 @@ def load_real_history(
                     include_1hz_preview=False,
                     profile=profile,
                     experimental_configuration=selected_configuration,
-                    prior_baseline_effective=prior_baseline_effective,
-                    prior_experimental_effective=prior_experimental_effective,
+                    prior_baseline_qref=prior_baseline_qref,
+                    prior_experimental_qref=prior_experimental_qref,
                 )
             except Exception:
                 processed += 1
@@ -445,9 +457,9 @@ def load_real_history(
                 continue
             for baseline_row in baseline_rows:
                 baseline_zone = str(baseline_row.get("zone") or "")
-                if baseline_zone in day_baseline_effective:
-                    day_baseline_effective[baseline_zone] += _finite_non_negative(
-                        baseline_row.get("E_z")
+                if baseline_zone in day_baseline_qref:
+                    day_baseline_qref[baseline_zone] += _finite_non_negative(
+                        baseline_row.get("Qref_z")
                     )
             if day_reference_rows is None:
                 day_reference_rows = rows
@@ -461,6 +473,10 @@ def load_real_history(
                     "zone": zone,
                     "T_z": _finite_non_negative(row.get("T_z")),
                     "Q_z": _finite_non_negative(row.get("Q_z")),
+                    "Qref_z": _finite_non_negative(row.get("Qref_z")),
+                    "direct_ratio": _finite_non_negative(
+                        row.get("direct_ratio")
+                    ),
                     "cascade": _finite_non_negative(row.get("cascade")),
                     "spillover": _finite_non_negative(row.get("spillover_received")),
                     "E_z": _finite_non_negative(row.get("E_z")),
@@ -468,10 +484,26 @@ def load_real_history(
                     "tref_effective": _finite_non_negative(
                         row.get("tref_effective")
                     ),
+                    "tref_history_value": (
+                        _finite_non_negative(row.get("tref_history_value"))
+                        if row.get("tref_history_value") is not None
+                        else None
+                    ),
+                    "tref_source": str(row.get("tref_source") or "profile"),
+                    "tref_history_days": int(
+                        _finite_non_negative(row.get("tref_history_days"))
+                    ),
                     "quality_status": status,
                 }
                 activity_zone_records.append(rendered)
-                for field in ("T_z", "Q_z", "cascade", "spillover", "E_z"):
+                for field in (
+                    "T_z",
+                    "Q_z",
+                    "Qref_z",
+                    "cascade",
+                    "spillover",
+                    "E_z",
+                ):
                     day_totals[zone][field] += float(rendered[field])
 
         if day_reference_rows is None:
@@ -479,7 +511,7 @@ def load_real_history(
                 calculate_shadow_result(
                     _empty_intrazone_analysis(selected_configuration),
                     selected_configuration,
-                    prior_daily_effective=prior_experimental_effective,
+                    prior_daily_qref=prior_experimental_qref,
                     activity_date=current_day,
                 )
             )
@@ -507,8 +539,8 @@ def load_real_history(
         for zone in AEROBIC_COMPONENTS:
             totals = day_totals[zone]
             reference = reference_by_zone.get(zone, {})
-            baseline_history_row[zone] = day_baseline_effective[zone]
-            experimental_history_row[zone] = totals["E_z"]
+            baseline_history_row[zone] = day_baseline_qref[zone]
+            experimental_history_row[zone] = totals["Qref_z"]
             load_row[f"q_{zone}"] = totals["Q_z"]
             load_row[f"e_{zone}"] = totals["E_z"]
             load_row[f"tref_used_{zone}"] = _finite_non_negative(
@@ -519,16 +551,31 @@ def load_real_history(
                     "date": pd.Timestamp(current_day),
                     "zone": zone,
                     **totals,
+                    "direct_ratio": (
+                        totals["Qref_z"]
+                        / max(_finite_non_negative(reference.get("tref_effective")), 1e-12)
+                    ),
                     "tref_raw": _finite_non_negative(reference.get("tref_raw")),
                     "tref_effective": _finite_non_negative(
                         reference.get("tref_effective")
+                    ),
+                    "tref_history_value": (
+                        _finite_non_negative(reference.get("tref_history_value"))
+                        if reference.get("tref_history_value") is not None
+                        else None
+                    ),
+                    "tref_source": str(
+                        reference.get("tref_source") or "profile"
+                    ),
+                    "tref_history_days": int(
+                        _finite_non_negative(reference.get("tref_history_days"))
                     ),
                     "quality_status": day_status,
                 }
             )
         daily_load_records.append(load_row)
-        prior_baseline_effective.append(baseline_history_row)
-        prior_experimental_effective.append(experimental_history_row)
+        prior_baseline_qref.append(baseline_history_row)
+        prior_experimental_qref.append(experimental_history_row)
 
     activities_frame = pd.DataFrame(activity_records, columns=_activity_columns())
     activity_zones_frame = pd.DataFrame(
@@ -550,14 +597,41 @@ def load_real_history(
     load_stats = compute_load_statistics(
         main_model_input, dict(parameters), as_of=end
     ).loc[list(AEROBIC_COMPONENTS)]
+    latest_tref = (
+        daily_zones_frame.loc[
+            daily_zones_frame["date"] == pd.Timestamp(end)
+        ]
+        .set_index("zone")
+    )
+    load_stats["Tref"] = latest_tref["tref_effective"].reindex(
+        load_stats.index
+    )
+    load_stats["reliability"] = (
+        latest_tref["tref_history_days"].reindex(load_stats.index).astype(float)
+        / float(HISTORY_WINDOW_DAYS)
+    ).clip(upper=1.0)
     rolling_load = rolling_load_statistics(
         main_model_input, dict(parameters)
     )
     rolling_load = rolling_load.loc[
         rolling_load["component"].isin(AEROBIC_COMPONENTS)
     ].reset_index(drop=True)
+    rolling_tref = daily_zones_frame[
+        ["date", "zone", "tref_effective"]
+    ].rename(
+        columns={"zone": "component", "tref_effective": "qref_Tref"}
+    )
+    rolling_load = rolling_load.merge(
+        rolling_tref,
+        on=["date", "component"],
+        how="left",
+        validate="one_to_one",
+    )
+    rolling_load["Tref"] = rolling_load.pop("qref_Tref")
     readiness_history = compute_readiness_history(
-        main_model_input, dict(parameters)
+        main_model_input,
+        dict(parameters),
+        use_supplied_tref=True,
     )
     readiness_history = readiness_history.loc[
         readiness_history["component"].isin(AEROBIC_COMPONENTS)
@@ -604,6 +678,7 @@ def load_real_history(
         tref_bounds_profile_version=(
             selected_configuration.tref_bounds_profile_version
         ),
+        profile_level=selected_configuration.profile_level,
         recovery_model_version=RECOVERY_MODEL_VERSION,
         parameter_fingerprint=parameter_fingerprint,
         activities=activities_frame,

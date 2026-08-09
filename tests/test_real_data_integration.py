@@ -78,15 +78,15 @@ def test_complete_pipeline_uses_real_prior_days_and_one_canonical_input() -> Non
         "normalized_once": True,
         "shared_by_baseline_and_experimental": True,
     }
-    assert summary["history"]["available_days"] == 1
+    assert summary["history"]["available_days"] == 40
     assert summary["history"]["available_activities"] == 2
-    assert summary["history"]["period_start"] == "2026-08-07"
+    assert summary["history"]["period_start"] == "2026-06-29"
     assert summary["history"]["period_end"] == "2026-08-07"
     assert summary["history"]["current_day_excluded"] is True
     comparison = summary["shadow_model_comparison"]
-    assert comparison["baseline"]["history_days"] == 1
+    assert comparison["baseline"]["history_days"] == 40
     assert comparison["baseline"]["history_period_end"] == "2026-08-07"
-    assert comparison["experimental"]["history_days"] == 1
+    assert comparison["experimental"]["history_days"] == 40
     assert summary["model_status"]["status"] == "valid"
 
 

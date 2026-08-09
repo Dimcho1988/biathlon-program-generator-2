@@ -388,7 +388,12 @@ def rolling_load_statistics(daily_loads: pd.DataFrame, parameters: dict[str, Any
     return pd.concat(rows, ignore_index=True)
 
 
-def compute_readiness_history(daily_loads: pd.DataFrame, parameters: dict[str, Any]) -> pd.DataFrame:
+def compute_readiness_history(
+    daily_loads: pd.DataFrame,
+    parameters: dict[str, Any],
+    *,
+    use_supplied_tref: bool = False,
+) -> pd.DataFrame:
     """Симулира умората и readiness за всеки ден и компонент."""
 
     if daily_loads.empty:
@@ -405,9 +410,13 @@ def compute_readiness_history(daily_loads: pd.DataFrame, parameters: dict[str, A
             rec = parameters["recovery"][component]
             fatigue[component] *= float(np.exp(-1.0 / max(float(rec["tau_days"]), EPS)))
             fatigue_before = fatigue[component]
-            history = full.iloc[max(0, day_index - long_window) : day_index][f"e_{component}"]
-            chronic = float(history.mean()) if not history.empty else 0.0
-            tref = 7.0 * chronic if chronic > EPS else 7.0 * float(base_loads[component])
+            supplied_column = f"tref_used_{component}"
+            if use_supplied_tref and supplied_column in full:
+                tref = max(float(row[supplied_column]), EPS)
+            else:
+                history = full.iloc[max(0, day_index - long_window) : day_index][f"e_{component}"]
+                chronic = float(history.mean()) if not history.empty else 0.0
+                tref = 7.0 * chronic if chronic > EPS else 7.0 * float(base_loads[component])
             effective = float(row[f"e_{component}"])
             impulse = 100.0 * float(rec["sensitivity"]) * effective / max(tref, EPS)
             fatigue[component] = min(float(rec["fmax"]), fatigue[component] + impulse)

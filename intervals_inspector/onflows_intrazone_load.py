@@ -15,7 +15,7 @@ from intervals_inspector.onflows_zone_profile import (
 from intervals_inspector.stream_normalizer import IntervalAwareResult
 
 
-ALGORITHM_VERSION = "onflows-intrazone-load-interval-aware-v1"
+ALGORITHM_VERSION = "onflows-intrazone-load-interval-aware-v2-qref"
 _ACTIVE_CLASSIFICATIONS = frozenset({"original_1hz", "smart_recording"})
 _HR_METRIC_PRIORITY = (
     "heartrate",
@@ -198,11 +198,25 @@ def calculate_onflows_intrazone_load(
         raise ArithmeticError("onFlows real-duration invariant failed")
 
     zone_rows: list[dict[str, Any]] = []
+    qref_seconds: list[float] = []
     for zone, real, weighted in zip(zones, real_seconds, weighted_seconds):
         maximum_weighted = real * zone.weight_high / zone.weight_low
         tolerance = max(_INVARIANT_TOLERANCE_SEC, real * 1e-12)
         if weighted < real - tolerance or weighted > maximum_weighted + tolerance:
             raise ArithmeticError("onFlows weighted-duration invariant failed")
+        reference_boundary = "lower" if zone.zone == "Z5" else "upper"
+        reference_weight = (
+            zone.weight_low
+            if reference_boundary == "lower"
+            else zone.weight_high
+        )
+        qref = weighted * zone.weight_low / reference_weight
+        if zone.zone == "Z5":
+            if qref < real - tolerance:
+                raise ArithmeticError("Z5 Qref must not be below real duration")
+        elif qref > real + tolerance:
+            raise ArithmeticError("Z1-Z4 Qref must not exceed real duration")
+        qref_seconds.append(qref)
         zone_rows.append(
             {
                 "zone": zone.zone,
@@ -217,6 +231,10 @@ def calculate_onflows_intrazone_load(
                 "real_minutes": real / 60.0,
                 "weighted_seconds": weighted,
                 "weighted_minutes": weighted / 60.0,
+                "qref_reference_boundary": reference_boundary,
+                "qref_reference_weight": reference_weight,
+                "qref_seconds": qref,
+                "qref_minutes": qref / 60.0,
                 "average_k": weighted / real if real else None,
                 "percent_of_classified_hr_time": (
                     real / classified * 100.0 if classified else 0.0
@@ -225,6 +243,7 @@ def calculate_onflows_intrazone_load(
         )
 
     total_weighted = math.fsum(weighted_seconds)
+    total_qref = math.fsum(qref_seconds)
     excluded = math.fsum(excluded_by_classification.values())
     return {
         "algorithm_version": ALGORITHM_VERSION,
@@ -257,6 +276,7 @@ def calculate_onflows_intrazone_load(
         ),
         "total_real_sec": classified,
         "total_weighted_sec": total_weighted,
+        "total_qref_sec": total_qref,
         "overall_average_k": (
             total_weighted / classified if classified else None
         ),

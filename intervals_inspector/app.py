@@ -71,6 +71,7 @@ from intervals_inspector.shadow_model import (
     EDITABLE_FIELDS,
     FIELD_RANGES,
     FIELD_UNITS,
+    PROFILE_LEVELS,
     READ_ONLY_FIELDS,
     ShadowModelConfiguration,
     build_model_registry,
@@ -78,6 +79,7 @@ from intervals_inspector.shadow_model import (
     configuration_from_safe_dict,
     configuration_to_safe_dict,
     configuration_with_overrides,
+    configuration_with_profile_level,
     default_shadow_configuration,
     export_shadow_diagnostics_json,
     profile_from_configuration,
@@ -460,7 +462,9 @@ def _process_callback(config: InspectorConfig) -> None:
         st.session_state.pop(SESSION_NORMALIZER_REPORT, None)
         st.session_state.pop(SESSION_NORMALIZER_REPORT_ID, None)
         for key in list(st.session_state):
-            if str(key).startswith("_real_history_"):
+            if str(key).startswith(
+                ("_real_history_", "_real_tref_", "_real_qref_")
+            ):
                 st.session_state.pop(key, None)
         _remember_notice("success", "Intervals.icu профилът е свързан.")
     except OAuthAccessDenied:
@@ -1072,6 +1076,17 @@ def _render_shadow_settings_panel(
 
         submitted_values: dict[str, float] = {}
         with st.form("_shadow_model_settings_form", clear_on_submit=False):
+            selected_profile_level = st.selectbox(
+                "Начален Tref профил при 0–6 завършени дни",
+                PROFILE_LEVELS,
+                index=PROFILE_LEVELS.index(configuration.profile_level),
+                format_func=lambda value: {
+                    "low": "Нисък · долна граница",
+                    "medium": "Среден · среда на диапазона",
+                    "high": "Висок · горна граница",
+                }[value],
+                key=f"{SHADOW_SETTING_KEY_PREFIX}profile_level",
+            )
             zone_tabs = st.tabs([zone.zone for zone in configuration.zones])
             for zone_index, (zone, initial_zone) in enumerate(
                 zip(configuration.zones, baseline.zones)
@@ -1166,6 +1181,10 @@ def _render_shadow_settings_panel(
                     submitted_values,
                     baseline=baseline,
                 )
+                candidate = configuration_with_profile_level(
+                    selected_profile_level,
+                    baseline=candidate,
+                )
             except ValueError as exc:
                 st.error(f"Невалидна експериментална стойност: {exc}")
         elif reset_requested or legacy_reset_requested:
@@ -1232,12 +1251,16 @@ def _render_shadow_comparison(
             f"{experimental_result.get('tref_bounds_profile_version')} · "
             f"история: {experimental_result.get('history_days', 0)}/"
             f"{experimental_result.get('history_window_days', 40)} дни · "
+            f"Tref source: {experimental_result.get('tref_source', 'profile')} · "
+            f"profile level: {experimental_result.get('profile_level', 'medium')} · "
             f"период: {experimental_result.get('history_period_start') or 'няма'} → "
             f"{experimental_result.get('history_period_end') or 'няма'}"
         )
     result_ids = (
         "result.t",
         "result.q",
+        "result.qref",
+        "result.direct_ratio",
         "result.cascade",
         "result.spillover",
         "result.e",
@@ -1269,6 +1292,8 @@ def _render_shadow_comparison(
         for field, label in (
             ("T_z", "T_z"),
             ("Q_z", "Q_z"),
+            ("Qref_z", "Qref_z"),
+            ("direct_ratio", "Qref/Tref"),
             ("cascade", "cascade"),
             ("spillover_received", "spillover"),
             ("E_z", "E_z"),
@@ -2155,6 +2180,8 @@ def _disconnect(*, preserve_host_state: bool = False) -> None:
             "_shadow_",
             "_onflows_",
             "_real_history_",
+            "_real_tref_",
+            "_real_qref_",
         )
         for key in list(st.session_state):
             if str(key).startswith(inspector_prefixes):

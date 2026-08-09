@@ -119,7 +119,16 @@ def test_load_and_recovery_render_the_same_cached_real_dataset() -> None:
         "Източник: Реални данни от Intervals.icu" in value
         for value in _values(app.info)
     )
-    assert len(app.metric) == 5
+    assert len(app.metric) >= 5
+
+    app.query_params["page"] = "settings"
+    app.run()
+    assert not app.exception
+    assert any(
+        "Некалибрирани начални физиологични граници" in value
+        for value in _values(app.warning)
+    )
+    assert "_real_tref_configuration" in app.session_state
 
     app.query_params["page"] = "recovery"
     app.run()

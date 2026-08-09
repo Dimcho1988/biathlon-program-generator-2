@@ -80,7 +80,6 @@ def test_parameter_registry_exposes_unit_version_source_initial_and_current() ->
         ("parameter.Z2.spill_up_fraction", -1.0),
         ("parameter.Z3.tref_min", -0.1),
         ("parameter.Z3.tref_max", 10081.0),
-        ("parameter.Z4.bounds_factor", 1.51),
     ),
 )
 def test_experimental_values_outside_allowed_ranges_are_rejected(
@@ -101,6 +100,10 @@ def test_cross_field_validation_and_read_only_protection() -> None:
     with pytest.raises(ValueError, match="read-only"):
         configuration_with_overrides(
             {"parameter.Z2.profile_version": 2.0}
+        )
+    with pytest.raises(ValueError, match="read-only"):
+        configuration_with_overrides(
+            {"parameter.Z4.bounds_factor": 1.01}
         )
 
 
@@ -159,6 +162,7 @@ def test_cascade_bidirectional_spill_and_tref_are_visible_per_zone() -> None:
                 "zone": zone.zone,
                 "real_seconds": 0.0,
                 "weighted_seconds": 90.0 * 60.0 if zone.zone == "Z2" else 0.0,
+                "qref_seconds": 90.0 * 60.0 if zone.zone == "Z2" else 0.0,
             }
             for zone in configuration.zones
         ],
@@ -167,18 +171,19 @@ def test_cascade_bidirectional_spill_and_tref_are_visible_per_zone() -> None:
     result = calculate_shadow_result(analysis, configuration)
     rows = {row["zone"]: row for row in result["rows"]}
 
-    # Tref_Z2 falls back visibly to 7 × main's 20 min/day base = 140.
-    # Excess is 90 - 0.5 × 140 = 20; 20% down and 10% up.
-    assert rows["Z2"]["tref_raw"] == pytest.approx(140.0)
-    assert rows["Z1"]["spillover_received"] == pytest.approx(4.0)
-    assert rows["Z3"]["spillover_received"] == pytest.approx(2.0)
+    # Medium profile uses the midpoint 135. Excess is 90 - 0.5 × 135 = 22.5.
+    assert rows["Z2"]["tref_raw"] == pytest.approx(135.0)
+    assert rows["Z1"]["spillover_received"] == pytest.approx(4.5)
+    assert rows["Z3"]["spillover_received"] == pytest.approx(2.25)
     assert rows["Z1"]["cascade"] == pytest.approx(90.0)
-    assert rows["Z1"]["E_z"] == pytest.approx(94.0)
-    assert rows["Z3"]["E_z"] == pytest.approx(2.0)
+    assert rows["Z1"]["E_z"] == pytest.approx(94.5)
+    assert rows["Z3"]["E_z"] == pytest.approx(2.25)
     for row in rows.values():
         assert {
             "T_z",
             "Q_z",
+            "Qref_z",
+            "direct_ratio",
             "cascade",
             "spillover_received",
             "E_z",
