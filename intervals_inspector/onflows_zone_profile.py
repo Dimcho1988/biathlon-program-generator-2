@@ -1,4 +1,4 @@
-"""Versioned, privacy-safe onFlows intrazone weighting profiles."""
+"""Versioned, privacy-safe onFlows HR-zone equivalence profiles."""
 
 from __future__ import annotations
 
@@ -11,7 +11,9 @@ from numbers import Real
 from typing import Any
 
 
-PROFILE_SCHEMA_VERSION = "onflows-zone-profile-v1"
+PROFILE_SCHEMA_VERSION = "onflows-zone-profile-v2-linear-equivalence"
+INTRA_ZONE_EQUIVALENCE_VERSION = "intra_zone_linear_v1"
+DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM = 3.0
 DEFAULT_PROFILE_SOURCE = "default_demo_profile"
 MANUAL_PROFILE_SOURCE = "manual_session_profile"
 _ALLOWED_SOURCES = frozenset(
@@ -26,41 +28,31 @@ DEFAULT_PROFILE_ROWS: tuple[dict[str, float | str], ...] = (
         "zone": "Z1",
         "hr_low": 100.0,
         "hr_high": 125.0,
-        "weight_low": 100.0,
-        "weight_high": 120.0,
-        "power": 1.00,
+        "equivalence_slope_pp_per_bpm": DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM,
     },
     {
         "zone": "Z2",
         "hr_low": 126.0,
         "hr_high": 145.0,
-        "weight_low": 120.0,
-        "weight_high": 150.0,
-        "power": 1.10,
+        "equivalence_slope_pp_per_bpm": DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM,
     },
     {
         "zone": "Z3",
         "hr_low": 146.0,
         "hr_high": 162.0,
-        "weight_low": 150.0,
-        "weight_high": 220.0,
-        "power": 1.15,
+        "equivalence_slope_pp_per_bpm": DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM,
     },
     {
         "zone": "Z4",
         "hr_low": 163.0,
         "hr_high": 177.0,
-        "weight_low": 220.0,
-        "weight_high": 300.0,
-        "power": 1.20,
+        "equivalence_slope_pp_per_bpm": DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM,
     },
     {
         "zone": "Z5",
         "hr_low": 178.0,
         "hr_high": 195.0,
-        "weight_low": 300.0,
-        "weight_high": 420.0,
-        "power": 1.10,
+        "equivalence_slope_pp_per_bpm": DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM,
     },
 )
 
@@ -70,9 +62,7 @@ class OnFlowsZone:
     zone: str
     hr_low: float
     hr_high: float
-    weight_low: float
-    weight_high: float
-    power: float
+    equivalence_slope_pp_per_bpm: float
     membership_low_bpm: float
     membership_high_bpm: float
     membership_lower_inclusive: bool
@@ -89,6 +79,7 @@ class ProfileWarning:
 @dataclass(frozen=True, slots=True)
 class OnFlowsZoneProfile:
     schema_version: str
+    equivalence_version: str
     source: str
     zones: tuple[OnFlowsZone, ...]
     warnings: tuple[ProfileWarning, ...]
@@ -122,14 +113,15 @@ def _integer_adjacent(left: float, right: float) -> bool:
 def _fingerprint_payload(zones: Sequence[OnFlowsZone]) -> dict[str, Any]:
     return {
         "schema_version": PROFILE_SCHEMA_VERSION,
+        "equivalence_version": INTRA_ZONE_EQUIVALENCE_VERSION,
         "zones": [
             {
                 "zone": zone.zone,
                 "hr_low": zone.hr_low,
                 "hr_high": zone.hr_high,
-                "weight_low": zone.weight_low,
-                "weight_high": zone.weight_high,
-                "power": zone.power,
+                "equivalence_slope_pp_per_bpm": (
+                    zone.equivalence_slope_pp_per_bpm
+                ),
                 "membership_low_bpm": zone.membership_low_bpm,
                 "membership_high_bpm": zone.membership_high_bpm,
                 "membership_lower_inclusive": (
@@ -181,33 +173,24 @@ def build_onflows_zone_profile(
             raise ValueError("zone names must be non-empty and unique")
         hr_low = _finite_number(_row_value(row, "hr_low"), "hr_low")
         hr_high = _finite_number(_row_value(row, "hr_high"), "hr_high")
-        weight_low = _finite_number(
-            _row_value(row, "weight_low"), "weight_low"
+        slope = _finite_number(
+            _row_value(row, "equivalence_slope_pp_per_bpm"),
+            "equivalence_slope_pp_per_bpm",
         )
-        weight_high = _finite_number(
-            _row_value(row, "weight_high"), "weight_high"
-        )
-        power = _finite_number(_row_value(row, "power"), "power")
         if hr_low < 0 or hr_high > _MAX_HR_BPM or hr_low >= hr_high:
             raise ValueError("each zone requires 0 <= hr_low < hr_high <= 300")
         if previous_high is not None and hr_low <= previous_high:
             raise ValueError("profile zones must be ordered and non-overlapping")
-        if weight_low <= 0:
-            raise ValueError("weight_low must be positive")
-        if weight_high < weight_low:
-            raise ValueError("weight_high must be greater than or equal to weight_low")
-        if not math.isfinite(weight_high / weight_low):
-            raise ValueError("weight_high / weight_low must be finite")
-        if power <= 0:
-            raise ValueError("power must be positive")
+        if slope < 0.0 or slope > 100.0:
+            raise ValueError(
+                "equivalence_slope_pp_per_bpm must be between 0 and 100"
+            )
         parsed.append(
             {
                 "zone": name,
                 "hr_low": hr_low,
                 "hr_high": hr_high,
-                "weight_low": weight_low,
-                "weight_high": weight_high,
-                "power": power,
+                "equivalence_slope_pp_per_bpm": slope,
             }
         )
         names.add(name)
@@ -227,6 +210,12 @@ def build_onflows_zone_profile(
             upper_inclusive[index] = False
             lower_inclusive[index + 1] = True
 
+    # A quality-controlled value above the configured Z5 HRmax remains Z5,
+    # while its equivalence coefficient is capped at HRmax by the integrator.
+    if parsed[-1]["zone"] == "Z5":
+        membership_highs[-1] = _MAX_HR_BPM
+        upper_inclusive[-1] = True
+
     zones = tuple(
         OnFlowsZone(
             **row,
@@ -238,43 +227,33 @@ def build_onflows_zone_profile(
         for index, row in enumerate(parsed)
     )
     warnings: list[ProfileWarning] = []
-    for left, right in zip(zones, zones[1:]):
-        if not math.isclose(
-            left.weight_high,
-            right.weight_low,
-            rel_tol=0.0,
-            abs_tol=_FLOAT_TOLERANCE,
-        ):
-            warnings.append(
-                ProfileWarning(
-                    code="interzone_weight_discontinuity",
-                    message=(
-                        "weight_high does not match the next zone's "
-                        "weight_low; the profile may introduce a jump"
-                    ),
-                    zone=f"{left.zone}->{right.zone}",
-                )
-            )
 
-    split_points = sorted(
-        {
-            value
-            for zone in zones
-            for value in (
-                zone.hr_low,
-                zone.hr_high,
-                zone.membership_low_bpm,
-                zone.membership_high_bpm,
+    split_points = {
+        value
+        for zone in zones
+        for value in (
+            zone.hr_low,
+            zone.hr_high,
+            zone.membership_low_bpm,
+            zone.membership_high_bpm,
+        )
+    }
+    for zone in zones:
+        if zone.zone != "Z5" and zone.equivalence_slope_pp_per_bpm > 0.0:
+            zero_coefficient_hr = (
+                zone.hr_high
+                - 100.0 / zone.equivalence_slope_pp_per_bpm
             )
-        }
-    )
+            if zone.membership_low_bpm < zero_coefficient_hr < zone.hr_high:
+                split_points.add(zero_coefficient_hr)
     return OnFlowsZoneProfile(
         schema_version=PROFILE_SCHEMA_VERSION,
+        equivalence_version=INTRA_ZONE_EQUIVALENCE_VERSION,
         source=source,
         zones=zones,
         warnings=tuple(warnings),
         fingerprint=_profile_fingerprint(zones),
-        split_points_bpm=tuple(split_points),
+        split_points_bpm=tuple(sorted(split_points)),
     )
 
 
@@ -293,9 +272,9 @@ def profile_edit_rows(
             "zone": zone.zone,
             "hr_low": zone.hr_low,
             "hr_high": zone.hr_high,
-            "weight_low": zone.weight_low,
-            "weight_high": zone.weight_high,
-            "power": zone.power,
+            "equivalence_slope_pp_per_bpm": (
+                zone.equivalence_slope_pp_per_bpm
+            ),
         }
         for zone in profile.zones
     ]

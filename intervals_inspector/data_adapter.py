@@ -418,7 +418,7 @@ def build_model_readiness(
             ),
         },
         {
-            "model": "HR zoning → Q/E → 7/40/Tref/load readiness",
+            "model": "HR zoning → приравнено време/E → 7/40/Tref/load readiness",
             "readiness": "partial" if load_ready else "blocked",
             "missing_or_limit": (
                 "Requires a selected activity with time, HR, moving signal and "

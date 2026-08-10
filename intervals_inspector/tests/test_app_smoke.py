@@ -510,7 +510,11 @@ def test_connected_diagnostics_render_interval_aware_hr_zone_section():
         ),
         "onflows_load_analysis": {
             "algorithm_version": (
-                "onflows-intrazone-load-interval-aware-v1"
+                "onflows-equivalent-time-interval-aware-v3-linear"
+            ),
+            "equivalence_version": onflows_profile.equivalence_version,
+            "effective_hr_adapter_version": (
+                "effective-hr-raw-pass-through-v1"
             ),
             "profile_schema_version": onflows_profile.schema_version,
             "profile_fingerprint": onflows_profile.fingerprint,
@@ -520,12 +524,12 @@ def test_connected_diagnostics_render_interval_aware_hr_zone_section():
                     "zone": "Z2",
                     "hr_low": 126.0,
                     "hr_high": 145.0,
-                    "weight_low": 120.0,
-                    "weight_high": 150.0,
-                    "power": 1.1,
+                    "equivalence_slope_pp_per_bpm": 3.0,
                     "real_seconds": 2.0,
-                    "weighted_seconds": 2.2,
-                    "average_k": 1.1,
+                    "equivalent_seconds": 1.6,
+                    "mean_effective_hr_bpm": 131.0,
+                    "mean_raw_hr_bpm": 131.0,
+                    "average_minute_value_percent": 80.0,
                     "percent_of_classified_hr_time": 100.0,
                 }
             ],
@@ -535,8 +539,8 @@ def test_connected_diagnostics_render_interval_aware_hr_zone_section():
             "hr_coverage_percent": 100.0,
             "excluded_duration_sec": 0.0,
             "total_real_sec": 2.0,
-            "total_weighted_sec": 2.2,
-            "overall_average_k": 1.1,
+            "total_equivalent_sec": 1.6,
+            "overall_average_minute_value_percent": 80.0,
         },
         "zone_analysis": {
             "available": True,
@@ -570,7 +574,7 @@ def test_connected_diagnostics_render_interval_aware_hr_zone_section():
         for item in app.subheader
     )
     assert any(
-        item.value == "onFlows вътрешнозоново претегляне"
+        item.value == "onFlows вътрешнозоново приравняване"
         for item in app.subheader
     )
     assert any(
@@ -581,9 +585,13 @@ def test_connected_diagnostics_render_interval_aware_hr_zone_section():
         dataframe.value.to_string() for dataframe in app.dataframe
     )
     assert "реално време T_z (s)" in rendered_tables
-    assert "претеглено време Q_z (s)" in rendered_tables
+    assert "приравнено време (s)" in rendered_tables
+    assert "среден HR (времево претеглен)" in rendered_tables
+    assert "средна стойност на минутата (%)" in rendered_tables
+    assert "линейна стойност (pp/bpm)" in rendered_tables
     assert "onFlows interval-aware време (s)" in rendered_tables
     assert "Intervals време (s)" in rendered_tables
+    assert "Q_z" not in rendered_tables
 
 
 def test_onflows_session_state_keeps_only_safe_profile_configuration(
@@ -618,7 +626,7 @@ def test_onflows_session_state_keeps_only_safe_profile_configuration(
 def test_onflows_result_is_marked_stale_after_profile_change() -> None:
     original = inspector_app.default_onflows_zone_profile()
     rows = inspector_app.profile_edit_rows(original)
-    rows[0]["power"] = 1.25
+    rows[0]["equivalence_slope_pp_per_bpm"] = 2.5
     changed = inspector_app.build_onflows_zone_profile(
         rows,
         source=inspector_app.MANUAL_PROFILE_SOURCE,

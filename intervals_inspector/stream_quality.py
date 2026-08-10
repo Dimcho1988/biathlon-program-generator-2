@@ -1469,6 +1469,19 @@ def _forbidden_export_key(key: Any) -> bool:
     rendered = str(key).casefold()
     return (
         rendered in _FORBIDDEN_EXPORT_KEYS
+        or "qref" in rendered
+        or rendered
+        in {
+            "q",
+            "q_z",
+            "q_min",
+            "weighted_seconds",
+            "weighted_minutes",
+            "total_weighted_sec",
+            "average_k",
+            "overall_average_k",
+        }
+        or rendered.endswith("_q_z")
         or rendered.endswith("_id")
         or rendered.startswith("raw_")
         or any(

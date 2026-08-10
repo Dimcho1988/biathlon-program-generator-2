@@ -1,4 +1,4 @@
-"""Pure diagnostic planning helpers based on Qref and the single Tref.
+"""Pure diagnostic planning helpers based on equivalent time and Tref.
 
 These helpers do not generate or publish a training plan.  They expose the
 explicit multipliers requested for shadow review while the protected adaptive
@@ -112,10 +112,10 @@ def adjust_target_for_recovery(
     return target * recovery
 
 
-def direct_ratio(qref: float, tref: float) -> float:
-    """Return direct ``Qref/Tref`` without cascade or spillover."""
+def direct_ratio(equivalent_time: float, tref: float) -> float:
+    """Return direct ``equivalent_time/Tref`` without downstream effects."""
 
-    direct = _non_negative(qref, "qref")
+    direct = _non_negative(equivalent_time, "equivalent_time")
     capacity = _non_negative(tref, "tref")
     if capacity <= 0.0:
         raise ValueError("tref must be positive")
@@ -123,7 +123,7 @@ def direct_ratio(qref: float, tref: float) -> float:
 
 
 def limiting_secondary_zones(
-    qref_by_zone: Mapping[str, float],
+    equivalent_time_by_zone: Mapping[str, float],
     tref_by_zone: Mapping[str, float],
     *,
     primary_zone: str,
@@ -131,10 +131,10 @@ def limiting_secondary_zones(
     """Identify secondary zones meeting the direct 0.50 Tref threshold."""
 
     limited = []
-    for zone, qref in qref_by_zone.items():
+    for zone, equivalent_time in equivalent_time_by_zone.items():
         if zone == primary_zone or zone not in tref_by_zone:
             continue
-        if direct_ratio(qref, tref_by_zone[zone]) >= SECONDARY_DIRECT_RATIO_THRESHOLD:
+        if direct_ratio(equivalent_time, tref_by_zone[zone]) >= SECONDARY_DIRECT_RATIO_THRESHOLD:
             limited.append(str(zone))
     return tuple(sorted(limited))
 

@@ -7,6 +7,14 @@ from copy import deepcopy
 COMPONENTS = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"]
 AEROBIC_COMPONENTS = COMPONENTS[:5]
 
+FIXED_AEROBIC_TREF_MINUTES = {
+    "Z1": 300.0,
+    "Z2": 180.0,
+    "Z3": 70.0,
+    "Z4": 20.0,
+    "Z5": 20.0,
+}
+
 # Силата остава един физиологичен компонент в модела 7/40, но реалното
 # време се съхранява по четири вида. Всеки вид има собствен фиксиран
 # коефициент за преобразуване към силови еквивалентни минути.
@@ -72,41 +80,31 @@ DEFAULT_ZONE_PROFILE = [
         "component": "Z1",
         "hr_low": 100,
         "hr_high": 125,
-        "weight_low": 100.0,
-        "weight_high": 120.0,
-        "power": 1.00,
+        "equivalence_slope_pp_per_bpm": 3.0,
     },
     {
         "component": "Z2",
         "hr_low": 126,
         "hr_high": 145,
-        "weight_low": 120.0,
-        "weight_high": 150.0,
-        "power": 1.10,
+        "equivalence_slope_pp_per_bpm": 3.0,
     },
     {
         "component": "Z3",
         "hr_low": 146,
         "hr_high": 162,
-        "weight_low": 150.0,
-        "weight_high": 220.0,
-        "power": 1.15,
+        "equivalence_slope_pp_per_bpm": 3.0,
     },
     {
         "component": "Z4",
         "hr_low": 163,
         "hr_high": 177,
-        "weight_low": 220.0,
-        "weight_high": 300.0,
-        "power": 1.20,
+        "equivalence_slope_pp_per_bpm": 3.0,
     },
     {
         "component": "Z5",
         "hr_low": 178,
         "hr_high": 195,
-        "weight_low": 300.0,
-        "weight_high": 420.0,
-        "power": 1.10,
+        "equivalence_slope_pp_per_bpm": 3.0,
     },
 ]
 

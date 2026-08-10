@@ -331,6 +331,10 @@ def test_safe_export_contains_only_aggregate_top_level_zone_analysis() -> None:
     assert "onflows_load_analysis" not in parsed["normalizer"]
     assert "onflows_zone_profile" not in parsed["normalizer"]
     assert parsed["onflows_load_analysis"]["total_real_sec"] == 2.0
+    assert "qref" not in exported.casefold()
+    assert "weighted_seconds" not in exported.casefold()
+    assert "total_weighted_sec" not in exported.casefold()
+    assert "average_k" not in exported.casefold()
     assert len(parsed["onflows_zone_profile"]["fingerprint"]) == 64
     for forbidden in (
         "987654321",

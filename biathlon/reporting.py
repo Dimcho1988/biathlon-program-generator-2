@@ -103,7 +103,7 @@ def work_report_xlsx_bytes(
                     "Спортист": athlete_name,
                     "Компонент": COMPONENT_LABELS.get(component, component),
                     "Реални минути": round(float(pd.to_numeric(period_activities[real_col], errors="coerce").fillna(0).sum()), 1) if real_col in period_activities else 0.0,
-                    "Еквивалентни минути Q": round(float(pd.to_numeric(period_activities[q_col], errors="coerce").fillna(0).sum()), 1) if q_col in period_activities else 0.0,
+                    "Приравнено време (мин)": round(float(pd.to_numeric(period_activities[q_col], errors="coerce").fillna(0).sum()), 1) if q_col in period_activities else 0.0,
                     "Ефективен товар E": round(float(pd.to_numeric(daily_period[e_col], errors="coerce").fillna(0).sum()), 1) if e_col in daily_period else 0.0,
                 }
             )

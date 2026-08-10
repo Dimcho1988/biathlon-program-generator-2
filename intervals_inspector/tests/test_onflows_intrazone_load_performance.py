@@ -62,5 +62,8 @@ def test_ten_thousand_interval_onflows_load_benchmark_is_one_pass() -> None:
     assert full_analysis["processed_active_interval_count"] == 10_000
     assert full_analysis["active_duration_sec"] == 10_000
     assert full_analysis["total_real_sec"] == pytest.approx(10_000)
-    assert full_analysis["total_weighted_sec"] >= 10_000
+    assert full_analysis["total_equivalent_sec"] > 0.0
+    assert full_analysis["total_weighted_sec"] == pytest.approx(
+        full_analysis["total_equivalent_sec"]
+    )
     assert interval_bytes > aggregate_bytes > 0

@@ -31,6 +31,13 @@ from biathlon.physiology import (
     rolling_load_statistics,
 )
 from intervals_inspector.intervals_client import IntervalsResponse
+from intervals_inspector.effective_hr import EFFECTIVE_HR_ADAPTER_VERSION
+from intervals_inspector.onflows_intrazone_load import (
+    ALGORITHM_VERSION as EQUIVALENT_TIME_ALGORITHM_VERSION,
+)
+from intervals_inspector.onflows_zone_profile import (
+    INTRA_ZONE_EQUIVALENCE_VERSION,
+)
 from intervals_inspector.pipeline import process_activity_payloads
 from intervals_inspector.shadow_model import (
     HISTORY_WINDOW_DAYS,
@@ -49,8 +56,10 @@ from intervals_inspector.stream_normalizer import (
 REAL_DATA_SOURCE = "intervals"
 DEMO_DATA_SOURCE = "demo"
 DATA_SOURCE_VALUES = (DEMO_DATA_SOURCE, REAL_DATA_SOURCE)
-REAL_HISTORY_SCHEMA_VERSION = "onflows-real-history-dataset-v2-qref-tref"
-RECOVERY_MODEL_VERSION = f"main-load-recovery-v{MAIN_MODEL_VERSION}-qref-tref"
+REAL_HISTORY_SCHEMA_VERSION = "onflows-real-history-dataset-v3-equivalent-time"
+RECOVERY_MODEL_VERSION = (
+    f"main-load-recovery-v{MAIN_MODEL_VERSION}-equivalent-time-fixed-tref"
+)
 DEFAULT_HISTORY_DAYS = 90
 MIN_HISTORY_DAYS = 41
 MAX_HISTORY_DAYS = 180
@@ -72,6 +81,9 @@ class RealHistoryDataset:
     excluded_activities: int
     no_activity_days: int
     normalization_version: str
+    equivalent_time_algorithm_version: str
+    equivalence_version: str
+    effective_hr_adapter_version: str
     zone_profile_fingerprint: str
     configuration_fingerprint: str
     model_version: str
@@ -165,6 +177,11 @@ def build_history_cache_key(
         "period_start": period_start.isoformat(),
         "period_end": period_end.isoformat(),
         "normalization_version": NORMALIZATION_VERSION,
+        "equivalent_time_algorithm_version": (
+            EQUIVALENT_TIME_ALGORITHM_VERSION
+        ),
+        "equivalence_version": INTRA_ZONE_EQUIVALENCE_VERSION,
+        "effective_hr_adapter_version": EFFECTIVE_HR_ADAPTER_VERSION,
         "zone_profile_fingerprint": profile.fingerprint,
         "configuration_fingerprint": configuration.fingerprint,
         "model_version": configuration.physiology_profile_version,
@@ -206,8 +223,9 @@ def _empty_intrazone_analysis(
             {
                 "zone": zone.zone,
                 "real_seconds": 0.0,
-                "weighted_seconds": 0.0,
-                "qref_seconds": 0.0,
+                "equivalent_seconds": 0.0,
+                "mean_effective_hr_bpm": None,
+                "average_minute_value_percent": None,
             }
             for zone in configuration.zones
         ],
@@ -251,8 +269,9 @@ def _zone_columns(*, daily: bool = False) -> list[str]:
     return [
         *prefix,
         "T_z",
-        "Q_z",
-        "Qref_z",
+        "T_eq_z",
+        "mean_effective_hr_bpm",
+        "average_minute_value_percent",
         "direct_ratio",
         "cascade",
         "spillover",
@@ -327,8 +346,11 @@ def load_real_history(
     activity_zone_records: list[dict[str, Any]] = []
     daily_zone_records: list[dict[str, Any]] = []
     daily_load_records: list[dict[str, Any]] = []
-    prior_baseline_qref: list[dict[str, Any]] = []
-    prior_experimental_qref: list[dict[str, Any]] = []
+    # These histories contain downstream E, so H40 is exactly 7 × E40 and
+    # matches the denominator used by the 7/40 model. The public T_eq columns
+    # remain the one direct dose from which E is derived.
+    prior_baseline_effective_load: list[dict[str, Any]] = []
+    prior_experimental_effective_load: list[dict[str, Any]] = []
     warnings: list[str] = []
     processed = 0
     limited = 0
@@ -343,15 +365,15 @@ def load_real_history(
         day_totals = {
             zone.zone: {
                 "T_z": 0.0,
-                "Q_z": 0.0,
-                "Qref_z": 0.0,
+                "T_eq_z": 0.0,
+                "effective_hr_bpm_minutes": 0.0,
                 "cascade": 0.0,
                 "spillover": 0.0,
                 "E_z": 0.0,
             }
             for zone in selected_configuration.zones
         }
-        day_baseline_qref = {
+        day_baseline_effective_load = {
             zone.zone: 0.0 for zone in selected_configuration.zones
         }
         day_reference_rows: list[Mapping[str, Any]] | None = None
@@ -375,8 +397,12 @@ def load_real_history(
                     include_1hz_preview=False,
                     profile=profile,
                     experimental_configuration=selected_configuration,
-                    prior_baseline_qref=prior_baseline_qref,
-                    prior_experimental_qref=prior_experimental_qref,
+                    prior_baseline_effective_load=(
+                        prior_baseline_effective_load
+                    ),
+                    prior_experimental_effective_load=(
+                        prior_experimental_effective_load
+                    ),
                 )
             except Exception:
                 processed += 1
@@ -457,9 +483,11 @@ def load_real_history(
                 continue
             for baseline_row in baseline_rows:
                 baseline_zone = str(baseline_row.get("zone") or "")
-                if baseline_zone in day_baseline_qref:
-                    day_baseline_qref[baseline_zone] += _finite_non_negative(
-                        baseline_row.get("Qref_z")
+                if baseline_zone in day_baseline_effective_load:
+                    day_baseline_effective_load[
+                        baseline_zone
+                    ] += _finite_non_negative(
+                        baseline_row.get("E_z")
                     )
             if day_reference_rows is None:
                 day_reference_rows = rows
@@ -472,8 +500,19 @@ def load_real_history(
                     "date": pd.Timestamp(current_day),
                     "zone": zone,
                     "T_z": _finite_non_negative(row.get("T_z")),
-                    "Q_z": _finite_non_negative(row.get("Q_z")),
-                    "Qref_z": _finite_non_negative(row.get("Qref_z")),
+                    "T_eq_z": _finite_non_negative(row.get("T_eq_z")),
+                    "mean_effective_hr_bpm": (
+                        _finite_non_negative(row.get("mean_effective_hr_bpm"))
+                        if row.get("mean_effective_hr_bpm") is not None
+                        else None
+                    ),
+                    "average_minute_value_percent": (
+                        _finite_non_negative(
+                            row.get("average_minute_value_percent")
+                        )
+                        if row.get("average_minute_value_percent") is not None
+                        else None
+                    ),
                     "direct_ratio": _finite_non_negative(
                         row.get("direct_ratio")
                     ),
@@ -489,7 +528,10 @@ def load_real_history(
                         if row.get("tref_history_value") is not None
                         else None
                     ),
-                    "tref_source": str(row.get("tref_source") or "profile"),
+                    "tref_source": str(
+                        row.get("tref_source")
+                        or "initial expert setting"
+                    ),
                     "tref_history_days": int(
                         _finite_non_negative(row.get("tref_history_days"))
                     ),
@@ -498,20 +540,27 @@ def load_real_history(
                 activity_zone_records.append(rendered)
                 for field in (
                     "T_z",
-                    "Q_z",
-                    "Qref_z",
+                    "T_eq_z",
                     "cascade",
                     "spillover",
                     "E_z",
                 ):
                     day_totals[zone][field] += float(rendered[field])
+                if rendered["mean_effective_hr_bpm"] is not None:
+                    day_totals[zone][
+                        "effective_hr_bpm_minutes"
+                    ] += float(rendered["mean_effective_hr_bpm"]) * float(
+                        rendered["T_z"]
+                    )
 
         if day_reference_rows is None:
             day_reference_rows = _model_rows(
                 calculate_shadow_result(
                     _empty_intrazone_analysis(selected_configuration),
                     selected_configuration,
-                    prior_daily_qref=prior_experimental_qref,
+                    prior_daily_effective_load=(
+                        prior_experimental_effective_load
+                    ),
                     activity_date=current_day,
                 )
             )
@@ -539,9 +588,21 @@ def load_real_history(
         for zone in AEROBIC_COMPONENTS:
             totals = day_totals[zone]
             reference = reference_by_zone.get(zone, {})
-            baseline_history_row[zone] = day_baseline_qref[zone]
-            experimental_history_row[zone] = totals["Qref_z"]
-            load_row[f"q_{zone}"] = totals["Q_z"]
+            mean_effective_hr_bpm = (
+                totals["effective_hr_bpm_minutes"] / totals["T_z"]
+                if totals["T_z"] > 0.0
+                else None
+            )
+            average_minute_value_percent = (
+                100.0 * totals["T_eq_z"] / totals["T_z"]
+                if totals["T_z"] > 0.0
+                else None
+            )
+            baseline_history_row[zone] = day_baseline_effective_load[zone]
+            experimental_history_row[zone] = totals["E_z"]
+            # ``q_*`` is a deprecated main-core input name. Its single value
+            # is exactly T_eq; no legacy Q calculation is retained.
+            load_row[f"q_{zone}"] = totals["T_eq_z"]
             load_row[f"e_{zone}"] = totals["E_z"]
             load_row[f"tref_used_{zone}"] = _finite_non_negative(
                 reference.get("tref_effective")
@@ -550,9 +611,17 @@ def load_real_history(
                 {
                     "date": pd.Timestamp(current_day),
                     "zone": zone,
-                    **totals,
+                    "T_z": totals["T_z"],
+                    "T_eq_z": totals["T_eq_z"],
+                    "mean_effective_hr_bpm": mean_effective_hr_bpm,
+                    "average_minute_value_percent": (
+                        average_minute_value_percent
+                    ),
+                    "cascade": totals["cascade"],
+                    "spillover": totals["spillover"],
+                    "E_z": totals["E_z"],
                     "direct_ratio": (
-                        totals["Qref_z"]
+                        totals["T_eq_z"]
                         / max(_finite_non_negative(reference.get("tref_effective")), 1e-12)
                     ),
                     "tref_raw": _finite_non_negative(reference.get("tref_raw")),
@@ -565,7 +634,8 @@ def load_real_history(
                         else None
                     ),
                     "tref_source": str(
-                        reference.get("tref_source") or "profile"
+                        reference.get("tref_source")
+                        or "initial expert setting"
                     ),
                     "tref_history_days": int(
                         _finite_non_negative(reference.get("tref_history_days"))
@@ -574,8 +644,8 @@ def load_real_history(
                 }
             )
         daily_load_records.append(load_row)
-        prior_baseline_qref.append(baseline_history_row)
-        prior_experimental_qref.append(experimental_history_row)
+        prior_baseline_effective_load.append(baseline_history_row)
+        prior_experimental_effective_load.append(experimental_history_row)
 
     activities_frame = pd.DataFrame(activity_records, columns=_activity_columns())
     activity_zones_frame = pd.DataFrame(
@@ -618,16 +688,14 @@ def load_real_history(
     ].reset_index(drop=True)
     rolling_tref = daily_zones_frame[
         ["date", "zone", "tref_effective"]
-    ].rename(
-        columns={"zone": "component", "tref_effective": "qref_Tref"}
-    )
+    ].rename(columns={"zone": "component", "tref_effective": "fixed_Tref"})
     rolling_load = rolling_load.merge(
         rolling_tref,
         on=["date", "component"],
         how="left",
         validate="one_to_one",
     )
-    rolling_load["Tref"] = rolling_load.pop("qref_Tref")
+    rolling_load["Tref"] = rolling_load.pop("fixed_Tref")
     readiness_history = compute_readiness_history(
         main_model_input,
         dict(parameters),
@@ -672,6 +740,11 @@ def load_real_history(
         excluded_activities=excluded,
         no_activity_days=no_activity_days,
         normalization_version=NORMALIZATION_VERSION,
+        equivalent_time_algorithm_version=(
+            EQUIVALENT_TIME_ALGORITHM_VERSION
+        ),
+        equivalence_version=INTRA_ZONE_EQUIVALENCE_VERSION,
+        effective_hr_adapter_version=EFFECTIVE_HR_ADAPTER_VERSION,
         zone_profile_fingerprint=profile.fingerprint,
         configuration_fingerprint=selected_configuration.fingerprint,
         model_version=selected_configuration.physiology_profile_version,

@@ -6,12 +6,18 @@ from pathlib import Path
 import pytest
 
 from intervals_inspector.model_registry import (
+    REGISTRY_VERSION,
     explanation_text,
     validate_registry_items,
 )
+from intervals_inspector.onflows_zone_profile import (
+    INTRA_ZONE_EQUIVALENCE_VERSION,
+)
 from intervals_inspector.shadow_model import (
     EDITABLE_FIELDS,
+    INITIAL_TREF_MINUTES,
     READ_ONLY_FIELDS,
+    TREF_PROFILE_VERSION,
     build_model_registry,
     calculate_shadow_comparison,
     calculate_shadow_result,
@@ -28,15 +34,33 @@ from intervals_inspector.stream_normalizer import (
 )
 
 
-def _real_interval_result():
+def _real_interval_result(hr: float = 126.0):
     return normalize_stream_intervals(
         NormalizerInput(
             offsets=list(range(61)),
-            metrics={"heartrate": [145.0] * 61},
+            metrics={"heartrate": [hr] * 61},
             elapsed_time_sec=60.0,
             icu_recording_time_sec=60.0,
         )
     )
+
+
+def _analysis_with_equivalent_minutes(
+    equivalent_time: dict[str, float],
+) -> dict[str, object]:
+    configuration = default_shadow_configuration()
+    return {
+        "hr_coverage_percent": 100.0,
+        "zones": [
+            {
+                "zone": zone.zone,
+                "real_seconds": 0.0,
+                "equivalent_seconds": 60.0
+                * float(equivalent_time.get(zone.zone, 0.0)),
+            }
+            for zone in configuration.zones
+        ],
+    }
 
 
 def test_every_displayed_parameter_result_and_warning_has_one_explanation() -> None:
@@ -47,147 +71,176 @@ def test_every_displayed_parameter_result_and_warning_has_one_explanation() -> N
     assert len(registry) == len(set(registry))
     for item_id, definition in registry.items():
         rendered = explanation_text(definition)
+        assert definition["id"] == item_id
         assert definition["full_name"] in rendered
-        assert "Формула" in rendered
-        assert "Мерна единица" in rendered
+        assert definition["formula"] in rendered
+        assert definition["unit"] in rendered
         assert definition["version"] in rendered
+        assert definition["registry_version"] == REGISTRY_VERSION
         assert not definition["sensitive"], item_id
 
 
-def test_parameter_registry_exposes_unit_version_source_initial_and_current() -> None:
+def test_registry_exposes_slope_version_source_initial_and_current() -> None:
     baseline = default_shadow_configuration()
     experimental = configuration_with_overrides(
-        {"parameter.Z2.power": 1.45}, baseline=baseline
+        {"parameter.Z2.equivalence_slope_pp_per_bpm": 1.45},
+        baseline=baseline,
     )
+    baseline_registry = build_model_registry(baseline)
     registry = build_model_registry(experimental, baseline=baseline)
-    power = registry["parameter.Z2.power"]
+    slope = registry["parameter.Z2.equivalence_slope_pp_per_bpm"]
 
-    assert power["unit"] == "без единица"
-    assert power["version"] == experimental.physiology_profile_version
-    assert power["value_source"] == "индивидуален override"
-    assert power["initial_value"] == pytest.approx(1.10)
-    assert power["current_value"] == pytest.approx(1.45)
+    assert slope["version"] == INTRA_ZONE_EQUIVALENCE_VERSION
+    assert slope["initial_value"] == pytest.approx(3.0)
+    assert slope["current_value"] == pytest.approx(1.45)
+    assert slope["value_source"] != baseline_registry[
+        "parameter.Z2.equivalence_slope_pp_per_bpm"
+    ]["value_source"]
+    assert experimental.equivalence_version == INTRA_ZONE_EQUIVALENCE_VERSION
+    assert experimental.fingerprint != baseline.fingerprint
+
+
+def test_registry_exposes_only_fixed_tref_and_no_legacy_weight_or_bounds() -> None:
+    registry = build_model_registry(default_shadow_configuration())
+    legacy_fields = {
+        "weight_low",
+        "weight_high",
+        "power",
+        "tref_min",
+        "tref_max",
+        "bounds_factor",
+    }
+
+    for zone, expected_tref in INITIAL_TREF_MINUTES.items():
+        tref = registry[f"parameter.{zone}.tref_minutes"]
+        assert tref["initial_value"] == pytest.approx(expected_tref)
+        assert tref["current_value"] == pytest.approx(expected_tref)
+        assert tref["editable"] is False
+        assert tref["version"] == TREF_PROFILE_VERSION
+    assert not any(
+        item_id.rsplit(".", 1)[-1] in legacy_fields
+        for item_id in registry
+    )
+    assert "result.equivalent_time" in registry
+    assert "result.q" not in registry
+    assert "result.qref" not in registry
 
 
 @pytest.mark.parametrize(
     ("item_id", "value"),
     (
-        ("parameter.Z1.weight_low", 0.0),
-        ("parameter.Z1.weight_high", 2001.0),
-        ("parameter.Z1.power", 4.01),
+        ("parameter.Z1.equivalence_slope_pp_per_bpm", -0.01),
+        ("parameter.Z1.equivalence_slope_pp_per_bpm", 100.01),
         ("parameter.Z2.spill_threshold_fraction", -0.01),
         ("parameter.Z2.spill_down_fraction", 1.01),
         ("parameter.Z2.spill_up_fraction", -1.0),
-        ("parameter.Z3.tref_min", -0.1),
-        ("parameter.Z3.tref_max", 10081.0),
     ),
 )
 def test_experimental_values_outside_allowed_ranges_are_rejected(
-    item_id: str, value: float
+    item_id: str,
+    value: float,
 ) -> None:
     with pytest.raises(ValueError, match="must be between"):
         configuration_with_overrides({item_id: value})
 
 
-def test_cross_field_validation_and_read_only_protection() -> None:
-    with pytest.raises(ValueError, match="weight_high"):
-        configuration_with_overrides(
-            {
-                "parameter.Z2.weight_low": 500.0,
-                "parameter.Z2.weight_high": 400.0,
-            }
-        )
+@pytest.mark.parametrize(
+    "item_id",
+    (
+        "parameter.Z2.tref_minutes",
+        "parameter.Z2.profile_version",
+        "parameter.Z2.equivalence_version",
+        "parameter.Z2.tref_profile_version",
+        "parameter.Z2.power",
+    ),
+)
+def test_fixed_version_and_legacy_parameters_cannot_be_overridden(
+    item_id: str,
+) -> None:
     with pytest.raises(ValueError, match="read-only"):
-        configuration_with_overrides(
-            {"parameter.Z2.profile_version": 2.0}
-        )
-    with pytest.raises(ValueError, match="read-only"):
-        configuration_with_overrides(
-            {"parameter.Z4.bounds_factor": 1.01}
-        )
+        configuration_with_overrides({item_id: 1.0})
 
 
-def test_safe_round_trip_and_reset_restore_the_initial_configuration() -> None:
+def test_safe_round_trip_preserves_versions_and_reset_restores_initial() -> None:
     baseline = default_shadow_configuration()
     changed = configuration_with_overrides(
         {
-            "parameter.Z1.power": 1.9,
+            "parameter.Z1.equivalence_slope_pp_per_bpm": 1.9,
             "parameter.Z5.spill_up_fraction": 0.0,
         }
     )
+    payload = configuration_to_safe_dict(changed)
 
-    restored_state = configuration_from_safe_dict(
-        configuration_to_safe_dict(changed)
-    )
+    restored_state = configuration_from_safe_dict(payload)
     reset = reset_shadow_configuration()
 
     assert restored_state == changed
+    assert payload["equivalence_version"] == INTRA_ZONE_EQUIVALENCE_VERSION
+    assert payload["tref_profile_version"] == TREF_PROFILE_VERSION
     assert changed.fingerprint != baseline.fingerprint
     assert reset == baseline
     assert reset.overrides == ()
 
+    with pytest.raises(ValueError, match="equivalence version"):
+        configuration_from_safe_dict(
+            {**payload, "equivalence_version": "stale-linear-model"}
+        )
 
-def test_allowed_change_recalculates_and_preserves_both_results() -> None:
+
+def test_slope_override_recalculates_only_the_single_equivalent_time_dose() -> None:
     baseline = default_shadow_configuration()
     experimental = configuration_with_overrides(
-        {
-            "parameter.Z2.weight_high": 300.0,
-            "parameter.Z2.power": 1.0,
-        },
+        {"parameter.Z2.equivalence_slope_pp_per_bpm": 1.0},
         baseline=baseline,
     )
 
     comparison = calculate_shadow_comparison(
-        _real_interval_result(),
+        _real_interval_result(126.0),
         experimental_configuration=experimental,
     )
-    z2 = next(row for row in comparison["comparison_rows"] if row["zone"] == "Z2")
+    z2 = next(
+        row for row in comparison["comparison_rows"] if row["zone"] == "Z2"
+    )
 
     assert z2["baseline_T_z"] == pytest.approx(z2["experimental_T_z"])
-    assert z2["baseline_Q_z"] != pytest.approx(z2["experimental_Q_z"])
-    assert z2["delta_Q_z"] == pytest.approx(
-        z2["experimental_Q_z"] - z2["baseline_Q_z"]
+    assert z2["baseline_T_eq_z"] == pytest.approx(0.43)
+    assert z2["experimental_T_eq_z"] == pytest.approx(0.81)
+    assert z2["delta_T_eq_z"] == pytest.approx(0.38)
+    assert z2["baseline_direct_ratio"] != pytest.approx(
+        z2["experimental_direct_ratio"]
     )
     assert comparison["baseline"]["rows"]
     assert comparison["experimental"]["rows"]
     assert comparison["experimental"]["experimental"] is True
+    assert comparison["intrazone_calculation_count"] == 2
 
 
-def test_cascade_bidirectional_spill_and_tref_are_visible_per_zone() -> None:
-    configuration = default_shadow_configuration()
-    analysis = {
-        "hr_coverage_percent": 100.0,
-        "zones": [
-            {
-                "zone": zone.zone,
-                "real_seconds": 0.0,
-                "weighted_seconds": 90.0 * 60.0 if zone.zone == "Z2" else 0.0,
-                "qref_seconds": 90.0 * 60.0 if zone.zone == "Z2" else 0.0,
-            }
-            for zone in configuration.zones
-        ],
-    }
-
-    result = calculate_shadow_result(analysis, configuration)
+def test_equivalent_time_drives_cascade_bidirectional_spill_and_effect() -> None:
+    result = calculate_shadow_result(
+        _analysis_with_equivalent_minutes({"Z2": 100.0}),
+        default_shadow_configuration(),
+    )
     rows = {row["zone"]: row for row in result["rows"]}
 
-    # Medium profile uses the midpoint 135. Excess is 90 - 0.5 × 135 = 22.5.
-    assert rows["Z2"]["tref_raw"] == pytest.approx(135.0)
-    assert rows["Z1"]["spillover_received"] == pytest.approx(4.5)
-    assert rows["Z3"]["spillover_received"] == pytest.approx(2.25)
-    assert rows["Z1"]["cascade"] == pytest.approx(90.0)
-    assert rows["Z1"]["E_z"] == pytest.approx(94.5)
-    assert rows["Z3"]["E_z"] == pytest.approx(2.25)
+    # Z2 has fixed Tref 180: excess = 100 - 0.5 x 180 = 10.
+    assert rows["Z2"]["T_eq_z"] == pytest.approx(100.0)
+    assert rows["Z2"]["tref_effective"] == pytest.approx(180.0)
+    assert rows["Z2"]["direct_ratio"] == pytest.approx(100.0 / 180.0)
+    assert rows["Z2"]["spillover_excess"] == pytest.approx(10.0)
+    assert rows["Z1"]["spillover_received"] == pytest.approx(2.0)
+    assert rows["Z3"]["spillover_received"] == pytest.approx(1.0)
+    assert rows["Z1"]["cascade"] == pytest.approx(100.0)
+    assert rows["Z1"]["E_z"] == pytest.approx(102.0)
+    assert rows["Z3"]["E_z"] == pytest.approx(1.0)
     for row in rows.values():
         assert {
             "T_z",
-            "Q_z",
-            "Qref_z",
+            "T_eq_z",
             "direct_ratio",
             "cascade",
             "spillover_received",
             "E_z",
-            "tref_raw",
+            "h40_equivalent_minutes",
             "tref_effective",
         } <= row.keys()
 
@@ -196,12 +249,13 @@ def test_shadow_layer_is_memory_only_and_integrated_without_streamlit() -> None:
     comparison = calculate_shadow_comparison(_real_interval_result())
     repository_root = Path(__file__).resolve().parents[2]
     main_source = (repository_root / "app.py").read_text(encoding="utf-8")
-    shadow_source = (repository_root / "intervals_inspector" / "shadow_model.py").read_text(
-        encoding="utf-8"
-    )
+    shadow_source = (
+        repository_root / "intervals_inspector" / "shadow_model.py"
+    ).read_text(encoding="utf-8")
 
     assert comparison["memory_only"] is True
     assert comparison["persistence_backend"] is None
+    assert comparison["intrazone_calculation_count"] == 1
     assert comparison["affects_main_demonstrator"] is False
     assert "render_integrated_page" in main_source
     assert "streamlit" not in shadow_source.lower()
@@ -230,6 +284,10 @@ def test_sensitive_keys_are_rejected_from_diagnostic_export() -> None:
 
     assert parsed["memory_only"] is True
     lowered = rendered.lower()
+    assert "qref" not in lowered
+    assert '"q_z"' not in lowered
+    assert "baseline_q_z" not in lowered
+    assert "experimental_q_z" not in lowered
     for forbidden in (
         "access_token",
         "refresh_token",

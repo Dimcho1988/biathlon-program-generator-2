@@ -104,11 +104,9 @@ from intervals_inspector.qref_planning import (
     weekly_target,
 )
 from intervals_inspector.shadow_model import (
-    PROFILE_LEVELS,
     configuration_from_safe_dict,
     configuration_to_safe_dict,
     configuration_with_overrides,
-    configuration_with_profile_level,
     default_shadow_configuration,
 )
 
@@ -699,7 +697,7 @@ def render_load_page(analysis: dict[str, Any]) -> None:
     if component == "STR":
         st.info(
             "STR е общият силов физиологичен компонент. Реалното време се пази по четири вида, "
-            "а силовият Q се получава чрез коефициентите по-долу.",
+            "а силовото приравнено време се получава чрез коефициентите по-долу.",
             icon="🏋️",
         )
         strength_model = pd.DataFrame(
@@ -735,7 +733,7 @@ def render_load_page(analysis: dict[str, Any]) -> None:
         st.info(
             "Все още няма въведена тренировъчна история за този спортист. "
             "Добави дневни или седмични данни от страницата „История и начални данни“; "
-            "след това тук ще се появи анализът реално време → Q → E."
+            "след това тук ще се появи анализът реално време → приравнено време → E."
         )
         return
 
@@ -764,7 +762,7 @@ def render_load_page(analysis: dict[str, Any]) -> None:
             columns={
                 "component": "Компонент",
                 "real_min": "Реално време",
-                "q_min": "Еквивалентно Q",
+                "q_min": "Приравнено време",
                 "avg_k": "Среден k",
                 "valid_seconds": "Валидни секунди",
             }
@@ -773,7 +771,7 @@ def render_load_page(analysis: dict[str, Any]) -> None:
         hide_index=True,
         column_config={
             "Реално време": st.column_config.NumberColumn(format="%.2f", help=help_text("real_equivalent")),
-            "Еквивалентно Q": st.column_config.NumberColumn(format="%.2f", help=help_text("real_equivalent")),
+            "Приравнено време": st.column_config.NumberColumn(format="%.2f", help=help_text("real_equivalent")),
             "Среден k": st.column_config.NumberColumn(format="%.3f", help=help_text("real_equivalent")),
         },
     )
@@ -812,7 +810,7 @@ def render_load_page(analysis: dict[str, Any]) -> None:
             q_total = float(strength_detail["Еквивалентни минути"].sum())
             average_k = q_total / real_total if real_total > 0 else 0.0
             st.metric("Сила · общо реално време", f"{real_total:.1f} мин")
-            st.metric("Сила · общ Q", f"{q_total:.1f} екв. мин", delta=f"среден k = {average_k:.2f}", delta_color="off")
+            st.metric("Сила · приравнено време", f"{q_total:.1f} мин", delta=f"среден коефициент = {average_k:.2f}", delta_color="off")
 
     st.caption(
         "Пулсовият поток е синтетичен и се отнася за Z1–Z5. Силовата работа се анализира "
@@ -899,11 +897,12 @@ def _render_real_source_banner(dataset: RealHistoryDataset) -> None:
     )
     st.caption(
         f"Нормализатор: {dataset.normalization_version} · "
+        f"effective HR: {dataset.effective_hr_adapter_version} · "
+        f"приравняване: {dataset.equivalence_version} · "
         f"zone profile: {dataset.zone_profile_fingerprint[:12]}… · "
         f"config: {dataset.configuration_fingerprint[:12]}… · "
         f"модел: {dataset.model_version} · "
-        f"Tref bounds: {dataset.tref_bounds_profile_version} · "
-        f"profile level: {dataset.profile_level} "
+        f"Tref: {dataset.tref_bounds_profile_version} "
         "(физиологично некалибриран)"
     )
     st.caption(
@@ -919,7 +918,7 @@ def _render_real_source_banner(dataset: RealHistoryDataset) -> None:
 def render_real_load_page(dataset: RealHistoryDataset) -> None:
     page_header(
         "Натоварване и индекс 7/40",
-        "Реални Intervals.icu активности → нормализиран HR → T/Q → cascade/spillover → E.",
+        "Реални Intervals.icu активности → raw HR → effective HR → приравнено време → cascade/spillover → E.",
     )
     _render_real_source_banner(dataset)
     if dataset.modeled_activity_count == 0:
@@ -945,8 +944,8 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
     c5.metric("Readiness", f"{readiness['readiness']:.0f}%")
     if float(row["reliability"]) < 1.0:
         st.warning(
-            "Историята още не покрива целия 40-дневен прозорец; 7/40 и Tref "
-            "са отбелязани като ограничени."
+            "Историята още не покрива целия 40-дневен прозорец; H40 и 7/40 "
+            "са ограничени от наличните дни. Фиксираният Tref не се променя."
         )
 
     latest_tref = view["daily_zones"].loc[
@@ -959,11 +958,14 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
             "tref_history_days",
         ],
     ].copy()
+    latest_tref["tref_source"] = latest_tref["tref_source"].replace(
+        {"initial expert setting": "Начална експертна настройка"}
+    )
     latest_tref = latest_tref.rename(
         columns={
             "zone": "Зона",
-            "tref_history_value": "Hn/H40",
-            "tref_effective": "Краен Tref",
+            "tref_history_value": "H40 (диагностично)",
+            "tref_effective": "Tref",
             "tref_source": "Източник",
             "tref_history_days": "Завършени дни",
         }
@@ -971,13 +973,12 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
     with st.expander("Текущ Tref по зони · Z1–Z5", expanded=True):
         st.dataframe(latest_tref, width="stretch", hide_index=True)
         st.caption(
-            "Tref използва само завършени календарни дни преди текущия ден. "
-            "Почивните дни участват с Qref=0; текущи и бъдещи данни не участват."
+            "H40 използва само завършени календарни дни преди текущия ден. "
+            "Почивните дни участват с ефективен товар E=0; текущи и бъдещи данни не участват."
         )
         st.caption(
-            "Tref е капацитет при референтната граница на зоната. Qref "
-            "приравнява различните позиции вътре в зоната чрез същия W(HR); "
-            "затова реалните минути T и референтните минути Qref не са едно и също."
+            "Tref е фиксирана начална експертна настройка. H40 продължава да участва "
+            "в индекса 7/40, но не променя Tref."
         )
 
     left, right = st.columns(2)
@@ -1004,7 +1005,7 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
         )
         for kind in SESSION_DOSE_RANGES
     }
-    with st.expander("Shadow/diagnostic · Qref планиране", expanded=False):
+    with st.expander("Shadow/diagnostic · планиране с приравнено време", expanded=False):
         st.warning(
             "Диагностичен изглед, не финален тренировъчен план. Не променя "
             "„Адаптивна програма“ и не записва нищо в Intervals.icu."
@@ -1067,13 +1068,13 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
             base_session_high, recovery_fraction
         )
         d1, d2, d3 = st.columns(3)
-        d1.metric("Базова седмична цел", f"{base_weekly:.1f} Qref")
-        d2.metric("Коригирана веднъж", f"{adjusted_weekly:.1f} Qref")
+        d1.metric("Базова седмична цел", f"{base_weekly:.1f} приравнени мин")
+        d2.metric("Коригирана веднъж", f"{adjusted_weekly:.1f} приравнени мин")
         d3.metric("Recovery дял", f"{100.0 * recovery_fraction:.0f}%")
         st.caption(
-            f"Базов сесиен диапазон: {base_session_low:.1f}–{base_session_high:.1f} Qref · "
+            f"Базов сесиен диапазон: {base_session_low:.1f}–{base_session_high:.1f} приравнени мин · "
             f"след еднократно умножение по recovery: "
-            f"{adjusted_session_low:.1f}–{adjusted_session_high:.1f} Qref. "
+            f"{adjusted_session_low:.1f}–{adjusted_session_high:.1f} приравнени мин. "
             "Диагностичната горна седмична граница е "
             f"{planning_settings['weekly_max']:.2f} × Tref."
         )
@@ -1143,6 +1144,9 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
     zones = view["activity_zones"].loc[
         view["activity_zones"]["activity_ref"] == selected_ref
     ].copy()
+    zones["tref_source"] = zones["tref_source"].replace(
+        {"initial expert setting": "Начална експертна настройка"}
+    )
     chart_values: dict[str, float] = {}
     by_zone = zones.set_index("zone") if not zones.empty else pd.DataFrame()
     for zone in AEROBIC_COMPONENTS:
@@ -1150,7 +1154,9 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
             float(by_zone.loc[zone, "T_z"]) if zone in by_zone.index else 0.0
         )
         chart_values[f"q_{zone}"] = (
-            float(by_zone.loc[zone, "Q_z"]) if zone in by_zone.index else 0.0
+            float(by_zone.loc[zone, "T_eq_z"])
+            if zone in by_zone.index
+            else 0.0
         )
     chart_values["real_STR"] = np.nan
     chart_values["q_STR"] = np.nan
@@ -1158,19 +1164,19 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
         real_vs_equivalent_figure(pd.Series(chart_values)),
         width="stretch",
     )
-    zones["Qref/Tref %"] = 100.0 * zones["direct_ratio"]
-    zones["HR покритие %"] = float(selected_activity["hr_coverage_percent"])
+    zones["% от Tref"] = 100.0 * zones["direct_ratio"]
     detail = zones.rename(
         columns={
             "zone": "Зона",
-            "T_z": "Реално T",
-            "Q_z": "Директно Q",
-            "Qref_z": "Директно Qref",
+            "T_z": "Реално време (мин)",
+            "T_eq_z": "Приравнено време (мин)",
+            "mean_effective_hr_bpm": "Среден HR (времево претеглен)",
+            "average_minute_value_percent": "Средна стойност на минутата (%)",
             "cascade": "Cascade",
             "spillover": "Spillover",
             "E_z": "Ефективно E",
-            "tref_history_value": "Hn/H40",
-            "tref_effective": "Краен Tref",
+            "tref_history_value": "H40 (диагностично)",
+            "tref_effective": "Tref",
             "tref_source": "Tref източник",
             "tref_history_days": "Исторически дни",
             "quality_status": "Качество",
@@ -1178,42 +1184,42 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
     )[
         [
             "Зона",
-            "Реално T",
-            "Директно Q",
-            "Директно Qref",
-            "Qref/Tref %",
+            "Реално време (мин)",
+            "Приравнено време (мин)",
+            "Среден HR (времево претеглен)",
+            "Средна стойност на минутата (%)",
+            "% от Tref",
             "Cascade",
             "Spillover",
             "Ефективно E",
-            "Hn/H40",
-            "Краен Tref",
+            "H40 (диагностично)",
+            "Tref",
             "Tref източник",
             "Исторически дни",
-            "HR покритие %",
             "Качество",
         ]
     ]
     st.dataframe(detail, width="stretch", hide_index=True)
     if not zones.empty:
-        qref_by_zone = zones.set_index("zone")["Qref_z"].to_dict()
+        equivalent_time_by_zone = zones.set_index("zone")["T_eq_z"].to_dict()
         tref_by_zone = zones.set_index("zone")["tref_effective"].to_dict()
         limiting = limiting_secondary_zones(
-            qref_by_zone,
+            equivalent_time_by_zone,
             tref_by_zone,
             primary_zone=component,
         )
         if limiting:
             st.warning(
                 "Shadow/diagnostic: вторични зони на или над директния "
-                f"праг Qref/Tref ≥ 0.50: {', '.join(limiting)}."
+                f"праг приравнено време/Tref ≥ 0.50: {', '.join(limiting)}."
             )
         else:
             st.caption(
                 "Shadow/diagnostic: няма вторична зона на директния праг "
-                "Qref/Tref ≥ 0.50."
+                "приравнено време/Tref ≥ 0.50."
             )
     st.caption(
-        "Активностите се моделират поотделно. Едва след това T, Q, cascade, "
+        "Активностите се моделират поотделно. Едва след това реалното време, приравненото време, cascade, "
         "spillover и E се сумират на дневно ниво."
     )
 
@@ -1297,7 +1303,7 @@ def render_real_tref_settings_page(
 ) -> None:
     page_header(
         "Експертни настройки · Tref",
-        "Сесийни Qref/Tref граници и начален профил за режима с реални данни.",
+        "Фиксиран начален Tref и линейно приравняване за режима с реални данни.",
     )
     if dataset is not None:
         _render_real_source_banner(dataset)
@@ -1308,66 +1314,47 @@ def render_real_tref_settings_page(
         )
     configuration = _real_history_configuration()
     st.warning(
-        "Некалибрирани начални физиологични граници. Промените са само в "
-        "текущата сесия; W(HR), cascade и spillover коефициентите остават непроменени."
+        "Tref е фиксирана начална експертна настройка. Линейният pp/bpm параметър "
+        "може да се тества само в текущата сесия; cascade и spillover остават непроменени."
     )
     st.caption(
         f"Модел: {configuration.physiology_profile_version} · "
-        f"Tref bounds: {configuration.tref_bounds_profile_version} · "
+        f"приравняване: {configuration.equivalence_version} · "
+        f"Tref: {configuration.tref_profile_version} · "
         f"config: {configuration.fingerprint[:12]}…"
     )
-    submitted_bounds: dict[str, float] = {}
+    submitted_slopes: dict[str, float] = {}
     with st.form("real_tref_settings_form", clear_on_submit=False):
-        profile_level = st.selectbox(
-            "Начален профил при 0–6 завършени дни",
-            PROFILE_LEVELS,
-            index=PROFILE_LEVELS.index(configuration.profile_level),
-            format_func=lambda value: {
-                "low": "Нисък · Tref = min",
-                "medium": "Среден · Tref = (min + max) / 2",
-                "high": "Висок · Tref = max",
-            }[value],
-            key="_real_tref_profile_level",
-        )
-        headings = st.columns([0.8, 1.2, 1.2])
+        headings = st.columns([0.7, 1.0, 1.8, 1.3])
         headings[0].markdown("**Зона**")
-        headings[1].markdown("**Tref min**")
-        headings[2].markdown("**Tref max**")
+        headings[1].markdown("**Tref**")
+        headings[2].markdown("**Източник**")
+        headings[3].markdown("**pp/bpm**")
         for zone in configuration.zones:
-            columns = st.columns([0.8, 1.2, 1.2])
+            columns = st.columns([0.7, 1.0, 1.8, 1.3])
             columns[0].markdown(f"**{zone.zone}**")
-            with columns[1]:
-                submitted_bounds[f"parameter.{zone.zone}.tref_min"] = (
-                    st.number_input(
-                        f"{zone.zone} Tref min",
-                        min_value=1.0,
-                        max_value=10080.0,
-                        value=float(zone.tref_min),
-                        step=1.0,
-                        key=f"_real_tref_{zone.zone}_min",
-                        label_visibility="collapsed",
-                    )
-                )
-            with columns[2]:
-                submitted_bounds[f"parameter.{zone.zone}.tref_max"] = (
-                    st.number_input(
-                        f"{zone.zone} Tref max",
-                        min_value=1.0,
-                        max_value=10080.0,
-                        value=float(zone.tref_max),
-                        step=1.0,
-                        key=f"_real_tref_{zone.zone}_max",
-                        label_visibility="collapsed",
-                    )
+            columns[1].markdown(f"{zone.tref_minutes:.0f} приравнени мин")
+            columns[2].markdown("Начална експертна настройка")
+            with columns[3]:
+                submitted_slopes[
+                    f"parameter.{zone.zone}.equivalence_slope_pp_per_bpm"
+                ] = st.number_input(
+                    f"{zone.zone} pp/bpm",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(zone.equivalence_slope_pp_per_bpm),
+                    step=0.1,
+                    key=f"_real_equivalence_{zone.zone}_slope",
+                    label_visibility="collapsed",
                 )
         save_requested = st.form_submit_button(
-            "Запази в сесията и маркирай историята за преизчисляване",
+            "Запази pp/bpm в сесията и маркирай историята за преизчисляване",
             type="primary",
             width="stretch",
         )
 
     reset_requested = st.button(
-        "Върни началните Tref граници и среден профил",
+        "Върни началните 3.0 pp/bpm",
         key="real_tref_reset",
         width="stretch",
     )
@@ -1414,28 +1401,28 @@ def render_real_tref_settings_page(
         planning_values.update(
             {
                 "building_low": dose_columns[0].number_input(
-                    "Развиваща min × Tref",
+                    "Развиваща · долна граница × Tref",
                     min_value=0.0,
                     value=planning["building_low"],
                     step=0.05,
                     key="_real_qref_building_low",
                 ),
                 "building_high": dose_columns[1].number_input(
-                    "Развиваща max × Tref",
+                    "Развиваща · горна граница × Tref",
                     min_value=0.0,
                     value=planning["building_high"],
                     step=0.05,
                     key="_real_qref_building_high",
                 ),
                 "maintenance_low": dose_columns[2].number_input(
-                    "Поддържаща min × Tref",
+                    "Поддържаща · долна граница × Tref",
                     min_value=0.0,
                     value=planning["maintenance_low"],
                     step=0.05,
                     key="_real_qref_maintenance_low",
                 ),
                 "maintenance_high": dose_columns[3].number_input(
-                    "Поддържаща max × Tref",
+                    "Поддържаща · горна граница × Tref",
                     min_value=0.0,
                     value=planning["maintenance_high"],
                     step=0.05,
@@ -1451,15 +1438,11 @@ def render_real_tref_settings_page(
     if save_requested:
         try:
             candidate = configuration_with_overrides(
-                submitted_bounds,
+                submitted_slopes,
                 baseline=default_shadow_configuration(),
             )
-            candidate = configuration_with_profile_level(
-                profile_level,
-                baseline=candidate,
-            )
         except ValueError as exc:
-            st.error(f"Невалидни Tref настройки: {exc}")
+            st.error(f"Невалидна настройка за приравняване: {exc}")
     elif reset_requested:
         candidate = default_shadow_configuration()
         for key in list(st.session_state):
@@ -1475,7 +1458,7 @@ def render_real_tref_settings_page(
         st.session_state.pop(REAL_DATASET_SESSION, None)
         st.session_state.flash = (
             "success",
-            "Tref настройките са обновени само в сесията. Заредете реалната история отново.",
+            "Линейното приравняване е обновено само в сесията. Заредете реалната история отново.",
         )
         st.rerun()
     if planning_save_requested:
@@ -1487,7 +1470,7 @@ def render_real_tref_settings_page(
             st.session_state[REAL_QREF_PLANNING_SESSION] = validated_planning
             st.session_state.flash = (
                 "success",
-                "Диагностичните Qref множители са обновени само в сесията.",
+                "Диагностичните множители за приравнено време са обновени само в сесията.",
             )
             st.rerun()
 
@@ -1607,9 +1590,9 @@ def render_plan_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit:
                 "component": "Компонент",
                 "target_effective": "Цел E",
                 "planned_effective": "План E",
-                "target_direct_q": "Цел Q",
-                "planned_direct_q": "План Q",
-                "remaining_direct_q": "Остатък Q",
+                "target_direct_q": "Целево приравнено време",
+                "planned_direct_q": "Планирано приравнено време",
+                "remaining_direct_q": "Оставащо приравнено време",
                 "completion_pct": "Изпълнение %",
             }
         )
@@ -1745,7 +1728,7 @@ def render_plan_page(bundle: dict[str, Any], analysis: dict[str, Any], can_edit:
                     {
                         "Компонент": COMPONENTS,
                         "Реални минути": [row[f"real_{c}"] for c in COMPONENTS],
-                        "Директно Q": [row[f"q_{c}"] for c in COMPONENTS],
+                        "Приравнено време": [row[f"q_{c}"] for c in COMPONENTS],
                         "Ефективно E": [row[f"e_{c}"] for c in COMPONENTS],
                     }
                 )
@@ -2482,7 +2465,7 @@ def render_history_page(bundle: dict[str, Any], analysis: dict[str, Any], can_ed
 
     page_header(
         "История на натоварването и начални данни",
-        "Въведи реални минути по зони и сила. Историята създава 40-дневната адаптационна база, Tref, 7/40 и началната програма.",
+        "Въведи реални минути по зони и сила. Историята създава H40, 7/40 и началната програма; аеробният Tref остава фиксирана експертна настройка.",
     )
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Активности", len(activities))
@@ -2496,7 +2479,7 @@ def render_history_page(bundle: dict[str, Any], analysis: dict[str, Any], can_ed
     if history_days < 40:
         st.warning(
             "Има по-малко от 40 дни с история. Системата ще работи със стабилизиращите базови товари, "
-            "но надеждността на индивидуалния 7/40 и Tref ще бъде по-ниска."
+            "но надеждността на индивидуалните H40 и 7/40 ще бъде по-ниска. Фиксираният Tref не се променя."
         )
 
     tab_add, tab_table, tab_weekly = st.tabs(
@@ -3302,7 +3285,12 @@ def render_profile_page(bundle: dict[str, Any], analysis: dict[str, Any], can_ed
 
     with tab_zones:
         zones = bundle["zone_profiles"][athlete_id].copy()
-        editable_cols = ["component", "hr_low", "hr_high", "weight_low", "weight_high", "power"]
+        editable_cols = [
+            "component",
+            "hr_low",
+            "hr_high",
+            "equivalence_slope_pp_per_bpm",
+        ]
         edited = st.data_editor(
             zones[editable_cols],
             width="stretch",
@@ -3313,26 +3301,30 @@ def render_profile_page(bundle: dict[str, Any], analysis: dict[str, Any], can_ed
                 "component": "Зона",
                 "hr_low": st.column_config.NumberColumn("Пулс · долна", min_value=50, max_value=230),
                 "hr_high": st.column_config.NumberColumn("Пулс · горна", min_value=50, max_value=230),
-                "weight_low": st.column_config.NumberColumn("Тегло · долно", min_value=1.0, help=help_text("real_equivalent")),
-                "weight_high": st.column_config.NumberColumn("Тегло · горно", min_value=1.0, help=help_text("real_equivalent")),
-                "power": st.column_config.NumberColumn("Степен p", min_value=0.2, max_value=4.0, step=0.05),
+                "equivalence_slope_pp_per_bpm": st.column_config.NumberColumn(
+                    "Линейно приравняване · pp/bpm",
+                    min_value=0.0,
+                    max_value=100.0,
+                    step=0.1,
+                    help=help_text("real_equivalent"),
+                ),
             },
         )
         if can_edit and st.button("Запази зоните и преизчисли", width="stretch"):
             valid = True
-            if (edited["hr_low"] >= edited["hr_high"]).any() or (edited["weight_low"] <= 0).any() or (edited["weight_high"] < edited["weight_low"]).any():
+            if (
+                (edited["hr_low"] >= edited["hr_high"]).any()
+                or (edited["equivalence_slope_pp_per_bpm"] < 0).any()
+                or (edited["equivalence_slope_pp_per_bpm"] > 100).any()
+            ):
                 valid = False
-                st.error("Проверете границите и теглата: долната граница трябва да е по-малка, а теглата — положителни и ненамаляващи.")
+                st.error("Проверете HR границите и линейния параметър 0–100 pp/bpm.")
             if valid:
                 for col in editable_cols:
                     zones[col] = edited[col].values
                 zones["version"] = int(zones["version"].max()) + 1
                 bundle["zone_profiles"][athlete_id] = zones
-                commit_bundle(bundle, "zone_profile_update", "Индивидуалните зони и вътрешнозонови тегла са променени.", athlete_id)
-        for i in range(len(edited) - 1):
-            if abs(float(edited.iloc[i]["weight_high"]) - float(edited.iloc[i + 1]["weight_low"])) > 1e-6:
-                st.warning("Има прекъсване между горното тегло на една зона и долното тегло на следващата. Това е допустимо за тест, но може да създаде изкуствен скок.")
-                break
+                commit_bundle(bundle, "zone_profile_update", "Индивидуалните зони и линейното приравняване са променени.", athlete_id)
 
         st.subheader("Силови коефициенти")
         st.caption(
@@ -3355,7 +3347,7 @@ def render_profile_page(bundle: dict[str, Any], analysis: dict[str, Any], can_ed
             hide_index=True,
             column_config={
                 "Коефициент": st.column_config.NumberColumn(format="%.1f", help=help_text("strength_load")),
-                "10 реални минути дават": st.column_config.NumberColumn("Екв. мин при 10 реални", format="%.1f"),
+                "10 реални минути дават": st.column_config.NumberColumn("Приравнени мин при 10 реални", format="%.1f"),
             },
         )
 
@@ -3398,10 +3390,10 @@ def render_models_page() -> None:
     st.subheader("Последователност на изчислителния pipeline")
     st.markdown(
         "1. Нормализиране на активността → 2. зониране на всяка секунда и класифициране на силовия вид → "
-        "3. реално време, коефициенти и `Q` → 4. каскада и разлив до `E` → "
+        "3. реално и приравнено време → 4. каскада и разлив до `E` → "
         "5. `E7`, `E40`, `B`, `7/40`, `Tref` → 6. умора и readiness → "
         "7. мониторинг → 8. контролни тестове → 9. интегрирана готовност → 10. периодизационна цел → "
-        "11. адаптивен множител → 12. обратно решение `E → Q` → 13. разпределение по дни → "
+        "11. адаптивен множител → 12. обратно решение към приравнено време → 13. разпределение по дни → "
         "14. избор и дозиране на метод → 15. проверка на ограниченията → 16. DecisionSnapshot."
     )
     st.info("Началните коефициенти са експертни параметри за MVP и валидиране. Те не са универсални норми и са видими в експертните настройки.")

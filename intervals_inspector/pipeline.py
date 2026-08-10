@@ -48,7 +48,7 @@ from intervals_inspector.stream_normalizer import (
 from intervals_inspector.stream_quality import analyze_stream_quality
 
 
-CANONICAL_INPUT_VERSION = "canonical-real-activity-v2-qref"
+CANONICAL_INPUT_VERSION = "canonical-real-activity-v3-equivalent-time"
 MAX_HISTORY_ACTIVITIES = 200
 _SAFE_ACTIVITY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
@@ -71,8 +71,8 @@ class CanonicalModelInput:
 
     normalized_activity: IntervalAwareResult
     activity_date: date | None
-    prior_baseline_qref: tuple[Mapping[str, Any], ...] = ()
-    prior_experimental_qref: tuple[Mapping[str, Any], ...] = ()
+    prior_baseline_effective_load: tuple[Mapping[str, Any], ...] = ()
+    prior_experimental_effective_load: tuple[Mapping[str, Any], ...] = ()
     schema_version: str = CANONICAL_INPUT_VERSION
     normalization_version: str = NORMALIZATION_VERSION
 
@@ -81,8 +81,8 @@ def build_canonical_model_input(
     normalized_activity: IntervalAwareResult,
     *,
     activity_date: date | None = None,
-    prior_baseline_qref: Sequence[Mapping[str, Any]] = (),
-    prior_experimental_qref: Sequence[Mapping[str, Any]] = (),
+    prior_baseline_effective_load: Sequence[Mapping[str, Any]] = (),
+    prior_experimental_effective_load: Sequence[Mapping[str, Any]] = (),
 ) -> CanonicalModelInput:
     """Adapt one normalized activity without copying or re-normalizing it."""
 
@@ -91,8 +91,12 @@ def build_canonical_model_input(
     return CanonicalModelInput(
         normalized_activity=normalized_activity,
         activity_date=activity_date,
-        prior_baseline_qref=tuple(prior_baseline_qref),
-        prior_experimental_qref=tuple(prior_experimental_qref),
+        prior_baseline_effective_load=tuple(
+            prior_baseline_effective_load
+        ),
+        prior_experimental_effective_load=tuple(
+            prior_experimental_effective_load
+        ),
     )
 
 
@@ -175,9 +179,14 @@ def run_physiological_models(
 
     comparison = calculate_shadow_comparison(
         canonical_input.normalized_activity,
+        precomputed_experimental_analysis=analysis,
         experimental_configuration=experimental_configuration,
-        prior_baseline_qref=canonical_input.prior_baseline_qref,
-        prior_experimental_qref=canonical_input.prior_experimental_qref,
+        prior_baseline_effective_load=(
+            canonical_input.prior_baseline_effective_load
+        ),
+        prior_experimental_effective_load=(
+            canonical_input.prior_experimental_effective_load
+        ),
         activity_date=canonical_input.activity_date,
     )
     if coverage < LOW_HR_COVERAGE_PERCENT:
@@ -203,8 +212,8 @@ def process_activity_payloads(
     include_1hz_preview: bool = False,
     profile: OnFlowsZoneProfile | None = None,
     experimental_configuration: ShadowModelConfiguration | None = None,
-    prior_baseline_qref: Sequence[Mapping[str, Any]] = (),
-    prior_experimental_qref: Sequence[Mapping[str, Any]] = (),
+    prior_baseline_effective_load: Sequence[Mapping[str, Any]] = (),
+    prior_experimental_effective_load: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Validate, normalize, adapt, and model one already-loaded activity."""
 
@@ -222,8 +231,8 @@ def process_activity_payloads(
     canonical_input = build_canonical_model_input(
         interval_result,
         activity_date=_activity_date(detail_payload),
-        prior_baseline_qref=prior_baseline_qref,
-        prior_experimental_qref=prior_experimental_qref,
+        prior_baseline_effective_load=prior_baseline_effective_load,
+        prior_experimental_effective_load=prior_experimental_effective_load,
     )
     onflows_analysis, comparison, model_status = run_physiological_models(
         canonical_input,
@@ -256,7 +265,9 @@ def process_activity_payloads(
     return summary
 
 
-def _qref_rows_from_result(result: Mapping[str, Any] | None) -> dict[str, float] | None:
+def _effective_load_rows_from_result(
+    result: Mapping[str, Any] | None,
+) -> dict[str, float] | None:
     if not isinstance(result, Mapping):
         return None
     rows = result.get("rows")
@@ -267,7 +278,7 @@ def _qref_rows_from_result(result: Mapping[str, Any] | None) -> dict[str, float]
         if not isinstance(row, Mapping):
             continue
         zone = str(row.get("zone") or "")
-        value = row.get("Qref_z")
+        value = row.get("E_z")
         if zone and isinstance(value, (int, float)) and not isinstance(value, bool):
             values[zone] = max(0.0, float(value))
     return values or None
@@ -295,7 +306,8 @@ def _load_history(
     }
     if selected_date is None:
         diagnostics["warnings"].append(
-            "Липсва безопасно разпознаваема дата; Tref използва видимия моделeн fallback."
+            "Липсва безопасно разпознаваема дата; H40 не може да използва "
+            "предходна история. Фиксираният Tref не се променя."
         )
         return baseline_history, experimental_history, diagnostics
 
@@ -354,8 +366,8 @@ def _load_history(
                 canonical = build_canonical_model_input(
                     interval_result,
                     activity_date=activity_day,
-                    prior_baseline_qref=baseline_history,
-                    prior_experimental_qref=experimental_history,
+                    prior_baseline_effective_load=baseline_history,
+                    prior_experimental_effective_load=experimental_history,
                 )
                 _analysis, comparison, status = run_physiological_models(
                     canonical,
@@ -365,8 +377,10 @@ def _load_history(
                 if comparison is None or status["status"] == "not_run":
                     skipped_activities += 1
                     continue
-                baseline_values = _qref_rows_from_result(comparison.get("baseline"))
-                experimental_values = _qref_rows_from_result(
+                baseline_values = _effective_load_rows_from_result(
+                    comparison.get("baseline")
+                )
+                experimental_values = _effective_load_rows_from_result(
                     comparison.get("experimental")
                 )
                 if not baseline_values or not experimental_values:
@@ -460,8 +474,8 @@ def run_activity_pipeline(
         include_1hz_preview=include_1hz_preview,
         profile=selected_profile,
         experimental_configuration=configuration,
-        prior_baseline_qref=baseline_history,
-        prior_experimental_qref=experimental_history,
+        prior_baseline_effective_load=baseline_history,
+        prior_experimental_effective_load=experimental_history,
     )
     summary["history"] = history
     return summary

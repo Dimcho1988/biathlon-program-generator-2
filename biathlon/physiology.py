@@ -9,10 +9,13 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import least_squares
 
+from intervals_inspector.effective_hr import effective_hr as canonical_effective_hr
+
 from .constants import (
     AEROBIC_COMPONENTS,
     COMPONENTS,
     DEFAULT_STRENGTH_TYPE,
+    FIXED_AEROBIC_TREF_MINUTES,
     STRENGTH_COEFFICIENTS,
     STRENGTH_TYPES,
 )
@@ -40,29 +43,37 @@ def _numeric_series(frame: pd.DataFrame, column: str, default: float = 0.0) -> p
     return pd.Series(float(default), index=frame.index, dtype=float)
 
 
-def intrazone_coefficient(position: float, weight_low: float, weight_high: float, power: float) -> float:
-    """Безразмерен коефициент k при нормализирана позиция 0–1 в зоната."""
+def linear_equivalence_coefficient(
+    effective_hr: float,
+    hr_low: float,
+    hr_high: float,
+    slope_pp_per_bpm: float,
+    *,
+    is_z5: bool = False,
+) -> float:
+    """Линейна стойност на минутата спрямо референтната HR граница."""
 
-    u = float(np.clip(position, 0.0, 1.0))
-    if weight_low <= 0:
-        raise ValueError("weight_low трябва да бъде положително число")
-    weight = weight_low + (weight_high - weight_low) * (u**power)
-    return float(weight / weight_low)
-
-
-def hr_intrazone_values(hr: float, zone: pd.Series | dict[str, Any]) -> tuple[float, float, float]:
-    """Връща u, W и k за конкретен пулс и зона."""
-
-    z = dict(zone)
-    width = max(float(z["hr_high"]) - float(z["hr_low"]), EPS)
-    u = float(np.clip((float(hr) - float(z["hr_low"])) / width, 0.0, 1.0))
-    w = float(z["weight_low"] + (z["weight_high"] - z["weight_low"]) * (u ** float(z["power"])))
-    k = w / max(float(z["weight_low"]), EPS)
-    return u, w, k
+    slope = max(0.0, float(slope_pp_per_bpm)) / 100.0
+    if is_z5:
+        return float(
+            max(
+                1.0,
+                1.0
+                + slope
+                * (min(float(effective_hr), float(hr_high)) - float(hr_low)),
+            )
+        )
+    return float(
+        np.clip(
+            1.0 - slope * (float(hr_high) - float(effective_hr)),
+            0.0,
+            1.0,
+        )
+    )
 
 
 def analyze_activity_stream(stream: pd.DataFrame, zone_profile: pd.DataFrame) -> pd.DataFrame:
-    """Анализира 1-секунден поток и връща T, Q и среден k по зона.
+    """Анализира 1-секунден поток и връща реално и приравнено време.
 
     Невалидни пулсови стойности или секунди с ``moving=False`` не участват в товара.
     """
@@ -75,22 +86,62 @@ def analyze_activity_stream(stream: pd.DataFrame, zone_profile: pd.DataFrame) ->
     zones = zone_profile.sort_values("hr_low").copy()
     valid = stream.copy()
     valid["hr"] = pd.to_numeric(valid["hr"], errors="coerce")
-    valid = valid.loc[valid["moving"].fillna(False) & valid["hr"].between(30, 240)].copy()
+    valid = valid.loc[
+        valid["moving"].fillna(False) & valid["hr"].between(0, 300)
+    ].copy()
+    valid["effective_hr"] = valid["hr"].map(canonical_effective_hr)
+    valid = valid.loc[valid["effective_hr"].notna()].copy()
 
     rows: list[dict[str, float | str]] = []
-    for _, zone in zones.iterrows():
+    zone_records = list(zones.iterrows())
+    for position, (_, zone) in enumerate(zone_records):
         code = str(zone["component"])
-        mask = valid["hr"].between(float(zone["hr_low"]), float(zone["hr_high"]), inclusive="both")
-        subset = valid.loc[mask, "hr"]
-        if subset.empty:
-            rows.append({"component": code, "real_min": 0.0, "q_min": 0.0, "avg_k": np.nan, "valid_seconds": 0})
-            continue
-        width = max(float(zone["hr_high"]) - float(zone["hr_low"]), EPS)
-        u = ((subset - float(zone["hr_low"])) / width).clip(0, 1)
-        w = float(zone["weight_low"]) + (float(zone["weight_high"]) - float(zone["weight_low"])) * (
-            u ** float(zone["power"])
+        membership_low = float(zone["hr_low"])
+        membership_high = float(zone["hr_high"])
+        if position > 0:
+            previous = zone_records[position - 1][1]
+            previous_high = float(previous["hr_high"])
+            if np.isclose(membership_low - previous_high, 1.0):
+                membership_low = (previous_high + membership_low) / 2.0
+        upper_inclusive = True
+        if position < len(zone_records) - 1:
+            following = zone_records[position + 1][1]
+            following_low = float(following["hr_low"])
+            if np.isclose(following_low - membership_high, 1.0):
+                membership_high = (membership_high + following_low) / 2.0
+                upper_inclusive = False
+        elif code == "Z5":
+            membership_high = 300.0
+        mask = valid["effective_hr"].ge(membership_low)
+        mask &= (
+            valid["effective_hr"].le(membership_high)
+            if upper_inclusive
+            else valid["effective_hr"].lt(membership_high)
         )
-        k = w / max(float(zone["weight_low"]), EPS)
+        subset = valid.loc[mask, "effective_hr"]
+        if subset.empty:
+            rows.append(
+                {
+                    "component": code,
+                    "real_min": 0.0,
+                    "q_min": 0.0,
+                    "avg_k": np.nan,
+                    "mean_effective_hr_bpm": np.nan,
+                    "average_minute_value_percent": np.nan,
+                    "valid_seconds": 0,
+                }
+            )
+            continue
+        slope = float(zone["equivalence_slope_pp_per_bpm"])
+        k = subset.map(
+            lambda value: linear_equivalence_coefficient(
+                float(value),
+                float(zone["hr_low"]),
+                float(zone["hr_high"]),
+                slope,
+                is_z5=code == "Z5",
+            )
+        )
         real_min = len(subset) / 60.0
         q_min = float(k.sum() / 60.0)
         rows.append(
@@ -99,6 +150,10 @@ def analyze_activity_stream(stream: pd.DataFrame, zone_profile: pd.DataFrame) ->
                 "real_min": real_min,
                 "q_min": q_min,
                 "avg_k": q_min / real_min if real_min > 0 else np.nan,
+                "mean_effective_hr_bpm": float(subset.mean()),
+                "average_minute_value_percent": (
+                    100.0 * q_min / real_min if real_min > 0 else np.nan
+                ),
                 "valid_seconds": int(len(subset)),
             }
         )
@@ -154,10 +209,16 @@ def activities_to_activity_summaries(
     for component in AEROBIC_COMPONENTS:
         zone = profile.loc[component]
         position = _numeric_series(result, f"pos_{component}", 0.0).clip(0, 1)
-        k = (
-            float(zone["weight_low"])
-            + (float(zone["weight_high"]) - float(zone["weight_low"])) * (position ** float(zone["power"]))
-        ) / max(float(zone["weight_low"]), EPS)
+        effective_hr = float(zone["hr_low"]) + position * (
+            float(zone["hr_high"]) - float(zone["hr_low"])
+        )
+        slope = float(zone["equivalence_slope_pp_per_bpm"]) / 100.0
+        if component == "Z5":
+            k = 1.0 + slope * (effective_hr - float(zone["hr_low"]))
+        else:
+            k = (
+                1.0 - slope * (float(zone["hr_high"]) - effective_hr)
+            ).clip(0.0, 1.0)
         real = _numeric_series(result, f"real_{component}", 0.0).clip(lower=0)
         result[f"k_{component}"] = k
         result[f"q_{component}"] = real * k
@@ -279,6 +340,8 @@ def compute_daily_load_history(
             tref = np.where(chronic > EPS, 7.0 * chronic, np.array([7.0 * base_loads[c] for c in COMPONENTS]))
         else:
             tref = np.array([7.0 * base_loads[c] for c in COMPONENTS], dtype=float)
+        for component, fixed_tref in FIXED_AEROBIC_TREF_MINUTES.items():
+            tref[COMPONENTS.index(component)] = fixed_tref
 
         q = np.array([float(row[f"q_{c}"]) for c in COMPONENTS], dtype=float)
         effective = effective_from_direct_vector(q, tref, parameters)
@@ -333,7 +396,13 @@ def compute_load_statistics(
         e50 = _window_mean(series, as_of_ts, base_window) if not series.empty else 0.0
         base = max(float(base_loads[component]), 0.5 * e50)
         index = (base + e7) / max(base + e40, EPS)
-        tref = 7.0 * e40 if e40 > EPS else 7.0 * base
+        tref = (
+            FIXED_AEROBIC_TREF_MINUTES[component]
+            if component in FIXED_AEROBIC_TREF_MINUTES
+            else 7.0 * e40
+            if e40 > EPS
+            else 7.0 * base
+        )
         reliability = min(1.0, history_days / float(long_window))
         rows.append(
             {
@@ -381,7 +450,11 @@ def rolling_load_statistics(daily_loads: pd.DataFrame, parameters: dict[str, Any
                     "E40_daily": e40.values,
                     "base_load": base,
                     "index_7_40": index,
-                    "Tref": 7.0 * np.where(e40.values > EPS, e40.values, base),
+                    "Tref": (
+                        np.full(len(full), FIXED_AEROBIC_TREF_MINUTES[component])
+                        if component in FIXED_AEROBIC_TREF_MINUTES
+                        else 7.0 * np.where(e40.values > EPS, e40.values, base)
+                    ),
                 }
             )
         )
@@ -413,6 +486,8 @@ def compute_readiness_history(
             supplied_column = f"tref_used_{component}"
             if use_supplied_tref and supplied_column in full:
                 tref = max(float(row[supplied_column]), EPS)
+            elif component in FIXED_AEROBIC_TREF_MINUTES:
+                tref = FIXED_AEROBIC_TREF_MINUTES[component]
             else:
                 history = full.iloc[max(0, day_index - long_window) : day_index][f"e_{component}"]
                 chronic = float(history.mean()) if not history.empty else 0.0

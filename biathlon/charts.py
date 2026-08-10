@@ -53,7 +53,7 @@ def effective_load_figure(rolling_load: pd.DataFrame, component: str, days: int 
     fig.update_layout(
         title=f"Ефективен товар · {COMPONENT_LABELS[component]}",
         xaxis_title="Дата",
-        yaxis_title="Еквивалентни минути",
+        yaxis_title="Приравнени минути",
         barmode="overlay",
         hovermode="x unified",
         height=390,
@@ -152,7 +152,7 @@ def real_vs_equivalent_figure(activity_summary: pd.Series) -> go.Figure:
     rows = []
     for component in COMPONENTS:
         rows.append({"component": component, "Тип": "Реално време", "Минути": float(activity_summary.get(f"real_{component}", 0.0))})
-        rows.append({"component": component, "Тип": "Директно Q", "Минути": float(activity_summary.get(f"q_{component}", 0.0))})
+        rows.append({"component": component, "Тип": "Приравнено време", "Минути": float(activity_summary.get(f"q_{component}", 0.0))})
     data = pd.DataFrame(rows)
     fig = px.bar(
         data,
@@ -160,7 +160,7 @@ def real_vs_equivalent_figure(activity_summary: pd.Series) -> go.Figure:
         y="Минути",
         color="Тип",
         barmode="group",
-        title="Реално срещу физиологично еквивалентно време",
+        title="Реално и приравнено време",
         labels={"component": "Компонент"},
     )
     fig.update_layout(height=390, margin=dict(l=20, r=20, t=55, b=25))
@@ -168,7 +168,7 @@ def real_vs_equivalent_figure(activity_summary: pd.Series) -> go.Figure:
 
 
 def strength_breakdown_figure(activity_summary: pd.Series) -> go.Figure:
-    """Реално и претеглено силово време по четирите вида сила."""
+    """Реално и приравнено силово време по четирите вида сила."""
 
     rows = []
     for strength_type in STRENGTH_TYPES:
@@ -186,7 +186,7 @@ def strength_breakdown_figure(activity_summary: pd.Series) -> go.Figure:
         rows.append(
             {
                 "Вид сила": STRENGTH_LABELS[strength_type],
-                "Тип": "Еквивалентни минути",
+                "Тип": "Приравнено време",
                 "Минути": equivalent,
                 "Коефициент": coefficient,
             }
@@ -278,13 +278,13 @@ def plan_comparison_figure(comparison: pd.DataFrame) -> go.Figure:
         id_vars="component",
         value_vars=["target_effective", "planned_effective"],
         var_name="Тип",
-        value_name="Еквивалентни минути",
+        value_name="Приравнени минути",
     )
     data["Тип"] = data["Тип"].map({"target_effective": "Цел", "planned_effective": "План"})
     fig = px.bar(
         data,
         x="component",
-        y="Еквивалентни минути",
+        y="Приравнени минути",
         color="Тип",
         barmode="group",
         title="Целеви срещу планиран ефективен товар",

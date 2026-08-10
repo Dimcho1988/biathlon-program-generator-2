@@ -71,7 +71,6 @@ from intervals_inspector.shadow_model import (
     EDITABLE_FIELDS,
     FIELD_RANGES,
     FIELD_UNITS,
-    PROFILE_LEVELS,
     READ_ONLY_FIELDS,
     ShadowModelConfiguration,
     build_model_registry,
@@ -79,7 +78,6 @@ from intervals_inspector.shadow_model import (
     configuration_from_safe_dict,
     configuration_to_safe_dict,
     configuration_with_overrides,
-    configuration_with_profile_level,
     default_shadow_configuration,
     export_shadow_diagnostics_json,
     profile_from_configuration,
@@ -1076,16 +1074,9 @@ def _render_shadow_settings_panel(
 
         submitted_values: dict[str, float] = {}
         with st.form("_shadow_model_settings_form", clear_on_submit=False):
-            selected_profile_level = st.selectbox(
-                "Начален Tref профил при 0–6 завършени дни",
-                PROFILE_LEVELS,
-                index=PROFILE_LEVELS.index(configuration.profile_level),
-                format_func=lambda value: {
-                    "low": "Нисък · долна граница",
-                    "medium": "Среден · среда на диапазона",
-                    "high": "Висок · горна граница",
-                }[value],
-                key=f"{SHADOW_SETTING_KEY_PREFIX}profile_level",
+            st.caption(
+                "Tref е фиксирана начална експертна настройка. "
+                "Редактира се само линейният pp/bpm параметър и разрешените spillover стойности."
             )
             zone_tabs = st.tabs([zone.zone for zone in configuration.zones])
             for zone_index, (zone, initial_zone) in enumerate(
@@ -1119,7 +1110,7 @@ def _render_shadow_settings_panel(
                                     1.0
                                     if percent
                                     else 0.05
-                                    if field in {"power", "bounds_factor"}
+                                    if field == "equivalence_slope_pp_per_bpm"
                                     else 1.0
                                 ),
                                 key=(
@@ -1180,10 +1171,6 @@ def _render_shadow_settings_panel(
                 candidate = configuration_with_overrides(
                     submitted_values,
                     baseline=baseline,
-                )
-                candidate = configuration_with_profile_level(
-                    selected_profile_level,
-                    baseline=candidate,
                 )
             except ValueError as exc:
                 st.error(f"Невалидна експериментална стойност: {exc}")
@@ -1247,24 +1234,25 @@ def _render_shadow_comparison(
     if isinstance(experimental_result, Mapping):
         st.caption(
             "Model version: "
-            f"{experimental_result.get('model_version')} · TrefBoundsProfile: "
-            f"{experimental_result.get('tref_bounds_profile_version')} · "
+            f"{experimental_result.get('model_version')} · приравняване: "
+            f"{experimental_result.get('equivalence_version')} · Tref: "
+            f"{experimental_result.get('tref_profile_version')} · "
             f"история: {experimental_result.get('history_days', 0)}/"
             f"{experimental_result.get('history_window_days', 40)} дни · "
-            f"Tref source: {experimental_result.get('tref_source', 'profile')} · "
-            f"profile level: {experimental_result.get('profile_level', 'medium')} · "
+            "Tref източник: Начална експертна настройка · "
             f"период: {experimental_result.get('history_period_start') or 'няма'} → "
             f"{experimental_result.get('history_period_end') or 'няма'}"
         )
     result_ids = (
         "result.t",
-        "result.q",
-        "result.qref",
+        "result.equivalent_time",
+        "result.mean_effective_hr",
+        "result.average_minute_value",
         "result.direct_ratio",
         "result.cascade",
         "result.spillover",
         "result.e",
-        "result.tref_raw",
+        "result.h40",
         "result.tref_effective",
         "result.hr_coverage",
     )
@@ -1291,14 +1279,12 @@ def _render_shadow_comparison(
         rendered: dict[str, Any] = {"зона": row.get("zone")}
         for field, label in (
             ("T_z", "T_z"),
-            ("Q_z", "Q_z"),
-            ("Qref_z", "Qref_z"),
-            ("direct_ratio", "Qref/Tref"),
+            ("T_eq_z", "Приравнено време"),
+            ("direct_ratio", "% от Tref"),
             ("cascade", "cascade"),
             ("spillover_received", "spillover"),
             ("E_z", "E_z"),
-            ("tref_raw", "tref_raw"),
-            ("tref_effective", "tref_effective"),
+            ("tref_effective", "Tref"),
         ):
             rendered[f"начален {label}"] = row.get(f"baseline_{field}")
             rendered[f"експериментален {label}"] = row.get(
@@ -1689,7 +1675,7 @@ def _render_report(
 
                 history = normalizer_summary.get("history")
                 if isinstance(history, Mapping):
-                    st.subheader("Реална предходна история за Tref")
+                    st.subheader("Реална предходна история за H40 и 7/40")
                     _render_table(
                         [
                             {
@@ -1800,10 +1786,10 @@ def _render_report(
                     "активност."
                 )
 
-            st.subheader("onFlows вътрешнозоново претегляне")
+            st.subheader("onFlows вътрешнозоново приравняване")
             st.caption(
                 "Този слой използва собствен регулируем onFlows профил и "
-                "аналитично интегрира k = W / W_low директно върху "
+                "аналитично интегрира линейна стойност 3 pp/bpm директно върху "
                 "interval-aware резултата. Не използва icu_hr_zones и не "
                 "изисква временен 1 Hz preview."
             )
@@ -1842,12 +1828,11 @@ def _render_report(
                 _render_model_help_strip(
                     legacy_registry,
                     (
-                        "parameter.Z1.weight_low",
-                        "parameter.Z1.weight_high",
-                        "parameter.Z1.power",
+                        "parameter.Z1.equivalence_slope_pp_per_bpm",
                         "result.t",
-                        "result.q",
-                        "result.average_k",
+                        "result.equivalent_time",
+                        "result.mean_effective_hr",
+                        "result.average_minute_value",
                         "result.zone_share",
                         "result.active_duration",
                         "result.classified_hr",
@@ -1865,16 +1850,21 @@ def _render_report(
                             "HR диапазон": (
                                 f"{row.get('hr_low')}–{row.get('hr_high')}"
                             ),
-                            "W_low": row.get("weight_low"),
-                            "W_high": row.get("weight_high"),
-                            "p": row.get("power"),
+                            "линейна стойност (pp/bpm)": row.get(
+                                "equivalence_slope_pp_per_bpm"
+                            ),
                             "реално време T_z (s)": row.get(
                                 "real_seconds"
                             ),
-                            "претеглено време Q_z (s)": row.get(
-                                "weighted_seconds"
+                            "приравнено време (s)": row.get(
+                                "equivalent_seconds"
                             ),
-                            "среден k_z": row.get("average_k"),
+                            "среден HR (времево претеглен)": row.get(
+                                "mean_effective_hr_bpm"
+                            ),
+                            "средна стойност на минутата (%)": row.get(
+                                "average_minute_value_percent"
+                            ),
                             "% от класифицираното T": row.get(
                                 "percent_of_classified_hr_time"
                             ),
@@ -1907,13 +1897,19 @@ def _render_report(
                             "общо реално T (s)": onflows_load_analysis.get(
                                 "total_real_sec"
                             ),
-                            "диагностичен сбор Q (s)": (
+                            "общо приравнено време (s)": (
                                 onflows_load_analysis.get(
-                                    "total_weighted_sec"
+                                    "total_equivalent_sec"
                                 )
                             ),
-                            "среден коефициент": onflows_load_analysis.get(
-                                "overall_average_k"
+                            "средна стойност на минутата (%)": onflows_load_analysis.get(
+                                "overall_average_minute_value_percent"
+                            ),
+                            "effective HR adapter": onflows_load_analysis.get(
+                                "effective_hr_adapter_version"
+                            ),
+                            "приравняване": onflows_load_analysis.get(
+                                "equivalence_version"
                             ),
                             "profile version": onflows_load_analysis.get(
                                 "profile_schema_version"

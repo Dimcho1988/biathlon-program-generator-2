@@ -34,7 +34,10 @@ class _SyntheticUIClient:
         )
 
     def get_activity_result(
-        self, activity_id: str, *, include_intervals: bool = False
+        self,
+        activity_id: str,
+        *,
+        include_intervals: bool = False,
     ) -> IntervalsResponse:
         assert include_intervals is False
         activity_day = self.activities[activity_id]
@@ -92,7 +95,7 @@ def test_real_mode_never_falls_back_and_marks_unconnected_pages() -> None:
     )
 
 
-def test_load_and_recovery_render_the_same_cached_real_dataset() -> None:
+def test_load_settings_and_recovery_share_the_new_real_model_contract() -> None:
     app = AppTest.from_file(str(APP_PATH), default_timeout=180)
     app.query_params["page"] = "load"
     app.run()
@@ -120,15 +123,104 @@ def test_load_and_recovery_render_the_same_cached_real_dataset() -> None:
         for value in _values(app.info)
     )
     assert len(app.metric) >= 5
+    metrics = {element.label: str(element.value) for element in app.metric}
+    assert metrics["Tref"] == "300.0"
+    load_captions = _values(app.caption)
+    assert any(
+        "raw HR → effective HR → приравнено време" in value
+        for value in load_captions
+    )
+    assert any(
+        "H40 използва само завършени календарни дни" in value
+        for value in load_captions
+    )
+    assert any(
+        "Tref е фиксирана начална експертна настройка" in value
+        and "7/40" in value
+        for value in load_captions
+    )
+
+    dataframes = [element.value for element in app.dataframe]
+    h40_table = next(
+        frame
+        for frame in dataframes
+        if "H40 (диагностично)" in frame.columns
+        and "Завършени дни" in frame.columns
+    )
+    assert list(h40_table.columns) == [
+        "Зона",
+        "H40 (диагностично)",
+        "Tref",
+        "Източник",
+        "Завършени дни",
+    ]
+    assert dict(zip(h40_table["Зона"], h40_table["Tref"])) == {
+        "Z1": 300.0,
+        "Z2": 180.0,
+        "Z3": 70.0,
+        "Z4": 20.0,
+        "Z5": 20.0,
+    }
+    activity_table = next(
+        frame
+        for frame in dataframes
+        if "Приравнено време (мин)" in frame.columns
+    )
+    assert {
+        "Реално време (мин)",
+        "Приравнено време (мин)",
+        "Среден HR (времево претеглен)",
+        "Средна стойност на минутата (%)",
+        "% от Tref",
+        "H40 (диагностично)",
+        "Tref",
+    } <= set(activity_table.columns)
+    assert not any(
+        "Qref" in str(column) or str(column) in {"Q", "Q_z"}
+        for frame in dataframes
+        for column in frame.columns
+    )
 
     app.query_params["page"] = "settings"
     app.run()
     assert not app.exception
     assert any(
-        "Некалибрирани начални физиологични граници" in value
+        "Tref е фиксирана начална експертна настройка" in value
+        and "Линейният pp/bpm параметър" in value
         for value in _values(app.warning)
     )
     assert "_real_tref_configuration" in app.session_state
+    settings_markdown = _values(app.markdown)
+    for value in (
+        "300 приравнени мин",
+        "180 приравнени мин",
+        "70 приравнени мин",
+        "20 приравнени мин",
+    ):
+        assert value in settings_markdown
+    assert settings_markdown.count("Начална експертна настройка") == 5
+    assert "**Tref**" in settings_markdown
+    assert "**pp/bpm**" in settings_markdown
+    assert not any(
+        label in settings_markdown
+        for label in ("Tref минимум", "Tref максимум", "Tref ограничение")
+    )
+    slope_inputs = {
+        element.label: float(element.value)
+        for element in app.number_input
+        if element.label.endswith("pp/bpm")
+    }
+    assert slope_inputs == {
+        "Z1 pp/bpm": 3.0,
+        "Z2 pp/bpm": 3.0,
+        "Z3 pp/bpm": 3.0,
+        "Z4 pp/bpm": 3.0,
+        "Z5 pp/bpm": 3.0,
+    }
+    visible_settings_text = "\n".join(
+        _values(app.warning) + _values(app.caption) + settings_markdown
+    )
+    assert "Qref" not in visible_settings_text
 
     app.query_params["page"] = "recovery"
     app.run()

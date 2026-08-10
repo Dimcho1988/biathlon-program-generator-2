@@ -69,7 +69,7 @@ def test_real_field_inventory_marks_load_pipeline_schema_partial() -> None:
     assert mapping_by_target["real_Z1..real_Z5"]["status"] == "derived"
     assert (
         readiness_by_model[
-            "HR zoning → Q/E → 7/40/Tref/load readiness"
+            "HR zoning → приравнено време/E → 7/40/Tref/load readiness"
         ]
         == "partial"
     )
@@ -118,7 +118,7 @@ def test_missing_streams_keep_load_pipeline_blocked() -> None:
         row
         for row in readiness
         if row["model"]
-        == "HR zoning → Q/E → 7/40/Tref/load readiness"
+        == "HR zoning → приравнено време/E → 7/40/Tref/load readiness"
     )
     assert load["readiness"] == "blocked"
 
@@ -151,7 +151,7 @@ def test_null_fields_and_zero_point_streams_are_not_usable_inputs() -> None:
         row
         for row in readiness
         if row["model"]
-        == "HR zoning → Q/E → 7/40/Tref/load readiness"
+        == "HR zoning → приравнено време/E → 7/40/Tref/load readiness"
     )
 
     assert mapping_by_target["hr_zones"]["status"] == "missing"

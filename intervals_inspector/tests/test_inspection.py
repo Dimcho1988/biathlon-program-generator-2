@@ -252,16 +252,42 @@ def test_selected_activity_normalizer_keeps_only_aggregate_summary(
     assert zone_analysis["intervals_reference_available"] is True
     onflows = summary["onflows_load_analysis"]
     assert onflows["algorithm_version"] == (
-        "onflows-intrazone-load-interval-aware-v2-qref"
+        "onflows-equivalent-time-interval-aware-v3-linear"
     )
-    assert onflows["profile_schema_version"] == "onflows-zone-profile-v1"
+    assert onflows["equivalence_version"] == "intra_zone_linear_v1"
+    assert onflows["effective_hr_adapter_version"] == (
+        "effective-hr-raw-pass-through-v1"
+    )
+    assert onflows["profile_schema_version"] == (
+        "onflows-zone-profile-v2-linear-equivalence"
+    )
     assert len(onflows["zones"]) == 5
     assert onflows["active_duration_sec"] == 2
     assert onflows["classified_hr_sec"] == 2
-    assert onflows["total_weighted_sec"] >= onflows["total_real_sec"]
-    assert onflows["total_qref_sec"] >= 0.0
-    assert all("qref_seconds" in row for row in onflows["zones"])
-    assert len(summary["onflows_zone_profile"]["fingerprint"]) == 64
+    assert onflows["total_real_sec"] == pytest.approx(2.0)
+    assert onflows["total_equivalent_sec"] == pytest.approx(1.76)
+    assert onflows["overall_average_minute_value_percent"] == pytest.approx(88.0)
+    z1 = onflows["zones"][0]
+    assert z1["equivalence_slope_pp_per_bpm"] == 3.0
+    assert z1["real_seconds"] == pytest.approx(2.0)
+    assert z1["equivalent_seconds"] == pytest.approx(1.76)
+    assert z1["mean_effective_hr_bpm"] == pytest.approx(121.0)
+    assert z1["mean_raw_hr_bpm"] == pytest.approx(121.0)
+    assert z1["average_minute_value_percent"] == pytest.approx(88.0)
+    assert all(
+        row["equivalence_slope_pp_per_bpm"] == 3.0
+        for row in onflows["zones"]
+    )
+    safe_profile = summary["onflows_zone_profile"]
+    assert safe_profile["schema_version"] == (
+        "onflows-zone-profile-v2-linear-equivalence"
+    )
+    assert safe_profile["equivalence_version"] == "intra_zone_linear_v1"
+    assert len(safe_profile["fingerprint"]) == 64
+    assert all(
+        row["equivalence_slope_pp_per_bpm"] == 3.0
+        for row in safe_profile["zones"]
+    )
     rendered = repr(summary)
     assert TOKEN not in rendered
     assert "i123" not in rendered
@@ -291,7 +317,7 @@ def test_zone_path_does_not_materialize_1hz(
     assert summary["materialize_1hz"]["requested"] is False
     assert summary["zone_analysis"]["classified_hr_sec"] == 2
     assert summary["onflows_load_analysis"]["classified_hr_sec"] == 2
-    assert summary["onflows_load_analysis"]["total_weighted_sec"] > 0
+    assert summary["onflows_load_analysis"]["total_equivalent_sec"] > 0
 
 
 def test_endpoint_failure_exposes_only_safe_status_and_message(
