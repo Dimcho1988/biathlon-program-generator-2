@@ -1,0 +1,1428 @@
+"""Standalone Streamlit entry point for the experimental HR-only HRmod Lab.
+
+Run from the repository root with::
+
+    python -m streamlit run hrmod_lab_app.py
+
+This file is intentionally not imported by the production application and does
+not add an entry to its navigation.  The only value passed to the model core is
+``TCXParseResult.hr_input_samples``; every reference channel remains post-hoc.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, is_dataclass
+from datetime import date, datetime
+import hashlib
+from io import BytesIO
+import json
+from math import isfinite
+from typing import Any, Iterable, Mapping, Sequence
+import zipfile
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import streamlit as st
+
+from hrmod_lab import (
+    AthleteHRProfile,
+    HRmodConfig,
+    HRmodResult,
+    HRZone,
+    compute_hrmod_hr_only,
+)
+from hrmod_lab.reference_validation import (
+    ReferenceValidationConfig,
+    ReferenceZone,
+    evaluate_against_reference,
+)
+from hrmod_lab.tcx_adapter import (
+    ReferenceChannels,
+    TCXParseResult,
+    TCXParserConfig,
+    parse_tcx,
+)
+
+
+APP_TITLE = "HRmod Lab v1 · HR-only"
+SCIENTIFIC_LIMITATION = (
+    "Ако кратко усилие не остави различим HR отговор, HR-only моделът не може "
+    "надеждно да го възстанови. Моделът преразпределя наблюдавания HR отговор "
+    "и не трябва да измисля ненаблюдавана мощност."
+)
+CORE_STATE_KEY = "hrmod_lab_core_run"
+REFERENCE_STATE_KEY = "hrmod_lab_reference_result"
+
+
+st.set_page_config(
+    page_title=APP_TITLE,
+    page_icon="🫀",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+
+def _plain(value: Any) -> Any:
+    """Return JSON-ready values without relying on private model internals."""
+
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        return value if isfinite(value) else None
+    if isinstance(value, (np.integer, np.bool_)):
+        return value.item()
+    if isinstance(value, np.floating):
+        number = float(value)
+        return number if isfinite(number) else None
+    if isinstance(value, (datetime, date, pd.Timestamp)):
+        return value.isoformat()
+    if isinstance(value, pd.DataFrame):
+        return [_plain(row) for row in value.to_dict(orient="records")]
+    if isinstance(value, pd.Series):
+        return [_plain(item) for item in value.tolist()]
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        return _plain(value.to_dict())
+    if is_dataclass(value):
+        return _plain(asdict(value))
+    if isinstance(value, Mapping):
+        return {str(key): _plain(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list, set, frozenset)):
+        return [_plain(item) for item in value]
+    return str(value)
+
+
+def _records_frame(value: Any) -> pd.DataFrame:
+    """Convert public result rows/dataclasses/mappings to a display frame."""
+
+    if value is None:
+        return pd.DataFrame()
+    if isinstance(value, pd.DataFrame):
+        return value.copy()
+    if isinstance(value, Mapping):
+        for candidate in (
+            "aligned_timeseries",
+            "timeseries",
+            "rows",
+            "samples",
+            "records",
+        ):
+            rows = value.get(candidate)
+            if isinstance(rows, (list, tuple)):
+                return _records_frame(rows)
+        return pd.DataFrame([_plain(value)])
+    if hasattr(value, "to_dict") and not isinstance(value, (list, tuple)):
+        plain = _plain(value)
+        if isinstance(plain, list):
+            return pd.DataFrame(plain)
+        if isinstance(plain, Mapping):
+            return pd.DataFrame([plain])
+    if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray)):
+        return pd.DataFrame([_plain(item) for item in value])
+    return pd.DataFrame()
+
+
+def _json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        _plain(value),
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _csv_bytes(frame: pd.DataFrame) -> bytes:
+    return frame.to_csv(index=False).encode("utf-8-sig")
+
+
+def _first_column(frame: pd.DataFrame, names: Sequence[str]) -> str | None:
+    return next((name for name in names if name in frame.columns), None)
+
+
+def _format_number(value: Any, *, percent: bool = False) -> str:
+    if value is None:
+        return "—"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not np.isfinite(number):
+        return "—"
+    if percent:
+        return f"{100.0 * number:.1f}%"
+    return f"{number:.3g}"
+
+
+def _clear_run_state() -> None:
+    st.session_state.pop(CORE_STATE_KEY, None)
+    st.session_state.pop(REFERENCE_STATE_KEY, None)
+    st.session_state.pop("hrmod_lab_annotations", None)
+    st.session_state.pop("hrmod_lab_annotation_import_hash", None)
+
+
+def _core_fingerprint(result: HRmodResult) -> str:
+    """Hash the complete public core result around reference evaluation."""
+
+    canonical = json.dumps(
+        _plain(result),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _parser_signature(payload_hash: str, config: TCXParserConfig) -> str:
+    encoded = json.dumps(
+        {"payload_hash": payload_hash, "parser_config": _plain(config)},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _preview_parse(
+    payload: bytes,
+    payload_hash: str,
+    parser_config: TCXParserConfig,
+) -> TCXParseResult:
+    """Parse once per file/parser configuration across Streamlit reruns."""
+
+    signature = _parser_signature(payload_hash, parser_config)
+    if st.session_state.get("hrmod_lab_preview_signature") != signature:
+        parsed = parse_tcx(payload, config=parser_config)
+        st.session_state["hrmod_lab_preview_parse"] = parsed
+        st.session_state["hrmod_lab_preview_signature"] = signature
+        _clear_run_state()
+    return st.session_state["hrmod_lab_preview_parse"]
+
+
+def _quality_report(parsed: TCXParseResult) -> None:
+    diagnostics = parsed.diagnostics
+    values = diagnostics.to_dict()
+    samples = _records_frame(parsed.hr_input_samples)
+    hr_column = _first_column(samples, ("heart_rate_bpm", "raw_hr_bpm", "raw_hr"))
+    observed_max = None
+    if hr_column:
+        observed = pd.to_numeric(samples[hr_column], errors="coerce")
+        observed_max = observed.max() if observed.notna().any() else None
+
+    st.subheader("2 · Data-quality отчет")
+    metric_columns = st.columns(6)
+    metric_columns[0].metric("Trackpoints", int(values.get("trackpoint_count", 0)))
+    metric_columns[1].metric(
+        "HR coverage",
+        _format_number(values.get("hr_coverage_fraction"), percent=True),
+    )
+    metric_columns[2].metric(
+        "Median dt",
+        f"{_format_number(values.get('median_dt_s'))} s",
+    )
+    metric_columns[3].metric(
+        "≈1 Hz regularity",
+        _format_number(values.get("sampling_regularity_fraction"), percent=True),
+    )
+    metric_columns[4].metric("Long gaps", int(values.get("long_gap_count", 0)))
+    metric_columns[5].metric(
+        "Observed max",
+        "—" if observed_max is None else f"{float(observed_max):.1f} bpm",
+        help="Само информативно; не се използва автоматично като HRmax.",
+    )
+
+    detail_columns = st.columns(4)
+    detail_columns[0].metric(
+        "Missing HR", int(values.get("missing_hr_count", 0))
+    )
+    detail_columns[1].metric(
+        "Duplicate timestamps", int(values.get("duplicate_timestamp_count", 0))
+    )
+    detail_columns[2].metric(
+        "Timezone assumed", int(values.get("timezone_assumed_count", 0))
+    )
+    detail_columns[3].metric(
+        "Продължителност",
+        f"{_format_number(values.get('duration_s'))} s",
+    )
+
+    flags = list(values.get("flags", []) or [])
+    warnings = list(values.get("warnings", []) or [])
+    if flags:
+        st.warning("TCX quality flags: " + ", ".join(map(str, flags)))
+    if warnings:
+        st.info(" · ".join(map(str, warnings)))
+    with st.expander("Пълни TCX diagnostics"):
+        st.json(_plain(diagnostics))
+
+
+def _model_config_widgets(defaults: HRmodConfig) -> dict[str, Any]:
+    """Render every configurable conservative-v1 parameter."""
+
+    first = st.columns(4)
+    alpha = first[0].slider(
+        "alpha",
+        min_value=0.0,
+        max_value=1.0,
+        value=float(defaults.alpha),
+        step=0.05,
+        help="Дял от наличната балансирана площ; никога над 1.",
+    )
+    delay_s = first[1].number_input(
+        "delay_s (s)", min_value=0.0, value=float(defaults.delay_s), step=1.0
+    )
+    tau_on_s = first[2].number_input(
+        "tau_on_s (s)", min_value=0.01, value=float(defaults.tau_on_s), step=1.0
+    )
+    tau_off_s = first[3].number_input(
+        "tau_off_s (s)", min_value=0.01, value=float(defaults.tau_off_s), step=1.0
+    )
+
+    st.caption("Robust smoothing и derivative support")
+    smoothing = st.columns(4)
+    smoothing_method = smoothing[0].selectbox(
+        "smoothing_method",
+        options=("robust_local_linear", "local_linear"),
+        index=("robust_local_linear", "local_linear").index(
+            defaults.smoothing_method
+        ),
+    )
+    smoothing_window_s = smoothing[1].number_input(
+        "smoothing_window_s",
+        min_value=0.01,
+        value=float(defaults.smoothing_window_s),
+        step=1.0,
+    )
+    smoothing_min_points = smoothing[2].number_input(
+        "smoothing_min_points",
+        min_value=2,
+        value=int(defaults.smoothing_min_points),
+        step=1,
+    )
+    smoothing_robust_iterations = smoothing[3].number_input(
+        "smoothing_robust_iterations",
+        min_value=0,
+        value=int(defaults.smoothing_robust_iterations),
+        step=1,
+    )
+
+    st.caption("Episode detection — само от HR correction lobes")
+    episode_a = st.columns(4)
+    correction_deadband_bpm = episode_a[0].number_input(
+        "correction_deadband_bpm",
+        min_value=0.0,
+        value=float(defaults.correction_deadband_bpm),
+        step=0.1,
+    )
+    min_lobe_duration_s = episode_a[1].number_input(
+        "min_lobe_duration_s",
+        min_value=0.0,
+        value=float(defaults.min_lobe_duration_s),
+        step=1.0,
+    )
+    min_lobe_area_bpm_s = episode_a[2].number_input(
+        "min_lobe_area_bpm_s",
+        min_value=0.0,
+        value=float(defaults.min_lobe_area_bpm_s),
+        step=1.0,
+    )
+    episode_neutral_gap_s = episode_a[3].number_input(
+        "episode_neutral_gap_s",
+        min_value=0.0,
+        value=float(defaults.episode_neutral_gap_s),
+        step=1.0,
+    )
+    episode_b = st.columns(3)
+    episode_balance_tolerance_bpm_s = episode_b[0].number_input(
+        "episode_balance_tolerance_bpm_s",
+        min_value=0.0,
+        value=float(defaults.episode_balance_tolerance_bpm_s),
+        step=0.5,
+    )
+    max_episode_duration_s = episode_b[1].number_input(
+        "max_episode_duration_s",
+        min_value=0.01,
+        value=float(defaults.max_episode_duration_s),
+        step=10.0,
+    )
+    edge_episode_policy = episode_b[2].selectbox(
+        "edge_episode_policy",
+        options=("skip_incomplete", "correct_if_balanced"),
+        index=("skip_incomplete", "correct_if_balanced").index(
+            defaults.edge_episode_policy
+        ),
+        help="Default-ът не коригира incomplete edge episodes.",
+    )
+
+    st.caption("Cleaning, gaps и sampling")
+    cleaning_a = st.columns(4)
+    max_interpolation_gap_s = cleaning_a[0].number_input(
+        "max_interpolation_gap_s",
+        min_value=0.0,
+        value=float(defaults.max_interpolation_gap_s),
+        step=0.5,
+    )
+    long_gap_threshold_s = cleaning_a[1].number_input(
+        "long_gap_threshold_s",
+        min_value=0.01,
+        value=float(defaults.long_gap_threshold_s),
+        step=1.0,
+        help="Long gap разделя core обработката на независими сегменти.",
+    )
+    sampling_regularity_tolerance_s = cleaning_a[2].number_input(
+        "sampling_regularity_tolerance_s",
+        min_value=0.0,
+        value=float(defaults.sampling_regularity_tolerance_s),
+        step=0.05,
+    )
+    area_conservation_tolerance_bpm_s = cleaning_a[3].number_input(
+        "area_conservation_tolerance_bpm_s",
+        min_value=0.0,
+        value=float(defaults.area_conservation_tolerance_bpm_s),
+        format="%.8f",
+    )
+    cleaning_b = st.columns(4)
+    artifact_min_hr_bpm = cleaning_b[0].number_input(
+        "artifact_min_hr_bpm",
+        min_value=0.0,
+        value=float(defaults.artifact_min_hr_bpm),
+        step=1.0,
+    )
+    artifact_max_hr_bpm = cleaning_b[1].number_input(
+        "artifact_max_hr_bpm",
+        min_value=0.01,
+        value=float(defaults.artifact_max_hr_bpm),
+        step=1.0,
+    )
+    artifact_max_rate_bpm_per_s = cleaning_b[2].number_input(
+        "artifact_max_rate_bpm_per_s",
+        min_value=0.01,
+        value=float(defaults.artifact_max_rate_bpm_per_s),
+        step=1.0,
+    )
+    artifact_spike_deviation_bpm = cleaning_b[3].number_input(
+        "artifact_spike_deviation_bpm",
+        min_value=0.01,
+        value=float(defaults.artifact_spike_deviation_bpm),
+        step=1.0,
+    )
+
+    st.caption("Optional local caps (disabled по default)")
+    caps = st.columns(4)
+    addition_enabled = caps[0].checkbox(
+        "Enable max_addition_bpm", value=defaults.max_addition_bpm is not None
+    )
+    max_addition_bpm = caps[1].number_input(
+        "max_addition_bpm",
+        min_value=0.0,
+        value=float(defaults.max_addition_bpm or 10.0),
+        step=0.5,
+        disabled=not addition_enabled,
+    )
+    removal_enabled = caps[2].checkbox(
+        "Enable max_removal_bpm", value=defaults.max_removal_bpm is not None
+    )
+    max_removal_bpm = caps[3].number_input(
+        "max_removal_bpm",
+        min_value=0.0,
+        value=float(defaults.max_removal_bpm or 10.0),
+        step=0.5,
+        disabled=not removal_enabled,
+    )
+
+    return {
+        "config_version": defaults.config_version,
+        "kernel_model": defaults.kernel_model,
+        "alpha": alpha,
+        "delay_s": delay_s,
+        "tau_on_s": tau_on_s,
+        "tau_off_s": tau_off_s,
+        "smoothing_method": smoothing_method,
+        "smoothing_window_s": smoothing_window_s,
+        "smoothing_min_points": int(smoothing_min_points),
+        "smoothing_robust_iterations": int(smoothing_robust_iterations),
+        "correction_deadband_bpm": correction_deadband_bpm,
+        "min_lobe_duration_s": min_lobe_duration_s,
+        "min_lobe_area_bpm_s": min_lobe_area_bpm_s,
+        "episode_neutral_gap_s": episode_neutral_gap_s,
+        "episode_balance_tolerance_bpm_s": episode_balance_tolerance_bpm_s,
+        "max_episode_duration_s": max_episode_duration_s,
+        "max_interpolation_gap_s": max_interpolation_gap_s,
+        "long_gap_threshold_s": long_gap_threshold_s,
+        "edge_episode_policy": edge_episode_policy,
+        "max_addition_bpm": max_addition_bpm if addition_enabled else None,
+        "max_removal_bpm": max_removal_bpm if removal_enabled else None,
+        "artifact_min_hr_bpm": artifact_min_hr_bpm,
+        "artifact_max_hr_bpm": artifact_max_hr_bpm,
+        "artifact_max_rate_bpm_per_s": artifact_max_rate_bpm_per_s,
+        "artifact_spike_deviation_bpm": artifact_spike_deviation_bpm,
+        "sampling_regularity_tolerance_s": sampling_regularity_tolerance_s,
+        "area_conservation_tolerance_bpm_s": area_conservation_tolerance_bpm_s,
+    }
+
+
+def _athlete_profile(
+    hr_floor_bpm: float,
+    hrmax_bpm: float,
+    internal_boundaries: Sequence[float],
+) -> AthleteHRProfile:
+    boundaries = [float(hr_floor_bpm), *map(float, internal_boundaries), float(hrmax_bpm)]
+    if any(left >= right for left, right in zip(boundaries, boundaries[1:])):
+        raise ValueError(
+            "HR_floor, четирите вътрешни граници и HRmax трябва да са строго "
+            "нарастващи."
+        )
+    zones = tuple(
+        HRZone(name=f"Z{index + 1}", lower_bpm=lower, upper_bpm=upper)
+        for index, (lower, upper) in enumerate(zip(boundaries, boundaries[1:]))
+    )
+    return AthleteHRProfile(
+        hrmax_bpm=float(hrmax_bpm),
+        hr_floor_bpm=float(hr_floor_bpm),
+        zones=zones,
+    )
+
+
+ZONE_COLORS = (
+    "rgba(78,121,167,0.08)",
+    "rgba(89,161,79,0.08)",
+    "rgba(242,207,74,0.09)",
+    "rgba(242,142,43,0.08)",
+    "rgba(225,87,89,0.08)",
+)
+
+
+def _hr_only_figure(
+    timeseries: pd.DataFrame,
+    profile: AthleteHRProfile,
+) -> go.Figure:
+    x_column = _first_column(timeseries, ("timestamp", "elapsed_s"))
+    if not x_column:
+        return go.Figure()
+    x_values = timeseries[x_column]
+    if x_column == "timestamp":
+        x_values = pd.to_datetime(x_values, errors="coerce", utc=True)
+
+    figure = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.07,
+        row_heights=(0.72, 0.28),
+        subplot_titles=("HR-only сигнали", "Корекция и derivative"),
+    )
+    hr_traces = (
+        (("raw_hr_bpm", "raw_hr"), "raw_hr", "rgba(120,120,120,0.55)", "dot"),
+        (("clean_hr_bpm", "clean_hr"), "clean_hr", "#3b82f6", "solid"),
+        (
+            ("smoothed_hr_bpm", "derivative_smoothed_hr_bpm", "smoothed_hr"),
+            "derivative-smoothed HR",
+            "#8b5cf6",
+            "dash",
+        ),
+        (
+            ("provisional_demand_bpm", "provisional_latent_demand_bpm"),
+            "provisional latent demand",
+            "#f59e0b",
+            "dashdot",
+        ),
+        (("hrmod_bpm", "hrmod"), "HRmod", "#dc2626", "solid"),
+    )
+    for candidates, label, color, dash in hr_traces:
+        column = _first_column(timeseries, candidates)
+        if not column:
+            continue
+        figure.add_trace(
+            go.Scatter(
+                x=x_values,
+                y=pd.to_numeric(timeseries[column], errors="coerce"),
+                mode="lines",
+                name=label,
+                line={"color": color, "width": 2 if label == "HRmod" else 1.35, "dash": dash},
+                connectgaps=False,
+            ),
+            row=1,
+            col=1,
+        )
+
+    correction_traces = (
+        (("raw_correction_bpm", "raw_correction"), "raw correction", "#64748b", "dot", 1.0),
+        (("added_correction_bpm", "added_correction"), "+ added", "#16a34a", "solid", 1.0),
+        (("removed_correction_bpm", "removed_correction"), "− removed", "#dc2626", "solid", -1.0),
+        (("derivative_bpm_per_s", "derivative_bpm_s", "derivative"), "derivative (bpm/s)", "#7c3aed", "dash", 1.0),
+    )
+    for candidates, label, color, dash, sign in correction_traces:
+        column = _first_column(timeseries, candidates)
+        if not column:
+            continue
+        y_values = sign * pd.to_numeric(timeseries[column], errors="coerce")
+        figure.add_trace(
+            go.Scatter(
+                x=x_values,
+                y=y_values,
+                mode="lines",
+                name=label,
+                line={"color": color, "width": 1.25, "dash": dash},
+                connectgaps=False,
+            ),
+            row=2,
+            col=1,
+        )
+
+    for color, zone in zip(ZONE_COLORS, profile.zones):
+        figure.add_hrect(
+            y0=zone.lower_bpm,
+            y1=zone.upper_bpm,
+            fillcolor=color,
+            line_width=0,
+            layer="below",
+            annotation_text=zone.name,
+            annotation_position="right",
+            row=1,
+            col=1,
+        )
+
+    episode_column = _first_column(timeseries, ("episode_id",))
+    if episode_column:
+        episode_values = pd.to_numeric(timeseries[episode_column], errors="coerce")
+        for episode_id in sorted(episode_values.dropna().unique()):
+            mask = episode_values.eq(episode_id)
+            if not mask.any():
+                continue
+            indices = np.flatnonzero(mask.to_numpy())
+            start_x = x_values.iloc[int(indices[0])]
+            end_x = x_values.iloc[int(indices[-1])]
+            figure.add_vrect(
+                x0=start_x,
+                x1=end_x,
+                fillcolor="rgba(245,158,11,0.07)",
+                line_width=1,
+                line_color="rgba(245,158,11,0.28)",
+                layer="below",
+                row="all",
+                col=1,
+            )
+
+    figure.add_hline(y=0.0, line_color="rgba(100,116,139,0.5)", row=2, col=1)
+    figure.update_yaxes(title_text="bpm", row=1, col=1)
+    figure.update_yaxes(title_text="bpm / bpm·s⁻¹", row=2, col=1)
+    figure.update_xaxes(title_text="Timestamp" if x_column == "timestamp" else "Elapsed (s)", row=2, col=1)
+    figure.update_layout(
+        height=760,
+        hovermode="x unified",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
+        margin={"l": 45, "r": 35, "t": 80, "b": 45},
+    )
+    return figure
+
+
+def _reference_samples_frame(reference_channels: ReferenceChannels) -> pd.DataFrame:
+    frame = _records_frame(reference_channels.samples)
+    if "timestamp" in frame.columns:
+        frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce", utc=True)
+    return frame
+
+
+def _reference_overlay_figure(
+    core_timeseries: pd.DataFrame,
+    reference_samples: pd.DataFrame,
+    selected_channels: Sequence[str],
+) -> go.Figure:
+    figure = make_subplots(specs=[[{"secondary_y": True}]])
+    core_x_column = _first_column(core_timeseries, ("timestamp", "elapsed_s"))
+    if core_x_column:
+        core_x = core_timeseries[core_x_column]
+        if core_x_column == "timestamp":
+            core_x = pd.to_datetime(core_x, errors="coerce", utc=True)
+        for candidates, label, color in (
+            (("clean_hr_bpm", "clean_hr"), "clean_hr", "#3b82f6"),
+            (("hrmod_bpm", "hrmod"), "HRmod", "#dc2626"),
+        ):
+            column = _first_column(core_timeseries, candidates)
+            if column:
+                figure.add_trace(
+                    go.Scatter(
+                        x=core_x,
+                        y=pd.to_numeric(core_timeseries[column], errors="coerce"),
+                        name=label,
+                        mode="lines",
+                        line={"color": color, "width": 2},
+                    ),
+                    secondary_y=False,
+                )
+
+    reference_x_column = _first_column(reference_samples, ("timestamp", "elapsed_s"))
+    reference_x = (
+        reference_samples[reference_x_column]
+        if reference_x_column
+        else pd.Series(dtype=float)
+    )
+    reference_colors = ("#16a34a", "#7c3aed", "#ea580c", "#0891b2", "#64748b")
+    for channel, color in zip(selected_channels, reference_colors):
+        if channel not in reference_samples.columns:
+            continue
+        figure.add_trace(
+            go.Scatter(
+                x=reference_x,
+                y=pd.to_numeric(reference_samples[channel], errors="coerce"),
+                name=f"reference · {channel}",
+                mode="lines",
+                line={"color": color, "width": 1.2, "dash": "dot"},
+                connectgaps=False,
+            ),
+            secondary_y=True,
+        )
+    figure.update_yaxes(title_text="HR (bpm)", secondary_y=False)
+    figure.update_yaxes(title_text="Reference — оригинални единици", secondary_y=True)
+    figure.update_layout(
+        height=560,
+        hovermode="x unified",
+        legend={"orientation": "h", "y": 1.04, "x": 0},
+        margin={"l": 45, "r": 45, "t": 65, "b": 40},
+    )
+    return figure
+
+
+def _annotation_frame(reference_channels: ReferenceChannels) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for lap in reference_channels.laps:
+        item = lap.to_dict()
+        rows.append(
+            {
+                "annotation_id": item.get("annotation_id"),
+                "start_time": item.get("start_time"),
+                "end_time": item.get("end_time"),
+                "label": item.get("annotation_id"),
+                "external_zone": None,
+                "source": item.get("source", "tcx_lap"),
+            }
+        )
+    return pd.DataFrame(
+        rows,
+        columns=(
+            "annotation_id",
+            "start_time",
+            "end_time",
+            "label",
+            "external_zone",
+            "source",
+        ),
+    )
+
+
+def _reference_zones(frame: pd.DataFrame, label: str) -> tuple[ReferenceZone, ...]:
+    zones: list[ReferenceZone] = []
+    for index, row in frame.iterrows():
+        zone_label = str(row.get("label", "")).strip()
+        lower = pd.to_numeric(pd.Series([row.get("lower")]), errors="coerce").iloc[0]
+        upper = pd.to_numeric(pd.Series([row.get("upper")]), errors="coerce").iloc[0]
+        if not zone_label and pd.isna(lower) and pd.isna(upper):
+            continue
+        if not zone_label or pd.isna(lower):
+            raise ValueError(f"{label}, row {index + 1}: label и lower са задължителни")
+        zones.append(
+            ReferenceZone(
+                label=zone_label,
+                lower=float(lower),
+                upper=None if pd.isna(upper) else float(upper),
+            )
+        )
+    return tuple(zones)
+
+
+def _read_annotation_upload(uploaded: Any) -> pd.DataFrame:
+    payload = uploaded.getvalue()
+    suffix = uploaded.name.lower().rsplit(".", 1)[-1]
+    if suffix == "json":
+        data = json.loads(payload.decode("utf-8-sig"))
+        if isinstance(data, Mapping):
+            data = data.get("annotations", data.get("rows", [data]))
+        return pd.DataFrame(data)
+    return pd.read_csv(BytesIO(payload))
+
+
+def _validation_aligned_frame(validation: Any) -> pd.DataFrame:
+    for name in ("aligned_timeseries", "aligned_comparison", "timeseries", "rows"):
+        if hasattr(validation, name):
+            return _records_frame(getattr(validation, name))
+    if isinstance(validation, Mapping):
+        return _records_frame(validation)
+    plain = _plain(validation)
+    if isinstance(plain, Mapping):
+        return _records_frame(plain)
+    return pd.DataFrame()
+
+
+def _zip_bundle(files: Mapping[str, bytes]) -> bytes:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for filename, payload in files.items():
+            archive.writestr(filename, payload)
+    return buffer.getvalue()
+
+
+def _download_panel(
+    run: Mapping[str, Any],
+    annotations: pd.DataFrame | None,
+    validation: Any | None,
+) -> None:
+    result: HRmodResult = run["result"]
+    timeseries = _records_frame(result.timeseries)
+    episodes = _records_frame(result.episode_summary)
+    zones = _records_frame(result.zone_summary)
+    configuration = {
+        "model_version": result.model_version,
+        "hr_input_hash": result.hr_input_hash,
+        "input_filename": run["filename"],
+        "input_file_sha256": run["file_sha256"],
+        "parser_config": _plain(run["parser_config"]),
+        "athlete_profile": _plain(run["athlete_profile"]),
+        "hrmod_config": _plain(result.config),
+    }
+    files: dict[str, bytes] = {
+        "processed_hr_only_timeseries.csv": _csv_bytes(timeseries),
+        "episode_summary.csv": _csv_bytes(episodes),
+        "zone_summary.csv": _csv_bytes(zones),
+        "run_configuration.json": _json_bytes(configuration),
+        "diagnostics.json": _json_bytes(result.diagnostics),
+    }
+    if annotations is not None and not annotations.empty:
+        files["annotations.csv"] = _csv_bytes(annotations)
+        files["annotations.json"] = _json_bytes(
+            {"annotations": annotations.to_dict(orient="records")}
+        )
+    if validation is not None:
+        aligned = _validation_aligned_frame(validation)
+        if not aligned.empty:
+            files["reference_aligned_comparison.csv"] = _csv_bytes(aligned)
+        files["reference_validation.json"] = _json_bytes(validation)
+
+    st.caption(
+        "Core CSV/JSON файловете не съдържат speed/power/lap колони. "
+        "Reference comparison е отделен артефакт."
+    )
+    buttons = st.columns(4)
+    buttons[0].download_button(
+        "Timeseries CSV",
+        files["processed_hr_only_timeseries.csv"],
+        "processed_hr_only_timeseries.csv",
+        "text/csv",
+        use_container_width=True,
+    )
+    buttons[1].download_button(
+        "Episodes CSV",
+        files["episode_summary.csv"],
+        "episode_summary.csv",
+        "text/csv",
+        use_container_width=True,
+    )
+    buttons[2].download_button(
+        "Zones CSV",
+        files["zone_summary.csv"],
+        "zone_summary.csv",
+        "text/csv",
+        use_container_width=True,
+    )
+    buttons[3].download_button(
+        "Всички резултати · ZIP",
+        _zip_bundle(files),
+        "hrmod_lab_results.zip",
+        "application/zip",
+        use_container_width=True,
+    )
+    json_buttons = st.columns(3)
+    json_buttons[0].download_button(
+        "Run config JSON",
+        files["run_configuration.json"],
+        "run_configuration.json",
+        "application/json",
+        use_container_width=True,
+    )
+    json_buttons[1].download_button(
+        "Diagnostics JSON",
+        files["diagnostics.json"],
+        "diagnostics.json",
+        "application/json",
+        use_container_width=True,
+    )
+    if "reference_aligned_comparison.csv" in files:
+        json_buttons[2].download_button(
+            "Reference CSV",
+            files["reference_aligned_comparison.csv"],
+            "reference_aligned_comparison.csv",
+            "text/csv",
+            use_container_width=True,
+        )
+
+
+def _diagnostic_panel(result: HRmodResult) -> None:
+    diagnostics = result.diagnostics.to_dict()
+    coverage = st.columns(4)
+    coverage[0].metric(
+        "HR coverage",
+        _format_number(diagnostics.get("hr_coverage_fraction"), percent=True),
+    )
+    coverage[1].metric(
+        "Sampling regularity",
+        _format_number(diagnostics.get("regular_sampling_fraction"), percent=True),
+    )
+    coverage[2].metric(
+        "Interpolated",
+        _format_number(diagnostics.get("interpolated_fraction"), percent=True),
+    )
+    coverage[3].metric(
+        "Artifacts",
+        _format_number(diagnostics.get("artifact_fraction"), percent=True),
+    )
+    support = st.columns(4)
+    support[0].metric(
+        "Derivative support",
+        _format_number(diagnostics.get("derivative_support_fraction"), percent=True),
+    )
+    support[1].metric(
+        "Complete / incomplete",
+        f"{diagnostics.get('complete_episode_count', 0)} / "
+        f"{diagnostics.get('incomplete_episode_count', 0)}",
+    )
+    support[2].metric(
+        "Capacity ratio",
+        _format_number(diagnostics.get("capacity_ratio"), percent=True),
+    )
+    support[3].metric(
+        "Area conservation",
+        "PASS" if diagnostics.get("area_conservation_passed") else "FAIL",
+    )
+    areas = pd.DataFrame(
+        [
+            {
+                "paired_added_bpm_s": diagnostics.get("total_added_area_bpm_s"),
+                "paired_removed_bpm_s": diagnostics.get("total_removed_area_bpm_s"),
+                "balance_error_bpm_s": diagnostics.get(
+                    "total_area_balance_error_bpm_s"
+                ),
+                "unpaired_positive_bpm_s": diagnostics.get(
+                    "total_unpaired_positive_area_bpm_s"
+                ),
+                "unpaired_negative_bpm_s": diagnostics.get(
+                    "total_unpaired_negative_area_bpm_s"
+                ),
+                "capacity_limited_bpm_s": diagnostics.get(
+                    "total_capacity_limited_area_bpm_s"
+                ),
+                "edge_affected_samples": diagnostics.get("edge_affected_samples"),
+                "gap_affected_samples": diagnostics.get("gap_affected_samples"),
+            }
+        ]
+    )
+    st.dataframe(areas, use_container_width=True, hide_index=True)
+    flags = diagnostics.get("flags", []) or []
+    if flags:
+        st.warning("Model flags: " + ", ".join(map(str, flags)))
+    st.markdown("**Parameter sensitivity**")
+    st.json(diagnostics.get("parameter_sensitivity", {}))
+    with st.expander("Пълни core diagnostics"):
+        st.json(_plain(diagnostics))
+
+
+st.title(APP_TITLE)
+st.caption(
+    "Самостоятелна лабораторна програма · не е част от продукционния onFlows flow · "
+    "офлайн inverse kinetics с HR look-ahead"
+)
+st.warning(SCIENTIFIC_LIMITATION, icon="⚠️")
+st.info(
+    "Core изчислението приема само timestamp, HR/HR-quality, индивидуалния HR "
+    "профил и HR-only параметрите. Speed, power, grade, distance, cadence, laps и "
+    "manual markers са изолирани в отделен post-hoc reference слой."
+)
+
+with st.sidebar:
+    st.header("HRmod Lab")
+    st.markdown("**Model:** `hrmod_inverse_kinetics_conservative_v1`")
+    st.markdown("**Режим:** offline / completed activity")
+    st.markdown("[Документация](./docs/HRMOD_LAB.md)")
+    st.divider()
+    st.caption(
+        "Няма production DB/Intervals.icu достъп. Reference overlays не стартират core."
+    )
+
+st.subheader("1 · TCX upload")
+uploaded_tcx = st.file_uploader(
+    "TCX файл с HR записи",
+    type=("tcx",),
+    accept_multiple_files=False,
+    help="Файлът се обработва в текущата сесия и не се commit-ва в repository.",
+)
+
+if uploaded_tcx is None:
+    st.info("Качете TCX файл, за да започне HR-only quality проверката.")
+    st.stop()
+
+tcx_payload = uploaded_tcx.getvalue()
+tcx_sha256 = hashlib.sha256(tcx_payload).hexdigest()
+default_config = HRmodConfig()
+
+with st.expander("TCX parser/quality настройки"):
+    parser_columns = st.columns(3)
+    parser_regularity_target_s = parser_columns[0].number_input(
+        "Очаквана sampling стъпка (s)", min_value=0.01, value=1.0, step=0.1
+    )
+    parser_regularity_tolerance_s = parser_columns[1].number_input(
+        "Sampling tolerance (s)", min_value=0.0, value=0.25, step=0.05
+    )
+    assume_naive_utc = parser_columns[2].checkbox(
+        "Приеми naive timestamp като UTC", value=True
+    )
+    st.caption(
+        "Preview long-gap границата следва текущия default на HRmodConfig. При core "
+        "run parser-ът се изпълнява отново с избраната model long-gap стойност."
+    )
+
+preview_parser_config = TCXParserConfig(
+    long_gap_threshold_s=float(default_config.long_gap_threshold_s),
+    regularity_target_s=float(parser_regularity_target_s),
+    regularity_tolerance_s=float(parser_regularity_tolerance_s),
+    assume_naive_timestamps_utc=bool(assume_naive_utc),
+)
+try:
+    preview_parse = _preview_parse(tcx_payload, tcx_sha256, preview_parser_config)
+except Exception as exc:  # Streamlit boundary: parser errors are user-facing.
+    st.error(f"TCX файлът не може да бъде обработен: {exc}")
+    st.stop()
+
+_quality_report(preview_parse)
+
+st.subheader("3 · Индивидуален HR профил и 5 зони")
+st.caption(
+    "HRmax не се извежда по възраст или от observed maximum. Зоните се "
+    "класифицират по незакръглените стойности."
+)
+
+with st.form("hrmod_core_configuration", clear_on_submit=False):
+    profile_columns = st.columns(6)
+    hr_floor_bpm = profile_columns[0].number_input(
+        "HR_floor (bpm)", min_value=1.0, value=40.0, step=1.0
+    )
+    zone_2_lower = profile_columns[1].number_input(
+        "Z2 starts", min_value=1.0, value=120.0, step=1.0
+    )
+    zone_3_lower = profile_columns[2].number_input(
+        "Z3 starts", min_value=1.0, value=140.0, step=1.0
+    )
+    zone_4_lower = profile_columns[3].number_input(
+        "Z4 starts", min_value=1.0, value=160.0, step=1.0
+    )
+    zone_5_lower = profile_columns[4].number_input(
+        "Z5 starts", min_value=1.0, value=180.0, step=1.0
+    )
+    hrmax_bpm = profile_columns[5].number_input(
+        "HRmax (bpm)", min_value=1.0, value=200.0, step=1.0
+    )
+
+    st.subheader("4 · Всички HR-only експериментални параметри")
+    st.caption(
+        f"{default_config.config_version} · {default_config.kernel_model}. "
+        "Defaults са exploratory и не са физиологично калибрирани."
+    )
+    config_values = _model_config_widgets(default_config)
+    compute_clicked = st.form_submit_button(
+        "Изчисли HRmod (само HR)",
+        type="primary",
+        use_container_width=True,
+    )
+
+if compute_clicked:
+    try:
+        athlete_profile = _athlete_profile(
+            hr_floor_bpm,
+            hrmax_bpm,
+            (zone_2_lower, zone_3_lower, zone_4_lower, zone_5_lower),
+        )
+        hrmod_config = HRmodConfig(**config_values)
+        run_parser_config = TCXParserConfig(
+            long_gap_threshold_s=hrmod_config.long_gap_threshold_s,
+            regularity_target_s=float(parser_regularity_target_s),
+            regularity_tolerance_s=float(parser_regularity_tolerance_s),
+            assume_naive_timestamps_utc=bool(assume_naive_utc),
+        )
+        with st.spinner("HR-only preprocessing, inverse kinetics и balancing…"):
+            run_parse = parse_tcx(tcx_payload, config=run_parser_config)
+            # Anti-leakage by construction: no reference object is in this call.
+            result = compute_hrmod_hr_only(
+                hr_samples=run_parse.hr_input_samples,
+                athlete_profile=athlete_profile,
+                config=hrmod_config,
+            )
+        st.session_state[CORE_STATE_KEY] = {
+            "result": result,
+            "parsed": run_parse,
+            "athlete_profile": athlete_profile,
+            "parser_config": run_parser_config,
+            "filename": uploaded_tcx.name,
+            "file_sha256": tcx_sha256,
+            "core_fingerprint": _core_fingerprint(result),
+        }
+        st.session_state.pop(REFERENCE_STATE_KEY, None)
+        st.session_state.pop("hrmod_lab_annotations", None)
+        st.success("HRmod е изчислен само от parser.hr_input_samples.")
+    except Exception as exc:  # Config/core validation must remain visible in UI.
+        st.error(f"HRmod run-ът не завърши: {exc}")
+
+run = st.session_state.get(CORE_STATE_KEY)
+if run is None:
+    st.info(
+        "Reference validation ще се появи едва след успешно HR-only изчисление."
+    )
+    st.stop()
+
+result = run["result"]
+run_parse = run["parsed"]
+athlete_profile = run["athlete_profile"]
+timeseries_frame = _records_frame(result.timeseries)
+episode_frame = _records_frame(result.episode_summary)
+zone_frame = _records_frame(result.zone_summary)
+
+st.subheader("5 · Готов HR-only core резултат")
+summary_columns = st.columns(4)
+summary_columns[0].metric("Model version", result.model_version)
+summary_columns[1].metric("HR samples", len(timeseries_frame))
+summary_columns[2].metric("Response episodes", len(episode_frame))
+summary_columns[3].metric(
+    "Core input hash", result.hr_input_hash[:16] + "…", help=result.hr_input_hash
+)
+st.caption(
+    "Core fingerprint: `"
+    + run["core_fingerprint"][:20]
+    + "…` · reference join все още не е част от този резултат."
+)
+st.warning(SCIENTIFIC_LIMITATION, icon="⚠️")
+
+(
+    tab_signals,
+    tab_episodes,
+    tab_zones,
+    tab_diagnostics,
+    tab_reference,
+    tab_downloads,
+) = st.tabs(
+    (
+        "HR-only сигнали",
+        "Response episodes",
+        "HR зони",
+        "Diagnostics",
+        "Reference validation",
+        "Downloads",
+    )
+)
+
+with tab_signals:
+    st.plotly_chart(
+        _hr_only_figure(timeseries_frame, athlete_profile),
+        use_container_width=True,
+        config={"displaylogo": False},
+    )
+    with st.expander("Processed HR-only timeseries"):
+        st.dataframe(timeseries_frame, use_container_width=True, hide_index=True)
+
+with tab_episodes:
+    st.caption(
+        "Това са автоматични математически HR response windows, не механични "
+        "work intervals и не доказателство за Z5."
+    )
+    if episode_frame.empty:
+        st.info("Не са установени response episodes при текущите параметри.")
+    else:
+        st.dataframe(episode_frame, use_container_width=True, hide_index=True)
+
+with tab_zones:
+    st.caption(
+        "raw_hr, clean_hr и hrmod са класифицирани преди визуално закръгляване."
+    )
+    st.dataframe(zone_frame, use_container_width=True, hide_index=True)
+    if not zone_frame.empty and {
+        "zone_name",
+        "clean_seconds",
+        "hrmod_seconds",
+    }.issubset(zone_frame.columns):
+        zone_plot = go.Figure()
+        zone_plot.add_bar(
+            x=zone_frame["zone_name"],
+            y=zone_frame["clean_seconds"],
+            name="clean_hr",
+        )
+        zone_plot.add_bar(
+            x=zone_frame["zone_name"],
+            y=zone_frame["hrmod_seconds"],
+            name="hrmod",
+        )
+        zone_plot.update_layout(
+            barmode="group", yaxis_title="Seconds", height=390
+        )
+        st.plotly_chart(zone_plot, use_container_width=True)
+
+with tab_diagnostics:
+    _diagnostic_panel(result)
+    with st.expander("TCX diagnostics за точно този run"):
+        st.json(_plain(run_parse.diagnostics))
+
+with tab_reference:
+    st.warning(
+        "Строга граница: този tab работи върху вече готовия core result. "
+        "Нито overlay, нито annotation извиква compute_hrmod_hr_only.",
+        icon="🔒",
+    )
+    reference_channels = run_parse.reference_channels
+    reference_frame = _reference_samples_frame(reference_channels)
+    available = [
+        name
+        for name in reference_channels.available_channels
+        if name in reference_frame.columns
+    ]
+    st.write(
+        "**TCX sport metadata:**",
+        reference_channels.sport or "не е зададено",
+        " · **налични reference канали:**",
+        ", ".join(available) if available else "няма",
+    )
+    sport_text = (reference_channels.sport or "").lower()
+    if "ski" in sport_text:
+        st.warning(
+            "RAW_SKI_SPEED_CONTEXT_ONLY — raw ski speed е само контекст и не е "
+            "автоматична оценка за интензивност или мощност."
+        )
+
+    selected_overlays = st.multiselect(
+        "Post-hoc overlays (оригинални единици)",
+        options=available,
+        default=[],
+        help="Промяната на този избор само прерисува reference графиката.",
+    )
+    if selected_overlays:
+        st.plotly_chart(
+            _reference_overlay_figure(
+                timeseries_frame, reference_frame, selected_overlays
+            ),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
+    elif available:
+        st.info("Изберете канал за post-hoc overlay. Core резултатът остава същият.")
+    else:
+        st.info(
+            "Файлът няма speed/power/grade/cadence reference проби. HRmod е "
+            "напълно използваем и без тях."
+        )
+
+    st.markdown("#### Laps и ръчни markers — само annotations")
+    base_annotations = _annotation_frame(reference_channels)
+    annotation_upload = st.file_uploader(
+        "Optional annotations CSV/JSON",
+        type=("csv", "json"),
+        key="hrmod_lab_annotation_upload",
+    )
+    if annotation_upload is not None:
+        annotation_hash = hashlib.sha256(annotation_upload.getvalue()).hexdigest()
+        if st.session_state.get("hrmod_lab_annotation_import_hash") != annotation_hash:
+            try:
+                imported_annotations = _read_annotation_upload(annotation_upload)
+                st.session_state["hrmod_lab_annotations"] = pd.concat(
+                    (base_annotations, imported_annotations), ignore_index=True
+                )
+                st.session_state["hrmod_lab_annotation_import_hash"] = annotation_hash
+            except Exception as exc:
+                st.error(f"Annotations import error: {exc}")
+    if "hrmod_lab_annotations" not in st.session_state:
+        st.session_state["hrmod_lab_annotations"] = base_annotations
+    edited_annotations = st.data_editor(
+        st.session_state["hrmod_lab_annotations"],
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key="hrmod_lab_annotation_editor",
+    )
+    st.session_state["hrmod_lab_annotations"] = edited_annotations
+
+    st.markdown("#### Reference evaluation настройки")
+    st.caption(
+        "Quantitative режими са explicit opt-in и изискват външен source/зони. "
+        "Тези настройки никога не се подават към HRmod core."
+    )
+    reference_base = st.columns(4)
+    reference_sport = reference_base[0].text_input(
+        "Sport/context",
+        value=reference_channels.sport or "",
+        help="Използва се само за допустимата post-hoc интерпретация.",
+    )
+    join_tolerance_s = reference_base[1].number_input(
+        "Timestamp join tolerance (s)", min_value=0.0, value=0.51, step=0.05
+    )
+    max_lag_s = reference_base[2].number_input(
+        "Max lag diagnostic (s)", min_value=0, value=120, step=5
+    )
+    lag_step_s = reference_base[3].number_input(
+        "Lag step (s)", min_value=1, value=1, step=1
+    )
+
+    power_col, treadmill_col = st.columns(2)
+    with power_col:
+        enable_quantitative_power = st.checkbox(
+            "Enable quantitative power reference",
+            value=False,
+            disabled="power_w" not in available,
+            help="Изисква известен произход на power и индивидуални power зони.",
+        )
+        power_source = st.text_input(
+            "Power source/provenance",
+            value="",
+            disabled=not enable_quantitative_power,
+        )
+        st.caption(
+            "Power zones (W) — попълват се изрично; последният upper може да е празен"
+        )
+        power_zone_frame = st.data_editor(
+            pd.DataFrame(
+                {
+                    "label": ["Z1", "Z2", "Z3", "Z4", "Z5"],
+                    "lower": [None, None, None, None, None],
+                    "upper": [None, None, None, None, None],
+                }
+            ),
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            disabled=not enable_quantitative_power,
+            key="hrmod_lab_power_zones",
+        )
+    with treadmill_col:
+        enable_controlled_treadmill_speed = st.checkbox(
+            "Enable controlled treadmill speed",
+            value=False,
+            disabled="speed_mps" not in available,
+            help="Не е допустимо за raw ski/outdoor speed без контролиран протокол.",
+        )
+        treadmill_grade_verified = st.checkbox(
+            "Treadmill grade е проверен",
+            value=False,
+            disabled=not enable_controlled_treadmill_speed,
+        )
+        st.caption(
+            "Protocol speed zones (m/s) — попълват се изрично; последният upper може да е празен"
+        )
+        speed_zone_frame = st.data_editor(
+            pd.DataFrame(
+                {
+                    "label": ["Z1", "Z2", "Z3", "Z4", "Z5"],
+                    "lower": [None, None, None, None, None],
+                    "upper": [None, None, None, None, None],
+                }
+            ),
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            disabled=not enable_controlled_treadmill_speed,
+            key="hrmod_lab_speed_zones",
+        )
+
+    external_columns = st.columns(3)
+    external_zone_field_text = external_columns[0].text_input(
+        "External zone field (optional)",
+        value="",
+        help="Име на вече налична reference колона със zone label.",
+    )
+    use_annotation_zones = external_columns[1].checkbox(
+        "Използвай annotation external_zone",
+        value=False,
+        help="Annotations остават post-hoc и променят само reference summaries.",
+    )
+    high_zone_labels_text = external_columns[2].text_input(
+        "High zone labels", value="Z4,Z5"
+    )
+    evaluate_clicked = st.button(
+        "Изпълни отделна post-hoc reference оценка",
+        disabled=reference_frame.empty and edited_annotations.empty,
+        use_container_width=True,
+    )
+    if evaluate_clicked:
+        before = _core_fingerprint(result)
+        try:
+            power_zones = (
+                _reference_zones(power_zone_frame, "Power zones")
+                if enable_quantitative_power
+                else ()
+            )
+            speed_zones = (
+                _reference_zones(speed_zone_frame, "Speed zones")
+                if enable_controlled_treadmill_speed
+                else ()
+            )
+            reference_config = ReferenceValidationConfig(
+                join_tolerance_s=float(join_tolerance_s),
+                sport=reference_sport.strip() or None,
+                enable_quantitative_power=bool(enable_quantitative_power),
+                power_source=power_source.strip() or None,
+                power_zones=power_zones,
+                enable_controlled_treadmill_speed=bool(
+                    enable_controlled_treadmill_speed
+                ),
+                treadmill_grade_verified=bool(treadmill_grade_verified),
+                speed_zones=speed_zones,
+                external_zone_field=external_zone_field_text.strip() or None,
+                use_annotation_zones=bool(use_annotation_zones),
+                high_zone_labels=tuple(
+                    label.strip()
+                    for label in high_zone_labels_text.split(",")
+                    if label.strip()
+                ),
+                max_lag_s=int(max_lag_s),
+                lag_step_s=int(lag_step_s),
+            )
+            with st.spinner("Reference timestamp alignment и експертни метрики…"):
+                validation = evaluate_against_reference(
+                    hrmod_result=result,
+                    reference_channels=reference_channels,
+                    reference_config=reference_config,
+                    optional_annotations=edited_annotations.to_dict(orient="records"),
+                )
+            after = _core_fingerprint(result)
+            if before != after or before != run["core_fingerprint"]:
+                raise RuntimeError(
+                    "Reference evaluator attempted to mutate the immutable core result."
+                )
+            st.session_state[REFERENCE_STATE_KEY] = validation
+            st.success(
+                "Reference evaluation е завършена; core fingerprint-ът е непроменен."
+            )
+        except Exception as exc:
+            st.error(f"Reference evaluation error: {exc}")
+
+    validation = st.session_state.get(REFERENCE_STATE_KEY)
+    if validation is not None:
+        st.caption(
+            "Предварителна експертна оценка — correlation сама по себе си не "
+            "валидира модела."
+        )
+        validation_plain = _plain(validation)
+        if isinstance(validation_plain, Mapping):
+            metrics = validation_plain.get("metrics")
+            flags = validation_plain.get("flags")
+            confusion = validation_plain.get("confusion_matrices")
+            if metrics:
+                st.json(metrics)
+            if flags:
+                st.warning("Reference flags: " + ", ".join(map(str, flags)))
+            if confusion:
+                st.dataframe(_records_frame(confusion), use_container_width=True)
+        aligned = _validation_aligned_frame(validation)
+        if not aligned.empty:
+            with st.expander("Reference-aligned comparison"):
+                st.dataframe(aligned, use_container_width=True, hide_index=True)
+        with st.expander("Пълен reference validation резултат"):
+            st.json(validation_plain)
+
+with tab_downloads:
+    _download_panel(
+        run,
+        st.session_state.get("hrmod_lab_annotations"),
+        st.session_state.get(REFERENCE_STATE_KEY),
+    )
