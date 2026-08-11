@@ -1,7 +1,8 @@
-"""Public orchestration for the physically isolated HR-only HRmod core."""
+"""Public orchestration for the physically isolated HR-only HRmod v2 core."""
 
 from __future__ import annotations
 
+from collections import Counter
 import hashlib
 import json
 from datetime import timezone
@@ -10,24 +11,20 @@ from typing import Sequence
 
 import numpy as np
 
-from .conservative_redistribution import (
-    ConservativeRedistributionResult,
-    redistribute_conservatively,
-)
-from .episode_detection import EpisodeDetectionResult, detect_response_episodes
-from .inverse_kinetics import InverseKineticsResult, compute_inverse_kinetics
 from .schemas import (
     MODEL_VERSION,
     AthleteHRProfile,
-    EpisodeSummary,
     HRmodConfig,
     HRmodDiagnostics,
     HRmodResult,
     HRmodTimeseriesPoint,
     HRSample,
+    WaveSummary,
     ZoneSummary,
 )
 from .signal_cleaning import CleanedHRSignal, clean_hr_signal
+from .wave_area_shift import WaveAreaShiftResult, shift_wave_areas
+from .wave_detection import WaveDetectionResult, detect_hr_waves
 
 
 def _optional_float(value: float) -> float | None:
@@ -35,7 +32,7 @@ def _optional_float(value: float) -> float | None:
 
 
 def _hash_hr_input(samples: tuple[HRSample, ...]) -> str:
-    """Hash only timestamp, measured HR, and HR quality flags."""
+    """Hash only timestamps, measured HR, and HR quality flags."""
 
     records = []
     for sample in samples:
@@ -82,7 +79,12 @@ def _zone_summaries(
     hrmod: np.ndarray,
     dt_s: np.ndarray,
     profile: AthleteHRProfile,
-) -> tuple[tuple[ZoneSummary, ...], tuple[str | None, ...], tuple[str | None, ...], tuple[str | None, ...]]:
+) -> tuple[
+    tuple[ZoneSummary, ...],
+    tuple[str | None, ...],
+    tuple[str | None, ...],
+    tuple[str | None, ...],
+]:
     raw_labels = tuple(_classify_zone(value, profile) for value in raw_hr)
     clean_labels = tuple(_classify_zone(value, profile) for value in clean_hr)
     hrmod_labels = tuple(_classify_zone(value, profile) for value in hrmod)
@@ -95,10 +97,18 @@ def _zone_summaries(
             sum(dt_s[index] for index, label in enumerate(raw_labels) if label == zone.name)
         )
         clean_seconds = float(
-            sum(dt_s[index] for index, label in enumerate(clean_labels) if label == zone.name)
+            sum(
+                dt_s[index]
+                for index, label in enumerate(clean_labels)
+                if label == zone.name
+            )
         )
         hrmod_seconds = float(
-            sum(dt_s[index] for index, label in enumerate(hrmod_labels) if label == zone.name)
+            sum(
+                dt_s[index]
+                for index, label in enumerate(hrmod_labels)
+                if label == zone.name
+            )
         )
         summaries.append(
             ZoneSummary(
@@ -118,55 +128,121 @@ def _zone_summaries(
                 hrmod_minus_clean_seconds=hrmod_seconds - clean_seconds,
             )
         )
-    return (
-        tuple(summaries),
-        raw_labels,
-        clean_labels,
-        hrmod_labels,
-    )
+    return tuple(summaries), raw_labels, clean_labels, hrmod_labels
 
 
-def _episode_summaries(
+def _zone_seconds_for_window(
+    *,
+    labels: tuple[str | None, ...],
+    dt_s: np.ndarray,
+    start: int,
+    end: int,
+    profile: AthleteHRProfile,
+) -> dict[str, float]:
+    return {
+        zone.name: float(
+            sum(
+                dt_s[index]
+                for index in range(start, end + 1)
+                if labels[index] == zone.name
+            )
+        )
+        for zone in profile.zones
+    }
+
+
+def _wave_summaries(
     *,
     cleaned: CleanedHRSignal,
-    redistribution: ConservativeRedistributionResult,
-) -> tuple[EpisodeSummary, ...]:
-    summaries: list[EpisodeSummary] = []
-    for result in redistribution.episode_results:
-        episode = result.episode
-        start = episode.start_index
-        end = episode.end_index
+    detection: WaveDetectionResult,
+    redistribution: WaveAreaShiftResult,
+    raw_zones: tuple[str | None, ...],
+    clean_zones: tuple[str | None, ...],
+    hrmod_zones: tuple[str | None, ...],
+    profile: AthleteHRProfile,
+) -> tuple[WaveSummary, ...]:
+    summaries: list[WaveSummary] = []
+    for result in redistribution.wave_results:
+        wave = result.wave
+        start = wave.rise_start_index
+        peak = wave.peak_index
+        end = wave.tail_end_index
+        raw_seconds = _zone_seconds_for_window(
+            labels=raw_zones,
+            dt_s=cleaned.dt_s,
+            start=start,
+            end=end,
+            profile=profile,
+        )
+        clean_seconds = _zone_seconds_for_window(
+            labels=clean_zones,
+            dt_s=cleaned.dt_s,
+            start=start,
+            end=end,
+            profile=profile,
+        )
+        hrmod_seconds = _zone_seconds_for_window(
+            labels=hrmod_zones,
+            dt_s=cleaned.dt_s,
+            start=start,
+            end=end,
+            profile=profile,
+        )
+        status = "corrected" if result.corrected else (
+            "skipped" if wave.complete else "incomplete"
+        )
         summaries.append(
-            EpisodeSummary(
-                episode_id=episode.episode_id,
-                segment_id=episode.segment_id,
-                start_timestamp=cleaned.timestamps[start],
-                end_timestamp=cleaned.timestamps[end],
-                start_elapsed_s=float(cleaned.elapsed_s[start]),
-                end_elapsed_s=float(cleaned.elapsed_s[end]),
-                duration_s=max(
-                    0.0, float(cleaned.elapsed_s[end] - cleaned.elapsed_s[start])
-                ),
-                state=episode.state,
-                complete=episode.complete,
+            WaveSummary(
+                wave_id=wave.wave_id,
+                segment_id=wave.segment_id,
+                status=status,
+                complete=wave.complete,
                 corrected=result.corrected,
-                incomplete_reason=episode.incomplete_reason,
-                lobe_count=len(episode.lobes),
-                positive_lobe_count=episode.positive_lobe_count,
-                negative_lobe_count=episode.negative_lobe_count,
-                positive_area_bpm_s=result.positive_area_bpm_s,
-                negative_area_bpm_s=result.negative_area_bpm_s,
-                target_balanced_area_bpm_s=result.target_balanced_area_bpm_s,
+                rise_start_timestamp=cleaned.timestamps[start],
+                peak_timestamp=cleaned.timestamps[peak],
+                tail_end_timestamp=cleaned.timestamps[end],
+                rise_start_elapsed_s=float(cleaned.elapsed_s[start]),
+                peak_elapsed_s=float(cleaned.elapsed_s[peak]),
+                tail_end_elapsed_s=float(cleaned.elapsed_s[end]),
+                end_reason=wave.end_reason,
+                baseline_hr_bpm=wave.baseline_hr_bpm,
+                donor_floor_bpm=result.donor_floor_bpm,
+                rise_bpm=max(
+                    0.0,
+                    float(detection.h_detect[peak] - detection.h_detect[start]),
+                ),
+                fall_bpm=max(
+                    0.0,
+                    float(detection.h_detect[peak] - detection.h_detect[end]),
+                ),
+                receiver_duration_s=result.receiver_duration_s,
+                donor_duration_s=result.donor_duration_s,
+                donor_available_area_bpm_s=result.donor_available_area_bpm_s,
+                requested_area_bpm_s=result.requested_area_bpm_s,
+                receiver_capacity_bpm_s=result.receiver_capacity_bpm_s,
                 moved_area_bpm_s=result.moved_area_bpm_s,
+                moved_fraction_of_donor=(
+                    result.moved_area_bpm_s / result.donor_available_area_bpm_s
+                    if result.donor_available_area_bpm_s > 0.0
+                    else 0.0
+                ),
                 added_area_bpm_s=result.added_area_bpm_s,
                 removed_area_bpm_s=result.removed_area_bpm_s,
                 area_balance_error_bpm_s=result.area_balance_error_bpm_s,
                 capacity_limited_area_bpm_s=result.capacity_limited_area_bpm_s,
-                unpaired_positive_area_bpm_s=result.unpaired_positive_area_bpm_s,
-                unpaired_negative_area_bpm_s=result.unpaired_negative_area_bpm_s,
-                positive_capacity_bpm_s=result.positive_capacity_bpm_s,
-                negative_capacity_bpm_s=result.negative_capacity_bpm_s,
-                capacity_ratio=result.capacity_ratio,
+                capacity_limited=result.capacity_limited,
+                skip_reason=result.skip_reason,
+                raw_zone_seconds=raw_seconds,
+                clean_zone_seconds=clean_seconds,
+                hrmod_zone_seconds=hrmod_seconds,
+                hrmod_minus_raw_zone_seconds={
+                    name: hrmod_seconds[name] - raw_seconds[name]
+                    for name in hrmod_seconds
+                },
+                hrmod_minus_clean_zone_seconds={
+                    name: hrmod_seconds[name] - clean_seconds[name]
+                    for name in hrmod_seconds
+                },
                 flags=result.flags,
             )
         )
@@ -176,9 +252,8 @@ def _episode_summaries(
 def _diagnostics(
     *,
     cleaned: CleanedHRSignal,
-    inverse: InverseKineticsResult,
-    episode_detection: EpisodeDetectionResult,
-    redistribution: ConservativeRedistributionResult,
+    detection: WaveDetectionResult,
+    redistribution: WaveAreaShiftResult,
     config: HRmodConfig,
 ) -> HRmodDiagnostics:
     count = len(cleaned.samples)
@@ -186,9 +261,8 @@ def _diagnostics(
     clean_valid = int(np.count_nonzero(np.isfinite(cleaned.clean_hr)))
     artifact_count = int(np.count_nonzero(cleaned.artifact_mask))
     interpolated_count = int(np.count_nonzero(cleaned.interpolated_mask))
-    derivative_count = int(np.count_nonzero(inverse.derivative_supported_mask))
-    intervals = np.diff(cleaned.elapsed_s)
-    intervals = intervals[np.isfinite(intervals) & (intervals > 0.0)]
+    supported_count = int(np.count_nonzero(detection.trend_supported_mask))
+    intervals = cleaned.dt_s[np.isfinite(cleaned.dt_s) & (cleaned.dt_s > 0.0)]
     if len(intervals):
         mean_dt = float(np.mean(intervals))
         median_dt = float(np.median(intervals))
@@ -202,36 +276,29 @@ def _diagnostics(
     else:
         mean_dt = median_dt = dt_cv = regular_fraction = None
 
-    episode_results = redistribution.episode_results
-    complete_count = sum(result.episode.complete for result in episode_results)
-    incomplete_count = len(episode_results) - complete_count
-    corrected_count = sum(result.corrected for result in episode_results)
-    positive_area = float(sum(result.positive_area_bpm_s for result in episode_results))
-    negative_area = float(sum(result.negative_area_bpm_s for result in episode_results))
-    added_area = float(sum(result.added_area_bpm_s for result in episode_results))
-    removed_area = float(sum(result.removed_area_bpm_s for result in episode_results))
-    errors = [result.area_balance_error_bpm_s for result in episode_results]
+    wave_results = redistribution.wave_results
+    complete_count = sum(result.wave.complete for result in wave_results)
+    incomplete_count = len(wave_results) - complete_count
+    corrected_count = sum(result.corrected for result in wave_results)
+    donor_available = float(
+        sum(result.donor_available_area_bpm_s for result in wave_results)
+    )
+    requested = float(sum(result.requested_area_bpm_s for result in wave_results))
+    receiver_capacity = float(
+        sum(result.receiver_capacity_bpm_s for result in wave_results)
+    )
+    moved = float(sum(result.moved_area_bpm_s for result in wave_results))
+    added = float(sum(result.added_area_bpm_s for result in wave_results))
+    removed = float(sum(result.removed_area_bpm_s for result in wave_results))
+    errors = [result.area_balance_error_bpm_s for result in wave_results]
     total_error = float(sum(errors))
     max_error = float(max((abs(value) for value in errors), default=0.0))
-    capacity_limited = float(
-        sum(result.capacity_limited_area_bpm_s for result in episode_results)
+    capacity_limited_area = float(
+        sum(result.capacity_limited_area_bpm_s for result in wave_results)
     )
-    unpaired_positive = float(
-        sum(result.unpaired_positive_area_bpm_s for result in episode_results)
+    skip_reasons = Counter(
+        result.skip_reason for result in wave_results if result.skip_reason is not None
     )
-    unpaired_negative = float(
-        sum(result.unpaired_negative_area_bpm_s for result in episode_results)
-    )
-    eligible_results = [
-        result
-        for result in episode_results
-        if result.episode.complete or config.edge_episode_policy == "correct_if_balanced"
-    ]
-    total_target = float(
-        sum(result.target_balanced_area_bpm_s for result in eligible_results)
-    )
-    total_moved = float(sum(result.moved_area_bpm_s for result in eligible_results))
-    capacity_ratio = 1.0 if total_target <= 0.0 else total_moved / total_target
 
     flags: set[str] = set()
     if artifact_count:
@@ -240,11 +307,11 @@ def _diagnostics(
         flags.add("INTERPOLATED_HR")
     if cleaned.long_gap_count or np.any(cleaned.long_gap_mask):
         flags.add("LONG_GAP")
-    if derivative_count < clean_valid:
-        flags.add("INSUFFICIENT_DERIVATIVE_SUPPORT")
-    for result in episode_results:
+    if supported_count < clean_valid:
+        flags.add("INSUFFICIENT_DETECTION_SUPPORT")
+    for result in wave_results:
         flags.update(result.flags)
-    area_passed = not any("AREA_BALANCE_FAILED" in result.flags for result in episode_results)
+    area_passed = max_error <= config.area_conservation_tolerance_bpm_s
 
     return HRmodDiagnostics(
         flags=tuple(sorted(flags)),
@@ -261,25 +328,33 @@ def _diagnostics(
         interpolated_fraction=(interpolated_count / count if count else 0.0),
         artifact_samples=artifact_count,
         artifact_fraction=(artifact_count / count if count else 0.0),
-        derivative_supported_samples=derivative_count,
-        derivative_support_fraction=(derivative_count / clean_valid if clean_valid else 0.0),
+        detection_supported_samples=supported_count,
+        detection_support_fraction=(
+            supported_count / clean_valid if clean_valid else 0.0
+        ),
         segment_count=len({int(value) for value in cleaned.segment_ids if value >= 0}),
         long_gap_count=cleaned.long_gap_count,
-        edge_affected_samples=int(np.count_nonzero(inverse.edge_affected_mask)),
+        edge_affected_samples=int(np.count_nonzero(detection.edge_affected_mask)),
         gap_affected_samples=int(np.count_nonzero(cleaned.gap_affected_mask)),
-        complete_episode_count=int(complete_count),
-        incomplete_episode_count=int(incomplete_count),
-        corrected_episode_count=int(corrected_count),
-        total_positive_area_bpm_s=positive_area,
-        total_negative_area_bpm_s=negative_area,
-        total_added_area_bpm_s=added_area,
-        total_removed_area_bpm_s=removed_area,
+        detected_wave_count=len(wave_results),
+        complete_wave_count=int(complete_count),
+        incomplete_wave_count=int(incomplete_count),
+        corrected_wave_count=int(corrected_count),
+        skipped_wave_count=len(wave_results) - int(corrected_count),
+        total_donor_available_area_bpm_s=donor_available,
+        total_requested_area_bpm_s=requested,
+        total_receiver_capacity_bpm_s=receiver_capacity,
+        total_moved_area_bpm_s=moved,
+        total_added_area_bpm_s=added,
+        total_removed_area_bpm_s=removed,
         total_area_balance_error_bpm_s=total_error,
         max_abs_area_balance_error_bpm_s=max_error,
-        total_capacity_limited_area_bpm_s=capacity_limited,
-        total_unpaired_positive_area_bpm_s=unpaired_positive,
-        total_unpaired_negative_area_bpm_s=unpaired_negative,
-        capacity_ratio=capacity_ratio,
+        total_capacity_limited_area_bpm_s=capacity_limited_area,
+        moved_fraction_of_donor=(moved / donor_available if donor_available > 0.0 else 0.0),
+        capacity_limited_wave_count=sum(
+            result.capacity_limited for result in wave_results
+        ),
+        skip_reason_counts=dict(sorted(skip_reasons.items())),
         area_conservation_passed=area_passed,
     )
 
@@ -290,11 +365,7 @@ def compute_hrmod_hr_only(
     athlete_profile: AthleteHRProfile,
     config: HRmodConfig | None = None,
 ) -> HRmodResult:
-    """Compute HRmod solely from timestamped HR and explicit HR settings.
-
-    This is an offline function: ``delay_s`` uses HR look-ahead within each
-    continuous segment.  The strict input type contains no reference channels.
-    """
+    """Compute v2 solely from timestamped HR and explicit HR settings."""
 
     if not isinstance(athlete_profile, AthleteHRProfile):
         raise TypeError("athlete_profile must be an AthleteHRProfile")
@@ -315,31 +386,19 @@ def compute_hrmod_hr_only(
             "adjust the profile or HR cleaning settings"
         )
 
-    hr_input_hash = _hash_hr_input(cleaned.samples)
-    inverse = compute_inverse_kinetics(
+    detection = detect_hr_waves(
         elapsed_s=cleaned.elapsed_s,
+        dt_s=cleaned.dt_s,
         clean_hr=cleaned.clean_hr,
         segment_ids=cleaned.segment_ids,
         config=config,
     )
-    detection = detect_response_episodes(
-        elapsed_s=cleaned.elapsed_s,
-        dt_s=cleaned.dt_s,
-        segment_ids=cleaned.segment_ids,
-        raw_correction=inverse.raw_correction,
-        config=config,
-    )
-    redistribution = redistribute_conservatively(
+    redistribution = shift_wave_areas(
         clean_hr=cleaned.clean_hr,
-        raw_correction=inverse.raw_correction,
         dt_s=cleaned.dt_s,
-        episodes=detection.episodes,
+        waves=detection.waves,
         athlete_profile=athlete_profile,
         config=config,
-    )
-
-    episode_summary = _episode_summaries(
-        cleaned=cleaned, redistribution=redistribution
     )
     zone_summary, raw_zones, clean_zones, hrmod_zones = _zone_summaries(
         raw_hr=cleaned.raw_hr,
@@ -348,33 +407,41 @@ def compute_hrmod_hr_only(
         dt_s=cleaned.dt_s,
         profile=athlete_profile,
     )
+    wave_summary = _wave_summaries(
+        cleaned=cleaned,
+        detection=detection,
+        redistribution=redistribution,
+        raw_zones=raw_zones,
+        clean_zones=clean_zones,
+        hrmod_zones=hrmod_zones,
+        profile=athlete_profile,
+    )
     diagnostics = _diagnostics(
         cleaned=cleaned,
-        inverse=inverse,
-        episode_detection=detection,
+        detection=detection,
         redistribution=redistribution,
         config=config,
     )
 
     point_model_flags: list[set[str]] = [set() for _ in cleaned.samples]
     for index in range(len(cleaned.samples)):
-        if np.isfinite(cleaned.clean_hr[index]) and not inverse.derivative_supported_mask[index]:
-            point_model_flags[index].add("INSUFFICIENT_DERIVATIVE_SUPPORT")
-        if inverse.edge_affected_mask[index]:
-            point_model_flags[index].add("LOOKAHEAD_EDGE_EFFECT")
+        if (
+            np.isfinite(cleaned.clean_hr[index])
+            and not detection.trend_supported_mask[index]
+        ):
+            point_model_flags[index].add("INSUFFICIENT_DETECTION_SUPPORT")
+        if detection.edge_affected_mask[index]:
+            point_model_flags[index].add("DETECTION_EDGE_EFFECT")
         if cleaned.long_gap_mask[index]:
             point_model_flags[index].add("LONG_GAP")
-        if detection.suppressed_lobe_mask[index]:
-            point_model_flags[index].add("LOBE_SUPPRESSED")
-    for result in redistribution.episode_results:
-        start = result.episode.start_index
-        end = result.episode.end_index
-        for index in range(start, end + 1):
+    for result in redistribution.wave_results:
+        wave = result.wave
+        for index in range(wave.rise_start_index, wave.tail_end_index + 1):
             point_model_flags[index].update(result.flags)
 
     timeseries: list[HRmodTimeseriesPoint] = []
     for index, timestamp in enumerate(cleaned.timestamps):
-        episode_id = int(detection.episode_ids[index])
+        wave_id = int(detection.wave_ids[index])
         timeseries.append(
             HRmodTimeseriesPoint(
                 timestamp=timestamp,
@@ -382,27 +449,23 @@ def compute_hrmod_hr_only(
                 dt_s=float(cleaned.dt_s[index]),
                 raw_hr_bpm=_optional_float(cleaned.raw_hr[index]),
                 clean_hr_bpm=_optional_float(cleaned.clean_hr[index]),
-                smoothed_hr_bpm=_optional_float(inverse.smoothed_hr[index]),
-                # This is the robust derivative at t + delay actually used in
-                # d_raw, not a derivative of measured/raw HR.
-                derivative_bpm_per_s=_optional_float(
-                    inverse.lookahead_derivative_bpm_per_s[index]
-                ),
-                lookahead_hr_bpm=_optional_float(inverse.lookahead_hr[index]),
-                provisional_demand_bpm=_optional_float(
-                    inverse.provisional_demand[index]
-                ),
-                raw_correction_bpm=_optional_float(inverse.raw_correction[index]),
-                added_correction_bpm=float(redistribution.added_correction[index]),
-                removed_correction_bpm=float(redistribution.removed_correction[index]),
-                hrmod_bpm=_optional_float(redistribution.hrmod[index]),
+                h_detect_bpm=_optional_float(detection.h_detect[index]),
+                trend_bpm_per_s=_optional_float(detection.trend_bpm_per_s[index]),
                 segment_id=(
                     int(cleaned.segment_ids[index])
                     if cleaned.segment_ids[index] >= 0
                     else None
                 ),
-                episode_id=episode_id if episode_id >= 0 else None,
-                episode_state=detection.episode_states[index],
+                wave_id=wave_id if wave_id >= 0 else None,
+                wave_state=detection.wave_states[index],
+                local_baseline_hr_bpm=_optional_float(
+                    detection.local_baseline_hr[index]
+                ),
+                receiver_flag=bool(detection.receiver_mask[index]),
+                donor_flag=bool(detection.donor_mask[index]),
+                added_bpm=float(redistribution.added_bpm[index]),
+                removed_bpm=float(redistribution.removed_bpm[index]),
+                hrmod_bpm=_optional_float(redistribution.hrmod[index]),
                 raw_hr_zone=raw_zones[index],
                 clean_hr_zone=clean_zones[index],
                 hrmod_zone=hrmod_zones[index],
@@ -413,11 +476,11 @@ def compute_hrmod_hr_only(
 
     return HRmodResult(
         timeseries=tuple(timeseries),
-        episode_summary=episode_summary,
+        wave_summary=wave_summary,
         zone_summary=zone_summary,
         diagnostics=diagnostics,
         config=config,
-        hr_input_hash=hr_input_hash,
+        hr_input_hash=_hash_hr_input(cleaned.samples),
         model_version=MODEL_VERSION,
     )
 

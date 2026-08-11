@@ -1,8 +1,8 @@
-"""Strict, serialisable schemas for the HR-only HRmod model.
+"""Strict, serialisable schemas for the HR-only HRmod v2 model.
 
-The input types in this module deliberately contain no reference-channel fields.
-In particular, speed, power, grade, distance, cadence, laps, and annotations
-cannot be supplied to :func:`compute_hrmod_hr_only` through these schemas.
+The core input deliberately has no representation for reference channels.
+Speed, power, grade, distance, cadence, laps, annotations, and sport type
+therefore cannot enter wave detection or area redistribution through this API.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ from math import isfinite
 from typing import Any, Mapping
 
 
-MODEL_VERSION = "hrmod_inverse_kinetics_conservative_v1"
-CONFIG_VERSION = "hrmod_config_v1"
+MODEL_VERSION = "hrmod_wave_area_shift_v2"
+CONFIG_VERSION = "hrmod_config_v2"
 
 
 def _finite(name: str, value: float) -> float:
@@ -42,11 +42,7 @@ def _json_ready(value: Any) -> Any:
 
 @dataclass(frozen=True, slots=True)
 class HRSample:
-    """One measured HR observation accepted by the model core.
-
-    ``quality_flags`` may describe HR provenance/quality only.  Reference data
-    intentionally has no representation in this type.
-    """
+    """One measured HR observation accepted by the model core."""
 
     timestamp: datetime
     heart_rate_bpm: float | None
@@ -67,22 +63,15 @@ class HRSample:
 
     @property
     def hr_bpm(self) -> float | None:
-        """Concise read-only alias used by a few adapters."""
-
         return self.heart_rate_bpm
 
 
-# Explicit semantic alias for TCX adapters.  It is the same strict class, not a
-# broader adapter row containing reference channels.
 HRInputSample = HRSample
 
 
 @dataclass(frozen=True, slots=True)
 class HRZone:
-    """An individual, lower-inclusive HR zone.
-
-    The upper boundary is exclusive except for the final zone in a profile.
-    """
+    """An individual, lower-inclusive HR zone."""
 
     name: str
     lower_bpm: float
@@ -104,7 +93,7 @@ class HRZone:
 
 @dataclass(frozen=True, slots=True)
 class AthleteHRProfile:
-    """Explicit individual bounds and exactly five individual HR zones."""
+    """Explicit individual HR bounds and exactly five individual zones."""
 
     hrmax_bpm: float
     hr_floor_bpm: float
@@ -126,11 +115,11 @@ class AthleteHRProfile:
                 raise TypeError("zones must contain HRZone values")
             if index and zone.lower_bpm < self.zones[index - 1].upper_bpm:
                 raise ValueError("HR zones must be increasing and non-overlapping")
+            if zone.lower_bpm < self.hr_floor_bpm or zone.upper_bpm > self.hrmax_bpm:
+                raise ValueError("HR zones must lie within HR_floor and HRmax")
 
     @property
     def hr_max_bpm(self) -> float:
-        """Read-only spelling alias; ``hrmax_bpm`` remains canonical."""
-
         return self.hrmax_bpm
 
     def to_dict(self) -> dict[str, Any]:
@@ -139,33 +128,46 @@ class AthleteHRProfile:
 
 @dataclass(frozen=True, slots=True)
 class HRmodConfig:
-    """Versioned exploratory settings for the conservative v1 model.
+    """Versioned exploratory settings for wave-area-shift v2.
 
-    These defaults are implementation starting points, not validated
-    physiological constants.
+    The first four user-facing controls are ``alpha``,
+    ``rise_threshold_bpm_s``, ``min_rise_bpm``, and ``smoothing_window_s``.
+    All remaining values are technical safeguards or transparent HR cleaning
+    settings.  These defaults are starting points, not validated physiology.
     """
 
     config_version: str = CONFIG_VERSION
-    kernel_model: str = "first_order_inverse"
+
+    # Four main expert controls.
     alpha: float = 1.0
-    delay_s: float = 5.0
-    tau_on_s: float = 30.0
-    tau_off_s: float = 45.0
-    smoothing_method: str = "robust_local_linear"
-    smoothing_window_s: float = 15.0
-    smoothing_min_points: int = 5
-    smoothing_robust_iterations: int = 2
-    correction_deadband_bpm: float = 0.5
-    min_lobe_duration_s: float = 3.0
-    min_lobe_area_bpm_s: float = 5.0
-    episode_neutral_gap_s: float = 15.0
-    episode_balance_tolerance_bpm_s: float = 5.0
-    max_episode_duration_s: float = 900.0
+    rise_threshold_bpm_s: float = 0.15
+    min_rise_bpm: float = 5.0
+    smoothing_window_s: float = 5.0
+
+    # Advanced detection safeguards.
+    min_sustained_rise_s: float = 3.0
+    fall_threshold_bpm_s: float = 0.10
+    min_sustained_fall_s: float = 3.0
+    min_fall_bpm: float = 3.0
+    baseline_lookback_s: float = 20.0
+    baseline_min_points: int = 3
+    return_tolerance_bpm: float = 2.0
+    return_sustain_s: float = 3.0
+    neutral_slope_tolerance_bpm_s: float = 0.05
+    neutral_trough_timeout_s: float = 8.0
+    min_receiver_duration_s: float = 3.0
+    min_donor_duration_s: float = 3.0
+    max_wave_duration_s: float = 600.0
     max_interpolation_gap_s: float = 3.0
     long_gap_threshold_s: float = 10.0
-    edge_episode_policy: str = "skip_incomplete"
+    edge_wave_policy: str = "skip_incomplete"
     max_addition_bpm: float | None = None
     max_removal_bpm: float | None = None
+
+    # Robust detection and transparent cleaning details.
+    smoothing_method: str = "robust_local_linear"
+    smoothing_min_points: int = 3
+    smoothing_robust_iterations: int = 2
     artifact_min_hr_bpm: float = 25.0
     artifact_max_hr_bpm: float = 250.0
     artifact_max_rate_bpm_per_s: float = 20.0
@@ -176,24 +178,28 @@ class HRmodConfig:
     def __post_init__(self) -> None:
         if self.config_version != CONFIG_VERSION:
             raise ValueError(f"unsupported config_version: {self.config_version!r}")
-        if self.kernel_model != "first_order_inverse":
-            raise ValueError("v1 supports only kernel_model='first_order_inverse'")
         if self.smoothing_method not in {"robust_local_linear", "local_linear"}:
             raise ValueError("unsupported smoothing_method")
-        if self.edge_episode_policy not in {"skip_incomplete", "correct_if_balanced"}:
-            raise ValueError("unsupported edge_episode_policy")
-        for name in (
+        if self.edge_wave_policy != "skip_incomplete":
+            raise ValueError("v2 supports only edge_wave_policy='skip_incomplete'")
+
+        finite_fields = (
             "alpha",
-            "delay_s",
-            "tau_on_s",
-            "tau_off_s",
+            "rise_threshold_bpm_s",
+            "min_rise_bpm",
             "smoothing_window_s",
-            "correction_deadband_bpm",
-            "min_lobe_duration_s",
-            "min_lobe_area_bpm_s",
-            "episode_neutral_gap_s",
-            "episode_balance_tolerance_bpm_s",
-            "max_episode_duration_s",
+            "min_sustained_rise_s",
+            "fall_threshold_bpm_s",
+            "min_sustained_fall_s",
+            "min_fall_bpm",
+            "baseline_lookback_s",
+            "return_tolerance_bpm",
+            "return_sustain_s",
+            "neutral_slope_tolerance_bpm_s",
+            "neutral_trough_timeout_s",
+            "min_receiver_duration_s",
+            "min_donor_duration_s",
+            "max_wave_duration_s",
             "max_interpolation_gap_s",
             "long_gap_threshold_s",
             "artifact_min_hr_bpm",
@@ -202,52 +208,64 @@ class HRmodConfig:
             "artifact_spike_deviation_bpm",
             "sampling_regularity_tolerance_s",
             "area_conservation_tolerance_bpm_s",
-        ):
+        )
+        for name in finite_fields:
             object.__setattr__(self, name, _finite(name, getattr(self, name)))
+
         if not 0.0 <= self.alpha <= 1.0:
-            raise ValueError("alpha must be in [0, 1] in conservative mode")
-        for name in (
-            "delay_s",
-            "correction_deadband_bpm",
-            "min_lobe_duration_s",
-            "min_lobe_area_bpm_s",
-            "episode_neutral_gap_s",
-            "episode_balance_tolerance_bpm_s",
-            "max_interpolation_gap_s",
-            "sampling_regularity_tolerance_s",
-        ):
-            if getattr(self, name) < 0.0:
-                raise ValueError(f"{name} must be non-negative")
-        for name in (
-            "tau_on_s",
-            "tau_off_s",
+            raise ValueError("alpha must be in [0, 1]")
+        positive_fields = (
+            "rise_threshold_bpm_s",
+            "min_rise_bpm",
             "smoothing_window_s",
-            "max_episode_duration_s",
+            "min_sustained_rise_s",
+            "fall_threshold_bpm_s",
+            "min_sustained_fall_s",
+            "min_fall_bpm",
+            "baseline_lookback_s",
+            "return_sustain_s",
+            "neutral_trough_timeout_s",
+            "min_receiver_duration_s",
+            "min_donor_duration_s",
+            "max_wave_duration_s",
             "long_gap_threshold_s",
             "artifact_max_rate_bpm_per_s",
             "artifact_spike_deviation_bpm",
             "area_conservation_tolerance_bpm_s",
-        ):
+        )
+        for name in positive_fields:
             if getattr(self, name) <= 0.0:
                 raise ValueError(f"{name} must be positive")
+        nonnegative_fields = (
+            "return_tolerance_bpm",
+            "neutral_slope_tolerance_bpm_s",
+            "max_interpolation_gap_s",
+            "sampling_regularity_tolerance_s",
+        )
+        for name in nonnegative_fields:
+            if getattr(self, name) < 0.0:
+                raise ValueError(f"{name} must be non-negative")
         if self.max_interpolation_gap_s > self.long_gap_threshold_s:
             raise ValueError("max_interpolation_gap_s cannot exceed long_gap_threshold_s")
         if self.artifact_min_hr_bpm >= self.artifact_max_hr_bpm:
             raise ValueError("artifact HR minimum must be below maximum")
-        if int(self.smoothing_min_points) < 2:
-            raise ValueError("smoothing_min_points must be at least 2")
-        if int(self.smoothing_robust_iterations) < 0:
-            raise ValueError("smoothing_robust_iterations must be non-negative")
-        object.__setattr__(self, "smoothing_min_points", int(self.smoothing_min_points))
-        object.__setattr__(
-            self, "smoothing_robust_iterations", int(self.smoothing_robust_iterations)
-        )
+
+        for name, minimum in (
+            ("baseline_min_points", 1),
+            ("smoothing_min_points", 2),
+            ("smoothing_robust_iterations", 0),
+        ):
+            value = int(getattr(self, name))
+            if value < minimum:
+                raise ValueError(f"{name} must be at least {minimum}")
+            object.__setattr__(self, name, value)
+
         for name in ("max_addition_bpm", "max_removal_bpm"):
             value = getattr(self, name)
             if value is not None:
                 value = _finite(name, value)
-                if value < 0.0:
-                    raise ValueError(f"{name} must be non-negative when enabled")
+                if value <= 0.0:
+                    raise ValueError(f"{name} must be positive when enabled")
                 object.__setattr__(self, name, value)
 
     def to_dict(self) -> dict[str, Any]:
@@ -261,17 +279,17 @@ class HRmodTimeseriesPoint:
     dt_s: float
     raw_hr_bpm: float | None
     clean_hr_bpm: float | None
-    smoothed_hr_bpm: float | None
-    derivative_bpm_per_s: float | None
-    lookahead_hr_bpm: float | None
-    provisional_demand_bpm: float | None
-    raw_correction_bpm: float | None
-    added_correction_bpm: float
-    removed_correction_bpm: float
-    hrmod_bpm: float | None
+    h_detect_bpm: float | None
+    trend_bpm_per_s: float | None
     segment_id: int | None
-    episode_id: int | None
-    episode_state: str
+    wave_id: int | None
+    wave_state: str
+    local_baseline_hr_bpm: float | None
+    receiver_flag: bool
+    donor_flag: bool
+    added_bpm: float
+    removed_bpm: float
+    hrmod_bpm: float | None
     raw_hr_zone: str | None
     clean_hr_zone: str | None
     hrmod_zone: str | None
@@ -283,34 +301,41 @@ class HRmodTimeseriesPoint:
 
 
 @dataclass(frozen=True, slots=True)
-class EpisodeSummary:
-    episode_id: int
+class WaveSummary:
+    wave_id: int
     segment_id: int
-    start_timestamp: datetime
-    end_timestamp: datetime
-    start_elapsed_s: float
-    end_elapsed_s: float
-    duration_s: float
-    state: str
+    status: str
     complete: bool
     corrected: bool
-    incomplete_reason: str | None
-    lobe_count: int
-    positive_lobe_count: int
-    negative_lobe_count: int
-    positive_area_bpm_s: float
-    negative_area_bpm_s: float
-    target_balanced_area_bpm_s: float
+    rise_start_timestamp: datetime
+    peak_timestamp: datetime
+    tail_end_timestamp: datetime
+    rise_start_elapsed_s: float
+    peak_elapsed_s: float
+    tail_end_elapsed_s: float
+    end_reason: str
+    baseline_hr_bpm: float | None
+    donor_floor_bpm: float | None
+    rise_bpm: float
+    fall_bpm: float
+    receiver_duration_s: float
+    donor_duration_s: float
+    donor_available_area_bpm_s: float
+    requested_area_bpm_s: float
+    receiver_capacity_bpm_s: float
     moved_area_bpm_s: float
+    moved_fraction_of_donor: float
     added_area_bpm_s: float
     removed_area_bpm_s: float
     area_balance_error_bpm_s: float
     capacity_limited_area_bpm_s: float
-    unpaired_positive_area_bpm_s: float
-    unpaired_negative_area_bpm_s: float
-    positive_capacity_bpm_s: float
-    negative_capacity_bpm_s: float
-    capacity_ratio: float
+    capacity_limited: bool
+    skip_reason: str | None
+    raw_zone_seconds: Mapping[str, float] = field(default_factory=dict)
+    clean_zone_seconds: Mapping[str, float] = field(default_factory=dict)
+    hrmod_zone_seconds: Mapping[str, float] = field(default_factory=dict)
+    hrmod_minus_raw_zone_seconds: Mapping[str, float] = field(default_factory=dict)
+    hrmod_minus_clean_zone_seconds: Mapping[str, float] = field(default_factory=dict)
     flags: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -354,26 +379,30 @@ class HRmodDiagnostics:
     interpolated_fraction: float
     artifact_samples: int
     artifact_fraction: float
-    derivative_supported_samples: int
-    derivative_support_fraction: float
+    detection_supported_samples: int
+    detection_support_fraction: float
     segment_count: int
     long_gap_count: int
     edge_affected_samples: int
     gap_affected_samples: int
-    complete_episode_count: int
-    incomplete_episode_count: int
-    corrected_episode_count: int
-    total_positive_area_bpm_s: float
-    total_negative_area_bpm_s: float
+    detected_wave_count: int
+    complete_wave_count: int
+    incomplete_wave_count: int
+    corrected_wave_count: int
+    skipped_wave_count: int
+    total_donor_available_area_bpm_s: float
+    total_requested_area_bpm_s: float
+    total_receiver_capacity_bpm_s: float
+    total_moved_area_bpm_s: float
     total_added_area_bpm_s: float
     total_removed_area_bpm_s: float
     total_area_balance_error_bpm_s: float
     max_abs_area_balance_error_bpm_s: float
     total_capacity_limited_area_bpm_s: float
-    total_unpaired_positive_area_bpm_s: float
-    total_unpaired_negative_area_bpm_s: float
-    capacity_ratio: float
-    area_conservation_passed: bool
+    moved_fraction_of_donor: float
+    capacity_limited_wave_count: int
+    skip_reason_counts: Mapping[str, int] = field(default_factory=dict)
+    area_conservation_passed: bool = True
     parameter_sensitivity: Mapping[str, Any] = field(
         default_factory=lambda: {"status": "not_computed_in_single_run"}
     )
@@ -385,7 +414,7 @@ class HRmodDiagnostics:
 @dataclass(frozen=True, slots=True)
 class HRmodResult:
     timeseries: tuple[HRmodTimeseriesPoint, ...]
-    episode_summary: tuple[EpisodeSummary, ...]
+    wave_summary: tuple[WaveSummary, ...]
     zone_summary: tuple[ZoneSummary, ...]
     diagnostics: HRmodDiagnostics
     config: HRmodConfig
@@ -393,8 +422,8 @@ class HRmodResult:
     model_version: str = MODEL_VERSION
 
     @property
-    def episodes(self) -> tuple[EpisodeSummary, ...]:
-        return self.episode_summary
+    def waves(self) -> tuple[WaveSummary, ...]:
+        return self.wave_summary
 
     @property
     def zones(self) -> tuple[ZoneSummary, ...]:
@@ -407,7 +436,6 @@ class HRmodResult:
 __all__ = [
     "AthleteHRProfile",
     "CONFIG_VERSION",
-    "EpisodeSummary",
     "HRInputSample",
     "HRmodConfig",
     "HRmodDiagnostics",
@@ -416,5 +444,6 @@ __all__ = [
     "HRSample",
     "HRZone",
     "MODEL_VERSION",
+    "WaveSummary",
     "ZoneSummary",
 ]

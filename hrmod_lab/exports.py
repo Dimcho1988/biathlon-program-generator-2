@@ -34,6 +34,11 @@ _REFERENCE_ONLY_FIELDS = {
     "lap",
     "lap_id",
     "laps",
+    "manual_marker",
+    "manual_markers",
+    "annotation",
+    "annotations",
+    "sport",
 }
 
 _TIMESERIES_ORDER = (
@@ -42,17 +47,17 @@ _TIMESERIES_ORDER = (
     "dt_s",
     "raw_hr_bpm",
     "clean_hr_bpm",
-    "smoothed_hr_bpm",
-    "derivative_bpm_per_s",
-    "lookahead_hr_bpm",
-    "provisional_demand_bpm",
-    "raw_correction_bpm",
-    "added_correction_bpm",
-    "removed_correction_bpm",
-    "hrmod_bpm",
+    "h_detect_bpm",
+    "trend_bpm_per_s",
     "segment_id",
-    "episode_id",
-    "episode_state",
+    "wave_id",
+    "wave_state",
+    "local_baseline_hr_bpm",
+    "receiver_flag",
+    "donor_flag",
+    "added_bpm",
+    "removed_bpm",
+    "hrmod_bpm",
     "raw_hr_zone",
     "clean_hr_zone",
     "hrmod_zone",
@@ -60,34 +65,41 @@ _TIMESERIES_ORDER = (
     "model_flags",
 )
 
-_EPISODE_ORDER = (
-    "episode_id",
+_WAVE_ORDER = (
+    "wave_id",
     "segment_id",
-    "start_timestamp",
-    "end_timestamp",
-    "start_elapsed_s",
-    "end_elapsed_s",
-    "duration_s",
-    "state",
+    "status",
     "complete",
     "corrected",
-    "incomplete_reason",
-    "lobe_count",
-    "positive_lobe_count",
-    "negative_lobe_count",
-    "positive_area_bpm_s",
-    "negative_area_bpm_s",
-    "target_balanced_area_bpm_s",
+    "rise_start_timestamp",
+    "peak_timestamp",
+    "tail_end_timestamp",
+    "rise_start_elapsed_s",
+    "peak_elapsed_s",
+    "tail_end_elapsed_s",
+    "end_reason",
+    "baseline_hr_bpm",
+    "donor_floor_bpm",
+    "rise_bpm",
+    "fall_bpm",
+    "receiver_duration_s",
+    "donor_duration_s",
+    "donor_available_area_bpm_s",
+    "requested_area_bpm_s",
+    "receiver_capacity_bpm_s",
     "moved_area_bpm_s",
+    "moved_fraction_of_donor",
     "added_area_bpm_s",
     "removed_area_bpm_s",
     "area_balance_error_bpm_s",
     "capacity_limited_area_bpm_s",
-    "unpaired_positive_area_bpm_s",
-    "unpaired_negative_area_bpm_s",
-    "positive_capacity_bpm_s",
-    "negative_capacity_bpm_s",
-    "capacity_ratio",
+    "capacity_limited",
+    "skip_reason",
+    "raw_zone_seconds",
+    "clean_zone_seconds",
+    "hrmod_zone_seconds",
+    "hrmod_minus_raw_zone_seconds",
+    "hrmod_minus_clean_zone_seconds",
     "flags",
 )
 
@@ -117,16 +129,18 @@ def export_timeseries_csv(hrmod_result: Any) -> bytes:
         {
             key: value
             for key, value in row.items()
-            if key not in _REFERENCE_ONLY_FIELDS and not key.startswith("reference_")
+            if not _is_reference_field(key)
         }
         for row in rows
     ]
     return _csv_bytes(core_rows, preferred_fields=_TIMESERIES_ORDER)
 
 
-def export_episode_summary_csv(hrmod_result: Any) -> bytes:
-    rows = _rows(_required_member(hrmod_result, "episode_summary"))
-    return _csv_bytes(rows, preferred_fields=_EPISODE_ORDER)
+def export_wave_summary_csv(hrmod_result: Any) -> bytes:
+    """Return one row per detected v2 rise-peak-fall wave."""
+
+    rows = _rows(_required_member(hrmod_result, "wave_summary"))
+    return _csv_bytes(rows, preferred_fields=_WAVE_ORDER)
 
 
 def export_zone_summary_csv(hrmod_result: Any) -> bytes:
@@ -184,7 +198,7 @@ def build_export_bundle(
 
     files = {
         "processed_hr_timeseries.csv": export_timeseries_csv(hrmod_result),
-        "episode_summary.csv": export_episode_summary_csv(hrmod_result),
+        "wave_summary.csv": export_wave_summary_csv(hrmod_result),
         "zone_summary.csv": export_zone_summary_csv(hrmod_result),
         "run_configuration.json": export_config_json(hrmod_result),
         "diagnostics.json": export_diagnostics_json(hrmod_result),
@@ -209,7 +223,7 @@ def build_export_bundle(
         files["annotations.json"] = export_annotations_json(annotations)
 
     manifest = {
-        "format": "hrmod_lab_export_v1",
+        "format": "hrmod_lab_export_v2",
         "model_version": _member(hrmod_result, "model_version"),
         "hr_input_hash": _member(hrmod_result, "hr_input_hash"),
         "core_and_reference_exports_are_separate": True,
@@ -246,6 +260,20 @@ def _member(value: Any, name: str) -> Any:
     if isinstance(value, Mapping):
         return value.get(name)
     return getattr(value, name, None)
+
+
+def _is_reference_field(name: Any) -> bool:
+    """Return whether a row field belongs outside the HR-only export.
+
+    The check is deliberately case-insensitive because callers may provide a
+    mapping rather than the strict core dataclass.  This is a final export
+    guard; the core result itself remains the primary anti-leakage boundary.
+    """
+
+    normalized = str(name).strip().casefold()
+    return normalized in _REFERENCE_ONLY_FIELDS or normalized.startswith(
+        "reference_"
+    )
 
 
 def _required_member(value: Any, name: str) -> Any:
@@ -362,10 +390,10 @@ __all__ = [
     "export_annotations_json",
     "export_config_json",
     "export_diagnostics_json",
-    "export_episode_summary_csv",
     "export_processed_timeseries_csv",
     "export_reference_comparison_csv",
     "export_reference_validation_json",
     "export_timeseries_csv",
+    "export_wave_summary_csv",
     "export_zone_summary_csv",
 ]

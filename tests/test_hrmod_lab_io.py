@@ -4,7 +4,6 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 import json
-import math
 from zipfile import ZipFile
 
 import pytest
@@ -38,26 +37,34 @@ def _profile() -> AthleteHRProfile:
 
 def _config() -> HRmodConfig:
     return HRmodConfig(
-        delay_s=0.0,
-        tau_on_s=18.0,
-        tau_off_s=28.0,
-        smoothing_window_s=7.0,
+        alpha=1.0,
+        rise_threshold_bpm_s=0.15,
+        min_rise_bpm=5.0,
+        smoothing_window_s=3.0,
         smoothing_min_points=3,
-        correction_deadband_bpm=0.01,
-        min_lobe_duration_s=1.0,
-        min_lobe_area_bpm_s=0.01,
-        episode_neutral_gap_s=12.0,
-        episode_balance_tolerance_bpm_s=10.0,
+        min_sustained_rise_s=2.0,
+        fall_threshold_bpm_s=0.10,
+        min_sustained_fall_s=2.0,
+        min_fall_bpm=3.0,
+        baseline_lookback_s=12.0,
+        baseline_min_points=3,
+        return_sustain_s=2.0,
+        neutral_trough_timeout_s=4.0,
+        min_receiver_duration_s=2.0,
+        min_donor_duration_s=2.0,
+        max_wave_duration_s=180.0,
     )
 
 
-def _response(duration: int = 260) -> list[float]:
-    values = [100.0]
-    for second in range(1, duration):
-        target = 155.0 if 40 <= second < 75 else 100.0
-        tau = 18.0 if target >= values[-1] else 28.0
-        values.append(values[-1] + (1.0 - math.exp(-1.0 / tau)) * (target - values[-1]))
-    return values
+def _response() -> list[float]:
+    """A closed, intentionally obvious baseline-rise-peak-fall wave."""
+
+    baseline_before = [100.0] * 25
+    rise = [100.0 + 2.5 * index for index in range(1, 21)]
+    peak = [150.0, 150.0]
+    fall = [150.0 - 1.25 * index for index in range(1, 41)]
+    baseline_after = [100.0] * 25
+    return [*baseline_before, *rise, *peak, *fall, *baseline_after]
 
 
 def _tcx_bytes(
@@ -137,6 +144,10 @@ def test_tcx_parser_handles_namespaces_duplicates_extensions_and_missing_optiona
     assert parsed.reference_channels.samples[1].distance_m == 7.0
     assert parsed.reference_channels.samples[0].speed_mps is None
     assert parsed.reference_channels.sport == "Running"
+    assert len(parsed.reference_channels.laps) == 1
+    assert not hasattr(parsed.hr_input_samples[0], "speed_mps")
+    assert not hasattr(parsed.hr_input_samples[0], "power_w")
+    assert not hasattr(parsed.hr_input_samples[0], "lap")
 
 
 def test_tcx_parser_rejects_dtd_and_entity_payloads() -> None:
@@ -169,6 +180,16 @@ def test_reference_channels_cannot_change_hrmod_or_hr_input_hash() -> None:
     assert result_a == result_b == result_none
 
 
+def test_identical_hr_and_config_are_deterministic_across_repeated_runs() -> None:
+    payload = _tcx_bytes(_response(), include_reference=True)
+    _, first = _core_from_tcx(payload)
+    _, second = _core_from_tcx(payload)
+
+    assert first == second
+    assert first.to_dict() == second.to_dict()
+    assert first.hr_input_hash == second.hr_input_hash
+
+
 def test_core_result_is_json_serializable_before_reference_join() -> None:
     _, result = _core_from_tcx(_tcx_bytes(_response(), include_reference=False))
     encoded = json.dumps(result.to_dict(), sort_keys=True, allow_nan=False)
@@ -193,6 +214,35 @@ def test_reference_evaluation_is_post_hoc_and_does_not_mutate_core() -> None:
     assert "RAW_SKI_SPEED_CONTEXT_ONLY" in validation.flags
     assert "REFERENCE_NOT_SUITABLE_FOR_INTENSITY" in validation.flags
     assert validation.interpretation == "context_only"
+
+
+def test_ski_source_cannot_be_relabelled_into_a_speed_intensity_reference() -> None:
+    parsed, result = _core_from_tcx(
+        _tcx_bytes(_response(), include_reference=True, sport="Cross Country Skiing")
+    )
+    before = result.to_dict()
+    validation = evaluate_against_reference(
+        hrmod_result=result,
+        reference_channels=parsed.reference_channels,
+        reference_config=ReferenceValidationConfig(
+            sport="Treadmill Running",
+            enable_controlled_treadmill_speed=True,
+            treadmill_grade_verified=True,
+            speed_zones=(
+                ReferenceZone("Z1", 0.0, 2.5),
+                ReferenceZone("Z2", 2.5, 3.0),
+                ReferenceZone("Z3", 3.0, 3.5),
+                ReferenceZone("Z4", 3.5, 4.0),
+                ReferenceZone("Z5", 4.0, None),
+            ),
+        ),
+    )
+
+    assert result.to_dict() == before
+    assert not validation.suitable_for_intensity
+    assert validation.metrics["quantitative_channel"] is None
+    assert validation.interpretation == "context_only"
+    assert "RAW_SKI_SPEED_CONTEXT_ONLY" in validation.flags
 
 
 def test_explicit_power_zones_enable_quantitative_reference_without_refitting() -> None:
@@ -266,7 +316,7 @@ def test_e2e_tcx_produces_core_summaries_diagnostics_and_separate_exports() -> N
     )
     assert {
         "processed_hr_timeseries.csv",
-        "episode_summary.csv",
+        "wave_summary.csv",
         "zone_summary.csv",
         "run_configuration.json",
         "diagnostics.json",
@@ -277,11 +327,51 @@ def test_e2e_tcx_produces_core_summaries_diagnostics_and_separate_exports() -> N
         "manifest.json",
     }.issubset(files)
     timeseries_header = files["processed_hr_timeseries.csv"].splitlines()[0].decode()
-    assert "hrmod_bpm" in timeseries_header
+    assert {
+        "raw_hr_bpm",
+        "clean_hr_bpm",
+        "h_detect_bpm",
+        "trend_bpm_per_s",
+        "wave_id",
+        "wave_state",
+        "local_baseline_hr_bpm",
+        "receiver_flag",
+        "donor_flag",
+        "added_bpm",
+        "removed_bpm",
+        "hrmod_bpm",
+        "quality_flags",
+        "model_flags",
+    }.issubset(set(timeseries_header.split(",")))
     assert "speed_mps" not in timeseries_header
     assert "power_w" not in timeseries_header
+    wave_header = files["wave_summary.csv"].splitlines()[0].decode()
+    assert {
+        "wave_id",
+        "status",
+        "rise_start_timestamp",
+        "peak_timestamp",
+        "tail_end_timestamp",
+        "donor_available_area_bpm_s",
+        "requested_area_bpm_s",
+        "receiver_capacity_bpm_s",
+        "moved_area_bpm_s",
+        "area_balance_error_bpm_s",
+        "capacity_limited",
+        "skip_reason",
+        "raw_zone_seconds",
+        "hrmod_zone_seconds",
+        "hrmod_minus_raw_zone_seconds",
+    }.issubset(set(wave_header.split(",")))
     assert len(result.zone_summary) == 5
     assert result.diagnostics.total_samples == len(_response())
+    assert result.diagnostics.detected_wave_count >= 1
+
+    config_export = json.loads(files["run_configuration.json"])
+    diagnostics_export = json.loads(files["diagnostics.json"])
+    assert config_export["model_version"] == "hrmod_wave_area_shift_v2"
+    assert config_export["config"]["config_version"] == "hrmod_config_v2"
+    assert diagnostics_export["diagnostics"]["detected_wave_count"] >= 1
 
     archive_bytes = build_results_zip(
         hrmod_result=result,
@@ -291,17 +381,36 @@ def test_e2e_tcx_produces_core_summaries_diagnostics_and_separate_exports() -> N
     with ZipFile(BytesIO(archive_bytes)) as archive:
         assert set(files) == set(archive.namelist())
         manifest = json.loads(archive.read("manifest.json"))
+    assert archive_bytes == build_results_zip(
+        hrmod_result=result,
+        validation_result=validation,
+        annotations=annotations,
+    )
+    assert manifest["format"] == "hrmod_lab_export_v2"
     assert manifest["core_and_reference_exports_are_separate"] is True
     assert manifest["hr_input_hash"] == result.hr_input_hash
 
+    core_only_files = build_export_bundle(hrmod_result=result)
+    assert "reference_aligned_comparison.csv" not in core_only_files
+    assert "reference_validation.json" not in core_only_files
 
-def test_service_keeps_computation_and_reference_evaluation_in_two_phases() -> None:
+
+def test_service_keeps_computation_and_reference_evaluation_in_two_phases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     core_run = run_hr_only_phase(
         tcx_source=_tcx_bytes(_response(), include_reference=True),
         athlete_profile=_profile(),
         hrmod_config=_config(),
     )
     before = deepcopy(core_run.hrmod_result)
+
+    def fail_if_core_is_recomputed(**_kwargs: object) -> None:
+        raise AssertionError("reference phase must not call the HR-only core")
+
+    monkeypatch.setattr(
+        "hrmod_lab.hrmod_service.compute_hrmod_hr_only", fail_if_core_is_recomputed
+    )
     validated = run_reference_phase(core_run=core_run)
     assert core_run.hrmod_result == before
     assert validated.core_run is core_run

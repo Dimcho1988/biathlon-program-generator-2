@@ -104,14 +104,19 @@ def run_reference_phase(
 
     if not isinstance(core_run, HRmodCoreRun):
         raise TypeError("core_run must be an HRmodCoreRun from run_hr_only_phase")
+    core_snapshot = core_run.hrmod_result.to_dict()
     validation = evaluate_against_reference(
         hrmod_result=core_run.hrmod_result,
         reference_channels=core_run.reference_channels,
         reference_config=reference_config,
         optional_annotations=optional_annotations,
     )
+    if core_run.hrmod_result.to_dict() != core_snapshot:
+        raise RuntimeError("Reference phase mutated the completed HR-only result")
     if validation.hr_input_hash != core_run.hr_input_hash:
         raise RuntimeError("Reference phase returned a different HR input hash")
+    if validation.model_version != core_run.model_version:
+        raise RuntimeError("Reference phase returned a different model version")
     return HRmodValidatedRun(core_run=core_run, validation_result=validation)
 
 

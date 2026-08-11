@@ -3,7 +3,7 @@
 Cleaning is intentionally conservative.  The measured values remain available
 as ``raw_hr``; interpolation and artifact decisions are represented explicitly
 by per-sample flags.  No smoothing is performed here because the separately
-labelled smoothed series is only an inverse-kinetics diagnostic.
+labelled ``h_detect`` series is used only for v2 wave detection.
 """
 
 from __future__ import annotations
@@ -93,6 +93,8 @@ def clean_hr_signal(
 
     samples, duplicate_count = _normalise_samples(hr_samples)
     count = len(samples)
+    if count == 0:
+        raise ValueError("at least one timestamped HR sample is required")
     timestamps = tuple(sample.timestamp for sample in samples)
     epoch_s = np.asarray(
         [sample.timestamp.astimezone(timezone.utc).timestamp() for sample in samples],

@@ -46,14 +46,41 @@ from hrmod_lab.tcx_adapter import (
 )
 
 
-APP_TITLE = "HRmod Lab v1 · HR-only"
+APP_TITLE = "HRmod Lab v2 · HR-only wave area shift"
 SCIENTIFIC_LIMITATION = (
-    "Ако кратко усилие не остави различим HR отговор, HR-only моделът не може "
-    "надеждно да го възстанови. Моделът преразпределя наблюдавания HR отговор "
-    "и не трябва да измисля ненаблюдавана мощност."
+    "HRmod v2 преразпределя във времето част от наблюдавания HR отговор. "
+    "Ако кратко усилие не остави различим HR отговор, HR-only моделът не може да го възстанови. "
+    "Ако HR спада по време на продължаващо реално усилие, моделът не може да го знае без независим "
+    "reference канал. Затова резултатът е експериментална HR-еквивалентна оценка, а не измерена мощност."
 )
 CORE_STATE_KEY = "hrmod_lab_core_run"
 REFERENCE_STATE_KEY = "hrmod_lab_reference_result"
+WAVE_TABLE_COLUMNS = (
+    "wave_id",
+    "status",
+    "rise_start_timestamp",
+    "peak_timestamp",
+    "tail_end_timestamp",
+    "end_reason",
+    "baseline_hr_bpm",
+    "rise_bpm",
+    "fall_bpm",
+    "receiver_duration_s",
+    "donor_duration_s",
+    "donor_available_area_bpm_s",
+    "requested_area_bpm_s",
+    "receiver_capacity_bpm_s",
+    "moved_area_bpm_s",
+    "moved_fraction_of_donor",
+    "area_balance_error_bpm_s",
+    "capacity_limited",
+    "skip_reason",
+    "raw_zone_seconds",
+    "clean_zone_seconds",
+    "hrmod_zone_seconds",
+    "hrmod_minus_raw_zone_seconds",
+    "hrmod_minus_clean_zone_seconds",
+)
 
 
 st.set_page_config(
@@ -121,6 +148,14 @@ def _records_frame(value: Any) -> pd.DataFrame:
     if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray)):
         return pd.DataFrame([_plain(item) for item in value])
     return pd.DataFrame()
+
+
+def _ordered_wave_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Keep the required scientific columns first without hiding diagnostics."""
+
+    leading = [column for column in WAVE_TABLE_COLUMNS if column in frame.columns]
+    trailing = [column for column in frame.columns if column not in leading]
+    return frame.loc[:, [*leading, *trailing]]
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -258,199 +293,208 @@ def _quality_report(parsed: TCXParseResult) -> None:
 
 
 def _model_config_widgets(defaults: HRmodConfig) -> dict[str, Any]:
-    """Render every configurable conservative-v1 parameter."""
+    """Render the four primary v2 settings and collapsed safeguards."""
 
-    first = st.columns(4)
-    alpha = first[0].slider(
+    primary = st.columns(4)
+    alpha = primary[0].slider(
         "alpha",
         min_value=0.0,
         max_value=1.0,
         value=float(defaults.alpha),
         step=0.05,
-        help="Дял от наличната балансирана площ; никога над 1.",
-    )
-    delay_s = first[1].number_input(
-        "delay_s (s)", min_value=0.0, value=float(defaults.delay_s), step=1.0
-    )
-    tau_on_s = first[2].number_input(
-        "tau_on_s (s)", min_value=0.01, value=float(defaults.tau_on_s), step=1.0
-    )
-    tau_off_s = first[3].number_input(
-        "tau_off_s (s)", min_value=0.01, value=float(defaults.tau_off_s), step=1.0
-    )
-
-    st.caption("Robust smoothing и derivative support")
-    smoothing = st.columns(4)
-    smoothing_method = smoothing[0].selectbox(
-        "smoothing_method",
-        options=("robust_local_linear", "local_linear"),
-        index=("robust_local_linear", "local_linear").index(
-            defaults.smoothing_method
+        help=(
+            "Дял от допустимата donor площ, заявен за преместване. "
+            "alpha=1 заявя цялата налична площ."
         ),
     )
-    smoothing_window_s = smoothing[1].number_input(
+    rise_threshold_bpm_s = primary[1].number_input(
+        "rise_threshold_bpm_s",
+        min_value=0.001,
+        value=float(defaults.rise_threshold_bpm_s),
+        step=0.01,
+        format="%.2f",
+        help="Минимален наклон за устойчиво начало на покачване (bpm/s).",
+    )
+    min_rise_bpm = primary[2].number_input(
+        "min_rise_bpm",
+        min_value=0.01,
+        value=float(defaults.min_rise_bpm),
+        step=0.5,
+        help="Минимално общо HR покачване за валидна вълна (bpm).",
+    )
+    smoothing_window_s = primary[3].number_input(
         "smoothing_window_s",
         min_value=0.01,
         value=float(defaults.smoothing_window_s),
         step=1.0,
-    )
-    smoothing_min_points = smoothing[2].number_input(
-        "smoothing_min_points",
-        min_value=2,
-        value=int(defaults.smoothing_min_points),
-        step=1,
-    )
-    smoothing_robust_iterations = smoothing[3].number_input(
-        "smoothing_robust_iterations",
-        min_value=0,
-        value=int(defaults.smoothing_robust_iterations),
-        step=1,
+        help="Time-based прозорец само за h_detect; clean_hr не се заменя.",
     )
 
-    st.caption("Episode detection — само от HR correction lobes")
-    episode_a = st.columns(4)
-    correction_deadband_bpm = episode_a[0].number_input(
-        "correction_deadband_bpm",
-        min_value=0.0,
-        value=float(defaults.correction_deadband_bpm),
-        step=0.1,
-    )
-    min_lobe_duration_s = episode_a[1].number_input(
-        "min_lobe_duration_s",
-        min_value=0.0,
-        value=float(defaults.min_lobe_duration_s),
-        step=1.0,
-    )
-    min_lobe_area_bpm_s = episode_a[2].number_input(
-        "min_lobe_area_bpm_s",
-        min_value=0.0,
-        value=float(defaults.min_lobe_area_bpm_s),
-        step=1.0,
-    )
-    episode_neutral_gap_s = episode_a[3].number_input(
-        "episode_neutral_gap_s",
-        min_value=0.0,
-        value=float(defaults.episode_neutral_gap_s),
-        step=1.0,
-    )
-    episode_b = st.columns(3)
-    episode_balance_tolerance_bpm_s = episode_b[0].number_input(
-        "episode_balance_tolerance_bpm_s",
-        min_value=0.0,
-        value=float(defaults.episode_balance_tolerance_bpm_s),
-        step=0.5,
-    )
-    max_episode_duration_s = episode_b[1].number_input(
-        "max_episode_duration_s",
-        min_value=0.01,
-        value=float(defaults.max_episode_duration_s),
-        step=10.0,
-    )
-    edge_episode_policy = episode_b[2].selectbox(
-        "edge_episode_policy",
-        options=("skip_incomplete", "correct_if_balanced"),
-        index=("skip_incomplete", "correct_if_balanced").index(
-            defaults.edge_episode_policy
-        ),
-        help="Default-ът не коригира incomplete edge episodes.",
-    )
+    with st.expander("Advanced detection safeguards", expanded=False):
+        st.caption(
+            "Технически HR-only защити. Стойностите се сериализират в run config; "
+            "defaults са exploratory, а не физиологично валидирани."
+        )
+        rise_fall = st.columns(4)
+        min_sustained_rise_s = rise_fall[0].number_input(
+            "min_sustained_rise_s", min_value=0.01,
+            value=float(defaults.min_sustained_rise_s), step=1.0
+        )
+        fall_threshold_bpm_s = rise_fall[1].number_input(
+            "fall_threshold_bpm_s", min_value=0.001,
+            value=float(defaults.fall_threshold_bpm_s), step=0.01, format="%.2f"
+        )
+        min_sustained_fall_s = rise_fall[2].number_input(
+            "min_sustained_fall_s", min_value=0.01,
+            value=float(defaults.min_sustained_fall_s), step=1.0
+        )
+        min_fall_bpm = rise_fall[3].number_input(
+            "min_fall_bpm", min_value=0.01,
+            value=float(defaults.min_fall_bpm), step=0.5
+        )
 
-    st.caption("Cleaning, gaps и sampling")
-    cleaning_a = st.columns(4)
-    max_interpolation_gap_s = cleaning_a[0].number_input(
-        "max_interpolation_gap_s",
-        min_value=0.0,
-        value=float(defaults.max_interpolation_gap_s),
-        step=0.5,
-    )
-    long_gap_threshold_s = cleaning_a[1].number_input(
-        "long_gap_threshold_s",
-        min_value=0.01,
-        value=float(defaults.long_gap_threshold_s),
-        step=1.0,
-        help="Long gap разделя core обработката на независими сегменти.",
-    )
-    sampling_regularity_tolerance_s = cleaning_a[2].number_input(
-        "sampling_regularity_tolerance_s",
-        min_value=0.0,
-        value=float(defaults.sampling_regularity_tolerance_s),
-        step=0.05,
-    )
-    area_conservation_tolerance_bpm_s = cleaning_a[3].number_input(
-        "area_conservation_tolerance_bpm_s",
-        min_value=0.0,
-        value=float(defaults.area_conservation_tolerance_bpm_s),
-        format="%.8f",
-    )
-    cleaning_b = st.columns(4)
-    artifact_min_hr_bpm = cleaning_b[0].number_input(
-        "artifact_min_hr_bpm",
-        min_value=0.0,
-        value=float(defaults.artifact_min_hr_bpm),
-        step=1.0,
-    )
-    artifact_max_hr_bpm = cleaning_b[1].number_input(
-        "artifact_max_hr_bpm",
-        min_value=0.01,
-        value=float(defaults.artifact_max_hr_bpm),
-        step=1.0,
-    )
-    artifact_max_rate_bpm_per_s = cleaning_b[2].number_input(
-        "artifact_max_rate_bpm_per_s",
-        min_value=0.01,
-        value=float(defaults.artifact_max_rate_bpm_per_s),
-        step=1.0,
-    )
-    artifact_spike_deviation_bpm = cleaning_b[3].number_input(
-        "artifact_spike_deviation_bpm",
-        min_value=0.01,
-        value=float(defaults.artifact_spike_deviation_bpm),
-        step=1.0,
-    )
+        baseline_return = st.columns(4)
+        baseline_lookback_s = baseline_return[0].number_input(
+            "baseline_lookback_s", min_value=0.01,
+            value=float(defaults.baseline_lookback_s), step=1.0
+        )
+        baseline_min_points = baseline_return[1].number_input(
+            "baseline_min_points", min_value=1,
+            value=int(defaults.baseline_min_points), step=1
+        )
+        return_tolerance_bpm = baseline_return[2].number_input(
+            "return_tolerance_bpm", min_value=0.0,
+            value=float(defaults.return_tolerance_bpm), step=0.5
+        )
+        return_sustain_s = baseline_return[3].number_input(
+            "return_sustain_s", min_value=0.01,
+            value=float(defaults.return_sustain_s), step=1.0
+        )
 
-    st.caption("Optional local caps (disabled по default)")
-    caps = st.columns(4)
-    addition_enabled = caps[0].checkbox(
-        "Enable max_addition_bpm", value=defaults.max_addition_bpm is not None
-    )
-    max_addition_bpm = caps[1].number_input(
-        "max_addition_bpm",
-        min_value=0.0,
-        value=float(defaults.max_addition_bpm or 10.0),
-        step=0.5,
-        disabled=not addition_enabled,
-    )
-    removal_enabled = caps[2].checkbox(
-        "Enable max_removal_bpm", value=defaults.max_removal_bpm is not None
-    )
-    max_removal_bpm = caps[3].number_input(
-        "max_removal_bpm",
-        min_value=0.0,
-        value=float(defaults.max_removal_bpm or 10.0),
-        step=0.5,
-        disabled=not removal_enabled,
-    )
+        termination = st.columns(4)
+        neutral_slope_tolerance_bpm_s = termination[0].number_input(
+            "neutral_slope_tolerance_bpm_s", min_value=0.0,
+            value=float(defaults.neutral_slope_tolerance_bpm_s), step=0.01,
+            format="%.2f"
+        )
+        neutral_trough_timeout_s = termination[1].number_input(
+            "neutral_trough_timeout_s", min_value=0.01,
+            value=float(defaults.neutral_trough_timeout_s), step=1.0
+        )
+        min_receiver_duration_s = termination[2].number_input(
+            "min_receiver_duration_s", min_value=0.01,
+            value=float(defaults.min_receiver_duration_s), step=1.0
+        )
+        min_donor_duration_s = termination[3].number_input(
+            "min_donor_duration_s", min_value=0.01,
+            value=float(defaults.min_donor_duration_s), step=1.0
+        )
+
+        boundaries = st.columns(4)
+        max_wave_duration_s = boundaries[0].number_input(
+            "max_wave_duration_s", min_value=0.01,
+            value=float(defaults.max_wave_duration_s), step=10.0
+        )
+        max_interpolation_gap_s = boundaries[1].number_input(
+            "max_interpolation_gap_s", min_value=0.0,
+            value=float(defaults.max_interpolation_gap_s), step=0.5
+        )
+        long_gap_threshold_s = boundaries[2].number_input(
+            "long_gap_threshold_s", min_value=0.01,
+            value=float(defaults.long_gap_threshold_s), step=1.0,
+            help="Long gap разделя сигнала; площ не се прехвърля през него."
+        )
+        edge_wave_policy = boundaries[3].selectbox(
+            "edge_wave_policy", options=("skip_incomplete",), index=0,
+            help="Incomplete edge/gap/file-end вълни не се коригират."
+        )
+
+        st.caption("Optional per-sample caps (disabled by default)")
+        caps = st.columns(4)
+        addition_enabled = caps[0].checkbox(
+            "Enable max_addition_bpm", value=defaults.max_addition_bpm is not None
+        )
+        max_addition_bpm = caps[1].number_input(
+            "max_addition_bpm", min_value=0.01,
+            value=float(defaults.max_addition_bpm or 10.0), step=0.5,
+            disabled=not addition_enabled
+        )
+        removal_enabled = caps[2].checkbox(
+            "Enable max_removal_bpm", value=defaults.max_removal_bpm is not None
+        )
+        max_removal_bpm = caps[3].number_input(
+            "max_removal_bpm", min_value=0.01,
+            value=float(defaults.max_removal_bpm or 10.0), step=0.5,
+            disabled=not removal_enabled
+        )
+
+        st.caption("Detection smoothing, cleaning and numerical safeguards")
+        smoothing = st.columns(4)
+        smoothing_method = smoothing[0].selectbox(
+            "smoothing_method",
+            options=("robust_local_linear", "local_linear"),
+            index=("robust_local_linear", "local_linear").index(defaults.smoothing_method),
+        )
+        smoothing_min_points = smoothing[1].number_input(
+            "smoothing_min_points", min_value=2,
+            value=int(defaults.smoothing_min_points), step=1
+        )
+        smoothing_robust_iterations = smoothing[2].number_input(
+            "smoothing_robust_iterations", min_value=0,
+            value=int(defaults.smoothing_robust_iterations), step=1
+        )
+        area_conservation_tolerance_bpm_s = smoothing[3].number_input(
+            "area_conservation_tolerance_bpm_s", min_value=1e-9,
+            value=float(defaults.area_conservation_tolerance_bpm_s), format="%.8f"
+        )
+
+        cleaning = st.columns(5)
+        artifact_min_hr_bpm = cleaning[0].number_input(
+            "artifact_min_hr_bpm", min_value=0.0,
+            value=float(defaults.artifact_min_hr_bpm), step=1.0
+        )
+        artifact_max_hr_bpm = cleaning[1].number_input(
+            "artifact_max_hr_bpm", min_value=0.01,
+            value=float(defaults.artifact_max_hr_bpm), step=1.0
+        )
+        artifact_max_rate_bpm_per_s = cleaning[2].number_input(
+            "artifact_max_rate_bpm_per_s", min_value=0.01,
+            value=float(defaults.artifact_max_rate_bpm_per_s), step=1.0
+        )
+        artifact_spike_deviation_bpm = cleaning[3].number_input(
+            "artifact_spike_deviation_bpm", min_value=0.01,
+            value=float(defaults.artifact_spike_deviation_bpm), step=1.0
+        )
+        sampling_regularity_tolerance_s = cleaning[4].number_input(
+            "sampling_regularity_tolerance_s", min_value=0.0,
+            value=float(defaults.sampling_regularity_tolerance_s), step=0.05
+        )
 
     return {
         "config_version": defaults.config_version,
-        "kernel_model": defaults.kernel_model,
         "alpha": alpha,
-        "delay_s": delay_s,
-        "tau_on_s": tau_on_s,
-        "tau_off_s": tau_off_s,
+        "rise_threshold_bpm_s": rise_threshold_bpm_s,
+        "min_rise_bpm": min_rise_bpm,
         "smoothing_method": smoothing_method,
         "smoothing_window_s": smoothing_window_s,
         "smoothing_min_points": int(smoothing_min_points),
         "smoothing_robust_iterations": int(smoothing_robust_iterations),
-        "correction_deadband_bpm": correction_deadband_bpm,
-        "min_lobe_duration_s": min_lobe_duration_s,
-        "min_lobe_area_bpm_s": min_lobe_area_bpm_s,
-        "episode_neutral_gap_s": episode_neutral_gap_s,
-        "episode_balance_tolerance_bpm_s": episode_balance_tolerance_bpm_s,
-        "max_episode_duration_s": max_episode_duration_s,
+        "min_sustained_rise_s": min_sustained_rise_s,
+        "fall_threshold_bpm_s": fall_threshold_bpm_s,
+        "min_sustained_fall_s": min_sustained_fall_s,
+        "min_fall_bpm": min_fall_bpm,
+        "baseline_lookback_s": baseline_lookback_s,
+        "baseline_min_points": int(baseline_min_points),
+        "return_tolerance_bpm": return_tolerance_bpm,
+        "return_sustain_s": return_sustain_s,
+        "neutral_slope_tolerance_bpm_s": neutral_slope_tolerance_bpm_s,
+        "neutral_trough_timeout_s": neutral_trough_timeout_s,
+        "min_receiver_duration_s": min_receiver_duration_s,
+        "min_donor_duration_s": min_donor_duration_s,
+        "max_wave_duration_s": max_wave_duration_s,
         "max_interpolation_gap_s": max_interpolation_gap_s,
         "long_gap_threshold_s": long_gap_threshold_s,
-        "edge_episode_policy": edge_episode_policy,
+        "edge_wave_policy": edge_wave_policy,
         "max_addition_bpm": max_addition_bpm if addition_enabled else None,
         "max_removal_bpm": max_removal_bpm if removal_enabled else None,
         "artifact_min_hr_bpm": artifact_min_hr_bpm,
@@ -495,12 +539,18 @@ ZONE_COLORS = (
 
 def _hr_only_figure(
     timeseries: pd.DataFrame,
+    waves: pd.DataFrame,
     profile: AthleteHRProfile,
+    *,
+    show_h_detect: bool,
+    selected_wave_id: int | None = None,
 ) -> go.Figure:
+    """Build the interactive overview or an automatically zoomed wave view."""
+
     x_column = _first_column(timeseries, ("timestamp", "elapsed_s"))
     if not x_column:
         return go.Figure()
-    x_values = timeseries[x_column]
+    x_values = timeseries[x_column].copy()
     if x_column == "timestamp":
         x_values = pd.to_datetime(x_values, errors="coerce", utc=True)
 
@@ -510,26 +560,17 @@ def _hr_only_figure(
         shared_xaxes=True,
         vertical_spacing=0.07,
         row_heights=(0.72, 0.28),
-        subplot_titles=("HR-only сигнали", "Корекция и derivative"),
+        subplot_titles=("clean_hr срещу hrmod", "Добавена/отнета промяна и HR trend"),
     )
-    hr_traces = (
-        (("raw_hr_bpm", "raw_hr"), "raw_hr", "rgba(120,120,120,0.55)", "dot"),
-        (("clean_hr_bpm", "clean_hr"), "clean_hr", "#3b82f6", "solid"),
-        (
-            ("smoothed_hr_bpm", "derivative_smoothed_hr_bpm", "smoothed_hr"),
-            "derivative-smoothed HR",
-            "#8b5cf6",
-            "dash",
-        ),
-        (
-            ("provisional_demand_bpm", "provisional_latent_demand_bpm"),
-            "provisional latent demand",
-            "#f59e0b",
-            "dashdot",
-        ),
-        (("hrmod_bpm", "hrmod"), "HRmod", "#dc2626", "solid"),
+    hr_traces: tuple[tuple[tuple[str, ...], str, str, str, float], ...] = (
+        (("clean_hr_bpm", "clean_hr"), "clean_hr", "#2563eb", "solid", 1.7),
+        (("hrmod_bpm", "hrmod"), "hrmod", "#dc2626", "solid", 2.25),
     )
-    for candidates, label, color, dash in hr_traces:
+    if show_h_detect:
+        hr_traces += (
+            (("h_detect_bpm", "h_detect"), "h_detect (detection only)", "#7c3aed", "dot", 1.0),
+        )
+    for candidates, label, color, dash, width in hr_traces:
         column = _first_column(timeseries, candidates)
         if not column:
             continue
@@ -539,7 +580,7 @@ def _hr_only_figure(
                 y=pd.to_numeric(timeseries[column], errors="coerce"),
                 mode="lines",
                 name=label,
-                line={"color": color, "width": 2 if label == "HRmod" else 1.35, "dash": dash},
+                line={"color": color, "width": width, "dash": dash},
                 connectgaps=False,
             ),
             row=1,
@@ -547,10 +588,9 @@ def _hr_only_figure(
         )
 
     correction_traces = (
-        (("raw_correction_bpm", "raw_correction"), "raw correction", "#64748b", "dot", 1.0),
-        (("added_correction_bpm", "added_correction"), "+ added", "#16a34a", "solid", 1.0),
-        (("removed_correction_bpm", "removed_correction"), "− removed", "#dc2626", "solid", -1.0),
-        (("derivative_bpm_per_s", "derivative_bpm_s", "derivative"), "derivative (bpm/s)", "#7c3aed", "dash", 1.0),
+        (("added_bpm",), "+ added_bpm", "#16a34a", "solid", 1.0),
+        (("removed_bpm",), "− removed_bpm", "#dc2626", "solid", -1.0),
+        (("trend_bpm_per_s",), "trend (bpm/s)", "#7c3aed", "dash", 1.0),
     )
     for candidates, label, color, dash, sign in correction_traces:
         column = _first_column(timeseries, candidates)
@@ -565,6 +605,7 @@ def _hr_only_figure(
                 name=label,
                 line={"color": color, "width": 1.25, "dash": dash},
                 connectgaps=False,
+                fill="tozeroy" if label.startswith(("+", "−")) else None,
             ),
             row=2,
             col=1,
@@ -583,38 +624,229 @@ def _hr_only_figure(
             col=1,
         )
 
-    episode_column = _first_column(timeseries, ("episode_id",))
-    if episode_column:
-        episode_values = pd.to_numeric(timeseries[episode_column], errors="coerce")
-        for episode_id in sorted(episode_values.dropna().unique()):
-            mask = episode_values.eq(episode_id)
-            if not mask.any():
-                continue
-            indices = np.flatnonzero(mask.to_numpy())
-            start_x = x_values.iloc[int(indices[0])]
-            end_x = x_values.iloc[int(indices[-1])]
-            figure.add_vrect(
-                x0=start_x,
-                x1=end_x,
-                fillcolor="rgba(245,158,11,0.07)",
-                line_width=1,
-                line_color="rgba(245,158,11,0.28)",
-                layer="below",
-                row="all",
-                col=1,
-            )
+    _add_flag_regions(
+        figure,
+        timeseries,
+        x_values,
+        "receiver_flag",
+        fillcolor="rgba(34,197,94,0.14)",
+    )
+    _add_flag_regions(
+        figure,
+        timeseries,
+        x_values,
+        "donor_flag",
+        fillcolor="rgba(249,115,22,0.14)",
+    )
+
+    visible_waves = waves
+    if selected_wave_id is not None and not waves.empty and "wave_id" in waves.columns:
+        visible_waves = waves.loc[
+            pd.to_numeric(waves["wave_id"], errors="coerce").eq(selected_wave_id)
+        ]
+    _add_wave_guides(figure, visible_waves, x_column)
+
+    figure.add_trace(
+        go.Scatter(
+            x=[None], y=[None], name="receiver s→p", mode="lines",
+            line={"color": "rgba(34,197,94,0.75)", "width": 8},
+        ),
+        row=1, col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=[None], y=[None], name="donor p→e", mode="lines",
+            line={"color": "rgba(249,115,22,0.75)", "width": 8},
+        ),
+        row=1, col=1,
+    )
+    for label, color, dash in (
+        ("s · rise start", "#15803d", "dash"),
+        ("p · peak", "#7e22ce", "dot"),
+        ("e · tail end", "#c2410c", "dash"),
+        ("B · local baseline", "#475569", "dashdot"),
+    ):
+        figure.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                name=label,
+                mode="lines",
+                line={"color": color, "width": 1.2, "dash": dash},
+            ),
+            row=1,
+            col=1,
+        )
 
     figure.add_hline(y=0.0, line_color="rgba(100,116,139,0.5)", row=2, col=1)
     figure.update_yaxes(title_text="bpm", row=1, col=1)
     figure.update_yaxes(title_text="bpm / bpm·s⁻¹", row=2, col=1)
     figure.update_xaxes(title_text="Timestamp" if x_column == "timestamp" else "Elapsed (s)", row=2, col=1)
+    selected_range = _selected_wave_range(timeseries, waves, selected_wave_id, x_column)
+    if selected_range is not None:
+        figure.update_xaxes(range=list(selected_range))
     figure.update_layout(
-        height=760,
+        height=740 if selected_wave_id is None else 680,
         hovermode="x unified",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
         margin={"l": 45, "r": 35, "t": 80, "b": 45},
     )
     return figure
+
+
+def _flag_mask(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column in frame.columns:
+        values = frame[column]
+        if values.dtype == bool:
+            return values.fillna(False)
+        return values.astype(str).str.lower().isin(("true", "1", "yes"))
+    if "wave_state" in frame.columns:
+        state = frame["wave_state"].astype(str).str.lower()
+        target = "receiver" if column == "receiver_flag" else "donor"
+        return state.eq(target)
+    return pd.Series(False, index=frame.index)
+
+
+def _add_flag_regions(
+    figure: go.Figure,
+    frame: pd.DataFrame,
+    x_values: pd.Series,
+    column: str,
+    *,
+    fillcolor: str,
+) -> None:
+    mask = _flag_mask(frame, column).reset_index(drop=True)
+    if mask.empty or not mask.any():
+        return
+    groups = mask.ne(mask.shift(fill_value=False)).cumsum()
+    for _, group in mask.groupby(groups):
+        if not bool(group.iloc[0]):
+            continue
+        start_index = int(group.index[0])
+        end_index = int(group.index[-1])
+        x0 = x_values.iloc[start_index]
+        x1 = x_values.iloc[end_index]
+        if start_index == end_index:
+            dt = pd.to_numeric(frame.get("dt_s", pd.Series(1.0, index=frame.index)), errors="coerce").iloc[end_index]
+            seconds = 1.0 if pd.isna(dt) or float(dt) <= 0.0 else float(dt)
+            x1 = x1 + pd.Timedelta(seconds=seconds) if isinstance(x1, pd.Timestamp) else float(x1) + seconds
+        figure.add_vrect(
+            x0=x0,
+            x1=x1,
+            fillcolor=fillcolor,
+            opacity=1.0,
+            line_width=0,
+            layer="below",
+            row="all",
+            col=1,
+        )
+
+
+def _wave_axis_value(row: pd.Series, names: Sequence[str], x_column: str) -> Any:
+    for name in names:
+        if name not in row.index or pd.isna(row[name]):
+            continue
+        value = row[name]
+        if x_column == "timestamp":
+            return pd.to_datetime(value, errors="coerce", utc=True)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _add_wave_guides(
+    figure: go.Figure, waves: pd.DataFrame, x_column: str
+) -> None:
+    if waves.empty:
+        return
+    marker_specs = (
+        (("rise_start_timestamp", "rise_start_elapsed_s"), "s", "#15803d", "dash"),
+        (("peak_timestamp", "peak_elapsed_s"), "p", "#7e22ce", "dot"),
+        (("tail_end_timestamp", "tail_end_elapsed_s"), "e", "#c2410c", "dash"),
+    )
+    for _, row in waves.iterrows():
+        for names, marker, color, dash in marker_specs:
+            x_value = _wave_axis_value(row, names, x_column)
+            if x_value is None or pd.isna(x_value):
+                continue
+            figure.add_vline(
+                x=x_value,
+                line_width=1.1,
+                line_dash=dash,
+                line_color=color,
+                row="all",
+                col=1,
+            )
+            if len(waves) == 1:
+                figure.add_annotation(
+                    x=x_value,
+                    y=1.0,
+                    xref="x",
+                    yref="paper",
+                    text=f"<b>{marker}</b>",
+                    showarrow=False,
+                    font={"color": color},
+                    yshift=8,
+                )
+        start = _wave_axis_value(
+            row, ("rise_start_timestamp", "rise_start_elapsed_s"), x_column
+        )
+        end = _wave_axis_value(
+            row, ("tail_end_timestamp", "tail_end_elapsed_s"), x_column
+        )
+        baseline = row.get("baseline_hr_bpm")
+        if start is None or end is None or pd.isna(baseline):
+            continue
+        figure.add_shape(
+            type="line",
+            x0=start,
+            x1=end,
+            y0=float(baseline),
+            y1=float(baseline),
+            line={"color": "#475569", "width": 1.2, "dash": "dashdot"},
+            row=1,
+            col=1,
+        )
+
+
+def _selected_wave_range(
+    timeseries: pd.DataFrame,
+    waves: pd.DataFrame,
+    selected_wave_id: int | None,
+    x_column: str,
+) -> tuple[Any, Any] | None:
+    if selected_wave_id is None or waves.empty or "wave_id" not in waves.columns:
+        return None
+    selected = waves.loc[
+        pd.to_numeric(waves["wave_id"], errors="coerce").eq(selected_wave_id)
+    ]
+    if selected.empty:
+        return None
+    row = selected.iloc[0]
+    start = _wave_axis_value(
+        row, ("rise_start_timestamp", "rise_start_elapsed_s"), x_column
+    )
+    end = _wave_axis_value(
+        row, ("tail_end_timestamp", "tail_end_elapsed_s"), x_column
+    )
+    if start is None or end is None or pd.isna(start) or pd.isna(end):
+        wave_ids = pd.to_numeric(timeseries.get("wave_id"), errors="coerce")
+        wave_x = timeseries.loc[wave_ids.eq(selected_wave_id), x_column]
+        if wave_x.empty:
+            return None
+        start, end = wave_x.iloc[0], wave_x.iloc[-1]
+    if x_column == "timestamp":
+        start = pd.to_datetime(start, utc=True)
+        end = pd.to_datetime(end, utc=True)
+        padding = pd.Timedelta(
+            max(5.0, float((end - start).total_seconds()) * 0.08), unit="s"
+        )
+    else:
+        start, end = float(start), float(end)
+        padding = max(5.0, (end - start) * 0.08)
+    return start - padding, end + padding
 
 
 def _reference_samples_frame(reference_channels: ReferenceChannels) -> pd.DataFrame:
@@ -769,7 +1001,7 @@ def _download_panel(
 ) -> None:
     result: HRmodResult = run["result"]
     timeseries = _records_frame(result.timeseries)
-    episodes = _records_frame(result.episode_summary)
+    waves = _records_frame(result.wave_summary)
     zones = _records_frame(result.zone_summary)
     configuration = {
         "model_version": result.model_version,
@@ -782,7 +1014,7 @@ def _download_panel(
     }
     files: dict[str, bytes] = {
         "processed_hr_only_timeseries.csv": _csv_bytes(timeseries),
-        "episode_summary.csv": _csv_bytes(episodes),
+        "wave_summary.csv": _csv_bytes(waves),
         "zone_summary.csv": _csv_bytes(zones),
         "run_configuration.json": _json_bytes(configuration),
         "diagnostics.json": _json_bytes(result.diagnostics),
@@ -811,9 +1043,9 @@ def _download_panel(
         use_container_width=True,
     )
     buttons[1].download_button(
-        "Episodes CSV",
-        files["episode_summary.csv"],
-        "episode_summary.csv",
+        "Waves CSV",
+        files["wave_summary.csv"],
+        "wave_summary.csv",
         "text/csv",
         use_container_width=True,
     )
@@ -877,17 +1109,18 @@ def _diagnostic_panel(result: HRmodResult) -> None:
     )
     support = st.columns(4)
     support[0].metric(
-        "Derivative support",
-        _format_number(diagnostics.get("derivative_support_fraction"), percent=True),
+        "Detection support",
+        _format_number(diagnostics.get("detection_support_fraction"), percent=True),
     )
     support[1].metric(
-        "Complete / incomplete",
-        f"{diagnostics.get('complete_episode_count', 0)} / "
-        f"{diagnostics.get('incomplete_episode_count', 0)}",
+        "Detected / corrected",
+        f"{diagnostics.get('detected_wave_count', 0)} / "
+        f"{diagnostics.get('corrected_wave_count', 0)}",
     )
     support[2].metric(
-        "Capacity ratio",
-        _format_number(diagnostics.get("capacity_ratio"), percent=True),
+        "Complete / incomplete",
+        f"{diagnostics.get('complete_wave_count', 0)} / "
+        f"{diagnostics.get('incomplete_wave_count', 0)}",
     )
     support[3].metric(
         "Area conservation",
@@ -896,19 +1129,27 @@ def _diagnostic_panel(result: HRmodResult) -> None:
     areas = pd.DataFrame(
         [
             {
-                "paired_added_bpm_s": diagnostics.get("total_added_area_bpm_s"),
-                "paired_removed_bpm_s": diagnostics.get("total_removed_area_bpm_s"),
+                "donor_available_bpm_s": diagnostics.get(
+                    "total_donor_available_area_bpm_s"
+                ),
+                "requested_bpm_s": diagnostics.get("total_requested_area_bpm_s"),
+                "receiver_capacity_bpm_s": diagnostics.get(
+                    "total_receiver_capacity_bpm_s"
+                ),
+                "moved_bpm_s": diagnostics.get("total_moved_area_bpm_s"),
+                "added_bpm_s": diagnostics.get("total_added_area_bpm_s"),
+                "removed_bpm_s": diagnostics.get("total_removed_area_bpm_s"),
                 "balance_error_bpm_s": diagnostics.get(
                     "total_area_balance_error_bpm_s"
                 ),
-                "unpaired_positive_bpm_s": diagnostics.get(
-                    "total_unpaired_positive_area_bpm_s"
-                ),
-                "unpaired_negative_bpm_s": diagnostics.get(
-                    "total_unpaired_negative_area_bpm_s"
-                ),
                 "capacity_limited_bpm_s": diagnostics.get(
                     "total_capacity_limited_area_bpm_s"
+                ),
+                "moved_fraction_of_donor": diagnostics.get(
+                    "moved_fraction_of_donor"
+                ),
+                "capacity_limited_waves": diagnostics.get(
+                    "capacity_limited_wave_count"
                 ),
                 "edge_affected_samples": diagnostics.get("edge_affected_samples"),
                 "gap_affected_samples": diagnostics.get("gap_affected_samples"),
@@ -919,6 +1160,16 @@ def _diagnostic_panel(result: HRmodResult) -> None:
     flags = diagnostics.get("flags", []) or []
     if flags:
         st.warning("Model flags: " + ", ".join(map(str, flags)))
+    skip_reasons = diagnostics.get("skip_reason_counts", {}) or {}
+    if skip_reasons:
+        st.markdown("**Skip reasons**")
+        st.dataframe(
+            pd.DataFrame(
+                {"skip_reason": list(skip_reasons), "wave_count": list(skip_reasons.values())}
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
     st.markdown("**Parameter sensitivity**")
     st.json(diagnostics.get("parameter_sensitivity", {}))
     with st.expander("Пълни core diagnostics"):
@@ -928,7 +1179,7 @@ def _diagnostic_panel(result: HRmodResult) -> None:
 st.title(APP_TITLE)
 st.caption(
     "Самостоятелна лабораторна програма · не е част от продукционния onFlows flow · "
-    "офлайн inverse kinetics с HR look-ahead"
+    "офлайн преразпределение на наблюдавана HR площ"
 )
 st.warning(SCIENTIFIC_LIMITATION, icon="⚠️")
 st.info(
@@ -939,7 +1190,7 @@ st.info(
 
 with st.sidebar:
     st.header("HRmod Lab")
-    st.markdown("**Model:** `hrmod_inverse_kinetics_conservative_v1`")
+    st.markdown("**Model:** `hrmod_wave_area_shift_v2`")
     st.markdown("**Режим:** offline / completed activity")
     st.markdown("[Документация](./docs/HRMOD_LAB.md)")
     st.divider()
@@ -1020,10 +1271,10 @@ with st.form("hrmod_core_configuration", clear_on_submit=False):
         "HRmax (bpm)", min_value=1.0, value=200.0, step=1.0
     )
 
-    st.subheader("4 · Всички HR-only експериментални параметри")
+    st.subheader("4 · Четири HR-only v2 основни настройки")
     st.caption(
-        f"{default_config.config_version} · {default_config.kernel_model}. "
-        "Defaults са exploratory и не са физиологично калибрирани."
+        f"{default_config.config_version} · alpha, rise threshold, minimum rise и "
+        "detection smoothing. Defaults са exploratory и не са физиологично калибрирани."
     )
     config_values = _model_config_widgets(default_config)
     compute_clicked = st.form_submit_button(
@@ -1046,7 +1297,7 @@ if compute_clicked:
             regularity_tolerance_s=float(parser_regularity_tolerance_s),
             assume_naive_timestamps_utc=bool(assume_naive_utc),
         )
-        with st.spinner("HR-only preprocessing, inverse kinetics и balancing…"):
+        with st.spinner("HR-only preprocessing, wave detection и exact area shift…"):
             run_parse = parse_tcx(tcx_payload, config=run_parser_config)
             # Anti-leakage by construction: no reference object is in this call.
             result = compute_hrmod_hr_only(
@@ -1054,6 +1305,20 @@ if compute_clicked:
                 athlete_profile=athlete_profile,
                 config=hrmod_config,
             )
+        run_timeseries = _records_frame(result.timeseries)
+        clean_column = _first_column(run_timeseries, ("clean_hr_bpm", "clean_hr"))
+        profile_warning = None
+        if clean_column:
+            clean_values = pd.to_numeric(run_timeseries[clean_column], errors="coerce")
+            out_of_profile = clean_values.lt(athlete_profile.hr_floor_bpm) | clean_values.gt(
+                athlete_profile.hrmax_bpm
+            )
+            if out_of_profile.any():
+                profile_warning = (
+                    "Приетият clean_hr съдържа стойности извън зададените "
+                    "HR_floor/HRmax. Проверете профила и артефактите; UI не прилага "
+                    "тихо clipping."
+                )
         st.session_state[CORE_STATE_KEY] = {
             "result": result,
             "parsed": run_parse,
@@ -1062,6 +1327,7 @@ if compute_clicked:
             "filename": uploaded_tcx.name,
             "file_sha256": tcx_sha256,
             "core_fingerprint": _core_fingerprint(result),
+            "profile_warning": profile_warning,
         }
         st.session_state.pop(REFERENCE_STATE_KEY, None)
         st.session_state.pop("hrmod_lab_annotations", None)
@@ -1080,15 +1346,21 @@ result = run["result"]
 run_parse = run["parsed"]
 athlete_profile = run["athlete_profile"]
 timeseries_frame = _records_frame(result.timeseries)
-episode_frame = _records_frame(result.episode_summary)
+wave_frame = _records_frame(result.wave_summary)
+wave_table_frame = _ordered_wave_frame(wave_frame)
 zone_frame = _records_frame(result.zone_summary)
 
 st.subheader("5 · Готов HR-only core резултат")
-summary_columns = st.columns(4)
+summary_columns = st.columns(5)
 summary_columns[0].metric("Model version", result.model_version)
 summary_columns[1].metric("HR samples", len(timeseries_frame))
-summary_columns[2].metric("Response episodes", len(episode_frame))
+summary_columns[2].metric("Detected waves", len(wave_frame))
 summary_columns[3].metric(
+    "Corrected waves",
+    int(pd.to_numeric(wave_frame.get("corrected"), errors="coerce").fillna(0).sum())
+    if "corrected" in wave_frame.columns else 0,
+)
+summary_columns[4].metric(
     "Core input hash", result.hr_input_hash[:16] + "…", help=result.hr_input_hash
 )
 st.caption(
@@ -1096,11 +1368,13 @@ st.caption(
     + run["core_fingerprint"][:20]
     + "…` · reference join все още не е част от този резултат."
 )
+if run.get("profile_warning"):
+    st.warning(run["profile_warning"], icon="⚠️")
 st.warning(SCIENTIFIC_LIMITATION, icon="⚠️")
 
 (
     tab_signals,
-    tab_episodes,
+    tab_waves,
     tab_zones,
     tab_diagnostics,
     tab_reference,
@@ -1108,7 +1382,7 @@ st.warning(SCIENTIFIC_LIMITATION, icon="⚠️")
 ) = st.tabs(
     (
         "HR-only сигнали",
-        "Response episodes",
+        "HR вълни",
         "HR зони",
         "Diagnostics",
         "Reference validation",
@@ -1117,23 +1391,72 @@ st.warning(SCIENTIFIC_LIMITATION, icon="⚠️")
 )
 
 with tab_signals:
+    show_h_detect_overview = st.checkbox(
+        "Покажи h_detect (тънка диагностична линия, не измерен HR)",
+        value=False,
+        key="hrmod_lab_show_h_detect_overview",
+    )
     st.plotly_chart(
-        _hr_only_figure(timeseries_frame, athlete_profile),
+        _hr_only_figure(
+            timeseries_frame,
+            wave_frame,
+            athlete_profile,
+            show_h_detect=show_h_detect_overview,
+        ),
         use_container_width=True,
         config={"displaylogo": False},
     )
     with st.expander("Processed HR-only timeseries"):
         st.dataframe(timeseries_frame, use_container_width=True, hide_index=True)
 
-with tab_episodes:
+with tab_waves:
     st.caption(
-        "Това са автоматични математически HR response windows, не механични "
-        "work intervals и не доказателство за Z5."
+        "Вълните са открити само от h_detect. Receiver s→p получава площта, "
+        "donor p→e я отдава; това не е механичен work interval."
     )
-    if episode_frame.empty:
-        st.info("Не са установени response episodes при текущите параметри.")
+    if wave_frame.empty:
+        st.info("Не са открити HR вълни при текущите параметри.")
     else:
-        st.dataframe(episode_frame, use_container_width=True, hide_index=True)
+        selector_options = [
+            int(value)
+            for value in pd.to_numeric(wave_frame["wave_id"], errors="coerce").dropna()
+        ]
+        selected_wave_id = st.selectbox(
+            "Wave selector",
+            options=selector_options,
+            format_func=lambda value: (
+                f"Wave {value} · "
+                + str(
+                    wave_frame.loc[
+                        pd.to_numeric(wave_frame["wave_id"], errors="coerce").eq(value),
+                        "status",
+                    ].iloc[0]
+                )
+            ),
+        )
+        show_h_detect_zoom = st.checkbox(
+            "Покажи h_detect в wave zoom",
+            value=True,
+            key="hrmod_lab_show_h_detect_zoom",
+        )
+        st.plotly_chart(
+            _hr_only_figure(
+                timeseries_frame,
+                wave_frame,
+                athlete_profile,
+                show_h_detect=show_h_detect_zoom,
+                selected_wave_id=int(selected_wave_id),
+            ),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
+        selected_wave = wave_table_frame.loc[
+            pd.to_numeric(wave_frame["wave_id"], errors="coerce").eq(selected_wave_id)
+        ]
+        st.markdown("**Избрана вълна — площи и зонова промяна**")
+        st.dataframe(selected_wave, use_container_width=True, hide_index=True)
+        st.markdown("**Всички вълни**")
+        st.dataframe(wave_table_frame, use_container_width=True, hide_index=True)
 
 with tab_zones:
     st.caption(

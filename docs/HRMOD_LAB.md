@@ -1,209 +1,286 @@
-# HRmod Lab v1 — HR-only експериментален модел
+# HRmod Lab v2 — HR-only преместване на площта на вълната
 
 ## Статус и предназначение
 
-HRmod Lab е самостоятелна лабораторна програма за офлайн анализ на вече завършена активност от TCX файл. Тя не е част от продукционната навигация на onFlows, не чете или записва продукционната база данни и не се включва в Intervals.icu потока.
+Активният модел е `hrmod_wave_area_shift_v2`, с versioned конфигурация
+`hrmod_config_v2`. Това е изолиран, offline и експериментален модул за завършени
+TCX активности. Той не е част от production onFlows, не чете Intervals.icu или
+база данни и не добавя production navigation entry.
 
-`HRmod` не е измерен пулс, механична мощност, кислороден дълг или доказана физиологична величина. Той е експериментален, синтетичен HR-еквивалентен сигнал на времево реконструирано натоварване. Конкретният inverse модел и консервативното преразпределяне на площ са хипотеза за бъдеща калибрация и независима валидация.
+Моделът тества проста хипотеза: когато наблюдаваният HR образува устойчива
+rise–peak–fall вълна, част от площта в по-късния спад може да се премести в
+по-ранното покачване. Добавената и отнетата площ са еднакви. Това е времево
+преразпределение на наблюдавания HR отговор, а не оценка на механична мощност.
 
-> **Основно научно ограничение:** ако кратко усилие не остави различим HR отговор, HR-only моделът не може надеждно да го възстанови. Моделът преразпределя наблюдавания HR отговор и не трябва да измисля ненаблюдавана мощност.
+> HRmod v2 преразпределя във времето част от наблюдавания HR отговор. Ако кратко усилие не остави различим HR отговор, HR-only моделът не може да го възстанови. Ако HR спада по време на продължаващо реално усилие, моделът не може да го знае без независим reference канал. Затова резултатът е експериментална HR-еквивалентна оценка, а не измерена мощност.
 
 ## Непроменима HR-only граница
 
-Core моделът приема само:
+Публичният core приема само:
 
-- timezone-aware timestamp;
-- измерен HR и прозрачни HR quality/provenance флагове; `clean_hr` се създава вътре в core preprocessing-а;
+- timezone-aware `timestamp`;
+- измерен HR и HR quality flags;
+- реалното `dt` между пробите;
 - индивидуални `HRmax`, `HR_floor` и пет HR зони;
-- сериализируема конфигурация на HR кинетичния модел.
+- сериализируемата HR-only v2 конфигурация.
 
-Speed, power, distance, altitude, grade, cadence, TCX laps и ръчни markers/intervals физически не са аргументи на core API. Те не участват в smoothing, inverse kinetics, episode detection, площта или размера на корекцията. Parser adapter-ът ги връща в отделна `reference_channels` структура. Reference оценката се изпълнява само след готов и hash-нат core резултат.
+Speed, power, grade, altitude, distance, cadence, TCX laps, sport metadata и
+ръчни annotations нямат представяне в core input schema. Те не могат да влияят
+върху cleaning, `h_detect`, wave detection, local baseline, receiver/donor
+границите, преместената площ, зонирането или `hr_input_hash`.
 
-Тази граница е съществена и за ски бягането: суровата скорост зависи от спускане, терен, сняг, вятър и техника. Висока скорост може да съвпадне с ниска двигателна мощност. Затова raw ski speed е единствено контекст, не се превръща автоматично в интензивност и никога не се нарича „реална мощност“.
+TCX adapter-ът създава две физически различни структури:
 
-## Научна хипотеза и точни формули
+1. `hr_input_samples` — единственият вход към `compute_hrmod_hr_only`;
+2. `reference_channels` — недостъпен за core контейнер за последваща оценка.
 
-Измереният HR се разглежда като забавен и изгладен first-order отговор на латентен HR-еквивалентен demand. Обработката е по независими непрекъснати сегменти; дълъг data gap никога не се пресича. Реалните timestamp разлики задават `dt_s` — не се приема, че всяка стъпка е точно 1 s.
+Следователно еднакви timestamps, HR и HR-only config дават числено идентичен
+core резултат и hash при различни, липсващи или премахнати reference канали.
 
-За `clean_hr` \(h_i\) при време \(t_i\), отделната robust-smoothed серия \(\tilde h(t)\) се използва само за производната и inverse kinetics. При look-ahead/dead time \(\delta\), в секунди:
+Raw ski speed е само контекст: високата скорост при спускане може да съвпада с
+ниско двигателно усилие и не се преобразува автоматично в intensity или power.
+
+## Подготовка на HR сигнала
+
+`raw_hr_bpm` остава непроменен. Deterministic preprocessing маркира артефакти,
+прави само допустимата кратка интерполация и създава `clean_hr_bpm`. Крайният
+`hrmod_bpm` винаги започва от `clean_hr_bpm`.
+
+`h_detect_bpm` е отделна, леко и робастно изгладена time-based серия само за
+тенденция и граници. Тя не е измерен пулс и никога не заменя `clean_hr_bpm` при
+изчисляване на donor area, receiver capacity или крайния сигнал. Наклонът
+`trend_bpm_per_s` също се използва само от detector-а.
+
+Изчисленията използват действителните timestamps и `dt_s`; не се предполага
+sampling през 1 s. Gap над `long_gap_threshold_s` започва нов независим segment.
+Вълна и HR площ никога не пресичат такава граница.
+
+## Deterministic rise–peak–fall state machine
+
+Една вълна съдържа локален baseline `B`, начало на rise `s`, действителен peak
+`p` и край на установения fall `e`.
+
+### 1. Търсене на устойчив rise
+
+Кандидатът започва при `trend_bpm_per_s >= rise_threshold_bpm_s`. Условието
+трябва да продължи поне `min_sustained_rise_s`, а общото покачване трябва да
+достигне `min_rise_bpm`. След потвърждение `s` се връща до първата проба на
+устойчивото покачване, не остава при късния момент на потвърждение.
+
+### 2. Локален baseline
+
+`B` е робастната медиана на валидния `clean_hr_bpm` в time-based прозореца
+`baseline_lookback_s` непосредствено преди `s`. Нужни са поне
+`baseline_min_points`. Не се използват глобален resting HR или reference данни.
+
+Недостатъчната pre-rise история прави вълната incomplete; default edge policy
+не я коригира. При нов rise преди пълно възстановяване се използва нов baseline
+около новия локален trough, а не baseline от предишната вълна.
+
+### 3. Peak и потвърден fall
+
+След `s` state machine следи максимума на `h_detect_bpm`. Fall се потвърждава,
+когато тенденцията е поне `fall_threshold_bpm_s` в отрицателна посока за
+`min_sustained_fall_s` и спадът достига `min_fall_bpm`. `p` е действителният
+максимум между `s` и потвърждението, а не моментът на късното потвърждение.
+
+### 4. Край на donor частта
+
+Donor започва от първата проба след `p` и завършва в най-ранното допустимо `e`:
+
+1. `h_detect_bpm` се задържи в `return_tolerance_bpm` над `B` за
+   `return_sustain_s`;
+2. нов устойчив rise затвори текущия fall в непосредствения локален trough;
+3. наклонът стане неутрален в `neutral_slope_tolerance_bpm_s` за
+   `neutral_trough_timeout_s`;
+4. бъде достигнат `max_wave_duration_s`;
+5. възникне long gap или свърши файлът.
+
+Първите три причини могат да затворят complete вълна при изпълнени минимални
+rise, fall, receiver и donor критерии. Max duration, gap, file end без надеждно
+затваряне или липсващ fall дават incomplete/skipped wave по default. Продължителен
+plateau не се включва като donor само защото HR остава над `B`.
+
+## Точно преместване на HR площта
+
+За complete валидна вълна receiver прозорецът е `R = [s, p]`, а donor
+прозорецът е `T = (p, e]`. Те не се припокриват. Нека `h_i` е
+`clean_hr_bpm`, а `dt_i` е реалната продължителност на пробата в секунди.
+
+Локалната donor граница е:
 
 \[
-g_i = \tilde h(t_i + \delta)
+F = \max(B, HR_{floor})
 \]
 
-Интерполацията за \(g_i\) е само в същия непрекъснат HR сегмент. Производната е в bpm/s:
+Допустимият donor излишък и общата donor площ са:
 
 \[
-\dot g_i = \frac{d\tilde h}{dt}(t_i + \delta)
-\]
-
-Времевата константа е в секунди и зависи от знака на производната:
-
-\[
-\tau_i =
-\begin{cases}
-\tau_{on}, & \dot g_i \ge 0 \\
-\tau_{off}, & \dot g_i < 0
-\end{cases}
-\]
-
-Предварителният латентен demand и суровата корекция са в bpm:
-
-\[
-d_i^{raw} = g_i + \tau_i \dot g_i
-\]
-
-\[
-c_i^{raw} = d_i^{raw} - \tilde h(t_i)
-\]
-
-Look-ahead означава, че алгоритъмът използва бъдещи спрямо \(t_i\) HR проби. Следователно v1 е **офлайн алгоритъм**, а не real-time оценка.
-
-## HR-only response episodes
-
-Episode detector-ът е детерминистична state machine върху формата на \(c_i^{raw}\), не детектор на реални работни интервали. Той:
-
-1. прилага `correction_deadband_bpm`;
-2. отхвърля lobes под `min_lobe_duration_s` или `min_lobe_area_bpm_s`;
-3. започва episode от значима положителна lobe;
-4. свързва последващи положителни и отрицателни lobes, включително повторни HR вълни;
-5. завършва след отрицателна фаза и баланс в tolerance или след достатъчно дълъг neutral gap;
-6. прекъсва при long gap или `max_episode_duration_s`;
-7. маркира incomplete start/end/gap episodes.
-
-По подразбиране incomplete edge episodes се маркират, но не се коригират (`skip_incomplete`). Episode е математически response window и не доказва Z5, механична работа или протоколен интервал.
-
-## Консервативно запазване на HR площта
-
-В завършен episode \(E_j\):
-
-\[
-p_i = \max(0,c_i^{raw}), \qquad n_i = \max(0,-c_i^{raw})
-\]
-
-Наличните площи, в bpm·s, са:
-
-\[
-P_j = \sum_{i \in E_j} p_i \Delta t_i, \qquad
-N_j = \sum_{i \in E_j} n_i \Delta t_i
-\]
-
-При \(\alpha \in [0,1]\) желаната балансирана площ е:
-
-\[
-M_j^* = \alpha \min(P_j,N_j)
-\]
-
-Капацитетът до индивидуалните HR граници е:
-
-\[
-C_j^+ = \sum_{i \in E_j,p_i>0}\max(0,HR_{max}-h_i)\Delta t_i
-\]
-
-\[
-C_j^- = \sum_{i \in E_j,n_i>0}\max(0,h_i-HR_{floor})\Delta t_i
-\]
-
-Реално преместваната площ е:
-
-\[
-M_j = \min(M_j^*,C_j^+,C_j^-)
-\]
-
-Deterministic capped water-filling разпределя добавката \(a_i\) по формата на \(p_i\), а отнемането \(r_i\) по \(n_i\), при:
-
-\[
-0 \le a_i \le HR_{max}-h_i, \qquad
-0 \le r_i \le h_i-HR_{floor}
+q_i = \max(0, h_i-F), \quad i\in T
 \]
 
 \[
-\sum a_i\Delta t_i = \sum r_i\Delta t_i = M_j
+N = \sum_{i\in T}q_i\,dt_i
 \]
+
+`q_i` е в bpm, а `N` е в bpm·s. При `alpha \in [0,1]` заявената площ е:
+
+\[
+M^* = \alpha N
+\]
+
+Свободният receiver капацитет до индивидуалния HRmax е:
+
+\[
+u_i = \max(0, HR_{max}-h_i), \quad i\in R
+\]
+
+\[
+C = \sum_{i\in R}u_i\,dt_i
+\]
+
+Реално преместената площ е:
+
+\[
+M = \min(M^*, C)
+\]
+
+При нулеви `N` или `C` няма корекция и причината се записва. Ако `C < M*`,
+вълната е `capacity_limited`; добавянето и отнемането се намаляват симетрично.
+
+Optional per-sample caps са изключени по default. Ако бъдат включени, нека
+`q'_i = min(q_i, max_removal_bpm)` и
+`u'_i = min(u_i, max_addition_bpm)` за съответния активен cap; при изключен cap
+съответната форма остава непроменена (`q'=q` или `u'=u`). Ефективните площи са
+`N_remove = sum(q'_i dt_i)` и `C_add = sum(u'_i dt_i)`, а реалното преместване
+става `M = min(M*, N_remove, C_add)`. Така cap-ът може допълнително да ограничи
+`M`, но добавената и отнетата площ пак се намаляват симетрично и се маркира
+`capacity_limited`.
+
+При default режима без caps от donor частта се отнема пропорционално на
+излишъка:
+
+\[
+r_i = q_i\frac{M}{N}, \quad i\in T
+\]
+
+В receiver частта се добавя пропорционално на свободния HRmax капацитет:
+
+\[
+a_i = u_i\frac{M}{C}, \quad i\in R
+\]
+
+При включени caps същото пропорционално разпределение използва capped формите:
+`r_i = q'_i M/N_remove` и `a_i = u'_i M/C_add`.
+
+Това естествено дава по-голямо добавяне на ранните проби с повече свободен
+капацитет. Не е нужен отделен параметър за front loading.
 
 Крайният сигнал е:
 
 \[
-HRmod_i = h_i + a_i-r_i
+HRmod_i =
+\begin{cases}
+h_i+a_i, & i\in R\\
+h_i-r_i, & i\in T\\
+h_i, & i\notin R\cup T
+\end{cases}
 \]
 
-и за всеки коригиран завършен episode важи инвариантът:
+За всяка коригирана вълна численият инвариант е:
 
 \[
-\sum_{i \in E_j}(HRmod_i-h_i)\Delta t_i = 0
+\sum_{i\in R}a_i dt_i
+=
+\sum_{i\in T}r_i dt_i
+=M
 \]
 
-`alpha=0` връща точно `hrmod == clean_hr`. `alpha=1` използва най-голямата балансирана корекция, позволена от provisional сигнала и HR границите; стойност над 1 не е допустима в conservative v1.
+и следователно:
 
-## Конфигурация и начални стойности
+\[
+\sum_{i\in R\cup T}(HRmod_i-h_i)dt_i=0
+\]
 
-Всички стойности са versioned, сериализируеми и видими в UI и run export. Те са некалибрирани лабораторни настройки, а не физиологично потвърдени константи. Каноничният източник на defaults е `hrmod_lab.schemas.HRmodConfig`; UI не поддържа второ скрито копие.
+Floating-point остатъкът се отчита като `area_balance_error_bpm_s` и се
+сравнява с versioned tolerance. Добавянето не преминава HRmax, а отнемането не
+преминава под `F`.
 
-| Параметър | Единица | Начална стойност | Роля |
-|---|---:|---:|---|
-| `alpha` | дял | `1.0` | дял от наличната балансирана площ |
-| `delay_s` | s | `5` | HR look-ahead/dead time |
-| `tau_on_s` | s | `30` | first-order on константа |
-| `tau_off_s` | s | `45` | first-order off константа |
-| `smoothing_method` | — | `robust_local_linear` | robust local-linear smoothing/differentiation |
-| `smoothing_window_s` | s | `15` | времеви прозорец за derivative support |
-| `smoothing_min_points` | samples | `5` | минимална локална опора |
-| `smoothing_robust_iterations` | iterations | `2` | robust reweighting итерации |
-| `correction_deadband_bpm` | bpm | `0.5` | неутрална лента около нулева корекция |
-| `min_lobe_duration_s` | s | `3` | минимална продължителност на lobe |
-| `min_lobe_area_bpm_s` | bpm·s | `5` | минимална площ на lobe |
-| `episode_neutral_gap_s` | s | `15` | neutral gap за приключване |
-| `episode_balance_tolerance_bpm_s` | bpm·s | `5` | episode balance tolerance |
-| `max_episode_duration_s` | s | `900` | предпазен максимум за episode |
-| `max_interpolation_gap_s` | s | `3` | най-дълга разрешена кратка интерполация |
-| `long_gap_threshold_s` | s | `10` | граница за независим HR сегмент |
-| `edge_episode_policy` | — | `skip_incomplete` | политика за incomplete episode |
-| `max_addition_bpm` | bpm | disabled | допълнителен локален cap |
-| `max_removal_bpm` | bpm | disabled | допълнителен локален cap |
-| `artifact_min_hr_bpm` | bpm | `25` | долна artifact граница |
-| `artifact_max_hr_bpm` | bpm | `250` | горна artifact граница |
-| `artifact_max_rate_bpm_per_s` | bpm/s | `20` | максимална допустима HR скорост |
-| `artifact_spike_deviation_bpm` | bpm | `12` | локална spike-deviation граница |
-| `sampling_regularity_tolerance_s` | s | `0.25` | tolerance около очакваната sampling стъпка |
-| `area_conservation_tolerance_bpm_s` | bpm·s | `1e-6` | числен tolerance за conservation check |
+### Значение на alpha
 
-Точните сериализирани стойности за конкретно изпълнение са в `run_configuration.json`. Това е правилният provenance артефакт при сравняване на лабораторни runs.
+- `alpha = 0`: `hrmod_bpm == clean_hr_bpm`;
+- `alpha = 0.5`: заявява 50% от допустимата donor площ;
+- `alpha = 1`: заявява цялата допустима descending площ над `F`;
+- при недостатъчен receiver капацитет `M` се ограничава до `C`;
+- `alpha` никога не може да е над 1.
 
-`config_version="hrmod_config_v1"` и `kernel_model="first_order_inverse"` са version identifiers, а не свободни калибрационни параметри. V1 приема `smoothing_method` `robust_local_linear` или `local_linear`, и `edge_episode_policy` `skip_incomplete` или експерименталното `correct_if_balanced`.
+При `alpha = 1` и достатъчен капацитет donor пробите достигат точно `F`. Това е
+очакваното агресивно поведение на експерименталния модел.
 
-Parser-only defaults са: `max_bytes=67108864`, `long_gap_threshold_s=30`, `regularity_target_s=1`, `regularity_tolerance_s=0.25` и `assume_naive_timestamps_utc=true`. В Lab UI preview/run long-gap диагностиката се синхронизира с избраната `HRmodConfig.long_gap_threshold_s`; parser-ът само маркира provenance и не изглажда или интерполира HR.
+## Основни настройки
 
-Reference validation има отделна конфигурация, която никога не влияе на HRmod: `join_tolerance_s=0.51`, `sport=null`, quantitative power и controlled treadmill opt-in са изключени, външните зони са празни, `use_annotation_zones=false`, high labels са `Z4,Z5`, `max_lag_s=120` и `lag_step_s=1`. Quantitative power изисква изрично `power_source` и ненаслагващи се power zones; treadmill speed изисква изрично потвърден grade и protocol speed zones.
+Главният UI показва само тези четири настройки:
 
-## Индивидуален HR профил и зони
+| Поле | Default | Единица | Значение |
+|---|---:|---|---|
+| `alpha` | `1.0` | дял | заявен дял от допустимата donor площ |
+| `rise_threshold_bpm_s` | `0.15` | bpm/s | праг за устойчиво начало на rise |
+| `min_rise_bpm` | `5.0` | bpm | минимално общо покачване |
+| `smoothing_window_s` | `5.0` | s | time-based smoothing само за detection |
 
-Потребителят задава изрично `HR_floor`, `HRmax` и четири вътрешни граници, които образуват пет нарастващи, неприпокриващи се зони. Не се използва формула по възраст и observed maximum от файла не се приема автоматично за HRmax; той се показва само информативно.
+Defaults са exploratory, централизирани, versioned и сериализируеми. Те не са
+физиологично валидирани константи.
 
-`raw_hr`, `clean_hr` и `hrmod` се класифицират по незакръглените floating-point стойности. Zone summary съдържа секунди, процент и разликата между `hrmod` и `clean_hr` за всяка зона. Продукционни onFlows модели като `T_eq` не участват.
+## Advanced detection safeguards
 
-## TCX workflow и входни схеми
+Панелът е затворен по default. Всички стойности се записват в export config.
 
-1. TCX се parse-ва безопасно, с namespace и extension поддръжка и без external-entity обработка.
-2. Timestamps се нормализират timezone-aware, сортират се детерминистично и се deduplicate-ват.
-3. Parser-ът създава две физически различни структури.
-4. `hr_input_samples` минава през cleaning и се подава към core.
-5. `reference_channels` остава извън core до готов `hrmod_result`.
+| Поле | Default | Роля |
+|---|---:|---|
+| `min_sustained_rise_s` | `3.0` | минимално устойчиво rise време |
+| `fall_threshold_bpm_s` | `0.10` | абсолютен праг за отрицателен trend |
+| `min_sustained_fall_s` | `3.0` | минимално устойчиво fall време |
+| `min_fall_bpm` | `3.0` | минимален общ спад |
+| `baseline_lookback_s` | `20.0` | pre-rise baseline прозорец |
+| `baseline_min_points` | `3` | минимум валидни baseline проби |
+| `return_tolerance_bpm` | `2.0` | допустимо връщане над baseline |
+| `return_sustain_s` | `3.0` | устойчивост при връщане |
+| `neutral_slope_tolerance_bpm_s` | `0.05` | неутрален trend band |
+| `neutral_trough_timeout_s` | `8.0` | timeout за trough/plateau |
+| `min_receiver_duration_s` | `3.0` | минимален receiver |
+| `min_donor_duration_s` | `3.0` | минимален donor |
+| `max_wave_duration_s` | `600.0` | защитна максимална вълна |
+| `max_interpolation_gap_s` | `3.0` | максимална кратка HR интерполация |
+| `long_gap_threshold_s` | `10.0` | segment boundary |
+| `edge_wave_policy` | `skip_incomplete` | incomplete вълните не се коригират |
+| `max_addition_bpm` | `null` | optional per-sample cap, изключен |
+| `max_removal_bpm` | `null` | optional per-sample cap, изключен |
 
-Точната публична HR-only parser/core-input схема е умишлено тясна:
+Останалите технически defaults са:
 
-| Поле | Тип/единица | Значение |
-|---|---|---|
-| `timestamp` | timezone-aware datetime | време на пробата |
-| `heart_rate_bpm` | float/null, bpm | оригинално измерен HR; missing остава explicit null |
-| `quality_flags` | tuple[string] | parser provenance като duplicate/missing/gap markers |
+| Поле | Default |
+|---|---:|
+| `smoothing_method` | `robust_local_linear` |
+| `smoothing_min_points` | `3` |
+| `smoothing_robust_iterations` | `2` |
+| `artifact_min_hr_bpm` | `25.0` |
+| `artifact_max_hr_bpm` | `250.0` |
+| `artifact_max_rate_bpm_per_s` | `20.0` |
+| `artifact_spike_deviation_bpm` | `12.0` |
+| `sampling_regularity_tolerance_s` | `0.25` |
+| `area_conservation_tolerance_bpm_s` | `0.000001` |
 
-`HRSample`/`HRInputSample` няма полета за `clean_hr`, `elapsed_s`, `dt_s`, speed, power, grade, distance, cadence, laps или annotations. Cleaning, кратката интерполация, real `dt_s` и segment assignment са детерминистични core preprocessing стъпки под `HRmodConfig` и се появяват в output timeseries, без да променят оригиналната HR стойност.
+## Индивидуален профил и зони
 
-Reference структурата може да съдържа `distance_m`, `speed_mps`, `power_w`, `grade`, `altitude_m`, `cadence`, laps и markers. Наличието или стойностите им не променят `hr_input_hash` и никоя core стойност.
+Потребителят задава `HR_floor`, `HRmax` и точно пет строго нарастващи,
+ненаслагващи се зони в тези граници. HRmax не се извежда по възраст или от
+observed maximum. `raw_hr`, `clean_hr` и `hrmod` се класифицират по
+незакръглените floating-point стойности.
 
-## Публични API договори
+Приет `clean_hr` извън зададените HR граници се показва като явен проблем за
+профила или артефакт. Няма тихо clipping, което да го прикрие.
 
-Core API е тесен по дизайн:
+## Публичен API
 
 ```python
 from hrmod_lab.hrmod_core import compute_hrmod_hr_only
@@ -215,9 +292,10 @@ hrmod_result = compute_hrmod_hr_only(
 )
 ```
 
-Той не приема generic TCX dataframe и няма параметри за intervals, laps, speed, power, grade, cadence или annotations. Core не чете Streamlit state, файлове, environment variables, база данни или Intervals.icu.
+Core не приема generic TCX dataframe, reference columns, Streamlit state,
+файлове, environment variables или база данни.
 
-Само след core резултата може да се извика отделният договор:
+Едва след готовия immutable core резултат може да се извика:
 
 ```python
 from hrmod_lab.reference_validation import evaluate_against_reference
@@ -230,115 +308,107 @@ validation_result = evaluate_against_reference(
 )
 ```
 
-Reference evaluator-ът не мутира `hrmod_result`. UI пази core резултата в session state; включване/изключване на overlay или редакция на annotation не извиква повторно core. Нов core run има само при изрично натискане на бутона за изчисление.
-
-### Integration contract за бъдещ onFlows adapter
-
-Бъдещата интеграция трябва да адаптира onFlows activity stream до същата HR-only sample схема, да валидира индивидуалния профил и да извика тесния core API. Едва след получаването и записването на `model_version`, `hr_input_hash`, config и diagnostics може отделен adapter да join-не reference данни за отчет. Production adapter не трябва да разширява core signature или да внася reference колони в HR samples.
-
-Текущата лабораторна задача умишлено не реализира този production adapter, navigation entry, database migration, deployment или merge.
+Reference evaluator-ът не мутира `hrmod_result`. Overlay или annotation промяна
+не стартира нов core run; ново изчисление има само при изрично натискане на
+бутона **Изчисли HRmod (само HR)**.
 
 ## Изходна схема
 
-Core резултатът съдържа:
+`timeseries` съдържа поне:
 
-- `timeseries` — `timestamp`, `elapsed_s`, `dt_s`, `raw_hr_bpm`, `clean_hr_bpm`, `smoothed_hr_bpm`, `derivative_bpm_per_s`, `lookahead_hr_bpm`, `provisional_demand_bpm`, `raw_correction_bpm`, `added_correction_bpm`, `removed_correction_bpm`, `hrmod_bpm`, `segment_id`, `episode_id`, `episode_state`, трите zone labels, `quality_flags` и `model_flags`;
-- `episode_summary` — граници, статус, lobe/area/capacity и conservation диагностика;
-- `zone_summary` — seconds, percent и `hrmod - clean_hr` по сигнал и зона;
-- `diagnostics` — quality, gap, derivative, episode, capacity и conservation показатели и флагове;
-- пълна сериализируема `config`;
-- `hr_input_hash`;
-- `model_version = "hrmod_inverse_kinetics_conservative_v1"`.
+- `timestamp`, `elapsed_s`, `dt_s`;
+- `raw_hr_bpm`, `clean_hr_bpm`, `h_detect_bpm`, `trend_bpm_per_s`;
+- `segment_id`, `wave_id`, `wave_state`, `local_baseline_hr_bpm`;
+- `receiver_flag`, `donor_flag`, `added_bpm`, `removed_bpm`, `hrmod_bpm`;
+- raw/clean/hrmod zone labels;
+- quality и model flags.
 
-Reference-aligned timeseries и метрики са отделен резултат и отделен export; никога не се смесват в core hash-а.
+`wave_summary` съдържа границите `s/p/e`, status/end/skip reason, baseline и
+donor floor, rise/fall, receiver/donor durations, donor/requested/capacity/moved
+площи, added/removed площи, balance error, capacity limitation и per-wave
+`raw_zone_seconds`, `clean_zone_seconds`, `hrmod_zone_seconds`,
+`hrmod_minus_raw_zone_seconds`, `hrmod_minus_clean_zone_seconds`.
+
+`zone_summary` съдържа seconds, percent и `hrmod - clean_hr` за всяка зона за
+цялата активност.
+
+Diagnostics показва HR coverage, sampling regularity, artifacts, interpolation,
+gaps, detection support, detected/complete/incomplete/corrected/skipped waves,
+donor/requested/capacity/moved/added/removed площи, capacity-limited площ и
+брой, skip-reason distribution и area-conservation error/pass.
+
+## Streamlit workflow и визуализации
+
+1. Качете `.tcx` с HR.
+2. Прегледайте quality отчета и информативния observed maximum.
+3. Задайте индивидуалния профил и петте зони.
+4. Проверете четирите главни v2 настройки; при нужда отворете collapsed advanced
+   safeguards.
+5. Натиснете **Изчисли HRmod (само HR)**.
+6. В overview графиката сравнете `clean_hr` и `hrmod`; по желание покажете тънката
+   detection-only линия `h_detect`.
+7. Receiver и donor областите са различно оцветени; вертикалните `s`, `p`, `e`
+   markers и локалният baseline показват границите.
+8. Изберете wave от selector-а. Отделната графика автоматично zoom-ва до нея и
+   показва къде е добавено и къде е отнето.
+9. Прегледайте wave таблицата, цялостното time-in-zone сравнение и diagnostics.
+10. Едва тогава използвайте отделния **Reference validation** tab.
+
+## Reference validation без leakage
+
+Reference join се прави след core result и core hash. Допустимата интерпретация
+е ограничена:
+
+- измерена/оценена power е количествена референция само при известен произход и
+  индивидуални power zones;
+- контролирана treadmill speed с проверен grade може да е protocol reference;
+- outdoor running speed е само контекст без валидиран sport/grade model;
+- raw ski speed винаги е само контекст;
+- laps и manual markers са post-hoc annotations.
+
+Reference данните не настройват автоматично `alpha` или detection параметрите.
+Correlation сама по себе си не доказва валидност.
+
+## Експорти и възпроизводимост
+
+Downloads tab предоставя:
+
+- `processed_hr_only_timeseries.csv`;
+- `wave_summary.csv`;
+- `zone_summary.csv`;
+- `run_configuration.json`;
+- `diagnostics.json`;
+- отделен reference comparison CSV/JSON само след такава оценка;
+- annotations CSV/JSON при налични annotations;
+- ZIP със същите артефакти.
+
+За възпроизводим run се пазят `model_version`, `config_version`, пълната config,
+профилът, parser config, `hr_input_hash` и TCX provenance. Лични TCX файлове не
+се commit-ват. Core export-ите не съдържат speed/power/lap колони.
 
 ## Локално стартиране
 
-От корена на repository:
+От repository root:
 
 ```powershell
 python -m pip install -r requirements.txt
 python -m streamlit run hrmod_lab_app.py
 ```
 
-След това:
+Това е единственият standalone entry point; не се създава отделно приложение.
 
-1. качете `.tcx` файл с HR;
-2. прегледайте quality отчета и observed maximum;
-3. задайте HR профила и всички експериментални параметри;
-4. натиснете **Изчисли HRmod (само HR)**;
-5. прегледайте HR-only графиката, episodes, zones и diagnostics;
-6. едва след готов резултат използвайте tab **Reference validation** за overlays/annotations;
-7. свалете отделните CSV/JSON файлове или общия ZIP.
+## Ограничения и бъдеща калибрация
 
-## Reference validation без leakage
+HR-only входът не съдържа информация за усилие, което не е оставило различим HR
+отговор, нито за продължаващо усилие при спадащ HR. Wave detector-ът може да
+пропусне физиологично значими промени или да интерпретира HR-only форма, която
+има друга причина. Capacity limit и incomplete/skipped waves са наблюдения за
+математическата приложимост, не физиологична диагноза.
 
-HRmod се изчислява и hash-ва преди timestamp join. Reference слоят може да показва:
-
-- измерена/оценена power серия, когато произходът и индивидуалните power зони са известни;
-- контролирана treadmill speed плюс проверен grade като протоколна референция;
-- outdoor running speed само като контекст без валидиран sport/grade модел;
-- raw ski speed само като контекст;
-- laps и ръчни markers само като post-hoc annotations и summaries.
-
-При изрично зададени external zones могат да се изчисляват confusion matrix, time-in-zone agreement, sensitivity за високите external зони, подобрение спрямо clean HR и lag diagnostics. Корелация сама по себе си не доказва валидност. v1 не auto-fit-ва HRmod параметрите по speed или power.
-
-Anti-leakage инвариантът е: два TCX входа с идентични timestamps и HR, но произволно различни reference стойности, дават numerically identical HRmod и еднакъв `hr_input_hash`. Премахването на всички reference канали също не променя core резултата.
-
-## Diagnostics и флагове
-
-UI и export-ите разграничават HR coverage, sampling regularity, interpolation/artifact fraction, derivative support, complete/incomplete episodes, paired/unpaired площ, capacity ratio, area conservation, edge/gap effects и налична parameter-sensitivity информация.
-
-Минималният flag речник включва:
-
-- `HR_ARTIFACTS_PRESENT`;
-- `INTERPOLATED_HR`;
-- `LONG_GAP`;
-- `INSUFFICIENT_DERIVATIVE_SUPPORT`;
-- `INCOMPLETE_EPISODE_START`;
-- `INCOMPLETE_EPISODE_END`;
-- `UNPAIRED_POSITIVE_AREA`;
-- `UNPAIRED_NEGATIVE_AREA`;
-- `CAPACITY_LIMITED`;
-- `HR_FLOOR_LIMITED`;
-- `HRMAX_LIMITED`;
-- `AREA_BALANCE_FAILED`;
-- `REFERENCE_NOT_SUITABLE_FOR_INTENSITY`;
-- `RAW_SKI_SPEED_CONTEXT_ONLY`.
-
-Flag е диагностично наблюдение, не автоматична физиологична интерпретация.
-
-## Експорти и възпроизводимост
-
-HRmod Lab предоставя:
-
-- processed HR-only timeseries CSV;
-- episode summary CSV;
-- zone summary CSV;
-- reference-aligned comparison CSV само при налична reference оценка;
-- annotations CSV/JSON при налични annotations;
-- `run_configuration.json`;
-- `diagnostics.json`;
-- ZIP със същите артефакти.
-
-За възпроизводим run пазете TCX provenance извън repository, core `hr_input_hash`, `model_version`, configuration JSON и версията на кода. Не commit-вайте лични TCX файлове.
-
-## Бъдеща калибрация и независима валидация
-
-Defaults не трябва да се оптимизират върху един спортист или да се избират по визуално съвпадение със speed. Предвиденият следващ етап е предварително регистриран лабораторен протокол с отделни calibration и hold-out cohorts, надежден external criterion (например измерена power при подходящ модалитет), повторни активности, uncertainty/measurement-error анализ и предварително определени primary metrics. Трябва да се докладват failure cases, sensitivity към параметри и сравнение с прост baseline, не само correlation.
-
-Калибрацията може да оцени общи и индивидуални `delay_s`, `tau_on_s`, `tau_off_s`, smoothing и episode параметри, но резултатът трябва да се потвърди върху независими данни. Ако `alpha=1` остава недостатъчен, това е доказателство срещу достатъчността на HR-only reconstruction за съответния сценарий, а не разрешение за създаване на HR площ.
-
-## Extension points
-
-- **Second-order/two-component HR kernel:** бъдеща стратегия зад същия HR-only kinetics interface. Тя трябва да запази реалните timestamps, segment boundaries, diagnostics и conservation договора; v1 умишлено остава first-order.
-- **Независим power model:** бъдещ модел може да прогнозира или анализира механична power, но трябва да е отделен downstream модул. Той не трябва да се добавя като вход към `compute_hrmod_hr_only`.
-- **Sport/grade reference adapters:** могат да подобрят външната оценка, без да променят core резултата.
-- **Calibration runner:** може да сравнява предварително зададени HR-only конфигурации върху отделен dataset, без reference auto-fit в интерактивния v1 UI.
-
-## Научни отправни точки
-
-- Zakynthinaki, *Modelling Heart Rate Kinetics*, PLOS ONE (2015), [doi:10.1371/journal.pone.0118263](https://doi.org/10.1371/journal.pone.0118263).
-- Spörri et al., *Heart Rate Dynamics Identification and Control in Cycle Ergometer Exercise* (2022), [doi:10.3389/fcteg.2022.894180](https://doi.org/10.3389/fcteg.2022.894180).
-
-Публикациите подкрепят използването на динамични on/off представяния на HR отговора. Те не валидират автоматично конкретното inverse преобразуване, episode detector-а или conservative area balancing в HRmod v1.
+Defaults не трябва да се настройват визуално по един спортист или по speed.
+Следващата научна стъпка е предварително регистриран лабораторен протокол с
+отделни calibration и hold-out cohorts, надежден независим criterion, повторни
+активности, measurement-error/uncertainty анализ и предварително зададени primary
+metrics. Failure cases и parameter sensitivity трябва да се докладват наред с
+резултатите. Ако `alpha=1` е недостатъчен, това е доказателство за границата на
+HR-only реконструкцията, не разрешение да се създава ненаблюдавана HR площ.

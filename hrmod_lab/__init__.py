@@ -10,7 +10,6 @@ from .schemas import (
     CONFIG_VERSION,
     MODEL_VERSION,
     AthleteHRProfile,
-    EpisodeSummary,
     HRInputSample,
     HRmodConfig,
     HRmodDiagnostics,
@@ -18,6 +17,7 @@ from .schemas import (
     HRmodTimeseriesPoint,
     HRSample,
     HRZone,
+    WaveSummary,
     ZoneSummary,
 )
 
@@ -26,7 +26,6 @@ __version__ = MODEL_VERSION
 __all__ = [
     "AthleteHRProfile",
     "CONFIG_VERSION",
-    "EpisodeSummary",
     "HRInputSample",
     "HRmodConfig",
     "HRmodDiagnostics",
@@ -35,6 +34,7 @@ __all__ = [
     "HRSample",
     "HRZone",
     "MODEL_VERSION",
+    "WaveSummary",
     "ZoneSummary",
     "compute_hrmod_hr_only",
 ]

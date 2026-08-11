@@ -206,8 +206,16 @@ def evaluate_against_reference(
     annotations = _normalize_annotations(
         [*embedded_annotations, *(optional_annotations or ())]
     )
-    sport = (config.sport or reference_sport or "").strip().lower()
-    is_ski = "ski" in sport or "biathlon" in sport
+    configured_sport = (config.sport or "").strip().lower()
+    source_sport = (reference_sport or "").strip().lower()
+    # A caller-facing overlay label must never be able to erase a ski source
+    # recorded by the parser.  Raw ski speed is descent-sensitive context, not
+    # an intensity signal, even when the same numeric channel is explicitly
+    # enabled as a controlled treadmill protocol in another activity.
+    is_ski = any(
+        "ski" in value or "biathlon" in value
+        for value in (source_sport, configured_sport)
+    )
 
     flags: set[str] = set()
     has_speed = any(_finite(row.get("speed_mps")) is not None for row in reference_rows)
