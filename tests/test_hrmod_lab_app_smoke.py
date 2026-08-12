@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import ast
-from dataclasses import fields
+from dataclasses import asdict, fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
+import hrmod_lab
 from hrmod_lab.schemas import HRmodConfig, MODEL_VERSION
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 APP_PATH = REPOSITORY_ROOT / "hrmod_lab_app.py"
+PLOTTING_PATH = REPOSITORY_ROOT / "hrmod_lab" / "plotting.py"
 
 
 def _synthetic_wave_tcx() -> bytes:
@@ -100,6 +102,7 @@ def test_main_v2_ui_has_exactly_four_core_settings_before_advanced_panel() -> No
 
 def test_v2_ui_exposes_wave_visualization_and_exact_limitation() -> None:
     source = APP_PATH.read_text(encoding="utf-8")
+    plotting_source = PLOTTING_PATH.read_text(encoding="utf-8")
     required_visual_fields = (
         "h_detect_bpm",
         "receiver_flag",
@@ -114,7 +117,7 @@ def test_v2_ui_exposes_wave_visualization_and_exact_limitation() -> None:
         "hrmod_zone_seconds",
         "hrmod_minus_raw_zone_seconds",
     )
-    assert all(field in source for field in required_visual_fields)
+    assert all(field in source or field in plotting_source for field in required_visual_fields)
     exact_limitation = (
         "HRmod v2 преразпределя във времето част от наблюдавания HR отговор. "
         "Ако кратко усилие не остави различим HR отговор, HR-only моделът не може да го възстанови. "
@@ -134,7 +137,16 @@ def test_v2_ui_exposes_wave_visualization_and_exact_limitation() -> None:
     assert ast.literal_eval(limitation_assignment.value) == exact_limitation
 
 
-def test_synthetic_tcx_runs_through_existing_v2_streamlit_entry_point() -> None:
+def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None:
+    compute_calls = 0
+    real_compute = hrmod_lab.compute_hrmod_hr_only
+
+    def counted_compute(**kwargs):
+        nonlocal compute_calls
+        compute_calls += 1
+        return real_compute(**kwargs)
+
+    monkeypatch.setattr(hrmod_lab, "compute_hrmod_hr_only", counted_compute)
     app = AppTest.from_file(str(APP_PATH), default_timeout=60).run()
     app.file_uploader[0].upload(
         "synthetic-wave.tcx", _synthetic_wave_tcx(), "application/xml"
@@ -148,5 +160,24 @@ def test_synthetic_tcx_runs_through_existing_v2_streamlit_entry_point() -> None:
     assert not app.exception
     assert not app.error
     assert any("изчислен само" in message.value for message in app.success)
+    assert compute_calls == 1
+    assert app.radio[0].label == "Резултатен изглед"
+    assert app.radio[0].value == "HR-only сигнали"
+    assert not any(widget.label == "Wave selector" for widget in app.selectbox)
+    assert len(app.get("plotly_chart")) == 1
+
+    before = app.session_state["hrmod_lab_core_run"]["result"]
+    before_plain = asdict(before)
+    before_hash = before.hr_input_hash
+    assert "hrmod_lab_annotations" in app.session_state
+    app.radio[0].set_value("HR вълни").run()
+
+    assert not app.exception
+    assert not app.error
+    assert compute_calls == 1
     assert any(widget.label == "Wave selector" for widget in app.selectbox)
-    assert len(app.get("plotly_chart")) >= 2
+    assert len(app.get("plotly_chart")) == 1
+    after = app.session_state["hrmod_lab_core_run"]["result"]
+    assert after is before
+    assert asdict(after) == before_plain
+    assert after.hr_input_hash == before_hash

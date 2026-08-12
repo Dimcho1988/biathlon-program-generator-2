@@ -345,14 +345,19 @@ donor/requested/capacity/moved/added/removed площи, capacity-limited пло
 4. Проверете четирите главни v2 настройки; при нужда отворете collapsed advanced
    safeguards.
 5. Натиснете **Изчисли HRmod (само HR)**.
-6. В overview графиката сравнете `clean_hr` и `hrmod`; по желание покажете тънката
-   detection-only линия `h_detect`.
+6. Изберете изглед **HR-only сигнали**. Overview графиката различава `raw_hr`,
+   `clean_hr` и `hrmod`; по желание покажете тънката detection-only линия `h_detect`.
 7. Receiver и donor областите са различно оцветени; вертикалните `s`, `p`, `e`
    markers и локалният baseline показват границите.
-8. Изберете wave от selector-а. Отделната графика автоматично zoom-ва до нея и
-   показва къде е добавено и къде е отнето.
+8. Изберете изглед **HR вълни**, после wave от selector-а. Графиката зарежда само
+   избраната вълна с малък времеви padding и показва къде е добавено и къде е отнето.
 9. Прегледайте wave таблицата, цялостното time-in-zone сравнение и diagnostics.
-10. Едва тогава използвайте отделния **Reference validation** tab.
+10. Едва тогава използвайте отделния изглед **Reference validation**.
+
+Само избраният резултатен изглед се изгражда при даден Streamlit rerun. Готовият
+immutable HR-only резултат остава в session state, така че превключването между
+overview и wave zoom не стартира core повторно. Receiver/donor областите, `s/p/e`
+маркерите и baseline сегментите са групирани в постоянен малък брой Plotly traces.
 
 ## Reference validation без leakage
 
@@ -371,7 +376,7 @@ Correlation сама по себе си не доказва валидност.
 
 ## Експорти и възпроизводимост
 
-Downloads tab предоставя:
+Изгледът **Downloads** предоставя:
 
 - `processed_hr_only_timeseries.csv`;
 - `wave_summary.csv`;

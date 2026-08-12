@@ -1,0 +1,137 @@
+from __future__ import annotations
+
+import copy
+
+import pandas as pd
+import pytest
+
+from hrmod_lab.plotting import build_hr_only_figure, prepare_plot_view
+from hrmod_lab.schemas import AthleteHRProfile, HRZone
+
+
+def _profile() -> AthleteHRProfile:
+    return AthleteHRProfile(
+        hrmax_bpm=200.0,
+        hr_floor_bpm=50.0,
+        zones=tuple(
+            HRZone(
+                name=f"Z{index + 1}",
+                lower_bpm=50.0 + index * 30.0,
+                upper_bpm=80.0 + index * 30.0,
+            )
+            for index in range(5)
+        ),
+    )
+
+
+def _plot_frames(wave_count: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    samples_per_wave = 80
+    rows: list[dict[str, object]] = []
+    waves: list[dict[str, object]] = []
+    for wave_index in range(wave_count):
+        wave_id = wave_index + 1
+        offset = wave_index * samples_per_wave
+        waves.append(
+            {
+                "wave_id": wave_id,
+                "rise_start_elapsed_s": float(offset + 10),
+                "peak_elapsed_s": float(offset + 30),
+                "tail_end_elapsed_s": float(offset + 60),
+                "baseline_hr_bpm": 100.0,
+            }
+        )
+
+    sample_count = max(100, wave_count * samples_per_wave)
+    for index in range(sample_count):
+        wave_index = index // samples_per_wave
+        wave_id = wave_index + 1 if wave_index < wave_count else None
+        local_index = index % samples_per_wave
+        raw_hr = 100.0 + min(local_index, 30) * 0.5
+        rows.append(
+            {
+                "elapsed_s": float(index),
+                "dt_s": 1.0,
+                "raw_hr_bpm": raw_hr,
+                "clean_hr_bpm": raw_hr,
+                "h_detect_bpm": raw_hr,
+                "hrmod_bpm": raw_hr + 0.25,
+                "added_bpm": 0.25 if 10 <= local_index <= 30 else 0.0,
+                "removed_bpm": 0.25 if 30 < local_index <= 60 else 0.0,
+                "trend_bpm_per_s": 0.5,
+                "wave_id": wave_id,
+                "receiver_flag": wave_id is not None and 10 <= local_index <= 30,
+                "donor_flag": wave_id is not None and 30 < local_index <= 60,
+            }
+        )
+    return pd.DataFrame(rows), pd.DataFrame(waves)
+
+
+@pytest.mark.parametrize("wave_count", (1, 10, 108))
+def test_overview_trace_and_shape_counts_are_small_and_constant(
+    wave_count: int,
+) -> None:
+    timeseries, waves = _plot_frames(wave_count)
+
+    figure = build_hr_only_figure(
+        timeseries, waves, _profile(), show_h_detect=False
+    )
+
+    assert len(figure.data) == 12
+    assert len(figure.layout.shapes or ()) == 6
+    names = [trace.name for trace in figure.data]
+    for expected in (
+        "receiver s→p",
+        "donor p→e",
+        "s · rise start",
+        "p · peak",
+        "e · tail end",
+        "B · local baseline",
+    ):
+        assert names.count(expected) == 1
+    traces = {trace.name: trace for trace in figure.data}
+    assert traces["raw_hr"].type == "scattergl"
+    assert traces["hrmod"].type == "scattergl"
+    assert len(figure.layout.shapes or ()) <= 6
+
+
+def test_wave_zoom_slices_points_and_overlays_without_mutating_inputs() -> None:
+    timeseries, waves = _plot_frames(108)
+    timeseries_before = timeseries.copy(deep=True)
+    waves_before = waves.copy(deep=True)
+    selected_wave_id = 54
+
+    view = prepare_plot_view(
+        timeseries, waves, selected_wave_id=selected_wave_id
+    )
+    figure = build_hr_only_figure(
+        timeseries,
+        waves,
+        _profile(),
+        show_h_detect=True,
+        selected_wave_id=selected_wave_id,
+    )
+
+    assert len(view.timeseries) == 61
+    assert view.waves["wave_id"].tolist() == [selected_wave_id]
+    flagged = view.timeseries.loc[
+        view.timeseries["receiver_flag"] | view.timeseries["donor_flag"]
+    ]
+    assert flagged["wave_id"].dropna().eq(selected_wave_id).all()
+    raw_trace = next(trace for trace in figure.data if trace.name == "raw_hr")
+    hrmod_trace = next(trace for trace in figure.data if trace.name == "hrmod")
+    assert len(raw_trace.x) == len(view.timeseries)
+    assert len(hrmod_trace.x) == len(view.timeseries)
+    assert len(view.timeseries) < len(timeseries) // 100
+    pd.testing.assert_frame_equal(timeseries, timeseries_before)
+    pd.testing.assert_frame_equal(waves, waves_before)
+
+
+def test_plot_build_does_not_modify_core_result_frames() -> None:
+    timeseries, waves = _plot_frames(10)
+    expected_timeseries = copy.deepcopy(timeseries)
+    expected_waves = copy.deepcopy(waves)
+
+    build_hr_only_figure(timeseries, waves, _profile(), show_h_detect=False)
+
+    pd.testing.assert_frame_equal(timeseries, expected_timeseries)
+    pd.testing.assert_frame_equal(waves, expected_waves)

@@ -33,6 +33,7 @@ from hrmod_lab import (
     HRZone,
     compute_hrmod_hr_only,
 )
+from hrmod_lab.plotting import build_hr_only_figure as _hr_only_figure
 from hrmod_lab.reference_validation import (
     ReferenceValidationConfig,
     ReferenceZone,
@@ -526,327 +527,6 @@ def _athlete_profile(
         hr_floor_bpm=float(hr_floor_bpm),
         zones=zones,
     )
-
-
-ZONE_COLORS = (
-    "rgba(78,121,167,0.08)",
-    "rgba(89,161,79,0.08)",
-    "rgba(242,207,74,0.09)",
-    "rgba(242,142,43,0.08)",
-    "rgba(225,87,89,0.08)",
-)
-
-
-def _hr_only_figure(
-    timeseries: pd.DataFrame,
-    waves: pd.DataFrame,
-    profile: AthleteHRProfile,
-    *,
-    show_h_detect: bool,
-    selected_wave_id: int | None = None,
-) -> go.Figure:
-    """Build the interactive overview or an automatically zoomed wave view."""
-
-    x_column = _first_column(timeseries, ("timestamp", "elapsed_s"))
-    if not x_column:
-        return go.Figure()
-    x_values = timeseries[x_column].copy()
-    if x_column == "timestamp":
-        x_values = pd.to_datetime(x_values, errors="coerce", utc=True)
-
-    figure = make_subplots(
-        rows=2,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.07,
-        row_heights=(0.72, 0.28),
-        subplot_titles=("clean_hr срещу hrmod", "Добавена/отнета промяна и HR trend"),
-    )
-    hr_traces: tuple[tuple[tuple[str, ...], str, str, str, float], ...] = (
-        (("clean_hr_bpm", "clean_hr"), "clean_hr", "#2563eb", "solid", 1.7),
-        (("hrmod_bpm", "hrmod"), "hrmod", "#dc2626", "solid", 2.25),
-    )
-    if show_h_detect:
-        hr_traces += (
-            (("h_detect_bpm", "h_detect"), "h_detect (detection only)", "#7c3aed", "dot", 1.0),
-        )
-    for candidates, label, color, dash, width in hr_traces:
-        column = _first_column(timeseries, candidates)
-        if not column:
-            continue
-        figure.add_trace(
-            go.Scatter(
-                x=x_values,
-                y=pd.to_numeric(timeseries[column], errors="coerce"),
-                mode="lines",
-                name=label,
-                line={"color": color, "width": width, "dash": dash},
-                connectgaps=False,
-            ),
-            row=1,
-            col=1,
-        )
-
-    correction_traces = (
-        (("added_bpm",), "+ added_bpm", "#16a34a", "solid", 1.0),
-        (("removed_bpm",), "− removed_bpm", "#dc2626", "solid", -1.0),
-        (("trend_bpm_per_s",), "trend (bpm/s)", "#7c3aed", "dash", 1.0),
-    )
-    for candidates, label, color, dash, sign in correction_traces:
-        column = _first_column(timeseries, candidates)
-        if not column:
-            continue
-        y_values = sign * pd.to_numeric(timeseries[column], errors="coerce")
-        figure.add_trace(
-            go.Scatter(
-                x=x_values,
-                y=y_values,
-                mode="lines",
-                name=label,
-                line={"color": color, "width": 1.25, "dash": dash},
-                connectgaps=False,
-                fill="tozeroy" if label.startswith(("+", "−")) else None,
-            ),
-            row=2,
-            col=1,
-        )
-
-    for color, zone in zip(ZONE_COLORS, profile.zones):
-        figure.add_hrect(
-            y0=zone.lower_bpm,
-            y1=zone.upper_bpm,
-            fillcolor=color,
-            line_width=0,
-            layer="below",
-            annotation_text=zone.name,
-            annotation_position="right",
-            row=1,
-            col=1,
-        )
-
-    _add_flag_regions(
-        figure,
-        timeseries,
-        x_values,
-        "receiver_flag",
-        fillcolor="rgba(34,197,94,0.14)",
-    )
-    _add_flag_regions(
-        figure,
-        timeseries,
-        x_values,
-        "donor_flag",
-        fillcolor="rgba(249,115,22,0.14)",
-    )
-
-    visible_waves = waves
-    if selected_wave_id is not None and not waves.empty and "wave_id" in waves.columns:
-        visible_waves = waves.loc[
-            pd.to_numeric(waves["wave_id"], errors="coerce").eq(selected_wave_id)
-        ]
-    _add_wave_guides(figure, visible_waves, x_column)
-
-    figure.add_trace(
-        go.Scatter(
-            x=[None], y=[None], name="receiver s→p", mode="lines",
-            line={"color": "rgba(34,197,94,0.75)", "width": 8},
-        ),
-        row=1, col=1,
-    )
-    figure.add_trace(
-        go.Scatter(
-            x=[None], y=[None], name="donor p→e", mode="lines",
-            line={"color": "rgba(249,115,22,0.75)", "width": 8},
-        ),
-        row=1, col=1,
-    )
-    for label, color, dash in (
-        ("s · rise start", "#15803d", "dash"),
-        ("p · peak", "#7e22ce", "dot"),
-        ("e · tail end", "#c2410c", "dash"),
-        ("B · local baseline", "#475569", "dashdot"),
-    ):
-        figure.add_trace(
-            go.Scatter(
-                x=[None],
-                y=[None],
-                name=label,
-                mode="lines",
-                line={"color": color, "width": 1.2, "dash": dash},
-            ),
-            row=1,
-            col=1,
-        )
-
-    figure.add_hline(y=0.0, line_color="rgba(100,116,139,0.5)", row=2, col=1)
-    figure.update_yaxes(title_text="bpm", row=1, col=1)
-    figure.update_yaxes(title_text="bpm / bpm·s⁻¹", row=2, col=1)
-    figure.update_xaxes(title_text="Timestamp" if x_column == "timestamp" else "Elapsed (s)", row=2, col=1)
-    selected_range = _selected_wave_range(timeseries, waves, selected_wave_id, x_column)
-    if selected_range is not None:
-        figure.update_xaxes(range=list(selected_range))
-    figure.update_layout(
-        height=740 if selected_wave_id is None else 680,
-        hovermode="x unified",
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
-        margin={"l": 45, "r": 35, "t": 80, "b": 45},
-    )
-    return figure
-
-
-def _flag_mask(frame: pd.DataFrame, column: str) -> pd.Series:
-    if column in frame.columns:
-        values = frame[column]
-        if values.dtype == bool:
-            return values.fillna(False)
-        return values.astype(str).str.lower().isin(("true", "1", "yes"))
-    if "wave_state" in frame.columns:
-        state = frame["wave_state"].astype(str).str.lower()
-        target = "receiver" if column == "receiver_flag" else "donor"
-        return state.eq(target)
-    return pd.Series(False, index=frame.index)
-
-
-def _add_flag_regions(
-    figure: go.Figure,
-    frame: pd.DataFrame,
-    x_values: pd.Series,
-    column: str,
-    *,
-    fillcolor: str,
-) -> None:
-    mask = _flag_mask(frame, column).reset_index(drop=True)
-    if mask.empty or not mask.any():
-        return
-    groups = mask.ne(mask.shift(fill_value=False)).cumsum()
-    for _, group in mask.groupby(groups):
-        if not bool(group.iloc[0]):
-            continue
-        start_index = int(group.index[0])
-        end_index = int(group.index[-1])
-        x0 = x_values.iloc[start_index]
-        x1 = x_values.iloc[end_index]
-        if start_index == end_index:
-            dt = pd.to_numeric(frame.get("dt_s", pd.Series(1.0, index=frame.index)), errors="coerce").iloc[end_index]
-            seconds = 1.0 if pd.isna(dt) or float(dt) <= 0.0 else float(dt)
-            x1 = x1 + pd.Timedelta(seconds=seconds) if isinstance(x1, pd.Timestamp) else float(x1) + seconds
-        figure.add_vrect(
-            x0=x0,
-            x1=x1,
-            fillcolor=fillcolor,
-            opacity=1.0,
-            line_width=0,
-            layer="below",
-            row="all",
-            col=1,
-        )
-
-
-def _wave_axis_value(row: pd.Series, names: Sequence[str], x_column: str) -> Any:
-    for name in names:
-        if name not in row.index or pd.isna(row[name]):
-            continue
-        value = row[name]
-        if x_column == "timestamp":
-            return pd.to_datetime(value, errors="coerce", utc=True)
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            continue
-    return None
-
-
-def _add_wave_guides(
-    figure: go.Figure, waves: pd.DataFrame, x_column: str
-) -> None:
-    if waves.empty:
-        return
-    marker_specs = (
-        (("rise_start_timestamp", "rise_start_elapsed_s"), "s", "#15803d", "dash"),
-        (("peak_timestamp", "peak_elapsed_s"), "p", "#7e22ce", "dot"),
-        (("tail_end_timestamp", "tail_end_elapsed_s"), "e", "#c2410c", "dash"),
-    )
-    for _, row in waves.iterrows():
-        for names, marker, color, dash in marker_specs:
-            x_value = _wave_axis_value(row, names, x_column)
-            if x_value is None or pd.isna(x_value):
-                continue
-            figure.add_vline(
-                x=x_value,
-                line_width=1.1,
-                line_dash=dash,
-                line_color=color,
-                row="all",
-                col=1,
-            )
-            if len(waves) == 1:
-                figure.add_annotation(
-                    x=x_value,
-                    y=1.0,
-                    xref="x",
-                    yref="paper",
-                    text=f"<b>{marker}</b>",
-                    showarrow=False,
-                    font={"color": color},
-                    yshift=8,
-                )
-        start = _wave_axis_value(
-            row, ("rise_start_timestamp", "rise_start_elapsed_s"), x_column
-        )
-        end = _wave_axis_value(
-            row, ("tail_end_timestamp", "tail_end_elapsed_s"), x_column
-        )
-        baseline = row.get("baseline_hr_bpm")
-        if start is None or end is None or pd.isna(baseline):
-            continue
-        figure.add_shape(
-            type="line",
-            x0=start,
-            x1=end,
-            y0=float(baseline),
-            y1=float(baseline),
-            line={"color": "#475569", "width": 1.2, "dash": "dashdot"},
-            row=1,
-            col=1,
-        )
-
-
-def _selected_wave_range(
-    timeseries: pd.DataFrame,
-    waves: pd.DataFrame,
-    selected_wave_id: int | None,
-    x_column: str,
-) -> tuple[Any, Any] | None:
-    if selected_wave_id is None or waves.empty or "wave_id" not in waves.columns:
-        return None
-    selected = waves.loc[
-        pd.to_numeric(waves["wave_id"], errors="coerce").eq(selected_wave_id)
-    ]
-    if selected.empty:
-        return None
-    row = selected.iloc[0]
-    start = _wave_axis_value(
-        row, ("rise_start_timestamp", "rise_start_elapsed_s"), x_column
-    )
-    end = _wave_axis_value(
-        row, ("tail_end_timestamp", "tail_end_elapsed_s"), x_column
-    )
-    if start is None or end is None or pd.isna(start) or pd.isna(end):
-        wave_ids = pd.to_numeric(timeseries.get("wave_id"), errors="coerce")
-        wave_x = timeseries.loc[wave_ids.eq(selected_wave_id), x_column]
-        if wave_x.empty:
-            return None
-        start, end = wave_x.iloc[0], wave_x.iloc[-1]
-    if x_column == "timestamp":
-        start = pd.to_datetime(start, utc=True)
-        end = pd.to_datetime(end, utc=True)
-        padding = pd.Timedelta(
-            max(5.0, float((end - start).total_seconds()) * 0.08), unit="s"
-        )
-    else:
-        start, end = float(start), float(end)
-        padding = max(5.0, (end - start) * 0.08)
-    return start - padding, end + padding
 
 
 def _reference_samples_frame(reference_channels: ReferenceChannels) -> pd.DataFrame:
@@ -1349,6 +1029,9 @@ timeseries_frame = _records_frame(result.timeseries)
 wave_frame = _records_frame(result.wave_summary)
 wave_table_frame = _ordered_wave_frame(wave_frame)
 zone_frame = _records_frame(result.zone_summary)
+base_annotations = _annotation_frame(run_parse.reference_channels)
+if "hrmod_lab_annotations" not in st.session_state:
+    st.session_state["hrmod_lab_annotations"] = base_annotations
 
 st.subheader("5 · Готов HR-only core резултат")
 summary_columns = st.columns(5)
@@ -1372,25 +1055,22 @@ if run.get("profile_warning"):
     st.warning(run["profile_warning"], icon="⚠️")
 st.warning(SCIENTIFIC_LIMITATION, icon="⚠️")
 
-(
-    tab_signals,
-    tab_waves,
-    tab_zones,
-    tab_diagnostics,
-    tab_reference,
-    tab_downloads,
-) = st.tabs(
-    (
+result_view = st.radio(
+    "Резултатен изглед",
+    options=(
         "HR-only сигнали",
         "HR вълни",
         "HR зони",
         "Diagnostics",
         "Reference validation",
         "Downloads",
-    )
+    ),
+    horizontal=True,
+    key="hrmod_lab_result_view",
+    help="Изгражда се само избраният изглед; готовият HR-only резултат се запазва.",
 )
 
-with tab_signals:
+if result_view == "HR-only сигнали":
     show_h_detect_overview = st.checkbox(
         "Покажи h_detect (тънка диагностична линия, не измерен HR)",
         value=False,
@@ -1409,7 +1089,7 @@ with tab_signals:
     with st.expander("Processed HR-only timeseries"):
         st.dataframe(timeseries_frame, use_container_width=True, hide_index=True)
 
-with tab_waves:
+if result_view == "HR вълни":
     st.caption(
         "Вълните са открити само от h_detect. Receiver s→p получава площта, "
         "donor p→e я отдава; това не е механичен work interval."
@@ -1458,7 +1138,7 @@ with tab_waves:
         st.markdown("**Всички вълни**")
         st.dataframe(wave_table_frame, use_container_width=True, hide_index=True)
 
-with tab_zones:
+if result_view == "HR зони":
     st.caption(
         "raw_hr, clean_hr и hrmod са класифицирани преди визуално закръгляване."
     )
@@ -1484,12 +1164,12 @@ with tab_zones:
         )
         st.plotly_chart(zone_plot, use_container_width=True)
 
-with tab_diagnostics:
+if result_view == "Diagnostics":
     _diagnostic_panel(result)
     with st.expander("TCX diagnostics за точно този run"):
         st.json(_plain(run_parse.diagnostics))
 
-with tab_reference:
+if result_view == "Reference validation":
     st.warning(
         "Строга граница: този tab работи върху вече готовия core result. "
         "Нито overlay, нито annotation извиква compute_hrmod_hr_only.",
@@ -1538,7 +1218,6 @@ with tab_reference:
         )
 
     st.markdown("#### Laps и ръчни markers — само annotations")
-    base_annotations = _annotation_frame(reference_channels)
     annotation_upload = st.file_uploader(
         "Optional annotations CSV/JSON",
         type=("csv", "json"),
@@ -1743,7 +1422,7 @@ with tab_reference:
         with st.expander("Пълен reference validation резултат"):
             st.json(validation_plain)
 
-with tab_downloads:
+if result_view == "Downloads":
     _download_panel(
         run,
         st.session_state.get("hrmod_lab_annotations"),
