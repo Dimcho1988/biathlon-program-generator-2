@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 from dataclasses import asdict, fields
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
@@ -165,11 +166,33 @@ def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None
     assert app.radio[0].value == "HR-only сигнали"
     assert not any(widget.label == "Wave selector" for widget in app.selectbox)
     assert len(app.get("plotly_chart")) == 1
+    default_plot = json.loads(app.get("plotly_chart")[0].proto.spec)
+    default_types = {trace["name"]: trace["type"] for trace in default_plot["data"]}
+    assert default_types["raw_hr"] == "scatter"
+    assert default_types["hrmod"] == "scatter"
+    assert "scattergl" not in default_types.values()
 
     before = app.session_state["hrmod_lab_core_run"]["result"]
     before_plain = asdict(before)
     before_hash = before.hr_input_hash
     assert "hrmod_lab_annotations" in app.session_state
+    webgl_toggle = next(
+        widget
+        for widget in app.checkbox
+        if widget.label == "WebGL ускорение (само за съвместим браузър)"
+    )
+    assert webgl_toggle.value is False
+    webgl_toggle.set_value(True).run()
+
+    assert not app.exception
+    assert not app.error
+    assert compute_calls == 1
+    webgl_plot = json.loads(app.get("plotly_chart")[0].proto.spec)
+    webgl_types = {trace["name"]: trace["type"] for trace in webgl_plot["data"]}
+    assert webgl_types["raw_hr"] == "scattergl"
+    assert webgl_types["hrmod"] == "scattergl"
+    assert sum(trace_type == "scattergl" for trace_type in webgl_types.values()) == 6
+    assert app.session_state["hrmod_lab_core_run"]["result"] is before
     app.radio[0].set_value("HR вълни").run()
 
     assert not app.exception

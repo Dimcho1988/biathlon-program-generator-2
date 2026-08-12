@@ -347,6 +347,8 @@ donor/requested/capacity/moved/added/removed площи, capacity-limited пло
 5. Натиснете **Изчисли HRmod (само HR)**.
 6. Изберете изглед **HR-only сигнали**. Overview графиката различава `raw_hr`,
    `clean_hr` и `hrmod`; по желание покажете тънката detection-only линия `h_detect`.
+   Съвместимият SVG renderer е включен по подразбиране и не изисква WebGL.
+   **WebGL ускорение** е отделна opt-in настройка само за браузъри с работещ WebGL.
 7. Receiver и donor областите са различно оцветени; вертикалните `s`, `p`, `e`
    markers и локалният baseline показват границите.
 8. Изберете изглед **HR вълни**, после wave от selector-а. Графиката зарежда само

@@ -314,9 +314,14 @@ def build_hr_only_figure(
     profile: AthleteHRProfile,
     *,
     show_h_detect: bool,
+    use_webgl: bool = False,
     selected_wave_id: int | None = None,
 ) -> go.Figure:
-    """Build one fast overview or one sliced wave-zoom figure."""
+    """Build one fast overview or one sliced wave-zoom figure.
+
+    SVG traces are the compatibility-safe default.  WebGL remains an explicit
+    acceleration option for browsers that advertise a working WebGL context.
+    """
 
     view = prepare_plot_view(
         timeseries, waves, selected_wave_id=selected_wave_id
@@ -367,12 +372,13 @@ def build_hr_only_figure(
         hr_traces += (
             (("h_detect_bpm", "h_detect"), "h_detect (detection only)", "#7c3aed", "dot", 1.0, 0.8),
         )
+    trace_class = go.Scattergl if use_webgl else go.Scatter
     for candidates, label, color, dash, width, opacity in hr_traces:
         column = _first_column(frame, candidates)
         if column is None:
             continue
         figure.add_trace(
-            go.Scattergl(
+            trace_class(
                 x=x_values,
                 y=pd.to_numeric(frame[column], errors="coerce"),
                 mode="lines",
@@ -395,7 +401,7 @@ def build_hr_only_figure(
         if column is None:
             continue
         figure.add_trace(
-            go.Scattergl(
+            trace_class(
                 x=x_values,
                 y=sign * pd.to_numeric(frame[column], errors="coerce"),
                 mode="lines",

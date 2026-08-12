@@ -89,9 +89,68 @@ def test_overview_trace_and_shape_counts_are_small_and_constant(
     ):
         assert names.count(expected) == 1
     traces = {trace.name: trace for trace in figure.data}
-    assert traces["raw_hr"].type == "scattergl"
-    assert traces["hrmod"].type == "scattergl"
+    assert traces["raw_hr"].type == "scatter"
+    assert traces["hrmod"].type == "scatter"
     assert len(figure.layout.shapes or ()) <= 6
+
+
+@pytest.mark.parametrize(
+    ("use_webgl", "expected_type"), ((False, "scatter"), (True, "scattergl"))
+)
+def test_full_series_backend_is_svg_by_default_and_webgl_only_when_requested(
+    use_webgl: bool, expected_type: str
+) -> None:
+    timeseries, waves = _plot_frames(10)
+
+    figure = build_hr_only_figure(
+        timeseries,
+        waves,
+        _profile(),
+        show_h_detect=True,
+        use_webgl=use_webgl,
+    )
+
+    traces = {trace.name: trace for trace in figure.data}
+    for name in (
+        "raw_hr",
+        "clean_hr",
+        "hrmod",
+        "h_detect (detection only)",
+        "+ added_bpm",
+        "− removed_bpm",
+        "trend (bpm/s)",
+    ):
+        assert traces[name].type == expected_type
+    for name in (
+        "receiver s→p",
+        "donor p→e",
+        "s · rise start",
+        "p · peak",
+        "e · tail end",
+        "B · local baseline",
+    ):
+        assert traces[name].type == "scatter"
+    assert len(figure.data) == 13
+    assert len(figure.layout.shapes or ()) == 6
+
+
+def test_svg_and_webgl_backends_prepare_identical_plot_data() -> None:
+    timeseries, waves = _plot_frames(10)
+    svg_figure = build_hr_only_figure(
+        timeseries, waves, _profile(), show_h_detect=True, use_webgl=False
+    )
+    webgl_figure = build_hr_only_figure(
+        timeseries, waves, _profile(), show_h_detect=True, use_webgl=True
+    )
+
+    assert len(svg_figure.data) == len(webgl_figure.data)
+    for svg_trace, webgl_trace in zip(
+        svg_figure.data, webgl_figure.data, strict=True
+    ):
+        assert svg_trace.name == webgl_trace.name
+        assert tuple(svg_trace.x) == tuple(webgl_trace.x)
+        assert tuple(svg_trace.y) == tuple(webgl_trace.y)
+    assert svg_figure.layout.shapes == webgl_figure.layout.shapes
 
 
 def test_wave_zoom_slices_points_and_overlays_without_mutating_inputs() -> None:

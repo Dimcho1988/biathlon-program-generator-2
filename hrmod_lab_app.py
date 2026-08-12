@@ -1070,6 +1070,19 @@ result_view = st.radio(
     help="Изгражда се само избраният изглед; готовият HR-only резултат се запазва.",
 )
 
+use_webgl = False
+if result_view in ("HR-only сигнали", "HR вълни"):
+    use_webgl = st.checkbox(
+        "WebGL ускорение (само за съвместим браузър)",
+        value=False,
+        key="hrmod_lab_use_webgl",
+        help=(
+            "По подразбиране графиката използва съвместим SVG режим. Включете "
+            "WebGL само ако браузърът го поддържа; при съобщение 'WebGL is not "
+            "supported' оставете тази опция изключена."
+        ),
+    )
+
 if result_view == "HR-only сигнали":
     show_h_detect_overview = st.checkbox(
         "Покажи h_detect (тънка диагностична линия, не измерен HR)",
@@ -1082,6 +1095,7 @@ if result_view == "HR-only сигнали":
             wave_frame,
             athlete_profile,
             show_h_detect=show_h_detect_overview,
+            use_webgl=use_webgl,
         ),
         use_container_width=True,
         config={"displaylogo": False},
@@ -1125,6 +1139,7 @@ if result_view == "HR вълни":
                 wave_frame,
                 athlete_profile,
                 show_h_detect=show_h_detect_zoom,
+                use_webgl=use_webgl,
                 selected_wave_id=int(selected_wave_id),
             ),
             use_container_width=True,
