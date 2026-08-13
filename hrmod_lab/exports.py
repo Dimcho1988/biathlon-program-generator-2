@@ -146,6 +146,20 @@ _TERRAIN_WAVE_ORDER = (
     "moved_area_final_bpm_s",
 )
 
+_TERRAIN_ZONE_ORDER = (
+    "zone_name",
+    "lower_bpm",
+    "upper_bpm",
+    "raw_seconds",
+    "raw_percent",
+    "hrmod_candidate_seconds",
+    "hrmod_candidate_percent",
+    "hrmod_final_seconds",
+    "hrmod_final_percent",
+    "final_minus_candidate_seconds",
+    "final_minus_raw_seconds",
+)
+
 
 def export_timeseries_csv(hrmod_result: Any) -> bytes:
     """Return the processed HR-only timeseries CSV as UTF-8 bytes.
@@ -206,6 +220,13 @@ def export_terrain_timeseries_csv(terrain_result: Any) -> bytes:
 def export_terrain_wave_summary_csv(terrain_result: Any) -> bytes:
     rows = _rows(_required_member(terrain_result, "wave_summary"))
     return _csv_bytes(rows, preferred_fields=_TERRAIN_WAVE_ORDER)
+
+
+def export_terrain_zone_summary_csv(terrain_result: Any) -> bytes:
+    """Export post-gate time-in-zone without changing the core zone export."""
+
+    rows = _rows(_required_member(terrain_result, "zone_summary"))
+    return _csv_bytes(rows, preferred_fields=_TERRAIN_ZONE_ORDER)
 
 
 def export_terrain_result_json(terrain_result: Any) -> bytes:
@@ -284,6 +305,9 @@ def build_export_bundle(
             terrain_result
         )
         files["terrain_wave_summary.csv"] = export_terrain_wave_summary_csv(
+            terrain_result
+        )
+        files["terrain_zone_summary.csv"] = export_terrain_zone_summary_csv(
             terrain_result
         )
         files["terrain_result.json"] = export_terrain_result_json(terrain_result)
@@ -472,6 +496,7 @@ __all__ = [
     "export_terrain_result_json",
     "export_terrain_timeseries_csv",
     "export_terrain_wave_summary_csv",
+    "export_terrain_zone_summary_csv",
     "export_wave_summary_csv",
     "export_zone_summary_csv",
 ]

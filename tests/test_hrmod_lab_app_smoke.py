@@ -18,7 +18,9 @@ APP_PATH = REPOSITORY_ROOT / "hrmod_lab_app.py"
 PLOTTING_PATH = REPOSITORY_ROOT / "hrmod_lab" / "plotting.py"
 
 
-def _synthetic_wave_tcx(*, include_grade: bool = True) -> bytes:
+def _synthetic_wave_tcx(
+    *, include_grade: bool = True, grade_pct: float = 0.0
+) -> bytes:
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     hr_values = (
         [100] * 25
@@ -31,7 +33,7 @@ def _synthetic_wave_tcx(*, include_grade: bool = True) -> bytes:
         f"<Time>{(start + timedelta(seconds=index)).isoformat().replace('+00:00', 'Z')}</Time>"
         f"<HeartRateBpm><Value>{hr}</Value></HeartRateBpm>"
         + (
-            "<Extensions><ns3:TPX><ns3:Grade>0.0</ns3:Grade>"
+            f"<Extensions><ns3:TPX><ns3:Grade>{grade_pct}</ns3:Grade>"
             "</ns3:TPX></Extensions>"
             if include_grade
             else ""
@@ -174,7 +176,9 @@ def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None
     monkeypatch.setattr(terrain_gate, "apply_terrain_gate", counted_apply)
     app = AppTest.from_file(str(APP_PATH), default_timeout=60).run()
     app.file_uploader[0].upload(
-        "synthetic-wave.tcx", _synthetic_wave_tcx(), "application/xml"
+        "synthetic-wave.tcx",
+        _synthetic_wave_tcx(grade_pct=-4.0),
+        "application/xml",
     ).run()
 
     compute = next(
@@ -206,12 +210,36 @@ def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None
     terrain_before = app.session_state["hrmod_lab_terrain_result"]["result"]
     assert terrain_before.hr_input_hash == before_hash
     assert "hrmod_lab_annotations" in app.session_state
+
+    app.radio[0].set_value(app.radio[0].options[2]).run()
+    assert compute_calls == 1
+    assert prepare_calls == terrain_calls == 1
+    zone_table_before = app.dataframe[0].value
+    required_zone_columns = {
+        "raw_seconds",
+        "clean_seconds",
+        "hrmod_candidate_seconds",
+        "hrmod_final_seconds",
+        "final_minus_candidate_seconds",
+    }
+    assert required_zone_columns.issubset(zone_table_before.columns)
+    candidate_zone_seconds = zone_table_before["hrmod_candidate_seconds"].tolist()
+    final_zone_seconds_before = zone_table_before["hrmod_final_seconds"].tolist()
+    assert final_zone_seconds_before != candidate_zone_seconds
+    zone_plot_before = json.loads(app.get("plotly_chart")[0].proto.spec)
+    assert [trace["name"] for trace in zone_plot_before["data"]] == [
+        "Raw HR",
+        "Clean HR",
+        "HRmod candidate (HR-only core)",
+        "HRmod final (terrain gate)",
+    ]
+
     threshold = next(
         widget
         for widget in app.number_input
         if widget.label == "Downhill threshold (%)"
     )
-    threshold.set_value(-2.5).run()
+    threshold.set_value(-5.0).run()
 
     assert not app.exception
     assert not app.error
@@ -221,6 +249,16 @@ def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None
     terrain_after_threshold = app.session_state["hrmod_lab_terrain_result"]["result"]
     assert terrain_after_threshold is not terrain_before
     assert terrain_after_threshold.hr_input_hash == before_hash
+    zone_table_after_threshold = app.dataframe[0].value
+    assert zone_table_after_threshold["hrmod_candidate_seconds"].tolist() == (
+        candidate_zone_seconds
+    )
+    assert zone_table_after_threshold["hrmod_final_seconds"].tolist() != (
+        final_zone_seconds_before
+    )
+    assert zone_table_after_threshold["hrmod_final_seconds"].tolist() == (
+        candidate_zone_seconds
+    )
 
     terrain_toggle = next(
         widget for widget in app.checkbox if widget.label == "Enable terrain gate"
@@ -236,7 +274,15 @@ def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None
     assert [point.hrmod_final_bpm for point in disabled.timeseries] == [
         point.hrmod_candidate_bpm for point in disabled.timeseries
     ]
+    disabled_zone_table = app.dataframe[0].value
+    assert disabled_zone_table["hrmod_candidate_seconds"].tolist() == (
+        candidate_zone_seconds
+    )
+    assert disabled_zone_table["hrmod_final_seconds"].tolist() == (
+        candidate_zone_seconds
+    )
     assert app.session_state["hrmod_lab_core_run"]["result"] is before
+    app.radio[0].set_value(app.radio[0].options[0]).run()
     webgl_toggle = next(
         widget
         for widget in app.checkbox
@@ -291,3 +337,33 @@ def test_missing_terrain_channel_warns_and_keeps_candidate_fallback() -> None:
     assert [point.hrmod_final_bpm for point in terrain_result.timeseries] == [
         point.hrmod_candidate_bpm for point in terrain_result.timeseries
     ]
+
+
+def test_pre_zone_cached_terrain_result_is_recomputed_without_core_rerun() -> None:
+    app = AppTest.from_file(str(APP_PATH), default_timeout=60).run()
+    app.file_uploader[0].upload(
+        "synthetic-cache-migration.tcx",
+        _synthetic_wave_tcx(),
+        "application/xml",
+    ).run()
+    next(button for button in app.button if "HRmod" in button.label).click().run()
+
+    core_before = app.session_state["hrmod_lab_core_run"]["result"]
+    terrain_state = app.session_state["hrmod_lab_terrain_result"]
+    legacy_result = {
+        "timeseries": terrain_state["result"].timeseries,
+        "wave_summary": terrain_state["result"].wave_summary,
+    }
+    app.session_state["hrmod_lab_terrain_result"] = {
+        "signature": terrain_state["signature"],
+        "prepared": terrain_state["prepared"],
+        "result": legacy_result,
+    }
+    app.run()
+
+    assert not app.exception
+    assert not app.error
+    assert app.session_state["hrmod_lab_core_run"]["result"] is core_before
+    migrated = app.session_state["hrmod_lab_terrain_result"]["result"]
+    assert migrated is not legacy_result
+    assert len(migrated.zone_summary) == 5

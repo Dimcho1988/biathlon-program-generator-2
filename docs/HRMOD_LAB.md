@@ -392,6 +392,14 @@ donor/requested/capacity/moved/added/removed площи, capacity-limited пло
 `downhill_overlap_fraction`, `min_smoothed_grade_pct`,
 `moved_area_candidate_bpm_s` и `moved_area_final_bpm_s`.
 
+Terrain result има и отделен `zone_summary`: `raw_seconds`/`raw_percent`,
+`hrmod_candidate_seconds`/`hrmod_candidate_percent`,
+`hrmod_final_seconds`/`hrmod_final_percent` и
+`final_minus_candidate_seconds` за всяка HR зона. Candidate е immutable
+HR-only core резултатът, а final е post-gate резултатът. При изключен или
+недостъпен terrain gate final е равен на candidate. Core `zone_summary` и
+`zone_summary.csv` остават непроменени HR-only артефакти.
+
 ## Streamlit workflow и визуализации
 
 1. Качете `.tcx` с HR.
@@ -451,6 +459,8 @@ Correlation сама по себе си не доказва валидност.
   downhill mask и terrain status;
 - `terrain_wave_summary.csv` и `terrain_result.json` с решенията, hashes и
   terrain diagnostics;
+- `terrain_zone_summary.csv` с raw, HRmod candidate и terrain-final seconds,
+  percent и final-minus-candidate delta по зони;
 - отделен reference comparison CSV/JSON само след такава оценка;
 - annotations CSV/JSON при налични annotations;
 - ZIP със същите артефакти.

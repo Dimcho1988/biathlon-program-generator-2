@@ -40,6 +40,7 @@ from hrmod_lab.exports import (
     export_terrain_result_json,
     export_terrain_timeseries_csv,
     export_terrain_wave_summary_csv,
+    export_terrain_zone_summary_csv,
 )
 from hrmod_lab.reference_validation import (
     ReferenceValidationConfig,
@@ -281,6 +282,66 @@ def _terrain_display_frames(
                 validate="one_to_one",
             )
     return core_timeseries, core_waves
+
+
+def _terrain_zone_display_frame(
+    result: HRmodResult,
+    terrain_result: Any | None,
+) -> pd.DataFrame:
+    """Build an explicitly labelled core/candidate/final zone comparison."""
+
+    core_zones = _records_frame(result.zone_summary)
+    terrain_zones = _records_frame(
+        _member(terrain_result, "zone_summary", "zones")
+        if terrain_result is not None
+        else None
+    )
+    if terrain_zones.empty:
+        terrain_zones = core_zones.rename(
+            columns={
+                "hrmod_seconds": "hrmod_candidate_seconds",
+                "hrmod_percent": "hrmod_candidate_percent",
+            }
+        ).copy()
+        terrain_zones["hrmod_final_seconds"] = terrain_zones.get(
+            "hrmod_candidate_seconds"
+        )
+        terrain_zones["hrmod_final_percent"] = terrain_zones.get(
+            "hrmod_candidate_percent"
+        )
+        terrain_zones["final_minus_candidate_seconds"] = 0.0
+
+    clean_value_columns = [
+        column
+        for column in ("clean_seconds", "clean_percent")
+        if column in core_zones.columns and column not in terrain_zones.columns
+    ]
+    if "zone_name" in terrain_zones.columns and clean_value_columns:
+        terrain_zones = terrain_zones.merge(
+            core_zones.loc[:, ["zone_name", *clean_value_columns]],
+            on="zone_name",
+            how="left",
+            validate="one_to_one",
+        )
+
+    display_order = (
+        "zone_name",
+        "lower_bpm",
+        "upper_bpm",
+        "raw_seconds",
+        "raw_percent",
+        "clean_seconds",
+        "clean_percent",
+        "hrmod_candidate_seconds",
+        "hrmod_candidate_percent",
+        "hrmod_final_seconds",
+        "hrmod_final_percent",
+        "final_minus_candidate_seconds",
+        "final_minus_raw_seconds",
+    )
+    return terrain_zones.loc[
+        :, [column for column in display_order if column in terrain_zones.columns]
+    ]
 
 
 def _terrain_summary_panel(terrain_result: Any, wave_frame: pd.DataFrame) -> None:
@@ -964,6 +1025,9 @@ def _download_panel(
         files["terrain_wave_summary.csv"] = export_terrain_wave_summary_csv(
             terrain_result
         )
+        files["terrain_zone_summary.csv"] = export_terrain_zone_summary_csv(
+            terrain_result
+        )
         files["terrain_result.json"] = export_terrain_result_json(terrain_result)
 
     st.caption(
@@ -1023,7 +1087,7 @@ def _download_panel(
             use_container_width=True,
         )
     if "terrain_gated_timeseries.csv" in files:
-        terrain_buttons = st.columns(3)
+        terrain_buttons = st.columns(4)
         terrain_buttons[0].download_button(
             "Terrain timeseries CSV",
             files["terrain_gated_timeseries.csv"],
@@ -1039,6 +1103,13 @@ def _download_panel(
             use_container_width=True,
         )
         terrain_buttons[2].download_button(
+            "Terrain zones CSV",
+            files["terrain_zone_summary.csv"],
+            "terrain_zone_summary.csv",
+            "text/csv",
+            use_container_width=True,
+        )
+        terrain_buttons[3].download_button(
             "Terrain result JSON",
             files["terrain_result.json"],
             "terrain_result.json",
@@ -1308,7 +1379,6 @@ athlete_profile = run["athlete_profile"]
 timeseries_frame = _records_frame(result.timeseries)
 wave_frame = _records_frame(result.wave_summary)
 wave_table_frame = _ordered_wave_frame(wave_frame)
-zone_frame = _records_frame(result.zone_summary)
 base_annotations = _annotation_frame(run_parse.reference_channels)
 if "hrmod_lab_annotations" not in st.session_state:
     st.session_state["hrmod_lab_annotations"] = base_annotations
@@ -1319,7 +1389,7 @@ summary_columns[0].metric("Model version", result.model_version)
 summary_columns[1].metric("HR samples", len(timeseries_frame))
 summary_columns[2].metric("Detected waves", len(wave_frame))
 summary_columns[3].metric(
-    "Corrected waves",
+    "Candidate corrected waves",
     int(pd.to_numeric(wave_frame.get("corrected"), errors="coerce").fillna(0).sum())
     if "corrected" in wave_frame.columns else 0,
 )
@@ -1338,9 +1408,17 @@ st.subheader("6 · Terrain gate post-processing")
 terrain_config = _terrain_config_widgets(terrain_gate.TerrainGateConfig())
 terrain_signature = _terrain_run_signature(run, terrain_config)
 terrain_state = st.session_state.get(TERRAIN_STATE_KEY)
-if not isinstance(terrain_state, Mapping) or terrain_state.get(
-    "signature"
-) != terrain_signature:
+cached_terrain_result = (
+    terrain_state.get("result") if isinstance(terrain_state, Mapping) else None
+)
+cached_zone_summary = _member(
+    cached_terrain_result, "zone_summary", "zones", default=None
+)
+if (
+    not isinstance(terrain_state, Mapping)
+    or terrain_state.get("signature") != terrain_signature
+    or cached_zone_summary is None
+):
     try:
         with st.spinner("Grade preparation и terrain_gate_v1…"):
             prepared_terrain = terrain_gate.prepare_terrain(
@@ -1396,6 +1474,8 @@ if terrain_result is not None:
         + "…`."
     )
 st.warning(SCIENTIFIC_LIMITATION, icon="⚠️")
+
+zone_display_frame = _terrain_zone_display_frame(result, terrain_result)
 
 result_view = st.radio(
     "Резултатен изглед",
@@ -1497,24 +1577,41 @@ if result_view == "HR вълни":
 
 if result_view == "HR зони":
     st.caption(
-        "raw_hr, clean_hr и hrmod са класифицирани преди визуално закръгляване."
+        "Raw HR, clean HR, HRmod candidate и HRmod final са класифицирани "
+        "преди визуално закръгляване."
     )
-    st.dataframe(zone_frame, use_container_width=True, hide_index=True)
-    if not zone_frame.empty and {
+    st.caption(
+        "Candidate е непромененият HR-only core резултат; final е резултатът "
+        "след terrain gate. При изключен или недостъпен gate final = candidate."
+    )
+    st.dataframe(zone_display_frame, use_container_width=True, hide_index=True)
+    if not zone_display_frame.empty and {
         "zone_name",
+        "raw_seconds",
         "clean_seconds",
-        "hrmod_seconds",
-    }.issubset(zone_frame.columns):
+        "hrmod_candidate_seconds",
+        "hrmod_final_seconds",
+    }.issubset(zone_display_frame.columns):
         zone_plot = go.Figure()
         zone_plot.add_bar(
-            x=zone_frame["zone_name"],
-            y=zone_frame["clean_seconds"],
-            name="clean_hr",
+            x=zone_display_frame["zone_name"],
+            y=zone_display_frame["raw_seconds"],
+            name="Raw HR",
         )
         zone_plot.add_bar(
-            x=zone_frame["zone_name"],
-            y=zone_frame["hrmod_seconds"],
-            name="hrmod",
+            x=zone_display_frame["zone_name"],
+            y=zone_display_frame["clean_seconds"],
+            name="Clean HR",
+        )
+        zone_plot.add_bar(
+            x=zone_display_frame["zone_name"],
+            y=zone_display_frame["hrmod_candidate_seconds"],
+            name="HRmod candidate (HR-only core)",
+        )
+        zone_plot.add_bar(
+            x=zone_display_frame["zone_name"],
+            y=zone_display_frame["hrmod_final_seconds"],
+            name="HRmod final (terrain gate)",
         )
         zone_plot.update_layout(
             barmode="group", yaxis_title="Seconds", height=390

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 
 import numpy as np
@@ -11,6 +11,8 @@ from hrmod_lab.hrmod_core import compute_hrmod_hr_only
 from hrmod_lab.tcx_adapter import ReferenceChannels, ReferenceSample
 from hrmod_lab.terrain_gate import (
     TerrainGateConfig,
+    TerrainTimeseriesPoint,
+    _terrain_zone_summaries,
     apply_terrain_gate,
     prepare_terrain,
 )
@@ -216,6 +218,12 @@ def test_missing_unreliable_grade_is_unavailable_without_fabricated_values() -> 
     assert [point.hrmod_final_bpm for point in terrain.timeseries] == [
         point.hrmod_bpm for point in core.timeseries
     ]
+    assert all(
+        zone.hrmod_final_seconds == pytest.approx(zone.hrmod_candidate_seconds)
+        and zone.hrmod_final_percent == pytest.approx(zone.hrmod_candidate_percent)
+        and zone.final_minus_candidate_seconds == pytest.approx(0.0)
+        for zone in terrain.zone_summary
+    )
 
 
 def test_accepted_wave_preserves_area_balance_and_candidate_area() -> None:
@@ -324,6 +332,152 @@ def test_prepared_terrain_is_reusable_and_gate_disabled_keeps_candidate() -> Non
     assert [point.hrmod_final_bpm for point in first.timeseries] == [
         point.hrmod_bpm for point in core.timeseries
     ]
+    assert first.zones == first.zone_summary
+    assert all(
+        zone.hrmod_final_seconds == pytest.approx(zone.hrmod_candidate_seconds)
+        and zone.hrmod_final_percent == pytest.approx(zone.hrmod_candidate_percent)
+        and zone.final_minus_candidate_seconds == pytest.approx(0.0)
+        for zone in first.zone_summary
+    )
+    assert [zone.hrmod_candidate_seconds for zone in first.zone_summary] == pytest.approx(
+        [zone.hrmod_seconds for zone in core.zone_summary]
+    )
+    assert [zone.raw_seconds for zone in first.zone_summary] == pytest.approx(
+        [zone.raw_seconds for zone in core.zone_summary]
+    )
+
+
+def test_rejected_wave_recomputes_final_zones_from_terrain_final_signal() -> None:
+    core = _core()
+    wave = core.wave_summary[0]
+    terrain = apply_terrain_gate(
+        core,
+        _references(
+            len(core.timeseries),
+            grades=_grade_for_range(
+                core, wave.rise_start_elapsed_s, wave.tail_end_elapsed_s
+            ),
+        ),
+        _config(),
+    )
+
+    assert terrain.wave_summary[0].terrain_status == "terrain_confounded"
+    assert any(
+        zone.hrmod_final_seconds != pytest.approx(zone.hrmod_candidate_seconds)
+        for zone in terrain.zone_summary
+    )
+    assert [zone.hrmod_candidate_seconds for zone in terrain.zone_summary] == pytest.approx(
+        [zone.hrmod_seconds for zone in core.zone_summary]
+    )
+    assert [zone.hrmod_final_seconds for zone in terrain.zone_summary] == pytest.approx(
+        [zone.raw_seconds for zone in core.zone_summary]
+    )
+
+
+def test_terrain_zone_seconds_and_percentages_use_unrounded_sample_durations() -> None:
+    core = _core()
+    terrain = apply_terrain_gate(
+        core,
+        _references(len(core.timeseries), grades=[0.0] * len(core.timeseries)),
+        _config(),
+    )
+    valid_duration = sum(
+        point.dt_s for point in terrain.timeseries if point.hrmod_final_bpm is not None
+    )
+
+    assert sum(zone.hrmod_final_seconds for zone in terrain.zone_summary) == pytest.approx(
+        valid_duration
+    )
+    assert sum(zone.hrmod_candidate_seconds for zone in terrain.zone_summary) == pytest.approx(
+        valid_duration
+    )
+    assert sum(zone.hrmod_final_percent for zone in terrain.zone_summary) == pytest.approx(
+        100.0
+    )
+    assert sum(zone.hrmod_candidate_percent for zone in terrain.zone_summary) == pytest.approx(
+        100.0
+    )
+    for zone in terrain.zone_summary:
+        assert zone.hrmod_final_seconds - zone.hrmod_candidate_seconds == pytest.approx(
+            zone.final_minus_candidate_seconds
+        )
+        assert zone.hrmod_final_seconds - zone.raw_seconds == pytest.approx(
+            zone.final_minus_raw_seconds
+        )
+
+
+def test_terrain_zones_use_lower_inclusive_final_upper_inclusive_and_irregular_dt() -> None:
+    core = _core()
+    values = (
+        99.999,
+        100.0,
+        119.999,
+        120.0,
+        120.001,
+        139.999,
+        140.0,
+        159.999,
+        160.0,
+        200.0,
+    )
+    durations = (0.5, 1.25, 2.0, 3.5, 4.75, 6.0, 7.25, 8.5, 9.75, 11.0)
+    points = tuple(
+        TerrainTimeseriesPoint(
+            timestamp=START + timedelta(seconds=index),
+            elapsed_s=float(index),
+            dt_s=durations[index],
+            raw_hr_bpm=value,
+            hrmod_candidate_bpm=value,
+            hrmod_final_bpm=value,
+            smoothed_grade_pct=0.0,
+            downhill_mask=False,
+            buffered_downhill_mask=False,
+            terrain_status="accepted",
+            wave_id=None,
+        )
+        for index, value in enumerate(values)
+    )
+
+    zones = _terrain_zone_summaries(core, points)
+
+    assert [zone.hrmod_final_seconds for zone in zones] == pytest.approx(
+        [0.5, 3.25, 14.25, 15.75, 20.75]
+    )
+    assert sum(zone.hrmod_final_seconds for zone in zones) == pytest.approx(
+        sum(durations)
+    )
+
+
+def test_zone_definitions_are_included_in_final_result_hash() -> None:
+    core = _core()
+    bounds = (50.0, 90.0, 110.0, 130.0, 150.0, 200.0)
+    alternate_core = replace(
+        core,
+        zone_summary=tuple(
+            replace(zone, lower_bpm=bounds[index], upper_bpm=bounds[index + 1])
+            for index, zone in enumerate(core.zone_summary)
+        ),
+    )
+    references = _references(
+        len(core.timeseries), grades=[0.0] * len(core.timeseries)
+    )
+    original = apply_terrain_gate(
+        core,
+        references,
+        _config(),
+    )
+    alternate = apply_terrain_gate(
+        alternate_core,
+        references,
+        _config(),
+    )
+
+    assert original.hr_input_hash == alternate.hr_input_hash == core.hr_input_hash
+    assert [point.hrmod_final_bpm for point in original.timeseries] == [
+        point.hrmod_final_bpm for point in alternate.timeseries
+    ]
+    assert original.zone_summary != alternate.zone_summary
+    assert original.final_result_hash != alternate.final_result_hash
 
 
 def test_large_sampling_gap_breaks_downhill_continuity() -> None:
@@ -382,3 +536,17 @@ def test_public_terrain_result_is_serialisable() -> None:
     payload = terrain.to_dict()
     assert payload["diagnostics"]["status_counts"] == {"accepted": 1}
     assert payload["terrain_input_hash"] == terrain.terrain_input_hash
+    assert payload["zone_summary"] == [zone.to_dict() for zone in terrain.zone_summary]
+    assert set(payload["zone_summary"][0]) == {
+        "zone_name",
+        "lower_bpm",
+        "upper_bpm",
+        "raw_seconds",
+        "raw_percent",
+        "hrmod_candidate_seconds",
+        "hrmod_candidate_percent",
+        "hrmod_final_seconds",
+        "hrmod_final_percent",
+        "final_minus_candidate_seconds",
+        "final_minus_raw_seconds",
+    }

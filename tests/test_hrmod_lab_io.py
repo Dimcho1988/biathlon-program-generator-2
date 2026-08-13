@@ -429,12 +429,32 @@ def test_terrain_exports_are_separate_and_keep_core_csv_hr_only() -> None:
                 "moved_area_final_bpm_s": 0.0,
             }
         ],
+        "zone_summary": [
+            {
+                "zone_name": zone.zone_name,
+                "lower_bpm": zone.lower_bpm,
+                "upper_bpm": zone.upper_bpm,
+                "raw_seconds": zone.raw_seconds,
+                "raw_percent": zone.raw_percent,
+                "hrmod_candidate_seconds": zone.hrmod_seconds,
+                "hrmod_candidate_percent": zone.hrmod_percent,
+                "hrmod_final_seconds": zone.raw_seconds,
+                "hrmod_final_percent": zone.raw_percent,
+                "final_minus_candidate_seconds": (
+                    zone.raw_seconds - zone.hrmod_seconds
+                ),
+                "final_minus_raw_seconds": 0.0,
+            }
+            for zone in result.zone_summary
+        ],
     }
 
     files = build_export_bundle(
         hrmod_result=result,
         terrain_result=terrain_result,
     )
+    core_only_files = build_export_bundle(hrmod_result=result)
+    assert files["zone_summary.csv"] == core_only_files["zone_summary.csv"]
 
     core_header = files["processed_hr_timeseries.csv"].splitlines()[0].decode()
     assert "smoothed_grade_pct" not in core_header
@@ -450,7 +470,18 @@ def test_terrain_exports_are_separate_and_keep_core_csv_hr_only() -> None:
     }.issubset(set(terrain_header.split(",")))
     wave_header = files["terrain_wave_summary.csv"].splitlines()[0].decode()
     assert "moved_area_final_bpm_s" in wave_header
+    terrain_zone_header = files["terrain_zone_summary.csv"].splitlines()[0].decode()
+    assert {
+        "raw_seconds",
+        "hrmod_candidate_seconds",
+        "hrmod_final_seconds",
+        "final_minus_candidate_seconds",
+    }.issubset(set(terrain_zone_header.split(",")))
+    core_zone_header = files["zone_summary.csv"].splitlines()[0].decode()
+    assert "hrmod_candidate_seconds" not in core_zone_header
+    assert "hrmod_final_seconds" not in core_zone_header
     manifest = json.loads(files["manifest.json"])
+    assert "terrain_zone_summary.csv" in manifest["files"]
     assert manifest["hr_input_hash"] == result.hr_input_hash
     assert manifest["terrain_input_hash"] == "terrain-hash"
     assert manifest["final_result_hash"] == "final-hash"

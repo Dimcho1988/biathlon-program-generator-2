@@ -29,6 +29,7 @@ from .terrain_gate import (
     TerrainGateResult,
     TerrainTimeseriesPoint,
     TerrainWaveSummary,
+    TerrainZoneSummary,
     apply_terrain_gate,
     prepare_terrain,
 )
@@ -56,6 +57,7 @@ __all__ = [
     "TerrainGateResult",
     "TerrainTimeseriesPoint",
     "TerrainWaveSummary",
+    "TerrainZoneSummary",
     "apply_terrain_gate",
     "compute_hrmod_hr_only",
     "prepare_terrain",

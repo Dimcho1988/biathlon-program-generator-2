@@ -188,6 +188,36 @@ class TerrainWaveSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class TerrainZoneSummary:
+    """Unrounded zone durations before and after terrain post-processing.
+
+    Zone names and bounds are copied from the completed HR-only result.  The
+    terrain layer therefore reports how its final signal differs from that
+    immutable candidate without reconstructing an athlete profile or changing
+    any core-owned zone result.
+    """
+
+    zone_name: str
+    lower_bpm: float
+    upper_bpm: float
+    raw_seconds: float
+    raw_percent: float
+    hrmod_candidate_seconds: float
+    hrmod_candidate_percent: float
+    hrmod_final_seconds: float
+    hrmod_final_percent: float
+    final_minus_candidate_seconds: float
+    final_minus_raw_seconds: float
+
+    @property
+    def zone_label(self) -> str:
+        return self.zone_name
+
+    def to_dict(self) -> dict[str, Any]:
+        return _plain(self)
+
+
+@dataclass(frozen=True, slots=True)
 class TerrainGateDiagnostics:
     terrain_gate_enabled: bool
     terrain_gate_applied: bool
@@ -217,6 +247,7 @@ class TerrainGateDiagnostics:
 class TerrainGateResult:
     timeseries: tuple[TerrainTimeseriesPoint, ...]
     wave_summary: tuple[TerrainWaveSummary, ...]
+    zone_summary: tuple[TerrainZoneSummary, ...]
     diagnostics: TerrainGateDiagnostics
     config: TerrainGateConfig
     hr_input_hash: str
@@ -228,6 +259,10 @@ class TerrainGateResult:
     @property
     def waves(self) -> tuple[TerrainWaveSummary, ...]:
         return self.wave_summary
+
+    @property
+    def zones(self) -> tuple[TerrainZoneSummary, ...]:
+        return self.zone_summary
 
     def to_dict(self) -> dict[str, Any]:
         return _plain(self)
@@ -520,6 +555,107 @@ def _prefix_overlap(
     )
 
 
+def _classify_terrain_zone(value: float | None, zones: Sequence[Any]) -> str | None:
+    """Classify with the exact lower/final-upper inclusivity used by the core."""
+
+    if value is None or not math.isfinite(float(value)):
+        return None
+    number = float(value)
+    for index, zone in enumerate(zones):
+        is_final = index == len(zones) - 1
+        if number >= zone.lower_bpm and (
+            number < zone.upper_bpm or (is_final and number <= zone.upper_bpm)
+        ):
+            return str(zone.zone_name)
+    return None
+
+
+def _terrain_zone_summaries(
+    hrmod_result: HRmodResult,
+    terrain_points: Sequence[TerrainTimeseriesPoint],
+) -> tuple[TerrainZoneSummary, ...]:
+    """Aggregate raw, immutable candidate, and terrain-final zone durations."""
+
+    zones = tuple(hrmod_result.zone_summary)
+    dt_s = np.asarray([point.dt_s for point in terrain_points], dtype=float)
+    raw_values = tuple(point.raw_hr_bpm for point in terrain_points)
+    candidate_values = tuple(point.hrmod_candidate_bpm for point in terrain_points)
+    final_values = tuple(point.hrmod_final_bpm for point in terrain_points)
+    raw_labels = tuple(_classify_terrain_zone(value, zones) for value in raw_values)
+    candidate_labels = tuple(
+        _classify_terrain_zone(value, zones) for value in candidate_values
+    )
+    final_labels = tuple(_classify_terrain_zone(value, zones) for value in final_values)
+
+    raw_total = float(
+        sum(
+            dt_s[index]
+            for index, value in enumerate(raw_values)
+            if value is not None and math.isfinite(float(value))
+        )
+    )
+    candidate_total = float(
+        sum(
+            dt_s[index]
+            for index, value in enumerate(candidate_values)
+            if value is not None and math.isfinite(float(value))
+        )
+    )
+    final_total = float(
+        sum(
+            dt_s[index]
+            for index, value in enumerate(final_values)
+            if value is not None and math.isfinite(float(value))
+        )
+    )
+
+    summaries: list[TerrainZoneSummary] = []
+    for zone in zones:
+        raw_seconds = float(
+            sum(
+                dt_s[index]
+                for index, label in enumerate(raw_labels)
+                if label == zone.zone_name
+            )
+        )
+        candidate_seconds = float(
+            sum(
+                dt_s[index]
+                for index, label in enumerate(candidate_labels)
+                if label == zone.zone_name
+            )
+        )
+        final_seconds = float(
+            sum(
+                dt_s[index]
+                for index, label in enumerate(final_labels)
+                if label == zone.zone_name
+            )
+        )
+        summaries.append(
+            TerrainZoneSummary(
+                zone_name=str(zone.zone_name),
+                lower_bpm=float(zone.lower_bpm),
+                upper_bpm=float(zone.upper_bpm),
+                raw_seconds=raw_seconds,
+                raw_percent=(100.0 * raw_seconds / raw_total if raw_total > 0.0 else 0.0),
+                hrmod_candidate_seconds=candidate_seconds,
+                hrmod_candidate_percent=(
+                    100.0 * candidate_seconds / candidate_total
+                    if candidate_total > 0.0
+                    else 0.0
+                ),
+                hrmod_final_seconds=final_seconds,
+                hrmod_final_percent=(
+                    100.0 * final_seconds / final_total if final_total > 0.0 else 0.0
+                ),
+                final_minus_candidate_seconds=final_seconds - candidate_seconds,
+                final_minus_raw_seconds=final_seconds - raw_seconds,
+            )
+        )
+    return tuple(summaries)
+
+
 def apply_terrain_gate(
     hrmod_result: HRmodResult,
     reference_channels: ReferenceChannels | None = None,
@@ -689,6 +825,7 @@ def apply_terrain_gate(
         )
         for index, point in enumerate(points)
     )
+    zone_summary = _terrain_zone_summaries(hrmod_result, terrain_points)
     total_candidate = float(
         sum(item.moved_area_candidate_bpm_s for item in terrain_waves)
     )
@@ -727,11 +864,13 @@ def apply_terrain_gate(
             "terrain_model_version": TERRAIN_MODEL_VERSION,
             "final_hr": [point.hrmod_final_bpm for point in terrain_points],
             "waves": [wave.to_dict() for wave in terrain_waves],
+            "zones": [zone.to_dict() for zone in zone_summary],
         }
     )
     result = TerrainGateResult(
         timeseries=terrain_points,
         wave_summary=tuple(terrain_waves),
+        zone_summary=zone_summary,
         diagnostics=diagnostics,
         config=effective,
         hr_input_hash=hrmod_result.hr_input_hash,
@@ -752,6 +891,7 @@ __all__ = [
     "TerrainInterval",
     "TerrainTimeseriesPoint",
     "TerrainWaveSummary",
+    "TerrainZoneSummary",
     "apply_terrain_gate",
     "prepare_terrain",
 ]
