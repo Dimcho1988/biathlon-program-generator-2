@@ -57,7 +57,12 @@ class TCXParserConfig:
 
 @dataclass(frozen=True, slots=True)
 class ReferenceSample:
-    """Non-core TCX channels aligned to one unique UTC timestamp."""
+    """Non-core TCX channels aligned to one unique UTC timestamp.
+
+    ``grade`` is a ready-made TCX grade value in percentage points, when the
+    file provides one.  The parser never derives grade from altitude/distance;
+    that belongs in a separate post-core terrain/reference layer.
+    """
 
     timestamp: datetime
     elapsed_s: float
@@ -291,6 +296,21 @@ def parse_tcx(
         )
 
     missing_hr_count = sum(sample.heart_rate_bpm is None for sample in hr_samples)
+    reference_count = len(reference_samples)
+    channel_coverage = {
+        channel: (
+            sum(getattr(sample, channel) is not None for sample in reference_samples)
+            / reference_count
+        )
+        for channel in ("distance_m", "altitude_m", "grade")
+    }
+    altitude_distance_joint_coverage = (
+        sum(
+            sample.altitude_m is not None and sample.distance_m is not None
+            for sample in reference_samples
+        )
+        / reference_count
+    )
     available_channels = tuple(
         channel
         for channel in (
@@ -363,6 +383,23 @@ def parse_tcx(
             "source_format": "TCX",
             "reference_only": True,
             "timestamp_timezone": "UTC",
+            # Grade remains raw reference data here.  These explicit fields
+            # let terrain_gate_v1 choose a ready TCX grade when present or
+            # derive one later from altitude/distance without guessing that a
+            # missing grade means flat terrain.
+            "grade_source": (
+                "tcx_grade" if channel_coverage["grade"] > 0.0 else "unavailable"
+            ),
+            "grade_unit": (
+                "percent" if channel_coverage["grade"] > 0.0 else None
+            ),
+            "grade_is_derived": False,
+            "grade_coverage_fraction": channel_coverage["grade"],
+            "altitude_coverage_fraction": channel_coverage["altitude_m"],
+            "distance_coverage_fraction": channel_coverage["distance_m"],
+            "altitude_distance_joint_coverage_fraction": (
+                altitude_distance_joint_coverage
+            ),
         },
     )
     return TCXParseResult(tuple(hr_samples), reference, diagnostics)

@@ -39,6 +39,12 @@ _REFERENCE_ONLY_FIELDS = {
     "annotation",
     "annotations",
     "sport",
+    "smoothed_grade_pct",
+    "downhill_mask",
+    "terrain_status",
+    "terrain_rejection_reason",
+    "hrmod_candidate_bpm",
+    "hrmod_final_bpm",
 }
 
 _TIMESERIES_ORDER = (
@@ -116,6 +122,30 @@ _ZONE_ORDER = (
     "hrmod_minus_clean_seconds",
 )
 
+_TERRAIN_TIMESERIES_ORDER = (
+    "timestamp",
+    "elapsed_s",
+    "dt_s",
+    "raw_hr_bpm",
+    "hrmod_candidate_bpm",
+    "hrmod_final_bpm",
+    "smoothed_grade_pct",
+    "downhill_mask",
+    "terrain_status",
+    "wave_id",
+)
+
+_TERRAIN_WAVE_ORDER = (
+    "wave_id",
+    "terrain_status",
+    "terrain_rejection_reason",
+    "downhill_overlap_s",
+    "downhill_overlap_fraction",
+    "min_smoothed_grade_pct",
+    "moved_area_candidate_bpm_s",
+    "moved_area_final_bpm_s",
+)
+
 
 def export_timeseries_csv(hrmod_result: Any) -> bytes:
     """Return the processed HR-only timeseries CSV as UTF-8 bytes.
@@ -166,6 +196,33 @@ def export_diagnostics_json(hrmod_result: Any) -> bytes:
     return _json_bytes(payload)
 
 
+def export_terrain_timeseries_csv(terrain_result: Any) -> bytes:
+    """Export the post-hoc raw/candidate/final terrain comparison."""
+
+    rows = _rows(_required_member(terrain_result, "timeseries"))
+    return _csv_bytes(rows, preferred_fields=_TERRAIN_TIMESERIES_ORDER)
+
+
+def export_terrain_wave_summary_csv(terrain_result: Any) -> bytes:
+    rows = _rows(_required_member(terrain_result, "wave_summary"))
+    return _csv_bytes(rows, preferred_fields=_TERRAIN_WAVE_ORDER)
+
+
+def export_terrain_result_json(terrain_result: Any) -> bytes:
+    """Export provenance and diagnostics without altering the core artefacts."""
+
+    payload = {
+        "model_version": _member(terrain_result, "model_version"),
+        "terrain_model_version": _member(terrain_result, "terrain_model_version"),
+        "hr_input_hash": _member(terrain_result, "hr_input_hash"),
+        "terrain_input_hash": _member(terrain_result, "terrain_input_hash"),
+        "final_result_hash": _member(terrain_result, "final_result_hash"),
+        "config": _plain(_member(terrain_result, "config")),
+        "diagnostics": _plain(_member(terrain_result, "diagnostics")),
+    }
+    return _json_bytes(payload)
+
+
 def export_reference_comparison_csv(validation_result: Any) -> bytes:
     rows = _rows(_required_member(validation_result, "aligned_timeseries"))
     return _csv_bytes(rows, preferred_fields=_TIMESERIES_ORDER)
@@ -193,6 +250,7 @@ def build_export_bundle(
     hrmod_result: Any,
     validation_result: Any | None = None,
     annotations: Sequence[Any] | None = None,
+    terrain_result: Any | None = None,
 ) -> dict[str, bytes]:
     """Build all applicable files without mixing references into core CSV."""
 
@@ -221,6 +279,14 @@ def build_export_bundle(
     if annotations:
         files["annotations.csv"] = export_annotations_csv(annotations)
         files["annotations.json"] = export_annotations_json(annotations)
+    if terrain_result is not None:
+        files["terrain_gated_timeseries.csv"] = export_terrain_timeseries_csv(
+            terrain_result
+        )
+        files["terrain_wave_summary.csv"] = export_terrain_wave_summary_csv(
+            terrain_result
+        )
+        files["terrain_result.json"] = export_terrain_result_json(terrain_result)
 
     manifest = {
         "format": "hrmod_lab_export_v2",
@@ -229,6 +295,13 @@ def build_export_bundle(
         "core_and_reference_exports_are_separate": True,
         "files": sorted(files),
     }
+    if terrain_result is not None:
+        manifest["terrain_input_hash"] = _member(
+            terrain_result, "terrain_input_hash"
+        )
+        manifest["final_result_hash"] = _member(
+            terrain_result, "final_result_hash"
+        )
     files["manifest.json"] = _json_bytes(manifest)
     return files
 
@@ -238,6 +311,7 @@ def build_results_zip(
     hrmod_result: Any,
     validation_result: Any | None = None,
     annotations: Sequence[Any] | None = None,
+    terrain_result: Any | None = None,
 ) -> bytes:
     """Return a deterministic ZIP containing every applicable export."""
 
@@ -245,6 +319,7 @@ def build_results_zip(
         hrmod_result=hrmod_result,
         validation_result=validation_result,
         annotations=annotations,
+        terrain_result=terrain_result,
     )
     output = BytesIO()
     with ZipFile(output, mode="w", compression=ZIP_DEFLATED, compresslevel=9) as archive:
@@ -394,6 +469,9 @@ __all__ = [
     "export_reference_comparison_csv",
     "export_reference_validation_json",
     "export_timeseries_csv",
+    "export_terrain_result_json",
+    "export_terrain_timeseries_csv",
+    "export_terrain_wave_summary_csv",
     "export_wave_summary_csv",
     "export_zone_summary_csv",
 ]

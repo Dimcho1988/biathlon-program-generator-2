@@ -194,3 +194,59 @@ def test_plot_build_does_not_modify_core_result_frames() -> None:
 
     pd.testing.assert_frame_equal(timeseries, expected_timeseries)
     pd.testing.assert_frame_equal(waves, expected_waves)
+
+
+@pytest.mark.parametrize("wave_count", (1, 10, 108))
+def test_terrain_overview_uses_constant_grouped_traces(wave_count: int) -> None:
+    timeseries, waves = _plot_frames(wave_count)
+    timeseries["hrmod_candidate_bpm"] = timeseries["hrmod_bpm"]
+    timeseries["hrmod_final_bpm"] = timeseries["hrmod_bpm"]
+    timeseries["smoothed_grade_pct"] = 0.0
+    timeseries["downhill_mask"] = False
+    waves["terrain_status"] = "accepted"
+    if wave_count:
+        rejected_wave = int(waves.iloc[-1]["wave_id"])
+        waves.loc[waves["wave_id"].eq(rejected_wave), "terrain_status"] = (
+            "terrain_confounded"
+        )
+        timeseries.loc[
+            pd.to_numeric(timeseries["wave_id"], errors="coerce").eq(rejected_wave),
+            "downhill_mask",
+        ] = True
+
+    figure = build_hr_only_figure(
+        timeseries, waves, _profile(), show_h_detect=False
+    )
+
+    names = [trace.name for trace in figure.data]
+    assert names.count("sustained downhill") == 1
+    assert names.count("terrain-confounded wave") == 1
+    assert names.count("raw HR") == 1
+    assert names.count("HRmod candidate") == 1
+    assert names.count("HRmod final") == 1
+    assert len(figure.data) == 14
+    assert len(figure.layout.shapes or ()) == 6
+    assert all(trace.type == "scatter" for trace in figure.data)
+
+
+def test_terrain_plot_preserves_svg_default_and_webgl_opt_in() -> None:
+    timeseries, waves = _plot_frames(10)
+    timeseries["hrmod_candidate_bpm"] = timeseries["hrmod_bpm"]
+    timeseries["hrmod_final_bpm"] = timeseries["raw_hr_bpm"]
+    timeseries["downhill_mask"] = timeseries["donor_flag"]
+    waves["terrain_status"] = "terrain_confounded"
+
+    figure = build_hr_only_figure(
+        timeseries,
+        waves,
+        _profile(),
+        show_h_detect=False,
+        use_webgl=True,
+    )
+    traces = {trace.name: trace for trace in figure.data}
+
+    for name in ("raw HR", "HRmod candidate", "HRmod final"):
+        assert traces[name].type == "scattergl"
+    for name in ("sustained downhill", "terrain-confounded wave"):
+        assert traces[name].type == "scatter"
+        assert None in tuple(traces[name].x)

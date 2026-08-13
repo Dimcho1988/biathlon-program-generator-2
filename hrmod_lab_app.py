@@ -11,7 +11,7 @@ not add an entry to its navigation.  The only value passed to the model core is
 
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
+from dataclasses import fields, is_dataclass
 from datetime import date, datetime
 import hashlib
 from io import BytesIO
@@ -26,6 +26,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
+import hrmod_lab.terrain_gate as terrain_gate
+
 from hrmod_lab import (
     AthleteHRProfile,
     HRmodConfig,
@@ -34,6 +36,11 @@ from hrmod_lab import (
     compute_hrmod_hr_only,
 )
 from hrmod_lab.plotting import build_hr_only_figure as _hr_only_figure
+from hrmod_lab.exports import (
+    export_terrain_result_json,
+    export_terrain_timeseries_csv,
+    export_terrain_wave_summary_csv,
+)
 from hrmod_lab.reference_validation import (
     ReferenceValidationConfig,
     ReferenceZone,
@@ -56,9 +63,17 @@ SCIENTIFIC_LIMITATION = (
 )
 CORE_STATE_KEY = "hrmod_lab_core_run"
 REFERENCE_STATE_KEY = "hrmod_lab_reference_result"
+TERRAIN_STATE_KEY = "hrmod_lab_terrain_result"
 WAVE_TABLE_COLUMNS = (
     "wave_id",
     "status",
+    "terrain_status",
+    "terrain_rejection_reason",
+    "downhill_overlap_s",
+    "downhill_overlap_fraction",
+    "min_smoothed_grade_pct",
+    "moved_area_candidate_bpm_s",
+    "moved_area_final_bpm_s",
     "rise_start_timestamp",
     "peak_timestamp",
     "tail_end_timestamp",
@@ -110,10 +125,13 @@ def _plain(value: Any) -> Any:
         return [_plain(row) for row in value.to_dict(orient="records")]
     if isinstance(value, pd.Series):
         return [_plain(item) for item in value.tolist()]
+    if is_dataclass(value):
+        return {
+            item.name: _plain(getattr(value, item.name))
+            for item in fields(value)
+        }
     if hasattr(value, "to_dict") and callable(value.to_dict):
         return _plain(value.to_dict())
-    if is_dataclass(value):
-        return _plain(asdict(value))
     if isinstance(value, Mapping):
         return {str(key): _plain(item) for key, item in value.items()}
     if isinstance(value, (tuple, list, set, frozenset)):
@@ -149,6 +167,15 @@ def _records_frame(value: Any) -> pd.DataFrame:
     if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray)):
         return pd.DataFrame([_plain(item) for item in value])
     return pd.DataFrame()
+
+
+def _member(value: Any, *names: str, default: Any = None) -> Any:
+    for name in names:
+        if isinstance(value, Mapping) and name in value:
+            return value[name]
+        if hasattr(value, name):
+            return getattr(value, name)
+    return default
 
 
 def _ordered_wave_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -194,8 +221,140 @@ def _format_number(value: Any, *, percent: bool = False) -> str:
 def _clear_run_state() -> None:
     st.session_state.pop(CORE_STATE_KEY, None)
     st.session_state.pop(REFERENCE_STATE_KEY, None)
+    st.session_state.pop(TERRAIN_STATE_KEY, None)
     st.session_state.pop("hrmod_lab_annotations", None)
     st.session_state.pop("hrmod_lab_annotation_import_hash", None)
+
+
+def _terrain_display_frames(
+    result: HRmodResult,
+    terrain_result: Any | None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Combine immutable core rows with display-only terrain output."""
+
+    core_timeseries = _records_frame(result.timeseries)
+    core_waves = _records_frame(result.wave_summary)
+    if terrain_result is None:
+        return core_timeseries, core_waves
+
+    terrain_timeseries = _records_frame(
+        _member(terrain_result, "timeseries", "terrain_timeseries")
+    )
+    terrain_waves = _records_frame(
+        _member(terrain_result, "wave_summary", "terrain_wave_summary")
+    )
+    if not terrain_timeseries.empty:
+        join_column = _first_column(
+            core_timeseries,
+            tuple(
+                name
+                for name in ("timestamp", "elapsed_s")
+                if name in terrain_timeseries.columns
+            ),
+        )
+        terrain_columns = [
+            column
+            for column in terrain_timeseries.columns
+            if column not in core_timeseries.columns or column == join_column
+        ]
+        if join_column is not None:
+            core_timeseries = core_timeseries.merge(
+                terrain_timeseries.loc[:, terrain_columns],
+                on=join_column,
+                how="left",
+                validate="one_to_one",
+            )
+        elif len(core_timeseries) == len(terrain_timeseries):
+            for column in terrain_columns:
+                core_timeseries[column] = terrain_timeseries[column].to_numpy()
+    if not terrain_waves.empty:
+        terrain_columns = [
+            column
+            for column in terrain_waves.columns
+            if column not in core_waves.columns or column == "wave_id"
+        ]
+        if "wave_id" in core_waves.columns and "wave_id" in terrain_waves.columns:
+            core_waves = core_waves.merge(
+                terrain_waves.loc[:, terrain_columns],
+                on="wave_id",
+                how="left",
+                validate="one_to_one",
+            )
+    return core_timeseries, core_waves
+
+
+def _terrain_summary_panel(terrain_result: Any, wave_frame: pd.DataFrame) -> None:
+    """Show terrain decisions while tolerating additive diagnostics fields."""
+
+    diagnostics = _plain(_member(terrain_result, "diagnostics", default={}))
+    if not isinstance(diagnostics, Mapping):
+        diagnostics = {}
+    candidate = int(
+        diagnostics.get("candidate_wave_count", diagnostics.get("total_wave_count", len(wave_frame)))
+        or 0
+    )
+    status = (
+        wave_frame.get("terrain_status", pd.Series(dtype=str))
+        .astype(str)
+        .str.casefold()
+    )
+    rejected = int(
+        diagnostics.get(
+            "terrain_rejected_wave_count",
+            diagnostics.get(
+                "rejected_wave_count",
+                status.isin(
+                    ("terrain_confounded", "terrain_rejected", "rejected")
+                ).sum(),
+            ),
+        )
+        or 0
+    )
+    accepted = int(
+        diagnostics.get(
+            "accepted_wave_count",
+            max(0, candidate - rejected),
+        )
+        or 0
+    )
+    rejected_fraction = diagnostics.get("terrain_rejected_fraction")
+    if rejected_fraction is None:
+        rejected_fraction = rejected / candidate if candidate else 0.0
+    metrics = st.columns(4)
+    metrics[0].metric("Candidate waves", candidate)
+    metrics[1].metric("Accepted waves", accepted)
+    metrics[2].metric("Terrain-rejected waves", rejected)
+    metrics[3].metric(
+        "Terrain-rejected share", _format_number(rejected_fraction, percent=True)
+    )
+    area = st.columns(4)
+    area[0].metric(
+        "Candidate moved area",
+        _format_number(
+            diagnostics.get(
+                "total_candidate_moved_area_bpm_s",
+                diagnostics.get("candidate_moved_area_bpm_s"),
+            )
+        )
+        + " bpm·s",
+    )
+    area[1].metric(
+        "Final moved area",
+        _format_number(
+            diagnostics.get(
+                "total_final_moved_area_bpm_s",
+                diagnostics.get("final_moved_area_bpm_s"),
+            )
+        )
+        + " bpm·s",
+    )
+    area[2].metric(
+        "Grade coverage",
+        _format_number(diagnostics.get("grade_coverage_fraction"), percent=True),
+    )
+    area[3].metric(
+        "Grade source", diagnostics.get("grade_source") or "unavailable"
+    )
 
 
 def _core_fingerprint(result: HRmodResult) -> str:
@@ -507,6 +666,94 @@ def _model_config_widgets(defaults: HRmodConfig) -> dict[str, Any]:
     }
 
 
+def _terrain_config_widgets(defaults: Any) -> Any:
+    """Render only the gate and threshold prominently; collapse all else."""
+
+    primary = st.columns(2)
+    enabled = primary[0].checkbox(
+        "Enable terrain gate",
+        value=bool(getattr(defaults, "terrain_gate_enabled", True)),
+        help=(
+            "Post-processing само: grade никога не влиза в HR-only detection, "
+            "candidate резултата или hr_input_hash."
+        ),
+    )
+    threshold = primary[1].number_input(
+        "Downhill threshold (%)",
+        max_value=-0.1,
+        value=float(getattr(defaults, "downhill_threshold_pct", -3.0)),
+        step=0.5,
+        format="%.1f",
+        help="Sustained downhill е smoothed grade, равен или по-нисък от този праг.",
+    )
+    values: dict[str, Any] = {
+        "terrain_gate_enabled": bool(enabled),
+        "downhill_threshold_pct": float(threshold),
+    }
+    with st.expander("Advanced terrain settings", expanded=False):
+        st.caption(
+            "Тези настройки преизчисляват само terrain_gate_v1; готовият HR-only "
+            "candidate остава кеширан и непроменен."
+        )
+        advanced_fields = [
+            item
+            for item in fields(defaults)
+            if item.init
+            and item.name
+            not in {
+                "config_version",
+                "terrain_gate_enabled",
+                "downhill_threshold_pct",
+            }
+        ]
+        columns = st.columns(min(3, max(1, len(advanced_fields))))
+        for index, item in enumerate(advanced_fields):
+            current = getattr(defaults, item.name)
+            target = columns[index % len(columns)]
+            if isinstance(current, bool):
+                values[item.name] = target.checkbox(item.name, value=current)
+            elif isinstance(current, int) and not isinstance(current, bool):
+                values[item.name] = int(
+                    target.number_input(item.name, value=current, step=1)
+                )
+            elif isinstance(current, float):
+                numeric_options: dict[str, Any] = {
+                    "value": current,
+                    "step": 0.5,
+                }
+                if item.name == "min_grade_coverage_fraction":
+                    numeric_options.update(
+                        min_value=0.01,
+                        max_value=1.0,
+                        step=0.05,
+                        format="%.2f",
+                    )
+                elif item.name == "terrain_transition_buffer_s":
+                    numeric_options["min_value"] = 0.0
+                else:
+                    numeric_options["min_value"] = 0.01
+                values[item.name] = float(
+                    target.number_input(item.name, **numeric_options)
+                )
+            elif current is None:
+                text = target.text_input(item.name, value="")
+                values[item.name] = None if not text.strip() else float(text)
+            else:
+                values[item.name] = target.text_input(item.name, value=str(current))
+    return type(defaults)(**values)
+
+
+def _terrain_run_signature(run: Mapping[str, Any], config: Any) -> str:
+    payload = {
+        "core_fingerprint": run["core_fingerprint"],
+        "input_file_sha256": run["file_sha256"],
+        "terrain_config": _plain(config),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def _athlete_profile(
     hr_floor_bpm: float,
     hrmax_bpm: float,
@@ -678,6 +925,7 @@ def _download_panel(
     run: Mapping[str, Any],
     annotations: pd.DataFrame | None,
     validation: Any | None,
+    terrain_result: Any | None,
 ) -> None:
     result: HRmodResult = run["result"]
     timeseries = _records_frame(result.timeseries)
@@ -709,10 +957,18 @@ def _download_panel(
         if not aligned.empty:
             files["reference_aligned_comparison.csv"] = _csv_bytes(aligned)
         files["reference_validation.json"] = _json_bytes(validation)
+    if terrain_result is not None:
+        files["terrain_gated_timeseries.csv"] = export_terrain_timeseries_csv(
+            terrain_result
+        )
+        files["terrain_wave_summary.csv"] = export_terrain_wave_summary_csv(
+            terrain_result
+        )
+        files["terrain_result.json"] = export_terrain_result_json(terrain_result)
 
     st.caption(
-        "Core CSV/JSON файловете не съдържат speed/power/lap колони. "
-        "Reference comparison е отделен артефакт."
+        "HR-only core CSV/JSON файловете остават без terrain/speed/power/lap колони. "
+        "Terrain raw/candidate/final/grade/status сравнението е отделен post-hoc артефакт."
     )
     buttons = st.columns(4)
     buttons[0].download_button(
@@ -764,6 +1020,29 @@ def _download_panel(
             files["reference_aligned_comparison.csv"],
             "reference_aligned_comparison.csv",
             "text/csv",
+            use_container_width=True,
+        )
+    if "terrain_gated_timeseries.csv" in files:
+        terrain_buttons = st.columns(3)
+        terrain_buttons[0].download_button(
+            "Terrain timeseries CSV",
+            files["terrain_gated_timeseries.csv"],
+            "terrain_gated_timeseries.csv",
+            "text/csv",
+            use_container_width=True,
+        )
+        terrain_buttons[1].download_button(
+            "Terrain waves CSV",
+            files["terrain_wave_summary.csv"],
+            "terrain_wave_summary.csv",
+            "text/csv",
+            use_container_width=True,
+        )
+        terrain_buttons[2].download_button(
+            "Terrain result JSON",
+            files["terrain_result.json"],
+            "terrain_result.json",
+            "application/json",
             use_container_width=True,
         )
 
@@ -865,7 +1144,7 @@ st.warning(SCIENTIFIC_LIMITATION, icon="⚠️")
 st.info(
     "Core изчислението приема само timestamp, HR/HR-quality, индивидуалния HR "
     "профил и HR-only параметрите. Speed, power, grade, distance, cadence, laps и "
-    "manual markers са изолирани в отделен post-hoc reference слой."
+    "manual markers са изолирани в отделни post-hoc terrain/reference слоеве."
 )
 
 with st.sidebar:
@@ -1009,6 +1288,7 @@ if compute_clicked:
             "core_fingerprint": _core_fingerprint(result),
             "profile_warning": profile_warning,
         }
+        st.session_state.pop(TERRAIN_STATE_KEY, None)
         st.session_state.pop(REFERENCE_STATE_KEY, None)
         st.session_state.pop("hrmod_lab_annotations", None)
         st.success("HRmod е изчислен само от parser.hr_input_samples.")
@@ -1053,6 +1333,68 @@ st.caption(
 )
 if run.get("profile_warning"):
     st.warning(run["profile_warning"], icon="⚠️")
+
+st.subheader("6 · Terrain gate post-processing")
+terrain_config = _terrain_config_widgets(terrain_gate.TerrainGateConfig())
+terrain_signature = _terrain_run_signature(run, terrain_config)
+terrain_state = st.session_state.get(TERRAIN_STATE_KEY)
+if not isinstance(terrain_state, Mapping) or terrain_state.get(
+    "signature"
+) != terrain_signature:
+    try:
+        with st.spinner("Grade preparation и terrain_gate_v1…"):
+            prepared_terrain = terrain_gate.prepare_terrain(
+                run_parse.reference_channels,
+                config=terrain_config,
+            )
+            terrain_result = terrain_gate.apply_terrain_gate(
+                result,
+                config=terrain_config,
+                prepared_terrain=prepared_terrain,
+            )
+        terrain_state = {
+            "signature": terrain_signature,
+            "prepared": prepared_terrain,
+            "result": terrain_result,
+        }
+        st.session_state[TERRAIN_STATE_KEY] = terrain_state
+    except Exception as exc:
+        st.error(f"Terrain gate не завърши: {exc}")
+        terrain_state = None
+
+terrain_result = (
+    terrain_state.get("result") if isinstance(terrain_state, Mapping) else None
+)
+if terrain_result is not None:
+    terrain_diagnostics = _plain(terrain_result.diagnostics)
+    terrain_flags = set(terrain_diagnostics.get("flags", ()) or ())
+    if "TERRAIN_GATE_UNAVAILABLE" in terrain_flags:
+        st.warning(
+            "Terrain gate не е приложен: липсва достатъчно надежден grade или "
+            "altitude+distance канал. HRmod candidate е запазен и final не "
+            "измисля terrain стойности.",
+            icon="⚠️",
+        )
+    elif "TERRAIN_GATE_DISABLED" in terrain_flags:
+        st.info(
+            "Terrain gate е изключен. HRmod final е идентичен с HRmod candidate."
+        )
+    else:
+        st.success(
+            "terrain_gate_v1 е приложен само след непроменения HR-only candidate."
+        )
+    timeseries_frame, wave_frame = _terrain_display_frames(result, terrain_result)
+    wave_table_frame = _ordered_wave_frame(wave_frame)
+    _terrain_summary_panel(terrain_result, wave_frame)
+    st.caption(
+        "Terrain input hash: `"
+        + terrain_result.terrain_input_hash[:20]
+        + "…` · final result hash: `"
+        + terrain_result.final_result_hash[:20]
+        + "…` · HR input hash остава `"
+        + result.hr_input_hash[:20]
+        + "…`."
+    )
 st.warning(SCIENTIFIC_LIMITATION, icon="⚠️")
 
 result_view = st.radio(
@@ -1442,4 +1784,5 @@ if result_view == "Downloads":
         run,
         st.session_state.get("hrmod_lab_annotations"),
         st.session_state.get(REFERENCE_STATE_KEY),
+        terrain_result,
     )

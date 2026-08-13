@@ -109,6 +109,22 @@ def _flag_mask(frame: pd.DataFrame, column: str) -> pd.Series:
     return pd.Series(False, index=frame.index)
 
 
+def _value_mask(
+    frame: pd.DataFrame,
+    column: str,
+    accepted_values: Sequence[str],
+) -> pd.Series:
+    """Return a tolerant display-only mask for terrain status columns."""
+
+    if column not in frame.columns:
+        return pd.Series(False, index=frame.index)
+    values = frame[column]
+    if values.dtype == bool:
+        return values.fillna(False)
+    accepted = {str(value).strip().casefold() for value in accepted_values}
+    return values.astype(str).str.strip().str.casefold().isin(accepted)
+
+
 def prepare_plot_view(
     timeseries: pd.DataFrame,
     waves: pd.DataFrame,
@@ -238,6 +254,73 @@ def _add_grouped_flag_trace(
     )
 
 
+def _add_grouped_ranges_trace(
+    figure: go.Figure,
+    ranges: Sequence[tuple[Any, Any]],
+    *,
+    y0: float,
+    y1: float,
+    name: str,
+    fillcolor: str,
+    linecolor: str = "rgba(0,0,0,0)",
+) -> None:
+    """Draw any number of intervals as one SVG trace with ``None`` gaps."""
+
+    xs: list[Any] = []
+    ys: list[float | None] = []
+    for start, end in ranges:
+        if start is None or end is None or pd.isna(start) or pd.isna(end):
+            continue
+        xs.extend((start, start, end, end, start, None))
+        ys.extend((y0, y1, y1, y0, y0, None))
+    figure.add_trace(
+        go.Scatter(
+            x=xs,
+            y=ys,
+            mode="lines",
+            name=name,
+            line={"width": 1.0, "color": linecolor},
+            fill="toself",
+            fillcolor=fillcolor,
+            hoverinfo="skip",
+            connectgaps=False,
+        ),
+        row=1,
+        col=1,
+    )
+
+
+def _terrain_rejected_ranges(
+    waves: pd.DataFrame,
+    x_column: str,
+) -> list[tuple[Any, Any]]:
+    """Return ranges of terrain-confounded waves without per-wave shapes."""
+
+    if waves.empty:
+        return []
+    if "terrain_rejected" in waves.columns:
+        rejected = _value_mask(waves, "terrain_rejected", ("true", "1", "yes"))
+    elif "terrain_status" in waves.columns:
+        rejected = _value_mask(
+            waves,
+            "terrain_status",
+            ("terrain_confounded", "rejected", "terrain_rejected"),
+        )
+    else:
+        return []
+    ranges: list[tuple[Any, Any]] = []
+    for _, row in waves.loc[rejected].iterrows():
+        start = _wave_axis_value(
+            row, ("rise_start_timestamp", "rise_start_elapsed_s"), x_column
+        )
+        end = _wave_axis_value(
+            row, ("tail_end_timestamp", "tail_end_elapsed_s"), x_column
+        )
+        if start is not None and end is not None:
+            ranges.append((start, end))
+    return ranges
+
+
 def _add_grouped_wave_guides(
     figure: go.Figure,
     waves: pd.DataFrame,
@@ -334,14 +417,56 @@ def build_hr_only_figure(
     if x_column == "timestamp":
         x_values = pd.to_datetime(x_values, errors="coerce", utc=True)
 
+    terrain_mode = any(
+        column in frame.columns
+        for column in (
+            "hrmod_candidate_bpm",
+            "hrmod_candidate",
+            "hrmod_final_bpm",
+            "hrmod_final",
+            "smoothed_grade_pct",
+            "downhill_mask",
+            "terrain_status",
+        )
+    ) or any(
+        column in view.waves.columns
+        for column in ("terrain_status", "terrain_rejected")
+    )
     figure = make_subplots(
         rows=2,
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.07,
         row_heights=(0.72, 0.28),
-        subplot_titles=("raw/clean HR срещу hrmod", "Добавена/отнета промяна и HR trend"),
+        subplot_titles=(
+            "raw HR срещу HRmod candidate/final"
+            if terrain_mode
+            else "raw/clean HR срещу hrmod",
+            "Добавена/отнета промяна и HR trend",
+        ),
     )
+    terrain_rejected_ranges: list[tuple[Any, Any]] = []
+    if terrain_mode:
+        downhill_column = _first_column(
+            frame, ("downhill_mask", "sustained_downhill", "is_downhill")
+        )
+        downhill_ranges = (
+            _contiguous_flag_ranges(frame, x_values, downhill_column)
+            if downhill_column is not None
+            else []
+        )
+        _add_grouped_ranges_trace(
+            figure,
+            downhill_ranges,
+            y0=profile.hr_floor_bpm,
+            y1=profile.hrmax_bpm,
+            name="sustained downhill",
+            fillcolor="rgba(14,116,144,0.12)",
+            linecolor="rgba(14,116,144,0.35)",
+        )
+        terrain_rejected_ranges = _terrain_rejected_ranges(
+            view.waves, x_column
+        )
     _add_grouped_flag_trace(
         figure,
         frame,
@@ -362,12 +487,45 @@ def build_hr_only_figure(
         name="donor p→e",
         fillcolor="rgba(249,115,22,0.14)",
     )
+    if terrain_mode:
+        _add_grouped_ranges_trace(
+            figure,
+            terrain_rejected_ranges,
+            y0=profile.hr_floor_bpm,
+            y1=profile.hrmax_bpm,
+            name="terrain-confounded wave",
+            fillcolor="rgba(220,38,38,0.10)",
+            linecolor="rgba(220,38,38,0.55)",
+        )
 
-    hr_traces: tuple[tuple[tuple[str, ...], str, str, str, float, float], ...] = (
-        (("raw_hr_bpm", "raw_hr"), "raw_hr", "#64748b", "solid", 0.9, 0.55),
-        (("clean_hr_bpm", "clean_hr"), "clean_hr", "#2563eb", "solid", 1.5, 0.9),
-        (("hrmod_bpm", "hrmod"), "hrmod", "#dc2626", "solid", 2.2, 1.0),
-    )
+    if terrain_mode:
+        hr_traces: tuple[
+            tuple[tuple[str, ...], str, str, str, float, float], ...
+        ] = (
+            (("raw_hr_bpm", "raw_hr"), "raw HR", "#64748b", "solid", 1.0, 0.65),
+            (
+                ("hrmod_candidate_bpm", "hrmod_candidate", "hrmod_bpm", "hrmod"),
+                "HRmod candidate",
+                "#7c3aed",
+                "dash",
+                1.7,
+                0.9,
+            ),
+            (
+                ("hrmod_final_bpm", "hrmod_final"),
+                "HRmod final",
+                "#dc2626",
+                "solid",
+                2.2,
+                1.0,
+            ),
+        )
+    else:
+        hr_traces = (
+            (("raw_hr_bpm", "raw_hr"), "raw_hr", "#64748b", "solid", 0.9, 0.55),
+            (("clean_hr_bpm", "clean_hr"), "clean_hr", "#2563eb", "solid", 1.5, 0.9),
+            (("hrmod_bpm", "hrmod"), "hrmod", "#dc2626", "solid", 2.2, 1.0),
+        )
     if show_h_detect:
         hr_traces += (
             (("h_detect_bpm", "h_detect"), "h_detect (detection only)", "#7c3aed", "dot", 1.0, 0.8),

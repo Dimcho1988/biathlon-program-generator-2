@@ -312,6 +312,54 @@ Reference evaluator-ът не мутира `hrmod_result`. Overlay или annota
 не стартира нов core run; ново изчисление има само при изрично натискане на
 бутона **Изчисли HRmod (само HR)**.
 
+### Terrain gate v1 — отделен post-processing слой
+
+`terrain_gate_v1` работи единствено след готовия immutable HR-only резултат.
+Grade, altitude и distance никога не влизат в wave detection, candidate
+корекцията или `hr_input_hash`. Слоят пази три отделни серии: `raw_hr`,
+`hrmod_candidate` (непроменения v2 core резултат) и `hrmod_final`.
+
+```python
+from hrmod_lab.terrain_gate import TerrainGateConfig, apply_terrain_gate
+
+terrain_result = apply_terrain_gate(
+    hrmod_result=hrmod_result,
+    reference_channels=parsed.reference_channels,
+    config=TerrainGateConfig(),
+)
+```
+
+Default спускане е изгладен grade `<= -3.0%`, устойчив поне 5 s, с 5 s
+transition buffer. Grade се използва директно, когато е надеждно наличен; иначе
+може да се изведе линейно от качествени altitude/distance проби. Единичен
+отрицателен spike не е спускане и при липсващ/ненадежден grade не се измисля
+`grade=0`: резултатът е `terrain_gate_unavailable`, candidate остава видим и
+не се представя като филтриран.
+
+| Terrain настройка | Default | Роля |
+|---|---:|---|
+| `terrain_gate_enabled` | `true` | включва само post-core gate |
+| `downhill_threshold_pct` | `-3.0` | inclusive downhill праг |
+| `min_sustained_downhill_s` | `5.0` | отхвърля кратки grade spikes |
+| `terrain_transition_buffer_s` | `5.0` | пази преходите към/от спускане |
+| `grade_smoothing_window_s` | `7.0` | centred running median за готов grade |
+| `derived_grade_window_m` | `30.0` | centred distance span за derived grade |
+| `derived_min_distance_span_m` | `10.0` | минимум надежден distance span |
+| `min_grade_coverage_fraction` | `0.80` | минимум валидно покритие |
+| `max_terrain_sample_gap_s` | `5.0` | прекъсва downhill continuity при по-голяма липса на terrain проби |
+
+При derived grade първо се прилага 5-point median върху altitude, след което
+наклонът се изчислява от altitude промяната върху centred distance span. Това е
+векторизиран/линеен спрямо броя проби процес, без samples × waves вложен цикъл.
+Устойчивият downhill интервал използва полуотворени sample интервали и никога не
+се пренася през terrain data gap, по-голям от `max_terrain_sample_gap_s`.
+
+Ако buffered sustained-downhill интервал засегне receiver, donor или граница
+на candidate wave, цялата корекция се маркира `terrain_confounded`.
+`hrmod_final` се връща към raw HR за цялата вълна и
+`moved_area_final_bpm_s=0`; другите неприпокриващи се вълни не се променят.
+Terrain provenance е отделен в `terrain_input_hash`/`final_result_hash`.
+
 ## Изходна схема
 
 `timeseries` съдържа поне:
@@ -337,6 +385,13 @@ gaps, detection support, detected/complete/incomplete/corrected/skipped waves,
 donor/requested/capacity/moved/added/removed площи, capacity-limited площ и
 брой, skip-reason distribution и area-conservation error/pass.
 
+Отделният terrain result добавя `raw_hr_bpm`, `hrmod_candidate_bpm`,
+`hrmod_final_bpm`, `smoothed_grade_pct`, `downhill_mask`,
+`buffered_downhill_mask` и per-sample `terrain_status`. Terrain wave таблицата
+съдържа `terrain_status`, `terrain_rejection_reason`, `downhill_overlap_s`,
+`downhill_overlap_fraction`, `min_smoothed_grade_pct`,
+`moved_area_candidate_bpm_s` и `moved_area_final_bpm_s`.
+
 ## Streamlit workflow и визуализации
 
 1. Качете `.tcx` с HR.
@@ -345,21 +400,28 @@ donor/requested/capacity/moved/added/removed площи, capacity-limited пло
 4. Проверете четирите главни v2 настройки; при нужда отворете collapsed advanced
    safeguards.
 5. Натиснете **Изчисли HRmod (само HR)**.
-6. Изберете изглед **HR-only сигнали**. Overview графиката различава `raw_hr`,
-   `clean_hr` и `hrmod`; по желание покажете тънката detection-only линия `h_detect`.
+6. Включете/изключете **Enable terrain gate** и задайте видимия **Downhill
+   threshold**. Продължителността, transition buffer и smoothing са в затворения
+   **Advanced terrain settings** панел. Тези промени преизчисляват само terrain
+   слоя и никога HR-only core.
+7. Изберете изглед **HR-only сигнали**. Overview графиката различава raw HR,
+   HRmod candidate и HRmod final; по желание покажете тънката detection-only линия `h_detect`.
    Съвместимият SVG renderer е включен по подразбиране и не изисква WebGL.
    **WebGL ускорение** е отделна opt-in настройка само за браузъри с работещ WebGL.
-7. Receiver и donor областите са различно оцветени; вертикалните `s`, `p`, `e`
-   markers и локалният baseline показват границите.
-8. Изберете изглед **HR вълни**, после wave от selector-а. Графиката зарежда само
+8. Receiver, donor, sustained-downhill и terrain-confounded областите са
+   различно оцветени; вертикалните `s`, `p`, `e` markers и локалният baseline
+   показват границите.
+9. Изберете изглед **HR вълни**, после wave от selector-а. Графиката зарежда само
    избраната вълна с малък времеви padding и показва къде е добавено и къде е отнето.
-9. Прегледайте wave таблицата, цялостното time-in-zone сравнение и diagnostics.
-10. Едва тогава използвайте отделния изглед **Reference validation**.
+10. Прегледайте wave таблицата, terrain summary, time-in-zone и diagnostics.
+11. Едва тогава използвайте отделния изглед **Reference validation**.
 
 Само избраният резултатен изглед се изгражда при даден Streamlit rerun. Готовият
 immutable HR-only резултат остава в session state, така че превключването между
 overview и wave zoom не стартира core повторно. Receiver/donor областите, `s/p/e`
 маркерите и baseline сегментите са групирани в постоянен малък брой Plotly traces.
+Downhill интервалите и отхвърлените вълни също са по един групиран trace с
+`None` разделители; не се създават per-wave Plotly shapes.
 
 ## Reference validation без leakage
 
@@ -385,6 +447,10 @@ Correlation сама по себе си не доказва валидност.
 - `zone_summary.csv`;
 - `run_configuration.json`;
 - `diagnostics.json`;
+- `terrain_gated_timeseries.csv` с raw/candidate/final HRmod, smoothed grade,
+  downhill mask и terrain status;
+- `terrain_wave_summary.csv` и `terrain_result.json` с решенията, hashes и
+  terrain diagnostics;
 - отделен reference comparison CSV/JSON само след такава оценка;
 - annotations CSV/JSON при налични annotations;
 - ZIP със същите артефакти.

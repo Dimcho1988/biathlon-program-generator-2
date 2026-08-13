@@ -9,6 +9,7 @@ from pathlib import Path
 from streamlit.testing.v1 import AppTest
 
 import hrmod_lab
+import hrmod_lab.terrain_gate as terrain_gate
 from hrmod_lab.schemas import HRmodConfig, MODEL_VERSION
 
 
@@ -17,7 +18,7 @@ APP_PATH = REPOSITORY_ROOT / "hrmod_lab_app.py"
 PLOTTING_PATH = REPOSITORY_ROOT / "hrmod_lab" / "plotting.py"
 
 
-def _synthetic_wave_tcx() -> bytes:
+def _synthetic_wave_tcx(*, include_grade: bool = True) -> bytes:
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     hr_values = (
         [100] * 25
@@ -29,12 +30,19 @@ def _synthetic_wave_tcx() -> bytes:
         "<Trackpoint>"
         f"<Time>{(start + timedelta(seconds=index)).isoformat().replace('+00:00', 'Z')}</Time>"
         f"<HeartRateBpm><Value>{hr}</Value></HeartRateBpm>"
-        "</Trackpoint>"
+        + (
+            "<Extensions><ns3:TPX><ns3:Grade>0.0</ns3:Grade>"
+            "</ns3:TPX></Extensions>"
+            if include_grade
+            else ""
+        )
+        + "</Trackpoint>"
         for index, hr in enumerate(hr_values)
     )
     return (
         '<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/'
-        'TrainingCenterDatabase/v2"><Activities><Activity Sport="Other">'
+        'TrainingCenterDatabase/v2" xmlns:ns3="http://www.garmin.com/xmlschemas/'
+        'ActivityExtension/v2"><Activities><Activity Sport="Other">'
         "<Id>2026-01-01T00:00:00Z</Id>"
         '<Lap StartTime="2026-01-01T00:00:00Z">'
         "<TotalTimeSeconds>75</TotalTimeSeconds><DistanceMeters>0</DistanceMeters>"
@@ -140,14 +148,30 @@ def test_v2_ui_exposes_wave_visualization_and_exact_limitation() -> None:
 
 def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None:
     compute_calls = 0
+    terrain_calls = 0
+    prepare_calls = 0
     real_compute = hrmod_lab.compute_hrmod_hr_only
+    real_prepare = terrain_gate.prepare_terrain
+    real_apply = terrain_gate.apply_terrain_gate
 
     def counted_compute(**kwargs):
         nonlocal compute_calls
         compute_calls += 1
         return real_compute(**kwargs)
 
+    def counted_prepare(*args, **kwargs):
+        nonlocal prepare_calls
+        prepare_calls += 1
+        return real_prepare(*args, **kwargs)
+
+    def counted_apply(*args, **kwargs):
+        nonlocal terrain_calls
+        terrain_calls += 1
+        return real_apply(*args, **kwargs)
+
     monkeypatch.setattr(hrmod_lab, "compute_hrmod_hr_only", counted_compute)
+    monkeypatch.setattr(terrain_gate, "prepare_terrain", counted_prepare)
+    monkeypatch.setattr(terrain_gate, "apply_terrain_gate", counted_apply)
     app = AppTest.from_file(str(APP_PATH), default_timeout=60).run()
     app.file_uploader[0].upload(
         "synthetic-wave.tcx", _synthetic_wave_tcx(), "application/xml"
@@ -162,20 +186,57 @@ def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None
     assert not app.error
     assert any("изчислен само" in message.value for message in app.success)
     assert compute_calls == 1
+    assert prepare_calls == terrain_calls == 1
     assert app.radio[0].label == "Резултатен изглед"
     assert app.radio[0].value == "HR-only сигнали"
     assert not any(widget.label == "Wave selector" for widget in app.selectbox)
     assert len(app.get("plotly_chart")) == 1
     default_plot = json.loads(app.get("plotly_chart")[0].proto.spec)
     default_types = {trace["name"]: trace["type"] for trace in default_plot["data"]}
-    assert default_types["raw_hr"] == "scatter"
-    assert default_types["hrmod"] == "scatter"
+    assert default_types["raw HR"] == "scatter"
+    assert default_types["HRmod candidate"] == "scatter"
+    assert default_types["HRmod final"] == "scatter"
+    assert default_types["sustained downhill"] == "scatter"
+    assert default_types["terrain-confounded wave"] == "scatter"
     assert "scattergl" not in default_types.values()
 
     before = app.session_state["hrmod_lab_core_run"]["result"]
     before_plain = asdict(before)
     before_hash = before.hr_input_hash
+    terrain_before = app.session_state["hrmod_lab_terrain_result"]["result"]
+    assert terrain_before.hr_input_hash == before_hash
     assert "hrmod_lab_annotations" in app.session_state
+    threshold = next(
+        widget
+        for widget in app.number_input
+        if widget.label == "Downhill threshold (%)"
+    )
+    threshold.set_value(-2.5).run()
+
+    assert not app.exception
+    assert not app.error
+    assert compute_calls == 1
+    assert prepare_calls == terrain_calls == 2
+    assert app.session_state["hrmod_lab_core_run"]["result"] is before
+    terrain_after_threshold = app.session_state["hrmod_lab_terrain_result"]["result"]
+    assert terrain_after_threshold is not terrain_before
+    assert terrain_after_threshold.hr_input_hash == before_hash
+
+    terrain_toggle = next(
+        widget for widget in app.checkbox if widget.label == "Enable terrain gate"
+    )
+    terrain_toggle.set_value(False).run()
+
+    assert not app.exception
+    assert not app.error
+    assert compute_calls == 1
+    assert prepare_calls == terrain_calls == 3
+    disabled = app.session_state["hrmod_lab_terrain_result"]["result"]
+    assert disabled.diagnostics.terrain_gate_enabled is False
+    assert [point.hrmod_final_bpm for point in disabled.timeseries] == [
+        point.hrmod_candidate_bpm for point in disabled.timeseries
+    ]
+    assert app.session_state["hrmod_lab_core_run"]["result"] is before
     webgl_toggle = next(
         widget
         for widget in app.checkbox
@@ -187,10 +248,12 @@ def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None
     assert not app.exception
     assert not app.error
     assert compute_calls == 1
+    assert prepare_calls == terrain_calls == 3
     webgl_plot = json.loads(app.get("plotly_chart")[0].proto.spec)
     webgl_types = {trace["name"]: trace["type"] for trace in webgl_plot["data"]}
-    assert webgl_types["raw_hr"] == "scattergl"
-    assert webgl_types["hrmod"] == "scattergl"
+    assert webgl_types["raw HR"] == "scattergl"
+    assert webgl_types["HRmod candidate"] == "scattergl"
+    assert webgl_types["HRmod final"] == "scattergl"
     assert sum(trace_type == "scattergl" for trace_type in webgl_types.values()) == 6
     assert app.session_state["hrmod_lab_core_run"]["result"] is before
     app.radio[0].set_value("HR вълни").run()
@@ -198,9 +261,33 @@ def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None
     assert not app.exception
     assert not app.error
     assert compute_calls == 1
+    assert prepare_calls == terrain_calls == 3
     assert any(widget.label == "Wave selector" for widget in app.selectbox)
     assert len(app.get("plotly_chart")) == 1
     after = app.session_state["hrmod_lab_core_run"]["result"]
     assert after is before
     assert asdict(after) == before_plain
     assert after.hr_input_hash == before_hash
+
+
+def test_missing_terrain_channel_warns_and_keeps_candidate_fallback() -> None:
+    app = AppTest.from_file(str(APP_PATH), default_timeout=60).run()
+    app.file_uploader[0].upload(
+        "synthetic-no-terrain.tcx",
+        _synthetic_wave_tcx(include_grade=False),
+        "application/xml",
+    ).run()
+    next(
+        button for button in app.button if button.label == "Изчисли HRmod (само HR)"
+    ).click().run()
+
+    assert not app.exception
+    assert not app.error
+    assert any(
+        "Terrain gate не е приложен" in message.value for message in app.warning
+    )
+    terrain_result = app.session_state["hrmod_lab_terrain_result"]["result"]
+    assert terrain_result.diagnostics.terrain_gate_applied is False
+    assert [point.hrmod_final_bpm for point in terrain_result.timeseries] == [
+        point.hrmod_candidate_bpm for point in terrain_result.timeseries
+    ]

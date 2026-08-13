@@ -395,6 +395,67 @@ def test_e2e_tcx_produces_core_summaries_diagnostics_and_separate_exports() -> N
     assert "reference_validation.json" not in core_only_files
 
 
+def test_terrain_exports_are_separate_and_keep_core_csv_hr_only() -> None:
+    parsed, result = _core_from_tcx(_tcx_bytes(_response(), include_reference=True))
+    terrain_result = {
+        "model_version": result.model_version,
+        "terrain_model_version": "terrain_gate_v1",
+        "hr_input_hash": result.hr_input_hash,
+        "terrain_input_hash": "terrain-hash",
+        "final_result_hash": "final-hash",
+        "config": {"downhill_threshold_pct": -3.0},
+        "diagnostics": {"terrain_rejected_wave_count": 1},
+        "timeseries": [
+            {
+                "timestamp": START,
+                "elapsed_s": 0.0,
+                "raw_hr_bpm": 100.0,
+                "hrmod_candidate_bpm": 102.0,
+                "hrmod_final_bpm": 100.0,
+                "smoothed_grade_pct": -4.0,
+                "downhill_mask": True,
+                "terrain_status": "terrain_confounded",
+            }
+        ],
+        "wave_summary": [
+            {
+                "wave_id": 1,
+                "terrain_status": "terrain_confounded",
+                "terrain_rejection_reason": "sustained_downhill_overlap",
+                "downhill_overlap_s": 7.0,
+                "downhill_overlap_fraction": 0.25,
+                "min_smoothed_grade_pct": -4.0,
+                "moved_area_candidate_bpm_s": 40.0,
+                "moved_area_final_bpm_s": 0.0,
+            }
+        ],
+    }
+
+    files = build_export_bundle(
+        hrmod_result=result,
+        terrain_result=terrain_result,
+    )
+
+    core_header = files["processed_hr_timeseries.csv"].splitlines()[0].decode()
+    assert "smoothed_grade_pct" not in core_header
+    assert "terrain_status" not in core_header
+    terrain_header = files["terrain_gated_timeseries.csv"].splitlines()[0].decode()
+    assert {
+        "raw_hr_bpm",
+        "hrmod_candidate_bpm",
+        "hrmod_final_bpm",
+        "smoothed_grade_pct",
+        "downhill_mask",
+        "terrain_status",
+    }.issubset(set(terrain_header.split(",")))
+    wave_header = files["terrain_wave_summary.csv"].splitlines()[0].decode()
+    assert "moved_area_final_bpm_s" in wave_header
+    manifest = json.loads(files["manifest.json"])
+    assert manifest["hr_input_hash"] == result.hr_input_hash
+    assert manifest["terrain_input_hash"] == "terrain-hash"
+    assert manifest["final_result_hash"] == "final-hash"
+
+
 def test_service_keeps_computation_and_reference_evaluation_in_two_phases(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -20,6 +20,18 @@ from .schemas import (
     WaveSummary,
     ZoneSummary,
 )
+from .terrain_gate import (
+    TERRAIN_CONFIG_VERSION,
+    TERRAIN_MODEL_VERSION,
+    PreparedTerrain,
+    TerrainGateConfig,
+    TerrainGateDiagnostics,
+    TerrainGateResult,
+    TerrainTimeseriesPoint,
+    TerrainWaveSummary,
+    apply_terrain_gate,
+    prepare_terrain,
+)
 
 __version__ = MODEL_VERSION
 
@@ -36,5 +48,15 @@ __all__ = [
     "MODEL_VERSION",
     "WaveSummary",
     "ZoneSummary",
+    "TERRAIN_CONFIG_VERSION",
+    "TERRAIN_MODEL_VERSION",
+    "PreparedTerrain",
+    "TerrainGateConfig",
+    "TerrainGateDiagnostics",
+    "TerrainGateResult",
+    "TerrainTimeseriesPoint",
+    "TerrainWaveSummary",
+    "apply_terrain_gate",
     "compute_hrmod_hr_only",
+    "prepare_terrain",
 ]
