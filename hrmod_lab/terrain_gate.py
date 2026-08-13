@@ -860,6 +860,8 @@ def apply_terrain_gate(
     final_hash = _canonical_hash(
         {
             "hr_input_hash": hrmod_result.hr_input_hash,
+            "core_model_version": hrmod_result.model_version,
+            "core_config": hrmod_result.config.to_dict(),
             "terrain_input_hash": prepared.terrain_input_hash,
             "terrain_model_version": TERRAIN_MODEL_VERSION,
             "final_hr": [point.hrmod_final_bpm for point in terrain_points],

@@ -12,6 +12,7 @@ from typing import Sequence
 import numpy as np
 
 from .schemas import (
+    LEGACY_MODEL_VERSION,
     MODEL_VERSION,
     AthleteHRProfile,
     HRmodConfig,
@@ -232,6 +233,51 @@ def _wave_summaries(
                 capacity_limited_area_bpm_s=result.capacity_limited_area_bpm_s,
                 capacity_limited=result.capacity_limited,
                 skip_reason=result.skip_reason,
+                morphology=wave.morphology,
+                morphology_reason=wave.morphology_reason,
+                correction_strategy=wave.correction_strategy,
+                transition_weight=wave.transition_weight,
+                hold_target_hr_bpm=wave.hold_target_hr_bpm,
+                hold_start_timestamp=(
+                    cleaned.timestamps[wave.hold_start_index]
+                    if wave.hold_start_index is not None
+                    else None
+                ),
+                hold_end_timestamp=(
+                    cleaned.timestamps[wave.hold_end_index]
+                    if wave.hold_end_index is not None
+                    else None
+                ),
+                terminal_fall_start_timestamp=(
+                    cleaned.timestamps[wave.terminal_fall_start_index]
+                    if wave.terminal_fall_start_index is not None
+                    else None
+                ),
+                terminal_fall_end_timestamp=(
+                    cleaned.timestamps[wave.terminal_fall_end_index]
+                    if wave.terminal_fall_end_index is not None
+                    else None
+                ),
+                hold_start_elapsed_s=(
+                    float(cleaned.elapsed_s[wave.hold_start_index])
+                    if wave.hold_start_index is not None
+                    else None
+                ),
+                hold_end_elapsed_s=(
+                    float(cleaned.elapsed_s[wave.hold_end_index])
+                    if wave.hold_end_index is not None
+                    else None
+                ),
+                terminal_fall_start_elapsed_s=(
+                    float(cleaned.elapsed_s[wave.terminal_fall_start_index])
+                    if wave.terminal_fall_start_index is not None
+                    else None
+                ),
+                terminal_fall_end_elapsed_s=(
+                    float(cleaned.elapsed_s[wave.terminal_fall_end_index])
+                    if wave.terminal_fall_end_index is not None
+                    else None
+                ),
                 raw_zone_seconds=raw_seconds,
                 clean_zone_seconds=clean_seconds,
                 hrmod_zone_seconds=hrmod_seconds,
@@ -461,8 +507,8 @@ def compute_hrmod_hr_only(
                 local_baseline_hr_bpm=_optional_float(
                     detection.local_baseline_hr[index]
                 ),
-                receiver_flag=bool(detection.receiver_mask[index]),
-                donor_flag=bool(detection.donor_mask[index]),
+                receiver_flag=bool(redistribution.receiver_mask[index]),
+                donor_flag=bool(redistribution.donor_mask[index]),
                 added_bpm=float(redistribution.added_bpm[index]),
                 removed_bpm=float(redistribution.removed_bpm[index]),
                 hrmod_bpm=_optional_float(redistribution.hrmod[index]),
@@ -481,7 +527,11 @@ def compute_hrmod_hr_only(
         diagnostics=diagnostics,
         config=config,
         hr_input_hash=_hash_hr_input(cleaned.samples),
-        model_version=MODEL_VERSION,
+        model_version=(
+            LEGACY_MODEL_VERSION
+            if config.model_variant == "v2_legacy"
+            else MODEL_VERSION
+        ),
     )
 
 

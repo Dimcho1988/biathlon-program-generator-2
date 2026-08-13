@@ -480,6 +480,41 @@ def test_zone_definitions_are_included_in_final_result_hash() -> None:
     assert original.final_result_hash != alternate.final_result_hash
 
 
+def test_core_model_and_config_are_included_in_final_result_hash() -> None:
+    core = _core()
+    references = _references(
+        len(core.timeseries), grades=[0.0] * len(core.timeseries)
+    )
+    original = apply_terrain_gate(core, references, _config())
+    alternate_model = apply_terrain_gate(
+        replace(core, model_version="hrmod_wave_area_shift_v2"),
+        references,
+        _config(),
+    )
+    alternate_config = apply_terrain_gate(
+        replace(
+            core,
+            config=replace(
+                core.config,
+                terminal_fall_threshold_bpm_s=(
+                    core.config.terminal_fall_threshold_bpm_s + 0.01
+                ),
+            ),
+        ),
+        references,
+        _config(),
+    )
+
+    for alternate in (alternate_model, alternate_config):
+        assert alternate.hr_input_hash == original.hr_input_hash
+        assert [point.hrmod_final_bpm for point in alternate.timeseries] == [
+            point.hrmod_final_bpm for point in original.timeseries
+        ]
+        assert alternate.wave_summary == original.wave_summary
+        assert alternate.zone_summary == original.zone_summary
+        assert alternate.final_result_hash != original.final_result_hash
+
+
 def test_large_sampling_gap_breaks_downhill_continuity() -> None:
     elapsed = (0.0, 1.0, 100.0, 101.0)
     references = ReferenceChannels(

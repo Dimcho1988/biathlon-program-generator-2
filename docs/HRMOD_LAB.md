@@ -1,18 +1,23 @@
-# HRmod Lab v2 — HR-only преместване на площта на вълната
+# HRmod Lab v3 — morphology-aware HR-only преместване на площта
 
 ## Статус и предназначение
 
-Активният модел е `hrmod_wave_area_shift_v2`, с versioned конфигурация
-`hrmod_config_v2`. Това е изолиран, offline и експериментален модул за завършени
+Активният default модел е `hrmod_wave_area_shift_v3`, с versioned конфигурация
+`hrmod_config_v3`. `v2_legacy` остава изрично избираем само за диагностично
+сравнение. Това е изолиран, offline и експериментален модул за завършени
 TCX активности. Той не е част от production onFlows, не чете Intervals.icu или
 база данни и не добавя production navigation entry.
 
-Моделът тества проста хипотеза: когато наблюдаваният HR образува устойчива
-rise–peak–fall вълна, част от площта в по-късния спад може да се премести в
-по-ранното покачване. Добавената и отнетата площ са еднакви. Това е времево
-преразпределение на наблюдавания HR отговор, а не оценка на механична мощност.
+Моделът разделя HR вълните по морфология. Compact формите запазват v2
+rise–peak–fall преместването. В преходния 30–45 s band нееднозначната форма
+намалява v2 площта плавно чрез `v2_fade_out`, вместо да я прекъсва рязко.
+Sustained формите изискват устойчив hold и потвърден остър terminal fall; donor
+е само този terminal fall, а hold target ограничава receiver добавянето. От
+45 s нататък нееднозначните дълги форми се пропускат fail-closed.
+Добавената и отнетата площ винаги са еднакви. Това е времево преразпределение
+на наблюдавания HR отговор, а не оценка на механична мощност.
 
-> HRmod v2 преразпределя във времето част от наблюдавания HR отговор. Ако кратко усилие не остави различим HR отговор, HR-only моделът не може да го възстанови. Ако HR спада по време на продължаващо реално усилие, моделът не може да го знае без независим reference канал. Затова резултатът е експериментална HR-еквивалентна оценка, а не измерена мощност.
+> HRmod v3 експериментално преразпределя във времето част от наблюдавания HR отговор. Ако кратко усилие не остави различим HR отговор, HR-only моделът не може да го възстанови. При HR-derived receiver фаза до 30 s той запазва compact v2, между 30 и 45 s използва плавен преход/fade, а от 45 s коригира само при устойчив hold и потвърден остър краен спад; нееднозначните дълги форми се пропускат. Моделът не може да знае реалното механично натоварване без независим reference канал. Резултатът е HR-еквивалентна хипотеза, а не измерена мощност.
 
 ## Непроменима HR-only граница
 
@@ -22,7 +27,7 @@ rise–peak–fall вълна, част от площта в по-късния �
 - измерен HR и HR quality flags;
 - реалното `dt` между пробите;
 - индивидуални `HRmax`, `HR_floor` и пет HR зони;
-- сериализируемата HR-only v2 конфигурация.
+- сериализируемата HR-only v3 конфигурация.
 
 Speed, power, grade, altitude, distance, cadence, TCX laps, sport metadata и
 ръчни annotations нямат представяне в core input schema. Те не могат да влияят
@@ -55,10 +60,11 @@ Raw ski speed е само контекст: високата скорост пр
 sampling през 1 s. Gap над `long_gap_threshold_s` започва нов независим segment.
 Вълна и HR площ никога не пресичат такава граница.
 
-## Deterministic rise–peak–fall state machine
+## Deterministic HR morphology state machine
 
-Една вълна съдържа локален baseline `B`, начало на rise `s`, действителен peak
-`p` и край на установения fall `e`.
+Всяка вълна съдържа локален baseline `B`, начало на rise `s`, действителен peak
+`p` и край `e`. Sustained формата добавя начало/край на hold `u/h`, hold target
+`H` и начало/край на terminal fall `d/f`.
 
 ### 1. Търсене на устойчив rise
 
@@ -101,7 +107,43 @@ rise, fall, receiver и donor критерии. Max duration, gap, file end бе
 затваряне или липсващ fall дават incomplete/skipped wave по default. Продължителен
 plateau не се включва като donor само защото HR остава над `B`.
 
-## Точно преместване на HR площта
+## V3 morphology решение
+
+Morphology границите и допустимостта в `v3_auto` използват HR-only
+`h_detect_bpm`, `trend_bpm_per_s`, detection support и elapsed time. Hold target
+`H` и самото area преразпределение използват `clean_hr_bpm`; външни канали не
+участват:
+
+- `compact`: receiver продължителност до `compact_full_v2_s` (default 30 s)
+  запазва пълната v2 allocation;
+- `transition`: между `compact_full_v2_s` и `sustained_full_v3_s` (default
+  45 s) `transition_weight` нараства непрекъснато от 0 до 1 — няма hard switch
+  при 30 s;
+- `sustained`: изисква hold поне `min_hold_duration_s`, ограничен от
+  `hold_slope_tolerance_bpm_s` и `hold_band_bpm`, последван от terminal fall;
+- `ambiguous` в 30–45 s band: липсва надежден hold/terminal fall и v2 площта се
+  fade-ва непрекъснато към нула;
+- `ambiguous` от 45 s: няма достатъчно еднозначна sustained форма и площ не се
+  премества.
+
+Terminal fall започва при устойчив отрицателен наклон
+`terminal_fall_threshold_bpm_s`, минимална продължителност
+`terminal_fall_min_duration_s` и спад `terminal_fall_min_drop_bpm`. Краят му се
+потвърждава след `terminal_fall_release_s` при release slope
+`terminal_fall_release_slope_bpm_s`; `terminal_fall_max_duration_s` е защитен
+лимит. `correction_strategy` е един от `v2_full_tail`, `v3_transition`,
+`v3_terminal_fall`, `v2_fade_out` или `none`.
+
+За sustained вълна donor е само `[d,f]`. Receiver може да обхваща rise и
+поддържащата част, но свободният му капацитет е само до робастно оценения `H`,
+не до HRmax. Пробите, които вече са около `H`, не се повдигат. Така платото е
+референция/таван, а не област, която задължително получава корекция.
+
+`v2_legacy` изключва morphology решението и възпроизвежда пълната v2
+rise–peak–fall allocation за диагностично сравнение. Streamlit изчислява само
+избрания variant; отделните изпълнени конфигурации се пазят в session cache.
+
+## Точно преместване на HR площта — compact/v2 allocation
 
 За complete валидна вълна receiver прозорецът е `R = [s, p]`, а donor
 прозорецът е `T = (p, e]`. Те не се припокриват. Нека `h_i` е
@@ -219,7 +261,7 @@ Floating-point остатъкът се отчита като `area_balance_error
 
 ## Основни настройки
 
-Главният UI показва само тези четири настройки:
+Главният UI показва `model_variant` и тези четири настройки:
 
 | Поле | Default | Единица | Значение |
 |---|---:|---|---|
@@ -230,6 +272,28 @@ Floating-point остатъкът се отчита като `area_balance_error
 
 Defaults са exploratory, централизирани, versioned и сериализируеми. Те не са
 физиологично валидирани константи.
+
+V3 morphology safeguards са в отделен затворен панел:
+
+| Поле | Default | Роля |
+|---|---:|---|
+| `compact_full_v2_s` | `30.0` | край на пълната compact v2 тежест |
+| `sustained_full_v3_s` | `45.0` | начало на пълната sustained v3 тежест |
+| `min_hold_duration_s` | `12.0` | минимален устойчив hold |
+| `hold_slope_tolerance_bpm_s` | `0.08` | допустим абсолютен hold trend |
+| `hold_band_bpm` | `3.0` | робастен hold band около target `H` |
+| `terminal_fall_threshold_bpm_s` | `0.20` | минимален отрицателен terminal trend |
+| `terminal_fall_min_duration_s` | `3.0` | минимална продължителност на fall |
+| `terminal_fall_min_drop_bpm` | `4.0` | минимален общ terminal спад |
+| `terminal_fall_release_slope_bpm_s` | `0.05` | release slope праг |
+| `terminal_fall_release_s` | `2.0` | устойчив release период |
+| `terminal_fall_max_duration_s` | `30.0` | защитен максимум на donor прозореца |
+| `terminal_recovery_min_s` | `3.0` | минимален нисък recovery престой след острия спад преди следващ rise |
+| `terminal_rebound_guard_s` | `10.0` | прозорец, в който връщане към предишния detect-domain hold прави спада нееднозначен |
+
+При вълна, затворена от нов rise, тези две защити различават терминален спад с
+нисък recovery престой от временен dip с бързо връщане към предишния hold. Нееднозначният
+случай fail-closed остава некоригиран и се маркира с `morphology_reason=ambiguous_terminal_vs_transient_dip`.
 
 ## Advanced detection safeguards
 
@@ -317,7 +381,7 @@ Reference evaluator-ът не мутира `hrmod_result`. Overlay или annota
 `terrain_gate_v1` работи единствено след готовия immutable HR-only резултат.
 Grade, altitude и distance никога не влизат в wave detection, candidate
 корекцията или `hr_input_hash`. Слоят пази три отделни серии: `raw_hr`,
-`hrmod_candidate` (непроменения v2 core резултат) и `hrmod_final`.
+`hrmod_candidate` (непромененият избран HR-only core резултат) и `hrmod_final`.
 
 ```python
 from hrmod_lab.terrain_gate import TerrainGateConfig, apply_terrain_gate
@@ -371,9 +435,15 @@ Terrain provenance е отделен в `terrain_input_hash`/`final_result_hash`
 - raw/clean/hrmod zone labels;
 - quality и model flags.
 
-`wave_summary` съдържа границите `s/p/e`, status/end/skip reason, baseline и
-donor floor, rise/fall, receiver/donor durations, donor/requested/capacity/moved
-площи, added/removed площи, balance error, capacity limitation и per-wave
+В transition случая `receiver_flag` и `donor_flag` маркират support-а на
+крайните ефективни signed deltas след blend/cancellation, а не едновременно
+двата концептуални branch прозореца.
+
+`wave_summary` съдържа `morphology`, `correction_strategy`, `transition_weight`,
+границите `s/p/e` и optional `u/h/d/f`, `hold_target_hr_bpm`, status/end/skip
+reason, baseline и donor floor, rise/fall, receiver/donor durations,
+donor/requested/capacity/moved площи, added/removed площи, balance error,
+capacity limitation и per-wave
 `raw_zone_seconds`, `clean_zone_seconds`, `hrmod_zone_seconds`,
 `hrmod_minus_raw_zone_seconds`, `hrmod_minus_clean_zone_seconds`.
 
@@ -405,8 +475,8 @@ HR-only core резултатът, а final е post-gate резултатът. �
 1. Качете `.tcx` с HR.
 2. Прегледайте quality отчета и информативния observed maximum.
 3. Задайте индивидуалния профил и петте зони.
-4. Проверете четирите главни v2 настройки; при нужда отворете collapsed advanced
-   safeguards.
+4. Изберете `v3_auto` (default) или `v2_legacy` за диагностично сравнение и
+   проверете четирите главни настройки; при нужда отворете collapsed safeguards.
 5. Натиснете **Изчисли HRmod (само HR)**.
 6. Включете/изключете **Enable terrain gate** и задайте видимия **Downhill
    threshold**. Продължителността, transition buffer и smoothing са в затворения
@@ -417,8 +487,8 @@ HR-only core резултатът, а final е post-gate резултатът. �
    Съвместимият SVG renderer е включен по подразбиране и не изисква WebGL.
    **WebGL ускорение** е отделна opt-in настройка само за браузъри с работещ WebGL.
 8. Receiver, donor, sustained-downhill и terrain-confounded областите са
-   различно оцветени; вертикалните `s`, `p`, `e` markers и локалният baseline
-   показват границите.
+   различно оцветени; вертикалните `s/p/e` и optional `u/h/d/f` markers,
+   локалният baseline `B` и hold target `H` показват границите.
 9. Изберете изглед **HR вълни**, после wave от selector-а. Графиката зарежда само
    избраната вълна с малък времеви padding и показва къде е добавено и къде е отнето.
 10. Прегледайте wave таблицата, terrain summary, time-in-zone и diagnostics.
@@ -426,8 +496,10 @@ HR-only core резултатът, а final е post-gate резултатът. �
 
 Само избраният резултатен изглед се изгражда при даден Streamlit rerun. Готовият
 immutable HR-only резултат остава в session state, така че превключването между
-overview и wave zoom не стартира core повторно. Receiver/donor областите, `s/p/e`
-маркерите и baseline сегментите са групирани в постоянен малък брой Plotly traces.
+overview и wave zoom не стартира core повторно. Изпълнените v3/v2 config варианти
+се кешират поотделно; variant се преизчислява само след изрично submit-ване, ако
+още не е кеширан. Receiver/donor областите, morphology маркерите и baseline/hold
+сегментите са групирани в постоянен малък брой Plotly traces.
 Downhill интервалите и отхвърлените вълни също са по един групиран trace с
 `None` разделители; не се създават per-wave Plotly shapes.
 

@@ -80,11 +80,11 @@ def test_overview_trace_and_shape_counts_are_small_and_constant(
     assert len(figure.layout.shapes or ()) == 6
     names = [trace.name for trace in figure.data]
     for expected in (
-        "receiver s→p",
-        "donor p→e",
+        "receiver · allocation window",
+        "donor · allocation window",
         "s · rise start",
         "p · peak",
-        "e · tail end",
+        "e · wave end",
         "B · local baseline",
     ):
         assert names.count(expected) == 1
@@ -122,11 +122,11 @@ def test_full_series_backend_is_svg_by_default_and_webgl_only_when_requested(
     ):
         assert traces[name].type == expected_type
     for name in (
-        "receiver s→p",
-        "donor p→e",
+        "receiver · allocation window",
+        "donor · allocation window",
         "s · rise start",
         "p · peak",
-        "e · tail end",
+        "e · wave end",
         "B · local baseline",
     ):
         assert traces[name].type == "scatter"
@@ -222,7 +222,7 @@ def test_terrain_overview_uses_constant_grouped_traces(wave_count: int) -> None:
     assert names.count("sustained downhill") == 1
     assert names.count("terrain-confounded wave") == 1
     assert names.count("raw HR") == 1
-    assert names.count("HRmod candidate") == 1
+    assert names.count("HRmod candidate (HR-only)") == 1
     assert names.count("HRmod final") == 1
     assert len(figure.data) == 14
     assert len(figure.layout.shapes or ()) == 6
@@ -245,8 +245,38 @@ def test_terrain_plot_preserves_svg_default_and_webgl_opt_in() -> None:
     )
     traces = {trace.name: trace for trace in figure.data}
 
-    for name in ("raw HR", "HRmod candidate", "HRmod final"):
+    for name in ("raw HR", "HRmod candidate (HR-only)", "HRmod final"):
         assert traces[name].type == "scattergl"
     for name in ("sustained downhill", "terrain-confounded wave"):
         assert traces[name].type == "scatter"
         assert None in tuple(traces[name].x)
+
+
+@pytest.mark.parametrize("wave_count", (1, 10, 108))
+def test_v3_morphology_guides_are_grouped_and_constant(
+    wave_count: int,
+) -> None:
+    timeseries, waves = _plot_frames(wave_count)
+    waves["morphology"] = "sustained"
+    waves["correction_strategy"] = "v3_terminal_fall"
+    waves["hold_start_elapsed_s"] = waves["rise_start_elapsed_s"] + 10.0
+    waves["hold_end_elapsed_s"] = waves["rise_start_elapsed_s"] + 34.0
+    waves["terminal_fall_start_elapsed_s"] = waves["hold_end_elapsed_s"]
+    waves["terminal_fall_end_elapsed_s"] = waves["hold_end_elapsed_s"] + 10.0
+    waves["hold_target_hr_bpm"] = 114.0
+
+    figure = build_hr_only_figure(
+        timeseries, waves, _profile(), show_h_detect=False
+    )
+
+    names = [trace.name for trace in figure.data]
+    for expected in (
+        "u · hold start",
+        "h · hold end",
+        "d · terminal fall start",
+        "f · terminal fall end",
+        "H · hold target",
+    ):
+        assert names.count(expected) == 1
+    assert len(figure.data) == 17
+    assert len(figure.layout.shapes or ()) == 6

@@ -55,19 +55,27 @@ from hrmod_lab.tcx_adapter import (
 )
 
 
-APP_TITLE = "HRmod Lab v2 · HR-only wave area shift"
+APP_TITLE = "HRmod Lab v3 · experimental HR-only morphology shift"
 SCIENTIFIC_LIMITATION = (
-    "HRmod v2 преразпределя във времето част от наблюдавания HR отговор. "
+    "HRmod v3 експериментално преразпределя във времето част от наблюдавания HR отговор. "
     "Ако кратко усилие не остави различим HR отговор, HR-only моделът не може да го възстанови. "
-    "Ако HR спада по време на продължаващо реално усилие, моделът не може да го знае без независим "
-    "reference канал. Затова резултатът е експериментална HR-еквивалентна оценка, а не измерена мощност."
+    "При HR-derived receiver фаза до 30 s той запазва compact v2, между 30 и 45 s използва плавен "
+    "преход/fade, а от 45 s коригира само при устойчив hold и потвърден остър краен спад; "
+    "нееднозначните дълги форми "
+    "се пропускат. Моделът не може да знае реалното механично "
+    "натоварване без независим reference канал. Резултатът е HR-еквивалентна хипотеза, а не измерена мощност."
 )
 CORE_STATE_KEY = "hrmod_lab_core_run"
+CORE_CACHE_KEY = "hrmod_lab_core_cache"
 REFERENCE_STATE_KEY = "hrmod_lab_reference_result"
 TERRAIN_STATE_KEY = "hrmod_lab_terrain_result"
 WAVE_TABLE_COLUMNS = (
     "wave_id",
     "status",
+    "morphology",
+    "morphology_reason",
+    "correction_strategy",
+    "transition_weight",
     "terrain_status",
     "terrain_rejection_reason",
     "downhill_overlap_s",
@@ -78,8 +86,13 @@ WAVE_TABLE_COLUMNS = (
     "rise_start_timestamp",
     "peak_timestamp",
     "tail_end_timestamp",
+    "hold_start_timestamp",
+    "hold_end_timestamp",
+    "terminal_fall_start_timestamp",
+    "terminal_fall_end_timestamp",
     "end_reason",
     "baseline_hr_bpm",
+    "hold_target_hr_bpm",
     "rise_bpm",
     "fall_bpm",
     "receiver_duration_s",
@@ -440,6 +453,25 @@ def _parser_signature(payload_hash: str, config: TCXParserConfig) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _core_run_signature(
+    hr_samples: Sequence[Any],
+    profile: AthleteHRProfile,
+    model_config: HRmodConfig,
+) -> str:
+    """Identify one HR-only run without including any reference channel."""
+
+    encoded = json.dumps(
+        {
+            "hr_input_samples": _plain(hr_samples),
+            "athlete_profile": _plain(profile),
+            "model_config": _plain(model_config),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _preview_parse(
     payload: bytes,
     payload_hash: str,
@@ -514,7 +546,22 @@ def _quality_report(parsed: TCXParseResult) -> None:
 
 
 def _model_config_widgets(defaults: HRmodConfig) -> dict[str, Any]:
-    """Render the four primary v2 settings and collapsed safeguards."""
+    """Render the v3 strategy, four primary settings and safeguards."""
+
+    model_variant = st.selectbox(
+        "HR-only model strategy",
+        options=("v3_auto", "v2_legacy"),
+        index=("v3_auto", "v2_legacy").index(defaults.model_variant),
+        format_func=lambda value: {
+            "v3_auto": "v3_auto · morphology-aware (experimental)",
+            "v2_legacy": "v2_legacy · full-tail diagnostic comparison",
+        }[value],
+        help=(
+            "v3_auto разпознава compact/sustained/ambiguous HR форми. "
+            "v2_legacy е запазен само за контролно сравнение; изчислява се "
+            "единствено избраният вариант."
+        ),
+    )
 
     primary = st.columns(4)
     alpha = primary[0].slider(
@@ -691,8 +738,125 @@ def _model_config_widgets(defaults: HRmodConfig) -> dict[str, Any]:
             value=float(defaults.sampling_regularity_tolerance_s), step=0.05
         )
 
+    with st.expander("V3 sustained morphology safeguards", expanded=False):
+        st.caption(
+            "Само HR морфология: устойчив hold, hold target и потвърден остър "
+            "terminal fall. До 30 s се пази compact v2, 30–45 s е плавен "
+            "transition/fade, а нееднозначните форми над 45 s се пропускат. Тези "
+            "контроли не използват grade, speed, power или laps."
+        )
+        morphology = st.columns(5)
+        compact_full_v2_s = morphology[0].number_input(
+            "compact_full_v2_s",
+            min_value=0.01,
+            value=float(defaults.compact_full_v2_s),
+            step=1.0,
+            disabled=model_variant == "v2_legacy",
+            help="До тази receiver продължителност v3_auto запазва изцяло compact v2 allocation.",
+        )
+        sustained_full_v3_s = morphology[1].number_input(
+            "sustained_full_v3_s",
+            min_value=0.01,
+            value=float(defaults.sustained_full_v3_s),
+            step=1.0,
+            disabled=model_variant == "v2_legacy",
+            help="От тази продължителност се допуска изцяло sustained v3; между двата прага има плавен blend.",
+        )
+        min_hold_duration_s = morphology[2].number_input(
+            "min_hold_duration_s",
+            min_value=0.01,
+            value=float(defaults.min_hold_duration_s),
+            step=1.0,
+            disabled=model_variant == "v2_legacy",
+        )
+        hold_slope_tolerance_bpm_s = morphology[3].number_input(
+            "hold_slope_tolerance_bpm_s",
+            min_value=0.0,
+            value=float(defaults.hold_slope_tolerance_bpm_s),
+            step=0.01,
+            format="%.2f",
+            disabled=model_variant == "v2_legacy",
+        )
+        hold_band_bpm = morphology[4].number_input(
+            "hold_band_bpm",
+            min_value=0.01,
+            value=float(defaults.hold_band_bpm),
+            step=0.5,
+            disabled=model_variant == "v2_legacy",
+        )
+        st.caption("Terminal fall confirmation")
+        terminal = st.columns(4)
+        terminal_fall_threshold_bpm_s = terminal[0].number_input(
+            "terminal_fall_threshold_bpm_s",
+            min_value=0.001,
+            value=float(defaults.terminal_fall_threshold_bpm_s),
+            step=0.01,
+            format="%.2f",
+            disabled=model_variant == "v2_legacy",
+        )
+        terminal_fall_min_duration_s = terminal[1].number_input(
+            "terminal_fall_min_duration_s",
+            min_value=0.01,
+            value=float(defaults.terminal_fall_min_duration_s),
+            step=1.0,
+            disabled=model_variant == "v2_legacy",
+        )
+        terminal_fall_min_drop_bpm = terminal[2].number_input(
+            "terminal_fall_min_drop_bpm",
+            min_value=0.01,
+            value=float(defaults.terminal_fall_min_drop_bpm),
+            step=0.5,
+            disabled=model_variant == "v2_legacy",
+        )
+        terminal_fall_release_slope_bpm_s = terminal[3].number_input(
+            "terminal_fall_release_slope_bpm_s",
+            min_value=0.0,
+            value=float(defaults.terminal_fall_release_slope_bpm_s),
+            step=0.01,
+            format="%.2f",
+            disabled=model_variant == "v2_legacy",
+        )
+        terminal_close = st.columns(4)
+        terminal_fall_release_s = terminal_close[0].number_input(
+            "terminal_fall_release_s",
+            min_value=0.01,
+            value=float(defaults.terminal_fall_release_s),
+            step=0.5,
+            disabled=model_variant == "v2_legacy",
+        )
+        terminal_fall_max_duration_s = terminal_close[1].number_input(
+            "terminal_fall_max_duration_s",
+            min_value=0.01,
+            value=float(defaults.terminal_fall_max_duration_s),
+            step=1.0,
+            disabled=model_variant == "v2_legacy",
+        )
+        terminal_recovery_min_s = terminal_close[2].number_input(
+            "terminal_recovery_min_s",
+            min_value=0.01,
+            value=float(defaults.terminal_recovery_min_s),
+            step=0.5,
+            disabled=model_variant == "v2_legacy",
+            help=(
+                "При new-rise trough изисква минимален нисък HR recovery dwell "
+                "след terminal fall, преди следващата вълна."
+            ),
+        )
+        terminal_rebound_guard_s = terminal_close[3].number_input(
+            "terminal_rebound_guard_s",
+            min_value=0.01,
+            value=float(defaults.terminal_rebound_guard_s),
+            step=1.0,
+            disabled=model_variant == "v2_legacy",
+            help=(
+                "Отхвърля terminal interpretation, ако ранният rebound достигне "
+                "предишния hold band."
+            ),
+        )
+
     return {
         "config_version": defaults.config_version,
+        "model_variant": model_variant,
         "alpha": alpha,
         "rise_threshold_bpm_s": rise_threshold_bpm_s,
         "min_rise_bpm": min_rise_bpm,
@@ -724,6 +888,19 @@ def _model_config_widgets(defaults: HRmodConfig) -> dict[str, Any]:
         "artifact_spike_deviation_bpm": artifact_spike_deviation_bpm,
         "sampling_regularity_tolerance_s": sampling_regularity_tolerance_s,
         "area_conservation_tolerance_bpm_s": area_conservation_tolerance_bpm_s,
+        "min_hold_duration_s": min_hold_duration_s,
+        "hold_slope_tolerance_bpm_s": hold_slope_tolerance_bpm_s,
+        "hold_band_bpm": hold_band_bpm,
+        "compact_full_v2_s": compact_full_v2_s,
+        "sustained_full_v3_s": sustained_full_v3_s,
+        "terminal_fall_threshold_bpm_s": terminal_fall_threshold_bpm_s,
+        "terminal_fall_min_duration_s": terminal_fall_min_duration_s,
+        "terminal_fall_min_drop_bpm": terminal_fall_min_drop_bpm,
+        "terminal_fall_release_slope_bpm_s": terminal_fall_release_slope_bpm_s,
+        "terminal_fall_release_s": terminal_fall_release_s,
+        "terminal_fall_max_duration_s": terminal_fall_max_duration_s,
+        "terminal_recovery_min_s": terminal_recovery_min_s,
+        "terminal_rebound_guard_s": terminal_rebound_guard_s,
     }
 
 
@@ -1220,7 +1397,8 @@ st.info(
 
 with st.sidebar:
     st.header("HRmod Lab")
-    st.markdown("**Model:** `hrmod_wave_area_shift_v2`")
+    st.markdown("**Default model:** `hrmod_wave_area_shift_v3` · experimental")
+    st.caption("`v2_legacy` remains available only for diagnostic comparison.")
     st.markdown("**Режим:** offline / completed activity")
     st.markdown("[Документация](./docs/HRMOD_LAB.md)")
     st.divider()
@@ -1301,10 +1479,11 @@ with st.form("hrmod_core_configuration", clear_on_submit=False):
         "HRmax (bpm)", min_value=1.0, value=200.0, step=1.0
     )
 
-    st.subheader("4 · Четири HR-only v2 основни настройки")
+    st.subheader("4 · HR-only v3 стратегия и основни настройки")
     st.caption(
-        f"{default_config.config_version} · alpha, rise threshold, minimum rise и "
-        "detection smoothing. Defaults са exploratory и не са физиологично калибрирани."
+        f"{default_config.config_version} · v3_auto е morphology-aware default; "
+        "v2_legacy може да се избере за контролно сравнение. Defaults са "
+        "exploratory и не са физиологично калибрирани."
     )
     config_values = _model_config_widgets(default_config)
     compute_clicked = st.form_submit_button(
@@ -1327,14 +1506,24 @@ if compute_clicked:
             regularity_tolerance_s=float(parser_regularity_tolerance_s),
             assume_naive_timestamps_utc=bool(assume_naive_utc),
         )
-        with st.spinner("HR-only preprocessing, wave detection и exact area shift…"):
-            run_parse = parse_tcx(tcx_payload, config=run_parser_config)
-            # Anti-leakage by construction: no reference object is in this call.
-            result = compute_hrmod_hr_only(
-                hr_samples=run_parse.hr_input_samples,
-                athlete_profile=athlete_profile,
-                config=hrmod_config,
-            )
+        # Parsing stays current for terrain/reference channels.  The core cache
+        # key below is built only from the parsed HR-only input and HR config.
+        run_parse = parse_tcx(tcx_payload, config=run_parser_config)
+        core_signature = _core_run_signature(
+            run_parse.hr_input_samples, athlete_profile, hrmod_config
+        )
+        core_cache = st.session_state.setdefault(CORE_CACHE_KEY, {})
+        cached_run = core_cache.get(core_signature)
+        if isinstance(cached_run, Mapping):
+            result = cached_run["result"]
+        else:
+            with st.spinner("HR-only preprocessing, morphology detection и exact area shift…"):
+                # Anti-leakage by construction: no reference object is in this call.
+                result = compute_hrmod_hr_only(
+                    hr_samples=run_parse.hr_input_samples,
+                    athlete_profile=athlete_profile,
+                    config=hrmod_config,
+                )
         run_timeseries = _records_frame(result.timeseries)
         clean_column = _first_column(run_timeseries, ("clean_hr_bpm", "clean_hr"))
         profile_warning = None
@@ -1349,7 +1538,7 @@ if compute_clicked:
                     "HR_floor/HRmax. Проверете профила и артефактите; UI не прилага "
                     "тихо clipping."
                 )
-        st.session_state[CORE_STATE_KEY] = {
+        completed_run = {
             "result": result,
             "parsed": run_parse,
             "athlete_profile": athlete_profile,
@@ -1358,11 +1547,20 @@ if compute_clicked:
             "file_sha256": tcx_sha256,
             "core_fingerprint": _core_fingerprint(result),
             "profile_warning": profile_warning,
+            "core_signature": core_signature,
         }
+        core_cache[core_signature] = {
+            "result": result,
+            "core_fingerprint": completed_run["core_fingerprint"],
+        }
+        st.session_state[CORE_STATE_KEY] = completed_run
         st.session_state.pop(TERRAIN_STATE_KEY, None)
         st.session_state.pop(REFERENCE_STATE_KEY, None)
         st.session_state.pop("hrmod_lab_annotations", None)
-        st.success("HRmod е изчислен само от parser.hr_input_samples.")
+        if isinstance(cached_run, Mapping):
+            st.success("HRmod HR-only резултатът е възстановен от session cache.")
+        else:
+            st.success("HRmod е изчислен само от parser.hr_input_samples.")
     except Exception as exc:  # Config/core validation must remain visible in UI.
         st.error(f"HRmod run-ът не завърши: {exc}")
 
@@ -1383,7 +1581,7 @@ base_annotations = _annotation_frame(run_parse.reference_channels)
 if "hrmod_lab_annotations" not in st.session_state:
     st.session_state["hrmod_lab_annotations"] = base_annotations
 
-st.subheader("5 · Готов HR-only core резултат")
+st.subheader("5 · Готов експериментален HR-only core резултат")
 summary_columns = st.columns(5)
 summary_columns[0].metric("Model version", result.model_version)
 summary_columns[1].metric("HR samples", len(timeseries_frame))
@@ -1401,6 +1599,24 @@ st.caption(
     + run["core_fingerprint"][:20]
     + "…` · reference join все още не е част от този резултат."
 )
+if "morphology" in wave_frame.columns:
+    morphology_counts = (
+        wave_frame["morphology"].fillna("unknown").astype(str).value_counts()
+    )
+    strategy_counts = (
+        wave_frame.get("correction_strategy", pd.Series(dtype=str))
+        .fillna("none")
+        .astype(str)
+        .value_counts()
+    )
+    st.caption(
+        "Избран strategy: `"
+        + str(getattr(result.config, "model_variant", "unknown"))
+        + "` · morphology: "
+        + ", ".join(f"{name}={count}" for name, count in morphology_counts.items())
+        + " · correction: "
+        + ", ".join(f"{name}={count}" for name, count in strategy_counts.items())
+    )
 if run.get("profile_warning"):
     st.warning(run["profile_warning"], icon="⚠️")
 
@@ -1527,8 +1743,10 @@ if result_view == "HR-only сигнали":
 
 if result_view == "HR вълни":
     st.caption(
-        "Вълните са открити само от h_detect. Receiver s→p получава площта, "
-        "donor p→e я отдава; това не е механичен work interval."
+        "Вълните са открити само от h_detect. При sustained форма u→h е hold, "
+        "d→f е потвърденият terminal fall, а H е hold target. Receiver/donor "
+        "показват действителните allocation windows. transition_weight=0 означава "
+        "compact v2 allocation, а 1 — пълен v3/fade край; това не е механичен work interval."
     )
     if wave_frame.empty:
         st.info("Не са открити HR вълни при текущите параметри.")
@@ -1542,11 +1760,22 @@ if result_view == "HR вълни":
             options=selector_options,
             format_func=lambda value: (
                 f"Wave {value} · "
-                + str(
-                    wave_frame.loc[
+                + " · ".join(
+                    str(item)
+                    for item in wave_frame.loc[
                         pd.to_numeric(wave_frame["wave_id"], errors="coerce").eq(value),
-                        "status",
+                        [
+                            column
+                            for column in (
+                                "morphology",
+                                "morphology_reason",
+                                "correction_strategy",
+                                "status",
+                            )
+                            if column in wave_frame.columns
+                        ],
                     ].iloc[0]
+                    if pd.notna(item) and str(item).strip()
                 )
             ),
         )
@@ -1606,7 +1835,7 @@ if result_view == "HR зони":
         zone_plot.add_bar(
             x=zone_display_frame["zone_name"],
             y=zone_display_frame["hrmod_candidate_seconds"],
-            name="HRmod candidate (HR-only core)",
+            name="HRmod candidate (selected HR-only strategy)",
         )
         zone_plot.add_bar(
             x=zone_display_frame["zone_name"],

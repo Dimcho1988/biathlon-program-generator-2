@@ -330,15 +330,56 @@ def _add_grouped_wave_guides(
     y1: float,
 ) -> None:
     marker_specs = (
-        (("rise_start_timestamp", "rise_start_elapsed_s"), "s", "#15803d", "dash"),
-        (("peak_timestamp", "peak_elapsed_s"), "p", "#7e22ce", "dot"),
-        (("tail_end_timestamp", "tail_end_elapsed_s"), "e", "#c2410c", "dash"),
+        (
+            ("rise_start_timestamp", "rise_start_elapsed_s"),
+            "s",
+            "rise start",
+            "#15803d",
+            "dash",
+        ),
+        (
+            ("hold_start_timestamp", "hold_start_elapsed_s"),
+            "u",
+            "hold start",
+            "#0369a1",
+            "dot",
+        ),
+        (
+            ("hold_end_timestamp", "hold_end_elapsed_s"),
+            "h",
+            "hold end",
+            "#0284c7",
+            "dot",
+        ),
+        (
+            ("terminal_fall_start_timestamp", "terminal_fall_start_elapsed_s"),
+            "d",
+            "terminal fall start",
+            "#be123c",
+            "dash",
+        ),
+        (
+            ("terminal_fall_end_timestamp", "terminal_fall_end_elapsed_s"),
+            "f",
+            "terminal fall end",
+            "#e11d48",
+            "dash",
+        ),
+        (("peak_timestamp", "peak_elapsed_s"), "p", "peak", "#7e22ce", "dot"),
+        (
+            ("tail_end_timestamp", "tail_end_elapsed_s"),
+            "e",
+            "wave end",
+            "#c2410c",
+            "dash",
+        ),
     )
     annotate = len(waves) == 1
-    for names, marker, color, dash in marker_specs:
+    for names, marker, label, color, dash in marker_specs:
         xs: list[Any] = []
         ys: list[float | None] = []
         texts: list[str | None] = []
+        customdata: list[list[Any]] = []
         for _, row in waves.iterrows():
             x_value = _wave_axis_value(row, names, x_column)
             if x_value is None or pd.isna(x_value):
@@ -346,18 +387,44 @@ def _add_grouped_wave_guides(
             xs.extend((x_value, x_value, None))
             ys.extend((y0, y1, None))
             texts.extend((None, f"<b>{marker}</b>" if annotate else None, None))
+            if annotate:
+                details = [
+                    row.get("wave_id"),
+                    row.get("morphology", "compact"),
+                    row.get("morphology_reason") or "not_applicable",
+                    row.get("correction_strategy", "v2_full_tail"),
+                    float(row.get("transition_weight", 0.0) or 0.0),
+                ]
+                customdata.extend((details, details, [None, None, None, None, 0.0]))
+        # A v2/compact result has no hold/terminal markers.  Avoid adding
+        # empty traces while keeping one grouped trace per marker kind for any
+        # number of v3 waves.
+        if not xs:
+            continue
+        trace_options: dict[str, Any] = {
+            "x": xs,
+            "y": ys,
+            "text": texts,
+            "textposition": "top center",
+            "mode": "lines+text" if annotate else "lines",
+            "name": f"{marker} · {label}",
+            "line": {"color": color, "width": 1.2, "dash": dash},
+            "connectgaps": False,
+        }
+        if annotate:
+            trace_options["customdata"] = customdata
+            trace_options["hovertemplate"] = (
+                f"<b>{marker} · {label}</b><br>"
+                "Wave %{customdata[0]}<br>"
+                "Morphology: %{customdata[1]}<br>"
+                "Reason: %{customdata[2]}<br>"
+                "Strategy: %{customdata[3]}<br>"
+                "transition_weight: %{customdata[4]:.3f}<extra></extra>"
+            )
+        else:
+            trace_options["hoverinfo"] = "skip"
         figure.add_trace(
-            go.Scatter(
-                x=xs,
-                y=ys,
-                text=texts,
-                textposition="top center",
-                mode="lines+text" if annotate else "lines",
-                name={"s": "s · rise start", "p": "p · peak", "e": "e · tail end"}[marker],
-                line={"color": color, "width": 1.2, "dash": dash},
-                hoverinfo="skip",
-                connectgaps=False,
-            ),
+            go.Scatter(**trace_options),
             row=1,
             col=1,
         )
@@ -389,6 +456,49 @@ def _add_grouped_wave_guides(
         row=1,
         col=1,
     )
+
+    hold_x: list[Any] = []
+    hold_y: list[float | None] = []
+    for _, row in waves.iterrows():
+        start = _wave_axis_value(
+            row,
+            (
+                "hold_start_timestamp",
+                "hold_start_elapsed_s",
+                "rise_start_timestamp",
+                "rise_start_elapsed_s",
+            ),
+            x_column,
+        )
+        end = _wave_axis_value(
+            row,
+            (
+                "terminal_fall_start_timestamp",
+                "terminal_fall_start_elapsed_s",
+                "hold_end_timestamp",
+                "hold_end_elapsed_s",
+            ),
+            x_column,
+        )
+        target = row.get("hold_target_hr_bpm")
+        if start is None or end is None or target is None or pd.isna(target):
+            continue
+        hold_x.extend((start, end, None))
+        hold_y.extend((float(target), float(target), None))
+    if hold_x:
+        figure.add_trace(
+            go.Scatter(
+                x=hold_x,
+                y=hold_y,
+                mode="lines",
+                name="H · hold target",
+                line={"color": "#0369a1", "width": 1.4, "dash": "longdash"},
+                hoverinfo="skip",
+                connectgaps=False,
+            ),
+            row=1,
+            col=1,
+        )
 
 
 def build_hr_only_figure(
@@ -474,7 +584,7 @@ def build_hr_only_figure(
         "receiver_flag",
         y0=profile.hr_floor_bpm,
         y1=profile.hrmax_bpm,
-        name="receiver s→p",
+        name="receiver · allocation window",
         fillcolor="rgba(34,197,94,0.14)",
     )
     _add_grouped_flag_trace(
@@ -484,7 +594,7 @@ def build_hr_only_figure(
         "donor_flag",
         y0=profile.hr_floor_bpm,
         y1=profile.hrmax_bpm,
-        name="donor p→e",
+        name="donor · allocation window",
         fillcolor="rgba(249,115,22,0.14)",
     )
     if terrain_mode:
@@ -505,7 +615,7 @@ def build_hr_only_figure(
             (("raw_hr_bpm", "raw_hr"), "raw HR", "#64748b", "solid", 1.0, 0.65),
             (
                 ("hrmod_candidate_bpm", "hrmod_candidate", "hrmod_bpm", "hrmod"),
-                "HRmod candidate",
+                "HRmod candidate (HR-only)",
                 "#7c3aed",
                 "dash",
                 1.7,

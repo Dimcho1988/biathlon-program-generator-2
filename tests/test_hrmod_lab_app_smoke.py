@@ -59,19 +59,22 @@ def test_standalone_hrmod_lab_renders_without_touching_production_navigation() -
     )
     app.run()
     assert not app.exception
-    assert app.title[0].value == "HRmod Lab v2 · HR-only wave area shift"
-    assert "HRmod v2 преразпределя" in app.warning[0].value
+    assert app.title[0].value == "HRmod Lab v3 · experimental HR-only morphology shift"
+    assert "HRmod v3 експериментално" in app.warning[0].value
     assert (REPOSITORY_ROOT / "app.py").read_text(encoding="utf-8").find("hrmod_lab") == -1
 
 
-def test_v2_config_contract_and_defaults_have_no_retired_model_fields() -> None:
+def test_v3_config_contract_and_defaults_have_no_retired_model_fields() -> None:
     config = HRmodConfig()
-    assert MODEL_VERSION == "hrmod_wave_area_shift_v2"
-    assert config.config_version == "hrmod_config_v2"
+    assert MODEL_VERSION == "hrmod_wave_area_shift_v3"
+    assert config.config_version == "hrmod_config_v3"
+    assert config.model_variant == "v3_auto"
     assert config.alpha == 1.0
     assert config.rise_threshold_bpm_s == 0.15
     assert config.min_rise_bpm == 5.0
     assert config.smoothing_window_s == 5.0
+    assert config.terminal_recovery_min_s == 3.0
+    assert config.terminal_rebound_guard_s == 10.0
 
     config_fields = {item.name for item in fields(HRmodConfig)}
     retired_fields = {
@@ -86,7 +89,7 @@ def test_v2_config_contract_and_defaults_have_no_retired_model_fields() -> None:
     assert config_fields.isdisjoint(retired_fields)
 
 
-def test_main_v2_ui_has_exactly_four_core_settings_before_advanced_panel() -> None:
+def test_main_v3_ui_has_variant_and_exactly_four_core_settings_before_advanced_panel() -> None:
     source = APP_PATH.read_text(encoding="utf-8")
     widget_source = source.split("def _model_config_widgets", 1)[1].split(
         'with st.expander("Advanced detection safeguards"', 1
@@ -99,6 +102,9 @@ def test_main_v2_ui_has_exactly_four_core_settings_before_advanced_panel() -> No
     )
     assert all(widget_source.count(label) == 1 for label in expected_labels)
     assert widget_source.count(".slider(") + widget_source.count(".number_input(") == 4
+    assert '"HR-only model strategy"' in widget_source
+    assert '"v3_auto"' in widget_source
+    assert '"v2_legacy"' in widget_source
 
     retired_ui_tokens = (
         "delay_s",
@@ -111,7 +117,7 @@ def test_main_v2_ui_has_exactly_four_core_settings_before_advanced_panel() -> No
     assert all(token not in source for token in retired_ui_tokens)
 
 
-def test_v2_ui_exposes_wave_visualization_and_exact_limitation() -> None:
+def test_v3_ui_exposes_morphology_visualization_and_exact_limitation() -> None:
     source = APP_PATH.read_text(encoding="utf-8")
     plotting_source = PLOTTING_PATH.read_text(encoding="utf-8")
     required_visual_fields = (
@@ -121,6 +127,14 @@ def test_v2_ui_exposes_wave_visualization_and_exact_limitation() -> None:
         "rise_start_timestamp",
         "peak_timestamp",
         "tail_end_timestamp",
+        "morphology",
+        "morphology_reason",
+        "correction_strategy",
+        "transition_weight",
+        "hold_target_hr_bpm",
+        "hold_start_timestamp",
+        "terminal_fall_start_timestamp",
+        "terminal_fall_end_timestamp",
         "baseline_hr_bpm",
         "wave_summary",
         "Wave selector",
@@ -129,11 +143,16 @@ def test_v2_ui_exposes_wave_visualization_and_exact_limitation() -> None:
         "hrmod_minus_raw_zone_seconds",
     )
     assert all(field in source or field in plotting_source for field in required_visual_fields)
+    assert '"terminal_recovery_min_s"' in source
+    assert '"terminal_rebound_guard_s"' in source
     exact_limitation = (
-        "HRmod v2 преразпределя във времето част от наблюдавания HR отговор. "
+        "HRmod v3 експериментално преразпределя във времето част от наблюдавания HR отговор. "
         "Ако кратко усилие не остави различим HR отговор, HR-only моделът не може да го възстанови. "
-        "Ако HR спада по време на продължаващо реално усилие, моделът не може да го знае без независим "
-        "reference канал. Затова резултатът е експериментална HR-еквивалентна оценка, а не измерена мощност."
+        "При HR-derived receiver фаза до 30 s той запазва compact v2, между 30 и 45 s използва плавен "
+        "преход/fade, а от 45 s коригира само при устойчив hold и потвърден остър краен спад; "
+        "нееднозначните дълги форми "
+        "се пропускат. Моделът не може да знае реалното механично "
+        "натоварване без независим reference канал. Резултатът е HR-еквивалентна хипотеза, а не измерена мощност."
     )
     tree = ast.parse(source)
     limitation_assignment = next(
@@ -198,7 +217,7 @@ def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None
     default_plot = json.loads(app.get("plotly_chart")[0].proto.spec)
     default_types = {trace["name"]: trace["type"] for trace in default_plot["data"]}
     assert default_types["raw HR"] == "scatter"
-    assert default_types["HRmod candidate"] == "scatter"
+    assert default_types["HRmod candidate (HR-only)"] == "scatter"
     assert default_types["HRmod final"] == "scatter"
     assert default_types["sustained downhill"] == "scatter"
     assert default_types["terrain-confounded wave"] == "scatter"
@@ -230,7 +249,7 @@ def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None
     assert [trace["name"] for trace in zone_plot_before["data"]] == [
         "Raw HR",
         "Clean HR",
-        "HRmod candidate (HR-only core)",
+        "HRmod candidate (selected HR-only strategy)",
         "HRmod final (terrain gate)",
     ]
 
@@ -298,7 +317,7 @@ def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None
     webgl_plot = json.loads(app.get("plotly_chart")[0].proto.spec)
     webgl_types = {trace["name"]: trace["type"] for trace in webgl_plot["data"]}
     assert webgl_types["raw HR"] == "scattergl"
-    assert webgl_types["HRmod candidate"] == "scattergl"
+    assert webgl_types["HRmod candidate (HR-only)"] == "scattergl"
     assert webgl_types["HRmod final"] == "scattergl"
     assert sum(trace_type == "scattergl" for trace_type in webgl_types.values()) == 6
     assert app.session_state["hrmod_lab_core_run"]["result"] is before
@@ -314,6 +333,95 @@ def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None
     assert after is before
     assert asdict(after) == before_plain
     assert after.hr_input_hash == before_hash
+
+
+def test_reference_only_tcx_change_reuses_hr_only_core_cache(monkeypatch) -> None:
+    compute_calls = 0
+    real_compute = hrmod_lab.compute_hrmod_hr_only
+
+    def counted_compute(**kwargs):
+        nonlocal compute_calls
+        compute_calls += 1
+        return real_compute(**kwargs)
+
+    monkeypatch.setattr(hrmod_lab, "compute_hrmod_hr_only", counted_compute)
+    app = AppTest.from_file(str(APP_PATH), default_timeout=60).run()
+    app.file_uploader[0].upload(
+        "same-hr-downhill.tcx",
+        _synthetic_wave_tcx(grade_pct=-4.0),
+        "application/xml",
+    ).run()
+    next(button for button in app.button if "HRmod" in button.label).click().run()
+
+    first = app.session_state["hrmod_lab_core_run"]["result"]
+    first_hash = first.hr_input_hash
+    assert compute_calls == 1
+
+    app.file_uploader[0].upload(
+        "same-hr-flat.tcx",
+        _synthetic_wave_tcx(grade_pct=0.0),
+        "application/xml",
+    ).run()
+    next(button for button in app.button if "HRmod" in button.label).click().run()
+
+    second = app.session_state["hrmod_lab_core_run"]["result"]
+    assert not app.exception
+    assert not app.error
+    assert compute_calls == 1
+    assert second is first
+    assert second.hr_input_hash == first_hash
+    assert len(app.session_state["hrmod_lab_core_cache"]) == 1
+
+
+def test_v3_v2_v3_switch_reuses_each_cached_core_result(monkeypatch) -> None:
+    compute_calls = 0
+    real_compute = hrmod_lab.compute_hrmod_hr_only
+
+    def counted_compute(**kwargs):
+        nonlocal compute_calls
+        compute_calls += 1
+        return real_compute(**kwargs)
+
+    monkeypatch.setattr(hrmod_lab, "compute_hrmod_hr_only", counted_compute)
+    app = AppTest.from_file(str(APP_PATH), default_timeout=60).run()
+    app.file_uploader[0].upload(
+        "variant-cache.tcx", _synthetic_wave_tcx(), "application/xml"
+    ).run()
+    compute = next(button for button in app.button if "HRmod" in button.label)
+    compute.click().run()
+    first_v3 = app.session_state["hrmod_lab_core_run"]["result"]
+    first_v3_terrain = app.session_state["hrmod_lab_terrain_result"]["result"]
+    assert compute_calls == 1
+    assert first_v3.config.model_variant == "v3_auto"
+    assert first_v3_terrain.hr_input_hash == first_v3.hr_input_hash
+
+    variant = next(
+        widget for widget in app.selectbox if widget.label == "HR-only model strategy"
+    )
+    variant.set_value("v2_legacy").run()
+    next(button for button in app.button if "HRmod" in button.label).click().run()
+    legacy = app.session_state["hrmod_lab_core_run"]["result"]
+    legacy_terrain = app.session_state["hrmod_lab_terrain_result"]["result"]
+    assert compute_calls == 2
+    assert legacy is not first_v3
+    assert legacy.config.model_variant == "v2_legacy"
+    assert legacy_terrain.hr_input_hash == legacy.hr_input_hash
+
+    variant = next(
+        widget for widget in app.selectbox if widget.label == "HR-only model strategy"
+    )
+    variant.set_value("v3_auto").run()
+    next(button for button in app.button if "HRmod" in button.label).click().run()
+    restored_v3 = app.session_state["hrmod_lab_core_run"]["result"]
+    restored_terrain = app.session_state["hrmod_lab_terrain_result"]["result"]
+    assert not app.exception
+    assert not app.error
+    assert compute_calls == 2
+    assert restored_v3 is first_v3
+    assert restored_v3.hr_input_hash == first_v3.hr_input_hash
+    assert restored_terrain is not legacy_terrain
+    assert restored_terrain.hr_input_hash == restored_v3.hr_input_hash
+    assert len(app.session_state["hrmod_lab_core_cache"]) == 2
 
 
 def test_missing_terrain_channel_warns_and_keeps_candidate_fallback() -> None:

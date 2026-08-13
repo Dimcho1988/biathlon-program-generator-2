@@ -349,6 +349,10 @@ def test_e2e_tcx_produces_core_summaries_diagnostics_and_separate_exports() -> N
     assert {
         "wave_id",
         "status",
+        "morphology",
+        "morphology_reason",
+        "correction_strategy",
+        "transition_weight",
         "rise_start_timestamp",
         "peak_timestamp",
         "tail_end_timestamp",
@@ -369,8 +373,9 @@ def test_e2e_tcx_produces_core_summaries_diagnostics_and_separate_exports() -> N
 
     config_export = json.loads(files["run_configuration.json"])
     diagnostics_export = json.loads(files["diagnostics.json"])
-    assert config_export["model_version"] == "hrmod_wave_area_shift_v2"
-    assert config_export["config"]["config_version"] == "hrmod_config_v2"
+    assert config_export["model_version"] == "hrmod_wave_area_shift_v3"
+    assert config_export["config"]["config_version"] == "hrmod_config_v3"
+    assert config_export["config"]["model_variant"] == "v3_auto"
     assert diagnostics_export["diagnostics"]["detected_wave_count"] >= 1
 
     archive_bytes = build_results_zip(
@@ -386,7 +391,7 @@ def test_e2e_tcx_produces_core_summaries_diagnostics_and_separate_exports() -> N
         validation_result=validation,
         annotations=annotations,
     )
-    assert manifest["format"] == "hrmod_lab_export_v2"
+    assert manifest["format"] == "hrmod_lab_export_v3"
     assert manifest["core_and_reference_exports_are_separate"] is True
     assert manifest["hr_input_hash"] == result.hr_input_hash
 
