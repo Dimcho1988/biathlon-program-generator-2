@@ -207,7 +207,7 @@ def test_terrain_overview_uses_constant_grouped_traces(wave_count: int) -> None:
     if wave_count:
         rejected_wave = int(waves.iloc[-1]["wave_id"])
         waves.loc[waves["wave_id"].eq(rejected_wave), "terrain_status"] = (
-            "terrain_confounded"
+            "terrain_adjusted"
         )
         timeseries.loc[
             pd.to_numeric(timeseries["wave_id"], errors="coerce").eq(rejected_wave),
@@ -220,7 +220,7 @@ def test_terrain_overview_uses_constant_grouped_traces(wave_count: int) -> None:
 
     names = [trace.name for trace in figure.data]
     assert names.count("sustained downhill") == 1
-    assert names.count("terrain-confounded wave") == 1
+    assert names.count("terrain-adjusted wave") == 1
     assert names.count("raw HR") == 1
     assert names.count("HRmod candidate (HR-only)") == 1
     assert names.count("HRmod final") == 1
@@ -234,7 +234,7 @@ def test_terrain_plot_preserves_svg_default_and_webgl_opt_in() -> None:
     timeseries["hrmod_candidate_bpm"] = timeseries["hrmod_bpm"]
     timeseries["hrmod_final_bpm"] = timeseries["raw_hr_bpm"]
     timeseries["downhill_mask"] = timeseries["donor_flag"]
-    waves["terrain_status"] = "terrain_confounded"
+    waves["terrain_status"] = "terrain_adjusted"
 
     figure = build_hr_only_figure(
         timeseries,
@@ -247,23 +247,16 @@ def test_terrain_plot_preserves_svg_default_and_webgl_opt_in() -> None:
 
     for name in ("raw HR", "HRmod candidate (HR-only)", "HRmod final"):
         assert traces[name].type == "scattergl"
-    for name in ("sustained downhill", "terrain-confounded wave"):
+    for name in ("sustained downhill", "terrain-adjusted wave"):
         assert traces[name].type == "scatter"
         assert None in tuple(traces[name].x)
 
 
 @pytest.mark.parametrize("wave_count", (1, 10, 108))
-def test_v3_morphology_guides_are_grouped_and_constant(
+def test_v4_wave_guides_are_grouped_and_constant(
     wave_count: int,
 ) -> None:
     timeseries, waves = _plot_frames(wave_count)
-    waves["morphology"] = "sustained"
-    waves["correction_strategy"] = "v3_terminal_fall"
-    waves["hold_start_elapsed_s"] = waves["rise_start_elapsed_s"] + 10.0
-    waves["hold_end_elapsed_s"] = waves["rise_start_elapsed_s"] + 34.0
-    waves["terminal_fall_start_elapsed_s"] = waves["hold_end_elapsed_s"]
-    waves["terminal_fall_end_elapsed_s"] = waves["hold_end_elapsed_s"] + 10.0
-    waves["hold_target_hr_bpm"] = 114.0
 
     figure = build_hr_only_figure(
         timeseries, waves, _profile(), show_h_detect=False
@@ -271,12 +264,12 @@ def test_v3_morphology_guides_are_grouped_and_constant(
 
     names = [trace.name for trace in figure.data]
     for expected in (
-        "u · hold start",
-        "h · hold end",
-        "d · terminal fall start",
-        "f · terminal fall end",
-        "H · hold target",
+        "s · rise start",
+        "p · peak",
+        "e · wave end",
+        "B · local baseline",
     ):
         assert names.count(expected) == 1
-    assert len(figure.data) == 17
+    assert not any("hold" in name or "terminal" in name for name in names)
+    assert len(figure.data) == 12
     assert len(figure.layout.shapes or ()) == 6

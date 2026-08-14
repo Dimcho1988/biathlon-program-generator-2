@@ -8,7 +8,6 @@ a separate module and cannot enter this call boundary.
 from .hrmod_core import compute_hrmod_hr_only
 from .schemas import (
     CONFIG_VERSION,
-    LEGACY_MODEL_VERSION,
     MODEL_VERSION,
     AthleteHRProfile,
     HRInputSample,
@@ -47,7 +46,6 @@ __all__ = [
     "HRmodTimeseriesPoint",
     "HRSample",
     "HRZone",
-    "LEGACY_MODEL_VERSION",
     "MODEL_VERSION",
     "WaveSummary",
     "ZoneSummary",

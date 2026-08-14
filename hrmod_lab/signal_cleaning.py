@@ -3,7 +3,7 @@
 Cleaning is intentionally conservative.  The measured values remain available
 as ``raw_hr``; interpolation and artifact decisions are represented explicitly
 by per-sample flags.  No smoothing is performed here because the separately
-labelled ``h_detect`` series is used only for v2 wave detection.
+labelled ``h_detect`` series is used only for HR-only v4 wave detection.
 """
 
 from __future__ import annotations

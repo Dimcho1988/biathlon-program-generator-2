@@ -352,7 +352,6 @@ def test_e2e_tcx_produces_core_summaries_diagnostics_and_separate_exports() -> N
         "morphology",
         "morphology_reason",
         "correction_strategy",
-        "transition_weight",
         "rise_start_timestamp",
         "peak_timestamp",
         "tail_end_timestamp",
@@ -373,9 +372,9 @@ def test_e2e_tcx_produces_core_summaries_diagnostics_and_separate_exports() -> N
 
     config_export = json.loads(files["run_configuration.json"])
     diagnostics_export = json.loads(files["diagnostics.json"])
-    assert config_export["model_version"] == "hrmod_wave_area_shift_v3"
-    assert config_export["config"]["config_version"] == "hrmod_config_v3"
-    assert config_export["config"]["model_variant"] == "v3_auto"
+    assert config_export["model_version"] == "hrmod_mirror_area_shift_v4"
+    assert config_export["config"]["config_version"] == "hrmod_config_v4"
+    assert "model_variant" not in config_export["config"]
     assert diagnostics_export["diagnostics"]["detected_wave_count"] >= 1
 
     archive_bytes = build_results_zip(
@@ -391,7 +390,7 @@ def test_e2e_tcx_produces_core_summaries_diagnostics_and_separate_exports() -> N
         validation_result=validation,
         annotations=annotations,
     )
-    assert manifest["format"] == "hrmod_lab_export_v3"
+    assert manifest["format"] == "hrmod_lab_export_v4"
     assert manifest["core_and_reference_exports_are_separate"] is True
     assert manifest["hr_input_hash"] == result.hr_input_hash
 
@@ -404,7 +403,7 @@ def test_terrain_exports_are_separate_and_keep_core_csv_hr_only() -> None:
     parsed, result = _core_from_tcx(_tcx_bytes(_response(), include_reference=True))
     terrain_result = {
         "model_version": result.model_version,
-        "terrain_model_version": "terrain_gate_v1",
+        "terrain_model_version": "terrain_downhill_donor_exclusion_v4",
         "hr_input_hash": result.hr_input_hash,
         "terrain_input_hash": "terrain-hash",
         "final_result_hash": "final-hash",

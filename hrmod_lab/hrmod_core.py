@@ -1,4 +1,4 @@
-"""Public orchestration for the physically isolated HR-only HRmod v2 core."""
+"""Public orchestration for the physically isolated HR-only HRmod v4 core."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from typing import Sequence
 import numpy as np
 
 from .schemas import (
-    LEGACY_MODEL_VERSION,
     MODEL_VERSION,
     AthleteHRProfile,
     HRmodConfig,
@@ -24,8 +23,8 @@ from .schemas import (
     ZoneSummary,
 )
 from .signal_cleaning import CleanedHRSignal, clean_hr_signal
-from .wave_area_shift import WaveAreaShiftResult, shift_wave_areas
-from .wave_detection import WaveDetectionResult, detect_hr_waves
+from .mirror_area_shift import WaveAreaShiftResult, shift_mirror_wave_areas
+from .wave_detection_v4 import WaveDetectionResult, detect_hr_waves
 
 
 def _optional_float(value: float) -> float | None:
@@ -236,48 +235,6 @@ def _wave_summaries(
                 morphology=wave.morphology,
                 morphology_reason=wave.morphology_reason,
                 correction_strategy=wave.correction_strategy,
-                transition_weight=wave.transition_weight,
-                hold_target_hr_bpm=wave.hold_target_hr_bpm,
-                hold_start_timestamp=(
-                    cleaned.timestamps[wave.hold_start_index]
-                    if wave.hold_start_index is not None
-                    else None
-                ),
-                hold_end_timestamp=(
-                    cleaned.timestamps[wave.hold_end_index]
-                    if wave.hold_end_index is not None
-                    else None
-                ),
-                terminal_fall_start_timestamp=(
-                    cleaned.timestamps[wave.terminal_fall_start_index]
-                    if wave.terminal_fall_start_index is not None
-                    else None
-                ),
-                terminal_fall_end_timestamp=(
-                    cleaned.timestamps[wave.terminal_fall_end_index]
-                    if wave.terminal_fall_end_index is not None
-                    else None
-                ),
-                hold_start_elapsed_s=(
-                    float(cleaned.elapsed_s[wave.hold_start_index])
-                    if wave.hold_start_index is not None
-                    else None
-                ),
-                hold_end_elapsed_s=(
-                    float(cleaned.elapsed_s[wave.hold_end_index])
-                    if wave.hold_end_index is not None
-                    else None
-                ),
-                terminal_fall_start_elapsed_s=(
-                    float(cleaned.elapsed_s[wave.terminal_fall_start_index])
-                    if wave.terminal_fall_start_index is not None
-                    else None
-                ),
-                terminal_fall_end_elapsed_s=(
-                    float(cleaned.elapsed_s[wave.terminal_fall_end_index])
-                    if wave.terminal_fall_end_index is not None
-                    else None
-                ),
                 raw_zone_seconds=raw_seconds,
                 clean_zone_seconds=clean_seconds,
                 hrmod_zone_seconds=hrmod_seconds,
@@ -411,7 +368,7 @@ def compute_hrmod_hr_only(
     athlete_profile: AthleteHRProfile,
     config: HRmodConfig | None = None,
 ) -> HRmodResult:
-    """Compute v2 solely from timestamped HR and explicit HR settings."""
+    """Compute v4 solely from timestamped HR and explicit HR settings."""
 
     if not isinstance(athlete_profile, AthleteHRProfile):
         raise TypeError("athlete_profile must be an AthleteHRProfile")
@@ -439,8 +396,9 @@ def compute_hrmod_hr_only(
         segment_ids=cleaned.segment_ids,
         config=config,
     )
-    redistribution = shift_wave_areas(
+    redistribution = shift_mirror_wave_areas(
         clean_hr=cleaned.clean_hr,
+        elapsed_s=cleaned.elapsed_s,
         dt_s=cleaned.dt_s,
         waves=detection.waves,
         athlete_profile=athlete_profile,
@@ -527,11 +485,7 @@ def compute_hrmod_hr_only(
         diagnostics=diagnostics,
         config=config,
         hr_input_hash=_hash_hr_input(cleaned.samples),
-        model_version=(
-            LEGACY_MODEL_VERSION
-            if config.model_variant == "v2_legacy"
-            else MODEL_VERSION
-        ),
+        model_version=MODEL_VERSION,
     )
 
 

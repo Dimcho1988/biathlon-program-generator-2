@@ -59,22 +59,21 @@ def test_standalone_hrmod_lab_renders_without_touching_production_navigation() -
     )
     app.run()
     assert not app.exception
-    assert app.title[0].value == "HRmod Lab v3 · experimental HR-only morphology shift"
-    assert "HRmod v3 експериментално" in app.warning[0].value
+    assert app.title[0].value == "HRmod Lab v4 · experimental HR-only mirror shift"
+    assert "HRmod v4" in app.warning[0].value
     assert (REPOSITORY_ROOT / "app.py").read_text(encoding="utf-8").find("hrmod_lab") == -1
 
 
-def test_v3_config_contract_and_defaults_have_no_retired_model_fields() -> None:
+def test_v4_config_contract_and_defaults_have_no_retired_model_fields() -> None:
     config = HRmodConfig()
-    assert MODEL_VERSION == "hrmod_wave_area_shift_v3"
-    assert config.config_version == "hrmod_config_v3"
-    assert config.model_variant == "v3_auto"
+    assert MODEL_VERSION == "hrmod_mirror_area_shift_v4"
+    assert config.config_version == "hrmod_config_v4"
     assert config.alpha == 1.0
     assert config.rise_threshold_bpm_s == 0.15
     assert config.min_rise_bpm == 5.0
     assert config.smoothing_window_s == 5.0
-    assert config.terminal_recovery_min_s == 3.0
-    assert config.terminal_rebound_guard_s == 10.0
+    assert config.mirror_min_peak_fraction_hrmax == 0.80
+    assert config.mirror_max_wave_duration_s == 180.0
 
     config_fields = {item.name for item in fields(HRmodConfig)}
     retired_fields = {
@@ -85,26 +84,29 @@ def test_v3_config_contract_and_defaults_have_no_retired_model_fields() -> None:
         "min_lobe_duration_s",
         "min_lobe_area_bpm_s",
         "episode_balance_tolerance_bpm_s",
+        "model_variant",
+        "terminal_recovery_min_s",
+        "terminal_rebound_guard_s",
+        "transition_weight",
     }
     assert config_fields.isdisjoint(retired_fields)
 
 
-def test_main_v3_ui_has_variant_and_exactly_four_core_settings_before_advanced_panel() -> None:
+def test_main_v4_ui_has_four_primary_settings_and_no_model_selector() -> None:
     source = APP_PATH.read_text(encoding="utf-8")
-    widget_source = source.split("def _model_config_widgets", 1)[1].split(
-        'with st.expander("Advanced detection safeguards"', 1
+    widget_source = source.split("def _simple_model_config_widgets", 1)[1].split(
+        'with st.expander("Разширени HR настройки"', 1
     )[0]
     expected_labels = (
         '"alpha"',
-        '"rise_threshold_bpm_s"',
-        '"min_rise_bpm"',
+        '"mirror_min_peak_fraction_hrmax"',
+        '"mirror_max_wave_duration_s"',
         '"smoothing_window_s"',
     )
     assert all(widget_source.count(label) == 1 for label in expected_labels)
     assert widget_source.count(".slider(") + widget_source.count(".number_input(") == 4
-    assert '"HR-only model strategy"' in widget_source
-    assert '"v3_auto"' in widget_source
-    assert '"v2_legacy"' in widget_source
+    assert "st.selectbox" not in widget_source
+    assert widget_source.count("help=") >= 4
 
     retired_ui_tokens = (
         "delay_s",
@@ -113,11 +115,14 @@ def test_main_v3_ui_has_variant_and_exactly_four_core_settings_before_advanced_p
         "min_lobe_duration_s",
         "episode_balance_tolerance_bpm_s",
         "provisional_latent_demand",
+        "model_variant",
+        "v2_legacy",
+        "v3_auto",
     )
     assert all(token not in source for token in retired_ui_tokens)
 
 
-def test_v3_ui_exposes_morphology_visualization_and_exact_limitation() -> None:
+def test_v4_ui_exposes_wave_visualization_and_scientific_limitation() -> None:
     source = APP_PATH.read_text(encoding="utf-8")
     plotting_source = PLOTTING_PATH.read_text(encoding="utf-8")
     required_visual_fields = (
@@ -130,11 +135,6 @@ def test_v3_ui_exposes_morphology_visualization_and_exact_limitation() -> None:
         "morphology",
         "morphology_reason",
         "correction_strategy",
-        "transition_weight",
-        "hold_target_hr_bpm",
-        "hold_start_timestamp",
-        "terminal_fall_start_timestamp",
-        "terminal_fall_end_timestamp",
         "baseline_hr_bpm",
         "wave_summary",
         "Wave selector",
@@ -143,17 +143,6 @@ def test_v3_ui_exposes_morphology_visualization_and_exact_limitation() -> None:
         "hrmod_minus_raw_zone_seconds",
     )
     assert all(field in source or field in plotting_source for field in required_visual_fields)
-    assert '"terminal_recovery_min_s"' in source
-    assert '"terminal_rebound_guard_s"' in source
-    exact_limitation = (
-        "HRmod v3 експериментално преразпределя във времето част от наблюдавания HR отговор. "
-        "Ако кратко усилие не остави различим HR отговор, HR-only моделът не може да го възстанови. "
-        "При HR-derived receiver фаза до 30 s той запазва compact v2, между 30 и 45 s използва плавен "
-        "преход/fade, а от 45 s коригира само при устойчив hold и потвърден остър краен спад; "
-        "нееднозначните дълги форми "
-        "се пропускат. Моделът не може да знае реалното механично "
-        "натоварване без независим reference канал. Резултатът е HR-еквивалентна хипотеза, а не измерена мощност."
-    )
     tree = ast.parse(source)
     limitation_assignment = next(
         node
@@ -164,7 +153,12 @@ def test_v3_ui_exposes_morphology_visualization_and_exact_limitation() -> None:
             for target in node.targets
         )
     )
-    assert ast.literal_eval(limitation_assignment.value) == exact_limitation
+    limitation = ast.literal_eval(limitation_assignment.value)
+    assert "HRmod v4" in limitation
+    assert "180 s" in limitation
+    assert "80%" in limitation
+    assert "отделен post-core слой" in limitation
+    assert "HR-еквивалентна хипотеза" in limitation
 
 
 def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None:
@@ -199,6 +193,11 @@ def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None
         _synthetic_wave_tcx(grade_pct=-4.0),
         "application/xml",
     ).run()
+    next(
+        widget
+        for widget in app.slider
+        if widget.label == "Минимален пик (% HRmax)"
+    ).set_value(60).run()
 
     compute = next(
         button for button in app.button if button.label == "Изчисли HRmod (само HR)"
@@ -220,7 +219,7 @@ def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None
     assert default_types["HRmod candidate (HR-only)"] == "scatter"
     assert default_types["HRmod final"] == "scatter"
     assert default_types["sustained downhill"] == "scatter"
-    assert default_types["terrain-confounded wave"] == "scatter"
+    assert default_types["terrain-adjusted wave"] == "scatter"
     assert "scattergl" not in default_types.values()
 
     before = app.session_state["hrmod_lab_core_run"]["result"]
@@ -244,19 +243,25 @@ def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None
     assert required_zone_columns.issubset(zone_table_before.columns)
     candidate_zone_seconds = zone_table_before["hrmod_candidate_seconds"].tolist()
     final_zone_seconds_before = zone_table_before["hrmod_final_seconds"].tolist()
+    assert candidate_zone_seconds == [
+        zone.hrmod_candidate_seconds for zone in terrain_before.zone_summary
+    ]
+    assert final_zone_seconds_before == [
+        zone.hrmod_final_seconds for zone in terrain_before.zone_summary
+    ]
     assert final_zone_seconds_before != candidate_zone_seconds
     zone_plot_before = json.loads(app.get("plotly_chart")[0].proto.spec)
     assert [trace["name"] for trace in zone_plot_before["data"]] == [
         "Raw HR",
         "Clean HR",
-        "HRmod candidate (selected HR-only strategy)",
-        "HRmod final (terrain gate)",
+        "HRmod candidate (v4 mirror)",
+        "HRmod final (downhill donor filter)",
     ]
 
     threshold = next(
         widget
         for widget in app.number_input
-        if widget.label == "Downhill threshold (%)"
+        if widget.label == "Спускане (%)"
     )
     threshold.set_value(-5.0).run()
 
@@ -280,7 +285,7 @@ def test_synthetic_tcx_uses_lazy_plot_views_and_cached_core(monkeypatch) -> None
     )
 
     terrain_toggle = next(
-        widget for widget in app.checkbox if widget.label == "Enable terrain gate"
+        widget for widget in app.checkbox if widget.label == "Теренен филтър"
     )
     terrain_toggle.set_value(False).run()
 
@@ -371,57 +376,6 @@ def test_reference_only_tcx_change_reuses_hr_only_core_cache(monkeypatch) -> Non
     assert second is first
     assert second.hr_input_hash == first_hash
     assert len(app.session_state["hrmod_lab_core_cache"]) == 1
-
-
-def test_v3_v2_v3_switch_reuses_each_cached_core_result(monkeypatch) -> None:
-    compute_calls = 0
-    real_compute = hrmod_lab.compute_hrmod_hr_only
-
-    def counted_compute(**kwargs):
-        nonlocal compute_calls
-        compute_calls += 1
-        return real_compute(**kwargs)
-
-    monkeypatch.setattr(hrmod_lab, "compute_hrmod_hr_only", counted_compute)
-    app = AppTest.from_file(str(APP_PATH), default_timeout=60).run()
-    app.file_uploader[0].upload(
-        "variant-cache.tcx", _synthetic_wave_tcx(), "application/xml"
-    ).run()
-    compute = next(button for button in app.button if "HRmod" in button.label)
-    compute.click().run()
-    first_v3 = app.session_state["hrmod_lab_core_run"]["result"]
-    first_v3_terrain = app.session_state["hrmod_lab_terrain_result"]["result"]
-    assert compute_calls == 1
-    assert first_v3.config.model_variant == "v3_auto"
-    assert first_v3_terrain.hr_input_hash == first_v3.hr_input_hash
-
-    variant = next(
-        widget for widget in app.selectbox if widget.label == "HR-only model strategy"
-    )
-    variant.set_value("v2_legacy").run()
-    next(button for button in app.button if "HRmod" in button.label).click().run()
-    legacy = app.session_state["hrmod_lab_core_run"]["result"]
-    legacy_terrain = app.session_state["hrmod_lab_terrain_result"]["result"]
-    assert compute_calls == 2
-    assert legacy is not first_v3
-    assert legacy.config.model_variant == "v2_legacy"
-    assert legacy_terrain.hr_input_hash == legacy.hr_input_hash
-
-    variant = next(
-        widget for widget in app.selectbox if widget.label == "HR-only model strategy"
-    )
-    variant.set_value("v3_auto").run()
-    next(button for button in app.button if "HRmod" in button.label).click().run()
-    restored_v3 = app.session_state["hrmod_lab_core_run"]["result"]
-    restored_terrain = app.session_state["hrmod_lab_terrain_result"]["result"]
-    assert not app.exception
-    assert not app.error
-    assert compute_calls == 2
-    assert restored_v3 is first_v3
-    assert restored_v3.hr_input_hash == first_v3.hr_input_hash
-    assert restored_terrain is not legacy_terrain
-    assert restored_terrain.hr_input_hash == restored_v3.hr_input_hash
-    assert len(app.session_state["hrmod_lab_core_cache"]) == 2
 
 
 def test_missing_terrain_channel_warns_and_keeps_candidate_fallback() -> None:

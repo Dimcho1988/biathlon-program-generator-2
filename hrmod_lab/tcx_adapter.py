@@ -384,7 +384,7 @@ def parse_tcx(
             "reference_only": True,
             "timestamp_timezone": "UTC",
             # Grade remains raw reference data here.  These explicit fields
-            # let terrain_gate_v1 choose a ready TCX grade when present or
+            # let the post-core terrain layer choose a ready TCX grade or
             # derive one later from altitude/distance without guessing that a
             # missing grade means flat terrain.
             "grade_source": (

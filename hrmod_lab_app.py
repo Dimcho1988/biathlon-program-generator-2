@@ -11,7 +11,7 @@ not add an entry to its navigation.  The only value passed to the model core is
 
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass
+from dataclasses import asdict, fields, is_dataclass
 from datetime import date, datetime
 import hashlib
 from io import BytesIO
@@ -55,14 +55,15 @@ from hrmod_lab.tcx_adapter import (
 )
 
 
-APP_TITLE = "HRmod Lab v3 · experimental HR-only morphology shift"
+APP_TITLE = "HRmod Lab v4 · experimental HR-only mirror shift"
 SCIENTIFIC_LIMITATION = (
-    "HRmod v3 експериментално преразпределя във времето част от наблюдавания HR отговор. "
+    "HRmod v4 експериментално оглежда към възхода част от HR площта над локалния baseline "
+    "след пика. По подразбиране се разглеждат завършени HR вълни до 180 s с пик поне "
+    "80% от зададения HRmax; това са регулируеми HR-only критерии, а не доказателство за "
+    "реалната продължителност или мощност на усилието. "
     "Ако кратко усилие не остави различим HR отговор, HR-only моделът не може да го възстанови. "
-    "При HR-derived receiver фаза до 30 s той запазва compact v2, между 30 и 45 s използва плавен "
-    "преход/fade, а от 45 s коригира само при устойчив hold и потвърден остър краен спад; "
-    "нееднозначните дълги форми "
-    "се пропускат. Моделът не може да знае реалното механично "
+    "Теренният филтър е отделен post-core слой: той изключва от donor само пробите в устойчиво "
+    "спускане и преизчислява същата площ. Моделът не може да знае реалното механично "
     "натоварване без независим reference канал. Резултатът е HR-еквивалентна хипотеза, а не измерена мощност."
 )
 CORE_STATE_KEY = "hrmod_lab_core_run"
@@ -75,7 +76,6 @@ WAVE_TABLE_COLUMNS = (
     "morphology",
     "morphology_reason",
     "correction_strategy",
-    "transition_weight",
     "terrain_status",
     "terrain_rejection_reason",
     "downhill_overlap_s",
@@ -86,13 +86,8 @@ WAVE_TABLE_COLUMNS = (
     "rise_start_timestamp",
     "peak_timestamp",
     "tail_end_timestamp",
-    "hold_start_timestamp",
-    "hold_end_timestamp",
-    "terminal_fall_start_timestamp",
-    "terminal_fall_end_timestamp",
     "end_reason",
     "baseline_hr_bpm",
-    "hold_target_hr_bpm",
     "rise_bpm",
     "fall_bpm",
     "receiver_duration_s",
@@ -394,12 +389,17 @@ def _terrain_summary_panel(terrain_result: Any, wave_frame: pd.DataFrame) -> Non
     rejected_fraction = diagnostics.get("terrain_rejected_fraction")
     if rejected_fraction is None:
         rejected_fraction = rejected / candidate if candidate else 0.0
+    adjusted = int(diagnostics.get("terrain_adjusted_wave_count", 0) or 0)
+    adjusted_fraction = diagnostics.get("terrain_adjusted_fraction")
+    if adjusted_fraction is None:
+        adjusted_fraction = adjusted / candidate if candidate else 0.0
     metrics = st.columns(4)
     metrics[0].metric("Candidate waves", candidate)
     metrics[1].metric("Accepted waves", accepted)
-    metrics[2].metric("Terrain-rejected waves", rejected)
+    metrics[2].metric("Terrain-adjusted waves", adjusted or rejected)
     metrics[3].metric(
-        "Terrain-rejected share", _format_number(rejected_fraction, percent=True)
+        "Terrain-adjusted share",
+        _format_number(adjusted_fraction if adjusted else rejected_fraction, percent=True),
     )
     area = st.columns(4)
     area[0].metric(
@@ -545,439 +545,164 @@ def _quality_report(parsed: TCXParseResult) -> None:
         st.json(_plain(diagnostics))
 
 
-def _model_config_widgets(defaults: HRmodConfig) -> dict[str, Any]:
-    """Render the v3 strategy, four primary settings and safeguards."""
+def _simple_model_config_widgets(defaults: HRmodConfig) -> dict[str, Any]:
+    """Compact controls for the single v4 model."""
 
-    model_variant = st.selectbox(
-        "HR-only model strategy",
-        options=("v3_auto", "v2_legacy"),
-        index=("v3_auto", "v2_legacy").index(defaults.model_variant),
-        format_func=lambda value: {
-            "v3_auto": "v3_auto · morphology-aware (experimental)",
-            "v2_legacy": "v2_legacy · full-tail diagnostic comparison",
-        }[value],
-        help=(
-            "v3_auto разпознава compact/sustained/ambiguous HR форми. "
-            "v2_legacy е запазен само за контролно сравнение; изчислява се "
-            "единствено избраният вариант."
-        ),
+    values = asdict(defaults)
+    st.info(
+        "Единствен активен модел: v4 mirror — следпиковата площ над локалния "
+        "baseline се оглежда към целия възход."
     )
-
-    primary = st.columns(4)
-    alpha = primary[0].slider(
-        "alpha",
-        min_value=0.0,
-        max_value=1.0,
-        value=float(defaults.alpha),
-        step=0.05,
-        help=(
-            "Дял от допустимата donor площ, заявен за преместване. "
-            "alpha=1 заявя цялата налична площ."
-        ),
+    main = st.columns(4)
+    values["alpha"] = main[0].slider(
+        "Сила на модулацията",
+        0.0,
+        1.0,
+        float(defaults.alpha),
+        0.05,
+        help="Каква част от допустимата следпикова площ да бъде преместена. 1.0 означава цялата площ.",
     )
-    rise_threshold_bpm_s = primary[1].number_input(
-        "rise_threshold_bpm_s",
-        min_value=0.001,
-        value=float(defaults.rise_threshold_bpm_s),
-        step=0.01,
-        format="%.2f",
-        help="Минимален наклон за устойчиво начало на покачване (bpm/s).",
+    peak_percent = main[1].slider(
+        "Минимален пик (% HRmax)",
+        50,
+        100,
+        int(round(defaults.mirror_min_peak_fraction_hrmax * 100)),
+        1,
+        help="Вълната се моделира само ако нейният HR пик достига този процент от индивидуалния HRmax.",
     )
-    min_rise_bpm = primary[2].number_input(
-        "min_rise_bpm",
-        min_value=0.01,
-        value=float(defaults.min_rise_bpm),
-        step=0.5,
-        help="Минимално общо HR покачване за валидна вълна (bpm).",
+    values["mirror_min_peak_fraction_hrmax"] = peak_percent / 100.0
+    values["mirror_max_wave_duration_s"] = float(
+        main[2].number_input(
+            "Максимална вълна (s)",
+            min_value=10.0,
+            value=float(defaults.mirror_max_wave_duration_s),
+            step=10.0,
+            help="Максималното време от начало на HR възхода до края на връщането; по-дългите вълни се пропускат.",
+        )
     )
-    smoothing_window_s = primary[3].number_input(
-        "smoothing_window_s",
-        min_value=0.01,
-        value=float(defaults.smoothing_window_s),
-        step=1.0,
-        help="Time-based прозорец само за h_detect; clean_hr не се заменя.",
-    )
-
-    with st.expander("Advanced detection safeguards", expanded=False):
-        st.caption(
-            "Технически HR-only защити. Стойностите се сериализират в run config; "
-            "defaults са exploratory, а не физиологично валидирани."
-        )
-        rise_fall = st.columns(4)
-        min_sustained_rise_s = rise_fall[0].number_input(
-            "min_sustained_rise_s", min_value=0.01,
-            value=float(defaults.min_sustained_rise_s), step=1.0
-        )
-        fall_threshold_bpm_s = rise_fall[1].number_input(
-            "fall_threshold_bpm_s", min_value=0.001,
-            value=float(defaults.fall_threshold_bpm_s), step=0.01, format="%.2f"
-        )
-        min_sustained_fall_s = rise_fall[2].number_input(
-            "min_sustained_fall_s", min_value=0.01,
-            value=float(defaults.min_sustained_fall_s), step=1.0
-        )
-        min_fall_bpm = rise_fall[3].number_input(
-            "min_fall_bpm", min_value=0.01,
-            value=float(defaults.min_fall_bpm), step=0.5
-        )
-
-        baseline_return = st.columns(4)
-        baseline_lookback_s = baseline_return[0].number_input(
-            "baseline_lookback_s", min_value=0.01,
-            value=float(defaults.baseline_lookback_s), step=1.0
-        )
-        baseline_min_points = baseline_return[1].number_input(
-            "baseline_min_points", min_value=1,
-            value=int(defaults.baseline_min_points), step=1
-        )
-        return_tolerance_bpm = baseline_return[2].number_input(
-            "return_tolerance_bpm", min_value=0.0,
-            value=float(defaults.return_tolerance_bpm), step=0.5
-        )
-        return_sustain_s = baseline_return[3].number_input(
-            "return_sustain_s", min_value=0.01,
-            value=float(defaults.return_sustain_s), step=1.0
-        )
-
-        termination = st.columns(4)
-        neutral_slope_tolerance_bpm_s = termination[0].number_input(
-            "neutral_slope_tolerance_bpm_s", min_value=0.0,
-            value=float(defaults.neutral_slope_tolerance_bpm_s), step=0.01,
-            format="%.2f"
-        )
-        neutral_trough_timeout_s = termination[1].number_input(
-            "neutral_trough_timeout_s", min_value=0.01,
-            value=float(defaults.neutral_trough_timeout_s), step=1.0
-        )
-        min_receiver_duration_s = termination[2].number_input(
-            "min_receiver_duration_s", min_value=0.01,
-            value=float(defaults.min_receiver_duration_s), step=1.0
-        )
-        min_donor_duration_s = termination[3].number_input(
-            "min_donor_duration_s", min_value=0.01,
-            value=float(defaults.min_donor_duration_s), step=1.0
-        )
-
-        boundaries = st.columns(4)
-        max_wave_duration_s = boundaries[0].number_input(
-            "max_wave_duration_s", min_value=0.01,
-            value=float(defaults.max_wave_duration_s), step=10.0
-        )
-        max_interpolation_gap_s = boundaries[1].number_input(
-            "max_interpolation_gap_s", min_value=0.0,
-            value=float(defaults.max_interpolation_gap_s), step=0.5
-        )
-        long_gap_threshold_s = boundaries[2].number_input(
-            "long_gap_threshold_s", min_value=0.01,
-            value=float(defaults.long_gap_threshold_s), step=1.0,
-            help="Long gap разделя сигнала; площ не се прехвърля през него."
-        )
-        edge_wave_policy = boundaries[3].selectbox(
-            "edge_wave_policy", options=("skip_incomplete",), index=0,
-            help="Incomplete edge/gap/file-end вълни не се коригират."
-        )
-
-        st.caption("Optional per-sample caps (disabled by default)")
-        caps = st.columns(4)
-        addition_enabled = caps[0].checkbox(
-            "Enable max_addition_bpm", value=defaults.max_addition_bpm is not None
-        )
-        max_addition_bpm = caps[1].number_input(
-            "max_addition_bpm", min_value=0.01,
-            value=float(defaults.max_addition_bpm or 10.0), step=0.5,
-            disabled=not addition_enabled
-        )
-        removal_enabled = caps[2].checkbox(
-            "Enable max_removal_bpm", value=defaults.max_removal_bpm is not None
-        )
-        max_removal_bpm = caps[3].number_input(
-            "max_removal_bpm", min_value=0.01,
-            value=float(defaults.max_removal_bpm or 10.0), step=0.5,
-            disabled=not removal_enabled
-        )
-
-        st.caption("Detection smoothing, cleaning and numerical safeguards")
-        smoothing = st.columns(4)
-        smoothing_method = smoothing[0].selectbox(
-            "smoothing_method",
-            options=("robust_local_linear", "local_linear"),
-            index=("robust_local_linear", "local_linear").index(defaults.smoothing_method),
-        )
-        smoothing_min_points = smoothing[1].number_input(
-            "smoothing_min_points", min_value=2,
-            value=int(defaults.smoothing_min_points), step=1
-        )
-        smoothing_robust_iterations = smoothing[2].number_input(
-            "smoothing_robust_iterations", min_value=0,
-            value=int(defaults.smoothing_robust_iterations), step=1
-        )
-        area_conservation_tolerance_bpm_s = smoothing[3].number_input(
-            "area_conservation_tolerance_bpm_s", min_value=1e-9,
-            value=float(defaults.area_conservation_tolerance_bpm_s), format="%.8f"
-        )
-
-        cleaning = st.columns(5)
-        artifact_min_hr_bpm = cleaning[0].number_input(
-            "artifact_min_hr_bpm", min_value=0.0,
-            value=float(defaults.artifact_min_hr_bpm), step=1.0
-        )
-        artifact_max_hr_bpm = cleaning[1].number_input(
-            "artifact_max_hr_bpm", min_value=0.01,
-            value=float(defaults.artifact_max_hr_bpm), step=1.0
-        )
-        artifact_max_rate_bpm_per_s = cleaning[2].number_input(
-            "artifact_max_rate_bpm_per_s", min_value=0.01,
-            value=float(defaults.artifact_max_rate_bpm_per_s), step=1.0
-        )
-        artifact_spike_deviation_bpm = cleaning[3].number_input(
-            "artifact_spike_deviation_bpm", min_value=0.01,
-            value=float(defaults.artifact_spike_deviation_bpm), step=1.0
-        )
-        sampling_regularity_tolerance_s = cleaning[4].number_input(
-            "sampling_regularity_tolerance_s", min_value=0.0,
-            value=float(defaults.sampling_regularity_tolerance_s), step=0.05
-        )
-
-    with st.expander("V3 sustained morphology safeguards", expanded=False):
-        st.caption(
-            "Само HR морфология: устойчив hold, hold target и потвърден остър "
-            "terminal fall. До 30 s се пази compact v2, 30–45 s е плавен "
-            "transition/fade, а нееднозначните форми над 45 s се пропускат. Тези "
-            "контроли не използват grade, speed, power или laps."
-        )
-        morphology = st.columns(5)
-        compact_full_v2_s = morphology[0].number_input(
-            "compact_full_v2_s",
-            min_value=0.01,
-            value=float(defaults.compact_full_v2_s),
+    values["smoothing_window_s"] = float(
+        main[3].number_input(
+            "Изглаждане (s)",
+            min_value=1.0,
+            value=float(defaults.smoothing_window_s),
             step=1.0,
-            disabled=model_variant == "v2_legacy",
-            help="До тази receiver продължителност v3_auto запазва изцяло compact v2 allocation.",
+            help="Прозорец само за откриване на формата; измереният HR не се заменя от изгладения сигнал.",
         )
-        sustained_full_v3_s = morphology[1].number_input(
-            "sustained_full_v3_s",
-            min_value=0.01,
-            value=float(defaults.sustained_full_v3_s),
-            step=1.0,
-            disabled=model_variant == "v2_legacy",
-            help="От тази продължителност се допуска изцяло sustained v3; между двата прага има плавен blend.",
-        )
-        min_hold_duration_s = morphology[2].number_input(
-            "min_hold_duration_s",
-            min_value=0.01,
-            value=float(defaults.min_hold_duration_s),
-            step=1.0,
-            disabled=model_variant == "v2_legacy",
-        )
-        hold_slope_tolerance_bpm_s = morphology[3].number_input(
-            "hold_slope_tolerance_bpm_s",
-            min_value=0.0,
-            value=float(defaults.hold_slope_tolerance_bpm_s),
-            step=0.01,
-            format="%.2f",
-            disabled=model_variant == "v2_legacy",
-        )
-        hold_band_bpm = morphology[4].number_input(
-            "hold_band_bpm",
-            min_value=0.01,
-            value=float(defaults.hold_band_bpm),
-            step=0.5,
-            disabled=model_variant == "v2_legacy",
-        )
-        st.caption("Terminal fall confirmation")
-        terminal = st.columns(4)
-        terminal_fall_threshold_bpm_s = terminal[0].number_input(
-            "terminal_fall_threshold_bpm_s",
-            min_value=0.001,
-            value=float(defaults.terminal_fall_threshold_bpm_s),
-            step=0.01,
-            format="%.2f",
-            disabled=model_variant == "v2_legacy",
-        )
-        terminal_fall_min_duration_s = terminal[1].number_input(
-            "terminal_fall_min_duration_s",
-            min_value=0.01,
-            value=float(defaults.terminal_fall_min_duration_s),
-            step=1.0,
-            disabled=model_variant == "v2_legacy",
-        )
-        terminal_fall_min_drop_bpm = terminal[2].number_input(
-            "terminal_fall_min_drop_bpm",
-            min_value=0.01,
-            value=float(defaults.terminal_fall_min_drop_bpm),
-            step=0.5,
-            disabled=model_variant == "v2_legacy",
-        )
-        terminal_fall_release_slope_bpm_s = terminal[3].number_input(
-            "terminal_fall_release_slope_bpm_s",
-            min_value=0.0,
-            value=float(defaults.terminal_fall_release_slope_bpm_s),
-            step=0.01,
-            format="%.2f",
-            disabled=model_variant == "v2_legacy",
-        )
-        terminal_close = st.columns(4)
-        terminal_fall_release_s = terminal_close[0].number_input(
-            "terminal_fall_release_s",
-            min_value=0.01,
-            value=float(defaults.terminal_fall_release_s),
-            step=0.5,
-            disabled=model_variant == "v2_legacy",
-        )
-        terminal_fall_max_duration_s = terminal_close[1].number_input(
-            "terminal_fall_max_duration_s",
-            min_value=0.01,
-            value=float(defaults.terminal_fall_max_duration_s),
-            step=1.0,
-            disabled=model_variant == "v2_legacy",
-        )
-        terminal_recovery_min_s = terminal_close[2].number_input(
-            "terminal_recovery_min_s",
-            min_value=0.01,
-            value=float(defaults.terminal_recovery_min_s),
-            step=0.5,
-            disabled=model_variant == "v2_legacy",
-            help=(
-                "При new-rise trough изисква минимален нисък HR recovery dwell "
-                "след terminal fall, преди следващата вълна."
-            ),
-        )
-        terminal_rebound_guard_s = terminal_close[3].number_input(
-            "terminal_rebound_guard_s",
-            min_value=0.01,
-            value=float(defaults.terminal_rebound_guard_s),
-            step=1.0,
-            disabled=model_variant == "v2_legacy",
-            help=(
-                "Отхвърля terminal interpretation, ако ранният rebound достигне "
-                "предишния hold band."
-            ),
-        )
-
-    return {
-        "config_version": defaults.config_version,
-        "model_variant": model_variant,
-        "alpha": alpha,
-        "rise_threshold_bpm_s": rise_threshold_bpm_s,
-        "min_rise_bpm": min_rise_bpm,
-        "smoothing_method": smoothing_method,
-        "smoothing_window_s": smoothing_window_s,
-        "smoothing_min_points": int(smoothing_min_points),
-        "smoothing_robust_iterations": int(smoothing_robust_iterations),
-        "min_sustained_rise_s": min_sustained_rise_s,
-        "fall_threshold_bpm_s": fall_threshold_bpm_s,
-        "min_sustained_fall_s": min_sustained_fall_s,
-        "min_fall_bpm": min_fall_bpm,
-        "baseline_lookback_s": baseline_lookback_s,
-        "baseline_min_points": int(baseline_min_points),
-        "return_tolerance_bpm": return_tolerance_bpm,
-        "return_sustain_s": return_sustain_s,
-        "neutral_slope_tolerance_bpm_s": neutral_slope_tolerance_bpm_s,
-        "neutral_trough_timeout_s": neutral_trough_timeout_s,
-        "min_receiver_duration_s": min_receiver_duration_s,
-        "min_donor_duration_s": min_donor_duration_s,
-        "max_wave_duration_s": max_wave_duration_s,
-        "max_interpolation_gap_s": max_interpolation_gap_s,
-        "long_gap_threshold_s": long_gap_threshold_s,
-        "edge_wave_policy": edge_wave_policy,
-        "max_addition_bpm": max_addition_bpm if addition_enabled else None,
-        "max_removal_bpm": max_removal_bpm if removal_enabled else None,
-        "artifact_min_hr_bpm": artifact_min_hr_bpm,
-        "artifact_max_hr_bpm": artifact_max_hr_bpm,
-        "artifact_max_rate_bpm_per_s": artifact_max_rate_bpm_per_s,
-        "artifact_spike_deviation_bpm": artifact_spike_deviation_bpm,
-        "sampling_regularity_tolerance_s": sampling_regularity_tolerance_s,
-        "area_conservation_tolerance_bpm_s": area_conservation_tolerance_bpm_s,
-        "min_hold_duration_s": min_hold_duration_s,
-        "hold_slope_tolerance_bpm_s": hold_slope_tolerance_bpm_s,
-        "hold_band_bpm": hold_band_bpm,
-        "compact_full_v2_s": compact_full_v2_s,
-        "sustained_full_v3_s": sustained_full_v3_s,
-        "terminal_fall_threshold_bpm_s": terminal_fall_threshold_bpm_s,
-        "terminal_fall_min_duration_s": terminal_fall_min_duration_s,
-        "terminal_fall_min_drop_bpm": terminal_fall_min_drop_bpm,
-        "terminal_fall_release_slope_bpm_s": terminal_fall_release_slope_bpm_s,
-        "terminal_fall_release_s": terminal_fall_release_s,
-        "terminal_fall_max_duration_s": terminal_fall_max_duration_s,
-        "terminal_recovery_min_s": terminal_recovery_min_s,
-        "terminal_rebound_guard_s": terminal_rebound_guard_s,
-    }
-
-
-def _terrain_config_widgets(defaults: Any) -> Any:
-    """Render only the gate and threshold prominently; collapse all else."""
-
-    primary = st.columns(2)
-    enabled = primary[0].checkbox(
-        "Enable terrain gate",
-        value=bool(getattr(defaults, "terrain_gate_enabled", True)),
-        help=(
-            "Post-processing само: grade никога не влиза в HR-only detection, "
-            "candidate резултата или hr_input_hash."
-        ),
     )
-    threshold = primary[1].number_input(
-        "Downhill threshold (%)",
-        max_value=-0.1,
-        value=float(getattr(defaults, "downhill_threshold_pct", -3.0)),
-        step=0.5,
-        format="%.1f",
-        help="Sustained downhill е smoothed grade, равен или по-нисък от този праг.",
-    )
-    values: dict[str, Any] = {
-        "terrain_gate_enabled": bool(enabled),
-        "downhill_threshold_pct": float(threshold),
-    }
-    with st.expander("Advanced terrain settings", expanded=False):
-        st.caption(
-            "Тези настройки преизчисляват само terrain_gate_v1; готовият HR-only "
-            "candidate остава кеширан и непроменен."
+    with st.expander("Разширени HR настройки", expanded=False):
+        row = st.columns(4)
+        values["rise_threshold_bpm_s"] = float(row[0].number_input(
+            "Праг за възход (bpm/s)", min_value=0.001, value=float(defaults.rise_threshold_bpm_s), step=0.01,
+            help="Минималният устойчив положителен наклон, с който започва HR вълна."
+        ))
+        values["min_rise_bpm"] = float(row[1].number_input(
+            "Минимално покачване (bpm)", min_value=0.1, value=float(defaults.min_rise_bpm), step=0.5,
+            help="Минималната обща разлика в HR, необходима за валиден възход."
+        ))
+        values["min_sustained_rise_s"] = float(row[2].number_input(
+            "Устойчив възход (s)", min_value=0.1, value=float(defaults.min_sustained_rise_s), step=0.5,
+            help="Колко време наклонът трябва да остане положителен, преди да потвърдим възход."
+        ))
+        values["fall_threshold_bpm_s"] = float(row[3].number_input(
+            "Праг за спад (bpm/s)", min_value=0.001, value=float(defaults.fall_threshold_bpm_s), step=0.01,
+            help="Минималният отрицателен наклон, използван за потвърждаване на следпиковия спад."
+        ))
+        row2 = st.columns(4)
+        values["min_fall_bpm"] = float(row2[0].number_input(
+            "Минимален спад (bpm)", min_value=0.1, value=float(defaults.min_fall_bpm), step=0.5,
+            help="Минималното общо понижение след пика за потвърдена вълна."
+        ))
+        values["min_sustained_fall_s"] = float(row2[1].number_input(
+            "Устойчив спад (s)", min_value=0.1, value=float(defaults.min_sustained_fall_s), step=0.5,
+            help="Минималното време на потвърдения отрицателен HR наклон."
+        ))
+        values["baseline_lookback_s"] = float(row2[2].number_input(
+            "Baseline история (s)", min_value=1.0, value=float(defaults.baseline_lookback_s), step=1.0,
+            help="Времето преди възхода, от което се оценява локалният HR baseline."
+        ))
+        values["return_tolerance_bpm"] = float(row2[3].number_input(
+            "Толеранс до baseline (bpm)", min_value=0.0, value=float(defaults.return_tolerance_bpm), step=0.5,
+            help="Колко близо до локалния baseline трябва да стигне HR, за да приключи вълната."
+        ))
+        row3 = st.columns(4)
+        values["long_gap_threshold_s"] = float(row3[0].number_input(
+            "Дълга липса (s)", min_value=1.0, value=float(defaults.long_gap_threshold_s), step=1.0,
+            help="По-голяма липса разделя сигнала; площ никога не се мести през нея."
+        ))
+        values["max_interpolation_gap_s"] = float(row3[1].number_input(
+            "Макс. интерполация (s)", min_value=0.0, value=float(defaults.max_interpolation_gap_s), step=0.5,
+            help="Само по-кратки HR липси могат да бъдат прозрачно интерполирани."
+        ))
+        addition = row3[2].checkbox(
+            "Лимит на добавяне", value=defaults.max_addition_bpm is not None,
+            help="Включва максимална добавка към една HR проба; по подразбиране е изключено."
         )
-        advanced_fields = [
-            item
-            for item in fields(defaults)
-            if item.init
-            and item.name
-            not in {
-                "config_version",
-                "terrain_gate_enabled",
-                "downhill_threshold_pct",
-            }
-        ]
-        columns = st.columns(min(3, max(1, len(advanced_fields))))
-        for index, item in enumerate(advanced_fields):
-            current = getattr(defaults, item.name)
-            target = columns[index % len(columns)]
-            if isinstance(current, bool):
-                values[item.name] = target.checkbox(item.name, value=current)
-            elif isinstance(current, int) and not isinstance(current, bool):
-                values[item.name] = int(
-                    target.number_input(item.name, value=current, step=1)
-                )
-            elif isinstance(current, float):
-                numeric_options: dict[str, Any] = {
-                    "value": current,
-                    "step": 0.5,
-                }
-                if item.name == "min_grade_coverage_fraction":
-                    numeric_options.update(
-                        min_value=0.01,
-                        max_value=1.0,
-                        step=0.05,
-                        format="%.2f",
-                    )
-                elif item.name == "terrain_transition_buffer_s":
-                    numeric_options["min_value"] = 0.0
-                else:
-                    numeric_options["min_value"] = 0.01
-                values[item.name] = float(
-                    target.number_input(item.name, **numeric_options)
-                )
-            elif current is None:
-                text = target.text_input(item.name, value="")
-                values[item.name] = None if not text.strip() else float(text)
-            else:
-                values[item.name] = target.text_input(item.name, value=str(current))
+        addition_value = row3[2].number_input(
+            "Макс. добавяне (bpm)", min_value=0.1, value=float(defaults.max_addition_bpm or 30.0), step=1.0,
+            disabled=not addition, help="Горна граница на добавката към една проба."
+        )
+        removal = row3[3].checkbox(
+            "Лимит на отнемане", value=defaults.max_removal_bpm is not None,
+            help="Включва максимално отнемане от една donor проба; по подразбиране е изключено."
+        )
+        removal_value = row3[3].number_input(
+            "Макс. отнемане (bpm)", min_value=0.1, value=float(defaults.max_removal_bpm or 30.0), step=1.0,
+            disabled=not removal, help="Горна граница на отнемането от една проба, без преминаване под baseline."
+        )
+        values["max_addition_bpm"] = float(addition_value) if addition else None
+        values["max_removal_bpm"] = float(removal_value) if removal else None
+    return values
+
+
+def _simple_terrain_config_widgets(defaults: Any) -> Any:
+    """Compact post-core downhill donor filter controls."""
+
+    values = asdict(defaults)
+    row = st.columns(3)
+    values["terrain_gate_enabled"] = row[0].checkbox(
+        "Теренен филтър",
+        value=bool(defaults.terrain_gate_enabled),
+        help="Работи само след готовия HR-only candidate и не променя HR input hash или избора на вълни.",
+    )
+    values["downhill_threshold_pct"] = float(row[1].number_input(
+        "Спускане (%)", max_value=-0.1, value=float(defaults.downhill_threshold_pct), step=0.5,
+        help="Donor проба се изключва, когато изгладеният наклон е равен или по-нисък от този праг."
+    ))
+    values["min_sustained_downhill_s"] = float(row[2].number_input(
+        "Устойчиво спускане (s)", min_value=1.0, value=float(defaults.min_sustained_downhill_s), step=1.0,
+        help="Минималната продължителност под прага, преди участъкът да се приеме за реално спускане."
+    ))
+    with st.expander("Разширени теренни настройки", expanded=False):
+        advanced = st.columns(4)
+        values["use_transition_buffer"] = advanced[0].checkbox(
+            "Използвай terrain buffer", value=bool(defaults.use_transition_buffer),
+            help="Ако е включено, изключва donor проби и около границите на спускането; по-консервативно е."
+        )
+        values["terrain_transition_buffer_s"] = float(advanced[1].number_input(
+            "Terrain buffer (s)", min_value=0.0, value=float(defaults.terrain_transition_buffer_s), step=1.0,
+            help="Секунди преди и след устойчивото спускане, използвани само когато buffer е включен."
+        ))
+        values["grade_smoothing_window_s"] = float(advanced[2].number_input(
+            "Изглаждане на наклона (s)", min_value=1.0, value=float(defaults.grade_smoothing_window_s), step=1.0,
+            help="Медианен времеви прозорец за потискане на единични GPS/височинни пикове."
+        ))
+        values["derived_grade_window_m"] = float(advanced[3].number_input(
+            "Прозорец за наклон (m)", min_value=5.0, value=float(defaults.derived_grade_window_m), step=5.0,
+            help="Дистанционният прозорец за извеждане на наклон от надморска височина и разстояние."
+        ))
+        advanced2 = st.columns(3)
+        values["derived_min_distance_span_m"] = float(advanced2[0].number_input(
+            "Минимален distance span (m)", min_value=1.0, value=float(defaults.derived_min_distance_span_m), step=1.0,
+            help="Минималната реална дистанция за надеждно изчисляване на локален наклон."
+        ))
+        values["min_grade_coverage_fraction"] = float(advanced2[1].slider(
+            "Минимално grade покритие", 0.1, 1.0, float(defaults.min_grade_coverage_fraction), 0.05,
+            help="Под това покритие terrain филтърът fail-closed остава неприложен и final=candidate."
+        ))
+        values["max_terrain_sample_gap_s"] = float(advanced2[2].number_input(
+            "Макс. terrain gap (s)", min_value=1.0, value=float(defaults.max_terrain_sample_gap_s), step=1.0,
+            help="Прекъсва устойчивото спускане през по-голяма липса в теренните данни."
+        ))
     return type(defaults)(**values)
 
 
@@ -1397,8 +1122,7 @@ st.info(
 
 with st.sidebar:
     st.header("HRmod Lab")
-    st.markdown("**Default model:** `hrmod_wave_area_shift_v3` · experimental")
-    st.caption("`v2_legacy` remains available only for diagnostic comparison.")
+    st.markdown("**Единствен модел:** `hrmod_mirror_area_shift_v4` · experimental")
     st.markdown("**Режим:** offline / completed activity")
     st.markdown("[Документация](./docs/HRMOD_LAB.md)")
     st.divider()
@@ -1425,13 +1149,16 @@ default_config = HRmodConfig()
 with st.expander("TCX parser/quality настройки"):
     parser_columns = st.columns(3)
     parser_regularity_target_s = parser_columns[0].number_input(
-        "Очаквана sampling стъпка (s)", min_value=0.01, value=1.0, step=0.1
+        "Очаквана sampling стъпка (s)", min_value=0.01, value=1.0, step=0.1,
+        help="Очакваният интервал между TCX пробите; използва се само за quality diagnostics."
     )
     parser_regularity_tolerance_s = parser_columns[1].number_input(
-        "Sampling tolerance (s)", min_value=0.0, value=0.25, step=0.05
+        "Sampling tolerance (s)", min_value=0.0, value=0.25, step=0.05,
+        help="Допустимото отклонение около очакваната sampling стъпка."
     )
     assume_naive_utc = parser_columns[2].checkbox(
-        "Приеми naive timestamp като UTC", value=True
+        "Приеми naive timestamp като UTC", value=True,
+        help="Как да се тълкуват TCX timestamps без изрично зададена часова зона."
     )
     st.caption(
         "Preview long-gap границата следва текущия default на HRmodConfig. При core "
@@ -1461,31 +1188,36 @@ st.caption(
 with st.form("hrmod_core_configuration", clear_on_submit=False):
     profile_columns = st.columns(6)
     hr_floor_bpm = profile_columns[0].number_input(
-        "HR_floor (bpm)", min_value=1.0, value=40.0, step=1.0
+        "HR_floor (bpm)", min_value=1.0, value=40.0, step=1.0,
+        help="Физиологичната долна граница за модела; HR никога не се отнема под нея."
     )
     zone_2_lower = profile_columns[1].number_input(
-        "Z2 starts", min_value=1.0, value=120.0, step=1.0
+        "Z2 starts", min_value=1.0, value=120.0, step=1.0,
+        help="Долната, включена граница на индивидуална зона Z2."
     )
     zone_3_lower = profile_columns[2].number_input(
-        "Z3 starts", min_value=1.0, value=140.0, step=1.0
+        "Z3 starts", min_value=1.0, value=140.0, step=1.0,
+        help="Долната, включена граница на индивидуална зона Z3."
     )
     zone_4_lower = profile_columns[3].number_input(
-        "Z4 starts", min_value=1.0, value=160.0, step=1.0
+        "Z4 starts", min_value=1.0, value=160.0, step=1.0,
+        help="Долната, включена граница на индивидуална зона Z4."
     )
     zone_5_lower = profile_columns[4].number_input(
-        "Z5 starts", min_value=1.0, value=180.0, step=1.0
+        "Z5 starts", min_value=1.0, value=180.0, step=1.0,
+        help="Долната, включена граница на индивидуална зона Z5."
     )
     hrmax_bpm = profile_columns[5].number_input(
-        "HRmax (bpm)", min_value=1.0, value=200.0, step=1.0
+        "HRmax (bpm)", min_value=1.0, value=200.0, step=1.0,
+        help="Индивидуалният максимален пулс и твърд таван за модулирания HR."
     )
 
-    st.subheader("4 · HR-only v3 стратегия и основни настройки")
+    st.subheader("4 · HR-only mirror модел и основни настройки")
     st.caption(
-        f"{default_config.config_version} · v3_auto е morphology-aware default; "
-        "v2_legacy може да се избере за контролно сравнение. Defaults са "
+        f"{default_config.config_version} · единствен активен модел е v4 mirror. Defaults са "
         "exploratory и не са физиологично калибрирани."
     )
-    config_values = _model_config_widgets(default_config)
+    config_values = _simple_model_config_widgets(default_config)
     compute_clicked = st.form_submit_button(
         "Изчисли HRmod (само HR)",
         type="primary",
@@ -1517,7 +1249,7 @@ if compute_clicked:
         if isinstance(cached_run, Mapping):
             result = cached_run["result"]
         else:
-            with st.spinner("HR-only preprocessing, morphology detection и exact area shift…"):
+            with st.spinner("HR-only preprocessing, wave detection и exact mirror area shift…"):
                 # Anti-leakage by construction: no reference object is in this call.
                 result = compute_hrmod_hr_only(
                     hr_samples=run_parse.hr_input_samples,
@@ -1610,9 +1342,7 @@ if "morphology" in wave_frame.columns:
         .value_counts()
     )
     st.caption(
-        "Избран strategy: `"
-        + str(getattr(result.config, "model_variant", "unknown"))
-        + "` · morphology: "
+        "V4 mirror · morphology: "
         + ", ".join(f"{name}={count}" for name, count in morphology_counts.items())
         + " · correction: "
         + ", ".join(f"{name}={count}" for name, count in strategy_counts.items())
@@ -1620,8 +1350,8 @@ if "morphology" in wave_frame.columns:
 if run.get("profile_warning"):
     st.warning(run["profile_warning"], icon="⚠️")
 
-st.subheader("6 · Terrain gate post-processing")
-terrain_config = _terrain_config_widgets(terrain_gate.TerrainGateConfig())
+st.subheader("6 · Теренен donor филтър (post-processing)")
+terrain_config = _simple_terrain_config_widgets(terrain_gate.TerrainGateConfig())
 terrain_signature = _terrain_run_signature(run, terrain_config)
 terrain_state = st.session_state.get(TERRAIN_STATE_KEY)
 cached_terrain_result = (
@@ -1636,7 +1366,7 @@ if (
     or cached_zone_summary is None
 ):
     try:
-        with st.spinner("Grade preparation и terrain_gate_v1…"):
+        with st.spinner("Подготовка на наклона и terrain donor filter…"):
             prepared_terrain = terrain_gate.prepare_terrain(
                 run_parse.reference_channels,
                 config=terrain_config,
@@ -1675,7 +1405,7 @@ if terrain_result is not None:
         )
     else:
         st.success(
-            "terrain_gate_v1 е приложен само след непроменения HR-only candidate."
+            "Теренният donor филтър е приложен само след непроменения HR-only candidate."
         )
     timeseries_frame, wave_frame = _terrain_display_frames(result, terrain_result)
     wave_table_frame = _ordered_wave_frame(wave_frame)
@@ -1743,10 +1473,9 @@ if result_view == "HR-only сигнали":
 
 if result_view == "HR вълни":
     st.caption(
-        "Вълните са открити само от h_detect. При sustained форма u→h е hold, "
-        "d→f е потвърденият terminal fall, а H е hold target. Receiver/donor "
-        "показват действителните allocation windows. transition_weight=0 означава "
-        "compact v2 allocation, а 1 — пълен v3/fade край; това не е механичен work interval."
+        "Вълните са открити само от h_detect. Receiver е целият възход s→p, "
+        "а donor е спадът p→e. Следпиковата площ се оглежда към възхода; "
+        "маркерите не са механичен work interval."
     )
     if wave_frame.empty:
         st.info("Не са открити HR вълни при текущите параметри.")
@@ -1835,12 +1564,12 @@ if result_view == "HR зони":
         zone_plot.add_bar(
             x=zone_display_frame["zone_name"],
             y=zone_display_frame["hrmod_candidate_seconds"],
-            name="HRmod candidate (selected HR-only strategy)",
+            name="HRmod candidate (v4 mirror)",
         )
         zone_plot.add_bar(
             x=zone_display_frame["zone_name"],
             y=zone_display_frame["hrmod_final_seconds"],
-            name="HRmod final (terrain gate)",
+            name="HRmod final (downhill donor filter)",
         )
         zone_plot.update_layout(
             barmode="group", yaxis_title="Seconds", height=390

@@ -1,4 +1,4 @@
-"""Strict, serialisable schemas for the HR-only HRmod v3 model.
+"""Strict, serialisable schemas for the HR-only HRmod models.
 
 The core input deliberately has no representation for reference channels.
 Speed, power, grade, distance, cadence, laps, annotations, and sport type
@@ -13,9 +13,8 @@ from math import isfinite
 from typing import Any, Mapping
 
 
-MODEL_VERSION = "hrmod_wave_area_shift_v3"
-LEGACY_MODEL_VERSION = "hrmod_wave_area_shift_v2"
-CONFIG_VERSION = "hrmod_config_v3"
+MODEL_VERSION = "hrmod_mirror_area_shift_v4"
+CONFIG_VERSION = "hrmod_config_v4"
 
 
 def _finite(name: str, value: float) -> float:
@@ -129,16 +128,15 @@ class AthleteHRProfile:
 
 @dataclass(frozen=True, slots=True)
 class HRmodConfig:
-    """Versioned exploratory settings for wave-area-shift v3.
+    """Versioned exploratory settings for the single v4 mirror model.
 
-    The first four user-facing controls are ``alpha``,
-    ``rise_threshold_bpm_s``, ``min_rise_bpm``, and ``smoothing_window_s``.
+    The four main controls are ``alpha``, minimum peak fraction, maximum wave
+    duration, and detection-only smoothing.
     All remaining values are technical safeguards or transparent HR cleaning
     settings.  These defaults are starting points, not validated physiology.
     """
 
     config_version: str = CONFIG_VERSION
-    model_variant: str = "v3_auto"
 
     # Four main expert controls.
     alpha: float = 1.0
@@ -166,21 +164,10 @@ class HRmodConfig:
     max_addition_bpm: float | None = None
     max_removal_bpm: float | None = None
 
-    # V3 sustained-wave morphology and fail-closed safeguards.  These use
-    # only the HR detection signal and elapsed time.
-    compact_full_v2_s: float = 30.0
-    sustained_full_v3_s: float = 45.0
-    min_hold_duration_s: float = 12.0
-    hold_slope_tolerance_bpm_s: float = 0.08
-    hold_band_bpm: float = 3.0
-    terminal_fall_threshold_bpm_s: float = 0.20
-    terminal_fall_min_duration_s: float = 3.0
-    terminal_fall_min_drop_bpm: float = 4.0
-    terminal_fall_release_slope_bpm_s: float = 0.05
-    terminal_fall_release_s: float = 2.0
-    terminal_fall_max_duration_s: float = 30.0
-    terminal_recovery_min_s: float = 3.0
-    terminal_rebound_guard_s: float = 10.0
+    # V4 mirror model eligibility.  These are HR-only morphology controls;
+    # terrain remains a separate post-core phase.
+    mirror_min_peak_fraction_hrmax: float = 0.80
+    mirror_max_wave_duration_s: float = 180.0
 
     # Robust detection and transparent cleaning details.
     smoothing_method: str = "robust_local_linear"
@@ -196,8 +183,6 @@ class HRmodConfig:
     def __post_init__(self) -> None:
         if self.config_version != CONFIG_VERSION:
             raise ValueError(f"unsupported config_version: {self.config_version!r}")
-        if self.model_variant not in {"v3_auto", "v2_legacy"}:
-            raise ValueError("model_variant must be 'v3_auto' or 'v2_legacy'")
         if self.smoothing_method not in {"robust_local_linear", "local_linear"}:
             raise ValueError("unsupported smoothing_method")
         if self.edge_wave_policy != "skip_incomplete":
@@ -228,25 +213,18 @@ class HRmodConfig:
             "artifact_spike_deviation_bpm",
             "sampling_regularity_tolerance_s",
             "area_conservation_tolerance_bpm_s",
-            "compact_full_v2_s",
-            "sustained_full_v3_s",
-            "min_hold_duration_s",
-            "hold_slope_tolerance_bpm_s",
-            "hold_band_bpm",
-            "terminal_fall_threshold_bpm_s",
-            "terminal_fall_min_duration_s",
-            "terminal_fall_min_drop_bpm",
-            "terminal_fall_release_slope_bpm_s",
-            "terminal_fall_release_s",
-            "terminal_fall_max_duration_s",
-            "terminal_recovery_min_s",
-            "terminal_rebound_guard_s",
+            "mirror_min_peak_fraction_hrmax",
+            "mirror_max_wave_duration_s",
         )
         for name in finite_fields:
             object.__setattr__(self, name, _finite(name, getattr(self, name)))
 
         if not 0.0 <= self.alpha <= 1.0:
             raise ValueError("alpha must be in [0, 1]")
+        if not 0.0 < self.mirror_min_peak_fraction_hrmax <= 1.0:
+            raise ValueError("mirror_min_peak_fraction_hrmax must be in (0, 1]")
+        if self.mirror_max_wave_duration_s <= 0.0:
+            raise ValueError("mirror_max_wave_duration_s must be positive")
         positive_fields = (
             "rise_threshold_bpm_s",
             "min_rise_bpm",
@@ -265,17 +243,6 @@ class HRmodConfig:
             "artifact_max_rate_bpm_per_s",
             "artifact_spike_deviation_bpm",
             "area_conservation_tolerance_bpm_s",
-            "compact_full_v2_s",
-            "sustained_full_v3_s",
-            "min_hold_duration_s",
-            "hold_band_bpm",
-            "terminal_fall_threshold_bpm_s",
-            "terminal_fall_min_duration_s",
-            "terminal_fall_min_drop_bpm",
-            "terminal_fall_release_s",
-            "terminal_fall_max_duration_s",
-            "terminal_recovery_min_s",
-            "terminal_rebound_guard_s",
         )
         for name in positive_fields:
             if getattr(self, name) <= 0.0:
@@ -285,20 +252,12 @@ class HRmodConfig:
             "neutral_slope_tolerance_bpm_s",
             "max_interpolation_gap_s",
             "sampling_regularity_tolerance_s",
-            "hold_slope_tolerance_bpm_s",
-            "terminal_fall_release_slope_bpm_s",
         )
         for name in nonnegative_fields:
             if getattr(self, name) < 0.0:
                 raise ValueError(f"{name} must be non-negative")
         if self.max_interpolation_gap_s > self.long_gap_threshold_s:
             raise ValueError("max_interpolation_gap_s cannot exceed long_gap_threshold_s")
-        if self.compact_full_v2_s >= self.sustained_full_v3_s:
-            raise ValueError("compact_full_v2_s must be below sustained_full_v3_s")
-        if self.terminal_fall_min_duration_s > self.terminal_fall_max_duration_s:
-            raise ValueError(
-                "terminal_fall_min_duration_s cannot exceed terminal_fall_max_duration_s"
-            )
         if self.artifact_min_hr_bpm >= self.artifact_max_hr_bpm:
             raise ValueError("artifact HR minimum must be below maximum")
 
@@ -385,17 +344,7 @@ class WaveSummary:
     skip_reason: str | None
     morphology: str = "compact"
     morphology_reason: str | None = None
-    correction_strategy: str = "v2_full_tail"
-    transition_weight: float = 0.0
-    hold_target_hr_bpm: float | None = None
-    hold_start_timestamp: datetime | None = None
-    hold_end_timestamp: datetime | None = None
-    terminal_fall_start_timestamp: datetime | None = None
-    terminal_fall_end_timestamp: datetime | None = None
-    hold_start_elapsed_s: float | None = None
-    hold_end_elapsed_s: float | None = None
-    terminal_fall_start_elapsed_s: float | None = None
-    terminal_fall_end_elapsed_s: float | None = None
+    correction_strategy: str = "v4_mirror_full_rise"
     raw_zone_seconds: Mapping[str, float] = field(default_factory=dict)
     clean_zone_seconds: Mapping[str, float] = field(default_factory=dict)
     hrmod_zone_seconds: Mapping[str, float] = field(default_factory=dict)
@@ -508,7 +457,6 @@ __all__ = [
     "HRmodTimeseriesPoint",
     "HRSample",
     "HRZone",
-    "LEGACY_MODEL_VERSION",
     "MODEL_VERSION",
     "WaveSummary",
     "ZoneSummary",

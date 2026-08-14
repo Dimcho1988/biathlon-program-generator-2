@@ -51,6 +51,7 @@ def _core(values: list[float] | None = None):
         hr_samples=samples,
         athlete_profile=_profile(),
         config=HRmodConfig(
+            mirror_min_peak_fraction_hrmax=0.50,
             smoothing_window_s=5.0,
             smoothing_min_points=3,
             min_sustained_rise_s=3.0,
@@ -107,9 +108,81 @@ def _grade_for_range(result, start: float, end: float, value: float = -4.0):
 
 
 def _config(**overrides) -> TerrainGateConfig:
-    values = {"grade_smoothing_window_s": 1.0}
+    values = {
+        "grade_smoothing_window_s": 1.0,
+    }
     values.update(overrides)
     return TerrainGateConfig(**values)
+
+
+def _v4_core():
+    values = _triangle(offset=50.0)
+    samples = tuple(
+        HRSample(START + timedelta(seconds=index), value)
+        for index, value in enumerate(values)
+    )
+    return compute_hrmod_hr_only(
+        hr_samples=samples,
+        athlete_profile=_profile(),
+        config=HRmodConfig(mirror_min_peak_fraction_hrmax=0.80),
+    )
+
+
+def test_v4_terrain_excludes_only_downhill_donor_and_reallocates_exactly() -> None:
+    core = _v4_core()
+    wave = next(wave for wave in core.wave_summary if wave.corrected)
+    grades = _grade_for_range(
+        core,
+        wave.peak_elapsed_s + 2.0,
+        wave.tail_end_elapsed_s - 2.0,
+        -4.0,
+    )
+    terrain = apply_terrain_gate(
+        core,
+        _references(len(core.timeseries), grades=grades),
+        TerrainGateConfig(
+            grade_smoothing_window_s=1.0,
+            downhill_threshold_pct=-3.0,
+            min_sustained_downhill_s=3.0,
+        ),
+    )
+    summary = next(item for item in terrain.wave_summary if item.wave_id == wave.wave_id)
+    assert summary.terrain_status == "terrain_adjusted"
+    assert 0.0 < summary.moved_area_final_bpm_s < summary.moved_area_candidate_bpm_s
+    assert summary.downhill_donor_excluded_s > 0.0
+    assert terrain.diagnostics.terrain_adjusted_wave_count == 1
+    final_added = sum(point.hrmod_final_added_bpm * point.dt_s for point in terrain.timeseries)
+    final_removed = sum(point.hrmod_final_removed_bpm * point.dt_s for point in terrain.timeseries)
+    assert final_added == pytest.approx(final_removed, abs=1e-9)
+    assert core.hr_input_hash == terrain.hr_input_hash
+
+
+def test_v4_downhill_in_receiver_does_not_change_candidate() -> None:
+    core = _v4_core()
+    wave = next(wave for wave in core.wave_summary if wave.corrected)
+    grades = _grade_for_range(
+        core,
+        wave.rise_start_elapsed_s,
+        wave.peak_elapsed_s,
+        -4.0,
+    )
+    terrain = apply_terrain_gate(
+        core,
+        _references(len(core.timeseries), grades=grades),
+        TerrainGateConfig(
+            grade_smoothing_window_s=1.0,
+            downhill_threshold_pct=-3.0,
+            min_sustained_downhill_s=3.0,
+        ),
+    )
+    summary = next(item for item in terrain.wave_summary if item.wave_id == wave.wave_id)
+    assert summary.terrain_status == "accepted"
+    assert summary.moved_area_final_bpm_s == pytest.approx(
+        summary.moved_area_candidate_bpm_s
+    )
+    assert [point.hrmod_final_bpm for point in terrain.timeseries] == [
+        point.hrmod_bpm for point in core.timeseries
+    ]
 
 
 def test_flat_grade_accepts_candidate_wave_and_final_equals_candidate() -> None:
@@ -123,61 +196,6 @@ def test_flat_grade_accepts_candidate_wave_and_final_equals_candidate() -> None:
         point.hrmod_bpm for point in core.timeseries
     ]
     assert terrain.diagnostics.terrain_rejected_wave_count == 0
-
-
-@pytest.mark.parametrize("section", ("receiver", "donor"))
-def test_sustained_downhill_in_receiver_or_donor_rejects_entire_wave(section: str) -> None:
-    core = _core()
-    wave = core.wave_summary[0]
-    start, end = (
-        (wave.rise_start_elapsed_s, wave.peak_elapsed_s)
-        if section == "receiver"
-        else (wave.peak_elapsed_s, wave.tail_end_elapsed_s)
-    )
-    terrain = apply_terrain_gate(
-        core,
-        _references(
-            len(core.timeseries), grades=_grade_for_range(core, start, end)
-        ),
-        _config(),
-    )
-
-    summary = terrain.wave_summary[0]
-    assert summary.terrain_status == "terrain_confounded"
-    assert summary.terrain_rejection_reason == "sustained_downhill_overlap"
-    assert summary.downhill_overlap_s >= 5.0
-    assert summary.moved_area_final_bpm_s == 0.0
-    affected = [
-        (candidate, final)
-        for candidate, final in zip(core.timeseries, terrain.timeseries, strict=True)
-        if wave.rise_start_elapsed_s
-        <= candidate.elapsed_s
-        <= wave.tail_end_elapsed_s
-    ]
-    assert all(final.hrmod_final_bpm == candidate.raw_hr_bpm for candidate, final in affected)
-
-
-@pytest.mark.parametrize("side", ("before", "after"))
-def test_downhill_transition_inside_buffer_rejects_wave(side: str) -> None:
-    core = _core()
-    wave = core.wave_summary[0]
-    if side == "before":
-        end = wave.rise_start_elapsed_s - 1.0
-        start = end - 6.0
-    else:
-        start = wave.tail_end_elapsed_s + 1.0
-        end = start + 6.0
-    terrain = apply_terrain_gate(
-        core,
-        _references(
-            len(core.timeseries), grades=_grade_for_range(core, start, end)
-        ),
-        _config(terrain_transition_buffer_s=5.0),
-    )
-
-    assert terrain.wave_summary[0].terrain_status == "terrain_confounded"
-    assert terrain.wave_summary[0].terrain_rejection_reason == "terrain_transition_buffer"
-    assert terrain.wave_summary[0].downhill_overlap_s == 0.0
 
 
 def test_single_one_second_grade_spike_does_not_reject() -> None:
@@ -196,13 +214,13 @@ def test_downhill_threshold_is_lower_inclusive() -> None:
     core = _core()
     wave = core.wave_summary[0]
     grades = _grade_for_range(
-        core, wave.rise_start_elapsed_s, wave.rise_start_elapsed_s + 6.0, -3.0
+        core, wave.peak_elapsed_s + 1.0, wave.peak_elapsed_s + 7.0, -3.0
     )
     terrain = apply_terrain_gate(
         core, _references(len(core.timeseries), grades=grades), _config()
     )
 
-    assert terrain.wave_summary[0].terrain_status == "terrain_confounded"
+    assert terrain.wave_summary[0].terrain_status == "terrain_adjusted"
     assert any(point.downhill_mask for point in terrain.timeseries)
 
 
@@ -269,28 +287,6 @@ def test_grade_changes_only_terrain_final_and_hash_not_core_candidate_or_hr_hash
     ]
 
 
-def test_rejecting_first_of_two_nonoverlapping_waves_does_not_change_second() -> None:
-    values = _triangle() + [100.0] * 20 + _triangle(offset=2.0)
-    core = _core(values)
-    assert len(core.wave_summary) >= 2
-    first, second = core.wave_summary[:2]
-    grades = _grade_for_range(core, first.rise_start_elapsed_s, first.tail_end_elapsed_s)
-    terrain = apply_terrain_gate(
-        core, _references(len(core.timeseries), grades=grades), _config()
-    )
-
-    assert terrain.wave_summary[0].terrain_status == "terrain_confounded"
-    assert terrain.wave_summary[1].terrain_status == "accepted"
-    second_points = [
-        (candidate, final)
-        for candidate, final in zip(core.timeseries, terrain.timeseries, strict=True)
-        if second.rise_start_elapsed_s
-        <= candidate.elapsed_s
-        <= second.tail_end_elapsed_s
-    ]
-    assert all(candidate.hrmod_bpm == final.hrmod_final_bpm for candidate, final in second_points)
-
-
 @pytest.mark.parametrize(
     ("altitude_step", "expected_grade"),
     ((0.0, 0.0), (1.0, 10.0), (-1.0, -10.0)),
@@ -347,7 +343,7 @@ def test_prepared_terrain_is_reusable_and_gate_disabled_keeps_candidate() -> Non
     )
 
 
-def test_rejected_wave_recomputes_final_zones_from_terrain_final_signal() -> None:
+def test_adjusted_wave_recomputes_final_zones_from_terrain_final_signal() -> None:
     core = _core()
     wave = core.wave_summary[0]
     terrain = apply_terrain_gate(
@@ -361,7 +357,7 @@ def test_rejected_wave_recomputes_final_zones_from_terrain_final_signal() -> Non
         _config(),
     )
 
-    assert terrain.wave_summary[0].terrain_status == "terrain_confounded"
+    assert terrain.wave_summary[0].terrain_status == "terrain_adjusted"
     assert any(
         zone.hrmod_final_seconds != pytest.approx(zone.hrmod_candidate_seconds)
         for zone in terrain.zone_summary
@@ -487,7 +483,7 @@ def test_core_model_and_config_are_included_in_final_result_hash() -> None:
     )
     original = apply_terrain_gate(core, references, _config())
     alternate_model = apply_terrain_gate(
-        replace(core, model_version="hrmod_wave_area_shift_v2"),
+        replace(core, model_version="alternate_core_model"),
         references,
         _config(),
     )
@@ -496,8 +492,8 @@ def test_core_model_and_config_are_included_in_final_result_hash() -> None:
             core,
             config=replace(
                 core.config,
-                terminal_fall_threshold_bpm_s=(
-                    core.config.terminal_fall_threshold_bpm_s + 0.01
+                sampling_regularity_tolerance_s=(
+                    core.config.sampling_regularity_tolerance_s + 0.01
                 ),
             ),
         ),

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import fields, replace
+from dataclasses import fields
 from datetime import UTC, datetime, timedelta
 import inspect
 import math
@@ -9,17 +9,15 @@ import numpy as np
 import pytest
 
 from hrmod_lab.hrmod_core import compute_hrmod_hr_only
+from hrmod_lab.mirror_area_shift import allocate_mirror_wave
 from hrmod_lab.schemas import (
     CONFIG_VERSION,
-    LEGACY_MODEL_VERSION,
     MODEL_VERSION,
     AthleteHRProfile,
     HRmodConfig,
     HRSample,
     HRZone,
 )
-from hrmod_lab.wave_area_shift import shift_wave_areas
-from hrmod_lab.wave_detection import DetectedWave
 
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
@@ -74,44 +72,9 @@ def _triangle(
     return [baseline] * pre + rise + fall + [baseline] * post
 
 
-def _sustained_wave(
-    *, hold_seconds: int, fall_seconds: int = 12
-) -> list[float]:
-    return (
-        [100.0] * 25
-        + [100.0 + 40.0 * index / 20.0 for index in range(1, 21)]
-        + [140.0] * hold_seconds
-        + [
-            140.0 - 40.0 * index / fall_seconds
-            for index in range(1, fall_seconds + 1)
-        ]
-        + [100.0] * 30
-    )
-
-
-def _repeated_sustained_wave(
-    *, recovery_seconds: int, next_rise_seconds: int = 20
-) -> list[float]:
-    """Long hold, sharp fall, low recovery, then another sustained wave."""
-
-    return (
-        [100.0] * 25
-        + [100.0 + 40.0 * index / 20.0 for index in range(1, 21)]
-        + [140.0] * 40
-        + [140.0 - 25.0 * index / 10.0 for index in range(1, 11)]
-        + [115.0] * recovery_seconds
-        + [
-            115.0 + 25.0 * index / next_rise_seconds
-            for index in range(1, next_rise_seconds + 1)
-        ]
-        + [140.0] * 20
-        + [140.0 - 40.0 * index / 12.0 for index in range(1, 13)]
-        + [100.0] * 30
-    )
-
-
 def _config(**overrides: object) -> HRmodConfig:
     values: dict[str, object] = {
+        "mirror_min_peak_fraction_hrmax": 0.50,
         "smoothing_window_s": 5.0,
         "smoothing_min_points": 3,
         "min_sustained_rise_s": 3.0,
@@ -129,7 +92,7 @@ def _corrected_waves(result):
     return [wave for wave in result.wave_summary if wave.corrected]
 
 
-def test_v3_core_signature_schema_and_model_are_strictly_hr_only() -> None:
+def test_v4_core_signature_schema_and_model_are_strictly_hr_only() -> None:
     parameters = inspect.signature(compute_hrmod_hr_only).parameters
     assert tuple(parameters) == ("hr_samples", "athlete_profile", "config")
     forbidden_inputs = {
@@ -144,9 +107,8 @@ def test_v3_core_signature_schema_and_model_are_strictly_hr_only() -> None:
         "sport",
     }
     assert forbidden_inputs.isdisjoint(HRSample.__dataclass_fields__)
-    assert MODEL_VERSION == "hrmod_wave_area_shift_v3"
-    assert CONFIG_VERSION == "hrmod_config_v3"
-    assert LEGACY_MODEL_VERSION == "hrmod_wave_area_shift_v2"
+    assert MODEL_VERSION == "hrmod_mirror_area_shift_v4"
+    assert CONFIG_VERSION == "hrmod_config_v4"
     with pytest.raises(TypeError):
         compute_hrmod_hr_only(  # type: ignore[call-arg]
             hr_samples=_samples([100.0] * 20),
@@ -155,17 +117,14 @@ def test_v3_core_signature_schema_and_model_are_strictly_hr_only() -> None:
         )
 
 
-def test_v3_config_defaults_and_no_v1_inverse_lobe_balance_fields() -> None:
+def test_v4_config_defaults_and_no_retired_model_fields() -> None:
     config = HRmodConfig()
     assert config.alpha == 1.0
     assert config.rise_threshold_bpm_s == 0.15
     assert config.min_rise_bpm == 5.0
     assert config.smoothing_window_s == 5.0
-    assert config.model_variant == "v3_auto"
-    assert config.compact_full_v2_s == 30.0
-    assert config.sustained_full_v3_s == 45.0
-    assert config.terminal_recovery_min_s == 3.0
-    assert config.terminal_rebound_guard_s == 10.0
+    assert config.mirror_min_peak_fraction_hrmax == 0.80
+    assert config.mirror_max_wave_duration_s == 180.0
     names = {item.name for item in fields(HRmodConfig)}
     forbidden = {
         "kernel_model",
@@ -181,6 +140,76 @@ def test_v3_config_defaults_and_no_v1_inverse_lobe_balance_fields() -> None:
         "edge_episode_policy",
     }
     assert names.isdisjoint(forbidden)
+
+
+def test_v4_mirror_uses_peak_fraction_duration_and_exact_area() -> None:
+    values = _triangle(baseline=120.0, peak=170.0, rise_seconds=25, fall_seconds=35)
+    result = compute_hrmod_hr_only(
+        hr_samples=_samples(values),
+        athlete_profile=_profile(),
+        config=HRmodConfig(
+            mirror_min_peak_fraction_hrmax=0.80,
+            mirror_max_wave_duration_s=180.0,
+        ),
+    )
+    corrected = _corrected_waves(result)
+    assert corrected
+    wave = corrected[0]
+    assert wave.correction_strategy == "v4_mirror_full_rise"
+    assert wave.morphology == "mirror_wave"
+    assert wave.added_area_bpm_s == pytest.approx(wave.removed_area_bpm_s, abs=1e-9)
+    assert wave.area_balance_error_bpm_s == pytest.approx(0.0, abs=1e-9)
+    assert max(point.hrmod_bpm or 0.0 for point in result.timeseries) <= 200.0
+    assert any(point.receiver_flag for point in result.timeseries)
+    assert any(point.donor_flag for point in result.timeseries)
+
+
+def test_v4_mirror_maps_early_donor_near_peak_and_late_tail_near_start() -> None:
+    allocation = allocate_mirror_wave(
+        clean_hr=np.asarray([120.0, 130.0, 140.0, 150.0, 140.0, 130.0]),
+        elapsed_s=np.arange(6, dtype=float),
+        dt_s=np.ones(6, dtype=float),
+        receiver_indices=np.asarray([0, 1, 2]),
+        donor_indices=np.asarray([3, 4, 5]),
+        donor_floor_bpm=120.0,
+        hrmax_bpm=200.0,
+        alpha=0.2,
+    )
+
+    assert allocation.removed.tolist() == pytest.approx([0, 0, 0, 6, 4, 2])
+    assert allocation.added.tolist() == pytest.approx([2, 4, 6, 0, 0, 0])
+    assert allocation.moved_area_bpm_s == pytest.approx(12.0)
+    assert sum(allocation.added) == pytest.approx(sum(allocation.removed))
+
+
+def test_v4_mirror_fails_closed_below_peak_or_above_duration() -> None:
+    below = compute_hrmod_hr_only(
+        hr_samples=_samples(_triangle(baseline=120.0, peak=159.0)),
+        athlete_profile=_profile(),
+        config=HRmodConfig(),
+    )
+    assert not _corrected_waves(below)
+    assert any(
+        wave.skip_reason == "mirror_peak_below_hrmax_fraction"
+        for wave in below.wave_summary
+    )
+
+    long_values = _triangle(
+        baseline=120.0,
+        peak=170.0,
+        rise_seconds=90,
+        fall_seconds=100,
+    )
+    long = compute_hrmod_hr_only(
+        hr_samples=_samples(long_values),
+        athlete_profile=_profile(),
+        config=HRmodConfig(mirror_max_wave_duration_s=180.0),
+    )
+    assert not _corrected_waves(long)
+    assert any(
+        wave.skip_reason == "mirror_wave_duration_above_limit"
+        for wave in long.wave_summary
+    )
 
 
 def test_alpha_zero_returns_clean_hr_exactly() -> None:
@@ -247,210 +276,6 @@ def test_synthetic_rise_peak_fall_detects_expected_boundaries() -> None:
     assert wave.tail_end_elapsed_s == pytest.approx(58.0, abs=3.0)
     assert wave.end_reason == "return_to_baseline"
     assert wave.complete and wave.corrected
-
-
-def test_compact_30_second_endpoint_is_numerically_identical_to_v2() -> None:
-    values = _sustained_wave(hold_seconds=10)
-    v3 = compute_hrmod_hr_only(
-        hr_samples=_samples(values),
-        athlete_profile=_profile(),
-        config=_config(model_variant="v3_auto"),
-    )
-    v2 = compute_hrmod_hr_only(
-        hr_samples=_samples(values),
-        athlete_profile=_profile(),
-        config=_config(model_variant="v2_legacy"),
-    )
-    assert v3.model_version == MODEL_VERSION
-    assert v2.model_version == LEGACY_MODEL_VERSION
-    assert v3.wave_summary[0].transition_weight == 0.0
-    assert v3.wave_summary[0].morphology == "compact"
-    assert v3.wave_summary[0].correction_strategy == "v2_full_tail"
-    assert [point.added_bpm for point in v3.timeseries] == [
-        point.added_bpm for point in v2.timeseries
-    ]
-    assert [point.removed_bpm for point in v3.timeseries] == [
-        point.removed_bpm for point in v2.timeseries
-    ]
-    assert [point.hrmod_bpm for point in v3.timeseries] == [
-        point.hrmod_bpm for point in v2.timeseries
-    ]
-    assert [point.receiver_flag for point in v3.timeseries] == [
-        point.receiver_flag for point in v2.timeseries
-    ]
-    assert [point.donor_flag for point in v3.timeseries] == [
-        point.donor_flag for point in v2.timeseries
-    ]
-    legacy_numeric_fields = (
-        "rise_start_elapsed_s",
-        "peak_elapsed_s",
-        "tail_end_elapsed_s",
-        "baseline_hr_bpm",
-        "donor_floor_bpm",
-        "rise_bpm",
-        "fall_bpm",
-        "receiver_duration_s",
-        "donor_duration_s",
-        "donor_available_area_bpm_s",
-        "requested_area_bpm_s",
-        "receiver_capacity_bpm_s",
-        "moved_area_bpm_s",
-        "added_area_bpm_s",
-        "removed_area_bpm_s",
-        "area_balance_error_bpm_s",
-    )
-    for name in legacy_numeric_fields:
-        assert getattr(v3.wave_summary[0], name) == getattr(v2.wave_summary[0], name)
-
-
-def test_v2_legacy_moved_area_retains_exact_preallocation_target() -> None:
-    result = compute_hrmod_hr_only(
-        hr_samples=_samples(_triangle()),
-        athlete_profile=_profile(),
-        config=_config(model_variant="v2_legacy", alpha=0.73),
-    )
-    wave = result.wave_summary[0]
-
-    assert wave.requested_area_bpm_s == 137.97
-    assert wave.moved_area_bpm_s == wave.requested_area_bpm_s
-    # The exported added/removed integrals remain their independently summed
-    # diagnostics and may differ from the allocation target in the final bit.
-    assert wave.added_area_bpm_s == pytest.approx(wave.moved_area_bpm_s, abs=1e-12)
-
-
-@pytest.mark.parametrize(
-    "hold_seconds,expected_weight,expected_strategy",
-    [
-        (10, 0.0, "v2_full_tail"),
-        (15, 1.0 / 3.0, "v3_transition"),
-        (20, 2.0 / 3.0, "v3_transition"),
-        (25, 1.0, "v3_terminal_fall"),
-    ],
-)
-def test_v3_transition_is_continuous_at_30_and_45_seconds(
-    hold_seconds: int, expected_weight: float, expected_strategy: str
-) -> None:
-    result = compute_hrmod_hr_only(
-        hr_samples=_samples(_sustained_wave(hold_seconds=hold_seconds)),
-        athlete_profile=_profile(),
-        config=_config(),
-    )
-    wave = result.wave_summary[0]
-    assert wave.transition_weight == pytest.approx(expected_weight)
-    assert wave.correction_strategy == expected_strategy
-    assert wave.added_area_bpm_s == pytest.approx(wave.removed_area_bpm_s, abs=1e-9)
-    assert all(
-        not (point.receiver_flag and point.donor_flag)
-        for point in result.timeseries
-    )
-
-
-def test_sustained_v3_uses_only_sharp_terminal_fall_and_hold_ceiling() -> None:
-    result = compute_hrmod_hr_only(
-        hr_samples=_samples(_sustained_wave(hold_seconds=40)),
-        athlete_profile=_profile(),
-        config=_config(),
-    )
-    wave = result.wave_summary[0]
-    assert wave.morphology == "sustained"
-    assert wave.correction_strategy == "v3_terminal_fall"
-    assert wave.hold_target_hr_bpm == pytest.approx(140.0)
-    assert wave.hold_start_elapsed_s is not None
-    assert wave.terminal_fall_start_elapsed_s is not None
-    assert wave.terminal_fall_end_elapsed_s is not None
-    donors = [point for point in result.timeseries if point.donor_flag]
-    receivers = [point for point in result.timeseries if point.receiver_flag]
-    assert donors and receivers
-    assert all(
-        wave.terminal_fall_start_elapsed_s
-        <= point.elapsed_s
-        <= wave.terminal_fall_end_elapsed_s
-        for point in donors
-    )
-    assert all(
-        (point.hrmod_bpm or 0.0) <= (wave.hold_target_hr_bpm or 0.0) + 1e-9
-        for point in receivers
-        if point.added_bpm > 0.0
-    )
-    assert all(
-        (point.hrmod_bpm or 0.0) >= (wave.donor_floor_bpm or 0.0) - 1e-9
-        for point in donors
-    )
-    assert wave.added_area_bpm_s == pytest.approx(wave.removed_area_bpm_s, abs=1e-9)
-
-
-def test_long_early_peak_without_sharp_terminal_fall_fails_closed() -> None:
-    values = (
-        [100.0] * 25
-        + [100.0 + 40.0 * index / 20.0 for index in range(1, 21)]
-        + [140.0] * 60
-        + [140.0 - 40.0 * index / 267.0 for index in range(1, 268)]
-        + [100.0] * 30
-    )
-    result = compute_hrmod_hr_only(
-        hr_samples=_samples(values), athlete_profile=_profile(), config=_config()
-    )
-    wave = result.wave_summary[0]
-    assert wave.morphology == "ambiguous"
-    assert wave.correction_strategy == "none"
-    assert wave.skip_reason == "ambiguous_long_wave"
-    assert not wave.corrected
-    assert all(point.added_bpm == point.removed_bpm == 0.0 for point in result.timeseries)
-
-
-def test_early_sharp_dip_followed_by_rerise_is_not_terminal() -> None:
-    values = (
-        [100.0] * 25
-        + [100.0 + 40.0 * index / 20.0 for index in range(1, 21)]
-        + [140.0] * 30
-        + [140.0 - 10.0 * index / 5.0 for index in range(1, 6)]
-        + [130.0 + 10.0 * index / 5.0 for index in range(1, 6)]
-        + [140.0] * 30
-        + [140.0 - 40.0 * index / 12.0 for index in range(1, 13)]
-        + [100.0] * 30
-    )
-    result = compute_hrmod_hr_only(
-        hr_samples=_samples(values), athlete_profile=_profile(), config=_config()
-    )
-    first = result.wave_summary[0]
-    assert first.end_reason == "new_rise_trough"
-    assert first.morphology == "ambiguous"
-    assert first.morphology_reason == "ambiguous_terminal_vs_transient_dip"
-    assert first.correction_strategy == "none"
-    assert first.terminal_fall_start_elapsed_s is None
-    assert not first.corrected
-
-
-def test_terminal_fall_with_low_recovery_dwell_before_next_rise_is_accepted() -> None:
-    result = compute_hrmod_hr_only(
-        hr_samples=_samples(_repeated_sustained_wave(recovery_seconds=6)),
-        athlete_profile=_profile(),
-        config=_config(),
-    )
-    first = result.wave_summary[0]
-
-    assert first.end_reason == "new_rise_trough"
-    assert first.morphology == "sustained"
-    assert first.morphology_reason == "confirmed_hold_and_terminal_fall"
-    assert first.correction_strategy == "v3_terminal_fall"
-    assert first.terminal_fall_start_elapsed_s is not None
-    assert first.corrected
-
-
-def test_terminal_fall_with_immediate_next_rise_is_explicitly_ambiguous() -> None:
-    result = compute_hrmod_hr_only(
-        hr_samples=_samples(_repeated_sustained_wave(recovery_seconds=0)),
-        athlete_profile=_profile(),
-        config=_config(),
-    )
-    first = result.wave_summary[0]
-
-    assert first.end_reason == "new_rise_trough"
-    assert first.morphology == "ambiguous"
-    assert first.morphology_reason == "ambiguous_terminal_vs_transient_dip"
-    assert first.correction_strategy == "none"
-    assert first.skip_reason == "ambiguous_long_wave"
-    assert not first.corrected
 
 
 def test_correction_requires_confirmed_fall() -> None:
@@ -553,34 +378,20 @@ def test_each_corrected_wave_conserves_area_and_respects_local_donor_floor() -> 
 
 def test_donor_sample_already_below_local_floor_is_left_unchanged() -> None:
     clean_hr = np.asarray([100.0, 105.0, 110.0, 120.0, 110.0, 95.0])
-    shifted = shift_wave_areas(
+    allocation = allocate_mirror_wave(
         clean_hr=clean_hr,
+        elapsed_s=np.arange(6, dtype=float),
         dt_s=np.asarray([0.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
-        waves=(
-            DetectedWave(
-                wave_id=1,
-                segment_id=1,
-                rise_start_index=1,
-                peak_index=3,
-                tail_end_index=5,
-                baseline_hr_bpm=100.0,
-                complete=True,
-                end_reason="return_to_baseline",
-            ),
-        ),
-        athlete_profile=_profile(),
-        config=_config(
-            alpha=1.0,
-            min_receiver_duration_s=1.0,
-            min_donor_duration_s=1.0,
-        ),
+        receiver_indices=np.asarray([1, 2, 3]),
+        donor_indices=np.asarray([4, 5]),
+        donor_floor_bpm=100.0,
+        hrmax_bpm=200.0,
+        alpha=1.0,
     )
 
-    assert shifted.removed_bpm[5] == 0.0
-    assert shifted.hrmod[5] == 95.0
-    wave = shifted.wave_results[0]
-    assert wave.corrected
-    assert wave.added_area_bpm_s == pytest.approx(wave.removed_area_bpm_s)
+    assert allocation.removed[5] == 0.0
+    assert clean_hr[5] - allocation.removed[5] == 95.0
+    assert sum(allocation.added) == pytest.approx(sum(allocation.removed))
 
 
 def test_receiver_capacity_limits_addition_and_removal_symmetrically() -> None:
@@ -692,7 +503,7 @@ def test_edge_wave_without_baseline_is_incomplete_and_skipped() -> None:
     wave = result.wave_summary[0]
     assert not wave.complete and not wave.corrected
     assert wave.skip_reason == "insufficient_baseline_history"
-    assert "INCOMPLETE_WAVE_START" in wave.flags
+    assert "INCOMPLETE_WAVE" in wave.flags
     assert all(point.added_bpm == point.removed_bpm == 0.0 for point in result.timeseries)
 
 

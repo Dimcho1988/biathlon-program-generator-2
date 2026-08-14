@@ -1,6 +1,6 @@
 """Post-core terrain gating for the standalone HRmod Lab.
 
-``terrain_gate_v1`` is deliberately outside the HR-only model boundary.  It
+``terrain_downhill_donor_exclusion_v4`` is deliberately outside the HR-only model boundary.  It
 consumes an already completed :class:`~hrmod_lab.schemas.HRmodResult` plus the
 physically separate TCX reference channels, and never calls wave detection or
 area redistribution.  Grade is either read from a sufficiently complete TCX
@@ -20,12 +20,13 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 from scipy.ndimage import median_filter
 
+from .mirror_area_shift import allocate_mirror_wave
 from .schemas import HRmodResult
 from .tcx_adapter import ReferenceChannels
 
 
-TERRAIN_MODEL_VERSION = "terrain_gate_v1"
-TERRAIN_CONFIG_VERSION = "terrain_gate_config_v1"
+TERRAIN_MODEL_VERSION = "terrain_downhill_donor_exclusion_v4"
+TERRAIN_CONFIG_VERSION = "terrain_filter_config_v4"
 
 
 def _finite(name: str, value: float) -> float:
@@ -72,6 +73,7 @@ class TerrainGateConfig:
 
     config_version: str = TERRAIN_CONFIG_VERSION
     terrain_gate_enabled: bool = True
+    use_transition_buffer: bool = False
     downhill_threshold_pct: float = -3.0
     min_sustained_downhill_s: float = 5.0
     terrain_transition_buffer_s: float = 5.0
@@ -85,6 +87,7 @@ class TerrainGateConfig:
         if self.config_version != TERRAIN_CONFIG_VERSION:
             raise ValueError(f"unsupported config_version: {self.config_version!r}")
         object.__setattr__(self, "terrain_gate_enabled", bool(self.terrain_gate_enabled))
+        object.__setattr__(self, "use_transition_buffer", bool(self.use_transition_buffer))
         for name in (
             "downhill_threshold_pct",
             "min_sustained_downhill_s",
@@ -167,6 +170,8 @@ class TerrainTimeseriesPoint:
     buffered_downhill_mask: bool
     terrain_status: str
     wave_id: int | None
+    hrmod_final_added_bpm: float = 0.0
+    hrmod_final_removed_bpm: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return _plain(self)
@@ -182,6 +187,8 @@ class TerrainWaveSummary:
     min_smoothed_grade_pct: float | None
     moved_area_candidate_bpm_s: float
     moved_area_final_bpm_s: float
+    downhill_donor_excluded_s: float = 0.0
+    excluded_donor_area_bpm_s: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return _plain(self)
@@ -227,6 +234,8 @@ class TerrainGateDiagnostics:
     accepted_wave_count: int
     terrain_rejected_wave_count: int
     terrain_rejected_fraction: float
+    terrain_adjusted_wave_count: int
+    terrain_adjusted_fraction: float
     total_candidate_moved_area_bpm_s: float
     total_final_moved_area_bpm_s: float
     sustained_downhill_interval_count: int
@@ -656,6 +665,202 @@ def _terrain_zone_summaries(
     return tuple(summaries)
 
 
+def _apply_mirror_donor_filter(
+    *,
+    hrmod_result: HRmodResult,
+    prepared: PreparedTerrain,
+    grades: np.ndarray,
+    downhill: np.ndarray,
+    buffered: np.ndarray,
+) -> TerrainGateResult:
+    """Reallocate v4 waves after excluding only downhill donor samples."""
+
+    effective = prepared.config
+    points = tuple(hrmod_result.timeseries)
+    elapsed = np.asarray([point.elapsed_s for point in points], dtype=float)
+    dt_s = np.asarray([point.dt_s for point in points], dtype=float)
+    clean = np.asarray(
+        [np.nan if point.clean_hr_bpm is None else point.clean_hr_bpm for point in points],
+        dtype=float,
+    )
+    candidate = np.asarray(
+        [np.nan if point.hrmod_bpm is None else point.hrmod_bpm for point in points],
+        dtype=float,
+    )
+    if not effective.terrain_gate_enabled or not prepared.available:
+        final = candidate.copy()
+    else:
+        final = clean.copy()
+
+    exclusion = buffered if effective.use_transition_buffer else downhill
+    donor_eligible = ~np.asarray(exclusion, dtype=bool)
+    hrmax = float(max(zone.upper_bpm for zone in hrmod_result.zone_summary))
+    status_by_sample = [
+        "terrain_gate_disabled"
+        if not effective.terrain_gate_enabled
+        else "terrain_gate_unavailable"
+        if not prepared.available
+        else "accepted"
+        for _ in points
+    ]
+    terrain_waves: list[TerrainWaveSummary] = []
+    status_counts: dict[str, int] = {}
+    adjusted_count = 0
+
+    for wave in sorted(
+        hrmod_result.wave_summary,
+        key=lambda item: (item.rise_start_elapsed_s, item.wave_id),
+    ):
+        start = int(np.searchsorted(elapsed, wave.rise_start_elapsed_s, side="left"))
+        peak = int(np.searchsorted(elapsed, wave.peak_elapsed_s, side="left"))
+        end = int(np.searchsorted(elapsed, wave.tail_end_elapsed_s, side="right")) - 1
+        start = max(0, min(start, len(points) - 1))
+        peak = max(start, min(peak, len(points) - 1))
+        end = max(peak, min(end, len(points) - 1))
+        receiver = np.arange(start, peak + 1, dtype=int)
+        donor = np.arange(peak + 1, end + 1, dtype=int)
+        candidate_area = float(wave.moved_area_bpm_s)
+        final_area = candidate_area
+        status = "accepted"
+        reason: str | None = None
+        excluded_s = float(np.sum(dt_s[donor][exclusion[donor]])) if len(donor) else 0.0
+        minimum_values = grades[start : end + 1]
+        minimum_grade = (
+            float(np.nanmin(minimum_values))
+            if np.any(np.isfinite(minimum_values))
+            else None
+        )
+        overlap_s = float(np.sum(dt_s[start : end + 1][downhill[start : end + 1]]))
+        duration = max(0.0, float(elapsed[end] - elapsed[start]))
+
+        if not effective.terrain_gate_enabled:
+            status = "terrain_gate_disabled"
+        elif not prepared.available:
+            status = "terrain_gate_unavailable"
+        elif wave.corrected and len(donor) and wave.donor_floor_bpm is not None:
+            allocation = allocate_mirror_wave(
+                clean_hr=clean,
+                elapsed_s=elapsed,
+                dt_s=dt_s,
+                receiver_indices=receiver,
+                donor_indices=donor,
+                donor_floor_bpm=float(wave.donor_floor_bpm),
+                hrmax_bpm=hrmax,
+                alpha=hrmod_result.config.alpha,
+                max_addition_bpm=hrmod_result.config.max_addition_bpm,
+                max_removal_bpm=hrmod_result.config.max_removal_bpm,
+                donor_eligible_mask=donor_eligible,
+            )
+            final[receiver] = clean[receiver] + allocation.added[receiver]
+            final[donor] = clean[donor] - allocation.removed[donor]
+            final_area = float(allocation.moved_area_bpm_s)
+            if final_area < candidate_area - hrmod_result.config.area_conservation_tolerance_bpm_s:
+                status = "terrain_adjusted"
+                reason = "downhill_donor_excluded"
+                adjusted_count += 1
+                for index in range(start, end + 1):
+                    status_by_sample[index] = status
+
+        status_counts[status] = status_counts.get(status, 0) + 1
+        terrain_waves.append(
+            TerrainWaveSummary(
+                wave_id=wave.wave_id,
+                terrain_status=status,
+                terrain_rejection_reason=reason,
+                downhill_overlap_s=overlap_s,
+                downhill_overlap_fraction=(overlap_s / duration if duration > 0 else 0.0),
+                min_smoothed_grade_pct=minimum_grade,
+                moved_area_candidate_bpm_s=candidate_area,
+                moved_area_final_bpm_s=final_area,
+                downhill_donor_excluded_s=excluded_s,
+                excluded_donor_area_bpm_s=max(0.0, candidate_area - final_area),
+            )
+        )
+
+    terrain_points = tuple(
+        TerrainTimeseriesPoint(
+            timestamp=point.timestamp,
+            elapsed_s=point.elapsed_s,
+            dt_s=point.dt_s,
+            raw_hr_bpm=point.raw_hr_bpm,
+            hrmod_candidate_bpm=point.hrmod_bpm,
+            hrmod_final_bpm=(
+                float(final[index]) if math.isfinite(float(final[index])) else None
+            ),
+            hrmod_final_added_bpm=(
+                max(0.0, float(final[index] - clean[index]))
+                if math.isfinite(float(final[index])) and math.isfinite(float(clean[index]))
+                else 0.0
+            ),
+            hrmod_final_removed_bpm=(
+                max(0.0, float(clean[index] - final[index]))
+                if math.isfinite(float(final[index])) and math.isfinite(float(clean[index]))
+                else 0.0
+            ),
+            smoothed_grade_pct=(
+                float(grades[index]) if math.isfinite(float(grades[index])) else None
+            ),
+            downhill_mask=bool(downhill[index]),
+            buffered_downhill_mask=bool(buffered[index]),
+            terrain_status=status_by_sample[index],
+            wave_id=point.wave_id,
+        )
+        for index, point in enumerate(points)
+    )
+    zone_summary = _terrain_zone_summaries(hrmod_result, terrain_points)
+    total_candidate = float(sum(w.moved_area_candidate_bpm_s for w in terrain_waves))
+    total_final = float(sum(w.moved_area_final_bpm_s for w in terrain_waves))
+    candidate_count = len(terrain_waves)
+    diagnostic_flags = set(prepared.flags)
+    if adjusted_count:
+        diagnostic_flags.add("DOWNHILL_DONOR_EXCLUDED")
+    if not effective.terrain_gate_enabled:
+        diagnostic_flags.add("TERRAIN_GATE_DISABLED")
+    elif not prepared.available:
+        diagnostic_flags.add("TERRAIN_GATE_UNAVAILABLE")
+    diagnostics = TerrainGateDiagnostics(
+        terrain_gate_enabled=effective.terrain_gate_enabled,
+        terrain_gate_applied=effective.terrain_gate_enabled and prepared.available,
+        grade_source=prepared.grade_source,
+        grade_coverage_fraction=prepared.grade_coverage_fraction,
+        candidate_wave_count=candidate_count,
+        accepted_wave_count=status_counts.get("accepted", 0),
+        terrain_rejected_wave_count=0,
+        terrain_rejected_fraction=0.0,
+        terrain_adjusted_wave_count=adjusted_count,
+        terrain_adjusted_fraction=(adjusted_count / candidate_count if candidate_count else 0.0),
+        total_candidate_moved_area_bpm_s=total_candidate,
+        total_final_moved_area_bpm_s=total_final,
+        sustained_downhill_interval_count=len(prepared.downhill_intervals),
+        sustained_downhill_duration_s=float(sum(i.duration_s for i in prepared.downhill_intervals)),
+        flags=tuple(sorted(diagnostic_flags)),
+        status_counts=status_counts,
+    )
+    final_hash = _canonical_hash(
+        {
+            "hr_input_hash": hrmod_result.hr_input_hash,
+            "core_model_version": hrmod_result.model_version,
+            "core_config": hrmod_result.config.to_dict(),
+            "terrain_input_hash": prepared.terrain_input_hash,
+            "terrain_model_version": TERRAIN_MODEL_VERSION,
+            "final_hr": [point.hrmod_final_bpm for point in terrain_points],
+            "waves": [wave.to_dict() for wave in terrain_waves],
+            "zones": [zone.to_dict() for zone in zone_summary],
+        }
+    )
+    return TerrainGateResult(
+        timeseries=terrain_points,
+        wave_summary=tuple(terrain_waves),
+        zone_summary=zone_summary,
+        diagnostics=diagnostics,
+        config=effective,
+        hr_input_hash=hrmod_result.hr_input_hash,
+        terrain_input_hash=prepared.terrain_input_hash,
+        final_result_hash=final_hash,
+        model_version=hrmod_result.model_version,
+    )
+
+
 def apply_terrain_gate(
     hrmod_result: HRmodResult,
     reference_channels: ReferenceChannels | None = None,
@@ -679,209 +884,13 @@ def apply_terrain_gate(
     points = tuple(hrmod_result.timeseries)
     elapsed = np.asarray([point.elapsed_s for point in points], dtype=float)
     grades, downhill, buffered = _aligned_prepared(hrmod_result, prepared)
-
-    # A grade sample at t_i represents the following half-open interval
-    # [t_i, t_{i+1}); the final sample has zero duration.  One prefix pass then
-    # answers each wave-overlap query without rescanning the sample series.
-    interval_durations = np.diff(elapsed) if elapsed.size >= 2 else np.asarray([], dtype=float)
-    # A downhill duration exists only between two adjacent sustained samples.
-    # This matches TerrainInterval.duration_s (last timestamp - first timestamp)
-    # and never integrates across a configured terrain-data gap.
-    interval_downhill = (
-        (
-            downhill[:-1]
-            & downhill[1:]
-            & (interval_durations <= effective.max_terrain_sample_gap_s)
-        ).astype(float)
-        if downhill.size >= 2
-        else np.asarray([], dtype=float)
+    return _apply_mirror_donor_filter(
+        hrmod_result=hrmod_result,
+        prepared=prepared,
+        grades=grades,
+        downhill=downhill,
+        buffered=buffered,
     )
-    downhill_prefix = np.concatenate(
-        ([0.0], np.cumsum(interval_downhill * interval_durations))
-    )
-    final_values = [point.hrmod_bpm for point in points]
-    terrain_status_by_sample = [
-        "terrain_gate_disabled"
-        if not effective.terrain_gate_enabled
-        else "terrain_gate_unavailable"
-        if not prepared.available
-        else "accepted"
-        for _ in points
-    ]
-    terrain_waves: list[TerrainWaveSummary] = []
-    rejected_wave_ids: set[int] = set()
-    rejected_ranges: list[tuple[int, int]] = []
-    status_counts: dict[str, int] = {}
-
-    interval_starts = np.asarray(
-        [item.buffered_start_elapsed_s for item in prepared.downhill_intervals],
-        dtype=float,
-    )
-    interval_ends = np.asarray(
-        [item.buffered_end_elapsed_s for item in prepared.downhill_intervals],
-        dtype=float,
-    )
-    sorted_waves = sorted(
-        hrmod_result.wave_summary,
-        key=lambda item: (item.rise_start_elapsed_s, item.tail_end_elapsed_s, item.wave_id),
-    )
-    grade_minimum = np.full((len(sorted_waves),), np.nan, dtype=float)
-    # Detected waves are non-overlapping.  Two monotonic pointers therefore
-    # collect per-wave minimum grade in O(samples + waves), with no mask alloc.
-    point_index = 0
-    for wave_index, wave in enumerate(sorted_waves):
-        while point_index < elapsed.size and elapsed[point_index] < wave.rise_start_elapsed_s:
-            point_index += 1
-        scan_index = point_index
-        minimum = math.inf
-        while scan_index < elapsed.size and elapsed[scan_index] <= wave.tail_end_elapsed_s:
-            if math.isfinite(float(grades[scan_index])):
-                minimum = min(minimum, float(grades[scan_index]))
-            scan_index += 1
-        grade_minimum[wave_index] = minimum if math.isfinite(minimum) else np.nan
-        point_index = scan_index
-
-    for wave_index, wave in enumerate(sorted_waves):
-        wave_start = float(wave.rise_start_elapsed_s)
-        wave_end = float(wave.tail_end_elapsed_s)
-        duration = max(0.0, wave_end - wave_start)
-        overlap_s = _prefix_overlap(
-            elapsed,
-            interval_downhill,
-            downhill_prefix,
-            wave_start,
-            wave_end,
-        )
-        overlap_fraction = overlap_s / duration if duration > 0.0 else 0.0
-        minimum_grade = (
-            float(grade_minimum[wave_index])
-            if math.isfinite(float(grade_minimum[wave_index]))
-            else None
-        )
-        status = "accepted"
-        reason: str | None = None
-        if not effective.terrain_gate_enabled:
-            status = "terrain_gate_disabled"
-        elif not prepared.available:
-            status = "terrain_gate_unavailable"
-        elif interval_starts.size:
-            candidate = int(np.searchsorted(interval_ends, wave_start, side="left"))
-            if candidate < interval_starts.size and interval_starts[candidate] <= wave_end:
-                status = "terrain_confounded"
-                reason = (
-                    "sustained_downhill_overlap"
-                    if overlap_s > 0.0
-                    else "terrain_transition_buffer"
-                )
-
-        candidate_area = float(wave.moved_area_bpm_s)
-        final_area = candidate_area
-        if status == "terrain_confounded":
-            final_area = 0.0
-            rejected_wave_ids.add(wave.wave_id)
-            start_index = int(np.searchsorted(elapsed, wave_start, side="left"))
-            end_index = int(np.searchsorted(elapsed, wave_end, side="right"))
-            rejected_ranges.append((start_index, end_index))
-        status_counts[status] = status_counts.get(status, 0) + 1
-        terrain_waves.append(
-            TerrainWaveSummary(
-                wave_id=wave.wave_id,
-                terrain_status=status,
-                terrain_rejection_reason=reason,
-                downhill_overlap_s=overlap_s,
-                downhill_overlap_fraction=overlap_fraction,
-                min_smoothed_grade_pct=minimum_grade,
-                moved_area_candidate_bpm_s=candidate_area,
-                moved_area_final_bpm_s=final_area,
-            )
-        )
-
-    # One range-difference pass applies every rejected wave to final HR/status.
-    rejection_delta = np.zeros((len(points) + 1,), dtype=int)
-    for start_index, end_index in rejected_ranges:
-        rejection_delta[start_index] += 1
-        rejection_delta[end_index] -= 1
-    rejected_samples = np.cumsum(rejection_delta[:-1]) > 0
-    for sample_index, rejected in enumerate(rejected_samples):
-        if rejected:
-            final_values[sample_index] = points[sample_index].raw_hr_bpm
-            terrain_status_by_sample[sample_index] = "terrain_confounded"
-
-    terrain_points = tuple(
-        TerrainTimeseriesPoint(
-            timestamp=point.timestamp,
-            elapsed_s=point.elapsed_s,
-            dt_s=point.dt_s,
-            raw_hr_bpm=point.raw_hr_bpm,
-            hrmod_candidate_bpm=point.hrmod_bpm,
-            hrmod_final_bpm=final_values[index],
-            smoothed_grade_pct=(
-                float(grades[index]) if math.isfinite(float(grades[index])) else None
-            ),
-            downhill_mask=bool(downhill[index]),
-            buffered_downhill_mask=bool(buffered[index]),
-            terrain_status=terrain_status_by_sample[index],
-            wave_id=point.wave_id,
-        )
-        for index, point in enumerate(points)
-    )
-    zone_summary = _terrain_zone_summaries(hrmod_result, terrain_points)
-    total_candidate = float(
-        sum(item.moved_area_candidate_bpm_s for item in terrain_waves)
-    )
-    total_final = float(sum(item.moved_area_final_bpm_s for item in terrain_waves))
-    rejected_count = len(rejected_wave_ids)
-    candidate_count = len(terrain_waves)
-    diagnostics_flags = set(prepared.flags)
-    if not effective.terrain_gate_enabled:
-        diagnostics_flags.add("TERRAIN_GATE_DISABLED")
-    elif not prepared.available:
-        diagnostics_flags.add("TERRAIN_GATE_UNAVAILABLE")
-    diagnostics = TerrainGateDiagnostics(
-        terrain_gate_enabled=effective.terrain_gate_enabled,
-        terrain_gate_applied=effective.terrain_gate_enabled and prepared.available,
-        grade_source=prepared.grade_source,
-        grade_coverage_fraction=prepared.grade_coverage_fraction,
-        candidate_wave_count=candidate_count,
-        accepted_wave_count=status_counts.get("accepted", 0),
-        terrain_rejected_wave_count=rejected_count,
-        terrain_rejected_fraction=(
-            rejected_count / candidate_count if candidate_count else 0.0
-        ),
-        total_candidate_moved_area_bpm_s=total_candidate,
-        total_final_moved_area_bpm_s=total_final,
-        sustained_downhill_interval_count=len(prepared.downhill_intervals),
-        sustained_downhill_duration_s=float(
-            sum(item.duration_s for item in prepared.downhill_intervals)
-        ),
-        flags=tuple(sorted(diagnostics_flags)),
-        status_counts=status_counts,
-    )
-    final_hash = _canonical_hash(
-        {
-            "hr_input_hash": hrmod_result.hr_input_hash,
-            "core_model_version": hrmod_result.model_version,
-            "core_config": hrmod_result.config.to_dict(),
-            "terrain_input_hash": prepared.terrain_input_hash,
-            "terrain_model_version": TERRAIN_MODEL_VERSION,
-            "final_hr": [point.hrmod_final_bpm for point in terrain_points],
-            "waves": [wave.to_dict() for wave in terrain_waves],
-            "zones": [zone.to_dict() for zone in zone_summary],
-        }
-    )
-    result = TerrainGateResult(
-        timeseries=terrain_points,
-        wave_summary=tuple(terrain_waves),
-        zone_summary=zone_summary,
-        diagnostics=diagnostics,
-        config=effective,
-        hr_input_hash=hrmod_result.hr_input_hash,
-        terrain_input_hash=prepared.terrain_input_hash,
-        final_result_hash=final_hash,
-        model_version=hrmod_result.model_version,
-    )
-    return result
-
 
 __all__ = [
     "PreparedTerrain",

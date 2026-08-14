@@ -78,7 +78,6 @@ _WAVE_ORDER = (
     "morphology",
     "morphology_reason",
     "correction_strategy",
-    "transition_weight",
     "complete",
     "corrected",
     "rise_start_timestamp",
@@ -87,17 +86,8 @@ _WAVE_ORDER = (
     "rise_start_elapsed_s",
     "peak_elapsed_s",
     "tail_end_elapsed_s",
-    "hold_start_timestamp",
-    "hold_end_timestamp",
-    "terminal_fall_start_timestamp",
-    "terminal_fall_end_timestamp",
-    "hold_start_elapsed_s",
-    "hold_end_elapsed_s",
-    "terminal_fall_start_elapsed_s",
-    "terminal_fall_end_elapsed_s",
     "end_reason",
     "baseline_hr_bpm",
-    "hold_target_hr_bpm",
     "donor_floor_bpm",
     "rise_bpm",
     "fall_bpm",
@@ -194,7 +184,7 @@ def export_timeseries_csv(hrmod_result: Any) -> bytes:
 
 
 def export_wave_summary_csv(hrmod_result: Any) -> bytes:
-    """Return one row per detected HR wave, including v3 morphology."""
+    """Return one row per detected HR wave, including versioned morphology."""
 
     rows = _rows(_required_member(hrmod_result, "wave_summary"))
     return _csv_bytes(rows, preferred_fields=_WAVE_ORDER)
@@ -326,7 +316,7 @@ def build_export_bundle(
         files["terrain_result.json"] = export_terrain_result_json(terrain_result)
 
     manifest = {
-        "format": "hrmod_lab_export_v3",
+        "format": "hrmod_lab_export_v4",
         "model_version": _member(hrmod_result, "model_version"),
         "hr_input_hash": _member(hrmod_result, "hr_input_hash"),
         "core_and_reference_exports_are_separate": True,
