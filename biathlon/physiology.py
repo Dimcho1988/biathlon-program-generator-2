@@ -9,8 +9,6 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import least_squares
 
-from intervals_inspector.effective_hr import effective_hr as canonical_effective_hr
-
 from .constants import (
     AEROBIC_COMPONENTS,
     COMPONENTS,
@@ -19,6 +17,7 @@ from .constants import (
     STRENGTH_COEFFICIENTS,
     STRENGTH_TYPES,
 )
+from .effective_hr import effective_hr as canonical_effective_hr
 
 EPS = 1e-9
 

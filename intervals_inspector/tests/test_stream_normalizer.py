@@ -499,16 +499,37 @@ def test_combined_safe_export_recursively_removes_normalizer_internals() -> None
     parsed = json.loads(exported)
 
     assert "normalizer" in parsed
-    for forbidden in (
+    serialized_keys: set[str] = set()
+    serialized_values: list[object] = []
+
+    def collect_exported_content(value: object) -> None:
+        if isinstance(value, dict):
+            serialized_keys.update(str(key) for key in value)
+            for nested in value.values():
+                collect_exported_content(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect_exported_content(nested)
+        else:
+            serialized_values.append(value)
+
+    collect_exported_content(parsed)
+    for forbidden_key in (
+        "activity_id",
+        "token",
+        "timestamp",
+        "latlng",
+        "intervals",
+        "materialized_points",
+    ):
+        assert forbidden_key not in serialized_keys
+    for forbidden_value in (
         "private-activity-id",
         "private-token",
-        "2026-08-05",
-        "latlng",
-        "42.1",
-        "23.1",
-        "999991",
-        "999992",
-        '"intervals"',
-        '"materialized_points"',
+        "2026-08-05T12:34:56Z",
+        42.1,
+        23.1,
+        999_991,
+        999_992,
     ):
-        assert forbidden not in exported
+        assert forbidden_value not in serialized_values
