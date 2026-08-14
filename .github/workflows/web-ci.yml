@@ -1,0 +1,41 @@
+name: Web CI
+
+on:
+  pull_request:
+    branches:
+      - codex/main-real-data-model-integration
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: apps/web
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Upload generated package lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-package-lock
+          path: apps/web/package-lock.json
+      - name: Lint
+        run: npm run lint
+      - name: Type-check
+        run: npm run type-check
+      - name: Test
+        run: npm test
+      - name: Production build
+        env:
+          ONFLOWS_DATA_MODE: fixture
+        run: npm run build
