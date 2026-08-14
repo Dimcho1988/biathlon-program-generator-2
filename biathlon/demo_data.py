@@ -610,8 +610,14 @@ def _training_methods() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def generate_demo_bundle(seed: int = DEMO_SEED, history_days: int = 150) -> dict[str, Any]:
-    today = date.today()
+def generate_demo_bundle(
+    seed: int = DEMO_SEED,
+    history_days: int = 150,
+    reference_date: date | None = None,
+) -> dict[str, Any]:
+    """Build the demo bundle, optionally anchored to a stable calendar date."""
+
+    today = reference_date or date.today()
     end_date = today - timedelta(days=1)
     start_date = end_date - timedelta(days=history_days - 1)
 

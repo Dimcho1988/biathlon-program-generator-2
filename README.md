@@ -125,6 +125,19 @@ python -m streamlit run app.py
 
 След стартиране приложението обикновено се отваря на `http://localhost:8501`.
 
+## onFlows API (локално демо)
+
+API зависимостите са отделени от Streamlit средата и се инсталират с
+`python -m pip install -r requirements-api.txt`. Стартирайте read-only API с:
+
+```bash
+uvicorn apps.api.main:app --reload
+```
+
+Проверете `GET /health` и версияния демо договор на
+`GET /api/v1/demo/training-status`. Демо заявката е изцяло локална и не изисква
+Streamlit secrets, Supabase или Intervals credentials.
+
 ## Streamlit Community Cloud
 
 За repository, в който `app.py` е в основната директория:
