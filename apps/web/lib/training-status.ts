@@ -39,11 +39,17 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const exactKeys = (value: Record<string, unknown>, keys: string[]) =>
   Object.keys(value).length === keys.length && keys.every((key) => key in value);
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+const isCalendarDate = (value: unknown): value is string => {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
+};
 
 export function parseTrainingStatus(value: unknown): TrainingStatus {
   if (!isRecord(value) || !exactKeys(value, rootKeys)) throw new Error("Невалидна структура на отговора.");
   if (value.schema_version !== "training-status-v1") throw new Error("Неподдържана версия на API договора.");
-  if (typeof value.as_of !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.as_of) || Number.isNaN(Date.parse(`${value.as_of}T00:00:00Z`))) throw new Error("Невалидна дата на анализа.");
+  if (!isCalendarDate(value.as_of)) throw new Error("Невалидна дата на анализа.");
   if (typeof value.athlete_id !== "string" || value.athlete_id.length === 0) throw new Error("Липсва идентификатор на спортист.");
   if (!isRecord(value.model) || !exactKeys(value.model, modelKeys) ||
       typeof value.model.algorithm_version !== "string" || typeof value.model.effective_hr_version !== "string" ||
@@ -56,7 +62,9 @@ export function parseTrainingStatus(value: unknown): TrainingStatus {
       !Array.isArray(value.data_quality.warnings) || !value.data_quality.warnings.every((warning) => typeof warning === "string")) {
     throw new Error("Невалидно обобщение за качеството на данните.");
   }
-  if (!Array.isArray(value.zones)) throw new Error("Липсват зонални данни.");
+  if (!Array.isArray(value.zones) || value.zones.length !== ZONES.length) {
+    throw new Error("Зоналните данни трябва да съдържат точно Z1–Z5.");
+  }
   const zones = value.zones.map((item, index) => {
     if (!isRecord(item) || !exactKeys(item, zoneKeys) || item.zone !== ZONES[index] ||
         !zoneKeys.slice(1).every((key) => finite(item[key]))) {

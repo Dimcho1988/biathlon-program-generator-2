@@ -16,10 +16,10 @@ export const trainingStatusFixture: TrainingStatus = {
     warnings: [],
   },
   zones: [
-    { zone: "Z1", raw_time_min: 38.4, equivalent_time_min: 38.4, tref_min: 300, status_7_40: 0.87, recovery_readiness_percent: 92.3, recovery_days_to_full: 0.4 },
-    { zone: "Z2", raw_time_min: 27.2, equivalent_time_min: 30.6, tref_min: 180, status_7_40: 1.04, recovery_readiness_percent: 84.7, recovery_days_to_full: 0.9 },
-    { zone: "Z3", raw_time_min: 12.8, equivalent_time_min: 18.1, tref_min: 70, status_7_40: 0.76, recovery_readiness_percent: 77.6, recovery_days_to_full: 1.3 },
-    { zone: "Z4", raw_time_min: 4.6, equivalent_time_min: 9.2, tref_min: 20, status_7_40: 0.58, recovery_readiness_percent: 69.8, recovery_days_to_full: 1.8 },
-    { zone: "Z5", raw_time_min: 1.4, equivalent_time_min: 4.9, tref_min: 20, status_7_40: 0.32, recovery_readiness_percent: 81.2, recovery_days_to_full: 1.1 },
+    { zone: "Z1", raw_time_min: 50.9, equivalent_time_min: 21.84882499999999, tref_min: 300.0, status_7_40: 1.0414434311238976, recovery_readiness_percent: 98.22964541950293, recovery_days_to_full: 0.0 },
+    { zone: "Z2", raw_time_min: 0.0, equivalent_time_min: 0.0, tref_min: 180.0, status_7_40: 1.020515408803807, recovery_readiness_percent: 97.84170251489827, recovery_days_to_full: 0.0 },
+    { zone: "Z3", raw_time_min: 0.0, equivalent_time_min: 0.0, tref_min: 70.0, status_7_40: 0.94851655323998, recovery_readiness_percent: 90.49300125839497, recovery_days_to_full: 0.8674969381798795 },
+    { zone: "Z4", raw_time_min: 0.0, equivalent_time_min: 0.0, tref_min: 20.0, status_7_40: 0.9629033091221942, recovery_readiness_percent: 53.87736142712738, recovery_days_to_full: 3.6660788874004906 },
+    { zone: "Z5", raw_time_min: 0.0, equivalent_time_min: 0.0, tref_min: 20.0, status_7_40: 0.8922692813680896, recovery_readiness_percent: 71.07073249428917, recovery_days_to_full: 3.510831773387006 },
   ],
 };
