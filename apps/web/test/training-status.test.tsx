@@ -10,7 +10,10 @@ describe("training-status-v1 contract", () => {
   it("rejects malformed and extra fields", () => {
     expect(() => parseTrainingStatus({ ...trainingStatusFixture, schema_version: "v2" })).toThrow(/версия/);
     expect(() => parseTrainingStatus({ ...trainingStatusFixture, unexpected: true })).toThrow(/структура/);
-    expect(() => parseTrainingStatus({ ...trainingStatusFixture, zones: [{ ...trainingStatusFixture.zones[0], raw_time_min: "38.4" }] })).toThrow(/зонални/);
+    const malformedZones = trainingStatusFixture.zones.map((zone) =>
+      zone.zone === "Z1" ? { ...zone, raw_time_min: "38.4" } : zone,
+    );
+    expect(() => parseTrainingStatus({ ...trainingStatusFixture, zones: malformedZones })).toThrow(/зонални/);
   });
   it("requires exactly five zones in exact Z1–Z5 order", () => {
     expect(() => parseTrainingStatus({ ...trainingStatusFixture, zones: trainingStatusFixture.zones.slice(0, 4) })).toThrow(/точно Z1–Z5/);
