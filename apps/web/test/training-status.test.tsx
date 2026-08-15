@@ -31,11 +31,29 @@ describe("training-status-v1 contract", () => {
 });
 
 describe("data access", () => {
-  afterEach(() => { vi.unstubAllGlobals(); delete process.env.ONFLOWS_DATA_MODE; delete process.env.ONFLOWS_API_BASE_URL; });
+  afterEach(() => { vi.unstubAllGlobals(); delete process.env.ONFLOWS_DATA_MODE; delete process.env.ONFLOWS_API_BASE_URL; delete process.env.ONFLOWS_API_RESOURCE; delete process.env.ONFLOWS_SERVICE_TOKEN; });
   it("returns an explicit API error without falling back to fixture", async () => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("failure", { status: 503 })));
     await expect(getTrainingStatus()).rejects.toThrow("API услугата върна грешка (503)");
+  });
+  it("uses the protected real endpoint and server-only authorization", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_API_RESOURCE = "real";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(trainingStatusFixture));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(getTrainingStatus()).resolves.toEqual({ data: trainingStatusFixture, mode: "api" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("https://api.example.test/api/v2/real/training-status");
+    expect(init.headers.Authorization).toBe("Bearer server-secret");
+  });
+  it("fails closed when real server authentication is missing", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_API_RESOURCE = "real";
+    const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
+    await expect(getTrainingStatus()).rejects.toThrow("ONFLOWS_SERVICE_TOKEN");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

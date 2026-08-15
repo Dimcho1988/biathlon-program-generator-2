@@ -2,7 +2,7 @@ services:
   - type: web
     name: onflows-api-preview
     runtime: python
-    branch: codex/real-cloud-model-integration
+    branch: codex/build-end-to-end-cloud-integration
     buildCommand: pip install -r requirements-api.txt
     startCommand: uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
@@ -11,10 +11,30 @@ services:
         value: 3.12.8
       - key: ONFLOWS_SERVICE_TOKEN
         sync: false
+      - key: INTERVALS_ACCESS_TOKEN
+        sync: false
+      - key: INTERVALS_ATHLETE_ID
+        sync: false
+      - key: ONFLOWS_ATHLETE_ALIAS
+        sync: false
+      - key: ONFLOWS_HR_ZONE_BOUNDS
+        sync: false
+      - key: ONFLOWS_ATHLETE_TIMEZONE
+        sync: false
+      - key: ONFLOWS_INTRAZONE_VERSION
+        value: intra_zone_linear_v1
+      - key: ONFLOWS_TREF_VERSION
+        value: tref-fixed-expert-v1
+      - key: ONFLOWS_RECOVERY_VERSION
+        sync: false
+      - key: ONFLOWS_HISTORY_DAYS
+        value: "90"
+      - key: ONFLOWS_SNAPSHOT_SALT
+        sync: false
   - type: web
     name: onflows-web-preview
     runtime: node
-    branch: codex/real-cloud-model-integration
+    branch: codex/build-end-to-end-cloud-integration
     rootDir: apps/web
     buildCommand: npm ci && npm run build
     startCommand: npm start

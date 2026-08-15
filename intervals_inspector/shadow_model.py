@@ -195,6 +195,38 @@ def default_shadow_configuration() -> ShadowModelConfiguration:
     return _build_configuration(zones)
 
 
+def configuration_with_hr_boundaries(
+    boundaries: Sequence[int | float],
+) -> ShadowModelConfiguration:
+    """Build the approved model with athlete-specific integer zone membership.
+
+    Only zone membership changes. Tref, intra-zone slope and spillover values
+    are copied unchanged from the approved baseline.
+    """
+    if len(boundaries) != 6:
+        raise ValueError("six HR boundaries are required")
+    rendered = tuple(_finite(value, "HR boundary") for value in boundaries)
+    if any(value != round(value) for value in rendered) or any(
+        left >= right for left, right in zip(rendered, rendered[1:])
+    ):
+        raise ValueError("HR boundaries must be strictly increasing integers")
+    baseline = default_shadow_configuration()
+    zones = [
+        ZoneModelSettings(
+            zone=zone.zone,
+            hr_low=rendered[index],
+            hr_high=rendered[index + 1] - 1.0,
+            equivalence_slope_pp_per_bpm=zone.equivalence_slope_pp_per_bpm,
+            spill_threshold_fraction=zone.spill_threshold_fraction,
+            spill_down_fraction=zone.spill_down_fraction,
+            spill_up_fraction=zone.spill_up_fraction,
+            tref_minutes=zone.tref_minutes,
+        )
+        for index, zone in enumerate(baseline.zones)
+    ]
+    return _build_configuration(zones)
+
+
 def validate_zone_settings(zones: Sequence[ZoneModelSettings]) -> None:
     if not zones:
         raise ValueError("at least one zone is required")
