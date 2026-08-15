@@ -15,6 +15,15 @@ class HealthResponse(StrictModel):
     status: Literal["ok"]
 
 
+class OAuthAuthorizationResponse(StrictModel):
+    authorization_url: str
+
+
+class OAuthConnectionStatusResponse(StrictModel):
+    connected: bool
+    scopes: list[str]
+
+
 class ModelMetadata(StrictModel):
     algorithm_version: str
     effective_hr_version: str

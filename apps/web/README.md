@@ -30,7 +30,7 @@ uvicorn apps.api.main:app --reload
 ONFLOWS_API_BASE_URL=http://127.0.0.1:8000 npm run dev
 ```
 
-When fixture mode is not explicitly selected, `ONFLOWS_API_BASE_URL` is required. The server fetches `/api/v1/demo/training-status` with an eight-second timeout. Request, HTTP, JSON, and contract-validation failures render an error and never fall back to the fixture.
+When fixture mode is not explicitly selected, `ONFLOWS_API_BASE_URL` is required. The server fetches the configured API resource with an eight-second timeout. Request, HTTP, JSON, and contract-validation failures render an error and never fall back to the fixture.
 
 ## Environment variables
 
@@ -38,6 +38,13 @@ When fixture mode is not explicitly selected, `ONFLOWS_API_BASE_URL` is required
 | --- | --- | --- |
 | `ONFLOWS_DATA_MODE` | `fixture` | Explicitly use the deterministic local contract fixture. Omit for API mode. |
 | `ONFLOWS_API_BASE_URL` | e.g. `http://127.0.0.1:8000` | FastAPI origin used in API mode. |
+| `ONFLOWS_API_RESOURCE` | `real` | Use the protected persisted real-data snapshot. |
+| `ONFLOWS_SERVICE_TOKEN` | server-only secret | Authenticate Next.js to FastAPI; never expose with `NEXT_PUBLIC_`. |
+
+In real mode the same-origin `/api/integrations/intervals/connect` route starts
+the Intervals OAuth flow without exposing the FastAPI service token. After a
+successful connection, `/api/integrations/intervals/refresh` triggers the
+explicit read-only refresh and returns to the dashboard.
 
 ## Verification
 

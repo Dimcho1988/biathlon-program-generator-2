@@ -34,10 +34,19 @@ class RefreshResult:
     wellness_coverage: float
 
 
-def context_from_environment(environ: Mapping[str, str] | None = None) -> AthleteContext:
+def context_from_environment(
+    environ: Mapping[str, str] | None = None,
+    *,
+    provider_athlete_id: str | None = None,
+) -> AthleteContext:
     env = environ or os.environ
-    required = ("ONFLOWS_ATHLETE_ALIAS", "INTERVALS_ATHLETE_ID", "ONFLOWS_HR_ZONE_BOUNDS")
+    required = ("ONFLOWS_ATHLETE_ALIAS", "ONFLOWS_HR_ZONE_BOUNDS")
     if any(not env.get(key, "").strip() for key in required):
+        raise ConfigurationError("Pilot athlete configuration is incomplete")
+    resolved_provider_id = (
+        provider_athlete_id or env.get("INTERVALS_ATHLETE_ID", "")
+    ).strip()
+    if not resolved_provider_id:
         raise ConfigurationError("Pilot athlete configuration is incomplete")
     try:
         bounds = tuple(int(item.strip()) for item in env["ONFLOWS_HR_ZONE_BOUNDS"].split(","))
@@ -46,7 +55,7 @@ def context_from_environment(environ: Mapping[str, str] | None = None) -> Athlet
     try:
         return AthleteContext(
             public_alias=env["ONFLOWS_ATHLETE_ALIAS"].strip(),
-            provider_athlete_id=env["INTERVALS_ATHLETE_ID"].strip(),
+            provider_athlete_id=resolved_provider_id,
             zone_bounds_bpm=bounds,
             timezone=env.get("ONFLOWS_ATHLETE_TIMEZONE", "").strip(),
             intra_zone_version=env.get("ONFLOWS_INTRAZONE_VERSION", "").strip(),
@@ -104,11 +113,14 @@ def dataset_to_training_status(dataset: Any, context: AthleteContext, wellness: 
 
 def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None = None,
             period_end: date | None = None, client: Any | None = None,
-            now: datetime | None = None) -> RefreshResult:
+            now: datetime | None = None, access_token: str | None = None,
+            provider_athlete_id: str | None = None) -> RefreshResult:
     """Retrieve once, normalize once, calculate canonical results, then replace atomically."""
     env = environ or os.environ
-    context = context_from_environment(env)
-    token = env.get("INTERVALS_ACCESS_TOKEN", "").strip()
+    context = context_from_environment(
+        env, provider_athlete_id=provider_athlete_id
+    )
+    token = (access_token or env.get("INTERVALS_ACCESS_TOKEN", "")).strip()
     salt = env.get("ONFLOWS_SNAPSHOT_SALT", "").strip()
     if not token or not salt:
         raise ConfigurationError("Provider credentials or snapshot salt are unavailable")

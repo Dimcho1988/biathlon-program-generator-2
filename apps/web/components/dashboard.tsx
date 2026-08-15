@@ -16,7 +16,12 @@ const metrics: Array<[keyof ZoneTrainingStatus, string, (value: number) => strin
   ["recovery_days_to_full", "Дни до пълно възстановяване", (value) => `${decimal(value)} дни`],
 ];
 
-export function Dashboard({ data, mode }: { data: TrainingStatus; mode: DataMode }) {
+export function Dashboard({ data, mode, integrationActions = false, notice }: {
+  data: TrainingStatus;
+  mode: DataMode;
+  integrationActions?: boolean;
+  notice?: string;
+}) {
   const qualityScore = data.data_quality.latest_activity_quality_score;
   return (
     <main>
@@ -40,6 +45,7 @@ export function Dashboard({ data, mode }: { data: TrainingStatus; mode: DataMode
       </header>
 
       <section className="content" aria-label="Тренировъчен анализ">
+        {notice && <p className="connection-notice">{notice}</p>}
         <section className="quality-panel" aria-labelledby="quality-title">
           <div><p className="section-kicker">Надеждност</p><h2 id="quality-title">Качество на данните</h2></div>
           <dl className="quality-values">
@@ -68,7 +74,7 @@ export function Dashboard({ data, mode }: { data: TrainingStatus; mode: DataMode
           </dl>
         </details>
       </section>
-      <footer><span className="footer-brand">onFlows</span><p>Данните са диагностичен изглед на съществуващия модел.</p></footer>
+      <footer><span className="footer-brand">onFlows</span><p>Данните са диагностичен изглед на съществуващия модел.</p>{integrationActions && <form action="/api/integrations/intervals/refresh" method="post"><button className="text-action" type="submit">Обнови данните</button></form>}</footer>
     </main>
   );
 }
