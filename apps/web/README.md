@@ -8,7 +8,7 @@ Requires Node.js 22 and npm.
 
 ```bash
 cd apps/web
-npm install --no-audit --no-fund
+npm ci --no-audit --no-fund
 ONFLOWS_DATA_MODE=fixture npm run dev
 ```
 
