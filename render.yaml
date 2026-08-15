@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: onflows-api-preview
+    runtime: python
+    branch: codex/real-cloud-model-integration
+    buildCommand: pip install -r requirements-api.txt
+    startCommand: uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: ONFLOWS_SERVICE_TOKEN
+        sync: false
+  - type: web
+    name: onflows-web-preview
+    runtime: node
+    branch: codex/real-cloud-model-integration
+    rootDir: apps/web
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 22.14.0
+      - key: ONFLOWS_DATA_MODE
+        value: api
+      - key: ONFLOWS_API_RESOURCE
+        value: real
+      - key: ONFLOWS_API_BASE_URL
+        sync: false
+      - key: ONFLOWS_SERVICE_TOKEN
+        sync: false
