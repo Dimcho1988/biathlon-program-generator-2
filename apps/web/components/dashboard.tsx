@@ -1,5 +1,7 @@
+import Image from "next/image";
 import type { DataMode } from "../lib/api";
 import type { TrainingStatus, ZoneTrainingStatus } from "../lib/training-status";
+import { ThemeToggle } from "./theme-toggle";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
 const decimal = (value: number) => number.format(value);
@@ -19,7 +21,10 @@ export function Dashboard({ data, mode }: { data: TrainingStatus; mode: DataMode
   return (
     <main>
       <header className="hero">
-        <nav aria-label="Основна навигация"><a className="brand" href="#top" aria-label="onFlows начало"><span>on</span>Flows</a><span className="product">Performance intelligence</span></nav>
+        <nav aria-label="Основна навигация">
+          <a className="brand" href="#top" aria-label="onFlows начало"><Image src="/brand/onflows-mark.png" width={33} height={40} alt="onFlows лого" priority /><span>onFlows</span></a>
+          <div className="nav-actions"><span className="product">Performance intelligence</span><ThemeToggle /></div>
+        </nav>
         <div id="top" className="hero-grid">
           <div>
             <p className="eyebrow">Анализ на натоварването</p>
@@ -63,7 +68,7 @@ export function Dashboard({ data, mode }: { data: TrainingStatus; mode: DataMode
           </dl>
         </details>
       </section>
-      <footer><span className="brand"><span>on</span>Flows</span><p>Данните са диагностичен изглед на съществуващия модел.</p></footer>
+      <footer><span className="footer-brand">onFlows</span><p>Данните са диагностичен изглед на съществуващия модел.</p></footer>
     </main>
   );
 }

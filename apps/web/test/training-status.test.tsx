@@ -4,6 +4,7 @@ import { Dashboard } from "../components/dashboard";
 import { getTrainingStatus } from "../lib/api";
 import { trainingStatusFixture } from "../lib/fixture";
 import { parseTrainingStatus } from "../lib/training-status";
+import { applyTheme, resolveInitialTheme, THEME_STORAGE_KEY } from "../components/theme-toggle";
 
 describe("training-status-v1 contract", () => {
   it("accepts the canonical fixture", () => expect(parseTrainingStatus(trainingStatusFixture)).toEqual(trainingStatusFixture));
@@ -39,6 +40,13 @@ describe("data access", () => {
 });
 
 describe("dashboard", () => {
+  it("renders the official logo and accessible theme control without losing content", () => {
+    const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" />);
+    expect(html).toContain('%2Fbrand%2Fonflows-mark.png');
+    expect(html).toContain('alt="onFlows лого"');
+    expect(html).toContain('aria-label="Превключи светла или тъмна тема"');
+    expect(html).toContain("Тренировъчен статус");
+  });
   it("labels fixture mode and renders ordered zones with every required field", () => {
     const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" />);
     expect(html).toContain("Демо данни");
@@ -47,4 +55,27 @@ describe("dashboard", () => {
     expect(html).toContain("50,9 мин"); expect(html).toContain("97,8%"); expect(html).toContain("3,5 дни");
   });
   it("does not show the demo label in API mode", () => expect(renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="api" />)).not.toContain("Демо данни"));
+});
+
+describe("theme preference", () => {
+  it("uses system preference when no manual choice exists", () => {
+    expect(resolveInitialTheme(null, true)).toBe("dark");
+    expect(resolveInitialTheme(null, false)).toBe("light");
+  });
+  it("restores stored light and dark choices regardless of the system", () => {
+    expect(resolveInitialTheme("light", true)).toBe("light");
+    expect(resolveInitialTheme("dark", false)).toBe("dark");
+    expect(THEME_STORAGE_KEY).toBe("onflows-theme");
+  });
+  it("applies manual switching and persists the choice", () => {
+    const root = { dataset: {} as DOMStringMap, style: { colorScheme: "" } as CSSStyleDeclaration };
+    const storage = { setItem: vi.fn() };
+    applyTheme("dark", root, storage);
+    expect(root.dataset.theme).toBe("dark");
+    expect(root.style.colorScheme).toBe("dark");
+    expect(storage.setItem).toHaveBeenCalledWith("onflows-theme", "dark");
+    applyTheme("light", root, storage);
+    expect(root.dataset.theme).toBe("light");
+    expect(storage.setItem).toHaveBeenLastCalledWith("onflows-theme", "light");
+  });
 });
