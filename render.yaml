@@ -1,6 +1,9 @@
 services:
   - type: web
     name: onflows-api-preview
+    plan: free
+    region: frankfurt
+    autoDeployTrigger: checksPass
     runtime: python
     branch: codex/build-end-to-end-cloud-integration
     buildCommand: pip install -r requirements-api.txt
@@ -33,6 +36,9 @@ services:
         sync: false
   - type: web
     name: onflows-web-preview
+    plan: free
+    region: frankfurt
+    autoDeployTrigger: checksPass
     runtime: node
     branch: codex/build-end-to-end-cloud-integration
     rootDir: apps/web
