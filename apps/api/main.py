@@ -24,6 +24,7 @@ from .real_service import (
     ConfigurationError,
     ProviderFailure,
     load_history_from_persisted,
+    recovery_history_from_persisted,
     refresh,
     training_status_from_persisted,
 )
@@ -32,6 +33,7 @@ from .schemas import (
     LoadHistoryResponse,
     OAuthAuthorizationResponse,
     OAuthConnectionStatusResponse,
+    RecoveryHistoryResponse,
     TrainingStatusResponse,
 )
 from .training_status import build_demo_training_status
@@ -119,6 +121,28 @@ def real_load_history(authorization: Annotated[str | None, Header()] = None):
         raise HTTPException(
             status_code=503,
             detail="Load history requires a new real-data refresh",
+        ) from exc
+
+
+@app.get("/api/v2/real/recovery-history", response_model=RecoveryHistoryResponse)
+def real_recovery_history(authorization: Annotated[str | None, Header()] = None):
+    _authorize(authorization)
+    try:
+        snapshot = _repository().latest(_pilot_alias())
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    if snapshot is None:
+        raise HTTPException(
+            status_code=503, detail="No valid real-data snapshot is available"
+        )
+    try:
+        return recovery_history_from_persisted(snapshot)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Recovery history requires a new real-data refresh",
         ) from exc
 
 

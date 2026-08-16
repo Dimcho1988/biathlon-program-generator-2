@@ -1,10 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dashboard } from "../components/dashboard";
-import { getLoadHistory, getTrainingStatus } from "../lib/api";
-import { loadHistoryFixture, trainingStatusFixture } from "../lib/fixture";
+import { getLoadHistory, getRecoveryHistory, getTrainingStatus } from "../lib/api";
+import { loadHistoryFixture, recoveryHistoryFixture, trainingStatusFixture } from "../lib/fixture";
 import { parseLoadHistory } from "../lib/load-history";
 import { parseTrainingStatus } from "../lib/training-status";
+import { parseRecoveryHistory } from "../lib/recovery-history";
 import { applyTheme, resolveInitialTheme, THEME_STORAGE_KEY } from "../components/theme-toggle";
 
 describe("training-status-v1 contract", () => {
@@ -51,6 +52,14 @@ describe("load-history-v1 contract", () => {
   });
 });
 
+describe("recovery-history-v1 contract", () => {
+  it("accepts the canonical recovery fixture", () => expect(parseRecoveryHistory(recoveryHistoryFixture)).toEqual(recoveryHistoryFixture));
+  it("rejects incomplete zones and non-load recovery claims", () => {
+    expect(() => parseRecoveryHistory({ ...recoveryHistoryFixture, current: recoveryHistoryFixture.current.slice(0, 4) })).toThrow(/точно Z1–Z5/);
+    expect(() => parseRecoveryHistory({ ...recoveryHistoryFixture, basis: "integrated" })).toThrow(/основа/);
+  });
+});
+
 describe("data access", () => {
   afterEach(() => { vi.unstubAllGlobals(); delete process.env.ONFLOWS_DATA_MODE; delete process.env.ONFLOWS_API_BASE_URL; delete process.env.ONFLOWS_API_RESOURCE; delete process.env.ONFLOWS_SERVICE_TOKEN; });
   it("returns an explicit API error without falling back to fixture", async () => {
@@ -87,6 +96,17 @@ describe("data access", () => {
     expect(String(url)).toBe("https://api.example.test/api/v2/real/load-history");
     expect(init.headers.Authorization).toBe("Bearer server-secret");
   });
+  it("loads the protected recovery history without exposing the token to the browser", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_API_RESOURCE = "real";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(recoveryHistoryFixture));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(getRecoveryHistory()).resolves.toEqual(recoveryHistoryFixture);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("https://api.example.test/api/v2/real/recovery-history");
+    expect(init.headers.Authorization).toBe("Bearer server-secret");
+  });
 });
 
 describe("dashboard", () => {
@@ -111,6 +131,14 @@ describe("dashboard", () => {
     expect(html).toContain("Динамика на индекса 7/40 по зони");
     expect(html).toContain("Реално → приравнено → ефективно");
     expect(html).toContain("NordicSki");
+  });
+  it("renders canonical load-only recovery dynamics and read-only settings", () => {
+    const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" recoveryHistory={recoveryHistoryFixture} />);
+    expect(html).toContain("Товарно възстановяване");
+    expect(html).toContain("Динамика на товарната готовност по зони");
+    expect(html).toContain("Load-only резултат");
+    expect(html).toContain("Настройки на recovery модела");
+    expect(html).toContain("main-load-recovery-v1");
   });
 });
 

@@ -3,6 +3,8 @@ import type { DataMode } from "../lib/api";
 import type { LoadHistory } from "../lib/load-history";
 import type { TrainingStatus, ZoneTrainingStatus } from "../lib/training-status";
 import { LoadHistorySection } from "./load-history-section";
+import type { RecoveryHistory } from "../lib/recovery-history";
+import { RecoveryHistorySection } from "./recovery-history-section";
 import { ThemeToggle } from "./theme-toggle";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
@@ -18,11 +20,22 @@ const metrics: Array<[keyof ZoneTrainingStatus, string, (value: number) => strin
   ["recovery_days_to_full", "Дни до пълно възстановяване", (value) => `${decimal(value)} дни`],
 ];
 
-export function Dashboard({ data, mode, loadHistory = null, loadHistoryMessage, integrationActions = false, notice }: {
+export function Dashboard({
+  data,
+  mode,
+  loadHistory = null,
+  recoveryHistory = null,
+  loadHistoryMessage,
+  recoveryHistoryMessage,
+  integrationActions = false,
+  notice,
+}: {
   data: TrainingStatus;
   mode: DataMode;
   loadHistory?: LoadHistory | null;
+  recoveryHistory?: RecoveryHistory | null;
   loadHistoryMessage?: string;
+  recoveryHistoryMessage?: string;
   integrationActions?: boolean;
   notice?: string;
 }) {
@@ -68,6 +81,7 @@ export function Dashboard({ data, mode, loadHistory = null, loadHistoryMessage, 
         </section>
 
         <LoadHistorySection history={loadHistory} message={loadHistoryMessage} />
+        <RecoveryHistorySection history={recoveryHistory} message={recoveryHistoryMessage} />
 
         <details className="metadata">
           <summary><span><small>Техническа информация</small>Метаданни на модела</span><span className="chevron" aria-hidden="true">⌄</span></summary>

@@ -1,5 +1,6 @@
 import type { TrainingStatus } from "./training-status";
 import type { LoadHistory } from "./load-history";
+import type { RecoveryHistory } from "./recovery-history";
 
 export const trainingStatusFixture: TrainingStatus = {
   schema_version: "training-status-v1",
@@ -97,4 +98,47 @@ export const loadHistoryFixture: LoadHistory = {
       })),
     },
   ],
+};
+
+export const recoveryHistoryFixture: RecoveryHistory = {
+  schema_version: "recovery-history-v1",
+  athlete_id: "A",
+  period_start: fixtureDates[0],
+  period_end: fixtureDates.at(-1)!,
+  basis: "load-only",
+  wellness_freshness: "unknown",
+  wellness_coverage_percent: 0,
+  model: {
+    algorithm_version: "main-load-recovery-v3-equivalent-time-fixed-tref",
+    parameter_version: "main-load-recovery-v1",
+    parameter_fingerprint: "fixture-recovery-parameters-v1",
+    practical_full_recovery_percent: 95,
+  },
+  settings: trainingStatusFixture.zones.map((zone, index) => ({
+    zone: zone.zone,
+    tref_min: zone.tref_min,
+    sensitivity: [0.55, 0.70, 0.88, 1.00, 1.12][index],
+    tau_days: [0.75, 1.00, 1.35, 1.65, 2.00][index],
+    fatigue_cap: [130, 135, 145, 155, 165][index],
+  })),
+  current: trainingStatusFixture.zones.map((zone) => ({
+    zone: zone.zone,
+    readiness_percent: zone.recovery_readiness_percent,
+    residual_fatigue: 100 - zone.recovery_readiness_percent,
+    days_to_practical_recovery: zone.recovery_days_to_full,
+  })),
+  daily: fixtureDates.flatMap((day, dayIndex) => trainingStatusFixture.zones.map((zone, zoneIndex) => {
+    const impulse = dayIndex % 3 === 0 ? 5 + zoneIndex * 5 : 0;
+    const readinessAfter = Math.max(0, Math.min(100, 94 - 12 * Math.sin((dayIndex + zoneIndex * 2) / 5) - impulse));
+    return {
+      date: day,
+      zone: zone.zone,
+      readiness_before_percent: Math.min(100, readinessAfter + impulse),
+      readiness_after_percent: readinessAfter,
+      residual_fatigue_after: 100 - readinessAfter,
+      impulse,
+      effective_load: loadHistoryFixture.daily[dayIndex * 5 + zoneIndex].effective_load,
+      tref_min: zone.tref_min,
+    };
+  })),
 };

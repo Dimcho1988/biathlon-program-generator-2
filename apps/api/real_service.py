@@ -19,10 +19,15 @@ from .schemas import (
     AthleteSnapshot,
     DailyZoneLoad,
     DataQuality,
+    DailyRecovery,
     LoadHistoryActivity,
     LoadHistoryQuality,
     LoadHistoryResponse,
     ModelMetadata,
+    RecoveryHistoryResponse,
+    RecoveryModelMetadata,
+    RecoveryZoneCurrent,
+    RecoveryZoneSettings,
     TrainingStatusResponse,
     ZoneLoadSummary,
     ZoneTrainingStatus,
@@ -260,6 +265,88 @@ def dataset_to_load_history(
     )
 
 
+def dataset_to_recovery_history(
+    dataset: Any,
+    context: AthleteContext,
+    wellness: Mapping[str, Any],
+    parameters: Mapping[str, Any],
+) -> RecoveryHistoryResponse:
+    """Expose the already-computed canonical load-recovery history."""
+
+    recovery = parameters["recovery"]
+    history = dataset.readiness_history.loc[
+        dataset.readiness_history["component"].isin(ZONES)
+    ].sort_values(["date", "component"], kind="stable")
+    return RecoveryHistoryResponse(
+        schema_version="recovery-history-v1",
+        athlete_id=context.public_alias,
+        period_start=dataset.period_start,
+        period_end=dataset.period_end,
+        basis="load-only",
+        wellness_freshness=str(wellness.get("freshness", "unknown")),
+        wellness_coverage_percent=_bounded_percentage(
+            100.0 * _finite(wellness.get("coverage", 0.0), "wellness coverage"),
+            "wellness coverage",
+        ),
+        model=RecoveryModelMetadata(
+            algorithm_version=str(dataset.recovery_model_version),
+            parameter_version=context.recovery_parameter_version,
+            parameter_fingerprint=str(dataset.parameter_fingerprint),
+            practical_full_recovery_percent=_bounded_percentage(
+                parameters["practical_full_recovery"],
+                "practical full recovery",
+            ),
+        ),
+        settings=[
+            RecoveryZoneSettings(
+                zone=zone,
+                tref_min=_finite(dataset.load_stats.loc[zone, "Tref"], f"Tref[{zone}]"),
+                sensitivity=_finite(recovery[zone]["sensitivity"], f"sensitivity[{zone}]"),
+                tau_days=_finite(recovery[zone]["tau_days"], f"tau[{zone}]"),
+                fatigue_cap=_finite(recovery[zone]["fmax"], f"fmax[{zone}]"),
+            )
+            for zone in ZONES
+        ],
+        current=[
+            RecoveryZoneCurrent(
+                zone=zone,
+                readiness_percent=_bounded_percentage(
+                    dataset.load_readiness.loc[zone, "readiness"],
+                    f"readiness[{zone}]",
+                ),
+                residual_fatigue=_finite(
+                    dataset.load_readiness.loc[zone, "fatigue"],
+                    f"fatigue[{zone}]",
+                ),
+                days_to_practical_recovery=_finite(
+                    dataset.load_readiness.loc[zone, "days_to_full"],
+                    f"days[{zone}]",
+                ),
+            )
+            for zone in ZONES
+        ],
+        daily=[
+            DailyRecovery(
+                date=_calendar_date(row.date, "daily recovery"),
+                zone=str(row.component),
+                readiness_before_percent=_bounded_percentage(
+                    row.readiness_before, f"readiness before[{row.component}]"
+                ),
+                readiness_after_percent=_bounded_percentage(
+                    row.readiness_after, f"readiness after[{row.component}]"
+                ),
+                residual_fatigue_after=_finite(
+                    row.fatigue_after, f"fatigue after[{row.component}]"
+                ),
+                impulse=_finite(row.impulse, f"impulse[{row.component}]"),
+                effective_load=_finite(row.effective, f"effective[{row.component}]"),
+                tref_min=_finite(row.Tref, f"Tref[{row.component}]"),
+            )
+            for row in history.itertuples(index=False)
+        ],
+    )
+
+
 def training_status_from_persisted(
     payload: Mapping[str, Any],
 ) -> TrainingStatusResponse:
@@ -272,6 +359,15 @@ def training_status_from_persisted(
 
 def load_history_from_persisted(payload: Mapping[str, Any]) -> LoadHistoryResponse:
     return AthleteSnapshot.model_validate(payload).load_history
+
+
+def recovery_history_from_persisted(
+    payload: Mapping[str, Any],
+) -> RecoveryHistoryResponse:
+    history = AthleteSnapshot.model_validate(payload).recovery_history
+    if history is None:
+        raise ValueError("Recovery history requires a new real-data refresh")
+    return history
 
 
 def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None = None,
@@ -308,12 +404,16 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         wellness_rows = wellness_payload if isinstance(wellness_payload, list) else []
         latest_wellness = max((r for r in wellness_rows if isinstance(r, Mapping)), key=lambda r: str(r.get("id") or r.get("date") or ""), default={})
         wellness = normalize_wellness(latest_wellness, now=now)
+        parameters = fresh_parameters()
         dataset = load_real_history(provider, profile_identifier=context.provider_athlete_id,
-                                    session_salt=salt, parameters=fresh_parameters(),
+                                    session_salt=salt, parameters=parameters,
                                     period_end=end, days=days, loaded_at_utc=now,
                                     configuration=configuration_with_hr_boundaries(context.zone_bounds_bpm))
         snapshot = dataset_to_training_status(dataset, context, wellness)
         load_history = dataset_to_load_history(dataset, context)
+        recovery_history = dataset_to_recovery_history(
+            dataset, context, wellness, parameters
+        )
     except IntervalsAPIError as exc:
         raise ProviderFailure("Intervals provider request failed") from exc
     except (TypeError, ValueError) as exc:
@@ -322,6 +422,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         schema_version="athlete-snapshot-v1",
         training_status=snapshot,
         load_history=load_history,
+        recovery_history=recovery_history,
     )
     repository.replace(context.public_alias, persisted.model_dump(mode="json"))
     return RefreshResult(snapshot, dataset.processed_activities, float(wellness["coverage"]))

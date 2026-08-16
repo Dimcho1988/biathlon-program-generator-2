@@ -112,9 +112,57 @@ class LoadHistoryResponse(StrictModel):
     activities: list[LoadHistoryActivity]
 
 
+class RecoveryModelMetadata(StrictModel):
+    algorithm_version: str
+    parameter_version: str
+    parameter_fingerprint: str
+    practical_full_recovery_percent: float
+
+
+class RecoveryZoneSettings(StrictModel):
+    zone: Literal["Z1", "Z2", "Z3", "Z4", "Z5"]
+    tref_min: float
+    sensitivity: float
+    tau_days: float
+    fatigue_cap: float
+
+
+class RecoveryZoneCurrent(StrictModel):
+    zone: Literal["Z1", "Z2", "Z3", "Z4", "Z5"]
+    readiness_percent: float
+    residual_fatigue: float
+    days_to_practical_recovery: float
+
+
+class DailyRecovery(StrictModel):
+    date: str
+    zone: Literal["Z1", "Z2", "Z3", "Z4", "Z5"]
+    readiness_before_percent: float
+    readiness_after_percent: float
+    residual_fatigue_after: float
+    impulse: float
+    effective_load: float
+    tref_min: float
+
+
+class RecoveryHistoryResponse(StrictModel):
+    schema_version: Literal["recovery-history-v1"]
+    athlete_id: str
+    period_start: str
+    period_end: str
+    basis: Literal["load-only"]
+    wellness_freshness: Literal["fresh", "stale", "unknown"]
+    wellness_coverage_percent: float
+    model: RecoveryModelMetadata
+    settings: list[RecoveryZoneSettings]
+    current: list[RecoveryZoneCurrent]
+    daily: list[DailyRecovery]
+
+
 class AthleteSnapshot(StrictModel):
     """Persisted aggregate envelope; no raw streams or provider identifiers."""
 
     schema_version: Literal["athlete-snapshot-v1"]
     training_status: TrainingStatusResponse
     load_history: LoadHistoryResponse
+    recovery_history: RecoveryHistoryResponse | None = None

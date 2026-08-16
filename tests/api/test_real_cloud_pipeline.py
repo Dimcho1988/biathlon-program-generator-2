@@ -9,6 +9,7 @@ from apps.api.real_service import (
     ProviderFailure,
     _bounded_percentage,
     load_history_from_persisted,
+    recovery_history_from_persisted,
     refresh,
     training_status_from_persisted,
 )
@@ -54,8 +55,10 @@ def test_ingests_activity_and_wellness_then_atomically_publishes_aggregate_snaps
     assert payload["schema_version"] == "athlete-snapshot-v1"
     assert payload["training_status"]["athlete_id"] == "pilot"
     assert payload["load_history"]["schema_version"] == "load-history-v1"
+    assert payload["recovery_history"]["schema_version"] == "recovery-history-v1"
     assert len(payload["load_history"]["daily"]) == 41 * 5
     assert len(payload["load_history"]["activities"]) == 1
+    assert len(payload["recovery_history"]["daily"]) == 41 * 5
     rendered = repr(payload)
     assert all(secret not in rendered for secret in ("private-athlete", "private-token", "provider-activity", "must-not-survive"))
 
@@ -73,10 +76,15 @@ def test_persisted_snapshot_exposes_v1_status_and_load_history_contracts():
     payload = repo.latest("pilot")
     status = training_status_from_persisted(payload)
     history = load_history_from_persisted(payload)
+    recovery = recovery_history_from_persisted(payload)
     assert status.schema_version == "training-status-v1"
     assert history.schema_version == "load-history-v1"
     assert [row.zone for row in history.zones] == ["Z1", "Z2", "Z3", "Z4", "Z5"]
     assert history.activities[0].activity_ref == "activity-001"
+    assert recovery.basis == "load-only"
+    assert recovery.model.parameter_version == "main-load-recovery-v1"
+    assert [row.zone for row in recovery.settings] == ["Z1", "Z2", "Z3", "Z4", "Z5"]
+    assert recovery.settings[3].tau_days == pytest.approx(1.65)
 
 
 def test_deployed_v1_snapshot_remains_readable_during_rollout():
@@ -109,6 +117,15 @@ def test_deployed_v1_snapshot_remains_readable_during_rollout():
         ],
     }
     assert training_status_from_persisted(legacy).athlete_id == "pilot"
+
+
+def test_snapshot_without_recovery_history_requires_one_refresh():
+    repo = InMemorySnapshotRepository()
+    refresh(repo, environ=ENV, client=Client(), period_end=date(2026, 8, 15))
+    payload = repo.latest("pilot")
+    payload.pop("recovery_history")
+    with pytest.raises(ValueError, match="requires a new real-data refresh"):
+        recovery_history_from_persisted(payload)
 
 
 @pytest.mark.parametrize("wellness, warning", [([], "unknown"), ([{"id": "2026-01-01", "fatigue": "bad"}], "stale")])

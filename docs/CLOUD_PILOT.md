@@ -74,3 +74,9 @@ privacy-minimized activity aggregates are available at
 `GET /api/v2/real/load-history`. Neither endpoint returns raw streams or
 provider identifiers. Existing `training-status-v1` rows remain readable
 during rollout; one successful refresh upgrades the stored envelope.
+
+The same atomic snapshot can include `recovery-history-v1`, exposed through
+`GET /api/v2/real/recovery-history`. It contains the canonical precomputed
+load-readiness history and read-only recovery parameters. Wellness freshness
+and coverage are explicit, but wellness does not alter readiness until an
+approved integrated-recovery model is available.

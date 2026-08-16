@@ -1,6 +1,7 @@
-import { loadHistoryFixture, trainingStatusFixture } from "./fixture";
+import { loadHistoryFixture, recoveryHistoryFixture, trainingStatusFixture } from "./fixture";
 import { parseLoadHistory, type LoadHistory } from "./load-history";
 import { parseTrainingStatus, type TrainingStatus } from "./training-status";
+import { parseRecoveryHistory, type RecoveryHistory } from "./recovery-history";
 
 const TIMEOUT_MS = 8_000;
 export type DataMode = "api" | "fixture";
@@ -38,4 +39,12 @@ export async function getLoadHistory(): Promise<LoadHistory | null> {
   const token = process.env.ONFLOWS_SERVICE_TOKEN;
   if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
   return parseLoadHistory(await fetchApiResource("/api/v2/real/load-history", token));
+}
+
+export async function getRecoveryHistory(): Promise<RecoveryHistory | null> {
+  if (process.env.ONFLOWS_DATA_MODE === "fixture") return parseRecoveryHistory(recoveryHistoryFixture);
+  if (process.env.ONFLOWS_API_RESOURCE !== "real") return null;
+  const token = process.env.ONFLOWS_SERVICE_TOKEN;
+  if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
+  return parseRecoveryHistory(await fetchApiResource("/api/v2/real/recovery-history", token));
 }
