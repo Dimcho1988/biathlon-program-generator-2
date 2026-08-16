@@ -39,7 +39,7 @@ class OAuthConnection:
 
 @dataclass(frozen=True)
 class PendingOAuthState:
-    athlete_alias: str
+    athlete_alias: str | None
     redirect_uri: str
 
 
@@ -152,14 +152,14 @@ class SupabasePilotRepository(SnapshotRepository):
             ) from exc
 
     @staticmethod
-    def _state_hash(nonce: str) -> str:
-        return hashlib.sha256(nonce.encode("utf-8")).hexdigest()
+    def _secret_hash(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
     def create_oauth_state(
         self,
         *,
         nonce: str,
-        athlete_alias: str,
+        athlete_alias: str | None,
         redirect_uri: str,
         expires_at: datetime,
     ) -> None:
@@ -167,7 +167,7 @@ class SupabasePilotRepository(SnapshotRepository):
             "POST",
             "/onflows_oauth_states",
             json={
-                "nonce_hash": self._state_hash(nonce),
+                "nonce_hash": self._secret_hash(nonce),
                 "athlete_alias": athlete_alias,
                 "redirect_uri": redirect_uri,
                 "expires_at": expires_at.astimezone(timezone.utc).isoformat(),
@@ -179,7 +179,7 @@ class SupabasePilotRepository(SnapshotRepository):
         response = self._request(
             "POST",
             "/rpc/consume_onflows_oauth_state",
-            json={"p_nonce_hash": self._state_hash(nonce)},
+            json={"p_nonce_hash": self._secret_hash(nonce)},
         )
         payload = self._json(response)
         if not isinstance(payload, list) or not payload:
@@ -189,9 +189,80 @@ class SupabasePilotRepository(SnapshotRepository):
             raise PersistentStoreFailure("Persistent OAuth state is invalid")
         alias = row.get("athlete_alias")
         redirect_uri = row.get("redirect_uri")
-        if not isinstance(alias, str) or not isinstance(redirect_uri, str):
+        if alias is not None and not isinstance(alias, str):
+            raise PersistentStoreFailure("Persistent OAuth state is invalid")
+        if not isinstance(redirect_uri, str):
             raise PersistentStoreFailure("Persistent OAuth state is invalid")
         return PendingOAuthState(alias, redirect_uri)
+
+    def alias_for_provider(self, provider_athlete_id: str) -> str | None:
+        provider_id = quote(provider_athlete_id, safe="")
+        response = self._request(
+            "GET",
+            "/onflows_intervals_connections?select=athlete_alias,status"
+            f"&provider_athlete_id=eq.{provider_id}&limit=1",
+        )
+        payload = self._json(response)
+        if not isinstance(payload, list) or not payload:
+            return None
+        row = payload[0]
+        alias = row.get("athlete_alias") if isinstance(row, Mapping) else None
+        status = row.get("status") if isinstance(row, Mapping) else None
+        if not isinstance(alias, str) or not isinstance(status, str):
+            raise PersistentStoreFailure("Persistent OAuth connection is invalid")
+        return alias
+
+    def provider_for_alias(self, athlete_alias: str) -> str | None:
+        alias = quote(athlete_alias, safe="")
+        response = self._request(
+            "GET",
+            "/onflows_intervals_connections?select=provider_athlete_id,status"
+            f"&athlete_alias=eq.{alias}&limit=1",
+        )
+        payload = self._json(response)
+        if not isinstance(payload, list) or not payload:
+            return None
+        row = payload[0]
+        provider_id = (
+            row.get("provider_athlete_id") if isinstance(row, Mapping) else None
+        )
+        status = row.get("status") if isinstance(row, Mapping) else None
+        if not isinstance(provider_id, str) or not isinstance(status, str):
+            raise PersistentStoreFailure("Persistent OAuth connection is invalid")
+        return provider_id
+
+    def create_login_ticket(
+        self,
+        *,
+        ticket: str,
+        athlete_alias: str,
+        expires_at: datetime,
+    ) -> None:
+        self._request(
+            "POST",
+            "/onflows_login_tickets",
+            json={
+                "ticket_hash": self._secret_hash(ticket),
+                "athlete_alias": athlete_alias,
+                "expires_at": expires_at.astimezone(timezone.utc).isoformat(),
+            },
+            headers={"Prefer": "return=minimal"},
+        )
+
+    def consume_login_ticket(self, ticket: str) -> str | None:
+        response = self._request(
+            "POST",
+            "/rpc/consume_onflows_login_ticket",
+            json={"p_ticket_hash": self._secret_hash(ticket)},
+        )
+        payload = self._json(response)
+        if not isinstance(payload, list) or not payload:
+            return None
+        row = payload[0]
+        alias = row.get("athlete_alias") if isinstance(row, Mapping) else None
+        if not isinstance(alias, str):
+            raise PersistentStoreFailure("Persistent login ticket is invalid")
+        return alias
 
     def save_connection(
         self,

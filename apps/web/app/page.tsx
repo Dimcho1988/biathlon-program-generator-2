@@ -3,6 +3,7 @@ import type { LoadHistory } from "../lib/load-history";
 import type { RecoveryHistory } from "../lib/recovery-history";
 import { Dashboard } from "../components/dashboard";
 import { ErrorState } from "../components/error-state";
+import { currentAthleteAlias, multiProfileMode } from "../lib/athlete-session";
 
 type PageResult =
   | { ok: true; value: TrainingStatusResult; loadHistory: LoadHistory | null; recoveryHistory: RecoveryHistory | null; loadHistoryMessage?: string; recoveryHistoryMessage?: string }
@@ -13,16 +14,30 @@ const notices: Record<string, string> = {
   error: "Свързването с Intervals не завърши. Опитайте отново.",
   "connect-error": "Връзката с OAuth услугата не е достъпна в момента.",
   "refresh-error": "Обновяването не завърши успешно. Последният валиден анализ е запазен.",
+  "session-required": "Свържете Intervals профила, за да отворите неговите данни.",
 };
 
 export default async function Page({ searchParams }: { searchParams: Promise<{ intervals?: string }> }) {
   const query = await searchParams;
   let result: PageResult;
+  const integrationActions = process.env.ONFLOWS_API_RESOURCE === "real";
+  const multiProfile = integrationActions && multiProfileMode();
+  const athleteAlias = multiProfile ? await currentAthleteAlias() : null;
+
+  if (multiProfile && !athleteAlias) {
+    const notice = query.intervals ? notices[query.intervals] : undefined;
+    return <ErrorState
+      message="Няма активна защитена сесия за спортист."
+      integrationActions
+      refreshAvailable={false}
+      notice={notice}
+    />;
+  }
 
   const [statusResult, historyResult, recoveryResult] = await Promise.allSettled([
-    getTrainingStatus(),
-    getLoadHistory(),
-    getRecoveryHistory(),
+    getTrainingStatus(athleteAlias ?? undefined),
+    getLoadHistory(athleteAlias ?? undefined),
+    getRecoveryHistory(athleteAlias ?? undefined),
   ]);
   if (statusResult.status === "fulfilled") {
     result = {
@@ -41,11 +56,10 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
     };
   }
 
-  const integrationActions = process.env.ONFLOWS_API_RESOURCE === "real";
   const notice = query.intervals === "connected" && result.ok && result.loadHistory
     ? undefined
     : query.intervals ? notices[query.intervals] : undefined;
   return result.ok
-    ? <Dashboard {...result.value} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} integrationActions={integrationActions} notice={notice} />
+    ? <Dashboard {...result.value} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} notice={notice} />
     : <ErrorState message={result.message} integrationActions={integrationActions} notice={notice} />;
 }

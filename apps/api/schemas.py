@@ -24,6 +24,14 @@ class OAuthConnectionStatusResponse(StrictModel):
     scopes: list[str]
 
 
+class SessionExchangeRequest(StrictModel):
+    ticket: str
+
+
+class SessionExchangeResponse(StrictModel):
+    athlete_alias: str
+
+
 class ModelMetadata(StrictModel):
     algorithm_version: str
     effective_hr_version: str

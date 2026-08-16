@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hmac
 import os
+import secrets
 from typing import Mapping
 
 from .oauth_store import SupabasePilotRepository
@@ -39,7 +40,6 @@ class OAuthSettings:
     client_secret: str
     redirect_uri: str
     state_secret: str
-    athlete_alias: str
     web_base_url: str
 
 
@@ -58,7 +58,6 @@ def settings_from_environment(
         "client_secret": env.get("INTERVALS_CLIENT_SECRET", "").strip(),
         "redirect_uri": env.get("INTERVALS_REDIRECT_URI", "").strip(),
         "state_secret": env.get("OAUTH_STATE_SECRET", "").strip(),
-        "athlete_alias": env.get("ONFLOWS_ATHLETE_ALIAS", "").strip(),
         "web_base_url": env.get("ONFLOWS_WEB_BASE_URL", "").strip(),
     }
     if any(not value for value in values.values()):
@@ -75,6 +74,7 @@ def begin_authorization(
     *,
     environ: Mapping[str, str] | None = None,
     now: datetime | None = None,
+    athlete_alias: str | None = None,
 ) -> str:
     from intervals_inspector.oauth import (
         build_authorization_url,
@@ -97,7 +97,7 @@ def begin_authorization(
     )
     repository.create_oauth_state(
         nonce=verified.nonce,
-        athlete_alias=settings.athlete_alias,
+        athlete_alias=athlete_alias,
         redirect_uri=settings.redirect_uri,
         expires_at=clock + timedelta(minutes=10),
     )
@@ -114,7 +114,7 @@ def complete_authorization(
     *,
     environ: Mapping[str, str] | None = None,
     now: datetime | None = None,
-) -> None:
+) -> str:
     from intervals_inspector.oauth import (
         OAuthCallbackError,
         OAuthExchangeError,
@@ -137,8 +137,6 @@ def complete_authorization(
             raise OAuthFlowError("OAuth state is invalid, expired or already used")
         if not hmac.compare_digest(pending.redirect_uri, settings.redirect_uri):
             raise OAuthFlowError("OAuth redirect binding is invalid")
-        if not hmac.compare_digest(pending.athlete_alias, settings.athlete_alias):
-            raise OAuthFlowError("OAuth athlete binding is invalid")
         grant = exchange_authorization_code(
             client_id=settings.client_id,
             client_secret=settings.client_secret,
@@ -150,21 +148,63 @@ def complete_authorization(
     granted = set(grant.scopes)
     if not set(READ_ONLY_SCOPES).issubset(granted):
         raise OAuthFlowError("Intervals OAuth grant is missing required read permissions")
+
+    existing_alias = repository.alias_for_provider(grant.athlete_id)
+    if pending.athlete_alias is not None:
+        alias_provider = repository.provider_for_alias(pending.athlete_alias)
+        if existing_alias is not None and not hmac.compare_digest(
+            existing_alias, pending.athlete_alias
+        ):
+            raise OAuthFlowError("Intervals profile is already bound to another athlete")
+        if alias_provider is not None and not hmac.compare_digest(
+            alias_provider, grant.athlete_id
+        ):
+            raise OAuthFlowError("Athlete session is bound to another Intervals profile")
+        athlete_alias = pending.athlete_alias
+    elif existing_alias is not None:
+        athlete_alias = existing_alias
+    else:
+        athlete_alias = _new_athlete_alias(repository)
+
     repository.save_connection(
-        athlete_alias=settings.athlete_alias,
+        athlete_alias=athlete_alias,
         provider_athlete_id=grant.athlete_id,
         access_token=grant.access_token,
         scopes=grant.scopes,
     )
+    return athlete_alias
+
+
+def _new_athlete_alias(repository: SupabasePilotRepository) -> str:
+    for _ in range(5):
+        candidate = f"ath-{secrets.token_hex(10)}"
+        if repository.provider_for_alias(candidate) is None:
+            return candidate
+    raise OAuthFlowError("A unique athlete identity could not be created")
+
+
+def issue_login_ticket(
+    repository: SupabasePilotRepository,
+    athlete_alias: str,
+    *,
+    now: datetime | None = None,
+) -> str:
+    clock = now or datetime.now(timezone.utc)
+    ticket = secrets.token_urlsafe(32)
+    repository.create_login_ticket(
+        ticket=ticket,
+        athlete_alias=athlete_alias,
+        expires_at=clock + timedelta(minutes=5),
+    )
+    return ticket
 
 
 def connection_status(
     repository: SupabasePilotRepository,
     *,
-    environ: Mapping[str, str] | None = None,
+    athlete_alias: str,
 ) -> OAuthStatus:
-    settings = settings_from_environment(environ)
-    connection = repository.connection(settings.athlete_alias)
+    connection = repository.connection(athlete_alias)
     if connection is None or connection.status != "CONNECTED":
         return OAuthStatus(False, ())
     return OAuthStatus(True, connection.scopes)
@@ -178,5 +218,6 @@ __all__ = [
     "begin_authorization",
     "complete_authorization",
     "connection_status",
+    "issue_login_ticket",
     "settings_from_environment",
 ]

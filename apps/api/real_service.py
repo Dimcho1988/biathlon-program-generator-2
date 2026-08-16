@@ -56,6 +56,7 @@ def context_from_environment(
     environ: Mapping[str, str] | None = None,
     *,
     provider_athlete_id: str | None = None,
+    athlete_alias: str | None = None,
 ) -> AthleteContext:
     env = environ or os.environ
     required = ("ONFLOWS_ATHLETE_ALIAS", "ONFLOWS_HR_ZONE_BOUNDS")
@@ -66,13 +67,19 @@ def context_from_environment(
     ).strip()
     if not resolved_provider_id:
         raise ConfigurationError("Pilot athlete configuration is incomplete")
+    configured_alias = env["ONFLOWS_ATHLETE_ALIAS"].strip()
+    resolved_alias = athlete_alias or configured_alias
+    if resolved_alias != configured_alias:
+        raise ConfigurationError(
+            "Athlete-specific physiological configuration is required"
+        )
     try:
         bounds = tuple(int(item.strip()) for item in env["ONFLOWS_HR_ZONE_BOUNDS"].split(","))
     except (TypeError, ValueError) as exc:
         raise ConfigurationError("Pilot HR zone configuration is invalid") from exc
     try:
         return AthleteContext(
-            public_alias=env["ONFLOWS_ATHLETE_ALIAS"].strip(),
+            public_alias=resolved_alias,
             provider_athlete_id=resolved_provider_id,
             zone_bounds_bpm=bounds,
             timezone=env.get("ONFLOWS_ATHLETE_TIMEZONE", "").strip(),
@@ -373,11 +380,14 @@ def recovery_history_from_persisted(
 def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None = None,
             period_end: date | None = None, client: Any | None = None,
             now: datetime | None = None, access_token: str | None = None,
-            provider_athlete_id: str | None = None) -> RefreshResult:
+            provider_athlete_id: str | None = None,
+            athlete_alias: str | None = None) -> RefreshResult:
     """Retrieve once, normalize once, calculate canonical results, then replace atomically."""
     env = environ or os.environ
     context = context_from_environment(
-        env, provider_athlete_id=provider_athlete_id
+        env,
+        provider_athlete_id=provider_athlete_id,
+        athlete_alias=athlete_alias,
     )
     token = (access_token or env.get("INTERVALS_ACCESS_TOKEN", "")).strip()
     salt = env.get("ONFLOWS_SNAPSHOT_SALT", "").strip()

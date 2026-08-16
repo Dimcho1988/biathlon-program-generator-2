@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from apps.api.cloud import AthleteContext, InMemorySnapshotRepository, normalize_wellness, service_token_valid
 from apps.api.hrmod import calculate_hrmod
+from apps.api import main as api_main
 from apps.api.main import app
 
 
@@ -51,3 +52,60 @@ def test_constant_time_boundary_semantics():
     assert service_token_valid("same", "same")
     assert not service_token_valid(None, "same")
     assert not service_token_valid("same", "")
+
+
+def test_real_endpoint_selects_only_the_server_authenticated_athlete(monkeypatch):
+    class Repository:
+        def __init__(self):
+            self.requested_alias = None
+
+        def latest(self, athlete_alias):
+            self.requested_alias = athlete_alias
+            return None
+
+    repository = Repository()
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
+    monkeypatch.setenv("ONFLOWS_ATHLETE_ALIAS", "pilot")
+    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/v2/real/training-status",
+        headers={
+            "Authorization": "Bearer secret-value",
+            "X-OnFlows-Athlete-Alias": "ath-second-profile",
+        },
+    )
+
+    assert response.status_code == 503
+    assert repository.requested_alias == "ath-second-profile"
+
+
+def test_login_ticket_is_consumed_through_the_protected_server_boundary(monkeypatch):
+    class Repository:
+        def __init__(self):
+            self.tickets = {"one-time-ticket-value-with-32-chars": "ath-profile"}
+
+        def consume_login_ticket(self, ticket):
+            return self.tickets.pop(ticket, None)
+
+    repository = Repository()
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
+    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    client = TestClient(app)
+    body = {"ticket": "one-time-ticket-value-with-32-chars"}
+
+    first = client.post(
+        "/api/v2/session/exchange",
+        headers={"Authorization": "Bearer secret-value"},
+        json=body,
+    )
+    replay = client.post(
+        "/api/v2/session/exchange",
+        headers={"Authorization": "Bearer secret-value"},
+        json=body,
+    )
+
+    assert first.status_code == 200
+    assert first.json() == {"athlete_alias": "ath-profile"}
+    assert replay.status_code == 401

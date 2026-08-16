@@ -28,6 +28,7 @@ export function Dashboard({
   loadHistoryMessage,
   recoveryHistoryMessage,
   integrationActions = false,
+  sessionActions = false,
   notice,
 }: {
   data: TrainingStatus;
@@ -37,6 +38,7 @@ export function Dashboard({
   loadHistoryMessage?: string;
   recoveryHistoryMessage?: string;
   integrationActions?: boolean;
+  sessionActions?: boolean;
   notice?: string;
 }) {
   const qualityScore = data.data_quality.latest_activity_quality_score;
@@ -94,7 +96,7 @@ export function Dashboard({
           </dl>
         </details>
       </section>
-      <footer><span className="footer-brand">onFlows</span><p>Данните са диагностичен изглед на съществуващия модел.</p>{integrationActions && <form action="/api/integrations/intervals/refresh" method="post"><button className="text-action" type="submit">Обнови данните</button></form>}</footer>
+      <footer><span className="footer-brand">onFlows</span><p>Данните са диагностичен изглед на съществуващия модел.</p><div>{integrationActions && <form action="/api/integrations/intervals/refresh" method="post"><button className="text-action" type="submit">Обнови данните</button></form>}{sessionActions && <form action="/api/session/logout" method="post"><button className="text-action" type="submit">Смени профила</button></form>}</div></footer>
     </main>
   );
 }

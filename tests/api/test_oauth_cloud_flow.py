@@ -8,7 +8,12 @@ import httpx
 import pytest
 
 from apps.api import oauth_service
-from apps.api.oauth_service import OAuthFlowError, begin_authorization, complete_authorization
+from apps.api.oauth_service import (
+    OAuthFlowError,
+    begin_authorization,
+    complete_authorization,
+    issue_login_ticket,
+)
 from apps.api.oauth_store import PendingOAuthState, SupabasePilotRepository, TokenCipher
 from intervals_inspector.oauth import OAuthGrant, READ_ONLY_SCOPES
 
@@ -27,6 +32,9 @@ class Repository:
     def __init__(self):
         self.pending = None
         self.saved = None
+        self.aliases_by_provider = {"12345": "pilot"}
+        self.providers_by_alias = {"pilot": "12345"}
+        self.ticket = None
 
     def create_oauth_state(self, **values):
         self.pending = values
@@ -35,10 +43,25 @@ class Repository:
         if self.pending is None or self.pending["nonce"] != nonce:
             return None
         self.pending = None
-        return PendingOAuthState("pilot", ENV["INTERVALS_REDIRECT_URI"])
+        return PendingOAuthState(
+            self.pending_alias, ENV["INTERVALS_REDIRECT_URI"]
+        )
+
+    @property
+    def pending_alias(self):
+        return "pilot"
+
+    def alias_for_provider(self, provider_athlete_id):
+        return self.aliases_by_provider.get(provider_athlete_id)
+
+    def provider_for_alias(self, athlete_alias):
+        return self.providers_by_alias.get(athlete_alias)
 
     def save_connection(self, **values):
         self.saved = values
+
+    def create_login_ticket(self, **values):
+        self.ticket = values
 
 
 class CapturingClient:
@@ -90,7 +113,7 @@ def test_supabase_auth_headers_support_current_and_legacy_server_keys(
 def test_oauth_state_is_persisted_consumed_once_and_grant_is_stored(monkeypatch):
     repository = Repository()
     now = datetime(2026, 8, 15, 18, tzinfo=timezone.utc)
-    url = begin_authorization(repository, environ=ENV, now=now)
+    url = begin_authorization(repository, environ=ENV, now=now, athlete_alias="pilot")
     query = parse_qs(urlparse(url).query)
     state = query["state"][0]
     assert query["scope"] == [",".join(READ_ONLY_SCOPES)]
@@ -107,12 +130,13 @@ def test_oauth_state_is_persisted_consumed_once_and_grant_is_stored(monkeypatch)
             token_type="Bearer",
         ),
     )
-    complete_authorization(
+    alias = complete_authorization(
         repository,
         {"code": "one-time-code", "state": state},
         environ=ENV,
         now=now,
     )
+    assert alias == "pilot"
     assert repository.saved == {
         "athlete_alias": "pilot",
         "provider_athlete_id": "12345",
@@ -131,7 +155,7 @@ def test_oauth_state_is_persisted_consumed_once_and_grant_is_stored(monkeypatch)
 def test_missing_read_scope_is_rejected(monkeypatch):
     repository = Repository()
     now = datetime(2026, 8, 15, 18, tzinfo=timezone.utc)
-    url = begin_authorization(repository, environ=ENV, now=now)
+    url = begin_authorization(repository, environ=ENV, now=now, athlete_alias="pilot")
     state = parse_qs(urlparse(url).query)["state"][0]
     monkeypatch.setattr(
         oauth_service,
@@ -151,3 +175,41 @@ def test_missing_read_scope_is_rejected(monkeypatch):
             environ=ENV,
             now=now,
         )
+
+
+def test_new_provider_gets_opaque_alias_and_short_lived_login_ticket(monkeypatch):
+    class NewRepository(Repository):
+        @property
+        def pending_alias(self):
+            return None
+
+    repository = NewRepository()
+    repository.aliases_by_provider = {}
+    repository.providers_by_alias = {}
+    now = datetime(2026, 8, 15, 18, tzinfo=timezone.utc)
+    url = begin_authorization(repository, environ=ENV, now=now)
+    state = parse_qs(urlparse(url).query)["state"][0]
+    monkeypatch.setattr(
+        oauth_service,
+        "exchange_authorization_code",
+        lambda **_: OAuthGrant(
+            access_token="provider-token",
+            athlete_id="new-provider-id",
+            athlete_name=None,
+            scopes=READ_ONLY_SCOPES,
+            token_type="Bearer",
+        ),
+    )
+
+    alias = complete_authorization(
+        repository,
+        {"code": "one-time-code", "state": state},
+        environ=ENV,
+        now=now,
+    )
+    assert alias.startswith("ath-")
+    assert "new-provider-id" not in alias
+    ticket = issue_login_ticket(repository, alias, now=now)
+    assert len(ticket) >= 32
+    assert repository.ticket["athlete_alias"] == alias
+    assert repository.ticket["expires_at"] > now

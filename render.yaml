@@ -77,3 +77,7 @@ services:
         value: real
       - key: ONFLOWS_API_BASE_URL
         sync: false
+      - key: ONFLOWS_PROFILE_MODE
+        value: multi
+      - key: ONFLOWS_SESSION_SECRET
+        generateValue: true

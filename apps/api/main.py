@@ -1,7 +1,9 @@
 """FastAPI entry point for the onFlows read-only API."""
 
 import os
+import re
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -13,6 +15,7 @@ from .oauth_service import (
     begin_authorization,
     complete_authorization,
     connection_status,
+    issue_login_ticket,
     settings_from_environment,
 )
 from .oauth_store import (
@@ -34,11 +37,14 @@ from .schemas import (
     OAuthAuthorizationResponse,
     OAuthConnectionStatusResponse,
     RecoveryHistoryResponse,
+    SessionExchangeRequest,
+    SessionExchangeResponse,
     TrainingStatusResponse,
 )
 from .training_status import build_demo_training_status
 
 app = FastAPI(title="onFlows API", version="1.0.0")
+ATHLETE_ALIAS_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{2,63}$")
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -81,11 +87,23 @@ def _pilot_alias() -> str:
     return alias
 
 
+def _validated_alias(alias: str | None, *, fallback: bool = True) -> str | None:
+    candidate = alias.strip() if alias else (_pilot_alias() if fallback else None)
+    if candidate is not None and not ATHLETE_ALIAS_PATTERN.fullmatch(candidate):
+        raise HTTPException(status_code=400, detail="Athlete session is invalid")
+    return candidate
+
+
 @app.get("/api/v2/real/training-status", response_model=TrainingStatusResponse)
-def real_training_status(authorization: Annotated[str | None, Header()] = None):
+def real_training_status(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
     _authorize(authorization)
     try:
-        snapshot = _repository().latest(_pilot_alias())
+        snapshot = _repository().latest(_validated_alias(athlete_alias))
     except PersistentStoreFailure as exc:
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
@@ -103,10 +121,15 @@ def real_training_status(authorization: Annotated[str | None, Header()] = None):
 
 
 @app.get("/api/v2/real/load-history", response_model=LoadHistoryResponse)
-def real_load_history(authorization: Annotated[str | None, Header()] = None):
+def real_load_history(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
     _authorize(authorization)
     try:
-        snapshot = _repository().latest(_pilot_alias())
+        snapshot = _repository().latest(_validated_alias(athlete_alias))
     except PersistentStoreFailure as exc:
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
@@ -125,10 +148,15 @@ def real_load_history(authorization: Annotated[str | None, Header()] = None):
 
 
 @app.get("/api/v2/real/recovery-history", response_model=RecoveryHistoryResponse)
-def real_recovery_history(authorization: Annotated[str | None, Header()] = None):
+def real_recovery_history(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
     _authorize(authorization)
     try:
-        snapshot = _repository().latest(_pilot_alias())
+        snapshot = _repository().latest(_validated_alias(athlete_alias))
     except PersistentStoreFailure as exc:
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
@@ -147,17 +175,24 @@ def real_recovery_history(authorization: Annotated[str | None, Header()] = None)
 
 
 @app.post("/api/v2/real/refresh", status_code=202)
-def refresh_real_data(authorization: Annotated[str | None, Header()] = None):
+def refresh_real_data(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
     _authorize(authorization)
     try:
         repository = _repository()
-        connection = repository.connection(_pilot_alias())
+        resolved_alias = _validated_alias(athlete_alias)
+        connection = repository.connection(resolved_alias)
         if connection is None or connection.status != "CONNECTED":
             raise ConfigurationError("Intervals profile is not connected")
         result = refresh(
             repository,
             access_token=connection.access_token,
             provider_athlete_id=connection.provider_athlete_id,
+            athlete_alias=resolved_alias,
         )
     except ConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -177,10 +212,17 @@ def refresh_real_data(authorization: Annotated[str | None, Header()] = None):
     "/api/v2/integrations/intervals/authorize",
     response_model=OAuthAuthorizationResponse,
 )
-def authorize_intervals(authorization: Annotated[str | None, Header()] = None):
+def authorize_intervals(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
     _authorize(authorization)
     try:
-        url = begin_authorization(_repository())
+        url = begin_authorization(
+            _repository(), athlete_alias=_validated_alias(athlete_alias, fallback=False)
+        )
     except (OAuthConfigurationError, PersistentStoreFailure) as exc:
         raise HTTPException(
             status_code=503, detail="Intervals OAuth connection is unavailable"
@@ -192,10 +234,17 @@ def authorize_intervals(authorization: Annotated[str | None, Header()] = None):
     "/api/v2/integrations/intervals/status",
     response_model=OAuthConnectionStatusResponse,
 )
-def intervals_status(authorization: Annotated[str | None, Header()] = None):
+def intervals_status(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
     _authorize(authorization)
     try:
-        status = connection_status(_repository())
+        status = connection_status(
+            _repository(), athlete_alias=_validated_alias(athlete_alias)
+        )
     except (OAuthConfigurationError, PersistentStoreFailure) as exc:
         raise HTTPException(
             status_code=503, detail="Intervals OAuth connection is unavailable"
@@ -215,7 +264,11 @@ def intervals_callback(request: Request):
         ) from exc
     destination = settings.web_base_url.rstrip("/")
     try:
-        complete_authorization(_repository(), dict(request.query_params))
+        repository = _repository()
+        athlete_alias = complete_authorization(
+            repository, dict(request.query_params)
+        )
+        ticket = issue_login_ticket(repository, athlete_alias)
     except (
         OAuthConfigurationError,
         OAuthFlowError,
@@ -223,4 +276,26 @@ def intervals_callback(request: Request):
         PersistentStoreFailure,
     ):
         return RedirectResponse(f"{destination}/?intervals=error", status_code=303)
-    return RedirectResponse(f"{destination}/?intervals=connected", status_code=303)
+    return RedirectResponse(
+        f"{destination}/api/session/complete?ticket={quote(ticket, safe='')}",
+        status_code=303,
+    )
+
+
+@app.post("/api/v2/session/exchange", response_model=SessionExchangeResponse)
+def exchange_session(
+    body: SessionExchangeRequest,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    _authorize(authorization)
+    if not 32 <= len(body.ticket) <= 128:
+        raise HTTPException(status_code=400, detail="Login ticket is invalid")
+    try:
+        athlete_alias = _repository().consume_login_ticket(body.ticket)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    if athlete_alias is None or _validated_alias(athlete_alias, fallback=False) is None:
+        raise HTTPException(status_code=401, detail="Login ticket is invalid or expired")
+    return SessionExchangeResponse(athlete_alias=athlete_alias)

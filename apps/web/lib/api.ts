@@ -9,14 +9,18 @@ const TIMEOUT_MS = 75_000;
 export type DataMode = "api" | "fixture";
 export interface TrainingStatusResult { data: TrainingStatus; mode: DataMode }
 
-async function fetchApiResource(path: string, token?: string): Promise<unknown> {
+async function fetchApiResource(path: string, token?: string, athleteAlias?: string): Promise<unknown> {
   const baseUrl = process.env.ONFLOWS_API_BASE_URL;
   if (!baseUrl) throw new Error("ONFLOWS_API_BASE_URL не е зададен. Изберете API адрес или explicit fixture режим.");
   let response: Response;
   try {
     response = await fetch(new URL(path, baseUrl), {
       signal: AbortSignal.timeout(TIMEOUT_MS), cache: "no-store",
-      headers: token ? { Accept: "application/json", Authorization: `Bearer ${token}` } : { Accept: "application/json" },
+      headers: {
+        Accept: "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(athleteAlias ? { "X-OnFlows-Athlete-Alias": athleteAlias } : {}),
+      },
     });
   } catch (error) {
     throw new Error("API услугата не отговори навреме или не е достъпна.", { cause: error });
@@ -25,28 +29,28 @@ async function fetchApiResource(path: string, token?: string): Promise<unknown> 
   try { return await response.json(); } catch (error) { throw new Error("API услугата върна невалиден JSON.", { cause: error }); }
 }
 
-export async function getTrainingStatus(): Promise<TrainingStatusResult> {
+export async function getTrainingStatus(athleteAlias?: string): Promise<TrainingStatusResult> {
   if (process.env.ONFLOWS_DATA_MODE === "fixture")
     return { data: parseTrainingStatus(trainingStatusFixture), mode: "fixture" };
   const real = process.env.ONFLOWS_API_RESOURCE === "real";
   const token = process.env.ONFLOWS_SERVICE_TOKEN;
   if (real && !token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
-  const payload = await fetchApiResource(real ? "/api/v2/real/training-status" : "/api/v1/demo/training-status", token);
+  const payload = await fetchApiResource(real ? "/api/v2/real/training-status" : "/api/v1/demo/training-status", token, athleteAlias);
   return { data: parseTrainingStatus(payload), mode: "api" };
 }
 
-export async function getLoadHistory(): Promise<LoadHistory | null> {
+export async function getLoadHistory(athleteAlias?: string): Promise<LoadHistory | null> {
   if (process.env.ONFLOWS_DATA_MODE === "fixture") return parseLoadHistory(loadHistoryFixture);
   if (process.env.ONFLOWS_API_RESOURCE !== "real") return null;
   const token = process.env.ONFLOWS_SERVICE_TOKEN;
   if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
-  return parseLoadHistory(await fetchApiResource("/api/v2/real/load-history", token));
+  return parseLoadHistory(await fetchApiResource("/api/v2/real/load-history", token, athleteAlias));
 }
 
-export async function getRecoveryHistory(): Promise<RecoveryHistory | null> {
+export async function getRecoveryHistory(athleteAlias?: string): Promise<RecoveryHistory | null> {
   if (process.env.ONFLOWS_DATA_MODE === "fixture") return parseRecoveryHistory(recoveryHistoryFixture);
   if (process.env.ONFLOWS_API_RESOURCE !== "real") return null;
   const token = process.env.ONFLOWS_SERVICE_TOKEN;
   if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
-  return parseRecoveryHistory(await fetchApiResource("/api/v2/real/recovery-history", token));
+  return parseRecoveryHistory(await fetchApiResource("/api/v2/real/recovery-history", token, athleteAlias));
 }

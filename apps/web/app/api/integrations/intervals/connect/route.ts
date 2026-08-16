@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { currentAthleteAlias } from "../../../../../lib/athlete-session";
 
 const apiConfiguration = () => {
   const baseUrl = process.env.ONFLOWS_API_BASE_URL;
@@ -10,10 +11,15 @@ const apiConfiguration = () => {
 export async function GET() {
   try {
     const { baseUrl, token } = apiConfiguration();
+    const athleteAlias = await currentAthleteAlias();
     const response = await fetch(new URL("/api/v2/integrations/intervals/authorize", baseUrl), {
       method: "POST",
       cache: "no-store",
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+        ...(athleteAlias ? { "X-OnFlows-Athlete-Alias": athleteAlias } : {}),
+      },
       // The preview API runs on Render Free and may need 50+ seconds to wake.
       signal: AbortSignal.timeout(75_000),
     });

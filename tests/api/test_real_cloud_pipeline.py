@@ -6,6 +6,7 @@ import pytest
 
 from apps.api.cloud import InMemorySnapshotRepository
 from apps.api.real_service import (
+    ConfigurationError,
     ProviderFailure,
     _bounded_percentage,
     load_history_from_persisted,
@@ -141,3 +142,17 @@ def test_provider_failure_retains_last_valid_snapshot_and_is_sanitized():
         refresh(repo, environ=ENV, client=Client(fail=True), period_end=date(2026, 8, 15))
     assert "leaked" not in str(caught.value)
     assert repo.latest("pilot")["sentinel"] is True
+
+
+def test_another_athlete_cannot_inherit_pilot_physiological_inputs():
+    with pytest.raises(
+        ConfigurationError, match="Athlete-specific physiological configuration"
+    ):
+        refresh(
+            InMemorySnapshotRepository(),
+            environ=ENV,
+            client=Client(),
+            athlete_alias="ath-another-profile",
+            provider_athlete_id="another-private-id",
+            period_end=date(2026, 8, 15),
+        )

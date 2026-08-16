@@ -1,6 +1,7 @@
-export function ErrorState({ message, integrationActions = false, notice }: {
+export function ErrorState({ message, integrationActions = false, refreshAvailable = true, notice }: {
   message: string;
   integrationActions?: boolean;
+  refreshAvailable?: boolean;
   notice?: string;
 }) {
   return (
@@ -12,7 +13,7 @@ export function ErrorState({ message, integrationActions = false, notice }: {
       {notice && <p className="connection-notice">{notice}</p>}
       {integrationActions && <div className="integration-actions">
         <a className="action-button" href="/api/integrations/intervals/connect">Свържи Intervals</a>
-        <form action="/api/integrations/intervals/refresh" method="post"><button className="action-button secondary" type="submit">Обнови реалните данни</button></form>
+        {refreshAvailable && <form action="/api/integrations/intervals/refresh" method="post"><button className="action-button secondary" type="submit">Обнови реалните данни</button></form>}
       </div>}
       <p className="state-help">Проверете API адреса и опитайте отново. Демо данни не се зареждат автоматично.</p>
     </main>
