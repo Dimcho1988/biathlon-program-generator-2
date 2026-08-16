@@ -14,6 +14,29 @@ import json
 import math
 from threading import RLock
 from typing import Any, Mapping, Protocol
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+
+@dataclass(frozen=True)
+class AthleteModelSettings:
+    """Athlete-specific inputs; shared model versions remain service-wide."""
+
+    zone_bounds_bpm: tuple[int, int, int, int, int, int]
+    timezone: str
+
+    def validate(self) -> "AthleteModelSettings":
+        if len(self.zone_bounds_bpm) != 6 or any(
+            not 30 <= value <= 240 for value in self.zone_bounds_bpm
+        ) or any(
+            left >= right
+            for left, right in zip(self.zone_bounds_bpm, self.zone_bounds_bpm[1:])
+        ):
+            raise ValueError("six strictly increasing HR boundaries are required")
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("a valid IANA timezone is required") from exc
+        return self
 
 
 @dataclass(frozen=True)
@@ -108,4 +131,3 @@ class InMemorySnapshotRepository:
         with self._lock: return self._items.get(athlete_alias)
     def replace(self, athlete_alias: str, snapshot: Mapping[str, Any]) -> None:
         with self._lock: self._items[athlete_alias] = dict(snapshot)
-

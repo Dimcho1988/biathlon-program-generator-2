@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from apps.api.cloud import InMemorySnapshotRepository
+from apps.api.cloud import AthleteModelSettings, InMemorySnapshotRepository
 from apps.api.real_service import (
     ConfigurationError,
     ProviderFailure,
@@ -156,3 +156,19 @@ def test_another_athlete_cannot_inherit_pilot_physiological_inputs():
             provider_athlete_id="another-private-id",
             period_end=date(2026, 8, 15),
         )
+
+
+def test_another_athlete_can_refresh_with_explicit_individual_settings():
+    result = refresh(
+        InMemorySnapshotRepository(),
+        environ=ENV,
+        client=Client(),
+        athlete_alias="ath-another-profile",
+        provider_athlete_id="another-private-id",
+        athlete_settings=AthleteModelSettings(
+            (90, 115, 135, 155, 175, 195), "Europe/Sofia"
+        ),
+        period_end=date(2026, 8, 15),
+    )
+    assert result.processed_activities == 1
+    assert result.snapshot.athlete_id == "ath-another-profile"

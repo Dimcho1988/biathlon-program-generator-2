@@ -17,7 +17,7 @@ from urllib.parse import quote
 import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from .cloud import SnapshotRepository
+from .cloud import AthleteModelSettings, SnapshotRepository
 
 
 class PersistentStoreConfigurationError(RuntimeError):
@@ -321,6 +321,47 @@ class SupabasePilotRepository(SnapshotRepository):
             access_token=self._cipher.decrypt(envelope, athlete_alias=athlete_alias),
             scopes=tuple(scopes),
             status=status,
+        )
+
+    def athlete_settings(self, athlete_alias: str) -> AthleteModelSettings | None:
+        alias = quote(athlete_alias, safe="")
+        response = self._request(
+            "GET",
+            "/onflows_athlete_settings?select=hr_zone_bounds,timezone"
+            f"&athlete_alias=eq.{alias}&limit=1",
+        )
+        payload = self._json(response)
+        if not isinstance(payload, list) or not payload:
+            return None
+        row = payload[0]
+        bounds = row.get("hr_zone_bounds") if isinstance(row, Mapping) else None
+        athlete_timezone = row.get("timezone") if isinstance(row, Mapping) else None
+        if (
+            not isinstance(bounds, list)
+            or len(bounds) != 6
+            or not all(isinstance(value, int) and not isinstance(value, bool) for value in bounds)
+            or not isinstance(athlete_timezone, str)
+        ):
+            raise PersistentStoreFailure("Stored athlete settings are invalid")
+        try:
+            return AthleteModelSettings(tuple(bounds), athlete_timezone).validate()
+        except ValueError as exc:
+            raise PersistentStoreFailure("Stored athlete settings are invalid") from exc
+
+    def save_athlete_settings(
+        self, athlete_alias: str, settings: AthleteModelSettings
+    ) -> None:
+        validated = settings.validate()
+        self._request(
+            "POST",
+            "/onflows_athlete_settings?on_conflict=athlete_alias",
+            json={
+                "athlete_alias": athlete_alias,
+                "hr_zone_bounds": list(validated.zone_bounds_bpm),
+                "timezone": validated.timezone,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
         )
 
     def latest(self, athlete_alias: str) -> Mapping[str, Any] | None:

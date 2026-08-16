@@ -32,6 +32,17 @@ class SessionExchangeResponse(StrictModel):
     athlete_alias: str
 
 
+class AthleteSettingsInput(StrictModel):
+    hr_zone_bounds_bpm: tuple[int, int, int, int, int, int]
+    timezone: str
+
+
+class AthleteSettingsResponse(StrictModel):
+    configured: bool
+    hr_zone_bounds_bpm: tuple[int, int, int, int, int, int] | None = None
+    timezone: str | None = None
+
+
 class ModelMetadata(StrictModel):
     algorithm_version: str
     effective_hr_version: str

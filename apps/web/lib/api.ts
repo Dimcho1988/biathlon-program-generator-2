@@ -8,6 +8,11 @@ import { parseRecoveryHistory, type RecoveryHistory } from "./recovery-history";
 const TIMEOUT_MS = 75_000;
 export type DataMode = "api" | "fixture";
 export interface TrainingStatusResult { data: TrainingStatus; mode: DataMode }
+export interface AthleteSettings {
+  configured: boolean;
+  hr_zone_bounds_bpm: [number, number, number, number, number, number] | null;
+  timezone: string | null;
+}
 
 async function fetchApiResource(path: string, token?: string, athleteAlias?: string): Promise<unknown> {
   const baseUrl = process.env.ONFLOWS_API_BASE_URL;
@@ -53,4 +58,19 @@ export async function getRecoveryHistory(athleteAlias?: string): Promise<Recover
   const token = process.env.ONFLOWS_SERVICE_TOKEN;
   if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
   return parseRecoveryHistory(await fetchApiResource("/api/v2/real/recovery-history", token, athleteAlias));
+}
+
+export async function getAthleteSettings(athleteAlias: string): Promise<AthleteSettings> {
+  const token = process.env.ONFLOWS_SERVICE_TOKEN;
+  if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
+  const payload = await fetchApiResource("/api/v2/athlete/settings", token, athleteAlias);
+  if (typeof payload !== "object" || payload === null || !("configured" in payload) || typeof payload.configured !== "boolean")
+    throw new Error("API услугата върна невалидни настройки на спортиста.");
+  const bounds = "hr_zone_bounds_bpm" in payload ? payload.hr_zone_bounds_bpm : null;
+  const timezone = "timezone" in payload ? payload.timezone : null;
+  if (bounds !== null && (!Array.isArray(bounds) || bounds.length !== 6 || !bounds.every((value) => Number.isInteger(value))))
+    throw new Error("API услугата върна невалидни HR граници.");
+  if (timezone !== null && typeof timezone !== "string")
+    throw new Error("API услугата върна невалидна часова зона.");
+  return { configured: payload.configured, hr_zone_bounds_bpm: bounds as AthleteSettings["hr_zone_bounds_bpm"], timezone };
 }

@@ -1,9 +1,10 @@
-import { getLoadHistory, getRecoveryHistory, getTrainingStatus, type TrainingStatusResult } from "../lib/api";
+import { getAthleteSettings, getLoadHistory, getRecoveryHistory, getTrainingStatus, type TrainingStatusResult } from "../lib/api";
 import type { LoadHistory } from "../lib/load-history";
 import type { RecoveryHistory } from "../lib/recovery-history";
 import { Dashboard } from "../components/dashboard";
 import { ErrorState } from "../components/error-state";
 import { currentAthleteAlias, multiProfileMode } from "../lib/athlete-session";
+import { AthleteSettingsForm } from "../components/athlete-settings-form";
 
 type PageResult =
   | { ok: true; value: TrainingStatusResult; loadHistory: LoadHistory | null; recoveryHistory: RecoveryHistory | null; loadHistoryMessage?: string; recoveryHistoryMessage?: string }
@@ -19,7 +20,13 @@ const notices: Record<string, string> = {
   "session-required": "Свържете Intervals профила, за да отворите неговите данни.",
 };
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ intervals?: string }> }) {
+const settingsNotices: Record<string, string> = {
+  saved: "Индивидуалните настройки са запазени. Стартирайте първото обновяване.",
+  invalid: "Границите трябва да са шест последователно нарастващи цели стойности между 30 и 240 уд/мин.",
+  error: "Настройките не бяха запазени. Опитайте отново.",
+};
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ intervals?: string; settings?: string }> }) {
   const query = await searchParams;
   let result: PageResult;
   const integrationActions = process.env.ONFLOWS_API_RESOURCE === "real";
@@ -58,9 +65,23 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
     };
   }
 
-  const notice = query.intervals === "connected" && result.ok && result.loadHistory
+  const settingsNotice = query.settings ? settingsNotices[query.settings] : undefined;
+  let athleteSettingsRequired = false;
+  if (!result.ok && multiProfile && athleteAlias) {
+    try {
+      const settings = await getAthleteSettings(athleteAlias);
+      athleteSettingsRequired = !settings.configured;
+    } catch {
+      // Keep the normal API error visible when the settings service is unavailable.
+    }
+  }
+  if (athleteSettingsRequired)
+    return <AthleteSettingsForm notice={settingsNotice} />;
+
+  const integrationNotice = query.intervals === "connected" && result.ok && result.loadHistory
     ? undefined
     : query.intervals ? notices[query.intervals] : undefined;
+  const notice = settingsNotice ?? integrationNotice;
   return result.ok
     ? <Dashboard {...result.value} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} notice={notice} />
     : <ErrorState message={result.message} integrationActions={integrationActions} notice={notice} />;

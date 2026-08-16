@@ -6,12 +6,13 @@ remain server-side; Next.js receives neither.
 
 ## Persistent data boundary
 
-Apply `supabase/migrations/202608150001_cloud_oauth_pilot.sql` once in the
-Supabase SQL editor. The migration creates three RLS-enabled, server-only
-tables:
+Apply the migrations in `supabase/migrations/` once, in filename order, in the
+Supabase SQL editor. They create RLS-enabled, server-only tables for:
 
 * one-time OAuth state hashes;
 * encrypted Intervals access tokens and the minimum connection metadata;
+* short-lived, one-use login tickets;
+* athlete-specific HR boundaries and timezone;
 * aggregate athlete snapshots containing `training-status-v1` and
   `load-history-v1` read models.
 
@@ -38,9 +39,10 @@ Never prefix these values with `NEXT_PUBLIC_` and never commit their values.
   or anon key.
 * `ONFLOWS_TOKEN_ENCRYPTION_KEY` — generated 256-bit Render value used for
   AES-256-GCM token encryption.
-* `ONFLOWS_ATHLETE_ALIAS` — pseudonymous public pilot alias.
-* `ONFLOWS_HR_ZONE_BOUNDS` — six comma-separated integer HR boundaries.
-* `ONFLOWS_ATHLETE_TIMEZONE` — IANA timezone.
+* `ONFLOWS_ATHLETE_ALIAS` — pseudonymous public alias for the original pilot.
+* `ONFLOWS_HR_ZONE_BOUNDS` — six comma-separated integer HR boundaries used
+  only as the original pilot's backward-compatible fallback.
+* `ONFLOWS_ATHLETE_TIMEZONE` — original pilot's fallback IANA timezone.
 * `ONFLOWS_INTRAZONE_VERSION` — `intra_zone_linear_v1`.
 * `ONFLOWS_TREF_VERSION` — approved fixed-Tref parameter version.
 * `ONFLOWS_RECOVERY_VERSION` — approved canonical recovery parameter version.
@@ -62,6 +64,12 @@ There is no manually entered `INTERVALS_ACCESS_TOKEN` or
 The browser starts OAuth through a same-origin Next.js route. Next.js calls the
 protected FastAPI authorization endpoint server-side and validates that the
 returned destination is exactly `https://intervals.icu/oauth/authorize`.
+
+New profiles must save six individually established HR boundaries and an IANA
+timezone before their first refresh. These inputs are scoped to the signed
+athlete session. A profile never inherits another athlete's physiological
+inputs. Tref, intra-zone and recovery model versions remain approved,
+service-wide configuration rather than duplicated per athlete.
 
 Refresh remains explicit (`POST /api/v2/real/refresh`). A complete analysis
 atomically replaces the persisted aggregate snapshot. Retrieval or analysis

@@ -8,7 +8,7 @@ from urllib.parse import quote
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from .cloud import service_token_valid
+from .cloud import AthleteModelSettings, service_token_valid
 from .oauth_service import (
     OAuthConfigurationError,
     OAuthFlowError,
@@ -32,6 +32,8 @@ from .real_service import (
     training_status_from_persisted,
 )
 from .schemas import (
+    AthleteSettingsInput,
+    AthleteSettingsResponse,
     HealthResponse,
     LoadHistoryResponse,
     OAuthAuthorizationResponse,
@@ -188,11 +190,13 @@ def refresh_real_data(
         connection = repository.connection(resolved_alias)
         if connection is None or connection.status != "CONNECTED":
             raise ConfigurationError("Intervals profile is not connected")
+        athlete_settings = repository.athlete_settings(resolved_alias)
         result = refresh(
             repository,
             access_token=connection.access_token,
             provider_athlete_id=connection.provider_athlete_id,
             athlete_alias=resolved_alias,
+            athlete_settings=athlete_settings,
         )
     except ConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -206,6 +210,65 @@ def refresh_real_data(
         "status": "refreshed",
         "processed_activities": result.processed_activities,
     }
+
+
+@app.get("/api/v2/athlete/settings", response_model=AthleteSettingsResponse)
+def athlete_settings(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    try:
+        settings = _repository().athlete_settings(_validated_alias(athlete_alias))
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    if settings is None:
+        return AthleteSettingsResponse(configured=False)
+    return AthleteSettingsResponse(
+        configured=True,
+        hr_zone_bounds_bpm=settings.zone_bounds_bpm,
+        timezone=settings.timezone,
+    )
+
+
+@app.put("/api/v2/athlete/settings", response_model=AthleteSettingsResponse)
+def update_athlete_settings(
+    body: AthleteSettingsInput,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    resolved_alias = _validated_alias(athlete_alias)
+    try:
+        settings = AthleteModelSettings(
+            body.hr_zone_bounds_bpm, body.timezone.strip()
+        ).validate()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Six increasing HR boundaries and a valid timezone are required",
+        ) from exc
+    try:
+        repository = _repository()
+        connection = repository.connection(resolved_alias)
+        if connection is None or connection.status != "CONNECTED":
+            raise HTTPException(status_code=409, detail="Intervals profile is not connected")
+        repository.save_athlete_settings(resolved_alias, settings)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    return AthleteSettingsResponse(
+        configured=True,
+        hr_zone_bounds_bpm=settings.zone_bounds_bpm,
+        timezone=settings.timezone,
+    )
 
 
 @app.post(

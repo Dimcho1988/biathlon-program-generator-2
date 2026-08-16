@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
 import math
 from fastapi.testclient import TestClient
+import pytest
 
-from apps.api.cloud import AthleteContext, InMemorySnapshotRepository, normalize_wellness, service_token_valid
+from apps.api.cloud import AthleteContext, AthleteModelSettings, InMemorySnapshotRepository, normalize_wellness, service_token_valid
 from apps.api.hrmod import calculate_hrmod
 from apps.api import main as api_main
 from apps.api.main import app
@@ -12,6 +13,15 @@ def test_athlete_configuration_validation_and_private_fingerprint():
     context = AthleteContext("pilot", "private-123", (90, 110, 130, 150, 170, 190), "Europe/Sofia", "intra_zone_linear_v1", "tref-300-180-70-20-20-v1", "recovery-v1")
     assert len(context.validate().fingerprint) == 64
     assert "private-123" not in context.fingerprint
+
+
+def test_athlete_model_settings_require_real_boundaries_and_timezone():
+    settings = AthleteModelSettings((100, 120, 140, 160, 180, 200), "Europe/Sofia")
+    assert settings.validate() is settings
+    with pytest.raises(ValueError, match="strictly increasing"):
+        AthleteModelSettings((100, 120, 140, 140, 180, 200), "Europe/Sofia").validate()
+    with pytest.raises(ValueError, match="IANA timezone"):
+        AthleteModelSettings((100, 120, 140, 160, 180, 200), "Sofia").validate()
 
 
 def test_wellness_preserves_missing_stale_invalid_and_units():
@@ -79,6 +89,44 @@ def test_real_endpoint_selects_only_the_server_authenticated_athlete(monkeypatch
 
     assert response.status_code == 503
     assert repository.requested_alias == "ath-second-profile"
+
+
+def test_athlete_settings_are_scoped_to_the_authenticated_profile(monkeypatch):
+    class Connection:
+        status = "CONNECTED"
+
+    class Repository:
+        def __init__(self):
+            self.items = {}
+
+        def connection(self, athlete_alias):
+            return Connection()
+
+        def athlete_settings(self, athlete_alias):
+            return self.items.get(athlete_alias)
+
+        def save_athlete_settings(self, athlete_alias, settings):
+            self.items[athlete_alias] = settings
+
+    repository = Repository()
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
+    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    client = TestClient(app)
+    headers = {
+        "Authorization": "Bearer secret-value",
+        "X-OnFlows-Athlete-Alias": "ath-second-profile",
+    }
+    body = {
+        "hr_zone_bounds_bpm": [100, 120, 140, 160, 180, 200],
+        "timezone": "Europe/Sofia",
+    }
+
+    saved = client.put("/api/v2/athlete/settings", headers=headers, json=body)
+    loaded = client.get("/api/v2/athlete/settings", headers=headers)
+
+    assert saved.status_code == 200
+    assert loaded.json() == {"configured": True, **body}
+    assert list(repository.items) == ["ath-second-profile"]
 
 
 def test_login_ticket_is_consumed_through_the_protected_server_boundary(monkeypatch):

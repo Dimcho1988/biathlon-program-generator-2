@@ -1,12 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cookies } from "next/headers";
 import { GET as connect } from "../app/api/integrations/intervals/connect/route";
 import { POST as refresh } from "../app/api/integrations/intervals/refresh/route";
+import { POST as saveSettings } from "../app/api/athlete/settings/route";
 import { GET as complete } from "../app/api/session/complete/route";
 import { createAthleteSession, verifyAthleteSession } from "../lib/athlete-session";
+
+vi.mock("next/headers", () => ({ cookies: vi.fn() }));
 
 describe("integration route redirects behind a reverse proxy", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.clearAllMocks();
     delete process.env.ONFLOWS_API_BASE_URL;
     delete process.env.ONFLOWS_SERVICE_TOKEN;
     delete process.env.ONFLOWS_PROFILE_MODE;
@@ -92,5 +97,31 @@ describe("integration route redirects behind a reverse proxy", () => {
 
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe("/?intervals=session-error");
+  });
+
+  it("saves physiological inputs only for the signed athlete session", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    process.env.ONFLOWS_PROFILE_MODE = "multi";
+    process.env.ONFLOWS_SESSION_SECRET = "a-secret-value-with-at-least-32-characters";
+    const session = createAthleteSession("ath-test-profile");
+    vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: session }) } as never);
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ configured: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const form = new FormData();
+    [100, 120, 140, 160, 180, 200].forEach((value, index) =>
+      form.set(["z1_low", "z2_low", "z3_low", "z4_low", "z5_low", "z5_high"][index], String(value))
+    );
+    form.set("timezone", "Europe/Sofia");
+
+    const response = await saveSettings(new Request("https://web.example.test/api/athlete/settings", { method: "POST", body: form }));
+
+    expect(response.headers.get("location")).toBe("/?settings=saved");
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers["X-OnFlows-Athlete-Alias"]).toBe("ath-test-profile");
+    expect(JSON.parse(init.body)).toEqual({
+      hr_zone_bounds_bpm: [100, 120, 140, 160, 180, 200],
+      timezone: "Europe/Sofia",
+    });
   });
 });

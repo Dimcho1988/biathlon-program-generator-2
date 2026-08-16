@@ -13,7 +13,7 @@ from typing import Any, Mapping
 from biathlon.constants import fresh_parameters
 from biathlon.effective_hr import EFFECTIVE_HR_SOURCE
 
-from .cloud import AthleteContext, SnapshotRepository, normalize_wellness
+from .cloud import AthleteContext, AthleteModelSettings, SnapshotRepository, normalize_wellness
 from .schemas import (
     ActivityZoneLoad,
     AthleteSnapshot,
@@ -57,32 +57,41 @@ def context_from_environment(
     *,
     provider_athlete_id: str | None = None,
     athlete_alias: str | None = None,
+    athlete_settings: AthleteModelSettings | None = None,
 ) -> AthleteContext:
     env = environ or os.environ
-    required = ("ONFLOWS_ATHLETE_ALIAS", "ONFLOWS_HR_ZONE_BOUNDS")
-    if any(not env.get(key, "").strip() for key in required):
-        raise ConfigurationError("Pilot athlete configuration is incomplete")
     resolved_provider_id = (
         provider_athlete_id or env.get("INTERVALS_ATHLETE_ID", "")
     ).strip()
     if not resolved_provider_id:
         raise ConfigurationError("Pilot athlete configuration is incomplete")
-    configured_alias = env["ONFLOWS_ATHLETE_ALIAS"].strip()
+    configured_alias = env.get("ONFLOWS_ATHLETE_ALIAS", "").strip()
     resolved_alias = athlete_alias or configured_alias
-    if resolved_alias != configured_alias:
-        raise ConfigurationError(
-            "Athlete-specific physiological configuration is required"
-        )
-    try:
-        bounds = tuple(int(item.strip()) for item in env["ONFLOWS_HR_ZONE_BOUNDS"].split(","))
-    except (TypeError, ValueError) as exc:
-        raise ConfigurationError("Pilot HR zone configuration is invalid") from exc
+    if not resolved_alias:
+        raise ConfigurationError("Pilot athlete configuration is incomplete")
+    if athlete_settings is not None:
+        try:
+            settings = athlete_settings.validate()
+        except ValueError as exc:
+            raise ConfigurationError("Athlete physiological configuration is invalid") from exc
+        bounds = settings.zone_bounds_bpm
+        athlete_timezone = settings.timezone
+    else:
+        if resolved_alias != configured_alias:
+            raise ConfigurationError(
+                "Athlete-specific physiological configuration is required"
+            )
+        try:
+            bounds = tuple(int(item.strip()) for item in env["ONFLOWS_HR_ZONE_BOUNDS"].split(","))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ConfigurationError("Pilot HR zone configuration is invalid") from exc
+        athlete_timezone = env.get("ONFLOWS_ATHLETE_TIMEZONE", "").strip()
     try:
         return AthleteContext(
             public_alias=resolved_alias,
             provider_athlete_id=resolved_provider_id,
             zone_bounds_bpm=bounds,
-            timezone=env.get("ONFLOWS_ATHLETE_TIMEZONE", "").strip(),
+            timezone=athlete_timezone,
             intra_zone_version=env.get("ONFLOWS_INTRAZONE_VERSION", "").strip(),
             tref_version=env.get("ONFLOWS_TREF_VERSION", "").strip(),
             recovery_parameter_version=env.get("ONFLOWS_RECOVERY_VERSION", "").strip(),
@@ -381,13 +390,15 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             period_end: date | None = None, client: Any | None = None,
             now: datetime | None = None, access_token: str | None = None,
             provider_athlete_id: str | None = None,
-            athlete_alias: str | None = None) -> RefreshResult:
+            athlete_alias: str | None = None,
+            athlete_settings: AthleteModelSettings | None = None) -> RefreshResult:
     """Retrieve once, normalize once, calculate canonical results, then replace atomically."""
     env = environ or os.environ
     context = context_from_environment(
         env,
         provider_athlete_id=provider_athlete_id,
         athlete_alias=athlete_alias,
+        athlete_settings=athlete_settings,
     )
     token = (access_token or env.get("INTERVALS_ACCESS_TOKEN", "")).strip()
     salt = env.get("ONFLOWS_SNAPSHOT_SALT", "").strip()
