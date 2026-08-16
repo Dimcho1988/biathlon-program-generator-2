@@ -14,7 +14,8 @@ export async function GET() {
       method: "POST",
       cache: "no-store",
       headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-      signal: AbortSignal.timeout(15_000),
+      // The preview API runs on Render Free and may need 50+ seconds to wake.
+      signal: AbortSignal.timeout(75_000),
     });
     if (!response.ok) throw new Error("OAuth start failed");
     const payload: unknown = await response.json();

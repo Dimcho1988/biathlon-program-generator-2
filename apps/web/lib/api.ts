@@ -3,7 +3,9 @@ import { parseLoadHistory, type LoadHistory } from "./load-history";
 import { parseTrainingStatus, type TrainingStatus } from "./training-status";
 import { parseRecoveryHistory, type RecoveryHistory } from "./recovery-history";
 
-const TIMEOUT_MS = 8_000;
+// Render Free can take more than 50 seconds to wake the API after inactivity.
+// Keep the preview reliable without introducing a paid always-on service.
+const TIMEOUT_MS = 75_000;
 export type DataMode = "api" | "fixture";
 export interface TrainingStatusResult { data: TrainingStatus; mode: DataMode }
 
