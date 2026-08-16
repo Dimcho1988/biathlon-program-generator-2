@@ -436,7 +436,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                                     session_salt=salt, parameters=parameters,
                                     period_end=end, days=days, loaded_at_utc=now,
                                     configuration=configuration_with_hr_boundaries(context.zone_bounds_bpm))
-        logger.info(
+        logger.warning(
             "real_refresh_history_result processed=%d limited=%d excluded=%d",
             dataset.processed_activities,
             dataset.limited_activities,
