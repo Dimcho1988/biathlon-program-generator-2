@@ -4,11 +4,12 @@ import base64
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
 
 from apps.api import oauth_service
 from apps.api.oauth_service import OAuthFlowError, begin_authorization, complete_authorization
-from apps.api.oauth_store import PendingOAuthState, TokenCipher
+from apps.api.oauth_store import PendingOAuthState, SupabasePilotRepository, TokenCipher
 from intervals_inspector.oauth import OAuthGrant, READ_ONLY_SCOPES
 
 
@@ -40,6 +41,15 @@ class Repository:
         self.saved = values
 
 
+class CapturingClient:
+    def __init__(self):
+        self.headers = None
+
+    def request(self, method, url, *, headers, **kwargs):
+        self.headers = headers
+        return httpx.Response(201)
+
+
 def test_token_cipher_round_trip_is_bound_to_alias():
     encoded_key = base64.urlsafe_b64encode(bytes(range(32))).decode()
     cipher = TokenCipher(encoded_key)
@@ -48,6 +58,33 @@ def test_token_cipher_round_trip_is_bound_to_alias():
     assert cipher.decrypt(envelope, athlete_alias="pilot") == "provider-token"
     with pytest.raises(Exception):
         cipher.decrypt(envelope, athlete_alias="another-athlete")
+
+
+@pytest.mark.parametrize(
+    ("secret_key", "expected_authorization"),
+    [
+        ("sb_secret_server-key", None),
+        ("legacy.service.role", "Bearer legacy.service.role"),
+    ],
+)
+def test_supabase_auth_headers_support_current_and_legacy_server_keys(
+    secret_key, expected_authorization
+):
+    client = CapturingClient()
+    repository = SupabasePilotRepository(
+        supabase_url="https://project.supabase.co",
+        secret_key=secret_key,
+        encryption_key=base64.urlsafe_b64encode(bytes(range(32))).decode(),
+        client=client,
+    )
+    repository.create_oauth_state(
+        nonce="nonce",
+        athlete_alias="pilot",
+        redirect_uri=ENV["INTERVALS_REDIRECT_URI"],
+        expires_at=datetime(2026, 8, 15, 18, tzinfo=timezone.utc),
+    )
+    assert client.headers["apikey"] == secret_key
+    assert client.headers.get("Authorization") == expected_authorization
 
 
 def test_oauth_state_is_persisted_consumed_once_and_grant_is_stored(monkeypatch):

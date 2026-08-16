@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-export async function POST(request: Request) {
+export async function POST() {
   try {
     const baseUrl = process.env.ONFLOWS_API_BASE_URL;
     const token = process.env.ONFLOWS_SERVICE_TOKEN;
@@ -12,8 +12,8 @@ export async function POST(request: Request) {
       signal: AbortSignal.timeout(180_000),
     });
     if (!response.ok) throw new Error("Refresh failed");
-    return NextResponse.redirect(new URL("/", request.url), 303);
+    return new NextResponse(null, { status: 303, headers: { Location: "/" } });
   } catch {
-    return NextResponse.redirect(new URL("/?intervals=refresh-error", request.url), 303);
+    return new NextResponse(null, { status: 303, headers: { Location: "/?intervals=refresh-error" } });
   }
 }

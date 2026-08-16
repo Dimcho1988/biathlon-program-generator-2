@@ -104,9 +104,12 @@ class SupabasePilotRepository(SnapshotRepository):
         self._base_url = supabase_url.rstrip("/") + "/rest/v1"
         self._headers = {
             "apikey": secret_key,
-            "Authorization": f"Bearer {secret_key}",
             "Content-Type": "application/json",
         }
+        # Supabase's current opaque server keys authenticate through `apikey`.
+        # Legacy service-role keys are JWTs and still require Bearer auth.
+        if not secret_key.startswith("sb_secret_"):
+            self._headers["Authorization"] = f"Bearer {secret_key}"
         self._cipher = TokenCipher(encryption_key)
         self._client = client or httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0))
 

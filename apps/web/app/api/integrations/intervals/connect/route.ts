@@ -7,7 +7,7 @@ const apiConfiguration = () => {
   return { baseUrl, token };
 };
 
-export async function GET(request: Request) {
+export async function GET() {
   try {
     const { baseUrl, token } = apiConfiguration();
     const response = await fetch(new URL("/api/v2/integrations/intervals/authorize", baseUrl), {
@@ -25,6 +25,6 @@ export async function GET(request: Request) {
       throw new Error("OAuth destination is invalid");
     return NextResponse.redirect(destination, 303);
   } catch {
-    return NextResponse.redirect(new URL("/?intervals=connect-error", request.url), 303);
+    return new NextResponse(null, { status: 303, headers: { Location: "/?intervals=connect-error" } });
   }
 }
