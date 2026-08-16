@@ -13,6 +13,8 @@ const notices: Record<string, string> = {
   connected: "Intervals профилът е свързан защитено. Стартирайте първото обновяване.",
   error: "Свързването с Intervals не завърши. Опитайте отново.",
   "connect-error": "Връзката с OAuth услугата не е достъпна в момента.",
+  "connect-start-error": "OAuth връзката с Intervals не стартира. Опитайте отново.",
+  "session-error": "Intervals потвърди връзката, но защитената сесия не беше създадена.",
   "refresh-error": "Обновяването не завърши успешно. Последният валиден анализ е запазен.",
   "session-required": "Свържете Intervals профила, за да отворите неговите данни.",
 };

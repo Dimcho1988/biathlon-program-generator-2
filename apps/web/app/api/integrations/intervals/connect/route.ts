@@ -32,6 +32,7 @@ export async function GET() {
       throw new Error("OAuth destination is invalid");
     return NextResponse.redirect(destination, 303);
   } catch {
-    return new NextResponse(null, { status: 303, headers: { Location: "/?intervals=connect-error" } });
+    console.error("Intervals OAuth start failed");
+    return new NextResponse(null, { status: 303, headers: { Location: "/?intervals=connect-start-error" } });
   }
 }

@@ -21,7 +21,7 @@ describe("integration route redirects behind a reverse proxy", () => {
     const response = await connect();
 
     expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe("/?intervals=connect-error");
+    expect(response.headers.get("location")).toBe("/?intervals=connect-start-error");
   });
 
   it("returns relative dashboard redirects after refresh success and failure", async () => {
@@ -61,5 +61,16 @@ describe("integration route redirects behind a reverse proxy", () => {
     expect(response.headers.get("set-cookie")).toContain("Secure");
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse(init.body)).toEqual({ ticket: "t".repeat(40) });
+  });
+
+  it("distinguishes a failed session handoff from an OAuth start failure", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 401 })));
+
+    const response = await complete(new Request(`https://web.example.test/api/session/complete?ticket=${"t".repeat(40)}`));
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/?intervals=session-error");
   });
 });

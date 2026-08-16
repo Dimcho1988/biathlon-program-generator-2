@@ -35,9 +35,10 @@ export async function GET(request: Request) {
     response.cookies.set(athleteSessionCookie(alias));
     return response;
   } catch {
+    console.error("Athlete session handoff failed");
     return new NextResponse(null, {
       status: 303,
-      headers: { Location: "/?intervals=connect-error" },
+      headers: { Location: "/?intervals=session-error" },
     });
   }
 }
