@@ -30,7 +30,9 @@ Never prefix these values with `NEXT_PUBLIC_` and never commit their values.
 * `INTERVALS_CLIENT_SECRET` — existing onFlows OAuth client secret.
 * `INTERVALS_REDIRECT_URI` — exact FastAPI callback HTTPS URL.
 * `OAUTH_STATE_SECRET` — independent generated state-signing secret.
-* `SUPABASE_URL` — Supabase project URL.
+* `SUPABASE_URL` — Supabase project origin (for example,
+  `https://project-ref.supabase.co`), without `/rest/v1`; the server client
+  appends the REST path.
 * `SUPABASE_SECRET_KEY` — server-only Supabase secret key; never a publishable
   or anon key.
 * `ONFLOWS_TOKEN_ENCRYPTION_KEY` — generated 256-bit Render value used for
