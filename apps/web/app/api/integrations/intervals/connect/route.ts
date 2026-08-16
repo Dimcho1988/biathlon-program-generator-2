@@ -9,9 +9,11 @@ const apiConfiguration = () => {
 };
 
 export async function GET() {
+  let stage = "configuration";
   try {
     const { baseUrl, token } = apiConfiguration();
     const athleteAlias = await currentAthleteAlias();
+    stage = "api-fetch";
     const response = await fetch(new URL("/api/v2/integrations/intervals/authorize", baseUrl), {
       method: "POST",
       cache: "no-store",
@@ -23,16 +25,19 @@ export async function GET() {
       // The preview API runs on Render Free and may need 50+ seconds to wake.
       signal: AbortSignal.timeout(75_000),
     });
+    stage = `api-response-${response.status}`;
     if (!response.ok) throw new Error("OAuth start failed");
+    stage = "api-json";
     const payload: unknown = await response.json();
     if (typeof payload !== "object" || payload === null || !("authorization_url" in payload) || typeof payload.authorization_url !== "string")
       throw new Error("OAuth response is invalid");
+    stage = "provider-destination";
     const destination = new URL(payload.authorization_url);
     if (destination.protocol !== "https:" || destination.hostname !== "intervals.icu" || destination.pathname !== "/oauth/authorize")
       throw new Error("OAuth destination is invalid");
     return NextResponse.redirect(destination, 303);
   } catch {
-    console.error("Intervals OAuth start failed");
+    console.error(`Intervals OAuth start failed [${stage}]`);
     return new NextResponse(null, { status: 303, headers: { Location: "/?intervals=connect-start-error" } });
   }
 }
