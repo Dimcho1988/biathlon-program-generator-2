@@ -8,23 +8,37 @@ const apiConfiguration = () => {
   return { baseUrl, token };
 };
 
+const retryableInfrastructureStatus = (status: number) => status === 502 || status === 503 || status === 504;
+
+const startAuthorization = (baseUrl: string, token: string, athleteAlias: string | null) =>
+  fetch(new URL("/api/v2/integrations/intervals/authorize", baseUrl), {
+    method: "POST",
+    cache: "no-store",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+      ...(athleteAlias ? { "X-OnFlows-Athlete-Alias": athleteAlias } : {}),
+    },
+    // The preview API runs on Render Free and may need 50+ seconds to wake.
+    signal: AbortSignal.timeout(75_000),
+  });
+
 export async function GET() {
   let stage = "configuration";
   try {
     const { baseUrl, token } = apiConfiguration();
     const athleteAlias = await currentAthleteAlias();
     stage = "api-fetch";
-    const response = await fetch(new URL("/api/v2/integrations/intervals/authorize", baseUrl), {
-      method: "POST",
-      cache: "no-store",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json",
-        ...(athleteAlias ? { "X-OnFlows-Athlete-Alias": athleteAlias } : {}),
-      },
-      // The preview API runs on Render Free and may need 50+ seconds to wake.
-      signal: AbortSignal.timeout(75_000),
-    });
+    let response = await startAuthorization(baseUrl, token, athleteAlias);
+    if (retryableInfrastructureStatus(response.status)) {
+      stage = `api-wake-${response.status}`;
+      await fetch(new URL("/health", baseUrl), {
+        cache: "no-store",
+        signal: AbortSignal.timeout(75_000),
+      });
+      stage = "api-retry";
+      response = await startAuthorization(baseUrl, token, athleteAlias);
+    }
     stage = `api-response-${response.status}`;
     if (!response.ok) throw new Error("OAuth start failed");
     stage = "api-json";

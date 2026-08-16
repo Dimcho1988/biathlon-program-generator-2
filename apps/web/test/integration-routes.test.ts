@@ -16,12 +16,32 @@ describe("integration route redirects behind a reverse proxy", () => {
   it("returns a relative dashboard redirect when OAuth start fails", async () => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
     process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 503 })));
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
 
     const response = await connect();
 
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe("/?intervals=connect-start-error");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("wakes a sleeping preview API and retries OAuth start once", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const authorizationUrl = "https://intervals.icu/oauth/authorize?state=opaque";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 502 }))
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json({ authorization_url: authorizationUrl }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await connect();
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe(authorizationUrl);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(String(fetchMock.mock.calls[1][0])).toBe("https://api.example.test/health");
   });
 
   it("returns relative dashboard redirects after refresh success and failure", async () => {
