@@ -12,6 +12,12 @@ services:
     autoDeployTrigger: checksPass
     runtime: python
     branch: codex/build-end-to-end-cloud-integration
+    buildFilter:
+      paths:
+        - apps/api/**
+        - biathlon/**
+        - intervals_inspector/**
+        - requirements-api.txt
     buildCommand: pip install -r requirements-api.txt
     startCommand: uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --no-access-log
     healthCheckPath: /health
