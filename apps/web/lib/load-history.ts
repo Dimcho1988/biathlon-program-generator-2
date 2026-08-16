@@ -64,6 +64,9 @@ const activityZoneKeys = ["zone", "raw_time_min", "equivalent_time_min", "effect
 const zoneAt = (value: unknown, index: number) => value === ZONES[index];
 const optionalFinite = (value: unknown) => value === null || finite(value);
 const nonNegativeInteger = (value: unknown) => Number.isInteger(value) && Number(value) >= 0;
+const percentageTolerance = 1e-6;
+const boundedPercentage = (value: unknown) => finite(value) && value >= -percentageTolerance && value <= 100 + percentageTolerance;
+const normalizePercentage = (value: number) => Math.min(100, Math.max(0, value));
 
 function parseZoneArray<T>(value: unknown, parser: (item: unknown, index: number) => T): T[] {
   if (!Array.isArray(value) || value.length !== ZONES.length) throw new Error("Зоналните данни трябва да съдържат точно Z1–Z5.");
@@ -105,8 +108,9 @@ export function parseLoadHistory(value: unknown): LoadHistory {
     if (!isRecord(item) || !exactKeys(item, activityKeys) || typeof item.activity_ref !== "string" || !item.activity_ref ||
         references.has(item.activity_ref) || !isCalendarDate(item.date) || typeof item.sport !== "string" || !item.sport ||
         !optionalFinite(item.duration_min) || (finite(item.duration_min) && item.duration_min < 0) ||
-        !(["valid", "limited"] as unknown[]).includes(item.quality_status) || !finite(item.hr_coverage_percent) ||
-        item.hr_coverage_percent < 0 || item.hr_coverage_percent > 100) throw new Error("Невалидна активност в историята.");
+        !(["valid", "limited"] as unknown[]).includes(item.quality_status) || !boundedPercentage(item.hr_coverage_percent)) {
+      throw new Error("Невалидна активност в историята.");
+    }
     references.add(item.activity_ref);
     const activityZones = parseZoneArray(item.zones, (zone, index) => {
       if (!isRecord(zone) || !exactKeys(zone, activityZoneKeys) || !zoneAt(zone.zone, index) ||
@@ -116,7 +120,11 @@ export function parseLoadHistory(value: unknown): LoadHistory {
       }
       return zone as unknown as ActivityZoneLoad;
     });
-    return { ...item, zones: activityZones } as unknown as LoadHistoryActivity;
+    return {
+      ...item,
+      hr_coverage_percent: normalizePercentage(item.hr_coverage_percent as number),
+      zones: activityZones,
+    } as unknown as LoadHistoryActivity;
   });
 
   return { ...value, quality, zones, daily, activities } as unknown as LoadHistory;

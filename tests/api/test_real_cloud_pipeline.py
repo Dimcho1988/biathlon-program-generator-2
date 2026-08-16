@@ -7,6 +7,7 @@ import pytest
 from apps.api.cloud import InMemorySnapshotRepository
 from apps.api.real_service import (
     ProviderFailure,
+    _bounded_percentage,
     load_history_from_persisted,
     refresh,
     training_status_from_persisted,
@@ -57,6 +58,13 @@ def test_ingests_activity_and_wellness_then_atomically_publishes_aggregate_snaps
     assert len(payload["load_history"]["activities"]) == 1
     rendered = repr(payload)
     assert all(secret not in rendered for secret in ("private-athlete", "private-token", "provider-activity", "must-not-survive"))
+
+
+def test_percentage_boundary_clamps_only_floating_point_drift():
+    assert _bounded_percentage(100.00000000000001, "coverage") == 100.0
+    assert _bounded_percentage(-0.00000000000001, "coverage") == 0.0
+    with pytest.raises(ValueError, match="outside 0–100"):
+        _bounded_percentage(100.01, "coverage")
 
 
 def test_persisted_snapshot_exposes_v1_status_and_load_history_contracts():

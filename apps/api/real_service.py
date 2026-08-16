@@ -29,6 +29,7 @@ from .schemas import (
 )
 
 ZONES = ("Z1", "Z2", "Z3", "Z4", "Z5")
+PERCENTAGE_TOLERANCE = 1e-6
 
 
 class ConfigurationError(RuntimeError):
@@ -98,6 +99,15 @@ def _optional_finite(value: Any, name: str) -> float | None:
     return rendered if math.isfinite(rendered) else None
 
 
+def _bounded_percentage(value: Any, name: str) -> float:
+    """Normalize harmless floating-point drift at the HTTP contract boundary."""
+
+    rendered = _finite(value, name)
+    if rendered < -PERCENTAGE_TOLERANCE or rendered > 100.0 + PERCENTAGE_TOLERANCE:
+        raise ValueError(f"Canonical percentage is outside 0–100: {name}")
+    return min(100.0, max(0.0, rendered))
+
+
 def _calendar_date(value: Any, name: str) -> str:
     rendered = str(value)[:10]
     try:
@@ -122,7 +132,9 @@ def dataset_to_training_status(dataset: Any, context: AthleteContext, wellness: 
         warnings.append(f"Wellness is {wellness.get('freshness', 'unknown')} and is not integrated into readiness.")
     if float(wellness.get("coverage", 0.0)) < 1.0:
         warnings.append("Wellness coverage is incomplete; readiness remains load-only.")
-    quality = _finite(latest["hr_coverage_percent"], "latest HR coverage") / 100.0
+    quality = _bounded_percentage(
+        latest["hr_coverage_percent"], "latest HR coverage"
+    ) / 100.0
     return TrainingStatusResponse(
         schema_version="training-status-v1", as_of=dataset.period_end,
         athlete_id=context.public_alias,
@@ -203,7 +215,7 @@ def dataset_to_load_history(
                 sport=str(activity.sport),
                 duration_min=_optional_finite(activity.duration_min, "activity duration"),
                 quality_status=str(activity.quality_status),
-                hr_coverage_percent=_finite(
+                hr_coverage_percent=_bounded_percentage(
                     activity.hr_coverage_percent, "activity HR coverage"
                 ),
                 zones=[

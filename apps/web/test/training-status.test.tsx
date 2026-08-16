@@ -33,6 +33,18 @@ describe("training-status-v1 contract", () => {
 
 describe("load-history-v1 contract", () => {
   it("accepts the aggregate fixture", () => expect(parseLoadHistory(loadHistoryFixture)).toEqual(loadHistoryFixture));
+  it("normalizes harmless floating-point drift at the percentage boundary", () => {
+    const activities = loadHistoryFixture.activities.map((activity, index) =>
+      index === 0 ? { ...activity, hr_coverage_percent: 100.00000000000001 } : activity,
+    );
+    expect(parseLoadHistory({ ...loadHistoryFixture, activities }).activities[0].hr_coverage_percent).toBe(100);
+    expect(() => parseLoadHistory({
+      ...loadHistoryFixture,
+      activities: activities.map((activity, index) =>
+        index === 0 ? { ...activity, hr_coverage_percent: 100.01 } : activity,
+      ),
+    })).toThrow(/Невалидна активност/);
+  });
   it("rejects incomplete daily zone groups and provider-shaped extras", () => {
     expect(() => parseLoadHistory({ ...loadHistoryFixture, daily: loadHistoryFixture.daily.slice(0, -1) })).toThrow(/дневна история/);
     expect(() => parseLoadHistory({ ...loadHistoryFixture, provider_athlete_id: "private" })).toThrow(/структура/);
