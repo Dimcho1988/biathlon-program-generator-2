@@ -54,3 +54,67 @@ class TrainingStatusResponse(StrictModel):
     model: ModelMetadata
     data_quality: DataQuality
     zones: list[ZoneTrainingStatus]
+
+
+class LoadHistoryQuality(StrictModel):
+    processed_activities: int
+    limited_activities: int
+    excluded_activities: int
+    no_activity_days: int
+    warnings: list[str]
+
+
+class ZoneLoadSummary(StrictModel):
+    zone: Literal["Z1", "Z2", "Z3", "Z4", "Z5"]
+    e7_daily: float
+    e40_daily: float
+    status_7_40: float
+    tref_min: float
+    history_reliability: float
+
+
+class DailyZoneLoad(StrictModel):
+    date: str
+    zone: Literal["Z1", "Z2", "Z3", "Z4", "Z5"]
+    effective_load: float
+    e7_daily: float
+    e40_daily: float
+    status_7_40: float
+
+
+class ActivityZoneLoad(StrictModel):
+    zone: Literal["Z1", "Z2", "Z3", "Z4", "Z5"]
+    raw_time_min: float
+    equivalent_time_min: float
+    effective_load: float
+    mean_effective_hr_bpm: float | None
+    average_minute_value_percent: float | None
+
+
+class LoadHistoryActivity(StrictModel):
+    activity_ref: str
+    date: str
+    sport: str
+    duration_min: float | None
+    quality_status: Literal["valid", "limited"]
+    hr_coverage_percent: float
+    zones: list[ActivityZoneLoad]
+
+
+class LoadHistoryResponse(StrictModel):
+    schema_version: Literal["load-history-v1"]
+    athlete_id: str
+    period_start: str
+    period_end: str
+    quality: LoadHistoryQuality
+    zones: list[ZoneLoadSummary]
+    daily: list[DailyZoneLoad]
+    activities: list[LoadHistoryActivity]
+
+
+class AthleteSnapshot(StrictModel):
+    """Persisted aggregate envelope; no raw streams or provider identifiers."""
+
+    schema_version: Literal["athlete-snapshot-v1"]
+    training_status: TrainingStatusResponse
+    load_history: LoadHistoryResponse

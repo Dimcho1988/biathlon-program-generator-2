@@ -5,7 +5,12 @@ from datetime import date, datetime, timezone
 import pytest
 
 from apps.api.cloud import InMemorySnapshotRepository
-from apps.api.real_service import ProviderFailure, refresh
+from apps.api.real_service import (
+    ProviderFailure,
+    load_history_from_persisted,
+    refresh,
+    training_status_from_persisted,
+)
 from intervals_inspector.intervals_client import IntervalsAPIError, IntervalsResponse
 
 
@@ -40,14 +45,62 @@ class Client:
         return IntervalsResponse(200, [{"type": "time", "data": list(range(61))}, {"type": "heartrate", "data": [145.0] * 61}])
 
 
-def test_ingests_activity_and_wellness_then_atomically_publishes_v1():
+def test_ingests_activity_and_wellness_then_atomically_publishes_aggregate_snapshot():
     repo = InMemorySnapshotRepository()
     result = refresh(repo, environ=ENV, client=Client(), period_end=date(2026, 8, 15), now=datetime(2026, 8, 15, 12, tzinfo=timezone.utc))
     payload = repo.latest("pilot")
-    assert result.processed_activities == 1 and payload["schema_version"] == "training-status-v1"
-    assert payload["athlete_id"] == "pilot"
+    assert result.processed_activities == 1
+    assert payload["schema_version"] == "athlete-snapshot-v1"
+    assert payload["training_status"]["athlete_id"] == "pilot"
+    assert payload["load_history"]["schema_version"] == "load-history-v1"
+    assert len(payload["load_history"]["daily"]) == 41 * 5
+    assert len(payload["load_history"]["activities"]) == 1
     rendered = repr(payload)
     assert all(secret not in rendered for secret in ("private-athlete", "private-token", "provider-activity", "must-not-survive"))
+
+
+def test_persisted_snapshot_exposes_v1_status_and_load_history_contracts():
+    repo = InMemorySnapshotRepository()
+    refresh(repo, environ=ENV, client=Client(), period_end=date(2026, 8, 15))
+    payload = repo.latest("pilot")
+    status = training_status_from_persisted(payload)
+    history = load_history_from_persisted(payload)
+    assert status.schema_version == "training-status-v1"
+    assert history.schema_version == "load-history-v1"
+    assert [row.zone for row in history.zones] == ["Z1", "Z2", "Z3", "Z4", "Z5"]
+    assert history.activities[0].activity_ref == "activity-001"
+
+
+def test_deployed_v1_snapshot_remains_readable_during_rollout():
+    legacy = {
+        "schema_version": "training-status-v1",
+        "as_of": "2026-08-15",
+        "athlete_id": "pilot",
+        "model": {
+            "algorithm_version": "v1",
+            "effective_hr_version": "v1",
+            "effective_hr_source": "raw_hr",
+            "parameter_version": 1,
+        },
+        "data_quality": {
+            "history_reliability": 1.0,
+            "latest_activity_quality_score": 1.0,
+            "warnings": [],
+        },
+        "zones": [
+            {
+                "zone": zone,
+                "raw_time_min": 0.0,
+                "equivalent_time_min": 0.0,
+                "tref_min": 1.0,
+                "status_7_40": 1.0,
+                "recovery_readiness_percent": 100.0,
+                "recovery_days_to_full": 0.0,
+            }
+            for zone in ("Z1", "Z2", "Z3", "Z4", "Z5")
+        ],
+    }
+    assert training_status_from_persisted(legacy).athlete_id == "pilot"
 
 
 @pytest.mark.parametrize("wellness, warning", [([], "unknown"), ([{"id": "2026-01-01", "fatigue": "bad"}], "stale")])

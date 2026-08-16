@@ -12,7 +12,8 @@ tables:
 
 * one-time OAuth state hashes;
 * encrypted Intervals access tokens and the minimum connection metadata;
-* aggregate `training-status-v1` snapshots.
+* aggregate athlete snapshots containing `training-status-v1` and
+  `load-history-v1` read models.
 
 Raw activities, streams, GPS, provider payloads and athlete names are never
 stored by this cloud layer. Supabase `anon` and `authenticated` roles receive no
@@ -66,3 +67,10 @@ Refresh remains explicit (`POST /api/v2/real/refresh`). A complete analysis
 atomically replaces the persisted aggregate snapshot. Retrieval or analysis
 failures retain the last valid snapshot. Fixture mode remains available only
 when `ONFLOWS_DATA_MODE=fixture` is set explicitly.
+
+The current status remains available at
+`GET /api/v2/real/training-status`. The precomputed 90-day zonal series and
+privacy-minimized activity aggregates are available at
+`GET /api/v2/real/load-history`. Neither endpoint returns raw streams or
+provider identifiers. Existing `training-status-v1` rows remain readable
+during rollout; one successful refresh upgrades the stored envelope.

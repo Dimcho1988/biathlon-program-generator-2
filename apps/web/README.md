@@ -1,6 +1,8 @@
 # onFlows web dashboard
 
-Next.js App Router frontend for the existing `training-status-v1` API contract. The frontend validates and presents model output; it does not calculate physiological values.
+Next.js App Router frontend for the `training-status-v1` and
+`load-history-v1` API contracts. The frontend validates and presents model
+output; it does not calculate physiological values.
 
 ## Local development
 

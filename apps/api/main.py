@@ -20,9 +20,16 @@ from .oauth_store import (
     PersistentStoreFailure,
     SupabasePilotRepository,
 )
-from .real_service import ConfigurationError, ProviderFailure, refresh
+from .real_service import (
+    ConfigurationError,
+    ProviderFailure,
+    load_history_from_persisted,
+    refresh,
+    training_status_from_persisted,
+)
 from .schemas import (
     HealthResponse,
+    LoadHistoryResponse,
     OAuthAuthorizationResponse,
     OAuthConnectionStatusResponse,
     TrainingStatusResponse,
@@ -72,7 +79,7 @@ def _pilot_alias() -> str:
     return alias
 
 
-@app.get("/api/v2/real/training-status")
+@app.get("/api/v2/real/training-status", response_model=TrainingStatusResponse)
 def real_training_status(authorization: Annotated[str | None, Header()] = None):
     _authorize(authorization)
     try:
@@ -85,7 +92,34 @@ def real_training_status(authorization: Annotated[str | None, Header()] = None):
         raise HTTPException(
             status_code=503, detail="No valid real-data snapshot is available"
         )
-    return snapshot
+    try:
+        return training_status_from_persisted(snapshot)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503, detail="Stored real-data snapshot is invalid"
+        ) from exc
+
+
+@app.get("/api/v2/real/load-history", response_model=LoadHistoryResponse)
+def real_load_history(authorization: Annotated[str | None, Header()] = None):
+    _authorize(authorization)
+    try:
+        snapshot = _repository().latest(_pilot_alias())
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    if snapshot is None:
+        raise HTTPException(
+            status_code=503, detail="No valid real-data snapshot is available"
+        )
+    try:
+        return load_history_from_persisted(snapshot)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Load history requires a new real-data refresh",
+        ) from exc
 
 
 @app.post("/api/v2/real/refresh", status_code=202)

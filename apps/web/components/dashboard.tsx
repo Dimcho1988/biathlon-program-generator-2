@@ -1,6 +1,8 @@
 import Image from "next/image";
 import type { DataMode } from "../lib/api";
+import type { LoadHistory } from "../lib/load-history";
 import type { TrainingStatus, ZoneTrainingStatus } from "../lib/training-status";
+import { LoadHistorySection } from "./load-history-section";
 import { ThemeToggle } from "./theme-toggle";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
@@ -16,9 +18,11 @@ const metrics: Array<[keyof ZoneTrainingStatus, string, (value: number) => strin
   ["recovery_days_to_full", "Дни до пълно възстановяване", (value) => `${decimal(value)} дни`],
 ];
 
-export function Dashboard({ data, mode, integrationActions = false, notice }: {
+export function Dashboard({ data, mode, loadHistory = null, loadHistoryMessage, integrationActions = false, notice }: {
   data: TrainingStatus;
   mode: DataMode;
+  loadHistory?: LoadHistory | null;
+  loadHistoryMessage?: string;
   integrationActions?: boolean;
   notice?: string;
 }) {
@@ -62,6 +66,8 @@ export function Dashboard({ data, mode, integrationActions = false, notice }: {
           {data.zones.length === 0 ? <div className="empty"><h3>Няма зонални данни</h3><p>API отговорът е валиден, но не съдържа зони за този анализ.</p></div> :
             <div className="zone-list">{data.zones.map((zone) => <ZoneCard key={zone.zone} zone={zone} />)}</div>}
         </section>
+
+        <LoadHistorySection history={loadHistory} message={loadHistoryMessage} />
 
         <details className="metadata">
           <summary><span><small>Техническа информация</small>Метаданни на модела</span><span className="chevron" aria-hidden="true">⌄</span></summary>

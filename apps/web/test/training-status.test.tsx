@@ -1,8 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dashboard } from "../components/dashboard";
-import { getTrainingStatus } from "../lib/api";
-import { trainingStatusFixture } from "../lib/fixture";
+import { getLoadHistory, getTrainingStatus } from "../lib/api";
+import { loadHistoryFixture, trainingStatusFixture } from "../lib/fixture";
+import { parseLoadHistory } from "../lib/load-history";
 import { parseTrainingStatus } from "../lib/training-status";
 import { applyTheme, resolveInitialTheme, THEME_STORAGE_KEY } from "../components/theme-toggle";
 
@@ -27,6 +28,14 @@ describe("training-status-v1 contract", () => {
     expect(() => parseTrainingStatus({ ...trainingStatusFixture, as_of: "2026-02-31" })).toThrow(/дата/);
     expect(() => parseTrainingStatus({ ...trainingStatusFixture, as_of: "2025-02-29" })).toThrow(/дата/);
     expect(parseTrainingStatus({ ...trainingStatusFixture, as_of: "2024-02-29" }).as_of).toBe("2024-02-29");
+  });
+});
+
+describe("load-history-v1 contract", () => {
+  it("accepts the aggregate fixture", () => expect(parseLoadHistory(loadHistoryFixture)).toEqual(loadHistoryFixture));
+  it("rejects incomplete daily zone groups and provider-shaped extras", () => {
+    expect(() => parseLoadHistory({ ...loadHistoryFixture, daily: loadHistoryFixture.daily.slice(0, -1) })).toThrow(/дневна история/);
+    expect(() => parseLoadHistory({ ...loadHistoryFixture, provider_athlete_id: "private" })).toThrow(/структура/);
   });
 });
 
@@ -55,6 +64,17 @@ describe("data access", () => {
     await expect(getTrainingStatus()).rejects.toThrow("ONFLOWS_SERVICE_TOKEN");
     expect(fetchMock).not.toHaveBeenCalled();
   });
+  it("loads the protected aggregate history without exposing the token to the browser", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_API_RESOURCE = "real";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(loadHistoryFixture));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(getLoadHistory()).resolves.toEqual(loadHistoryFixture);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("https://api.example.test/api/v2/real/load-history");
+    expect(init.headers.Authorization).toBe("Bearer server-secret");
+  });
 });
 
 describe("dashboard", () => {
@@ -73,6 +93,13 @@ describe("dashboard", () => {
     expect(html).toContain("50,9 мин"); expect(html).toContain("97,8%"); expect(html).toContain("3,5 дни");
   });
   it("does not show the demo label in API mode", () => expect(renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="api" />)).not.toContain("Демо данни"));
+  it("renders 7/40 dynamics and aggregate activity detail", () => {
+    const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" loadHistory={loadHistoryFixture} />);
+    expect(html).toContain("Натоварване и динамика");
+    expect(html).toContain("Динамика на индекса 7/40 по зони");
+    expect(html).toContain("Реално → приравнено → ефективно");
+    expect(html).toContain("NordicSki");
+  });
 });
 
 describe("theme preference", () => {

@@ -41,6 +41,8 @@ def test_real_endpoint_auth_and_no_snapshot(monkeypatch):
     assert client.get("/api/v2/real/training-status").status_code == 401
     assert client.get("/api/v2/real/training-status", headers={"Authorization": "Bearer wrong"}).status_code == 401
     assert client.get("/api/v2/real/training-status", headers={"Authorization": "Bearer secret-value"}).status_code == 503
+    assert client.get("/api/v2/real/load-history").status_code == 401
+    assert client.get("/api/v2/real/load-history", headers={"Authorization": "Bearer secret-value"}).status_code == 503
 
 
 def test_constant_time_boundary_semantics():

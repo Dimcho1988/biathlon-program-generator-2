@@ -34,12 +34,12 @@ const modelKeys = ["algorithm_version", "effective_hr_version", "effective_hr_so
 const qualityKeys = ["history_reliability", "latest_activity_quality_score", "warnings"];
 const zoneKeys = ["zone", "raw_time_min", "equivalent_time_min", "tref_min", "status_7_40", "recovery_readiness_percent", "recovery_days_to_full"];
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-const exactKeys = (value: Record<string, unknown>, keys: string[]) =>
+export const exactKeys = (value: Record<string, unknown>, keys: string[]) =>
   Object.keys(value).length === keys.length && keys.every((key) => key in value);
-const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
-const isCalendarDate = (value: unknown): value is string => {
+export const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+export const isCalendarDate = (value: unknown): value is string => {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const [year, month, day] = value.split("-").map(Number);
   const parsed = new Date(Date.UTC(year, month - 1, day));

@@ -14,7 +14,19 @@ from biathlon.constants import fresh_parameters
 from biathlon.effective_hr import EFFECTIVE_HR_SOURCE
 
 from .cloud import AthleteContext, SnapshotRepository, normalize_wellness
-from .schemas import DataQuality, ModelMetadata, TrainingStatusResponse, ZoneTrainingStatus
+from .schemas import (
+    ActivityZoneLoad,
+    AthleteSnapshot,
+    DailyZoneLoad,
+    DataQuality,
+    LoadHistoryActivity,
+    LoadHistoryQuality,
+    LoadHistoryResponse,
+    ModelMetadata,
+    TrainingStatusResponse,
+    ZoneLoadSummary,
+    ZoneTrainingStatus,
+)
 
 ZONES = ("Z1", "Z2", "Z3", "Z4", "Z5")
 
@@ -74,6 +86,27 @@ def _finite(value: Any, name: str) -> float:
     return rendered
 
 
+def _optional_finite(value: Any, name: str) -> float | None:
+    import math
+
+    if value is None:
+        return None
+    try:
+        rendered = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid optional canonical result: {name}") from exc
+    return rendered if math.isfinite(rendered) else None
+
+
+def _calendar_date(value: Any, name: str) -> str:
+    rendered = str(value)[:10]
+    try:
+        date.fromisoformat(rendered)
+    except ValueError as exc:
+        raise ValueError(f"Invalid canonical date: {name}") from exc
+    return rendered
+
+
 def dataset_to_training_status(dataset: Any, context: AthleteContext, wellness: Mapping[str, Any]) -> TrainingStatusResponse:
     """Pure aggregate adapter; it never invokes Intervals or reads credentials."""
     eligible = dataset.activities.loc[dataset.activities["quality_status"].isin(("valid", "limited"))]
@@ -109,6 +142,124 @@ def dataset_to_training_status(dataset: Any, context: AthleteContext, wellness: 
             recovery_days_to_full=_finite(dataset.load_readiness.loc[z, "days_to_full"], f"days[{z}]"),
         ) for z in ZONES],
     )
+
+
+def dataset_to_load_history(
+    dataset: Any,
+    context: AthleteContext,
+) -> LoadHistoryResponse:
+    """Publish precomputed aggregates only; raw provider streams remain transient."""
+
+    zone_summaries = [
+        ZoneLoadSummary(
+            zone=zone,
+            e7_daily=_finite(dataset.load_stats.loc[zone, "E7_daily"], f"E7[{zone}]"),
+            e40_daily=_finite(dataset.load_stats.loc[zone, "E40_daily"], f"E40[{zone}]"),
+            status_7_40=_finite(
+                dataset.load_stats.loc[zone, "index_7_40"], f"7/40[{zone}]"
+            ),
+            tref_min=_finite(dataset.load_stats.loc[zone, "Tref"], f"Tref[{zone}]"),
+            history_reliability=_finite(
+                dataset.load_stats.loc[zone, "reliability"],
+                f"reliability[{zone}]",
+            ),
+        )
+        for zone in ZONES
+    ]
+
+    daily_rows = dataset.rolling_load.loc[
+        dataset.rolling_load["component"].isin(ZONES)
+    ].sort_values(["date", "component"], kind="stable")
+    daily = [
+        DailyZoneLoad(
+            date=_calendar_date(row.date, "daily load"),
+            zone=str(row.component),
+            effective_load=_finite(row.effective, f"effective[{row.component}]"),
+            e7_daily=_finite(row.E7_daily, f"E7[{row.component}]"),
+            e40_daily=_finite(row.E40_daily, f"E40[{row.component}]"),
+            status_7_40=_finite(row.index_7_40, f"7/40[{row.component}]"),
+        )
+        for row in daily_rows.itertuples(index=False)
+    ]
+
+    modeled = dataset.activities.loc[
+        dataset.activities["quality_status"].isin(("valid", "limited"))
+    ].sort_values(["date", "activity_ref"], ascending=[False, False], kind="stable")
+    activities: list[LoadHistoryActivity] = []
+    for activity in modeled.itertuples(index=False):
+        zone_rows = (
+            dataset.activity_zones.loc[
+                dataset.activity_zones["activity_ref"] == activity.activity_ref
+            ]
+            .set_index("zone")
+            .reindex(ZONES)
+        )
+        if zone_rows[list(("T_z", "T_eq_z", "E_z"))].isna().any().any():
+            raise ValueError("Modeled activity has incomplete canonical zones")
+        activities.append(
+            LoadHistoryActivity(
+                activity_ref=str(activity.activity_ref),
+                date=_calendar_date(activity.date, "activity"),
+                sport=str(activity.sport),
+                duration_min=_optional_finite(activity.duration_min, "activity duration"),
+                quality_status=str(activity.quality_status),
+                hr_coverage_percent=_finite(
+                    activity.hr_coverage_percent, "activity HR coverage"
+                ),
+                zones=[
+                    ActivityZoneLoad(
+                        zone=zone,
+                        raw_time_min=_finite(zone_rows.loc[zone, "T_z"], f"T_z[{zone}]"),
+                        equivalent_time_min=_finite(
+                            zone_rows.loc[zone, "T_eq_z"], f"T_eq_z[{zone}]"
+                        ),
+                        effective_load=_finite(
+                            zone_rows.loc[zone, "E_z"], f"E_z[{zone}]"
+                        ),
+                        mean_effective_hr_bpm=_optional_finite(
+                            zone_rows.loc[zone, "mean_effective_hr_bpm"],
+                            f"mean HR[{zone}]",
+                        ),
+                        average_minute_value_percent=_optional_finite(
+                            zone_rows.loc[zone, "average_minute_value_percent"],
+                            f"minute value[{zone}]",
+                        ),
+                    )
+                    for zone in ZONES
+                ],
+            )
+        )
+
+    return LoadHistoryResponse(
+        schema_version="load-history-v1",
+        athlete_id=context.public_alias,
+        period_start=dataset.period_start,
+        period_end=dataset.period_end,
+        quality=LoadHistoryQuality(
+            processed_activities=int(dataset.processed_activities),
+            limited_activities=int(dataset.limited_activities),
+            excluded_activities=int(dataset.excluded_activities),
+            no_activity_days=int(dataset.no_activity_days),
+            warnings=list(dataset.warnings),
+        ),
+        zones=zone_summaries,
+        daily=daily,
+        activities=activities,
+    )
+
+
+def training_status_from_persisted(
+    payload: Mapping[str, Any],
+) -> TrainingStatusResponse:
+    """Read the new aggregate envelope while accepting the deployed v1 snapshot."""
+
+    if payload.get("schema_version") == "training-status-v1":
+        return TrainingStatusResponse.model_validate(payload)
+    return AthleteSnapshot.model_validate(payload).training_status
+
+
+def load_history_from_persisted(payload: Mapping[str, Any]) -> LoadHistoryResponse:
+    return AthleteSnapshot.model_validate(payload).load_history
 
 
 def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None = None,
@@ -150,9 +301,15 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                                     period_end=end, days=days, loaded_at_utc=now,
                                     configuration=configuration_with_hr_boundaries(context.zone_bounds_bpm))
         snapshot = dataset_to_training_status(dataset, context, wellness)
+        load_history = dataset_to_load_history(dataset, context)
     except IntervalsAPIError as exc:
         raise ProviderFailure("Intervals provider request failed") from exc
     except (TypeError, ValueError) as exc:
         raise ProviderFailure("Real-data analysis could not be completed safely") from exc
-    repository.replace(context.public_alias, snapshot.model_dump(mode="json"))
+    persisted = AthleteSnapshot(
+        schema_version="athlete-snapshot-v1",
+        training_status=snapshot,
+        load_history=load_history,
+    )
+    repository.replace(context.public_alias, persisted.model_dump(mode="json"))
     return RefreshResult(snapshot, dataset.processed_activities, float(wellness["coverage"]))

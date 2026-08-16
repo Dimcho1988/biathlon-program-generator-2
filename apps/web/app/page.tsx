@@ -1,9 +1,10 @@
-import { getTrainingStatus, type TrainingStatusResult } from "../lib/api";
+import { getLoadHistory, getTrainingStatus, type TrainingStatusResult } from "../lib/api";
+import type { LoadHistory } from "../lib/load-history";
 import { Dashboard } from "../components/dashboard";
 import { ErrorState } from "../components/error-state";
 
 type PageResult =
-  | { ok: true; value: TrainingStatusResult }
+  | { ok: true; value: TrainingStatusResult; loadHistory: LoadHistory | null; loadHistoryMessage?: string }
   | { ok: false; message: string };
 
 const notices: Record<string, string> = {
@@ -17,9 +18,21 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
   const query = await searchParams;
   let result: PageResult;
 
-  try {
-    result = { ok: true, value: await getTrainingStatus() };
-  } catch (error) {
+  const [statusResult, historyResult] = await Promise.allSettled([
+    getTrainingStatus(),
+    getLoadHistory(),
+  ]);
+  if (statusResult.status === "fulfilled") {
+    result = historyResult.status === "fulfilled"
+      ? { ok: true, value: statusResult.value, loadHistory: historyResult.value }
+      : {
+          ok: true,
+          value: statusResult.value,
+          loadHistory: null,
+          loadHistoryMessage: historyResult.reason instanceof Error ? historyResult.reason.message : "Историята на натоварването не е достъпна.",
+        };
+  } else {
+    const error = statusResult.reason;
     result = {
       ok: false,
       message: error instanceof Error ? error.message : "Възникна неочаквана грешка.",
@@ -29,6 +42,6 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
   const integrationActions = process.env.ONFLOWS_API_RESOURCE === "real";
   const notice = query.intervals ? notices[query.intervals] : undefined;
   return result.ok
-    ? <Dashboard {...result.value} integrationActions={integrationActions} notice={notice} />
+    ? <Dashboard {...result.value} loadHistory={result.loadHistory} loadHistoryMessage={result.loadHistoryMessage} integrationActions={integrationActions} notice={notice} />
     : <ErrorState message={result.message} integrationActions={integrationActions} notice={notice} />;
 }
