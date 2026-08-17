@@ -19,13 +19,26 @@ describe("integration route redirects behind a reverse proxy", () => {
     delete process.env.ONFLOWS_SESSION_SECRET;
   });
 
+  it("routes the browser through the API wake endpoint before OAuth", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await connect(new Request("https://web.example.test/api/integrations/intervals/connect"));
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("https://api.example.test/api/v2/wake?resume=connect");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("returns a relative dashboard redirect when API readiness fails", async () => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
     process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 500 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const response = await connect();
+    const response = await connect(new Request("https://web.example.test/api/integrations/intervals/connect?wake=ready"));
 
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe("/?intervals=connect-start-error");
@@ -43,7 +56,7 @@ describe("integration route redirects behind a reverse proxy", () => {
       .mockResolvedValueOnce(Response.json({ authorization_url: authorizationUrl }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const responsePromise = connect();
+    const responsePromise = connect(new Request("https://web.example.test/api/integrations/intervals/connect?wake=ready"));
     await vi.advanceTimersByTimeAsync(3_000);
     const response = await responsePromise;
 
@@ -63,7 +76,7 @@ describe("integration route redirects behind a reverse proxy", () => {
       .mockResolvedValueOnce(Response.json({ authorization_url: authorizationUrl }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const response = await connect();
+    const response = await connect(new Request("https://web.example.test/api/integrations/intervals/connect?wake=ready"));
 
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe(authorizationUrl);
@@ -84,7 +97,7 @@ describe("integration route redirects behind a reverse proxy", () => {
       .mockResolvedValueOnce(Response.json({ authorization_url: authorizationUrl }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const response = await connect();
+    const response = await connect(new Request("https://web.example.test/api/integrations/intervals/connect?wake=ready"));
 
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe(authorizationUrl);

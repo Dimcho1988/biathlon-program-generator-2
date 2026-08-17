@@ -5,6 +5,7 @@ import { Dashboard } from "../components/dashboard";
 import { ErrorState } from "../components/error-state";
 import { currentAthleteAlias, multiProfileMode } from "../lib/athlete-session";
 import { AthleteSettingsForm } from "../components/athlete-settings-form";
+import { redirect } from "next/navigation";
 
 type PageResult =
   | { ok: true; value: TrainingStatusResult; loadHistory: LoadHistory | null; recoveryHistory: RecoveryHistory | null; loadHistoryMessage?: string; recoveryHistoryMessage?: string }
@@ -35,7 +36,7 @@ const settingsNotices: Record<string, string> = {
   error: "Настройките не бяха запазени. Опитайте отново.",
 };
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ intervals?: string; settings?: string }> }) {
+export default async function Page({ searchParams }: { searchParams: Promise<{ intervals?: string; settings?: string; wake?: string }> }) {
   const query = await searchParams;
   let result: PageResult;
   const integrationActions = process.env.ONFLOWS_API_RESOURCE === "real";
@@ -50,6 +51,16 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
       refreshAvailable={false}
       notice={notice}
     />;
+  }
+
+  if (multiProfile && athleteAlias && query.wake !== "ready") {
+    const baseUrl = process.env.ONFLOWS_API_BASE_URL;
+    if (baseUrl) {
+      const wakeUrl = new URL("/api/v2/wake", baseUrl);
+      if (query.intervals) wakeUrl.searchParams.set("intervals", query.intervals);
+      if (query.settings) wakeUrl.searchParams.set("settings", query.settings);
+      redirect(wakeUrl.toString());
+    }
   }
 
   if (query.settings === "edit" && multiProfile && athleteAlias) {

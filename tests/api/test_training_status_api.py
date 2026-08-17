@@ -33,6 +33,32 @@ def test_health() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_browser_wake_redirect_is_fixed_to_the_configured_web_service(monkeypatch) -> None:
+    monkeypatch.setenv("ONFLOWS_WEB_BASE_URL", "https://web.example.test")
+    response = client.get(
+        "/api/v2/wake?intervals=refresh-error&settings=saved",
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "https://web.example.test/?wake=ready&intervals=refresh-error&settings=saved"
+    )
+    assert client.get(
+        "/api/v2/wake?intervals=https://attacker.example",
+        follow_redirects=False,
+    ).status_code == 400
+
+
+def test_browser_wake_can_resume_only_the_oauth_start(monkeypatch) -> None:
+    monkeypatch.setenv("ONFLOWS_WEB_BASE_URL", "https://web.example.test")
+    response = client.get("/api/v2/wake?resume=connect", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "https://web.example.test/api/integrations/intervals/connect?wake=ready"
+    )
+    assert client.get("/api/v2/wake?resume=refresh", follow_redirects=False).status_code == 400
+
+
 def test_training_status_exact_schema_and_zone_order() -> None:
     response = client.get("/api/v1/demo/training-status")
     assert response.status_code == 200

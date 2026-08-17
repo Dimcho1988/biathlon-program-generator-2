@@ -20,10 +20,15 @@ const startAuthorization = (baseUrl: string, token: string) =>
     signal: AbortSignal.timeout(75_000),
   });
 
-export async function GET() {
+export async function GET(request: Request) {
   let stage = "configuration";
   try {
     const { baseUrl, token } = apiConfiguration();
+    if (new URL(request.url).searchParams.get("wake") !== "ready") {
+      const wakeUrl = new URL("/api/v2/wake", baseUrl);
+      wakeUrl.searchParams.set("resume", "connect");
+      return NextResponse.redirect(wakeUrl, 303);
+    }
     stage = "api-wake";
     await waitForApi(baseUrl);
     stage = "api-fetch";

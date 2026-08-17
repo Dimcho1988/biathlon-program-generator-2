@@ -4,7 +4,7 @@ import logging
 import os
 import re
 from typing import Annotated
-from urllib.parse import quote
+from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -49,11 +49,50 @@ from .training_status import build_demo_training_status
 app = FastAPI(title="onFlows API", version="1.0.0")
 logger = logging.getLogger(__name__)
 ATHLETE_ALIAS_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{2,63}$")
+SAFE_WEB_NOTICE_PATTERN = re.compile(r"^[a-z0-9-]{1,64}$")
 
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
+
+
+def _web_base_url() -> str:
+    destination = os.environ.get("ONFLOWS_WEB_BASE_URL", "").strip().rstrip("/")
+    parsed = urlsplit(destination)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise HTTPException(status_code=503, detail="Web destination is not configured")
+    return destination
+
+
+@app.get("/api/v2/wake", include_in_schema=False)
+def wake_preview(
+    intervals: str | None = None,
+    settings: str | None = None,
+    resume: str | None = None,
+):
+    destination = _web_base_url()
+    if resume is not None:
+        if resume != "connect":
+            raise HTTPException(status_code=400, detail="Wake continuation is invalid")
+        return RedirectResponse(
+            f"{destination}/api/integrations/intervals/connect?wake=ready",
+            status_code=303,
+        )
+    query = [("wake", "ready")]
+    for key, value in (("intervals", intervals), ("settings", settings)):
+        if value is None:
+            continue
+        if not SAFE_WEB_NOTICE_PATTERN.fullmatch(value):
+            raise HTTPException(status_code=400, detail="Wake destination is invalid")
+        query.append((key, value))
+    return RedirectResponse(f"{destination}/?{urlencode(query)}", status_code=303)
 
 
 @app.get("/api/v1/demo/training-status", response_model=TrainingStatusResponse)
