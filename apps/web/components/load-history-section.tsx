@@ -45,6 +45,47 @@ function SevenFortyChart({ rows }: { rows: DailyZoneLoad[] }) {
   );
 }
 
+function EffectiveLoadChart({ rows }: { rows: DailyZoneLoad[] }) {
+  const dates = [...new Set(rows.map((row) => row.date))];
+  if (dates.length < 2) return <p className="muted-copy">Няма достатъчно дни за графика.</p>;
+  const width = 920;
+  const height = 300;
+  const left = 48;
+  const right = 16;
+  const top = 22;
+  const bottom = 42;
+  const maximum = Math.max(...rows.map((row) => row.effective_load));
+  const yMax = Math.max(1, Math.ceil(maximum));
+  const ticks = [0, yMax / 2, yMax];
+  const x = (index: number) => left + index * (width - left - right) / (dates.length - 1);
+  const y = (value: number) => top + (yMax - value) * (height - top - bottom) / yMax;
+
+  return (
+    <figure className="history-chart">
+      <div className="history-chart-heading">
+        <div><p className="section-kicker">Канонични дневни стойности</p><h3>Дневен ефективен товар E по зони</h3></div>
+        <p>Показани са Z1–Z5 поотделно; линиите не се сумират до нов общ резултат.</p>
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-labelledby="effective-load-chart-title effective-load-chart-description">
+        <title id="effective-load-chart-title">Дневен ефективен товар E по зони</title>
+        <desc id="effective-load-chart-description">Директните дневни effective load стойности за Z1 до Z5 през наличния период, без изглаждане или сумиране.</desc>
+        {ticks.map((tick) => <g key={tick}>
+          <line className="chart-grid" x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} />
+          <text className="chart-label" x={left - 8} y={y(tick) + 4} textAnchor="end">{decimal(tick)}</text>
+        </g>)}
+        {ZONES.map((zone) => {
+          const zoneRows = rows.filter((row) => row.zone === zone);
+          const points = zoneRows.map((row) => `${x(dates.indexOf(row.date))},${y(row.effective_load)}`).join(" ");
+          return <polyline key={zone} className="chart-series" style={zoneStyle(zone)} points={points} />;
+        })}
+        <text className="chart-label" x={left} y={height - 12}>{date(dates[0])}</text>
+        <text className="chart-label" x={width - right} y={height - 12} textAnchor="end">{date(dates.at(-1)!)}</text>
+      </svg>
+      <figcaption className="chart-legend">{ZONES.map((zone) => <span key={zone} style={zoneStyle(zone)}><i />{zone}</span>)}</figcaption>
+    </figure>
+  );
+}
+
 export function LoadHistorySection({ history, message }: { history: LoadHistory | null; message?: string }) {
   if (!history) return message ? (
     <section className="history-section" aria-labelledby="history-title">
@@ -77,6 +118,8 @@ export function LoadHistorySection({ history, message }: { history: LoadHistory 
       </div>
 
       <SevenFortyChart rows={history.daily} />
+
+      <EffectiveLoadChart rows={history.daily} />
 
       <div className="activities-heading"><div><p className="section-kicker">Последни сесии</p><h3>Реално → приравнено → ефективно</h3></div><p>{history.quality.limited_activities} с ограничено HR покритие · {history.quality.excluded_activities} изключени</p></div>
       <div className="activity-list">

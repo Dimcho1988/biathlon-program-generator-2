@@ -184,10 +184,13 @@ describe("dashboard", () => {
     expect(html).toContain("50,9 мин"); expect(html).toContain("97,8%"); expect(html).toContain("3,5 дни");
   });
   it("does not show the demo label in API mode", () => expect(renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="api" />)).not.toContain("Демо данни"));
-  it("renders 7/40 dynamics and aggregate activity detail", () => {
+  it("renders 7/40 and canonical daily effective-load dynamics with aggregate activity detail", () => {
     const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" loadHistory={loadHistoryFixture} />);
     expect(html).toContain("Натоварване и динамика");
     expect(html).toContain("Динамика на индекса 7/40 по зони");
+    expect(html).toContain("Дневен ефективен товар E по зони");
+    expect(html).toContain("без изглаждане или сумиране");
+    expect(html).toContain("линиите не се сумират до нов общ резултат");
     expect(html).toContain("Реално → приравнено → ефективно");
     expect(html).toContain("NordicSki");
   });
