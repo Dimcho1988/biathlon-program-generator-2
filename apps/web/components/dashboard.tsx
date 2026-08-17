@@ -1,9 +1,11 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { DataMode } from "../lib/api";
+import type { CompletedWork } from "../lib/completed-work";
 import type { LoadHistory } from "../lib/load-history";
 import type { TrainingStatus, ZoneTrainingStatus } from "../lib/training-status";
 import { LoadHistorySection } from "./load-history-section";
+import { CompletedWorkSection } from "./completed-work-section";
 import type { RecoveryHistory } from "../lib/recovery-history";
 import { RecoveryHistorySection } from "./recovery-history-section";
 import { ThemeToggle } from "./theme-toggle";
@@ -24,8 +26,10 @@ const metrics: Array<[keyof ZoneTrainingStatus, string, (value: number) => strin
 export function Dashboard({
   data,
   mode,
+  completedWork = null,
   loadHistory = null,
   recoveryHistory = null,
+  completedWorkMessage,
   loadHistoryMessage,
   recoveryHistoryMessage,
   integrationActions = false,
@@ -34,8 +38,10 @@ export function Dashboard({
 }: {
   data: TrainingStatus;
   mode: DataMode;
+  completedWork?: CompletedWork | null;
   loadHistory?: LoadHistory | null;
   recoveryHistory?: RecoveryHistory | null;
+  completedWorkMessage?: string;
   loadHistoryMessage?: string;
   recoveryHistoryMessage?: string;
   integrationActions?: boolean;
@@ -83,6 +89,7 @@ export function Dashboard({
             <div className="zone-list">{data.zones.map((zone) => <ZoneCard key={zone.zone} zone={zone} />)}</div>}
         </section>
 
+        <CompletedWorkSection report={completedWork} message={completedWorkMessage} selectable={mode === "api"} availablePeriodStart={loadHistory?.period_start} availablePeriodEnd={loadHistory?.period_end} />
         <LoadHistorySection history={loadHistory} message={loadHistoryMessage} />
         <RecoveryHistorySection history={recoveryHistory} message={recoveryHistoryMessage} />
 

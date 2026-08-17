@@ -1,8 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dashboard } from "../components/dashboard";
-import { getLoadHistory, getRecoveryHistory, getTrainingStatus } from "../lib/api";
-import { loadHistoryFixture, recoveryHistoryFixture, trainingStatusFixture } from "../lib/fixture";
+import { getCompletedWork, getLoadHistory, getRecoveryHistory, getTrainingStatus } from "../lib/api";
+import { completedWorkFixture, loadHistoryFixture, recoveryHistoryFixture, trainingStatusFixture } from "../lib/fixture";
+import { parseCompletedWork } from "../lib/completed-work";
 import { parseLoadHistory } from "../lib/load-history";
 import { parseTrainingStatus } from "../lib/training-status";
 import { parseRecoveryHistory } from "../lib/recovery-history";
@@ -51,6 +52,15 @@ describe("load-history-v1 contract", () => {
   it("rejects incomplete daily zone groups and provider-shaped extras", () => {
     expect(() => parseLoadHistory({ ...loadHistoryFixture, daily: loadHistoryFixture.daily.slice(0, -1) })).toThrow(/дневна история/);
     expect(() => parseLoadHistory({ ...loadHistoryFixture, provider_athlete_id: "private" })).toThrow(/структура/);
+  });
+});
+
+describe("completed-work-v1 contract", () => {
+  it("accepts the aggregate fixture", () => expect(parseCompletedWork(completedWorkFixture)).toEqual(completedWorkFixture));
+  it("rejects altered metadata, incomplete zones and duplicate provider labels", () => {
+    expect(() => parseCompletedWork({ ...completedWorkFixture, model: { ...completedWorkFixture.model, sport_grouping: "mapped" } })).toThrow(/метаданни/);
+    expect(() => parseCompletedWork({ ...completedWorkFixture, zones: completedWorkFixture.zones.slice(0, 4) })).toThrow(/точно Z1–Z5/);
+    expect(() => parseCompletedWork({ ...completedWorkFixture, sports: [completedWorkFixture.sports[0], completedWorkFixture.sports[0]] })).toThrow(/вид активност/);
   });
 });
 
@@ -103,6 +113,20 @@ describe("data access", () => {
     const [url, init] = fetchMock.mock.calls[1];
     expect(String(url)).toBe("https://api.example.test/api/v2/real/load-history");
     expect(init.headers.Authorization).toBe("Bearer server-secret");
+  });
+  it("loads a selected completed-work period from the protected snapshot endpoint", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_API_RESOURCE = "real";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json(completedWorkFixture));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(getCompletedWork("ath-profile", "2026-06-01", "2026-06-20")).resolves.toEqual(completedWorkFixture);
+    const [url, init] = fetchMock.mock.calls[1];
+    expect(String(url)).toBe("https://api.example.test/api/v2/real/completed-work?period_start=2026-06-01&period_end=2026-06-20");
+    expect(init.headers.Authorization).toBe("Bearer server-secret");
+    expect(init.headers["X-OnFlows-Athlete-Alias"]).toBe("ath-profile");
   });
   it("loads the protected recovery history without exposing the token to the browser", async () => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
@@ -166,6 +190,15 @@ describe("dashboard", () => {
     expect(html).toContain("Динамика на индекса 7/40 по зони");
     expect(html).toContain("Реално → приравнено → ефективно");
     expect(html).toContain("NordicSki");
+  });
+  it("renders the completed-work report without reclassifying provider sport labels", () => {
+    const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" completedWork={completedWorkFixture} />);
+    expect(html).toContain("Отчет за извършеното натоварване");
+    expect(html).toContain("Натоварване по пулсови зони");
+    expect(html).toContain("По вид активност от Intervals");
+    expect(html).toContain("NordicSki");
+    expect(html).toContain("не са автоматично интерпретирани");
+    expect(html).not.toContain("Покажи периода");
   });
   it("renders canonical load-only recovery dynamics and read-only settings", () => {
     const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" recoveryHistory={recoveryHistoryFixture} />);

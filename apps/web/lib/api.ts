@@ -1,4 +1,5 @@
-import { loadHistoryFixture, recoveryHistoryFixture, trainingStatusFixture } from "./fixture";
+import { completedWorkFixture, loadHistoryFixture, recoveryHistoryFixture, trainingStatusFixture } from "./fixture";
+import { parseCompletedWork, type CompletedWork } from "./completed-work";
 import { parseLoadHistory, type LoadHistory } from "./load-history";
 import { parseTrainingStatus, type TrainingStatus } from "./training-status";
 import { parseRecoveryHistory, type RecoveryHistory } from "./recovery-history";
@@ -56,6 +57,18 @@ export async function getLoadHistory(athleteAlias?: string): Promise<LoadHistory
   const token = process.env.ONFLOWS_SERVICE_TOKEN;
   if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
   return parseLoadHistory(await fetchApiResource("/api/v2/real/load-history", token, athleteAlias));
+}
+
+export async function getCompletedWork(athleteAlias?: string, periodStart?: string, periodEnd?: string): Promise<CompletedWork | null> {
+  if (process.env.ONFLOWS_DATA_MODE === "fixture") return parseCompletedWork(completedWorkFixture);
+  if (process.env.ONFLOWS_API_RESOURCE !== "real") return null;
+  const token = process.env.ONFLOWS_SERVICE_TOKEN;
+  if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
+  const query = new URLSearchParams();
+  if (periodStart) query.set("period_start", periodStart);
+  if (periodEnd) query.set("period_end", periodEnd);
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return parseCompletedWork(await fetchApiResource(`/api/v2/real/completed-work${suffix}`, token, athleteAlias));
 }
 
 export async function getRecoveryHistory(athleteAlias?: string): Promise<RecoveryHistory | null> {

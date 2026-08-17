@@ -131,6 +131,49 @@ class LoadHistoryResponse(StrictModel):
     activities: list[LoadHistoryActivity]
 
 
+class CompletedWorkMetadata(StrictModel):
+    aggregation_version: Literal["completed-work-snapshot-aggregation-v1"]
+    source_schema_version: Literal["load-history-v1"]
+    sport_grouping: Literal["provider-label-exact"]
+
+
+class CompletedWorkQuality(StrictModel):
+    modeled_activities: int
+    limited_activities: int
+    missing_duration_activities: int
+
+
+class CompletedWorkTotals(StrictModel):
+    activity_duration_min: float
+    zoned_hr_time_min: float
+
+
+class CompletedWorkZone(StrictModel):
+    zone: Literal["Z1", "Z2", "Z3", "Z4", "Z5"]
+    raw_time_min: float
+    equivalent_time_min: float
+    effective_load: float
+
+
+class CompletedWorkSport(StrictModel):
+    sport: str
+    activities_count: int
+    activity_duration_min: float
+    zoned_hr_time_min: float
+
+
+class CompletedWorkResponse(StrictModel):
+    schema_version: Literal["completed-work-v1"]
+    athlete_id: str
+    period_start: str
+    period_end: str
+    model: CompletedWorkMetadata
+    quality: CompletedWorkQuality
+    totals: CompletedWorkTotals
+    zones: list[CompletedWorkZone]
+    sports: list[CompletedWorkSport]
+
+
 class RecoveryModelMetadata(StrictModel):
     algorithm_version: str
     parameter_version: str

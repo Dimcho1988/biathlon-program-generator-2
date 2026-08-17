@@ -1,6 +1,7 @@
 import type { TrainingStatus } from "./training-status";
 import type { LoadHistory } from "./load-history";
 import type { RecoveryHistory } from "./recovery-history";
+import type { CompletedWork } from "./completed-work";
 
 export const trainingStatusFixture: TrainingStatus = {
   schema_version: "training-status-v1",
@@ -97,6 +98,38 @@ export const loadHistoryFixture: LoadHistory = {
         average_minute_value_percent: index === 0 ? 80 : index === 1 ? 72.9 : null,
       })),
     },
+  ],
+};
+
+export const completedWorkFixture: CompletedWork = {
+  schema_version: "completed-work-v1",
+  athlete_id: "A",
+  period_start: loadHistoryFixture.period_start,
+  period_end: loadHistoryFixture.period_end,
+  model: {
+    aggregation_version: "completed-work-snapshot-aggregation-v1",
+    source_schema_version: "load-history-v1",
+    sport_grouping: "provider-label-exact",
+  },
+  quality: {
+    modeled_activities: 2,
+    limited_activities: 1,
+    missing_duration_activities: 0,
+  },
+  totals: {
+    activity_duration_min: 93,
+    zoned_hr_time_min: 92.9,
+  },
+  zones: [
+    { zone: "Z1", raw_time_min: 71.9, equivalent_time_min: 38.648825, effective_load: 38.648825 },
+    { zone: "Z2", raw_time_min: 21, equivalent_time_min: 15.3, effective_load: 15.3 },
+    { zone: "Z3", raw_time_min: 0, equivalent_time_min: 0, effective_load: 0 },
+    { zone: "Z4", raw_time_min: 0, equivalent_time_min: 0, effective_load: 0 },
+    { zone: "Z5", raw_time_min: 0, equivalent_time_min: 0, effective_load: 0 },
+  ],
+  sports: [
+    { sport: "NordicSki", activities_count: 1, activity_duration_min: 51, zoned_hr_time_min: 50.9 },
+    { sport: "Run", activities_count: 1, activity_duration_min: 42, zoned_hr_time_min: 42 },
   ],
 };
 

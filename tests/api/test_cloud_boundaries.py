@@ -55,6 +55,8 @@ def test_real_endpoint_auth_and_no_snapshot(monkeypatch):
     assert client.get("/api/v2/real/training-status", headers={"Authorization": "Bearer secret-value"}).status_code == 503
     assert client.get("/api/v2/real/load-history").status_code == 401
     assert client.get("/api/v2/real/load-history", headers={"Authorization": "Bearer secret-value"}).status_code == 503
+    assert client.get("/api/v2/real/completed-work").status_code == 401
+    assert client.get("/api/v2/real/completed-work", headers={"Authorization": "Bearer secret-value"}).status_code == 503
     assert client.get("/api/v2/real/recovery-history").status_code == 401
     assert client.get("/api/v2/real/recovery-history", headers={"Authorization": "Bearer secret-value"}).status_code == 503
 

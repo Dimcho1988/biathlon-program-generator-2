@@ -18,6 +18,12 @@ from .cloud import AthleteContext, AthleteModelSettings, SnapshotRepository, nor
 from .schemas import (
     ActivityZoneLoad,
     AthleteSnapshot,
+    CompletedWorkMetadata,
+    CompletedWorkQuality,
+    CompletedWorkResponse,
+    CompletedWorkSport,
+    CompletedWorkTotals,
+    CompletedWorkZone,
     DailyZoneLoad,
     DataQuality,
     DailyRecovery,
@@ -377,6 +383,121 @@ def training_status_from_persisted(
 
 def load_history_from_persisted(payload: Mapping[str, Any]) -> LoadHistoryResponse:
     return AthleteSnapshot.model_validate(payload).load_history
+
+
+def completed_work_from_load_history(
+    history: LoadHistoryResponse,
+    period_start: date | None = None,
+    period_end: date | None = None,
+) -> CompletedWorkResponse:
+    """Aggregate an explicit period from an already-persisted load snapshot.
+
+    This is a technical reporting adapter. It does not fetch provider data and
+    does not alter any physiological value stored in ``load-history-v1``.
+    """
+
+    available_start = date.fromisoformat(history.period_start)
+    available_end = date.fromisoformat(history.period_end)
+    start = period_start or available_start
+    end = period_end or available_end
+    if start < available_start or end > available_end or start > end:
+        raise ValueError("Completed-work period is outside stored history")
+
+    activities = [
+        activity
+        for activity in history.activities
+        if start <= date.fromisoformat(activity.date) <= end
+    ]
+    zone_totals = {
+        zone: {"raw": 0.0, "equivalent": 0.0, "effective": 0.0}
+        for zone in ZONES
+    }
+    sport_totals: dict[str, dict[str, float | int]] = {}
+    duration_total = 0.0
+    missing_duration = 0
+    for activity in activities:
+        if activity.duration_min is None:
+            missing_duration += 1
+            duration = 0.0
+        else:
+            duration = activity.duration_min
+            duration_total += duration
+        sport = sport_totals.setdefault(
+            activity.sport,
+            {"activities": 0, "duration": 0.0, "zoned": 0.0},
+        )
+        sport["activities"] += 1
+        sport["duration"] += duration
+        for row in activity.zones:
+            target = zone_totals[row.zone]
+            target["raw"] += row.raw_time_min
+            target["equivalent"] += row.equivalent_time_min
+            target["effective"] += row.effective_load
+            sport["zoned"] += row.raw_time_min
+
+    zoned_total = sum(float(row["raw"]) for row in zone_totals.values())
+    return CompletedWorkResponse(
+        schema_version="completed-work-v1",
+        athlete_id=history.athlete_id,
+        period_start=start.isoformat(),
+        period_end=end.isoformat(),
+        model=CompletedWorkMetadata(
+            aggregation_version="completed-work-snapshot-aggregation-v1",
+            source_schema_version="load-history-v1",
+            sport_grouping="provider-label-exact",
+        ),
+        quality=CompletedWorkQuality(
+            modeled_activities=len(activities),
+            limited_activities=sum(
+                activity.quality_status == "limited" for activity in activities
+            ),
+            missing_duration_activities=missing_duration,
+        ),
+        totals=CompletedWorkTotals(
+            activity_duration_min=_finite(duration_total, "completed duration"),
+            zoned_hr_time_min=_finite(zoned_total, "completed zoned HR time"),
+        ),
+        zones=[
+            CompletedWorkZone(
+                zone=zone,
+                raw_time_min=_finite(zone_totals[zone]["raw"], f"completed raw[{zone}]"),
+                equivalent_time_min=_finite(
+                    zone_totals[zone]["equivalent"],
+                    f"completed equivalent[{zone}]",
+                ),
+                effective_load=_finite(
+                    zone_totals[zone]["effective"],
+                    f"completed effective[{zone}]",
+                ),
+            )
+            for zone in ZONES
+        ],
+        sports=[
+            CompletedWorkSport(
+                sport=sport,
+                activities_count=int(values["activities"]),
+                activity_duration_min=_finite(
+                    values["duration"], f"sport duration[{sport}]"
+                ),
+                zoned_hr_time_min=_finite(
+                    values["zoned"], f"sport zoned HR time[{sport}]"
+                ),
+            )
+            for sport, values in sorted(
+                sport_totals.items(), key=lambda item: (item[0].casefold(), item[0])
+            )
+        ],
+    )
+
+
+def completed_work_from_persisted(
+    payload: Mapping[str, Any],
+    period_start: date | None = None,
+    period_end: date | None = None,
+) -> CompletedWorkResponse:
+    return completed_work_from_load_history(
+        load_history_from_persisted(payload), period_start, period_end
+    )
 
 
 def recovery_history_from_persisted(

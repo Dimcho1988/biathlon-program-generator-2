@@ -3,12 +3,17 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 import pytest
+from fastapi.testclient import TestClient
 
+from apps.api import main as api_main
 from apps.api.cloud import AthleteModelSettings, InMemorySnapshotRepository
+from apps.api.main import app
 from apps.api.real_service import (
     ConfigurationError,
     ProviderFailure,
     _bounded_percentage,
+    completed_work_from_load_history,
+    completed_work_from_persisted,
     load_history_from_persisted,
     recovery_history_from_persisted,
     refresh,
@@ -86,6 +91,82 @@ def test_persisted_snapshot_exposes_v1_status_and_load_history_contracts():
     assert recovery.model.parameter_version == "main-load-recovery-v1"
     assert [row.zone for row in recovery.settings] == ["Z1", "Z2", "Z3", "Z4", "Z5"]
     assert recovery.settings[3].tau_days == pytest.approx(1.65)
+    report = completed_work_from_persisted(payload)
+    assert report.schema_version == "completed-work-v1"
+    assert report.model.source_schema_version == "load-history-v1"
+
+
+def test_completed_work_aggregates_persisted_values_without_recalculating_physiology():
+    repo = InMemorySnapshotRepository()
+    refresh(repo, environ=ENV, client=Client(), period_end=date(2026, 8, 15))
+    history = load_history_from_persisted(repo.latest("pilot"))
+    payload = history.model_dump(mode="json")
+    second = dict(payload["activities"][0])
+    second.update(
+        activity_ref="activity-002",
+        date="2026-08-14",
+        sport="TrailRun",
+        duration_min=None,
+        quality_status="limited",
+    )
+    second["zones"] = [dict(row) for row in second["zones"]]
+    payload["activities"].append(second)
+    enriched = type(history).model_validate(payload)
+
+    report = completed_work_from_load_history(enriched)
+    original_zoned = sum(row.raw_time_min for row in history.activities[0].zones)
+    assert report.quality.modeled_activities == 2
+    assert report.quality.limited_activities == 1
+    assert report.quality.missing_duration_activities == 1
+    assert report.totals.activity_duration_min == pytest.approx(
+        history.activities[0].duration_min
+    )
+    assert report.totals.zoned_hr_time_min == pytest.approx(2 * original_zoned)
+    assert [row.sport for row in report.sports] == ["Run", "TrailRun"]
+    assert report.sports[1].activity_duration_min == 0
+    for expected, actual in zip(history.activities[0].zones, report.zones):
+        assert actual.zone == expected.zone
+        assert actual.raw_time_min == pytest.approx(2 * expected.raw_time_min)
+        assert actual.equivalent_time_min == pytest.approx(
+            2 * expected.equivalent_time_min
+        )
+        assert actual.effective_load == pytest.approx(2 * expected.effective_load)
+
+    selected = completed_work_from_load_history(
+        enriched, date(2026, 8, 15), date(2026, 8, 15)
+    )
+    assert selected.quality.modeled_activities == 1
+    assert [row.sport for row in selected.sports] == ["Run"]
+    with pytest.raises(ValueError, match="outside stored history"):
+        completed_work_from_load_history(
+            enriched, date(2026, 7, 1), date(2026, 8, 15)
+        )
+
+
+def test_completed_work_endpoint_is_profile_scoped_and_validates_the_period(monkeypatch):
+    repo = InMemorySnapshotRepository()
+    refresh(repo, environ=ENV, client=Client(), period_end=date(2026, 8, 15))
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
+    monkeypatch.setattr(api_main, "_repository", lambda: repo)
+    client = TestClient(app)
+    headers = {
+        "Authorization": "Bearer service-secret",
+        "X-OnFlows-Athlete-Alias": "pilot",
+    }
+
+    response = client.get(
+        "/api/v2/real/completed-work"
+        "?period_start=2026-08-15&period_end=2026-08-15",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["quality"]["modeled_activities"] == 1
+    assert response.json()["athlete_id"] == "pilot"
+    assert client.get(
+        "/api/v2/real/completed-work"
+        "?period_start=2026-01-01&period_end=2026-08-15",
+        headers=headers,
+    ).status_code == 422
 
 
 def test_deployed_v1_snapshot_remains_readable_during_rollout():

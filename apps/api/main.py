@@ -1,5 +1,6 @@
 """FastAPI entry point for the onFlows read-only API."""
 
+from datetime import date
 import logging
 import os
 import re
@@ -27,6 +28,7 @@ from .oauth_store import (
 from .real_service import (
     ConfigurationError,
     ProviderFailure,
+    completed_work_from_load_history,
     load_history_from_persisted,
     recovery_history_from_persisted,
     refresh,
@@ -35,6 +37,7 @@ from .real_service import (
 from .schemas import (
     AthleteSettingsInput,
     AthleteSettingsResponse,
+    CompletedWorkResponse,
     HealthResponse,
     LoadHistoryResponse,
     OAuthAuthorizationResponse,
@@ -187,6 +190,42 @@ def real_load_history(
         raise HTTPException(
             status_code=503,
             detail="Load history requires a new real-data refresh",
+        ) from exc
+
+
+@app.get("/api/v2/real/completed-work", response_model=CompletedWorkResponse)
+def real_completed_work(
+    period_start: date | None = None,
+    period_end: date | None = None,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    try:
+        snapshot = _repository().latest(_validated_alias(athlete_alias))
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    if snapshot is None:
+        raise HTTPException(
+            status_code=503, detail="No valid real-data snapshot is available"
+        )
+    try:
+        history = load_history_from_persisted(snapshot)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Completed-work report requires a new real-data refresh",
+        ) from exc
+    try:
+        return completed_work_from_load_history(history, period_start, period_end)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Requested period must be within the stored history",
         ) from exc
 
 
