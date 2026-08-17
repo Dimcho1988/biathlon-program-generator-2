@@ -47,6 +47,8 @@ describe("integration route redirects behind a reverse proxy", () => {
     expect(response.headers.get("location")).toBe(authorizationUrl);
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(String(fetchMock.mock.calls[1][0])).toBe("https://api.example.test/health");
+    const [, authorizationRequest] = fetchMock.mock.calls[2];
+    expect(authorizationRequest.headers).not.toHaveProperty("X-OnFlows-Athlete-Alias");
   });
 
   it("returns relative dashboard redirects after refresh success and failure", async () => {
