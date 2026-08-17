@@ -8,6 +8,7 @@ const apiConfiguration = () => {
 };
 
 const retryableInfrastructureStatus = (status: number) => status === 502 || status === 503 || status === 504;
+const pause = () => new Promise((resolve) => setTimeout(resolve, 1_000));
 
 const startAuthorization = (baseUrl: string, token: string) =>
   fetch(new URL("/api/v2/integrations/intervals/authorize", baseUrl), {
@@ -21,6 +22,19 @@ const startAuthorization = (baseUrl: string, token: string) =>
     signal: AbortSignal.timeout(75_000),
   });
 
+const waitForApi = async (baseUrl: string) => {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const response = await fetch(new URL("/health", baseUrl), {
+      cache: "no-store",
+      signal: AbortSignal.timeout(75_000),
+    });
+    if (response.ok) return;
+    if (!retryableInfrastructureStatus(response.status)) throw new Error("API health check failed");
+    if (attempt < 2) await pause();
+  }
+  throw new Error("API did not wake in time");
+};
+
 export async function GET() {
   let stage = "configuration";
   try {
@@ -29,10 +43,7 @@ export async function GET() {
     let response = await startAuthorization(baseUrl, token);
     if (retryableInfrastructureStatus(response.status)) {
       stage = `api-wake-${response.status}`;
-      await fetch(new URL("/health", baseUrl), {
-        cache: "no-store",
-        signal: AbortSignal.timeout(75_000),
-      });
+      await waitForApi(baseUrl);
       stage = "api-retry";
       response = await startAuthorization(baseUrl, token);
     }

@@ -30,7 +30,7 @@ const notices: Record<string, string> = {
 };
 
 const settingsNotices: Record<string, string> = {
-  saved: "Индивидуалните настройки са запазени. Стартирайте първото обновяване.",
+  saved: "Индивидуалните настройки са запазени. Обновете реалните данни, за да преизчислите анализа.",
   invalid: "Границите трябва да са шест последователно нарастващи цели стойности между 30 и 240 уд/мин.",
   error: "Настройките не бяха запазени. Опитайте отново.",
 };
@@ -49,6 +49,28 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
       integrationActions
       refreshAvailable={false}
       notice={notice}
+    />;
+  }
+
+  if (query.settings === "edit" && multiProfile && athleteAlias) {
+    let settings: Awaited<ReturnType<typeof getAthleteSettings>> | null = null;
+    let settingsError: string | null = null;
+    try {
+      settings = await getAthleteSettings(athleteAlias);
+    } catch (error) {
+      settingsError = error instanceof Error ? error.message : "Настройките на профила не са достъпни.";
+    }
+    if (!settings) {
+      return <ErrorState
+        message={settingsError ?? "Настройките на профила не са достъпни."}
+        integrationActions={integrationActions}
+        notice={settingsNotices.error}
+      />;
+    }
+    return <AthleteSettingsForm
+      editing
+      initialBounds={settings.hr_zone_bounds_bpm}
+      initialTimezone={settings.timezone}
     />;
   }
 

@@ -1,4 +1,5 @@
 import Image from "next/image";
+import Link from "next/link";
 import type { DataMode } from "../lib/api";
 import type { LoadHistory } from "../lib/load-history";
 import type { TrainingStatus, ZoneTrainingStatus } from "../lib/training-status";
@@ -96,7 +97,7 @@ export function Dashboard({
           </dl>
         </details>
       </section>
-      <footer><span className="footer-brand">onFlows</span><p>Данните са диагностичен изглед на съществуващия модел.</p><div>{integrationActions && <form action="/api/integrations/intervals/refresh" method="post"><button className="text-action" type="submit">Обнови данните</button></form>}{sessionActions && <form action="/api/session/logout" method="post"><button className="text-action" type="submit">Смени профила</button></form>}</div></footer>
+      <footer><span className="footer-brand">onFlows</span><p>Данните са диагностичен изглед на съществуващия модел.</p><div>{integrationActions && <form action="/api/integrations/intervals/refresh" method="post"><button className="text-action" type="submit">Обнови данните</button></form>}{sessionActions && <Link className="text-action" href="/?settings=edit">Настройки</Link>}{sessionActions && <form action="/api/session/logout" method="post"><button className="text-action" type="submit">Смени профила</button></form>}</div></footer>
     </main>
   );
 }
