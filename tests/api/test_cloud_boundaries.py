@@ -7,6 +7,7 @@ from apps.api.cloud import AthleteContext, AthleteModelSettings, InMemorySnapsho
 from apps.api.hrmod import calculate_hrmod
 from apps.api import main as api_main
 from apps.api.main import app
+from apps.api.oauth_service import OAuthFlowError
 
 
 def test_athlete_configuration_validation_and_private_fingerprint():
@@ -157,3 +158,30 @@ def test_login_ticket_is_consumed_through_the_protected_server_boundary(monkeypa
     assert first.status_code == 200
     assert first.json() == {"athlete_alias": "ath-profile"}
     assert replay.status_code == 401
+
+
+def test_oauth_callback_exposes_only_safe_failure_stage(monkeypatch):
+    monkeypatch.setenv("INTERVALS_CLIENT_ID", "client-id")
+    monkeypatch.setenv("INTERVALS_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv(
+        "INTERVALS_REDIRECT_URI",
+        "https://api.example.test/api/v2/integrations/intervals/callback",
+    )
+    monkeypatch.setenv("OAUTH_STATE_SECRET", "state-secret")
+    monkeypatch.setenv("ONFLOWS_WEB_BASE_URL", "https://web.example.test")
+    monkeypatch.setattr(api_main, "_repository", lambda: object())
+
+    def fail_safely(*_args, **_kwargs):
+        raise OAuthFlowError("provider detail remains private", stage="permissions")
+
+    monkeypatch.setattr(api_main, "complete_authorization", fail_safely)
+    response = TestClient(app).get(
+        "/api/v2/integrations/intervals/callback?code=private&state=private",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "https://web.example.test/?intervals=error-permissions"
+    )
+    assert "provider detail" not in response.headers["location"]

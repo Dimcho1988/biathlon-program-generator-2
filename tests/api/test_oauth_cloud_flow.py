@@ -143,13 +143,14 @@ def test_oauth_state_is_persisted_consumed_once_and_grant_is_stored(monkeypatch)
         "access_token": "provider-token",
         "scopes": READ_ONLY_SCOPES,
     }
-    with pytest.raises(OAuthFlowError, match="invalid, expired or already used"):
+    with pytest.raises(OAuthFlowError, match="invalid, expired or already used") as error:
         complete_authorization(
             repository,
             {"code": "replayed-code", "state": state},
             environ=ENV,
             now=now,
         )
+    assert error.value.stage == "state"
 
 
 def test_missing_read_scope_is_rejected(monkeypatch):
@@ -168,13 +169,14 @@ def test_missing_read_scope_is_rejected(monkeypatch):
             token_type="Bearer",
         ),
     )
-    with pytest.raises(OAuthFlowError, match="missing required read permissions"):
+    with pytest.raises(OAuthFlowError, match="missing required read permissions") as error:
         complete_authorization(
             repository,
             {"code": "one-time-code", "state": state},
             environ=ENV,
             now=now,
         )
+    assert error.value.stage == "permissions"
 
 
 def test_new_provider_gets_opaque_alias_and_short_lived_login_ticket(monkeypatch):

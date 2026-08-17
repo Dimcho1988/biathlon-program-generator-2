@@ -1,5 +1,6 @@
 """FastAPI entry point for the onFlows read-only API."""
 
+import logging
 import os
 import re
 from typing import Annotated
@@ -46,6 +47,7 @@ from .schemas import (
 from .training_status import build_demo_training_status
 
 app = FastAPI(title="onFlows API", version="1.0.0")
+logger = logging.getLogger(__name__)
 ATHLETE_ALIAS_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{2,63}$")
 
 
@@ -326,19 +328,29 @@ def intervals_callback(request: Request):
             status_code=503, detail="OAuth server configuration is incomplete"
         ) from exc
     destination = settings.web_base_url.rstrip("/")
+    stage = "storage"
     try:
         repository = _repository()
+        stage = "authorization"
         athlete_alias = complete_authorization(
             repository, dict(request.query_params)
         )
+        stage = "session"
         ticket = issue_login_ticket(repository, athlete_alias)
+    except OAuthFlowError as exc:
+        logger.warning("intervals_oauth_callback_failed stage=%s", exc.stage)
+        return RedirectResponse(
+            f"{destination}/?intervals=error-{exc.stage}", status_code=303
+        )
     except (
         OAuthConfigurationError,
-        OAuthFlowError,
         PersistentStoreConfigurationError,
         PersistentStoreFailure,
     ):
-        return RedirectResponse(f"{destination}/?intervals=error", status_code=303)
+        logger.warning("intervals_oauth_callback_failed stage=%s", stage)
+        return RedirectResponse(
+            f"{destination}/?intervals=error-{stage}", status_code=303
+        )
     return RedirectResponse(
         f"{destination}/api/session/complete?ticket={quote(ticket, safe='')}",
         status_code=303,

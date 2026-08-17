@@ -33,6 +33,10 @@ class OAuthConfigurationError(RuntimeError):
 class OAuthFlowError(RuntimeError):
     """Safe OAuth flow failure without codes, tokens or provider identity."""
 
+    def __init__(self, message: str, *, stage: str = "callback") -> None:
+        super().__init__(message)
+        self.stage = stage
+
 
 @dataclass(frozen=True)
 class OAuthSettings:
@@ -126,6 +130,11 @@ def complete_authorization(
     clock = now or datetime.now(timezone.utc)
     try:
         callback = parse_callback(query)
+    except (OAuthCallbackError, ValueError) as exc:
+        raise OAuthFlowError(
+            "Intervals OAuth callback is invalid", stage="callback"
+        ) from exc
+    try:
         verified = verify_signed_state(
             callback.state,
             settings.state_secret,
@@ -134,20 +143,32 @@ def complete_authorization(
         )
         pending = repository.consume_oauth_state(verified.nonce)
         if pending is None:
-            raise OAuthFlowError("OAuth state is invalid, expired or already used")
+            raise OAuthFlowError(
+                "OAuth state is invalid, expired or already used", stage="state"
+            )
         if not hmac.compare_digest(pending.redirect_uri, settings.redirect_uri):
-            raise OAuthFlowError("OAuth redirect binding is invalid")
+            raise OAuthFlowError("OAuth redirect binding is invalid", stage="state")
+    except OAuthFlowError:
+        raise
+    except ValueError as exc:
+        raise OAuthFlowError("OAuth state is invalid", stage="state") from exc
+    try:
         grant = exchange_authorization_code(
             client_id=settings.client_id,
             client_secret=settings.client_secret,
             code=callback.code,
             redact_values=(callback.state,),
         )
-    except (OAuthCallbackError, OAuthExchangeError, ValueError) as exc:
-        raise OAuthFlowError("Intervals OAuth connection could not be completed") from exc
+    except (OAuthExchangeError, ValueError) as exc:
+        raise OAuthFlowError(
+            "Intervals OAuth connection could not be completed", stage="exchange"
+        ) from exc
     granted = set(grant.scopes)
     if not set(READ_ONLY_SCOPES).issubset(granted):
-        raise OAuthFlowError("Intervals OAuth grant is missing required read permissions")
+        raise OAuthFlowError(
+            "Intervals OAuth grant is missing required read permissions",
+            stage="permissions",
+        )
 
     existing_alias = repository.alias_for_provider(grant.athlete_id)
     if pending.athlete_alias is not None:
@@ -155,11 +176,17 @@ def complete_authorization(
         if existing_alias is not None and not hmac.compare_digest(
             existing_alias, pending.athlete_alias
         ):
-            raise OAuthFlowError("Intervals profile is already bound to another athlete")
+            raise OAuthFlowError(
+                "Intervals profile is already bound to another athlete",
+                stage="binding",
+            )
         if alias_provider is not None and not hmac.compare_digest(
             alias_provider, grant.athlete_id
         ):
-            raise OAuthFlowError("Athlete session is bound to another Intervals profile")
+            raise OAuthFlowError(
+                "Athlete session is bound to another Intervals profile",
+                stage="binding",
+            )
         athlete_alias = pending.athlete_alias
     elif existing_alias is not None:
         athlete_alias = existing_alias
@@ -180,7 +207,9 @@ def _new_athlete_alias(repository: SupabasePilotRepository) -> str:
         candidate = f"ath-{secrets.token_hex(10)}"
         if repository.provider_for_alias(candidate) is None:
             return candidate
-    raise OAuthFlowError("A unique athlete identity could not be created")
+    raise OAuthFlowError(
+        "A unique athlete identity could not be created", stage="identity"
+    )
 
 
 def issue_login_ticket(
