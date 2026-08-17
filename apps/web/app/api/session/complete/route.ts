@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { athleteSessionCookie } from "../../../../lib/athlete-session";
+import { waitForApi } from "../../../../lib/api-readiness";
 
 const ALIAS_PATTERN = /^[a-z0-9][a-z0-9-]{2,63}$/;
 
@@ -10,6 +11,7 @@ export async function GET(request: Request) {
     const token = process.env.ONFLOWS_SERVICE_TOKEN;
     if (!baseUrl || !token || ticket.length < 32 || ticket.length > 128)
       throw new Error("Session handoff is invalid");
+    await waitForApi(baseUrl);
     const exchange = await fetch(new URL("/api/v2/session/exchange", baseUrl), {
       method: "POST",
       cache: "no-store",

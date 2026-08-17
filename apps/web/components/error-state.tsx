@@ -1,6 +1,10 @@
-export function ErrorState({ message, integrationActions = false, refreshAvailable = true, notice }: {
+import Link from "next/link";
+
+export function ErrorState({ message, integrationActions = false, connectAvailable = true, retryAvailable = false, refreshAvailable = true, notice }: {
   message: string;
   integrationActions?: boolean;
+  connectAvailable?: boolean;
+  retryAvailable?: boolean;
   refreshAvailable?: boolean;
   notice?: string;
 }) {
@@ -12,10 +16,11 @@ export function ErrorState({ message, integrationActions = false, refreshAvailab
       <p className="muted">{message}</p>
       {notice && <p className="connection-notice">{notice}</p>}
       {integrationActions && <div className="integration-actions">
-        <a className="action-button" href="/api/integrations/intervals/connect">Свържи Intervals</a>
+        {connectAvailable && <a className="action-button" href="/api/integrations/intervals/connect">Свържи Intervals</a>}
+        {retryAvailable && <Link className="action-button" href="/">Опитай отново</Link>}
         {refreshAvailable && <form action="/api/integrations/intervals/refresh" method="post"><button className="action-button secondary" type="submit">Обнови реалните данни</button></form>}
       </div>}
-      <p className="state-help">Проверете API адреса и опитайте отново. Демо данни не се зареждат автоматично.</p>
+      <p className="state-help">Free preview се събужда автоматично. След неактивност изчакайте около минута; не е нужно да свързвате профила отново.</p>
     </main>
   );
 }

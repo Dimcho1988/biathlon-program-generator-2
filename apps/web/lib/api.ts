@@ -2,6 +2,7 @@ import { loadHistoryFixture, recoveryHistoryFixture, trainingStatusFixture } fro
 import { parseLoadHistory, type LoadHistory } from "./load-history";
 import { parseTrainingStatus, type TrainingStatus } from "./training-status";
 import { parseRecoveryHistory, type RecoveryHistory } from "./recovery-history";
+import { waitForApi } from "./api-readiness";
 
 // Render Free can take more than 50 seconds to wake the API after inactivity.
 // Keep the preview reliable without introducing a paid always-on service.
@@ -17,6 +18,11 @@ export interface AthleteSettings {
 async function fetchApiResource(path: string, token?: string, athleteAlias?: string): Promise<unknown> {
   const baseUrl = process.env.ONFLOWS_API_BASE_URL;
   if (!baseUrl) throw new Error("ONFLOWS_API_BASE_URL не е зададен. Изберете API адрес или explicit fixture режим.");
+  try {
+    await waitForApi(baseUrl);
+  } catch (error) {
+    throw new Error("API услугата не се събуди навреме.", { cause: error });
+  }
   let response: Response;
   try {
     response = await fetch(new URL(path, baseUrl), {

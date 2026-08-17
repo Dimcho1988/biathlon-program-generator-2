@@ -7,6 +7,8 @@ import { parseLoadHistory } from "../lib/load-history";
 import { parseTrainingStatus } from "../lib/training-status";
 import { parseRecoveryHistory } from "../lib/recovery-history";
 import { applyTheme, resolveInitialTheme, THEME_STORAGE_KEY } from "../components/theme-toggle";
+import { ErrorState } from "../components/error-state";
+import { waitForApi } from "../lib/api-readiness";
 
 describe("training-status-v1 contract", () => {
   it("accepts the canonical fixture", () => expect(parseTrainingStatus(trainingStatusFixture)).toEqual(trainingStatusFixture));
@@ -64,17 +66,21 @@ describe("data access", () => {
   afterEach(() => { vi.unstubAllGlobals(); delete process.env.ONFLOWS_DATA_MODE; delete process.env.ONFLOWS_API_BASE_URL; delete process.env.ONFLOWS_API_RESOURCE; delete process.env.ONFLOWS_SERVICE_TOKEN; });
   it("returns an explicit API error without falling back to fixture", async () => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("failure", { status: 503 })));
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(new Response("failure", { status: 503 })));
     await expect(getTrainingStatus()).rejects.toThrow("API услугата върна грешка (503)");
   });
   it("uses the protected real endpoint and server-only authorization", async () => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
     process.env.ONFLOWS_API_RESOURCE = "real";
     process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
-    const fetchMock = vi.fn().mockResolvedValue(Response.json(trainingStatusFixture));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json(trainingStatusFixture));
     vi.stubGlobal("fetch", fetchMock);
     await expect(getTrainingStatus()).resolves.toEqual({ data: trainingStatusFixture, mode: "api" });
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, init] = fetchMock.mock.calls[1];
     expect(String(url)).toBe("https://api.example.test/api/v2/real/training-status");
     expect(init.headers.Authorization).toBe("Bearer server-secret");
   });
@@ -89,10 +95,12 @@ describe("data access", () => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
     process.env.ONFLOWS_API_RESOURCE = "real";
     process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
-    const fetchMock = vi.fn().mockResolvedValue(Response.json(loadHistoryFixture));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json(loadHistoryFixture));
     vi.stubGlobal("fetch", fetchMock);
     await expect(getLoadHistory()).resolves.toEqual(loadHistoryFixture);
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, init] = fetchMock.mock.calls[1];
     expect(String(url)).toBe("https://api.example.test/api/v2/real/load-history");
     expect(init.headers.Authorization).toBe("Bearer server-secret");
   });
@@ -100,16 +108,43 @@ describe("data access", () => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
     process.env.ONFLOWS_API_RESOURCE = "real";
     process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
-    const fetchMock = vi.fn().mockResolvedValue(Response.json(recoveryHistoryFixture));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json(recoveryHistoryFixture));
     vi.stubGlobal("fetch", fetchMock);
     await expect(getRecoveryHistory()).resolves.toEqual(recoveryHistoryFixture);
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, init] = fetchMock.mock.calls[1];
     expect(String(url)).toBe("https://api.example.test/api/v2/real/recovery-history");
     expect(init.headers.Authorization).toBe("Bearer server-secret");
   });
 });
 
+describe("API readiness", () => {
+  it("shares one wake-up probe across parallel server requests", async () => {
+    let release: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn().mockImplementation(() => new Promise<Response>((resolve) => { release = resolve; }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = waitForApi("https://api.example.test");
+    const second = waitForApi("https://api.example.test");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    release?.(Response.json({ status: "ok" }));
+    await Promise.all([first, second]);
+    vi.unstubAllGlobals();
+  });
+});
+
 describe("dashboard", () => {
+  it("does not offer a new OAuth connection for an already active athlete session", () => {
+    const html = renderToStaticMarkup(<ErrorState
+      message="API услугата не се събуди навреме."
+      integrationActions
+      connectAvailable={false}
+      retryAvailable
+    />);
+    expect(html).toContain("Опитай отново");
+    expect(html).not.toContain("Свържи Intervals");
+  });
   it("renders the official logo and accessible theme control without losing content", () => {
     const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" />);
     expect(html).toContain('%2Fbrand%2Fonflows-mark.png');

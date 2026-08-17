@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { currentAthleteAlias, multiProfileMode } from "../../../../../lib/athlete-session";
+import { waitForApi } from "../../../../../lib/api-readiness";
 
 export async function POST() {
   try {
@@ -9,6 +10,7 @@ export async function POST() {
     const baseUrl = process.env.ONFLOWS_API_BASE_URL;
     const token = process.env.ONFLOWS_SERVICE_TOKEN;
     if (!baseUrl || !token) throw new Error("Server integration configuration is incomplete");
+    await waitForApi(baseUrl);
     const response = await fetch(new URL("/api/v2/real/refresh", baseUrl), {
       method: "POST",
       cache: "no-store",

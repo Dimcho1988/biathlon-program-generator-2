@@ -64,6 +64,8 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
       return <ErrorState
         message={settingsError ?? "Настройките на профила не са достъпни."}
         integrationActions={integrationActions}
+        connectAvailable={false}
+        retryAvailable
         notice={settingsNotices.error}
       />;
     }
@@ -115,5 +117,11 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
   const notice = settingsNotice ?? integrationNotice;
   return result.ok
     ? <Dashboard {...result.value} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} notice={notice} />
-    : <ErrorState message={result.message} integrationActions={integrationActions} notice={notice} />;
+    : <ErrorState
+      message={result.message}
+      integrationActions={integrationActions}
+      connectAvailable={!multiProfile || !athleteAlias}
+      retryAvailable={Boolean(multiProfile && athleteAlias)}
+      notice={notice}
+    />;
 }

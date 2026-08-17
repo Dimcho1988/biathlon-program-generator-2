@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { currentAthleteAlias, multiProfileMode } from "../../../../lib/athlete-session";
+import { waitForApi } from "../../../../lib/api-readiness";
 
 const fieldNames = ["z1_low", "z2_low", "z3_low", "z4_low", "z5_low", "z5_high"] as const;
 
@@ -22,6 +23,7 @@ export async function POST(request: Request) {
       || !timezone
     ) return new NextResponse(null, { status: 303, headers: { Location: "/?settings=invalid" } });
     stage = "api";
+    await waitForApi(baseUrl);
     const response = await fetch(new URL("/api/v2/athlete/settings", baseUrl), {
       method: "PUT",
       cache: "no-store",
