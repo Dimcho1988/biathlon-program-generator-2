@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { GET as connect } from "../app/api/integrations/intervals/connect/route";
 import { POST as refresh } from "../app/api/integrations/intervals/refresh/route";
 import { POST as saveSettings } from "../app/api/athlete/settings/route";
+import { POST as savePlanningProfile } from "../app/api/athlete/planning-profile/route";
 import { GET as complete } from "../app/api/session/complete/route";
 import { createAthleteSession, verifyAthleteSession } from "../lib/athlete-session";
 
@@ -185,6 +186,71 @@ describe("integration route redirects behind a reverse proxy", () => {
     expect(JSON.parse(init.body)).toEqual({
       hr_zone_bounds_bpm: [100, 120, 140, 160, 180, 200],
       timezone: "Europe/Sofia",
+    });
+  });
+
+  it("saves planning inputs only for the signed athlete session", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    process.env.ONFLOWS_PROFILE_MODE = "multi";
+    process.env.ONFLOWS_SESSION_SECRET = "a-secret-value-with-at-least-32-characters";
+    const session = createAthleteSession("ath-test-profile");
+    vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: session }) } as never);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json({ configured: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const form = new FormData();
+    const values = {
+      schema_version: "planning-profile-v1",
+      season_start: "2026-01-01",
+      season_end: "2026-12-31",
+      annual_target_hours: "600",
+      sessions_per_week: "9",
+      long_session_day: "6",
+      max_key_sessions_per_week: "3",
+      mesocycle_anchor_date: "2026-01-01",
+      mesocycle_length_weeks: "4",
+      camp_default_accent_limit: "2",
+      double_threshold_day: "2",
+    };
+    Object.entries(values).forEach(([name, value]) => form.set(name, value));
+    form.append("rest_days", "0");
+    form.append("double_session_days", "2");
+    form.append("double_session_days", "5");
+    form.append("intensity_days", "2");
+    form.append("intensity_days", "5");
+    form.append("strength_days", "1");
+    form.append("strength_days", "4");
+    form.append("double_threshold_components", "Z3");
+    form.append("double_threshold_components", "Z4");
+
+    const response = await savePlanningProfile(new Request(
+      "https://web.example.test/api/athlete/planning-profile",
+      { method: "POST", body: form },
+    ));
+
+    expect(response.headers.get("location")).toBe("/planning?planning=saved");
+    const [, init] = fetchMock.mock.calls[1];
+    expect(init.headers["X-OnFlows-Athlete-Alias"]).toBe("ath-test-profile");
+    expect(JSON.parse(init.body)).toEqual({
+      schema_version: "planning-profile-v1",
+      season_start: "2026-01-01",
+      season_end: "2026-12-31",
+      annual_target_hours: 600,
+      sessions_per_week: 9,
+      rest_days: [0],
+      double_session_days: [2, 5],
+      long_session_day: 6,
+      intensity_days: [2, 5],
+      strength_days: [1, 4],
+      max_key_sessions_per_week: 3,
+      mesocycle_anchor_date: "2026-01-01",
+      mesocycle_length_weeks: 4,
+      camp_default_accent_limit: 2,
+      double_threshold_enabled: false,
+      double_threshold_day: 2,
+      double_threshold_components: ["Z3", "Z4"],
     });
   });
 });

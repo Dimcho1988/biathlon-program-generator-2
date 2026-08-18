@@ -206,6 +206,10 @@ describe("dashboard", () => {
       "#quality-title", "#zones-title", "#completed-work-title", "#volume-title", "#history-title", "#recovery-title", "#model-metadata",
     ]);
     for (const label of ["Качество", "Статус по зони", "Извършена работа", "Общ обем", "7/40 и зонален товар", "Възстановяване", "Версии на моделите"]) expect(html).toContain(label);
+    expect(html).not.toContain('href="/planning"');
+    const protectedHtml = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="api" sessionActions />);
+    expect(protectedHtml).toContain('href="/planning"');
+    expect(protectedHtml).toContain("Профил за планиране");
   });
   it("labels fixture mode and renders ordered zones with every required field", () => {
     const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" />);

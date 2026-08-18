@@ -35,10 +35,11 @@ const analysisSections = [
   ["#model-metadata", "Версии на моделите"],
 ] as const;
 
-function AnalysisNavigation() {
+function AnalysisNavigation({ planningAvailable }: { planningAvailable: boolean }) {
   return <nav className="analysis-nav" aria-label="Модули на тренировъчния анализ">
     <p className="analysis-nav-label">Модули</p>
     {analysisSections.map(([href, label]) => <a key={href} href={href}>{label}</a>)}
+    {planningAvailable && <Link href="/planning">Профил за планиране</Link>}
   </nav>;
 }
 
@@ -94,7 +95,7 @@ export function Dashboard({
       </header>
 
       <section className="content" aria-label="Тренировъчен анализ">
-        <AnalysisNavigation />
+        <AnalysisNavigation planningAvailable={sessionActions} />
         <div className="analysis-main">
         {notice && <p className="connection-notice">{notice}</p>}
         <section className="quality-panel" aria-labelledby="quality-title">
