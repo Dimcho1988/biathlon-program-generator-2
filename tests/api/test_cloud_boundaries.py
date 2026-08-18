@@ -3,7 +3,15 @@ import math
 from fastapi.testclient import TestClient
 import pytest
 
-from apps.api.cloud import AthleteContext, AthleteModelSettings, AthletePlanningProfile, InMemorySnapshotRepository, normalize_wellness, service_token_valid
+from apps.api.cloud import (
+    AthleteContext,
+    AthleteMesocycleAccentPreferences,
+    AthleteModelSettings,
+    AthletePlanningProfile,
+    InMemorySnapshotRepository,
+    normalize_wellness,
+    service_token_valid,
+)
 from apps.api.hrmod import calculate_hrmod
 from apps.api import main as api_main
 from apps.api.main import app
@@ -66,6 +74,33 @@ def test_planning_profile_contains_only_individual_inputs_and_validates_structur
         AthletePlanningProfile.from_mapping(
             {**profile.to_payload(), "sessions_per_week": True}
         )
+
+
+def test_mesocycle_accent_preferences_are_individual_and_do_not_guess_auto_slots():
+    preferences = AthleteMesocycleAccentPreferences(
+        accent_mode="HYBRID",
+        accent_limit=3,
+        manual_components=("Z5",),
+    ).validate()
+
+    assert preferences.to_payload() == {
+        "schema_version": "mesocycle-accent-preferences-v1",
+        "accent_mode": "HYBRID",
+        "accent_limit": 3,
+        "manual_components": ["Z5"],
+    }
+    assert preferences.resolution_preview() == {
+        "fixed_components": ["Z5"],
+        "automatic_slots": 2,
+        "resolution_stage": "PLAN_GENERATION",
+    }
+    assert AthleteMesocycleAccentPreferences.from_mapping(
+        preferences.to_payload()
+    ) == preferences
+    with pytest.raises(ValueError, match="require a manual component"):
+        AthleteMesocycleAccentPreferences("MANUAL", 2, ()).validate()
+    with pytest.raises(ValueError, match="cannot contain manual"):
+        AthleteMesocycleAccentPreferences("AUTO", 2, ("Z1",)).validate()
 
 
 def test_wellness_preserves_missing_stale_invalid_and_units():
@@ -235,6 +270,89 @@ def test_planning_profile_is_scoped_and_rejects_inconsistent_structure(monkeypat
     )
     assert rejected.status_code == 422
     assert repository.profiles["ath-second-profile"].to_payload() == body
+
+
+def test_mesocycle_accent_preferences_are_scoped_and_require_a_profile(monkeypatch):
+    class Repository:
+        def __init__(self):
+            self.profiles = {"ath-second-profile": planning_profile()}
+            self.preferences = {}
+
+        def athlete_planning_profile(self, athlete_alias):
+            return self.profiles.get(athlete_alias)
+
+        def athlete_mesocycle_accent_preferences(self, athlete_alias):
+            return self.preferences.get(athlete_alias)
+
+        def save_athlete_mesocycle_accent_preferences(
+            self, athlete_alias, preferences
+        ):
+            self.preferences[athlete_alias] = preferences
+
+    repository = Repository()
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
+    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    client = TestClient(app)
+    headers = {
+        "Authorization": "Bearer secret-value",
+        "X-OnFlows-Athlete-Alias": "ath-second-profile",
+    }
+    body = {
+        "schema_version": "mesocycle-accent-preferences-v1",
+        "accent_mode": "HYBRID",
+        "accent_limit": 3,
+        "manual_components": ["Z5"],
+    }
+
+    assert client.get(
+        "/api/v2/athlete/mesocycle-accent-preferences"
+    ).status_code == 401
+    saved = client.put(
+        "/api/v2/athlete/mesocycle-accent-preferences",
+        headers=headers,
+        json=body,
+    )
+    loaded = client.get(
+        "/api/v2/athlete/mesocycle-accent-preferences", headers=headers
+    )
+
+    expected = {
+        "configured": True,
+        "preferences": body,
+        "resolution": {
+            "methodology_version": "onflows-canonical-v1",
+            "fixed_components": ["Z5"],
+            "automatic_slots": 2,
+            "resolution_stage": "PLAN_GENERATION",
+        },
+    }
+    assert saved.status_code == 200
+    assert saved.json() == expected
+    assert loaded.json() == expected
+    assert list(repository.preferences) == ["ath-second-profile"]
+
+    invalid = client.put(
+        "/api/v2/athlete/mesocycle-accent-preferences",
+        headers=headers,
+        json={**body, "accent_mode": "AUTO"},
+    )
+    assert invalid.status_code == 422
+    assert repository.preferences["ath-second-profile"].to_payload() == body
+
+    missing_profile_headers = {
+        **headers,
+        "X-OnFlows-Athlete-Alias": "ath-missing-profile",
+    }
+    missing_profile = client.put(
+        "/api/v2/athlete/mesocycle-accent-preferences",
+        headers=missing_profile_headers,
+        json={
+            **body,
+            "accent_mode": "MANUAL",
+            "accent_limit": 1,
+        },
+    )
+    assert missing_profile.status_code == 409
 
 
 def test_login_ticket_is_consumed_through_the_protected_server_boundary(monkeypatch):

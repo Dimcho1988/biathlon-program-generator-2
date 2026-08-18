@@ -92,6 +92,26 @@ class AthletePlanningProfileResponse(StrictModel):
     profile: AthletePlanningProfileInput | None = None
 
 
+class MesocycleAccentPreferencesInput(StrictModel):
+    schema_version: Literal["mesocycle-accent-preferences-v1"]
+    accent_mode: Literal["AUTO", "MANUAL", "HYBRID"]
+    accent_limit: int
+    manual_components: tuple[Literal["Z1", "Z2", "Z3", "Z4", "Z5", "STR"], ...]
+
+
+class MesocycleAccentResolution(StrictModel):
+    methodology_version: Literal["onflows-canonical-v1"]
+    fixed_components: tuple[Literal["Z1", "Z2", "Z3", "Z4", "Z5", "STR"], ...]
+    automatic_slots: int
+    resolution_stage: Literal["PLAN_GENERATION"]
+
+
+class MesocycleAccentPreferencesResponse(StrictModel):
+    configured: bool
+    preferences: MesocycleAccentPreferencesInput | None = None
+    resolution: MesocycleAccentResolution | None = None
+
+
 class ModelMetadata(StrictModel):
     algorithm_version: str
     effective_hr_version: str

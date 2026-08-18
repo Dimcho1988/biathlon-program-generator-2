@@ -10,9 +10,18 @@ from urllib.parse import quote, urlencode, urlsplit
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from biathlon.methodology import canonical_methodology
+from biathlon.methodology import (
+    CANONICAL_METHODOLOGY_VERSION,
+    canonical_methodology,
+)
 
-from .cloud import AthleteModelSettings, AthletePlanningProfile, service_token_valid
+from .cloud import (
+    MESOCYCLE_ACCENT_COMPONENTS,
+    AthleteMesocycleAccentPreferences,
+    AthleteModelSettings,
+    AthletePlanningProfile,
+    service_token_valid,
+)
 from .oauth_service import (
     OAuthConfigurationError,
     OAuthFlowError,
@@ -45,6 +54,9 @@ from .schemas import (
     CompletedWorkResponse,
     HealthResponse,
     LoadHistoryResponse,
+    MesocycleAccentPreferencesInput,
+    MesocycleAccentPreferencesResponse,
+    MesocycleAccentResolution,
     OAuthAuthorizationResponse,
     OAuthConnectionStatusResponse,
     PlanningMethodologyMetadata,
@@ -477,6 +489,96 @@ def update_athlete_planning_profile(
         configured=True,
         profile=AthletePlanningProfileInput.model_validate(profile.to_payload()),
     )
+
+
+def _mesocycle_accent_response(
+    preferences: AthleteMesocycleAccentPreferences | None,
+) -> MesocycleAccentPreferencesResponse:
+    if preferences is None:
+        return MesocycleAccentPreferencesResponse(configured=False)
+    return MesocycleAccentPreferencesResponse(
+        configured=True,
+        preferences=MesocycleAccentPreferencesInput.model_validate(
+            preferences.to_payload()
+        ),
+        resolution=MesocycleAccentResolution.model_validate(
+            {
+                "methodology_version": CANONICAL_METHODOLOGY_VERSION,
+                **preferences.resolution_preview(),
+            }
+        ),
+    )
+
+
+@app.get(
+    "/api/v2/athlete/mesocycle-accent-preferences",
+    response_model=MesocycleAccentPreferencesResponse,
+)
+def athlete_mesocycle_accent_preferences(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    try:
+        preferences = _repository().athlete_mesocycle_accent_preferences(
+            _validated_alias(athlete_alias)
+        )
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    return _mesocycle_accent_response(preferences)
+
+
+@app.put(
+    "/api/v2/athlete/mesocycle-accent-preferences",
+    response_model=MesocycleAccentPreferencesResponse,
+)
+def update_athlete_mesocycle_accent_preferences(
+    body: MesocycleAccentPreferencesInput,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    resolved_alias = _validated_alias(athlete_alias)
+    selected = set(body.manual_components)
+    try:
+        if len(selected) != len(body.manual_components):
+            raise ValueError("manual mesocycle accents must be unique")
+        preferences = AthleteMesocycleAccentPreferences(
+            schema_version=body.schema_version,
+            accent_mode=body.accent_mode,
+            accent_limit=body.accent_limit,
+            manual_components=tuple(
+                component
+                for component in MESOCYCLE_ACCENT_COMPONENTS
+                if component in selected
+            ),
+        ).validate()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Mesocycle accent preferences are inconsistent",
+        ) from exc
+    try:
+        repository = _repository()
+        if repository.athlete_planning_profile(resolved_alias) is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Athlete planning profile must be configured first",
+            )
+        repository.save_athlete_mesocycle_accent_preferences(
+            resolved_alias, preferences
+        )
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    return _mesocycle_accent_response(preferences)
 
 
 @app.post(

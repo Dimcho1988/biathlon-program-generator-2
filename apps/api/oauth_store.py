@@ -17,7 +17,12 @@ from urllib.parse import quote
 import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from .cloud import AthleteModelSettings, AthletePlanningProfile, SnapshotRepository
+from .cloud import (
+    AthleteMesocycleAccentPreferences,
+    AthleteModelSettings,
+    AthletePlanningProfile,
+    SnapshotRepository,
+)
 
 
 class PersistentStoreConfigurationError(RuntimeError):
@@ -396,6 +401,53 @@ class SupabasePilotRepository(SnapshotRepository):
             f"/onflows_athlete_settings?athlete_alias=eq.{alias}",
             json={
                 "planning_profile": profile.to_payload(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            headers={"Prefer": "return=minimal"},
+        )
+
+    def athlete_mesocycle_accent_preferences(
+        self, athlete_alias: str
+    ) -> AthleteMesocycleAccentPreferences | None:
+        alias = quote(athlete_alias, safe="")
+        response = self._request(
+            "GET",
+            "/onflows_athlete_settings?select=mesocycle_accent_preferences"
+            f"&athlete_alias=eq.{alias}&limit=1",
+        )
+        payload = self._json(response)
+        if not isinstance(payload, list) or not payload:
+            return None
+        row = payload[0]
+        preferences = (
+            row.get("mesocycle_accent_preferences")
+            if isinstance(row, Mapping)
+            else None
+        )
+        if preferences is None:
+            return None
+        if not isinstance(preferences, Mapping):
+            raise PersistentStoreFailure(
+                "Stored mesocycle accent preferences are invalid"
+            )
+        try:
+            return AthleteMesocycleAccentPreferences.from_mapping(preferences)
+        except ValueError as exc:
+            raise PersistentStoreFailure(
+                "Stored mesocycle accent preferences are invalid"
+            ) from exc
+
+    def save_athlete_mesocycle_accent_preferences(
+        self,
+        athlete_alias: str,
+        preferences: AthleteMesocycleAccentPreferences,
+    ) -> None:
+        alias = quote(athlete_alias, safe="")
+        self._request(
+            "PATCH",
+            f"/onflows_athlete_settings?athlete_alias=eq.{alias}",
+            json={
+                "mesocycle_accent_preferences": preferences.to_payload(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
             headers={"Prefer": "return=minimal"},

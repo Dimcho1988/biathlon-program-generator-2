@@ -227,6 +227,128 @@ class AthletePlanningProfile:
         return profile.validate()
 
 
+MESOCYCLE_ACCENT_COMPONENTS = ("Z1", "Z2", "Z3", "Z4", "Z5", "STR")
+MESOCYCLE_ACCENT_MODES = ("AUTO", "MANUAL", "HYBRID")
+
+
+@dataclass(frozen=True)
+class AthleteMesocycleAccentPreferences:
+    """Athlete-owned accent choices; scientific factors remain service-wide."""
+
+    accent_mode: str
+    accent_limit: int
+    manual_components: tuple[str, ...]
+    schema_version: str = "mesocycle-accent-preferences-v1"
+
+    def validate(self) -> "AthleteMesocycleAccentPreferences":
+        if self.schema_version != "mesocycle-accent-preferences-v1":
+            raise ValueError("unsupported mesocycle accent preferences version")
+        if self.accent_mode not in MESOCYCLE_ACCENT_MODES:
+            raise ValueError("unsupported mesocycle accent mode")
+        if not 1 <= self.accent_limit <= len(MESOCYCLE_ACCENT_COMPONENTS):
+            raise ValueError("mesocycle accent limit must be between 1 and 6")
+        if (
+            len(self.manual_components) != len(set(self.manual_components))
+            or any(
+                component not in MESOCYCLE_ACCENT_COMPONENTS
+                for component in self.manual_components
+            )
+        ):
+            raise ValueError("manual mesocycle accents must be unique components")
+        if len(self.manual_components) > self.accent_limit:
+            raise ValueError("manual mesocycle accents exceed the accent limit")
+        if self.accent_mode == "AUTO" and self.manual_components:
+            raise ValueError("automatic mesocycle accents cannot contain manual choices")
+        if self.accent_mode in {"MANUAL", "HYBRID"} and not self.manual_components:
+            raise ValueError("manual and hybrid modes require a manual component")
+        return self
+
+    @property
+    def canonical_manual_components(self) -> tuple[str, ...]:
+        selected = set(self.manual_components)
+        return tuple(
+            component
+            for component in MESOCYCLE_ACCENT_COMPONENTS
+            if component in selected
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "schema_version": self.schema_version,
+            "accent_mode": self.accent_mode,
+            "accent_limit": self.accent_limit,
+            "manual_components": list(self.canonical_manual_components),
+        }
+
+    def resolution_preview(self) -> dict[str, Any]:
+        """Describe fixed choices and deferred dynamic slots without guessing them."""
+
+        self.validate()
+        fixed = (
+            ()
+            if self.accent_mode == "AUTO"
+            else self.canonical_manual_components
+        )
+        automatic_slots = (
+            self.accent_limit
+            if self.accent_mode == "AUTO"
+            else 0
+            if self.accent_mode == "MANUAL"
+            else self.accent_limit - len(fixed)
+        )
+        return {
+            "fixed_components": list(fixed),
+            "automatic_slots": automatic_slots,
+            "resolution_stage": "PLAN_GENERATION",
+        }
+
+    @classmethod
+    def from_mapping(
+        cls, payload: Mapping[str, Any]
+    ) -> "AthleteMesocycleAccentPreferences":
+        expected = {
+            "schema_version",
+            "accent_mode",
+            "accent_limit",
+            "manual_components",
+        }
+        if set(payload) != expected:
+            raise ValueError("mesocycle accent preference fields are invalid")
+        if (
+            not isinstance(payload["schema_version"], str)
+            or not isinstance(payload["accent_mode"], str)
+            or not isinstance(payload["accent_limit"], int)
+            or isinstance(payload["accent_limit"], bool)
+            or not isinstance(payload["manual_components"], list)
+            or any(
+                not isinstance(component, str)
+                for component in payload["manual_components"]
+            )
+        ):
+            raise ValueError("mesocycle accent preference fields are invalid")
+        selected = set(payload["manual_components"])
+        if (
+            len(selected) != len(payload["manual_components"])
+            or any(
+                component not in MESOCYCLE_ACCENT_COMPONENTS
+                for component in selected
+            )
+        ):
+            raise ValueError("mesocycle accent preference fields are invalid")
+        preferences = cls(
+            schema_version=payload["schema_version"],
+            accent_mode=payload["accent_mode"],
+            accent_limit=payload["accent_limit"],
+            manual_components=tuple(
+                component
+                for component in MESOCYCLE_ACCENT_COMPONENTS
+                if component in selected
+            ),
+        )
+        return preferences.validate()
+
+
 @dataclass(frozen=True)
 class AthleteContext:
     public_alias: str

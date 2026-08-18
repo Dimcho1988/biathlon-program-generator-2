@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from apps.api import oauth_service
-from apps.api.cloud import AthletePlanningProfile
+from apps.api.cloud import AthleteMesocycleAccentPreferences, AthletePlanningProfile
 from apps.api.oauth_service import (
     OAuthFlowError,
     begin_authorization,
@@ -88,6 +88,23 @@ class PlanningProfileClient:
         return httpx.Response(204)
 
 
+class MesocycleAccentPreferencesClient:
+    def __init__(self, payload):
+        self.payload = payload
+        self.saved = None
+        self.url = None
+
+    def request(self, method, url, *, headers, **kwargs):
+        self.url = url
+        if method == "GET":
+            return httpx.Response(
+                200,
+                json=[{"mesocycle_accent_preferences": self.payload}],
+            )
+        self.saved = kwargs["json"]["mesocycle_accent_preferences"]
+        return httpx.Response(204)
+
+
 def test_token_cipher_round_trip_is_bound_to_alias():
     encoded_key = base64.urlsafe_b64encode(bytes(range(32))).decode()
     cipher = TokenCipher(encoded_key)
@@ -157,6 +174,33 @@ def test_supabase_planning_profile_round_trip_is_scoped_to_alias():
 
     repository.save_athlete_planning_profile("ath-profile", profile)
     assert client.saved == profile.to_payload()
+    assert "athlete_alias=eq.ath-profile" in client.url
+
+
+def test_supabase_mesocycle_accent_preferences_round_trip_is_scoped_to_alias():
+    preferences = AthleteMesocycleAccentPreferences(
+        accent_mode="HYBRID",
+        accent_limit=3,
+        manual_components=("Z5",),
+    ).validate()
+    client = MesocycleAccentPreferencesClient(preferences.to_payload())
+    repository = SupabasePilotRepository(
+        supabase_url="https://project.supabase.co",
+        secret_key="sb_secret_server-key",
+        encryption_key=base64.urlsafe_b64encode(bytes(range(32))).decode(),
+        client=client,
+    )
+
+    assert (
+        repository.athlete_mesocycle_accent_preferences("ath-profile")
+        == preferences
+    )
+    assert "athlete_alias=eq.ath-profile" in client.url
+
+    repository.save_athlete_mesocycle_accent_preferences(
+        "ath-profile", preferences
+    )
+    assert client.saved == preferences.to_payload()
     assert "athlete_alias=eq.ath-profile" in client.url
 
 
