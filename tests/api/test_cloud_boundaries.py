@@ -8,6 +8,7 @@ from apps.api.hrmod import calculate_hrmod
 from apps.api import main as api_main
 from apps.api.main import app
 from apps.api.oauth_service import OAuthFlowError
+from biathlon.methodology import canonical_methodology
 
 
 def test_athlete_configuration_validation_and_private_fingerprint():
@@ -102,6 +103,20 @@ def test_real_endpoint_auth_and_no_snapshot(monkeypatch):
     assert client.get("/api/v2/real/completed-work", headers={"Authorization": "Bearer secret-value"}).status_code == 503
     assert client.get("/api/v2/real/recovery-history").status_code == 401
     assert client.get("/api/v2/real/recovery-history", headers={"Authorization": "Bearer secret-value"}).status_code == 503
+
+
+def test_planning_methodology_is_protected_shared_and_versioned(monkeypatch):
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
+    client = TestClient(app)
+
+    assert client.get("/api/v2/planning/methodology").status_code == 401
+    response = client.get(
+        "/api/v2/planning/methodology",
+        headers={"Authorization": "Bearer secret-value"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == canonical_methodology()
 
 
 def test_constant_time_boundary_semantics():

@@ -64,6 +64,29 @@ class AthletePlanningProfileInput(StrictModel):
     double_threshold_components: tuple[Literal["Z3", "Z4"], ...]
 
 
+class StressMesocyclePolicy(StrictModel):
+    status: Literal["DESIGNED_NOT_ACTIVE"]
+    automatic_enabled: Literal[False]
+    manual_dose_required: Literal[True]
+    selected_accents_only: Literal[True]
+    mandatory_recovery: Literal[True]
+    affects_canonical_result: Literal[False]
+
+
+class PlanningMethodologyMetadata(StrictModel):
+    schema_version: Literal["planning-methodology-v1"]
+    methodology_id: Literal["onflows-canonical"]
+    methodology_version: Literal["onflows-canonical-v1"]
+    source_scope: Literal["BUILT_IN"]
+    mesocycle_pattern: tuple[float, ...]
+    supported_accent_modes: tuple[Literal["AUTO", "MANUAL", "HYBRID"], ...]
+    accent_components: tuple[Literal["Z1", "Z2", "Z3", "Z4", "Z5", "STR"], ...]
+    default_accent_limit: int
+    maximum_accent_limit: int
+    hybrid_rule: Literal["manual-first-auto-fill"]
+    stress_mesocycle: StressMesocyclePolicy
+
+
 class AthletePlanningProfileResponse(StrictModel):
     configured: bool
     profile: AthletePlanningProfileInput | None = None

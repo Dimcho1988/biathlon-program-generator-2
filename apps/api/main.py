@@ -10,6 +10,8 @@ from urllib.parse import quote, urlencode, urlsplit
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
+from biathlon.methodology import canonical_methodology
+
 from .cloud import AthleteModelSettings, AthletePlanningProfile, service_token_valid
 from .oauth_service import (
     OAuthConfigurationError,
@@ -45,6 +47,7 @@ from .schemas import (
     LoadHistoryResponse,
     OAuthAuthorizationResponse,
     OAuthConnectionStatusResponse,
+    PlanningMethodologyMetadata,
     RecoveryHistoryResponse,
     SessionExchangeRequest,
     SessionExchangeResponse,
@@ -381,6 +384,17 @@ def update_athlete_settings(
         hr_zone_bounds_bpm=settings.zone_bounds_bpm,
         timezone=settings.timezone,
     )
+
+
+@app.get(
+    "/api/v2/planning/methodology",
+    response_model=PlanningMethodologyMetadata,
+)
+def planning_methodology(
+    authorization: Annotated[str | None, Header()] = None,
+):
+    _authorize(authorization)
+    return PlanningMethodologyMetadata.model_validate(canonical_methodology())
 
 
 @app.get(
