@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { currentAthleteAlias, multiProfileMode } from "../../../../../lib/athlete-session";
 import { waitForApi } from "../../../../../lib/api-readiness";
 
-export async function POST() {
+async function refreshIntervalsData() {
   try {
     const athleteAlias = await currentAthleteAlias();
     if (multiProfileMode() && !athleteAlias)
@@ -27,3 +27,11 @@ export async function POST() {
     return new NextResponse(null, { status: 303, headers: { Location: "/?intervals=refresh-error" } });
   }
 }
+
+export const POST = refreshIntervalsData;
+
+// Some browsers can replay a form target as a navigation after a deployment or
+// history restore. Refresh is an authenticated, read-only Intervals import, so
+// route the fallback navigation through the same session-scoped handler instead of
+// exposing a raw 405 page.
+export const GET = refreshIntervalsData;

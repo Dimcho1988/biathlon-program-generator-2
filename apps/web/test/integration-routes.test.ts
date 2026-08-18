@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cookies } from "next/headers";
 import { GET as connect } from "../app/api/integrations/intervals/connect/route";
-import { POST as refresh } from "../app/api/integrations/intervals/refresh/route";
+import { GET as refreshFromNavigation, POST as refresh } from "../app/api/integrations/intervals/refresh/route";
 import { POST as saveSettings } from "../app/api/athlete/settings/route";
 import { POST as savePlanningProfile } from "../app/api/athlete/planning-profile/route";
 import { POST as saveMesocycleAccents } from "../app/api/athlete/mesocycle-accents/route";
@@ -118,6 +118,22 @@ describe("integration route redirects behind a reverse proxy", () => {
 
     expect((await refresh()).headers.get("location")).toBe("/");
     expect((await refresh()).headers.get("location")).toBe("/?intervals=refresh-error");
+  });
+
+  it("handles a browser navigation to refresh without exposing a 405 page", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(new Response(null, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await refreshFromNavigation();
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: "POST" });
   });
 
   it("signs, validates and expires opaque athlete sessions", () => {
