@@ -25,6 +25,23 @@ const metrics: Array<[keyof ZoneTrainingStatus, string, (value: number) => strin
   ["recovery_days_to_full", "Дни до пълно възстановяване", (value) => `${decimal(value)} дни`],
 ];
 
+const analysisSections = [
+  ["#quality-title", "Качество"],
+  ["#zones-title", "Статус по зони"],
+  ["#completed-work-title", "Извършена работа"],
+  ["#volume-title", "Общ обем"],
+  ["#history-title", "7/40 и зонален товар"],
+  ["#recovery-title", "Възстановяване"],
+  ["#model-metadata", "Версии на моделите"],
+] as const;
+
+function AnalysisNavigation() {
+  return <nav className="analysis-nav" aria-label="Модули на тренировъчния анализ">
+    <p className="analysis-nav-label">Модули</p>
+    {analysisSections.map(([href, label]) => <a key={href} href={href}>{label}</a>)}
+  </nav>;
+}
+
 export function Dashboard({
   data,
   mode,
@@ -77,6 +94,8 @@ export function Dashboard({
       </header>
 
       <section className="content" aria-label="Тренировъчен анализ">
+        <AnalysisNavigation />
+        <div className="analysis-main">
         {notice && <p className="connection-notice">{notice}</p>}
         <section className="quality-panel" aria-labelledby="quality-title">
           <div><p className="section-kicker">Надеждност</p><h2 id="quality-title">Качество на данните</h2></div>
@@ -100,7 +119,7 @@ export function Dashboard({
         <LoadHistorySection history={loadHistory} message={loadHistoryMessage} />
         <RecoveryHistorySection history={recoveryHistory} message={recoveryHistoryMessage} />
 
-        <details className="metadata">
+        <details id="model-metadata" className="metadata">
           <summary><span><small>Техническа информация</small>Метаданни на модела</span><span className="chevron" aria-hidden="true">⌄</span></summary>
           <dl>
             <div><dt>Версия на договора</dt><dd>{data.schema_version}</dd></div>
@@ -110,6 +129,7 @@ export function Dashboard({
             <div><dt>Версия на параметрите</dt><dd>{data.model.parameter_version}</dd></div>
           </dl>
         </details>
+        </div>
       </section>
       <footer><span className="footer-brand">onFlows</span><p>Данните са диагностичен изглед на съществуващия модел.</p><div>{integrationActions && <form action="/api/integrations/intervals/refresh" method="post"><button className="text-action" type="submit">Обнови данните</button></form>}{sessionActions && <Link className="text-action" href="/?settings=edit">Настройки</Link>}{sessionActions && <form action="/api/session/logout" method="post"><button className="text-action" type="submit">Смени профила</button></form>}</div></footer>
     </main>

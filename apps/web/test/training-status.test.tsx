@@ -199,6 +199,14 @@ describe("dashboard", () => {
     expect(html).toContain('aria-label="Превключи светла или тъмна тема"');
     expect(html).toContain("Тренировъчен статус");
   });
+  it("renders an accessible ordered module navigation without client state", () => {
+    const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" completedWork={completedWorkFixture} volumeHistory={volumeHistoryFixture} loadHistory={loadHistoryFixture} recoveryHistory={recoveryHistoryFixture} />);
+    expect(html).toContain('aria-label="Модули на тренировъчния анализ"');
+    expect([...html.matchAll(/href="(#(?:quality|zones|completed-work|volume|history|recovery)-title|#model-metadata)"/g)].map((match) => match[1])).toEqual([
+      "#quality-title", "#zones-title", "#completed-work-title", "#volume-title", "#history-title", "#recovery-title", "#model-metadata",
+    ]);
+    for (const label of ["Качество", "Статус по зони", "Извършена работа", "Общ обем", "7/40 и зонален товар", "Възстановяване", "Версии на моделите"]) expect(html).toContain(label);
+  });
   it("labels fixture mode and renders ordered zones with every required field", () => {
     const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" />);
     expect(html).toContain("Демо данни");
