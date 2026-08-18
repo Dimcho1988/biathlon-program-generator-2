@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { WEEKDAYS, type PlanningProfile } from "../lib/planning-profile";
+import { WEEKDAYS, type PlanningMethodology, type PlanningProfile } from "../lib/planning-profile";
 
 function WeekdayChoices({
   name,
@@ -31,9 +31,11 @@ function WeekdaySelect({
 
 export function PlanningProfileForm({
   profile,
+  methodology,
   notice,
 }: {
   profile: PlanningProfile | null;
+  methodology: PlanningMethodology;
   notice?: string;
 }) {
   return <main className="state-page settings-page planning-page">
@@ -47,6 +49,29 @@ export function PlanningProfileForm({
     {!profile && <p className="planning-unconfigured">
       Профилът още не е конфигуриран. Стойностите не се предполагат автоматично.
     </p>}
+    <section className="methodology-card" aria-labelledby="methodology-title">
+      <div>
+        <p className="eyebrow">Вградена методология</p>
+        <h2 id="methodology-title">onFlows canonical</h2>
+        <p className="muted">
+          Общата методика е versioned и не се копира в профила на спортиста.
+          Плановият snapshot записва точната версия и източник.
+        </p>
+      </div>
+      <dl>
+        <div><dt>Версия</dt><dd>{methodology.methodology_version}</dd></div>
+        <div><dt>Източник</dt><dd>Вградена в onFlows</dd></div>
+        <div><dt>Базова вълна</dt><dd>{methodology.mesocycle_pattern.map((value) => `${Math.round(value * 100)}%`).join(" · ")}</dd></div>
+        <div><dt>Акценти</dt><dd>{methodology.default_accent_limit} стандартно · до {methodology.maximum_accent_limit}</dd></div>
+        <div><dt>Режими</dt><dd>{methodology.supported_accent_modes.join(" · ")}</dd></div>
+        <div><dt>Стресов мезоцикъл</dt><dd>Проектиран · неактивен до одобрена доза</dd></div>
+      </dl>
+      <p className="methodology-note">
+        HYBRID запазва ръчно избраните компоненти и допълва свободните места
+        автоматично. Външна методология по-късно ще се приема само като
+        валидиран versioned файл след треньорски преглед, без AI при всяко отваряне.
+      </p>
+    </section>
     <form className="planning-profile-form" action="/api/athlete/planning-profile" method="post">
       <input type="hidden" name="schema_version" value="planning-profile-v1" />
 

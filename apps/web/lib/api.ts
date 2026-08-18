@@ -4,7 +4,7 @@ import { parseLoadHistory, type LoadHistory } from "./load-history";
 import { parseTrainingStatus, type TrainingStatus } from "./training-status";
 import { parseRecoveryHistory, type RecoveryHistory } from "./recovery-history";
 import { parseVolumeHistory, type VolumeHistory } from "./volume-history";
-import { parsePlanningProfileResponse, type PlanningProfileResponse } from "./planning-profile";
+import { parsePlanningMethodology, parsePlanningProfileResponse, type PlanningMethodology, type PlanningProfileResponse } from "./planning-profile";
 import { waitForApi } from "./api-readiness";
 
 // Render Free can take more than 50 seconds to wake the API after inactivity.
@@ -109,5 +109,13 @@ export async function getAthletePlanningProfile(athleteAlias: string): Promise<P
   if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
   return parsePlanningProfileResponse(
     await fetchApiResource("/api/v2/athlete/planning-profile", token, athleteAlias),
+  );
+}
+
+export async function getPlanningMethodology(athleteAlias: string): Promise<PlanningMethodology> {
+  const token = process.env.ONFLOWS_SERVICE_TOKEN;
+  if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
+  return parsePlanningMethodology(
+    await fetchApiResource("/api/v2/planning/methodology", token, athleteAlias),
   );
 }

@@ -1,8 +1,29 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PlanningProfileForm } from "../components/planning-profile-form";
-import { getAthletePlanningProfile } from "../lib/api";
-import { parsePlanningProfileResponse, type PlanningProfile } from "../lib/planning-profile";
+import { getAthletePlanningProfile, getPlanningMethodology } from "../lib/api";
+import { parsePlanningMethodology, parsePlanningProfileResponse, type PlanningMethodology, type PlanningProfile } from "../lib/planning-profile";
+
+const methodology: PlanningMethodology = {
+  schema_version: "planning-methodology-v1",
+  methodology_id: "onflows-canonical",
+  methodology_version: "onflows-canonical-v1",
+  source_scope: "BUILT_IN",
+  mesocycle_pattern: [0.96, 1.04, 1.10, 0.78],
+  supported_accent_modes: ["AUTO", "MANUAL", "HYBRID"],
+  accent_components: ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"],
+  default_accent_limit: 2,
+  maximum_accent_limit: 6,
+  hybrid_rule: "manual-first-auto-fill",
+  stress_mesocycle: {
+    status: "DESIGNED_NOT_ACTIVE",
+    automatic_enabled: false,
+    manual_dose_required: true,
+    selected_accents_only: true,
+    mandatory_recovery: true,
+    affects_canonical_result: false,
+  },
+};
 
 const profile: PlanningProfile = {
   schema_version: "planning-profile-v1",
@@ -45,13 +66,13 @@ describe("planning-profile-v1 contract", () => {
 
   it("preserves an explicitly unconfigured profile without defaults", () => {
     expect(parsePlanningProfileResponse({ configured: false, profile: null })).toEqual({ configured: false, profile: null });
-    const html = renderToStaticMarkup(<PlanningProfileForm profile={null} />);
+    const html = renderToStaticMarkup(<PlanningProfileForm profile={null} methodology={methodology} />);
     expect(html).toContain("Стойностите не се предполагат автоматично");
     expect(html).not.toContain('name="annual_target_hours" type="number" min="50" max="1500" step="1" value=');
   });
 
   it("renders all individual inputs but no shared scientific coefficients", () => {
-    const html = renderToStaticMarkup(<PlanningProfileForm profile={profile} />);
+    const html = renderToStaticMarkup(<PlanningProfileForm profile={profile} methodology={methodology} />);
     for (const label of [
       "Сезонна цел",
       "Седмична структура",
@@ -66,6 +87,24 @@ describe("planning-profile-v1 contract", () => {
     expect(html).not.toContain("between_sessions_recovery_days");
   });
 
+  it("shows the immutable methodology and inactive stress policy", () => {
+    expect(parsePlanningMethodology(methodology)).toEqual(methodology);
+    expect(() => parsePlanningMethodology({
+      ...methodology,
+      stress_mesocycle: {
+        ...methodology.stress_mesocycle,
+        affects_canonical_result: true,
+      },
+    })).toThrow(/методология/);
+
+    const html = renderToStaticMarkup(<PlanningProfileForm profile={profile} methodology={methodology} />);
+
+    expect(html).toContain("onflows-canonical-v1");
+    expect(html).toContain("96% · 104% · 110% · 78%");
+    expect(html).toContain("AUTO · MANUAL · HYBRID");
+    expect(html).toContain("неактивен до одобрена доза");
+  });
+
   it("loads the profile through server-only authentication for one athlete alias", async () => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
     process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
@@ -78,6 +117,22 @@ describe("planning-profile-v1 contract", () => {
 
     const [url, init] = fetchMock.mock.calls[1];
     expect(String(url)).toBe("https://api.example.test/api/v2/athlete/planning-profile");
+    expect(init.headers.Authorization).toBe("Bearer server-secret");
+    expect(init.headers["X-OnFlows-Athlete-Alias"]).toBe("ath-profile");
+  });
+
+  it("loads the shared methodology through the protected endpoint", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json(methodology));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getPlanningMethodology("ath-profile")).resolves.toEqual(methodology);
+
+    const [url, init] = fetchMock.mock.calls[1];
+    expect(String(url)).toBe("https://api.example.test/api/v2/planning/methodology");
     expect(init.headers.Authorization).toBe("Bearer server-secret");
     expect(init.headers["X-OnFlows-Athlete-Alias"]).toBe("ath-profile");
   });

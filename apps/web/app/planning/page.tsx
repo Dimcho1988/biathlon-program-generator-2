@@ -1,7 +1,7 @@
 import { ErrorState } from "../../components/error-state";
 import { PlanningProfileForm } from "../../components/planning-profile-form";
 import { currentAthleteAlias, multiProfileMode } from "../../lib/athlete-session";
-import { getAthletePlanningProfile } from "../../lib/api";
+import { getAthletePlanningProfile, getPlanningMethodology } from "../../lib/api";
 
 const notices: Record<string, string> = {
   saved: "Индивидуалният профил за планиране е запазен.",
@@ -22,8 +22,12 @@ export default async function PlanningPage({
     refreshAvailable={false}
   />;
   let result;
+  let methodology;
   try {
-    result = await getAthletePlanningProfile(athleteAlias);
+    [result, methodology] = await Promise.all([
+      getAthletePlanningProfile(athleteAlias),
+      getPlanningMethodology(athleteAlias),
+    ]);
   } catch (error) {
     return <ErrorState
       message={error instanceof Error ? error.message : "Профилът за планиране не е достъпен."}
@@ -33,6 +37,7 @@ export default async function PlanningPage({
   }
   return <PlanningProfileForm
     profile={result.profile}
+    methodology={methodology}
     notice={query.planning ? notices[query.planning] : undefined}
   />;
 }
