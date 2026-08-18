@@ -3,7 +3,9 @@ import type { RecoveryHistory, WellnessCoverageDiagnostics, WellnessCoverageFiel
 import { ZONES, type Zone } from "../lib/training-status";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
+const parameterNumber = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 2 });
 const decimal = (value: number) => number.format(value);
+const parameter = (value: number) => parameterNumber.format(value);
 const date = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "2-digit", month: "short", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
 const zoneStyle = (zone: Zone): CSSProperties => ({ "--series": `var(--zone-${ZONES.indexOf(zone) + 1})` } as CSSProperties);
 const wellnessLabels: Record<WellnessCoverageField, string> = {
@@ -55,6 +57,23 @@ function WellnessCoveragePanel({ diagnostics }: { diagnostics: WellnessCoverageD
   </details>;
 }
 
+function RecoverySettingsHelp() {
+  return <details className="recovery-settings-help">
+    <summary><span className="help-icon" aria-hidden="true">?</span><strong>Какво означават показателите?</strong></summary>
+    <div className="recovery-settings-help-body">
+      <p>Това са параметри на текущата версионирана конфигурация, а не директни измервания на спортиста. Засега са само за преглед и не се персонализират автоматично.</p>
+      <p className="recovery-formula"><code>Δумора = 100 × чувствителност × E / Tref</code>, където <code>E</code> е ефективният товар в съответната зона.</p>
+      <dl className="recovery-parameter-help">
+        <div><dt>Tref · референтна доза</dt><dd>Референтен ефективен обем за зоната, изразен в минути. По-нисък Tref означава, че еднакъв товар E създава по-голям импулс на умора. Това не е дневна препоръка или личен рекорд.</dd></div>
+        <div><dt>Чувствителност</dt><dd>Безразмерен множител на непосредствената умора. По-висока стойност означава по-голям спад на товарната готовност при еднакво съотношение E/Tref.</dd></div>
+        <div><dt>τ · скорост на възстановяване</dt><dd>Времева константа в дни. След τ дни остават приблизително 37% от предходната умора. По-високо τ означава по-бавно възстановяване.</dd></div>
+        <div><dt>Таван на умората</dt><dd>Максималната вътрешна натрупана умора в модела. При умора над 100 видимата готовност остава 0%, но допълнителният „дълг“ се пази до този таван и удължава възстановяването.</dd></div>
+      </dl>
+      <p className="recovery-technical-help"><strong>Алгоритъм</strong> посочва формулата; <strong>версия параметри</strong> — набора коефициенти; <strong>fingerprint</strong> — кратък технически отпечатък, с който проверяваме, че наборът не е променен.</p>
+    </div>
+  </details>;
+}
+
 function RecoveryChart({ history }: { history: RecoveryHistory }) {
   const dates = [...new Set(history.daily.map((row) => row.date))];
   if (dates.length < 2) return <p className="muted-copy">Няма достатъчно дни за recovery графика.</p>;
@@ -86,6 +105,6 @@ export function RecoveryHistorySection({ history, message }: { history: Recovery
       {history.current.map((zone) => <article key={zone.zone} className="load-summary-card" style={zoneStyle(zone.zone)} role="listitem"><div><span className="summary-zone">{zone.zone}</span><strong>{decimal(zone.readiness_percent)}%</strong><small>товарна готовност</small></div><dl><div><dt>Остатъчна умора</dt><dd>{decimal(zone.residual_fatigue)}</dd></div><div><dt>До ≥ {decimal(history.model.practical_full_recovery_percent)}%</dt><dd>{decimal(zone.days_to_practical_recovery)} дни</dd></div></dl></article>)}
     </div>
     <RecoveryChart history={history} />
-    <details className="recovery-settings"><summary><span><small>Read-only</small>Настройки на recovery модела</span><span className="chevron" aria-hidden="true">⌄</span></summary><div className="activity-table-wrap"><table><thead><tr><th>Зона</th><th>Tref</th><th>Чувствителност</th><th>τ</th><th>Таван на умората</th></tr></thead><tbody>{history.settings.map((setting) => <tr key={setting.zone}><th>{setting.zone}</th><td>{decimal(setting.tref_min)} мин</td><td>{decimal(setting.sensitivity)}</td><td>{decimal(setting.tau_days)} дни</td><td>{decimal(setting.fatigue_cap)}</td></tr>)}</tbody></table></div><dl className="recovery-model-meta"><div><dt>Алгоритъм</dt><dd>{history.model.algorithm_version}</dd></div><div><dt>Версия параметри</dt><dd>{history.model.parameter_version}</dd></div><div><dt>Fingerprint</dt><dd>{history.model.parameter_fingerprint.slice(0, 12)}</dd></div></dl></details>
+    <details className="recovery-settings"><summary><span><small>Read-only</small>Настройки на recovery модела</span><span className="chevron" aria-hidden="true">⌄</span></summary><RecoverySettingsHelp /><div className="activity-table-wrap"><table><thead><tr><th>Зона</th><th>Tref</th><th>Чувствителност</th><th>τ</th><th>Таван на умората</th></tr></thead><tbody>{history.settings.map((setting) => <tr key={setting.zone}><th>{setting.zone}</th><td>{decimal(setting.tref_min)} мин</td><td>{parameter(setting.sensitivity)}</td><td>{parameter(setting.tau_days)} дни</td><td>{decimal(setting.fatigue_cap)}</td></tr>)}</tbody></table></div><dl className="recovery-model-meta"><div><dt>Алгоритъм</dt><dd>{history.model.algorithm_version}</dd></div><div><dt>Версия параметри</dt><dd>{history.model.parameter_version}</dd></div><div><dt>Fingerprint</dt><dd>{history.model.parameter_fingerprint.slice(0, 12)}</dd></div></dl></details>
   </section>;
 }

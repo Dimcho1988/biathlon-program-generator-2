@@ -272,6 +272,11 @@ describe("dashboard", () => {
     expect(html).toContain("sleepSecs");
     expect(html).toContain("не се заместват с неутрални стойности");
     expect(html).toContain("Настройки на recovery модела");
+    expect(html).toContain("Какво означават показателите?");
+    expect(html).toContain("Δумора = 100 × чувствителност × E / Tref");
+    expect(html).toContain("След τ дни остават приблизително 37%");
+    expect(html).toContain("0,55");
+    expect(html).toContain("0,75 дни");
     expect(html).toContain("main-load-recovery-v1");
   });
 });
