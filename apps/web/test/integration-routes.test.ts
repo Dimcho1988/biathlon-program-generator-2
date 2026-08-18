@@ -4,6 +4,7 @@ import { GET as connect } from "../app/api/integrations/intervals/connect/route"
 import { POST as refresh } from "../app/api/integrations/intervals/refresh/route";
 import { POST as saveSettings } from "../app/api/athlete/settings/route";
 import { POST as savePlanningProfile } from "../app/api/athlete/planning-profile/route";
+import { POST as saveMesocycleAccents } from "../app/api/athlete/mesocycle-accents/route";
 import { GET as complete } from "../app/api/session/complete/route";
 import { createAthleteSession, verifyAthleteSession } from "../lib/athlete-session";
 
@@ -251,6 +252,40 @@ describe("integration route redirects behind a reverse proxy", () => {
       double_threshold_enabled: false,
       double_threshold_day: 2,
       double_threshold_components: ["Z3", "Z4"],
+    });
+  });
+
+  it("saves canonicalized mesocycle accents only for the signed athlete session", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    process.env.ONFLOWS_PROFILE_MODE = "multi";
+    process.env.ONFLOWS_SESSION_SECRET = "a-secret-value-with-at-least-32-characters";
+    const session = createAthleteSession("ath-test-profile");
+    vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: session }) } as never);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json({ configured: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const form = new FormData();
+    form.set("schema_version", "mesocycle-accent-preferences-v1");
+    form.set("accent_mode", "HYBRID");
+    form.set("accent_limit", "3");
+    form.append("manual_components", "Z5");
+    form.append("manual_components", "Z3");
+
+    const response = await saveMesocycleAccents(new Request(
+      "https://web.example.test/api/athlete/mesocycle-accents",
+      { method: "POST", body: form },
+    ));
+
+    expect(response.headers.get("location")).toBe("/planning?planning=accents-saved");
+    const [, init] = fetchMock.mock.calls[1];
+    expect(init.headers["X-OnFlows-Athlete-Alias"]).toBe("ath-test-profile");
+    expect(JSON.parse(init.body)).toEqual({
+      schema_version: "mesocycle-accent-preferences-v1",
+      accent_mode: "HYBRID",
+      accent_limit: 3,
+      manual_components: ["Z3", "Z5"],
     });
   });
 });

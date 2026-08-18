@@ -56,6 +56,28 @@ export interface PlanningMethodology {
   };
 }
 
+export const MESOCYCLE_ACCENT_COMPONENTS = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"] as const;
+export type MesocycleAccentComponent = typeof MESOCYCLE_ACCENT_COMPONENTS[number];
+export type MesocycleAccentMode = "AUTO" | "MANUAL" | "HYBRID";
+
+export interface MesocycleAccentPreferences {
+  schema_version: "mesocycle-accent-preferences-v1";
+  accent_mode: MesocycleAccentMode;
+  accent_limit: number;
+  manual_components: MesocycleAccentComponent[];
+}
+
+export interface MesocycleAccentPreferencesResponse {
+  configured: boolean;
+  preferences: MesocycleAccentPreferences | null;
+  resolution: {
+    methodology_version: "onflows-canonical-v1";
+    fixed_components: MesocycleAccentComponent[];
+    automatic_slots: number;
+    resolution_stage: "PLAN_GENERATION";
+  } | null;
+}
+
 const responseKeys = ["configured", "profile"];
 const profileKeys = [
   "schema_version",
@@ -96,6 +118,19 @@ const stressKeys = [
   "selected_accents_only",
   "mandatory_recovery",
   "affects_canonical_result",
+];
+const accentResponseKeys = ["configured", "preferences", "resolution"];
+const accentPreferenceKeys = [
+  "schema_version",
+  "accent_mode",
+  "accent_limit",
+  "manual_components",
+];
+const accentResolutionKeys = [
+  "methodology_version",
+  "fixed_components",
+  "automatic_slots",
+  "resolution_stage",
 ];
 const integer = (value: unknown, minimum: number, maximum: number): value is number =>
   Number.isInteger(value) && Number(value) >= minimum && Number(value) <= maximum;
@@ -175,4 +210,54 @@ export function parsePlanningMethodology(value: unknown): PlanningMethodology {
     || methodology.stress_mesocycle.affects_canonical_result !== false
   ) throw new Error("Невалидна versioned методология за планиране.");
   return methodology as unknown as PlanningMethodology;
+}
+
+const accentComponents = (value: unknown): value is MesocycleAccentComponent[] => {
+  if (!Array.isArray(value) || new Set(value).size !== value.length) return false;
+  const positions = value.map((component) =>
+    MESOCYCLE_ACCENT_COMPONENTS.indexOf(component as MesocycleAccentComponent));
+  return positions.every((position, index) =>
+    position >= 0 && (index === 0 || position > positions[index - 1]));
+};
+
+export function parseMesocycleAccentPreferencesResponse(
+  value: unknown,
+): MesocycleAccentPreferencesResponse {
+  if (!isRecord(value) || !exactKeys(value, accentResponseKeys) || typeof value.configured !== "boolean")
+    throw new Error("Невалидна структура на мезоцикличните акценти.");
+  if (!value.configured) {
+    if (value.preferences !== null || value.resolution !== null)
+      throw new Error("Неконфигурирани мезоциклични акценти съдържат стойности.");
+    return { configured: false, preferences: null, resolution: null };
+  }
+  const preferences = value.preferences;
+  const resolution = value.resolution;
+  if (
+    !isRecord(preferences)
+    || !exactKeys(preferences, accentPreferenceKeys)
+    || preferences.schema_version !== "mesocycle-accent-preferences-v1"
+    || !["AUTO", "MANUAL", "HYBRID"].includes(String(preferences.accent_mode))
+    || !integer(preferences.accent_limit, 1, MESOCYCLE_ACCENT_COMPONENTS.length)
+    || !accentComponents(preferences.manual_components)
+    || preferences.manual_components.length > preferences.accent_limit
+    || (preferences.accent_mode === "AUTO" && preferences.manual_components.length !== 0)
+    || (preferences.accent_mode !== "AUTO" && preferences.manual_components.length === 0)
+    || !isRecord(resolution)
+    || !exactKeys(resolution, accentResolutionKeys)
+    || resolution.methodology_version !== "onflows-canonical-v1"
+    || !accentComponents(resolution.fixed_components)
+    || !integer(resolution.automatic_slots, 0, MESOCYCLE_ACCENT_COMPONENTS.length)
+    || resolution.resolution_stage !== "PLAN_GENERATION"
+  ) throw new Error("Невалидни стойности на мезоцикличните акценти.");
+  const expectedFixed = preferences.accent_mode === "AUTO" ? [] : preferences.manual_components;
+  const expectedAutomaticSlots = preferences.accent_mode === "AUTO"
+    ? preferences.accent_limit
+    : preferences.accent_mode === "MANUAL"
+      ? 0
+      : preferences.accent_limit - preferences.manual_components.length;
+  if (
+    resolution.fixed_components.join(",") !== expectedFixed.join(",")
+    || resolution.automatic_slots !== expectedAutomaticSlots
+  ) throw new Error("Несъгласувано разрешаване на мезоцикличните акценти.");
+  return value as unknown as MesocycleAccentPreferencesResponse;
 }

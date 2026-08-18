@@ -1,12 +1,19 @@
 import { ErrorState } from "../../components/error-state";
 import { PlanningProfileForm } from "../../components/planning-profile-form";
 import { currentAthleteAlias, multiProfileMode } from "../../lib/athlete-session";
-import { getAthletePlanningProfile, getPlanningMethodology } from "../../lib/api";
+import {
+  getAthletePlanningProfile,
+  getMesocycleAccentPreferences,
+  getPlanningMethodology,
+} from "../../lib/api";
 
 const notices: Record<string, string> = {
   saved: "Индивидуалният профил за планиране е запазен.",
+  "accents-saved": "Правилото за мезоцикличните акценти е запазено.",
   invalid: "Структурата съдържа липсващи или несъвместими стойности.",
+  "accents-invalid": "Правилото за акцентите съдържа несъвместими стойности.",
   error: "Профилът за планиране не беше запазен. Опитайте отново.",
+  "accents-error": "Правилото за акцентите не беше запазено. Опитайте отново.",
 };
 
 export default async function PlanningPage({
@@ -23,10 +30,12 @@ export default async function PlanningPage({
   />;
   let result;
   let methodology;
+  let accentPreferences;
   try {
-    [result, methodology] = await Promise.all([
+    [result, methodology, accentPreferences] = await Promise.all([
       getAthletePlanningProfile(athleteAlias),
       getPlanningMethodology(athleteAlias),
+      getMesocycleAccentPreferences(athleteAlias),
     ]);
   } catch (error) {
     return <ErrorState
@@ -38,6 +47,7 @@ export default async function PlanningPage({
   return <PlanningProfileForm
     profile={result.profile}
     methodology={methodology}
+    accentPreferences={accentPreferences}
     notice={query.planning ? notices[query.planning] : undefined}
   />;
 }

@@ -1,8 +1,19 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PlanningProfileForm } from "../components/planning-profile-form";
-import { getAthletePlanningProfile, getPlanningMethodology } from "../lib/api";
-import { parsePlanningMethodology, parsePlanningProfileResponse, type PlanningMethodology, type PlanningProfile } from "../lib/planning-profile";
+import {
+  getAthletePlanningProfile,
+  getMesocycleAccentPreferences,
+  getPlanningMethodology,
+} from "../lib/api";
+import {
+  parseMesocycleAccentPreferencesResponse,
+  parsePlanningMethodology,
+  parsePlanningProfileResponse,
+  type MesocycleAccentPreferencesResponse,
+  type PlanningMethodology,
+  type PlanningProfile,
+} from "../lib/planning-profile";
 
 const methodology: PlanningMethodology = {
   schema_version: "planning-methodology-v1",
@@ -45,6 +56,28 @@ const profile: PlanningProfile = {
   double_threshold_components: ["Z3", "Z4"],
 };
 
+const unconfiguredAccents: MesocycleAccentPreferencesResponse = {
+  configured: false,
+  preferences: null,
+  resolution: null,
+};
+
+const accentPreferences: MesocycleAccentPreferencesResponse = {
+  configured: true,
+  preferences: {
+    schema_version: "mesocycle-accent-preferences-v1",
+    accent_mode: "HYBRID",
+    accent_limit: 3,
+    manual_components: ["Z5"],
+  },
+  resolution: {
+    methodology_version: "onflows-canonical-v1",
+    fixed_components: ["Z5"],
+    automatic_slots: 2,
+    resolution_stage: "PLAN_GENERATION",
+  },
+};
+
 describe("planning-profile-v1 contract", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -66,13 +99,21 @@ describe("planning-profile-v1 contract", () => {
 
   it("preserves an explicitly unconfigured profile without defaults", () => {
     expect(parsePlanningProfileResponse({ configured: false, profile: null })).toEqual({ configured: false, profile: null });
-    const html = renderToStaticMarkup(<PlanningProfileForm profile={null} methodology={methodology} />);
+    const html = renderToStaticMarkup(<PlanningProfileForm
+      profile={null}
+      methodology={methodology}
+      accentPreferences={unconfiguredAccents}
+    />);
     expect(html).toContain("Стойностите не се предполагат автоматично");
     expect(html).not.toContain('name="annual_target_hours" type="number" min="50" max="1500" step="1" value=');
   });
 
   it("renders all individual inputs but no shared scientific coefficients", () => {
-    const html = renderToStaticMarkup(<PlanningProfileForm profile={profile} methodology={methodology} />);
+    const html = renderToStaticMarkup(<PlanningProfileForm
+      profile={profile}
+      methodology={methodology}
+      accentPreferences={accentPreferences}
+    />);
     for (const label of [
       "Сезонна цел",
       "Седмична структура",
@@ -97,12 +138,39 @@ describe("planning-profile-v1 contract", () => {
       },
     })).toThrow(/методология/);
 
-    const html = renderToStaticMarkup(<PlanningProfileForm profile={profile} methodology={methodology} />);
+    const html = renderToStaticMarkup(<PlanningProfileForm
+      profile={profile}
+      methodology={methodology}
+      accentPreferences={accentPreferences}
+    />);
 
     expect(html).toContain("onflows-canonical-v1");
     expect(html).toContain("96% · 104% · 110% · 78%");
     expect(html).toContain("AUTO · MANUAL · HYBRID");
     expect(html).toContain("неактивен до одобрена доза");
+  });
+
+  it("renders and validates the stored hybrid accent resolution without guessing components", () => {
+    expect(parseMesocycleAccentPreferencesResponse(accentPreferences)).toEqual(accentPreferences);
+    expect(() => parseMesocycleAccentPreferencesResponse({
+      ...accentPreferences,
+      resolution: {
+        ...accentPreferences.resolution,
+        automatic_slots: 1,
+      },
+    })).toThrow(/разрешаване/);
+
+    const html = renderToStaticMarkup(<PlanningProfileForm
+      profile={profile}
+      methodology={methodology}
+      accentPreferences={accentPreferences}
+    />);
+
+    expect(html).toContain('action="/api/athlete/mesocycle-accents"');
+    expect(html).toContain("Z5 · ръчно");
+    expect(html).toContain("AUTO 1");
+    expect(html).toContain("AUTO 2");
+    expect(html).toContain("STRESS остава неактивен");
   });
 
   it("loads the profile through server-only authentication for one athlete alias", async () => {
@@ -133,6 +201,25 @@ describe("planning-profile-v1 contract", () => {
 
     const [url, init] = fetchMock.mock.calls[1];
     expect(String(url)).toBe("https://api.example.test/api/v2/planning/methodology");
+    expect(init.headers.Authorization).toBe("Bearer server-secret");
+    expect(init.headers["X-OnFlows-Athlete-Alias"]).toBe("ath-profile");
+  });
+
+  it("loads athlete-scoped mesocycle accents through the protected endpoint", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json(accentPreferences));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getMesocycleAccentPreferences("ath-profile"))
+      .resolves.toEqual(accentPreferences);
+
+    const [url, init] = fetchMock.mock.calls[1];
+    expect(String(url)).toBe(
+      "https://api.example.test/api/v2/athlete/mesocycle-accent-preferences",
+    );
     expect(init.headers.Authorization).toBe("Bearer server-secret");
     expect(init.headers["X-OnFlows-Athlete-Alias"]).toBe("ath-profile");
   });
