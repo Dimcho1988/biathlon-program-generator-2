@@ -1,7 +1,8 @@
-import { getAthleteSettings, getCompletedWork, getLoadHistory, getRecoveryHistory, getTrainingStatus, type TrainingStatusResult } from "../lib/api";
+import { getAthleteSettings, getCompletedWork, getLoadHistory, getRecoveryHistory, getTrainingStatus, getVolumeHistory, type TrainingStatusResult } from "../lib/api";
 import type { CompletedWork } from "../lib/completed-work";
 import type { LoadHistory } from "../lib/load-history";
 import type { RecoveryHistory } from "../lib/recovery-history";
+import type { VolumeHistory } from "../lib/volume-history";
 import { Dashboard } from "../components/dashboard";
 import { ErrorState } from "../components/error-state";
 import { currentAthleteAlias, multiProfileMode } from "../lib/athlete-session";
@@ -9,7 +10,7 @@ import { AthleteSettingsForm } from "../components/athlete-settings-form";
 import { redirect } from "next/navigation";
 
 type PageResult =
-  | { ok: true; value: TrainingStatusResult; completedWork: CompletedWork | null; loadHistory: LoadHistory | null; recoveryHistory: RecoveryHistory | null; completedWorkMessage?: string; loadHistoryMessage?: string; recoveryHistoryMessage?: string }
+  | { ok: true; value: TrainingStatusResult; completedWork: CompletedWork | null; loadHistory: LoadHistory | null; recoveryHistory: RecoveryHistory | null; volumeHistory: VolumeHistory | null; completedWorkMessage?: string; loadHistoryMessage?: string; recoveryHistoryMessage?: string; volumeHistoryMessage?: string }
   | { ok: false; message: string };
 
 const notices: Record<string, string> = {
@@ -88,11 +89,12 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
     />;
   }
 
-  const [statusResult, completedWorkResult, historyResult, recoveryResult] = await Promise.allSettled([
+  const [statusResult, completedWorkResult, historyResult, recoveryResult, volumeResult] = await Promise.allSettled([
     getTrainingStatus(athleteAlias ?? undefined),
     getCompletedWork(athleteAlias ?? undefined, query.report_start, query.report_end),
     getLoadHistory(athleteAlias ?? undefined),
     getRecoveryHistory(athleteAlias ?? undefined),
+    getVolumeHistory(athleteAlias ?? undefined),
   ]);
   if (statusResult.status === "fulfilled") {
     result = {
@@ -101,9 +103,11 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
       completedWork: completedWorkResult.status === "fulfilled" ? completedWorkResult.value : null,
       loadHistory: historyResult.status === "fulfilled" ? historyResult.value : null,
       recoveryHistory: recoveryResult.status === "fulfilled" ? recoveryResult.value : null,
+      volumeHistory: volumeResult.status === "fulfilled" ? volumeResult.value : null,
       completedWorkMessage: completedWorkResult.status === "rejected" ? (completedWorkResult.reason instanceof Error ? completedWorkResult.reason.message : "Отчетът за извършеното натоварване не е достъпен.") : undefined,
       loadHistoryMessage: historyResult.status === "rejected" ? (historyResult.reason instanceof Error ? historyResult.reason.message : "Историята на натоварването не е достъпна.") : undefined,
       recoveryHistoryMessage: recoveryResult.status === "rejected" ? (recoveryResult.reason instanceof Error ? recoveryResult.reason.message : "Recovery историята не е достъпна.") : undefined,
+      volumeHistoryMessage: volumeResult.status === "rejected" ? (volumeResult.reason instanceof Error ? volumeResult.reason.message : "Обемната история не е достъпна.") : undefined,
     };
   } else {
     const error = statusResult.reason;
@@ -131,7 +135,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
     : query.intervals ? notices[query.intervals] : undefined;
   const notice = settingsNotice ?? integrationNotice;
   return result.ok
-    ? <Dashboard {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} notice={notice} />
+    ? <Dashboard {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} notice={notice} />
     : <ErrorState
       message={result.message}
       integrationActions={integrationActions}

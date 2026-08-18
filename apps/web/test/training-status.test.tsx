@@ -1,12 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dashboard } from "../components/dashboard";
-import { getCompletedWork, getLoadHistory, getRecoveryHistory, getTrainingStatus } from "../lib/api";
-import { completedWorkFixture, loadHistoryFixture, recoveryHistoryFixture, trainingStatusFixture } from "../lib/fixture";
+import { getCompletedWork, getLoadHistory, getRecoveryHistory, getTrainingStatus, getVolumeHistory } from "../lib/api";
+import { completedWorkFixture, loadHistoryFixture, recoveryHistoryFixture, trainingStatusFixture, volumeHistoryFixture } from "../lib/fixture";
 import { parseCompletedWork } from "../lib/completed-work";
 import { parseLoadHistory } from "../lib/load-history";
 import { parseTrainingStatus } from "../lib/training-status";
 import { parseRecoveryHistory } from "../lib/recovery-history";
+import { parseVolumeHistory } from "../lib/volume-history";
 import { applyTheme, resolveInitialTheme, THEME_STORAGE_KEY } from "../components/theme-toggle";
 import { ErrorState } from "../components/error-state";
 import { waitForApi } from "../lib/api-readiness";
@@ -61,6 +62,14 @@ describe("completed-work-v1 contract", () => {
     expect(() => parseCompletedWork({ ...completedWorkFixture, model: { ...completedWorkFixture.model, sport_grouping: "mapped" } })).toThrow(/метаданни/);
     expect(() => parseCompletedWork({ ...completedWorkFixture, zones: completedWorkFixture.zones.slice(0, 4) })).toThrow(/точно Z1–Z5/);
     expect(() => parseCompletedWork({ ...completedWorkFixture, sports: [completedWorkFixture.sports[0], completedWorkFixture.sports[0]] })).toThrow(/вид активност/);
+  });
+});
+
+describe("volume-history-v1 contract", () => {
+  it("accepts the calendar-week fixture", () => expect(parseVolumeHistory(volumeHistoryFixture)).toEqual(volumeHistoryFixture));
+  it("rejects altered aggregation semantics and inconsistent quality totals", () => {
+    expect(() => parseVolumeHistory({ ...volumeHistoryFixture, model: { ...volumeHistoryFixture.model, calendar_week_start: "sunday" } })).toThrow(/метаданни/);
+    expect(() => parseVolumeHistory({ ...volumeHistoryFixture, quality: { ...volumeHistoryFixture.quality, modeled_activities: 3 } })).toThrow(/качество/);
   });
 });
 
@@ -141,6 +150,20 @@ describe("data access", () => {
     expect(String(url)).toBe("https://api.example.test/api/v2/real/recovery-history");
     expect(init.headers.Authorization).toBe("Bearer server-secret");
   });
+  it("loads the protected weekly volume history for the active profile", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_API_RESOURCE = "real";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json(volumeHistoryFixture));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(getVolumeHistory("ath-profile")).resolves.toEqual(volumeHistoryFixture);
+    const [url, init] = fetchMock.mock.calls[1];
+    expect(String(url)).toBe("https://api.example.test/api/v2/real/volume-history");
+    expect(init.headers.Authorization).toBe("Bearer server-secret");
+    expect(init.headers["X-OnFlows-Athlete-Alias"]).toBe("ath-profile");
+  });
 });
 
 describe("API readiness", () => {
@@ -193,6 +216,15 @@ describe("dashboard", () => {
     expect(html).toContain("линиите не се сумират до нов общ резултат");
     expect(html).toContain("Реално → приравнено → ефективно");
     expect(html).toContain("NordicSki");
+  });
+  it("renders weekly real volume without inventing a total effective load", () => {
+    const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" volumeHistory={volumeHistoryFixture} />);
+    expect(html).toContain("Обща динамика на реалния обем");
+    expect(html).toContain("Реален седмичен обем");
+    expect(html).toContain("Продължителност на активностите");
+    expect(html).toContain("HR-зонирано време Z1–Z5");
+    expect(html).toContain("Това не е сбор на ефективен товар E");
+    expect(html).toContain("STR компонент");
   });
   it("renders the completed-work report without reclassifying provider sport labels", () => {
     const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" completedWork={completedWorkFixture} />);

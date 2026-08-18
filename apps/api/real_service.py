@@ -6,7 +6,7 @@ Provider credentials stop at :func:`refresh`; downstream code receives an
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import logging
 import os
 from typing import Any, Mapping
@@ -36,6 +36,10 @@ from .schemas import (
     RecoveryZoneCurrent,
     RecoveryZoneSettings,
     TrainingStatusResponse,
+    VolumeHistoryMetadata,
+    VolumeHistoryQuality,
+    VolumeHistoryResponse,
+    WeeklyVolume,
     ZoneLoadSummary,
     ZoneTrainingStatus,
 )
@@ -498,6 +502,98 @@ def completed_work_from_persisted(
     return completed_work_from_load_history(
         load_history_from_persisted(payload), period_start, period_end
     )
+
+
+def volume_history_from_load_history(
+    history: LoadHistoryResponse,
+) -> VolumeHistoryResponse:
+    """Build calendar-week volume series from the persisted activity aggregates.
+
+    The two output series retain their distinct source semantics. Provider
+    duration uses only present values, while HR-zoned time is the exact sum of
+    stored Z1–Z5 ``raw_time_min``. No effective-load values are combined.
+    """
+
+    period_start = date.fromisoformat(history.period_start)
+    period_end = date.fromisoformat(history.period_end)
+    first_week = period_start - timedelta(days=period_start.weekday())
+    last_week = period_end - timedelta(days=period_end.weekday())
+    buckets: dict[date, dict[str, float | int]] = {}
+    week_start = first_week
+    while week_start <= last_week:
+        buckets[week_start] = {
+            "activities": 0,
+            "limited": 0,
+            "missing_duration": 0,
+            "duration": 0.0,
+            "zoned": 0.0,
+        }
+        week_start += timedelta(days=7)
+
+    for activity in history.activities:
+        activity_date = date.fromisoformat(activity.date)
+        if not period_start <= activity_date <= period_end:
+            raise ValueError("Load-history activity is outside its stored period")
+        activity_week = activity_date - timedelta(days=activity_date.weekday())
+        bucket = buckets[activity_week]
+        bucket["activities"] += 1
+        bucket["limited"] += activity.quality_status == "limited"
+        if activity.duration_min is None:
+            bucket["missing_duration"] += 1
+        else:
+            bucket["duration"] += activity.duration_min
+        bucket["zoned"] += sum(row.raw_time_min for row in activity.zones)
+
+    weekly = []
+    for week_start, values in buckets.items():
+        week_end = week_start + timedelta(days=6)
+        observed_start = max(week_start, period_start)
+        observed_end = min(week_end, period_end)
+        weekly.append(
+            WeeklyVolume(
+                week_start=week_start.isoformat(),
+                week_end=week_end.isoformat(),
+                observed_days=(observed_end - observed_start).days + 1,
+                activities_count=int(values["activities"]),
+                limited_activities=int(values["limited"]),
+                missing_duration_activities=int(values["missing_duration"]),
+                activity_duration_min=_finite(
+                    values["duration"], f"weekly duration[{week_start}]"
+                ),
+                zoned_hr_time_min=_finite(
+                    values["zoned"], f"weekly zoned HR time[{week_start}]"
+                ),
+            )
+        )
+
+    return VolumeHistoryResponse(
+        schema_version="volume-history-v1",
+        athlete_id=history.athlete_id,
+        period_start=history.period_start,
+        period_end=history.period_end,
+        model=VolumeHistoryMetadata(
+            aggregation_version="volume-history-calendar-week-v1",
+            source_schema_version="load-history-v1",
+            calendar_week_start="monday",
+            activity_duration_handling="known-values-only",
+        ),
+        quality=VolumeHistoryQuality(
+            modeled_activities=len(history.activities),
+            limited_activities=sum(
+                activity.quality_status == "limited" for activity in history.activities
+            ),
+            missing_duration_activities=sum(
+                activity.duration_min is None for activity in history.activities
+            ),
+        ),
+        weekly=weekly,
+    )
+
+
+def volume_history_from_persisted(
+    payload: Mapping[str, Any],
+) -> VolumeHistoryResponse:
+    return volume_history_from_load_history(load_history_from_persisted(payload))
 
 
 def recovery_history_from_persisted(

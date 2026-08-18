@@ -33,6 +33,7 @@ from .real_service import (
     recovery_history_from_persisted,
     refresh,
     training_status_from_persisted,
+    volume_history_from_load_history,
 )
 from .schemas import (
     AthleteSettingsInput,
@@ -46,6 +47,7 @@ from .schemas import (
     SessionExchangeRequest,
     SessionExchangeResponse,
     TrainingStatusResponse,
+    VolumeHistoryResponse,
 )
 from .training_status import build_demo_training_status
 
@@ -226,6 +228,34 @@ def real_completed_work(
         raise HTTPException(
             status_code=422,
             detail="Requested period must be within the stored history",
+        ) from exc
+
+
+@app.get("/api/v2/real/volume-history", response_model=VolumeHistoryResponse)
+def real_volume_history(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    try:
+        snapshot = _repository().latest(_validated_alias(athlete_alias))
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    if snapshot is None:
+        raise HTTPException(
+            status_code=503, detail="No valid real-data snapshot is available"
+        )
+    try:
+        history = load_history_from_persisted(snapshot)
+        return volume_history_from_load_history(history)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Volume history requires a new real-data refresh",
         ) from exc
 
 

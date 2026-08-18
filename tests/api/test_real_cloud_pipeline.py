@@ -18,6 +18,8 @@ from apps.api.real_service import (
     recovery_history_from_persisted,
     refresh,
     training_status_from_persisted,
+    volume_history_from_load_history,
+    volume_history_from_persisted,
 )
 from intervals_inspector.intervals_client import IntervalsAPIError, IntervalsResponse
 
@@ -94,6 +96,43 @@ def test_persisted_snapshot_exposes_v1_status_and_load_history_contracts():
     report = completed_work_from_persisted(payload)
     assert report.schema_version == "completed-work-v1"
     assert report.model.source_schema_version == "load-history-v1"
+    volume = volume_history_from_persisted(payload)
+    assert volume.schema_version == "volume-history-v1"
+    assert volume.model.source_schema_version == "load-history-v1"
+    assert volume.model.calendar_week_start == "monday"
+
+
+def test_volume_history_keeps_duration_and_hr_zoned_time_separate():
+    repo = InMemorySnapshotRepository()
+    refresh(repo, environ=ENV, client=Client(), period_end=date(2026, 8, 15))
+    history = load_history_from_persisted(repo.latest("pilot"))
+    payload = history.model_dump(mode="json")
+    second = dict(payload["activities"][0])
+    second.update(
+        activity_ref="activity-002",
+        date="2026-08-08",
+        duration_min=None,
+        quality_status="limited",
+    )
+    second["zones"] = [dict(row) for row in second["zones"]]
+    payload["activities"].append(second)
+
+    volume = volume_history_from_load_history(type(history).model_validate(payload))
+    original_zoned = sum(row.raw_time_min for row in history.activities[0].zones)
+    assert volume.quality.modeled_activities == 2
+    assert volume.quality.limited_activities == 1
+    assert volume.quality.missing_duration_activities == 1
+    assert volume.weekly[0].week_start == "2026-07-06"
+    assert volume.weekly[0].observed_days == 7
+    assert volume.weekly[-1].week_end == "2026-08-16"
+    assert volume.weekly[-1].observed_days == 6
+    assert volume.weekly[-1].activity_duration_min == pytest.approx(
+        history.activities[0].duration_min
+    )
+    assert volume.weekly[-1].zoned_hr_time_min == pytest.approx(original_zoned)
+    assert volume.weekly[-2].activity_duration_min == 0
+    assert volume.weekly[-2].zoned_hr_time_min == pytest.approx(original_zoned)
+    assert volume.weekly[-2].missing_duration_activities == 1
 
 
 def test_completed_work_aggregates_persisted_values_without_recalculating_physiology():
@@ -167,6 +206,11 @@ def test_completed_work_endpoint_is_profile_scoped_and_validates_the_period(monk
         "?period_start=2026-01-01&period_end=2026-08-15",
         headers=headers,
     ).status_code == 422
+
+    volume = client.get("/api/v2/real/volume-history", headers=headers)
+    assert volume.status_code == 200
+    assert volume.json()["schema_version"] == "volume-history-v1"
+    assert volume.json()["athlete_id"] == "pilot"
 
 
 def test_deployed_v1_snapshot_remains_readable_during_rollout():

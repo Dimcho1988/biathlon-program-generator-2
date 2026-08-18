@@ -2,6 +2,7 @@ import type { TrainingStatus } from "./training-status";
 import type { LoadHistory } from "./load-history";
 import type { RecoveryHistory } from "./recovery-history";
 import type { CompletedWork } from "./completed-work";
+import type { VolumeHistory } from "./volume-history";
 
 export const trainingStatusFixture: TrainingStatus = {
   schema_version: "training-status-v1",
@@ -130,6 +131,32 @@ export const completedWorkFixture: CompletedWork = {
   sports: [
     { sport: "NordicSki", activities_count: 1, activity_duration_min: 51, zoned_hr_time_min: 50.9 },
     { sport: "Run", activities_count: 1, activity_duration_min: 42, zoned_hr_time_min: 42 },
+  ],
+};
+
+export const volumeHistoryFixture: VolumeHistory = {
+  schema_version: "volume-history-v1",
+  athlete_id: "A",
+  period_start: loadHistoryFixture.period_start,
+  period_end: loadHistoryFixture.period_end,
+  model: {
+    aggregation_version: "volume-history-calendar-week-v1",
+    source_schema_version: "load-history-v1",
+    calendar_week_start: "monday",
+    activity_duration_handling: "known-values-only",
+  },
+  quality: {
+    modeled_activities: 2,
+    limited_activities: 1,
+    missing_duration_activities: 0,
+  },
+  weekly: [
+    { week_start: "2026-05-11", week_end: "2026-05-17", observed_days: 6, activities_count: 0, limited_activities: 0, missing_duration_activities: 0, activity_duration_min: 0, zoned_hr_time_min: 0 },
+    { week_start: "2026-05-18", week_end: "2026-05-24", observed_days: 7, activities_count: 0, limited_activities: 0, missing_duration_activities: 0, activity_duration_min: 0, zoned_hr_time_min: 0 },
+    { week_start: "2026-05-25", week_end: "2026-05-31", observed_days: 7, activities_count: 0, limited_activities: 0, missing_duration_activities: 0, activity_duration_min: 0, zoned_hr_time_min: 0 },
+    { week_start: "2026-06-01", week_end: "2026-06-07", observed_days: 7, activities_count: 0, limited_activities: 0, missing_duration_activities: 0, activity_duration_min: 0, zoned_hr_time_min: 0 },
+    { week_start: "2026-06-08", week_end: "2026-06-14", observed_days: 7, activities_count: 0, limited_activities: 0, missing_duration_activities: 0, activity_duration_min: 0, zoned_hr_time_min: 0 },
+    { week_start: "2026-06-15", week_end: "2026-06-21", observed_days: 6, activities_count: 2, limited_activities: 1, missing_duration_activities: 0, activity_duration_min: 93, zoned_hr_time_min: 92.9 },
   ],
 };
 

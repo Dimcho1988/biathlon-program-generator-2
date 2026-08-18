@@ -1,8 +1,9 @@
-import { completedWorkFixture, loadHistoryFixture, recoveryHistoryFixture, trainingStatusFixture } from "./fixture";
+import { completedWorkFixture, loadHistoryFixture, recoveryHistoryFixture, trainingStatusFixture, volumeHistoryFixture } from "./fixture";
 import { parseCompletedWork, type CompletedWork } from "./completed-work";
 import { parseLoadHistory, type LoadHistory } from "./load-history";
 import { parseTrainingStatus, type TrainingStatus } from "./training-status";
 import { parseRecoveryHistory, type RecoveryHistory } from "./recovery-history";
+import { parseVolumeHistory, type VolumeHistory } from "./volume-history";
 import { waitForApi } from "./api-readiness";
 
 // Render Free can take more than 50 seconds to wake the API after inactivity.
@@ -69,6 +70,14 @@ export async function getCompletedWork(athleteAlias?: string, periodStart?: stri
   if (periodEnd) query.set("period_end", periodEnd);
   const suffix = query.size > 0 ? `?${query.toString()}` : "";
   return parseCompletedWork(await fetchApiResource(`/api/v2/real/completed-work${suffix}`, token, athleteAlias));
+}
+
+export async function getVolumeHistory(athleteAlias?: string): Promise<VolumeHistory | null> {
+  if (process.env.ONFLOWS_DATA_MODE === "fixture") return parseVolumeHistory(volumeHistoryFixture);
+  if (process.env.ONFLOWS_API_RESOURCE !== "real") return null;
+  const token = process.env.ONFLOWS_SERVICE_TOKEN;
+  if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
+  return parseVolumeHistory(await fetchApiResource("/api/v2/real/volume-history", token, athleteAlias));
 }
 
 export async function getRecoveryHistory(athleteAlias?: string): Promise<RecoveryHistory | null> {

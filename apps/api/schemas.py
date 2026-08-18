@@ -174,6 +174,40 @@ class CompletedWorkResponse(StrictModel):
     sports: list[CompletedWorkSport]
 
 
+class VolumeHistoryMetadata(StrictModel):
+    aggregation_version: Literal["volume-history-calendar-week-v1"]
+    source_schema_version: Literal["load-history-v1"]
+    calendar_week_start: Literal["monday"]
+    activity_duration_handling: Literal["known-values-only"]
+
+
+class VolumeHistoryQuality(StrictModel):
+    modeled_activities: int
+    limited_activities: int
+    missing_duration_activities: int
+
+
+class WeeklyVolume(StrictModel):
+    week_start: str
+    week_end: str
+    observed_days: int
+    activities_count: int
+    limited_activities: int
+    missing_duration_activities: int
+    activity_duration_min: float
+    zoned_hr_time_min: float
+
+
+class VolumeHistoryResponse(StrictModel):
+    schema_version: Literal["volume-history-v1"]
+    athlete_id: str
+    period_start: str
+    period_end: str
+    model: VolumeHistoryMetadata
+    quality: VolumeHistoryQuality
+    weekly: list[WeeklyVolume]
+
+
 class RecoveryModelMetadata(StrictModel):
     algorithm_version: str
     parameter_version: str

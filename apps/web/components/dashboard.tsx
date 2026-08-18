@@ -9,6 +9,8 @@ import { CompletedWorkSection } from "./completed-work-section";
 import type { RecoveryHistory } from "../lib/recovery-history";
 import { RecoveryHistorySection } from "./recovery-history-section";
 import { ThemeToggle } from "./theme-toggle";
+import type { VolumeHistory } from "../lib/volume-history";
+import { VolumeHistorySection } from "./volume-history-section";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
 const decimal = (value: number) => number.format(value);
@@ -29,9 +31,11 @@ export function Dashboard({
   completedWork = null,
   loadHistory = null,
   recoveryHistory = null,
+  volumeHistory = null,
   completedWorkMessage,
   loadHistoryMessage,
   recoveryHistoryMessage,
+  volumeHistoryMessage,
   integrationActions = false,
   sessionActions = false,
   notice,
@@ -41,9 +45,11 @@ export function Dashboard({
   completedWork?: CompletedWork | null;
   loadHistory?: LoadHistory | null;
   recoveryHistory?: RecoveryHistory | null;
+  volumeHistory?: VolumeHistory | null;
   completedWorkMessage?: string;
   loadHistoryMessage?: string;
   recoveryHistoryMessage?: string;
+  volumeHistoryMessage?: string;
   integrationActions?: boolean;
   sessionActions?: boolean;
   notice?: string;
@@ -90,6 +96,7 @@ export function Dashboard({
         </section>
 
         <CompletedWorkSection report={completedWork} message={completedWorkMessage} selectable={mode === "api"} availablePeriodStart={loadHistory?.period_start} availablePeriodEnd={loadHistory?.period_end} />
+        <VolumeHistorySection history={volumeHistory} message={volumeHistoryMessage} />
         <LoadHistorySection history={loadHistory} message={loadHistoryMessage} />
         <RecoveryHistorySection history={recoveryHistory} message={recoveryHistoryMessage} />
 
