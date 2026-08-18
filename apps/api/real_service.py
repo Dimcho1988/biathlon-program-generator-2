@@ -14,7 +14,13 @@ from typing import Any, Mapping
 from biathlon.constants import fresh_parameters
 from biathlon.effective_hr import EFFECTIVE_HR_SOURCE
 
-from .cloud import AthleteContext, AthleteModelSettings, SnapshotRepository, normalize_wellness
+from .cloud import (
+    AthleteContext,
+    AthleteModelSettings,
+    SnapshotRepository,
+    normalize_wellness,
+    summarize_wellness_coverage,
+)
 from .schemas import (
     ActivityZoneLoad,
     AthleteSnapshot,
@@ -39,6 +45,7 @@ from .schemas import (
     VolumeHistoryMetadata,
     VolumeHistoryQuality,
     VolumeHistoryResponse,
+    WellnessCoverageDiagnostics,
     WeeklyVolume,
     ZoneLoadSummary,
     ZoneTrainingStatus,
@@ -150,7 +157,12 @@ def _calendar_date(value: Any, name: str) -> str:
     return rendered
 
 
-def dataset_to_training_status(dataset: Any, context: AthleteContext, wellness: Mapping[str, Any]) -> TrainingStatusResponse:
+def dataset_to_training_status(
+    dataset: Any,
+    context: AthleteContext,
+    wellness: Mapping[str, Any],
+    wellness_diagnostics: Mapping[str, Any],
+) -> TrainingStatusResponse:
     """Pure aggregate adapter; it never invokes Intervals or reads credentials."""
     eligible = dataset.activities.loc[dataset.activities["quality_status"].isin(("valid", "limited"))]
     if eligible.empty:
@@ -162,9 +174,17 @@ def dataset_to_training_status(dataset: Any, context: AthleteContext, wellness: 
     reliability = min(_finite(dataset.load_stats.loc[z, "reliability"], f"reliability[{z}]") for z in ZONES)
     warnings = list(dataset.warnings)
     if wellness.get("freshness") != "fresh":
-        warnings.append(f"Wellness is {wellness.get('freshness', 'unknown')} and is not integrated into readiness.")
-    if float(wellness.get("coverage", 0.0)) < 1.0:
-        warnings.append("Wellness coverage is incomplete; readiness remains load-only.")
+        warnings.append(
+            f"Wellness is {wellness.get('freshness', 'unknown')} and is not integrated into readiness."
+        )
+    if int(wellness_diagnostics.get("records_received", 0)) == 0:
+        warnings.append(
+            "No dated wellness records were received for the stored period; readiness remains load-only."
+        )
+    else:
+        warnings.append(
+            "Wellness field coverage is diagnostic-only; readiness remains load-only in this model version."
+        )
     quality = _bounded_percentage(
         latest["hr_coverage_percent"], "latest HR coverage"
     ) / 100.0
@@ -297,6 +317,7 @@ def dataset_to_recovery_history(
     dataset: Any,
     context: AthleteContext,
     wellness: Mapping[str, Any],
+    wellness_diagnostics: Mapping[str, Any],
     parameters: Mapping[str, Any],
 ) -> RecoveryHistoryResponse:
     """Expose the already-computed canonical load-recovery history."""
@@ -315,6 +336,9 @@ def dataset_to_recovery_history(
         wellness_coverage_percent=_bounded_percentage(
             100.0 * _finite(wellness.get("coverage", 0.0), "wellness coverage"),
             "wellness coverage",
+        ),
+        wellness_diagnostics=WellnessCoverageDiagnostics.model_validate(
+            wellness_diagnostics
         ),
         model=RecoveryModelMetadata(
             algorithm_version=str(dataset.recovery_model_version),
@@ -647,6 +671,12 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         wellness_rows = wellness_payload if isinstance(wellness_payload, list) else []
         latest_wellness = max((r for r in wellness_rows if isinstance(r, Mapping)), key=lambda r: str(r.get("id") or r.get("date") or ""), default={})
         wellness = normalize_wellness(latest_wellness, now=now)
+        wellness_diagnostics = summarize_wellness_coverage(
+            [row for row in wellness_rows if isinstance(row, Mapping)],
+            period_start=start,
+            period_end=end,
+            now=now,
+        )
         parameters = fresh_parameters()
         stage = "history"
         dataset = load_real_history(provider, profile_identifier=context.provider_athlete_id,
@@ -660,12 +690,14 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             dataset.excluded_activities,
         )
         stage = "training_status"
-        snapshot = dataset_to_training_status(dataset, context, wellness)
+        snapshot = dataset_to_training_status(
+            dataset, context, wellness, wellness_diagnostics
+        )
         stage = "load_history"
         load_history = dataset_to_load_history(dataset, context)
         stage = "recovery_history"
         recovery_history = dataset_to_recovery_history(
-            dataset, context, wellness, parameters
+            dataset, context, wellness, wellness_diagnostics, parameters
         )
     except IntervalsAPIError as exc:
         logger.warning(

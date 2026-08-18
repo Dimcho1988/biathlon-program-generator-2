@@ -310,6 +310,51 @@ class DailyRecovery(StrictModel):
     tref_min: float
 
 
+class WellnessFieldCoverage(StrictModel):
+    field: Literal[
+        "sleep_duration",
+        "sleep_score",
+        "sleep_quality",
+        "resting_hr",
+        "average_sleeping_hr",
+        "hrv",
+        "hrv_sdnn",
+        "readiness",
+        "respiration",
+        "spo2",
+        "fatigue",
+        "stress",
+        "mood",
+        "motivation",
+        "soreness",
+        "injury",
+    ]
+    source_fields: list[str]
+    present_days: int
+    valid_days: int
+    invalid_days: int
+    coverage_percent: float
+
+
+class WellnessCoverageDiagnostics(StrictModel):
+    schema_version: Literal["wellness-coverage-v1"]
+    period_start: str
+    period_end: str
+    calendar_days: int
+    records_received: int
+    days_with_any_recognized_data: int
+    daily_presence_percent: float
+    recognized_field_coverage_percent: float
+    latest_observed_date: str | None
+    freshness: Literal["fresh", "stale", "unknown"]
+    fields: list[WellnessFieldCoverage]
+    unresolved_canonical_inputs: list[
+        Literal["soreness_legs", "soreness_upper", "pain", "illness"]
+    ]
+    model_status: Literal["diagnostic-only"]
+    affects_recovery: Literal[False]
+
+
 class RecoveryHistoryResponse(StrictModel):
     schema_version: Literal["recovery-history-v1"]
     athlete_id: str
@@ -318,6 +363,7 @@ class RecoveryHistoryResponse(StrictModel):
     basis: Literal["load-only"]
     wellness_freshness: Literal["fresh", "stale", "unknown"]
     wellness_coverage_percent: float
+    wellness_diagnostics: WellnessCoverageDiagnostics | None = None
     model: RecoveryModelMetadata
     settings: list[RecoveryZoneSettings]
     current: list[RecoveryZoneCurrent]

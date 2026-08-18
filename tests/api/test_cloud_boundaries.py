@@ -11,6 +11,7 @@ from apps.api.cloud import (
     InMemorySnapshotRepository,
     normalize_wellness,
     service_token_valid,
+    summarize_wellness_coverage,
 )
 from apps.api.hrmod import calculate_hrmod
 from apps.api import main as api_main
@@ -104,12 +105,52 @@ def test_mesocycle_accent_preferences_are_individual_and_do_not_guess_auto_slots
 
 
 def test_wellness_preserves_missing_stale_invalid_and_units():
-    result = normalize_wellness({"id": "2026-01-01", "sleepSecs": 28800, "fatigue": float("nan"), "illness": False}, now=datetime(2026, 1, 5, tzinfo=timezone.utc))
+    result = normalize_wellness({"id": "2026-01-01", "sleepSecs": 28800, "sleepQuality": 4, "fatigue": float("nan"), "illness": False}, now=datetime(2026, 1, 5, tzinfo=timezone.utc))
     assert result["freshness"] == "stale"
     assert result["values"]["sleep_duration"] == {"value": 28800.0, "unit": "s", "state": "valid"}
+    assert result["values"]["sleep_quality"] == {"value": 4.0, "unit": "score", "state": "valid"}
     assert result["values"]["fatigue"]["state"] == "invalid"
     assert result["values"]["stress"]["state"] == "missing"
     assert result["values"]["illness"]["value"] is False
+
+
+def test_wellness_coverage_uses_distinct_days_and_never_persists_values():
+    result = summarize_wellness_coverage(
+        [
+            {"id": "2026-01-01", "sleepSecs": 28800, "restingHR": 50},
+            {"id": "2026-01-02", "sleepQuality": 4, "fatigue": 2, "hrv": 80},
+            {"id": "2026-01-03", "sleepScore": 75, "fatigue": "bad", "soreness": 3},
+            {"id": "2026-01-03", "fatigue": 4},
+            {"id": "2026-01-06", "sleepSecs": 30000},
+            {"id": "invalid", "stress": 2},
+        ],
+        period_start=date(2026, 1, 1),
+        period_end=date(2026, 1, 5),
+        now=datetime(2026, 1, 4, 12, tzinfo=timezone.utc),
+    )
+
+    assert result["schema_version"] == "wellness-coverage-v1"
+    assert result["records_received"] == 4
+    assert result["days_with_any_recognized_data"] == 3
+    assert result["daily_presence_percent"] == 60.0
+    assert result["recognized_field_coverage_percent"] == 10.0
+    assert result["latest_observed_date"] == "2026-01-03"
+    assert result["freshness"] == "fresh"
+    assert result["affects_recovery"] is False
+    assert result["unresolved_canonical_inputs"] == [
+        "soreness_legs",
+        "soreness_upper",
+        "pain",
+        "illness",
+    ]
+    by_field = {row["field"]: row for row in result["fields"]}
+    assert by_field["sleep_quality"]["source_fields"] == ["sleepQuality"]
+    assert by_field["sleep_score"]["source_fields"] == ["sleepScore"]
+    assert by_field["sleep_quality"]["valid_days"] == 1
+    assert by_field["sleep_score"]["valid_days"] == 1
+    assert by_field["fatigue"]["valid_days"] == 2
+    assert by_field["fatigue"]["invalid_days"] == 0
+    assert "28800" not in repr(result)
 
 
 def test_hrmod_is_deterministic_hr_only_and_finite():

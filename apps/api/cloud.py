@@ -391,33 +391,84 @@ def service_token_valid(provided: str | None, expected: str) -> bool:
 
 
 WELLNESS_FIELDS = {
-    "sleepSecs": ("sleep_duration", "s"), "sleepScore": ("sleep_score", "score"),
-    "fatigue": ("fatigue", "score"), "stress": ("stress", "score"),
-    "motivation": ("motivation", "score"), "restingHR": ("resting_hr", "bpm"),
-    "hrv": ("hrv", "ms"), "soreness": ("soreness", "score"),
-    "illness": ("illness", "boolean"),
+    "sleep_duration": (("sleepSecs",), "s", "number"),
+    # Intervals can expose both fields.  They are counted separately because
+    # their provider semantics and scales are not interchangeable.
+    "sleep_score": (("sleepScore",), "score", "number"),
+    "sleep_quality": (("sleepQuality",), "score", "number"),
+    "resting_hr": (("restingHR",), "bpm", "number"),
+    "average_sleeping_hr": (("avgSleepingHR",), "bpm", "number"),
+    "hrv": (("hrv",), "ms", "number"),
+    "hrv_sdnn": (("hrvSDNN",), "ms", "number"),
+    "readiness": (("readiness",), "score", "number"),
+    "respiration": (("respiration",), "breaths/min", "number"),
+    "spo2": (("spO2",), "%", "number"),
+    "fatigue": (("fatigue",), "score", "number"),
+    "stress": (("stress",), "score", "number"),
+    "mood": (("mood",), "score", "number"),
+    "motivation": (("motivation",), "score", "number"),
+    "soreness": (("soreness",), "score", "number"),
+    "injury": (("injury",), "score", "number"),
+    "illness": (("illness",), "boolean", "boolean"),
 }
+
+# Only aggregate presence/validity is persisted for these provider fields.
+# Generic soreness is measured, but it is not silently split into the two
+# region-specific inputs required by the existing scientific model.
+WELLNESS_COVERAGE_FIELDS = tuple(
+    field for field in WELLNESS_FIELDS if field != "illness"
+)
+UNRESOLVED_WELLNESS_MODEL_INPUTS = (
+    "soreness_legs",
+    "soreness_upper",
+    "pain",
+    "illness",
+)
+
+
+def _wellness_observed_date(row: Mapping[str, Any]) -> date | None:
+    stamp = row.get("id") or row.get("date")
+    if not isinstance(stamp, str):
+        return None
+    try:
+        return date.fromisoformat(stamp[:10])
+    except ValueError:
+        return None
+
+
+def _wellness_raw_value(
+    row: Mapping[str, Any], sources: tuple[str, ...]
+) -> Any:
+    for source in sources:
+        value = row.get(source)
+        if value is not None:
+            return value
+    return None
 
 
 def normalize_wellness(row: Mapping[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
     """Map only unambiguous Intervals fields; missing never becomes neutral."""
-    stamp = row.get("id") or row.get("date")
-    observed: datetime | None = None
-    if isinstance(stamp, str):
-        try:
-            observed = datetime.fromisoformat(stamp[:10]).replace(tzinfo=timezone.utc)
-        except ValueError:
-            pass
+    observed_date = _wellness_observed_date(row)
+    observed = (
+        datetime.combine(observed_date, datetime.min.time(), tzinfo=timezone.utc)
+        if observed_date is not None
+        else None
+    )
     clock = now or datetime.now(timezone.utc)
     values: dict[str, Any] = {}
     invalid: list[str] = []
-    for source, (target, unit) in WELLNESS_FIELDS.items():
-        raw = row.get(source)
+    for target, (sources, unit, kind) in WELLNESS_FIELDS.items():
+        raw = _wellness_raw_value(row, sources)
         if raw is None:
             values[target] = {"value": None, "unit": unit, "state": "missing"}
-        elif isinstance(raw, bool) and target == "illness":
+        elif kind == "boolean" and isinstance(raw, bool):
             values[target] = {"value": raw, "unit": unit, "state": "valid"}
-        elif isinstance(raw, (int, float)) and not isinstance(raw, bool) and math.isfinite(float(raw)):
+        elif (
+            kind == "number"
+            and isinstance(raw, (int, float))
+            and not isinstance(raw, bool)
+            and math.isfinite(float(raw))
+        ):
             values[target] = {"value": float(raw), "unit": unit, "state": "valid"}
         else:
             values[target] = {"value": None, "unit": unit, "state": "invalid"}; invalid.append(target)
@@ -427,6 +478,102 @@ def normalize_wellness(row: Mapping[str, Any], *, now: datetime | None = None) -
             "freshness": "unknown" if age_hours is None else ("fresh" if age_hours <= 48 else "stale"),
             "coverage": valid / len(values), "values": values,
             "warnings": [f"invalid wellness field: {x}" for x in invalid]}
+
+
+def summarize_wellness_coverage(
+    rows: list[Mapping[str, Any]],
+    *,
+    period_start: date,
+    period_end: date,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Return privacy-minimized field coverage without scoring wellness.
+
+    Raw values never leave this function.  The result contains distinct-day
+    counts only and is deliberately marked as non-canonical for recovery.
+    """
+
+    if period_end < period_start:
+        raise ValueError("wellness coverage period is invalid")
+    calendar_days = (period_end - period_start).days + 1
+    present_dates = {field: set() for field in WELLNESS_COVERAGE_FIELDS}
+    valid_dates = {field: set() for field in WELLNESS_COVERAGE_FIELDS}
+    invalid_dates = {field: set() for field in WELLNESS_COVERAGE_FIELDS}
+    recognized_dates: set[date] = set()
+    received_records = 0
+
+    for row in rows:
+        observed_date = _wellness_observed_date(row)
+        if observed_date is None or not period_start <= observed_date <= period_end:
+            continue
+        received_records += 1
+        normalized = normalize_wellness(row, now=now)
+        for field in WELLNESS_COVERAGE_FIELDS:
+            state = normalized["values"][field]["state"]
+            if state == "missing":
+                continue
+            present_dates[field].add(observed_date)
+            recognized_dates.add(observed_date)
+            if state == "valid":
+                valid_dates[field].add(observed_date)
+            else:
+                invalid_dates[field].add(observed_date)
+
+    def percentage(numerator: int, denominator: int) -> float:
+        return round(100.0 * numerator / denominator, 2) if denominator else 0.0
+
+    field_rows = []
+    total_valid_field_days = 0
+    for field in WELLNESS_COVERAGE_FIELDS:
+        valid = len(valid_dates[field])
+        total_valid_field_days += valid
+        sources = list(WELLNESS_FIELDS[field][0])
+        field_rows.append(
+            {
+                "field": field,
+                "source_fields": sources,
+                "present_days": len(present_dates[field]),
+                "valid_days": valid,
+                "invalid_days": len(invalid_dates[field] - valid_dates[field]),
+                "coverage_percent": percentage(valid, calendar_days),
+            }
+        )
+
+    latest_observed = max(recognized_dates) if recognized_dates else None
+    if latest_observed is None:
+        freshness = "unknown"
+    else:
+        observed_at = datetime.combine(
+            latest_observed, datetime.min.time(), tzinfo=timezone.utc
+        )
+        age_hours = max(
+            0.0,
+            ((now or datetime.now(timezone.utc)) - observed_at).total_seconds()
+            / 3600.0,
+        )
+        freshness = "fresh" if age_hours <= 48 else "stale"
+
+    return {
+        "schema_version": "wellness-coverage-v1",
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
+        "calendar_days": calendar_days,
+        "records_received": received_records,
+        "days_with_any_recognized_data": len(recognized_dates),
+        "daily_presence_percent": percentage(len(recognized_dates), calendar_days),
+        "recognized_field_coverage_percent": percentage(
+            total_valid_field_days,
+            calendar_days * len(WELLNESS_COVERAGE_FIELDS),
+        ),
+        "latest_observed_date": (
+            latest_observed.isoformat() if latest_observed is not None else None
+        ),
+        "freshness": freshness,
+        "fields": field_rows,
+        "unresolved_canonical_inputs": list(UNRESOLVED_WELLNESS_MODEL_INPUTS),
+        "model_status": "diagnostic-only",
+        "affects_recovery": False,
+    }
 
 
 class SnapshotRepository(Protocol):

@@ -32,4 +32,22 @@
 @media(max-width:960px){.hero-grid{grid-template-columns:1fr;padding-top:64px}.identity{flex-wrap:wrap}.quality-panel{grid-template-columns:1fr 1fr}.quality-ok,.warnings{justify-self:start;grid-column:1/-1}.zone-card{grid-template-columns:90px 1fr;padding:20px}.zone-card dl{grid-template-columns:repeat(3,1fr);row-gap:18px}.load-summary{grid-template-columns:repeat(2,1fr)}.metadata dl{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:960px){.content{grid-template-columns:1fr;gap:24px}.analysis-nav{position:static;display:flex;align-items:center;justify-content:flex-start;overflow-x:auto;padding:10px;white-space:nowrap}.analysis-nav-label{margin:0 8px}.analysis-nav a{border-left:0;border-bottom:2px solid transparent}.analysis-nav a:hover{border-left-color:transparent;border-bottom-color:var(--accent)}}
 @media(max-width:620px){.product{display:none}.nav-actions{gap:8px}.hero{padding-inline:20px}.hero-grid{padding:50px 0 24px;gap:32px}.identity{gap:18px}.identity div:not(.demo-badge){flex:1;min-width:120px}.content{padding:28px 14px 56px}.quality-panel{grid-template-columns:1fr;padding:20px;gap:22px}.quality-values{justify-content:space-between}.quality-ok,.warnings{grid-column:auto}.section-heading,.activities-heading,.history-chart-heading{align-items:start;flex-direction:column;gap:10px}.history-chart-heading>p{text-align:left}.zone-card{grid-template-columns:1fr;padding:20px}.zone-id{margin-bottom:18px}.zone-mark{width:35px;height:5px}.zone-card dl{grid-template-columns:repeat(2,1fr);gap:16px 0}.zone-card dl div{padding:0 12px}.zone-card dl div:nth-child(odd){border-left:0;padding-left:0}.history-explainer{grid-template-columns:1fr;gap:8px}.load-summary{grid-template-columns:1fr}.activity-row summary{grid-template-columns:1fr auto;gap:8px}.activity-row summary>span:first-child{align-items:start;flex-direction:column;gap:2px}.report-totals dl{flex-direction:column;gap:16px}.recovery-model-meta,.metadata dl,.methodology-card dl{grid-template-columns:1fr}.boundary-grid,.planning-grid.three-columns,.planning-grid.two-columns{grid-template-columns:1fr}.weekday-grid{grid-template-columns:repeat(2,1fr)}.planning-profile-form,.methodology-card,.accent-editor-card{padding:20px}.accent-editor-heading{flex-direction:column}.accent-component-choices label{min-width:calc(33.333% - 6px)}footer{align-items:start;gap:14px;flex-direction:column}}
+
+.wellness-diagnostics{margin:0 0 20px;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:var(--shadow)}
+.wellness-diagnostics>summary{display:flex;align-items:center;gap:18px;padding:18px 20px;cursor:pointer;list-style:none;font-weight:700}
+.wellness-diagnostics>summary::-webkit-details-marker{display:none}
+.wellness-diagnostics>summary>span:first-child{min-width:230px}
+.wellness-diagnostics>summary small{display:block;margin-bottom:3px;color:var(--text-muted);font-size:10px;letter-spacing:.13em;text-transform:uppercase}
+.wellness-summary-value{margin-left:auto;color:var(--accent);font-size:14px;white-space:nowrap}
+.wellness-diagnostics[open] .chevron{transform:rotate(180deg)}
+.wellness-diagnostics-body{padding:0 20px 20px;border-top:1px solid var(--border)}
+.wellness-coverage-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:0;padding:20px 0}
+.wellness-coverage-metrics div{padding-left:14px;border-left:2px solid var(--accent)}
+.wellness-coverage-metrics dt{color:var(--text-muted);font-size:11px}
+.wellness-coverage-metrics dd{margin:4px 0 0;font-size:18px;font-weight:750}
+.wellness-privacy-note,.wellness-unresolved{margin:0;padding:13px 16px;background:var(--surface-secondary);color:var(--text-secondary);font-size:13px;line-height:1.55}
+.wellness-unresolved{margin-top:14px}
+.wellness-diagnostics .activity-table-wrap{margin-top:14px;border:1px solid var(--border);border-radius:8px}
+.wellness-diagnostics code{font-size:12px}
+@media(max-width:620px){.wellness-diagnostics>summary{display:grid;grid-template-columns:1fr auto;gap:8px}.wellness-summary-value{grid-column:1;margin-left:0}.wellness-diagnostics>summary .chevron{grid-column:2;grid-row:1/3}.wellness-coverage-metrics{grid-template-columns:1fr 1fr}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation:none!important;transition:none!important}}

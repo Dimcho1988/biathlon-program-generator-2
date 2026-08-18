@@ -64,11 +64,18 @@ def test_ingests_activity_and_wellness_then_atomically_publishes_aggregate_snaps
     assert payload["training_status"]["athlete_id"] == "pilot"
     assert payload["load_history"]["schema_version"] == "load-history-v1"
     assert payload["recovery_history"]["schema_version"] == "recovery-history-v1"
+    diagnostics = payload["recovery_history"]["wellness_diagnostics"]
+    assert diagnostics["schema_version"] == "wellness-coverage-v1"
+    assert diagnostics["records_received"] == 1
+    assert diagnostics["days_with_any_recognized_data"] == 1
+    assert diagnostics["fields"][0]["field"] == "sleep_duration"
+    assert diagnostics["affects_recovery"] is False
     assert len(payload["load_history"]["daily"]) == 41 * 5
     assert len(payload["load_history"]["activities"]) == 1
     assert len(payload["recovery_history"]["daily"]) == 41 * 5
     rendered = repr(payload)
     assert all(secret not in rendered for secret in ("private-athlete", "private-token", "provider-activity", "must-not-survive"))
+    assert "28800" not in rendered
 
 
 def test_percentage_boundary_clamps_only_floating_point_drift():

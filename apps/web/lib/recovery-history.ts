@@ -8,6 +8,7 @@ export interface RecoveryHistory {
   basis: "load-only";
   wellness_freshness: "fresh" | "stale" | "unknown";
   wellness_coverage_percent: number;
+  wellness_diagnostics?: WellnessCoverageDiagnostics | null;
   model: {
     algorithm_version: string;
     parameter_version: string;
@@ -39,13 +40,66 @@ export interface RecoveryHistory {
   }>;
 }
 
-const rootKeys = ["schema_version", "athlete_id", "period_start", "period_end", "basis", "wellness_freshness", "wellness_coverage_percent", "model", "settings", "current", "daily"];
+export type WellnessCoverageField =
+  | "sleep_duration"
+  | "sleep_score"
+  | "sleep_quality"
+  | "resting_hr"
+  | "average_sleeping_hr"
+  | "hrv"
+  | "hrv_sdnn"
+  | "readiness"
+  | "respiration"
+  | "spo2"
+  | "fatigue"
+  | "stress"
+  | "mood"
+  | "motivation"
+  | "soreness"
+  | "injury";
+
+export interface WellnessCoverageDiagnostics {
+  schema_version: "wellness-coverage-v1";
+  period_start: string;
+  period_end: string;
+  calendar_days: number;
+  records_received: number;
+  days_with_any_recognized_data: number;
+  daily_presence_percent: number;
+  recognized_field_coverage_percent: number;
+  latest_observed_date: string | null;
+  freshness: "fresh" | "stale" | "unknown";
+  fields: Array<{
+    field: WellnessCoverageField;
+    source_fields: string[];
+    present_days: number;
+    valid_days: number;
+    invalid_days: number;
+    coverage_percent: number;
+  }>;
+  unresolved_canonical_inputs: Array<
+    "soreness_legs" | "soreness_upper" | "pain" | "illness"
+  >;
+  model_status: "diagnostic-only";
+  affects_recovery: false;
+}
+
+const legacyRootKeys = ["schema_version", "athlete_id", "period_start", "period_end", "basis", "wellness_freshness", "wellness_coverage_percent", "model", "settings", "current", "daily"];
+const rootKeys = [...legacyRootKeys, "wellness_diagnostics"];
 const modelKeys = ["algorithm_version", "parameter_version", "parameter_fingerprint", "practical_full_recovery_percent"];
 const settingKeys = ["zone", "tref_min", "sensitivity", "tau_days", "fatigue_cap"];
 const currentKeys = ["zone", "readiness_percent", "residual_fatigue", "days_to_practical_recovery"];
 const dailyKeys = ["date", "zone", "readiness_before_percent", "readiness_after_percent", "residual_fatigue_after", "impulse", "effective_load", "tref_min"];
-const percentage = (value: unknown) => finite(value) && value >= 0 && value <= 100;
+const diagnosticsKeys = ["schema_version", "period_start", "period_end", "calendar_days", "records_received", "days_with_any_recognized_data", "daily_presence_percent", "recognized_field_coverage_percent", "latest_observed_date", "freshness", "fields", "unresolved_canonical_inputs", "model_status", "affects_recovery"];
+const coverageFieldKeys = ["field", "source_fields", "present_days", "valid_days", "invalid_days", "coverage_percent"];
+const coverageFields: WellnessCoverageField[] = ["sleep_duration", "sleep_score", "sleep_quality", "resting_hr", "average_sleeping_hr", "hrv", "hrv_sdnn", "readiness", "respiration", "spo2", "fatigue", "stress", "mood", "motivation", "soreness", "injury"];
+const unresolvedInputs = ["soreness_legs", "soreness_upper", "pain", "illness"];
+const percentage = (value: unknown): value is number =>
+  finite(value) && value >= 0 && value <= 100;
 const zoneAt = (value: unknown, index: number) => value === ZONES[index];
+const count = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0;
+const approximately = (left: number, right: number) => Math.abs(left - right) <= 0.011;
 
 function zoneArray<T>(value: unknown, parser: (item: unknown, index: number) => T): T[] {
   if (!Array.isArray(value) || value.length !== ZONES.length) throw new Error("Recovery данните трябва да съдържат точно Z1–Z5.");
@@ -53,7 +107,7 @@ function zoneArray<T>(value: unknown, parser: (item: unknown, index: number) => 
 }
 
 export function parseRecoveryHistory(value: unknown): RecoveryHistory {
-  if (!isRecord(value) || !exactKeys(value, rootKeys)) throw new Error("Невалидна структура на recovery историята.");
+  if (!isRecord(value) || (!exactKeys(value, rootKeys) && !exactKeys(value, legacyRootKeys))) throw new Error("Невалидна структура на recovery историята.");
   if (value.schema_version !== "recovery-history-v1" || value.basis !== "load-only") throw new Error("Неподдържана recovery версия или основа.");
   if (typeof value.athlete_id !== "string" || !value.athlete_id ||
       !isCalendarDate(value.period_start) || !isCalendarDate(value.period_end) || value.period_start > value.period_end ||
@@ -84,5 +138,55 @@ export function parseRecoveryHistory(value: unknown): RecoveryHistory {
         !dailyKeys.slice(4).every((key) => finite(item[key]) && item[key] >= 0)) throw new Error("Невалиден дневен recovery ред.");
     return item as unknown as RecoveryHistory["daily"][number];
   });
-  return { ...value, settings, current, daily } as unknown as RecoveryHistory;
+  let wellnessDiagnostics: WellnessCoverageDiagnostics | null | undefined;
+  if ("wellness_diagnostics" in value) {
+    const diagnostics = value.wellness_diagnostics;
+    if (diagnostics === null) wellnessDiagnostics = null;
+    else {
+      if (!isRecord(diagnostics) || !exactKeys(diagnostics, diagnosticsKeys)) {
+        throw new Error("Невалидна wellness диагностика.");
+      }
+      const rawFields = diagnostics.fields;
+      const rawUnresolved = diagnostics.unresolved_canonical_inputs;
+      const expectedCalendarDays = isCalendarDate(diagnostics.period_start) && isCalendarDate(diagnostics.period_end)
+        ? Math.round((Date.parse(`${diagnostics.period_end}T00:00:00Z`) - Date.parse(`${diagnostics.period_start}T00:00:00Z`)) / 86_400_000) + 1
+        : 0;
+      if (
+          diagnostics.schema_version !== "wellness-coverage-v1" ||
+          !isCalendarDate(diagnostics.period_start) || !isCalendarDate(diagnostics.period_end) || diagnostics.period_start > diagnostics.period_end ||
+          diagnostics.period_start !== value.period_start || diagnostics.period_end !== value.period_end ||
+          !count(diagnostics.calendar_days) || diagnostics.calendar_days === 0 || diagnostics.calendar_days !== expectedCalendarDays ||
+          !count(diagnostics.records_received) || !count(diagnostics.days_with_any_recognized_data) ||
+          diagnostics.days_with_any_recognized_data > diagnostics.calendar_days || diagnostics.records_received < diagnostics.days_with_any_recognized_data ||
+          !percentage(diagnostics.daily_presence_percent) || !percentage(diagnostics.recognized_field_coverage_percent) ||
+          !(diagnostics.latest_observed_date === null || (isCalendarDate(diagnostics.latest_observed_date) && diagnostics.latest_observed_date >= diagnostics.period_start && diagnostics.latest_observed_date <= diagnostics.period_end)) ||
+          !(diagnostics.freshness === "fresh" || diagnostics.freshness === "stale" || diagnostics.freshness === "unknown") ||
+          diagnostics.model_status !== "diagnostic-only" || diagnostics.affects_recovery !== false ||
+          !Array.isArray(rawFields) || rawFields.length !== coverageFields.length ||
+          !Array.isArray(rawUnresolved) || rawUnresolved.length !== unresolvedInputs.length ||
+          !unresolvedInputs.every((input, index) => rawUnresolved[index] === input)) {
+        throw new Error("Невалидна wellness диагностика.");
+      }
+      const calendarDays = diagnostics.calendar_days as number;
+      const daysWithData = diagnostics.days_with_any_recognized_data as number;
+      const dailyPresence = diagnostics.daily_presence_percent as number;
+      const aggregateFieldCoverage = diagnostics.recognized_field_coverage_percent as number;
+      const fields = rawFields.map((item, index) => {
+        if (!isRecord(item) || !exactKeys(item, coverageFieldKeys) || item.field !== coverageFields[index] ||
+            !Array.isArray(item.source_fields) || item.source_fields.length === 0 || !item.source_fields.every((source) => typeof source === "string" && source !== "") ||
+            !count(item.present_days) || !count(item.valid_days) || !count(item.invalid_days) ||
+            item.present_days > calendarDays || item.valid_days + item.invalid_days > item.present_days ||
+            !percentage(item.coverage_percent) || !approximately(item.coverage_percent, 100 * item.valid_days / calendarDays)) throw new Error("Невалидно wellness покритие по поле.");
+        return item as unknown as WellnessCoverageDiagnostics["fields"][number];
+      });
+      const expectedDailyPresence = 100 * daysWithData / calendarDays;
+      const expectedFieldCoverage = 100 * fields.reduce((sum, field) => sum + field.valid_days, 0) / (calendarDays * fields.length);
+      if (!approximately(dailyPresence, expectedDailyPresence) ||
+          !approximately(aggregateFieldCoverage, expectedFieldCoverage)) {
+        throw new Error("Невалидни агрегирани wellness проценти.");
+      }
+      wellnessDiagnostics = { ...diagnostics, fields } as unknown as WellnessCoverageDiagnostics;
+    }
+  }
+  return { ...value, wellness_diagnostics: wellnessDiagnostics, settings, current, daily } as unknown as RecoveryHistory;
 }

@@ -75,9 +75,24 @@ describe("volume-history-v1 contract", () => {
 
 describe("recovery-history-v1 contract", () => {
   it("accepts the canonical recovery fixture", () => expect(parseRecoveryHistory(recoveryHistoryFixture)).toEqual(recoveryHistoryFixture));
+  it("accepts a legacy snapshot without aggregate wellness diagnostics", () => {
+    const legacy = { ...recoveryHistoryFixture };
+    delete legacy.wellness_diagnostics;
+    expect(parseRecoveryHistory(legacy).wellness_diagnostics).toBeUndefined();
+  });
   it("rejects incomplete zones and non-load recovery claims", () => {
     expect(() => parseRecoveryHistory({ ...recoveryHistoryFixture, current: recoveryHistoryFixture.current.slice(0, 4) })).toThrow(/точно Z1–Z5/);
     expect(() => parseRecoveryHistory({ ...recoveryHistoryFixture, basis: "integrated" })).toThrow(/основа/);
+  });
+  it("rejects impossible wellness coverage without accepting raw values", () => {
+    const diagnostics = recoveryHistoryFixture.wellness_diagnostics!;
+    expect(() => parseRecoveryHistory({
+      ...recoveryHistoryFixture,
+      wellness_diagnostics: {
+        ...diagnostics,
+        fields: diagnostics.fields.map((field, index) => index === 0 ? { ...field, coverage_percent: 101 } : field),
+      },
+    })).toThrow(/wellness покритие/);
   });
 });
 
@@ -252,6 +267,10 @@ describe("dashboard", () => {
     expect(html).toContain("Товарно възстановяване");
     expect(html).toContain("Динамика на товарната готовност по зони");
     expect(html).toContain("Load-only резултат");
+    expect(html).toContain("Покритие на wellness данните");
+    expect(html).toContain("32/40 дни");
+    expect(html).toContain("sleepSecs");
+    expect(html).toContain("не се заместват с неутрални стойности");
     expect(html).toContain("Настройки на recovery модела");
     expect(html).toContain("main-load-recovery-v1");
   });
