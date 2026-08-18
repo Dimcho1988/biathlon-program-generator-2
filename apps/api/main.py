@@ -10,7 +10,7 @@ from urllib.parse import quote, urlencode, urlsplit
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from .cloud import AthleteModelSettings, service_token_valid
+from .cloud import AthleteModelSettings, AthletePlanningProfile, service_token_valid
 from .oauth_service import (
     OAuthConfigurationError,
     OAuthFlowError,
@@ -38,6 +38,8 @@ from .real_service import (
 from .schemas import (
     AthleteSettingsInput,
     AthleteSettingsResponse,
+    AthletePlanningProfileInput,
+    AthletePlanningProfileResponse,
     CompletedWorkResponse,
     HealthResponse,
     LoadHistoryResponse,
@@ -378,6 +380,88 @@ def update_athlete_settings(
         configured=True,
         hr_zone_bounds_bpm=settings.zone_bounds_bpm,
         timezone=settings.timezone,
+    )
+
+
+@app.get(
+    "/api/v2/athlete/planning-profile",
+    response_model=AthletePlanningProfileResponse,
+)
+def athlete_planning_profile(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    try:
+        profile = _repository().athlete_planning_profile(
+            _validated_alias(athlete_alias)
+        )
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    if profile is None:
+        return AthletePlanningProfileResponse(configured=False)
+    return AthletePlanningProfileResponse(
+        configured=True,
+        profile=AthletePlanningProfileInput.model_validate(profile.to_payload()),
+    )
+
+
+@app.put(
+    "/api/v2/athlete/planning-profile",
+    response_model=AthletePlanningProfileResponse,
+)
+def update_athlete_planning_profile(
+    body: AthletePlanningProfileInput,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    resolved_alias = _validated_alias(athlete_alias)
+    try:
+        profile = AthletePlanningProfile(
+            schema_version=body.schema_version,
+            season_start=body.season_start,
+            season_end=body.season_end,
+            annual_target_hours=body.annual_target_hours,
+            sessions_per_week=body.sessions_per_week,
+            rest_days=body.rest_days,
+            double_session_days=body.double_session_days,
+            long_session_day=body.long_session_day,
+            intensity_days=body.intensity_days,
+            strength_days=body.strength_days,
+            max_key_sessions_per_week=body.max_key_sessions_per_week,
+            mesocycle_anchor_date=body.mesocycle_anchor_date,
+            mesocycle_length_weeks=body.mesocycle_length_weeks,
+            camp_default_accent_limit=body.camp_default_accent_limit,
+            double_threshold_enabled=body.double_threshold_enabled,
+            double_threshold_day=body.double_threshold_day,
+            double_threshold_components=body.double_threshold_components,
+        ).validate()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail="Planning profile values are inconsistent"
+        ) from exc
+    try:
+        repository = _repository()
+        if repository.athlete_settings(resolved_alias) is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Athlete HR zones and timezone must be configured first",
+            )
+        repository.save_athlete_planning_profile(resolved_alias, profile)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    return AthletePlanningProfileResponse(
+        configured=True,
+        profile=AthletePlanningProfileInput.model_validate(profile.to_payload()),
     )
 
 

@@ -7,7 +7,7 @@ single-profile implementation is deliberately an adapter around an
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import hashlib
 import hmac
 import json
@@ -37,6 +37,194 @@ class AthleteModelSettings:
         except (ZoneInfoNotFoundError, ValueError) as exc:
             raise ValueError("a valid IANA timezone is required") from exc
         return self
+
+
+@dataclass(frozen=True)
+class AthletePlanningProfile:
+    """Athlete-owned planning choices; shared scientific limits stay in code."""
+
+    season_start: date
+    season_end: date
+    annual_target_hours: float
+    sessions_per_week: int
+    rest_days: tuple[int, ...]
+    double_session_days: tuple[int, ...]
+    long_session_day: int
+    intensity_days: tuple[int, ...]
+    strength_days: tuple[int, ...]
+    max_key_sessions_per_week: int
+    mesocycle_anchor_date: date
+    mesocycle_length_weeks: int
+    camp_default_accent_limit: int
+    double_threshold_enabled: bool
+    double_threshold_day: int
+    double_threshold_components: tuple[str, ...]
+    schema_version: str = "planning-profile-v1"
+
+    def validate(self) -> "AthletePlanningProfile":
+        if self.schema_version != "planning-profile-v1":
+            raise ValueError("unsupported planning profile version")
+        if self.season_end <= self.season_start:
+            raise ValueError("season end must be after season start")
+        if not 50.0 <= self.annual_target_hours <= 1500.0:
+            raise ValueError("annual target must be between 50 and 1500 hours")
+
+        weekday_groups = (
+            self.rest_days,
+            self.double_session_days,
+            self.intensity_days,
+            self.strength_days,
+        )
+        if any(
+            len(group) != len(set(group))
+            or any(day < 0 or day > 6 for day in group)
+            for group in weekday_groups
+        ):
+            raise ValueError("weekday lists must contain unique values from 0 to 6")
+        if len(self.rest_days) >= 7:
+            raise ValueError("at least one active weekday is required")
+        max_sessions = 2 * (7 - len(self.rest_days))
+        if not 1 <= self.sessions_per_week <= max_sessions:
+            raise ValueError("session count exceeds the available training days")
+        if not 0 <= self.long_session_day <= 6:
+            raise ValueError("long-session weekday must be between 0 and 6")
+        if not 0 <= self.max_key_sessions_per_week <= 8:
+            raise ValueError("maximum key sessions must be between 0 and 8")
+        if not 2 <= self.mesocycle_length_weeks <= 6:
+            raise ValueError("mesocycle length must be between 2 and 6 weeks")
+        if not 1 <= self.camp_default_accent_limit <= 6:
+            raise ValueError("camp accent limit must be between 1 and 6")
+        if not 0 <= self.double_threshold_day <= 6:
+            raise ValueError("double-threshold weekday must be between 0 and 6")
+        if (
+            not self.double_threshold_components
+            or len(self.double_threshold_components)
+            != len(set(self.double_threshold_components))
+            or any(component not in {"Z3", "Z4"} for component in self.double_threshold_components)
+        ):
+            raise ValueError("double-threshold components must be Z3 and/or Z4")
+        if self.double_threshold_enabled:
+            if self.double_threshold_day in self.rest_days:
+                raise ValueError("double-threshold day cannot be a rest day")
+            if self.max_key_sessions_per_week < 2:
+                raise ValueError("double threshold requires at least two key sessions")
+        return self
+
+    def to_payload(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "schema_version": self.schema_version,
+            "season_start": self.season_start.isoformat(),
+            "season_end": self.season_end.isoformat(),
+            "annual_target_hours": self.annual_target_hours,
+            "sessions_per_week": self.sessions_per_week,
+            "rest_days": list(self.rest_days),
+            "double_session_days": list(self.double_session_days),
+            "long_session_day": self.long_session_day,
+            "intensity_days": list(self.intensity_days),
+            "strength_days": list(self.strength_days),
+            "max_key_sessions_per_week": self.max_key_sessions_per_week,
+            "mesocycle_anchor_date": self.mesocycle_anchor_date.isoformat(),
+            "mesocycle_length_weeks": self.mesocycle_length_weeks,
+            "camp_default_accent_limit": self.camp_default_accent_limit,
+            "double_threshold_enabled": self.double_threshold_enabled,
+            "double_threshold_day": self.double_threshold_day,
+            "double_threshold_components": list(self.double_threshold_components),
+        }
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> "AthletePlanningProfile":
+        expected = {
+            "schema_version",
+            "season_start",
+            "season_end",
+            "annual_target_hours",
+            "sessions_per_week",
+            "rest_days",
+            "double_session_days",
+            "long_session_day",
+            "intensity_days",
+            "strength_days",
+            "max_key_sessions_per_week",
+            "mesocycle_anchor_date",
+            "mesocycle_length_weeks",
+            "camp_default_accent_limit",
+            "double_threshold_enabled",
+            "double_threshold_day",
+            "double_threshold_components",
+        }
+        if set(payload) != expected:
+            raise ValueError("planning profile fields are invalid")
+        integer_fields = {
+            "sessions_per_week",
+            "long_session_day",
+            "max_key_sessions_per_week",
+            "mesocycle_length_weeks",
+            "camp_default_accent_limit",
+            "double_threshold_day",
+        }
+        weekday_fields = {
+            "rest_days",
+            "double_session_days",
+            "intensity_days",
+            "strength_days",
+        }
+        if any(
+            not isinstance(payload[field], int)
+            or isinstance(payload[field], bool)
+            for field in integer_fields
+        ) or any(
+            not isinstance(payload[field], list)
+            or any(
+                not isinstance(day, int) or isinstance(day, bool)
+                for day in payload[field]
+            )
+            for field in weekday_fields
+        ):
+            raise ValueError("planning profile fields are invalid")
+        if (
+            not isinstance(payload["annual_target_hours"], (int, float))
+            or isinstance(payload["annual_target_hours"], bool)
+            or not isinstance(payload["double_threshold_enabled"], bool)
+            or not isinstance(payload["double_threshold_components"], list)
+            or any(
+                not isinstance(component, str)
+                for component in payload["double_threshold_components"]
+            )
+            or not isinstance(payload["season_start"], str)
+            or not isinstance(payload["season_end"], str)
+            or not isinstance(payload["mesocycle_anchor_date"], str)
+        ):
+            raise ValueError("planning profile fields are invalid")
+        try:
+            profile = cls(
+                schema_version=str(payload["schema_version"]),
+                season_start=date.fromisoformat(str(payload["season_start"])),
+                season_end=date.fromisoformat(str(payload["season_end"])),
+                annual_target_hours=float(payload["annual_target_hours"]),
+                sessions_per_week=int(payload["sessions_per_week"]),
+                rest_days=tuple(int(day) for day in payload["rest_days"]),
+                double_session_days=tuple(
+                    int(day) for day in payload["double_session_days"]
+                ),
+                long_session_day=int(payload["long_session_day"]),
+                intensity_days=tuple(int(day) for day in payload["intensity_days"]),
+                strength_days=tuple(int(day) for day in payload["strength_days"]),
+                max_key_sessions_per_week=int(payload["max_key_sessions_per_week"]),
+                mesocycle_anchor_date=date.fromisoformat(
+                    str(payload["mesocycle_anchor_date"])
+                ),
+                mesocycle_length_weeks=int(payload["mesocycle_length_weeks"]),
+                camp_default_accent_limit=int(payload["camp_default_accent_limit"]),
+                double_threshold_enabled=payload["double_threshold_enabled"],
+                double_threshold_day=int(payload["double_threshold_day"]),
+                double_threshold_components=tuple(
+                    str(component) for component in payload["double_threshold_components"]
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("planning profile fields are invalid") from exc
+        return profile.validate()
 
 
 @dataclass(frozen=True)

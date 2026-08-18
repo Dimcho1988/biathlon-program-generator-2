@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import base64
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
 
 from apps.api import oauth_service
+from apps.api.cloud import AthletePlanningProfile
 from apps.api.oauth_service import (
     OAuthFlowError,
     begin_authorization,
@@ -73,6 +74,20 @@ class CapturingClient:
         return httpx.Response(201)
 
 
+class PlanningProfileClient:
+    def __init__(self, payload):
+        self.payload = payload
+        self.saved = None
+        self.url = None
+
+    def request(self, method, url, *, headers, **kwargs):
+        self.url = url
+        if method == "GET":
+            return httpx.Response(200, json=[{"planning_profile": self.payload}])
+        self.saved = kwargs["json"]["planning_profile"]
+        return httpx.Response(204)
+
+
 def test_token_cipher_round_trip_is_bound_to_alias():
     encoded_key = base64.urlsafe_b64encode(bytes(range(32))).decode()
     cipher = TokenCipher(encoded_key)
@@ -108,6 +123,41 @@ def test_supabase_auth_headers_support_current_and_legacy_server_keys(
     )
     assert client.headers["apikey"] == secret_key
     assert client.headers.get("Authorization") == expected_authorization
+
+
+def test_supabase_planning_profile_round_trip_is_scoped_to_alias():
+    profile = AthletePlanningProfile(
+        season_start=date(2026, 1, 1),
+        season_end=date(2026, 12, 31),
+        annual_target_hours=600.0,
+        sessions_per_week=9,
+        rest_days=(0,),
+        double_session_days=(2, 5),
+        long_session_day=6,
+        intensity_days=(2, 5),
+        strength_days=(1, 4),
+        max_key_sessions_per_week=3,
+        mesocycle_anchor_date=date(2026, 1, 1),
+        mesocycle_length_weeks=4,
+        camp_default_accent_limit=2,
+        double_threshold_enabled=False,
+        double_threshold_day=2,
+        double_threshold_components=("Z3", "Z4"),
+    ).validate()
+    client = PlanningProfileClient(profile.to_payload())
+    repository = SupabasePilotRepository(
+        supabase_url="https://project.supabase.co",
+        secret_key="sb_secret_server-key",
+        encryption_key=base64.urlsafe_b64encode(bytes(range(32))).decode(),
+        client=client,
+    )
+
+    assert repository.athlete_planning_profile("ath-profile") == profile
+    assert "athlete_alias=eq.ath-profile" in client.url
+
+    repository.save_athlete_planning_profile("ath-profile", profile)
+    assert client.saved == profile.to_payload()
+    assert "athlete_alias=eq.ath-profile" in client.url
 
 
 def test_oauth_state_is_persisted_consumed_once_and_grant_is_stored(monkeypatch):

@@ -1,9 +1,9 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import math
 from fastapi.testclient import TestClient
 import pytest
 
-from apps.api.cloud import AthleteContext, AthleteModelSettings, InMemorySnapshotRepository, normalize_wellness, service_token_valid
+from apps.api.cloud import AthleteContext, AthleteModelSettings, AthletePlanningProfile, InMemorySnapshotRepository, normalize_wellness, service_token_valid
 from apps.api.hrmod import calculate_hrmod
 from apps.api import main as api_main
 from apps.api.main import app
@@ -23,6 +23,48 @@ def test_athlete_model_settings_require_real_boundaries_and_timezone():
         AthleteModelSettings((100, 120, 140, 140, 180, 200), "Europe/Sofia").validate()
     with pytest.raises(ValueError, match="IANA timezone"):
         AthleteModelSettings((100, 120, 140, 160, 180, 200), "Sofia").validate()
+
+
+def planning_profile(**overrides):
+    values = {
+        "season_start": date(2026, 1, 1),
+        "season_end": date(2026, 12, 31),
+        "annual_target_hours": 600.0,
+        "sessions_per_week": 9,
+        "rest_days": (0,),
+        "double_session_days": (2, 5),
+        "long_session_day": 6,
+        "intensity_days": (2, 5),
+        "strength_days": (1, 4),
+        "max_key_sessions_per_week": 3,
+        "mesocycle_anchor_date": date(2026, 1, 1),
+        "mesocycle_length_weeks": 4,
+        "camp_default_accent_limit": 2,
+        "double_threshold_enabled": False,
+        "double_threshold_day": 2,
+        "double_threshold_components": ("Z3", "Z4"),
+    }
+    values.update(overrides)
+    return AthletePlanningProfile(**values)
+
+
+def test_planning_profile_contains_only_individual_inputs_and_validates_structure():
+    profile = planning_profile().validate()
+    assert profile.to_payload()["schema_version"] == "planning-profile-v1"
+    assert AthletePlanningProfile.from_mapping(profile.to_payload()) == profile
+    assert "double_threshold_min_readiness" not in profile.to_payload()
+    assert "annual_goal_influence" not in profile.to_payload()
+    with pytest.raises(ValueError, match="session count"):
+        planning_profile(sessions_per_week=13, rest_days=(0,)).validate()
+    with pytest.raises(ValueError, match="cannot be a rest day"):
+        planning_profile(
+            double_threshold_enabled=True,
+            double_threshold_day=0,
+        ).validate()
+    with pytest.raises(ValueError, match="fields are invalid"):
+        AthletePlanningProfile.from_mapping(
+            {**profile.to_payload(), "sessions_per_week": True}
+        )
 
 
 def test_wellness_preserves_missing_stale_invalid_and_units():
@@ -131,6 +173,53 @@ def test_athlete_settings_are_scoped_to_the_authenticated_profile(monkeypatch):
     assert saved.status_code == 200
     assert loaded.json() == {"configured": True, **body}
     assert list(repository.items) == ["ath-second-profile"]
+
+
+def test_planning_profile_is_scoped_and_rejects_inconsistent_structure(monkeypatch):
+    class Repository:
+        def __init__(self):
+            self.profiles = {}
+
+        def athlete_settings(self, athlete_alias):
+            return AthleteModelSettings(
+                (100, 120, 140, 160, 180, 200), "Europe/Sofia"
+            )
+
+        def athlete_planning_profile(self, athlete_alias):
+            return self.profiles.get(athlete_alias)
+
+        def save_athlete_planning_profile(self, athlete_alias, profile):
+            self.profiles[athlete_alias] = profile
+
+    repository = Repository()
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
+    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    client = TestClient(app)
+    headers = {
+        "Authorization": "Bearer secret-value",
+        "X-OnFlows-Athlete-Alias": "ath-second-profile",
+    }
+    body = planning_profile().to_payload()
+
+    saved = client.put(
+        "/api/v2/athlete/planning-profile", headers=headers, json=body
+    )
+    loaded = client.get("/api/v2/athlete/planning-profile", headers=headers)
+
+    assert saved.status_code == 200
+    assert loaded.json() == {"configured": True, "profile": body}
+    assert list(repository.profiles) == ["ath-second-profile"]
+
+    invalid = {
+        **body,
+        "double_threshold_enabled": True,
+        "double_threshold_day": 0,
+    }
+    rejected = client.put(
+        "/api/v2/athlete/planning-profile", headers=headers, json=invalid
+    )
+    assert rejected.status_code == 422
+    assert repository.profiles["ath-second-profile"].to_payload() == body
 
 
 def test_login_ticket_is_consumed_through_the_protected_server_boundary(monkeypatch):

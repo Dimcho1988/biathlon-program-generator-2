@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -41,6 +42,31 @@ class AthleteSettingsResponse(StrictModel):
     configured: bool
     hr_zone_bounds_bpm: tuple[int, int, int, int, int, int] | None = None
     timezone: str | None = None
+
+
+class AthletePlanningProfileInput(StrictModel):
+    schema_version: Literal["planning-profile-v1"]
+    season_start: date
+    season_end: date
+    annual_target_hours: float
+    sessions_per_week: int
+    rest_days: tuple[int, ...]
+    double_session_days: tuple[int, ...]
+    long_session_day: int
+    intensity_days: tuple[int, ...]
+    strength_days: tuple[int, ...]
+    max_key_sessions_per_week: int
+    mesocycle_anchor_date: date
+    mesocycle_length_weeks: int
+    camp_default_accent_limit: int
+    double_threshold_enabled: bool
+    double_threshold_day: int
+    double_threshold_components: tuple[Literal["Z3", "Z4"], ...]
+
+
+class AthletePlanningProfileResponse(StrictModel):
+    configured: bool
+    profile: AthletePlanningProfileInput | None = None
 
 
 class ModelMetadata(StrictModel):
