@@ -205,6 +205,7 @@ describe("dashboard", () => {
       retryAvailable
     />);
     expect(html).toContain("Опитай отново");
+    expect(html).toContain("Подготвяме автоматичен повторен опит");
     expect(html).not.toContain("Свържи Intervals");
   });
   it("renders the official logo and accessible theme control without losing content", () => {

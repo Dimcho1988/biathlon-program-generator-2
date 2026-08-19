@@ -1,4 +1,8 @@
-const WAKE_WINDOW_MS = 75_000;
+// Render Free documents an approximately one-minute cold start, but deploys and
+// busy shared capacity can take longer. Keep a generous preview-only window;
+// an already-running API returns on the first probe, so paid instances are not
+// delayed by this safeguard.
+const WAKE_WINDOW_MS = 150_000;
 const PROBE_TIMEOUT_MS = 10_000;
 const RETRY_DELAY_MS = 3_000;
 

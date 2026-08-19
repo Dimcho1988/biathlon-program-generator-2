@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ApiWakeRetry } from "./api-wake-retry";
 
 export function ErrorState({ message, integrationActions = false, connectAvailable = true, retryAvailable = false, refreshAvailable = true, notice }: {
   message: string;
@@ -8,6 +9,7 @@ export function ErrorState({ message, integrationActions = false, connectAvailab
   refreshAvailable?: boolean;
   notice?: string;
 }) {
+  const apiWakeTimedOut = message === "API услугата не се събуди навреме.";
   return (
     <main className="state-page" role="alert">
       <span className="state-icon" aria-hidden="true">!</span>
@@ -20,7 +22,8 @@ export function ErrorState({ message, integrationActions = false, connectAvailab
         {retryAvailable && <Link className="action-button" href="/">Опитай отново</Link>}
         {refreshAvailable && <form action="/api/integrations/intervals/refresh" method="post"><button className="action-button secondary" type="submit">Обнови реалните данни</button></form>}
       </div>}
-      <p className="state-help">Free preview се събужда автоматично. След неактивност изчакайте около минута; не е нужно да свързвате профила отново.</p>
+      {apiWakeTimedOut && <ApiWakeRetry />}
+      <p className="state-help">Free preview се събужда автоматично. При по-бавен старт изчакването може да достигне около две минути; не е нужно да свързвате профила отново.</p>
     </main>
   );
 }

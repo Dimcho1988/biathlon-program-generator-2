@@ -36,7 +36,7 @@ uvicorn apps.api.main:app --reload
 ONFLOWS_API_BASE_URL=http://127.0.0.1:8000 npm run dev
 ```
 
-When fixture mode is not explicitly selected, `ONFLOWS_API_BASE_URL` is required. The server fetches the configured API resource with an eight-second timeout. Request, HTTP, JSON, and contract-validation failures render an error and never fall back to the fixture.
+When fixture mode is not explicitly selected, `ONFLOWS_API_BASE_URL` is required. The server allows up to 150 seconds for a sleeping preview API to become healthy, then applies a separate 75-second resource timeout. A wake timeout renders a bounded automatic retry on the same page; request, HTTP, JSON, and contract-validation failures never fall back to the fixture.
 
 ## Environment variables
 
