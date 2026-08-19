@@ -7,6 +7,7 @@ const decimal = (value: number) => number.format(value);
 const date = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "2-digit", month: "short", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
 
 const zoneStyle = (zone: Zone): CSSProperties => ({ "--series": `var(--zone-${ZONES.indexOf(zone) + 1})` } as CSSProperties);
+const strengthStyle = { "--series": "var(--strength)" } as CSSProperties;
 
 function SevenFortyChart({ rows }: { rows: DailyZoneLoad[] }) {
   const dates = [...new Set(rows.map((row) => row.date))];
@@ -117,6 +118,28 @@ export function LoadHistorySection({ history, message }: { history: LoadHistory 
         </article>)}
       </div>
 
+      {history.strength && <div className="strength-load-panel" style={strengthStyle}>
+        <div className="history-chart-heading">
+          <div><p className="section-kicker">Intervals · реална продължителност</p><h3>Силова тренировка</h3></div>
+          <p>Всички изрично разпознати силови активности влизат в един общ компонент STR. Пулсовите им минути не се добавят към Z1–Z5.</p>
+        </div>
+        <div className="load-summary strength-summary" role="list" aria-label="Текущо силово натоварване">
+          <article className="load-summary-card" style={strengthStyle} role="listitem">
+            <div><span className="summary-zone">STR</span><strong>{decimal(history.strength.summary.status_7_40)}</strong><small>7/40</small></div>
+            <dl>
+              <div><dt>Последни 7 дни</dt><dd>{decimal(history.strength.summary.real_time_7d_min)} мин</dd></div>
+              <div><dt>Последни 40 дни</dt><dd>{decimal(history.strength.summary.real_time_40d_min)} мин</dd></div>
+              <div><dt>Записани тренировки</dt><dd>{history.strength.summary.recorded_activities}</dd></div>
+              <div><dt>Tref</dt><dd>{decimal(history.strength.summary.tref_min)} мин</dd></div>
+            </dl>
+          </article>
+          <div className="strength-method-note">
+            <strong>Коефициент {decimal(history.strength.model.equivalent_time_coefficient)}</strong>
+            <p>Една записана минута е една STR минута. Моделът не предполага разновидност на силата и не използва името на активността за класификация.</p>
+          </div>
+        </div>
+      </div>}
+
       <SevenFortyChart rows={history.daily} />
 
       <EffectiveLoadChart rows={history.daily} />
@@ -127,15 +150,15 @@ export function LoadHistorySection({ history, message }: { history: LoadHistory 
           <summary>
             <span><strong>{activity.sport}</strong><small>{date(activity.date)}</small></span>
             <span>{activity.duration_min === null ? "—" : `${decimal(activity.duration_min)} мин`}</span>
-            <span className={activity.quality_status === "limited" ? "quality-limited" : "quality-valid"}>{decimal(activity.hr_coverage_percent)}% HR</span>
+            <span className={activity.quality_status === "limited" ? "quality-limited" : "quality-valid"}>{activity.strength_time_min > 0 ? "STR · без двойно HR" : `${decimal(activity.hr_coverage_percent)}% HR`}</span>
             <span className="chevron" aria-hidden="true">⌄</span>
           </summary>
-          <div className="activity-table-wrap"><table>
+          {activity.strength_time_min > 0 ? <div className="strength-activity-detail"><strong>STR</strong><span>{decimal(activity.strength_time_min)} реални мин</span><span>{decimal(activity.strength_time_min)} приравнени мин</span><small>Коефициент 1,0 · Z1–Z5 = 0</small></div> : <div className="activity-table-wrap"><table>
             <thead><tr><th>Зона</th><th>Реално</th><th>Приравнено</th><th>Ефективно E</th><th>Среден HR</th><th>Стойност/мин</th></tr></thead>
             <tbody>{activity.zones.map((zone) => <tr key={zone.zone}>
               <th>{zone.zone}</th><td>{decimal(zone.raw_time_min)} мин</td><td>{decimal(zone.equivalent_time_min)} мин</td><td>{decimal(zone.effective_load)}</td><td>{zone.mean_effective_hr_bpm === null ? "—" : `${decimal(zone.mean_effective_hr_bpm)} bpm`}</td><td>{zone.average_minute_value_percent === null ? "—" : `${decimal(zone.average_minute_value_percent)}%`}</td>
             </tr>)}</tbody>
-          </table></div>
+          </table></div>}
         </details>)}
       </div>
     </section>

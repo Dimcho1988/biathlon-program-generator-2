@@ -56,9 +56,24 @@ from intervals_inspector.stream_normalizer import (
 REAL_DATA_SOURCE = "intervals"
 DEMO_DATA_SOURCE = "demo"
 DATA_SOURCE_VALUES = (DEMO_DATA_SOURCE, REAL_DATA_SOURCE)
-REAL_HISTORY_SCHEMA_VERSION = "onflows-real-history-dataset-v3-equivalent-time"
+REAL_HISTORY_SCHEMA_VERSION = "onflows-real-history-dataset-v4-strength-duration"
 RECOVERY_MODEL_VERSION = (
     f"main-load-recovery-v{MAIN_MODEL_VERSION}-equivalent-time-fixed-tref"
+)
+STRENGTH_ACTIVITY_CLASSIFICATION_VERSION = "intervals-strength-activity-type-v1"
+STRENGTH_DURATION_COEFFICIENT = 1.0
+# Intervals currently publishes WeightTraining as the canonical activity type.
+# The remaining entries are conservative semantic aliases used by upstream
+# devices; generic Workout, HIIT, Crossfit, Yoga and Pilates stay excluded
+# because their label alone does not prove that the activity is strength work.
+_STRENGTH_ACTIVITY_TYPES = frozenset(
+    {
+        "weighttraining",
+        "strengthtraining",
+        "functionalstrengthtraining",
+        "traditionalstrengthtraining",
+        "coretraining",
+    }
 )
 DEFAULT_HISTORY_DAYS = 90
 MIN_HISTORY_DAYS = 41
@@ -91,6 +106,8 @@ class RealHistoryDataset:
     profile_level: str
     recovery_model_version: str
     parameter_fingerprint: str
+    strength_classification_version: str
+    strength_duration_coefficient: float
     activities: pd.DataFrame
     activity_zones: pd.DataFrame
     daily_zones: pd.DataFrame
@@ -188,6 +205,8 @@ def build_history_cache_key(
         "tref_bounds_profile_version": configuration.tref_bounds_profile_version,
         "recovery_model_version": RECOVERY_MODEL_VERSION,
         "parameter_fingerprint": parameter_fingerprint,
+        "strength_classification_version": STRENGTH_ACTIVITY_CLASSIFICATION_VERSION,
+        "strength_duration_coefficient": STRENGTH_DURATION_COEFFICIENT,
     }
     rendered = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
@@ -249,12 +268,46 @@ def _safe_sport(metadata: Mapping[str, Any]) -> str:
     return rendered[:40] or "Активност"
 
 
+def _normalised_activity_type(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+
+
+def is_strength_activity(detail: Mapping[str, Any]) -> bool:
+    """Classify only explicit strength labels; never infer from HR or names."""
+
+    return any(
+        _normalised_activity_type(detail.get(field)) in _STRENGTH_ACTIVITY_TYPES
+        for field in ("type", "sub_type", "sport")
+    )
+
+
+def _activity_duration_seconds(
+    detail: Mapping[str, Any], *, strength_activity: bool
+) -> float | None:
+    """Select the provider duration appropriate for the activity semantics."""
+
+    fields = (
+        ("icu_recording_time", "elapsed_time", "moving_time")
+        if strength_activity
+        else ("moving_time", "icu_recording_time", "elapsed_time")
+    )
+    for field in fields:
+        value = detail.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        rendered = float(value)
+        if math.isfinite(rendered) and rendered > 0.0:
+            return rendered
+    return None
+
+
 def _activity_columns() -> list[str]:
     return [
         "activity_ref",
         "date",
         "sport",
         "duration_min",
+        "strength_time_min",
         "quality_status",
         "status_reason",
         "hr_coverage_percent",
@@ -378,6 +431,7 @@ def load_real_history(
         }
         day_reference_rows: list[Mapping[str, Any]] | None = None
         day_statuses: list[str] = []
+        day_strength_time_min = 0.0
 
         for provider_id in day_provider_ids:
             activity_ordinal += 1
@@ -386,24 +440,33 @@ def load_real_history(
                 detail = _response_payload(
                     client.get_activity_result(provider_id, include_intervals=False)
                 )
-                streams = _response_payload(client.get_streams_result(provider_id))
                 if not isinstance(detail, Mapping):
                     raise TypeError("activity detail is not a mapping")
                 if _activity_date(detail) != current_day:
                     raise ValueError("activity date does not match the history day")
-                summary = process_activity_payloads(
-                    detail,
-                    streams,
-                    include_1hz_preview=False,
-                    profile=profile,
-                    experimental_configuration=selected_configuration,
-                    prior_baseline_effective_load=(
-                        prior_baseline_effective_load
-                    ),
-                    prior_experimental_effective_load=(
-                        prior_experimental_effective_load
-                    ),
+                strength_activity = is_strength_activity(detail)
+                duration_seconds = _activity_duration_seconds(
+                    detail, strength_activity=strength_activity
                 )
+                if strength_activity:
+                    summary = None
+                else:
+                    streams = _response_payload(
+                        client.get_streams_result(provider_id)
+                    )
+                    summary = process_activity_payloads(
+                        detail,
+                        streams,
+                        include_1hz_preview=False,
+                        profile=profile,
+                        experimental_configuration=selected_configuration,
+                        prior_baseline_effective_load=(
+                            prior_baseline_effective_load
+                        ),
+                        prior_experimental_effective_load=(
+                            prior_experimental_effective_load
+                        ),
+                    )
             except Exception:
                 processed += 1
                 excluded += 1
@@ -414,6 +477,7 @@ def load_real_history(
                         "date": pd.Timestamp(current_day),
                         "sport": "Активност",
                         "duration_min": None,
+                        "strength_time_min": 0.0,
                         "quality_status": "excluded",
                         "status_reason": "API или обработката не завърши безопасно.",
                         "hr_coverage_percent": 0.0,
@@ -425,30 +489,58 @@ def load_real_history(
                 continue
 
             processed += 1
-            metadata = summary.get("activity_metadata", {})
-            model_status = summary.get("model_status", {})
-            status = str(model_status.get("status") or "not_run")
-            if status == "not_run":
-                status = "excluded"
-                excluded += 1
-            elif status == "limited":
-                limited += 1
-            elif status != "valid":
-                status = "excluded"
-                excluded += 1
+            if strength_activity:
+                metadata = {
+                    "sport": detail.get("type")
+                    or detail.get("sub_type")
+                    or detail.get("sport")
+                }
+                model_status = {
+                    "status": "valid" if duration_seconds is not None else "excluded",
+                    "reason": (
+                        "Силова активност: използвана е записаната продължителност; "
+                        "HR зоните не участват."
+                        if duration_seconds is not None
+                        else "Силовата активност няма използваема продължителност."
+                    ),
+                }
+                status = str(model_status["status"])
+                if status == "excluded":
+                    excluded += 1
+            else:
+                assert isinstance(summary, Mapping)
+                metadata = summary.get("activity_metadata", {})
+                model_status = summary.get("model_status", {})
+                status = str(model_status.get("status") or "not_run")
+                if status == "not_run":
+                    status = "excluded"
+                    excluded += 1
+                elif status == "limited":
+                    limited += 1
+                elif status != "valid":
+                    status = "excluded"
+                    excluded += 1
             day_statuses.append(status)
-            onflows = summary.get("onflows_load_analysis", {})
+            onflows = (
+                summary.get("onflows_load_analysis", {})
+                if isinstance(summary, Mapping)
+                else {}
+            )
             coverage = _finite_non_negative(
                 onflows.get("hr_coverage_percent")
                 if isinstance(onflows, Mapping)
                 else 0.0
             )
-            duration_seconds = (
-                metadata.get("moving_time_sec")
-                or metadata.get("recording_time_sec")
-                or metadata.get("elapsed_time_sec")
-                if isinstance(metadata, Mapping)
-                else None
+            if not strength_activity and isinstance(metadata, Mapping):
+                duration_seconds = (
+                    metadata.get("moving_time_sec")
+                    or metadata.get("recording_time_sec")
+                    or metadata.get("elapsed_time_sec")
+                )
+            strength_time_min = (
+                _finite_non_negative(duration_seconds) / 60.0
+                if strength_activity and duration_seconds is not None
+                else 0.0
             )
             activity_records.append(
                 {
@@ -460,6 +552,7 @@ def load_real_history(
                         if duration_seconds is not None
                         else None
                     ),
+                    "strength_time_min": strength_time_min,
                     "quality_status": status,
                     "status_reason": str(model_status.get("reason") or ""),
                     "hr_coverage_percent": coverage,
@@ -470,6 +563,63 @@ def load_real_history(
                     ),
                 }
             )
+            if status != "excluded" and strength_activity:
+                day_strength_time_min += strength_time_min
+                if day_reference_rows is None:
+                    day_reference_rows = _model_rows(
+                        calculate_shadow_result(
+                            _empty_intrazone_analysis(selected_configuration),
+                            selected_configuration,
+                            prior_daily_effective_load=(
+                                prior_experimental_effective_load
+                            ),
+                            activity_date=current_day,
+                        )
+                    )
+                reference_by_zone = {
+                    str(row.get("zone")): row for row in day_reference_rows
+                }
+                for zone in AEROBIC_COMPONENTS:
+                    reference = reference_by_zone.get(zone, {})
+                    activity_zone_records.append(
+                        {
+                            "activity_ref": activity_ref,
+                            "date": pd.Timestamp(current_day),
+                            "zone": zone,
+                            "T_z": 0.0,
+                            "T_eq_z": 0.0,
+                            "mean_effective_hr_bpm": None,
+                            "average_minute_value_percent": None,
+                            "direct_ratio": 0.0,
+                            "cascade": 0.0,
+                            "spillover": 0.0,
+                            "E_z": 0.0,
+                            "tref_raw": _finite_non_negative(
+                                reference.get("tref_raw")
+                            ),
+                            "tref_effective": _finite_non_negative(
+                                reference.get("tref_effective")
+                            ),
+                            "tref_history_value": (
+                                _finite_non_negative(
+                                    reference.get("tref_history_value")
+                                )
+                                if reference.get("tref_history_value") is not None
+                                else None
+                            ),
+                            "tref_source": str(
+                                reference.get("tref_source")
+                                or "initial expert setting"
+                            ),
+                            "tref_history_days": int(
+                                _finite_non_negative(
+                                    reference.get("tref_history_days")
+                                )
+                            ),
+                            "quality_status": status,
+                        }
+                    )
+                continue
             comparison = summary.get("shadow_model_comparison")
             baseline_rows = _model_rows(
                 comparison.get("baseline") if isinstance(comparison, Mapping) else None
@@ -643,6 +793,13 @@ def load_real_history(
                     "quality_status": day_status,
                 }
             )
+        load_row["q_STR"] = (
+            day_strength_time_min * STRENGTH_DURATION_COEFFICIENT
+        )
+        load_row["e_STR"] = load_row["q_STR"]
+        load_row["tref_used_STR"] = 7.0 * float(
+            parameters["base_loads"]["STR"]
+        )
         daily_load_records.append(load_row)
         prior_baseline_effective_load.append(baseline_history_row)
         prior_experimental_effective_load.append(experimental_history_row)
@@ -655,18 +812,10 @@ def load_real_history(
         daily_zone_records, columns=_zone_columns(daily=True)
     )
     daily_loads = pd.DataFrame(daily_load_records).set_index("date").sort_index()
-    # The unchanged main functions currently require every main component.
-    # Add STR only to this transient adapter input, then remove it from every
-    # published result: HR history provides no real strength observation.
     main_model_input = daily_loads.copy()
-    main_model_input["q_STR"] = 0.0
-    main_model_input["e_STR"] = 0.0
-    main_model_input["tref_used_STR"] = 7.0 * float(
-        parameters["base_loads"]["STR"]
-    )
     load_stats = compute_load_statistics(
         main_model_input, dict(parameters), as_of=end
-    ).loc[list(AEROBIC_COMPONENTS)]
+    ).loc[list(COMPONENTS)]
     latest_tref = (
         daily_zones_frame.loc[
             daily_zones_frame["date"] == pd.Timestamp(end)
@@ -674,18 +823,24 @@ def load_real_history(
         .set_index("zone")
     )
     load_stats["Tref"] = latest_tref["tref_effective"].reindex(
-        load_stats.index
+        AEROBIC_COMPONENTS
+    )
+    load_stats.loc["STR", "Tref"] = 7.0 * float(
+        parameters["base_loads"]["STR"]
     )
     load_stats["reliability"] = (
-        latest_tref["tref_history_days"].reindex(load_stats.index).astype(float)
-        / float(HISTORY_WINDOW_DAYS)
-    ).clip(upper=1.0)
+        min(1.0, len(daily_loads) / float(HISTORY_WINDOW_DAYS))
+    )
+    load_stats.loc[list(AEROBIC_COMPONENTS), "reliability"] = (
+        latest_tref["tref_history_days"]
+        .reindex(AEROBIC_COMPONENTS)
+        .astype(float)
+        .div(float(HISTORY_WINDOW_DAYS))
+        .clip(upper=1.0)
+    )
     rolling_load = rolling_load_statistics(
         main_model_input, dict(parameters)
     )
-    rolling_load = rolling_load.loc[
-        rolling_load["component"].isin(AEROBIC_COMPONENTS)
-    ].reset_index(drop=True)
     rolling_tref = daily_zones_frame[
         ["date", "zone", "tref_effective"]
     ].rename(columns={"zone": "component", "tref_effective": "fixed_Tref"})
@@ -695,20 +850,23 @@ def load_real_history(
         how="left",
         validate="one_to_one",
     )
-    rolling_load["Tref"] = rolling_load.pop("fixed_Tref")
+    rolling_load["Tref"] = rolling_load["fixed_Tref"].fillna(
+        rolling_load["Tref"]
+    )
+    rolling_load.loc[
+        rolling_load["component"] == "STR", "Tref"
+    ] = 7.0 * float(parameters["base_loads"]["STR"])
+    rolling_load = rolling_load.drop(columns="fixed_Tref")
     readiness_history = compute_readiness_history(
         main_model_input,
         dict(parameters),
         use_supplied_tref=True,
     )
-    readiness_history = readiness_history.loc[
-        readiness_history["component"].isin(AEROBIC_COMPONENTS)
-    ].reset_index(drop=True)
     load_readiness = current_readiness(
         readiness_history,
         dict(parameters),
         target_date=end,
-    ).loc[list(AEROBIC_COMPONENTS)]
+    ).loc[list(COMPONENTS)]
 
     if invalid_list_entries:
         warnings.append(
@@ -754,6 +912,8 @@ def load_real_history(
         profile_level=selected_configuration.profile_level,
         recovery_model_version=RECOVERY_MODEL_VERSION,
         parameter_fingerprint=parameter_fingerprint,
+        strength_classification_version=STRENGTH_ACTIVITY_CLASSIFICATION_VERSION,
+        strength_duration_coefficient=STRENGTH_DURATION_COEFFICIENT,
         activities=activities_frame,
         activity_zones=activity_zones_frame,
         daily_zones=daily_zones_frame,

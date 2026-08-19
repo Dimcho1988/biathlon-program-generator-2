@@ -55,6 +55,25 @@ class Client:
         return IntervalsResponse(200, [{"type": "time", "data": list(range(61))}, {"type": "heartrate", "data": [145.0] * 61}])
 
 
+class StrengthClient(Client):
+    def get_activity_result(self, activity_id, *, include_intervals=False):
+        return IntervalsResponse(
+            200,
+            {
+                "id": activity_id,
+                "start_date_local": "2026-08-15T08:00:00",
+                "type": "WeightTraining",
+                "moving_time": 600,
+                "elapsed_time": 2100,
+                "icu_recording_time": 1800,
+                "recording_stops": [],
+            },
+        )
+
+    def get_streams_result(self, activity_id):
+        raise AssertionError("strength activities must not request or use HR streams")
+
+
 def test_ingests_activity_and_wellness_then_atomically_publishes_aggregate_snapshot():
     repo = InMemorySnapshotRepository()
     result = refresh(repo, environ=ENV, client=Client(), period_end=date(2026, 8, 15), now=datetime(2026, 8, 15, 12, tzinfo=timezone.utc))
@@ -76,6 +95,38 @@ def test_ingests_activity_and_wellness_then_atomically_publishes_aggregate_snaps
     rendered = repr(payload)
     assert all(secret not in rendered for secret in ("private-athlete", "private-token", "provider-activity", "must-not-survive"))
     assert "28800" not in rendered
+
+
+def test_strength_activity_is_persisted_as_one_str_component_without_hr_double_counting():
+    repo = InMemorySnapshotRepository()
+    refresh(
+        repo,
+        environ=ENV,
+        client=StrengthClient(),
+        period_end=date(2026, 8, 15),
+    )
+    payload = repo.latest("pilot")
+    history = payload["load_history"]
+    strength = history["strength"]
+    assert strength["model"] == {
+        "classification_version": "intervals-strength-activity-type-v1",
+        "source": "intervals-activity-type-duration",
+        "duration_basis": "recording-time-first",
+        "equivalent_time_coefficient": 1.0,
+        "aerobic_hr_counted": False,
+    }
+    assert strength["summary"]["recorded_activities"] == 1
+    assert strength["summary"]["real_time_7d_min"] == pytest.approx(30.0)
+    activity = history["activities"][0]
+    assert activity["sport"] == "WeightTraining"
+    assert activity["duration_min"] == pytest.approx(30.0)
+    assert activity["strength_time_min"] == pytest.approx(30.0)
+    assert activity["hr_coverage_percent"] == 0.0
+    assert sum(row["raw_time_min"] for row in activity["zones"]) == 0.0
+    recovery = payload["recovery_history"]["strength"]
+    assert recovery["settings"]["tref_min"] == pytest.approx(56.0)
+    assert recovery["current"]["readiness_percent"] < 100.0
+    assert payload["training_status"]["data_quality"]["latest_activity_quality_score"] is None
 
 
 def test_percentage_boundary_clamps_only_floating_point_drift():

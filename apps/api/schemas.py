@@ -225,9 +225,45 @@ class LoadHistoryActivity(StrictModel):
     date: str
     sport: str
     duration_min: float | None
+    strength_time_min: float = 0.0
     quality_status: Literal["valid", "limited"]
     hr_coverage_percent: float
     zones: list[ActivityZoneLoad]
+
+
+class StrengthLoadModel(StrictModel):
+    classification_version: str
+    source: Literal["intervals-activity-type-duration"]
+    duration_basis: Literal["recording-time-first"]
+    equivalent_time_coefficient: float
+    aerobic_hr_counted: Literal[False]
+
+
+class StrengthLoadSummary(StrictModel):
+    recorded_activities: int
+    real_time_7d_min: float
+    real_time_40d_min: float
+    e7_daily: float
+    e40_daily: float
+    status_7_40: float
+    tref_min: float
+    history_reliability: float
+
+
+class DailyStrengthLoad(StrictModel):
+    date: str
+    real_time_min: float
+    equivalent_time_min: float
+    effective_load: float
+    e7_daily: float
+    e40_daily: float
+    status_7_40: float
+
+
+class StrengthLoadHistory(StrictModel):
+    model: StrengthLoadModel
+    summary: StrengthLoadSummary
+    daily: list[DailyStrengthLoad]
 
 
 class LoadHistoryResponse(StrictModel):
@@ -239,6 +275,7 @@ class LoadHistoryResponse(StrictModel):
     zones: list[ZoneLoadSummary]
     daily: list[DailyZoneLoad]
     activities: list[LoadHistoryActivity]
+    strength: StrengthLoadHistory | None = None
 
 
 class CompletedWorkMetadata(StrictModel):
@@ -351,6 +388,35 @@ class DailyRecovery(StrictModel):
     tref_min: float
 
 
+class RecoveryStrengthSettings(StrictModel):
+    tref_min: float
+    sensitivity: float
+    tau_days: float
+    fatigue_cap: float
+
+
+class RecoveryStrengthCurrent(StrictModel):
+    readiness_percent: float
+    residual_fatigue: float
+    days_to_practical_recovery: float
+
+
+class DailyStrengthRecovery(StrictModel):
+    date: str
+    readiness_before_percent: float
+    readiness_after_percent: float
+    residual_fatigue_after: float
+    impulse: float
+    effective_load: float
+    tref_min: float
+
+
+class RecoveryStrengthHistory(StrictModel):
+    settings: RecoveryStrengthSettings
+    current: RecoveryStrengthCurrent
+    daily: list[DailyStrengthRecovery]
+
+
 class WellnessFieldCoverage(StrictModel):
     field: Literal[
         "sleep_duration",
@@ -409,6 +475,7 @@ class RecoveryHistoryResponse(StrictModel):
     settings: list[RecoveryZoneSettings]
     current: list[RecoveryZoneCurrent]
     daily: list[DailyRecovery]
+    strength: RecoveryStrengthHistory | None = None
 
 
 class AthleteSnapshot(StrictModel):

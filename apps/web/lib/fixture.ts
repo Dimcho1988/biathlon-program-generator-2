@@ -72,6 +72,7 @@ export const loadHistoryFixture: LoadHistory = {
       date: "2026-06-20",
       sport: "NordicSki",
       duration_min: 51,
+      strength_time_min: 0,
       quality_status: "valid",
       hr_coverage_percent: 96,
       zones: trainingStatusFixture.zones.map((zone) => ({
@@ -88,6 +89,7 @@ export const loadHistoryFixture: LoadHistory = {
       date: "2026-06-18",
       sport: "Run",
       duration_min: 42,
+      strength_time_min: 0,
       quality_status: "limited",
       hr_coverage_percent: 88.4,
       zones: trainingStatusFixture.zones.map((zone, index) => ({
@@ -99,7 +101,55 @@ export const loadHistoryFixture: LoadHistory = {
         average_minute_value_percent: index === 0 ? 80 : index === 1 ? 72.9 : null,
       })),
     },
+    {
+      activity_ref: "activity-strength-001",
+      date: "2026-06-17",
+      sport: "WeightTraining",
+      duration_min: 35,
+      strength_time_min: 35,
+      quality_status: "valid",
+      hr_coverage_percent: 0,
+      zones: trainingStatusFixture.zones.map((zone) => ({
+        zone: zone.zone,
+        raw_time_min: 0,
+        equivalent_time_min: 0,
+        effective_load: 0,
+        mean_effective_hr_bpm: null,
+        average_minute_value_percent: null,
+      })),
+    },
   ],
+  strength: {
+    model: {
+      classification_version: "intervals-strength-activity-type-v1",
+      source: "intervals-activity-type-duration",
+      duration_basis: "recording-time-first",
+      equivalent_time_coefficient: 1,
+      aerobic_hr_counted: false,
+    },
+    summary: {
+      recorded_activities: 4,
+      real_time_7d_min: 35,
+      real_time_40d_min: 155,
+      e7_daily: 5,
+      e40_daily: 3.875,
+      status_7_40: 1.08,
+      tref_min: 56,
+      history_reliability: 1,
+    },
+    daily: fixtureDates.map((day, dayIndex) => {
+      const real = dayIndex % 10 === 2 ? 35 : 0;
+      return {
+        date: day,
+        real_time_min: real,
+        equivalent_time_min: real,
+        effective_load: real,
+        e7_daily: dayIndex > 32 ? 5 : 3.5,
+        e40_daily: 3.875,
+        status_7_40: dayIndex > 32 ? 1.08 : 0.98,
+      };
+    }),
+  },
 };
 
 export const completedWorkFixture: CompletedWork = {
@@ -234,4 +284,30 @@ export const recoveryHistoryFixture: RecoveryHistory = {
       tref_min: zone.tref_min,
     };
   })),
+  strength: {
+    settings: {
+      tref_min: 56,
+      sensitivity: 0.95,
+      tau_days: 1.7,
+      fatigue_cap: 150,
+    },
+    current: {
+      readiness_percent: 84,
+      residual_fatigue: 16,
+      days_to_practical_recovery: 0.9,
+    },
+    daily: fixtureDates.map((day, dayIndex) => {
+      const impulse = loadHistoryFixture.strength?.daily[dayIndex].effective_load ?? 0;
+      const readinessAfter = Math.max(0, 96 - impulse * 0.8);
+      return {
+        date: day,
+        readiness_before_percent: Math.min(100, readinessAfter + impulse),
+        readiness_after_percent: readinessAfter,
+        residual_fatigue_after: 100 - readinessAfter,
+        impulse,
+        effective_load: impulse,
+        tref_min: 56,
+      };
+    }),
+  },
 };

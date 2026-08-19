@@ -121,6 +121,24 @@ MAPPING_SPECS: tuple[MappingSpec, ...] = (
         "Derived from 1 Hz moving HR samples and the matching sport zones.",
     ),
     MappingSpec(
+        "real_STR",
+        (
+            _require("activities", "type", "sub_type"),
+            _require(
+                "activities",
+                "icu_recording_time",
+                "elapsed_time",
+                "moving_time",
+            ),
+        ),
+        "derived",
+        ("load_model", "strength_model"),
+        (
+            "Explicit strength activity labels map to one STR component; "
+            "recording duration is preferred and HR zones are excluded."
+        ),
+    ),
+    MappingSpec(
         "sleep_quality",
         (_require("wellness", "sleepQuality", "sleepScore"),),
         "direct",
@@ -243,8 +261,11 @@ MAPPING_SPECS: tuple[MappingSpec, ...] = (
         "strength_subtype",
         (_require("manual", "strength_subtype"),),
         "manual",
-        ("strength_model",),
-        "Intervals activity type does not identify the four onFlows subtypes.",
+        ("future_strength_subtype_model",),
+        (
+            "Reserved for a later detailed model; the active first version "
+            "uses one generic STR component without manual subtype entry."
+        ),
     ),
     MappingSpec(
         "planning_preferences",

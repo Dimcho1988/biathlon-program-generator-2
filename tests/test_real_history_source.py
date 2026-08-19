@@ -18,6 +18,7 @@ from intervals_inspector.real_data_source import (
     load_real_history,
     recovery_parameter_fingerprint,
     resolve_real_dataset,
+    is_strength_activity,
     validate_data_source,
 )
 from intervals_inspector.shadow_model import (
@@ -76,6 +77,15 @@ class SyntheticHistoryClient:
     ) -> IntervalsResponse:
         assert include_intervals is False
         detail = _activity_detail(activity_id, self.specs[activity_id]["date"])
+        for field in (
+            "type",
+            "sub_type",
+            "elapsed_time",
+            "moving_time",
+            "icu_recording_time",
+        ):
+            if field in self.specs[activity_id]:
+                detail[field] = self.specs[activity_id][field]
         detail["recording_stops"] = self.specs[activity_id].get(
             "recording_stops", []
         )
@@ -238,9 +248,10 @@ def test_ninety_day_history_builds_one_shared_load_and_recovery_dataset() -> Non
     assert dataset.period_start == start.isoformat()
     assert dataset.period_end == end.isoformat()
     assert len(dataset.daily_loads) == 90
-    assert not any(column.endswith("_STR") for column in dataset.daily_loads)
-    assert set(dataset.load_stats.index) == {"Z1", "Z2", "Z3", "Z4", "Z5"}
-    assert set(dataset.load_readiness.index) == {"Z1", "Z2", "Z3", "Z4", "Z5"}
+    assert {"q_STR", "e_STR", "tref_used_STR"} <= set(dataset.daily_loads)
+    assert dataset.daily_loads["q_STR"].eq(0.0).all()
+    assert set(dataset.load_stats.index) == {"Z1", "Z2", "Z3", "Z4", "Z5", "STR"}
+    assert set(dataset.load_readiness.index) == {"Z1", "Z2", "Z3", "Z4", "Z5", "STR"}
     assert len(dataset.daily_zones) == 90 * 5
     assert dataset.processed_activities == len(_specs(start, 90))
     assert dataset.limited_activities == 1
@@ -308,6 +319,71 @@ def test_ninety_day_history_builds_one_shared_load_and_recovery_dataset() -> Non
         build_real_recovery_view(dataset)["readiness_history"]
         is dataset.readiness_history
     )
+
+
+def test_strength_activity_uses_recording_duration_and_never_hr_zones() -> None:
+    end = date(2026, 8, 8)
+    start = end - timedelta(days=40)
+    strength_day = end - timedelta(days=2)
+    specs = {
+        "strength": {
+            "date": strength_day,
+            "type": "WeightTraining",
+            "moving_time": 600,
+            "icu_recording_time": 1800,
+            "elapsed_time": 2100,
+            "hr": [175.0] * 61,
+        },
+        "run": {"date": end, "type": "Run", "hr": [145.0] * 61},
+    }
+
+    dataset = load_real_history(
+        SyntheticHistoryClient(specs),
+        profile_identifier="athlete-strength",
+        session_salt="session-salt",
+        parameters=_parameters(),
+        period_end=end,
+        days=41,
+    )
+
+    activity = dataset.activities.loc[
+        dataset.activities["sport"] == "WeightTraining"
+    ].iloc[0]
+    assert activity["duration_min"] == pytest.approx(30.0)
+    assert activity["strength_time_min"] == pytest.approx(30.0)
+    strength_date = pd.Timestamp(strength_day)
+    assert dataset.daily_loads.loc[strength_date, "q_STR"] == pytest.approx(30.0)
+    assert dataset.daily_loads.loc[strength_date, "e_STR"] == pytest.approx(30.0)
+    assert dataset.daily_loads.loc[
+        strength_date, [f"q_{zone}" for zone in EXPECTED_FIXED_TREF]
+    ].sum() == pytest.approx(0.0)
+    strength_ref = str(activity["activity_ref"])
+    aerobic_rows = dataset.activity_zones.loc[
+        dataset.activity_zones["activity_ref"] == strength_ref
+    ]
+    assert len(aerobic_rows) == 5
+    assert aerobic_rows[["T_z", "T_eq_z", "E_z"]].to_numpy().sum() == pytest.approx(0.0)
+    assert dataset.load_stats.loc["STR", "Tref"] == pytest.approx(56.0)
+    assert dataset.load_readiness.loc["STR", "readiness"] < 100.0
+
+
+@pytest.mark.parametrize(
+    ("detail", "expected"),
+    [
+        ({"type": "WeightTraining"}, True),
+        ({"type": "weight training"}, True),
+        ({"type": "Workout", "sub_type": "StrengthTraining"}, True),
+        ({"type": "CoreTraining"}, True),
+        ({"type": "Crossfit"}, False),
+        ({"type": "HighIntensityIntervalTraining"}, False),
+        ({"type": "Workout"}, False),
+        ({"type": "Run", "name": "Strength after running"}, False),
+    ],
+)
+def test_strength_classification_is_explicit_and_does_not_use_activity_name(
+    detail: dict[str, Any], expected: bool
+) -> None:
+    assert is_strength_activity(detail) is expected
 
 
 def test_multiple_activities_aggregate_after_individual_modeling() -> None:

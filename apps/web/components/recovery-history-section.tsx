@@ -8,6 +8,7 @@ const decimal = (value: number) => number.format(value);
 const parameter = (value: number) => parameterNumber.format(value);
 const date = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "2-digit", month: "short", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
 const zoneStyle = (zone: Zone): CSSProperties => ({ "--series": `var(--zone-${ZONES.indexOf(zone) + 1})` } as CSSProperties);
+const strengthStyle = { "--series": "var(--strength)" } as CSSProperties;
 const wellnessLabels: Record<WellnessCoverageField, string> = {
   sleep_duration: "Продължителност на съня",
   sleep_score: "Sleep score",
@@ -83,15 +84,16 @@ function RecoveryChart({ history }: { history: RecoveryHistory }) {
   const threshold = history.model.practical_full_recovery_percent;
   return <figure className="history-chart recovery-chart">
     <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-labelledby="recovery-chart-title recovery-chart-description">
-      <title id="recovery-chart-title">Динамика на товарната готовност по зони</title>
-      <desc id="recovery-chart-description">Дневна готовност след натоварването за Z1 до Z5. Пунктираната линия е прагът за практическо пълно възстановяване.</desc>
+      <title id="recovery-chart-title">Динамика на товарната готовност по компоненти</title>
+      <desc id="recovery-chart-description">Дневна готовност след натоварването за Z1 до Z5 и отделния силов компонент STR. Пунктираната линия е прагът за практическо пълно възстановяване.</desc>
       {[0, 50, 100].map((tick) => <g key={tick}><line className="chart-grid" x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} /><text className="chart-label" x={left - 8} y={y(tick) + 4} textAnchor="end">{tick}%</text></g>)}
       <line className="chart-reference" x1={left} x2={width - right} y1={y(threshold)} y2={y(threshold)} />
       <text className="chart-label" x={width - right} y={y(threshold) - 7} textAnchor="end">практически възстановен · {decimal(threshold)}%</text>
       {ZONES.map((zone) => <polyline key={zone} className="chart-series" style={zoneStyle(zone)} points={history.daily.filter((row) => row.zone === zone).map((row) => `${x(dates.indexOf(row.date))},${y(row.readiness_after_percent)}`).join(" ")} />)}
+      {history.strength && <polyline className="chart-series" style={strengthStyle} points={history.strength.daily.map((row) => `${x(dates.indexOf(row.date))},${y(row.readiness_after_percent)}`).join(" ")} />}
       <text className="chart-label" x={left} y={height - 12}>{date(dates[0])}</text><text className="chart-label" x={width - right} y={height - 12} textAnchor="end">{date(dates.at(-1)!)}</text>
     </svg>
-    <figcaption className="chart-legend">{ZONES.map((zone) => <span key={zone} style={zoneStyle(zone)}><i />{zone}</span>)}</figcaption>
+    <figcaption className="chart-legend">{ZONES.map((zone) => <span key={zone} style={zoneStyle(zone)}><i />{zone}</span>)}{history.strength && <span style={strengthStyle}><i />STR</span>}</figcaption>
   </figure>;
 }
 
@@ -104,7 +106,8 @@ export function RecoveryHistorySection({ history, message }: { history: Recovery
     <div className="load-summary recovery-summary" role="list" aria-label="Текущо товарно възстановяване по зони">
       {history.current.map((zone) => <article key={zone.zone} className="load-summary-card" style={zoneStyle(zone.zone)} role="listitem"><div><span className="summary-zone">{zone.zone}</span><strong>{decimal(zone.readiness_percent)}%</strong><small>товарна готовност</small></div><dl><div><dt>Остатъчна умора</dt><dd>{decimal(zone.residual_fatigue)}</dd></div><div><dt>До ≥ {decimal(history.model.practical_full_recovery_percent)}%</dt><dd>{decimal(zone.days_to_practical_recovery)} дни</dd></div></dl></article>)}
     </div>
+    {history.strength && <div className="load-summary strength-recovery-summary" role="list" aria-label="Текущо силово възстановяване"><article className="load-summary-card" style={strengthStyle} role="listitem"><div><span className="summary-zone">STR</span><strong>{decimal(history.strength.current.readiness_percent)}%</strong><small>силова готовност</small></div><dl><div><dt>Остатъчна умора</dt><dd>{decimal(history.strength.current.residual_fatigue)}</dd></div><div><dt>До ≥ {decimal(history.model.practical_full_recovery_percent)}%</dt><dd>{decimal(history.strength.current.days_to_practical_recovery)} дни</dd></div></dl></article><p>STR се възстановява като отделен компонент. Пулсът от силовата активност не създава втори товар в Z1–Z5.</p></div>}
     <RecoveryChart history={history} />
-    <details className="recovery-settings"><summary><span><small>Read-only</small>Настройки на recovery модела</span><span className="chevron" aria-hidden="true">⌄</span></summary><RecoverySettingsHelp /><div className="activity-table-wrap"><table><thead><tr><th>Зона</th><th>Tref</th><th>Чувствителност</th><th>τ</th><th>Таван на умората</th></tr></thead><tbody>{history.settings.map((setting) => <tr key={setting.zone}><th>{setting.zone}</th><td>{decimal(setting.tref_min)} мин</td><td>{parameter(setting.sensitivity)}</td><td>{parameter(setting.tau_days)} дни</td><td>{decimal(setting.fatigue_cap)}</td></tr>)}</tbody></table></div><dl className="recovery-model-meta"><div><dt>Алгоритъм</dt><dd>{history.model.algorithm_version}</dd></div><div><dt>Версия параметри</dt><dd>{history.model.parameter_version}</dd></div><div><dt>Fingerprint</dt><dd>{history.model.parameter_fingerprint.slice(0, 12)}</dd></div></dl></details>
+    <details className="recovery-settings"><summary><span><small>Read-only</small>Настройки на recovery модела</span><span className="chevron" aria-hidden="true">⌄</span></summary><RecoverySettingsHelp /><div className="activity-table-wrap"><table><thead><tr><th>Компонент</th><th>Tref</th><th>Чувствителност</th><th>τ</th><th>Таван на умората</th></tr></thead><tbody>{history.settings.map((setting) => <tr key={setting.zone}><th>{setting.zone}</th><td>{decimal(setting.tref_min)} мин</td><td>{parameter(setting.sensitivity)}</td><td>{parameter(setting.tau_days)} дни</td><td>{decimal(setting.fatigue_cap)}</td></tr>)}{history.strength && <tr><th>STR</th><td>{decimal(history.strength.settings.tref_min)} мин</td><td>{parameter(history.strength.settings.sensitivity)}</td><td>{parameter(history.strength.settings.tau_days)} дни</td><td>{decimal(history.strength.settings.fatigue_cap)}</td></tr>}</tbody></table></div><dl className="recovery-model-meta"><div><dt>Алгоритъм</dt><dd>{history.model.algorithm_version}</dd></div><div><dt>Версия параметри</dt><dd>{history.model.parameter_version}</dd></div><div><dt>Fingerprint</dt><dd>{history.model.parameter_fingerprint.slice(0, 12)}</dd></div></dl></details>
   </section>;
 }

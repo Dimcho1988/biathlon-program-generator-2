@@ -38,6 +38,28 @@ export interface RecoveryHistory {
     effective_load: number;
     tref_min: number;
   }>;
+  strength?: {
+    settings: {
+      tref_min: number;
+      sensitivity: number;
+      tau_days: number;
+      fatigue_cap: number;
+    };
+    current: {
+      readiness_percent: number;
+      residual_fatigue: number;
+      days_to_practical_recovery: number;
+    };
+    daily: Array<{
+      date: string;
+      readiness_before_percent: number;
+      readiness_after_percent: number;
+      residual_fatigue_after: number;
+      impulse: number;
+      effective_load: number;
+      tref_min: number;
+    }>;
+  } | null;
 }
 
 export type WellnessCoverageField =
@@ -85,11 +107,17 @@ export interface WellnessCoverageDiagnostics {
 }
 
 const legacyRootKeys = ["schema_version", "athlete_id", "period_start", "period_end", "basis", "wellness_freshness", "wellness_coverage_percent", "model", "settings", "current", "daily"];
-const rootKeys = [...legacyRootKeys, "wellness_diagnostics"];
+const wellnessRootKeys = [...legacyRootKeys, "wellness_diagnostics"];
+const strengthRootKeys = [...legacyRootKeys, "strength"];
+const rootKeys = [...wellnessRootKeys, "strength"];
 const modelKeys = ["algorithm_version", "parameter_version", "parameter_fingerprint", "practical_full_recovery_percent"];
 const settingKeys = ["zone", "tref_min", "sensitivity", "tau_days", "fatigue_cap"];
 const currentKeys = ["zone", "readiness_percent", "residual_fatigue", "days_to_practical_recovery"];
 const dailyKeys = ["date", "zone", "readiness_before_percent", "readiness_after_percent", "residual_fatigue_after", "impulse", "effective_load", "tref_min"];
+const strengthKeys = ["settings", "current", "daily"];
+const strengthSettingKeys = ["tref_min", "sensitivity", "tau_days", "fatigue_cap"];
+const strengthCurrentKeys = ["readiness_percent", "residual_fatigue", "days_to_practical_recovery"];
+const strengthDailyKeys = ["date", "readiness_before_percent", "readiness_after_percent", "residual_fatigue_after", "impulse", "effective_load", "tref_min"];
 const diagnosticsKeys = ["schema_version", "period_start", "period_end", "calendar_days", "records_received", "days_with_any_recognized_data", "daily_presence_percent", "recognized_field_coverage_percent", "latest_observed_date", "freshness", "fields", "unresolved_canonical_inputs", "model_status", "affects_recovery"];
 const coverageFieldKeys = ["field", "source_fields", "present_days", "valid_days", "invalid_days", "coverage_percent"];
 const coverageFields: WellnessCoverageField[] = ["sleep_duration", "sleep_score", "sleep_quality", "resting_hr", "average_sleeping_hr", "hrv", "hrv_sdnn", "readiness", "respiration", "spo2", "fatigue", "stress", "mood", "motivation", "soreness", "injury"];
@@ -107,7 +135,7 @@ function zoneArray<T>(value: unknown, parser: (item: unknown, index: number) => 
 }
 
 export function parseRecoveryHistory(value: unknown): RecoveryHistory {
-  if (!isRecord(value) || (!exactKeys(value, rootKeys) && !exactKeys(value, legacyRootKeys))) throw new Error("Невалидна структура на recovery историята.");
+  if (!isRecord(value) || ![rootKeys, wellnessRootKeys, strengthRootKeys, legacyRootKeys].some((keys) => exactKeys(value, keys))) throw new Error("Невалидна структура на recovery историята.");
   if (value.schema_version !== "recovery-history-v1" || value.basis !== "load-only") throw new Error("Неподдържана recovery версия или основа.");
   if (typeof value.athlete_id !== "string" || !value.athlete_id ||
       !isCalendarDate(value.period_start) || !isCalendarDate(value.period_end) || value.period_start > value.period_end ||
@@ -188,5 +216,34 @@ export function parseRecoveryHistory(value: unknown): RecoveryHistory {
       wellnessDiagnostics = { ...diagnostics, fields } as unknown as WellnessCoverageDiagnostics;
     }
   }
-  return { ...value, wellness_diagnostics: wellnessDiagnostics, settings, current, daily } as unknown as RecoveryHistory;
+  let strength: RecoveryHistory["strength"];
+  if ("strength" in value) {
+    if (value.strength === null) strength = null;
+    else {
+      const raw = value.strength;
+      if (!isRecord(raw) || !exactKeys(raw, strengthKeys) || !isRecord(raw.settings) || !isRecord(raw.current)) {
+        throw new Error("Невалидна recovery история за сила.");
+      }
+      const strengthSettings = raw.settings;
+      const strengthCurrent = raw.current;
+      if (!exactKeys(strengthSettings, strengthSettingKeys) || !exactKeys(strengthCurrent, strengthCurrentKeys) ||
+          !strengthSettingKeys.every((key) => finite(strengthSettings[key]) && strengthSettings[key] >= 0) ||
+          !percentage(strengthCurrent.readiness_percent) ||
+          !strengthCurrentKeys.slice(1).every((key) => finite(strengthCurrent[key]) && strengthCurrent[key] >= 0) ||
+          !Array.isArray(raw.daily) || raw.daily.length !== value.daily.length / ZONES.length) {
+        throw new Error("Невалидна recovery история за сила.");
+      }
+      const strengthDaily = raw.daily.map((item, index) => {
+        if (!isRecord(item) || !exactKeys(item, strengthDailyKeys) || !isCalendarDate(item.date) ||
+            item.date !== (value.daily as Array<Record<string, unknown>>)[index * ZONES.length]?.date ||
+            !percentage(item.readiness_before_percent) || !percentage(item.readiness_after_percent) ||
+            !strengthDailyKeys.slice(3).every((key) => finite(item[key]) && item[key] >= 0)) {
+          throw new Error("Невалиден дневен recovery ред за сила.");
+        }
+        return item as unknown as NonNullable<RecoveryHistory["strength"]>["daily"][number];
+      });
+      strength = { ...raw, settings: strengthSettings, current: strengthCurrent, daily: strengthDaily } as unknown as NonNullable<RecoveryHistory["strength"]>;
+    }
+  }
+  return { ...value, wellness_diagnostics: wellnessDiagnostics, settings, current, daily, strength } as unknown as RecoveryHistory;
 }

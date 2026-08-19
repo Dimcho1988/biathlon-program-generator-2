@@ -11,6 +11,8 @@ import logging
 import os
 from typing import Any, Mapping
 
+import pandas as pd
+
 from biathlon.constants import fresh_parameters
 from biathlon.effective_hr import EFFECTIVE_HR_SOURCE
 
@@ -30,6 +32,8 @@ from .schemas import (
     CompletedWorkSport,
     CompletedWorkTotals,
     CompletedWorkZone,
+    DailyStrengthLoad,
+    DailyStrengthRecovery,
     DailyZoneLoad,
     DataQuality,
     DailyRecovery,
@@ -39,9 +43,15 @@ from .schemas import (
     ModelMetadata,
     RecoveryHistoryResponse,
     RecoveryModelMetadata,
+    RecoveryStrengthCurrent,
+    RecoveryStrengthHistory,
+    RecoveryStrengthSettings,
     RecoveryZoneCurrent,
     RecoveryZoneSettings,
     TrainingStatusResponse,
+    StrengthLoadHistory,
+    StrengthLoadModel,
+    StrengthLoadSummary,
     VolumeHistoryMetadata,
     VolumeHistoryQuality,
     VolumeHistoryResponse,
@@ -185,9 +195,14 @@ def dataset_to_training_status(
         warnings.append(
             "Wellness field coverage is diagnostic-only; readiness remains load-only in this model version."
         )
-    quality = _bounded_percentage(
-        latest["hr_coverage_percent"], "latest HR coverage"
-    ) / 100.0
+    quality = (
+        None
+        if _finite(latest.get("strength_time_min", 0.0), "latest strength time") > 0.0
+        else _bounded_percentage(
+            latest["hr_coverage_percent"], "latest HR coverage"
+        )
+        / 100.0
+    )
     return TrainingStatusResponse(
         schema_version="training-status-v1", as_of=dataset.period_end,
         athlete_id=context.public_alias,
@@ -267,6 +282,9 @@ def dataset_to_load_history(
                 date=_calendar_date(activity.date, "activity"),
                 sport=str(activity.sport),
                 duration_min=_optional_finite(activity.duration_min, "activity duration"),
+                strength_time_min=_finite(
+                    activity.strength_time_min, "activity strength time"
+                ),
                 quality_status=str(activity.quality_status),
                 hr_coverage_percent=_bounded_percentage(
                     activity.hr_coverage_percent, "activity HR coverage"
@@ -295,6 +313,76 @@ def dataset_to_load_history(
             )
         )
 
+    strength_rows = dataset.rolling_load.loc[
+        dataset.rolling_load["component"] == "STR"
+    ].sort_values("date", kind="stable")
+    strength_daily = [
+        DailyStrengthLoad(
+            date=_calendar_date(row.date, "daily strength load"),
+            real_time_min=_finite(
+                dataset.daily_loads.loc[pd.Timestamp(row.date), "q_STR"]
+                / float(dataset.strength_duration_coefficient),
+                "daily strength real time",
+            ),
+            equivalent_time_min=_finite(
+                dataset.daily_loads.loc[pd.Timestamp(row.date), "q_STR"],
+                "daily strength equivalent time",
+            ),
+            effective_load=_finite(row.effective, "daily strength effective"),
+            e7_daily=_finite(row.E7_daily, "daily strength E7"),
+            e40_daily=_finite(row.E40_daily, "daily strength E40"),
+            status_7_40=_finite(row.index_7_40, "daily strength 7/40"),
+        )
+        for row in strength_rows.itertuples(index=False)
+    ]
+    period_end = pd.Timestamp(dataset.period_end)
+    strength_real = (
+        dataset.daily_loads["q_STR"]
+        / float(dataset.strength_duration_coefficient)
+    )
+    strength = StrengthLoadHistory(
+        model=StrengthLoadModel(
+            classification_version=str(dataset.strength_classification_version),
+            source="intervals-activity-type-duration",
+            duration_basis="recording-time-first",
+            equivalent_time_coefficient=_finite(
+                dataset.strength_duration_coefficient,
+                "strength duration coefficient",
+            ),
+            aerobic_hr_counted=False,
+        ),
+        summary=StrengthLoadSummary(
+            recorded_activities=int(
+                (
+                    dataset.activities["strength_time_min"].astype(float) > 0.0
+                ).sum()
+            ),
+            real_time_7d_min=_finite(
+                strength_real.loc[
+                    (strength_real.index >= period_end - pd.Timedelta(days=6))
+                    & (strength_real.index <= period_end)
+                ].sum(),
+                "strength real time 7d",
+            ),
+            real_time_40d_min=_finite(
+                strength_real.loc[
+                    (strength_real.index >= period_end - pd.Timedelta(days=39))
+                    & (strength_real.index <= period_end)
+                ].sum(),
+                "strength real time 40d",
+            ),
+            e7_daily=_finite(dataset.load_stats.loc["STR", "E7_daily"], "strength E7"),
+            e40_daily=_finite(dataset.load_stats.loc["STR", "E40_daily"], "strength E40"),
+            status_7_40=_finite(dataset.load_stats.loc["STR", "index_7_40"], "strength 7/40"),
+            tref_min=_finite(dataset.load_stats.loc["STR", "Tref"], "strength Tref"),
+            history_reliability=_finite(
+                dataset.load_stats.loc["STR", "reliability"],
+                "strength reliability",
+            ),
+        ),
+        daily=strength_daily,
+    )
+
     return LoadHistoryResponse(
         schema_version="load-history-v1",
         athlete_id=context.public_alias,
@@ -310,6 +398,7 @@ def dataset_to_load_history(
         zones=zone_summaries,
         daily=daily,
         activities=activities,
+        strength=strength,
     )
 
 
@@ -326,6 +415,47 @@ def dataset_to_recovery_history(
     history = dataset.readiness_history.loc[
         dataset.readiness_history["component"].isin(ZONES)
     ].sort_values(["date", "component"], kind="stable")
+    strength_history = dataset.readiness_history.loc[
+        dataset.readiness_history["component"] == "STR"
+    ].sort_values("date", kind="stable")
+    strength = RecoveryStrengthHistory(
+        settings=RecoveryStrengthSettings(
+            tref_min=_finite(dataset.load_stats.loc["STR", "Tref"], "Tref[STR]"),
+            sensitivity=_finite(recovery["STR"]["sensitivity"], "sensitivity[STR]"),
+            tau_days=_finite(recovery["STR"]["tau_days"], "tau[STR]"),
+            fatigue_cap=_finite(recovery["STR"]["fmax"], "fmax[STR]"),
+        ),
+        current=RecoveryStrengthCurrent(
+            readiness_percent=_bounded_percentage(
+                dataset.load_readiness.loc["STR", "readiness"],
+                "readiness[STR]",
+            ),
+            residual_fatigue=_finite(
+                dataset.load_readiness.loc["STR", "fatigue"], "fatigue[STR]"
+            ),
+            days_to_practical_recovery=_finite(
+                dataset.load_readiness.loc["STR", "days_to_full"], "days[STR]"
+            ),
+        ),
+        daily=[
+            DailyStrengthRecovery(
+                date=_calendar_date(row.date, "daily strength recovery"),
+                readiness_before_percent=_bounded_percentage(
+                    row.readiness_before, "strength readiness before"
+                ),
+                readiness_after_percent=_bounded_percentage(
+                    row.readiness_after, "strength readiness after"
+                ),
+                residual_fatigue_after=_finite(
+                    row.fatigue_after, "strength fatigue after"
+                ),
+                impulse=_finite(row.impulse, "strength impulse"),
+                effective_load=_finite(row.effective, "strength effective"),
+                tref_min=_finite(row.Tref, "strength Tref"),
+            )
+            for row in strength_history.itertuples(index=False)
+        ],
+    )
     return RecoveryHistoryResponse(
         schema_version="recovery-history-v1",
         athlete_id=context.public_alias,
@@ -396,6 +526,7 @@ def dataset_to_recovery_history(
             )
             for row in history.itertuples(index=False)
         ],
+        strength=strength,
     )
 
 

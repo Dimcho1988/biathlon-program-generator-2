@@ -4,6 +4,9 @@ Next.js App Router frontend for the `training-status-v1`, `load-history-v1`,
 `completed-work-v1`, `volume-history-v1`, and `recovery-history-v1` API
 contracts. The frontend validates and presents
 precomputed model output; it does not calculate physiological values.
+The real-data load and recovery payloads also expose a separate optional
+`STR` history derived from explicit Intervals strength activity types and
+recorded duration; it is never folded into the Z1–Z5 HR series.
 
 ## Local development
 

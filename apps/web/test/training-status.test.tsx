@@ -243,6 +243,9 @@ describe("dashboard", () => {
     expect(html).toContain("линиите не се сумират до нов общ резултат");
     expect(html).toContain("Реално → приравнено → ефективно");
     expect(html).toContain("NordicSki");
+    expect(html).toContain("Силова тренировка");
+    expect(html).toContain("STR · без двойно HR");
+    expect(html).toContain("Коефициент 1,0");
   });
   it("renders weekly real volume without inventing a total effective load", () => {
     const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" volumeHistory={volumeHistoryFixture} />);
@@ -265,7 +268,7 @@ describe("dashboard", () => {
   it("renders canonical load-only recovery dynamics and read-only settings", () => {
     const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" recoveryHistory={recoveryHistoryFixture} />);
     expect(html).toContain("Товарно възстановяване");
-    expect(html).toContain("Динамика на товарната готовност по зони");
+    expect(html).toContain("Динамика на товарната готовност по компоненти");
     expect(html).toContain("Load-only резултат");
     expect(html).toContain("Покритие на wellness данните");
     expect(html).toContain("32/40 дни");
@@ -275,6 +278,8 @@ describe("dashboard", () => {
     expect(html).toContain("Какво означават показателите?");
     expect(html).toContain("Δумора = 100 × чувствителност × E / Tref");
     expect(html).toContain("След τ дни остават приблизително 37%");
+    expect(html).toContain("силова готовност");
+    expect(html).toContain("STR се възстановява като отделен компонент");
     expect(html).toContain("0,55");
     expect(html).toContain("0,75 дни");
     expect(html).toContain("main-load-recovery-v1");
