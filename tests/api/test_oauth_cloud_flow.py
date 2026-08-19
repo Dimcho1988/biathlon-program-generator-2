@@ -8,7 +8,12 @@ import httpx
 import pytest
 
 from apps.api import oauth_service
-from apps.api.cloud import AthleteMesocycleAccentPreferences, AthletePlanningProfile
+from apps.api.cloud import (
+    AthleteMesocycleAccentPreferences,
+    AthletePlanningCalendar,
+    AthletePlanningCalendarEvent,
+    AthletePlanningProfile,
+)
 from apps.api.oauth_service import (
     OAuthFlowError,
     begin_authorization,
@@ -102,6 +107,20 @@ class MesocycleAccentPreferencesClient:
                 json=[{"mesocycle_accent_preferences": self.payload}],
             )
         self.saved = kwargs["json"]["mesocycle_accent_preferences"]
+        return httpx.Response(204)
+
+
+class PlanningCalendarClient:
+    def __init__(self, payload):
+        self.payload = payload
+        self.saved = None
+        self.url = None
+
+    def request(self, method, url, *, headers, **kwargs):
+        self.url = url
+        if method == "GET":
+            return httpx.Response(200, json=[{"planning_calendar": self.payload}])
+        self.saved = kwargs["json"]["planning_calendar"]
         return httpx.Response(204)
 
 
@@ -201,6 +220,34 @@ def test_supabase_mesocycle_accent_preferences_round_trip_is_scoped_to_alias():
         "ath-profile", preferences
     )
     assert client.saved == preferences.to_payload()
+    assert "athlete_alias=eq.ath-profile" in client.url
+
+
+def test_supabase_planning_calendar_round_trip_is_scoped_to_alias():
+    calendar = AthletePlanningCalendar(
+        events=(
+            AthletePlanningCalendarEvent(
+                event_id="event-main-0001",
+                event_type="MAIN_RACE",
+                name="Основен старт",
+                start_date=date(2026, 12, 12),
+                end_date=date(2026, 12, 13),
+            ),
+        )
+    ).validate()
+    client = PlanningCalendarClient(calendar.to_payload())
+    repository = SupabasePilotRepository(
+        supabase_url="https://project.supabase.co",
+        secret_key="sb_secret_server-key",
+        encryption_key=base64.urlsafe_b64encode(bytes(range(32))).decode(),
+        client=client,
+    )
+
+    assert repository.athlete_planning_calendar("ath-profile") == calendar
+    assert "athlete_alias=eq.ath-profile" in client.url
+
+    repository.save_athlete_planning_calendar("ath-profile", calendar)
+    assert client.saved == calendar.to_payload()
     assert "athlete_alias=eq.ath-profile" in client.url
 
 

@@ -14,6 +14,7 @@ import {
   type PlanningMethodology,
   type PlanningProfile,
 } from "../lib/planning-profile";
+import type { PlanningCalendarResponse } from "../lib/planning-calendar";
 
 const methodology: PlanningMethodology = {
   schema_version: "planning-methodology-v1",
@@ -78,6 +79,22 @@ const accentPreferences: MesocycleAccentPreferencesResponse = {
   },
 };
 
+const planningCalendar: PlanningCalendarResponse = {
+  configured: false,
+  calendar: null,
+  context: {
+    schema_version: "planning-context-v1",
+    as_of: "2026-08-19",
+    ready_for_generation: false,
+    generator_status: "NOT_ACTIVE",
+    missing_inputs: ["FUTURE_MAIN_RACE", "TRAINING_SNAPSHOT"],
+    next_main_race: null,
+    methodology_version: "onflows-canonical-v1",
+    recovery_basis: "LOAD_ONLY",
+    wellness_integration: "DIAGNOSTIC_ONLY",
+  },
+};
+
 describe("planning-profile-v1 contract", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -103,6 +120,7 @@ describe("planning-profile-v1 contract", () => {
       profile={null}
       methodology={methodology}
       accentPreferences={unconfiguredAccents}
+      planningCalendar={planningCalendar}
     />);
     expect(html).toContain("Стойностите не се предполагат автоматично");
     expect(html).not.toContain('name="annual_target_hours" type="number" min="50" max="1500" step="1" value=');
@@ -113,6 +131,7 @@ describe("planning-profile-v1 contract", () => {
       profile={profile}
       methodology={methodology}
       accentPreferences={accentPreferences}
+      planningCalendar={planningCalendar}
     />);
     for (const label of [
       "Сезонна цел",
@@ -142,6 +161,7 @@ describe("planning-profile-v1 contract", () => {
       profile={profile}
       methodology={methodology}
       accentPreferences={accentPreferences}
+      planningCalendar={planningCalendar}
     />);
 
     expect(html).toContain("onflows-canonical-v1");
@@ -164,6 +184,7 @@ describe("planning-profile-v1 contract", () => {
       profile={profile}
       methodology={methodology}
       accentPreferences={accentPreferences}
+      planningCalendar={planningCalendar}
     />);
 
     expect(html).toContain('action="/api/athlete/mesocycle-accents"');

@@ -19,7 +19,10 @@ from .cloud import (
     MESOCYCLE_ACCENT_COMPONENTS,
     AthleteMesocycleAccentPreferences,
     AthleteModelSettings,
+    AthletePlanningCalendar,
+    AthletePlanningCalendarEvent,
     AthletePlanningProfile,
+    planning_generation_context,
     service_token_valid,
 )
 from .oauth_service import (
@@ -59,6 +62,9 @@ from .schemas import (
     MesocycleAccentResolution,
     OAuthAuthorizationResponse,
     OAuthConnectionStatusResponse,
+    PlanningCalendarInput,
+    PlanningCalendarResponse,
+    PlanningGenerationContext,
     PlanningMethodologyMetadata,
     RecoveryHistoryResponse,
     SessionExchangeRequest,
@@ -579,6 +585,99 @@ def update_athlete_mesocycle_accent_preferences(
             status_code=503, detail="Persistent server storage is unavailable"
         ) from exc
     return _mesocycle_accent_response(preferences)
+
+
+def _planning_calendar_response(
+    repository: SupabasePilotRepository,
+    athlete_alias: str,
+    calendar: AthletePlanningCalendar | None,
+) -> PlanningCalendarResponse:
+    context = planning_generation_context(
+        calendar=calendar,
+        profile=repository.athlete_planning_profile(athlete_alias),
+        accent_preferences=repository.athlete_mesocycle_accent_preferences(
+            athlete_alias
+        ),
+        training_snapshot=repository.latest(athlete_alias),
+        as_of=date.today(),
+    )
+    return PlanningCalendarResponse(
+        configured=calendar is not None,
+        calendar=(
+            PlanningCalendarInput.model_validate(calendar.to_payload())
+            if calendar is not None
+            else None
+        ),
+        context=PlanningGenerationContext.model_validate(context),
+    )
+
+
+@app.get(
+    "/api/v2/athlete/planning-calendar",
+    response_model=PlanningCalendarResponse,
+)
+def athlete_planning_calendar(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    resolved_alias = _validated_alias(athlete_alias)
+    try:
+        repository = _repository()
+        calendar = repository.athlete_planning_calendar(resolved_alias)
+        return _planning_calendar_response(repository, resolved_alias, calendar)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+
+
+@app.put(
+    "/api/v2/athlete/planning-calendar",
+    response_model=PlanningCalendarResponse,
+)
+def update_athlete_planning_calendar(
+    body: PlanningCalendarInput,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    resolved_alias = _validated_alias(athlete_alias)
+    try:
+        calendar = AthletePlanningCalendar(
+            schema_version=body.schema_version,
+            events=tuple(
+                AthletePlanningCalendarEvent(
+                    event_id=event.event_id,
+                    event_type=event.event_type,
+                    name=event.name,
+                    start_date=event.start_date,
+                    end_date=event.end_date,
+                )
+                for event in body.events
+            ),
+        ).validate()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail="Planning calendar values are inconsistent"
+        ) from exc
+    try:
+        repository = _repository()
+        if repository.athlete_settings(resolved_alias) is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Athlete HR zones and timezone must be configured first",
+            )
+        repository.save_athlete_planning_calendar(resolved_alias, calendar)
+        return _planning_calendar_response(repository, resolved_alias, calendar)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
 
 
 @app.post(

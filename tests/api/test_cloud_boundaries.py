@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import math
 from fastapi.testclient import TestClient
 import pytest
@@ -7,9 +7,12 @@ from apps.api.cloud import (
     AthleteContext,
     AthleteMesocycleAccentPreferences,
     AthleteModelSettings,
+    AthletePlanningCalendar,
+    AthletePlanningCalendarEvent,
     AthletePlanningProfile,
     InMemorySnapshotRepository,
     normalize_wellness,
+    planning_generation_context,
     service_token_valid,
     summarize_wellness_coverage,
 )
@@ -102,6 +105,93 @@ def test_mesocycle_accent_preferences_are_individual_and_do_not_guess_auto_slots
         AthleteMesocycleAccentPreferences("MANUAL", 2, ()).validate()
     with pytest.raises(ValueError, match="cannot contain manual"):
         AthleteMesocycleAccentPreferences("AUTO", 2, ("Z1",)).validate()
+
+
+def test_planning_calendar_is_versioned_canonical_and_never_infers_events():
+    calendar = AthletePlanningCalendar(
+        events=(
+            AthletePlanningCalendarEvent(
+                event_id="event-control-01",
+                event_type="CONTROL_RACE",
+                name="Контролен старт",
+                start_date=date(2026, 10, 10),
+                end_date=date(2026, 10, 10),
+            ),
+            AthletePlanningCalendarEvent(
+                event_id="event-main-0001",
+                event_type="MAIN_RACE",
+                name="Основен старт",
+                start_date=date(2026, 12, 12),
+                end_date=date(2026, 12, 13),
+            ),
+        )
+    ).validate()
+
+    payload = calendar.to_payload()
+    assert payload["schema_version"] == "planning-calendar-v1"
+    assert [event["event_id"] for event in payload["events"]] == [
+        "event-control-01",
+        "event-main-0001",
+    ]
+    assert AthletePlanningCalendar.from_mapping(payload).to_payload() == payload
+    with pytest.raises(ValueError, match="end precedes"):
+        AthletePlanningCalendarEvent(
+            "event-invalid-1",
+            "CAMP",
+            "Лагер",
+            date(2026, 2, 2),
+            date(2026, 2, 1),
+        ).validate()
+
+
+def test_planning_context_requires_a_real_future_main_race_and_stays_inactive():
+    as_of = date(2026, 8, 19)
+    calendar = AthletePlanningCalendar(
+        events=(
+            AthletePlanningCalendarEvent(
+                "event-main-past",
+                "MAIN_RACE",
+                "Минал старт",
+                date(2026, 7, 1),
+                date(2026, 7, 1),
+            ),
+        )
+    )
+    incomplete = planning_generation_context(
+        calendar=calendar,
+        profile=planning_profile(),
+        accent_preferences=AthleteMesocycleAccentPreferences("AUTO", 2, ()),
+        training_snapshot={"training_status": {}},
+        as_of=as_of,
+    )
+    assert incomplete["ready_for_generation"] is False
+    assert incomplete["missing_inputs"] == ["FUTURE_MAIN_RACE"]
+    assert incomplete["next_main_race"] is None
+    assert incomplete["generator_status"] == "NOT_ACTIVE"
+
+    future = AthletePlanningCalendar(
+        events=(
+            *calendar.events,
+            AthletePlanningCalendarEvent(
+                "event-main-future",
+                "MAIN_RACE",
+                "Реален основен старт",
+                date(2026, 12, 12),
+                date(2026, 12, 13),
+            ),
+        )
+    )
+    ready = planning_generation_context(
+        calendar=future,
+        profile=planning_profile(),
+        accent_preferences=AthleteMesocycleAccentPreferences("AUTO", 2, ()),
+        training_snapshot={"training_status": {}},
+        as_of=as_of,
+    )
+    assert ready["ready_for_generation"] is True
+    assert ready["missing_inputs"] == []
+    assert ready["next_main_race"]["event_id"] == "event-main-future"
+    assert ready["generator_status"] == "NOT_ACTIVE"
 
 
 def test_wellness_preserves_missing_stale_invalid_and_units():
@@ -394,6 +484,79 @@ def test_mesocycle_accent_preferences_are_scoped_and_require_a_profile(monkeypat
         },
     )
     assert missing_profile.status_code == 409
+
+
+def test_planning_calendar_is_scoped_and_reports_generation_readiness(monkeypatch):
+    class Repository:
+        def __init__(self):
+            self.calendars = {}
+
+        def athlete_settings(self, athlete_alias):
+            return AthleteModelSettings(
+                (100, 120, 140, 160, 180, 200), "Europe/Sofia"
+            )
+
+        def athlete_planning_profile(self, athlete_alias):
+            return planning_profile()
+
+        def athlete_mesocycle_accent_preferences(self, athlete_alias):
+            return AthleteMesocycleAccentPreferences("AUTO", 2, ())
+
+        def athlete_planning_calendar(self, athlete_alias):
+            return self.calendars.get(athlete_alias)
+
+        def save_athlete_planning_calendar(self, athlete_alias, calendar):
+            self.calendars[athlete_alias] = calendar
+
+        def latest(self, athlete_alias):
+            return {"training_status": {"athlete_id": athlete_alias}}
+
+    repository = Repository()
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
+    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    client = TestClient(app)
+    headers = {
+        "Authorization": "Bearer secret-value",
+        "X-OnFlows-Athlete-Alias": "ath-second-profile",
+    }
+    main_date = date.today() + timedelta(days=60)
+    body = {
+        "schema_version": "planning-calendar-v1",
+        "events": [
+            {
+                "event_id": "event-main-0001",
+                "event_type": "MAIN_RACE",
+                "name": "Основен старт",
+                "start_date": main_date.isoformat(),
+                "end_date": main_date.isoformat(),
+            }
+        ],
+    }
+
+    assert client.get("/api/v2/athlete/planning-calendar").status_code == 401
+    saved = client.put(
+        "/api/v2/athlete/planning-calendar", headers=headers, json=body
+    )
+    loaded = client.get("/api/v2/athlete/planning-calendar", headers=headers)
+
+    assert saved.status_code == 200
+    assert loaded.json() == saved.json()
+    assert saved.json()["configured"] is True
+    assert saved.json()["calendar"] == body
+    assert saved.json()["context"]["ready_for_generation"] is True
+    assert saved.json()["context"]["generator_status"] == "NOT_ACTIVE"
+    assert saved.json()["context"]["next_main_race"]["event_id"] == "event-main-0001"
+    assert list(repository.calendars) == ["ath-second-profile"]
+
+    invalid = client.put(
+        "/api/v2/athlete/planning-calendar",
+        headers=headers,
+        json={
+            **body,
+            "events": [{**body["events"][0], "end_date": "2026-01-01"}],
+        },
+    )
+    assert invalid.status_code == 422
 
 
 def test_login_ticket_is_consumed_through_the_protected_server_boundary(monkeypatch):

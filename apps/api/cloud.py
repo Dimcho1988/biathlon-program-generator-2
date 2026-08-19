@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import math
+import re
 from threading import RLock
 from typing import Any, Mapping, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -347,6 +348,176 @@ class AthleteMesocycleAccentPreferences:
             ),
         )
         return preferences.validate()
+
+
+PLANNING_CALENDAR_EVENT_TYPES = (
+    "MAIN_RACE",
+    "CONTROL_RACE",
+    "CAMP",
+    "TEST",
+    "UNAVAILABLE",
+)
+PLANNING_CALENDAR_EVENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$")
+
+
+@dataclass(frozen=True)
+class AthletePlanningCalendarEvent:
+    """A coach-owned calendar boundary used later by the plan generator."""
+
+    event_id: str
+    event_type: str
+    name: str
+    start_date: date
+    end_date: date
+
+    def validate(self) -> "AthletePlanningCalendarEvent":
+        if not PLANNING_CALENDAR_EVENT_ID_PATTERN.fullmatch(self.event_id):
+            raise ValueError("planning calendar event id is invalid")
+        if self.event_type not in PLANNING_CALENDAR_EVENT_TYPES:
+            raise ValueError("planning calendar event type is invalid")
+        if (
+            not self.name
+            or self.name.strip() != self.name
+            or len(self.name) > 120
+            or any(ord(character) < 32 for character in self.name)
+        ):
+            raise ValueError("planning calendar event name is invalid")
+        if self.end_date < self.start_date:
+            raise ValueError("planning calendar event end precedes its start")
+        return self
+
+    def to_payload(self) -> dict[str, str]:
+        self.validate()
+        return {
+            "event_id": self.event_id,
+            "event_type": self.event_type,
+            "name": self.name,
+            "start_date": self.start_date.isoformat(),
+            "end_date": self.end_date.isoformat(),
+        }
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> "AthletePlanningCalendarEvent":
+        if set(payload) != {
+            "event_id",
+            "event_type",
+            "name",
+            "start_date",
+            "end_date",
+        } or any(not isinstance(payload[field], str) for field in payload):
+            raise ValueError("planning calendar event fields are invalid")
+        try:
+            event = cls(
+                event_id=payload["event_id"],
+                event_type=payload["event_type"],
+                name=payload["name"],
+                start_date=date.fromisoformat(payload["start_date"]),
+                end_date=date.fromisoformat(payload["end_date"]),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("planning calendar event fields are invalid") from exc
+        return event.validate()
+
+
+@dataclass(frozen=True)
+class AthletePlanningCalendar:
+    """Versioned, athlete-scoped planning calendar without inferred events."""
+
+    events: tuple[AthletePlanningCalendarEvent, ...]
+    schema_version: str = "planning-calendar-v1"
+
+    def validate(self) -> "AthletePlanningCalendar":
+        if self.schema_version != "planning-calendar-v1":
+            raise ValueError("unsupported planning calendar version")
+        if len(self.events) > 100:
+            raise ValueError("planning calendar supports at most 100 events")
+        validated = tuple(event.validate() for event in self.events)
+        identifiers = tuple(event.event_id for event in validated)
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("planning calendar event ids must be unique")
+        return self
+
+    @property
+    def canonical_events(self) -> tuple[AthletePlanningCalendarEvent, ...]:
+        self.validate()
+        return tuple(
+            sorted(
+                self.events,
+                key=lambda event: (
+                    event.start_date,
+                    event.end_date,
+                    event.event_type,
+                    event.event_id,
+                ),
+            )
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "events": [event.to_payload() for event in self.canonical_events],
+        }
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> "AthletePlanningCalendar":
+        if set(payload) != {"schema_version", "events"}:
+            raise ValueError("planning calendar fields are invalid")
+        if not isinstance(payload["schema_version"], str) or not isinstance(
+            payload["events"], list
+        ) or any(not isinstance(event, Mapping) for event in payload["events"]):
+            raise ValueError("planning calendar fields are invalid")
+        calendar = cls(
+            schema_version=payload["schema_version"],
+            events=tuple(
+                AthletePlanningCalendarEvent.from_mapping(event)
+                for event in payload["events"]
+            ),
+        )
+        return calendar.validate()
+
+
+def planning_generation_context(
+    *,
+    calendar: AthletePlanningCalendar | None,
+    profile: AthletePlanningProfile | None,
+    accent_preferences: AthleteMesocycleAccentPreferences | None,
+    training_snapshot: Mapping[str, Any] | None,
+    as_of: date,
+) -> dict[str, Any]:
+    """Report required planning inputs without generating or guessing a plan."""
+
+    future_main_events = (
+        [
+            event
+            for event in calendar.canonical_events
+            if event.event_type == "MAIN_RACE" and event.start_date >= as_of
+        ]
+        if calendar is not None
+        else []
+    )
+    missing_inputs = []
+    if profile is None:
+        missing_inputs.append("PLANNING_PROFILE")
+    if accent_preferences is None:
+        missing_inputs.append("MESOCYCLE_ACCENTS")
+    if not future_main_events:
+        missing_inputs.append("FUTURE_MAIN_RACE")
+    if training_snapshot is None:
+        missing_inputs.append("TRAINING_SNAPSHOT")
+    next_main_race = future_main_events[0] if future_main_events else None
+    return {
+        "schema_version": "planning-context-v1",
+        "as_of": as_of.isoformat(),
+        "ready_for_generation": not missing_inputs,
+        "generator_status": "NOT_ACTIVE",
+        "missing_inputs": missing_inputs,
+        "next_main_race": (
+            next_main_race.to_payload() if next_main_race is not None else None
+        ),
+        "methodology_version": "onflows-canonical-v1",
+        "recovery_basis": "LOAD_ONLY",
+        "wellness_integration": "DIAGNOSTIC_ONLY",
+    }
 
 
 @dataclass(frozen=True)

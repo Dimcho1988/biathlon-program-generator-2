@@ -12,6 +12,10 @@ import {
   type PlanningMethodology,
   type PlanningProfileResponse,
 } from "./planning-profile";
+import {
+  parsePlanningCalendarResponse,
+  type PlanningCalendarResponse,
+} from "./planning-calendar";
 import { waitForApi } from "./api-readiness";
 
 // Render Free can take more than 50 seconds to wake the API after inactivity.
@@ -135,6 +139,20 @@ export async function getMesocycleAccentPreferences(
   return parseMesocycleAccentPreferencesResponse(
     await fetchApiResource(
       "/api/v2/athlete/mesocycle-accent-preferences",
+      token,
+      athleteAlias,
+    ),
+  );
+}
+
+export async function getPlanningCalendar(
+  athleteAlias: string,
+): Promise<PlanningCalendarResponse> {
+  const token = process.env.ONFLOWS_SERVICE_TOKEN;
+  if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
+  return parsePlanningCalendarResponse(
+    await fetchApiResource(
+      "/api/v2/athlete/planning-calendar",
       token,
       athleteAlias,
     ),

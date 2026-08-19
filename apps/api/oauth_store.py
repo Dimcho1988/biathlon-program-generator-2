@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from .cloud import (
     AthleteMesocycleAccentPreferences,
     AthleteModelSettings,
+    AthletePlanningCalendar,
     AthletePlanningProfile,
     SnapshotRepository,
 )
@@ -448,6 +449,43 @@ class SupabasePilotRepository(SnapshotRepository):
             f"/onflows_athlete_settings?athlete_alias=eq.{alias}",
             json={
                 "mesocycle_accent_preferences": preferences.to_payload(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            headers={"Prefer": "return=minimal"},
+        )
+
+    def athlete_planning_calendar(
+        self, athlete_alias: str
+    ) -> AthletePlanningCalendar | None:
+        alias = quote(athlete_alias, safe="")
+        response = self._request(
+            "GET",
+            "/onflows_athlete_settings?select=planning_calendar"
+            f"&athlete_alias=eq.{alias}&limit=1",
+        )
+        payload = self._json(response)
+        if not isinstance(payload, list) or not payload:
+            return None
+        row = payload[0]
+        calendar = row.get("planning_calendar") if isinstance(row, Mapping) else None
+        if calendar is None:
+            return None
+        if not isinstance(calendar, Mapping):
+            raise PersistentStoreFailure("Stored planning calendar is invalid")
+        try:
+            return AthletePlanningCalendar.from_mapping(calendar)
+        except ValueError as exc:
+            raise PersistentStoreFailure("Stored planning calendar is invalid") from exc
+
+    def save_athlete_planning_calendar(
+        self, athlete_alias: str, calendar: AthletePlanningCalendar
+    ) -> None:
+        alias = quote(athlete_alias, safe="")
+        self._request(
+            "PATCH",
+            f"/onflows_athlete_settings?athlete_alias=eq.{alias}",
+            json={
+                "planning_calendar": calendar.to_payload(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
             headers={"Prefer": "return=minimal"},

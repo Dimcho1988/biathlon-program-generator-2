@@ -112,6 +112,47 @@ class MesocycleAccentPreferencesResponse(StrictModel):
     resolution: MesocycleAccentResolution | None = None
 
 
+class PlanningCalendarEvent(StrictModel):
+    event_id: str
+    event_type: Literal[
+        "MAIN_RACE", "CONTROL_RACE", "CAMP", "TEST", "UNAVAILABLE"
+    ]
+    name: str
+    start_date: date
+    end_date: date
+
+
+class PlanningCalendarInput(StrictModel):
+    schema_version: Literal["planning-calendar-v1"]
+    events: tuple[PlanningCalendarEvent, ...]
+
+
+class PlanningGenerationContext(StrictModel):
+    schema_version: Literal["planning-context-v1"]
+    as_of: date
+    ready_for_generation: bool
+    generator_status: Literal["NOT_ACTIVE"]
+    missing_inputs: tuple[
+        Literal[
+            "PLANNING_PROFILE",
+            "MESOCYCLE_ACCENTS",
+            "FUTURE_MAIN_RACE",
+            "TRAINING_SNAPSHOT",
+        ],
+        ...,
+    ]
+    next_main_race: PlanningCalendarEvent | None
+    methodology_version: Literal["onflows-canonical-v1"]
+    recovery_basis: Literal["LOAD_ONLY"]
+    wellness_integration: Literal["DIAGNOSTIC_ONLY"]
+
+
+class PlanningCalendarResponse(StrictModel):
+    configured: bool
+    calendar: PlanningCalendarInput | None = None
+    context: PlanningGenerationContext
+
+
 class ModelMetadata(StrictModel):
     algorithm_version: str
     effective_hr_version: str

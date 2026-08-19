@@ -6,6 +6,8 @@ import {
   type PlanningProfile,
 } from "../lib/planning-profile";
 import { MesocycleAccentEditor } from "./mesocycle-accent-editor";
+import { PlanningCalendarPanel } from "./planning-calendar-panel";
+import type { PlanningCalendarResponse } from "../lib/planning-calendar";
 
 function WeekdayChoices({
   name,
@@ -39,11 +41,13 @@ export function PlanningProfileForm({
   profile,
   methodology,
   accentPreferences,
+  planningCalendar,
   notice,
 }: {
   profile: PlanningProfile | null;
   methodology: PlanningMethodology;
   accentPreferences: MesocycleAccentPreferencesResponse;
+  planningCalendar: PlanningCalendarResponse;
   notice?: string;
 }) {
   return <main className="state-page settings-page planning-page">
@@ -85,6 +89,7 @@ export function PlanningProfileForm({
       methodology={methodology}
       profileConfigured={profile !== null}
     />
+    <PlanningCalendarPanel response={planningCalendar} />
     <form className="planning-profile-form" action="/api/athlete/planning-profile" method="post">
       <input type="hidden" name="schema_version" value="planning-profile-v1" />
 

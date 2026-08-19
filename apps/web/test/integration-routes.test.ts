@@ -5,6 +5,7 @@ import { GET as refreshFromNavigation, POST as refresh } from "../app/api/integr
 import { POST as saveSettings } from "../app/api/athlete/settings/route";
 import { POST as savePlanningProfile } from "../app/api/athlete/planning-profile/route";
 import { POST as saveMesocycleAccents } from "../app/api/athlete/mesocycle-accents/route";
+import { POST as savePlanningCalendar } from "../app/api/athlete/planning-calendar/route";
 import { GET as complete } from "../app/api/session/complete/route";
 import { createAthleteSession, verifyAthleteSession } from "../lib/athlete-session";
 
@@ -302,6 +303,44 @@ describe("integration route redirects behind a reverse proxy", () => {
       accent_mode: "HYBRID",
       accent_limit: 3,
       manual_components: ["Z3", "Z5"],
+    });
+  });
+
+  it("saves a canonical planning calendar only for the signed athlete session", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    process.env.ONFLOWS_PROFILE_MODE = "multi";
+    process.env.ONFLOWS_SESSION_SECRET = "a-secret-value-with-at-least-32-characters";
+    const session = createAthleteSession("ath-test-profile");
+    vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: session }) } as never);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json({ configured: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const events = [
+      {
+        event_id: "event-main-0001",
+        event_type: "MAIN_RACE",
+        name: "Основен старт",
+        start_date: "2026-12-12",
+        end_date: "2026-12-13",
+      },
+    ];
+    const form = new FormData();
+    form.set("schema_version", "planning-calendar-v1");
+    form.set("events_json", JSON.stringify(events));
+
+    const response = await savePlanningCalendar(new Request(
+      "https://web.example.test/api/athlete/planning-calendar",
+      { method: "POST", body: form },
+    ));
+
+    expect(response.headers.get("location")).toBe("/planning?planning=calendar-saved");
+    const [, init] = fetchMock.mock.calls[1];
+    expect(init.headers["X-OnFlows-Athlete-Alias"]).toBe("ath-test-profile");
+    expect(JSON.parse(init.body)).toEqual({
+      schema_version: "planning-calendar-v1",
+      events,
     });
   });
 });
