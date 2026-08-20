@@ -111,6 +111,18 @@ python -m streamlit run app.py
 
 След стартиране приложението обикновено се отваря на `http://localhost:8501`.
 
+### Експериментална Vflat лаборатория
+
+Отделната лаборатория за емпирично калибриране с реални TCX файлове се стартира
+без да променя основното приложение:
+
+```bash
+python -m streamlit run vflat_lab_app.py
+```
+
+Подробната методика и настройките са описани в
+[`docs/VFLAT_LAB.md`](docs/VFLAT_LAB.md).
+
 ## Streamlit Community Cloud
 
 За repository, в който `app.py` е в основната директория:
