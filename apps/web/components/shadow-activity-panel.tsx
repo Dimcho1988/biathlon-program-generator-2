@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 type Row = Record<string, unknown>;
 
@@ -52,10 +52,10 @@ export function ShadowActivityPanel({ payload }: { payload: Record<string, unkno
   const segments = Array.isArray(payload.segments_15s) ? payload.segments_15s as Row[] : [];
   const diagnostics = (payload.diagnostics && typeof payload.diagnostics === "object") ? payload.diagnostics as Row : {};
   const hrDiagnostics = (diagnostics.hrmod && typeof diagnostics.hrmod === "object") ? diagnostics.hrmod as Row : {};
-  const allFlags = useMemo(() => Array.from(new Set(rows.flatMap((row) => [
+  const allFlags = Array.from(new Set(rows.flatMap((row) => [
     ...(Array.isArray(row.quality_flags) ? row.quality_flags : []),
     ...(Array.isArray(row.model_flags) ? row.model_flags : []),
-  ].map(String)))), [rows]);
+  ].map(String))));
 
   return (
     <div>
@@ -92,7 +92,7 @@ export function ShadowActivityPanel({ payload }: { payload: Record<string, unkno
           ["receiver_downhill_overlap_fraction", hrDiagnostics.receiver_downhill_overlap_fraction],
           ["moved_area_bpm_s", hrDiagnostics.total_moved_area_bpm_s], ["corrected waves", hrDiagnostics.corrected_wave_count],
           ["skipped waves", hrDiagnostics.skipped_wave_count], ["incomplete waves", hrDiagnostics.incomplete_wave_count],
-        ].map(([label, value]) => <tr key={String(label)}><th>{label}</th><td>{text(value)}</td></tr>)}
+        ].map(([label, value]) => <tr key={String(label)}><th>{text(label)}</th><td>{text(value)}</td></tr>)}
       </tbody></table>
 
       <h2>HR вълни, receiver и donor</h2>
