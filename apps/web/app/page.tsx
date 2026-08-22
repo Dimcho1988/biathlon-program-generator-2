@@ -136,7 +136,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
     : query.intervals ? notices[query.intervals] : undefined;
   const notice = settingsNotice ?? integrationNotice;
   return result.ok
-    ? <><p style={{ margin: "1rem auto", maxWidth: 1180 }}><a href="/shadow">Experimental Vflat B65 / HRmod shadow →</a></p><Dashboard {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} notice={notice} /></>
+    ? <Dashboard {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} notice={notice} />
     : <ErrorState
       message={result.message}
       integrationActions={integrationActions}

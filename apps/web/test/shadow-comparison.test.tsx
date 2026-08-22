@@ -1,0 +1,48 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+import { ShadowActivityPanel } from "../components/shadow-activity-panel";
+
+const payload = {
+  vflat_model_version: "vflat_b65_dynamic_v1",
+  vflat_config_version: "vflat_b65_config_v1",
+  hrmod_model_version: "hrmod_mirror_area_shift_v4",
+  hrmod_config_version: "hrmod_config_v4",
+  terrain_model_version: "terrain_downhill_donor_exclusion_v4",
+  timeseries: [
+    { timestamp: "2026-08-22T08:00:00Z", elapsed_s: 0, speed_raw_kmh: 12, vflat_b65_kmh: 13, hr_raw_bpm: 140, hr_clean_bpm: 140, hrmod_candidate_bpm: 142, hrmod_final_bpm: 142, grade_raw_pct: 2, grade_smoothed_pct: 2, added_bpm: 2, removed_bpm: 0, receiver_flag: true, donor_flag: false, quality_flags: [], model_flags: [] },
+    { timestamp: "2026-08-22T08:00:01Z", elapsed_s: 1, speed_raw_kmh: 11, vflat_b65_kmh: 13, hr_raw_bpm: 141, hr_clean_bpm: 141, hrmod_candidate_bpm: 143, hrmod_final_bpm: 143, grade_raw_pct: 3, grade_smoothed_pct: 2.5, added_bpm: 2, removed_bpm: 0, receiver_flag: true, donor_flag: false, quality_flags: [], model_flags: ["RECEIVER_DOWNHILL_OVERLAP"] },
+    { timestamp: "2026-08-22T08:00:02Z", elapsed_s: 2, speed_raw_kmh: 14, vflat_b65_kmh: 14, hr_raw_bpm: 143, hr_clean_bpm: 143, hrmod_candidate_bpm: 139, hrmod_final_bpm: 139, grade_raw_pct: -2, grade_smoothed_pct: -1.5, added_bpm: 0, removed_bpm: 4, receiver_flag: false, donor_flag: true, quality_flags: [], model_flags: [] },
+  ],
+  segments_15s: [
+    { segment_index: 0, start_elapsed_s: 0, end_elapsed_s: 15, speed_raw_kmh: 12.3, vflat_b65_kmh: 13.3, hr_raw_bpm: 141.3, hrmod_final_bpm: 141.3, grade_smoothed_pct: 1 },
+  ],
+  zone_summary: [
+    { zone_name: "Z1", raw_seconds: 30, clean_seconds: 30, hrmod_seconds: 20, hrmod_minus_clean_seconds: -10 },
+    { zone_name: "Z2", raw_seconds: 30, clean_seconds: 30, hrmod_seconds: 40, hrmod_minus_clean_seconds: 10 },
+  ],
+  hrmod_waves: [
+    { wave_id: 1, corrected: true, rise_start_elapsed_s: 0, peak_elapsed_s: 1, tail_end_elapsed_s: 2, added_area_bpm_s: 4, removed_area_bpm_s: 4, moved_area_bpm_s: 4, capacity_limited: false, receiver_downhill_overlap_s: 0, flags: ["AREA_CONSERVATION_PASSED"] },
+  ],
+  diagnostics: {
+    hrmod: { max_added_bpm: 2, max_removed_bpm: 4, corrected_wave_count: 1, skipped_wave_count: 0, incomplete_wave_count: 0, total_moved_area_bpm_s: 4 },
+  },
+  hashes: { hr_input_hash: "abc" },
+};
+
+describe("Raw ↔ Shadow comparison", () => {
+  it("renders a coach-facing parallel comparison without implying canonical effects", () => {
+    const html = renderToStaticMarkup(
+      <ShadowActivityPanel payload={payload} activityRef="shadow-0123456789abcdef0123456789abcdef" />,
+    );
+    for (const label of [
+      "Средна скорост", "Среден пулс", "Преразпределено по зони",
+      "Реална скорост ↔ Vflat B65", "Raw / clean HR ↔ HRmod candidate / final",
+      "Receiver и donor интервали", "Raw ↔ HRmod времена по зони",
+      "15-секундни сегменти (1)", "HR вълни, receiver и donor (1)",
+    ]) expect(html).toContain(label);
+    expect(html).toContain("vflat_b65_dynamic_v1");
+    expect(html).toContain("hrmod_mirror_area_shift_v4");
+    expect(html).toContain("RECEIVER_DOWNHILL_OVERLAP");
+    expect(html).toContain("89ABCDEF");
+  });
+});

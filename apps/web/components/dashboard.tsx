@@ -39,6 +39,7 @@ function AnalysisNavigation({ planningAvailable }: { planningAvailable: boolean 
   return <nav className="analysis-nav" aria-label="Модули на тренировъчния анализ">
     <p className="analysis-nav-label">Модули</p>
     {analysisSections.map(([href, label]) => <a key={href} href={href}>{label}</a>)}
+    <Link href="/shadow">Raw ↔ Shadow</Link>
     {planningAvailable && <Link href="/planning">Профил за планиране</Link>}
   </nav>;
 }
