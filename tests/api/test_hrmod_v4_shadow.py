@@ -60,7 +60,9 @@ def test_production_adapter_preserves_streamlit_v4_candidate_and_raw_hr() -> Non
     samples, references = _inputs()
     profile = _profile()
     config = HRmodConfig()
-    golden = compute_hrmod_hr_only(samples, profile, config)
+    golden = compute_hrmod_hr_only(
+        hr_samples=samples, athlete_profile=profile, config=config
+    )
     result = run_hrmod_v4_shadow(
         hr_samples=samples,
         athlete_profile=profile,
@@ -103,7 +105,9 @@ def test_receiver_downhill_overlap_is_warning_only() -> None:
     samples, flat_references = _inputs()
     profile = _profile()
     config = HRmodConfig()
-    core = compute_hrmod_hr_only(samples, profile, config)
+    core = compute_hrmod_hr_only(
+        hr_samples=samples, athlete_profile=profile, config=config
+    )
     corrected = next(wave for wave in core.wave_summary if wave.corrected)
     grades = [
         -4.0 if corrected.rise_start_elapsed_s <= point.elapsed_s <= corrected.peak_elapsed_s else 0.0
@@ -153,7 +157,9 @@ def test_terrain_uses_explicit_hrmax_not_z5_upper() -> None:
 def test_extreme_delta_flag_is_diagnostic_only() -> None:
     samples, references = _inputs()
     profile = _profile()
-    core = compute_hrmod_hr_only(samples, profile, HRmodConfig())
+    core = compute_hrmod_hr_only(
+        hr_samples=samples, athlete_profile=profile, config=HRmodConfig()
+    )
     result = run_hrmod_v4_shadow(
         hr_samples=samples,
         athlete_profile=profile,

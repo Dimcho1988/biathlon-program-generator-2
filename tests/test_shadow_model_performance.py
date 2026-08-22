@@ -38,7 +38,11 @@ def test_hrmod_v4_and_vflat_b65_process_at_least_10000_samples() -> None:
         }
     )
     started = perf_counter()
-    hrmod = compute_hrmod_hr_only(samples, profile, HRmodConfig())
+    hrmod = compute_hrmod_hr_only(
+        hr_samples=samples,
+        athlete_profile=profile,
+        config=HRmodConfig(),
+    )
     vflat = apply_vflat_b65(frame)
     elapsed = perf_counter() - started
     assert len(hrmod.timeseries) == count

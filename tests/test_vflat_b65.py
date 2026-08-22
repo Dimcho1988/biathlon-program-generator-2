@@ -50,7 +50,10 @@ def test_locked_versions_defaults_and_golden_multipliers() -> None:
 
 @pytest.mark.parametrize("boundary", (-3.0, -1.0, 1.0, 5.0, 8.0, 15.0))
 def test_stationary_curve_is_continuous_at_locked_boundaries(boundary: float) -> None:
-    epsilon = 1e-7
+    # The accepted base curve uses a 0.53 power immediately above +1%, so its
+    # derivative is unbounded at the boundary even though the value is
+    # continuous.  Use a limit-scale epsilon rather than a slope assertion.
+    epsilon = 1e-12
     values = stationary_multiplier_b65(
         np.asarray([boundary - epsilon, boundary, boundary + epsilon])
     )
