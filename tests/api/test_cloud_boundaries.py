@@ -346,6 +346,7 @@ def test_athlete_settings_are_scoped_to_the_authenticated_profile(monkeypatch):
     body = {
         "hr_zone_bounds_bpm": [100, 120, 140, 160, 180, 200],
         "timezone": "Europe/Sofia",
+        "hrmax_bpm": 205,
     }
 
     saved = client.put("/api/v2/athlete/settings", headers=headers, json=body)

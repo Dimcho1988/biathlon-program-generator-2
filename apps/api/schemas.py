@@ -36,12 +36,14 @@ class SessionExchangeResponse(StrictModel):
 class AthleteSettingsInput(StrictModel):
     hr_zone_bounds_bpm: tuple[int, int, int, int, int, int]
     timezone: str
+    hrmax_bpm: int | None = None
 
 
 class AthleteSettingsResponse(StrictModel):
     configured: bool
     hr_zone_bounds_bpm: tuple[int, int, int, int, int, int] | None = None
     timezone: str | None = None
+    hrmax_bpm: int | None = None
 
 
 class AthletePlanningProfileInput(StrictModel):

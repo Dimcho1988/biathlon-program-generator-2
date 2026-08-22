@@ -27,6 +27,19 @@ export interface AthleteSettings {
   configured: boolean;
   hr_zone_bounds_bpm: [number, number, number, number, number, number] | null;
   timezone: string | null;
+  hrmax_bpm: number | null;
+}
+export interface ActivityShadowIndexRow {
+  activity_ref: string;
+  run_key: string;
+  created_at?: string;
+  vflat_model_version?: string | null;
+  hrmod_model_version?: string | null;
+  terrain_model_version?: string | null;
+}
+export interface ActivityShadowIndex {
+  schema_version: "activity-shadow-index-v1";
+  activities: ActivityShadowIndexRow[];
 }
 
 async function fetchApiResource(path: string, token?: string, athleteAlias?: string): Promise<unknown> {
@@ -108,11 +121,49 @@ export async function getAthleteSettings(athleteAlias: string): Promise<AthleteS
     throw new Error("API услугата върна невалидни настройки на спортиста.");
   const bounds = "hr_zone_bounds_bpm" in payload ? payload.hr_zone_bounds_bpm : null;
   const timezone = "timezone" in payload ? payload.timezone : null;
+  const hrmax = "hrmax_bpm" in payload ? payload.hrmax_bpm : null;
   if (bounds !== null && (!Array.isArray(bounds) || bounds.length !== 6 || !bounds.every((value) => Number.isInteger(value))))
     throw new Error("API услугата върна невалидни HR граници.");
   if (timezone !== null && typeof timezone !== "string")
     throw new Error("API услугата върна невалидна часова зона.");
-  return { configured: payload.configured, hr_zone_bounds_bpm: bounds as AthleteSettings["hr_zone_bounds_bpm"], timezone };
+  if (hrmax !== null && (!Number.isInteger(hrmax) || Number(hrmax) < 30 || Number(hrmax) > 240))
+    throw new Error("API услугата върна невалиден HRmax.");
+  return { configured: payload.configured, hr_zone_bounds_bpm: bounds as AthleteSettings["hr_zone_bounds_bpm"], timezone, hrmax_bpm: hrmax as number | null };
+}
+
+export async function getActivityShadowIndex(
+  athleteAlias: string,
+): Promise<ActivityShadowIndex> {
+  const token = process.env.ONFLOWS_SERVICE_TOKEN;
+  if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
+  const payload = await fetchApiResource(
+    "/api/v2/real/activity-shadows",
+    token,
+    athleteAlias,
+  );
+  if (
+    typeof payload !== "object" || payload === null ||
+    !("activities" in payload) || !Array.isArray(payload.activities)
+  ) throw new Error("API услугата върна невалиден shadow index.");
+  return payload as ActivityShadowIndex;
+}
+
+export async function getActivityShadow(
+  athleteAlias: string,
+  activityRef: string,
+): Promise<Record<string, unknown>> {
+  const token = process.env.ONFLOWS_SERVICE_TOKEN;
+  if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
+  if (!/^shadow-[a-f0-9]{32}$/.test(activityRef))
+    throw new Error("Невалиден shadow activity reference.");
+  const payload = await fetchApiResource(
+    `/api/v2/real/activity-shadow?activity_ref=${encodeURIComponent(activityRef)}`,
+    token,
+    athleteAlias,
+  );
+  if (typeof payload !== "object" || payload === null)
+    throw new Error("API услугата върна невалиден shadow резултат.");
+  return payload as Record<string, unknown>;
 }
 
 export async function getAthletePlanningProfile(athleteAlias: string): Promise<PlanningProfileResponse> {

@@ -9,7 +9,7 @@ only for the duration of a call; returned values are aggregate diagnostics.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import math
@@ -214,6 +214,9 @@ def process_activity_payloads(
     experimental_configuration: ShadowModelConfiguration | None = None,
     prior_baseline_effective_load: Sequence[Mapping[str, Any]] = (),
     prior_experimental_effective_load: Sequence[Mapping[str, Any]] = (),
+    shadow_processor: Callable[
+        [Mapping[str, Any], IntervalAwareResult], Mapping[str, Any]
+    ] | None = None,
 ) -> dict[str, Any]:
     """Validate, normalize, adapt, and model one already-loaded activity."""
 
@@ -262,6 +265,18 @@ def process_activity_payloads(
         "normalized_once": True,
         "shared_by_baseline_and_experimental": True,
     }
+    if shadow_processor is not None:
+        try:
+            shadow_status = shadow_processor(detail_payload, interval_result)
+            summary["activity_shadow_status"] = dict(shadow_status)
+        except Exception:
+            # Experimental processing can fail closed but must never exclude or
+            # change the canonical activity model result.
+            summary["activity_shadow_status"] = {
+                "status": "failed",
+                "exclusion_reason": "SHADOW_PROCESSING_FAILED",
+                "affects_canonical_load": False,
+            }
     return summary
 
 

@@ -86,6 +86,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
       editing
       initialBounds={settings.hr_zone_bounds_bpm}
       initialTimezone={settings.timezone}
+      initialHrmax={settings.hrmax_bpm}
     />;
   }
 
@@ -135,7 +136,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
     : query.intervals ? notices[query.intervals] : undefined;
   const notice = settingsNotice ?? integrationNotice;
   return result.ok
-    ? <Dashboard {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} notice={notice} />
+    ? <><p style={{ margin: "1rem auto", maxWidth: 1180 }}><a href="/shadow">Experimental Vflat B65 / HRmod shadow →</a></p><Dashboard {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} notice={notice} /></>
     : <ErrorState
       message={result.message}
       integrationActions={integrationActions}

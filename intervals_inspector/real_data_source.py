@@ -10,7 +10,7 @@ streams, OAuth values, provider identifiers, names, or GPS data.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import hashlib
@@ -356,6 +356,9 @@ def load_real_history(
     days: int = DEFAULT_HISTORY_DAYS,
     configuration: ShadowModelConfiguration | None = None,
     loaded_at_utc: datetime | None = None,
+    activity_shadow_processor: Callable[
+        [str, Mapping[str, Any], Any], Mapping[str, Any]
+    ] | None = None,
 ) -> RealHistoryDataset:
     """Load and process one bounded real history in chronological order."""
 
@@ -436,6 +439,11 @@ def load_real_history(
         for provider_id in day_provider_ids:
             activity_ordinal += 1
             activity_ref = f"activity-{activity_ordinal:03d}"
+            shadow_activity_ref = "shadow-" + hmac.new(
+                session_salt.encode("utf-8"),
+                provider_id.encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()[:32]
             try:
                 detail = _response_payload(
                     client.get_activity_result(provider_id, include_intervals=False)
@@ -465,6 +473,13 @@ def load_real_history(
                         ),
                         prior_experimental_effective_load=(
                             prior_experimental_effective_load
+                        ),
+                        shadow_processor=(
+                            None
+                            if activity_shadow_processor is None
+                            else lambda shadow_detail, normalized, ref=shadow_activity_ref: (
+                                activity_shadow_processor(ref, shadow_detail, normalized)
+                            )
                         ),
                     )
             except Exception:
