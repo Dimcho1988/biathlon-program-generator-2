@@ -222,6 +222,8 @@ describe("dashboard", () => {
       "#quality-title", "#zones-title", "#completed-work-title", "#volume-title", "#history-title", "#recovery-title", "#model-metadata",
     ]);
     for (const label of ["Качество", "Статус по зони", "Извършена работа", "Общ обем", "7/40 и зонален товар", "Възстановяване", "Версии на моделите"]) expect(html).toContain(label);
+    expect(html).toContain('href="/shadow"');
+    expect(html).toContain("Raw ↔ Shadow");
     expect(html).not.toContain('href="/planning"');
     const protectedHtml = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="api" sessionActions />);
     expect(protectedHtml).toContain('href="/planning"');
