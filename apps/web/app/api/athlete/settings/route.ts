@@ -17,10 +17,13 @@ export async function POST(request: Request) {
     const form = await request.formData();
     const bounds = fieldNames.map((name) => Number(form.get(name)));
     const timezone = String(form.get("timezone") ?? "").trim();
+    const hrmax = Number(form.get("hrmax_bpm"));
     if (
       bounds.some((value) => !Number.isInteger(value) || value < 30 || value > 240)
       || bounds.some((value, index) => index > 0 && bounds[index - 1] >= value)
       || !timezone
+      || !Number.isInteger(hrmax) || hrmax < 30 || hrmax > 240
+      || bounds[5] > hrmax
     ) return new NextResponse(null, { status: 303, headers: { Location: "/?settings=invalid" } });
     stage = "api";
     await waitForApi(baseUrl);
@@ -33,7 +36,7 @@ export async function POST(request: Request) {
         "Content-Type": "application/json",
         "X-OnFlows-Athlete-Alias": athleteAlias,
       },
-      body: JSON.stringify({ hr_zone_bounds_bpm: bounds, timezone }),
+      body: JSON.stringify({ hr_zone_bounds_bpm: bounds, timezone, hrmax_bpm: hrmax }),
       signal: AbortSignal.timeout(75_000),
     });
     stage = `api-response-${response.status}`;

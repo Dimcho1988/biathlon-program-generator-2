@@ -7,6 +7,7 @@ single-profile implementation is deliberately an adapter around an
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
 from datetime import date, datetime, timezone
 import hashlib
 import hmac
@@ -24,6 +25,7 @@ class AthleteModelSettings:
 
     zone_bounds_bpm: tuple[int, int, int, int, int, int]
     timezone: str
+    hrmax_bpm: int | None = None
 
     def validate(self) -> "AthleteModelSettings":
         if len(self.zone_bounds_bpm) != 6 or any(
@@ -37,6 +39,11 @@ class AthleteModelSettings:
             ZoneInfo(self.timezone)
         except (ZoneInfoNotFoundError, ValueError) as exc:
             raise ValueError("a valid IANA timezone is required") from exc
+        if self.hrmax_bpm is not None:
+            if not 30 <= self.hrmax_bpm <= 240:
+                raise ValueError("explicit HRmax must be between 30 and 240 bpm")
+            if self.zone_bounds_bpm[-1] > self.hrmax_bpm:
+                raise ValueError("HR zones cannot exceed explicit HRmax")
         return self
 
 
@@ -529,6 +536,7 @@ class AthleteContext:
     intra_zone_version: str
     tref_version: str
     recovery_parameter_version: str
+    hrmax_bpm: int | None = None
 
     def validate(self) -> "AthleteContext":
         if not self.public_alias or self.public_alias.strip() != self.public_alias:
@@ -543,6 +551,11 @@ class AthleteContext:
             raise ValueError("unapproved intra-zone version")
         if not all((self.timezone, self.tref_version, self.recovery_parameter_version)):
             raise ValueError("all configuration versions are required")
+        if self.hrmax_bpm is not None and (
+            not 30 <= self.hrmax_bpm <= 240
+            or self.zone_bounds_bpm[-1] > self.hrmax_bpm
+        ):
+            raise ValueError("explicit HRmax is invalid")
         return self
 
     @property
@@ -551,7 +564,8 @@ class AthleteContext:
         # Provider identity is intentionally excluded from model configuration.
         payload = {"alias": self.public_alias, "zones": self.zone_bounds_bpm,
                    "timezone": self.timezone, "intra": self.intra_zone_version,
-                   "tref": self.tref_version, "recovery": self.recovery_parameter_version}
+                   "tref": self.tref_version, "recovery": self.recovery_parameter_version,
+                   "explicit_hrmax": self.hrmax_bpm}
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
@@ -750,12 +764,76 @@ def summarize_wellness_coverage(
 class SnapshotRepository(Protocol):
     def latest(self, athlete_alias: str) -> Mapping[str, Any] | None: ...
     def replace(self, athlete_alias: str, snapshot: Mapping[str, Any]) -> None: ...
+    def publish_activity_shadow(
+        self,
+        *,
+        athlete_alias: str,
+        activity_ref: str,
+        input_payload: Mapping[str, Any],
+        derived_payload: Mapping[str, Any],
+    ) -> str: ...
+    def activity_shadow(
+        self, athlete_alias: str, activity_ref: str
+    ) -> Mapping[str, Any] | None: ...
+    def activity_shadow_index(
+        self, athlete_alias: str
+    ) -> tuple[Mapping[str, Any], ...]: ...
 
 
 class InMemorySnapshotRepository:
     """Atomic process-local pilot repository; replaceable by persistent storage."""
-    def __init__(self) -> None: self._lock, self._items = RLock(), {}
+    def __init__(self) -> None:
+        self._lock, self._items = RLock(), {}
+        self._activity_inputs: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._activity_runs: dict[tuple[str, str], list[dict[str, Any]]] = {}
     def latest(self, athlete_alias: str) -> Mapping[str, Any] | None:
         with self._lock: return self._items.get(athlete_alias)
     def replace(self, athlete_alias: str, snapshot: Mapping[str, Any]) -> None:
         with self._lock: self._items[athlete_alias] = dict(snapshot)
+    def publish_activity_shadow(
+        self,
+        *,
+        athlete_alias: str,
+        activity_ref: str,
+        input_payload: Mapping[str, Any],
+        derived_payload: Mapping[str, Any],
+    ) -> str:
+        input_hash = str(input_payload.get("input_hash") or "")
+        result_hash = str(derived_payload.get("result_hash") or "")
+        if len(input_hash) != 64 or len(result_hash) != 64:
+            raise ValueError("Activity shadow hashes are invalid")
+        run_key = hashlib.sha256(
+            f"{athlete_alias}|{activity_ref}|{input_hash}|{result_hash}".encode("utf-8")
+        ).hexdigest()
+        with self._lock:
+            self._activity_inputs.setdefault(
+                (athlete_alias, activity_ref, input_hash), deepcopy(dict(input_payload))
+            )
+            self._activity_runs.setdefault((athlete_alias, activity_ref), []).append(
+                {"run_key": run_key, "result_payload": deepcopy(dict(derived_payload))}
+            )
+        return run_key
+    def activity_shadow(
+        self, athlete_alias: str, activity_ref: str
+    ) -> Mapping[str, Any] | None:
+        with self._lock:
+            runs = self._activity_runs.get((athlete_alias, activity_ref), [])
+            return deepcopy(dict(runs[-1]["result_payload"])) if runs else None
+    def activity_shadow_index(
+        self, athlete_alias: str
+    ) -> tuple[Mapping[str, Any], ...]:
+        with self._lock:
+            return tuple(
+                {
+                    "activity_ref": activity_ref,
+                    "run_key": runs[-1]["run_key"],
+                    "vflat_model_version": runs[-1]["result_payload"].get(
+                        "vflat_model_version"
+                    ),
+                    "hrmod_model_version": runs[-1]["result_payload"].get(
+                        "hrmod_model_version"
+                    ),
+                }
+                for (alias, activity_ref), runs in sorted(self._activity_runs.items())
+                if alias == athlete_alias and runs
+            )

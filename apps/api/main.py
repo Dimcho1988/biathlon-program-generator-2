@@ -78,6 +78,7 @@ app = FastAPI(title="onFlows API", version="1.0.0")
 logger = logging.getLogger(__name__)
 ATHLETE_ALIAS_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{2,63}$")
 SAFE_WEB_NOTICE_PATTERN = re.compile(r"^[a-z0-9-]{1,64}$")
+ACTIVITY_SHADOW_REF_PATTERN = re.compile(r"^shadow-[a-f0-9]{32}$")
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -309,6 +310,47 @@ def real_recovery_history(
         ) from exc
 
 
+@app.get("/api/v2/real/activity-shadows")
+def real_activity_shadow_index(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    try:
+        rows = _repository().activity_shadow_index(_validated_alias(athlete_alias))
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    return {"schema_version": "activity-shadow-index-v1", "activities": rows}
+
+
+@app.get("/api/v2/real/activity-shadow")
+def real_activity_shadow(
+    activity_ref: str,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    if not ACTIVITY_SHADOW_REF_PATTERN.fullmatch(activity_ref):
+        raise HTTPException(status_code=422, detail="Invalid activity shadow reference")
+    try:
+        payload = _repository().activity_shadow(
+            _validated_alias(athlete_alias), activity_ref
+        )
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Activity shadow result is unavailable")
+    return payload
+
+
 @app.post("/api/v2/real/refresh", status_code=202)
 def refresh_real_data(
     authorization: Annotated[str | None, Header()] = None,
@@ -365,6 +407,7 @@ def athlete_settings(
         configured=True,
         hr_zone_bounds_bpm=settings.zone_bounds_bpm,
         timezone=settings.timezone,
+        hrmax_bpm=settings.hrmax_bpm,
     )
 
 
@@ -380,7 +423,7 @@ def update_athlete_settings(
     resolved_alias = _validated_alias(athlete_alias)
     try:
         settings = AthleteModelSettings(
-            body.hr_zone_bounds_bpm, body.timezone.strip()
+            body.hr_zone_bounds_bpm, body.timezone.strip(), body.hrmax_bpm
         ).validate()
     except ValueError as exc:
         raise HTTPException(
@@ -401,6 +444,7 @@ def update_athlete_settings(
         configured=True,
         hr_zone_bounds_bpm=settings.zone_bounds_bpm,
         timezone=settings.timezone,
+        hrmax_bpm=settings.hrmax_bpm,
     )
 
 

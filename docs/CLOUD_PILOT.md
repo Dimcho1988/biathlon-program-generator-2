@@ -14,11 +14,16 @@ Supabase SQL editor. They create RLS-enabled, server-only tables for:
 * short-lived, one-use login tickets;
 * athlete-specific HR boundaries and timezone;
 * aggregate athlete snapshots containing `training-status-v1` and
-  `load-history-v1` read models.
+  `load-history-v1` read models;
+* immutable, privacy-minimized activity model inputs and append-only,
+  versioned experimental Vflat/HRmod derived runs.
 
-Raw activities, streams, GPS, provider payloads and athlete names are never
-stored by this cloud layer. Supabase `anon` and `authenticated` roles receive no
-table access. Only the FastAPI service uses the Supabase secret key.
+The activity model input retains only timestamps, raw HR, raw speed,
+raw/provider grade when available, altitude, cumulative distance and quality
+flags. GPS coordinates, activity names and the full provider payload are never
+stored. Original model inputs are never overwritten. Supabase `anon` and
+`authenticated` roles receive no table access. Only the FastAPI service uses
+the Supabase secret key.
 
 Intervals access tokens do not use refresh tokens. A new OAuth grant replaces
 the previous token; disconnect/revoke requires a new authorization.
@@ -43,6 +48,8 @@ Never prefix these values with `NEXT_PUBLIC_` and never commit their values.
 * `ONFLOWS_HR_ZONE_BOUNDS` — six comma-separated integer HR boundaries used
   only as the original pilot's backward-compatible fallback.
 * `ONFLOWS_ATHLETE_TIMEZONE` — original pilot's fallback IANA timezone.
+* `ONFLOWS_HRMAX_BPM` — original pilot's optional explicit individual HRmax;
+  HRmod fails closed when it is absent and never infers it from Z5 or observed HR.
 * `ONFLOWS_INTRAZONE_VERSION` — `intra_zone_linear_v1`.
 * `ONFLOWS_TREF_VERSION` — approved fixed-Tref parameter version.
 * `ONFLOWS_RECOVERY_VERSION` — approved canonical recovery parameter version.
@@ -65,8 +72,8 @@ The browser starts OAuth through a same-origin Next.js route. Next.js calls the
 protected FastAPI authorization endpoint server-side and validates that the
 returned destination is exactly `https://intervals.icu/oauth/authorize`.
 
-New profiles must save six individually established HR boundaries and an IANA
-timezone before their first refresh. These inputs are scoped to the signed
+New profiles must save six individually established HR boundaries, an explicit
+individual HRmax and an IANA timezone before their first refresh. These inputs are scoped to the signed
 athlete session. A profile never inherits another athlete's physiological
 inputs. Tref, intra-zone and recovery model versions remain approved,
 service-wide configuration rather than duplicated per athlete.
@@ -82,6 +89,14 @@ privacy-minimized activity aggregates are available at
 `GET /api/v2/real/load-history`. Neither endpoint returns raw streams or
 provider identifiers. Existing `training-status-v1` rows remain readable
 during rollout; one successful refresh upgrades the stored envelope.
+
+Each refresh also computes the experimental Vflat B65 and HRmod v4 channels
+once during ingest and publishes a separate versioned derived run. The stored
+results are read through `GET /api/v2/real/activity-shadows` and
+`GET /api/v2/real/activity-shadow?activity_ref=...`; opening the `/shadow`
+page never recomputes either model. HRmod candidate remains HR-only, terrain is
+a separate post-core layer, and Vflat is only a parallel reference channel.
+Neither model changes canonical training load, recovery or real HR zones.
 
 The same atomic snapshot can include `recovery-history-v1`, exposed through
 `GET /api/v2/real/recovery-history`. It contains the canonical precomputed

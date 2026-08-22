@@ -333,7 +333,7 @@ class SupabasePilotRepository(SnapshotRepository):
         alias = quote(athlete_alias, safe="")
         response = self._request(
             "GET",
-            "/onflows_athlete_settings?select=hr_zone_bounds,timezone"
+            "/onflows_athlete_settings?select=hr_zone_bounds,timezone,hrmax_bpm"
             f"&athlete_alias=eq.{alias}&limit=1",
         )
         payload = self._json(response)
@@ -342,15 +342,21 @@ class SupabasePilotRepository(SnapshotRepository):
         row = payload[0]
         bounds = row.get("hr_zone_bounds") if isinstance(row, Mapping) else None
         athlete_timezone = row.get("timezone") if isinstance(row, Mapping) else None
+        hrmax_bpm = row.get("hrmax_bpm") if isinstance(row, Mapping) else None
         if (
             not isinstance(bounds, list)
             or len(bounds) != 6
             or not all(isinstance(value, int) and not isinstance(value, bool) for value in bounds)
             or not isinstance(athlete_timezone, str)
+            or (hrmax_bpm is not None and (
+                not isinstance(hrmax_bpm, int) or isinstance(hrmax_bpm, bool)
+            ))
         ):
             raise PersistentStoreFailure("Stored athlete settings are invalid")
         try:
-            return AthleteModelSettings(tuple(bounds), athlete_timezone).validate()
+            return AthleteModelSettings(
+                tuple(bounds), athlete_timezone, hrmax_bpm
+            ).validate()
         except ValueError as exc:
             raise PersistentStoreFailure("Stored athlete settings are invalid") from exc
 
@@ -365,6 +371,7 @@ class SupabasePilotRepository(SnapshotRepository):
                 "athlete_alias": athlete_alias,
                 "hr_zone_bounds": list(validated.zone_bounds_bpm),
                 "timezone": validated.timezone,
+                "hrmax_bpm": validated.hrmax_bpm,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
             headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
@@ -518,6 +525,102 @@ class SupabasePilotRepository(SnapshotRepository):
             },
             headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
         )
+
+    def publish_activity_shadow(
+        self,
+        *,
+        athlete_alias: str,
+        activity_ref: str,
+        input_payload: Mapping[str, Any],
+        derived_payload: Mapping[str, Any],
+    ) -> str:
+        """Atomically publish immutable input plus one append-only derived run."""
+        input_hash = str(input_payload.get("input_hash") or "")
+        result_hash = str(derived_payload.get("result_hash") or "")
+        if len(input_hash) != 64 or len(result_hash) != 64:
+            raise PersistentStoreFailure("Activity shadow hashes are invalid")
+        input_key = hashlib.sha256(
+            f"{athlete_alias}|{activity_ref}|{input_hash}".encode("utf-8")
+        ).hexdigest()
+        versions = "|".join(
+            str(derived_payload.get(name) or "")
+            for name in (
+                "vflat_model_version",
+                "vflat_config_version",
+                "hrmod_model_version",
+                "hrmod_config_version",
+                "terrain_model_version",
+            )
+        )
+        run_key = hashlib.sha256(
+            f"{input_key}|{versions}|{result_hash}".encode("utf-8")
+        ).hexdigest()
+        self._request(
+            "POST",
+            "/rpc/publish_onflows_activity_shadow",
+            json={
+                "p_input_key": input_key,
+                "p_athlete_alias": athlete_alias,
+                "p_activity_ref": activity_ref,
+                "p_input_hash": input_hash,
+                "p_input_schema_version": str(input_payload.get("schema_version") or ""),
+                "p_input_payload": dict(input_payload),
+                "p_run_key": run_key,
+                "p_result_hash": result_hash,
+                "p_derived_schema_version": str(derived_payload.get("schema_version") or ""),
+                "p_vflat_model_version": derived_payload.get("vflat_model_version"),
+                "p_vflat_config_version": derived_payload.get("vflat_config_version"),
+                "p_hrmod_model_version": derived_payload.get("hrmod_model_version"),
+                "p_hrmod_config_version": derived_payload.get("hrmod_config_version"),
+                "p_terrain_model_version": derived_payload.get("terrain_model_version"),
+                "p_result_payload": dict(derived_payload),
+            },
+            headers={"Prefer": "return=minimal"},
+        )
+        return run_key
+
+    def activity_shadow(
+        self, athlete_alias: str, activity_ref: str
+    ) -> Mapping[str, Any] | None:
+        alias = quote(athlete_alias, safe="")
+        reference = quote(activity_ref, safe="")
+        response = self._request(
+            "GET",
+            "/onflows_activity_derived_runs?select=result_payload,created_at"
+            f"&athlete_alias=eq.{alias}&activity_ref=eq.{reference}"
+            "&order=created_at.desc&limit=1",
+        )
+        payload = self._json(response)
+        if not isinstance(payload, list) or not payload:
+            return None
+        row = payload[0]
+        result = row.get("result_payload") if isinstance(row, Mapping) else None
+        if not isinstance(result, Mapping):
+            raise PersistentStoreFailure("Stored activity shadow result is invalid")
+        return dict(result)
+
+    def activity_shadow_index(
+        self, athlete_alias: str
+    ) -> tuple[Mapping[str, Any], ...]:
+        alias = quote(athlete_alias, safe="")
+        selected = quote(
+            "activity_ref,run_key,created_at,vflat_model_version,hrmod_model_version,terrain_model_version",
+            safe=",",
+        )
+        response = self._request(
+            "GET",
+            f"/onflows_activity_derived_runs?select={selected}&athlete_alias=eq.{alias}"
+            "&order=created_at.desc&limit=250",
+        )
+        payload = self._json(response)
+        if not isinstance(payload, list):
+            raise PersistentStoreFailure("Stored activity shadow index is invalid")
+        latest: dict[str, dict[str, Any]] = {}
+        for row in payload:
+            if not isinstance(row, Mapping) or not isinstance(row.get("activity_ref"), str):
+                raise PersistentStoreFailure("Stored activity shadow index is invalid")
+            latest.setdefault(str(row["activity_ref"]), dict(row))
+        return tuple(latest.values())
 
 
 __all__ = [

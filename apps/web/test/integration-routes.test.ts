@@ -194,6 +194,7 @@ describe("integration route redirects behind a reverse proxy", () => {
     [100, 120, 140, 160, 180, 200].forEach((value, index) =>
       form.set(["z1_low", "z2_low", "z3_low", "z4_low", "z5_low", "z5_high"][index], String(value))
     );
+    form.set("hrmax_bpm", "205");
     form.set("timezone", "Europe/Sofia");
 
     const response = await saveSettings(new Request("https://web.example.test/api/athlete/settings", { method: "POST", body: form }));
@@ -204,6 +205,7 @@ describe("integration route redirects behind a reverse proxy", () => {
     expect(JSON.parse(init.body)).toEqual({
       hr_zone_bounds_bpm: [100, 120, 140, 160, 180, 200],
       timezone: "Europe/Sofia",
+      hrmax_bpm: 205,
     });
   });
 

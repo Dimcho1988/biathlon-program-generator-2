@@ -11,6 +11,7 @@ type AthleteSettingsFormProps = {
   notice?: string;
   initialBounds?: [number, number, number, number, number, number] | null;
   initialTimezone?: string | null;
+  initialHrmax?: number | null;
   editing?: boolean;
 };
 
@@ -18,6 +19,7 @@ export function AthleteSettingsForm({
   notice,
   initialBounds = null,
   initialTimezone = null,
+  initialHrmax = null,
   editing = false,
 }: AthleteSettingsFormProps) {
   return (
@@ -42,6 +44,11 @@ export function AthleteSettingsForm({
             ))}
           </div>
         </fieldset>
+        <label className="timezone-field">
+          <span>Индивидуален HRmax (уд/мин)</span>
+          <input name="hrmax_bpm" type="number" min="30" max="240" required inputMode="numeric" defaultValue={initialHrmax ?? undefined} />
+          <small>Въвежда се изрично. Не се извежда от възраст, наблюдаван максимум или Z5.</small>
+        </label>
         <label className="timezone-field">
           <span>Часова зона</span>
           <input name="timezone" type="text" defaultValue={initialTimezone ?? "Europe/Sofia"} maxLength={64} required autoComplete="off" />

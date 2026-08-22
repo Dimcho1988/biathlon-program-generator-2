@@ -105,6 +105,7 @@ def context_from_environment(
             raise ConfigurationError("Athlete physiological configuration is invalid") from exc
         bounds = settings.zone_bounds_bpm
         athlete_timezone = settings.timezone
+        explicit_hrmax = settings.hrmax_bpm
     else:
         if resolved_alias != configured_alias:
             raise ConfigurationError(
@@ -115,6 +116,11 @@ def context_from_environment(
         except (KeyError, TypeError, ValueError) as exc:
             raise ConfigurationError("Pilot HR zone configuration is invalid") from exc
         athlete_timezone = env.get("ONFLOWS_ATHLETE_TIMEZONE", "").strip()
+        raw_hrmax = env.get("ONFLOWS_HRMAX_BPM", "").strip()
+        try:
+            explicit_hrmax = int(raw_hrmax) if raw_hrmax else None
+        except ValueError as exc:
+            raise ConfigurationError("Pilot explicit HRmax is invalid") from exc
     try:
         return AthleteContext(
             public_alias=resolved_alias,
@@ -124,6 +130,7 @@ def context_from_environment(
             intra_zone_version=env.get("ONFLOWS_INTRAZONE_VERSION", "").strip(),
             tref_version=env.get("ONFLOWS_TREF_VERSION", "").strip(),
             recovery_parameter_version=env.get("ONFLOWS_RECOVERY_VERSION", "").strip(),
+            hrmax_bpm=explicit_hrmax,
         ).validate()
     except ValueError as exc:
         raise ConfigurationError("Pilot athlete configuration is invalid") from exc
@@ -810,10 +817,37 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         )
         parameters = fresh_parameters()
         stage = "history"
+        from .activity_shadow_pipeline import compute_activity_shadow
+
+        def process_activity_shadow(
+            activity_ref: str,
+            detail: Mapping[str, Any],
+            normalized: Any,
+        ) -> Mapping[str, Any]:
+            immutable_input, derived = compute_activity_shadow(
+                detail=detail,
+                normalized=normalized,
+                zone_bounds_bpm=context.zone_bounds_bpm,
+                explicit_hrmax_bpm=context.hrmax_bpm,
+            )
+            run_key = repository.publish_activity_shadow(
+                athlete_alias=context.public_alias,
+                activity_ref=activity_ref,
+                input_payload=immutable_input,
+                derived_payload=derived,
+            )
+            return {
+                "status": "published",
+                "run_key": run_key,
+                "experimental": True,
+                "affects_canonical_load": False,
+            }
+
         dataset = load_real_history(provider, profile_identifier=context.provider_athlete_id,
                                     session_salt=salt, parameters=parameters,
                                     period_end=end, days=days, loaded_at_utc=now,
-                                    configuration=configuration_with_hr_boundaries(context.zone_bounds_bpm))
+                                    configuration=configuration_with_hr_boundaries(context.zone_bounds_bpm),
+                                    activity_shadow_processor=process_activity_shadow)
         logger.warning(
             "real_refresh_history_result processed=%d limited=%d excluded=%d",
             dataset.processed_activities,
