@@ -56,6 +56,10 @@ export function ShadowActivityPanel({ payload }: { payload: Record<string, unkno
     ...(Array.isArray(row.quality_flags) ? row.quality_flags : []),
     ...(Array.isArray(row.model_flags) ? row.model_flags : []),
   ].map(String))));
+  const allExclusions = Array.from(new Set(
+    rows.map((row) => row.exclusion_reason)
+      .filter((value): value is string => typeof value === "string" && value.length > 0),
+  ));
 
   return (
     <div>
@@ -119,6 +123,7 @@ export function ShadowActivityPanel({ payload }: { payload: Record<string, unkno
       <h2>Versions, flags и exclusions</h2>
       <p>Vflat: {text(payload.vflat_model_version)} / {text(payload.vflat_config_version)} · HRmod: {text(payload.hrmod_model_version)} / {text(payload.hrmod_config_version)} · Terrain: {text(payload.terrain_model_version)}</p>
       <p>Flags: {allFlags.length ? allFlags.join(", ") : "няма"}</p>
+      <p>Exclusions: {allExclusions.length ? allExclusions.join(", ") : "няма"}</p>
       <details><summary>Hashes и пълна диагностика</summary><pre style={{ overflowX: "auto" }}>{JSON.stringify({ hashes: payload.hashes, diagnostics }, null, 2)}</pre></details>
     </div>
   );
