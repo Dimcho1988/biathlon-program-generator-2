@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import os
 import secrets
 from typing import Any, Mapping
@@ -25,6 +26,9 @@ from .cloud import (
     AthletePlanningProfile,
     SnapshotRepository,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class PersistentStoreConfigurationError(RuntimeError):
@@ -137,15 +141,28 @@ class SupabasePilotRepository(SnapshotRepository):
 
     def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         headers = {**self._headers, **kwargs.pop("headers", {})}
+        resource = path.split("?", 1)[0]
         try:
             response = self._client.request(
                 method, self._base_url + path, headers=headers, **kwargs
             )
         except httpx.HTTPError as exc:
+            logger.warning(
+                "persistent_store_request_failed method=%s resource=%s status=network",
+                method,
+                resource,
+            )
             raise PersistentStoreFailure("Persistent store is unavailable") from exc
         if not 200 <= response.status_code < 300:
+            logger.warning(
+                "persistent_store_request_failed method=%s resource=%s status=%d",
+                method,
+                resource,
+                response.status_code,
+            )
             raise PersistentStoreFailure(
-                f"Persistent store request failed ({response.status_code})"
+                "Persistent store request failed "
+                f"for {method} {resource} ({response.status_code})"
             )
         return response
 
