@@ -21,9 +21,15 @@ async function refreshIntervalsData() {
       },
       signal: AbortSignal.timeout(180_000),
     });
-    if (!response.ok) throw new Error("Refresh failed");
+    if (!response.ok) {
+      console.error(`intervals_refresh_failed stage=api status=${response.status}`);
+      throw new Error("Refresh failed");
+    }
+    console.info("intervals_refresh_completed");
     return new NextResponse(null, { status: 303, headers: { Location: "/" } });
-  } catch {
+  } catch (error) {
+    if (!(error instanceof Error && error.message === "Refresh failed"))
+      console.error(`intervals_refresh_failed stage=web error_type=${error instanceof Error ? error.name : "Unknown"}`);
     return new NextResponse(null, { status: 303, headers: { Location: "/?intervals=refresh-error" } });
   }
 }
