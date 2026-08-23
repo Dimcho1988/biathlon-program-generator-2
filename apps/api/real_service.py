@@ -825,6 +825,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             compute_activity_shadow,
         )
         catalog_metadata: dict[str, dict[str, Any]] = {}
+        catalog_provider_keys: dict[str, str] = {}
         shadow_runs: dict[str, str] = {}
         scientific_input_hashes: dict[str, str] = {}
         identity_secret = env.get("ONFLOWS_ACTIVITY_ID_SECRET", "").strip() or salt
@@ -835,7 +836,11 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 provider_activity_id=provider_activity_id,
                 secret=identity_secret,
             )
-            return repository.resolve_activity_ref(context.public_alias, key)
+            activity_ref = repository.resolve_activity_ref(
+                context.public_alias, key
+            )
+            catalog_provider_keys[activity_ref] = key
+            return activity_ref
 
         def collect_activity_metadata(
             activity_ref: str, detail: Mapping[str, Any]
@@ -893,6 +898,11 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             metadata = catalog_metadata.get(str(activity.activity_ref))
             if metadata is None:
                 continue
+            catalog_provider_key = catalog_provider_keys.get(
+                str(activity.activity_ref)
+            )
+            if catalog_provider_key is None:
+                raise ValueError("Canonical activity provider identity is incomplete")
             zone_rows = dataset.activity_zones.loc[
                 dataset.activity_zones["activity_ref"] == activity.activity_ref
             ]
@@ -952,6 +962,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             )
             catalog_row = {
                     **metadata,
+                    "provider_activity_key": catalog_provider_key,
                     "sport": str(activity.sport),
                     "quality_status": str(activity.quality_status),
                     "quality_reason": str(activity.status_reason or "")[:500] or None,
