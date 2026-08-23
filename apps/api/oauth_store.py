@@ -9,6 +9,7 @@ import base64
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+import json
 import os
 import secrets
 from typing import Any, Mapping
@@ -579,6 +580,55 @@ class SupabasePilotRepository(SnapshotRepository):
         )
         return run_key
 
+    def publish_canonical_activity_result(
+        self,
+        *,
+        athlete_alias: str,
+        activity_ref: str,
+        scientific_input_hash: str,
+        result_payload: Mapping[str, Any],
+    ) -> str:
+        """Publish one immutable canonical result and advance its catalog pointer."""
+
+        if len(scientific_input_hash) != 64:
+            raise PersistentStoreFailure(
+                "Canonical scientific input hash is invalid"
+            )
+        rendered = json.dumps(
+            dict(result_payload),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        result_hash = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+        run_key = hashlib.sha256(
+            (
+                f"{athlete_alias}|{activity_ref}|{scientific_input_hash}|"
+                f"{result_hash}"
+            ).encode("utf-8")
+        ).hexdigest()
+        self._request(
+            "POST",
+            "/rpc/publish_onflows_canonical_activity_result",
+            json={
+                "p_run_key": run_key,
+                "p_athlete_alias": athlete_alias,
+                "p_activity_ref": activity_ref,
+                "p_scientific_input_hash": scientific_input_hash,
+                "p_result_hash": result_hash,
+                "p_schema_version": str(
+                    result_payload.get("schema_version") or ""
+                ),
+                "p_model_version": str(
+                    result_payload.get("model_version") or ""
+                ),
+                "p_result_payload": dict(result_payload),
+            },
+            headers={"Prefer": "return=minimal"},
+        )
+        return run_key
+
     def activity_shadow(
         self, athlete_alias: str, activity_ref: str
     ) -> Mapping[str, Any] | None:
@@ -621,6 +671,153 @@ class SupabasePilotRepository(SnapshotRepository):
                 raise PersistentStoreFailure("Stored activity shadow index is invalid")
             latest.setdefault(str(row["activity_ref"]), dict(row))
         return tuple(latest.values())
+
+    def resolve_activity_ref(
+        self, athlete_alias: str, provider_activity_key: str
+    ) -> str:
+        response = self._request(
+            "POST",
+            "/rpc/resolve_onflows_activity_ref",
+            json={
+                "p_athlete_alias": athlete_alias,
+                "p_provider_activity_key": provider_activity_key,
+            },
+        )
+        payload = self._json(response)
+        if not isinstance(payload, str) or not payload.startswith("act_"):
+            raise PersistentStoreFailure("Stable activity identity could not be resolved")
+        return payload
+
+    def upsert_activity_catalog(
+        self, athlete_alias: str, activities: list[Mapping[str, Any]]
+    ) -> None:
+        if not activities:
+            return
+        payload = [
+            {
+                **dict(activity),
+                "athlete_alias": athlete_alias,
+                "metadata_synced_at": datetime.now(timezone.utc).isoformat(),
+                "last_seen_at": datetime.now(timezone.utc).isoformat(),
+            }
+            for activity in activities
+        ]
+        self._request(
+            "POST",
+            "/onflows_activity_catalog?on_conflict=activity_ref",
+            json=payload,
+            headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+        )
+
+    def activity_calendar(
+        self, athlete_alias: str, period_start: Any, period_end: Any
+    ) -> tuple[Mapping[str, Any], ...]:
+        alias = quote(athlete_alias, safe="")
+        selected = quote(
+            "activity_ref,start_at_utc,start_local,local_date,timezone,utc_offset_minutes,"
+            "sport,activity_type,activity_sub_type,name,moving_time_s,elapsed_time_s,"
+            "recording_time_s,distance_m,elevation_gain_m,average_hr_bpm,max_hr_bpm,"
+            "average_speed_mps,max_speed_mps,canonical_training_load,quality_status,"
+            "quality_reason,hr_coverage_percent,canonical_summary,latest_shadow_run_key",
+            safe=",",
+        )
+        response = self._request(
+            "GET",
+            f"/onflows_activity_catalog?select={selected}&athlete_alias=eq.{alias}"
+            f"&local_date=gte.{period_start.isoformat()}&local_date=lte.{period_end.isoformat()}"
+            "&order=start_at_utc.asc,activity_ref.asc&limit=1000",
+        )
+        payload = self._json(response)
+        if not isinstance(payload, list) or not all(isinstance(row, Mapping) for row in payload):
+            raise PersistentStoreFailure("Stored activity calendar is invalid")
+        return tuple(dict(row) for row in payload)
+
+    def activity_detail(
+        self, athlete_alias: str, activity_ref: str
+    ) -> Mapping[str, Any] | None:
+        alias = quote(athlete_alias, safe="")
+        reference = quote(activity_ref, safe="")
+        response = self._request(
+            "GET",
+            "/onflows_activity_catalog?select=*"
+            f"&athlete_alias=eq.{alias}&activity_ref=eq.{reference}&limit=1",
+        )
+        payload = self._json(response)
+        if not isinstance(payload, list) or not payload:
+            return None
+        row = payload[0]
+        if not isinstance(row, Mapping):
+            raise PersistentStoreFailure("Stored activity detail is invalid")
+        start = str(row.get("start_at_utc") or "")
+        previous = self._request(
+            "GET",
+            "/onflows_activity_catalog?select=activity_ref"
+            f"&athlete_alias=eq.{alias}&start_at_utc=lt.{quote(start, safe=':-.TZ')}"
+            "&order=start_at_utc.desc,activity_ref.desc&limit=1",
+        ) if start else None
+        following = self._request(
+            "GET",
+            "/onflows_activity_catalog?select=activity_ref"
+            f"&athlete_alias=eq.{alias}&start_at_utc=gt.{quote(start, safe=':-.TZ')}"
+            "&order=start_at_utc.asc,activity_ref.asc&limit=1",
+        ) if start else None
+        previous_payload = self._json(previous) if previous is not None else []
+        following_payload = self._json(following) if following is not None else []
+        return {
+            **dict(row),
+            "previous_activity_ref": (
+                previous_payload[0].get("activity_ref")
+                if isinstance(previous_payload, list) and previous_payload and isinstance(previous_payload[0], Mapping)
+                else None
+            ),
+            "next_activity_ref": (
+                following_payload[0].get("activity_ref")
+                if isinstance(following_payload, list) and following_payload and isinstance(following_payload[0], Mapping)
+                else None
+            ),
+            "shadow_available": bool(row.get("latest_shadow_run_key")),
+        }
+
+    def activity_series(
+        self, athlete_alias: str, activity_ref: str
+    ) -> Mapping[str, Any] | None:
+        from .activity_catalog import downsample_model_input
+
+        alias = quote(athlete_alias, safe="")
+        reference = quote(activity_ref, safe="")
+        response = self._request(
+            "GET",
+            "/onflows_activity_model_inputs?select=input_payload,created_at"
+            f"&athlete_alias=eq.{alias}&activity_ref=eq.{reference}"
+            "&order=created_at.desc&limit=1",
+        )
+        payload = self._json(response)
+        if not isinstance(payload, list) or not payload:
+            return None
+        row = payload[0]
+        source = row.get("input_payload") if isinstance(row, Mapping) else None
+        if not isinstance(source, Mapping):
+            raise PersistentStoreFailure("Stored activity series is invalid")
+        return downsample_model_input(source)
+
+    def latest_activity_input_hash(
+        self, athlete_alias: str, activity_ref: str
+    ) -> str | None:
+        alias = quote(athlete_alias, safe="")
+        reference = quote(activity_ref, safe="")
+        response = self._request(
+            "GET",
+            "/onflows_activity_model_inputs?select=input_hash,created_at"
+            f"&athlete_alias=eq.{alias}&activity_ref=eq.{reference}"
+            "&order=created_at.desc&limit=1",
+        )
+        payload = self._json(response)
+        if not isinstance(payload, list) or not payload:
+            return None
+        value = payload[0].get("input_hash") if isinstance(payload[0], Mapping) else None
+        if not isinstance(value, str) or len(value) != 64:
+            raise PersistentStoreFailure("Stored activity input hash is invalid")
+        return value
 
 
 __all__ = [

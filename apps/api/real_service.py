@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+import hashlib
+import json
 import logging
 import os
 from typing import Any, Mapping
@@ -23,6 +25,7 @@ from .cloud import (
     normalize_wellness,
     summarize_wellness_coverage,
 )
+from .activity_catalog import extract_activity_metadata, provider_activity_key
 from .schemas import (
     ActivityZoneLoad,
     AthleteSnapshot,
@@ -817,13 +820,47 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         )
         parameters = fresh_parameters()
         stage = "history"
-        from .activity_shadow_pipeline import compute_activity_shadow
+        from .activity_shadow_pipeline import (
+            build_immutable_activity_input,
+            compute_activity_shadow,
+        )
+        catalog_metadata: dict[str, dict[str, Any]] = {}
+        shadow_runs: dict[str, str] = {}
+        scientific_input_hashes: dict[str, str] = {}
+        identity_secret = env.get("ONFLOWS_ACTIVITY_ID_SECRET", "").strip() or salt
+
+        def resolve_activity_ref(provider_activity_id: str) -> str:
+            key = provider_activity_key(
+                provider_athlete_id=context.provider_athlete_id,
+                provider_activity_id=provider_activity_id,
+                secret=identity_secret,
+            )
+            return repository.resolve_activity_ref(context.public_alias, key)
+
+        def collect_activity_metadata(
+            activity_ref: str, detail: Mapping[str, Any]
+        ) -> None:
+            catalog_metadata[activity_ref] = extract_activity_metadata(
+                activity_ref, detail
+            )
 
         def process_activity_shadow(
             activity_ref: str,
             detail: Mapping[str, Any],
             normalized: Any,
         ) -> Mapping[str, Any]:
+            immutable_input = build_immutable_activity_input(detail, normalized)
+            scientific_input_hashes[activity_ref] = str(
+                immutable_input["input_hash"]
+            )
+            if repository.latest_activity_input_hash(
+                context.public_alias, activity_ref
+            ) == immutable_input["input_hash"]:
+                return {
+                    "status": "unchanged",
+                    "experimental": True,
+                    "affects_canonical_load": False,
+                }
             immutable_input, derived = compute_activity_shadow(
                 detail=detail,
                 normalized=normalized,
@@ -836,6 +873,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 input_payload=immutable_input,
                 derived_payload=derived,
             )
+            shadow_runs[activity_ref] = run_key
             return {
                 "status": "published",
                 "run_key": run_key,
@@ -847,7 +885,87 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                                     session_salt=salt, parameters=parameters,
                                     period_end=end, days=days, loaded_at_utc=now,
                                     configuration=configuration_with_hr_boundaries(context.zone_bounds_bpm),
-                                    activity_shadow_processor=process_activity_shadow)
+                                    activity_shadow_processor=process_activity_shadow,
+                                    activity_ref_resolver=resolve_activity_ref,
+                                    activity_metadata_collector=collect_activity_metadata)
+        catalog_rows: list[Mapping[str, Any]] = []
+        for activity in dataset.activities.itertuples(index=False):
+            metadata = catalog_metadata.get(str(activity.activity_ref))
+            if metadata is None:
+                continue
+            zone_rows = dataset.activity_zones.loc[
+                dataset.activity_zones["activity_ref"] == activity.activity_ref
+            ]
+            zones = [
+                {
+                    "zone": str(zone.zone),
+                    "raw_time_s": float(zone.T_z) * 60.0,
+                    "equivalent_time_s": float(zone.T_eq_z) * 60.0,
+                    "effective_load": float(zone.E_z),
+                }
+                for zone in zone_rows.itertuples(index=False)
+            ]
+            canonical_load = sum(float(zone["effective_load"]) for zone in zones)
+            if float(activity.strength_time_min or 0.0) > 0.0:
+                canonical_load = float(activity.strength_time_min)
+            canonical_summary = {
+                "schema_version": "activity-canonical-summary-v1",
+                "model_version": str(activity.model_version),
+                "normalization_version": str(activity.normalization_version),
+                "tref_bounds_profile_version": str(
+                    activity.tref_bounds_profile_version
+                ),
+                "duration_min": (
+                    float(activity.duration_min)
+                    if pd.notna(activity.duration_min)
+                    else None
+                ),
+                "strength_time_min": float(activity.strength_time_min or 0.0),
+                "zones": zones,
+            }
+            scientific_input_hash = scientific_input_hashes.get(
+                str(activity.activity_ref)
+            )
+            if scientific_input_hash is None:
+                strength_input = {
+                    "schema_version": "activity-strength-input-v1",
+                    "activity_type": metadata.get("activity_type"),
+                    "activity_sub_type": metadata.get("activity_sub_type"),
+                    "duration_min": canonical_summary["duration_min"],
+                    "classification_version": str(
+                        dataset.strength_classification_version
+                    ),
+                }
+                scientific_input_hash = hashlib.sha256(
+                    json.dumps(
+                        strength_input,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ).encode("utf-8")
+                ).hexdigest()
+            canonical_run_key = repository.publish_canonical_activity_result(
+                athlete_alias=context.public_alias,
+                activity_ref=str(activity.activity_ref),
+                scientific_input_hash=scientific_input_hash,
+                result_payload=canonical_summary,
+            )
+            catalog_row = {
+                    **metadata,
+                    "sport": str(activity.sport),
+                    "quality_status": str(activity.quality_status),
+                    "quality_reason": str(activity.status_reason or "")[:500] or None,
+                    "hr_coverage_percent": float(activity.hr_coverage_percent),
+                    "canonical_training_load": canonical_load,
+                    "canonical_summary": canonical_summary,
+                    "latest_canonical_run_key": canonical_run_key,
+                }
+            if str(activity.activity_ref) in shadow_runs:
+                catalog_row["latest_shadow_run_key"] = shadow_runs[
+                    str(activity.activity_ref)
+                ]
+            catalog_rows.append(catalog_row)
+        repository.upsert_activity_catalog(context.public_alias, catalog_rows)
         logger.warning(
             "real_refresh_history_result processed=%d limited=%d excluded=%d",
             dataset.processed_activities,

@@ -75,7 +75,7 @@ class SyntheticHistoryClient:
     def get_activity_result(
         self, activity_id: str, *, include_intervals: bool = False
     ) -> IntervalsResponse:
-        assert include_intervals is False
+        assert include_intervals is True
         detail = _activity_detail(activity_id, self.specs[activity_id]["date"])
         for field in (
             "type",

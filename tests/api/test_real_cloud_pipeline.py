@@ -146,7 +146,8 @@ def test_persisted_snapshot_exposes_v1_status_and_load_history_contracts():
     assert status.schema_version == "training-status-v1"
     assert history.schema_version == "load-history-v1"
     assert [row.zone for row in history.zones] == ["Z1", "Z2", "Z3", "Z4", "Z5"]
-    assert history.activities[0].activity_ref == "activity-001"
+    assert history.activities[0].activity_ref.startswith("act_")
+    assert len(history.activities[0].activity_ref) == 36
     assert recovery.basis == "load-only"
     assert recovery.model.parameter_version == "main-load-recovery-v1"
     assert [row.zone for row in recovery.settings] == ["Z1", "Z2", "Z3", "Z4", "Z5"]

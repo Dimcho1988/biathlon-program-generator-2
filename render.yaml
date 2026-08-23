@@ -55,6 +55,8 @@ services:
         value: "90"
       - key: ONFLOWS_SNAPSHOT_SALT
         generateValue: true
+      - key: ONFLOWS_ACTIVITY_ID_SECRET
+        generateValue: true
       - key: ONFLOWS_WEB_BASE_URL
         value: https://onflows-web-preview.onrender.com
   - type: web

@@ -17,6 +17,17 @@ import {
   type PlanningCalendarResponse,
 } from "./planning-calendar";
 import { waitForApi } from "./api-readiness";
+import {
+  activityCalendarFixture,
+  activityDetailFixture,
+  activitySeriesFixture,
+  parseActivityCalendar,
+  parseActivityDetail,
+  parseActivitySeries,
+  type ActivityCalendar,
+  type ActivityDetail,
+  type ActivitySeries,
+} from "./activities";
 
 // Render Free can take more than 50 seconds to wake the API after inactivity.
 // Keep the preview reliable without introducing a paid always-on service.
@@ -152,18 +163,97 @@ export async function getActivityShadow(
   athleteAlias: string,
   activityRef: string,
 ): Promise<Record<string, unknown>> {
+  if (process.env.ONFLOWS_DATA_MODE === "fixture") {
+    const timeseries = activitySeriesFixture.series.map((row) => ({
+      ...row,
+      speed_raw_kmh: row.speed_kmh,
+      vflat_b65_kmh: row.speed_kmh === null ? null : row.speed_kmh * 1.04,
+      hr_raw_bpm: row.hr_bpm,
+      hr_clean_bpm: row.hr_bpm,
+      hrmod_candidate_bpm: row.hr_bpm === null ? null : row.hr_bpm + 2,
+      hrmod_final_bpm: row.hr_bpm === null ? null : row.hr_bpm + 1.2,
+      grade_raw_pct: row.grade_pct,
+      grade_smoothed_pct: row.grade_pct,
+      added_bpm: 1.2,
+      removed_bpm: 0,
+      receiver_flag: false,
+      donor_flag: false,
+    }));
+    return {
+      schema_version: "activity-shadow-derived-v1",
+      experimental: true,
+      affects_canonical_load: false,
+      vflat_model_version: "vflat_b65_dynamic_v1",
+      vflat_config_version: "vflat_b65_config_v1",
+      hrmod_model_version: "hrmod_mirror_area_shift_v4",
+      hrmod_config_version: "hrmod_config_v4",
+      terrain_model_version: "terrain_downhill_donor_exclusion_v4",
+      timeseries,
+      segments_15s: [],
+      hrmod_waves: [],
+      zone_summary: [],
+      diagnostics: { hrmod: { corrected_wave_count: 0 } },
+    };
+  }
   const token = process.env.ONFLOWS_SERVICE_TOKEN;
   if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
-  if (!/^shadow-[a-f0-9]{32}$/.test(activityRef))
+  if (!/^(?:shadow-|act_)[a-f0-9]{32}$/.test(activityRef))
     throw new Error("Невалиден shadow activity reference.");
+  const path = activityRef.startsWith("act_")
+    ? `/api/v2/real/activities/${encodeURIComponent(activityRef)}/shadow`
+    : `/api/v2/real/activity-shadow?activity_ref=${encodeURIComponent(activityRef)}`;
   const payload = await fetchApiResource(
-    `/api/v2/real/activity-shadow?activity_ref=${encodeURIComponent(activityRef)}`,
+    path,
     token,
     athleteAlias,
   );
   if (typeof payload !== "object" || payload === null)
     throw new Error("API услугата върна невалиден shadow резултат.");
   return payload as Record<string, unknown>;
+}
+
+export async function getActivityCalendar(
+  athleteAlias?: string,
+  periodStart?: string,
+  periodEnd?: string,
+): Promise<ActivityCalendar> {
+  if (process.env.ONFLOWS_DATA_MODE === "fixture") return activityCalendarFixture;
+  const token = process.env.ONFLOWS_SERVICE_TOKEN;
+  if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
+  const query = new URLSearchParams();
+  if (periodStart) query.set("period_start", periodStart);
+  if (periodEnd) query.set("period_end", periodEnd);
+  const suffix = query.size ? `?${query.toString()}` : "";
+  return parseActivityCalendar(await fetchApiResource(`/api/v2/real/activities${suffix}`, token, athleteAlias));
+}
+
+export async function getActivityDetail(
+  activityRef: string,
+  athleteAlias?: string,
+): Promise<ActivityDetail> {
+  if (!/^act_[a-f0-9]{32}$/.test(activityRef)) throw new Error("Невалиден activity reference.");
+  if (process.env.ONFLOWS_DATA_MODE === "fixture") {
+    const selected = activityCalendarFixture.activities.find((activity) => activity.activity_ref === activityRef);
+    return selected ? { ...activityDetailFixture, ...selected, activity_ref: selected.activity_ref } : activityDetailFixture;
+  }
+  const token = process.env.ONFLOWS_SERVICE_TOKEN;
+  if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
+  return parseActivityDetail(await fetchApiResource(`/api/v2/real/activities/${encodeURIComponent(activityRef)}`, token, athleteAlias));
+}
+
+export async function getActivitySeries(
+  activityRef: string,
+  athleteAlias?: string,
+): Promise<ActivitySeries | null> {
+  if (process.env.ONFLOWS_DATA_MODE === "fixture") return { ...activitySeriesFixture, activity_ref: activityRef };
+  const token = process.env.ONFLOWS_SERVICE_TOKEN;
+  if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
+  try {
+    return parseActivitySeries(await fetchApiResource(`/api/v2/real/activities/${encodeURIComponent(activityRef)}/series`, token, athleteAlias));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("(404)")) return null;
+    throw error;
+  }
 }
 
 export async function getAthletePlanningProfile(athleteAlias: string): Promise<PlanningProfileResponse> {

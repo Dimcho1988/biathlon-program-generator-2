@@ -39,7 +39,7 @@ class _SyntheticUIClient:
         *,
         include_intervals: bool = False,
     ) -> IntervalsResponse:
-        assert include_intervals is False
+        assert include_intervals is True
         activity_day = self.activities[activity_id]
         return IntervalsResponse(
             200,

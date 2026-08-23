@@ -772,12 +772,38 @@ class SnapshotRepository(Protocol):
         input_payload: Mapping[str, Any],
         derived_payload: Mapping[str, Any],
     ) -> str: ...
+    def publish_canonical_activity_result(
+        self,
+        *,
+        athlete_alias: str,
+        activity_ref: str,
+        scientific_input_hash: str,
+        result_payload: Mapping[str, Any],
+    ) -> str: ...
     def activity_shadow(
         self, athlete_alias: str, activity_ref: str
     ) -> Mapping[str, Any] | None: ...
     def activity_shadow_index(
         self, athlete_alias: str
     ) -> tuple[Mapping[str, Any], ...]: ...
+    def resolve_activity_ref(
+        self, athlete_alias: str, provider_activity_key: str
+    ) -> str: ...
+    def upsert_activity_catalog(
+        self, athlete_alias: str, activities: list[Mapping[str, Any]]
+    ) -> None: ...
+    def activity_calendar(
+        self, athlete_alias: str, period_start: date, period_end: date
+    ) -> tuple[Mapping[str, Any], ...]: ...
+    def activity_detail(
+        self, athlete_alias: str, activity_ref: str
+    ) -> Mapping[str, Any] | None: ...
+    def activity_series(
+        self, athlete_alias: str, activity_ref: str
+    ) -> Mapping[str, Any] | None: ...
+    def latest_activity_input_hash(
+        self, athlete_alias: str, activity_ref: str
+    ) -> str | None: ...
 
 
 class InMemorySnapshotRepository:
@@ -786,6 +812,11 @@ class InMemorySnapshotRepository:
         self._lock, self._items = RLock(), {}
         self._activity_inputs: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._activity_runs: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self._canonical_activity_runs: dict[
+            tuple[str, str], list[dict[str, Any]]
+        ] = {}
+        self._activity_identity: dict[tuple[str, str], str] = {}
+        self._activity_catalog: dict[tuple[str, str], dict[str, Any]] = {}
     def latest(self, athlete_alias: str) -> Mapping[str, Any] | None:
         with self._lock: return self._items.get(athlete_alias)
     def replace(self, athlete_alias: str, snapshot: Mapping[str, Any]) -> None:
@@ -809,9 +840,50 @@ class InMemorySnapshotRepository:
             self._activity_inputs.setdefault(
                 (athlete_alias, activity_ref, input_hash), deepcopy(dict(input_payload))
             )
-            self._activity_runs.setdefault((athlete_alias, activity_ref), []).append(
-                {"run_key": run_key, "result_payload": deepcopy(dict(derived_payload))}
+            runs = self._activity_runs.setdefault((athlete_alias, activity_ref), [])
+            if not any(run["run_key"] == run_key for run in runs):
+                runs.append(
+                    {"run_key": run_key, "result_payload": deepcopy(dict(derived_payload))}
+                )
+        return run_key
+
+    def publish_canonical_activity_result(
+        self,
+        *,
+        athlete_alias: str,
+        activity_ref: str,
+        scientific_input_hash: str,
+        result_payload: Mapping[str, Any],
+    ) -> str:
+        if len(scientific_input_hash) != 64:
+            raise ValueError("Canonical scientific input hash is invalid")
+        rendered = json.dumps(
+            dict(result_payload),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        result_hash = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+        run_key = hashlib.sha256(
+            (
+                f"{athlete_alias}|{activity_ref}|{scientific_input_hash}|"
+                f"{result_hash}"
+            ).encode("utf-8")
+        ).hexdigest()
+        with self._lock:
+            runs = self._canonical_activity_runs.setdefault(
+                (athlete_alias, activity_ref), []
             )
+            if not any(run["run_key"] == run_key for run in runs):
+                runs.append(
+                    {
+                        "run_key": run_key,
+                        "scientific_input_hash": scientific_input_hash,
+                        "result_hash": result_hash,
+                        "result_payload": deepcopy(dict(result_payload)),
+                    }
+                )
         return run_key
     def activity_shadow(
         self, athlete_alias: str, activity_ref: str
@@ -837,3 +909,84 @@ class InMemorySnapshotRepository:
                 for (alias, activity_ref), runs in sorted(self._activity_runs.items())
                 if alias == athlete_alias and runs
             )
+
+    def resolve_activity_ref(
+        self, athlete_alias: str, provider_activity_key: str
+    ) -> str:
+        import uuid
+
+        with self._lock:
+            return self._activity_identity.setdefault(
+                (athlete_alias, provider_activity_key), f"act_{uuid.uuid4().hex}"
+            )
+
+    def upsert_activity_catalog(
+        self, athlete_alias: str, activities: list[Mapping[str, Any]]
+    ) -> None:
+        with self._lock:
+            for activity in activities:
+                activity_ref = str(activity.get("activity_ref") or "")
+                existing = self._activity_catalog.get((athlete_alias, activity_ref), {})
+                self._activity_catalog[(athlete_alias, activity_ref)] = {
+                    **deepcopy(existing),
+                    **deepcopy(dict(activity)),
+                    "athlete_alias": athlete_alias,
+                }
+
+    def activity_calendar(
+        self, athlete_alias: str, period_start: date, period_end: date
+    ) -> tuple[Mapping[str, Any], ...]:
+        with self._lock:
+            rows = [
+                deepcopy(row)
+                for (alias, _), row in self._activity_catalog.items()
+                if alias == athlete_alias
+                and row.get("local_date")
+                and period_start <= date.fromisoformat(str(row["local_date"])) <= period_end
+            ]
+        return tuple(sorted(rows, key=lambda row: (str(row.get("start_at_utc") or ""), str(row["activity_ref"]))))
+
+    def activity_detail(
+        self, athlete_alias: str, activity_ref: str
+    ) -> Mapping[str, Any] | None:
+        with self._lock:
+            row = self._activity_catalog.get((athlete_alias, activity_ref))
+            if row is None:
+                return None
+            ordered = sorted(
+                (
+                    item for (alias, _), item in self._activity_catalog.items()
+                    if alias == athlete_alias and item.get("start_at_utc")
+                ),
+                key=lambda item: (str(item.get("start_at_utc")), str(item.get("activity_ref"))),
+            )
+            refs = [str(item["activity_ref"]) for item in ordered]
+            position = refs.index(activity_ref) if activity_ref in refs else -1
+            return {
+                **deepcopy(row),
+                "previous_activity_ref": refs[position - 1] if position > 0 else None,
+                "next_activity_ref": refs[position + 1] if 0 <= position < len(refs) - 1 else None,
+                "shadow_available": bool(self._activity_runs.get((athlete_alias, activity_ref))),
+            }
+
+    def activity_series(
+        self, athlete_alias: str, activity_ref: str
+    ) -> Mapping[str, Any] | None:
+        from .activity_catalog import downsample_model_input
+
+        with self._lock:
+            candidates = [
+                payload for (alias, ref, _), payload in self._activity_inputs.items()
+                if alias == athlete_alias and ref == activity_ref
+            ]
+            return downsample_model_input(deepcopy(candidates[-1])) if candidates else None
+
+    def latest_activity_input_hash(
+        self, athlete_alias: str, activity_ref: str
+    ) -> str | None:
+        with self._lock:
+            hashes = [
+                input_hash for alias, ref, input_hash in self._activity_inputs
+                if alias == athlete_alias and ref == activity_ref
+            ]
+            return hashes[-1] if hashes else None
