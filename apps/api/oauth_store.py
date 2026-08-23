@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 from typing import Any, Mapping
 from urllib.parse import quote
@@ -29,6 +30,43 @@ from .cloud import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_store_error(response: httpx.Response) -> str:
+    """Classify a PostgREST error without retaining its possibly private detail."""
+
+    try:
+        payload = response.json()
+    except Exception:
+        return "code=unknown category=request"
+    if not isinstance(payload, Mapping):
+        return "code=unknown category=request"
+    raw_code = payload.get("code")
+    code = (
+        raw_code
+        if isinstance(raw_code, str) and re.fullmatch(r"[A-Z0-9]{5,12}", raw_code)
+        else "unknown"
+    )
+    message = payload.get("message")
+    rendered = message if isinstance(message, str) else ""
+    category = "request"
+    if "cannot affect row a second time" in rendered:
+        category = "duplicate_batch"
+    elif "null value in column" in rendered:
+        category = "not_null"
+    elif "violates check constraint" in rendered:
+        category = "check"
+    elif "duplicate key value violates unique constraint" in rendered:
+        category = "unique"
+    elif "invalid input syntax" in rendered:
+        category = "invalid_input"
+    elif "schema cache" in rendered.lower():
+        category = "schema_cache"
+    target_match = re.search(
+        r'(?:column|constraint) "([a-z][a-z0-9_]*)"', rendered
+    )
+    target = f" target={target_match.group(1)}" if target_match else ""
+    return f"code={code} category={category}{target}"
 
 
 class PersistentStoreConfigurationError(RuntimeError):
@@ -154,15 +192,17 @@ class SupabasePilotRepository(SnapshotRepository):
             )
             raise PersistentStoreFailure("Persistent store is unavailable") from exc
         if not 200 <= response.status_code < 300:
+            diagnostic = _safe_store_error(response)
             logger.warning(
-                "persistent_store_request_failed method=%s resource=%s status=%d",
+                "persistent_store_request_failed method=%s resource=%s status=%d %s",
                 method,
                 resource,
                 response.status_code,
+                diagnostic,
             )
             raise PersistentStoreFailure(
                 "Persistent store request failed "
-                f"for {method} {resource} ({response.status_code})"
+                f"for {method} {resource} ({response.status_code}; {diagnostic})"
             )
         return response
 
