@@ -86,7 +86,14 @@ class CapturingClient:
 
 class FailingClient:
     def request(self, method, url, *, headers, **kwargs):
-        return httpx.Response(400)
+        return httpx.Response(
+            400,
+            json={
+                "code": "23514",
+                "message": 'new row violates check constraint "hr_coverage_percent_check"',
+                "details": "Failing row contains Private athlete note",
+            },
+        )
 
 
 class PlanningProfileClient:
@@ -184,9 +191,15 @@ def test_supabase_failure_logs_only_safe_resource_and_status(caplog):
             "private-athlete-alias", date(2026, 8, 1), date(2026, 8, 23)
         )
 
-    assert "GET /onflows_activity_catalog (400)" in str(error.value)
-    assert "resource=/onflows_activity_catalog status=400" in caplog.text
+    assert "GET /onflows_activity_catalog (400; code=23514 category=check" in str(
+        error.value
+    )
+    assert (
+        "resource=/onflows_activity_catalog status=400 "
+        "code=23514 category=check target=hr_coverage_percent_check"
+    ) in caplog.text
     assert "private-athlete-alias" not in caplog.text
+    assert "Private athlete note" not in caplog.text
 
 
 def test_supabase_planning_profile_round_trip_is_scoped_to_alias():
