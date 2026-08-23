@@ -20,7 +20,12 @@ from apps.api.oauth_service import (
     complete_authorization,
     issue_login_ticket,
 )
-from apps.api.oauth_store import PendingOAuthState, SupabasePilotRepository, TokenCipher
+from apps.api.oauth_store import (
+    PendingOAuthState,
+    PersistentStoreFailure,
+    SupabasePilotRepository,
+    TokenCipher,
+)
 from intervals_inspector.oauth import OAuthGrant, READ_ONLY_SCOPES
 
 
@@ -77,6 +82,11 @@ class CapturingClient:
     def request(self, method, url, *, headers, **kwargs):
         self.headers = headers
         return httpx.Response(201)
+
+
+class FailingClient:
+    def request(self, method, url, *, headers, **kwargs):
+        return httpx.Response(400)
 
 
 class PlanningProfileClient:
@@ -159,6 +169,24 @@ def test_supabase_auth_headers_support_current_and_legacy_server_keys(
     )
     assert client.headers["apikey"] == secret_key
     assert client.headers.get("Authorization") == expected_authorization
+
+
+def test_supabase_failure_logs_only_safe_resource_and_status(caplog):
+    repository = SupabasePilotRepository(
+        supabase_url="https://project.supabase.co",
+        secret_key="sb_secret_server-key",
+        encryption_key=base64.urlsafe_b64encode(bytes(range(32))).decode(),
+        client=FailingClient(),
+    )
+
+    with caplog.at_level("WARNING"), pytest.raises(PersistentStoreFailure) as error:
+        repository.activity_calendar(
+            "private-athlete-alias", date(2026, 8, 1), date(2026, 8, 23)
+        )
+
+    assert "GET /onflows_activity_catalog (400)" in str(error.value)
+    assert "resource=/onflows_activity_catalog status=400" in caplog.text
+    assert "private-athlete-alias" not in caplog.text
 
 
 def test_supabase_planning_profile_round_trip_is_scoped_to_alias():

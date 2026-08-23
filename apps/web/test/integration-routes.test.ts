@@ -117,8 +117,13 @@ describe("integration route redirects behind a reverse proxy", () => {
       .mockResolvedValueOnce(new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetchMock);
 
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
     expect((await refresh()).headers.get("location")).toBe("/");
     expect((await refresh()).headers.get("location")).toBe("/?intervals=refresh-error");
+    expect(info).toHaveBeenCalledWith("intervals_refresh_completed");
+    expect(error).toHaveBeenCalledWith("intervals_refresh_failed stage=api status=503");
   });
 
   it("handles a browser navigation to refresh without exposing a 405 page", async () => {

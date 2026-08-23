@@ -488,6 +488,10 @@ def refresh_real_data(
     except ConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except PersistentStoreFailure as exc:
+        logger.warning(
+            "real_refresh_failed stage=persistent_store detail=%s",
+            str(exc),
+        )
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
         ) from exc
