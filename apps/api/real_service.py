@@ -966,7 +966,10 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                     "sport": str(activity.sport),
                     "quality_status": str(activity.quality_status),
                     "quality_reason": str(activity.status_reason or "")[:500] or None,
-                    "hr_coverage_percent": float(activity.hr_coverage_percent),
+                    "hr_coverage_percent": _bounded_percentage(
+                        activity.hr_coverage_percent,
+                        "catalog activity HR coverage",
+                    ),
                     "canonical_training_load": canonical_load,
                     "canonical_summary": canonical_summary,
                     "latest_canonical_run_key": canonical_run_key,
