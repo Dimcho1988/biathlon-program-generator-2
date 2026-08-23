@@ -133,6 +133,32 @@ def test_refresh_persists_provider_key_but_calendar_contract_keeps_it_private():
     assert "provider_activity_key" not in public_item
 
 
+def test_catalog_clamps_harmless_hr_coverage_drift(monkeypatch):
+    from intervals_inspector import real_data_source
+
+    real_loader = real_data_source.load_real_history
+
+    def load_with_float_drift(*args, **kwargs):
+        dataset = real_loader(*args, **kwargs)
+        dataset.activities.loc[:, "hr_coverage_percent"] = 100.00000000000001
+        return dataset
+
+    monkeypatch.setattr(real_data_source, "load_real_history", load_with_float_drift)
+    repository = InMemorySnapshotRepository()
+    refresh(
+        repository,
+        environ=ENV,
+        client=CatalogClient(),
+        period_end=date(2026, 8, 15),
+        now=datetime(2026, 8, 15, tzinfo=timezone.utc),
+    )
+
+    rows = repository.activity_calendar(
+        "pilot", date(2026, 8, 15), date(2026, 8, 15)
+    )
+    assert rows[0]["hr_coverage_percent"] == 100.0
+
+
 def test_timezone_and_dst_offset_are_preserved_without_provider_payload():
     summer = extract_activity_metadata(
         "act_" + "1" * 32,
