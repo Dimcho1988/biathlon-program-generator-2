@@ -107,6 +107,32 @@ def test_provider_identity_is_stable_opaque_and_athlete_scoped():
     assert "athlete" not in first and "activity" not in first
 
 
+def test_refresh_persists_provider_key_but_calendar_contract_keeps_it_private():
+    repository = InMemorySnapshotRepository()
+    refresh(
+        repository,
+        environ=ENV,
+        client=CatalogClient(),
+        period_end=date(2026, 8, 15),
+        now=datetime(2026, 8, 15, tzinfo=timezone.utc),
+    )
+    rows = repository.activity_calendar(
+        "pilot", date(2026, 8, 15), date(2026, 8, 15)
+    )
+    assert rows[0]["provider_activity_key"] == provider_activity_key(
+        provider_athlete_id="private-athlete",
+        provider_activity_id="provider-activity",
+        secret="stable-secret",
+    )
+    public_item = activity_calendar_payload(
+        athlete_alias="pilot",
+        period_start=date(2026, 8, 15),
+        period_end=date(2026, 8, 15),
+        rows=rows,
+    )["activities"][0]
+    assert "provider_activity_key" not in public_item
+
+
 def test_timezone_and_dst_offset_are_preserved_without_provider_payload():
     summer = extract_activity_metadata(
         "act_" + "1" * 32,

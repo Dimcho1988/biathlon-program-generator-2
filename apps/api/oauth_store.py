@@ -693,6 +693,13 @@ class SupabasePilotRepository(SnapshotRepository):
     ) -> None:
         if not activities:
             return
+        if any(
+            len(str(activity.get("provider_activity_key") or "")) != 64
+            for activity in activities
+        ):
+            raise PersistentStoreFailure(
+                "Activity catalog provider identity is incomplete"
+            )
         payload = [
             {
                 **dict(activity),
