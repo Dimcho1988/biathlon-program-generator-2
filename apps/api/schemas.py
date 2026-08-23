@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -278,6 +278,90 @@ class LoadHistoryResponse(StrictModel):
     daily: list[DailyZoneLoad]
     activities: list[LoadHistoryActivity]
     strength: StrengthLoadHistory | None = None
+
+
+class ActivityZoneSummary(StrictModel):
+    zone: Literal["Z1", "Z2", "Z3", "Z4", "Z5"]
+    raw_time_s: float
+    equivalent_time_s: float
+    effective_load: float
+
+
+class ActivityCalendarItem(StrictModel):
+    activity_ref: str
+    start_at_utc: str
+    start_local: str
+    local_date: str
+    local_time: str
+    timezone: str | None
+    utc_offset_minutes: int | None
+    sport: str
+    activity_type: str | None
+    activity_sub_type: str | None
+    name: str | None
+    duration_min: float | None
+    distance_m: float | None
+    elevation_gain_m: float | None
+    average_hr_bpm: float | None
+    max_hr_bpm: float | None
+    average_speed_mps: float | None
+    max_speed_mps: float | None
+    canonical_training_load: float | None
+    quality_status: Literal["valid", "limited", "excluded", "provider_missing"]
+    quality_reason: str | None
+    hr_coverage_percent: float | None
+    shadow_available: bool
+    zones: list[ActivityZoneSummary]
+
+
+class ActivityWeekSummary(StrictModel):
+    week_start: str
+    week_end: str
+    activities_count: int
+    duration_min: float
+    distance_m: float
+    canonical_training_load: float
+    zones: list[ActivityZoneSummary]
+
+
+class ActivityCalendarResponse(StrictModel):
+    schema_version: Literal["activity-calendar-index-v1"]
+    athlete_id: str
+    period_start: str
+    period_end: str
+    activities: list[ActivityCalendarItem]
+    weeks: list[ActivityWeekSummary]
+    includes_timeseries: Literal[False]
+
+
+class ActivityDetailResponse(ActivityCalendarItem):
+    schema_version: Literal["activity-detail-v1"]
+    description: str | None
+    moving_time_min: float | None
+    elapsed_time_min: float | None
+    recording_time_min: float | None
+    intervals: list[dict[str, Any]]
+    previous_activity_ref: str | None
+    next_activity_ref: str | None
+
+
+class ActivitySeriesPoint(StrictModel):
+    timestamp: str | None
+    elapsed_s: float | None
+    hr_bpm: float | None
+    speed_kmh: float | None
+    altitude_m: float | None
+    grade_pct: float | None
+    quality_flags: list[str]
+
+
+class ActivitySeriesResponse(StrictModel):
+    schema_version: Literal["activity-series-v1"]
+    activity_ref: str
+    source_sample_count: int
+    returned_sample_count: int
+    downsample_step: int
+    series: list[ActivitySeriesPoint]
 
 
 class CompletedWorkMetadata(StrictModel):

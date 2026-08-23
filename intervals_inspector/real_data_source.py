@@ -359,6 +359,9 @@ def load_real_history(
     activity_shadow_processor: Callable[
         [str, Mapping[str, Any], Any], Mapping[str, Any]
     ] | None = None,
+    activity_ref_resolver: Callable[[str], str] | None = None,
+    activity_metadata_collector: Callable[[str, Mapping[str, Any]], None]
+    | None = None,
 ) -> RealHistoryDataset:
     """Load and process one bounded real history in chronological order."""
 
@@ -438,20 +441,21 @@ def load_real_history(
 
         for provider_id in day_provider_ids:
             activity_ordinal += 1
-            activity_ref = f"activity-{activity_ordinal:03d}"
-            shadow_activity_ref = "shadow-" + hmac.new(
-                session_salt.encode("utf-8"),
-                provider_id.encode("utf-8"),
-                hashlib.sha256,
-            ).hexdigest()[:32]
+            activity_ref = (
+                activity_ref_resolver(provider_id)
+                if activity_ref_resolver is not None
+                else f"activity-{activity_ordinal:03d}"
+            )
             try:
                 detail = _response_payload(
-                    client.get_activity_result(provider_id, include_intervals=False)
+                    client.get_activity_result(provider_id, include_intervals=True)
                 )
                 if not isinstance(detail, Mapping):
                     raise TypeError("activity detail is not a mapping")
                 if _activity_date(detail) != current_day:
                     raise ValueError("activity date does not match the history day")
+                if activity_metadata_collector is not None:
+                    activity_metadata_collector(activity_ref, detail)
                 strength_activity = is_strength_activity(detail)
                 duration_seconds = _activity_duration_seconds(
                     detail, strength_activity=strength_activity
@@ -477,7 +481,7 @@ def load_real_history(
                         shadow_processor=(
                             None
                             if activity_shadow_processor is None
-                            else lambda shadow_detail, normalized, ref=shadow_activity_ref: (
+                            else lambda shadow_detail, normalized, ref=activity_ref: (
                                 activity_shadow_processor(ref, shadow_detail, normalized)
                             )
                         ),

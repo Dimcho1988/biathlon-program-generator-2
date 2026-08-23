@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - codex/main-real-data-model-integration
+      - codex/build-end-to-end-cloud-integration
 
 permissions:
   contents: read

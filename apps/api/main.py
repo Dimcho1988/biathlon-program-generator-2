@@ -1,6 +1,6 @@
 """FastAPI entry point for the onFlows read-only API."""
 
-from datetime import date
+from datetime import date, timedelta
 import logging
 import os
 import re
@@ -39,6 +39,11 @@ from .oauth_store import (
     PersistentStoreFailure,
     SupabasePilotRepository,
 )
+from .activity_catalog import (
+    ACTIVITY_REF_PATTERN,
+    activity_calendar_payload,
+    activity_detail_payload,
+)
 from .real_service import (
     ConfigurationError,
     ProviderFailure,
@@ -52,6 +57,9 @@ from .real_service import (
 from .schemas import (
     AthleteSettingsInput,
     AthleteSettingsResponse,
+    ActivityCalendarResponse,
+    ActivityDetailResponse,
+    ActivitySeriesResponse,
     AthletePlanningProfileInput,
     AthletePlanningProfileResponse,
     CompletedWorkResponse,
@@ -78,7 +86,7 @@ app = FastAPI(title="onFlows API", version="1.0.0")
 logger = logging.getLogger(__name__)
 ATHLETE_ALIAS_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{2,63}$")
 SAFE_WEB_NOTICE_PATTERN = re.compile(r"^[a-z0-9-]{1,64}$")
-ACTIVITY_SHADOW_REF_PATTERN = re.compile(r"^shadow-[a-f0-9]{32}$")
+ACTIVITY_SHADOW_REF_PATTERN = re.compile(r"^(?:shadow-|act_)[a-f0-9]{32}$")
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -325,6 +333,110 @@ def real_activity_shadow_index(
             status_code=503, detail="Persistent server storage is unavailable"
         ) from exc
     return {"schema_version": "activity-shadow-index-v1", "activities": rows}
+
+
+@app.get("/api/v2/real/activities", response_model=ActivityCalendarResponse)
+def real_activity_calendar(
+    period_start: date | None = None,
+    period_end: date | None = None,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    end = period_end or date.today()
+    start = period_start or end - timedelta(days=89)
+    if start > end or (end - start).days >= 90:
+        raise HTTPException(status_code=422, detail="Activity period must contain 1–90 days")
+    alias = _validated_alias(athlete_alias)
+    try:
+        rows = _repository().activity_calendar(alias, start, end)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    return activity_calendar_payload(
+        athlete_alias=alias, period_start=start, period_end=end, rows=rows
+    )
+
+
+@app.get(
+    "/api/v2/real/activities/{activity_ref}",
+    response_model=ActivityDetailResponse,
+)
+def real_activity_detail(
+    activity_ref: str,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    if not ACTIVITY_REF_PATTERN.fullmatch(activity_ref):
+        raise HTTPException(status_code=422, detail="Invalid activity reference")
+    try:
+        row = _repository().activity_detail(
+            _validated_alias(athlete_alias), activity_ref
+        )
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="Activity is unavailable")
+    return activity_detail_payload(row)
+
+
+@app.get(
+    "/api/v2/real/activities/{activity_ref}/series",
+    response_model=ActivitySeriesResponse,
+)
+def real_activity_series(
+    activity_ref: str,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    if not ACTIVITY_REF_PATTERN.fullmatch(activity_ref):
+        raise HTTPException(status_code=422, detail="Invalid activity reference")
+    try:
+        payload = _repository().activity_series(
+            _validated_alias(athlete_alias), activity_ref
+        )
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Activity series is unavailable")
+    return {**payload, "activity_ref": activity_ref}
+
+
+@app.get("/api/v2/real/activities/{activity_ref}/shadow")
+def real_activity_shadow_detail(
+    activity_ref: str,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    if not ACTIVITY_REF_PATTERN.fullmatch(activity_ref):
+        raise HTTPException(status_code=422, detail="Invalid activity reference")
+    try:
+        payload = _repository().activity_shadow(
+            _validated_alias(athlete_alias), activity_ref
+        )
+    except PersistentStoreFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Activity shadow result is unavailable")
+    return payload
 
 
 @app.get("/api/v2/real/activity-shadow")
