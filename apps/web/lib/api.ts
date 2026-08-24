@@ -32,6 +32,9 @@ import {
 // Render Free can take more than 50 seconds to wake the API after inactivity.
 // Keep the preview reliable without introducing a paid always-on service.
 const TIMEOUT_MS = 75_000;
+const DIRECT_WAKE_TIMEOUT_MS = 25_000;
+const DIRECT_WAKE_RETRY_DELAY_MS = 2_000;
+const DIRECT_WAKE_ATTEMPTS = 3;
 export type DataMode = "api" | "fixture";
 export interface TrainingStatusResult { data: TrainingStatus; mode: DataMode }
 export interface AthleteSettings {
@@ -53,27 +56,56 @@ export interface ActivityShadowIndex {
   activities: ActivityShadowIndexRow[];
 }
 
-async function fetchApiResource(path: string, token?: string, athleteAlias?: string): Promise<unknown> {
+interface ResourceReliabilityOptions {
+  continueAfterReadinessFailure?: boolean;
+}
+
+const pause = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+async function fetchApiResource(
+  path: string,
+  token?: string,
+  athleteAlias?: string,
+  reliability: ResourceReliabilityOptions = {},
+): Promise<unknown> {
   const baseUrl = process.env.ONFLOWS_API_BASE_URL;
   if (!baseUrl) throw new Error("ONFLOWS_API_BASE_URL не е зададен. Изберете API адрес или explicit fixture режим.");
+  let readinessFailed = false;
   try {
     await waitForApi(baseUrl);
   } catch (error) {
-    throw new Error("API услугата не се събуди навреме.", { cause: error });
+    if (!reliability.continueAfterReadinessFailure)
+      throw new Error("API услугата не се събуди навреме.", { cause: error });
+    readinessFailed = true;
   }
-  let response: Response;
-  try {
-    response = await fetch(new URL(path, baseUrl), {
-      signal: AbortSignal.timeout(TIMEOUT_MS), cache: "no-store",
-      headers: {
-        Accept: "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(athleteAlias ? { "X-OnFlows-Athlete-Alias": athleteAlias } : {}),
-      },
-    });
-  } catch (error) {
-    throw new Error("API услугата не отговори навреме или не е достъпна.", { cause: error });
+
+  const attempts = readinessFailed ? DIRECT_WAKE_ATTEMPTS : 1;
+  let response: Response | null = null;
+  let requestError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      response = await fetch(new URL(path, baseUrl), {
+        signal: AbortSignal.timeout(readinessFailed ? DIRECT_WAKE_TIMEOUT_MS : TIMEOUT_MS), cache: "no-store",
+        headers: {
+          Accept: "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(athleteAlias ? { "X-OnFlows-Athlete-Alias": athleteAlias } : {}),
+        },
+      });
+      requestError = undefined;
+    } catch (error) {
+      response = null;
+      requestError = error;
+    }
+    const retryableResponse = response !== null && (
+      response.status === 502 || response.status === 503 || response.status === 504 ||
+      (response.ok && !(response.headers.get("content-type") ?? "").toLowerCase().includes("application/json"))
+    );
+    if (response && !retryableResponse) break;
+    if (attempt < attempts) await pause(DIRECT_WAKE_RETRY_DELAY_MS);
   }
+  if (!response)
+    throw new Error("API услугата не отговори навреме или не е достъпна.", { cause: requestError });
   if (!response.ok) throw new Error(`API услугата върна грешка (${response.status}).`);
   try { return await response.json(); } catch (error) { throw new Error("API услугата върна невалиден JSON.", { cause: error }); }
 }
@@ -238,7 +270,12 @@ export async function getActivityDetail(
   }
   const token = process.env.ONFLOWS_SERVICE_TOKEN;
   if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
-  return parseActivityDetail(await fetchApiResource(`/api/v2/real/activities/${encodeURIComponent(activityRef)}`, token, athleteAlias));
+  return parseActivityDetail(await fetchApiResource(
+    `/api/v2/real/activities/${encodeURIComponent(activityRef)}`,
+    token,
+    athleteAlias,
+    { continueAfterReadinessFailure: true },
+  ));
 }
 
 export async function getActivitySeries(
@@ -249,7 +286,12 @@ export async function getActivitySeries(
   const token = process.env.ONFLOWS_SERVICE_TOKEN;
   if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
   try {
-    return parseActivitySeries(await fetchApiResource(`/api/v2/real/activities/${encodeURIComponent(activityRef)}/series`, token, athleteAlias));
+    return parseActivitySeries(await fetchApiResource(
+      `/api/v2/real/activities/${encodeURIComponent(activityRef)}/series`,
+      token,
+      athleteAlias,
+      { continueAfterReadinessFailure: true },
+    ));
   } catch (error) {
     if (error instanceof Error && error.message.includes("(404)")) return null;
     throw error;
