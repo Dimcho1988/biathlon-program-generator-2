@@ -32,8 +32,8 @@ from vflat_b65 import (
 
 
 INPUT_SCHEMA_VERSION = "activity-model-input-v1"
-DERIVED_SCHEMA_VERSION = "activity-shadow-derived-v1"
-SHADOW_CONFIGURATION_SCHEMA_VERSION = "activity-shadow-configuration-v1"
+DERIVED_SCHEMA_VERSION = "activity-shadow-derived-v2"
+SHADOW_CONFIGURATION_SCHEMA_VERSION = "activity-shadow-configuration-v2"
 
 _HR_NAMES = ("heartrate", "fixed_heartrate", "heart_rate", "hr")
 _SPEED_NAMES = ("velocity_smooth", "fixed_velocity_smooth", "speed", "velocity")

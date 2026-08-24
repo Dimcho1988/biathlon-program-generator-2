@@ -212,7 +212,7 @@ export async function getActivityShadow(
       donor_flag: false,
     }));
     return {
-      schema_version: "activity-shadow-derived-v1",
+      schema_version: "activity-shadow-derived-v2",
       experimental: true,
       affects_canonical_load: false,
       vflat_model_version: "vflat_b65_dynamic_v1",

@@ -42,6 +42,43 @@ def _reference_rows(reference_channels: ReferenceChannels, count: int):
     return rows
 
 
+def _combined_zone_summary(core: Any, terrain: Any) -> list[dict[str, Any]]:
+    """Expose the complete unrounded Raw/Clean/Candidate/Final zone contract."""
+    core_by_zone = {zone.zone_name: zone for zone in core.zone_summary}
+    if set(core_by_zone) != {zone.zone_name for zone in terrain.zone_summary}:
+        raise ValueError("HRmod core and terrain zone summaries must align")
+
+    rows: list[dict[str, Any]] = []
+    for final_zone in terrain.zone_summary:
+        core_zone = core_by_zone[final_zone.zone_name]
+        rows.append(
+            {
+                "zone_name": final_zone.zone_name,
+                "lower_bpm": final_zone.lower_bpm,
+                "upper_bpm": final_zone.upper_bpm,
+                "raw_seconds": final_zone.raw_seconds,
+                "raw_percent": final_zone.raw_percent,
+                "clean_seconds": core_zone.clean_seconds,
+                "clean_percent": core_zone.clean_percent,
+                "hrmod_candidate_seconds": final_zone.hrmod_candidate_seconds,
+                "hrmod_candidate_percent": final_zone.hrmod_candidate_percent,
+                "candidate_minus_clean_seconds": (
+                    final_zone.hrmod_candidate_seconds - core_zone.clean_seconds
+                ),
+                "hrmod_final_seconds": final_zone.hrmod_final_seconds,
+                "hrmod_final_percent": final_zone.hrmod_final_percent,
+                "final_minus_clean_seconds": (
+                    final_zone.hrmod_final_seconds - core_zone.clean_seconds
+                ),
+                "final_minus_candidate_seconds": (
+                    final_zone.final_minus_candidate_seconds
+                ),
+                "final_minus_raw_seconds": final_zone.final_minus_raw_seconds,
+            }
+        )
+    return rows
+
+
 def run_hrmod_v4_shadow(
     *,
     hr_samples: Sequence[HRInputSample],
@@ -223,7 +260,7 @@ def run_hrmod_v4_shadow(
         "final_result_hash": terrain.final_result_hash,
         "timeseries": records,
         "waves": waves,
-        "zones": [zone.to_dict() for zone in terrain.zone_summary],
+        "zones": _combined_zone_summary(core, terrain),
         "diagnostics": diagnostics,
         "config": selected_config.to_dict(),
         "terrain_config": asdict(terrain.config),
