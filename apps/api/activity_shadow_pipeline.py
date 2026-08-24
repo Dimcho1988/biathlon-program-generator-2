@@ -13,8 +13,15 @@ import pandas as pd
 
 from apps.api.shadow_models.hrmod_v4 import SOURCE_COMMIT, run_hrmod_v4_shadow
 from apps.api.shadow_models.vflat_b65 import run_vflat_b65_shadow
-from hrmod_lab.schemas import AthleteHRProfile, HRInputSample, HRZone
+from hrmod_lab.schemas import (
+    CONFIG_VERSION as HRMOD_CONFIG_VERSION,
+    MODEL_VERSION as HRMOD_MODEL_VERSION,
+    AthleteHRProfile,
+    HRInputSample,
+    HRZone,
+)
 from hrmod_lab.tcx_adapter import ReferenceChannels, ReferenceSample
+from hrmod_lab.terrain_gate import TERRAIN_CONFIG_VERSION, TERRAIN_MODEL_VERSION
 from intervals_inspector.stream_normalizer import IntervalAwareResult, materialize_1hz
 from vflat_b65 import (
     CONFIG_VERSION as VFLAT_CONFIG_VERSION,
@@ -26,6 +33,7 @@ from vflat_b65 import (
 
 INPUT_SCHEMA_VERSION = "activity-model-input-v1"
 DERIVED_SCHEMA_VERSION = "activity-shadow-derived-v1"
+SHADOW_CONFIGURATION_SCHEMA_VERSION = "activity-shadow-configuration-v1"
 
 _HR_NAMES = ("heartrate", "fixed_heartrate", "heart_rate", "hr")
 _SPEED_NAMES = ("velocity_smooth", "fixed_velocity_smooth", "speed", "velocity")
@@ -61,6 +69,30 @@ def _canonical_hash(payload: Any) -> str:
         allow_nan=False,
     )
     return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def activity_shadow_configuration_fingerprint(
+    zone_bounds_bpm: Sequence[int], explicit_hrmax_bpm: int | None
+) -> str:
+    """Identify every setting that can change a derived shadow result.
+
+    The immutable activity input remains a hash of provider observations only.
+    This separate fingerprint invalidates derived runs when athlete physiology or
+    a shadow model/configuration changes.
+    """
+    payload = {
+        "schema_version": SHADOW_CONFIGURATION_SCHEMA_VERSION,
+        "zone_bounds_bpm": [int(value) for value in zone_bounds_bpm],
+        "explicit_hrmax_bpm": explicit_hrmax_bpm,
+        "vflat_model_version": VFLAT_MODEL_VERSION,
+        "vflat_config_version": VFLAT_CONFIG_VERSION,
+        "hrmod_model_version": HRMOD_MODEL_VERSION,
+        "hrmod_config_version": HRMOD_CONFIG_VERSION,
+        "hrmod_source_commit": SOURCE_COMMIT,
+        "terrain_model_version": TERRAIN_MODEL_VERSION,
+        "terrain_config_version": TERRAIN_CONFIG_VERSION,
+    }
+    return _canonical_hash(payload)
 
 
 def _plain_number(value: float | None) -> float | None:
@@ -257,13 +289,16 @@ def compute_activity_shadow(
     )
     vflat = run_vflat_b65_shadow(vflat_frame)
     profile = _profile(zone_bounds_bpm, explicit_hrmax_bpm)
+    configuration_fingerprint = activity_shadow_configuration_fingerprint(
+        zone_bounds_bpm, explicit_hrmax_bpm
+    )
     if profile is None:
         hrmod = {
             "status": "excluded",
             "exclusion_reason": "EXPLICIT_HRMAX_MISSING",
-            "model_version": "hrmod_mirror_area_shift_v4",
-            "config_version": "hrmod_config_v4",
-            "terrain_model_version": "terrain_downhill_donor_exclusion_v4",
+            "model_version": HRMOD_MODEL_VERSION,
+            "config_version": HRMOD_CONFIG_VERSION,
+            "terrain_model_version": TERRAIN_MODEL_VERSION,
             "source_commit": SOURCE_COMMIT,
             "timeseries": [{} for _ in samples],
             "waves": [],
@@ -337,6 +372,7 @@ def compute_activity_shadow(
         "experimental": True,
         "affects_canonical_load": False,
         "input_hash": immutable_input["input_hash"],
+        "configuration_fingerprint": configuration_fingerprint,
         "vflat_model_version": VFLAT_MODEL_VERSION,
         "vflat_config_version": VFLAT_CONFIG_VERSION,
         "hrmod_model_version": hrmod.get("model_version"),

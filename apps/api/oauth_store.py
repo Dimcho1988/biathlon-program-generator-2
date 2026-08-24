@@ -926,6 +926,39 @@ class SupabasePilotRepository(SnapshotRepository):
             raise PersistentStoreFailure("Stored activity input hash is invalid")
         return value
 
+    def latest_activity_shadow_run_metadata(
+        self, athlete_alias: str, activity_ref: str
+    ) -> Mapping[str, Any] | None:
+        alias = quote(athlete_alias, safe="")
+        reference = quote(activity_ref, safe="")
+        response = self._request(
+            "GET",
+            "/onflows_activity_derived_runs?select=run_key,"
+            "configuration_fingerprint:result_payload->>configuration_fingerprint,created_at"
+            f"&athlete_alias=eq.{alias}&activity_ref=eq.{reference}"
+            "&order=created_at.desc&limit=1",
+        )
+        payload = self._json(response)
+        if not isinstance(payload, list) or not payload:
+            return None
+        row = payload[0]
+        if not isinstance(row, Mapping):
+            raise PersistentStoreFailure("Stored activity shadow metadata is invalid")
+        run_key = row.get("run_key")
+        fingerprint = row.get("configuration_fingerprint")
+        if not isinstance(run_key, str) or len(run_key) != 64:
+            raise PersistentStoreFailure("Stored activity shadow run key is invalid")
+        if fingerprint is not None and (
+            not isinstance(fingerprint, str) or len(fingerprint) != 64
+        ):
+            raise PersistentStoreFailure(
+                "Stored activity shadow configuration fingerprint is invalid"
+            )
+        return {
+            "run_key": run_key,
+            "configuration_fingerprint": fingerprint,
+        }
+
     def latest_activity_shadow_run_key(
         self, athlete_alias: str, activity_ref: str
     ) -> str | None:

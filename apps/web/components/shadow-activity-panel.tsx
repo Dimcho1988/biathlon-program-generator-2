@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
 type Row = Record<string, unknown>;
 
@@ -210,9 +211,9 @@ export function ShadowActivityPanel({ payload, activityRef }: { payload: Record<
 
       <section className="shadow-zone-comparison">
         <div className="section-heading"><div><p className="section-kicker">Z1—Z5</p><h2>Raw ↔ HRmod времена по зони</h2></div><p>Паралелно сравнение; реалните зони остават непроменени</p></div>
-        <div className="shadow-table-wrap"><table><thead><tr><th>Зона</th><th>Raw HR</th><th>Clean HR</th><th>HRmod final</th><th>Δ спрямо clean</th></tr></thead>
+        {zones.length === 0 ? <p className="detail-empty">HRmod разпределението още не е изчислено с текущите индивидуални настройки. Проверете <Link href="/?settings=edit">зоните и HRmax</Link>, запазете ги и изберете „Обнови данните“.</p> : <div className="shadow-table-wrap"><table><thead><tr><th>Зона</th><th>Raw HR</th><th>Clean HR</th><th>HRmod final</th><th>Δ спрямо clean</th></tr></thead>
           <tbody>{zones.map((zone) => <tr key={text(zone.zone_name)}><th>{text(zone.zone_name)}</th><td>{duration(zone.raw_seconds)}</td><td>{duration(zone.clean_seconds)}</td><td>{hrmodEnabled ? duration(zone.hrmod_seconds) : "off"}</td><td>{hrmodEnabled && number(zone.hrmod_minus_clean_seconds) !== null ? `${signed(number(zone.hrmod_minus_clean_seconds)! / 60)} мин` : hrmodEnabled ? "—" : "off"}</td></tr>)}</tbody>
-        </table></div>
+        </table></div>}
       </section>
 
       <details className="shadow-details">

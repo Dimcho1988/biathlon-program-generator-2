@@ -45,4 +45,13 @@ describe("Raw ↔ Shadow comparison", () => {
     expect(html).toContain("RECEIVER_DOWNHILL_OVERLAP");
     expect(html).toContain("89ABCDEF");
   });
+
+  it("explains how to restore an unavailable HRmod zone distribution", () => {
+    const html = renderToStaticMarkup(
+      <ShadowActivityPanel payload={{ ...payload, zone_summary: [] }} activityRef="shadow-0123456789abcdef0123456789abcdef" />,
+    );
+    expect(html).toContain("HRmod разпределението още не е изчислено");
+    expect(html).toContain("/?settings=edit");
+    expect(html).toContain("Обнови данните");
+  });
 });

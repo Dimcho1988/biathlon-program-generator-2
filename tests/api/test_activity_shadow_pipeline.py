@@ -5,6 +5,7 @@ from copy import deepcopy
 import pytest
 
 from apps.api.activity_shadow_pipeline import (
+    activity_shadow_configuration_fingerprint,
     build_immutable_activity_input,
     compute_activity_shadow,
 )
@@ -88,6 +89,18 @@ def test_explicit_hrmax_enables_hrmod_without_changing_immutable_input() -> None
     assert immutable_with == immutable_without
     assert derived["hrmod_model_version"] == "hrmod_mirror_area_shift_v4"
     assert any(row["hr_clean_bpm"] is not None for row in derived["timeseries"])
+
+
+def test_shadow_configuration_changes_for_zones_or_hrmax() -> None:
+    baseline = activity_shadow_configuration_fingerprint(
+        (50, 100, 120, 140, 160, 190), 200
+    )
+    assert activity_shadow_configuration_fingerprint(
+        (50, 101, 120, 140, 160, 190), 200
+    ) != baseline
+    assert activity_shadow_configuration_fingerprint(
+        (50, 100, 120, 140, 160, 190), 201
+    ) != baseline
 
 
 def test_explicit_hrmax_must_not_be_inferred_from_z5() -> None:

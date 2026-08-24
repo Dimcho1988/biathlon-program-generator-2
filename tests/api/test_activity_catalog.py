@@ -271,6 +271,23 @@ def test_changed_scientific_input_creates_a_new_derived_run():
     assert len(repository._canonical_activity_runs[("pilot", activity_ref)]) == 2
 
 
+def test_changed_hrmax_recomputes_shadow_with_same_activity_input():
+    repository = InMemorySnapshotRepository()
+    refresh(repository, environ=ENV, client=CatalogClient(), period_end=date(2026, 8, 15))
+    activity_ref = repository.activity_calendar(
+        "pilot", date(2026, 8, 15), date(2026, 8, 15)
+    )[0]["activity_ref"]
+    first_input_hash = repository.latest_activity_input_hash("pilot", activity_ref)
+    assert repository.activity_shadow("pilot", activity_ref)["zone_summary"] == []
+
+    configured = {**ENV, "ONFLOWS_HRMAX_BPM": "200"}
+    refresh(repository, environ=configured, client=CatalogClient(), period_end=date(2026, 8, 15))
+
+    assert repository.latest_activity_input_hash("pilot", activity_ref) == first_input_hash
+    assert len(repository._activity_runs[("pilot", activity_ref)]) == 2
+    assert len(repository.activity_shadow("pilot", activity_ref)["zone_summary"]) == 5
+
+
 def test_calendar_contract_is_summary_only_and_athlete_isolated(monkeypatch):
     repository = InMemorySnapshotRepository()
     refresh(repository, environ=ENV, client=CatalogClient(), period_end=date(2026, 8, 15))

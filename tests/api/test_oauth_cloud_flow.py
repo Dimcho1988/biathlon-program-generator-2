@@ -328,6 +328,42 @@ def test_existing_shadow_run_is_visible_when_catalog_pointer_is_missing():
     assert detail["shadow_available"] is True
 
 
+def test_latest_shadow_metadata_reads_configuration_fingerprint_without_full_result():
+    fingerprint = "f" * 64
+
+    class Client:
+        url = None
+
+        def request(self, method, url, *, headers, **kwargs):
+            self.url = url
+            return httpx.Response(
+                200,
+                json=[{
+                    "run_key": "a" * 64,
+                    "configuration_fingerprint": fingerprint,
+                    "created_at": "2026-08-24T18:00:00Z",
+                }],
+            )
+
+    client = Client()
+    repository = SupabasePilotRepository(
+        supabase_url="https://project.supabase.co",
+        secret_key="sb_secret_server-key",
+        encryption_key=base64.urlsafe_b64encode(bytes(range(32))).decode(),
+        client=client,
+    )
+
+    assert repository.latest_activity_shadow_run_metadata(
+        "pilot", "act_" + "1" * 32
+    ) == {
+        "run_key": "a" * 64,
+        "configuration_fingerprint": fingerprint,
+    }
+    assert client.url is not None
+    assert "configuration_fingerprint:result_payload->>configuration_fingerprint" in client.url
+    assert "result_payload," not in client.url
+
+
 def test_supabase_planning_profile_round_trip_is_scoped_to_alias():
     profile = AthletePlanningProfile(
         season_start=date(2026, 1, 1),
