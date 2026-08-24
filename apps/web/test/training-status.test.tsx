@@ -228,6 +228,8 @@ describe("dashboard", () => {
     const protectedHtml = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="api" sessionActions />);
     expect(protectedHtml).toContain('href="/planning"');
     expect(protectedHtml).toContain("Профил за планиране");
+    expect(protectedHtml).toContain('href="/?settings=edit"');
+    expect(protectedHtml).toContain("Зони и HRmax");
   });
   it("labels fixture mode and renders ordered zones with every required field", () => {
     const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" />);

@@ -821,6 +821,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         parameters = fresh_parameters()
         stage = "history"
         from .activity_shadow_pipeline import (
+            activity_shadow_configuration_fingerprint,
             build_immutable_activity_input,
             compute_activity_shadow,
         )
@@ -858,13 +859,21 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             scientific_input_hashes[activity_ref] = str(
                 immutable_input["input_hash"]
             )
+            configuration_fingerprint = activity_shadow_configuration_fingerprint(
+                context.zone_bounds_bpm, context.hrmax_bpm
+            )
             if repository.latest_activity_input_hash(
                 context.public_alias, activity_ref
             ) == immutable_input["input_hash"]:
-                existing_run_key = repository.latest_activity_shadow_run_key(
+                existing_run = repository.latest_activity_shadow_run_metadata(
                     context.public_alias, activity_ref
                 )
-                if existing_run_key is not None:
+                if (
+                    existing_run is not None
+                    and existing_run.get("configuration_fingerprint")
+                    == configuration_fingerprint
+                ):
+                    existing_run_key = str(existing_run["run_key"])
                     shadow_runs[activity_ref] = existing_run_key
                     return {
                         "status": "unchanged",

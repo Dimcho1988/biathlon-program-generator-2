@@ -79,7 +79,7 @@ export function Dashboard({
       <header className="hero">
         <nav aria-label="Основна навигация">
           <a className="brand" href="#top" aria-label="onFlows начало"><Image src="/brand/onflows-mark.png" width={33} height={40} alt="onFlows лого" priority /><span>onFlows</span></a>
-          <div className="nav-actions"><span className="product">Performance intelligence</span><ThemeToggle /></div>
+          <div className="nav-actions"><span className="product">Performance intelligence</span>{sessionActions && <Link href="/?settings=edit">Зони и HRmax</Link>}<ThemeToggle /></div>
         </nav>
         <div id="top" className="hero-grid">
           <div>

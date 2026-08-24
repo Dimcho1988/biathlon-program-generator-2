@@ -804,6 +804,9 @@ class SnapshotRepository(Protocol):
     def latest_activity_input_hash(
         self, athlete_alias: str, activity_ref: str
     ) -> str | None: ...
+    def latest_activity_shadow_run_metadata(
+        self, athlete_alias: str, activity_ref: str
+    ) -> Mapping[str, Any] | None: ...
     def latest_activity_shadow_run_key(
         self, athlete_alias: str, activity_ref: str
     ) -> str | None: ...
@@ -993,6 +996,25 @@ class InMemorySnapshotRepository:
                 if alias == athlete_alias and ref == activity_ref
             ]
             return hashes[-1] if hashes else None
+
+    def latest_activity_shadow_run_metadata(
+        self, athlete_alias: str, activity_ref: str
+    ) -> Mapping[str, Any] | None:
+        with self._lock:
+            runs = self._activity_runs.get((athlete_alias, activity_ref), [])
+            if not runs:
+                return None
+            latest = runs[-1]
+            payload = latest.get("result_payload")
+            fingerprint = (
+                payload.get("configuration_fingerprint")
+                if isinstance(payload, Mapping)
+                else None
+            )
+            return {
+                "run_key": str(latest["run_key"]),
+                "configuration_fingerprint": fingerprint,
+            }
 
     def latest_activity_shadow_run_key(
         self, athlete_alias: str, activity_ref: str
