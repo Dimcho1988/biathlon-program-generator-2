@@ -1,13 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ActivityCalendarView } from "../components/activity-calendar";
 import { ActivityDetailView } from "../components/activity-detail";
+import { ErrorState } from "../components/error-state";
 import {
   activityCalendarFixture,
   activityDetailFixture,
   activitySeriesFixture,
   parseActivityCalendar,
 } from "../lib/activities";
+import { getActivityDetail } from "../lib/api";
 
 describe("completed activities calendar", () => {
   it("shows names, local time, same-day activities, summaries and stable routes", () => {
@@ -48,5 +50,43 @@ describe("canonical activity detail", () => {
     expect(html).toContain("Canonical load");
     expect(html).toContain("Графиките временно не са заредени");
     expect(html).toContain("HR време по зони");
+  });
+
+  it("shows a working same-activity retry action outside the integration dashboard", () => {
+    const retryHref = `/activities/${activityDetailFixture.activity_ref}`;
+    const html = renderToStaticMarkup(
+      <ErrorState message="API услугата не се събуди навреме." retryAvailable retryHref={retryHref} />,
+    );
+    expect(html).toContain(`href="${retryHref}"`);
+    expect(html).toContain("Опитай отново");
+  });
+});
+
+describe("activity API cold-start reliability", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.ONFLOWS_API_BASE_URL;
+    delete process.env.ONFLOWS_SERVICE_TOKEN;
+  });
+
+  it("attempts the protected activity resource when the readiness probe gives a false failure", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 500 }))
+      .mockResolvedValueOnce(Response.json(activityDetailFixture));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getActivityDetail(activityDetailFixture.activity_ref, "ath-profile"))
+      .resolves.toEqual(activityDetailFixture);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0][0])).toBe("https://api.example.test/health");
+    expect(String(fetchMock.mock.calls[1][0])).toBe(
+      `https://api.example.test/api/v2/real/activities/${activityDetailFixture.activity_ref}`,
+    );
+    expect(fetchMock.mock.calls[1][1].headers).toMatchObject({
+      Authorization: "Bearer server-secret",
+      "X-OnFlows-Athlete-Alias": "ath-profile",
+    });
   });
 });
