@@ -14,7 +14,7 @@ export default async function ActivityPage({ params }: { params: Promise<{ activ
     getActivityDetail(activityRef, athleteAlias ?? undefined),
     getActivitySeries(activityRef, athleteAlias ?? undefined),
   ]);
-  if (activityResult.status === "rejected") return <ErrorState message={activityResult.reason instanceof Error ? activityResult.reason.message : "Активността временно не е достъпна."} retryAvailable />;
+  if (activityResult.status === "rejected") return <ErrorState message={activityResult.reason instanceof Error ? activityResult.reason.message : "Активността временно не е достъпна."} retryAvailable retryHref={`/activities/${encodeURIComponent(activityRef)}`} />;
   const seriesUnavailable = seriesResult.status === "rejected";
   const series = seriesResult.status === "fulfilled" ? seriesResult.value : null;
   return <main className="activity-detail-page"><nav className="detail-top-nav" aria-label="Основна навигация"><Link className="brand" href="/"><Image src="/brand/onflows-mark.png" width={33} height={40} alt="onFlows лого" /><span>onFlows</span></Link><div className="nav-actions"><Link href="/activities">Активности</Link><ThemeToggle /></div></nav><ActivityDetailView activity={activityResult.value} series={series} seriesUnavailable={seriesUnavailable} /></main>;
