@@ -82,6 +82,39 @@ def test_production_adapter_preserves_streamlit_v4_candidate_and_raw_hr() -> Non
     assert result["affects_canonical_load"] is False
 
 
+def test_zone_payload_combines_core_clean_candidate_and_terrain_final() -> None:
+    samples, references = _inputs()
+    profile = _profile()
+    config = HRmodConfig()
+    golden = compute_hrmod_hr_only(
+        hr_samples=samples, athlete_profile=profile, config=config
+    )
+    result = run_hrmod_v4_shadow(
+        hr_samples=samples,
+        athlete_profile=profile,
+        reference_channels=references,
+        config=config,
+        terrain_config=TerrainGateConfig(grade_smoothing_window_s=1.0),
+    )
+
+    golden_by_zone = {zone.zone_name: zone for zone in golden.zone_summary}
+    assert len(result["zones"]) == 5
+    for zone in result["zones"]:
+        golden_zone = golden_by_zone[zone["zone_name"]]
+        assert zone["raw_seconds"] == pytest.approx(golden_zone.raw_seconds)
+        assert zone["clean_seconds"] == pytest.approx(golden_zone.clean_seconds)
+        assert zone["hrmod_candidate_seconds"] == pytest.approx(
+            golden_zone.hrmod_seconds
+        )
+        assert zone["candidate_minus_clean_seconds"] == pytest.approx(
+            golden_zone.hrmod_minus_clean_seconds
+        )
+        assert zone["hrmod_final_seconds"] >= 0.0
+        assert zone["final_minus_clean_seconds"] == pytest.approx(
+            zone["hrmod_final_seconds"] - zone["clean_seconds"]
+        )
+
+
 def test_diagnostics_do_not_change_candidate_and_area_is_exact() -> None:
     samples, references = _inputs()
     result = run_hrmod_v4_shadow(

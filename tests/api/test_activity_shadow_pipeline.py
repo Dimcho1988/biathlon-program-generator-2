@@ -89,6 +89,15 @@ def test_explicit_hrmax_enables_hrmod_without_changing_immutable_input() -> None
     assert immutable_with == immutable_without
     assert derived["hrmod_model_version"] == "hrmod_mirror_area_shift_v4"
     assert any(row["hr_clean_bpm"] is not None for row in derived["timeseries"])
+    assert derived["schema_version"] == "activity-shadow-derived-v2"
+    assert len(derived["zone_summary"]) == 5
+    assert {
+        "raw_seconds",
+        "clean_seconds",
+        "hrmod_candidate_seconds",
+        "hrmod_final_seconds",
+        "final_minus_clean_seconds",
+    } <= set(derived["zone_summary"][0])
 
 
 def test_shadow_configuration_changes_for_zones_or_hrmax() -> None:

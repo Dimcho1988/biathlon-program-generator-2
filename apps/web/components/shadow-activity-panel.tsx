@@ -159,9 +159,9 @@ export function ShadowActivityPanel({ payload, activityRef }: { payload: Record<
   const cleanHr = mean(rows, "hr_clean_bpm");
   const finalHr = mean(rows, "hrmod_final_bpm");
   const redistributedZoneSeconds = zones.reduce((sum, zone) => {
-    const raw = number(zone.raw_seconds);
-    const modulated = number(zone.hrmod_seconds);
-    return raw === null || modulated === null ? sum : sum + Math.abs(modulated - raw);
+    const clean = number(zone.clean_seconds);
+    const modulated = number(zone.hrmod_final_seconds ?? zone.hrmod_seconds);
+    return clean === null || modulated === null ? sum : sum + Math.abs(modulated - clean);
   }, 0) / 2;
 
   return (
@@ -182,7 +182,7 @@ export function ShadowActivityPanel({ payload, activityRef }: { payload: Record<
       <section className="shadow-summary" aria-label="Обобщение на сравнението">
         <article><span>Средна скорост</span><strong>{fixed(rawSpeed)} → {vflatEnabled ? fixed(vflatSpeed) : "off"} km/h</strong><small>Δ {vflatEnabled && rawSpeed !== null && vflatSpeed !== null ? signed(vflatSpeed - rawSpeed) : "—"}</small></article>
         <article><span>Среден пулс</span><strong>{fixed(cleanHr)} → {hrmodEnabled ? fixed(finalHr) : "off"} bpm</strong><small>Δ {hrmodEnabled && cleanHr !== null && finalHr !== null ? signed(finalHr - cleanHr) : "—"}</small></article>
-        <article><span>Преразпределено по зони</span><strong>{duration(redistributedZoneSeconds)}</strong><small>½ Σ |HRmod − Raw|</small></article>
+        <article><span>Преразпределено по зони</span><strong>{duration(redistributedZoneSeconds)}</strong><small>½ Σ |HRmod final − Clean|</small></article>
         <article><span>HR вълни</span><strong>{text(hrDiagnostics.corrected_wave_count ?? 0)} коригирани</strong><small>{waves.length} открити общо</small></article>
         <article><span>Диагностични сигнали</span><strong>{allFlags.length} flags</strong><small>{allExclusions.length} exclusions</small></article>
       </section>
@@ -211,8 +211,12 @@ export function ShadowActivityPanel({ payload, activityRef }: { payload: Record<
 
       <section className="shadow-zone-comparison">
         <div className="section-heading"><div><p className="section-kicker">Z1—Z5</p><h2>Raw ↔ HRmod времена по зони</h2></div><p>Паралелно сравнение; реалните зони остават непроменени</p></div>
-        {zones.length === 0 ? <p className="detail-empty">HRmod разпределението още не е изчислено с текущите индивидуални настройки. Проверете <Link href="/?settings=edit">зоните и HRmax</Link>, запазете ги и изберете „Обнови данните“.</p> : <div className="shadow-table-wrap"><table><thead><tr><th>Зона</th><th>Raw HR</th><th>Clean HR</th><th>HRmod final</th><th>Δ спрямо clean</th></tr></thead>
-          <tbody>{zones.map((zone) => <tr key={text(zone.zone_name)}><th>{text(zone.zone_name)}</th><td>{duration(zone.raw_seconds)}</td><td>{duration(zone.clean_seconds)}</td><td>{hrmodEnabled ? duration(zone.hrmod_seconds) : "off"}</td><td>{hrmodEnabled && number(zone.hrmod_minus_clean_seconds) !== null ? `${signed(number(zone.hrmod_minus_clean_seconds)! / 60)} мин` : hrmodEnabled ? "—" : "off"}</td></tr>)}</tbody>
+        {zones.length === 0 ? <p className="detail-empty">HRmod разпределението още не е изчислено с текущите индивидуални настройки. Проверете <Link href="/?settings=edit">зоните и HRmax</Link>, запазете ги и изберете „Обнови данните“.</p> : <div className="shadow-table-wrap"><table><thead><tr><th>Зона</th><th>Raw HR</th><th>Clean HR</th><th>HRmod candidate</th><th>HRmod final</th><th>Δ final спрямо clean</th></tr></thead>
+          <tbody>{zones.map((zone) => {
+            const finalSeconds = zone.hrmod_final_seconds ?? zone.hrmod_seconds;
+            const finalMinusClean = zone.final_minus_clean_seconds ?? zone.hrmod_minus_clean_seconds;
+            return <tr key={text(zone.zone_name)}><th>{text(zone.zone_name)}</th><td>{duration(zone.raw_seconds)}</td><td>{duration(zone.clean_seconds)}</td><td>{hrmodEnabled ? duration(zone.hrmod_candidate_seconds) : "off"}</td><td>{hrmodEnabled ? duration(finalSeconds) : "off"}</td><td>{hrmodEnabled && number(finalMinusClean) !== null ? `${signed(number(finalMinusClean)! / 60)} мин` : hrmodEnabled ? "—" : "off"}</td></tr>;
+          })}</tbody>
         </table></div>}
       </section>
 

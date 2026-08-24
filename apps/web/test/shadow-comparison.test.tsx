@@ -17,8 +17,8 @@ const payload = {
     { segment_index: 0, start_elapsed_s: 0, end_elapsed_s: 15, speed_raw_kmh: 12.3, vflat_b65_kmh: 13.3, hr_raw_bpm: 141.3, hrmod_final_bpm: 141.3, grade_smoothed_pct: 1 },
   ],
   zone_summary: [
-    { zone_name: "Z1", raw_seconds: 30, clean_seconds: 30, hrmod_seconds: 20, hrmod_minus_clean_seconds: -10 },
-    { zone_name: "Z2", raw_seconds: 30, clean_seconds: 30, hrmod_seconds: 40, hrmod_minus_clean_seconds: 10 },
+    { zone_name: "Z1", raw_seconds: 30, clean_seconds: 30, hrmod_candidate_seconds: 25, hrmod_final_seconds: 20, final_minus_clean_seconds: -10 },
+    { zone_name: "Z2", raw_seconds: 30, clean_seconds: 30, hrmod_candidate_seconds: 35, hrmod_final_seconds: 40, final_minus_clean_seconds: 10 },
   ],
   hrmod_waves: [
     { wave_id: 1, corrected: true, rise_start_elapsed_s: 0, peak_elapsed_s: 1, tail_end_elapsed_s: 2, added_area_bpm_s: 4, removed_area_bpm_s: 4, moved_area_bpm_s: 4, capacity_limited: false, receiver_downhill_overlap_s: 0, flags: ["AREA_CONSERVATION_PASSED"] },
@@ -44,6 +44,9 @@ describe("Raw ↔ Shadow comparison", () => {
     expect(html).toContain("hrmod_mirror_area_shift_v4");
     expect(html).toContain("RECEIVER_DOWNHILL_OVERLAP");
     expect(html).toContain("89ABCDEF");
+    expect(html).toContain("HRmod candidate");
+    expect(html).toContain("HRmod final");
+    expect(html).toContain("Δ final спрямо clean");
   });
 
   it("explains how to restore an unavailable HRmod zone distribution", () => {
