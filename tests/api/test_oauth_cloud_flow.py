@@ -113,6 +113,52 @@ class TransientAuthClient:
         return httpx.Response(200, json=[])
 
 
+class ExistingShadowClient:
+    activity_ref = "act_" + "1" * 32
+    run_key = "a" * 64
+
+    def request(self, method, url, *, headers, **kwargs):
+        if "/onflows_activity_catalog?select=*" in url:
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "activity_ref": self.activity_ref,
+                        "athlete_alias": "pilot",
+                        "start_at_utc": "2026-08-15T05:00:00Z",
+                        "latest_shadow_run_key": None,
+                    }
+                ],
+            )
+        if "/onflows_activity_catalog?" in url and "&local_date=" in url:
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "activity_ref": self.activity_ref,
+                        "latest_shadow_run_key": None,
+                    }
+                ],
+            )
+        if "/onflows_activity_catalog?select=activity_ref" in url:
+            return httpx.Response(200, json=[])
+        if "/onflows_activity_derived_runs?" in url:
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "activity_ref": self.activity_ref,
+                        "run_key": self.run_key,
+                        "created_at": "2026-08-15T06:00:00Z",
+                        "vflat_model_version": "vflat_b65_dynamic_v1",
+                        "hrmod_model_version": "hrmod_mirror_area_shift_v4",
+                        "terrain_model_version": "hrmod_terrain_gate_v1",
+                    }
+                ],
+            )
+        raise AssertionError(f"Unexpected request: {method} {url}")
+
+
 class PlanningProfileClient:
     def __init__(self, payload):
         self.payload = payload
@@ -260,6 +306,26 @@ def test_supabase_never_retries_a_write_after_auth_failure():
         )
 
     assert client.calls == 1
+
+
+def test_existing_shadow_run_is_visible_when_catalog_pointer_is_missing():
+    client = ExistingShadowClient()
+    repository = SupabasePilotRepository(
+        supabase_url="https://project.supabase.co",
+        secret_key="sb_secret_server-key",
+        encryption_key=base64.urlsafe_b64encode(bytes(range(32))).decode(),
+        client=client,
+    )
+
+    calendar = repository.activity_calendar(
+        "pilot", date(2026, 8, 1), date(2026, 8, 23)
+    )
+    detail = repository.activity_detail("pilot", client.activity_ref)
+
+    assert calendar[0]["latest_shadow_run_key"] == client.run_key
+    assert detail is not None
+    assert detail["latest_shadow_run_key"] == client.run_key
+    assert detail["shadow_available"] is True
 
 
 def test_supabase_planning_profile_round_trip_is_scoped_to_alias():

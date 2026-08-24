@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
 from apps.api import main as api_main
@@ -12,6 +13,7 @@ from apps.api.activity_catalog import (
 )
 from apps.api.cloud import InMemorySnapshotRepository
 from apps.api.main import app
+from apps.api.oauth_store import PersistentStoreFailure
 from apps.api.real_service import refresh
 from intervals_inspector.intervals_client import IntervalsResponse
 
@@ -86,6 +88,18 @@ class CatalogClient:
                 {"type": "distance", "data": [index * 4.0 for index in range(61)]},
             ],
         )
+
+
+class CatalogFailsOnceRepository(InMemorySnapshotRepository):
+    def __init__(self):
+        super().__init__()
+        self.catalog_failures_remaining = 1
+
+    def upsert_activity_catalog(self, athlete_alias, activities):
+        if self.catalog_failures_remaining:
+            self.catalog_failures_remaining -= 1
+            raise PersistentStoreFailure("simulated catalog failure")
+        return super().upsert_activity_catalog(athlete_alias, activities)
 
 
 def test_provider_identity_is_stable_opaque_and_athlete_scoped():
@@ -214,6 +228,36 @@ def test_edited_name_does_not_create_a_new_scientific_run():
     assert len(repository._activity_runs[("pilot", activity_ref)]) == 1
     assert len(repository._canonical_activity_runs[("pilot", activity_ref)]) == 1
     assert "Edited private name" not in repr(repository._activity_inputs)
+
+
+def test_retry_relinks_shadow_run_after_catalog_write_failed():
+    repository = CatalogFailsOnceRepository()
+
+    with pytest.raises(PersistentStoreFailure):
+        refresh(
+            repository,
+            environ=ENV,
+            client=CatalogClient(),
+            period_end=date(2026, 8, 15),
+            now=datetime(2026, 8, 15, tzinfo=timezone.utc),
+        )
+
+    assert len(repository._activity_runs) == 1
+    refresh(
+        repository,
+        environ=ENV,
+        client=CatalogClient(),
+        period_end=date(2026, 8, 15),
+        now=datetime(2026, 8, 15, tzinfo=timezone.utc),
+    )
+
+    row = repository.activity_calendar(
+        "pilot", date(2026, 8, 15), date(2026, 8, 15)
+    )[0]
+    assert row["latest_shadow_run_key"] == repository.latest_activity_shadow_run_key(
+        "pilot", row["activity_ref"]
+    )
+    assert len(repository._activity_runs[("pilot", row["activity_ref"])]) == 1
 
 
 def test_changed_scientific_input_creates_a_new_derived_run():

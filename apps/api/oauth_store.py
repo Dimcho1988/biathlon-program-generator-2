@@ -744,7 +744,7 @@ class SupabasePilotRepository(SnapshotRepository):
         response = self._request(
             "GET",
             f"/onflows_activity_derived_runs?select={selected}&athlete_alias=eq.{alias}"
-            "&order=created_at.desc&limit=250",
+            "&order=created_at.desc&limit=1000",
         )
         payload = self._json(response)
         if not isinstance(payload, list):
@@ -821,7 +821,18 @@ class SupabasePilotRepository(SnapshotRepository):
         payload = self._json(response)
         if not isinstance(payload, list) or not all(isinstance(row, Mapping) for row in payload):
             raise PersistentStoreFailure("Stored activity calendar is invalid")
-        return tuple(dict(row) for row in payload)
+        rows = [dict(row) for row in payload]
+        if any(not row.get("latest_shadow_run_key") for row in rows):
+            existing_runs = {
+                str(run["activity_ref"]): str(run["run_key"])
+                for run in self.activity_shadow_index(athlete_alias)
+                if run.get("activity_ref") and run.get("run_key")
+            }
+            for row in rows:
+                row["latest_shadow_run_key"] = row.get(
+                    "latest_shadow_run_key"
+                ) or existing_runs.get(str(row.get("activity_ref") or ""))
+        return tuple(rows)
 
     def activity_detail(
         self, athlete_alias: str, activity_ref: str
@@ -854,8 +865,13 @@ class SupabasePilotRepository(SnapshotRepository):
         ) if start else None
         previous_payload = self._json(previous) if previous is not None else []
         following_payload = self._json(following) if following is not None else []
+        shadow_run_key = (
+            row.get("latest_shadow_run_key")
+            or self.latest_activity_shadow_run_key(athlete_alias, activity_ref)
+        )
         return {
             **dict(row),
+            "latest_shadow_run_key": shadow_run_key,
             "previous_activity_ref": (
                 previous_payload[0].get("activity_ref")
                 if isinstance(previous_payload, list) and previous_payload and isinstance(previous_payload[0], Mapping)
@@ -866,7 +882,7 @@ class SupabasePilotRepository(SnapshotRepository):
                 if isinstance(following_payload, list) and following_payload and isinstance(following_payload[0], Mapping)
                 else None
             ),
-            "shadow_available": bool(row.get("latest_shadow_run_key")),
+            "shadow_available": bool(shadow_run_key),
         }
 
     def activity_series(
@@ -908,6 +924,25 @@ class SupabasePilotRepository(SnapshotRepository):
         value = payload[0].get("input_hash") if isinstance(payload[0], Mapping) else None
         if not isinstance(value, str) or len(value) != 64:
             raise PersistentStoreFailure("Stored activity input hash is invalid")
+        return value
+
+    def latest_activity_shadow_run_key(
+        self, athlete_alias: str, activity_ref: str
+    ) -> str | None:
+        alias = quote(athlete_alias, safe="")
+        reference = quote(activity_ref, safe="")
+        response = self._request(
+            "GET",
+            "/onflows_activity_derived_runs?select=run_key,created_at"
+            f"&athlete_alias=eq.{alias}&activity_ref=eq.{reference}"
+            "&order=created_at.desc&limit=1",
+        )
+        payload = self._json(response)
+        if not isinstance(payload, list) or not payload:
+            return None
+        value = payload[0].get("run_key") if isinstance(payload[0], Mapping) else None
+        if not isinstance(value, str) or len(value) != 64:
+            raise PersistentStoreFailure("Stored activity shadow run key is invalid")
         return value
 
 

@@ -861,11 +861,17 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             if repository.latest_activity_input_hash(
                 context.public_alias, activity_ref
             ) == immutable_input["input_hash"]:
-                return {
-                    "status": "unchanged",
-                    "experimental": True,
-                    "affects_canonical_load": False,
-                }
+                existing_run_key = repository.latest_activity_shadow_run_key(
+                    context.public_alias, activity_ref
+                )
+                if existing_run_key is not None:
+                    shadow_runs[activity_ref] = existing_run_key
+                    return {
+                        "status": "unchanged",
+                        "run_key": existing_run_key,
+                        "experimental": True,
+                        "affects_canonical_load": False,
+                    }
             immutable_input, derived = compute_activity_shadow(
                 detail=detail,
                 normalized=normalized,
