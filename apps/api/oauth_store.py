@@ -69,6 +69,18 @@ def _safe_store_error(response: httpx.Response) -> str:
     return f"code={code} category={category}{target}"
 
 
+def _retryable_store_auth_failure(response: httpx.Response) -> bool:
+    """Recognize the bounded, safe-to-retry PostgREST auth failure."""
+
+    if response.status_code != 401:
+        return False
+    try:
+        payload = response.json()
+    except Exception:
+        return False
+    return isinstance(payload, Mapping) and payload.get("code") == "PGRST303"
+
+
 class PersistentStoreConfigurationError(RuntimeError):
     """Safe configuration failure without credential values."""
 
@@ -180,17 +192,32 @@ class SupabasePilotRepository(SnapshotRepository):
     def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         headers = {**self._headers, **kwargs.pop("headers", {})}
         resource = path.split("?", 1)[0]
-        try:
-            response = self._client.request(
-                method, self._base_url + path, headers=headers, **kwargs
-            )
-        except httpx.HTTPError as exc:
-            logger.warning(
-                "persistent_store_request_failed method=%s resource=%s status=network",
-                method,
-                resource,
-            )
-            raise PersistentStoreFailure("Persistent store is unavailable") from exc
+        response: httpx.Response | None = None
+        attempts = 2 if method.upper() == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                response = self._client.request(
+                    method, self._base_url + path, headers=headers, **kwargs
+                )
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "persistent_store_request_failed method=%s resource=%s status=network",
+                    method,
+                    resource,
+                )
+                raise PersistentStoreFailure("Persistent store is unavailable") from exc
+            if 200 <= response.status_code < 300:
+                return response
+            if attempt == 0 and _retryable_store_auth_failure(response):
+                logger.warning(
+                    "persistent_store_request_retry method=%s resource=%s "
+                    "status=401 code=PGRST303",
+                    method,
+                    resource,
+                )
+                continue
+            break
+        assert response is not None
         if not 200 <= response.status_code < 300:
             diagnostic = _safe_store_error(response)
             logger.warning(

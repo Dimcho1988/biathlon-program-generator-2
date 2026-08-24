@@ -96,6 +96,23 @@ class FailingClient:
         )
 
 
+class TransientAuthClient:
+    def __init__(self):
+        self.calls = 0
+
+    def request(self, method, url, *, headers, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            return httpx.Response(
+                401,
+                json={
+                    "code": "PGRST303",
+                    "message": "JWT claims validation failed",
+                },
+            )
+        return httpx.Response(200, json=[])
+
+
 class PlanningProfileClient:
     def __init__(self, payload):
         self.payload = payload
@@ -200,6 +217,49 @@ def test_supabase_failure_logs_only_safe_resource_and_status(caplog):
     ) in caplog.text
     assert "private-athlete-alias" not in caplog.text
     assert "Private athlete note" not in caplog.text
+
+
+def test_supabase_retries_one_transient_get_auth_failure(caplog):
+    client = TransientAuthClient()
+    repository = SupabasePilotRepository(
+        supabase_url="https://project.supabase.co",
+        secret_key="sb_secret_server-key",
+        encryption_key=base64.urlsafe_b64encode(bytes(range(32))).decode(),
+        client=client,
+    )
+
+    with caplog.at_level("WARNING"):
+        rows = repository.activity_calendar(
+            "private-athlete-alias", date(2026, 8, 1), date(2026, 8, 23)
+        )
+
+    assert rows == ()
+    assert client.calls == 2
+    assert (
+        "persistent_store_request_retry method=GET "
+        "resource=/onflows_activity_catalog status=401 code=PGRST303"
+    ) in caplog.text
+    assert "private-athlete-alias" not in caplog.text
+
+
+def test_supabase_never_retries_a_write_after_auth_failure():
+    client = TransientAuthClient()
+    repository = SupabasePilotRepository(
+        supabase_url="https://project.supabase.co",
+        secret_key="sb_secret_server-key",
+        encryption_key=base64.urlsafe_b64encode(bytes(range(32))).decode(),
+        client=client,
+    )
+
+    with pytest.raises(PersistentStoreFailure):
+        repository.create_oauth_state(
+            nonce="nonce",
+            athlete_alias="pilot",
+            redirect_uri=ENV["INTERVALS_REDIRECT_URI"],
+            expires_at=datetime(2026, 8, 24, tzinfo=timezone.utc),
+        )
+
+    assert client.calls == 1
 
 
 def test_supabase_planning_profile_round_trip_is_scoped_to_alias():

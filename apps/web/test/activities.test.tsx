@@ -42,4 +42,11 @@ describe("canonical activity detail", () => {
     expect(html).toContain("aria-label=\"Височина\"");
     expect(html).toContain("aria-label=\"Наклон\"");
   });
+
+  it("keeps the canonical summary visible when timeseries are temporarily unavailable", () => {
+    const html = renderToStaticMarkup(<ActivityDetailView activity={activityDetailFixture} series={null} seriesUnavailable />);
+    expect(html).toContain("Canonical load");
+    expect(html).toContain("Графиките временно не са заредени");
+    expect(html).toContain("HR време по зони");
+  });
 });
