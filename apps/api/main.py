@@ -90,7 +90,9 @@ ACTIVITY_SHADOW_REF_PATTERN = re.compile(r"^(?:shadow-|act_)[a-f0-9]{32}$")
 
 
 @app.get("/health", response_model=HealthResponse)
-def health() -> HealthResponse:
+async def health() -> HealthResponse:
+    """Keep Render liveness independent from the synchronous worker pool."""
+
     return HealthResponse(status="ok")
 
 
