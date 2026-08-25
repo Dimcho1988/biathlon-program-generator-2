@@ -94,7 +94,11 @@ def test_ingests_activity_and_wellness_then_atomically_publishes_aggregate_snaps
     assert len(payload["recovery_history"]["daily"]) == 41 * 5
     rendered = repr(payload)
     assert all(secret not in rendered for secret in ("private-athlete", "private-token", "provider-activity", "must-not-survive"))
-    assert "28800" not in rendered
+    assert payload["wellness_calendar"] == [{
+        "date": "2026-08-15",
+        "metrics": {"sleep_duration": {"value": 28800.0, "unit": "s"}},
+    }]
+    assert "comments" not in rendered
 
 
 def test_strength_activity_is_persisted_as_one_str_component_without_hr_double_counting():

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { ActivityCalendar, ActivityCalendarItem } from "../lib/activities";
+import type { ActivityCalendar, ActivityCalendarItem, DailyWellnessSummary } from "../lib/activities";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
 const dateLabel = new Intl.DateTimeFormat("bg-BG", { day: "numeric", month: "short", timeZone: "UTC" });
@@ -15,6 +15,14 @@ const monday = (value: string) => {
   const date = utcDate(value); const day = (date.getUTCDay() + 6) % 7; date.setUTCDate(date.getUTCDate() - day); return isoDate(date);
 };
 const sunday = (value: string) => addDays(monday(value), 6);
+const wellnessNumber = (wellness: DailyWellnessSummary, field: string): number | null => {
+  const value = wellness.metrics[field]?.value;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+};
+const sleepDuration = (seconds: number) => {
+  const roundedMinutes = Math.round(seconds / 60);
+  return `${Math.floor(roundedMinutes / 60)}:${String(roundedMinutes % 60).padStart(2, "0")}`;
+};
 
 const sportClass = (sport: string) => {
   const value = sport.toLowerCase();
@@ -24,6 +32,51 @@ const sportClass = (sport: string) => {
   if (value.includes("weight") || value.includes("strength")) return "strength";
   return "other";
 };
+
+function WellnessDay({ wellness }: { wellness?: DailyWellnessSummary }) {
+  if (!wellness) return null;
+  const sleep = wellnessNumber(wellness, "sleep_duration");
+  const sleepScore = wellnessNumber(wellness, "sleep_score") ?? wellnessNumber(wellness, "sleep_quality");
+  const restingHr = wellnessNumber(wellness, "resting_hr");
+  const hrv = wellnessNumber(wellness, "hrv") ?? wellnessNumber(wellness, "hrv_sdnn");
+  const weight = wellnessNumber(wellness, "weight");
+  const steps = wellnessNumber(wellness, "steps");
+  const readiness = wellnessNumber(wellness, "readiness");
+  const labels = [
+    sleep !== null ? `сън ${sleepDuration(sleep)}` : null,
+    sleepScore !== null ? `качество ${number.format(sleepScore)}` : null,
+    restingHr !== null ? `пулс в покой ${number.format(restingHr)} bpm` : null,
+    hrv !== null ? `HRV ${number.format(hrv)} ms` : null,
+    weight !== null ? `тегло ${number.format(weight)} kg` : null,
+    steps !== null ? `${number.format(steps)} стъпки` : null,
+    readiness !== null ? `готовност ${number.format(readiness)}` : null,
+  ].filter(Boolean).join(", ");
+  return <span className="calendar-wellness" aria-label={`Wellness: ${labels}`} title={labels}>
+    {sleep !== null && <span className="wellness-sleep">☾ {sleepDuration(sleep)}{sleepScore !== null ? ` · ${number.format(sleepScore)}Q` : ""}</span>}
+    {restingHr !== null && <span className="wellness-rhr">♥ {number.format(restingHr)}</span>}
+    {hrv !== null && <span>HRV {number.format(hrv)}</span>}
+    {weight !== null && <span>{number.format(weight)} kg</span>}
+    {steps !== null && <span>{number.format(steps / 1000)}k ст.</span>}
+    {readiness !== null && <span>R {number.format(readiness)}</span>}
+  </span>;
+}
+
+function ActivityZoneStrip({ activity }: { activity: ActivityCalendarItem }) {
+  const source = activity.zone_visualization_source;
+  const zones = source === "hrmod_final"
+    ? activity.hrmod_zones.map((zone) => ({ zone: zone.zone, seconds: zone.final_time_s }))
+    : activity.zones.map((zone) => ({ zone: zone.zone, seconds: zone.raw_time_s }));
+  const total = zones.reduce((sum, zone) => sum + zone.seconds, 0);
+  if (source === "none" || total <= 0) return null;
+  const sourceLabel = source === "hrmod_final" ? "HRmod final · experimental" : "Реален пулс";
+  const distribution = zones.map((zone) => `${zone.zone} ${number.format(zone.seconds / 60)} мин`).join(", ");
+  return <span className={`activity-zone-visual source-${source}`} aria-label={`${sourceLabel}: ${distribution}`} title={`${sourceLabel}: ${distribution}`}>
+    <span className="activity-zone-strip">
+      {zones.filter((zone) => zone.seconds > 0).map((zone) => <i key={zone.zone} className={zone.zone.toLowerCase()} style={{ flexGrow: zone.seconds / total }} />)}
+    </span>
+    <small>{source === "hrmod_final" ? "HRmod" : "Raw HR"}</small>
+  </span>;
+}
 
 function ActivityCard({ activity }: { activity: ActivityCalendarItem }) {
   const fallback = `${activity.sport} · ${activity.local_time}`;
@@ -36,6 +89,7 @@ function ActivityCard({ activity }: { activity: ActivityCalendarItem }) {
       {activity.average_hr_bpm !== null && <span>{number.format(activity.average_hr_bpm)} HR</span>}
       {activity.canonical_training_load !== null && <span>{number.format(activity.canonical_training_load)} load</span>}
     </span>
+    <ActivityZoneStrip activity={activity} />
     <span className="activity-card-badges">
       {activity.quality_status !== "valid" && <span className={`quality-badge ${activity.quality_status}`}>{activity.quality_status === "limited" ? "Ограничено" : activity.quality_status === "excluded" ? "Изключено" : "Липсва при източника"}</span>}
       {activity.shadow_available && <span className="shadow-badge">Shadow</span>}
@@ -70,15 +124,17 @@ export function ActivityCalendarView({ calendar }: { calendar: ActivityCalendar 
   const days: string[] = [];
   for (let day = gridStart; day <= gridEnd; day = addDays(day, 1)) days.push(day);
   const byDate = new Map<string, ActivityCalendarItem[]>();
+  const wellnessByDate = new Map(calendar.wellness_days.map((day) => [day.date, day]));
   for (const activity of calendar.activities) byDate.set(activity.local_date, [...(byDate.get(activity.local_date) ?? []), activity]);
   const weeks = Array.from({ length: Math.ceil(days.length / 7) }, (_, index) => days.slice(index * 7, index * 7 + 7));
   return <section className="completed-calendar" aria-label="Календар на завършените активности">
+    <div className="calendar-visual-key"><span><i className="z1" /><i className="z2" /><i className="z3" /><i className="z4" /><i className="z5" /> Z1–Z5 разпределение</span><small>HRmod final при наличен shadow резултат; иначе Raw HR. Wellness и HRmod са диагностични и не променят canonical load.</small></div>
     <div className="calendar-weekdays" aria-hidden="true">{weekdays.map((day) => <span key={day}>{day}</span>)}</div>
     <div className="completed-calendar-grid">
       {weeks.map((week) => <section className="completed-week" key={week[0]}>
         <WeekSummary calendar={calendar} weekStart={week[0]} />
         {week.map((day) => <div key={day} className={`completed-day ${day < calendar.period_start || day > calendar.period_end ? "outside-period" : ""}`}>
-          <header><time dateTime={day}>{dateLabel.format(utcDate(day))}</time><span>{byDate.get(day)?.length || ""}</span></header>
+          <header><span className="calendar-day-title"><time dateTime={day}>{dateLabel.format(utcDate(day))}</time><span>{byDate.get(day)?.length || ""}</span></span><WellnessDay wellness={wellnessByDate.get(day)} /></header>
           <div className="day-activities">{(byDate.get(day) ?? []).map((activity) => <ActivityCard key={activity.activity_ref} activity={activity} />)}</div>
         </div>)}
       </section>)}

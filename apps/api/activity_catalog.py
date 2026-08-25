@@ -212,7 +212,23 @@ def _zones(row: Mapping[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def calendar_item(row: Mapping[str, Any]) -> dict[str, Any]:
+def _hrmod_zones(source: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
+    result = []
+    for item in source or ():
+        zone = item.get("zone_name")
+        seconds = item.get("hrmod_final_seconds", item.get("hrmod_seconds"))
+        if zone not in {"Z1", "Z2", "Z3", "Z4", "Z5"}:
+            continue
+        value = _number(seconds)
+        if value is not None:
+            result.append({"zone": zone, "final_time_s": value})
+    return result
+
+
+def calendar_item(
+    row: Mapping[str, Any],
+    hrmod_zone_summary: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
     start_utc = str(row.get("start_at_utc") or "")
     start_local = str(row.get("start_local") or start_utc)
     local_date = str(row.get("local_date") or start_local[:10])
@@ -221,6 +237,8 @@ def calendar_item(row: Mapping[str, Any]) -> dict[str, Any]:
     if duration is None:
         seconds = row.get("moving_time_s") or row.get("recording_time_s") or row.get("elapsed_time_s")
         duration = float(seconds) / 60.0 if seconds is not None else None
+    canonical_zones = _zones(row)
+    hrmod_zones = _hrmod_zones(hrmod_zone_summary)
     return {
         "activity_ref": str(row.get("activity_ref") or ""),
         "start_at_utc": start_utc,
@@ -245,14 +263,34 @@ def calendar_item(row: Mapping[str, Any]) -> dict[str, Any]:
         "quality_reason": row.get("quality_reason"),
         "hr_coverage_percent": row.get("hr_coverage_percent"),
         "shadow_available": bool(row.get("latest_shadow_run_key") or row.get("shadow_available")),
-        "zones": _zones(row),
+        "zones": canonical_zones,
+        "hrmod_zones": hrmod_zones,
+        "zone_visualization_source": (
+            "hrmod_final"
+            if hrmod_zones
+            else "canonical_raw" if canonical_zones else "none"
+        ),
     }
 
 
 def activity_calendar_payload(
-    *, athlete_alias: str, period_start: date, period_end: date, rows: Sequence[Mapping[str, Any]]
+    *,
+    athlete_alias: str,
+    period_start: date,
+    period_end: date,
+    rows: Sequence[Mapping[str, Any]],
+    shadow_zones: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    wellness_days: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
-    activities = [calendar_item(row) for row in rows if row.get("start_at_utc")]
+    zones_by_activity = shadow_zones or {}
+    activities = [
+        calendar_item(
+            row,
+            zones_by_activity.get(str(row.get("activity_ref") or "")),
+        )
+        for row in rows
+        if row.get("start_at_utc")
+    ]
     weeks: dict[date, dict[str, Any]] = {}
     for activity in activities:
         activity_date = date.fromisoformat(activity["local_date"])
@@ -290,6 +328,8 @@ def activity_calendar_payload(
         "period_end": period_end.isoformat(),
         "activities": activities,
         "weeks": rendered_weeks,
+        "wellness_days": [dict(day) for day in wellness_days],
+        "wellness_integration": "DIAGNOSTIC_ONLY",
         "includes_timeseries": False,
     }
 

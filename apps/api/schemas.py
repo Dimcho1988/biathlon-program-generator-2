@@ -287,6 +287,21 @@ class ActivityZoneSummary(StrictModel):
     effective_load: float
 
 
+class ActivityHrmodZoneSummary(StrictModel):
+    zone: Literal["Z1", "Z2", "Z3", "Z4", "Z5"]
+    final_time_s: float
+
+
+class DailyWellnessMetric(StrictModel):
+    value: bool | float
+    unit: str
+
+
+class DailyWellnessSummary(StrictModel):
+    date: str
+    metrics: dict[str, DailyWellnessMetric]
+
+
 class ActivityCalendarItem(StrictModel):
     activity_ref: str
     start_at_utc: str
@@ -312,6 +327,8 @@ class ActivityCalendarItem(StrictModel):
     hr_coverage_percent: float | None
     shadow_available: bool
     zones: list[ActivityZoneSummary]
+    hrmod_zones: list[ActivityHrmodZoneSummary]
+    zone_visualization_source: Literal["hrmod_final", "canonical_raw", "none"]
 
 
 class ActivityWeekSummary(StrictModel):
@@ -331,6 +348,8 @@ class ActivityCalendarResponse(StrictModel):
     period_end: str
     activities: list[ActivityCalendarItem]
     weeks: list[ActivityWeekSummary]
+    wellness_days: list[DailyWellnessSummary]
+    wellness_integration: Literal["DIAGNOSTIC_ONLY"]
     includes_timeseries: Literal[False]
 
 
@@ -571,3 +590,4 @@ class AthleteSnapshot(StrictModel):
     training_status: TrainingStatusResponse
     load_history: LoadHistoryResponse
     recovery_history: RecoveryHistoryResponse | None = None
+    wellness_calendar: list[DailyWellnessSummary] = []

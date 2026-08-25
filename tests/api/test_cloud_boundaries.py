@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from apps.api.cloud import (
+    daily_wellness_summaries,
     AthleteContext,
     AthleteMesocycleAccentPreferences,
     AthleteModelSettings,
@@ -202,6 +203,37 @@ def test_wellness_preserves_missing_stale_invalid_and_units():
     assert result["values"]["fatigue"]["state"] == "invalid"
     assert result["values"]["stress"]["state"] == "missing"
     assert result["values"]["illness"]["value"] is False
+
+
+def test_daily_wellness_summaries_keep_only_normalized_display_values():
+    result = daily_wellness_summaries(
+        [
+            {
+                "id": "2026-01-02",
+                "sleepSecs": 28800,
+                "restingHR": 43,
+                "hrv": 91,
+                "weight": 68.7,
+                "steps": 12345,
+                "comments": "must-not-survive",
+            },
+            {"id": "invalid", "restingHR": 40},
+        ],
+        period_start=date(2026, 1, 1),
+        period_end=date(2026, 1, 3),
+        now=datetime(2026, 1, 3, tzinfo=timezone.utc),
+    )
+    assert result == [{
+        "date": "2026-01-02",
+        "metrics": {
+            "weight": {"value": 68.7, "unit": "kg"},
+            "steps": {"value": 12345.0, "unit": "count"},
+            "sleep_duration": {"value": 28800.0, "unit": "s"},
+            "resting_hr": {"value": 43.0, "unit": "bpm"},
+            "hrv": {"value": 91.0, "unit": "ms"},
+        },
+    }]
+    assert "comments" not in repr(result)
 
 
 def test_wellness_coverage_uses_distinct_days_and_never_persists_values():
