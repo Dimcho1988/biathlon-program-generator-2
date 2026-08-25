@@ -97,8 +97,16 @@ function RecoveryChart({ history }: { history: RecoveryHistory }) {
   </figure>;
 }
 
-export function RecoveryHistorySection({ history, message }: { history: RecoveryHistory | null; message?: string }) {
-  if (!history) return message ? <section className="history-section" aria-labelledby="recovery-title"><div className="section-heading"><div><p className="section-kicker">Canonical recovery</p><h2 id="recovery-title">Товарно възстановяване</h2></div></div><p className="history-unavailable">{message} Обновете реалните данни след публикуването на recovery API версията.</p></section> : null;
+export function RecoveryHistorySection({ history, message, refreshAvailable = false }: { history: RecoveryHistory | null; message?: string; refreshAvailable?: boolean }) {
+  if (!history) return message || refreshAvailable ? <section className="history-section" aria-labelledby="recovery-title">
+    <div className="section-heading"><div><p className="section-kicker">Canonical recovery</p><h2 id="recovery-title">Товарно възстановяване</h2></div></div>
+    <div className="history-unavailable">
+      <strong>Моделът не е премахнат.</strong>
+      <p>Текущият профилен snapshot е създаден без <code>recovery-history-v1</code>. За точно възстановяване със същите canonical параметри е необходимо еднократно пълно обновяване.</p>
+      {message && <small>Технически статус: {message}</small>}
+    </div>
+    {refreshAvailable && <div className="integration-actions"><form action="/api/integrations/intervals/refresh" method="post"><input type="hidden" name="scope" value="recovery" /><button className="action-button secondary" type="submit">Възстанови recovery модела</button></form></div>}
+  </section> : null;
   return <section className="history-section recovery-section" aria-labelledby="recovery-title">
     <div className="section-heading"><div><p className="section-kicker">Canonical recovery · {date(history.period_start)} — {date(history.period_end)}</p><h2 id="recovery-title">Товарно възстановяване</h2></div><p>Предварително изчислено в Python scientific core</p></div>
     <div className="history-explainer recovery-basis"><strong>Load-only резултат</strong><p>Графиката показва остатъчната умора от тренировъчния товар. {history.wellness_diagnostics ? "Wellness историята е измерена отделно, но тази версия още не я включва във формулата за готовност." : `Последният wellness запис има ${decimal(history.wellness_coverage_percent)}% разпознати полета и не променя тази готовност.`}</p></div>

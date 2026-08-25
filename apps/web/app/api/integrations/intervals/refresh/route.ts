@@ -18,25 +18,27 @@ function safeReturnTo(value: FormDataEntryValue | null) {
 }
 
 async function requestedRefreshOptions(request?: Request) {
-  if (!request || request.method !== "POST") return { returnTo: "/", wellnessOnly: false };
+  if (!request || request.method !== "POST") return { returnTo: "/", wellnessOnly: false, recoveryRestore: false };
   try {
     const form = await request.formData();
+    const scope = form.get("scope");
     return {
       returnTo: safeReturnTo(form.get("returnTo")),
-      wellnessOnly: form.get("scope") === "wellness",
+      wellnessOnly: scope === "wellness",
+      recoveryRestore: scope === "recovery",
     };
   }
-  catch { return { returnTo: "/", wellnessOnly: false }; }
+  catch { return { returnTo: "/", wellnessOnly: false, recoveryRestore: false }; }
 }
 
-function withRefreshState(returnTo: string, state: "refreshed" | "refresh-error") {
+function withRefreshState(returnTo: string, state: "refreshed" | "recovery-restored" | "refresh-error") {
   const destination = new URL(returnTo, "https://onflows.invalid");
   destination.searchParams.set("intervals", state);
   return `${destination.pathname}${destination.search}`;
 }
 
 async function refreshIntervalsData(request?: Request) {
-  const { returnTo, wellnessOnly } = await requestedRefreshOptions(request);
+  const { returnTo, wellnessOnly, recoveryRestore } = await requestedRefreshOptions(request);
   try {
     const athleteAlias = await currentAthleteAlias();
     if (multiProfileMode() && !athleteAlias)
@@ -65,9 +67,10 @@ async function refreshIntervalsData(request?: Request) {
       !result || result.status !== "refreshed"
       || !Number.isInteger(result.wellness_records_received)
       || !Number.isInteger(result.wellness_days_stored)
+      || (recoveryRestore && result.recovery_history_stored !== true)
     ) throw new Error("Refresh result was not persisted");
     console.info("intervals_refresh_completed");
-    return new NextResponse(null, { status: 303, headers: { Location: withRefreshState(returnTo, "refreshed") } });
+    return new NextResponse(null, { status: 303, headers: { Location: withRefreshState(returnTo, recoveryRestore ? "recovery-restored" : "refreshed") } });
   } catch (error) {
     if (!(error instanceof Error && error.message === "Refresh failed"))
       console.error(`intervals_refresh_failed stage=web error_type=${error instanceof Error ? error.name : "Unknown"}`);
