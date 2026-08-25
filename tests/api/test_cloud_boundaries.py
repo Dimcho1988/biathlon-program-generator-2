@@ -414,6 +414,52 @@ def test_full_refresh_fails_closed_when_recovery_history_was_not_persisted(monke
     assert response.json() == {"detail": "Persistent server storage is unavailable"}
 
 
+def test_recovery_restore_uses_persisted_load_projection_and_confirms_readback(monkeypatch):
+    class Connection:
+        status = "CONNECTED"
+        provider_athlete_id = "i123"
+
+    class Repository:
+        def connection(self, athlete_alias):
+            return Connection()
+
+        def athlete_settings(self, athlete_alias):
+            return None
+
+        def latest(self, athlete_alias):
+            return {"recovery_history": {"stored": True}}
+
+    repository = Repository()
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
+    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    restore = lambda *args, **kwargs: SimpleNamespace(
+        period_start="2026-05-28",
+        period_end="2026-08-25",
+    )
+    monkeypatch.setattr(api_main, "restore_recovery_history_from_snapshot", restore)
+    monkeypatch.setattr(
+        api_main,
+        "recovery_history_from_persisted",
+        lambda snapshot: object(),
+    )
+
+    response = TestClient(app).post(
+        "/api/v2/real/recovery/restore",
+        headers={
+            "Authorization": "Bearer secret-value",
+            "X-OnFlows-Athlete-Alias": "ath-recovery-test",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "restored",
+        "recovery_history_stored": True,
+        "period_start": "2026-05-28",
+        "period_end": "2026-08-25",
+    }
+
+
 def test_planning_methodology_is_protected_shared_and_versioned(monkeypatch):
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
     client = TestClient(app)
