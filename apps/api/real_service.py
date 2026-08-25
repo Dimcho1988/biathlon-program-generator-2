@@ -84,6 +84,8 @@ class RefreshResult:
     snapshot: TrainingStatusResponse
     processed_activities: int
     wellness_coverage: float
+    wellness_records_received: int
+    wellness_days_stored: int
 
 
 def context_from_environment(
@@ -1041,4 +1043,10 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         wellness_calendar=wellness_calendar,
     )
     repository.replace(context.public_alias, persisted.model_dump(mode="json"))
-    return RefreshResult(snapshot, dataset.processed_activities, float(wellness["coverage"]))
+    return RefreshResult(
+        snapshot=snapshot,
+        processed_activities=dataset.processed_activities,
+        wellness_coverage=float(wellness["coverage"]),
+        wellness_records_received=int(wellness_diagnostics["records_received"]),
+        wellness_days_stored=len(wellness_calendar),
+    )
