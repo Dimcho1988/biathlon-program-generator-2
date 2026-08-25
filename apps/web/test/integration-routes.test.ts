@@ -161,18 +161,18 @@ describe("integration route redirects behind a reverse proxy", () => {
     expect(String(fetchMock.mock.calls[1][0])).toBe("https://api.example.test/api/v2/real/wellness/refresh");
   });
 
-  it("restores recovery only after the full refresh confirms persisted recovery history", async () => {
+  it("restores recovery from persisted canonical load and confirms the read path", async () => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
     process.env.ONFLOWS_API_RESOURCE = "real";
     process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(Response.json({ status: "ok" }))
       .mockResolvedValueOnce(Response.json({
-        status: "refreshed",
-        wellness_records_received: 20,
-        wellness_days_stored: 18,
+        status: "restored",
         recovery_history_stored: true,
-      }, { status: 202 }))
+        period_start: "2026-05-28",
+        period_end: "2026-08-25",
+      }))
       .mockResolvedValueOnce(Response.json({ status: "ok" }))
       .mockResolvedValueOnce(Response.json(recoveryHistoryFixture));
     vi.stubGlobal("fetch", fetchMock);
@@ -182,7 +182,7 @@ describe("integration route redirects behind a reverse proxy", () => {
     const response = await refresh(new Request("https://web.example.test/api/integrations/intervals/refresh", { method: "POST", body }));
 
     expect(response.headers.get("location")).toBe("/?intervals=recovery-restored");
-    expect(String(fetchMock.mock.calls[1][0])).toBe("https://api.example.test/api/v2/real/refresh");
+    expect(String(fetchMock.mock.calls[1][0])).toBe("https://api.example.test/api/v2/real/recovery/restore");
     expect(String(fetchMock.mock.calls[3][0])).toBe("https://api.example.test/api/v2/real/recovery-history");
   });
 
