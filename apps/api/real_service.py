@@ -17,6 +17,7 @@ import pandas as pd
 
 from biathlon.constants import fresh_parameters
 from biathlon.effective_hr import EFFECTIVE_HR_SOURCE
+from biathlon.physiology import compute_readiness_history, current_readiness
 
 from .cloud import (
     AthleteContext,
@@ -655,6 +656,210 @@ def dataset_to_recovery_history(
         ],
         strength=strength,
     )
+
+
+def restore_recovery_history_from_snapshot(
+    repository: SnapshotRepository,
+    *,
+    athlete_alias: str,
+    provider_athlete_id: str,
+    athlete_settings: AthleteModelSettings | None,
+    environ: Mapping[str, str] | None = None,
+) -> RecoveryHistoryResponse:
+    """Rebuild load-only recovery from the persisted canonical load history.
+
+    Recovery is a deterministic projection of canonical daily effective load.
+    Restoring it therefore must not depend on another slow provider import or
+    modify the already-persisted training/load analysis.
+    """
+
+    env = environ or os.environ
+    alias = athlete_alias.strip() if isinstance(athlete_alias, str) else ""
+    provider_id = (
+        provider_athlete_id.strip()
+        if isinstance(provider_athlete_id, str)
+        else ""
+    )
+    if not alias or not provider_id:
+        raise ConfigurationError("Provider profile or athlete alias is unavailable")
+    payload = repository.latest(alias)
+    if not isinstance(payload, Mapping):
+        raise ConfigurationError("Training snapshot requires a full real-data refresh")
+    try:
+        snapshot = AthleteSnapshot.model_validate(payload)
+        history = snapshot.load_history
+        start = date.fromisoformat(history.period_start)
+        end = date.fromisoformat(history.period_end)
+    except (TypeError, ValueError) as exc:
+        raise ConfigurationError("Canonical load history is unavailable") from exc
+
+    context = context_from_environment(
+        env,
+        provider_athlete_id=provider_id,
+        athlete_alias=alias,
+        athlete_settings=athlete_settings,
+    )
+    parameters = fresh_parameters()
+    # Keep the API import surface credential-free and lightweight.  The real
+    # data package is loaded only for this explicit recovery operation.
+    from intervals_inspector.real_data_source import (
+        RECOVERY_MODEL_VERSION,
+        recovery_parameter_fingerprint,
+    )
+
+    dates = pd.date_range(start, end, freq="D")
+    daily_loads = pd.DataFrame(
+        0.0,
+        index=dates,
+        columns=[f"e_{component}" for component in (*ZONES, "STR")],
+    )
+    for row in history.daily:
+        day = pd.Timestamp(row.date).normalize()
+        if day in daily_loads.index:
+            daily_loads.loc[day, f"e_{row.zone}"] = float(row.effective_load)
+    if history.strength is not None:
+        for row in history.strength.daily:
+            day = pd.Timestamp(row.date).normalize()
+            if day in daily_loads.index:
+                daily_loads.loc[day, "e_STR"] = float(row.effective_load)
+
+    readiness_history = compute_readiness_history(daily_loads, parameters)
+    readiness = current_readiness(readiness_history, parameters, target_date=end)
+    zone_settings = {row.zone: row for row in history.zones}
+    recovery_parameters = parameters["recovery"]
+    zone_daily = readiness_history.loc[
+        readiness_history["component"].isin(ZONES)
+    ].sort_values(["date", "component"], kind="stable")
+    strength_daily = readiness_history.loc[
+        readiness_history["component"] == "STR"
+    ].sort_values("date", kind="stable")
+
+    strength: RecoveryStrengthHistory | None = None
+    if history.strength is not None:
+        strength = RecoveryStrengthHistory(
+            settings=RecoveryStrengthSettings(
+                tref_min=_finite(history.strength.summary.tref_min, "Tref[STR]"),
+                sensitivity=_finite(
+                    recovery_parameters["STR"]["sensitivity"], "sensitivity[STR]"
+                ),
+                tau_days=_finite(
+                    recovery_parameters["STR"]["tau_days"], "tau[STR]"
+                ),
+                fatigue_cap=_finite(
+                    recovery_parameters["STR"]["fmax"], "fmax[STR]"
+                ),
+            ),
+            current=RecoveryStrengthCurrent(
+                readiness_percent=_bounded_percentage(
+                    readiness.loc["STR", "readiness"], "readiness[STR]"
+                ),
+                residual_fatigue=_finite(
+                    readiness.loc["STR", "fatigue"], "fatigue[STR]"
+                ),
+                days_to_practical_recovery=_finite(
+                    readiness.loc["STR", "days_to_full"], "days[STR]"
+                ),
+            ),
+            daily=[
+                DailyStrengthRecovery(
+                    date=_calendar_date(row.date, "daily strength recovery"),
+                    readiness_before_percent=_bounded_percentage(
+                        row.readiness_before, "strength readiness before"
+                    ),
+                    readiness_after_percent=_bounded_percentage(
+                        row.readiness_after, "strength readiness after"
+                    ),
+                    residual_fatigue_after=_finite(
+                        row.fatigue_after, "strength fatigue after"
+                    ),
+                    impulse=_finite(row.impulse, "strength impulse"),
+                    effective_load=_finite(row.effective, "strength effective"),
+                    tref_min=_finite(row.Tref, "strength Tref"),
+                )
+                for row in strength_daily.itertuples(index=False)
+            ],
+        )
+
+    restored = RecoveryHistoryResponse(
+        schema_version="recovery-history-v1",
+        athlete_id=context.public_alias,
+        period_start=history.period_start,
+        period_end=history.period_end,
+        basis="load-only",
+        wellness_freshness="unknown",
+        wellness_coverage_percent=0.0,
+        wellness_diagnostics=None,
+        model=RecoveryModelMetadata(
+            algorithm_version=RECOVERY_MODEL_VERSION,
+            parameter_version=context.recovery_parameter_version,
+            parameter_fingerprint=recovery_parameter_fingerprint(parameters),
+            practical_full_recovery_percent=_bounded_percentage(
+                parameters["practical_full_recovery"],
+                "practical full recovery",
+            ),
+        ),
+        settings=[
+            RecoveryZoneSettings(
+                zone=zone,
+                tref_min=_finite(zone_settings[zone].tref_min, f"Tref[{zone}]"),
+                sensitivity=_finite(
+                    recovery_parameters[zone]["sensitivity"],
+                    f"sensitivity[{zone}]",
+                ),
+                tau_days=_finite(
+                    recovery_parameters[zone]["tau_days"], f"tau[{zone}]"
+                ),
+                fatigue_cap=_finite(
+                    recovery_parameters[zone]["fmax"], f"fmax[{zone}]"
+                ),
+            )
+            for zone in ZONES
+        ],
+        current=[
+            RecoveryZoneCurrent(
+                zone=zone,
+                readiness_percent=_bounded_percentage(
+                    readiness.loc[zone, "readiness"], f"readiness[{zone}]"
+                ),
+                residual_fatigue=_finite(
+                    readiness.loc[zone, "fatigue"], f"fatigue[{zone}]"
+                ),
+                days_to_practical_recovery=_finite(
+                    readiness.loc[zone, "days_to_full"], f"days[{zone}]"
+                ),
+            )
+            for zone in ZONES
+        ],
+        daily=[
+            DailyRecovery(
+                date=_calendar_date(row.date, "daily recovery"),
+                zone=str(row.component),
+                readiness_before_percent=_bounded_percentage(
+                    row.readiness_before, f"readiness before[{row.component}]"
+                ),
+                readiness_after_percent=_bounded_percentage(
+                    row.readiness_after, f"readiness after[{row.component}]"
+                ),
+                residual_fatigue_after=_finite(
+                    row.fatigue_after, f"fatigue after[{row.component}]"
+                ),
+                impulse=_finite(row.impulse, f"impulse[{row.component}]"),
+                effective_load=_finite(
+                    row.effective, f"effective[{row.component}]"
+                ),
+                tref_min=_finite(row.Tref, f"Tref[{row.component}]"),
+            )
+            for row in zone_daily.itertuples(index=False)
+        ],
+        strength=strength,
+    )
+    current_payload = repository.latest(alias)
+    if not isinstance(current_payload, Mapping):
+        raise ConfigurationError("Training snapshot requires a full real-data refresh")
+    patched = dict(current_payload)
+    patched["recovery_history"] = restored.model_dump(mode="json")
+    repository.replace(alias, patched)
+    return restored
 
 
 def training_status_from_persisted(
