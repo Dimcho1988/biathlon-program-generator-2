@@ -23,6 +23,14 @@ export interface DailyWellnessSummary {
   metrics: Record<string, DailyWellnessMetric>;
 }
 
+export interface ActivityWellnessStatus {
+  state: "available" | "refresh_required" | "no_provider_records" | "no_recognized_values" | "outside_snapshot_period";
+  records_received: number;
+  stored_days: number;
+  displayed_days: number;
+  latest_observed_date: string | null;
+}
+
 export interface ActivityCalendarItem {
   activity_ref: string;
   start_at_utc: string;
@@ -70,6 +78,7 @@ export interface ActivityCalendar {
   activities: ActivityCalendarItem[];
   weeks: ActivityWeekSummary[];
   wellness_days: DailyWellnessSummary[];
+  wellness_status: ActivityWellnessStatus;
   wellness_integration: "DIAGNOSTIC_ONLY";
   includes_timeseries: false;
 }
@@ -129,7 +138,17 @@ export function parseActivityCalendar(value: unknown): ActivityCalendar {
   if (!isObject(value) || value.schema_version !== "activity-calendar-index-v1" || value.includes_timeseries !== false || !Array.isArray(value.activities) || !Array.isArray(value.weeks))
     throw new Error("API услугата върна невалиден календар на активностите.");
   value.activities.forEach(assertActivityItem);
-  if (!Array.isArray(value.wellness_days)) value.wellness_days = [];
+  const wellnessDays = Array.isArray(value.wellness_days) ? value.wellness_days : [];
+  value.wellness_days = wellnessDays;
+  if (!isObject(value.wellness_status)) {
+    value.wellness_status = {
+      state: wellnessDays.length ? "available" : "refresh_required",
+      records_received: 0,
+      stored_days: wellnessDays.length,
+      displayed_days: wellnessDays.length,
+      latest_observed_date: null,
+    };
+  }
   if (value.wellness_integration !== "DIAGNOSTIC_ONLY") value.wellness_integration = "DIAGNOSTIC_ONLY";
   return value as unknown as ActivityCalendar;
 }
@@ -162,6 +181,7 @@ export const activityCalendarFixture: ActivityCalendar = {
     { date: "2026-06-05", metrics: { sleep_duration: { value: 26400, unit: "s" }, resting_hr: { value: 44, unit: "bpm" }, hrv: { value: 78, unit: "ms" }, readiness: { value: 73, unit: "score" } } },
     { date: "2026-06-18", metrics: { sleep_duration: { value: 30000, unit: "s" }, sleep_quality: { value: 2, unit: "score" }, resting_hr: { value: 39, unit: "bpm" }, hrv: { value: 101, unit: "ms" }, weight: { value: 68.4, unit: "kg" } } },
   ],
+  wellness_status: { state: "available", records_received: 28, stored_days: 26, displayed_days: 26, latest_observed_date: "2026-06-28" },
   activities: [
     ["act_11111111111111111111111111111111", "2026-06-02", "07:35", "Run", "Леко бягане и ускорения", 54, 11200, 138, 43, "valid", true, [34, 16, 4, 0, 0]],
     ["act_22222222222222222222222222222222", "2026-06-05", "16:10", "NordicSki", "Ролкови ски · основна тренировка", 92, 22700, 146, 78, "valid", true, [18, 46, 21, 7, 0]],

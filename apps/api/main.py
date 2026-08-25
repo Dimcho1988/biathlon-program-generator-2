@@ -364,23 +364,48 @@ def real_activity_calendar(
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
         ) from exc
-    wellness_days = (
-        snapshot.get("wellness_calendar", [])
-        if isinstance(snapshot, Mapping)
-        else []
-    )
+    snapshot_mapping = snapshot if isinstance(snapshot, Mapping) else {}
+    snapshot_has_wellness_calendar = "wellness_calendar" in snapshot_mapping
+    wellness_days = snapshot_mapping.get("wellness_calendar", [])
+    wellness_days = wellness_days if isinstance(wellness_days, list) else []
+    recovery_history = snapshot_mapping.get("recovery_history")
+    recovery_history = recovery_history if isinstance(recovery_history, Mapping) else {}
+    diagnostics = recovery_history.get("wellness_diagnostics")
+    diagnostics = diagnostics if isinstance(diagnostics, Mapping) else {}
+    records_received = diagnostics.get("records_received", 0)
+    records_received = records_received if isinstance(records_received, int) else 0
+    latest_observed_date = diagnostics.get("latest_observed_date")
+    latest_observed_date = latest_observed_date if isinstance(latest_observed_date, str) else None
+    displayed_wellness_days = [
+        day
+        for day in wellness_days
+        if isinstance(day, Mapping)
+        and start.isoformat() <= str(day.get("date") or "") <= end.isoformat()
+    ]
+    if not snapshot_has_wellness_calendar:
+        wellness_state = "refresh_required"
+    elif displayed_wellness_days:
+        wellness_state = "available"
+    elif wellness_days:
+        wellness_state = "outside_snapshot_period"
+    elif records_received == 0:
+        wellness_state = "no_provider_records"
+    else:
+        wellness_state = "no_recognized_values"
     return activity_calendar_payload(
         athlete_alias=alias,
         period_start=start,
         period_end=end,
         rows=rows,
         shadow_zones=shadow_zones,
-        wellness_days=[
-            day
-            for day in wellness_days
-            if isinstance(day, Mapping)
-            and start.isoformat() <= str(day.get("date") or "") <= end.isoformat()
-        ],
+        wellness_days=displayed_wellness_days,
+        wellness_status={
+            "state": wellness_state,
+            "records_received": records_received,
+            "stored_days": len(wellness_days),
+            "displayed_days": len(displayed_wellness_days),
+            "latest_observed_date": latest_observed_date,
+        },
     )
 
 

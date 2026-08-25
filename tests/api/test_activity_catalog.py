@@ -358,9 +358,39 @@ def test_calendar_adds_daily_wellness_and_hrmod_final_zone_visualization(monkeyp
     assert response.status_code == 200
     payload = response.json()
     assert payload["wellness_integration"] == "DIAGNOSTIC_ONLY"
+    assert payload["wellness_status"] == {
+        "state": "available",
+        "records_received": 1,
+        "stored_days": 1,
+        "displayed_days": 1,
+        "latest_observed_date": "2026-08-15",
+    }
     assert payload["wellness_days"][0]["metrics"]["sleep_duration"]["value"] == 28200
     assert payload["wellness_days"][0]["metrics"]["hrv"]["value"] == 96
     activity = payload["activities"][0]
     assert activity["zone_visualization_source"] == "hrmod_final"
     assert len(activity["hrmod_zones"]) == 5
     assert sum(zone["final_time_s"] for zone in activity["hrmod_zones"]) > 0
+
+
+def test_calendar_marks_legacy_snapshot_as_wellness_refresh_required(monkeypatch):
+    repository = InMemorySnapshotRepository()
+    repository.replace("pilot", {
+        "schema_version": "athlete-snapshot-v1",
+        "training_status": {},
+        "load_history": {},
+        "recovery_history": None,
+    })
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
+    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+
+    response = TestClient(app).get(
+        "/api/v2/real/activities?period_start=2026-08-15&period_end=2026-08-15",
+        headers={
+            "Authorization": "Bearer service-secret",
+            "X-OnFlows-Athlete-Alias": "pilot",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["wellness_status"]["state"] == "refresh_required"

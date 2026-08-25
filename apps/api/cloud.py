@@ -576,17 +576,25 @@ def service_token_valid(provided: str | None, expected: str) -> bool:
 
 
 WELLNESS_FIELDS = {
-    "weight": (("weight",), "kg", "number"),
-    "steps": (("steps",), "count", "number"),
-    "sleep_duration": (("sleepSecs",), "s", "number"),
+    "weight": (("weight", "weightKg", "weight_kg"), "kg", "number"),
+    "steps": (("steps", "stepCount", "step_count"), "count", "number"),
+    "sleep_duration": (
+        ("sleepSecs", "sleepSeconds", "sleepDuration", "sleep_secs"),
+        "s",
+        "number",
+    ),
     # Intervals can expose both fields.  They are counted separately because
     # their provider semantics and scales are not interchangeable.
-    "sleep_score": (("sleepScore",), "score", "number"),
-    "sleep_quality": (("sleepQuality",), "score", "number"),
-    "resting_hr": (("restingHR",), "bpm", "number"),
-    "average_sleeping_hr": (("avgSleepingHR",), "bpm", "number"),
-    "hrv": (("hrv",), "ms", "number"),
-    "hrv_sdnn": (("hrvSDNN",), "ms", "number"),
+    "sleep_score": (("sleepScore", "sleep_score"), "score", "number"),
+    "sleep_quality": (("sleepQuality", "sleep_quality"), "score", "number"),
+    "resting_hr": (("restingHR", "restingHr", "resting_hr"), "bpm", "number"),
+    "average_sleeping_hr": (
+        ("avgSleepingHR", "averageSleepingHR", "avg_sleeping_hr"),
+        "bpm",
+        "number",
+    ),
+    "hrv": (("hrv", "hrvRMSSD", "hrv_rmssd"), "ms", "number"),
+    "hrv_sdnn": (("hrvSDNN", "hrv_sdnn"), "ms", "number"),
     "readiness": (("readiness",), "score", "number"),
     "respiration": (("respiration",), "breaths/min", "number"),
     "spo2": (("spO2",), "%", "number"),
@@ -632,6 +640,19 @@ def _wellness_raw_value(
         if value is not None:
             return value
     return None
+
+
+def wellness_rows_from_payload(payload: Any) -> list[Mapping[str, Any]]:
+    """Accept the documented list and bounded provider envelope variants."""
+    candidate: Any = payload
+    if isinstance(payload, Mapping):
+        for key in ("wellness", "data", "items"):
+            if isinstance(payload.get(key), list):
+                candidate = payload[key]
+                break
+    if not isinstance(candidate, list):
+        return []
+    return [row for row in candidate if isinstance(row, Mapping)]
 
 
 def normalize_wellness(row: Mapping[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
@@ -745,7 +766,9 @@ def summarize_wellness_coverage(
     for field in WELLNESS_COVERAGE_FIELDS:
         valid = len(valid_dates[field])
         total_valid_field_days += valid
-        sources = list(WELLNESS_FIELDS[field][0])
+        # Keep the public wellness-coverage-v1 contract on the documented
+        # Intervals field while accepting bounded aliases at the input edge.
+        sources = [WELLNESS_FIELDS[field][0][0]]
         field_rows.append(
             {
                 "field": field,

@@ -32,6 +32,23 @@ describe("completed activities calendar", () => {
     expect(parseActivityCalendar(activityCalendarFixture).includes_timeseries).toBe(false);
     expect(() => parseActivityCalendar({ ...activityCalendarFixture, includes_timeseries: true })).toThrow(/календар/);
   });
+
+  it("explains a legacy snapshot and offers a real Intervals refresh", () => {
+    const html = renderToStaticMarkup(<ActivityCalendarView calendar={{
+      ...activityCalendarFixture,
+      wellness_days: [],
+      wellness_status: {
+        state: "refresh_required",
+        records_received: 0,
+        stored_days: 0,
+        displayed_days: 0,
+        latest_observed_date: null,
+      },
+    }} />);
+    expect(html).toContain("Обикновеният refresh на браузъра не ги изтегля");
+    expect(html).toContain("Обнови от Intervals");
+    expect(html).toContain("action=\"/api/integrations/intervals/refresh\"");
+  });
 });
 
 describe("canonical activity detail", () => {

@@ -341,6 +341,20 @@ class ActivityWeekSummary(StrictModel):
     zones: list[ActivityZoneSummary]
 
 
+class ActivityWellnessStatus(StrictModel):
+    state: Literal[
+        "available",
+        "refresh_required",
+        "no_provider_records",
+        "no_recognized_values",
+        "outside_snapshot_period",
+    ]
+    records_received: int
+    stored_days: int
+    displayed_days: int
+    latest_observed_date: str | None
+
+
 class ActivityCalendarResponse(StrictModel):
     schema_version: Literal["activity-calendar-index-v1"]
     athlete_id: str
@@ -349,6 +363,7 @@ class ActivityCalendarResponse(StrictModel):
     activities: list[ActivityCalendarItem]
     weeks: list[ActivityWeekSummary]
     wellness_days: list[DailyWellnessSummary]
+    wellness_status: ActivityWellnessStatus
     wellness_integration: Literal["DIAGNOSTIC_ONLY"]
     includes_timeseries: Literal[False]
 

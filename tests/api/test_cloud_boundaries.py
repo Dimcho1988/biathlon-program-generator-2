@@ -16,6 +16,7 @@ from apps.api.cloud import (
     planning_generation_context,
     service_token_valid,
     summarize_wellness_coverage,
+    wellness_rows_from_payload,
 )
 from apps.api.hrmod import calculate_hrmod
 from apps.api import main as api_main
@@ -203,6 +204,27 @@ def test_wellness_preserves_missing_stale_invalid_and_units():
     assert result["values"]["fatigue"]["state"] == "invalid"
     assert result["values"]["stress"]["state"] == "missing"
     assert result["values"]["illness"]["value"] is False
+
+
+def test_wellness_accepts_bounded_real_provider_aliases_and_envelopes():
+    rows = wellness_rows_from_payload({
+        "data": [{
+            "id": "2026-01-02",
+            "sleepDuration": 27000,
+            "restingHr": 41,
+            "hrvRMSSD": 88,
+        }],
+    })
+    result = daily_wellness_summaries(
+        rows,
+        period_start=date(2026, 1, 1),
+        period_end=date(2026, 1, 3),
+    )
+    assert result[0]["metrics"] == {
+        "sleep_duration": {"value": 27000.0, "unit": "s"},
+        "resting_hr": {"value": 41.0, "unit": "bpm"},
+        "hrv": {"value": 88.0, "unit": "ms"},
+    }
 
 
 def test_daily_wellness_summaries_keep_only_normalized_display_values():
