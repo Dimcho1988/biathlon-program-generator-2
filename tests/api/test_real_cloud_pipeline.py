@@ -18,6 +18,7 @@ from apps.api.real_service import (
     recovery_history_from_persisted,
     refresh,
     refresh_wellness_calendar,
+    restore_recovery_history_from_snapshot,
     training_status_from_persisted,
     volume_history_from_load_history,
     volume_history_from_persisted,
@@ -442,6 +443,41 @@ def test_snapshot_without_recovery_history_requires_one_refresh():
     payload.pop("recovery_history")
     with pytest.raises(ValueError, match="requires a new real-data refresh"):
         recovery_history_from_persisted(payload)
+
+
+def test_recovery_restore_rebuilds_from_persisted_load_without_provider_io():
+    repo = InMemorySnapshotRepository()
+    refresh(
+        repo,
+        environ=ENV,
+        client=Client(),
+        period_end=date(2026, 8, 15),
+    )
+    before = repo.latest("pilot")
+    expected = before["recovery_history"]
+    broken = dict(before)
+    broken_recovery = dict(expected)
+    broken_diagnostics = dict(expected["wellness_diagnostics"])
+    broken_diagnostics["period_end"] = "2026-08-16"
+    broken_recovery["wellness_diagnostics"] = broken_diagnostics
+    broken["recovery_history"] = broken_recovery
+    repo.replace("pilot", broken)
+
+    restored = restore_recovery_history_from_snapshot(
+        repo,
+        athlete_alias="pilot",
+        provider_athlete_id="private-athlete",
+        athlete_settings=None,
+        environ=ENV,
+    )
+    after = repo.latest("pilot")
+
+    assert restored.wellness_diagnostics is None
+    assert restored.daily == recovery_history_from_persisted(before).daily
+    assert restored.current == recovery_history_from_persisted(before).current
+    assert after["training_status"] == before["training_status"]
+    assert after["load_history"] == before["load_history"]
+    assert after["wellness_calendar"] == before["wellness_calendar"]
 
 
 @pytest.mark.parametrize("wellness, warning", [([], "unknown"), ([{"id": "2026-01-01", "fatigue": "bad"}], "stale")])
