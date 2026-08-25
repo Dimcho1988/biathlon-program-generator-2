@@ -145,15 +145,18 @@ describe("integration route redirects behind a reverse proxy", () => {
   it("returns a calendar refresh to the same validated period", async () => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
     process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
-    vi.stubGlobal("fetch", vi.fn()
+    const fetchMock = vi.fn()
       .mockResolvedValueOnce(Response.json({ status: "ok" }))
-      .mockResolvedValueOnce(Response.json({ status: "refreshed", wellness_records_received: 20, wellness_days_stored: 18 }, { status: 202 })));
+      .mockResolvedValueOnce(Response.json({ status: "refreshed", wellness_records_received: 20, wellness_days_stored: 18 }, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
     const body = new FormData();
     body.set("returnTo", "/activities?start=2026-07-15&end=2026-08-25");
+    body.set("scope", "wellness");
 
     const response = await refresh(new Request("https://web.example.test/api/integrations/intervals/refresh", { method: "POST", body }));
 
     expect(response.headers.get("location")).toBe("/activities?start=2026-07-15&end=2026-08-25&intervals=refreshed");
+    expect(String(fetchMock.mock.calls[1][0])).toBe("https://api.example.test/api/v2/real/wellness/refresh");
   });
 
   it("signs, validates and expires opaque athlete sessions", () => {
