@@ -50,6 +50,7 @@ from .real_service import (
     completed_work_from_load_history,
     load_history_from_persisted,
     recovery_history_from_persisted,
+    restore_recovery_history_from_snapshot,
     refresh,
     refresh_wellness_calendar,
     training_status_from_persisted,
@@ -319,6 +320,47 @@ def real_recovery_history(
             status_code=503,
             detail="Recovery history requires a new real-data refresh",
         ) from exc
+
+
+@app.post("/api/v2/real/recovery/restore")
+def restore_real_recovery_history(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    """Restore the deterministic recovery projection without provider I/O."""
+
+    _authorize(authorization)
+    try:
+        repository = _repository()
+        resolved_alias = _validated_alias(athlete_alias)
+        connection = repository.connection(resolved_alias)
+        if connection is None or connection.status != "CONNECTED":
+            raise ConfigurationError("Intervals profile is not connected")
+        restored = restore_recovery_history_from_snapshot(
+            repository,
+            athlete_alias=resolved_alias,
+            provider_athlete_id=connection.provider_athlete_id,
+            athlete_settings=repository.athlete_settings(resolved_alias),
+        )
+        recovery_history_from_persisted(repository.latest(resolved_alias))
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (PersistentStoreFailure, ValueError) as exc:
+        logger.warning(
+            "recovery_restore_failed error_type=%s",
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    return {
+        "status": "restored",
+        "recovery_history_stored": True,
+        "period_start": restored.period_start,
+        "period_end": restored.period_end,
+    }
 
 
 @app.get("/api/v2/real/activity-shadows")
