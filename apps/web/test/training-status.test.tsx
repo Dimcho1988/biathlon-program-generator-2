@@ -102,8 +102,21 @@ describe("data access", () => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(Response.json({ status: "ok" }))
-      .mockResolvedValueOnce(new Response("failure", { status: 503 })));
+      .mockResolvedValue(new Response("failure", { status: 503 })));
     await expect(getTrainingStatus()).rejects.toThrow("API услугата върна грешка (503)");
+  });
+  it("retries a transient recovery gateway failure after the API is already awake", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_API_RESOURCE = "real";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(new Response("temporary", { status: 503 }))
+      .mockResolvedValueOnce(Response.json(recoveryHistoryFixture));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getRecoveryHistory()).resolves.toEqual(recoveryHistoryFixture);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
   it("uses the protected real endpoint and server-only authorization", async () => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";

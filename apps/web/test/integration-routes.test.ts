@@ -8,6 +8,7 @@ import { POST as saveMesocycleAccents } from "../app/api/athlete/mesocycle-accen
 import { POST as savePlanningCalendar } from "../app/api/athlete/planning-calendar/route";
 import { GET as complete } from "../app/api/session/complete/route";
 import { createAthleteSession, verifyAthleteSession } from "../lib/athlete-session";
+import { recoveryHistoryFixture } from "../lib/fixture";
 
 vi.mock("next/headers", () => ({ cookies: vi.fn() }));
 
@@ -17,6 +18,7 @@ describe("integration route redirects behind a reverse proxy", () => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
     delete process.env.ONFLOWS_API_BASE_URL;
+    delete process.env.ONFLOWS_API_RESOURCE;
     delete process.env.ONFLOWS_SERVICE_TOKEN;
     delete process.env.ONFLOWS_PROFILE_MODE;
     delete process.env.ONFLOWS_SESSION_SECRET;
@@ -161,6 +163,7 @@ describe("integration route redirects behind a reverse proxy", () => {
 
   it("restores recovery only after the full refresh confirms persisted recovery history", async () => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_API_RESOURCE = "real";
     process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(Response.json({ status: "ok" }))
@@ -169,7 +172,9 @@ describe("integration route redirects behind a reverse proxy", () => {
         wellness_records_received: 20,
         wellness_days_stored: 18,
         recovery_history_stored: true,
-      }, { status: 202 }));
+      }, { status: 202 }))
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json(recoveryHistoryFixture));
     vi.stubGlobal("fetch", fetchMock);
     const body = new FormData();
     body.set("scope", "recovery");
@@ -178,6 +183,7 @@ describe("integration route redirects behind a reverse proxy", () => {
 
     expect(response.headers.get("location")).toBe("/?intervals=recovery-restored");
     expect(String(fetchMock.mock.calls[1][0])).toBe("https://api.example.test/api/v2/real/refresh");
+    expect(String(fetchMock.mock.calls[3][0])).toBe("https://api.example.test/api/v2/real/recovery-history");
   });
 
   it("does not claim recovery was restored when persistence was not confirmed", async () => {

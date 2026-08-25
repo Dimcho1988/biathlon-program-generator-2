@@ -136,12 +136,6 @@ def refresh_wellness_calendar(
             start.isoformat(), end.isoformat()
         ).payload
         rows = wellness_rows_from_payload(payload)
-        latest = max(
-            rows,
-            key=lambda row: str(row.get("id") or row.get("date") or ""),
-            default={},
-        )
-        normalized_latest = normalize_wellness(latest, now=now)
         diagnostics = summarize_wellness_coverage(
             rows, period_start=start, period_end=end, now=now
         )
@@ -158,16 +152,47 @@ def refresh_wellness_calendar(
         logger.warning("wellness_refresh_failed error_type=%s", type(exc).__name__)
         raise ProviderFailure("Wellness data could not be normalized safely") from exc
 
-    updated = dict(existing)
+    # The provider request can overlap a full canonical refresh. Re-read the
+    # current snapshot immediately before patching so a wellness-only request
+    # cannot restore the stale pre-refresh envelope and erase recovery_history.
+    current = repository.latest(alias)
+    if not isinstance(current, Mapping):
+        raise ConfigurationError("Training snapshot requires a full real-data refresh")
+    updated = dict(current)
     updated["wellness_calendar"] = calendar
     recovery = updated.get("recovery_history")
     if isinstance(recovery, Mapping):
         recovery_update = dict(recovery)
-        recovery_update["wellness_freshness"] = normalized_latest["freshness"]
-        recovery_update["wellness_coverage_percent"] = round(
-            100.0 * float(normalized_latest["coverage"]), 6
-        )
-        recovery_update["wellness_diagnostics"] = diagnostics
+        try:
+            recovery_start = date.fromisoformat(str(recovery["period_start"]))
+            recovery_end = date.fromisoformat(str(recovery["period_end"]))
+        except (KeyError, TypeError, ValueError):
+            # Preserve an older recovery payload rather than attaching
+            # diagnostics for an incompatible calendar period.
+            pass
+        else:
+            recovery_rows = [
+                row for row in rows
+                if recovery_start.isoformat()
+                <= str(row.get("id") or row.get("date") or "")[:10]
+                <= recovery_end.isoformat()
+            ]
+            recovery_latest = max(
+                recovery_rows,
+                key=lambda row: str(row.get("id") or row.get("date") or ""),
+                default={},
+            )
+            recovery_wellness = normalize_wellness(recovery_latest, now=now)
+            recovery_update["wellness_freshness"] = recovery_wellness["freshness"]
+            recovery_update["wellness_coverage_percent"] = round(
+                100.0 * float(recovery_wellness["coverage"]), 6
+            )
+            recovery_update["wellness_diagnostics"] = summarize_wellness_coverage(
+                recovery_rows,
+                period_start=recovery_start,
+                period_end=recovery_end,
+                now=now,
+            )
         updated["recovery_history"] = recovery_update
     repository.replace(alias, updated)
     return WellnessRefreshResult(

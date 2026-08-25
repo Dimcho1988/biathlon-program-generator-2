@@ -79,13 +79,17 @@ async function fetchApiResource(
     readinessFailed = true;
   }
 
-  const attempts = readinessFailed ? DIRECT_WAKE_ATTEMPTS : 1;
+  // A healthy Render process can still return one transient gateway/store 5xx
+  // while several dashboard resources read the same snapshot in parallel.
+  // Retry only infrastructure responses; valid 4xx and contract failures still
+  // fail immediately.
+  const attempts = DIRECT_WAKE_ATTEMPTS;
   let response: Response | null = null;
   let requestError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       response = await fetch(new URL(path, baseUrl), {
-        signal: AbortSignal.timeout(readinessFailed ? DIRECT_WAKE_TIMEOUT_MS : TIMEOUT_MS), cache: "no-store",
+        signal: AbortSignal.timeout(readinessFailed || attempt > 1 ? DIRECT_WAKE_TIMEOUT_MS : TIMEOUT_MS), cache: "no-store",
         headers: {
           Accept: "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),

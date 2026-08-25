@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { currentAthleteAlias, multiProfileMode } from "../../../../../lib/athlete-session";
+import { getRecoveryHistory } from "../../../../../lib/api";
 import { waitForApi } from "../../../../../lib/api-readiness";
 
 function safeReturnTo(value: FormDataEntryValue | null) {
@@ -69,6 +70,11 @@ async function refreshIntervalsData(request?: Request) {
       || !Number.isInteger(result.wellness_days_stored)
       || (recoveryRestore && result.recovery_history_stored !== true)
     ) throw new Error("Refresh result was not persisted");
+    // Prove the full API -> web read path before claiming recovery success.
+    // This catches profile routing, persistence and frontend-contract failures,
+    // rather than validating only the write inside the API process.
+    if (recoveryRestore && !(await getRecoveryHistory(athleteAlias ?? undefined)))
+      throw new Error("Recovery history could not be read back");
     console.info("intervals_refresh_completed");
     return new NextResponse(null, { status: 303, headers: { Location: withRefreshState(returnTo, recoveryRestore ? "recovery-restored" : "refreshed") } });
   } catch (error) {
