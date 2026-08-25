@@ -119,7 +119,7 @@ export function Dashboard({
         <CompletedWorkSection report={completedWork} message={completedWorkMessage} selectable={mode === "api"} availablePeriodStart={loadHistory?.period_start} availablePeriodEnd={loadHistory?.period_end} />
         <VolumeHistorySection history={volumeHistory} message={volumeHistoryMessage} />
         <LoadHistorySection history={loadHistory} message={loadHistoryMessage} />
-        <RecoveryHistorySection history={recoveryHistory} message={recoveryHistoryMessage} />
+        <RecoveryHistorySection history={recoveryHistory} message={recoveryHistoryMessage} refreshAvailable={integrationActions} />
 
         <details id="model-metadata" className="metadata">
           <summary><span><small>Техническа информация</small>Метаданни на модела</span><span className="chevron" aria-hidden="true">⌄</span></summary>

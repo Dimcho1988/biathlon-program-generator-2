@@ -159,6 +159,43 @@ describe("integration route redirects behind a reverse proxy", () => {
     expect(String(fetchMock.mock.calls[1][0])).toBe("https://api.example.test/api/v2/real/wellness/refresh");
   });
 
+  it("restores recovery only after the full refresh confirms persisted recovery history", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json({
+        status: "refreshed",
+        wellness_records_received: 20,
+        wellness_days_stored: 18,
+        recovery_history_stored: true,
+      }, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const body = new FormData();
+    body.set("scope", "recovery");
+
+    const response = await refresh(new Request("https://web.example.test/api/integrations/intervals/refresh", { method: "POST", body }));
+
+    expect(response.headers.get("location")).toBe("/?intervals=recovery-restored");
+    expect(String(fetchMock.mock.calls[1][0])).toBe("https://api.example.test/api/v2/real/refresh");
+  });
+
+  it("does not claim recovery was restored when persistence was not confirmed", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json({ status: "refreshed", wellness_records_received: 20, wellness_days_stored: 18 }, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const body = new FormData();
+    body.set("scope", "recovery");
+
+    const response = await refresh(new Request("https://web.example.test/api/integrations/intervals/refresh", { method: "POST", body }));
+
+    expect(response.headers.get("location")).toBe("/?intervals=refresh-error");
+  });
+
   it("signs, validates and expires opaque athlete sessions", () => {
     process.env.ONFLOWS_SESSION_SECRET = "a-secret-value-with-at-least-32-characters";
     const now = 1_700_000_000_000;

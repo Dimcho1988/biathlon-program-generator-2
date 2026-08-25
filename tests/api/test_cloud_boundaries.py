@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
 import math
+from types import SimpleNamespace
 from fastapi.testclient import TestClient
 import pytest
 
@@ -323,6 +324,94 @@ def test_real_endpoint_auth_and_no_snapshot(monkeypatch):
     assert client.get("/api/v2/real/completed-work", headers={"Authorization": "Bearer secret-value"}).status_code == 503
     assert client.get("/api/v2/real/recovery-history").status_code == 401
     assert client.get("/api/v2/real/recovery-history", headers={"Authorization": "Bearer secret-value"}).status_code == 503
+
+
+def test_full_refresh_confirms_recovery_history_was_persisted(monkeypatch):
+    class Connection:
+        status = "CONNECTED"
+        access_token = "provider-token"
+        provider_athlete_id = "i123"
+
+    class Repository:
+        def connection(self, athlete_alias):
+            return Connection()
+
+        def athlete_settings(self, athlete_alias):
+            return None
+
+        def latest(self, athlete_alias):
+            return {"wellness_calendar": []}
+
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
+    monkeypatch.setattr(api_main, "_repository", lambda: Repository())
+    monkeypatch.setattr(
+        api_main,
+        "refresh",
+        lambda *args, **kwargs: SimpleNamespace(
+            processed_activities=12,
+            wellness_records_received=4,
+        ),
+    )
+    monkeypatch.setattr(
+        api_main,
+        "recovery_history_from_persisted",
+        lambda snapshot: object(),
+    )
+
+    response = TestClient(app).post(
+        "/api/v2/real/refresh",
+        headers={
+            "Authorization": "Bearer secret-value",
+            "X-OnFlows-Athlete-Alias": "ath-recovery-test",
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["recovery_history_stored"] is True
+
+
+def test_full_refresh_fails_closed_when_recovery_history_was_not_persisted(monkeypatch):
+    class Connection:
+        status = "CONNECTED"
+        access_token = "provider-token"
+        provider_athlete_id = "i123"
+
+    class Repository:
+        def connection(self, athlete_alias):
+            return Connection()
+
+        def athlete_settings(self, athlete_alias):
+            return None
+
+        def latest(self, athlete_alias):
+            return {"wellness_calendar": []}
+
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
+    monkeypatch.setattr(api_main, "_repository", lambda: Repository())
+    monkeypatch.setattr(
+        api_main,
+        "refresh",
+        lambda *args, **kwargs: SimpleNamespace(
+            processed_activities=12,
+            wellness_records_received=4,
+        ),
+    )
+
+    def missing_recovery(snapshot):
+        raise ValueError("Recovery history requires a new real-data refresh")
+
+    monkeypatch.setattr(api_main, "recovery_history_from_persisted", missing_recovery)
+
+    response = TestClient(app).post(
+        "/api/v2/real/refresh",
+        headers={
+            "Authorization": "Bearer secret-value",
+            "X-OnFlows-Athlete-Alias": "ath-recovery-test",
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Persistent server storage is unavailable"}
 
 
 def test_planning_methodology_is_protected_shared_and_versioned(monkeypatch):

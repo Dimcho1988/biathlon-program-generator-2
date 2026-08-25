@@ -544,6 +544,12 @@ def refresh_real_data(
             raise PersistentStoreFailure(
                 "Persisted snapshot did not retain wellness calendar state"
             )
+        try:
+            recovery_history_from_persisted(stored_snapshot)
+        except ValueError as exc:
+            raise PersistentStoreFailure(
+                "Persisted snapshot did not retain recovery history"
+            ) from exc
     except ConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except PersistentStoreFailure as exc:
@@ -561,6 +567,7 @@ def refresh_real_data(
         "processed_activities": result.processed_activities,
         "wellness_records_received": result.wellness_records_received,
         "wellness_days_stored": len(stored_wellness),
+        "recovery_history_stored": True,
     }
 
 

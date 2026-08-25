@@ -289,6 +289,21 @@ describe("dashboard", () => {
     expect(html).toContain("0,75 дни");
     expect(html).toContain("main-load-recovery-v1");
   });
+  it("offers an exact canonical recovery restore when the profile snapshot predates recovery history", () => {
+    const html = renderToStaticMarkup(<Dashboard
+      data={trainingStatusFixture}
+      mode="api"
+      recoveryHistory={null}
+      recoveryHistoryMessage="API услугата върна грешка (503)."
+      integrationActions
+    />);
+    expect(html).toContain("Моделът не е премахнат");
+    expect(html).toContain("recovery-history-v1");
+    expect(html).toContain('action="/api/integrations/intervals/refresh"');
+    expect(html).toContain('name="scope"');
+    expect(html).toContain('value="recovery"');
+    expect(html).toContain("Възстанови recovery модела");
+  });
 });
 
 describe("theme preference", () => {
