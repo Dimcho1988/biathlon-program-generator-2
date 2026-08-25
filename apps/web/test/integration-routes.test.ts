@@ -112,7 +112,7 @@ describe("integration route redirects behind a reverse proxy", () => {
     process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(Response.json({ status: "ok" }))
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
+      .mockResolvedValueOnce(Response.json({ status: "refreshed", wellness_records_received: 20, wellness_days_stored: 18 }, { status: 202 }))
       .mockResolvedValueOnce(Response.json({ status: "ok" }))
       .mockResolvedValueOnce(new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -120,7 +120,7 @@ describe("integration route redirects behind a reverse proxy", () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-    expect((await refresh()).headers.get("location")).toBe("/");
+    expect((await refresh()).headers.get("location")).toBe("/?intervals=refreshed");
     expect((await refresh()).headers.get("location")).toBe("/?intervals=refresh-error");
     expect(info).toHaveBeenCalledWith("intervals_refresh_completed");
     expect(error).toHaveBeenCalledWith("intervals_refresh_failed stage=api status=503");
@@ -131,15 +131,29 @@ describe("integration route redirects behind a reverse proxy", () => {
     process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(Response.json({ status: "ok" }))
-      .mockResolvedValueOnce(new Response(null, { status: 202 }));
+      .mockResolvedValueOnce(Response.json({ status: "refreshed", wellness_records_received: 20, wellness_days_stored: 18 }, { status: 202 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const response = await refreshFromNavigation();
 
     expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe("/");
+    expect(response.headers.get("location")).toBe("/?intervals=refreshed");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: "POST" });
+  });
+
+  it("returns a calendar refresh to the same validated period", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json({ status: "refreshed", wellness_records_received: 20, wellness_days_stored: 18 }, { status: 202 })));
+    const body = new FormData();
+    body.set("returnTo", "/activities?start=2026-07-15&end=2026-08-25");
+
+    const response = await refresh(new Request("https://web.example.test/api/integrations/intervals/refresh", { method: "POST", body }));
+
+    expect(response.headers.get("location")).toBe("/activities?start=2026-07-15&end=2026-08-25&intervals=refreshed");
   });
 
   it("signs, validates and expires opaque athlete sessions", () => {

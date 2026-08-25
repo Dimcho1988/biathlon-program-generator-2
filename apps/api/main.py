@@ -533,6 +533,16 @@ def refresh_real_data(
             athlete_alias=resolved_alias,
             athlete_settings=athlete_settings,
         )
+        stored_snapshot = repository.latest(resolved_alias)
+        stored_wellness = (
+            stored_snapshot.get("wellness_calendar")
+            if isinstance(stored_snapshot, Mapping)
+            else None
+        )
+        if not isinstance(stored_wellness, list):
+            raise PersistentStoreFailure(
+                "Persisted snapshot did not retain wellness calendar state"
+            )
     except ConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except PersistentStoreFailure as exc:
@@ -548,6 +558,8 @@ def refresh_real_data(
     return {
         "status": "refreshed",
         "processed_activities": result.processed_activities,
+        "wellness_records_received": result.wellness_records_received,
+        "wellness_days_stored": len(stored_wellness),
     }
 
 

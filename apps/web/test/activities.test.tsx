@@ -48,6 +48,8 @@ describe("completed activities calendar", () => {
     expect(html).toContain("Обикновеният refresh на браузъра не ги изтегля");
     expect(html).toContain("Обнови от Intervals");
     expect(html).toContain("action=\"/api/integrations/intervals/refresh\"");
+    expect(html).toContain("name=\"returnTo\"");
+    expect(html).toContain("/activities?start=2026-06-01&amp;end=2026-06-28");
   });
 });
 

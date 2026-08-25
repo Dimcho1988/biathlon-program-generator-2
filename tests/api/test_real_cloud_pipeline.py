@@ -79,6 +79,8 @@ def test_ingests_activity_and_wellness_then_atomically_publishes_aggregate_snaps
     result = refresh(repo, environ=ENV, client=Client(), period_end=date(2026, 8, 15), now=datetime(2026, 8, 15, 12, tzinfo=timezone.utc))
     payload = repo.latest("pilot")
     assert result.processed_activities == 1
+    assert result.wellness_records_received == 1
+    assert result.wellness_days_stored == 1
     assert payload["schema_version"] == "athlete-snapshot-v1"
     assert payload["training_status"]["athlete_id"] == "pilot"
     assert payload["load_history"]["schema_version"] == "load-history-v1"

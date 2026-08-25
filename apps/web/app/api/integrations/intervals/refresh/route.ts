@@ -2,7 +2,35 @@ import { NextResponse } from "next/server";
 import { currentAthleteAlias, multiProfileMode } from "../../../../../lib/athlete-session";
 import { waitForApi } from "../../../../../lib/api-readiness";
 
-async function refreshIntervalsData() {
+function safeReturnTo(value: FormDataEntryValue | null) {
+  if (typeof value !== "string" || !value.startsWith("/activities")) return "/";
+  try {
+    const parsed = new URL(value, "https://onflows.invalid");
+    if (parsed.origin !== "https://onflows.invalid" || parsed.pathname !== "/activities") return "/";
+    const start = parsed.searchParams.get("start");
+    const end = parsed.searchParams.get("end");
+    if (start && !/^\d{4}-\d{2}-\d{2}$/.test(start)) return "/";
+    if (end && !/^\d{4}-\d{2}-\d{2}$/.test(end)) return "/";
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return "/";
+  }
+}
+
+async function requestedReturnTo(request?: Request) {
+  if (!request || request.method !== "POST") return "/";
+  try { return safeReturnTo((await request.formData()).get("returnTo")); }
+  catch { return "/"; }
+}
+
+function withRefreshState(returnTo: string, state: "refreshed" | "refresh-error") {
+  const destination = new URL(returnTo, "https://onflows.invalid");
+  destination.searchParams.set("intervals", state);
+  return `${destination.pathname}${destination.search}`;
+}
+
+async function refreshIntervalsData(request?: Request) {
+  const returnTo = await requestedReturnTo(request);
   try {
     const athleteAlias = await currentAthleteAlias();
     if (multiProfileMode() && !athleteAlias)
@@ -25,12 +53,18 @@ async function refreshIntervalsData() {
       console.error(`intervals_refresh_failed stage=api status=${response.status}`);
       throw new Error("Refresh failed");
     }
+    const result = await response.json();
+    if (
+      !result || result.status !== "refreshed"
+      || !Number.isInteger(result.wellness_records_received)
+      || !Number.isInteger(result.wellness_days_stored)
+    ) throw new Error("Refresh result was not persisted");
     console.info("intervals_refresh_completed");
-    return new NextResponse(null, { status: 303, headers: { Location: "/" } });
+    return new NextResponse(null, { status: 303, headers: { Location: withRefreshState(returnTo, "refreshed") } });
   } catch (error) {
     if (!(error instanceof Error && error.message === "Refresh failed"))
       console.error(`intervals_refresh_failed stage=web error_type=${error instanceof Error ? error.name : "Unknown"}`);
-    return new NextResponse(null, { status: 303, headers: { Location: "/?intervals=refresh-error" } });
+    return new NextResponse(null, { status: 303, headers: { Location: withRefreshState(returnTo, "refresh-error") } });
   }
 }
 
