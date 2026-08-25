@@ -150,6 +150,84 @@ def test_wellness_only_refresh_patches_snapshot_without_reprocessing_activities(
     assert after["recovery_history"]["wellness_diagnostics"]["affects_recovery"] is False
 
 
+def test_next_day_wellness_refresh_keeps_recovery_diagnostics_on_its_model_period():
+    repo = InMemorySnapshotRepository()
+    refresh(
+        repo,
+        environ=ENV,
+        client=Client(wellness=[]),
+        period_end=date(2026, 8, 15),
+        now=datetime(2026, 8, 15, 12, tzinfo=timezone.utc),
+    )
+    before = repo.latest("pilot")["recovery_history"]
+
+    refresh_wellness_calendar(
+        repo,
+        access_token="private-token",
+        provider_athlete_id="private-athlete",
+        athlete_alias="pilot",
+        environ=ENV,
+        client=WellnessOnlyClient(wellness=[{
+            "id": "2026-08-16",
+            "sleepSecs": 27900,
+        }]),
+        period_end=date(2026, 8, 16),
+        now=datetime(2026, 8, 16, 12, tzinfo=timezone.utc),
+    )
+
+    after = repo.latest("pilot")["recovery_history"]
+    diagnostics = after["wellness_diagnostics"]
+    assert diagnostics["period_start"] == before["period_start"]
+    assert diagnostics["period_end"] == before["period_end"]
+    assert diagnostics["days_with_any_recognized_data"] == 0
+    assert after["basis"] == "load-only"
+
+
+def test_wellness_only_refresh_does_not_erase_a_concurrent_recovery_refresh():
+    class InterleavedRepository:
+        def __init__(self):
+            self.reads = 0
+            self.written = None
+
+        def latest(self, athlete_alias):
+            self.reads += 1
+            if self.reads == 1:
+                return {"schema_version": "athlete-snapshot-v1", "wellness_calendar": []}
+            return {
+                "schema_version": "athlete-snapshot-v1",
+                "training_status": {"generation": "new"},
+                "wellness_calendar": [],
+                "recovery_history": {
+                    "basis": "load-only",
+                    "generation": "new",
+                },
+            }
+
+        def replace(self, athlete_alias, snapshot):
+            self.written = dict(snapshot)
+
+    repo = InterleavedRepository()
+
+    refresh_wellness_calendar(
+        repo,
+        access_token="private-token",
+        provider_athlete_id="private-athlete",
+        athlete_alias="pilot",
+        environ=ENV,
+        client=WellnessOnlyClient(wellness=[{
+            "id": "2026-08-15",
+            "sleepSecs": 27900,
+        }]),
+        period_end=date(2026, 8, 15),
+        now=datetime(2026, 8, 15, 12, tzinfo=timezone.utc),
+    )
+
+    assert repo.reads == 2
+    assert repo.written["training_status"] == {"generation": "new"}
+    assert repo.written["recovery_history"]["generation"] == "new"
+    assert repo.written["recovery_history"]["basis"] == "load-only"
+
+
 def test_strength_activity_is_persisted_as_one_str_component_without_hr_double_counting():
     repo = InMemorySnapshotRepository()
     refresh(
