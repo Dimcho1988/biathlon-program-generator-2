@@ -75,7 +75,7 @@ function WellnessStatus({ calendar }: { calendar: ActivityCalendar }) {
         : "Записаните wellness дни са извън избрания период на календара.";
   return <div className={`calendar-wellness-status ${status.state}`} role="status">
     <div><strong>Дневните wellness данни още не са показани</strong><span>{message}</span></div>
-    {status.state !== "outside_snapshot_period" && <form action="/api/integrations/intervals/refresh" method="post"><input type="hidden" name="returnTo" value={`/activities?start=${calendar.period_start}&end=${calendar.period_end}`} /><button className="action-button secondary" type="submit">Обнови от Intervals</button></form>}
+    {status.state !== "outside_snapshot_period" && <form action="/api/integrations/intervals/refresh" method="post"><input type="hidden" name="returnTo" value={`/activities?start=${calendar.period_start}&end=${calendar.period_end}`} /><input type="hidden" name="scope" value="wellness" /><button className="action-button secondary" type="submit">Обнови wellness</button></form>}
     {status.state === "no_provider_records" && <Link href="/api/integrations/intervals/connect">Свържи Intervals отново</Link>}
   </div>;
 }

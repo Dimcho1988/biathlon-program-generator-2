@@ -51,6 +51,7 @@ from .real_service import (
     load_history_from_persisted,
     recovery_history_from_persisted,
     refresh,
+    refresh_wellness_calendar,
     training_status_from_persisted,
     volume_history_from_load_history,
 )
@@ -559,6 +560,53 @@ def refresh_real_data(
         "status": "refreshed",
         "processed_activities": result.processed_activities,
         "wellness_records_received": result.wellness_records_received,
+        "wellness_days_stored": len(stored_wellness),
+    }
+
+
+@app.post("/api/v2/real/wellness/refresh", status_code=202)
+def refresh_real_wellness(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[
+        str | None, Header(alias="X-OnFlows-Athlete-Alias")
+    ] = None,
+):
+    _authorize(authorization)
+    try:
+        repository = _repository()
+        resolved_alias = _validated_alias(athlete_alias)
+        connection = repository.connection(resolved_alias)
+        if connection is None or connection.status != "CONNECTED":
+            raise ConfigurationError("Intervals profile is not connected")
+        result = refresh_wellness_calendar(
+            repository,
+            access_token=connection.access_token,
+            provider_athlete_id=connection.provider_athlete_id,
+            athlete_alias=resolved_alias,
+        )
+        stored_snapshot = repository.latest(resolved_alias)
+        stored_wellness = (
+            stored_snapshot.get("wellness_calendar")
+            if isinstance(stored_snapshot, Mapping)
+            else None
+        )
+        if not isinstance(stored_wellness, list):
+            raise PersistentStoreFailure(
+                "Persisted snapshot did not retain wellness calendar state"
+            )
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except PersistentStoreFailure as exc:
+        logger.warning("wellness_refresh_failed stage=persistent_store detail=%s", str(exc))
+        raise HTTPException(
+            status_code=503, detail="Persistent server storage is unavailable"
+        ) from exc
+    except ProviderFailure as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        "status": "refreshed",
+        "processed_activities": 0,
+        "wellness_records_received": result.records_received,
         "wellness_days_stored": len(stored_wellness),
     }
 

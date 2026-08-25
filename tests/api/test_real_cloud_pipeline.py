@@ -17,6 +17,7 @@ from apps.api.real_service import (
     load_history_from_persisted,
     recovery_history_from_persisted,
     refresh,
+    refresh_wellness_calendar,
     training_status_from_persisted,
     volume_history_from_load_history,
     volume_history_from_persisted,
@@ -74,6 +75,11 @@ class StrengthClient(Client):
         raise AssertionError("strength activities must not request or use HR streams")
 
 
+class WellnessOnlyClient(Client):
+    def get_activities_result(self, oldest, newest):
+        raise AssertionError("wellness-only refresh must not request activities")
+
+
 def test_ingests_activity_and_wellness_then_atomically_publishes_aggregate_snapshot():
     repo = InMemorySnapshotRepository()
     result = refresh(repo, environ=ENV, client=Client(), period_end=date(2026, 8, 15), now=datetime(2026, 8, 15, 12, tzinfo=timezone.utc))
@@ -101,6 +107,47 @@ def test_ingests_activity_and_wellness_then_atomically_publishes_aggregate_snaps
         "metrics": {"sleep_duration": {"value": 28800.0, "unit": "s"}},
     }]
     assert "comments" not in rendered
+
+
+def test_wellness_only_refresh_patches_snapshot_without_reprocessing_activities():
+    repo = InMemorySnapshotRepository()
+    refresh(
+        repo,
+        environ=ENV,
+        client=Client(wellness=[]),
+        period_end=date(2026, 8, 15),
+        now=datetime(2026, 8, 15, 12, tzinfo=timezone.utc),
+    )
+    before = repo.latest("pilot")
+
+    result = refresh_wellness_calendar(
+        repo,
+        access_token="private-token",
+        provider_athlete_id="private-athlete",
+        athlete_alias="pilot",
+        environ=ENV,
+        client=WellnessOnlyClient(wellness=[{
+            "id": "2026-08-15",
+            "sleepSecs": 27900,
+            "restingHR": 41,
+            "hrv": 94,
+        }]),
+        period_end=date(2026, 8, 15),
+        now=datetime(2026, 8, 15, 12, tzinfo=timezone.utc),
+    )
+
+    after = repo.latest("pilot")
+    assert result.records_received == 1
+    assert result.days_stored == 1
+    assert after["training_status"] == before["training_status"]
+    assert after["load_history"] == before["load_history"]
+    assert after["wellness_calendar"][0]["metrics"] == {
+        "sleep_duration": {"value": 27900.0, "unit": "s"},
+        "resting_hr": {"value": 41.0, "unit": "bpm"},
+        "hrv": {"value": 94.0, "unit": "ms"},
+    }
+    assert after["recovery_history"]["basis"] == "load-only"
+    assert after["recovery_history"]["wellness_diagnostics"]["affects_recovery"] is False
 
 
 def test_strength_activity_is_persisted_as_one_str_component_without_hr_double_counting():

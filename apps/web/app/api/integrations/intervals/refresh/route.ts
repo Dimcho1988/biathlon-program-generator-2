@@ -17,10 +17,16 @@ function safeReturnTo(value: FormDataEntryValue | null) {
   }
 }
 
-async function requestedReturnTo(request?: Request) {
-  if (!request || request.method !== "POST") return "/";
-  try { return safeReturnTo((await request.formData()).get("returnTo")); }
-  catch { return "/"; }
+async function requestedRefreshOptions(request?: Request) {
+  if (!request || request.method !== "POST") return { returnTo: "/", wellnessOnly: false };
+  try {
+    const form = await request.formData();
+    return {
+      returnTo: safeReturnTo(form.get("returnTo")),
+      wellnessOnly: form.get("scope") === "wellness",
+    };
+  }
+  catch { return { returnTo: "/", wellnessOnly: false }; }
 }
 
 function withRefreshState(returnTo: string, state: "refreshed" | "refresh-error") {
@@ -30,7 +36,7 @@ function withRefreshState(returnTo: string, state: "refreshed" | "refresh-error"
 }
 
 async function refreshIntervalsData(request?: Request) {
-  const returnTo = await requestedReturnTo(request);
+  const { returnTo, wellnessOnly } = await requestedRefreshOptions(request);
   try {
     const athleteAlias = await currentAthleteAlias();
     if (multiProfileMode() && !athleteAlias)
@@ -39,7 +45,8 @@ async function refreshIntervalsData(request?: Request) {
     const token = process.env.ONFLOWS_SERVICE_TOKEN;
     if (!baseUrl || !token) throw new Error("Server integration configuration is incomplete");
     await waitForApi(baseUrl);
-    const response = await fetch(new URL("/api/v2/real/refresh", baseUrl), {
+    const resource = wellnessOnly ? "/api/v2/real/wellness/refresh" : "/api/v2/real/refresh";
+    const response = await fetch(new URL(resource, baseUrl), {
       method: "POST",
       cache: "no-store",
       headers: {
@@ -47,7 +54,7 @@ async function refreshIntervalsData(request?: Request) {
         Accept: "application/json",
         ...(athleteAlias ? { "X-OnFlows-Athlete-Alias": athleteAlias } : {}),
       },
-      signal: AbortSignal.timeout(180_000),
+      signal: AbortSignal.timeout(wellnessOnly ? 75_000 : 180_000),
     });
     if (!response.ok) {
       console.error(`intervals_refresh_failed stage=api status=${response.status}`);

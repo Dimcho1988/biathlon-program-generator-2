@@ -88,6 +88,94 @@ class RefreshResult:
     wellness_days_stored: int
 
 
+@dataclass(frozen=True)
+class WellnessRefreshResult:
+    records_received: int
+    days_stored: int
+
+
+def refresh_wellness_calendar(
+    repository: SnapshotRepository,
+    *,
+    access_token: str,
+    provider_athlete_id: str,
+    athlete_alias: str,
+    environ: Mapping[str, str] | None = None,
+    client: Any | None = None,
+    period_end: date | None = None,
+    now: datetime | None = None,
+) -> WellnessRefreshResult:
+    """Refresh only display-safe wellness aggregates, never activity models."""
+    env = environ or os.environ
+    token = access_token.strip() if isinstance(access_token, str) else ""
+    provider_id = (
+        provider_athlete_id.strip()
+        if isinstance(provider_athlete_id, str)
+        else ""
+    )
+    alias = athlete_alias.strip() if isinstance(athlete_alias, str) else ""
+    if not token or not provider_id or not alias:
+        raise ConfigurationError("Provider credentials or athlete alias are unavailable")
+    try:
+        days = int(env.get("ONFLOWS_HISTORY_DAYS", "90"))
+        if not 41 <= days <= 90:
+            raise ValueError
+    except ValueError as exc:
+        raise ConfigurationError("History period must be between 41 and 90 days") from exc
+    existing = repository.latest(alias)
+    if not isinstance(existing, Mapping):
+        raise ConfigurationError("Training snapshot requires a full real-data refresh")
+
+    from intervals_inspector.intervals_client import IntervalsAPIError, IntervalsClient
+
+    provider = client or IntervalsClient(token, provider_id)
+    end = period_end or date.today()
+    start = end.fromordinal(end.toordinal() - days + 1)
+    try:
+        payload = provider.get_wellness_result(
+            start.isoformat(), end.isoformat()
+        ).payload
+        rows = wellness_rows_from_payload(payload)
+        latest = max(
+            rows,
+            key=lambda row: str(row.get("id") or row.get("date") or ""),
+            default={},
+        )
+        normalized_latest = normalize_wellness(latest, now=now)
+        diagnostics = summarize_wellness_coverage(
+            rows, period_start=start, period_end=end, now=now
+        )
+        calendar = daily_wellness_summaries(
+            rows, period_start=start, period_end=end, now=now
+        )
+    except IntervalsAPIError as exc:
+        logger.warning(
+            "wellness_refresh_failed provider_status=%s",
+            exc.status_code if exc.status_code is not None else "network",
+        )
+        raise ProviderFailure("Intervals wellness request failed") from exc
+    except (TypeError, ValueError) as exc:
+        logger.warning("wellness_refresh_failed error_type=%s", type(exc).__name__)
+        raise ProviderFailure("Wellness data could not be normalized safely") from exc
+
+    updated = dict(existing)
+    updated["wellness_calendar"] = calendar
+    recovery = updated.get("recovery_history")
+    if isinstance(recovery, Mapping):
+        recovery_update = dict(recovery)
+        recovery_update["wellness_freshness"] = normalized_latest["freshness"]
+        recovery_update["wellness_coverage_percent"] = round(
+            100.0 * float(normalized_latest["coverage"]), 6
+        )
+        recovery_update["wellness_diagnostics"] = diagnostics
+        updated["recovery_history"] = recovery_update
+    repository.replace(alias, updated)
+    return WellnessRefreshResult(
+        records_received=int(diagnostics["records_received"]),
+        days_stored=len(calendar),
+    )
+
+
 def context_from_environment(
     environ: Mapping[str, str] | None = None,
     *,
