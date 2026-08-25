@@ -281,6 +281,7 @@ def activity_calendar_payload(
     rows: Sequence[Mapping[str, Any]],
     shadow_zones: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     wellness_days: Sequence[Mapping[str, Any]] = (),
+    wellness_status: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     zones_by_activity = shadow_zones or {}
     activities = [
@@ -329,6 +330,13 @@ def activity_calendar_payload(
         "activities": activities,
         "weeks": rendered_weeks,
         "wellness_days": [dict(day) for day in wellness_days],
+        "wellness_status": dict(wellness_status or {
+            "state": "refresh_required",
+            "records_received": 0,
+            "stored_days": 0,
+            "displayed_days": 0,
+            "latest_observed_date": None,
+        }),
         "wellness_integration": "DIAGNOSTIC_ONLY",
         "includes_timeseries": False,
     }

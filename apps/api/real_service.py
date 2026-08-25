@@ -25,6 +25,7 @@ from .cloud import (
     daily_wellness_summaries,
     normalize_wellness,
     summarize_wellness_coverage,
+    wellness_rows_from_payload,
 )
 from .activity_catalog import extract_activity_metadata, provider_activity_key
 from .schemas import (
@@ -810,17 +811,17 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         provider.get_sport_settings_result()
         stage = "wellness"
         wellness_payload = provider.get_wellness_result(start.isoformat(), end.isoformat()).payload
-        wellness_rows = wellness_payload if isinstance(wellness_payload, list) else []
+        wellness_rows = wellness_rows_from_payload(wellness_payload)
         latest_wellness = max((r for r in wellness_rows if isinstance(r, Mapping)), key=lambda r: str(r.get("id") or r.get("date") or ""), default={})
         wellness = normalize_wellness(latest_wellness, now=now)
         wellness_diagnostics = summarize_wellness_coverage(
-            [row for row in wellness_rows if isinstance(row, Mapping)],
+            wellness_rows,
             period_start=start,
             period_end=end,
             now=now,
         )
         wellness_calendar = daily_wellness_summaries(
-            [row for row in wellness_rows if isinstance(row, Mapping)],
+            wellness_rows,
             period_start=start,
             period_end=end,
             now=now,
