@@ -48,7 +48,11 @@ async function refreshIntervalsData(request?: Request) {
     const token = process.env.ONFLOWS_SERVICE_TOKEN;
     if (!baseUrl || !token) throw new Error("Server integration configuration is incomplete");
     await waitForApi(baseUrl);
-    const resource = wellnessOnly ? "/api/v2/real/wellness/refresh" : "/api/v2/real/refresh";
+    const resource = recoveryRestore
+      ? "/api/v2/real/recovery/restore"
+      : wellnessOnly
+        ? "/api/v2/real/wellness/refresh"
+        : "/api/v2/real/refresh";
     const response = await fetch(new URL(resource, baseUrl), {
       method: "POST",
       cache: "no-store",
@@ -57,7 +61,7 @@ async function refreshIntervalsData(request?: Request) {
         Accept: "application/json",
         ...(athleteAlias ? { "X-OnFlows-Athlete-Alias": athleteAlias } : {}),
       },
-      signal: AbortSignal.timeout(wellnessOnly ? 75_000 : 180_000),
+      signal: AbortSignal.timeout(recoveryRestore ? 30_000 : wellnessOnly ? 75_000 : 180_000),
     });
     if (!response.ok) {
       console.error(`intervals_refresh_failed stage=api status=${response.status}`);
@@ -65,10 +69,12 @@ async function refreshIntervalsData(request?: Request) {
     }
     const result = await response.json();
     if (
-      !result || result.status !== "refreshed"
-      || !Number.isInteger(result.wellness_records_received)
-      || !Number.isInteger(result.wellness_days_stored)
-      || (recoveryRestore && result.recovery_history_stored !== true)
+      !result
+      || (recoveryRestore
+        ? result.status !== "restored" || result.recovery_history_stored !== true
+        : result.status !== "refreshed"
+          || !Number.isInteger(result.wellness_records_received)
+          || !Number.isInteger(result.wellness_days_stored))
     ) throw new Error("Refresh result was not persisted");
     // Prove the full API -> web read path before claiming recovery success.
     // This catches profile routing, persistence and frontend-contract failures,
