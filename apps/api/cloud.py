@@ -576,6 +576,8 @@ def service_token_valid(provided: str | None, expected: str) -> bool:
 
 
 WELLNESS_FIELDS = {
+    "weight": (("weight",), "kg", "number"),
+    "steps": (("steps",), "count", "number"),
     "sleep_duration": (("sleepSecs",), "s", "number"),
     # Intervals can expose both fields.  They are counted separately because
     # their provider semantics and scales are not interchangeable.
@@ -597,11 +599,12 @@ WELLNESS_FIELDS = {
     "illness": (("illness",), "boolean", "boolean"),
 }
 
-# Only aggregate presence/validity is persisted for these provider fields.
-# Generic soreness is measured, but it is not silently split into the two
-# region-specific inputs required by the existing scientific model.
+# The recovery coverage metric remains presence-only and keeps its v1
+# denominator stable. Separately, selected normalized values are retained for
+# the athlete-private calendar; the raw provider rows are never persisted.
+# Generic soreness is not silently split into region-specific model inputs.
 WELLNESS_COVERAGE_FIELDS = tuple(
-    field for field in WELLNESS_FIELDS if field != "illness"
+    field for field in WELLNESS_FIELDS if field not in {"illness", "weight", "steps"}
 )
 UNRESOLVED_WELLNESS_MODEL_INPUTS = (
     "soreness_legs",
@@ -663,6 +666,36 @@ def normalize_wellness(row: Mapping[str, Any], *, now: datetime | None = None) -
             "freshness": "unknown" if age_hours is None else ("fresh" if age_hours <= 48 else "stale"),
             "coverage": valid / len(values), "values": values,
             "warnings": [f"invalid wellness field: {x}" for x in invalid]}
+
+
+def daily_wellness_summaries(
+    rows: list[Mapping[str, Any]],
+    *,
+    period_start: date,
+    period_end: date,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Persist display-safe daily values, never the provider wellness payload."""
+    by_date: dict[date, dict[str, Any]] = {}
+    for row in rows:
+        observed_date = _wellness_observed_date(row)
+        if observed_date is None or not period_start <= observed_date <= period_end:
+            continue
+        normalized = normalize_wellness(row, now=now)
+        metrics = {
+            field: {
+                "value": value["value"],
+                "unit": value["unit"],
+            }
+            for field, value in normalized["values"].items()
+            if value["state"] == "valid"
+        }
+        if metrics:
+            by_date[observed_date] = {
+                "date": observed_date.isoformat(),
+                "metrics": metrics,
+            }
+    return [by_date[day] for day in sorted(by_date)]
 
 
 def summarize_wellness_coverage(
@@ -786,6 +819,9 @@ class SnapshotRepository(Protocol):
     def activity_shadow_index(
         self, athlete_alias: str
     ) -> tuple[Mapping[str, Any], ...]: ...
+    def activity_shadow_zone_summaries(
+        self, athlete_alias: str, activity_refs: tuple[str, ...]
+    ) -> Mapping[str, list[Mapping[str, Any]]]: ...
     def resolve_activity_ref(
         self, athlete_alias: str, provider_activity_key: str
     ) -> str: ...
@@ -915,6 +951,19 @@ class InMemorySnapshotRepository:
                 for (alias, activity_ref), runs in sorted(self._activity_runs.items())
                 if alias == athlete_alias and runs
             )
+
+    def activity_shadow_zone_summaries(
+        self, athlete_alias: str, activity_refs: tuple[str, ...]
+    ) -> Mapping[str, list[Mapping[str, Any]]]:
+        requested = set(activity_refs)
+        with self._lock:
+            return {
+                activity_ref: deepcopy(
+                    list(runs[-1]["result_payload"].get("zone_summary") or [])
+                )
+                for (alias, activity_ref), runs in self._activity_runs.items()
+                if alias == athlete_alias and activity_ref in requested and runs
+            }
 
     def resolve_activity_ref(
         self, athlete_alias: str, provider_activity_key: str

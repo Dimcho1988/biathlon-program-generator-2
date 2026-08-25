@@ -19,6 +19,11 @@ describe("completed activities calendar", () => {
     expect(html).toContain("16:10");
     expect(html).toContain("09:00");
     expect(html).toContain("Обобщение за седмицата");
+    expect(html).toContain("Wellness: сън 8:00");
+    expect(html).toContain("HRV 92");
+    expect(html).toContain("HRmod final · experimental");
+    expect(html).toContain("HRmod");
+    expect(html).toContain("не променят canonical load");
     expect(html).toContain("/activities/act_22222222222222222222222222222222");
     expect(html).not.toContain("activity-001");
   });

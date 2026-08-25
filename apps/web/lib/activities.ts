@@ -8,6 +8,21 @@ export interface ActivityZoneSummary {
   effective_load: number;
 }
 
+export interface ActivityHrmodZoneSummary {
+  zone: ActivityZone;
+  final_time_s: number;
+}
+
+export interface DailyWellnessMetric {
+  value: number | boolean;
+  unit: string;
+}
+
+export interface DailyWellnessSummary {
+  date: string;
+  metrics: Record<string, DailyWellnessMetric>;
+}
+
 export interface ActivityCalendarItem {
   activity_ref: string;
   start_at_utc: string;
@@ -33,6 +48,8 @@ export interface ActivityCalendarItem {
   hr_coverage_percent: number | null;
   shadow_available: boolean;
   zones: ActivityZoneSummary[];
+  hrmod_zones: ActivityHrmodZoneSummary[];
+  zone_visualization_source: "hrmod_final" | "canonical_raw" | "none";
 }
 
 export interface ActivityWeekSummary {
@@ -52,6 +69,8 @@ export interface ActivityCalendar {
   period_end: string;
   activities: ActivityCalendarItem[];
   weeks: ActivityWeekSummary[];
+  wellness_days: DailyWellnessSummary[];
+  wellness_integration: "DIAGNOSTIC_ONLY";
   includes_timeseries: false;
 }
 
@@ -98,12 +117,20 @@ function assertActivityItem(value: unknown): asserts value is ActivityCalendarIt
     throw new Error("API услугата върна невалиден activity summary.");
   if (!Array.isArray(value.zones) || !value.zones.every((zone) => isObject(zone) && zones.has(zone.zone as ActivityZone)))
     throw new Error("API услугата върна невалидни activity зони.");
+  const hrmodZones = Array.isArray(value.hrmod_zones) ? value.hrmod_zones : [];
+  value.hrmod_zones = hrmodZones;
+  if (!hrmodZones.every((zone) => isObject(zone) && zones.has(zone.zone as ActivityZone)))
+    throw new Error("API услугата върна невалидни HRmod зони.");
+  if (!(value.zone_visualization_source === "hrmod_final" || value.zone_visualization_source === "canonical_raw" || value.zone_visualization_source === "none"))
+    value.zone_visualization_source = hrmodZones.length ? "hrmod_final" : value.zones.length ? "canonical_raw" : "none";
 }
 
 export function parseActivityCalendar(value: unknown): ActivityCalendar {
   if (!isObject(value) || value.schema_version !== "activity-calendar-index-v1" || value.includes_timeseries !== false || !Array.isArray(value.activities) || !Array.isArray(value.weeks))
     throw new Error("API услугата върна невалиден календар на активностите.");
   value.activities.forEach(assertActivityItem);
+  if (!Array.isArray(value.wellness_days)) value.wellness_days = [];
+  if (value.wellness_integration !== "DIAGNOSTIC_ONLY") value.wellness_integration = "DIAGNOSTIC_ONLY";
   return value as unknown as ActivityCalendar;
 }
 
@@ -129,6 +156,12 @@ export const activityCalendarFixture: ActivityCalendar = {
   period_start: "2026-06-01",
   period_end: "2026-06-28",
   includes_timeseries: false,
+  wellness_integration: "DIAGNOSTIC_ONLY",
+  wellness_days: [
+    { date: "2026-06-02", metrics: { sleep_duration: { value: 28800, unit: "s" }, sleep_score: { value: 86, unit: "score" }, resting_hr: { value: 41, unit: "bpm" }, hrv: { value: 92, unit: "ms" }, weight: { value: 68.7, unit: "kg" }, steps: { value: 12480, unit: "count" } } },
+    { date: "2026-06-05", metrics: { sleep_duration: { value: 26400, unit: "s" }, resting_hr: { value: 44, unit: "bpm" }, hrv: { value: 78, unit: "ms" }, readiness: { value: 73, unit: "score" } } },
+    { date: "2026-06-18", metrics: { sleep_duration: { value: 30000, unit: "s" }, sleep_quality: { value: 2, unit: "score" }, resting_hr: { value: 39, unit: "bpm" }, hrv: { value: 101, unit: "ms" }, weight: { value: 68.4, unit: "kg" } } },
+  ],
   activities: [
     ["act_11111111111111111111111111111111", "2026-06-02", "07:35", "Run", "Леко бягане и ускорения", 54, 11200, 138, 43, "valid", true, [34, 16, 4, 0, 0]],
     ["act_22222222222222222222222222222222", "2026-06-05", "16:10", "NordicSki", "Ролкови ски · основна тренировка", 92, 22700, 146, 78, "valid", true, [18, 46, 21, 7, 0]],
@@ -138,7 +171,10 @@ export const activityCalendarFixture: ActivityCalendar = {
     ["act_66666666666666666666666666666666", "2026-06-18", "07:20", "Run", "4 × 8 минути праг", 68, 14600, 158, 89, "valid", true, [12, 18, 25, 13, 0]],
     ["act_77777777777777777777777777777777", "2026-06-20", "08:00", "NordicSki", "Ролкови ски · продължително", 118, 29400, 144, 96, "valid", true, [26, 58, 28, 6, 0]],
     ["act_88888888888888888888888888888888", "2026-06-24", "17:45", "Run", "Кратко възстановяване", 36, 7200, 128, 24, "excluded", false, [0, 0, 0, 0, 0]],
-  ].map(([ref, day, time, sport, name, duration, distance, averageHr, load, quality, shadow, zoneMinutes]) => ({
+  ].map(([ref, day, time, sport, name, duration, distance, averageHr, load, quality, shadow, zoneMinutes]) => {
+    const canonicalZones = zoneRows(zoneMinutes as [number, number, number, number, number]);
+    const hasHrZones = canonicalZones.some((zone) => zone.raw_time_s > 0);
+    return {
     activity_ref: ref as string,
     start_at_utc: `${day}T${time}:00+00:00`, start_local: `${day}T${time}:00`, local_date: day as string, local_time: time as string,
     timezone: "Europe/Sofia", utc_offset_minutes: 180, sport: sport as string, activity_type: sport as string, activity_sub_type: null, name: name as string,
@@ -148,8 +184,11 @@ export const activityCalendarFixture: ActivityCalendar = {
     canonical_training_load: load as number, quality_status: quality as ActivityQuality,
     quality_reason: quality === "limited" ? "Ограничено HR покритие." : quality === "excluded" ? "Недостатъчно надеждни HR данни." : null,
     hr_coverage_percent: quality === "limited" ? 71 : quality === "excluded" ? 18 : sport === "WeightTraining" ? 0 : 98,
-    shadow_available: shadow as boolean, zones: zoneRows(zoneMinutes as [number, number, number, number, number]),
-  })),
+    shadow_available: shadow as boolean,
+    zones: canonicalZones,
+    hrmod_zones: shadow && hasHrZones ? canonicalZones.map((zone, index) => ({ zone: zone.zone, final_time_s: Math.max(0, zone.raw_time_s + (index === 0 ? -120 : index === 1 ? 120 : 0)) })) : [],
+    zone_visualization_source: shadow && hasHrZones ? "hrmod_final" as const : hasHrZones ? "canonical_raw" as const : "none" as const,
+  }; }),
   weeks: [],
 };
 

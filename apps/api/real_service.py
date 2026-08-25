@@ -22,6 +22,7 @@ from .cloud import (
     AthleteContext,
     AthleteModelSettings,
     SnapshotRepository,
+    daily_wellness_summaries,
     normalize_wellness,
     summarize_wellness_coverage,
 )
@@ -818,6 +819,12 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             period_end=end,
             now=now,
         )
+        wellness_calendar = daily_wellness_summaries(
+            [row for row in wellness_rows if isinstance(row, Mapping)],
+            period_start=start,
+            period_end=end,
+            now=now,
+        )
         parameters = fresh_parameters()
         stage = "history"
         from .activity_shadow_pipeline import (
@@ -1030,6 +1037,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         training_status=snapshot,
         load_history=load_history,
         recovery_history=recovery_history,
+        wellness_calendar=wellness_calendar,
     )
     repository.replace(context.public_alias, persisted.model_dump(mode="json"))
     return RefreshResult(snapshot, dataset.processed_activities, float(wellness["coverage"]))

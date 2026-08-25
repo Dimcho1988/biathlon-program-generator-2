@@ -364,6 +364,51 @@ def test_latest_shadow_metadata_reads_configuration_fingerprint_without_full_res
     assert "result_payload," not in client.url
 
 
+def test_shadow_zone_summaries_are_loaded_in_one_projection_query():
+    first_ref = "act_" + "1" * 32
+    second_ref = "act_" + "2" * 32
+
+    class Client:
+        url = None
+
+        def request(self, method, url, *, headers, **kwargs):
+            self.url = url
+            return httpx.Response(200, json=[
+                {
+                    "activity_ref": first_ref,
+                    "zone_summary": [{"zone_name": "Z1", "hrmod_final_seconds": 60}],
+                    "created_at": "2026-08-25T08:00:00Z",
+                },
+                {
+                    "activity_ref": first_ref,
+                    "zone_summary": [{"zone_name": "Z1", "hrmod_final_seconds": 30}],
+                    "created_at": "2026-08-24T08:00:00Z",
+                },
+                {
+                    "activity_ref": second_ref,
+                    "zone_summary": [{"zone_name": "Z2", "hrmod_final_seconds": 90}],
+                    "created_at": "2026-08-25T08:00:00Z",
+                },
+            ])
+
+    client = Client()
+    repository = SupabasePilotRepository(
+        supabase_url="https://project.supabase.co",
+        secret_key="sb_secret_server-key",
+        encryption_key=base64.urlsafe_b64encode(bytes(range(32))).decode(),
+        client=client,
+    )
+
+    result = repository.activity_shadow_zone_summaries(
+        "pilot", (first_ref, second_ref)
+    )
+    assert result[first_ref][0]["hrmod_final_seconds"] == 60
+    assert result[second_ref][0]["hrmod_final_seconds"] == 90
+    assert client.url is not None
+    assert "zone_summary:result_payload->zone_summary" in client.url
+    assert "result_payload," not in client.url
+
+
 def test_supabase_planning_profile_round_trip_is_scoped_to_alias():
     profile = AthletePlanningProfile(
         season_start=date(2026, 1, 1),

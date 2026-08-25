@@ -102,6 +102,19 @@ class CatalogFailsOnceRepository(InMemorySnapshotRepository):
         return super().upsert_activity_catalog(athlete_alias, activities)
 
 
+class WellnessCatalogClient(CatalogClient):
+    def get_wellness_result(self, oldest, newest):
+        return IntervalsResponse(200, [{
+            "id": "2026-08-15",
+            "sleepSecs": 28200,
+            "sleepScore": 84,
+            "restingHR": 42,
+            "hrv": 96,
+            "weight": 68.6,
+            "steps": 13240,
+        }])
+
+
 def test_provider_identity_is_stable_opaque_and_athlete_scoped():
     first = provider_activity_key(
         provider_athlete_id="athlete-a",
@@ -320,3 +333,34 @@ def test_calendar_contract_is_summary_only_and_athlete_isolated(monkeypatch):
         period_end=date(2026, 8, 15),
         rows=repository.activity_calendar("pilot", date(2026, 8, 15), date(2026, 8, 15)),
     )["includes_timeseries"] is False
+
+
+def test_calendar_adds_daily_wellness_and_hrmod_final_zone_visualization(monkeypatch):
+    repository = InMemorySnapshotRepository()
+    refresh(
+        repository,
+        environ={**ENV, "ONFLOWS_HRMAX_BPM": "200"},
+        client=WellnessCatalogClient(),
+        period_end=date(2026, 8, 15),
+        now=datetime(2026, 8, 15, 12, tzinfo=timezone.utc),
+    )
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
+    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+
+    response = TestClient(app).get(
+        "/api/v2/real/activities?period_start=2026-08-15&period_end=2026-08-15",
+        headers={
+            "Authorization": "Bearer service-secret",
+            "X-OnFlows-Athlete-Alias": "pilot",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["wellness_integration"] == "DIAGNOSTIC_ONLY"
+    assert payload["wellness_days"][0]["metrics"]["sleep_duration"]["value"] == 28200
+    assert payload["wellness_days"][0]["metrics"]["hrv"]["value"] == 96
+    activity = payload["activities"][0]
+    assert activity["zone_visualization_source"] == "hrmod_final"
+    assert len(activity["hrmod_zones"]) == 5
+    assert sum(zone["final_time_s"] for zone in activity["hrmod_zones"]) > 0

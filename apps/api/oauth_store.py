@@ -756,6 +756,42 @@ class SupabasePilotRepository(SnapshotRepository):
             latest.setdefault(str(row["activity_ref"]), dict(row))
         return tuple(latest.values())
 
+    def activity_shadow_zone_summaries(
+        self, athlete_alias: str, activity_refs: tuple[str, ...]
+    ) -> Mapping[str, list[Mapping[str, Any]]]:
+        if not activity_refs:
+            return {}
+        alias = quote(athlete_alias, safe="")
+        response = self._request(
+            "GET",
+            "/onflows_activity_derived_runs?select=activity_ref,"
+            "zone_summary:result_payload->zone_summary,created_at"
+            f"&athlete_alias=eq.{alias}&order=created_at.desc&limit=1000",
+        )
+        payload = self._json(response)
+        if not isinstance(payload, list):
+            raise PersistentStoreFailure("Stored HRmod zone summaries are invalid")
+        requested = set(activity_refs)
+        latest: dict[str, list[Mapping[str, Any]]] = {}
+        for row in payload:
+            if not isinstance(row, Mapping):
+                raise PersistentStoreFailure("Stored HRmod zone summaries are invalid")
+            activity_ref = row.get("activity_ref")
+            zones = row.get("zone_summary")
+            if (
+                not isinstance(activity_ref, str)
+                or activity_ref not in requested
+                or activity_ref in latest
+            ):
+                continue
+            if zones is not None and not (
+                isinstance(zones, list)
+                and all(isinstance(zone, Mapping) for zone in zones)
+            ):
+                raise PersistentStoreFailure("Stored HRmod zone summaries are invalid")
+            latest[activity_ref] = list(zones or [])
+        return latest
+
     def resolve_activity_ref(
         self, athlete_alias: str, provider_activity_key: str
     ) -> str:

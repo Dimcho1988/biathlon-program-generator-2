@@ -4,7 +4,7 @@ from datetime import date, timedelta
 import logging
 import os
 import re
-from typing import Annotated
+from typing import Annotated, Mapping
 from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -353,13 +353,34 @@ def real_activity_calendar(
         raise HTTPException(status_code=422, detail="Activity period must contain 1–90 days")
     alias = _validated_alias(athlete_alias)
     try:
-        rows = _repository().activity_calendar(alias, start, end)
+        repository = _repository()
+        rows = repository.activity_calendar(alias, start, end)
+        shadow_zones = repository.activity_shadow_zone_summaries(
+            alias,
+            tuple(str(row.get("activity_ref") or "") for row in rows),
+        )
+        snapshot = repository.latest(alias)
     except PersistentStoreFailure as exc:
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
         ) from exc
+    wellness_days = (
+        snapshot.get("wellness_calendar", [])
+        if isinstance(snapshot, Mapping)
+        else []
+    )
     return activity_calendar_payload(
-        athlete_alias=alias, period_start=start, period_end=end, rows=rows
+        athlete_alias=alias,
+        period_start=start,
+        period_end=end,
+        rows=rows,
+        shadow_zones=shadow_zones,
+        wellness_days=[
+            day
+            for day in wellness_days
+            if isinstance(day, Mapping)
+            and start.isoformat() <= str(day.get("date") or "") <= end.isoformat()
+        ],
     )
 
 
