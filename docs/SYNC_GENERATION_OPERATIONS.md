@@ -97,7 +97,14 @@ Do not apply the migration directly to production as its first execution.
     the old mutable canonical publish RPC; keep only the generation path used by
     the new API and worker.
 11. Only after the staging evidence is retained should the same ordered rollout
-   be approved for production.
+    be approved for production.
+
+The first Render staging deployment uses the repository's
+`render.staging.yaml` custom Blueprint path.  Phase 1 deliberately contains
+only `onflows-api-staging`, pins the async feature branch and disables automatic
+deploys.  The worker and web service are added to that same Blueprint only after
+the preceding rollout gates pass; they must not be created from the production
+`render.yaml` or managed by a second Blueprint.
 
 The Render worker is a continuously running paid service. Creating or enabling
 it is a billing and deployment action and requires explicit approval. The
