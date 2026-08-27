@@ -336,3 +336,15 @@ def test_generation_migration_keeps_profile_and_activity_set_fks_deferred_and_sc
     assert release_pointers < shadow_delete < input_delete < catalog_delete
     assert canonical_delete < catalog_delete
     assert migration.count("and ga.athlete_alias = p_athlete_alias") >= 4
+
+
+def test_enqueue_repair_migration_uses_unambiguous_conflict_target():
+    migration = Path(
+        "supabase/migrations/202608270002_enqueue_sync_job_conflict_target.sql"
+    ).read_text(encoding="utf-8")
+    assert "create or replace function public.enqueue_onflows_sync_job(" in migration
+    assert (
+        "on conflict on constraint onflows_athlete_analysis_state_pkey do nothing"
+        in migration
+    )
+    assert "\n  on conflict (athlete_alias)" not in migration
