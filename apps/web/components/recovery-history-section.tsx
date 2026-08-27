@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import type { RecoveryHistory, WellnessCoverageDiagnostics, WellnessCoverageField } from "../lib/recovery-history";
 import { ZONES, type Zone } from "../lib/training-status";
+import { SyncActionForm } from "./sync-action-form";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
 const parameterNumber = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 2 });
@@ -97,15 +98,17 @@ function RecoveryChart({ history }: { history: RecoveryHistory }) {
   </figure>;
 }
 
-export function RecoveryHistorySection({ history, message, refreshAvailable = false }: { history: RecoveryHistory | null; message?: string; refreshAvailable?: boolean }) {
+export function RecoveryHistorySection({ history, message, refreshAvailable = false, syncBusy = false, fullRefreshRequired = false }: { history: RecoveryHistory | null; message?: string; refreshAvailable?: boolean; syncBusy?: boolean; fullRefreshRequired?: boolean }) {
   if (!history) return message || refreshAvailable ? <section className="history-section" aria-labelledby="recovery-title">
     <div className="section-heading"><div><p className="section-kicker">Canonical recovery</p><h2 id="recovery-title">Товарно възстановяване</h2></div></div>
     <div className="history-unavailable">
       <strong>Моделът не е премахнат.</strong>
-      <p>Текущият профилен snapshot е създаден без <code>recovery-history-v1</code>. За точно възстановяване със същите canonical параметри е необходимо еднократно пълно обновяване.</p>
+      <p>{fullRefreshRequired
+        ? <>Текущият профилен snapshot е създаден без <code>recovery-history-v1</code> и без необходимата дневна Tref история. Необходимо е еднократно пълно обновяване.</>
+        : <>Текущият профилен snapshot е създаден без <code>recovery-history-v1</code>. Моделът може да бъде възстановен детерминистично от записаната canonical история.</>}</p>
       {message && <small>Технически статус: {message}</small>}
     </div>
-    {refreshAvailable && <div className="integration-actions"><form action="/api/integrations/intervals/refresh" method="post"><input type="hidden" name="scope" value="recovery" /><button className="action-button secondary" type="submit">Възстанови recovery модела</button></form></div>}
+    {refreshAvailable && <div className="integration-actions"><SyncActionForm scope={fullRefreshRequired ? "FULL" : "RECOVERY"} busy={syncBusy} label={fullRefreshRequired ? "Пълно обновяване" : "Възстанови recovery модела"} /></div>}
   </section> : null;
   return <section className="history-section recovery-section" aria-labelledby="recovery-title">
     <div className="section-heading"><div><p className="section-kicker">Canonical recovery · {date(history.period_start)} — {date(history.period_end)}</p><h2 id="recovery-title">Товарно възстановяване</h2></div><p>Предварително изчислено в Python scientific core</p></div>

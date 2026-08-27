@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { currentAthleteAlias, multiProfileMode } from "../../../../../lib/athlete-session";
-import { getRecoveryHistory } from "../../../../../lib/api";
-import { waitForApi } from "../../../../../lib/api-readiness";
+import { parseSyncEnqueueResponse, type SyncScope } from "../../../../../lib/sync";
 
 function safeReturnTo(value: FormDataEntryValue | null) {
   if (typeof value !== "string" || !value.startsWith("/activities")) return "/";
@@ -18,28 +17,39 @@ function safeReturnTo(value: FormDataEntryValue | null) {
   }
 }
 
-async function requestedRefreshOptions(request?: Request) {
-  if (!request || request.method !== "POST") return { returnTo: "/", wellnessOnly: false, recoveryRestore: false };
+async function requestedRefreshOptions(request: Request): Promise<{
+  returnTo: string;
+  scope: SyncScope;
+} | null> {
   try {
     const form = await request.formData();
-    const scope = form.get("scope");
+    const requestedScope = form.get("scope");
+    let scope: SyncScope;
+    if (requestedScope === null) scope = "FULL";
+    else if (requestedScope === "full" || requestedScope === "FULL") scope = "FULL";
+    else if (requestedScope === "wellness" || requestedScope === "WELLNESS") scope = "WELLNESS";
+    else if (requestedScope === "recovery" || requestedScope === "RECOVERY") scope = "RECOVERY";
+    else return null;
     return {
       returnTo: safeReturnTo(form.get("returnTo")),
-      wellnessOnly: scope === "wellness",
-      recoveryRestore: scope === "recovery",
+      scope,
     };
   }
-  catch { return { returnTo: "/", wellnessOnly: false, recoveryRestore: false }; }
+  catch { return null; }
 }
 
-function withRefreshState(returnTo: string, state: "refreshed" | "recovery-restored" | "refresh-error") {
+function withSyncState(returnTo: string, state: "queued" | "coalesced" | "enqueue-error") {
   const destination = new URL(returnTo, "https://onflows.invalid");
-  destination.searchParams.set("intervals", state);
+  destination.searchParams.set("sync", state);
+  if (destination.pathname === "/") destination.searchParams.set("wake", "ready");
   return `${destination.pathname}${destination.search}`;
 }
 
-async function refreshIntervalsData(request?: Request) {
-  const { returnTo, wellnessOnly, recoveryRestore } = await requestedRefreshOptions(request);
+export async function POST(request: Request) {
+  const options = await requestedRefreshOptions(request);
+  if (!options)
+    return NextResponse.json({ error: "invalid_sync_scope" }, { status: 400 });
+  const { returnTo, scope } = options;
   try {
     const athleteAlias = await currentAthleteAlias();
     if (multiProfileMode() && !athleteAlias)
@@ -47,53 +57,31 @@ async function refreshIntervalsData(request?: Request) {
     const baseUrl = process.env.ONFLOWS_API_BASE_URL;
     const token = process.env.ONFLOWS_SERVICE_TOKEN;
     if (!baseUrl || !token) throw new Error("Server integration configuration is incomplete");
-    await waitForApi(baseUrl);
-    const resource = recoveryRestore
-      ? "/api/v2/real/recovery/restore"
-      : wellnessOnly
-        ? "/api/v2/real/wellness/refresh"
-        : "/api/v2/real/refresh";
-    const response = await fetch(new URL(resource, baseUrl), {
+    const response = await fetch(new URL("/api/v2/real/sync-jobs", baseUrl), {
       method: "POST",
       cache: "no-store",
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
+        "Content-Type": "application/json",
         ...(athleteAlias ? { "X-OnFlows-Athlete-Alias": athleteAlias } : {}),
       },
-      signal: AbortSignal.timeout(recoveryRestore ? 30_000 : wellnessOnly ? 75_000 : 180_000),
+      body: JSON.stringify({ scope }),
+      signal: AbortSignal.timeout(15_000),
     });
-    if (!response.ok) {
-      console.error(`intervals_refresh_failed stage=api status=${response.status}`);
-      throw new Error("Refresh failed");
+    if (response.status !== 202) {
+      console.error(`intervals_sync_enqueue_failed stage=api status=${response.status}`);
+      throw new Error("Sync enqueue failed");
     }
-    const result = await response.json();
-    if (
-      !result
-      || (recoveryRestore
-        ? result.status !== "restored" || result.recovery_history_stored !== true
-        : result.status !== "refreshed"
-          || !Number.isInteger(result.wellness_records_received)
-          || !Number.isInteger(result.wellness_days_stored))
-    ) throw new Error("Refresh result was not persisted");
-    // Prove the full API -> web read path before claiming recovery success.
-    // This catches profile routing, persistence and frontend-contract failures,
-    // rather than validating only the write inside the API process.
-    if (recoveryRestore && !(await getRecoveryHistory(athleteAlias ?? undefined)))
-      throw new Error("Recovery history could not be read back");
-    console.info("intervals_refresh_completed");
-    return new NextResponse(null, { status: 303, headers: { Location: withRefreshState(returnTo, recoveryRestore ? "recovery-restored" : "refreshed") } });
+    const result = parseSyncEnqueueResponse(await response.json());
+    console.info(`intervals_sync_enqueued state=${result.state} coalesced=${result.coalesced}`);
+    return new NextResponse(null, {
+      status: 303,
+      headers: { Location: withSyncState(returnTo, result.coalesced ? "coalesced" : "queued") },
+    });
   } catch (error) {
-    if (!(error instanceof Error && error.message === "Refresh failed"))
-      console.error(`intervals_refresh_failed stage=web error_type=${error instanceof Error ? error.name : "Unknown"}`);
-    return new NextResponse(null, { status: 303, headers: { Location: withRefreshState(returnTo, "refresh-error") } });
+    if (!(error instanceof Error && error.message === "Sync enqueue failed"))
+      console.error(`intervals_sync_enqueue_failed stage=web error_type=${error instanceof Error ? error.name : "Unknown"}`);
+    return new NextResponse(null, { status: 303, headers: { Location: withSyncState(returnTo, "enqueue-error") } });
   }
 }
-
-export const POST = refreshIntervalsData;
-
-// Some browsers can replay a form target as a navigation after a deployment or
-// history restore. Refresh is an authenticated, read-only Intervals import, so
-// route the fallback navigation through the same session-scoped handler instead of
-// exposing a raw 405 page.
-export const GET = refreshIntervalsData;

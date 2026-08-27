@@ -282,6 +282,7 @@ def activity_calendar_payload(
     shadow_zones: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     wellness_days: Sequence[Mapping[str, Any]] = (),
     wellness_status: Mapping[str, Any] | None = None,
+    generation_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     zones_by_activity = shadow_zones or {}
     activities = [
@@ -322,8 +323,12 @@ def activity_calendar_payload(
     rendered_weeks = []
     for week in sorted(weeks.values(), key=lambda item: item["week_start"]):
         rendered_weeks.append({**week, "zones": list(week["zones"].values())})
-    return {
-        "schema_version": "activity-calendar-index-v1",
+    payload = {
+        "schema_version": (
+            "activity-calendar-index-v2"
+            if generation_metadata is not None
+            else "activity-calendar-index-v1"
+        ),
         "athlete_id": athlete_alias,
         "period_start": period_start.isoformat(),
         "period_end": period_end.isoformat(),
@@ -340,10 +345,23 @@ def activity_calendar_payload(
         "wellness_integration": "DIAGNOSTIC_ONLY",
         "includes_timeseries": False,
     }
+    if generation_metadata is not None:
+        payload.update(
+            {
+                "generation_id": generation_metadata.get("generation_id"),
+                "revision": int(generation_metadata.get("revision") or 0),
+                "analysis_as_of": generation_metadata.get("analysis_as_of"),
+                "activated_at": generation_metadata.get("activated_at"),
+            }
+        )
+    return payload
 
 
-def activity_detail_payload(row: Mapping[str, Any]) -> dict[str, Any]:
-    base = calendar_item(row)
+def activity_detail_payload(
+    row: Mapping[str, Any],
+    hrmod_zone_summary: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    base = calendar_item(row, hrmod_zone_summary)
     return {
         **base,
         "schema_version": "activity-detail-v1",

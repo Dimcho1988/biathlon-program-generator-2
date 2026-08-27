@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from copy import deepcopy
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
@@ -16,6 +16,7 @@ import math
 import re
 from threading import RLock
 from typing import Any, Mapping, Protocol
+import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
@@ -91,7 +92,11 @@ class AthletePlanningProfile:
             raise ValueError("weekday lists must contain unique values from 0 to 6")
         if len(self.rest_days) >= 7:
             raise ValueError("at least one active weekday is required")
-        max_sessions = 2 * (7 - len(self.rest_days))
+        if set(self.rest_days) & set(self.double_session_days):
+            raise ValueError("double-session days cannot be rest days")
+        max_sessions = (7 - len(self.rest_days)) + len(
+            self.double_session_days
+        )
         if not 1 <= self.sessions_per_week <= max_sessions:
             raise ValueError("session count exceeds the available training days")
         if not 0 <= self.long_session_day <= 6:
@@ -114,6 +119,10 @@ class AthletePlanningProfile:
         if self.double_threshold_enabled:
             if self.double_threshold_day in self.rest_days:
                 raise ValueError("double-threshold day cannot be a rest day")
+            if self.double_threshold_day not in self.double_session_days:
+                raise ValueError(
+                    "double-threshold day must allow a double session"
+                )
             if self.max_key_sessions_per_week < 2:
                 raise ValueError("double threshold requires at least two key sessions")
         return self
@@ -527,6 +536,9 @@ def planning_generation_context(
     }
 
 
+CANONICAL_TREF_PROFILE_VERSION = "tref-bounded-40d-expert-v1"
+
+
 @dataclass(frozen=True)
 class AthleteContext:
     public_alias: str
@@ -549,7 +561,9 @@ class AthleteContext:
             raise ValueError("six strictly increasing HR boundaries are required")
         if self.intra_zone_version != "intra_zone_linear_v1":
             raise ValueError("unapproved intra-zone version")
-        if not all((self.timezone, self.tref_version, self.recovery_parameter_version)):
+        if self.tref_version != CANONICAL_TREF_PROFILE_VERSION:
+            raise ValueError("unapproved Tref profile version")
+        if not all((self.timezone, self.recovery_parameter_version)):
             raise ValueError("all configuration versions are required")
         if self.hrmax_bpm is not None and (
             not 30 <= self.hrmax_bpm <= 240
@@ -819,7 +833,74 @@ def summarize_wellness_coverage(
 
 class SnapshotRepository(Protocol):
     def latest(self, athlete_alias: str) -> Mapping[str, Any] | None: ...
+    def latest_envelope(self, athlete_alias: str) -> Mapping[str, Any] | None: ...
+    def active_analysis(self, athlete_alias: str) -> Mapping[str, Any] | None: ...
+    def active_activity_calendar(
+        self, athlete_alias: str, period_start: date, period_end: date
+    ) -> Mapping[str, Any] | None: ...
+    def active_activity_view(
+        self, athlete_alias: str, activity_ref: str
+    ) -> Mapping[str, Any] | None: ...
     def replace(self, athlete_alias: str, snapshot: Mapping[str, Any]) -> None: ...
+    def enqueue_sync_job(
+        self,
+        *,
+        athlete_alias: str,
+        job_kind: str,
+        idempotency_key: str,
+        request_payload: Mapping[str, Any],
+    ) -> Mapping[str, Any]: ...
+    def sync_state(self, athlete_alias: str) -> Mapping[str, Any]: ...
+    def claim_sync_job(
+        self, *, worker_id: str, lease_seconds: int = 300
+    ) -> Mapping[str, Any] | None: ...
+    def renew_sync_lease(
+        self,
+        *,
+        job_id: str,
+        generation_id: str,
+        lease_token: str,
+        lease_seconds: int = 300,
+    ) -> bool: ...
+    def stage_analysis_generation(
+        self,
+        *,
+        job_id: str,
+        generation_id: str,
+        lease_token: str,
+        snapshot_payload: Mapping[str, Any],
+        snapshot_hash: str,
+        period_start: date,
+        period_end: date,
+        as_of: date,
+        provenance: Mapping[str, Any],
+        activities: list[Mapping[str, Any]],
+        inherit_activities: bool = False,
+    ) -> Mapping[str, Any]: ...
+    def activate_analysis_generation(
+        self, *, job_id: str, generation_id: str, lease_token: str
+    ) -> Mapping[str, Any]: ...
+    def fail_sync_job(
+        self,
+        *,
+        job_id: str,
+        generation_id: str,
+        lease_token: str,
+        error_code: str,
+        retryable: bool,
+        retry_after_seconds: int | None = None,
+    ) -> Mapping[str, Any]: ...
+    def rollback_analysis_generation(
+        self, *, athlete_alias: str, target_generation_id: str
+    ) -> Mapping[str, Any]: ...
+    def prune_analysis_generations(
+        self,
+        *,
+        athlete_alias: str,
+        keep_superseded: int = 5,
+        terminal_older_than_days: int = 30,
+        batch_limit: int = 100,
+    ) -> Mapping[str, int]: ...
     def publish_activity_shadow(
         self,
         *,
@@ -829,6 +910,14 @@ class SnapshotRepository(Protocol):
         derived_payload: Mapping[str, Any],
     ) -> str: ...
     def publish_canonical_activity_result(
+        self,
+        *,
+        athlete_alias: str,
+        activity_ref: str,
+        scientific_input_hash: str,
+        result_payload: Mapping[str, Any],
+    ) -> str: ...
+    def store_canonical_activity_result(
         self,
         *,
         athlete_alias: str,
@@ -873,8 +962,15 @@ class SnapshotRepository(Protocol):
 
 class InMemorySnapshotRepository:
     """Atomic process-local pilot repository; replaceable by persistent storage."""
+
     def __init__(self) -> None:
         self._lock, self._items = RLock(), {}
+        self._sync_states: dict[str, dict[str, Any]] = {}
+        self._sync_jobs: dict[str, dict[str, Any]] = {}
+        self._analysis_generations: dict[str, dict[str, Any]] = {}
+        self._generation_activities: dict[
+            tuple[str, str], dict[str, Any]
+        ] = {}
         self._activity_inputs: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._activity_runs: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self._canonical_activity_runs: dict[
@@ -882,10 +978,1007 @@ class InMemorySnapshotRepository:
         ] = {}
         self._activity_identity: dict[tuple[str, str], str] = {}
         self._activity_catalog: dict[tuple[str, str], dict[str, Any]] = {}
+
     def latest(self, athlete_alias: str) -> Mapping[str, Any] | None:
-        with self._lock: return self._items.get(athlete_alias)
+        with self._lock:
+            state = self._state(athlete_alias)
+            generation = self._analysis_generations.get(
+                str(state.get("active_generation_id") or "")
+            )
+            payload = (
+                generation.get("snapshot_payload")
+                if generation and generation.get("status") == "ACTIVE"
+                else self._items.get(athlete_alias)
+            )
+            return deepcopy(payload) if payload is not None else None
+
+    def latest_envelope(self, athlete_alias: str) -> Mapping[str, Any] | None:
+        with self._lock:
+            state = self._state(athlete_alias)
+            generation = self._analysis_generations.get(
+                str(state.get("active_generation_id") or "")
+            )
+            payload = (
+                generation.get("snapshot_payload")
+                if generation and generation.get("status") == "ACTIVE"
+                else self._items.get(athlete_alias)
+            )
+            if payload is None:
+                return None
+            return {
+                "payload": deepcopy(payload),
+                "generation_id": state.get("active_generation_id"),
+                "revision": int(state.get("active_revision", 0)),
+                "activated_at": (
+                    generation.get("activated_at") if generation else None
+                ),
+            }
+
+    def active_analysis(self, athlete_alias: str) -> Mapping[str, Any] | None:
+        envelope = self.latest_envelope(athlete_alias)
+        if envelope is None:
+            return None
+        with self._lock:
+            generation = self._analysis_generations.get(
+                str(envelope.get("generation_id") or "")
+            )
+            return {
+                "generation_id": envelope.get("generation_id"),
+                "revision": int(envelope.get("revision", 0)),
+                "analysis_as_of": generation.get("as_of") if generation else None,
+                "activated_at": self._iso(envelope.get("activated_at")),
+                "snapshot_payload": deepcopy(envelope["payload"]),
+            }
+
+    def active_activity_calendar(
+        self, athlete_alias: str, period_start: date, period_end: date
+    ) -> Mapping[str, Any] | None:
+        analysis = self.active_analysis(athlete_alias)
+        if analysis is None:
+            return None
+        rows = self.activity_calendar(athlete_alias, period_start, period_end)
+        with self._lock:
+            activities = []
+            for row in rows:
+                rendered = deepcopy(dict(row))
+                activity_ref = str(rendered.get("activity_ref") or "")
+                pinned = self._active_activity_row(athlete_alias, activity_ref)
+                shadow_key = (
+                    pinned.get("shadow_run_key") if pinned else None
+                ) or rendered.get("latest_shadow_run_key")
+                shadow = self._run_by_key(
+                    self._activity_runs.get((athlete_alias, activity_ref), []),
+                    shadow_key,
+                )
+                rendered["hrmod_zone_summary"] = deepcopy(
+                    (shadow.get("result_payload") or {}).get("zone_summary", [])
+                    if shadow
+                    else []
+                )
+                activities.append(rendered)
+            return {**analysis, "activities": activities}
+
+    def active_activity_view(
+        self, athlete_alias: str, activity_ref: str
+    ) -> Mapping[str, Any] | None:
+        with self._lock:
+            analysis = self.active_analysis(athlete_alias)
+            detail = self.activity_detail(athlete_alias, activity_ref)
+            if analysis is None or detail is None:
+                return None
+            pinned = self._active_activity_row(athlete_alias, activity_ref)
+            shadow_key = (
+                pinned.get("shadow_run_key")
+                if pinned
+                else detail.get("latest_shadow_run_key")
+            )
+            legacy_runs = self._activity_runs.get(
+                (athlete_alias, activity_ref), []
+            )
+            if (
+                not shadow_key
+                and analysis["generation_id"] is None
+                and legacy_runs
+            ):
+                shadow_key = legacy_runs[-1].get("run_key")
+            canonical_key = (
+                pinned.get("canonical_run_key")
+                if pinned
+                else detail.get("latest_canonical_run_key")
+            )
+            shadow = self._run_by_key(
+                legacy_runs,
+                shadow_key,
+            )
+            input_key = (
+                pinned.get("input_key")
+                if pinned
+                else shadow.get("input_key")
+                if shadow
+                else None
+            )
+            if input_key is None and analysis["generation_id"] is None:
+                for (alias, ref, input_hash), _ in reversed(
+                    self._activity_inputs.items()
+                ):
+                    if alias == athlete_alias and ref == activity_ref:
+                        input_key = hashlib.sha256(
+                            f"{alias}|{ref}|{input_hash}".encode("utf-8")
+                        ).hexdigest()
+                        break
+            series_payload = None
+            if input_key:
+                for (alias, ref, _), payload in self._activity_inputs.items():
+                    if alias != athlete_alias or ref != activity_ref:
+                        continue
+                    candidate_key = hashlib.sha256(
+                        f"{alias}|{ref}|{payload.get('input_hash', '')}".encode(
+                            "utf-8"
+                        )
+                    ).hexdigest()
+                    if candidate_key == input_key:
+                        series_payload = deepcopy(payload)
+                        break
+            catalog_payload = {
+                key: deepcopy(value)
+                for key, value in detail.items()
+                if key
+                not in {
+                    "previous_activity_ref",
+                    "next_activity_ref",
+                    "shadow_available",
+                }
+            }
+            return {
+                "generation_id": analysis["generation_id"],
+                "revision": analysis["revision"],
+                "analysis_as_of": analysis["analysis_as_of"],
+                "activated_at": analysis["activated_at"],
+                "catalog_payload": catalog_payload,
+                "input_key": input_key,
+                "canonical_run_key": canonical_key,
+                "shadow_run_key": shadow_key,
+                "previous_activity_ref": detail.get("previous_activity_ref"),
+                "next_activity_ref": detail.get("next_activity_ref"),
+                "series_payload": series_payload,
+                "shadow_payload": (
+                    deepcopy(shadow.get("result_payload")) if shadow else None
+                ),
+            }
+
     def replace(self, athlete_alias: str, snapshot: Mapping[str, Any]) -> None:
-        with self._lock: self._items[athlete_alias] = dict(snapshot)
+        """Legacy revision-zero replacement retained only for rollout fallback."""
+
+        with self._lock:
+            self._items[athlete_alias] = deepcopy(dict(snapshot))
+            self._state(athlete_alias)
+
+    def _state(self, athlete_alias: str) -> dict[str, Any]:
+        return self._sync_states.setdefault(
+            athlete_alias,
+            {
+                "athlete_alias": athlete_alias,
+                "active_generation_id": None,
+                "active_revision": 0,
+                "request_sequence": 0,
+                "updated_at": datetime.now(timezone.utc),
+            },
+        )
+
+    def _active_activity_row(
+        self, athlete_alias: str, activity_ref: str
+    ) -> dict[str, Any] | None:
+        state = self._state(athlete_alias)
+        generation_id = state.get("active_generation_id")
+        if not generation_id:
+            return None
+        activity_set_id = self._activity_set_generation_id(str(generation_id))
+        return self._generation_activities.get((activity_set_id, activity_ref))
+
+    def _activity_set_generation_id(self, generation_id: str) -> str:
+        generation = self._analysis_generations.get(generation_id)
+        if generation is None:
+            return generation_id
+        return str(
+            generation.get("activity_set_generation_id") or generation_id
+        )
+
+    @staticmethod
+    def _run_by_key(
+        runs: list[dict[str, Any]], run_key: Any
+    ) -> dict[str, Any] | None:
+        if not run_key:
+            return None
+        return next(
+            (run for run in runs if run.get("run_key") == run_key),
+            None,
+        )
+
+    def _pinned_activity_keys(
+        self,
+        *,
+        athlete_alias: str,
+        activity_ref: str,
+        input_key: Any,
+        canonical_run_key: Any,
+        shadow_run_key: Any,
+    ) -> tuple[str | None, str | None, str | None]:
+        """Validate and normalize one immutable generation pointer set.
+
+        A captured catalog row normally contains only ``latest_shadow_run_key``.
+        The exact input must therefore be resolved from that immutable derived
+        run, never from a latest-by-time query.
+        """
+
+        normalized_shadow = str(shadow_run_key) if shadow_run_key else None
+        normalized_input = str(input_key) if input_key else None
+        if normalized_shadow is not None:
+            shadow = self._run_by_key(
+                self._activity_runs.get((athlete_alias, activity_ref), []),
+                normalized_shadow,
+            )
+            if shadow is None:
+                raise ValueError("staged activity shadow pointer is unavailable")
+            resolved_input = str(shadow.get("input_key") or "") or None
+            if resolved_input is None or (
+                normalized_input is not None and normalized_input != resolved_input
+            ):
+                raise ValueError("staged activity input pointer is inconsistent")
+            normalized_input = resolved_input
+
+        normalized_canonical = (
+            str(canonical_run_key) if canonical_run_key else None
+        )
+        if normalized_canonical is not None:
+            canonical_runs = self._canonical_activity_runs.get(
+                (athlete_alias, activity_ref), []
+            )
+            if not self._run_by_key(canonical_runs, normalized_canonical):
+                raise ValueError("staged canonical activity pointer is unavailable")
+        return normalized_input, normalized_canonical, normalized_shadow
+
+    @staticmethod
+    def _iso(value: Any) -> Any:
+        return value.isoformat() if isinstance(value, datetime) else value
+
+    @classmethod
+    def _public_job(cls, job: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            key: cls._iso(value)
+            for key, value in job.items()
+            if key != "lease_token_internal"
+        }
+
+    @staticmethod
+    def _payload_hash(payload: Mapping[str, Any]) -> str:
+        rendered = json.dumps(
+            dict(payload),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+    def enqueue_sync_job(
+        self,
+        *,
+        athlete_alias: str,
+        job_kind: str,
+        idempotency_key: str,
+        request_payload: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        if job_kind not in {"FULL_SYNC", "WELLNESS_SYNC", "RECOVERY_RESTORE"}:
+            raise ValueError("unsupported sync job kind")
+        if len(idempotency_key) != 64 or not isinstance(request_payload, Mapping):
+            raise ValueError("invalid sync job request")
+        with self._lock:
+            state = self._state(athlete_alias)
+            for job in self._sync_jobs.values():
+                if (
+                    job["athlete_alias"] == athlete_alias
+                    and job["job_kind"] == job_kind
+                    and (
+                        job["idempotency_key"] == idempotency_key
+                        or job["status"] in {"QUEUED", "RETRY_WAIT"}
+                    )
+                ):
+                    return {
+                        **self._public_job(job),
+                        "deduplicated": True,
+                    }
+            state["request_sequence"] += 1
+            state["updated_at"] = datetime.now(timezone.utc)
+            job_id = str(uuid.uuid4())
+            now = datetime.now(timezone.utc)
+            job = {
+                "job_id": job_id,
+                "athlete_alias": athlete_alias,
+                "job_kind": job_kind,
+                "idempotency_key": idempotency_key,
+                "request_sequence": state["request_sequence"],
+                "request_payload": deepcopy(dict(request_payload)),
+                "status": "QUEUED",
+                "priority": 0,
+                "attempt_count": 0,
+                "max_attempts": 3,
+                "available_at": now,
+                "lease_token": None,
+                "lease_owner": None,
+                "lease_expires_at": None,
+                "current_generation_id": None,
+                "progress_stage": None,
+                "progress_percent": None,
+                "error_code": None,
+                "requested_at": now,
+                "started_at": None,
+                "completed_at": None,
+                "updated_at": now,
+            }
+            self._sync_jobs[job_id] = job
+            return {**self._public_job(job), "deduplicated": False}
+
+    def sync_state(self, athlete_alias: str) -> Mapping[str, Any]:
+        with self._lock:
+            state = deepcopy(self._state(athlete_alias))
+            jobs = [
+                job
+                for job in self._sync_jobs.values()
+                if job["athlete_alias"] == athlete_alias
+            ]
+            selected_job = min(
+                jobs,
+                key=lambda row: (
+                    0
+                    if row["status"] == "RUNNING"
+                    else 1
+                    if row["status"] in {"QUEUED", "RETRY_WAIT"}
+                    else 2,
+                    (
+                        int(row["request_sequence"])
+                        if row["status"] in {"QUEUED", "RETRY_WAIT"}
+                        else -int(row["request_sequence"])
+                    ),
+                    row["requested_at"],
+                    row["job_id"],
+                ),
+                default=None,
+            )
+            generation = self._analysis_generations.get(
+                str(state.get("active_generation_id") or "")
+            )
+            return {
+                "athlete_alias": athlete_alias,
+                "active_generation_id": state.get("active_generation_id"),
+                "active_revision": int(state.get("active_revision", 0)),
+                "request_sequence": int(state.get("request_sequence", 0)),
+                "active_as_of": generation.get("as_of") if generation else None,
+                "activated_at": self._iso(
+                    generation.get("activated_at") if generation else None
+                ),
+                "job_id": selected_job.get("job_id") if selected_job else None,
+                "job_kind": selected_job.get("job_kind") if selected_job else None,
+                "status": selected_job.get("status") if selected_job else None,
+                "progress_stage": (
+                    selected_job.get("progress_stage") if selected_job else None
+                ),
+                "progress_percent": (
+                    selected_job.get("progress_percent") if selected_job else None
+                ),
+                "error_code": selected_job.get("error_code") if selected_job else None,
+                "requested_at": self._iso(
+                    selected_job.get("requested_at") if selected_job else None
+                ),
+                "started_at": self._iso(
+                    selected_job.get("started_at") if selected_job else None
+                ),
+                "completed_at": self._iso(
+                    selected_job.get("completed_at") if selected_job else None
+                ),
+                "available_at": self._iso(
+                    selected_job.get("available_at") if selected_job else None
+                ),
+                "pending_job_count": sum(
+                    job["status"] in {"QUEUED", "RETRY_WAIT"} for job in jobs
+                ),
+            }
+
+    def _lease_valid(
+        self,
+        job: Mapping[str, Any] | None,
+        *,
+        generation_id: str,
+        lease_token: str,
+    ) -> bool:
+        return bool(
+            job
+            and job.get("status") == "RUNNING"
+            and job.get("current_generation_id") == generation_id
+            and job.get("lease_token") == lease_token
+            and isinstance(job.get("lease_expires_at"), datetime)
+            and job["lease_expires_at"] >= datetime.now(timezone.utc)
+        )
+
+    def claim_sync_job(
+        self, *, worker_id: str, lease_seconds: int = 300
+    ) -> Mapping[str, Any] | None:
+        if not 1 <= len(worker_id) <= 128 or not 30 <= lease_seconds <= 3600:
+            raise ValueError("invalid worker lease request")
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            for job in self._sync_jobs.values():
+                if (
+                    job["status"] == "RUNNING"
+                    and job["lease_expires_at"] < now
+                ):
+                    generation = self._analysis_generations.get(
+                        str(job.get("current_generation_id") or "")
+                    )
+                    if generation and generation["status"] in {"BUILDING", "READY"}:
+                        generation["status"] = "FAILED"
+                        generation["failed_at"] = now
+                    successor_exists = any(
+                        candidate["job_id"] != job["job_id"]
+                        and candidate["athlete_alias"] == job["athlete_alias"]
+                        and candidate["job_kind"] == job["job_kind"]
+                        and candidate["status"] in {"QUEUED", "RETRY_WAIT"}
+                        for candidate in self._sync_jobs.values()
+                    )
+                    if successor_exists:
+                        job["status"] = "SUPERSEDED"
+                        job["completed_at"] = now
+                        job["progress_stage"] = "SUPERSEDED"
+                    elif job["attempt_count"] < job["max_attempts"]:
+                        job["status"] = "RETRY_WAIT"
+                        job["available_at"] = now
+                    else:
+                        job["status"] = "FAILED"
+                        job["error_code"] = "LEASE_EXPIRED"
+                        job["completed_at"] = now
+                    job["lease_token"] = None
+                    job["lease_owner"] = None
+                    job["lease_expires_at"] = None
+                    job["current_generation_id"] = None
+                    job["updated_at"] = now
+
+            running_aliases = {
+                str(job["athlete_alias"])
+                for job in self._sync_jobs.values()
+                if job["status"] == "RUNNING"
+            }
+            candidates = [
+                job
+                for job in self._sync_jobs.values()
+                if job["status"] in {"QUEUED", "RETRY_WAIT"}
+                and job["available_at"] <= now
+                and job["athlete_alias"] not in running_aliases
+            ]
+            if not candidates:
+                return None
+            job = min(
+                candidates,
+                key=lambda row: (
+                    -int(row["priority"]),
+                    row["available_at"],
+                    row["requested_at"],
+                    row["job_id"],
+                ),
+            )
+            state = self._state(str(job["athlete_alias"]))
+            generation_id = str(uuid.uuid4())
+            lease_token = str(uuid.uuid4())
+            lease_expires_at = now + timedelta(seconds=lease_seconds)
+            attempt_no = int(job["attempt_count"]) + 1
+            generation = {
+                "generation_id": generation_id,
+                "athlete_alias": job["athlete_alias"],
+                "job_id": job["job_id"],
+                "attempt_no": attempt_no,
+                "job_kind": job["job_kind"],
+                "request_sequence": job["request_sequence"],
+                "base_generation_id": state["active_generation_id"],
+                "base_revision": state["active_revision"],
+                "activated_revision": None,
+                "status": "BUILDING",
+                "created_at": now,
+            }
+            self._analysis_generations[generation_id] = generation
+            job.update(
+                {
+                    "status": "RUNNING",
+                    "attempt_count": attempt_no,
+                    "lease_token": lease_token,
+                    "lease_owner": worker_id,
+                    "lease_expires_at": lease_expires_at,
+                    "current_generation_id": generation_id,
+                    "progress_stage": "CLAIMED",
+                    "progress_percent": 0,
+                    "started_at": job.get("started_at") or now,
+                    "completed_at": None,
+                    "error_code": None,
+                    "updated_at": now,
+                }
+            )
+            base = self._analysis_generations.get(
+                str(state.get("active_generation_id") or "")
+            )
+            return {
+                "job_id": job["job_id"],
+                "athlete_alias": job["athlete_alias"],
+                "job_kind": job["job_kind"],
+                "request_payload": deepcopy(job["request_payload"]),
+                "request_sequence": job["request_sequence"],
+                "generation_id": generation_id,
+                "attempt_no": attempt_no,
+                "base_generation_id": state["active_generation_id"],
+                "base_revision": state["active_revision"],
+                "base_activity_set_hash": (
+                    (base.get("provenance") or {}).get("activity_set_hash")
+                    if base
+                    else None
+                ),
+                "lease_token": lease_token,
+                "lease_expires_at": lease_expires_at.isoformat(),
+            }
+
+    def renew_sync_lease(
+        self,
+        *,
+        job_id: str,
+        generation_id: str,
+        lease_token: str,
+        lease_seconds: int = 300,
+    ) -> bool:
+        if not 30 <= lease_seconds <= 3600:
+            return False
+        with self._lock:
+            job = self._sync_jobs.get(job_id)
+            if not self._lease_valid(
+                job, generation_id=generation_id, lease_token=lease_token
+            ):
+                return False
+            job["lease_expires_at"] = datetime.now(timezone.utc) + timedelta(
+                seconds=lease_seconds
+            )
+            job["updated_at"] = datetime.now(timezone.utc)
+            return True
+
+    def stage_analysis_generation(
+        self,
+        *,
+        job_id: str,
+        generation_id: str,
+        lease_token: str,
+        snapshot_payload: Mapping[str, Any],
+        snapshot_hash: str,
+        period_start: date,
+        period_end: date,
+        as_of: date,
+        provenance: Mapping[str, Any],
+        activities: list[Mapping[str, Any]],
+        inherit_activities: bool = False,
+    ) -> Mapping[str, Any]:
+        if (
+            len(snapshot_hash) != 64
+            or period_start > period_end
+            or snapshot_payload.get("schema_version") != "athlete-snapshot-v1"
+        ):
+            raise ValueError("analysis generation payload is invalid")
+        with self._lock:
+            job = self._sync_jobs.get(job_id)
+            generation = self._analysis_generations.get(generation_id)
+            if generation and generation.get("status") == "READY":
+                if generation.get("snapshot_hash") != snapshot_hash:
+                    raise ValueError(
+                        "generation is already staged with different content"
+                    )
+                return {
+                    "outcome": "ALREADY_READY",
+                    "activity_count": generation["activity_count"],
+                }
+            if not generation or not self._lease_valid(
+                job, generation_id=generation_id, lease_token=lease_token
+            ) or generation.get("status") != "BUILDING":
+                raise ValueError("sync generation lease is unavailable")
+            athlete_alias = str(generation["athlete_alias"])
+            for section in ("training_status", "load_history", "recovery_history"):
+                value = snapshot_payload.get(section)
+                if not isinstance(value, Mapping) or value.get("athlete_id") != athlete_alias:
+                    raise ValueError("analysis generation athlete scope is invalid")
+
+            staged: list[dict[str, Any]] = []
+            activity_set_generation_id = generation_id
+            if inherit_activities:
+                if activities:
+                    raise ValueError(
+                        "inherited activity generation must not include rows"
+                    )
+                base_generation_id = generation.get("base_generation_id")
+                if base_generation_id:
+                    activity_set_generation_id = self._activity_set_generation_id(
+                        str(base_generation_id)
+                    )
+                    staged = [
+                        deepcopy(row)
+                        for (candidate_id, _), row in self._generation_activities.items()
+                        if candidate_id == activity_set_generation_id
+                    ]
+                else:
+                    for (alias, ref), row in self._activity_catalog.items():
+                        if (
+                            alias != athlete_alias
+                            or not row.get("local_date")
+                            or not period_start
+                            <= date.fromisoformat(str(row["local_date"]))
+                            <= period_end
+                        ):
+                            continue
+                        input_key, canonical_key, shadow_key = (
+                            self._pinned_activity_keys(
+                                athlete_alias=athlete_alias,
+                                activity_ref=ref,
+                                input_key=None,
+                                canonical_run_key=row.get(
+                                    "latest_canonical_run_key"
+                                ),
+                                shadow_run_key=row.get(
+                                    "latest_shadow_run_key"
+                                ),
+                            )
+                        )
+                        staged.append(
+                            {
+                                "athlete_alias": athlete_alias,
+                                "activity_ref": ref,
+                                "start_at_utc": row.get("start_at_utc"),
+                                "local_date": row.get("local_date"),
+                                "catalog_payload": deepcopy(row),
+                                "payload_hash": self._payload_hash(row),
+                                "input_key": input_key,
+                                "canonical_run_key": canonical_key,
+                                "shadow_run_key": shadow_key,
+                            }
+                        )
+            else:
+                for activity in activities:
+                    source = activity.get("catalog_payload")
+                    payload = (
+                        deepcopy(dict(source))
+                        if isinstance(source, Mapping)
+                        else deepcopy(dict(activity))
+                    )
+                    activity_ref = str(
+                        activity.get("activity_ref")
+                        or payload.get("activity_ref")
+                        or ""
+                    )
+                    if not activity_ref:
+                        raise ValueError("staged activity identity is missing")
+                    input_key, canonical_key, shadow_key = (
+                        self._pinned_activity_keys(
+                            athlete_alias=athlete_alias,
+                            activity_ref=activity_ref,
+                            input_key=activity.get("input_key"),
+                            canonical_run_key=activity.get(
+                                "canonical_run_key",
+                                payload.get("latest_canonical_run_key"),
+                            ),
+                            shadow_run_key=activity.get(
+                                "shadow_run_key",
+                                payload.get("latest_shadow_run_key"),
+                            ),
+                        )
+                    )
+                    staged.append(
+                        {
+                            "athlete_alias": athlete_alias,
+                            "activity_ref": activity_ref,
+                            "start_at_utc": activity.get(
+                                "start_at_utc", payload.get("start_at_utc")
+                            ),
+                            "local_date": activity.get(
+                                "local_date", payload.get("local_date")
+                            ),
+                            "catalog_payload": payload,
+                            "payload_hash": str(
+                                activity.get("payload_hash")
+                                or self._payload_hash(payload)
+                            ),
+                            "input_key": input_key,
+                            "canonical_run_key": canonical_key,
+                            "shadow_run_key": shadow_key,
+                        }
+                    )
+
+            staged_by_ref = {row["activity_ref"]: row for row in staged}
+            if len(staged_by_ref) != len(staged):
+                raise ValueError("staged activities must be unique")
+            history = snapshot_payload.get("load_history")
+            history_activities = (
+                history.get("activities", []) if isinstance(history, Mapping) else []
+            )
+            if any(
+                not isinstance(row, Mapping)
+                or row.get("activity_ref") not in staged_by_ref
+                for row in history_activities
+            ):
+                raise ValueError("snapshot references an unstaged activity")
+
+            if activity_set_generation_id == generation_id:
+                for activity_ref, row in staged_by_ref.items():
+                    self._generation_activities[(generation_id, activity_ref)] = row
+            ready_at = datetime.now(timezone.utc)
+            generation.update(
+                {
+                    "status": "READY",
+                    "snapshot_schema_version": "athlete-snapshot-v1",
+                    "snapshot_hash": snapshot_hash,
+                    "snapshot_payload": deepcopy(dict(snapshot_payload)),
+                    "period_start": period_start.isoformat(),
+                    "period_end": period_end.isoformat(),
+                    "as_of": as_of.isoformat(),
+                    "provenance": deepcopy(dict(provenance)),
+                    "activity_count": len(staged_by_ref),
+                    "activity_set_generation_id": activity_set_generation_id,
+                    "ready_at": ready_at,
+                }
+            )
+            job["progress_stage"] = "READY"
+            job["progress_percent"] = 95
+            job["updated_at"] = ready_at
+            return {"outcome": "READY", "activity_count": len(staged_by_ref)}
+
+    def activate_analysis_generation(
+        self, *, job_id: str, generation_id: str, lease_token: str
+    ) -> Mapping[str, Any]:
+        with self._lock:
+            generation = self._analysis_generations.get(generation_id)
+            if not generation:
+                return {
+                    "outcome": "LEASE_LOST",
+                    "active_generation_id": None,
+                    "active_revision": None,
+                }
+            state = self._state(str(generation["athlete_alias"]))
+            if (
+                generation.get("status") == "ACTIVE"
+                and state["active_generation_id"] == generation_id
+            ):
+                return {
+                    "outcome": "ACTIVATED",
+                    "active_generation_id": generation_id,
+                    "active_revision": state["active_revision"],
+                }
+            job = self._sync_jobs.get(job_id)
+            if not self._lease_valid(
+                job, generation_id=generation_id, lease_token=lease_token
+            ) or generation.get("job_id") != job_id:
+                return {
+                    "outcome": "LEASE_LOST",
+                    "active_generation_id": state["active_generation_id"],
+                    "active_revision": state["active_revision"],
+                }
+            if (
+                generation.get("status") != "READY"
+                or state["active_revision"] != generation["base_revision"]
+                or state["active_generation_id"]
+                != generation["base_generation_id"]
+            ):
+                if generation.get("status") in {"BUILDING", "READY"}:
+                    generation["status"] = "SUPERSEDED"
+                    generation["superseded_at"] = datetime.now(timezone.utc)
+                job.update(
+                    {
+                        "status": "SUPERSEDED",
+                        "lease_token": None,
+                        "lease_owner": None,
+                        "lease_expires_at": None,
+                        "current_generation_id": None,
+                        "completed_at": datetime.now(timezone.utc),
+                        "progress_stage": "SUPERSEDED",
+                    }
+                )
+                return {
+                    "outcome": "STALE",
+                    "active_generation_id": state["active_generation_id"],
+                    "active_revision": state["active_revision"],
+                }
+            previous = self._analysis_generations.get(
+                str(state.get("active_generation_id") or "")
+            )
+            now = datetime.now(timezone.utc)
+            if previous and previous.get("status") == "ACTIVE":
+                previous["status"] = "SUPERSEDED"
+                previous["superseded_at"] = now
+            revision = int(state["active_revision"]) + 1
+            generation.update(
+                {
+                    "status": "ACTIVE",
+                    "activated_revision": revision,
+                    "activated_at": now,
+                }
+            )
+            state.update(
+                {
+                    "active_generation_id": generation_id,
+                    "active_revision": revision,
+                    "updated_at": now,
+                }
+            )
+            self._items[str(generation["athlete_alias"])] = deepcopy(
+                generation["snapshot_payload"]
+            )
+            job.update(
+                {
+                    "status": "SUCCEEDED",
+                    "lease_token": None,
+                    "lease_owner": None,
+                    "lease_expires_at": None,
+                    "current_generation_id": None,
+                    "completed_at": now,
+                    "updated_at": now,
+                    "progress_stage": "ACTIVATED",
+                    "progress_percent": 100,
+                }
+            )
+            return {
+                "outcome": "ACTIVATED",
+                "active_generation_id": generation_id,
+                "active_revision": revision,
+            }
+
+    def fail_sync_job(
+        self,
+        *,
+        job_id: str,
+        generation_id: str,
+        lease_token: str,
+        error_code: str,
+        retryable: bool,
+        retry_after_seconds: int | None = None,
+    ) -> Mapping[str, Any]:
+        if not re.fullmatch(r"[A-Z0-9_]{1,64}", error_code):
+            raise ValueError("invalid sync error code")
+        if retry_after_seconds is not None and not 1 <= retry_after_seconds <= 86_400:
+            raise ValueError("invalid retry delay")
+        with self._lock:
+            job = self._sync_jobs.get(job_id)
+            if not self._lease_valid(
+                job, generation_id=generation_id, lease_token=lease_token
+            ):
+                return {"status": "LEASE_LOST", "available_at": None}
+            generation = self._analysis_generations.get(generation_id)
+            now = datetime.now(timezone.utc)
+            if generation and generation.get("status") in {"BUILDING", "READY"}:
+                generation["status"] = "FAILED"
+                generation["failed_at"] = now
+            successor_exists = any(
+                candidate["job_id"] != job_id
+                and candidate["athlete_alias"] == job["athlete_alias"]
+                and candidate["job_kind"] == job["job_kind"]
+                and candidate["status"] in {"QUEUED", "RETRY_WAIT"}
+                for candidate in self._sync_jobs.values()
+            )
+            if retryable and successor_exists:
+                available_at = None
+                status = "SUPERSEDED"
+                completed_at = now
+            elif retryable and job["attempt_count"] < job["max_attempts"]:
+                delay = retry_after_seconds or min(
+                    300, 5 * (2 ** max(0, int(job["attempt_count"]) - 1))
+                )
+                available_at = now + timedelta(seconds=delay)
+                status = "RETRY_WAIT"
+                completed_at = None
+            else:
+                available_at = None
+                status = "FAILED"
+                completed_at = now
+            job.update(
+                {
+                    "status": status,
+                    "available_at": available_at or job["available_at"],
+                    "lease_token": None,
+                    "lease_owner": None,
+                    "lease_expires_at": None,
+                    "current_generation_id": None,
+                    "progress_stage": (
+                        "SUPERSEDED"
+                        if status == "SUPERSEDED"
+                        else None
+                        if status == "RETRY_WAIT"
+                        else "FAILED"
+                    ),
+                    "progress_percent": None,
+                    "error_code": error_code,
+                    "completed_at": completed_at,
+                    "updated_at": now,
+                }
+            )
+            return {
+                "status": status,
+                "available_at": self._iso(available_at),
+            }
+
+    def rollback_analysis_generation(
+        self, *, athlete_alias: str, target_generation_id: str
+    ) -> Mapping[str, Any]:
+        with self._lock:
+            state = self._state(athlete_alias)
+            target = self._analysis_generations.get(target_generation_id)
+            if (
+                not target
+                or target.get("athlete_alias") != athlete_alias
+                or target.get("status") != "SUPERSEDED"
+                or target.get("activated_revision") is None
+                or target.get("activated_at") is None
+                or target.get("snapshot_payload") is None
+            ):
+                raise ValueError("rollback generation is unavailable")
+            activity_set_id = self._activity_set_generation_id(
+                target_generation_id
+            )
+            pinned_count = sum(
+                candidate_id == activity_set_id
+                for candidate_id, _ in self._generation_activities
+            )
+            if pinned_count != target.get("activity_count"):
+                raise ValueError("rollback generation is incomplete")
+            current = self._analysis_generations.get(
+                str(state.get("active_generation_id") or "")
+            )
+            if current is None or current.get("status") != "ACTIVE":
+                raise ValueError("active analysis is unavailable")
+            now = datetime.now(timezone.utc)
+            current.update({"status": "SUPERSEDED", "superseded_at": now})
+            revision = int(state["active_revision"]) + 1
+            target.update(
+                {
+                    "status": "ACTIVE",
+                    "activated_revision": revision,
+                    "activated_at": now,
+                    "superseded_at": None,
+                }
+            )
+            state.update(
+                {
+                    "active_generation_id": target_generation_id,
+                    "active_revision": revision,
+                    "updated_at": now,
+                }
+            )
+            self._items[athlete_alias] = deepcopy(target["snapshot_payload"])
+            return {
+                "outcome": "ROLLED_BACK",
+                "active_generation_id": target_generation_id,
+                "active_revision": revision,
+            }
+
+    def prune_analysis_generations(
+        self,
+        *,
+        athlete_alias: str,
+        keep_superseded: int = 5,
+        terminal_older_than_days: int = 30,
+        batch_limit: int = 100,
+    ) -> Mapping[str, int]:
+        del athlete_alias
+        if (
+            not 1 <= keep_superseded <= 50
+            or not 30 <= terminal_older_than_days <= 365
+            or not 1 <= batch_limit <= 1000
+        ):
+            raise ValueError("invalid analysis retention policy")
+        return {
+            "deleted_generations": 0,
+            "deleted_activity_rows": 0,
+            "deleted_jobs": 0,
+            "deleted_shadow_runs": 0,
+            "deleted_canonical_runs": 0,
+            "deleted_model_inputs": 0,
+            "deleted_catalog_rows": 0,
+        }
+
     def publish_activity_shadow(
         self,
         *,
@@ -901,6 +1994,9 @@ class InMemorySnapshotRepository:
         run_key = hashlib.sha256(
             f"{athlete_alias}|{activity_ref}|{input_hash}|{result_hash}".encode("utf-8")
         ).hexdigest()
+        input_key = hashlib.sha256(
+            f"{athlete_alias}|{activity_ref}|{input_hash}".encode("utf-8")
+        ).hexdigest()
         with self._lock:
             self._activity_inputs.setdefault(
                 (athlete_alias, activity_ref, input_hash), deepcopy(dict(input_payload))
@@ -908,11 +2004,30 @@ class InMemorySnapshotRepository:
             runs = self._activity_runs.setdefault((athlete_alias, activity_ref), [])
             if not any(run["run_key"] == run_key for run in runs):
                 runs.append(
-                    {"run_key": run_key, "result_payload": deepcopy(dict(derived_payload))}
+                    {
+                        "run_key": run_key,
+                        "input_key": input_key,
+                        "result_payload": deepcopy(dict(derived_payload)),
+                    }
                 )
         return run_key
 
     def publish_canonical_activity_result(
+        self,
+        *,
+        athlete_alias: str,
+        activity_ref: str,
+        scientific_input_hash: str,
+        result_payload: Mapping[str, Any],
+    ) -> str:
+        return self.store_canonical_activity_result(
+            athlete_alias=athlete_alias,
+            activity_ref=activity_ref,
+            scientific_input_hash=scientific_input_hash,
+            result_payload=result_payload,
+        )
+
+    def store_canonical_activity_result(
         self,
         *,
         athlete_alias: str,
@@ -955,11 +2070,49 @@ class InMemorySnapshotRepository:
     ) -> Mapping[str, Any] | None:
         with self._lock:
             runs = self._activity_runs.get((athlete_alias, activity_ref), [])
-            return deepcopy(dict(runs[-1]["result_payload"])) if runs else None
+            pinned = self._active_activity_row(athlete_alias, activity_ref)
+            run = (
+                self._run_by_key(runs, pinned.get("shadow_run_key"))
+                if pinned is not None
+                else (runs[-1] if runs else None)
+            )
+            return deepcopy(dict(run["result_payload"])) if run else None
+
     def activity_shadow_index(
         self, athlete_alias: str
     ) -> tuple[Mapping[str, Any], ...]:
         with self._lock:
+            generation_id = self._state(athlete_alias).get("active_generation_id")
+            if generation_id:
+                activity_set_id = self._activity_set_generation_id(
+                    str(generation_id)
+                )
+                rendered = []
+                for (candidate_id, activity_ref), pinned in sorted(
+                    self._generation_activities.items()
+                ):
+                    if candidate_id != activity_set_id or not pinned.get("shadow_run_key"):
+                        continue
+                    run = self._run_by_key(
+                        self._activity_runs.get((athlete_alias, activity_ref), []),
+                        pinned["shadow_run_key"],
+                    )
+                    if run is None:
+                        continue
+                    payload = run.get("result_payload") or {}
+                    rendered.append(
+                        {
+                            "activity_ref": activity_ref,
+                            "run_key": run["run_key"],
+                            "vflat_model_version": payload.get(
+                                "vflat_model_version"
+                            ),
+                            "hrmod_model_version": payload.get(
+                                "hrmod_model_version"
+                            ),
+                        }
+                    )
+                return tuple(rendered)
             return tuple(
                 {
                     "activity_ref": activity_ref,
@@ -980,6 +2133,36 @@ class InMemorySnapshotRepository:
     ) -> Mapping[str, list[Mapping[str, Any]]]:
         requested = set(activity_refs)
         with self._lock:
+            generation_id = self._state(athlete_alias).get("active_generation_id")
+            if generation_id:
+                activity_set_id = self._activity_set_generation_id(
+                    str(generation_id)
+                )
+                summaries: dict[str, list[Mapping[str, Any]]] = {}
+                for activity_ref in requested:
+                    pinned = self._generation_activities.get(
+                        (activity_set_id, activity_ref)
+                    )
+                    run = (
+                        self._run_by_key(
+                            self._activity_runs.get(
+                                (athlete_alias, activity_ref), []
+                            ),
+                            pinned.get("shadow_run_key") if pinned else None,
+                        )
+                        if pinned
+                        else None
+                    )
+                    if run is not None:
+                        summaries[activity_ref] = deepcopy(
+                            list(
+                                (run.get("result_payload") or {}).get(
+                                    "zone_summary"
+                                )
+                                or []
+                            )
+                        )
+                return summaries
             return {
                 activity_ref: deepcopy(
                     list(runs[-1]["result_payload"].get("zone_summary") or [])
@@ -1015,36 +2198,99 @@ class InMemorySnapshotRepository:
         self, athlete_alias: str, period_start: date, period_end: date
     ) -> tuple[Mapping[str, Any], ...]:
         with self._lock:
-            rows = [
-                deepcopy(row)
-                for (alias, _), row in self._activity_catalog.items()
-                if alias == athlete_alias
-                and row.get("local_date")
-                and period_start <= date.fromisoformat(str(row["local_date"])) <= period_end
-            ]
+            generation_id = self._state(athlete_alias).get("active_generation_id")
+            if generation_id:
+                activity_set_id = self._activity_set_generation_id(
+                    str(generation_id)
+                )
+                rows = [
+                    {
+                        **deepcopy(row["catalog_payload"]),
+                        "activity_ref": activity_ref,
+                        "latest_canonical_run_key": row.get(
+                            "canonical_run_key"
+                        ),
+                        "latest_shadow_run_key": row.get("shadow_run_key"),
+                    }
+                    for (candidate_id, activity_ref), row
+                    in self._generation_activities.items()
+                    if candidate_id == activity_set_id
+                    and row.get("local_date")
+                    and period_start
+                    <= date.fromisoformat(str(row["local_date"]))
+                    <= period_end
+                ]
+            else:
+                rows = [
+                    deepcopy(row)
+                    for (alias, _), row in self._activity_catalog.items()
+                    if alias == athlete_alias
+                    and row.get("local_date")
+                    and period_start
+                    <= date.fromisoformat(str(row["local_date"]))
+                    <= period_end
+                ]
         return tuple(sorted(rows, key=lambda row: (str(row.get("start_at_utc") or ""), str(row["activity_ref"]))))
 
     def activity_detail(
         self, athlete_alias: str, activity_ref: str
     ) -> Mapping[str, Any] | None:
         with self._lock:
-            row = self._activity_catalog.get((athlete_alias, activity_ref))
-            if row is None:
-                return None
-            ordered = sorted(
-                (
-                    item for (alias, _), item in self._activity_catalog.items()
-                    if alias == athlete_alias and item.get("start_at_utc")
-                ),
-                key=lambda item: (str(item.get("start_at_utc")), str(item.get("activity_ref"))),
-            )
+            generation_id = self._state(athlete_alias).get("active_generation_id")
+            pinned = self._active_activity_row(athlete_alias, activity_ref)
+            if generation_id:
+                activity_set_id = self._activity_set_generation_id(
+                    str(generation_id)
+                )
+                if pinned is None:
+                    return None
+                row = {
+                    **deepcopy(pinned["catalog_payload"]),
+                    "activity_ref": activity_ref,
+                    "latest_canonical_run_key": pinned.get("canonical_run_key"),
+                    "latest_shadow_run_key": pinned.get("shadow_run_key"),
+                }
+                ordered = sorted(
+                    (
+                        {
+                            **candidate["catalog_payload"],
+                            "activity_ref": candidate_ref,
+                        }
+                        for (candidate_id, candidate_ref), candidate
+                        in self._generation_activities.items()
+                        if candidate_id == activity_set_id
+                        and candidate.get("start_at_utc")
+                    ),
+                    key=lambda item: (
+                        str(item.get("start_at_utc")),
+                        str(item.get("activity_ref")),
+                    ),
+                )
+            else:
+                row = self._activity_catalog.get((athlete_alias, activity_ref))
+                if row is None:
+                    return None
+                ordered = sorted(
+                    (
+                        item for (alias, _), item in self._activity_catalog.items()
+                        if alias == athlete_alias and item.get("start_at_utc")
+                    ),
+                    key=lambda item: (
+                        str(item.get("start_at_utc")),
+                        str(item.get("activity_ref")),
+                    ),
+                )
             refs = [str(item["activity_ref"]) for item in ordered]
             position = refs.index(activity_ref) if activity_ref in refs else -1
             return {
                 **deepcopy(row),
                 "previous_activity_ref": refs[position - 1] if position > 0 else None,
                 "next_activity_ref": refs[position + 1] if 0 <= position < len(refs) - 1 else None,
-                "shadow_available": bool(self._activity_runs.get((athlete_alias, activity_ref))),
+                "shadow_available": bool(
+                    pinned.get("shadow_run_key")
+                    if pinned is not None
+                    else self._activity_runs.get((athlete_alias, activity_ref))
+                ),
             }
 
     def activity_series(
@@ -1053,6 +2299,21 @@ class InMemorySnapshotRepository:
         from .activity_catalog import downsample_model_input
 
         with self._lock:
+            pinned = self._active_activity_row(athlete_alias, activity_ref)
+            if pinned is not None:
+                input_key = pinned.get("input_key")
+                if not input_key:
+                    return None
+                for (alias, ref, _), payload in self._activity_inputs.items():
+                    if alias == athlete_alias and ref == activity_ref:
+                        candidate_key = hashlib.sha256(
+                            f"{alias}|{ref}|{payload.get('input_hash', '')}".encode(
+                                "utf-8"
+                            )
+                        ).hexdigest()
+                        if candidate_key == input_key:
+                            return downsample_model_input(deepcopy(payload))
+                return None
             candidates = [
                 payload for (alias, ref, _), payload in self._activity_inputs.items()
                 if alias == athlete_alias and ref == activity_ref
@@ -1093,4 +2354,11 @@ class InMemorySnapshotRepository:
     ) -> str | None:
         with self._lock:
             runs = self._activity_runs.get((athlete_alias, activity_ref), [])
+            pinned = self._active_activity_row(athlete_alias, activity_ref)
+            if pinned is not None:
+                return (
+                    str(pinned["shadow_run_key"])
+                    if pinned.get("shadow_run_key")
+                    else None
+                )
             return str(runs[-1]["run_key"]) if runs else None

@@ -20,6 +20,7 @@ from biathlon.effective_hr import EFFECTIVE_HR_SOURCE
 from biathlon.physiology import compute_readiness_history, current_readiness
 
 from .cloud import (
+    CANONICAL_TREF_PROFILE_VERSION,
     AthleteContext,
     AthleteModelSettings,
     SnapshotRepository,
@@ -74,6 +75,10 @@ logger = logging.getLogger(__name__)
 
 class ConfigurationError(RuntimeError):
     """A safe startup/refresh configuration failure."""
+
+
+class RecoverySourceRefreshRequired(ConfigurationError):
+    """Recovery cannot be reproduced until a new full analysis is stored."""
 
 
 class ProviderFailure(RuntimeError):
@@ -210,6 +215,11 @@ def context_from_environment(
     athlete_settings: AthleteModelSettings | None = None,
 ) -> AthleteContext:
     env = environ or os.environ
+    from intervals_inspector.shadow_model import TREF_PROFILE_VERSION
+
+    configured_tref_version = env.get("ONFLOWS_TREF_VERSION", "").strip()
+    if configured_tref_version != TREF_PROFILE_VERSION:
+        raise ConfigurationError("Configured Tref profile version is unsupported")
     resolved_provider_id = (
         provider_athlete_id or env.get("INTERVALS_ATHLETE_ID", "")
     ).strip()
@@ -249,7 +259,7 @@ def context_from_environment(
             zone_bounds_bpm=bounds,
             timezone=athlete_timezone,
             intra_zone_version=env.get("ONFLOWS_INTRAZONE_VERSION", "").strip(),
-            tref_version=env.get("ONFLOWS_TREF_VERSION", "").strip(),
+            tref_version=configured_tref_version,
             recovery_parameter_version=env.get("ONFLOWS_RECOVERY_VERSION", "").strip(),
             hrmax_bpm=explicit_hrmax,
         ).validate()
@@ -262,6 +272,13 @@ def _finite(value: Any, name: str) -> float:
     rendered = float(value)
     if not math.isfinite(rendered):
         raise ValueError(f"Non-finite canonical result: {name}")
+    return rendered
+
+
+def _positive_finite(value: Any, name: str) -> float:
+    rendered = _finite(value, name)
+    if rendered <= 0.0:
+        raise ValueError(f"Non-positive canonical result: {name}")
     return rendered
 
 
@@ -358,6 +375,11 @@ def dataset_to_load_history(
 ) -> LoadHistoryResponse:
     """Publish precomputed aggregates only; raw provider streams remain transient."""
 
+    tref_profile_version = getattr(dataset, "tref_bounds_profile_version", None)
+    if not isinstance(tref_profile_version, str) or not tref_profile_version.strip():
+        raise ValueError("Canonical Tref profile provenance is incomplete")
+    tref_profile_version = tref_profile_version.strip()
+
     zone_summaries = [
         ZoneLoadSummary(
             zone=zone,
@@ -386,6 +408,9 @@ def dataset_to_load_history(
             e7_daily=_finite(row.E7_daily, f"E7[{row.component}]"),
             e40_daily=_finite(row.E40_daily, f"E40[{row.component}]"),
             status_7_40=_finite(row.index_7_40, f"7/40[{row.component}]"),
+            tref_used_min=_positive_finite(
+                row.Tref, f"Tref used[{row.component}]"
+            ),
         )
         for row in daily_rows.itertuples(index=False)
     ]
@@ -460,6 +485,9 @@ def dataset_to_load_history(
             e7_daily=_finite(row.E7_daily, "daily strength E7"),
             e40_daily=_finite(row.E40_daily, "daily strength E40"),
             status_7_40=_finite(row.index_7_40, "daily strength 7/40"),
+            tref_used_min=_positive_finite(
+                row.Tref, "daily strength Tref used"
+            ),
         )
         for row in strength_rows.itertuples(index=False)
     ]
@@ -512,10 +540,11 @@ def dataset_to_load_history(
     )
 
     return LoadHistoryResponse(
-        schema_version="load-history-v1",
+        schema_version="load-history-v2",
         athlete_id=context.public_alias,
         period_start=dataset.period_start,
         period_end=dataset.period_end,
+        tref_bounds_profile_version=tref_profile_version,
         quality=LoadHistoryQuality(
             processed_activities=int(dataset.processed_activities),
             limited_activities=int(dataset.limited_activities),
@@ -658,6 +687,20 @@ def dataset_to_recovery_history(
     )
 
 
+def recovery_source_supports_restore(payload: Mapping[str, Any]) -> bool:
+    """Return whether a snapshot pins every daily Tref needed for restore."""
+
+    try:
+        history = AthleteSnapshot.model_validate(payload).load_history
+    except (TypeError, ValueError):
+        return False
+    return (
+        history.schema_version == "load-history-v2"
+        and history.tref_bounds_profile_version
+        == CANONICAL_TREF_PROFILE_VERSION
+    )
+
+
 def restore_recovery_history_from_snapshot(
     repository: SnapshotRepository,
     *,
@@ -684,14 +727,22 @@ def restore_recovery_history_from_snapshot(
         raise ConfigurationError("Provider profile or athlete alias is unavailable")
     payload = repository.latest(alias)
     if not isinstance(payload, Mapping):
-        raise ConfigurationError("Training snapshot requires a full real-data refresh")
+        raise RecoverySourceRefreshRequired(
+            "Recovery source requires a full real-data refresh"
+        )
+    if not recovery_source_supports_restore(payload):
+        raise RecoverySourceRefreshRequired(
+            "Recovery source requires a full real-data refresh"
+        )
     try:
         snapshot = AthleteSnapshot.model_validate(payload)
         history = snapshot.load_history
         start = date.fromisoformat(history.period_start)
         end = date.fromisoformat(history.period_end)
     except (TypeError, ValueError) as exc:
-        raise ConfigurationError("Canonical load history is unavailable") from exc
+        raise RecoverySourceRefreshRequired(
+            "Recovery source requires a full real-data refresh"
+        ) from exc
 
     context = context_from_environment(
         env,
@@ -717,13 +768,41 @@ def restore_recovery_history_from_snapshot(
         day = pd.Timestamp(row.date).normalize()
         if day in daily_loads.index:
             daily_loads.loc[day, f"e_{row.zone}"] = float(row.effective_load)
+            if row.tref_used_min is None:
+                raise RecoverySourceRefreshRequired(
+                    "Recovery source requires a full real-data refresh"
+                )
+            daily_loads.loc[day, f"tref_used_{row.zone}"] = float(
+                row.tref_used_min
+            )
     if history.strength is not None:
         for row in history.strength.daily:
             day = pd.Timestamp(row.date).normalize()
             if day in daily_loads.index:
                 daily_loads.loc[day, "e_STR"] = float(row.effective_load)
+                if row.tref_used_min is None:
+                    raise RecoverySourceRefreshRequired(
+                        "Recovery source requires a full real-data refresh"
+                    )
+                daily_loads.loc[day, "tref_used_STR"] = float(
+                    row.tref_used_min
+                )
 
-    readiness_history = compute_readiness_history(daily_loads, parameters)
+    required_tref_columns = {
+        f"tref_used_{component}" for component in (*ZONES, "STR")
+    }
+    if not required_tref_columns.issubset(daily_loads.columns) or daily_loads[
+        sorted(required_tref_columns)
+    ].isna().any().any():
+        raise RecoverySourceRefreshRequired(
+            "Recovery source requires a full real-data refresh"
+        )
+
+    readiness_history = compute_readiness_history(
+        daily_loads,
+        parameters,
+        use_supplied_tref=True,
+    )
     readiness = current_readiness(readiness_history, parameters, target_date=end)
     zone_settings = {row.zone: row for row in history.zones}
     recovery_parameters = parameters["recovery"]
@@ -884,7 +963,7 @@ def completed_work_from_load_history(
     """Aggregate an explicit period from an already-persisted load snapshot.
 
     This is a technical reporting adapter. It does not fetch provider data and
-    does not alter any physiological value stored in ``load-history-v1``.
+    does not alter any physiological value stored in the load history.
     """
 
     available_start = date.fromisoformat(history.period_start)
@@ -934,7 +1013,7 @@ def completed_work_from_load_history(
         period_end=end.isoformat(),
         model=CompletedWorkMetadata(
             aggregation_version="completed-work-snapshot-aggregation-v1",
-            source_schema_version="load-history-v1",
+            source_schema_version=history.schema_version,
             sport_grouping="provider-label-exact",
         ),
         quality=CompletedWorkQuality(
@@ -1060,7 +1139,7 @@ def volume_history_from_load_history(
         period_end=history.period_end,
         model=VolumeHistoryMetadata(
             aggregation_version="volume-history-calendar-week-v1",
-            source_schema_version="load-history-v1",
+            source_schema_version=history.schema_version,
             calendar_week_start="monday",
             activity_duration_handling="known-values-only",
         ),
@@ -1241,6 +1320,24 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             metadata = catalog_metadata.get(str(activity.activity_ref))
             if metadata is None:
                 continue
+            activity_day = pd.Timestamp(activity.date).normalize()
+            if activity_day not in dataset.daily_loads.index:
+                raise ValueError("Canonical activity Tref provenance is incomplete")
+            daily_load_row = dataset.daily_loads.loc[activity_day]
+            tref_used_min = {
+                component: _positive_finite(
+                    daily_load_row[f"tref_used_{component}"],
+                    f"activity Tref used[{component}]",
+                )
+                for component in (*ZONES, "STR")
+            }
+            tref_profile_version = dataset.tref_bounds_profile_version
+            if (
+                not isinstance(tref_profile_version, str)
+                or not tref_profile_version.strip()
+            ):
+                raise ValueError("Canonical activity Tref profile is incomplete")
+            tref_profile_version = tref_profile_version.strip()
             catalog_provider_key = catalog_provider_keys.get(
                 str(activity.activity_ref)
             )
@@ -1262,12 +1359,11 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             if float(activity.strength_time_min or 0.0) > 0.0:
                 canonical_load = float(activity.strength_time_min)
             canonical_summary = {
-                "schema_version": "activity-canonical-summary-v1",
+                "schema_version": "activity-canonical-summary-v2",
                 "model_version": str(activity.model_version),
                 "normalization_version": str(activity.normalization_version),
-                "tref_bounds_profile_version": str(
-                    activity.tref_bounds_profile_version
-                ),
+                "tref_bounds_profile_version": tref_profile_version,
+                "tref_used_min": tref_used_min,
                 "duration_min": (
                     float(activity.duration_min)
                     if pd.notna(activity.duration_min)
@@ -1276,10 +1372,10 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 "strength_time_min": float(activity.strength_time_min or 0.0),
                 "zones": zones,
             }
-            scientific_input_hash = scientific_input_hashes.get(
+            source_scientific_input_hash = scientific_input_hashes.get(
                 str(activity.activity_ref)
             )
-            if scientific_input_hash is None:
+            if source_scientific_input_hash is None:
                 strength_input = {
                     "schema_version": "activity-strength-input-v1",
                     "activity_type": metadata.get("activity_type"),
@@ -1289,7 +1385,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                         dataset.strength_classification_version
                     ),
                 }
-                scientific_input_hash = hashlib.sha256(
+                source_scientific_input_hash = hashlib.sha256(
                     json.dumps(
                         strength_input,
                         sort_keys=True,
@@ -1297,6 +1393,19 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                         allow_nan=False,
                     ).encode("utf-8")
                 ).hexdigest()
+            scientific_input_hash = hashlib.sha256(
+                json.dumps(
+                    {
+                        "schema_version": "canonical-scientific-input-v2",
+                        "source_input_hash": source_scientific_input_hash,
+                        "tref_bounds_profile_version": tref_profile_version,
+                        "tref_used_min": tref_used_min,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+            ).hexdigest()
             canonical_run_key = repository.publish_canonical_activity_result(
                 athlete_alias=context.public_alias,
                 activity_ref=str(activity.activity_ref),

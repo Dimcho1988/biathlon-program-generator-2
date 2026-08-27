@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 
 import pytest
 
@@ -69,6 +70,28 @@ def test_shadow_results_have_parallel_fields_and_missing_hrmax_fails_closed() ->
     assert required <= set(derived["timeseries"][0])
     assert derived["timeseries"][0]["exclusion_reason"] == "EXPLICIT_HRMAX_MISSING"
     assert len(derived["segments_15s"]) >= 6
+
+
+def test_hr_only_shadow_normalizes_unavailable_vflat_numbers_to_null() -> None:
+    normalized = normalize_stream_intervals(
+        NormalizerInput(
+            offsets=list(range(61)),
+            metrics={"heartrate": [145.0] * 61},
+        )
+    )
+
+    _, derived = compute_activity_shadow(
+        detail={"start_date": "2026-01-01T10:00:00Z"},
+        normalized=normalized,
+        zone_bounds_bpm=(50, 100, 120, 140, 160, 190),
+        explicit_hrmax_bpm=200,
+    )
+
+    assert all(row["vflat_b65_kmh"] is None for row in derived["timeseries"])
+    assert all(row["grade_smoothed_pct"] is None for row in derived["timeseries"])
+    assert all(row["vflat_b65_kmh"] is None for row in derived["segments_15s"])
+    assert all(row["grade_smoothed_pct"] is None for row in derived["segments_15s"])
+    json.dumps(derived, allow_nan=False)
 
 
 def test_explicit_hrmax_enables_hrmod_without_changing_immutable_input() -> None:

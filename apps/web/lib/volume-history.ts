@@ -18,7 +18,7 @@ export interface VolumeHistory {
   period_end: string;
   model: {
     aggregation_version: "volume-history-calendar-week-v1";
-    source_schema_version: "load-history-v1";
+    source_schema_version: "load-history-v1" | "load-history-v2";
     calendar_week_start: "monday";
     activity_duration_handling: "known-values-only";
   };
@@ -45,7 +45,7 @@ export function parseVolumeHistory(value: unknown): VolumeHistory {
   if (!isCalendarDate(value.period_start) || !isCalendarDate(value.period_end) || value.period_start > value.period_end) throw new Error("Невалиден период на обемната история.");
   if (!isRecord(value.model) || !exactKeys(value.model, modelKeys) ||
       value.model.aggregation_version !== "volume-history-calendar-week-v1" ||
-      value.model.source_schema_version !== "load-history-v1" ||
+      !(value.model.source_schema_version === "load-history-v1" || value.model.source_schema_version === "load-history-v2") ||
       value.model.calendar_week_start !== "monday" ||
       value.model.activity_duration_handling !== "known-values-only") {
     throw new Error("Невалидни метаданни на обемната история.");

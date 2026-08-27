@@ -23,14 +23,18 @@ from typing import Any
 import pandas as pd
 
 from biathlon import __version__ as MAIN_MODEL_VERSION
-from biathlon.constants import AEROBIC_COMPONENTS, COMPONENTS
+from biathlon.constants import (
+    AEROBIC_COMPONENTS,
+    COMPONENTS,
+    FIXED_STRENGTH_TREF_MINUTES,
+)
 from biathlon.physiology import (
     compute_load_statistics,
     compute_readiness_history,
     current_readiness,
     rolling_load_statistics,
 )
-from intervals_inspector.intervals_client import IntervalsResponse
+from intervals_inspector.intervals_client import IntervalsAPIError, IntervalsResponse
 from intervals_inspector.effective_hr import EFFECTIVE_HR_ADAPTER_VERSION
 from intervals_inspector.onflows_intrazone_load import (
     ALGORITHM_VERSION as EQUIVALENT_TIME_ALGORITHM_VERSION,
@@ -56,9 +60,9 @@ from intervals_inspector.stream_normalizer import (
 REAL_DATA_SOURCE = "intervals"
 DEMO_DATA_SOURCE = "demo"
 DATA_SOURCE_VALUES = (DEMO_DATA_SOURCE, REAL_DATA_SOURCE)
-REAL_HISTORY_SCHEMA_VERSION = "onflows-real-history-dataset-v4-strength-duration"
+REAL_HISTORY_SCHEMA_VERSION = "onflows-real-history-dataset-v5-bounded-tref"
 RECOVERY_MODEL_VERSION = (
-    f"main-load-recovery-v{MAIN_MODEL_VERSION}-equivalent-time-fixed-tref"
+    f"main-load-recovery-v{MAIN_MODEL_VERSION}-equivalent-time-bounded-40d-tref"
 )
 STRENGTH_ACTIVITY_CLASSIFICATION_VERSION = "intervals-strength-activity-type-v1"
 STRENGTH_DURATION_COEFFICIENT = 1.0
@@ -79,6 +83,30 @@ DEFAULT_HISTORY_DAYS = 90
 MIN_HISTORY_DAYS = 41
 MAX_HISTORY_DAYS = 180
 _SAFE_ACTIVITY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+
+class _ExternalActivityCallbackFailure(RuntimeError):
+    """An injected persistence/publication callback failed.
+
+    This marker keeps infrastructure failures separate from malformed data for
+    one provider activity without importing the API persistence layer here.
+    """
+
+
+_MALFORMED_ACTIVITY_ERRORS = (
+    ArithmeticError,
+    AttributeError,
+    IndexError,
+    KeyError,
+    TypeError,
+    ValueError,
+)
+
+
+def _activity_resource_missing(error: IntervalsAPIError) -> bool:
+    """Only an explicitly missing/deleted single resource is skippable."""
+
+    return error.status_code in {404, 410}
 
 
 @dataclass(frozen=True)
@@ -334,6 +362,9 @@ def _zone_columns(*, daily: bool = False) -> list[str]:
         "tref_history_value",
         "tref_source",
         "tref_history_days",
+        "tref_min_effective",
+        "tref_max_effective",
+        "tref_bound_applied",
         "quality_status",
     ]
 
@@ -455,7 +486,12 @@ def load_real_history(
                 if _activity_date(detail) != current_day:
                     raise ValueError("activity date does not match the history day")
                 if activity_metadata_collector is not None:
-                    activity_metadata_collector(activity_ref, detail)
+                    try:
+                        activity_metadata_collector(activity_ref, detail)
+                    except Exception as exc:
+                        raise _ExternalActivityCallbackFailure(
+                            "Activity metadata callback failed"
+                        ) from exc
                 strength_activity = is_strength_activity(detail)
                 duration_seconds = _activity_duration_seconds(
                     detail, strength_activity=strength_activity
@@ -466,6 +502,26 @@ def load_real_history(
                     streams = _response_payload(
                         client.get_streams_result(provider_id)
                     )
+
+                    def publish_activity_shadow(
+                        shadow_detail: Mapping[str, Any],
+                        normalized: Any,
+                        *,
+                        ref: str = activity_ref,
+                    ) -> Mapping[str, Any]:
+                        if activity_shadow_processor is None:
+                            raise AssertionError(
+                                "activity shadow processor is unavailable"
+                            )
+                        try:
+                            return activity_shadow_processor(
+                                ref, shadow_detail, normalized
+                            )
+                        except Exception as exc:
+                            raise _ExternalActivityCallbackFailure(
+                                "Activity shadow callback failed"
+                            ) from exc
+
                     summary = process_activity_payloads(
                         detail,
                         streams,
@@ -481,12 +537,35 @@ def load_real_history(
                         shadow_processor=(
                             None
                             if activity_shadow_processor is None
-                            else lambda shadow_detail, normalized, ref=activity_ref: (
-                                activity_shadow_processor(ref, shadow_detail, normalized)
-                            )
+                            else publish_activity_shadow
                         ),
+                        propagate_shadow_processor_errors=True,
                     )
-            except Exception:
+            except _ExternalActivityCallbackFailure:
+                raise
+            except IntervalsAPIError as exc:
+                if not _activity_resource_missing(exc):
+                    raise
+                processed += 1
+                excluded += 1
+                day_statuses.append("excluded")
+                activity_records.append(
+                    {
+                        "activity_ref": activity_ref,
+                        "date": pd.Timestamp(current_day),
+                        "sport": "Активност",
+                        "duration_min": None,
+                        "strength_time_min": 0.0,
+                        "quality_status": "excluded",
+                        "status_reason": "Активността вече не е достъпна при доставчика.",
+                        "hr_coverage_percent": 0.0,
+                        "normalization_version": NORMALIZATION_VERSION,
+                        "model_version": SHADOW_MODEL_VERSION,
+                        "tref_bounds_profile_version": TREF_BOUNDS_PROFILE_VERSION,
+                    }
+                )
+                continue
+            except _MALFORMED_ACTIVITY_ERRORS:
                 processed += 1
                 excluded += 1
                 day_statuses.append("excluded")
@@ -628,12 +707,21 @@ def load_real_history(
                             ),
                             "tref_source": str(
                                 reference.get("tref_source")
-                                or "initial expert setting"
+                                or "expert upper-bound fallback"
                             ),
                             "tref_history_days": int(
                                 _finite_non_negative(
                                     reference.get("tref_history_days")
                                 )
+                            ),
+                            "tref_min_effective": _finite_non_negative(
+                                reference.get("tref_min_effective")
+                            ),
+                            "tref_max_effective": _finite_non_negative(
+                                reference.get("tref_max_effective")
+                            ),
+                            "tref_bound_applied": str(
+                                reference.get("tref_bound_applied") or "none"
                             ),
                             "quality_status": status,
                         }
@@ -699,10 +787,19 @@ def load_real_history(
                     ),
                     "tref_source": str(
                         row.get("tref_source")
-                        or "initial expert setting"
+                        or "expert upper-bound fallback"
                     ),
                     "tref_history_days": int(
                         _finite_non_negative(row.get("tref_history_days"))
+                    ),
+                    "tref_min_effective": _finite_non_negative(
+                        row.get("tref_min_effective")
+                    ),
+                    "tref_max_effective": _finite_non_negative(
+                        row.get("tref_max_effective")
+                    ),
+                    "tref_bound_applied": str(
+                        row.get("tref_bound_applied") or "none"
                     ),
                     "quality_status": status,
                 }
@@ -804,10 +901,19 @@ def load_real_history(
                     ),
                     "tref_source": str(
                         reference.get("tref_source")
-                        or "initial expert setting"
+                        or "expert upper-bound fallback"
                     ),
                     "tref_history_days": int(
                         _finite_non_negative(reference.get("tref_history_days"))
+                    ),
+                    "tref_min_effective": _finite_non_negative(
+                        reference.get("tref_min_effective")
+                    ),
+                    "tref_max_effective": _finite_non_negative(
+                        reference.get("tref_max_effective")
+                    ),
+                    "tref_bound_applied": str(
+                        reference.get("tref_bound_applied") or "none"
                     ),
                     "quality_status": day_status,
                 }
@@ -816,9 +922,7 @@ def load_real_history(
             day_strength_time_min * STRENGTH_DURATION_COEFFICIENT
         )
         load_row["e_STR"] = load_row["q_STR"]
-        load_row["tref_used_STR"] = 7.0 * float(
-            parameters["base_loads"]["STR"]
-        )
+        load_row["tref_used_STR"] = FIXED_STRENGTH_TREF_MINUTES
         daily_load_records.append(load_row)
         prior_baseline_effective_load.append(baseline_history_row)
         prior_experimental_effective_load.append(experimental_history_row)
@@ -835,47 +939,32 @@ def load_real_history(
     load_stats = compute_load_statistics(
         main_model_input, dict(parameters), as_of=end
     ).loc[list(COMPONENTS)]
-    latest_tref = (
-        daily_zones_frame.loc[
-            daily_zones_frame["date"] == pd.Timestamp(end)
-        ]
-        .set_index("zone")
-    )
-    load_stats["Tref"] = latest_tref["tref_effective"].reindex(
-        AEROBIC_COMPONENTS
-    )
-    load_stats.loc["STR", "Tref"] = 7.0 * float(
-        parameters["base_loads"]["STR"]
-    )
+    # ``load_stats`` is the current state after ``end`` and therefore includes
+    # that completed day in its 40-day Tref.  Per-day ``tref_used_*`` remains
+    # causal and excludes the day whose load it scales.
+    load_stats.loc["STR", "Tref"] = FIXED_STRENGTH_TREF_MINUTES
     load_stats["reliability"] = (
         min(1.0, len(daily_loads) / float(HISTORY_WINDOW_DAYS))
-    )
-    load_stats.loc[list(AEROBIC_COMPONENTS), "reliability"] = (
-        latest_tref["tref_history_days"]
-        .reindex(AEROBIC_COMPONENTS)
-        .astype(float)
-        .div(float(HISTORY_WINDOW_DAYS))
-        .clip(upper=1.0)
     )
     rolling_load = rolling_load_statistics(
         main_model_input, dict(parameters)
     )
     rolling_tref = daily_zones_frame[
         ["date", "zone", "tref_effective"]
-    ].rename(columns={"zone": "component", "tref_effective": "fixed_Tref"})
+    ].rename(columns={"zone": "component", "tref_effective": "causal_Tref"})
     rolling_load = rolling_load.merge(
         rolling_tref,
         on=["date", "component"],
         how="left",
         validate="one_to_one",
     )
-    rolling_load["Tref"] = rolling_load["fixed_Tref"].fillna(
+    rolling_load["Tref"] = rolling_load["causal_Tref"].fillna(
         rolling_load["Tref"]
     )
     rolling_load.loc[
         rolling_load["component"] == "STR", "Tref"
-    ] = 7.0 * float(parameters["base_loads"]["STR"])
-    rolling_load = rolling_load.drop(columns="fixed_Tref")
+    ] = FIXED_STRENGTH_TREF_MINUTES
+    rolling_load = rolling_load.drop(columns="causal_Tref")
     readiness_history = compute_readiness_history(
         main_model_input,
         dict(parameters),

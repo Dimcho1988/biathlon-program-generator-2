@@ -139,6 +139,9 @@ const weekdays = (value: unknown): value is number[] =>
   && value.every((day) => integer(day, 0, 6))
   && new Set(value).size === value.length;
 
+export const PLANNING_PROFILE_RESAVE_MESSAGE =
+  "Запазеният профил за планиране съдържа несъвместими стойности. Коригирайте седмичната структура и го запазете отново.";
+
 export function parsePlanningProfileResponse(value: unknown): PlanningProfileResponse {
   if (!isRecord(value) || !exactKeys(value, responseKeys) || typeof value.configured !== "boolean")
     throw new Error("Невалидна структура на профила за планиране.");
@@ -160,7 +163,6 @@ export function parsePlanningProfileResponse(value: unknown): PlanningProfileRes
     || !integer(profile.sessions_per_week, 1, 14)
     || !weekdays(profile.rest_days)
     || profile.rest_days.length >= 7
-    || profile.sessions_per_week > 2 * (7 - profile.rest_days.length)
     || !weekdays(profile.double_session_days)
     || !integer(profile.long_session_day, 0, 6)
     || !weekdays(profile.intensity_days)
@@ -175,9 +177,18 @@ export function parsePlanningProfileResponse(value: unknown): PlanningProfileRes
     || profile.double_threshold_components.length === 0
     || new Set(profile.double_threshold_components).size !== profile.double_threshold_components.length
     || !profile.double_threshold_components.every((component) => component === "Z3" || component === "Z4")
-    || (profile.double_threshold_enabled && profile.rest_days.includes(profile.double_threshold_day))
+  ) throw new Error(PLANNING_PROFILE_RESAVE_MESSAGE);
+  const restDays = profile.rest_days;
+  const doubleSessionDays = profile.double_session_days;
+  const activeDays = 7 - restDays.length;
+  const capacity = activeDays + doubleSessionDays.length;
+  if (
+    doubleSessionDays.some((day) => restDays.includes(day))
+    || profile.sessions_per_week > capacity
+    || (profile.double_threshold_enabled && restDays.includes(profile.double_threshold_day))
+    || (profile.double_threshold_enabled && !doubleSessionDays.includes(profile.double_threshold_day))
     || (profile.double_threshold_enabled && profile.max_key_sessions_per_week < 2)
-  ) throw new Error("Невалидни стойности в профила за планиране.");
+  ) throw new Error(PLANNING_PROFILE_RESAVE_MESSAGE);
   return { configured: true, profile: profile as unknown as PlanningProfile };
 }
 

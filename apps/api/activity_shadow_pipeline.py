@@ -95,7 +95,7 @@ def activity_shadow_configuration_fingerprint(
     return _canonical_hash(payload)
 
 
-def _plain_number(value: float | None) -> float | None:
+def _plain_number(value: Any) -> float | None:
     return float(value) if value is not None and math.isfinite(float(value)) else None
 
 
@@ -256,7 +256,11 @@ def _segments_15s(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result = []
     for bucket, values in sorted(buckets.items()):
         def mean(name: str):
-            available = [float(row[name]) for row in values if row.get(name) is not None]
+            available = [
+                number
+                for row in values
+                if (number := _plain_number(row.get(name))) is not None
+            ]
             return sum(available) / len(available) if available else None
         result.append(
             {
@@ -332,7 +336,7 @@ def compute_activity_shadow(
             {
                 "timestamp": sample.timestamp.isoformat(),
                 "elapsed_s": references.samples[index].elapsed_s,
-                "speed_raw_kmh": (
+                "speed_raw_kmh": _plain_number(
                     vf_row.get("speed_raw_kmh")
                     if vf_row
                     else (
@@ -341,23 +345,29 @@ def compute_activity_shadow(
                         else None
                     )
                 ),
-                "vflat_b65_kmh": vf_row.get("vflat_b65_kmh"),
-                "vflat_delta_kmh": vf_row.get("vflat_delta_kmh"),
-                "hr_raw_bpm": hr_row.get("hr_raw_bpm", sample.heart_rate_bpm),
-                "hr_clean_bpm": hr_row.get("hr_clean_bpm"),
-                "hrmod_candidate_bpm": hr_row.get("hrmod_candidate_bpm"),
-                "hrmod_final_bpm": hr_row.get("hrmod_final_bpm"),
-                "hrmod_delta_bpm": hr_row.get("hrmod_delta_bpm"),
-                "added_bpm": hr_row.get("added_bpm"),
-                "removed_bpm": hr_row.get("removed_bpm"),
+                "vflat_b65_kmh": _plain_number(vf_row.get("vflat_b65_kmh")),
+                "vflat_delta_kmh": _plain_number(vf_row.get("vflat_delta_kmh")),
+                "hr_raw_bpm": _plain_number(
+                    hr_row.get("hr_raw_bpm", sample.heart_rate_bpm)
+                ),
+                "hr_clean_bpm": _plain_number(hr_row.get("hr_clean_bpm")),
+                "hrmod_candidate_bpm": _plain_number(
+                    hr_row.get("hrmod_candidate_bpm")
+                ),
+                "hrmod_final_bpm": _plain_number(hr_row.get("hrmod_final_bpm")),
+                "hrmod_delta_bpm": _plain_number(hr_row.get("hrmod_delta_bpm")),
+                "added_bpm": _plain_number(hr_row.get("added_bpm")),
+                "removed_bpm": _plain_number(hr_row.get("removed_bpm")),
                 "receiver_flag": hr_row.get("receiver_flag", False),
                 "donor_flag": hr_row.get("donor_flag", False),
                 "wave_id": hr_row.get("wave_id"),
-                "grade_raw_pct": hr_row.get(
-                    "grade_raw_pct", references.samples[index].grade
+                "grade_raw_pct": _plain_number(
+                    hr_row.get("grade_raw_pct", references.samples[index].grade)
                 ),
-                "grade_smoothed_pct": hr_row.get(
-                    "grade_smoothed_pct", vf_row.get("grade_smoothed_pct")
+                "grade_smoothed_pct": _plain_number(
+                    hr_row.get(
+                        "grade_smoothed_pct", vf_row.get("grade_smoothed_pct")
+                    )
                 ),
                 "vflat_model_version": VFLAT_MODEL_VERSION,
                 "hrmod_model_version": hrmod.get("model_version"),

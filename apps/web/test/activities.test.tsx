@@ -8,8 +8,9 @@ import {
   activityDetailFixture,
   activitySeriesFixture,
   parseActivityCalendar,
+  parseActivityView,
 } from "../lib/activities";
-import { getActivityDetail } from "../lib/api";
+import { getActivityDetail, getActivityView } from "../lib/api";
 
 describe("completed activities calendar", () => {
   it("shows names, local time, same-day activities, summaries and stable routes", () => {
@@ -33,6 +34,19 @@ describe("completed activities calendar", () => {
     expect(() => parseActivityCalendar({ ...activityCalendarFixture, includes_timeseries: true })).toThrow(/календар/);
   });
 
+  it("accepts generation-aware v2 calendars while retaining v1", () => {
+    const version2 = {
+      ...activityCalendarFixture,
+      schema_version: "activity-calendar-index-v2",
+      generation_id: "gen-41",
+      revision: 41,
+      analysis_as_of: "2026-06-28",
+      activated_at: "2026-06-28T18:00:00Z",
+    };
+    expect(parseActivityCalendar(version2).revision).toBe(41);
+    expect(() => parseActivityCalendar({ ...version2, revision: 0 })).toThrow(/версия на календара/);
+  });
+
   it("explains a legacy snapshot and offers a real Intervals refresh", () => {
     const html = renderToStaticMarkup(<ActivityCalendarView calendar={{
       ...activityCalendarFixture,
@@ -49,7 +63,7 @@ describe("completed activities calendar", () => {
     expect(html).toContain("Обнови wellness");
     expect(html).toContain("action=\"/api/integrations/intervals/refresh\"");
     expect(html).toContain("name=\"returnTo\"");
-    expect(html).toContain("name=\"scope\" value=\"wellness\"");
+    expect(html).toContain("name=\"scope\" value=\"WELLNESS\"");
     expect(html).toContain("/activities?start=2026-06-01&amp;end=2026-06-28");
   });
 });
@@ -68,6 +82,34 @@ describe("canonical activity detail", () => {
     expect(html).toContain("aria-label=\"Скорост / темпо\"");
     expect(html).toContain("aria-label=\"Височина\"");
     expect(html).toContain("aria-label=\"Наклон\"");
+  });
+
+  it("accepts one coherent generation-pinned activity view and legacy revision zero", () => {
+    const shadow = { schema_version: "activity-shadow-derived-v2", experimental: true };
+    const active = {
+      schema_version: "activity-view-v1",
+      generation_id: "11111111-1111-4111-8111-111111111111",
+      revision: 7,
+      analysis_as_of: "2026-06-28",
+      activated_at: "2026-06-28T18:00:00Z",
+      activity: activityDetailFixture,
+      series: activitySeriesFixture,
+      shadow,
+    };
+    expect(parseActivityView(active)).toMatchObject({ revision: 7, shadow });
+    expect(parseActivityView({
+      ...active,
+      generation_id: null,
+      revision: 0,
+      analysis_as_of: null,
+      activated_at: null,
+    }).revision).toBe(0);
+    expect(() => parseActivityView({ ...active, revision: 0 })).toThrow(/версия/);
+    expect(() => parseActivityView({
+      ...active,
+      series: { ...activitySeriesFixture, activity_ref: "act_" + "9".repeat(32) },
+    })).toThrow(/серии/);
+    expect(() => parseActivityView({ ...active, shadow: null })).toThrow(/shadow/);
   });
 
   it("keeps the canonical summary visible when timeseries are temporarily unavailable", () => {
@@ -108,6 +150,36 @@ describe("activity API cold-start reliability", () => {
     expect(String(fetchMock.mock.calls[0][0])).toBe("https://api.example.test/health");
     expect(String(fetchMock.mock.calls[1][0])).toBe(
       `https://api.example.test/api/v2/real/activities/${activityDetailFixture.activity_ref}`,
+    );
+    expect(fetchMock.mock.calls[1][1].headers).toMatchObject({
+      Authorization: "Bearer server-secret",
+      "X-OnFlows-Athlete-Alias": "ath-profile",
+    });
+  });
+
+  it("loads detail, series and shadow through one protected activity-view request", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const activityView = {
+      schema_version: "activity-view-v1",
+      generation_id: "11111111-1111-4111-8111-111111111111",
+      revision: 7,
+      analysis_as_of: "2026-06-28",
+      activated_at: "2026-06-28T18:00:00Z",
+      activity: activityDetailFixture,
+      series: activitySeriesFixture,
+      shadow: { schema_version: "activity-shadow-derived-v2" },
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json(activityView));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getActivityView(activityDetailFixture.activity_ref, "ath-profile"))
+      .resolves.toMatchObject({ revision: 7, activity: activityDetailFixture });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1][0])).toBe(
+      `https://api.example.test/api/v2/real/activities/${activityDetailFixture.activity_ref}/view`,
     );
     expect(fetchMock.mock.calls[1][1].headers).toMatchObject({
       Authorization: "Bearer server-secret",

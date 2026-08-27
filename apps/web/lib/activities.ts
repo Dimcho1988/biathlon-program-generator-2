@@ -71,7 +71,11 @@ export interface ActivityWeekSummary {
 }
 
 export interface ActivityCalendar {
-  schema_version: "activity-calendar-index-v1";
+  schema_version: "activity-calendar-index-v1" | "activity-calendar-index-v2";
+  generation_id?: string | null;
+  revision?: number;
+  analysis_as_of?: string | null;
+  activated_at?: string | null;
   athlete_id: string;
   period_start: string;
   period_end: string;
@@ -113,6 +117,17 @@ export interface ActivitySeries {
   series: ActivitySeriesPoint[];
 }
 
+export interface ActivityView {
+  schema_version: "activity-view-v1";
+  generation_id: string | null;
+  revision: number;
+  analysis_as_of: string | null;
+  activated_at: string | null;
+  activity: ActivityDetail;
+  series: ActivitySeries | null;
+  shadow: Record<string, unknown> | null;
+}
+
 const zones = new Set<ActivityZone>(["Z1", "Z2", "Z3", "Z4", "Z5"]);
 const qualities = new Set<ActivityQuality>(["valid", "limited", "excluded", "provider_missing"]);
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
@@ -135,8 +150,15 @@ function assertActivityItem(value: unknown): asserts value is ActivityCalendarIt
 }
 
 export function parseActivityCalendar(value: unknown): ActivityCalendar {
-  if (!isObject(value) || value.schema_version !== "activity-calendar-index-v1" || value.includes_timeseries !== false || !Array.isArray(value.activities) || !Array.isArray(value.weeks))
+  if (!isObject(value) || !(value.schema_version === "activity-calendar-index-v1" || value.schema_version === "activity-calendar-index-v2") || value.includes_timeseries !== false || !Array.isArray(value.activities) || !Array.isArray(value.weeks))
     throw new Error("API услугата върна невалиден календар на активностите.");
+  if (value.schema_version === "activity-calendar-index-v2") {
+    const validGeneration = value.generation_id === null || (typeof value.generation_id === "string" && value.generation_id.length > 0 && value.generation_id.length <= 128);
+    const validAsOf = value.analysis_as_of === null || (typeof value.analysis_as_of === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value.analysis_as_of));
+    const validActivatedAt = value.activated_at === null || (typeof value.activated_at === "string" && Number.isFinite(Date.parse(value.activated_at)));
+    if (!validGeneration || !Number.isInteger(value.revision) || Number(value.revision) < 0 || !validAsOf || !validActivatedAt || ((value.generation_id === null) !== (value.revision === 0)))
+      throw new Error("API услугата върна невалидна версия на календара.");
+  }
   value.activities.forEach(assertActivityItem);
   const wellnessDays = Array.isArray(value.wellness_days) ? value.wellness_days : [];
   value.wellness_days = wellnessDays;
@@ -164,6 +186,41 @@ export function parseActivitySeries(value: unknown): ActivitySeries {
   if (!isObject(value) || value.schema_version !== "activity-series-v1" || !Array.isArray(value.series))
     throw new Error("API услугата върна невалидни графични серии.");
   return value as unknown as ActivitySeries;
+}
+
+export function parseActivityView(value: unknown): ActivityView {
+  if (!isObject(value) || value.schema_version !== "activity-view-v1")
+    throw new Error("API услугата върна невалиден activity view.");
+  const generationId = value.generation_id;
+  const revision = value.revision;
+  const analysisAsOf = value.analysis_as_of;
+  const activatedAt = value.activated_at;
+  const validGeneration = generationId === null || (
+    typeof generationId === "string" && generationId.length > 0 && generationId.length <= 128
+  );
+  if (
+    !validGeneration || !Number.isInteger(revision) || Number(revision) < 0 ||
+    ((generationId === null) !== (revision === 0)) ||
+    !(analysisAsOf === null || (typeof analysisAsOf === "string" && /^\d{4}-\d{2}-\d{2}$/.test(analysisAsOf))) ||
+    !(activatedAt === null || (typeof activatedAt === "string" && Number.isFinite(Date.parse(activatedAt))))
+  ) throw new Error("API услугата върна невалидна версия на activity view.");
+  const activity = parseActivityDetail(value.activity);
+  const series = value.series === null ? null : parseActivitySeries(value.series);
+  if (series !== null && series.activity_ref !== activity.activity_ref)
+    throw new Error("API услугата върна несъгласувани activity серии.");
+  const shadow = value.shadow;
+  if (!(shadow === null || isObject(shadow)) || activity.shadow_available !== (shadow !== null))
+    throw new Error("API услугата върна несъгласуван shadow резултат.");
+  return {
+    schema_version: "activity-view-v1",
+    generation_id: generationId as string | null,
+    revision: Number(revision),
+    analysis_as_of: analysisAsOf as string | null,
+    activated_at: activatedAt as string | null,
+    activity,
+    series,
+    shadow: shadow as Record<string, unknown> | null,
+  };
 }
 
 const zoneRows = (minutes: [number, number, number, number, number]): ActivityZoneSummary[] =>

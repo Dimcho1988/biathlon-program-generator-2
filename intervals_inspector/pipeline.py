@@ -217,6 +217,7 @@ def process_activity_payloads(
     shadow_processor: Callable[
         [Mapping[str, Any], IntervalAwareResult], Mapping[str, Any]
     ] | None = None,
+    propagate_shadow_processor_errors: bool = False,
 ) -> dict[str, Any]:
     """Validate, normalize, adapt, and model one already-loaded activity."""
 
@@ -270,6 +271,8 @@ def process_activity_payloads(
             shadow_status = shadow_processor(detail_payload, interval_result)
             summary["activity_shadow_status"] = dict(shadow_status)
         except Exception:
+            if propagate_shadow_processor_errors:
+                raise
             # Experimental processing can fail closed but must never exclude or
             # change the canonical activity model result.
             summary["activity_shadow_status"] = {

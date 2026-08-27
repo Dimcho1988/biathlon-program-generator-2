@@ -11,6 +11,7 @@ from apps.api.main import app
 from apps.api.real_service import (
     ConfigurationError,
     ProviderFailure,
+    RecoverySourceRefreshRequired,
     _bounded_percentage,
     completed_work_from_load_history,
     completed_work_from_persisted,
@@ -34,7 +35,7 @@ ENV = {
     "ONFLOWS_HR_ZONE_BOUNDS": "100,126,146,163,178,196",
     "ONFLOWS_ATHLETE_TIMEZONE": "Europe/Sofia",
     "ONFLOWS_INTRAZONE_VERSION": "intra_zone_linear_v1",
-    "ONFLOWS_TREF_VERSION": "tref-fixed-expert-v1",
+    "ONFLOWS_TREF_VERSION": "tref-bounded-40d-expert-v1",
     "ONFLOWS_RECOVERY_VERSION": "main-load-recovery-v1",
     "ONFLOWS_HISTORY_DAYS": "41",
 }
@@ -90,7 +91,16 @@ def test_ingests_activity_and_wellness_then_atomically_publishes_aggregate_snaps
     assert result.wellness_days_stored == 1
     assert payload["schema_version"] == "athlete-snapshot-v1"
     assert payload["training_status"]["athlete_id"] == "pilot"
-    assert payload["load_history"]["schema_version"] == "load-history-v1"
+    assert payload["load_history"]["schema_version"] == "load-history-v2"
+    assert payload["load_history"]["tref_bounds_profile_version"]
+    assert all(
+        row["tref_used_min"] > 0.0
+        for row in payload["load_history"]["daily"]
+    )
+    assert all(
+        row["tref_used_min"] > 0.0
+        for row in payload["load_history"]["strength"]["daily"]
+    )
     assert payload["recovery_history"]["schema_version"] == "recovery-history-v1"
     diagnostics = payload["recovery_history"]["wellness_diagnostics"]
     assert diagnostics["schema_version"] == "wellness-coverage-v1"
@@ -268,7 +278,7 @@ def test_percentage_boundary_clamps_only_floating_point_drift():
         _bounded_percentage(100.01, "coverage")
 
 
-def test_persisted_snapshot_exposes_v1_status_and_load_history_contracts():
+def test_persisted_snapshot_exposes_v1_status_and_v2_load_history_contracts():
     repo = InMemorySnapshotRepository()
     refresh(repo, environ=ENV, client=Client(), period_end=date(2026, 8, 15))
     payload = repo.latest("pilot")
@@ -276,7 +286,7 @@ def test_persisted_snapshot_exposes_v1_status_and_load_history_contracts():
     history = load_history_from_persisted(payload)
     recovery = recovery_history_from_persisted(payload)
     assert status.schema_version == "training-status-v1"
-    assert history.schema_version == "load-history-v1"
+    assert history.schema_version == "load-history-v2"
     assert [row.zone for row in history.zones] == ["Z1", "Z2", "Z3", "Z4", "Z5"]
     assert history.activities[0].activity_ref.startswith("act_")
     assert len(history.activities[0].activity_ref) == 36
@@ -286,10 +296,10 @@ def test_persisted_snapshot_exposes_v1_status_and_load_history_contracts():
     assert recovery.settings[3].tau_days == pytest.approx(1.65)
     report = completed_work_from_persisted(payload)
     assert report.schema_version == "completed-work-v1"
-    assert report.model.source_schema_version == "load-history-v1"
+    assert report.model.source_schema_version == "load-history-v2"
     volume = volume_history_from_persisted(payload)
     assert volume.schema_version == "volume-history-v1"
-    assert volume.model.source_schema_version == "load-history-v1"
+    assert volume.model.source_schema_version == "load-history-v2"
     assert volume.model.calendar_week_start == "monday"
 
 
@@ -480,6 +490,37 @@ def test_recovery_restore_rebuilds_from_persisted_load_without_provider_io():
     assert after["wellness_calendar"] == before["wellness_calendar"]
 
 
+def test_recovery_restore_requires_v2_daily_tref_provenance():
+    repo = InMemorySnapshotRepository()
+    refresh(
+        repo,
+        environ=ENV,
+        client=Client(),
+        period_end=date(2026, 8, 15),
+    )
+    payload = dict(repo.latest("pilot"))
+    history = dict(payload["load_history"])
+    history["schema_version"] = "load-history-v1"
+    history.pop("tref_bounds_profile_version", None)
+    for row in history["daily"]:
+        row.pop("tref_used_min", None)
+    for row in history["strength"]["daily"]:
+        row.pop("tref_used_min", None)
+    payload["load_history"] = history
+    repo.replace("pilot", payload)
+
+    with pytest.raises(
+        RecoverySourceRefreshRequired, match="full real-data refresh"
+    ):
+        restore_recovery_history_from_snapshot(
+            repo,
+            athlete_alias="pilot",
+            provider_athlete_id="private-athlete",
+            athlete_settings=None,
+            environ=ENV,
+        )
+
+
 @pytest.mark.parametrize("wellness, warning", [([], "unknown"), ([{"id": "2026-01-01", "fatigue": "bad"}], "stale")])
 def test_missing_stale_invalid_wellness_is_explicit(wellness, warning):
     result = refresh(InMemorySnapshotRepository(), environ=ENV, client=Client(wellness=wellness), period_end=date(2026, 8, 15), now=datetime(2026, 8, 15, tzinfo=timezone.utc))
@@ -505,6 +546,16 @@ def test_another_athlete_cannot_inherit_pilot_physiological_inputs():
             client=Client(),
             athlete_alias="ath-another-profile",
             provider_athlete_id="another-private-id",
+            period_end=date(2026, 8, 15),
+        )
+
+
+def test_refresh_rejects_mislabelled_tref_profile_version():
+    with pytest.raises(ConfigurationError, match="Tref profile version"):
+        refresh(
+            InMemorySnapshotRepository(),
+            environ={**ENV, "ONFLOWS_TREF_VERSION": "tref-fixed-expert-v1"},
+            client=Client(),
             period_end=date(2026, 8, 15),
         )
 

@@ -1,0 +1,22 @@
+{
+  "configured": true,
+  "profile": {
+    "schema_version": "planning-profile-v1",
+    "season_start": "2026-01-01",
+    "season_end": "2026-12-31",
+    "annual_target_hours": 600.0,
+    "sessions_per_week": 8,
+    "rest_days": [0],
+    "double_session_days": [2, 5],
+    "long_session_day": 6,
+    "intensity_days": [2, 5],
+    "strength_days": [1, 4],
+    "max_key_sessions_per_week": 3,
+    "mesocycle_anchor_date": "2026-01-01",
+    "mesocycle_length_weeks": 4,
+    "camp_default_accent_limit": 2,
+    "double_threshold_enabled": true,
+    "double_threshold_day": 2,
+    "double_threshold_components": ["Z3", "Z4"]
+  }
+}
