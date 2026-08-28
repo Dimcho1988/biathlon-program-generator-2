@@ -769,7 +769,17 @@ def process_claimed_job(
             )
     except Exception as exc:
         heartbeat.stop()
-        return _fail_claim(repository, job, _classify_failure(exc))
+        failure = _classify_failure(exc)
+        chain = _exception_chain(exc)
+        logger.warning(
+            "sync_worker_pipeline_failed job_id=%s failure_code=%s "
+            "error_type=%s cause_type=%s",
+            job.job_id,
+            failure.code,
+            type(exc).__name__,
+            type(chain[-1]).__name__,
+        )
+        return _fail_claim(repository, job, failure)
     finally:
         heartbeat.stop()
 

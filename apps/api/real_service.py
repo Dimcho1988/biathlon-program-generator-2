@@ -1266,6 +1266,22 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             scientific_input_hashes[activity_ref] = str(
                 immutable_input["input_hash"]
             )
+            # An activity with no usable normalized samples can still be
+            # represented safely by the canonical pipeline as an excluded
+            # activity.  HRmod/Vflat are diagnostic-only and must not turn
+            # that valid canonical outcome into a failed full refresh.
+            if not normalized.points:
+                logger.info(
+                    "activity_shadow_excluded activity_ref=%s "
+                    "reason=NO_NORMALIZED_SAMPLES",
+                    activity_ref,
+                )
+                return {
+                    "status": "excluded",
+                    "exclusion_reason": "NO_NORMALIZED_SAMPLES",
+                    "experimental": True,
+                    "affects_canonical_load": False,
+                }
             configuration_fingerprint = activity_shadow_configuration_fingerprint(
                 context.zone_bounds_bpm, context.hrmax_bpm
             )

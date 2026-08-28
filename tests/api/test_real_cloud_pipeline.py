@@ -77,6 +77,43 @@ class StrengthClient(Client):
         raise AssertionError("strength activities must not request or use HR streams")
 
 
+class MixedStreamClient(Client):
+    def get_activities_result(self, oldest, newest):
+        return IntervalsResponse(
+            200,
+            [
+                {
+                    "id": "provider-activity-valid",
+                    "start_date_local": "2026-08-14T08:00:00",
+                },
+                {
+                    "id": "provider-activity-empty",
+                    "start_date_local": "2026-08-15T08:00:00",
+                },
+            ],
+        )
+
+    def get_activity_result(self, activity_id, *, include_intervals=False):
+        day = "2026-08-14" if activity_id.endswith("valid") else "2026-08-15"
+        return IntervalsResponse(
+            200,
+            {
+                "id": activity_id,
+                "start_date_local": f"{day}T08:00:00",
+                "type": "Run",
+                "moving_time": 60,
+                "elapsed_time": 60,
+                "icu_recording_time": 60,
+                "recording_stops": [],
+            },
+        )
+
+    def get_streams_result(self, activity_id):
+        if activity_id.endswith("empty"):
+            return IntervalsResponse(200, [])
+        return super().get_streams_result(activity_id)
+
+
 class WellnessOnlyClient(Client):
     def get_activities_result(self, oldest, newest):
         raise AssertionError("wellness-only refresh must not request activities")
@@ -118,6 +155,34 @@ def test_ingests_activity_and_wellness_then_atomically_publishes_aggregate_snaps
         "metrics": {"sleep_duration": {"value": 28800.0, "unit": "s"}},
     }]
     assert "comments" not in rendered
+
+
+def test_empty_activity_stream_excludes_shadow_without_blocking_canonical_refresh():
+    repo = InMemorySnapshotRepository()
+
+    result = refresh(
+        repo,
+        environ=ENV,
+        client=MixedStreamClient(),
+        period_end=date(2026, 8, 15),
+        now=datetime(2026, 8, 15, 12, tzinfo=timezone.utc),
+    )
+
+    payload = repo.latest("pilot")
+    assert result.processed_activities == 2
+    assert payload is not None
+    activities = payload["load_history"]["activities"]
+    assert [row["quality_status"] for row in activities] == ["valid"]
+    catalog = repo.activity_calendar(
+        "pilot", date(2026, 8, 14), date(2026, 8, 15)
+    )
+    by_status = {row["quality_status"]: row for row in catalog}
+    valid = by_status["valid"]
+    excluded = by_status["excluded"]
+    assert valid["latest_canonical_run_key"]
+    assert valid["latest_shadow_run_key"]
+    assert excluded["latest_canonical_run_key"]
+    assert excluded.get("latest_shadow_run_key") is None
 
 
 def test_wellness_only_refresh_patches_snapshot_without_reprocessing_activities():
