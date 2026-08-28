@@ -104,9 +104,16 @@ The first Render staging deployment uses the repository's
 only `onflows-api-staging`, pins the async feature branch and disables automatic
 deploys.  After API health succeeds, the same Blueprint adds
 `onflows-web-staging` for the OAuth and API-to-Supabase read-contract checks.
-The paid worker is added only after those checks pass.  None of these resources
-may be created from the production `render.yaml` or managed by a second
-Blueprint.
+The paid worker is added only after those checks pass.  The staging API and
+worker share the disposable Supabase connection plus the token-encryption,
+snapshot-salt and activity-ID secrets through the dedicated
+`onflows-staging-analysis-shared` environment group.  This group is created
+manually before the worker is added because Render does not allow
+`sync: false` values in Blueprint-managed environment groups.  Copy the five
+existing API values into it, link it only to the API and worker, then remove the
+five service-level duplicates from the API after a health check.  The web
+service does not receive that group.  None of these resources may be created
+from the production `render.yaml` or managed by a second Blueprint.
 
 The Render worker is a continuously running paid service. Creating or enabling
 it is a billing and deployment action and requires explicit approval. The
