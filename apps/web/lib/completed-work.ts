@@ -21,7 +21,7 @@ export interface CompletedWork {
   period_end: string;
   model: {
     aggregation_version: "completed-work-snapshot-aggregation-v1";
-    source_schema_version: "load-history-v1";
+    source_schema_version: "load-history-v1" | "load-history-v2";
     sport_grouping: "provider-label-exact";
   };
   quality: {
@@ -53,7 +53,7 @@ export function parseCompletedWork(value: unknown): CompletedWork {
   if (!isCalendarDate(value.period_start) || !isCalendarDate(value.period_end) || value.period_start > value.period_end) throw new Error("Невалиден период на отчета.");
   if (!isRecord(value.model) || !exactKeys(value.model, modelKeys) ||
       value.model.aggregation_version !== "completed-work-snapshot-aggregation-v1" ||
-      value.model.source_schema_version !== "load-history-v1" ||
+      !(value.model.source_schema_version === "load-history-v1" || value.model.source_schema_version === "load-history-v2") ||
       value.model.sport_grouping !== "provider-label-exact") throw new Error("Невалидни метаданни на отчета.");
   if (!isRecord(value.quality)) throw new Error("Невалидно качество на отчета.");
   const quality = value.quality;

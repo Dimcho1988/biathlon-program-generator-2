@@ -24,10 +24,14 @@ import {
   parseActivityCalendar,
   parseActivityDetail,
   parseActivitySeries,
+  parseActivityView,
   type ActivityCalendar,
   type ActivityDetail,
   type ActivitySeries,
+  type ActivityView,
 } from "./activities";
+import { parseDashboardView, type DashboardView } from "./dashboard-view";
+import { parseSyncState, type SyncState } from "./sync";
 
 // Render Free can take more than 50 seconds to wake the API after inactivity.
 // Keep the preview reliable without introducing a paid always-on service.
@@ -58,6 +62,9 @@ export interface ActivityShadowIndex {
 
 interface ResourceReliabilityOptions {
   continueAfterReadinessFailure?: boolean;
+  skipReadiness?: boolean;
+  timeoutMs?: number;
+  attempts?: number;
 }
 
 const pause = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -71,25 +78,27 @@ async function fetchApiResource(
   const baseUrl = process.env.ONFLOWS_API_BASE_URL;
   if (!baseUrl) throw new Error("ONFLOWS_API_BASE_URL не е зададен. Изберете API адрес или explicit fixture режим.");
   let readinessFailed = false;
-  try {
-    await waitForApi(baseUrl);
-  } catch (error) {
-    if (!reliability.continueAfterReadinessFailure)
-      throw new Error("API услугата не се събуди навреме.", { cause: error });
-    readinessFailed = true;
+  if (!reliability.skipReadiness) {
+    try {
+      await waitForApi(baseUrl);
+    } catch (error) {
+      if (!reliability.continueAfterReadinessFailure)
+        throw new Error("API услугата не се събуди навреме.", { cause: error });
+      readinessFailed = true;
+    }
   }
 
   // A healthy Render process can still return one transient gateway/store 5xx
   // while several dashboard resources read the same snapshot in parallel.
   // Retry only infrastructure responses; valid 4xx and contract failures still
   // fail immediately.
-  const attempts = DIRECT_WAKE_ATTEMPTS;
+  const attempts = reliability.attempts ?? DIRECT_WAKE_ATTEMPTS;
   let response: Response | null = null;
   let requestError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       response = await fetch(new URL(path, baseUrl), {
-        signal: AbortSignal.timeout(readinessFailed || attempt > 1 ? DIRECT_WAKE_TIMEOUT_MS : TIMEOUT_MS), cache: "no-store",
+        signal: AbortSignal.timeout(reliability.timeoutMs ?? (readinessFailed || attempt > 1 ? DIRECT_WAKE_TIMEOUT_MS : TIMEOUT_MS)), cache: "no-store",
         headers: {
           Accept: "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -112,6 +121,39 @@ async function fetchApiResource(
     throw new Error("API услугата не отговори навреме или не е достъпна.", { cause: requestError });
   if (!response.ok) throw new Error(`API услугата върна грешка (${response.status}).`);
   try { return await response.json(); } catch (error) { throw new Error("API услугата върна невалиден JSON.", { cause: error }); }
+}
+
+export async function getSyncState(
+  athleteAlias?: string,
+  options: { direct?: boolean } = {},
+): Promise<SyncState> {
+  const token = process.env.ONFLOWS_SERVICE_TOKEN;
+  if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
+  const payload = await fetchApiResource(
+    "/api/v2/real/sync-status",
+    token,
+    athleteAlias,
+    options.direct ? { skipReadiness: true, timeoutMs: 10_000, attempts: 1 } : {},
+  );
+  return parseSyncState(payload);
+}
+
+export async function getDashboardView(
+  athleteAlias?: string,
+  periodStart?: string,
+  periodEnd?: string,
+): Promise<DashboardView> {
+  const token = process.env.ONFLOWS_SERVICE_TOKEN;
+  if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
+  const query = new URLSearchParams();
+  if (periodStart) query.set("period_start", periodStart);
+  if (periodEnd) query.set("period_end", periodEnd);
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return parseDashboardView(await fetchApiResource(
+    `/api/v2/real/dashboard-view${suffix}`,
+    token,
+    athleteAlias,
+  ));
 }
 
 export async function getTrainingStatus(athleteAlias?: string): Promise<TrainingStatusResult> {
@@ -300,6 +342,38 @@ export async function getActivitySeries(
     if (error instanceof Error && error.message.includes("(404)")) return null;
     throw error;
   }
+}
+
+export async function getActivityView(
+  activityRef: string,
+  athleteAlias?: string,
+): Promise<ActivityView> {
+  if (!/^act_[a-f0-9]{32}$/.test(activityRef)) throw new Error("Невалиден activity reference.");
+  if (process.env.ONFLOWS_DATA_MODE === "fixture") {
+    const selected = activityCalendarFixture.activities.find((activity) => activity.activity_ref === activityRef);
+    const activity = selected
+      ? { ...activityDetailFixture, ...selected, activity_ref: selected.activity_ref }
+      : { ...activityDetailFixture, activity_ref: activityRef };
+    const shadow = activity.shadow_available ? await getActivityShadow("", activityRef) : null;
+    return parseActivityView({
+      schema_version: "activity-view-v1",
+      generation_id: null,
+      revision: 0,
+      analysis_as_of: null,
+      activated_at: null,
+      activity,
+      series: { ...activitySeriesFixture, activity_ref: activity.activity_ref },
+      shadow,
+    });
+  }
+  const token = process.env.ONFLOWS_SERVICE_TOKEN;
+  if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
+  return parseActivityView(await fetchApiResource(
+    `/api/v2/real/activities/${encodeURIComponent(activityRef)}/view`,
+    token,
+    athleteAlias,
+    { continueAfterReadinessFailure: true },
+  ));
 }
 
 export async function getAthletePlanningProfile(athleteAlias: string): Promise<PlanningProfileResponse> {

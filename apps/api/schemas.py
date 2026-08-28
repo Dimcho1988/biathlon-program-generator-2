@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
+import math
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class StrictModel(BaseModel):
@@ -14,6 +15,44 @@ class StrictModel(BaseModel):
 
 class HealthResponse(StrictModel):
     status: Literal["ok"]
+
+
+class SyncJobRequest(StrictModel):
+    scope: Literal["FULL", "WELLNESS", "RECOVERY"]
+
+
+class SyncEnqueueResponse(StrictModel):
+    schema_version: Literal["sync-enqueue-v1"]
+    job_id: str
+    scope: Literal["FULL", "WELLNESS", "RECOVERY"]
+    state: Literal["QUEUED", "RUNNING"]
+    coalesced: bool
+
+
+class SyncStateResponse(StrictModel):
+    schema_version: Literal["sync-state-v1"]
+    job_id: str | None
+    scope: Literal["FULL", "WELLNESS", "RECOVERY"] | None
+    state: Literal[
+        "IDLE",
+        "QUEUED",
+        "RUNNING",
+        "RETRY_WAIT",
+        "SUCCEEDED",
+        "FAILED",
+        "SUPERSEDED",
+    ]
+    stage: str | None
+    progress_percent: float
+    requested_at: str | None
+    started_at: str | None
+    finished_at: str | None
+    retry_at: str | None
+    failure_code: str | None
+    active_generation_id: str | None
+    active_revision: int
+    analysis_as_of: str | None
+    activated_at: str | None
 
 
 class OAuthAuthorizationResponse(StrictModel):
@@ -211,6 +250,7 @@ class DailyZoneLoad(StrictModel):
     e7_daily: float
     e40_daily: float
     status_7_40: float
+    tref_used_min: float | None = None
 
 
 class ActivityZoneLoad(StrictModel):
@@ -260,6 +300,7 @@ class DailyStrengthLoad(StrictModel):
     e7_daily: float
     e40_daily: float
     status_7_40: float
+    tref_used_min: float | None = None
 
 
 class StrengthLoadHistory(StrictModel):
@@ -269,15 +310,68 @@ class StrengthLoadHistory(StrictModel):
 
 
 class LoadHistoryResponse(StrictModel):
-    schema_version: Literal["load-history-v1"]
+    schema_version: Literal["load-history-v1", "load-history-v2"]
     athlete_id: str
     period_start: str
     period_end: str
+    tref_bounds_profile_version: str | None = None
     quality: LoadHistoryQuality
     zones: list[ZoneLoadSummary]
     daily: list[DailyZoneLoad]
     activities: list[LoadHistoryActivity]
     strength: StrengthLoadHistory | None = None
+
+    @model_validator(mode="after")
+    def validate_v2_tref_provenance(self) -> "LoadHistoryResponse":
+        if self.schema_version == "load-history-v1":
+            return self
+        if not self.tref_bounds_profile_version:
+            raise ValueError("load-history-v2 requires a Tref bounds profile version")
+        if any(
+            row.tref_used_min is None
+            or not math.isfinite(row.tref_used_min)
+            or row.tref_used_min <= 0.0
+            for row in self.daily
+        ):
+            raise ValueError("load-history-v2 requires daily aerobic Tref provenance")
+        if self.strength is not None and any(
+            row.tref_used_min is None
+            or not math.isfinite(row.tref_used_min)
+            or row.tref_used_min <= 0.0
+            for row in self.strength.daily
+        ):
+            raise ValueError("load-history-v2 requires daily strength Tref provenance")
+        try:
+            start = date.fromisoformat(self.period_start)
+            end = date.fromisoformat(self.period_end)
+        except ValueError as exc:
+            raise ValueError("load-history-v2 period is invalid") from exc
+        if end < start:
+            raise ValueError("load-history-v2 period is invalid")
+        expected_dates = {
+            (start + timedelta(days=offset)).isoformat()
+            for offset in range((end - start).days + 1)
+        }
+        expected_zone_rows = {
+            (day, zone)
+            for day in expected_dates
+            for zone in ("Z1", "Z2", "Z3", "Z4", "Z5")
+        }
+        actual_zone_rows = {(row.date, row.zone) for row in self.daily}
+        if (
+            len(self.daily) != len(expected_zone_rows)
+            or actual_zone_rows != expected_zone_rows
+        ):
+            raise ValueError("load-history-v2 requires complete daily Tref provenance")
+        if self.strength is None:
+            raise ValueError("load-history-v2 requires strength Tref provenance")
+        actual_strength_dates = {row.date for row in self.strength.daily}
+        if (
+            len(self.strength.daily) != len(expected_dates)
+            or actual_strength_dates != expected_dates
+        ):
+            raise ValueError("load-history-v2 requires complete strength Tref provenance")
+        return self
 
 
 class ActivityZoneSummary(StrictModel):
@@ -356,7 +450,13 @@ class ActivityWellnessStatus(StrictModel):
 
 
 class ActivityCalendarResponse(StrictModel):
-    schema_version: Literal["activity-calendar-index-v1"]
+    schema_version: Literal[
+        "activity-calendar-index-v1", "activity-calendar-index-v2"
+    ]
+    generation_id: str | None = None
+    revision: int | None = None
+    analysis_as_of: str | None = None
+    activated_at: str | None = None
     athlete_id: str
     period_start: str
     period_end: str
@@ -366,6 +466,13 @@ class ActivityCalendarResponse(StrictModel):
     wellness_status: ActivityWellnessStatus
     wellness_integration: Literal["DIAGNOSTIC_ONLY"]
     includes_timeseries: Literal[False]
+
+    @model_validator(mode="after")
+    def validate_generation_metadata(self) -> "ActivityCalendarResponse":
+        if self.schema_version == "activity-calendar-index-v2":
+            if self.revision is None or self.revision < 0:
+                raise ValueError("activity calendar generation revision is invalid")
+        return self
 
 
 class ActivityDetailResponse(ActivityCalendarItem):
@@ -398,9 +505,36 @@ class ActivitySeriesResponse(StrictModel):
     series: list[ActivitySeriesPoint]
 
 
+class ActivityViewResponse(StrictModel):
+    """One coherent activity page resolved from a single active generation."""
+
+    schema_version: Literal["activity-view-v1"]
+    generation_id: str | None
+    revision: int
+    analysis_as_of: str | None
+    activated_at: str | None
+    activity: ActivityDetailResponse
+    series: ActivitySeriesResponse | None
+    shadow: dict[str, Any] | None
+
+    @model_validator(mode="after")
+    def validate_generation_metadata(self) -> "ActivityViewResponse":
+        if self.revision < 0:
+            raise ValueError("activity view generation revision is invalid")
+        if (self.generation_id is None) != (self.revision == 0):
+            raise ValueError("activity view generation identity is inconsistent")
+        if self.series is not None and (
+            self.series.activity_ref != self.activity.activity_ref
+        ):
+            raise ValueError("activity view series reference is inconsistent")
+        if self.activity.shadow_available != (self.shadow is not None):
+            raise ValueError("activity view shadow availability is inconsistent")
+        return self
+
+
 class CompletedWorkMetadata(StrictModel):
     aggregation_version: Literal["completed-work-snapshot-aggregation-v1"]
-    source_schema_version: Literal["load-history-v1"]
+    source_schema_version: Literal["load-history-v1", "load-history-v2"]
     sport_grouping: Literal["provider-label-exact"]
 
 
@@ -443,7 +577,7 @@ class CompletedWorkResponse(StrictModel):
 
 class VolumeHistoryMetadata(StrictModel):
     aggregation_version: Literal["volume-history-calendar-week-v1"]
-    source_schema_version: Literal["load-history-v1"]
+    source_schema_version: Literal["load-history-v1", "load-history-v2"]
     calendar_week_start: Literal["monday"]
     activity_duration_handling: Literal["known-values-only"]
 
@@ -606,3 +740,16 @@ class AthleteSnapshot(StrictModel):
     load_history: LoadHistoryResponse
     recovery_history: RecoveryHistoryResponse | None = None
     wellness_calendar: list[DailyWellnessSummary] = []
+
+
+class DashboardViewResponse(StrictModel):
+    schema_version: Literal["dashboard-view-v1"]
+    generation_id: str | None
+    revision: int
+    analysis_as_of: str | None
+    activated_at: str | None
+    training_status: TrainingStatusResponse
+    completed_work: CompletedWorkResponse
+    load_history: LoadHistoryResponse
+    recovery_history: RecoveryHistoryResponse | None
+    volume_history: VolumeHistoryResponse

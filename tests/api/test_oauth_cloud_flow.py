@@ -414,7 +414,7 @@ def test_supabase_planning_profile_round_trip_is_scoped_to_alias():
         season_start=date(2026, 1, 1),
         season_end=date(2026, 12, 31),
         annual_target_hours=600.0,
-        sessions_per_week=9,
+        sessions_per_week=8,
         rest_days=(0,),
         double_session_days=(2, 5),
         long_session_day=6,

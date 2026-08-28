@@ -27,6 +27,14 @@ from .mirror_area_shift import WaveAreaShiftResult, shift_mirror_wave_areas
 from .wave_detection_v4 import WaveDetectionResult, detect_hr_waves
 
 
+class HRmodInputUnsuitableError(ValueError):
+    """Typed, formula-neutral rejection of an unsuitable activity HR input."""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
 def _optional_float(value: float) -> float | None:
     return float(value) if isfinite(float(value)) else None
 
@@ -380,13 +388,17 @@ def compute_hrmod_hr_only(
     cleaned = clean_hr_signal(hr_samples, config)
     finite_clean = cleaned.clean_hr[np.isfinite(cleaned.clean_hr)]
     if len(finite_clean) == 0:
-        raise ValueError("no usable HR remains after transparent cleaning")
+        raise HRmodInputUnsuitableError(
+            "HRMOD_NO_USABLE_HR",
+            "no usable HR remains after transparent cleaning",
+        )
     if np.any(finite_clean < athlete_profile.hr_floor_bpm) or np.any(
         finite_clean > athlete_profile.hrmax_bpm
     ):
-        raise ValueError(
+        raise HRmodInputUnsuitableError(
+            "HRMOD_HR_OUTSIDE_PROFILE",
             "clean HR lies outside the explicitly supplied HR floor/HRmax; "
-            "adjust the profile or HR cleaning settings"
+            "adjust the profile or HR cleaning settings",
         )
 
     detection = detect_hr_waves(

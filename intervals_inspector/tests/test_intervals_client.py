@@ -1,21 +1,44 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 from typing import Any
 from unittest.mock import Mock
 
 import pytest
 import requests
 
+from intervals_inspector import intervals_client as intervals_client_module
 from intervals_inspector.intervals_client import (
     IntervalsAPIError,
     IntervalsClient,
+    IntervalsRequestPacer,
     IntervalsResponse,
+    MAX_RETRY_AFTER_SECONDS,
+    MAX_REQUESTS_PER_SECOND,
 )
 
 
 TOKEN = "test-token-that-must-not-leak"
 ATHLETE_ID = "123456"
+
+
+class FakeTime:
+    def __init__(self, observer: Callable[[float], None] | None = None) -> None:
+        self.value = 0.0
+        self.observer = observer
+        self._lock = Lock()
+
+    def __call__(self) -> float:
+        with self._lock:
+            return self.value
+
+    def sleep(self, delay: float) -> None:
+        if self.observer is not None:
+            self.observer(delay)
+        with self._lock:
+            self.value += delay
 
 
 def _response(
@@ -40,11 +63,13 @@ def _client(
     session = Mock(spec=requests.Session)
     if responses is not None:
         session.get.side_effect = responses
+    fake_time = FakeTime(sleeper)
     client = IntervalsClient(
         TOKEN,
         ATHLETE_ID,
         session=session,
-        sleeper=sleeper or (lambda _delay: None),
+        sleeper=fake_time.sleep,
+        clock=fake_time,
         max_retries=max_retries,
     )
     return client, session
@@ -230,11 +255,11 @@ def test_rejects_invalid_date_ranges_before_http(
     session.get.assert_not_called()
 
 
-def test_429_retries_twice_and_caps_retry_after_without_real_sleep() -> None:
+def test_429_retries_twice_for_short_retry_after_without_double_sleep() -> None:
     delays: list[float] = []
     client, session = _client(
         [
-            _response(429, headers={"Retry-After": "999"}),
+            _response(429, headers={"Retry-After": "5"}),
             _response(429, headers={"Retry-After": "2"}),
             _response(200, payload=[{"id": "ok"}]),
         ],
@@ -245,7 +270,27 @@ def test_429_retries_twice_and_caps_retry_after_without_real_sleep() -> None:
 
     assert result == [{"id": "ok"}]
     assert session.get.call_count == 3
+    # Pacing and Retry-After share one scheduled wait per retry rather than
+    # sleeping independently.
     assert delays == [5.0, 2.0]
+
+
+def test_long_retry_after_skips_internal_retry_for_durable_scheduling() -> None:
+    delays: list[float] = []
+    client, session = _client(
+        [_response(429, headers={"Retry-After": "7200"})],
+        sleeper=delays.append,
+    )
+
+    with pytest.raises(IntervalsAPIError) as caught:
+        client.get_athlete()
+
+    assert session.get.call_count == 1
+    assert delays == []
+    assert caught.value.status_code == 429
+    assert caught.value.retry_after_seconds == 7200.0
+    assert caught.value.retryable is True
+    assert caught.value.terminal is False
 
 
 def test_5xx_retries_twice_with_bounded_exponential_backoff() -> None:
@@ -259,22 +304,25 @@ def test_5xx_retries_twice_with_bounded_exponential_backoff() -> None:
         client.get_athlete()
 
     assert caught.value.status_code == 502
+    assert caught.value.retryable is True
+    assert caught.value.terminal is False
+    assert caught.value.classification == "RETRYABLE"
     assert session.get.call_count == 3
     assert delays == [0.5, 1.0]
 
 
 @pytest.mark.parametrize(
-    ("status", "expected_fragment"),
+    ("status", "expected_fragment", "retryable", "terminal"),
     [
-        (401, "401"),
-        (403, "403"),
-        (429, "429"),
-        (500, "500"),
-        (503, "503"),
+        (401, "401", False, True),
+        (403, "403", False, True),
+        (429, "429", True, False),
+        (500, "500", True, False),
+        (503, "503", True, False),
     ],
 )
 def test_status_errors_are_sanitized(
-    status: int, expected_fragment: str
+    status: int, expected_fragment: str, retryable: bool, terminal: bool
 ) -> None:
     client, _session = _client([_response(status)], max_retries=0)
 
@@ -286,6 +334,11 @@ def test_status_errors_are_sanitized(
     assert TOKEN not in message
     assert "https://intervals.icu" not in message
     assert caught.value.status_code == status
+    assert caught.value.retryable is retryable
+    assert caught.value.terminal is terminal
+    assert caught.value.classification == (
+        "RETRYABLE" if retryable else "TERMINAL"
+    )
 
 
 def test_other_http_error_is_sanitized() -> None:
@@ -295,6 +348,8 @@ def test_other_http_error_is_sanitized() -> None:
         client.get_streams("i404")
 
     assert caught.value.status_code == 404
+    assert caught.value.retryable is False
+    assert caught.value.terminal is True
     assert "404" in str(caught.value)
     assert TOKEN not in str(caught.value)
 
@@ -310,6 +365,11 @@ def test_network_error_does_not_include_request_or_token() -> None:
 
     assert TOKEN not in str(caught.value)
     assert "Authorization" not in str(caught.value)
+    assert session.get.call_count == 3
+    assert caught.value.status_code is None
+    assert caught.value.retryable is True
+    assert caught.value.terminal is False
+    assert caught.value.retry_after_seconds is None
 
 
 def test_invalid_json_does_not_include_response_payload() -> None:
@@ -323,6 +383,8 @@ def test_invalid_json_does_not_include_response_payload() -> None:
     assert TOKEN not in str(caught.value)
     assert "JSON" in str(caught.value)
     assert caught.value.status_code == 200
+    assert caught.value.retryable is False
+    assert caught.value.terminal is True
 
 
 def test_no_content_is_a_successful_empty_result() -> None:
@@ -356,4 +418,103 @@ def test_rejects_unsafe_transport_configuration(
             ATHLETE_ID,
             timeout=timeout,
             max_retries=max_retries,
+        )
+
+
+def test_default_pacer_is_process_wide_across_client_instances(monkeypatch) -> None:
+    fake_time = FakeTime()
+    pacer = IntervalsRequestPacer(
+        clock=fake_time,
+        sleeper=fake_time.sleep,
+    )
+    monkeypatch.setattr(intervals_client_module, "_PROCESS_WIDE_PACER", pacer)
+    starts: list[float] = []
+    session = Mock(spec=requests.Session)
+
+    def record_request(*_args, **_kwargs):
+        starts.append(fake_time())
+        return _response(payload={"ok": True})
+
+    session.get.side_effect = record_request
+    first = IntervalsClient(TOKEN, ATHLETE_ID, session=session)
+    second = IntervalsClient(TOKEN, "654321", session=session)
+
+    for index in range(9):
+        (first if index % 2 == 0 else second).get_athlete()
+
+    minimum_interval = 1.0 / MAX_REQUESTS_PER_SECOND
+    assert starts == pytest.approx(
+        [index * minimum_interval for index in range(9)]
+    )
+    assert starts[8] - starts[0] >= 1.0
+
+
+def test_injected_clock_and_sleeper_are_isolated_from_process_pacer() -> None:
+    first_delays: list[float] = []
+    second_delays: list[float] = []
+    first, _ = _client([_response()], sleeper=first_delays.append)
+    second, _ = _client([_response()], sleeper=second_delays.append)
+
+    first.get_athlete()
+    second.get_athlete()
+
+    assert first_delays == []
+    assert second_delays == []
+
+
+def test_pacer_reserves_unique_slots_under_concurrent_callers() -> None:
+    pacer = IntervalsRequestPacer(
+        clock=lambda: 0.0,
+        sleeper=lambda _delay: None,
+    )
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        reserved_delays = list(pool.map(lambda _index: pacer.wait(), range(16)))
+
+    minimum_interval = 1.0 / MAX_REQUESTS_PER_SECOND
+    assert sorted(reserved_delays) == pytest.approx(
+        [index * minimum_interval for index in range(16)]
+    )
+
+
+def test_retry_after_is_numeric_bounded_and_never_contains_response_data() -> None:
+    client, _ = _client(
+        [
+            _response(
+                429,
+                payload={"private": TOKEN},
+                headers={"Retry-After": "999999"},
+            )
+        ],
+        max_retries=0,
+    )
+
+    with pytest.raises(IntervalsAPIError) as caught:
+        client.get_athlete()
+
+    assert caught.value.retry_after_seconds == MAX_RETRY_AFTER_SECONDS
+    assert caught.value.retryable is True
+    assert caught.value.terminal is False
+    assert TOKEN not in str(caught.value)
+    assert TOKEN not in repr(caught.value)
+
+
+@pytest.mark.parametrize("requests_per_second", (0, -1, 8.01, float("inf")))
+def test_pacer_rejects_rates_outside_the_conservative_limit(
+    requests_per_second: float,
+) -> None:
+    with pytest.raises(ValueError, match="between 0 and 8"):
+        IntervalsRequestPacer(requests_per_second=requests_per_second)
+
+
+def test_custom_pacer_cannot_be_mixed_with_another_clock_or_sleeper() -> None:
+    pacer = IntervalsRequestPacer(
+        clock=lambda: 0.0,
+        sleeper=lambda _delay: None,
+    )
+    with pytest.raises(ValueError, match="cannot be combined"):
+        IntervalsClient(
+            TOKEN,
+            ATHLETE_ID,
+            request_pacer=pacer,
+            sleeper=lambda _delay: None,
         )

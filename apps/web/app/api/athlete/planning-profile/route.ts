@@ -71,7 +71,6 @@ export async function POST(request: Request) {
       || sessions === null
       || restDays === null
       || restDays.length >= 7
-      || sessions > 2 * (7 - restDays.length)
       || doubleSessionDays === null
       || longSessionDay === null
       || intensityDays === null
@@ -83,7 +82,10 @@ export async function POST(request: Request) {
       || (doubleThresholdRaw !== null && !doubleThresholdEnabled)
       || doubleThresholdDay === null
       || !validComponents
+      || doubleSessionDays.some((day) => restDays.includes(day))
+      || sessions > (7 - restDays.length) + doubleSessionDays.length
       || (doubleThresholdEnabled && restDays.includes(doubleThresholdDay))
+      || (doubleThresholdEnabled && !doubleSessionDays.includes(doubleThresholdDay))
       || (doubleThresholdEnabled && maxKeySessions < 2)
     ) return redirect("invalid");
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 
 import pytest
 
 from apps.api.activity_shadow_pipeline import (
+    ActivityShadowStageError,
     activity_shadow_configuration_fingerprint,
     build_immutable_activity_input,
     compute_activity_shadow,
@@ -71,6 +73,61 @@ def test_shadow_results_have_parallel_fields_and_missing_hrmax_fails_closed() ->
     assert len(derived["segments_15s"]) >= 6
 
 
+def test_hr_only_shadow_normalizes_unavailable_vflat_numbers_to_null() -> None:
+    normalized = normalize_stream_intervals(
+        NormalizerInput(
+            offsets=list(range(61)),
+            metrics={"heartrate": [145.0] * 61},
+        )
+    )
+
+    _, derived = compute_activity_shadow(
+        detail={"start_date": "2026-01-01T10:00:00Z"},
+        normalized=normalized,
+        zone_bounds_bpm=(50, 100, 120, 140, 160, 190),
+        explicit_hrmax_bpm=200,
+    )
+
+    assert all(row["vflat_b65_kmh"] is None for row in derived["timeseries"])
+    assert all(row["grade_smoothed_pct"] is None for row in derived["timeseries"])
+    assert all(row["vflat_b65_kmh"] is None for row in derived["segments_15s"])
+    assert all(row["grade_smoothed_pct"] is None for row in derived["segments_15s"])
+    json.dumps(derived, allow_nan=False)
+
+
+@pytest.mark.parametrize(
+    ("heart_rate", "reason"),
+    [
+        (None, "HRMOD_NO_USABLE_HR"),
+        (80.0, "HRMOD_HR_OUTSIDE_PROFILE"),
+    ],
+)
+def test_unsuitable_hr_excludes_only_hrmod_diagnostics(
+    heart_rate: float | None, reason: str
+) -> None:
+    normalized = normalize_stream_intervals(
+        NormalizerInput(
+            offsets=list(range(61)),
+            metrics={
+                "heartrate": [heart_rate] * 61,
+                "velocity_smooth": [5.0] * 61,
+            },
+        )
+    )
+
+    _, derived = compute_activity_shadow(
+        detail={"start_date": "2026-01-01T10:00:00Z"},
+        normalized=normalized,
+        zone_bounds_bpm=(100, 120, 140, 160, 180, 190),
+        explicit_hrmax_bpm=200,
+    )
+
+    assert derived["diagnostics"]["hrmod"]["flags"] == [reason]
+    assert all(row["exclusion_reason"] == reason for row in derived["timeseries"])
+    assert any(row["vflat_model_version"] for row in derived["timeseries"])
+    assert derived["affects_canonical_load"] is False
+
+
 def test_explicit_hrmax_enables_hrmod_without_changing_immutable_input() -> None:
     detail = {"start_date": "2026-01-01T10:00:00Z"}
     normalized = _normalized()
@@ -113,13 +170,14 @@ def test_shadow_configuration_changes_for_zones_or_hrmax() -> None:
 
 
 def test_explicit_hrmax_must_not_be_inferred_from_z5() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ActivityShadowStageError) as caught:
         compute_activity_shadow(
             detail={"start_date": "2026-01-01T10:00:00Z"},
             normalized=_normalized(),
             zone_bounds_bpm=(50, 100, 120, 140, 160, 200),
             explicit_hrmax_bpm=190,
         )
+    assert caught.value.safe_stage == "PROFILE"
 
 
 def test_hrmod_keeps_original_irregular_timestamps_and_gap_flags() -> None:

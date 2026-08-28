@@ -105,12 +105,13 @@ export function PlanningProfileForm({
       <fieldset>
         <legend>Седмична структура</legend>
         <div className="planning-grid three-columns">
-          <label><span>Сесии седмично</span><input name="sessions_per_week" type="number" min="1" max="14" step="1" defaultValue={profile?.sessions_per_week} required /></label>
+          <label><span>Сесии седмично</span><input name="sessions_per_week" type="number" min="1" max="14" step="1" defaultValue={profile?.sessions_per_week} aria-describedby="planning-session-capacity" required /></label>
           <label><span>Дълга аеробна тренировка</span><WeekdaySelect name="long_session_day" selected={profile?.long_session_day} /></label>
           <label><span>Максимум ключови сесии</span><input name="max_key_sessions_per_week" type="number" min="0" max="8" step="1" defaultValue={profile?.max_key_sessions_per_week} required /></label>
         </div>
         <div className="planning-choice-group"><h2>Дни за пълна почивка</h2><WeekdayChoices name="rest_days" selected={profile?.rest_days} /></div>
         <div className="planning-choice-group"><h2>Разрешени дни с две сесии</h2><WeekdayChoices name="double_session_days" selected={profile?.double_session_days} /></div>
+        <p id="planning-session-capacity" className="muted">Максимумът е по една сесия за всеки непочивен ден плюс още една само за всеки изрично избран двоен ден. Двоен ден не може да бъде ден за почивка.</p>
         <div className="planning-choice-group"><h2>Предпочитани интензивни дни</h2><WeekdayChoices name="intensity_days" selected={profile?.intensity_days} /></div>
         <div className="planning-choice-group"><h2>Предпочитани силови дни</h2><WeekdayChoices name="strength_days" selected={profile?.strength_days} /></div>
       </fieldset>
@@ -142,6 +143,7 @@ export function PlanningProfileForm({
             </div>
           </div>
         </div>
+        <p className="muted">Когато двойната прагова тренировка е разрешена, предпочитаният ден трябва да е избран и като ден с две сесии.</p>
       </fieldset>
 
       <button className="action-button" type="submit">Запази профила за планиране</button>

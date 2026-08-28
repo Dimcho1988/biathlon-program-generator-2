@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import hashlib
 import json
 import logging
@@ -157,6 +157,7 @@ class SupabasePilotRepository(SnapshotRepository):
         secret_key: str,
         encryption_key: str,
         client: httpx.Client | None = None,
+        generation_reads: bool = False,
     ) -> None:
         if not supabase_url.startswith("https://") or not secret_key:
             raise PersistentStoreConfigurationError(
@@ -173,6 +174,7 @@ class SupabasePilotRepository(SnapshotRepository):
             self._headers["Authorization"] = f"Bearer {secret_key}"
         self._cipher = TokenCipher(encryption_key)
         self._client = client or httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0))
+        self._generation_reads = generation_reads
 
     @classmethod
     def from_environment(
@@ -187,6 +189,7 @@ class SupabasePilotRepository(SnapshotRepository):
             secret_key=env.get("SUPABASE_SECRET_KEY", "").strip(),
             encryption_key=env.get("ONFLOWS_TOKEN_ENCRYPTION_KEY", "").strip(),
             client=client,
+            generation_reads=True,
         )
 
     def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
@@ -245,6 +248,37 @@ class SupabasePilotRepository(SnapshotRepository):
     @staticmethod
     def _secret_hash(value: str) -> str:
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    def _rpc_rows(self, name: str, payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+        response = self._request("POST", f"/rpc/{name}", json=dict(payload))
+        value = self._json(response)
+        if not isinstance(value, list) or not all(
+            isinstance(row, Mapping) for row in value
+        ):
+            raise PersistentStoreFailure("Persistent RPC response is invalid")
+        return value
+
+    def _rpc_row(
+        self, name: str, payload: Mapping[str, Any]
+    ) -> Mapping[str, Any] | None:
+        rows = self._rpc_rows(name, payload)
+        return dict(rows[0]) if rows else None
+
+    @staticmethod
+    def _canonical_payload_hash(payload: Mapping[str, Any]) -> str:
+        try:
+            rendered = json.dumps(
+                dict(payload),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise PersistentStoreFailure(
+                "Generation activity payload is invalid"
+            ) from exc
+        return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
     def create_oauth_state(
         self,
@@ -584,6 +618,13 @@ class SupabasePilotRepository(SnapshotRepository):
         )
 
     def latest(self, athlete_alias: str) -> Mapping[str, Any] | None:
+        if self._generation_reads:
+            analysis = self.active_analysis(athlete_alias)
+            return (
+                dict(analysis["snapshot_payload"])
+                if analysis is not None
+                else None
+            )
         alias = quote(athlete_alias, safe="")
         response = self._request(
             "GET",
@@ -599,7 +640,121 @@ class SupabasePilotRepository(SnapshotRepository):
             raise PersistentStoreFailure("Stored training snapshot is invalid")
         return dict(snapshot)
 
+    def latest_envelope(self, athlete_alias: str) -> Mapping[str, Any] | None:
+        analysis = self.active_analysis(athlete_alias)
+        if analysis is None:
+            return None
+        return {
+            "payload": dict(analysis["snapshot_payload"]),
+            "generation_id": analysis["generation_id"],
+            "revision": analysis["revision"],
+            "activated_at": analysis["activated_at"],
+        }
+
+    def active_analysis(self, athlete_alias: str) -> Mapping[str, Any] | None:
+        row = self._rpc_row(
+            "active_onflows_analysis", {"p_athlete_alias": athlete_alias}
+        )
+        if row is None:
+            return None
+        snapshot = row.get("snapshot_payload")
+        revision = row.get("revision")
+        generation_id = row.get("generation_id")
+        if (
+            not isinstance(snapshot, Mapping)
+            or isinstance(revision, bool)
+            or not isinstance(revision, int)
+            or revision < 0
+            or (generation_id is not None and not isinstance(generation_id, str))
+        ):
+            raise PersistentStoreFailure("Stored active analysis is invalid")
+        return {
+            "generation_id": generation_id,
+            "revision": revision,
+            "analysis_as_of": row.get("analysis_as_of"),
+            "activated_at": row.get("activated_at"),
+            "snapshot_payload": dict(snapshot),
+        }
+
+    def active_activity_calendar(
+        self, athlete_alias: str, period_start: date, period_end: date
+    ) -> Mapping[str, Any] | None:
+        row = self._rpc_row(
+            "active_onflows_activity_calendar",
+            {
+                "p_athlete_alias": athlete_alias,
+                "p_period_start": period_start.isoformat(),
+                "p_period_end": period_end.isoformat(),
+            },
+        )
+        if row is None:
+            return None
+        activities = row.get("activities")
+        snapshot = row.get("snapshot_payload")
+        revision = row.get("revision")
+        if (
+            not isinstance(activities, list)
+            or not all(isinstance(activity, Mapping) for activity in activities)
+            or not isinstance(snapshot, Mapping)
+            or isinstance(revision, bool)
+            or not isinstance(revision, int)
+            or revision < 0
+        ):
+            raise PersistentStoreFailure("Stored active activity calendar is invalid")
+        return {
+            "generation_id": row.get("generation_id"),
+            "revision": revision,
+            "analysis_as_of": row.get("analysis_as_of"),
+            "activated_at": row.get("activated_at"),
+            "snapshot_payload": dict(snapshot),
+            "activities": [dict(activity) for activity in activities],
+        }
+
+    def active_activity_view(
+        self, athlete_alias: str, activity_ref: str
+    ) -> Mapping[str, Any] | None:
+        row = self._rpc_row(
+            "active_onflows_activity_view",
+            {
+                "p_athlete_alias": athlete_alias,
+                "p_activity_ref": activity_ref,
+            },
+        )
+        if row is None:
+            return None
+        catalog = row.get("catalog_payload")
+        series = row.get("series_payload")
+        shadow = row.get("shadow_payload")
+        if not isinstance(catalog, Mapping):
+            raise PersistentStoreFailure("Pinned activity view is invalid")
+        for key, payload in (
+            ("input_key", series),
+            ("shadow_run_key", shadow),
+        ):
+            pointer = row.get(key)
+            if pointer is not None and (
+                not isinstance(pointer, str)
+                or len(pointer) != 64
+                or not isinstance(payload, Mapping)
+            ):
+                raise PersistentStoreFailure("Pinned activity view is incomplete")
+            if pointer is None and payload is not None:
+                raise PersistentStoreFailure("Pinned activity view is inconsistent")
+        canonical_key = row.get("canonical_run_key")
+        if canonical_key is not None and (
+            not isinstance(canonical_key, str) or len(canonical_key) != 64
+        ):
+            raise PersistentStoreFailure("Pinned activity view is invalid")
+        return {
+            **dict(row),
+            "catalog_payload": dict(catalog),
+            "series_payload": dict(series) if isinstance(series, Mapping) else None,
+            "shadow_payload": dict(shadow) if isinstance(shadow, Mapping) else None,
+        }
+
     def replace(self, athlete_alias: str, snapshot: Mapping[str, Any]) -> None:
+        """Legacy revision-zero projection retained for rollout compatibility."""
+
         self._request(
             "POST",
             "/onflows_training_snapshots?on_conflict=athlete_alias",
@@ -610,6 +765,251 @@ class SupabasePilotRepository(SnapshotRepository):
             },
             headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
         )
+
+    def enqueue_sync_job(
+        self,
+        *,
+        athlete_alias: str,
+        job_kind: str,
+        idempotency_key: str,
+        request_payload: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        row = self._rpc_row(
+            "enqueue_onflows_sync_job",
+            {
+                "p_athlete_alias": athlete_alias,
+                "p_job_kind": job_kind,
+                "p_idempotency_key": idempotency_key,
+                "p_request_payload": dict(request_payload),
+            },
+        )
+        if row is None or not isinstance(row.get("job_id"), str):
+            raise PersistentStoreFailure("Sync job could not be enqueued")
+        return dict(row)
+
+    def sync_state(self, athlete_alias: str) -> Mapping[str, Any]:
+        row = self._rpc_row(
+            "onflows_sync_state", {"p_athlete_alias": athlete_alias}
+        )
+        if row is None:
+            raise PersistentStoreFailure("Sync state is unavailable")
+        revision = row.get("active_revision")
+        request_sequence = row.get("request_sequence")
+        if (
+            isinstance(revision, bool)
+            or not isinstance(revision, int)
+            or revision < 0
+            or isinstance(request_sequence, bool)
+            or not isinstance(request_sequence, int)
+            or request_sequence < 0
+        ):
+            raise PersistentStoreFailure("Stored sync state is invalid")
+        return dict(row)
+
+    def claim_sync_job(
+        self, *, worker_id: str, lease_seconds: int = 300
+    ) -> Mapping[str, Any] | None:
+        return self._rpc_row(
+            "claim_onflows_sync_job",
+            {
+                "p_worker_id": worker_id,
+                "p_lease_seconds": lease_seconds,
+            },
+        )
+
+    def renew_sync_lease(
+        self,
+        *,
+        job_id: str,
+        generation_id: str,
+        lease_token: str,
+        lease_seconds: int = 300,
+    ) -> bool:
+        response = self._request(
+            "POST",
+            "/rpc/renew_onflows_sync_lease",
+            json={
+                "p_job_id": job_id,
+                "p_generation_id": generation_id,
+                "p_lease_token": lease_token,
+                "p_lease_seconds": lease_seconds,
+            },
+        )
+        value = self._json(response)
+        if not isinstance(value, bool):
+            raise PersistentStoreFailure("Sync lease response is invalid")
+        return value
+
+    def stage_analysis_generation(
+        self,
+        *,
+        job_id: str,
+        generation_id: str,
+        lease_token: str,
+        snapshot_payload: Mapping[str, Any],
+        snapshot_hash: str,
+        period_start: date,
+        period_end: date,
+        as_of: date,
+        provenance: Mapping[str, Any],
+        activities: list[Mapping[str, Any]],
+        inherit_activities: bool = False,
+    ) -> Mapping[str, Any]:
+        normalized: list[dict[str, Any]] = []
+        for activity in activities:
+            source = activity.get("catalog_payload")
+            catalog_payload = (
+                dict(source) if isinstance(source, Mapping) else dict(activity)
+            )
+            activity_ref = activity.get("activity_ref") or catalog_payload.get(
+                "activity_ref"
+            )
+            if not isinstance(activity_ref, str) or not activity_ref:
+                raise PersistentStoreFailure(
+                    "Generation activity identity is invalid"
+                )
+            normalized.append(
+                {
+                    "activity_ref": activity_ref,
+                    "start_at_utc": activity.get(
+                        "start_at_utc", catalog_payload.get("start_at_utc")
+                    ),
+                    "local_date": activity.get(
+                        "local_date", catalog_payload.get("local_date")
+                    ),
+                    "catalog_payload": catalog_payload,
+                    "payload_hash": activity.get("payload_hash")
+                    or self._canonical_payload_hash(catalog_payload),
+                    "input_key": activity.get("input_key"),
+                    "canonical_run_key": activity.get("canonical_run_key")
+                    or catalog_payload.get("latest_canonical_run_key"),
+                    "shadow_run_key": activity.get("shadow_run_key")
+                    or catalog_payload.get("latest_shadow_run_key"),
+                }
+            )
+        row = self._rpc_row(
+            "stage_onflows_analysis_generation",
+            {
+                "p_job_id": job_id,
+                "p_generation_id": generation_id,
+                "p_lease_token": lease_token,
+                "p_snapshot_payload": dict(snapshot_payload),
+                "p_snapshot_hash": snapshot_hash,
+                "p_period_start": period_start.isoformat(),
+                "p_period_end": period_end.isoformat(),
+                "p_as_of": as_of.isoformat(),
+                "p_provenance": dict(provenance),
+                "p_activities": normalized,
+                "p_inherit_activities": inherit_activities,
+            },
+        )
+        if row is None or row.get("outcome") not in {"READY", "ALREADY_READY"}:
+            raise PersistentStoreFailure("Analysis generation could not be staged")
+        return dict(row)
+
+    def activate_analysis_generation(
+        self, *, job_id: str, generation_id: str, lease_token: str
+    ) -> Mapping[str, Any]:
+        row = self._rpc_row(
+            "activate_onflows_analysis_generation",
+            {
+                "p_job_id": job_id,
+                "p_generation_id": generation_id,
+                "p_lease_token": lease_token,
+            },
+        )
+        if row is None or row.get("outcome") not in {
+            "ACTIVATED",
+            "STALE",
+            "LEASE_LOST",
+        }:
+            raise PersistentStoreFailure("Analysis activation response is invalid")
+        return dict(row)
+
+    def fail_sync_job(
+        self,
+        *,
+        job_id: str,
+        generation_id: str,
+        lease_token: str,
+        error_code: str,
+        retryable: bool,
+        retry_after_seconds: int | None = None,
+    ) -> Mapping[str, Any]:
+        row = self._rpc_row(
+            "fail_onflows_sync_job",
+            {
+                "p_job_id": job_id,
+                "p_generation_id": generation_id,
+                "p_lease_token": lease_token,
+                "p_error_code": error_code,
+                "p_retryable": retryable,
+                "p_retry_after_seconds": retry_after_seconds,
+            },
+        )
+        if row is None or row.get("status") not in {
+            "RETRY_WAIT",
+            "FAILED",
+            "SUPERSEDED",
+            "LEASE_LOST",
+        }:
+            raise PersistentStoreFailure("Sync failure response is invalid")
+        return dict(row)
+
+    def rollback_analysis_generation(
+        self, *, athlete_alias: str, target_generation_id: str
+    ) -> Mapping[str, Any]:
+        row = self._rpc_row(
+            "rollback_onflows_analysis_generation",
+            {
+                "p_athlete_alias": athlete_alias,
+                "p_target_generation_id": target_generation_id,
+            },
+        )
+        if row is None or row.get("outcome") != "ROLLED_BACK":
+            raise PersistentStoreFailure("Analysis rollback response is invalid")
+        return dict(row)
+
+    def prune_analysis_generations(
+        self,
+        *,
+        athlete_alias: str,
+        keep_superseded: int = 5,
+        terminal_older_than_days: int = 30,
+        batch_limit: int = 100,
+    ) -> Mapping[str, int]:
+        if (
+            not 1 <= keep_superseded <= 50
+            or not 30 <= terminal_older_than_days <= 365
+            or not 1 <= batch_limit <= 1000
+        ):
+            raise ValueError("invalid analysis retention policy")
+        row = self._rpc_row(
+            "prune_onflows_analysis_generations",
+            {
+                "p_athlete_alias": athlete_alias,
+                "p_keep_superseded": keep_superseded,
+                "p_terminal_older_than": f"{terminal_older_than_days} days",
+                "p_batch_limit": batch_limit,
+            },
+        )
+        count_keys = (
+            "deleted_generations",
+            "deleted_activity_rows",
+            "deleted_jobs",
+            "deleted_shadow_runs",
+            "deleted_canonical_runs",
+            "deleted_model_inputs",
+            "deleted_catalog_rows",
+        )
+        if row is None or any(
+            isinstance(row.get(key), bool)
+            or not isinstance(row.get(key), int)
+            or int(row[key]) < 0
+            for key in count_keys
+        ):
+            raise PersistentStoreFailure("Analysis retention response is invalid")
+        return {key: int(row[key]) for key in count_keys}
 
     def publish_activity_shadow(
         self,
@@ -713,9 +1113,84 @@ class SupabasePilotRepository(SnapshotRepository):
         )
         return run_key
 
+    def store_canonical_activity_result(
+        self,
+        *,
+        athlete_alias: str,
+        activity_ref: str,
+        scientific_input_hash: str,
+        result_payload: Mapping[str, Any],
+    ) -> str:
+        """Insert one immutable run without advancing the legacy catalog."""
+
+        if len(scientific_input_hash) != 64:
+            raise PersistentStoreFailure(
+                "Canonical scientific input hash is invalid"
+            )
+        rendered = json.dumps(
+            dict(result_payload),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        result_hash = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+        run_key = hashlib.sha256(
+            (
+                f"{athlete_alias}|{activity_ref}|{scientific_input_hash}|"
+                f"{result_hash}"
+            ).encode("utf-8")
+        ).hexdigest()
+        self._request(
+            "POST",
+            "/rpc/store_onflows_canonical_activity_result",
+            json={
+                "p_run_key": run_key,
+                "p_athlete_alias": athlete_alias,
+                "p_activity_ref": activity_ref,
+                "p_scientific_input_hash": scientific_input_hash,
+                "p_result_hash": result_hash,
+                "p_schema_version": str(
+                    result_payload.get("schema_version") or ""
+                ),
+                "p_model_version": str(result_payload.get("model_version") or ""),
+                "p_result_payload": dict(result_payload),
+            },
+            headers={"Prefer": "return=minimal"},
+        )
+        return run_key
+
     def activity_shadow(
         self, athlete_alias: str, activity_ref: str
     ) -> Mapping[str, Any] | None:
+        if self._generation_reads:
+            pointer = self._active_activity_pointer(athlete_alias, activity_ref)
+            if pointer is None or not pointer.get("shadow_run_key"):
+                return None
+            alias = quote(athlete_alias, safe="")
+            reference = quote(activity_ref, safe="")
+            run_key = quote(str(pointer["shadow_run_key"]), safe="")
+            response = self._request(
+                "GET",
+                "/onflows_activity_derived_runs?select=result_payload"
+                f"&run_key=eq.{run_key}&athlete_alias=eq.{alias}"
+                f"&activity_ref=eq.{reference}&limit=1",
+            )
+            payload = self._json(response)
+            if not isinstance(payload, list) or not payload:
+                raise PersistentStoreFailure(
+                    "Pinned activity shadow result is unavailable"
+                )
+            result = (
+                payload[0].get("result_payload")
+                if isinstance(payload[0], Mapping)
+                else None
+            )
+            if not isinstance(result, Mapping):
+                raise PersistentStoreFailure(
+                    "Pinned activity shadow result is invalid"
+                )
+            return dict(result)
         alias = quote(athlete_alias, safe="")
         reference = quote(activity_ref, safe="")
         response = self._request(
@@ -736,6 +1211,15 @@ class SupabasePilotRepository(SnapshotRepository):
     def activity_shadow_index(
         self, athlete_alias: str
     ) -> tuple[Mapping[str, Any], ...]:
+        if self._generation_reads:
+            return tuple(
+                {
+                    key: value
+                    for key, value in row.items()
+                    if key != "zone_summary"
+                }
+                for row in self._active_activity_shadow_rows(athlete_alias)
+            )
         alias = quote(athlete_alias, safe="")
         selected = quote(
             "activity_ref,run_key,created_at,vflat_model_version,hrmod_model_version,terrain_model_version",
@@ -761,6 +1245,22 @@ class SupabasePilotRepository(SnapshotRepository):
     ) -> Mapping[str, list[Mapping[str, Any]]]:
         if not activity_refs:
             return {}
+        if self._generation_reads:
+            requested = set(activity_refs)
+            result: dict[str, list[Mapping[str, Any]]] = {}
+            for row in self._active_activity_shadow_rows(athlete_alias):
+                activity_ref = row.get("activity_ref")
+                zones = row.get("zone_summary")
+                if activity_ref not in requested:
+                    continue
+                if not isinstance(zones, list) or not all(
+                    isinstance(zone, Mapping) for zone in zones
+                ):
+                    raise PersistentStoreFailure(
+                        "Pinned HRmod zone summaries are invalid"
+                    )
+                result[str(activity_ref)] = [dict(zone) for zone in zones]
+            return result
         alias = quote(athlete_alias, safe="")
         response = self._request(
             "GET",
@@ -839,6 +1339,13 @@ class SupabasePilotRepository(SnapshotRepository):
     def activity_calendar(
         self, athlete_alias: str, period_start: Any, period_end: Any
     ) -> tuple[Mapping[str, Any], ...]:
+        if self._generation_reads:
+            calendar = self.active_activity_calendar(
+                athlete_alias, period_start, period_end
+            )
+            if calendar is None:
+                return ()
+            return tuple(dict(row) for row in calendar["activities"])
         alias = quote(athlete_alias, safe="")
         selected = quote(
             "activity_ref,start_at_utc,start_local,local_date,timezone,utc_offset_minutes,"
@@ -873,6 +1380,24 @@ class SupabasePilotRepository(SnapshotRepository):
     def activity_detail(
         self, athlete_alias: str, activity_ref: str
     ) -> Mapping[str, Any] | None:
+        if self._generation_reads:
+            pointer = self._active_activity_pointer(athlete_alias, activity_ref)
+            if pointer is None:
+                return None
+            catalog = pointer.get("catalog_payload")
+            if not isinstance(catalog, Mapping):
+                raise PersistentStoreFailure(
+                    "Pinned activity catalog payload is invalid"
+                )
+            return {
+                **dict(catalog),
+                "activity_ref": activity_ref,
+                "latest_canonical_run_key": pointer.get("canonical_run_key"),
+                "latest_shadow_run_key": pointer.get("shadow_run_key"),
+                "previous_activity_ref": pointer.get("previous_activity_ref"),
+                "next_activity_ref": pointer.get("next_activity_ref"),
+                "shadow_available": bool(pointer.get("shadow_run_key")),
+            }
         alias = quote(athlete_alias, safe="")
         reference = quote(activity_ref, safe="")
         response = self._request(
@@ -926,6 +1451,32 @@ class SupabasePilotRepository(SnapshotRepository):
     ) -> Mapping[str, Any] | None:
         from .activity_catalog import downsample_model_input
 
+        if self._generation_reads:
+            pointer = self._active_activity_pointer(athlete_alias, activity_ref)
+            if pointer is None or not pointer.get("input_key"):
+                return None
+            alias = quote(athlete_alias, safe="")
+            reference = quote(activity_ref, safe="")
+            input_key = quote(str(pointer["input_key"]), safe="")
+            response = self._request(
+                "GET",
+                "/onflows_activity_model_inputs?select=input_payload"
+                f"&input_key=eq.{input_key}&athlete_alias=eq.{alias}"
+                f"&activity_ref=eq.{reference}&limit=1",
+            )
+            payload = self._json(response)
+            if not isinstance(payload, list) or not payload:
+                raise PersistentStoreFailure(
+                    "Pinned activity series is unavailable"
+                )
+            source = (
+                payload[0].get("input_payload")
+                if isinstance(payload[0], Mapping)
+                else None
+            )
+            if not isinstance(source, Mapping):
+                raise PersistentStoreFailure("Pinned activity series is invalid")
+            return downsample_model_input(source)
         alias = quote(athlete_alias, safe="")
         reference = quote(activity_ref, safe="")
         response = self._request(
@@ -998,6 +1549,10 @@ class SupabasePilotRepository(SnapshotRepository):
     def latest_activity_shadow_run_key(
         self, athlete_alias: str, activity_ref: str
     ) -> str | None:
+        if self._generation_reads:
+            pointer = self._active_activity_pointer(athlete_alias, activity_ref)
+            value = pointer.get("shadow_run_key") if pointer is not None else None
+            return str(value) if value else None
         alias = quote(athlete_alias, safe="")
         reference = quote(activity_ref, safe="")
         response = self._request(
@@ -1013,6 +1568,51 @@ class SupabasePilotRepository(SnapshotRepository):
         if not isinstance(value, str) or len(value) != 64:
             raise PersistentStoreFailure("Stored activity shadow run key is invalid")
         return value
+
+    def _active_activity_pointer(
+        self, athlete_alias: str, activity_ref: str
+    ) -> Mapping[str, Any] | None:
+        row = self._rpc_row(
+            "active_onflows_activity",
+            {
+                "p_athlete_alias": athlete_alias,
+                "p_activity_ref": activity_ref,
+            },
+        )
+        if row is None:
+            return None
+        catalog = row.get("catalog_payload")
+        if not isinstance(catalog, Mapping):
+            raise PersistentStoreFailure("Pinned activity pointer is invalid")
+        for key in ("input_key", "canonical_run_key", "shadow_run_key"):
+            value = row.get(key)
+            if value is not None and (
+                not isinstance(value, str) or len(value) != 64
+            ):
+                raise PersistentStoreFailure("Pinned activity pointer is invalid")
+        return dict(row)
+
+    def _active_activity_shadow_rows(
+        self, athlete_alias: str
+    ) -> list[Mapping[str, Any]]:
+        rows = self._rpc_rows(
+            "active_onflows_activity_shadow_index",
+            {"p_athlete_alias": athlete_alias},
+        )
+        rendered: list[Mapping[str, Any]] = []
+        for row in rows:
+            activity_ref = row.get("activity_ref")
+            run_key = row.get("run_key")
+            if (
+                not isinstance(activity_ref, str)
+                or not isinstance(run_key, str)
+                or len(run_key) != 64
+            ):
+                raise PersistentStoreFailure(
+                    "Pinned activity shadow index is invalid"
+                )
+            rendered.append(dict(row))
+        return rendered
 
 
 __all__ = [

@@ -13,10 +13,12 @@ Supabase SQL editor. They create RLS-enabled, server-only tables for:
 * encrypted Intervals access tokens and the minimum connection metadata;
 * short-lived, one-use login tickets;
 * athlete-specific HR boundaries and timezone;
-* aggregate athlete snapshots containing `training-status-v1` and
-  `load-history-v1` read models;
+* aggregate athlete snapshots containing `training-status-v1` and versioned
+  `load-history-v1`/`load-history-v2` read models;
 * immutable, privacy-minimized activity model inputs and append-only,
   versioned experimental Vflat/HRmod derived runs.
+* durable sync jobs, immutable analysis generations and an atomic active
+  generation pointer per athlete.
 
 The activity model input retains only timestamps, raw HR, raw speed,
 raw/provider grade when available, altitude, cumulative distance and quality
@@ -51,10 +53,13 @@ Never prefix these values with `NEXT_PUBLIC_` and never commit their values.
 * `ONFLOWS_HRMAX_BPM` — original pilot's optional explicit individual HRmax;
   HRmod fails closed when it is absent and never infers it from Z5 or observed HR.
 * `ONFLOWS_INTRAZONE_VERSION` — `intra_zone_linear_v1`.
-* `ONFLOWS_TREF_VERSION` — approved fixed-Tref parameter version.
+* `ONFLOWS_TREF_VERSION` — `tref-bounded-40d-expert-v1`; startup fails closed
+  for any other value.
 * `ONFLOWS_RECOVERY_VERSION` — approved canonical recovery parameter version.
 * `ONFLOWS_HISTORY_DAYS` — `41` through `90` (default `90`).
 * `ONFLOWS_SNAPSHOT_SALT` — generated private salt for provider-safe cache keys.
+* `ONFLOWS_ACTIVITY_ID_SECRET` — generated private HMAC key for stable,
+  provider-safe activity references.
 * `ONFLOWS_WEB_BASE_URL` — exact Next.js HTTPS origin.
 
 There is no manually entered `INTERVALS_ACCESS_TOKEN` or
@@ -78,17 +83,33 @@ athlete session. A profile never inherits another athlete's physiological
 inputs. Tref, intra-zone and recovery model versions remain approved,
 service-wide configuration rather than duplicated per athlete.
 
-Refresh remains explicit (`POST /api/v2/real/refresh`). A complete analysis
-atomically replaces the persisted aggregate snapshot. Retrieval or analysis
-failures retain the last valid snapshot. Fixture mode remains available only
-when `ONFLOWS_DATA_MODE=fixture` is set explicitly.
+Sync remains explicit. `POST /api/v2/real/sync-jobs` enqueues `FULL`,
+`WELLNESS` or `RECOVERY`; the legacy refresh routes delegate to the same
+durable queue and never perform provider or model work in the API process. A
+single background worker claims a fenced lease, builds an invisible staged
+generation and atomically activates it only after the snapshot and exact
+activity run pointers are complete. Retrieval, worker termination or analysis
+failures retain the previous active generation. The browser polls
+`GET /api/v2/real/sync-status` and keeps displaying that last valid version.
+Fixture mode remains available only when `ONFLOWS_DATA_MODE=fixture` is set
+explicitly.
 
-The current status remains available at
-`GET /api/v2/real/training-status`. The precomputed 90-day zonal series and
+The coherent dashboard aggregate is available at
+`GET /api/v2/real/dashboard-view`; compatibility resources such as
+`GET /api/v2/real/training-status` remain available. The precomputed 90-day zonal series and
 privacy-minimized activity aggregates are available at
 `GET /api/v2/real/load-history`. Neither endpoint returns raw streams or
 provider identifiers. Existing `training-status-v1` rows remain readable
-during rollout; one successful refresh upgrades the stored envelope.
+during rollout; one successful full sync upgrades the stored envelope to
+`load-history-v2` with the exact per-day Tref used for deterministic Recovery
+restore.
+
+The Render worker must use the same existing `SUPABASE_URL`,
+`SUPABASE_SECRET_KEY`, `ONFLOWS_TOKEN_ENCRYPTION_KEY`,
+`ONFLOWS_SNAPSHOT_SALT`, `ONFLOWS_ACTIVITY_ID_SECRET` and model-version values
+as the API. Never regenerate these values for the worker. Start with exactly
+one worker instance; the process-wide Intervals pacer is deliberately the
+provider-budget guard until a global limiter and incremental sync are added.
 
 Each refresh also computes the experimental Vflat B65 and HRmod v4 channels
 once during ingest and publishes a separate versioned derived run. The stored

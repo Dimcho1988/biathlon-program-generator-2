@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 import math
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -40,6 +40,22 @@ _SPEED_NAMES = ("velocity_smooth", "fixed_velocity_smooth", "speed", "velocity")
 _GRADE_NAMES = ("gradient",)
 _ALTITUDE_NAMES = ("altitude", "fixed_altitude")
 _DISTANCE_NAMES = ("distance",)
+_T = TypeVar("_T")
+
+
+class ActivityShadowStageError(ValueError):
+    """A safe stage marker for diagnostic-model validation failures."""
+
+    def __init__(self, safe_stage: str) -> None:
+        super().__init__("Activity shadow computation failed validation")
+        self.safe_stage = safe_stage
+
+
+def _validated_stage(safe_stage: str, operation: Callable[[], _T]) -> _T:
+    try:
+        return operation()
+    except ValueError as exc:
+        raise ActivityShadowStageError(safe_stage) from exc
 
 
 def _first(point: Any, names: Sequence[str]) -> float | None:
@@ -95,7 +111,7 @@ def activity_shadow_configuration_fingerprint(
     return _canonical_hash(payload)
 
 
-def _plain_number(value: float | None) -> float | None:
+def _plain_number(value: Any) -> float | None:
     return float(value) if value is not None and math.isfinite(float(value)) else None
 
 
@@ -256,7 +272,11 @@ def _segments_15s(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result = []
     for bucket, values in sorted(buckets.items()):
         def mean(name: str):
-            available = [float(row[name]) for row in values if row.get(name) is not None]
+            available = [
+                number
+                for row in values
+                if (number := _plain_number(row.get(name))) is not None
+            ]
             return sum(available) / len(available) if available else None
         result.append(
             {
@@ -284,11 +304,15 @@ def compute_activity_shadow(
     explicit_hrmax_bpm: int | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     immutable_input = build_immutable_activity_input(detail, normalized)
-    samples, references, vflat_frame = _model_inputs(
-        detail, normalized
+    samples, references, vflat_frame = _validated_stage(
+        "MODEL_INPUTS", lambda: _model_inputs(detail, normalized)
     )
-    vflat = run_vflat_b65_shadow(vflat_frame)
-    profile = _profile(zone_bounds_bpm, explicit_hrmax_bpm)
+    vflat = _validated_stage(
+        "VFLAT", lambda: run_vflat_b65_shadow(vflat_frame)
+    )
+    profile = _validated_stage(
+        "PROFILE", lambda: _profile(zone_bounds_bpm, explicit_hrmax_bpm)
+    )
     configuration_fingerprint = activity_shadow_configuration_fingerprint(
         zone_bounds_bpm, explicit_hrmax_bpm
     )
@@ -306,10 +330,13 @@ def compute_activity_shadow(
             "diagnostics": {"flags": ["EXPLICIT_HRMAX_MISSING"]},
         }
     else:
-        hrmod = run_hrmod_v4_shadow(
-            hr_samples=samples,
-            athlete_profile=profile,
-            reference_channels=references,
+        hrmod = _validated_stage(
+            "HRMOD",
+            lambda: run_hrmod_v4_shadow(
+                hr_samples=samples,
+                athlete_profile=profile,
+                reference_channels=references,
+            ),
         )
     vflat_by_timestamp = {
         str(row.get("timestamp")): row for row in vflat["timeseries"]
@@ -332,7 +359,7 @@ def compute_activity_shadow(
             {
                 "timestamp": sample.timestamp.isoformat(),
                 "elapsed_s": references.samples[index].elapsed_s,
-                "speed_raw_kmh": (
+                "speed_raw_kmh": _plain_number(
                     vf_row.get("speed_raw_kmh")
                     if vf_row
                     else (
@@ -341,23 +368,29 @@ def compute_activity_shadow(
                         else None
                     )
                 ),
-                "vflat_b65_kmh": vf_row.get("vflat_b65_kmh"),
-                "vflat_delta_kmh": vf_row.get("vflat_delta_kmh"),
-                "hr_raw_bpm": hr_row.get("hr_raw_bpm", sample.heart_rate_bpm),
-                "hr_clean_bpm": hr_row.get("hr_clean_bpm"),
-                "hrmod_candidate_bpm": hr_row.get("hrmod_candidate_bpm"),
-                "hrmod_final_bpm": hr_row.get("hrmod_final_bpm"),
-                "hrmod_delta_bpm": hr_row.get("hrmod_delta_bpm"),
-                "added_bpm": hr_row.get("added_bpm"),
-                "removed_bpm": hr_row.get("removed_bpm"),
+                "vflat_b65_kmh": _plain_number(vf_row.get("vflat_b65_kmh")),
+                "vflat_delta_kmh": _plain_number(vf_row.get("vflat_delta_kmh")),
+                "hr_raw_bpm": _plain_number(
+                    hr_row.get("hr_raw_bpm", sample.heart_rate_bpm)
+                ),
+                "hr_clean_bpm": _plain_number(hr_row.get("hr_clean_bpm")),
+                "hrmod_candidate_bpm": _plain_number(
+                    hr_row.get("hrmod_candidate_bpm")
+                ),
+                "hrmod_final_bpm": _plain_number(hr_row.get("hrmod_final_bpm")),
+                "hrmod_delta_bpm": _plain_number(hr_row.get("hrmod_delta_bpm")),
+                "added_bpm": _plain_number(hr_row.get("added_bpm")),
+                "removed_bpm": _plain_number(hr_row.get("removed_bpm")),
                 "receiver_flag": hr_row.get("receiver_flag", False),
                 "donor_flag": hr_row.get("donor_flag", False),
                 "wave_id": hr_row.get("wave_id"),
-                "grade_raw_pct": hr_row.get(
-                    "grade_raw_pct", references.samples[index].grade
+                "grade_raw_pct": _plain_number(
+                    hr_row.get("grade_raw_pct", references.samples[index].grade)
                 ),
-                "grade_smoothed_pct": hr_row.get(
-                    "grade_smoothed_pct", vf_row.get("grade_smoothed_pct")
+                "grade_smoothed_pct": _plain_number(
+                    hr_row.get(
+                        "grade_smoothed_pct", vf_row.get("grade_smoothed_pct")
+                    )
                 ),
                 "vflat_model_version": VFLAT_MODEL_VERSION,
                 "hrmod_model_version": hrmod.get("model_version"),

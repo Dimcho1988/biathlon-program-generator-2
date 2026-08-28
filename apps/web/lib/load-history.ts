@@ -16,6 +16,7 @@ export interface DailyZoneLoad {
   e7_daily: number;
   e40_daily: number;
   status_7_40: number;
+  tref_used_min?: number | null;
 }
 
 export interface ActivityZoneLoad {
@@ -64,14 +65,16 @@ export interface StrengthLoadHistory {
     e7_daily: number;
     e40_daily: number;
     status_7_40: number;
+    tref_used_min?: number | null;
   }>;
 }
 
 export interface LoadHistory {
-  schema_version: "load-history-v1";
+  schema_version: "load-history-v1" | "load-history-v2";
   athlete_id: string;
   period_start: string;
   period_end: string;
+  tref_bounds_profile_version?: string | null;
   quality: {
     processed_activities: number;
     limited_activities: number;
@@ -87,9 +90,12 @@ export interface LoadHistory {
 
 const legacyRootKeys = ["schema_version", "athlete_id", "period_start", "period_end", "quality", "zones", "daily", "activities"];
 const rootKeys = [...legacyRootKeys, "strength"];
+const legacyRootKeysWithTrefProfile = [...legacyRootKeys, "tref_bounds_profile_version"];
+const rootKeysWithTrefProfile = [...rootKeys, "tref_bounds_profile_version"];
 const qualityKeys = ["processed_activities", "limited_activities", "excluded_activities", "no_activity_days", "warnings"];
 const summaryKeys = ["zone", "e7_daily", "e40_daily", "status_7_40", "tref_min", "history_reliability"];
 const dailyKeys = ["date", "zone", "effective_load", "e7_daily", "e40_daily", "status_7_40"];
+const dailyKeysV2 = [...dailyKeys, "tref_used_min"];
 const legacyActivityKeys = ["activity_ref", "date", "sport", "duration_min", "quality_status", "hr_coverage_percent", "zones"];
 const activityKeys = ["activity_ref", "date", "sport", "duration_min", "strength_time_min", "quality_status", "hr_coverage_percent", "zones"];
 const activityZoneKeys = ["zone", "raw_time_min", "equivalent_time_min", "effective_load", "mean_effective_hr_bpm", "average_minute_value_percent"];
@@ -97,6 +103,7 @@ const strengthKeys = ["model", "summary", "daily"];
 const strengthModelKeys = ["classification_version", "source", "duration_basis", "equivalent_time_coefficient", "aerobic_hr_counted"];
 const strengthSummaryKeys = ["recorded_activities", "real_time_7d_min", "real_time_40d_min", "e7_daily", "e40_daily", "status_7_40", "tref_min", "history_reliability"];
 const strengthDailyKeys = ["date", "real_time_min", "equivalent_time_min", "effective_load", "e7_daily", "e40_daily", "status_7_40"];
+const strengthDailyKeysV2 = [...strengthDailyKeys, "tref_used_min"];
 
 const zoneAt = (value: unknown, index: number) => value === ZONES[index];
 const optionalFinite = (value: unknown) => value === null || finite(value);
@@ -111,8 +118,22 @@ function parseZoneArray<T>(value: unknown, parser: (item: unknown, index: number
 }
 
 export function parseLoadHistory(value: unknown): LoadHistory {
-  if (!isRecord(value) || (!exactKeys(value, rootKeys) && !exactKeys(value, legacyRootKeys))) throw new Error("Невалидна структура на историята.");
-  if (value.schema_version !== "load-history-v1") throw new Error("Неподдържана версия на историята.");
+  if (!isRecord(value)) throw new Error("Невалидна структура на историята.");
+  if (value.schema_version !== "load-history-v1" && value.schema_version !== "load-history-v2") throw new Error("Неподдържана версия на историята.");
+  const version2 = value.schema_version === "load-history-v2";
+  const validRoot = version2
+    ? exactKeys(value, rootKeysWithTrefProfile)
+    : exactKeys(value, rootKeys) || exactKeys(value, legacyRootKeys) ||
+      exactKeys(value, rootKeysWithTrefProfile) || exactKeys(value, legacyRootKeysWithTrefProfile);
+  if (!validRoot) throw new Error("Невалидна структура на историята.");
+  if (version2) {
+    if (typeof value.tref_bounds_profile_version !== "string" || value.tref_bounds_profile_version.length === 0) {
+      throw new Error("Липсва версия на границите за Tref.");
+    }
+  } else if (!(value.tref_bounds_profile_version === undefined || value.tref_bounds_profile_version === null ||
+      (typeof value.tref_bounds_profile_version === "string" && value.tref_bounds_profile_version.length > 0))) {
+    throw new Error("Невалидна версия на границите за Tref.");
+  }
   if (typeof value.athlete_id !== "string" || value.athlete_id.length === 0) throw new Error("Липсва идентификатор на спортист.");
   if (!isCalendarDate(value.period_start) || !isCalendarDate(value.period_end) || value.period_start > value.period_end) throw new Error("Невалиден период на историята.");
   if (!isRecord(value.quality)) throw new Error("Невалидно качество на историята.");
@@ -131,8 +152,11 @@ export function parseLoadHistory(value: unknown): LoadHistory {
 
   if (!Array.isArray(value.daily) || value.daily.length % ZONES.length !== 0) throw new Error("Невалидна дневна история.");
   const daily = value.daily.map((item, index) => {
-    if (!isRecord(item) || !exactKeys(item, dailyKeys) || !isCalendarDate(item.date) ||
-        !zoneAt(item.zone, index % ZONES.length) || !dailyKeys.slice(2).every((key) => finite(item[key]))) {
+    const validKeys = isRecord(item) && (version2 ? exactKeys(item, dailyKeysV2) : exactKeys(item, dailyKeys) || exactKeys(item, dailyKeysV2));
+    if (!isRecord(item) || !validKeys || !isCalendarDate(item.date) ||
+        !zoneAt(item.zone, index % ZONES.length) || !dailyKeys.slice(2).every((key) => finite(item[key])) ||
+        (version2 ? !finite(item.tref_used_min) || item.tref_used_min <= 0 :
+          !(item.tref_used_min === undefined || item.tref_used_min === null || (finite(item.tref_used_min) && item.tref_used_min > 0)))) {
       throw new Error("Невалиден дневен ред.");
     }
     if (index > 0 && index % ZONES.length !== 0 && item.date !== (value.daily as Array<Record<string, unknown>>)[index - 1].date) throw new Error("Непълна дневна зонална група.");
@@ -184,9 +208,12 @@ export function parseLoadHistory(value: unknown): LoadHistory {
       const expectedDays = value.daily.length / ZONES.length;
       if (raw.daily.length !== expectedDays) throw new Error("Непълна дневна история на силовото натоварване.");
       const strengthDaily = raw.daily.map((item, index) => {
-        if (!isRecord(item) || !exactKeys(item, strengthDailyKeys) || !isCalendarDate(item.date) ||
+        const validKeys = isRecord(item) && (version2 ? exactKeys(item, strengthDailyKeysV2) : exactKeys(item, strengthDailyKeys) || exactKeys(item, strengthDailyKeysV2));
+        if (!isRecord(item) || !validKeys || !isCalendarDate(item.date) ||
             item.date !== (value.daily as Array<Record<string, unknown>>)[index * ZONES.length]?.date ||
-            !strengthDailyKeys.slice(1).every((key) => finite(item[key]) && item[key] >= 0)) {
+            !strengthDailyKeys.slice(1).every((key) => finite(item[key]) && item[key] >= 0) ||
+            (version2 ? !finite(item.tref_used_min) || item.tref_used_min <= 0 :
+              !(item.tref_used_min === undefined || item.tref_used_min === null || (finite(item.tref_used_min) && item.tref_used_min > 0)))) {
           throw new Error("Невалиден дневен силов ред.");
         }
         return item as unknown as StrengthLoadHistory["daily"][number];

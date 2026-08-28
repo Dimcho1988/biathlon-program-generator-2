@@ -1,0 +1,118 @@
+# Isolated onFlows staging rollout.
+#
+# Link this file to a separate Render Blueprint using the custom Blueprint path
+# `render.staging.yaml`.  The API and web service are isolated from production.
+# The paid worker is added only after OAuth and read-contract checks pass
+# against the disposable Supabase project.
+
+envVarGroups:
+  - name: onflows-staging-shared
+    envVars:
+      - key: ONFLOWS_SERVICE_TOKEN
+        generateValue: true
+
+services:
+  - type: web
+    name: onflows-api-staging
+    plan: free
+    region: frankfurt
+    autoDeployTrigger: "off"
+    runtime: python
+    branch: codex/async-refresh-generation-v1
+    buildFilter:
+      paths:
+        - apps/api/**
+        - biathlon/**
+        - hrmod_lab/**
+        - intervals_inspector/**
+        - vflat_b65/**
+        - requirements-api.txt
+        - render.staging.yaml
+    buildCommand: pip install -r requirements-api.txt
+    startCommand: uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --no-access-log
+    healthCheckPath: /health
+    envVars:
+      - fromGroup: onflows-staging-shared
+      - fromGroup: onflows-staging-analysis-shared
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: INTERVALS_CLIENT_ID
+        sync: false
+      - key: INTERVALS_CLIENT_SECRET
+        sync: false
+      - key: INTERVALS_REDIRECT_URI
+        value: https://onflows-api-staging.onrender.com/api/v2/integrations/intervals/callback
+      - key: OAUTH_STATE_SECRET
+        generateValue: true
+      - key: ONFLOWS_INTRAZONE_VERSION
+        value: intra_zone_linear_v1
+      - key: ONFLOWS_TREF_VERSION
+        value: tref-bounded-40d-expert-v1
+      - key: ONFLOWS_RECOVERY_VERSION
+        value: main-load-recovery-v1
+      - key: ONFLOWS_HISTORY_DAYS
+        value: "90"
+      - key: ONFLOWS_WEB_BASE_URL
+        value: https://onflows-web-staging.onrender.com
+
+  - type: worker
+    name: onflows-sync-worker-staging
+    plan: starter
+    region: frankfurt
+    autoDeployTrigger: "off"
+    runtime: python
+    branch: codex/async-refresh-generation-v1
+    numInstances: 1
+    maxShutdownDelaySeconds: 300
+    buildFilter:
+      paths:
+        - apps/api/**
+        - biathlon/**
+        - hrmod_lab/**
+        - intervals_inspector/**
+        - vflat_b65/**
+        - requirements-api.txt
+        - render.staging.yaml
+    buildCommand: pip install -r requirements-api.txt
+    startCommand: python -m apps.api.sync_worker --lease-seconds 300
+    envVars:
+      - fromGroup: onflows-staging-analysis-shared
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: ONFLOWS_INTRAZONE_VERSION
+        value: intra_zone_linear_v1
+      - key: ONFLOWS_TREF_VERSION
+        value: tref-bounded-40d-expert-v1
+      - key: ONFLOWS_RECOVERY_VERSION
+        value: main-load-recovery-v1
+      - key: ONFLOWS_HISTORY_DAYS
+        value: "90"
+
+  - type: web
+    name: onflows-web-staging
+    plan: free
+    region: frankfurt
+    autoDeployTrigger: "off"
+    runtime: node
+    branch: codex/async-refresh-generation-v1
+    rootDir: apps/web
+    buildFilter:
+      paths:
+        - apps/web/**
+        - render.staging.yaml
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    envVars:
+      - fromGroup: onflows-staging-shared
+      - key: NODE_VERSION
+        value: 22.14.0
+      - key: ONFLOWS_DATA_MODE
+        value: api
+      - key: ONFLOWS_API_RESOURCE
+        value: real
+      - key: ONFLOWS_API_BASE_URL
+        value: https://onflows-api-staging.onrender.com
+      - key: ONFLOWS_PROFILE_MODE
+        value: multi
+      - key: ONFLOWS_SESSION_SECRET
+        generateValue: true

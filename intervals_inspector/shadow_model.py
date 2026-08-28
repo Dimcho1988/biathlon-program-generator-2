@@ -15,6 +15,11 @@ import math
 from numbers import Real
 from typing import Any, Mapping, Sequence
 
+from biathlon.constants import (
+    AEROBIC_TREF_BOUNDS_MINUTES,
+    AEROBIC_TREF_INITIAL_MINUTES,
+    TREF_HISTORY_WINDOW_DAYS,
+)
 from intervals_inspector.model_registry import (
     RESULT_DEFINITIONS,
     WARNING_DEFINITIONS,
@@ -32,22 +37,17 @@ from intervals_inspector.onflows_zone_profile import (
 )
 
 
-SHADOW_MODEL_VERSION = "real-data-shadow-physiology-v3-equivalent-time"
-TREF_PROFILE_VERSION = "tref-fixed-expert-v1"
-# Deprecated compatibility alias. There are no Tref bounds in this model.
+SHADOW_MODEL_VERSION = "real-data-shadow-physiology-v4-bounded-tref"
+TREF_PROFILE_VERSION = "tref-bounded-40d-expert-v1"
+# Compatibility name retained for aggregate-cache and persistence metadata.
 TREF_BOUNDS_PROFILE_VERSION = TREF_PROFILE_VERSION
-CONFIG_SCHEMA_VERSION = "shadow-model-config-v3-equivalent-time"
-RESULT_SCHEMA_VERSION = "shadow-model-comparison-v3-equivalent-time"
-HISTORY_WINDOW_DAYS = 40
+CONFIG_SCHEMA_VERSION = "shadow-model-config-v4-bounded-tref"
+RESULT_SCHEMA_VERSION = "shadow-model-comparison-v4-bounded-tref"
+HISTORY_WINDOW_DAYS = TREF_HISTORY_WINDOW_DAYS
 LOW_HR_COVERAGE_PERCENT = 80.0
-PROFILE_LEVELS = ("fixed",)
-INITIAL_TREF_MINUTES = {
-    "Z1": 300.0,
-    "Z2": 180.0,
-    "Z3": 70.0,
-    "Z4": 20.0,
-    "Z5": 20.0,
-}
+PROFILE_LEVELS = ("bounded-40d",)
+INITIAL_TREF_MINUTES = dict(AEROBIC_TREF_INITIAL_MINUTES)
+TREF_BOUNDS_MINUTES = dict(AEROBIC_TREF_BOUNDS_MINUTES)
 
 EDITABLE_FIELDS = (
     "equivalence_slope_pp_per_bpm",
@@ -56,7 +56,8 @@ EDITABLE_FIELDS = (
     "spill_up_fraction",
 )
 READ_ONLY_FIELDS = (
-    "tref_minutes",
+    "tref_min",
+    "tref_max",
     "profile_version",
     "equivalence_version",
     "tref_profile_version",
@@ -66,7 +67,8 @@ FIELD_UNITS = {
     "spill_threshold_fraction": "% от Tref",
     "spill_down_fraction": "% от превишението",
     "spill_up_fraction": "% от превишението",
-    "tref_minutes": "приравнени минути",
+    "tref_min": "приравнени минути",
+    "tref_max": "приравнени минути",
     "profile_version": "версия",
     "equivalence_version": "версия",
     "tref_profile_version": "версия",
@@ -88,7 +90,8 @@ class ZoneModelSettings:
     spill_threshold_fraction: float
     spill_down_fraction: float
     spill_up_fraction: float
-    tref_minutes: float
+    tref_min: float
+    tref_max: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,9 +116,9 @@ class ShadowModelConfiguration:
 
     @property
     def profile_level(self) -> str:
-        """Deprecated compatibility value; fixed Tref has no level."""
+        """Deprecated compatibility value; bounds have no athlete level."""
 
-        return "fixed"
+        return "bounded-40d"
 
 
 def _finite(value: Any, field: str) -> float:
@@ -173,11 +176,12 @@ def _build_configuration(
 
 
 def default_shadow_configuration() -> ShadowModelConfiguration:
-    """Build the explicit baseline with fixed expert Tref values."""
+    """Build the baseline with fixed bounds and a history-derived Tref."""
 
     zones = []
     for row in DEFAULT_PROFILE_ROWS:
         zone = str(row["zone"])
+        tref_min, tref_max = TREF_BOUNDS_MINUTES[zone]
         zones.append(
             ZoneModelSettings(
                 zone=zone,
@@ -189,7 +193,8 @@ def default_shadow_configuration() -> ShadowModelConfiguration:
                 spill_threshold_fraction=0.50,
                 spill_down_fraction=0.20,
                 spill_up_fraction=0.10,
-                tref_minutes=INITIAL_TREF_MINUTES[zone],
+                tref_min=tref_min,
+                tref_max=tref_max,
             )
         )
     return _build_configuration(zones)
@@ -220,7 +225,8 @@ def configuration_with_hr_boundaries(
             spill_threshold_fraction=zone.spill_threshold_fraction,
             spill_down_fraction=zone.spill_down_fraction,
             spill_up_fraction=zone.spill_up_fraction,
-            tref_minutes=zone.tref_minutes,
+            tref_min=zone.tref_min,
+            tref_max=zone.tref_max,
         )
         for index, zone in enumerate(baseline.zones)
     ]
@@ -247,14 +253,18 @@ def validate_zone_settings(zones: Sequence[ZoneModelSettings]) -> None:
                 raise ValueError(
                     f"{zone.zone}.{field} must be between {minimum} and {maximum}"
                 )
-        expected_tref = INITIAL_TREF_MINUTES.get(zone.zone)
-        if expected_tref is None or not math.isclose(
-            zone.tref_minutes,
-            expected_tref,
-            rel_tol=0.0,
-            abs_tol=1e-12,
+        tref_min = _finite(zone.tref_min, "tref_min")
+        tref_max = _finite(zone.tref_max, "tref_max")
+        if tref_min <= 0.0 or tref_min > tref_max:
+            raise ValueError(f"{zone.zone}: invalid Tref bounds")
+        expected_bounds = TREF_BOUNDS_MINUTES.get(zone.zone)
+        if expected_bounds is None or not all(
+            math.isclose(current, expected, rel_tol=0.0, abs_tol=1e-12)
+            for current, expected in zip(
+                (tref_min, tref_max), expected_bounds
+            )
         ):
-            raise ValueError(f"{zone.zone}.tref_minutes is a fixed expert value")
+            raise ValueError(f"{zone.zone} Tref bounds are fixed expert values")
 
 
 def configuration_with_overrides(
@@ -299,7 +309,7 @@ def configuration_with_profile_level(
 ) -> ShadowModelConfiguration:
     """Deprecated no-op retained while old session state is discarded."""
 
-    if profile_level not in {"fixed", "low", "medium", "high"}:
+    if profile_level not in {"bounded-40d", "fixed", "low", "medium", "high"}:
         raise ValueError("profile_level is unsupported")
     return baseline or default_shadow_configuration()
 
@@ -337,7 +347,8 @@ def configuration_from_safe_dict(value: Any) -> ShadowModelConfiguration:
                 zone=str(row.get("zone") or ""),
                 hr_low=_finite(row.get("hr_low"), "hr_low"),
                 hr_high=_finite(row.get("hr_high"), "hr_high"),
-                tref_minutes=_finite(row.get("tref_minutes"), "tref_minutes"),
+                tref_min=_finite(row.get("tref_min"), "tref_min"),
+                tref_max=_finite(row.get("tref_max"), "tref_max"),
                 **{
                     field: _finite(row.get(field), field)
                     for field in EDITABLE_FIELDS
@@ -431,12 +442,16 @@ def build_model_registry(
                     "индивидуален override"
                     if item_id in configuration.overrides
                     else "профилна"
-                    if field in {"equivalence_slope_pp_per_bpm", "tref_minutes"}
+                    if field in {
+                        "equivalence_slope_pp_per_bpm",
+                        "tref_min",
+                        "tref_max",
+                    }
                     else "системна"
                 )
                 version = (
                     configuration.tref_profile_version
-                    if field == "tref_minutes"
+                    if field in {"tref_min", "tref_max"}
                     else configuration.equivalence_version
                     if field == "equivalence_slope_pp_per_bpm"
                     else configuration.physiology_profile_version
@@ -492,9 +507,18 @@ def _tref_values(
     else:
         usable = candidates[-HISTORY_WINDOW_DAYS:]
     history_days = len(usable)
-    source = "initial expert setting"
-    fallback_used = False
-    values = {zone.zone: zone.tref_minutes for zone in zones}
+    source = (
+        "expert upper-bound fallback"
+        if history_days == 0
+        else "40-day history"
+        if history_days == HISTORY_WINDOW_DAYS
+        else "provisional history"
+    )
+    fallback_used = history_days == 0
+    values = {
+        zone.zone: AEROBIC_TREF_INITIAL_MINUTES[zone.zone]
+        for zone in zones
+    }
     historical_values: dict[str, float | None] = {}
     for zone in zones:
         if not usable:
@@ -599,9 +623,16 @@ def calculate_shadow_result(
         prior_daily_effective_load,
         activity_date=activity_date,
     )
-    tref_effective = {
-        zone: config.tref_minutes for zone, config in settings.items()
-    }
+    tref_effective: dict[str, float] = {}
+    bound_applied: dict[str, str] = {}
+    for zone, config in settings.items():
+        raw = tref_raw[zone]
+        tref_effective[zone] = min(max(raw, config.tref_min), config.tref_max)
+        bound_applied[zone] = (
+            "lower" if raw < config.tref_min
+            else "upper" if raw > config.tref_max
+            else "none"
+        )
 
     zone_order = list(settings)
     cascade = {
@@ -656,6 +687,9 @@ def calculate_shadow_result(
                 "h40_equivalent_minutes": tref_history_value[zone],
                 "tref_source": tref_source,
                 "tref_history_days": history_days,
+                "tref_min_effective": settings[zone].tref_min,
+                "tref_max_effective": settings[zone].tref_max,
+                "tref_bound_applied": bound_applied[zone],
                 # Deprecated aliases. Both point to the one T_eq dose.
                 "Q_z": equivalent_time[zone],
                 "Qref_z": equivalent_time[zone],
@@ -667,9 +701,9 @@ def calculate_shadow_result(
             {
                 "id": "warning.incomplete_history",
                 "message": (
-                    "Налични предходни дни за диагностичния H40: "
-                    f"{history_days}/{HISTORY_WINDOW_DAYS}. Фиксираният Tref "
-                    "не се променя."
+                    "Налични предходни дни за Tref: "
+                    f"{history_days}/{HISTORY_WINDOW_DAYS}. Използва се "
+                    "ограничена временна стойност до пълен 40-дневен прозорец."
                 ),
             }
         )

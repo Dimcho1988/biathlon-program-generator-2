@@ -11,10 +11,15 @@ import { RecoveryHistorySection } from "./recovery-history-section";
 import { ThemeToggle } from "./theme-toggle";
 import type { VolumeHistory } from "../lib/volume-history";
 import { VolumeHistorySection } from "./volume-history-section";
+import type { SyncState } from "../lib/sync";
+import { syncInProgress } from "../lib/sync";
+import { SyncStatusPanel } from "./sync-status-panel";
+import { SyncActionForm } from "./sync-action-form";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
 const decimal = (value: number) => number.format(value);
 const date = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "2-digit", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
+const timestamp = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC", timeZoneName: "short" }).format(new Date(value));
 
 const metrics: Array<[keyof ZoneTrainingStatus, string, (value: number) => string]> = [
   ["raw_time_min", "Реално време", (value) => `${decimal(value)} мин`],
@@ -55,6 +60,10 @@ export function Dashboard({
   loadHistoryMessage,
   recoveryHistoryMessage,
   volumeHistoryMessage,
+  generationId,
+  generationRevision,
+  generationActivatedAt,
+  syncState = null,
   integrationActions = false,
   sessionActions = false,
   notice,
@@ -69,11 +78,16 @@ export function Dashboard({
   loadHistoryMessage?: string;
   recoveryHistoryMessage?: string;
   volumeHistoryMessage?: string;
+  generationId?: string | null;
+  generationRevision?: number;
+  generationActivatedAt?: string | null;
+  syncState?: SyncState | null;
   integrationActions?: boolean;
   sessionActions?: boolean;
   notice?: string;
 }) {
   const qualityScore = data.data_quality.latest_activity_quality_score;
+  const syncBusy = Boolean(syncState && syncInProgress(syncState));
   return (
     <main>
       <header className="hero">
@@ -90,6 +104,7 @@ export function Dashboard({
           <dl className="identity">
             <div><dt>Спортист</dt><dd>{data.athlete_id}</dd></div>
             <div><dt>Анализ към</dt><dd><time dateTime={data.as_of}>{date(data.as_of)}</time></dd></div>
+            {generationRevision !== undefined && generationRevision > 0 && <div><dt>Активна версия</dt><dd>№ {generationRevision}</dd></div>}
             {mode === "fixture" && <div className="demo-badge" aria-label="Режим с демо данни"><span aria-hidden="true" />Демо данни</div>}
           </dl>
         </div>
@@ -98,6 +113,7 @@ export function Dashboard({
       <section className="content" aria-label="Тренировъчен анализ">
         <AnalysisNavigation planningAvailable={sessionActions} />
         <div className="analysis-main">
+        {syncState && <SyncStatusPanel key={`${syncState.job_id ?? "idle"}:${syncState.state}:${generationId ?? "none"}`} initialState={syncState} renderedGenerationId={generationId ?? null} />}
         {notice && <p className="connection-notice">{notice}</p>}
         <section className="quality-panel" aria-labelledby="quality-title">
           <div><p className="section-kicker">Надеждност</p><h2 id="quality-title">Качество на данните</h2></div>
@@ -119,7 +135,7 @@ export function Dashboard({
         <CompletedWorkSection report={completedWork} message={completedWorkMessage} selectable={mode === "api"} availablePeriodStart={loadHistory?.period_start} availablePeriodEnd={loadHistory?.period_end} />
         <VolumeHistorySection history={volumeHistory} message={volumeHistoryMessage} />
         <LoadHistorySection history={loadHistory} message={loadHistoryMessage} />
-        <RecoveryHistorySection history={recoveryHistory} message={recoveryHistoryMessage} refreshAvailable={integrationActions} />
+        <RecoveryHistorySection history={recoveryHistory} message={recoveryHistoryMessage} refreshAvailable={integrationActions} syncBusy={syncBusy} fullRefreshRequired={loadHistory?.schema_version !== "load-history-v2"} />
 
         <details id="model-metadata" className="metadata">
           <summary><span><small>Техническа информация</small>Метаданни на модела</span><span className="chevron" aria-hidden="true">⌄</span></summary>
@@ -129,11 +145,13 @@ export function Dashboard({
             <div><dt>Effective HR версия</dt><dd>{data.model.effective_hr_version}</dd></div>
             <div><dt>Effective HR източник</dt><dd>{data.model.effective_hr_source}</dd></div>
             <div><dt>Версия на параметрите</dt><dd>{data.model.parameter_version}</dd></div>
+            {generationId && <div><dt>Generation ID</dt><dd>{generationId}</dd></div>}
+            {generationActivatedAt && <div><dt>Активирана</dt><dd><time dateTime={generationActivatedAt}>{timestamp(generationActivatedAt)}</time></dd></div>}
           </dl>
         </details>
         </div>
       </section>
-      <footer><span className="footer-brand">onFlows</span><p>Данните са диагностичен изглед на съществуващия модел.</p><div>{integrationActions && <form action="/api/integrations/intervals/refresh" method="post"><button className="text-action" type="submit">Обнови данните</button></form>}{sessionActions && <Link className="text-action" href="/?settings=edit">Настройки</Link>}{sessionActions && <form action="/api/session/logout" method="post"><button className="text-action" type="submit">Смени профила</button></form>}</div></footer>
+      <footer><span className="footer-brand">onFlows</span><p>Данните са диагностичен изглед на съществуващия модел.</p><div>{integrationActions && <SyncActionForm busy={syncBusy} className="text-action" />}{sessionActions && <Link className="text-action" href="/?settings=edit">Настройки</Link>}{sessionActions && <form action="/api/session/logout" method="post"><button className="text-action" type="submit">Смени профила</button></form>}</div></footer>
     </main>
   );
 }

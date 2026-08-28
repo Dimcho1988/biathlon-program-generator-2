@@ -7,6 +7,7 @@ import {
   getPlanningMethodology,
 } from "../lib/api";
 import {
+  PLANNING_PROFILE_RESAVE_MESSAGE,
   parseMesocycleAccentPreferencesResponse,
   parsePlanningMethodology,
   parsePlanningProfileResponse,
@@ -15,6 +16,7 @@ import {
   type PlanningProfile,
 } from "../lib/planning-profile";
 import type { PlanningCalendarResponse } from "../lib/planning-calendar";
+import planningProfileContract from "./fixtures/planning-profile-response-v1.json";
 
 const methodology: PlanningMethodology = {
   schema_version: "planning-methodology-v1",
@@ -42,7 +44,7 @@ const profile: PlanningProfile = {
   season_start: "2026-01-01",
   season_end: "2026-12-31",
   annual_target_hours: 600,
-  sessions_per_week: 9,
+  sessions_per_week: 8,
   rest_days: [0],
   double_session_days: [2, 5],
   long_session_day: 6,
@@ -111,7 +113,22 @@ describe("planning-profile-v1 contract", () => {
     expect(() => parsePlanningProfileResponse({
       configured: true,
       profile: { ...profile, sessions_per_week: 13, rest_days: [0] },
-    })).toThrow(/стойности/);
+    })).toThrow(PLANNING_PROFILE_RESAVE_MESSAGE);
+  });
+
+  it("accepts the shared Python/TypeScript planning contract fixture", () => {
+    expect(parsePlanningProfileResponse(planningProfileContract)).toEqual(planningProfileContract);
+  });
+
+  it("fails closed for impossible stored weekly capacity and explains re-save", () => {
+    const impossibleProfiles = [
+      { ...profile, sessions_per_week: 9 },
+      { ...profile, rest_days: [0, 2] },
+      { ...profile, double_threshold_enabled: true, double_threshold_day: 4 },
+    ];
+    for (const invalidProfile of impossibleProfiles)
+      expect(() => parsePlanningProfileResponse({ configured: true, profile: invalidProfile }))
+        .toThrow(PLANNING_PROFILE_RESAVE_MESSAGE);
   });
 
   it("preserves an explicitly unconfigured profile without defaults", () => {
@@ -142,6 +159,8 @@ describe("planning-profile-v1 contract", () => {
       "Дни за пълна почивка",
     ]) expect(html).toContain(label);
     expect(html).toContain('action="/api/athlete/planning-profile"');
+    expect(html).toContain("още една само за всеки изрично избран двоен ден");
+    expect(html).toContain("трябва да е избран и като ден с две сесии");
     expect(html).not.toContain("annual_goal_influence");
     expect(html).not.toContain("double_threshold_min_readiness");
     expect(html).not.toContain("between_sessions_recovery_days");

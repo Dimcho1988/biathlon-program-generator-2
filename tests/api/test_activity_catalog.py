@@ -26,7 +26,7 @@ ENV = {
     "ONFLOWS_HR_ZONE_BOUNDS": "100,126,146,163,178,196",
     "ONFLOWS_ATHLETE_TIMEZONE": "Europe/Sofia",
     "ONFLOWS_INTRAZONE_VERSION": "intra_zone_linear_v1",
-    "ONFLOWS_TREF_VERSION": "tref-fixed-expert-v1",
+    "ONFLOWS_TREF_VERSION": "tref-bounded-40d-expert-v1",
     "ONFLOWS_RECOVERY_VERSION": "main-load-recovery-v1",
     "ONFLOWS_HISTORY_DAYS": "41",
 }
@@ -146,6 +146,13 @@ def test_refresh_persists_provider_key_but_calendar_contract_keeps_it_private():
     rows = repository.activity_calendar(
         "pilot", date(2026, 8, 15), date(2026, 8, 15)
     )
+    canonical = rows[0]["canonical_summary"]
+    assert canonical["schema_version"] == "activity-canonical-summary-v2"
+    assert canonical["tref_bounds_profile_version"]
+    assert set(canonical["tref_used_min"]) == {
+        "Z1", "Z2", "Z3", "Z4", "Z5", "STR"
+    }
+    assert all(value > 0.0 for value in canonical["tref_used_min"].values())
     assert rows[0]["provider_activity_key"] == provider_activity_key(
         provider_athlete_id="private-athlete",
         provider_activity_id="provider-activity",
@@ -322,6 +329,9 @@ def test_calendar_contract_is_summary_only_and_athlete_isolated(monkeypatch):
     )
     assert response.status_code == 200
     payload = response.json()
+    assert payload["schema_version"] == "activity-calendar-index-v2"
+    assert payload["generation_id"] is None
+    assert payload["revision"] == 0
     assert payload["includes_timeseries"] is False
     assert len(payload["activities"]) == 1
     assert all("series" not in activity for activity in payload["activities"])

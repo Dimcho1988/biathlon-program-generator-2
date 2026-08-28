@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ActivityCalendar, ActivityCalendarItem, DailyWellnessSummary } from "../lib/activities";
+import { SyncActionForm } from "./sync-action-form";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
 const dateLabel = new Intl.DateTimeFormat("bg-BG", { day: "numeric", month: "short", timeZone: "UTC" });
@@ -61,7 +62,7 @@ function WellnessDay({ wellness }: { wellness?: DailyWellnessSummary }) {
   </span>;
 }
 
-function WellnessStatus({ calendar }: { calendar: ActivityCalendar }) {
+function WellnessStatus({ calendar, syncBusy }: { calendar: ActivityCalendar; syncBusy: boolean }) {
   const status = calendar.wellness_status;
   if (status.state === "available") return <div className="calendar-wellness-status available">
     <div><strong>Wellness от Intervals</strong><span>{status.displayed_days} дни в периода{status.latest_observed_date ? ` · последни данни ${status.latest_observed_date}` : ""}</span></div>
@@ -75,7 +76,7 @@ function WellnessStatus({ calendar }: { calendar: ActivityCalendar }) {
         : "Записаните wellness дни са извън избрания период на календара.";
   return <div className={`calendar-wellness-status ${status.state}`} role="status">
     <div><strong>Дневните wellness данни още не са показани</strong><span>{message}</span></div>
-    {status.state !== "outside_snapshot_period" && <form action="/api/integrations/intervals/refresh" method="post"><input type="hidden" name="returnTo" value={`/activities?start=${calendar.period_start}&end=${calendar.period_end}`} /><input type="hidden" name="scope" value="wellness" /><button className="action-button secondary" type="submit">Обнови wellness</button></form>}
+    {status.state !== "outside_snapshot_period" && <SyncActionForm scope="WELLNESS" returnTo={`/activities?start=${calendar.period_start}&end=${calendar.period_end}`} busy={syncBusy} label="Обнови wellness" />}
     {status.state === "no_provider_records" && <Link href="/api/integrations/intervals/connect">Свържи Intervals отново</Link>}
   </div>;
 }
@@ -137,7 +138,7 @@ function WeekSummary({ calendar, weekStart }: { calendar: ActivityCalendar; week
   </aside>;
 }
 
-export function ActivityCalendarView({ calendar }: { calendar: ActivityCalendar }) {
+export function ActivityCalendarView({ calendar, syncBusy = false }: { calendar: ActivityCalendar; syncBusy?: boolean }) {
   const gridStart = monday(calendar.period_start);
   const gridEnd = sunday(calendar.period_end);
   const days: string[] = [];
@@ -147,7 +148,7 @@ export function ActivityCalendarView({ calendar }: { calendar: ActivityCalendar 
   for (const activity of calendar.activities) byDate.set(activity.local_date, [...(byDate.get(activity.local_date) ?? []), activity]);
   const weeks = Array.from({ length: Math.ceil(days.length / 7) }, (_, index) => days.slice(index * 7, index * 7 + 7));
   return <section className="completed-calendar" aria-label="Календар на завършените активности">
-    <WellnessStatus calendar={calendar} />
+    <WellnessStatus calendar={calendar} syncBusy={syncBusy} />
     <div className="calendar-visual-key"><span><i className="z1" /><i className="z2" /><i className="z3" /><i className="z4" /><i className="z5" /> Z1–Z5 разпределение</span><small>HRmod final при наличен shadow резултат; иначе Raw HR. Wellness и HRmod са диагностични и не променят canonical load.</small></div>
     <div className="calendar-weekdays" aria-hidden="true">{weekdays.map((day) => <span key={day}>{day}</span>)}</div>
     <div className="completed-calendar-grid">

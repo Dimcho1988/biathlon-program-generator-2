@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
+import json
 import math
-from types import SimpleNamespace
+from pathlib import Path
 from fastapi.testclient import TestClient
 import pytest
 
@@ -22,14 +23,27 @@ from apps.api.cloud import (
 from apps.api.hrmod import calculate_hrmod
 from apps.api import main as api_main
 from apps.api.main import app
+from apps.api.schemas import AthletePlanningProfileResponse
 from apps.api.oauth_service import OAuthFlowError
+from apps.api.oauth_store import PersistentStoreFailure
 from biathlon.methodology import canonical_methodology
 
 
 def test_athlete_configuration_validation_and_private_fingerprint():
-    context = AthleteContext("pilot", "private-123", (90, 110, 130, 150, 170, 190), "Europe/Sofia", "intra_zone_linear_v1", "tref-300-180-70-20-20-v1", "recovery-v1")
+    context = AthleteContext("pilot", "private-123", (90, 110, 130, 150, 170, 190), "Europe/Sofia", "intra_zone_linear_v1", "tref-bounded-40d-expert-v1", "recovery-v1")
     assert len(context.validate().fingerprint) == 64
     assert "private-123" not in context.fingerprint
+
+    with pytest.raises(ValueError, match="Tref profile version"):
+        AthleteContext(
+            "pilot",
+            "private-123",
+            (90, 110, 130, 150, 170, 190),
+            "Europe/Sofia",
+            "intra_zone_linear_v1",
+            "tref-fixed-expert-v1",
+            "recovery-v1",
+        ).validate()
 
 
 def test_athlete_model_settings_require_real_boundaries_and_timezone():
@@ -46,7 +60,7 @@ def planning_profile(**overrides):
         "season_start": date(2026, 1, 1),
         "season_end": date(2026, 12, 31),
         "annual_target_hours": 600.0,
-        "sessions_per_week": 9,
+        "sessions_per_week": 8,
         "rest_days": (0,),
         "double_session_days": (2, 5),
         "long_session_day": 6,
@@ -71,16 +85,37 @@ def test_planning_profile_contains_only_individual_inputs_and_validates_structur
     assert "double_threshold_min_readiness" not in profile.to_payload()
     assert "annual_goal_influence" not in profile.to_payload()
     with pytest.raises(ValueError, match="session count"):
-        planning_profile(sessions_per_week=13, rest_days=(0,)).validate()
+        planning_profile(sessions_per_week=9).validate()
+    with pytest.raises(ValueError, match="cannot be rest days"):
+        planning_profile(rest_days=(0, 2)).validate()
     with pytest.raises(ValueError, match="cannot be a rest day"):
         planning_profile(
             double_threshold_enabled=True,
             double_threshold_day=0,
         ).validate()
+    with pytest.raises(ValueError, match="must allow a double session"):
+        planning_profile(
+            double_threshold_enabled=True,
+            double_threshold_day=4,
+        ).validate()
     with pytest.raises(ValueError, match="fields are invalid"):
         AthletePlanningProfile.from_mapping(
             {**profile.to_payload(), "sessions_per_week": True}
         )
+
+
+def test_python_and_typescript_share_one_planning_profile_contract_fixture():
+    fixture_path = (
+        Path(__file__).resolve().parents[2]
+        / "apps/web/test/fixtures/planning-profile-response-v1.json"
+    )
+    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    response = AthletePlanningProfileResponse.model_validate(payload)
+    profile = AthletePlanningProfile.from_mapping(payload["profile"])
+
+    assert response.model_dump(mode="json") == payload
+    assert profile.to_payload() == payload["profile"]
 
 
 def test_mesocycle_accent_preferences_are_individual_and_do_not_guess_auto_slots():
@@ -326,37 +361,25 @@ def test_real_endpoint_auth_and_no_snapshot(monkeypatch):
     assert client.get("/api/v2/real/recovery-history", headers={"Authorization": "Bearer secret-value"}).status_code == 503
 
 
-def test_full_refresh_confirms_recovery_history_was_persisted(monkeypatch):
-    class Connection:
-        status = "CONNECTED"
-        access_token = "provider-token"
-        provider_athlete_id = "i123"
-
+def test_legacy_full_refresh_only_enqueues_worker_job(monkeypatch):
     class Repository:
-        def connection(self, athlete_alias):
-            return Connection()
+        def __init__(self):
+            self.calls = []
 
         def athlete_settings(self, athlete_alias):
-            return None
+            return {"timezone": "Europe/Sofia"}
 
-        def latest(self, athlete_alias):
-            return {"wellness_calendar": []}
+        def enqueue_sync_job(self, **kwargs):
+            self.calls.append(kwargs)
+            return {
+                "job_id": "job-full",
+                "status": "QUEUED",
+                "deduplicated": False,
+            }
 
+    repository = Repository()
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
-    monkeypatch.setattr(api_main, "_repository", lambda: Repository())
-    monkeypatch.setattr(
-        api_main,
-        "refresh",
-        lambda *args, **kwargs: SimpleNamespace(
-            processed_activities=12,
-            wellness_records_received=4,
-        ),
-    )
-    monkeypatch.setattr(
-        api_main,
-        "recovery_history_from_persisted",
-        lambda snapshot: object(),
-    )
+    monkeypatch.setattr(api_main, "_repository", lambda: repository)
 
     response = TestClient(app).post(
         "/api/v2/real/refresh",
@@ -367,40 +390,27 @@ def test_full_refresh_confirms_recovery_history_was_persisted(monkeypatch):
     )
 
     assert response.status_code == 202
-    assert response.json()["recovery_history_stored"] is True
+    assert response.json() == {
+        "schema_version": "sync-enqueue-v1",
+        "job_id": "job-full",
+        "scope": "FULL",
+        "state": "QUEUED",
+        "coalesced": False,
+    }
+    assert repository.calls[0]["job_kind"] == "FULL_SYNC"
+    assert len(repository.calls[0]["idempotency_key"]) == 64
 
 
-def test_full_refresh_fails_closed_when_recovery_history_was_not_persisted(monkeypatch):
-    class Connection:
-        status = "CONNECTED"
-        access_token = "provider-token"
-        provider_athlete_id = "i123"
-
+def test_legacy_full_refresh_fails_closed_when_enqueue_fails(monkeypatch):
     class Repository:
-        def connection(self, athlete_alias):
-            return Connection()
-
         def athlete_settings(self, athlete_alias):
-            return None
+            return {"timezone": "Europe/Sofia"}
 
-        def latest(self, athlete_alias):
-            return {"wellness_calendar": []}
+        def enqueue_sync_job(self, **kwargs):
+            raise PersistentStoreFailure("private store detail")
 
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
     monkeypatch.setattr(api_main, "_repository", lambda: Repository())
-    monkeypatch.setattr(
-        api_main,
-        "refresh",
-        lambda *args, **kwargs: SimpleNamespace(
-            processed_activities=12,
-            wellness_records_received=4,
-        ),
-    )
-
-    def missing_recovery(snapshot):
-        raise ValueError("Recovery history requires a new real-data refresh")
-
-    monkeypatch.setattr(api_main, "recovery_history_from_persisted", missing_recovery)
 
     response = TestClient(app).post(
         "/api/v2/real/refresh",
@@ -414,34 +424,25 @@ def test_full_refresh_fails_closed_when_recovery_history_was_not_persisted(monke
     assert response.json() == {"detail": "Persistent server storage is unavailable"}
 
 
-def test_recovery_restore_uses_persisted_load_projection_and_confirms_readback(monkeypatch):
-    class Connection:
-        status = "CONNECTED"
-        provider_athlete_id = "i123"
-
+def test_legacy_recovery_restore_auto_upgrades_to_full_sync(monkeypatch):
     class Repository:
-        def connection(self, athlete_alias):
-            return Connection()
+        def __init__(self):
+            self.calls = []
 
         def athlete_settings(self, athlete_alias):
-            return None
+            return {"timezone": "Europe/Sofia"}
 
-        def latest(self, athlete_alias):
-            return {"recovery_history": {"stored": True}}
+        def enqueue_sync_job(self, **kwargs):
+            self.calls.append(kwargs)
+            return {
+                "job_id": "job-full",
+                "status": "RUNNING",
+                "deduplicated": True,
+            }
 
     repository = Repository()
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
     monkeypatch.setattr(api_main, "_repository", lambda: repository)
-    restore = lambda *args, **kwargs: SimpleNamespace(
-        period_start="2026-05-28",
-        period_end="2026-08-25",
-    )
-    monkeypatch.setattr(api_main, "restore_recovery_history_from_snapshot", restore)
-    monkeypatch.setattr(
-        api_main,
-        "recovery_history_from_persisted",
-        lambda snapshot: object(),
-    )
 
     response = TestClient(app).post(
         "/api/v2/real/recovery/restore",
@@ -451,13 +452,15 @@ def test_recovery_restore_uses_persisted_load_projection_and_confirms_readback(m
         },
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     assert response.json() == {
-        "status": "restored",
-        "recovery_history_stored": True,
-        "period_start": "2026-05-28",
-        "period_end": "2026-08-25",
+        "schema_version": "sync-enqueue-v1",
+        "job_id": "job-full",
+        "scope": "FULL",
+        "state": "RUNNING",
+        "coalesced": True,
     }
+    assert repository.calls[0]["job_kind"] == "FULL_SYNC"
 
 
 def test_planning_methodology_is_protected_shared_and_versioned(monkeypatch):

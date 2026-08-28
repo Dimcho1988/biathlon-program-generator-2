@@ -208,8 +208,8 @@ def test_short_history_uses_available_days_consistently() -> None:
     assert current.loc["STR", "E7_daily"] == pytest.approx(10.0)
     assert rolling_last["E7_daily"] == pytest.approx(10.0)
     assert current.loc["STR", "E40_daily"] == pytest.approx(10.0)
-    assert current.loc["STR", "Tref"] == pytest.approx(70.0)
-    assert readiness_last["Tref"] == pytest.approx(70.0)
+    assert current.loc["STR", "Tref"] == pytest.approx(56.0)
+    assert readiness_last["Tref"] == pytest.approx(56.0)
 
 
 @pytest.mark.parametrize(

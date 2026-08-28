@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import pandas as pd
 import pytest
 
+from biathlon.constants import (
+    AEROBIC_TREF_BOUNDS_MINUTES,
+    FIXED_STRENGTH_TREF_MINUTES,
+)
 from biathlon.demo_data import generate_demo_bundle
-from intervals_inspector.intervals_client import IntervalsResponse
+from intervals_inspector.intervals_client import IntervalsAPIError, IntervalsResponse
 from intervals_inspector.real_data_source import (
     DEMO_DATA_SOURCE,
     REAL_DATA_SOURCE,
@@ -27,13 +31,7 @@ from intervals_inspector.shadow_model import (
 )
 
 
-EXPECTED_FIXED_TREF = {
-    "Z1": 300.0,
-    "Z2": 180.0,
-    "Z3": 70.0,
-    "Z4": 20.0,
-    "Z5": 20.0,
-}
+EXPECTED_TREF_BOUNDS = dict(AEROBIC_TREF_BOUNDS_MINUTES)
 
 
 def _activity_detail(activity_id: str, activity_day: date) -> dict[str, Any]:
@@ -108,6 +106,31 @@ class SyntheticHistoryClient:
         )
 
 
+class FailingActivityClient(SyntheticHistoryClient):
+    def __init__(
+        self,
+        specs: dict[str, dict[str, Any]],
+        *,
+        failing_activity_id: str,
+        status_code: int,
+    ) -> None:
+        super().__init__(specs)
+        self.failing_activity_id = failing_activity_id
+        self.status_code = status_code
+
+    def get_streams_result(self, activity_id: str) -> IntervalsResponse:
+        if activity_id == self.failing_activity_id:
+            retryable = self.status_code == 429 or self.status_code >= 500
+            raise IntervalsAPIError(
+                "sanitized provider failure",
+                status_code=self.status_code,
+                retry_after_seconds=37 if retryable else None,
+                retryable=retryable,
+                terminal=not retryable,
+            )
+        return super().get_streams_result(activity_id)
+
+
 def _specs(start: date, days: int) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for offset in range(0, days, 3):
@@ -136,37 +159,172 @@ def _parameters() -> dict[str, Any]:
     return generate_demo_bundle()["parameters"]
 
 
-def _assert_fixed_tref_is_shared_everywhere(dataset: Any) -> None:
-    for zone, expected in EXPECTED_FIXED_TREF.items():
+def test_systemic_activity_provider_failure_aborts_the_whole_history() -> None:
+    end = date(2026, 8, 8)
+    start = end - timedelta(days=40)
+    specs = {
+        "first-ok": {"date": start + timedelta(days=1)},
+        "second-rate-limited": {"date": start + timedelta(days=2)},
+    }
+
+    with pytest.raises(IntervalsAPIError) as captured:
+        load_real_history(
+            FailingActivityClient(
+                specs,
+                failing_activity_id="second-rate-limited",
+                status_code=429,
+            ),
+            profile_identifier="athlete-provider-failure",
+            session_salt="session-salt",
+            parameters=_parameters(),
+            period_end=end,
+            days=41,
+        )
+
+    assert captured.value.status_code == 429
+    assert captured.value.retryable is True
+    assert captured.value.retry_after_seconds == pytest.approx(37.0)
+
+
+def test_explicitly_missing_activity_is_excluded_without_hiding_other_data() -> None:
+    end = date(2026, 8, 8)
+    start = end - timedelta(days=40)
+    specs = {
+        "available": {"date": start + timedelta(days=1)},
+        "deleted": {"date": start + timedelta(days=2)},
+    }
+
+    dataset = load_real_history(
+        FailingActivityClient(
+            specs,
+            failing_activity_id="deleted",
+            status_code=410,
+        ),
+        profile_identifier="athlete-missing-activity",
+        session_salt="session-salt",
+        parameters=_parameters(),
+        period_end=end,
+        days=41,
+    )
+
+    assert dataset.processed_activities == 2
+    assert dataset.excluded_activities == 1
+    assert dataset.activities["quality_status"].tolist() == ["valid", "excluded"]
+
+
+@pytest.mark.parametrize("callback_kind", ["metadata", "shadow"])
+def test_external_activity_callback_failure_aborts_generation(
+    callback_kind: str,
+) -> None:
+    end = date(2026, 8, 8)
+    specs = {"activity": {"date": end}}
+
+    def fail_callback(*args: Any) -> Mapping[str, Any] | None:
+        del args
+        raise ValueError("private persistence detail")
+
+    kwargs: dict[str, Any] = {}
+    if callback_kind == "metadata":
+        kwargs["activity_metadata_collector"] = fail_callback
+    else:
+        kwargs["activity_shadow_processor"] = fail_callback
+
+    with pytest.raises(RuntimeError, match="Activity .* callback failed") as captured:
+        load_real_history(
+            SyntheticHistoryClient(specs),
+            profile_identifier="athlete-callback-failure",
+            session_salt="session-salt",
+            parameters=_parameters(),
+            period_end=end,
+            days=41,
+            **kwargs,
+        )
+
+    assert isinstance(captured.value.__cause__, ValueError)
+
+
+def _bounded_tref(zone: str, raw: float) -> float:
+    lower, upper = EXPECTED_TREF_BOUNDS[zone]
+    return min(max(float(raw), lower), upper)
+
+
+def _assert_bounded_tref_is_shared_everywhere(dataset: Any) -> None:
+    for zone, (lower, upper) in EXPECTED_TREF_BOUNDS.items():
+        daily_rows = dataset.daily_zones.loc[
+            dataset.daily_zones["zone"] == zone
+        ].sort_values("date")
+        effective_history: list[float] = []
+        expected_raw: list[float] = []
+        expected_tref: list[float] = []
+        expected_bound: list[str] = []
+        for effective in daily_rows["E_z"].astype(float):
+            raw = (
+                7.0 * float(pd.Series(effective_history[-40:]).mean())
+                if effective_history
+                else upper
+            )
+            expected_raw.append(raw)
+            expected_tref.append(_bounded_tref(zone, raw))
+            expected_bound.append(
+                "lower" if raw < lower else "upper" if raw > upper else "none"
+            )
+            effective_history.append(effective)
+
+        assert daily_rows["tref_raw"].to_numpy() == pytest.approx(
+            expected_raw
+        )
+        assert daily_rows["tref_effective"].to_numpy() == pytest.approx(
+            expected_tref
+        )
+        assert daily_rows["tref_bound_applied"].tolist() == expected_bound
+        assert daily_rows["tref_effective"].between(lower, upper).all()
+
+        expected_by_date = daily_rows.set_index("date")["tref_effective"]
         activity_values = dataset.activity_zones.loc[
             dataset.activity_zones["zone"] == zone,
-            "tref_effective",
-        ]
-        daily_values = dataset.daily_zones.loc[
-            dataset.daily_zones["zone"] == zone,
-            "tref_effective",
+            ["date", "tref_effective"],
         ]
         rolling_values = dataset.rolling_load.loc[
-            dataset.rolling_load["component"] == zone,
-            "Tref",
-        ]
+            dataset.rolling_load["component"] == zone
+        ].sort_values("date")
         readiness_values = dataset.readiness_history.loc[
-            dataset.readiness_history["component"] == zone,
-            "Tref",
-        ]
+            dataset.readiness_history["component"] == zone
+        ].sort_values("date")
 
         assert not activity_values.empty
-        assert not daily_values.empty
         assert not rolling_values.empty
         assert not readiness_values.empty
-        assert activity_values.to_numpy() == pytest.approx(expected)
-        assert daily_values.to_numpy() == pytest.approx(expected)
-        assert dataset.load_stats.loc[zone, "Tref"] == pytest.approx(expected)
-        assert rolling_values.to_numpy() == pytest.approx(expected)
-        assert readiness_values.to_numpy() == pytest.approx(expected)
-        assert dataset.daily_loads[f"tref_used_{zone}"].to_numpy() == (
-            pytest.approx(expected)
+        assert activity_values["tref_effective"].to_numpy() == pytest.approx(
+            activity_values["date"].map(expected_by_date).to_numpy()
         )
+        assert rolling_values["Tref"].to_numpy() == pytest.approx(
+            expected_tref
+        )
+        assert readiness_values["Tref"].to_numpy() == pytest.approx(
+            expected_tref
+        )
+        assert dataset.daily_loads[f"tref_used_{zone}"].to_numpy() == (
+            pytest.approx(expected_tref)
+        )
+        current_raw = 7.0 * float(
+            dataset.load_stats.loc[zone, "E40_daily"]
+        )
+        assert dataset.load_stats.loc[zone, "Tref"] == pytest.approx(
+            _bounded_tref(zone, current_raw)
+        )
+
+    assert dataset.daily_loads["tref_used_STR"].to_numpy() == pytest.approx(
+        FIXED_STRENGTH_TREF_MINUTES
+    )
+    assert dataset.load_stats.loc["STR", "Tref"] == pytest.approx(
+        FIXED_STRENGTH_TREF_MINUTES
+    )
+    assert dataset.rolling_load.loc[
+        dataset.rolling_load["component"] == "STR", "Tref"
+    ].to_numpy() == pytest.approx(FIXED_STRENGTH_TREF_MINUTES)
+    assert dataset.readiness_history.loc[
+        dataset.readiness_history["component"] == "STR", "Tref"
+    ].to_numpy() == pytest.approx(FIXED_STRENGTH_TREF_MINUTES)
 
 
 def _with_old_history_hr(
@@ -295,7 +453,7 @@ def test_ninety_day_history_builds_one_shared_load_and_recovery_dataset() -> Non
         columns="zone",
         values="T_eq_z",
     ).reindex(dataset.daily_loads.index)
-    for zone in EXPECTED_FIXED_TREF:
+    for zone in EXPECTED_TREF_BOUNDS:
         assert dataset.daily_loads[f"q_{zone}"].to_numpy() == pytest.approx(
             daily_equivalent[zone].to_numpy()
         )
@@ -313,7 +471,7 @@ def test_ninety_day_history_builds_one_shared_load_and_recovery_dataset() -> Non
         assert current_stats["index_7_40"] == pytest.approx(
             rolling_stats["index_7_40"]
         )
-    _assert_fixed_tref_is_shared_everywhere(dataset)
+    _assert_bounded_tref_is_shared_everywhere(dataset)
     assert build_real_load_view(dataset)["daily_zones"] is dataset.daily_zones
     assert (
         build_real_recovery_view(dataset)["readiness_history"]
@@ -355,7 +513,7 @@ def test_strength_activity_uses_recording_duration_and_never_hr_zones() -> None:
     assert dataset.daily_loads.loc[strength_date, "q_STR"] == pytest.approx(30.0)
     assert dataset.daily_loads.loc[strength_date, "e_STR"] == pytest.approx(30.0)
     assert dataset.daily_loads.loc[
-        strength_date, [f"q_{zone}" for zone in EXPECTED_FIXED_TREF]
+        strength_date, [f"q_{zone}" for zone in EXPECTED_TREF_BOUNDS]
     ].sum() == pytest.approx(0.0)
     strength_ref = str(activity["activity_ref"])
     aerobic_rows = dataset.activity_zones.loc[
@@ -415,7 +573,7 @@ def test_multiple_activities_aggregate_after_individual_modeling() -> None:
     assert daily == pytest.approx(individual)
 
 
-def test_h40_uses_only_previous_calendar_days_and_tref_stays_fixed() -> None:
+def test_tref_uses_only_previous_calendar_days_for_each_history_day() -> None:
     end = date(2026, 8, 8)
     start = end - timedelta(days=89)
     dataset = load_real_history(
@@ -445,17 +603,19 @@ def test_h40_uses_only_previous_calendar_days_and_tref_stays_fixed() -> None:
         & (dataset.activity_zones["zone"] == "Z2"),
         "tref_history_value",
     ]
-    same_day_fixed_tref = dataset.activity_zones.loc[
+    same_day_tref = dataset.activity_zones.loc[
         (dataset.activity_zones["date"] == current)
         & (dataset.activity_zones["zone"] == "Z2"),
         "tref_effective",
     ]
     assert len(same_day_h40) == 2
     assert all(value == pytest.approx(expected) for value in same_day_h40)
-    assert same_day_fixed_tref.to_numpy() == pytest.approx(180.0)
+    assert same_day_tref.to_numpy() == pytest.approx(
+        _bounded_tref("Z2", expected)
+    )
 
 
-def test_h40_and_seven_forty_react_to_history_while_tref_does_not() -> None:
+def test_h40_seven_forty_and_bounded_tref_react_to_real_history() -> None:
     end = date(2026, 8, 8)
     start = end - timedelta(days=89)
     base_specs = _specs(start, 90)
@@ -496,14 +656,14 @@ def test_h40_and_seven_forty_react_to_history_while_tref_does_not() -> None:
     assert high_old_history.load_stats.loc["Z2", "index_7_40"] < (
         low_old_history.load_stats.loc["Z2", "index_7_40"]
     )
-    assert high_old_history.load_stats.loc["Z2", "Tref"] == pytest.approx(
-        180.0
-    )
-    assert low_old_history.load_stats.loc["Z2", "Tref"] == pytest.approx(
-        180.0
-    )
-    _assert_fixed_tref_is_shared_everywhere(low_old_history)
-    _assert_fixed_tref_is_shared_everywhere(high_old_history)
+    for dataset in (low_old_history, high_old_history):
+        expected_current = _bounded_tref(
+            "Z2", 7.0 * float(dataset.load_stats.loc["Z2", "E40_daily"])
+        )
+        assert dataset.load_stats.loc["Z2", "Tref"] == pytest.approx(
+            expected_current
+        )
+        _assert_bounded_tref_is_shared_everywhere(dataset)
 
 
 def test_future_activities_do_not_change_past_results() -> None:

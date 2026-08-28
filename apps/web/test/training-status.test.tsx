@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dashboard } from "../components/dashboard";
-import { getCompletedWork, getLoadHistory, getRecoveryHistory, getTrainingStatus, getVolumeHistory } from "../lib/api";
+import { getCompletedWork, getDashboardView, getLoadHistory, getRecoveryHistory, getTrainingStatus, getVolumeHistory } from "../lib/api";
 import { completedWorkFixture, loadHistoryFixture, recoveryHistoryFixture, trainingStatusFixture, volumeHistoryFixture } from "../lib/fixture";
 import { parseCompletedWork } from "../lib/completed-work";
 import { parseLoadHistory } from "../lib/load-history";
@@ -36,7 +36,7 @@ describe("training-status-v1 contract", () => {
   });
 });
 
-describe("load-history-v1 contract", () => {
+describe("load-history-v1/v2 contract", () => {
   it("accepts the aggregate fixture", () => expect(parseLoadHistory(loadHistoryFixture)).toEqual(loadHistoryFixture));
   it("normalizes harmless floating-point drift at the percentage boundary", () => {
     const activities = loadHistoryFixture.activities.map((activity, index) =>
@@ -54,6 +54,35 @@ describe("load-history-v1 contract", () => {
     expect(() => parseLoadHistory({ ...loadHistoryFixture, daily: loadHistoryFixture.daily.slice(0, -1) })).toThrow(/дневна история/);
     expect(() => parseLoadHistory({ ...loadHistoryFixture, provider_athlete_id: "private" })).toThrow(/структура/);
   });
+  it("requires persisted per-day Tref provenance in v2 while retaining v1 compatibility", () => {
+    const version2 = {
+      ...loadHistoryFixture,
+      schema_version: "load-history-v2",
+      tref_bounds_profile_version: "tref-bounds-profile-v1",
+      daily: loadHistoryFixture.daily.map((row) => ({ ...row, tref_used_min: 120 })),
+      strength: loadHistoryFixture.strength ? {
+        ...loadHistoryFixture.strength,
+        daily: loadHistoryFixture.strength.daily.map((row) => ({ ...row, tref_used_min: 90 })),
+      } : loadHistoryFixture.strength,
+    };
+    expect(parseLoadHistory(version2).schema_version).toBe("load-history-v2");
+    expect(parseLoadHistory(version2).daily[0].tref_used_min).toBe(120);
+    expect(() => parseLoadHistory({ ...version2, tref_bounds_profile_version: null })).toThrow(/границите за Tref/);
+    expect(() => parseLoadHistory({ ...version2, daily: loadHistoryFixture.daily })).toThrow(/дневен ред/);
+  });
+
+  it("accepts current API serialization of a legacy v1 history", () => {
+    const serializedLegacy = {
+      ...loadHistoryFixture,
+      tref_bounds_profile_version: null,
+      daily: loadHistoryFixture.daily.map((row) => ({ ...row, tref_used_min: null })),
+      strength: {
+        ...loadHistoryFixture.strength!,
+        daily: loadHistoryFixture.strength!.daily.map((row) => ({ ...row, tref_used_min: null })),
+      },
+    };
+    expect(parseLoadHistory(serializedLegacy).schema_version).toBe("load-history-v1");
+  });
 });
 
 describe("completed-work-v1 contract", () => {
@@ -63,6 +92,10 @@ describe("completed-work-v1 contract", () => {
     expect(() => parseCompletedWork({ ...completedWorkFixture, zones: completedWorkFixture.zones.slice(0, 4) })).toThrow(/точно Z1–Z5/);
     expect(() => parseCompletedWork({ ...completedWorkFixture, sports: [completedWorkFixture.sports[0], completedWorkFixture.sports[0]] })).toThrow(/вид активност/);
   });
+  it("accepts an aggregate derived from load-history-v2", () => {
+    const report = { ...completedWorkFixture, model: { ...completedWorkFixture.model, source_schema_version: "load-history-v2" } };
+    expect(parseCompletedWork(report).model.source_schema_version).toBe("load-history-v2");
+  });
 });
 
 describe("volume-history-v1 contract", () => {
@@ -70,6 +103,10 @@ describe("volume-history-v1 contract", () => {
   it("rejects altered aggregation semantics and inconsistent quality totals", () => {
     expect(() => parseVolumeHistory({ ...volumeHistoryFixture, model: { ...volumeHistoryFixture.model, calendar_week_start: "sunday" } })).toThrow(/метаданни/);
     expect(() => parseVolumeHistory({ ...volumeHistoryFixture, quality: { ...volumeHistoryFixture.quality, modeled_activities: 3 } })).toThrow(/качество/);
+  });
+  it("accepts weekly volume derived from load-history-v2", () => {
+    const history = { ...volumeHistoryFixture, model: { ...volumeHistoryFixture.model, source_schema_version: "load-history-v2" } };
+    expect(parseVolumeHistory(history).model.source_schema_version).toBe("load-history-v2");
   });
 });
 
@@ -192,6 +229,31 @@ describe("data access", () => {
     expect(init.headers.Authorization).toBe("Bearer server-secret");
     expect(init.headers["X-OnFlows-Athlete-Alias"]).toBe("ath-profile");
   });
+  it("loads one coherent generation for every dashboard resource", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const view = {
+      schema_version: "dashboard-view-v1",
+      generation_id: "gen-41",
+      revision: 41,
+      analysis_as_of: trainingStatusFixture.as_of,
+      activated_at: "2026-08-26T18:00:00Z",
+      training_status: trainingStatusFixture,
+      completed_work: completedWorkFixture,
+      load_history: loadHistoryFixture,
+      recovery_history: recoveryHistoryFixture,
+      volume_history: volumeHistoryFixture,
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json(view));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getDashboardView("ath-profile", "2026-06-01", "2026-06-20")).resolves.toEqual(view);
+    const [url, init] = fetchMock.mock.calls[1];
+    expect(String(url)).toBe("https://api.example.test/api/v2/real/dashboard-view?period_start=2026-06-01&period_end=2026-06-20");
+    expect(init.headers["X-OnFlows-Athlete-Alias"]).toBe("ath-profile");
+  });
 });
 
 describe("API readiness", () => {
@@ -252,6 +314,19 @@ describe("dashboard", () => {
     expect(html).toContain("50,9 мин"); expect(html).toContain("97,8%"); expect(html).toContain("3,5 дни");
   });
   it("does not show the demo label in API mode", () => expect(renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="api" />)).not.toContain("Демо данни"));
+  it("shows the exact active analysis generation separately from model versions", () => {
+    const html = renderToStaticMarkup(<Dashboard
+      data={trainingStatusFixture}
+      mode="api"
+      generationId="gen-41"
+      generationRevision={41}
+      generationActivatedAt="2026-08-26T18:00:00Z"
+    />);
+    expect(html).toContain("Активна версия");
+    expect(html).toContain("№ 41");
+    expect(html).toContain("Generation ID");
+    expect(html).toContain("gen-41");
+  });
   it("renders 7/40 and canonical daily effective-load dynamics with aggregate activity detail", () => {
     const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" loadHistory={loadHistoryFixture} />);
     expect(html).toContain("Натоварване и динамика");
@@ -302,10 +377,11 @@ describe("dashboard", () => {
     expect(html).toContain("0,75 дни");
     expect(html).toContain("main-load-recovery-v1");
   });
-  it("offers an exact canonical recovery restore when the profile snapshot predates recovery history", () => {
+  it("offers a full refresh when legacy load history cannot restore recovery exactly", () => {
     const html = renderToStaticMarkup(<Dashboard
       data={trainingStatusFixture}
       mode="api"
+      loadHistory={loadHistoryFixture}
       recoveryHistory={null}
       recoveryHistoryMessage="API услугата върна грешка (503)."
       integrationActions
@@ -314,7 +390,28 @@ describe("dashboard", () => {
     expect(html).toContain("recovery-history-v1");
     expect(html).toContain('action="/api/integrations/intervals/refresh"');
     expect(html).toContain('name="scope"');
-    expect(html).toContain('value="recovery"');
+    expect(html).toContain('value="FULL"');
+    expect(html).toContain("Пълно обновяване");
+  });
+  it("offers deterministic recovery restore when daily Tref provenance exists", () => {
+    const html = renderToStaticMarkup(<Dashboard
+      data={trainingStatusFixture}
+      mode="api"
+      loadHistory={{
+        ...loadHistoryFixture,
+        schema_version: "load-history-v2",
+        tref_bounds_profile_version: "tref-bounded-40d-expert-v1",
+        daily: loadHistoryFixture.daily.map((row) => ({ ...row, tref_used_min: 120 })),
+        strength: loadHistoryFixture.strength ? {
+          ...loadHistoryFixture.strength,
+          daily: loadHistoryFixture.strength.daily.map((row) => ({ ...row, tref_used_min: 90 })),
+        } : loadHistoryFixture.strength,
+      }}
+      recoveryHistory={null}
+      integrationActions
+    />);
+    expect(html).toContain("canonical история");
+    expect(html).toContain('value="RECOVERY"');
     expect(html).toContain("Възстанови recovery модела");
   });
 });

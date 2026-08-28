@@ -1,4 +1,4 @@
-import { getAthleteSettings, getCompletedWork, getLoadHistory, getRecoveryHistory, getTrainingStatus, getVolumeHistory, type TrainingStatusResult } from "../lib/api";
+import { getAthleteSettings, getCompletedWork, getDashboardView, getLoadHistory, getRecoveryHistory, getSyncState, getTrainingStatus, getVolumeHistory, type TrainingStatusResult } from "../lib/api";
 import type { CompletedWork } from "../lib/completed-work";
 import type { LoadHistory } from "../lib/load-history";
 import type { RecoveryHistory } from "../lib/recovery-history";
@@ -8,9 +8,12 @@ import { ErrorState } from "../components/error-state";
 import { currentAthleteAlias, multiProfileMode } from "../lib/athlete-session";
 import { AthleteSettingsForm } from "../components/athlete-settings-form";
 import { redirect } from "next/navigation";
+import type { SyncState } from "../lib/sync";
+import { syncInProgress } from "../lib/sync";
+import { SyncPendingState } from "../components/sync-pending-state";
 
 type PageResult =
-  | { ok: true; value: TrainingStatusResult; completedWork: CompletedWork | null; loadHistory: LoadHistory | null; recoveryHistory: RecoveryHistory | null; volumeHistory: VolumeHistory | null; completedWorkMessage?: string; loadHistoryMessage?: string; recoveryHistoryMessage?: string; volumeHistoryMessage?: string }
+  | { ok: true; value: TrainingStatusResult; completedWork: CompletedWork | null; loadHistory: LoadHistory | null; recoveryHistory: RecoveryHistory | null; volumeHistory: VolumeHistory | null; generationId?: string | null; generationRevision?: number; generationActivatedAt?: string | null; completedWorkMessage?: string; loadHistoryMessage?: string; recoveryHistoryMessage?: string; volumeHistoryMessage?: string }
   | { ok: false; message: string };
 
 const notices: Record<string, string> = {
@@ -40,7 +43,13 @@ const settingsNotices: Record<string, string> = {
   error: "Настройките не бяха запазени. Опитайте отново.",
 };
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ intervals?: string; settings?: string; wake?: string; report_start?: string; report_end?: string }> }) {
+const syncNotices: Record<string, string> = {
+  queued: "Обновяването е добавено към опашката и ще продължи във фонов режим.",
+  coalesced: "За този профил вече има активно обновяване; използваме същата задача.",
+  "enqueue-error": "Не успяхме да потвърдим новата заявка. Проверяваме запазения статус, без да стартираме автоматично второ обновяване.",
+};
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ intervals?: string; settings?: string; sync?: string; wake?: string; report_start?: string; report_end?: string }> }) {
   const query = await searchParams;
   let result: PageResult;
   const integrationActions = process.env.ONFLOWS_API_RESOURCE === "real";
@@ -92,32 +101,68 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
     />;
   }
 
-  const [statusResult, completedWorkResult, historyResult, recoveryResult, volumeResult] = await Promise.allSettled([
-    getTrainingStatus(athleteAlias ?? undefined),
-    getCompletedWork(athleteAlias ?? undefined, query.report_start, query.report_end),
-    getLoadHistory(athleteAlias ?? undefined),
-    getRecoveryHistory(athleteAlias ?? undefined),
-    getVolumeHistory(athleteAlias ?? undefined),
-  ]);
-  if (statusResult.status === "fulfilled") {
-    result = {
-      ok: true,
-      value: statusResult.value,
-      completedWork: completedWorkResult.status === "fulfilled" ? completedWorkResult.value : null,
-      loadHistory: historyResult.status === "fulfilled" ? historyResult.value : null,
-      recoveryHistory: recoveryResult.status === "fulfilled" ? recoveryResult.value : null,
-      volumeHistory: volumeResult.status === "fulfilled" ? volumeResult.value : null,
-      completedWorkMessage: completedWorkResult.status === "rejected" ? (completedWorkResult.reason instanceof Error ? completedWorkResult.reason.message : "Отчетът за извършеното натоварване не е достъпен.") : undefined,
-      loadHistoryMessage: historyResult.status === "rejected" ? (historyResult.reason instanceof Error ? historyResult.reason.message : "Историята на натоварването не е достъпна.") : undefined,
-      recoveryHistoryMessage: recoveryResult.status === "rejected" ? (recoveryResult.reason instanceof Error ? recoveryResult.reason.message : "Recovery историята не е достъпна.") : undefined,
-      volumeHistoryMessage: volumeResult.status === "rejected" ? (volumeResult.reason instanceof Error ? volumeResult.reason.message : "Обемната история не е достъпна.") : undefined,
-    };
+  let syncState: SyncState | null = null;
+  let syncStatusUnavailable = false;
+  if (integrationActions) {
+    const [viewResult, syncResult] = await Promise.allSettled([
+      getDashboardView(athleteAlias ?? undefined, query.report_start, query.report_end),
+      getSyncState(athleteAlias ?? undefined),
+    ]);
+    if (syncResult.status === "fulfilled") syncState = syncResult.value;
+    else syncStatusUnavailable = true;
+    const trainingStatus = viewResult.status === "fulfilled" ? viewResult.value.training_status : null;
+    if (viewResult.status === "fulfilled" && trainingStatus) {
+      const view = viewResult.value;
+      result = {
+        ok: true,
+        value: { data: trainingStatus, mode: "api" },
+        completedWork: view.completed_work,
+        loadHistory: view.load_history,
+        recoveryHistory: view.recovery_history,
+        volumeHistory: view.volume_history,
+        generationId: view.generation_id,
+        generationRevision: view.revision,
+        generationActivatedAt: view.activated_at,
+        completedWorkMessage: view.completed_work ? undefined : "Отчетът за извършеното натоварване не е наличен в активната версия.",
+        loadHistoryMessage: view.load_history ? undefined : "Историята на натоварването не е налична в активната версия.",
+        recoveryHistoryMessage: view.recovery_history ? undefined : "Recovery историята изисква ново обновяване.",
+        volumeHistoryMessage: view.volume_history ? undefined : "Обемната история не е налична в активната версия.",
+      };
+    } else {
+      const error = viewResult.status === "rejected" ? viewResult.reason : null;
+      result = {
+        ok: false,
+        message: error instanceof Error ? error.message : "Все още няма активна версия на тренировъчния анализ.",
+      };
+    }
   } else {
-    const error = statusResult.reason;
-    result = {
-      ok: false,
-      message: error instanceof Error ? error.message : "Възникна неочаквана грешка.",
-    };
+    const [statusResult, completedWorkResult, historyResult, recoveryResult, volumeResult] = await Promise.allSettled([
+      getTrainingStatus(athleteAlias ?? undefined),
+      getCompletedWork(athleteAlias ?? undefined, query.report_start, query.report_end),
+      getLoadHistory(athleteAlias ?? undefined),
+      getRecoveryHistory(athleteAlias ?? undefined),
+      getVolumeHistory(athleteAlias ?? undefined),
+    ]);
+    if (statusResult.status === "fulfilled") {
+      result = {
+        ok: true,
+        value: statusResult.value,
+        completedWork: completedWorkResult.status === "fulfilled" ? completedWorkResult.value : null,
+        loadHistory: historyResult.status === "fulfilled" ? historyResult.value : null,
+        recoveryHistory: recoveryResult.status === "fulfilled" ? recoveryResult.value : null,
+        volumeHistory: volumeResult.status === "fulfilled" ? volumeResult.value : null,
+        completedWorkMessage: completedWorkResult.status === "rejected" ? (completedWorkResult.reason instanceof Error ? completedWorkResult.reason.message : "Отчетът за извършеното натоварване не е достъпен.") : undefined,
+        loadHistoryMessage: historyResult.status === "rejected" ? (historyResult.reason instanceof Error ? historyResult.reason.message : "Историята на натоварването не е достъпна.") : undefined,
+        recoveryHistoryMessage: recoveryResult.status === "rejected" ? (recoveryResult.reason instanceof Error ? recoveryResult.reason.message : "Recovery историята не е достъпна.") : undefined,
+        volumeHistoryMessage: volumeResult.status === "rejected" ? (volumeResult.reason instanceof Error ? volumeResult.reason.message : "Обемната история не е достъпна.") : undefined,
+      };
+    } else {
+      const error = statusResult.reason;
+      result = {
+        ok: false,
+        message: error instanceof Error ? error.message : "Възникна неочаквана грешка.",
+      };
+    }
   }
 
   const settingsNotice = query.settings ? settingsNotices[query.settings] : undefined;
@@ -133,12 +178,16 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
   if (athleteSettingsRequired)
     return <AthleteSettingsForm notice={settingsNotice} />;
 
+  if (!result.ok && syncState && syncInProgress(syncState) && syncState.active_generation_id === null)
+    return <SyncPendingState state={syncState} />;
+
   const integrationNotice = query.intervals === "connected" && result.ok && result.loadHistory
     ? undefined
     : query.intervals ? notices[query.intervals] : undefined;
-  const notice = settingsNotice ?? integrationNotice;
+  const syncNotice = query.sync ? syncNotices[query.sync] : undefined;
+  const notice = settingsNotice ?? syncNotice ?? integrationNotice ?? (syncStatusUnavailable ? "Статусът на обновяването временно не е достъпен; показваме последната активна версия." : undefined);
   return result.ok
-    ? <Dashboard {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} notice={notice} />
+    ? <Dashboard {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} generationId={result.generationId} generationRevision={result.generationRevision} generationActivatedAt={result.generationActivatedAt} syncState={syncState} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} notice={notice} />
     : <ErrorState
       message={result.message}
       integrationActions={integrationActions}
