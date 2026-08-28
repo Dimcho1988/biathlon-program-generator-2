@@ -104,12 +104,14 @@ during rollout; one successful full sync upgrades the stored envelope to
 `load-history-v2` with the exact per-day Tref used for deterministic Recovery
 restore.
 
-The Render worker must use the same existing `SUPABASE_URL`,
+The Render API and worker consume the same existing `SUPABASE_URL`,
 `SUPABASE_SECRET_KEY`, `ONFLOWS_TOKEN_ENCRYPTION_KEY`,
-`ONFLOWS_SNAPSHOT_SALT`, `ONFLOWS_ACTIVITY_ID_SECRET` and model-version values
-as the API. Never regenerate these values for the worker. Start with exactly
-one worker instance; the process-wide Intervals pacer is deliberately the
-provider-budget guard until a global limiter and incremental sync are added.
+`ONFLOWS_SNAPSHOT_SALT` and `ONFLOWS_ACTIVITY_ID_SECRET` from the manually
+managed `onflows-preview-analysis-shared` environment group. Never redeclare or
+regenerate these values per service. Model-version values must also match.
+Start with exactly one worker instance; the process-wide Intervals pacer is
+deliberately the provider-budget guard until a global limiter and incremental
+sync are added.
 
 Each refresh also computes the experimental Vflat B65 and HRmod v4 channels
 once during ingest and publishes a separate versioned derived run. The stored

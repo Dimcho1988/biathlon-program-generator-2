@@ -26,6 +26,9 @@ services:
     healthCheckPath: /health
     envVars:
       - fromGroup: onflows-preview-shared
+      # Manually managed shared analysis secrets. API and worker must consume
+      # the same existing values; never redeclare or regenerate them per service.
+      - fromGroup: onflows-preview-analysis-shared
       - key: PYTHON_VERSION
         value: 3.12.8
       - key: INTERVALS_CLIENT_ID
@@ -35,12 +38,6 @@ services:
       - key: INTERVALS_REDIRECT_URI
         value: https://onflows-api-preview.onrender.com/api/v2/integrations/intervals/callback
       - key: OAUTH_STATE_SECRET
-        generateValue: true
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SECRET_KEY
-        sync: false
-      - key: ONFLOWS_TOKEN_ENCRYPTION_KEY
         generateValue: true
       - key: ONFLOWS_ATHLETE_ALIAS
         sync: false
@@ -56,10 +53,6 @@ services:
         value: main-load-recovery-v1
       - key: ONFLOWS_HISTORY_DAYS
         value: "90"
-      - key: ONFLOWS_SNAPSHOT_SALT
-        generateValue: true
-      - key: ONFLOWS_ACTIVITY_ID_SECRET
-        generateValue: true
       - key: ONFLOWS_WEB_BASE_URL
         value: https://onflows-web-preview.onrender.com
   - type: worker
@@ -83,16 +76,9 @@ services:
     buildCommand: pip install -r requirements-api.txt
     startCommand: python -m apps.api.sync_worker --lease-seconds 300
     envVars:
+      - fromGroup: onflows-preview-analysis-shared
       - key: PYTHON_VERSION
         value: 3.12.8
-      # These values must match the existing API service exactly. In
-      # particular, never regenerate the encryption, salt or activity-ID keys.
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SECRET_KEY
-        sync: false
-      - key: ONFLOWS_TOKEN_ENCRYPTION_KEY
-        sync: false
       - key: ONFLOWS_INTRAZONE_VERSION
         value: intra_zone_linear_v1
       - key: ONFLOWS_TREF_VERSION
@@ -101,10 +87,6 @@ services:
         value: main-load-recovery-v1
       - key: ONFLOWS_HISTORY_DAYS
         value: "90"
-      - key: ONFLOWS_SNAPSHOT_SALT
-        sync: false
-      - key: ONFLOWS_ACTIVITY_ID_SECRET
-        sync: false
   - type: web
     name: onflows-web-preview
     plan: free
