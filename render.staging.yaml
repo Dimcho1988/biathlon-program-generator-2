@@ -1,4 +1,4 @@
-# Phase 1 of the isolated onFlows staging rollout.
+# Isolated onFlows staging rollout.
 #
 # Link this file to a separate Render Blueprint using the custom Blueprint path
 # `render.staging.yaml`.  The API and web service are isolated from production.
