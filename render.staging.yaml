@@ -2,8 +2,8 @@
 #
 # Link this file to a separate Render Blueprint using the custom Blueprint path
 # `render.staging.yaml`.  The API and web service are isolated from production.
-# The paid worker is added only after OAuth and read-contract checks pass
-# against the disposable Supabase project.
+# All services follow the integration branch, with automatic deploys disabled,
+# so each staging candidate remains an explicit controlled rollout.
 
 envVarGroups:
   - name: onflows-staging-shared
@@ -18,7 +18,7 @@ services:
     region: frankfurt
     autoDeployTrigger: "off"
     runtime: python
-    branch: codex/async-refresh-generation-v1
+    branch: codex/build-end-to-end-cloud-integration
     buildFilter:
       paths:
         - apps/api/**
@@ -61,7 +61,7 @@ services:
     region: frankfurt
     autoDeployTrigger: "off"
     runtime: python
-    branch: codex/async-refresh-generation-v1
+    branch: codex/build-end-to-end-cloud-integration
     numInstances: 1
     maxShutdownDelaySeconds: 300
     buildFilter:
@@ -94,7 +94,7 @@ services:
     region: frankfurt
     autoDeployTrigger: "off"
     runtime: node
-    branch: codex/async-refresh-generation-v1
+    branch: codex/build-end-to-end-cloud-integration
     rootDir: apps/web
     buildFilter:
       paths:

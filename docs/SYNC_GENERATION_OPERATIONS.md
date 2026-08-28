@@ -99,21 +99,20 @@ Do not apply the migration directly to production as its first execution.
 11. Only after the staging evidence is retained should the same ordered rollout
     be approved for production.
 
-The first Render staging deployment uses the repository's
-`render.staging.yaml` custom Blueprint path.  Phase 1 deliberately contains
-only `onflows-api-staging`, pins the async feature branch and disables automatic
-deploys.  After API health succeeds, the same Blueprint adds
-`onflows-web-staging` for the OAuth and API-to-Supabase read-contract checks.
-The paid worker is added only after those checks pass.  The staging API and
-worker share the disposable Supabase connection plus the token-encryption,
-snapshot-salt and activity-ID secrets through the dedicated
-`onflows-staging-analysis-shared` environment group.  This group is created
+The Render staging deployment uses the repository's `render.staging.yaml`
+custom Blueprint path. All three services follow the integration branch and
+disable automatic deploys, so advancing staging remains an explicit controlled
+rollout. The staging API and worker share the disposable Supabase connection
+plus the token-encryption, snapshot-salt and activity-ID secrets through the
+dedicated `onflows-staging-analysis-shared` environment group. This group is created
 manually before the worker is added because Render does not allow
 `sync: false` values in Blueprint-managed environment groups.  Copy the five
 existing API values into it, link it only to the API and worker, then remove the
 five service-level duplicates from the API after a health check.  The web
-service does not receive that group.  None of these resources may be created
-from the production `render.yaml` or managed by a second Blueprint.
+service does not receive that group. Production follows the same single-source
+pattern through the manually managed `onflows-preview-analysis-shared` group,
+which is linked only to the production API and worker. Neither analysis group
+may be recreated or populated by another Blueprint.
 
 The Render worker is a continuously running paid service. Creating or enabling
 it is a billing and deployment action and requires explicit approval. The
