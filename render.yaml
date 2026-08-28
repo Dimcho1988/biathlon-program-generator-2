@@ -53,7 +53,7 @@ services:
       - key: ONFLOWS_TREF_VERSION
         value: tref-bounded-40d-expert-v1
       - key: ONFLOWS_RECOVERY_VERSION
-        sync: false
+        value: main-load-recovery-v1
       - key: ONFLOWS_HISTORY_DAYS
         value: "90"
       - key: ONFLOWS_SNAPSHOT_SALT
@@ -98,7 +98,7 @@ services:
       - key: ONFLOWS_TREF_VERSION
         value: tref-bounded-40d-expert-v1
       - key: ONFLOWS_RECOVERY_VERSION
-        sync: false
+        value: main-load-recovery-v1
       - key: ONFLOWS_HISTORY_DAYS
         value: "90"
       - key: ONFLOWS_SNAPSHOT_SALT
