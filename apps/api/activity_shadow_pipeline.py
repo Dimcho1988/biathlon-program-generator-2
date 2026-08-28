@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 import math
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -40,6 +40,22 @@ _SPEED_NAMES = ("velocity_smooth", "fixed_velocity_smooth", "speed", "velocity")
 _GRADE_NAMES = ("gradient",)
 _ALTITUDE_NAMES = ("altitude", "fixed_altitude")
 _DISTANCE_NAMES = ("distance",)
+_T = TypeVar("_T")
+
+
+class ActivityShadowStageError(ValueError):
+    """A safe stage marker for diagnostic-model validation failures."""
+
+    def __init__(self, safe_stage: str) -> None:
+        super().__init__("Activity shadow computation failed validation")
+        self.safe_stage = safe_stage
+
+
+def _validated_stage(safe_stage: str, operation: Callable[[], _T]) -> _T:
+    try:
+        return operation()
+    except ValueError as exc:
+        raise ActivityShadowStageError(safe_stage) from exc
 
 
 def _first(point: Any, names: Sequence[str]) -> float | None:
@@ -288,11 +304,15 @@ def compute_activity_shadow(
     explicit_hrmax_bpm: int | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     immutable_input = build_immutable_activity_input(detail, normalized)
-    samples, references, vflat_frame = _model_inputs(
-        detail, normalized
+    samples, references, vflat_frame = _validated_stage(
+        "MODEL_INPUTS", lambda: _model_inputs(detail, normalized)
     )
-    vflat = run_vflat_b65_shadow(vflat_frame)
-    profile = _profile(zone_bounds_bpm, explicit_hrmax_bpm)
+    vflat = _validated_stage(
+        "VFLAT", lambda: run_vflat_b65_shadow(vflat_frame)
+    )
+    profile = _validated_stage(
+        "PROFILE", lambda: _profile(zone_bounds_bpm, explicit_hrmax_bpm)
+    )
     configuration_fingerprint = activity_shadow_configuration_fingerprint(
         zone_bounds_bpm, explicit_hrmax_bpm
     )
@@ -310,10 +330,13 @@ def compute_activity_shadow(
             "diagnostics": {"flags": ["EXPLICIT_HRMAX_MISSING"]},
         }
     else:
-        hrmod = run_hrmod_v4_shadow(
-            hr_samples=samples,
-            athlete_profile=profile,
-            reference_channels=references,
+        hrmod = _validated_stage(
+            "HRMOD",
+            lambda: run_hrmod_v4_shadow(
+                hr_samples=samples,
+                athlete_profile=profile,
+                reference_channels=references,
+            ),
         )
     vflat_by_timestamp = {
         str(row.get("timestamp")): row for row in vflat["timeseries"]

@@ -771,13 +771,22 @@ def process_claimed_job(
         heartbeat.stop()
         failure = _classify_failure(exc)
         chain = _exception_chain(exc)
+        failure_stage = next(
+            (
+                str(item.safe_stage)
+                for item in chain
+                if isinstance(getattr(item, "safe_stage", None), str)
+            ),
+            "UNSPECIFIED",
+        )
         logger.warning(
             "sync_worker_pipeline_failed job_id=%s failure_code=%s "
-            "error_type=%s cause_type=%s",
+            "error_type=%s cause_type=%s failure_stage=%s",
             job.job_id,
             failure.code,
             type(exc).__name__,
             type(chain[-1]).__name__,
+            failure_stage,
         )
         return _fail_claim(repository, job, failure)
     finally:

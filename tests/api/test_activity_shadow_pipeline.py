@@ -6,6 +6,7 @@ import json
 import pytest
 
 from apps.api.activity_shadow_pipeline import (
+    ActivityShadowStageError,
     activity_shadow_configuration_fingerprint,
     build_immutable_activity_input,
     compute_activity_shadow,
@@ -136,13 +137,14 @@ def test_shadow_configuration_changes_for_zones_or_hrmax() -> None:
 
 
 def test_explicit_hrmax_must_not_be_inferred_from_z5() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ActivityShadowStageError) as caught:
         compute_activity_shadow(
             detail={"start_date": "2026-01-01T10:00:00Z"},
             normalized=_normalized(),
             zone_bounds_bpm=(50, 100, 120, 140, 160, 200),
             explicit_hrmax_bpm=190,
         )
+    assert caught.value.safe_stage == "PROFILE"
 
 
 def test_hrmod_keeps_original_irregular_timestamps_and_gap_flags() -> None:
