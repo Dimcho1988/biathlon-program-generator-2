@@ -102,9 +102,11 @@ Do not apply the migration directly to production as its first execution.
 The first Render staging deployment uses the repository's
 `render.staging.yaml` custom Blueprint path.  Phase 1 deliberately contains
 only `onflows-api-staging`, pins the async feature branch and disables automatic
-deploys.  The worker and web service are added to that same Blueprint only after
-the preceding rollout gates pass; they must not be created from the production
-`render.yaml` or managed by a second Blueprint.
+deploys.  After API health succeeds, the same Blueprint adds
+`onflows-web-staging` for the OAuth and API-to-Supabase read-contract checks.
+The paid worker is added only after those checks pass.  None of these resources
+may be created from the production `render.yaml` or managed by a second
+Blueprint.
 
 The Render worker is a continuously running paid service. Creating or enabling
 it is a billing and deployment action and requires explicit approval. The
