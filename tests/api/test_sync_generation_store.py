@@ -320,6 +320,13 @@ def test_generation_migration_keeps_profile_and_activity_set_fks_deferred_and_sc
     assert "order by derived.created_at desc, derived.run_key desc" in migration
     assert "onflows_oauth_states_athlete_alias_fk" in migration
     assert "p_terminal_older_than < interval '30 days'" in migration
+    state_rls = migration.index(
+        "alter table public.onflows_athlete_analysis_state enable row level security;"
+    )
+    state_backfill = migration.index(
+        "insert into public.onflows_athlete_analysis_state (athlete_alias)"
+    )
+    assert state_rls < state_backfill
     release_pointers = migration.index(
         "set latest_shadow_run_key = null,"
     )

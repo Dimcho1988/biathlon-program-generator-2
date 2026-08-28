@@ -295,14 +295,17 @@ alter table public.onflows_training_snapshots
   references public.onflows_analysis_generations(generation_id, athlete_alias)
   deferrable initially deferred;
 
-insert into public.onflows_athlete_analysis_state (athlete_alias)
-select athlete_alias from public.onflows_intervals_connections
-on conflict (athlete_alias) do nothing;
-
 alter table public.onflows_athlete_analysis_state enable row level security;
 alter table public.onflows_sync_jobs enable row level security;
 alter table public.onflows_analysis_generations enable row level security;
 alter table public.onflows_analysis_generation_activities enable row level security;
+
+-- Enable RLS before backfilling existing profiles.  On populated databases the
+-- deferred athlete foreign key queues trigger events for the insert, and
+-- PostgreSQL will then reject a later ALTER TABLE in the same transaction.
+insert into public.onflows_athlete_analysis_state (athlete_alias)
+select athlete_alias from public.onflows_intervals_connections
+on conflict (athlete_alias) do nothing;
 
 revoke all on table public.onflows_athlete_analysis_state from public, anon, authenticated;
 revoke all on table public.onflows_sync_jobs from public, anon, authenticated;
