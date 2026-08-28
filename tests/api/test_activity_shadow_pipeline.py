@@ -95,6 +95,39 @@ def test_hr_only_shadow_normalizes_unavailable_vflat_numbers_to_null() -> None:
     json.dumps(derived, allow_nan=False)
 
 
+@pytest.mark.parametrize(
+    ("heart_rate", "reason"),
+    [
+        (None, "HRMOD_NO_USABLE_HR"),
+        (80.0, "HRMOD_HR_OUTSIDE_PROFILE"),
+    ],
+)
+def test_unsuitable_hr_excludes_only_hrmod_diagnostics(
+    heart_rate: float | None, reason: str
+) -> None:
+    normalized = normalize_stream_intervals(
+        NormalizerInput(
+            offsets=list(range(61)),
+            metrics={
+                "heartrate": [heart_rate] * 61,
+                "velocity_smooth": [5.0] * 61,
+            },
+        )
+    )
+
+    _, derived = compute_activity_shadow(
+        detail={"start_date": "2026-01-01T10:00:00Z"},
+        normalized=normalized,
+        zone_bounds_bpm=(100, 120, 140, 160, 180, 190),
+        explicit_hrmax_bpm=200,
+    )
+
+    assert derived["diagnostics"]["hrmod"]["flags"] == [reason]
+    assert all(row["exclusion_reason"] == reason for row in derived["timeseries"])
+    assert any(row["vflat_model_version"] for row in derived["timeseries"])
+    assert derived["affects_canonical_load"] is False
+
+
 def test_explicit_hrmax_enables_hrmod_without_changing_immutable_input() -> None:
     detail = {"start_date": "2026-01-01T10:00:00Z"}
     normalized = _normalized()

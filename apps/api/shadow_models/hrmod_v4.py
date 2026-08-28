@@ -10,8 +10,13 @@ from dataclasses import asdict
 import math
 from typing import Any, Sequence
 
-from hrmod_lab.hrmod_core import compute_hrmod_hr_only
+from hrmod_lab.hrmod_core import (
+    HRmodInputUnsuitableError,
+    compute_hrmod_hr_only,
+)
 from hrmod_lab.schemas import (
+    CONFIG_VERSION,
+    MODEL_VERSION,
     AthleteHRProfile,
     HRInputSample,
     HRmodConfig,
@@ -96,11 +101,27 @@ def run_hrmod_v4_shadow(
             "affects_canonical_load": False,
         }
     selected_config = config or HRmodConfig()
-    core = compute_hrmod_hr_only(
-        hr_samples=tuple(hr_samples),
-        athlete_profile=athlete_profile,
-        config=selected_config,
-    )
+    try:
+        core = compute_hrmod_hr_only(
+            hr_samples=tuple(hr_samples),
+            athlete_profile=athlete_profile,
+            config=selected_config,
+        )
+    except HRmodInputUnsuitableError as exc:
+        return {
+            "status": "excluded",
+            "exclusion_reason": exc.reason_code,
+            "experimental": True,
+            "affects_canonical_load": False,
+            "model_version": MODEL_VERSION,
+            "config_version": CONFIG_VERSION,
+            "terrain_model_version": TERRAIN_MODEL_VERSION,
+            "source_commit": SOURCE_COMMIT,
+            "timeseries": [{} for _ in hr_samples],
+            "waves": [],
+            "zones": [],
+            "diagnostics": {"flags": [exc.reason_code]},
+        }
     terrain = apply_terrain_gate(
         core,
         reference_channels,
