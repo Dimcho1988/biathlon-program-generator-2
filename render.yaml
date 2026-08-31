@@ -22,7 +22,7 @@ services:
         - requirements-api.txt
         - render.yaml
     buildCommand: pip install -r requirements-api.txt
-    startCommand: uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --no-access-log
+    startCommand: uvicorn apps.api.application:app --host 0.0.0.0 --port $PORT --no-access-log
     healthCheckPath: /health
     envVars:
       - fromGroup: onflows-preview-shared
@@ -37,6 +37,8 @@ services:
         sync: false
       - key: INTERVALS_REDIRECT_URI
         value: https://onflows-api-preview.onrender.com/api/v2/integrations/intervals/callback
+      - key: INTERVALS_WEBHOOK_SECRET
+        sync: false
       - key: OAUTH_STATE_SECRET
         generateValue: true
       - key: ONFLOWS_ATHLETE_ALIAS
