@@ -11,13 +11,16 @@ from apps.api.application import app
 WEBHOOK_URL = "/api/v2/integrations/intervals/webhook"
 
 
-def _payload(secret: str = "webhook-secret") -> dict:
+def _payload(
+    secret: str = "webhook-secret",
+    event_type: str = "ACTIVITY_ANALYZED",
+) -> dict:
     return {
         "secret": secret,
         "events": [
             {
                 "athlete_id": "2049151",
-                "type": "ACTIVITY_ANALYZED",
+                "type": event_type,
                 "timestamp": "2026-08-31T10:00:00+00:00",
                 "activity": {"id": "i123", "type": "Run"},
             }
@@ -79,6 +82,43 @@ def test_intervals_analyzed_webhook_enqueues_durable_full_sync(monkeypatch):
         "scope": "FULL",
         "as_of": "2026-09-01",
     }
+
+
+def test_intervals_uploaded_webhook_enqueues_durable_full_sync(monkeypatch):
+    class Repository:
+        def __init__(self):
+            self.calls = []
+
+        def alias_for_provider(self, provider_athlete_id):
+            assert provider_athlete_id == "2049151"
+            return "ath-webhook-test"
+
+        def athlete_settings(self, athlete_alias):
+            assert athlete_alias == "ath-webhook-test"
+            return {"timezone": "Europe/Sofia"}
+
+        def enqueue_sync_job(self, **kwargs):
+            self.calls.append(kwargs)
+            return {
+                "job_id": "job-webhook-upload-1",
+                "status": "QUEUED",
+                "deduplicated": False,
+            }
+
+    repository = Repository()
+    monkeypatch.setenv("INTERVALS_WEBHOOK_SECRET", "webhook-secret")
+    monkeypatch.setattr(intervals_webhook.api_main, "_repository", lambda: repository)
+
+    response = TestClient(app).post(
+        WEBHOOK_URL,
+        json=_payload(event_type="ACTIVITY_UPLOADED"),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "scheduled": 1}
+    assert len(repository.calls) == 1
+    assert repository.calls[0]["athlete_alias"] == "ath-webhook-test"
+    assert repository.calls[0]["job_kind"] == "FULL_SYNC"
 
 
 def test_intervals_webhook_retry_uses_same_idempotency_key(monkeypatch):
