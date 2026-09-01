@@ -27,9 +27,13 @@ from .oauth_store import PersistentStoreFailure, SupabasePilotRepository
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Intervals documents ACTIVITY_ANALYZED as a delayed/consolidated webhook. Using
-# it avoids doing a full refresh both at upload time and again after analysis.
-_ACTIVITY_SYNC_EVENTS = frozenset({"ACTIVITY_ANALYZED"})
+# A newly uploaded activity and a later re-analysis are distinct Intervals
+# events.  Both can change the provider history that a FULL_SYNC imports.
+# Exact webhook retries remain safe through the deterministic idempotency key
+# below and pending work is coalesced by the durable sync queue.
+_ACTIVITY_SYNC_EVENTS = frozenset(
+    {"ACTIVITY_UPLOADED", "ACTIVITY_ANALYZED"}
+)
 _MAX_WEBHOOK_EVENTS = 100
 
 
