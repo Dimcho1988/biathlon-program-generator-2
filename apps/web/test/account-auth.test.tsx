@@ -8,6 +8,7 @@ import { POST as logout } from "../app/api/auth/logout/route";
 import { POST as sendMagicLink } from "../app/api/auth/magic-link/route";
 import { supabaseAuthConfigured, supabasePublicConfig } from "../lib/supabase/config";
 import { createClient } from "../lib/supabase/server";
+import { currentAccountDisplayName } from "../lib/account-profile";
 
 vi.mock("../lib/supabase/server", () => ({ createClient: vi.fn() }));
 
@@ -147,6 +148,20 @@ describe("onFlows account foundation", () => {
       user_id: "auth-user-1",
       display_name: "Димчо",
     }), { onConflict: "user_id" });
+  });
+
+  it("reads the verified account display name without treating it as an athlete alias", async () => {
+    const maybeSingle = vi.fn().mockResolvedValue({ data: { display_name: "  Dimcho Mitsov  " } });
+    const eq = vi.fn().mockReturnValue({ maybeSingle });
+    const select = vi.fn().mockReturnValue({ eq });
+    vi.mocked(createClient).mockResolvedValue({
+      auth: { getClaims: vi.fn().mockResolvedValue({ data: { claims: { sub: "auth-user-1" } } }) },
+      from: vi.fn().mockReturnValue({ select }),
+    } as never);
+
+    await expect(currentAccountDisplayName()).resolves.toBe("Dimcho Mitsov");
+    expect(createClient).toHaveBeenCalledWith({ requestTimeoutMs: 5_000 });
+    expect(eq).toHaveBeenCalledWith("user_id", "auth-user-1");
   });
 
   it("does not write a profile without a verified session", async () => {

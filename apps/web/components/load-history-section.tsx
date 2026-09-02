@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import type { DailyZoneLoad, LoadHistory } from "../lib/load-history";
-import { ZONES, type Zone } from "../lib/training-status";
+import { TREF_BOUNDS_MINUTES, ZONES, type Zone } from "../lib/training-status";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
 const decimal = (value: number) => number.format(value);
@@ -104,7 +104,7 @@ export function LoadHistorySection({ history, message }: { history: LoadHistory 
 
       <div className="history-explainer">
         <strong>Как се чете 7/40</strong>
-        <p>Индексът сравнява средния ефективен товар за последните 7 и 40 календарни дни със стабилизираща база. Деветдесетте дни осигуряват историческото загряване; те не са знаменател на индекса.</p>
+        <p>Индексът сравнява средния ефективен товар за последните 7 и 40 календарни дни със стабилизираща база. Tref е 7 × средния дневен E за предходните до 40 завършени дни и се ограничава в експертните граници за съответната зона. Деветдесетте дни осигуряват историческото загряване; те не са знаменател на индекса.</p>
       </div>
 
       <div className="load-summary" role="list" aria-label="Текущи показатели по зони">
@@ -113,7 +113,7 @@ export function LoadHistorySection({ history, message }: { history: LoadHistory 
           <dl>
             <div><dt>E7 / ден</dt><dd>{decimal(zone.e7_daily)}</dd></div>
             <div><dt>E40 / ден</dt><dd>{decimal(zone.e40_daily)}</dd></div>
-            <div><dt>Tref</dt><dd>{decimal(zone.tref_min)} мин</dd></div>
+            <div><dt>Tref · {TREF_BOUNDS_MINUTES[zone.zone][0]}–{TREF_BOUNDS_MINUTES[zone.zone][1]}</dt><dd>{decimal(zone.tref_min)} мин</dd></div>
           </dl>
         </article>)}
       </div>

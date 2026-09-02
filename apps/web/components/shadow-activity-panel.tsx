@@ -131,7 +131,7 @@ function IntervalBands({ rows }: { rows: Row[] }) {
   );
 }
 
-export function ShadowActivityPanel({ payload, activityRef }: { payload: Record<string, unknown>; activityRef: string }) {
+export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { payload: Record<string, unknown>; activityRef: string; profileHrRange?: readonly [number, number] | null }) {
   const [vflatEnabled, setVflatEnabled] = useState(true);
   const [hrmodEnabled, setHrmodEnabled] = useState(true);
   const rows = Array.isArray(payload.timeseries) ? payload.timeseries as Row[] : [];
@@ -140,6 +140,7 @@ export function ShadowActivityPanel({ payload, activityRef }: { payload: Record<
   const segments = Array.isArray(payload.segments_15s) ? payload.segments_15s as Row[] : [];
   const diagnostics = (payload.diagnostics && typeof payload.diagnostics === "object") ? payload.diagnostics as Row : {};
   const hrDiagnostics = (diagnostics.hrmod && typeof diagnostics.hrmod === "object") ? diagnostics.hrmod as Row : {};
+  const hrDiagnosticFlags = Array.isArray(hrDiagnostics.flags) ? hrDiagnostics.flags.map(String) : [];
   const allFlags = Array.from(new Set([
     ...rows.flatMap((row) => [
       ...(Array.isArray(row.quality_flags) ? row.quality_flags : []),
@@ -158,6 +159,11 @@ export function ShadowActivityPanel({ payload, activityRef }: { payload: Record<
   const vflatSpeed = mean(rows, "vflat_b65_kmh");
   const cleanHr = mean(rows, "hr_clean_bpm");
   const finalHr = mean(rows, "hrmod_final_bpm");
+  const rawHrValues = rows.map((row) => number(row.hr_raw_bpm)).filter((value): value is number => value !== null);
+  const rawHrRange = rawHrValues.length ? [Math.min(...rawHrValues), Math.max(...rawHrValues)] as const : null;
+  const outsideProfile = hrDiagnosticFlags.includes("HRMOD_HR_OUTSIDE_PROFILE");
+  const noUsableHr = hrDiagnosticFlags.includes("HRMOD_NO_USABLE_HR");
+  const missingHrmax = hrDiagnosticFlags.includes("EXPLICIT_HRMAX_MISSING");
   const redistributedZoneSeconds = zones.reduce((sum, zone) => {
     const clean = number(zone.clean_seconds);
     const modulated = number(zone.hrmod_final_seconds ?? zone.hrmod_seconds);
@@ -211,7 +217,7 @@ export function ShadowActivityPanel({ payload, activityRef }: { payload: Record<
 
       <section className="shadow-zone-comparison">
         <div className="section-heading"><div><p className="section-kicker">Z1—Z5</p><h2>Raw ↔ HRmod времена по зони</h2></div><p>Паралелно сравнение; реалните зони остават непроменени</p></div>
-        {zones.length === 0 ? <p className="detail-empty">HRmod разпределението още не е изчислено с текущите индивидуални настройки. Проверете <Link href="/?settings=edit">зоните и HRmax</Link>, запазете ги и изберете „Обнови данните“.</p> : <div className="shadow-table-wrap"><table><thead><tr><th>Зона</th><th>Raw HR</th><th>Clean HR</th><th>HRmod candidate</th><th>HRmod final</th><th>Δ final спрямо clean</th></tr></thead>
+        {zones.length === 0 ? <p className="detail-empty">{outsideProfile ? <>HRmod е изключен само за тази активност, защото почистеният пулс излиза извън индивидуалния HR диапазон{profileHrRange ? ` ${profileHrRange[0]}–${profileHrRange[1]} bpm` : ""}{rawHrRange ? `; измереният диапазон е ${fixed(rawHrRange[0])}–${fixed(rawHrRange[1])} bpm` : ""}. Vflat и наклонът остават налични, а canonical load, recovery и 7/40 не се променят. Проверете източника и <Link href="/?settings=edit">зоните и HRmax</Link>, но не променяйте верни граници само за да форсирате HRmod.</> : noUsableHr ? <>HRmod е изключен за тази активност, защото след прозрачното почистване не остава използваем HR сигнал. Vflat и canonical анализът остават достъпни.</> : missingHrmax ? <>HRmod изисква изрично зададен HRmax. Попълнете <Link href="/?settings=edit">зоните и HRmax</Link> и стартирайте пълно обновяване.</> : <>HRmod разпределението не е налично в този запазен shadow резултат. Проверете <Link href="/?settings=edit">зоните и HRmax</Link> и изберете „Обнови данните“.</>}</p> : <div className="shadow-table-wrap"><table><thead><tr><th>Зона</th><th>Raw HR</th><th>Clean HR</th><th>HRmod candidate</th><th>HRmod final</th><th>Δ final спрямо clean</th></tr></thead>
           <tbody>{zones.map((zone) => {
             const finalSeconds = zone.hrmod_final_seconds ?? zone.hrmod_seconds;
             const finalMinusClean = zone.final_minus_clean_seconds ?? zone.hrmod_minus_clean_seconds;
