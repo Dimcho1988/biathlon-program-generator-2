@@ -62,6 +62,27 @@ describe("onFlows account foundation", () => {
     });
   });
 
+  it("uses the public Render origin behind its reverse proxy", async () => {
+    const signInWithOtp = vi.fn().mockResolvedValue({ error: null });
+    vi.mocked(createClient).mockResolvedValue({ auth: { signInWithOtp } } as never);
+    const response = await sendMagicLink(new Request("http://internal-render-host:10000/api/auth/magic-link", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://web.example.test",
+        "X-Forwarded-Host": "web.example.test",
+        "X-Forwarded-Proto": "https",
+      },
+      body: JSON.stringify({ email: "athlete@example.test" }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(signInWithOtp).toHaveBeenCalledWith({
+      email: "athlete@example.test",
+      options: { emailRedirectTo: "https://web.example.test/auth/callback" },
+    });
+  });
+
   it("rejects cross-origin magic-link requests before contacting Supabase", async () => {
     const response = await sendMagicLink(new Request("https://web.example.test/api/auth/magic-link", {
       method: "POST",
