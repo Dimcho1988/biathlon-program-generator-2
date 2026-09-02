@@ -76,9 +76,9 @@ def test_production_adapter_preserves_streamlit_v4_candidate_and_raw_hr() -> Non
     assert [row["hr_raw_bpm"] for row in result["timeseries"]] == pytest.approx(
         [sample.heart_rate_bpm for sample in samples]
     )
-    assert result["model_version"] == "hrmod_mirror_area_shift_v4"
-    assert result["config_version"] == "hrmod_config_v4"
-    assert result["source_commit"] == "40b7d17a61c0bce0c3ffcf7b9381a6fe5645373f"
+    assert result["model_version"] == "hrmod_mirror_area_shift_v5"
+    assert result["config_version"] == "hrmod_config_v5"
+    assert result["source_commit"] == "hrmod-v5-derived-from-40b7d17"
     assert result["affects_canonical_load"] is False
 
 

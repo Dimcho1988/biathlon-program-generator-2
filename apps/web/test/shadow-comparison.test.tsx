@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest";
 import { ShadowActivityPanel } from "../components/shadow-activity-panel";
 
 const payload = {
-  vflat_model_version: "vflat_b65_dynamic_v1",
-  vflat_config_version: "vflat_b65_config_v1",
-  hrmod_model_version: "hrmod_mirror_area_shift_v4",
-  hrmod_config_version: "hrmod_config_v4",
+  vflat_model_version: "vflat_b65_dynamic_v2",
+  vflat_config_version: "vflat_b65_config_v2",
+  hrmod_model_version: "hrmod_mirror_area_shift_v5",
+  hrmod_config_version: "hrmod_config_v5",
   terrain_model_version: "terrain_downhill_donor_exclusion_v4",
   timeseries: [
     { timestamp: "2026-08-22T08:00:00Z", elapsed_s: 0, speed_raw_kmh: 12, vflat_b65_kmh: 13, hr_raw_bpm: 140, hr_clean_bpm: 140, hrmod_candidate_bpm: 142, hrmod_final_bpm: 142, grade_raw_pct: 2, grade_smoothed_pct: 2, added_bpm: 2, removed_bpm: 0, receiver_flag: true, donor_flag: false, quality_flags: [], model_flags: [] },
@@ -40,8 +40,8 @@ describe("Raw ↔ Shadow comparison", () => {
       "Receiver и donor интервали", "Raw ↔ HRmod времена по зони",
       "15-секундни сегменти (1)", "HR вълни, receiver и donor (1)",
     ]) expect(html).toContain(label);
-    expect(html).toContain("vflat_b65_dynamic_v1");
-    expect(html).toContain("hrmod_mirror_area_shift_v4");
+    expect(html).toContain("vflat_b65_dynamic_v2");
+    expect(html).toContain("hrmod_mirror_area_shift_v5");
     expect(html).toContain("RECEIVER_DOWNHILL_OVERLAP");
     expect(html).toContain("89ABCDEF");
     expect(html).toContain("HRmod candidate");

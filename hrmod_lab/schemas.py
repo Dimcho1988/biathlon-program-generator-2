@@ -13,8 +13,8 @@ from math import isfinite
 from typing import Any, Mapping
 
 
-MODEL_VERSION = "hrmod_mirror_area_shift_v4"
-CONFIG_VERSION = "hrmod_config_v4"
+MODEL_VERSION = "hrmod_mirror_area_shift_v5"
+CONFIG_VERSION = "hrmod_config_v5"
 
 
 def _finite(name: str, value: float) -> float:
@@ -128,7 +128,7 @@ class AthleteHRProfile:
 
 @dataclass(frozen=True, slots=True)
 class HRmodConfig:
-    """Versioned exploratory settings for the single v4 mirror model.
+    """Versioned exploratory settings for the single HR-only mirror model.
 
     The four main controls are ``alpha``, minimum peak fraction, maximum wave
     duration, and detection-only smoothing.
@@ -164,9 +164,9 @@ class HRmodConfig:
     max_addition_bpm: float | None = None
     max_removal_bpm: float | None = None
 
-    # V4 mirror model eligibility.  These are HR-only morphology controls;
+    # Mirror model eligibility.  These are HR-only morphology controls;
     # terrain remains a separate post-core phase.
-    mirror_min_peak_fraction_hrmax: float = 0.80
+    mirror_min_peak_fraction_hrmax: float = 0.75
     mirror_max_wave_duration_s: float = 180.0
 
     # Robust detection and transparent cleaning details.

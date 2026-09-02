@@ -99,7 +99,7 @@ def test_hr_only_shadow_normalizes_unavailable_vflat_numbers_to_null() -> None:
     ("heart_rate", "reason"),
     [
         (None, "HRMOD_NO_USABLE_HR"),
-        (80.0, "HRMOD_HR_OUTSIDE_PROFILE"),
+        (20.0, "HRMOD_NO_USABLE_HR"),
     ],
 )
 def test_unsuitable_hr_excludes_only_hrmod_diagnostics(
@@ -144,7 +144,31 @@ def test_explicit_hrmax_enables_hrmod_without_changing_immutable_input() -> None
         explicit_hrmax_bpm=200,
     )
     assert immutable_with == immutable_without
-    assert derived["hrmod_model_version"] == "hrmod_mirror_area_shift_v4"
+    assert derived["hrmod_model_version"] == "hrmod_mirror_area_shift_v5"
+
+
+def test_hr_below_z1_does_not_exclude_the_whole_activity() -> None:
+    normalized = normalize_stream_intervals(
+        NormalizerInput(
+            offsets=list(range(61)),
+            metrics={
+                "heartrate": [75.0] * 20 + [145.0] * 21 + [100.0] * 20,
+                "velocity_smooth": [5.0] * 61,
+            },
+        )
+    )
+
+    _, derived = compute_activity_shadow(
+        detail={"start_date": "2026-01-01T10:00:00Z"},
+        normalized=normalized,
+        zone_bounds_bpm=(80, 100, 120, 140, 160, 180),
+        explicit_hrmax_bpm=180,
+    )
+
+    assert derived["diagnostics"]["hrmod"]["flags"] != [
+        "HRMOD_HR_OUTSIDE_PROFILE"
+    ]
+    assert any(row["hr_clean_bpm"] == 75.0 for row in derived["timeseries"])
     assert any(row["hr_clean_bpm"] is not None for row in derived["timeseries"])
     assert derived["schema_version"] == "activity-shadow-derived-v2"
     assert len(derived["zone_summary"]) == 5

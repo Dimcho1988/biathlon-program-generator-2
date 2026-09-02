@@ -36,10 +36,11 @@ GOLDEN = {
 
 def test_locked_versions_defaults_and_golden_multipliers() -> None:
     config = VFlatB65Config()
-    assert MODEL_VERSION == "vflat_b65_dynamic_v1"
-    assert CONFIG_VERSION == "vflat_b65_config_v1"
+    assert MODEL_VERSION == "vflat_b65_dynamic_v2"
+    assert CONFIG_VERSION == "vflat_b65_config_v2"
     assert config.transition_anchor_strength == 0.90
     assert config.transition_accel_scale_mps2 == 0.10
+    assert config.transition_decay_s == 18.0
     assert config.output_smoothing_s == 21
     grades = np.asarray(list(GOLDEN))
     expected = np.asarray(list(GOLDEN.values()))
@@ -105,3 +106,44 @@ def test_no_time_shift_and_parallel_fields_are_present() -> None:
         "grade_stationary_pct",
         "vflat_model_version",
     } <= set(result)
+
+
+def test_transition_anchor_only_follows_accelerating_descent_entry() -> None:
+    grade = np.r_[np.zeros(20), np.full(25, -4.0), np.zeros(20)]
+    accel = np.zeros(len(grade))
+    accel[20] = 0.2
+    source = pd.DataFrame(
+        {
+            "grade_pct": grade,
+            "speed_mps": np.full(len(grade), 5.0),
+            "accel_mps2": accel,
+            "block": np.ones(len(grade), dtype=int),
+            "turn_flag": np.zeros(len(grade), dtype=bool),
+        }
+    )
+
+    result = apply_vflat_b65(source)
+
+    assert result.loc[20, "transition_weight"] == pytest.approx(1.0)
+    assert 0.0 < result.loc[37, "transition_weight"] < 0.1
+    assert result.loc[38, "transition_weight"] == pytest.approx(0.0)
+    assert result.loc[19, "transition_weight"] == 0.0
+
+
+def test_flat_sprint_does_not_activate_transition_anchor() -> None:
+    accel = np.zeros(50)
+    accel[20:24] = 0.2
+    source = pd.DataFrame(
+        {
+            "grade_pct": np.zeros(50),
+            "speed_mps": np.r_[np.full(20, 3.0), np.full(15, 8.0), np.full(15, 3.0)],
+            "accel_mps2": accel,
+            "block": np.ones(50, dtype=int),
+            "turn_flag": np.zeros(50, dtype=bool),
+        }
+    )
+
+    result = apply_vflat_b65(source)
+
+    assert np.all(result["transition_weight"].to_numpy() == 0.0)
+    assert result.loc[25, "vflat_b65_kmh"] > 20.0
