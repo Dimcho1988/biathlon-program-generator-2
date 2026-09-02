@@ -50,3 +50,19 @@ def test_staging_services_follow_the_integration_branch() -> None:
     integration_branch = "branch: codex/build-end-to-end-cloud-integration"
     assert blueprint.count(integration_branch) == 3
     assert "branch: codex/async-refresh-generation-v1" not in blueprint
+
+
+def test_supabase_auth_public_config_is_web_only_and_environment_specific() -> None:
+    for path, web_name, api_name, worker_name in (
+        ("render.yaml", "onflows-web-preview", "onflows-api-preview", "onflows-sync-worker-preview"),
+        ("render.staging.yaml", "onflows-web-staging", "onflows-api-staging", "onflows-sync-worker-staging"),
+    ):
+        blueprint = Path(path).read_text(encoding="utf-8")
+        web = _service_block(blueprint, web_name)
+        api = _service_block(blueprint, api_name)
+        worker = _service_block(blueprint, worker_name)
+        for key in ("NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"):
+            declaration = f"- key: {key}\n        sync: false"
+            assert declaration in web
+            assert f"- key: {key}\n" not in api
+            assert f"- key: {key}\n" not in worker
