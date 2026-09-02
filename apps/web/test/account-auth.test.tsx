@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { NextRequest } from "next/server";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MagicLinkForm } from "../components/magic-link-form";
 import { POST as saveProfile } from "../app/api/account/profile/route";
+import { GET as completeAuthCallback } from "../app/auth/callback/route";
 import { POST as logout } from "../app/api/auth/logout/route";
 import { POST as sendMagicLink } from "../app/api/auth/magic-link/route";
 import { supabaseAuthConfigured, supabasePublicConfig } from "../lib/supabase/config";
@@ -40,6 +42,12 @@ describe("onFlows account foundation", () => {
     expect(html).toContain('type="email"');
     expect(html).toContain("Изпрати защитен линк");
     expect(html).not.toContain('type="password"');
+  });
+
+  it("explains that an invalid callback needs a new link", () => {
+    const html = renderToStaticMarkup(<MagicLinkForm callbackError />);
+    expect(html).toContain("Линкът е невалиден или е изтекъл");
+    expect(html).toContain("Изпрати си нов линк");
   });
 
   it("sends magic links server-side with a same-origin callback", async () => {
@@ -81,6 +89,21 @@ describe("onFlows account foundation", () => {
       email: "athlete@example.test",
       options: { emailRedirectTo: "https://web.example.test/auth/callback" },
     });
+  });
+
+  it("redirects failed callbacks to the public Render origin", async () => {
+    const response = await completeAuthCallback(new NextRequest(
+      "http://internal-render-host:10000/auth/callback",
+      {
+        headers: {
+          "X-Forwarded-Host": "web.example.test",
+          "X-Forwarded-Proto": "https",
+        },
+      },
+    ));
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("https://web.example.test/login?error=callback");
   });
 
   it("rejects cross-origin magic-link requests before contacting Supabase", async () => {
