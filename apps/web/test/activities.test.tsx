@@ -84,6 +84,17 @@ describe("canonical activity detail", () => {
     expect(html).toContain("aria-label=\"Наклон\"");
   });
 
+  it("points a missing canonical grade channel to the separate shadow view", () => {
+    const seriesWithoutGrade = {
+      ...activitySeriesFixture,
+      series: activitySeriesFixture.series.map((point) => ({ ...point, grade_pct: null })),
+    };
+    const html = renderToStaticMarkup(<ActivityDetailView activity={activityDetailFixture} series={seriesWithoutGrade} />);
+    expect(html).toContain("Наклонът не е част от canonical серията");
+    expect(html).toContain(`/activities/${activityDetailFixture.activity_ref}/shadow`);
+    expect(html).toContain("Experimental анализа");
+  });
+
   it("accepts one coherent generation-pinned activity view and legacy revision zero", () => {
     const shadow = { schema_version: "activity-shadow-derived-v2", experimental: true };
     const active = {

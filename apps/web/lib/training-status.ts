@@ -1,6 +1,14 @@
 export const ZONES = ["Z1", "Z2", "Z3", "Z4", "Z5"] as const;
 export type Zone = (typeof ZONES)[number];
 
+export const TREF_BOUNDS_MINUTES: Record<Zone, readonly [number, number]> = {
+  Z1: [180, 300],
+  Z2: [90, 180],
+  Z3: [40, 70],
+  Z4: [10, 20],
+  Z5: [10, 20],
+};
+
 export interface ZoneTrainingStatus {
   zone: Zone;
   raw_time_min: number;
@@ -69,6 +77,10 @@ export function parseTrainingStatus(value: unknown): TrainingStatus {
     if (!isRecord(item) || !exactKeys(item, zoneKeys) || item.zone !== ZONES[index] ||
         !zoneKeys.slice(1).every((key) => finite(item[key]))) {
       throw new Error("Невалидни или неподредени зонални данни.");
+    }
+    const [minimumTref, maximumTref] = TREF_BOUNDS_MINUTES[ZONES[index]];
+    if (Number(item.tref_min) < minimumTref || Number(item.tref_min) > maximumTref) {
+      throw new Error("Tref е извън одобрените зонални граници.");
     }
     return item as unknown as ZoneTrainingStatus;
   });

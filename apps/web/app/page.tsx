@@ -11,6 +11,7 @@ import { redirect } from "next/navigation";
 import type { SyncState } from "../lib/sync";
 import { syncInProgress } from "../lib/sync";
 import { SyncPendingState } from "../components/sync-pending-state";
+import { currentAccountDisplayName } from "../lib/account-profile";
 
 type PageResult =
   | { ok: true; value: TrainingStatusResult; completedWork: CompletedWork | null; loadHistory: LoadHistory | null; recoveryHistory: RecoveryHistory | null; volumeHistory: VolumeHistory | null; generationId?: string | null; generationRevision?: number; generationActivatedAt?: string | null; completedWorkMessage?: string; loadHistoryMessage?: string; recoveryHistoryMessage?: string; volumeHistoryMessage?: string }
@@ -54,7 +55,9 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
   let result: PageResult;
   const integrationActions = process.env.ONFLOWS_API_RESOURCE === "real";
   const multiProfile = integrationActions && multiProfileMode();
-  const athleteAlias = multiProfile ? await currentAthleteAlias() : null;
+  const [athleteAlias, accountDisplayName] = multiProfile
+    ? await Promise.all([currentAthleteAlias(), currentAccountDisplayName()])
+    : [null, null];
 
   if (multiProfile && !athleteAlias) {
     const notice = query.intervals ? notices[query.intervals] : undefined;
@@ -187,7 +190,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
   const syncNotice = query.sync ? syncNotices[query.sync] : undefined;
   const notice = settingsNotice ?? syncNotice ?? integrationNotice ?? (syncStatusUnavailable ? "Статусът на обновяването временно не е достъпен; показваме последната активна версия." : undefined);
   return result.ok
-    ? <Dashboard {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} generationId={result.generationId} generationRevision={result.generationRevision} generationActivatedAt={result.generationActivatedAt} syncState={syncState} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} notice={notice} />
+    ? <Dashboard {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} generationId={result.generationId} generationRevision={result.generationRevision} generationActivatedAt={result.generationActivatedAt} syncState={syncState} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} accountDisplayName={accountDisplayName} notice={notice} />
     : <ErrorState
       message={result.message}
       integrationActions={integrationActions}

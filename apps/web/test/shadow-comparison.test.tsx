@@ -49,12 +49,30 @@ describe("Raw ↔ Shadow comparison", () => {
     expect(html).toContain("Δ final спрямо clean");
   });
 
-  it("explains how to restore an unavailable HRmod zone distribution", () => {
+  it("explains a generic unavailable HRmod zone distribution", () => {
     const html = renderToStaticMarkup(
       <ShadowActivityPanel payload={{ ...payload, zone_summary: [] }} activityRef="shadow-0123456789abcdef0123456789abcdef" />,
     );
-    expect(html).toContain("HRmod разпределението още не е изчислено");
+    expect(html).toContain("HRmod разпределението не е налично");
     expect(html).toContain("/?settings=edit");
     expect(html).toContain("Обнови данните");
+  });
+
+  it("shows the exact profile-range exclusion without blaming a valid zero-wave result", () => {
+    const excluded = {
+      ...payload,
+      zone_summary: [],
+      hrmod_waves: [],
+      timeseries: [
+        { timestamp: "2026-09-01T08:00:00Z", elapsed_s: 0, hr_raw_bpm: 78, speed_raw_kmh: 12, vflat_b65_kmh: 13 },
+        { timestamp: "2026-09-01T08:00:01Z", elapsed_s: 1, hr_raw_bpm: 152, speed_raw_kmh: 12, vflat_b65_kmh: 13 },
+      ],
+      diagnostics: { hrmod: { flags: ["HRMOD_HR_OUTSIDE_PROFILE"] } },
+    };
+    const html = renderToStaticMarkup(<ShadowActivityPanel payload={excluded} activityRef="shadow-0123456789abcdef0123456789abcdef" profileHrRange={[80, 180]} />);
+    expect(html).toContain("изключен само за тази активност");
+    expect(html).toContain("80–180 bpm");
+    expect(html).toContain("78.0–152.0 bpm");
+    expect(html).toContain("не променяйте верни граници");
   });
 });
