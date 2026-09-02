@@ -16,6 +16,15 @@ const request = (path: string, body?: FormData) => new Request(`https://web.exam
   body,
 });
 
+const proxiedRequest = (path: string, body?: FormData) => new Request(`http://internal-render-host:10000${path}`, {
+  method: "POST",
+  headers: {
+    "X-Forwarded-Host": "web.example.test",
+    "X-Forwarded-Proto": "https",
+  },
+  body,
+});
+
 describe("onFlows account foundation", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -155,6 +164,21 @@ describe("onFlows account foundation", () => {
     expect(from).not.toHaveBeenCalled();
   });
 
+  it("redirects profile saves to the public Render origin", async () => {
+    const upsert = vi.fn().mockResolvedValue({ error: null });
+    vi.mocked(createClient).mockResolvedValue({
+      auth: { getClaims: vi.fn().mockResolvedValue({ data: { claims: { sub: "auth-user-1" } } }) },
+      from: vi.fn().mockReturnValue({ upsert }),
+    } as never);
+    const body = new FormData();
+    body.set("display_name", "Dimcho Mitsov");
+
+    const response = await saveProfile(proxiedRequest("/api/account/profile", body));
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("https://web.example.test/account?saved=1");
+  });
+
   it("signs out through a POST-only route", async () => {
     const signOut = vi.fn().mockResolvedValue({ error: null });
     vi.mocked(createClient).mockResolvedValue({ auth: { signOut } } as never);
@@ -162,6 +186,16 @@ describe("onFlows account foundation", () => {
     const response = await logout(request("/api/auth/logout"));
 
     expect(signOut).toHaveBeenCalledOnce();
+    expect(response.headers.get("location")).toBe("https://web.example.test/login");
+  });
+
+  it("redirects sign-out to the public Render origin", async () => {
+    const signOut = vi.fn().mockResolvedValue({ error: null });
+    vi.mocked(createClient).mockResolvedValue({ auth: { signOut } } as never);
+
+    const response = await logout(proxiedRequest("/api/auth/logout"));
+
+    expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe("https://web.example.test/login");
   });
 });
