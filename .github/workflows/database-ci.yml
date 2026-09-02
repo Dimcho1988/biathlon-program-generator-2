@@ -1,0 +1,30 @@
+name: Database CI
+
+on:
+  pull_request:
+    branches:
+      - codex/build-end-to-end-cloud-integration
+    paths:
+      - "supabase/**"
+      - "tests/api/test_account_access_migration.py"
+      - ".github/workflows/database-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.116.0
+      - name: Start local Supabase
+        run: supabase start
+      - name: Rebuild database from migrations
+        run: supabase db reset --local
+      - name: Verify local migration history
+        run: supabase migration list --local
