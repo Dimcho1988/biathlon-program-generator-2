@@ -2,11 +2,24 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { supabasePublicConfig } from "./config";
 
-export async function createClient() {
+type ServerClientOptions = {
+  requestTimeoutMs?: number;
+};
+
+export async function createClient(options: ServerClientOptions = {}) {
   const cookieStore = await cookies();
   const { url, publishableKey } = supabasePublicConfig();
+  const timedFetch = options.requestTimeoutMs
+    ? (input: RequestInfo | URL, init?: RequestInit) => fetch(input, {
+        ...init,
+        signal: init?.signal
+          ? AbortSignal.any([init.signal, AbortSignal.timeout(options.requestTimeoutMs!)])
+          : AbortSignal.timeout(options.requestTimeoutMs!),
+      })
+    : undefined;
 
   return createServerClient(url, publishableKey, {
+    ...(timedFetch ? { global: { fetch: timedFetch } } : {}),
     cookies: {
       getAll: () => cookieStore.getAll(),
       setAll(cookiesToSet) {

@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MagicLinkForm } from "../components/magic-link-form";
 import { POST as saveProfile } from "../app/api/account/profile/route";
 import { POST as logout } from "../app/api/auth/logout/route";
+import { POST as sendMagicLink } from "../app/api/auth/magic-link/route";
 import { supabaseAuthConfigured, supabasePublicConfig } from "../lib/supabase/config";
 import { createClient } from "../lib/supabase/server";
 
@@ -39,6 +40,40 @@ describe("onFlows account foundation", () => {
     expect(html).toContain('type="email"');
     expect(html).toContain("Изпрати защитен линк");
     expect(html).not.toContain('type="password"');
+  });
+
+  it("sends magic links server-side with a same-origin callback", async () => {
+    const signInWithOtp = vi.fn().mockResolvedValue({ error: null });
+    vi.mocked(createClient).mockResolvedValue({ auth: { signInWithOtp } } as never);
+    const response = await sendMagicLink(new Request("https://web.example.test/api/auth/magic-link", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://web.example.test",
+      },
+      body: JSON.stringify({ email: "athlete@example.test" }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(createClient).toHaveBeenCalledWith({ requestTimeoutMs: 10_000 });
+    expect(signInWithOtp).toHaveBeenCalledWith({
+      email: "athlete@example.test",
+      options: { emailRedirectTo: "https://web.example.test/auth/callback" },
+    });
+  });
+
+  it("rejects cross-origin magic-link requests before contacting Supabase", async () => {
+    const response = await sendMagicLink(new Request("https://web.example.test/api/auth/magic-link", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://attacker.example.test",
+      },
+      body: JSON.stringify({ email: "athlete@example.test" }),
+    }));
+
+    expect(response.status).toBe(403);
+    expect(createClient).not.toHaveBeenCalled();
   });
 
   it("creates a profile only for the cryptographically verified user id", async () => {
