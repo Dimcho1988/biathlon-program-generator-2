@@ -4,7 +4,7 @@ import { FormEvent, useState } from "react";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
-export function MagicLinkForm() {
+export function MagicLinkForm({ callbackError = false }: { callbackError?: boolean }) {
   const [state, setState] = useState<"idle" | "sending" | "sent" | "error">("idle");
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -33,5 +33,6 @@ export function MagicLinkForm() {
     </button>
     {state === "sent" && <p className="form-success" role="status">Провери email-а си и отвори линка от същото устройство.</p>}
     {state === "error" && <p className="form-error" role="alert">Линкът не беше изпратен. Провери връзката и опитай отново.</p>}
+    {state === "idle" && callbackError && <p className="form-error" role="alert">Линкът е невалиден или е изтекъл. Изпрати си нов линк.</p>}
   </form>;
 }
