@@ -1,7 +1,8 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { createClient } from "../lib/supabase/client";
+
+const REQUEST_TIMEOUT_MS = 15_000;
 
 export function MagicLinkForm() {
   const [state, setState] = useState<"idle" | "sending" | "sent" | "error">("idle");
@@ -11,12 +12,18 @@ export function MagicLinkForm() {
     setState("sending");
     const form = new FormData(event.currentTarget);
     const email = String(form.get("email") ?? "").trim();
-    const supabase = createClient();
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
-    });
-    setState(error ? "error" : "sent");
+
+    try {
+      const response = await fetch("/api/auth/magic-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      setState(response.ok ? "sent" : "error");
+    } catch {
+      setState("error");
+    }
   }
 
   return <form className="account-form" onSubmit={submit}>
@@ -25,6 +32,6 @@ export function MagicLinkForm() {
       {state === "sending" ? "Изпращане…" : state === "sent" ? "Линкът е изпратен" : "Изпрати защитен линк"}
     </button>
     {state === "sent" && <p className="form-success" role="status">Провери email-а си и отвори линка от същото устройство.</p>}
-    {state === "error" && <p className="form-error" role="alert">Линкът не беше изпратен. Провери адреса и опитай отново.</p>}
+    {state === "error" && <p className="form-error" role="alert">Линкът не беше изпратен. Провери връзката и опитай отново.</p>}
   </form>;
 }
