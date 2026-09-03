@@ -17,5 +17,5 @@ export async function POST(request: Request) {
     display_name: displayName,
     updated_at: new Date().toISOString(),
   }, { onConflict: "user_id" });
-  return NextResponse.redirect(new URL(error ? "/account?error=save" : "/account?saved=1", appOrigin), 303);
+  return NextResponse.redirect(new URL(error ? "/account?error=save" : "/account?saved=profile", appOrigin), 303);
 }

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { currentAthleteAlias, multiProfileMode } from "../../../../../lib/athlete-session";
+import { currentAuthorizedAthlete } from "../../../../../lib/account-access";
+import { multiProfileMode } from "../../../../../lib/athlete-session";
 import { parseSyncEnqueueResponse, type SyncScope } from "../../../../../lib/sync";
 
 function safeReturnTo(value: FormDataEntryValue | null) {
@@ -51,7 +52,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid_sync_scope" }, { status: 400 });
   const { returnTo, scope } = options;
   try {
-    const athleteAlias = await currentAthleteAlias();
+    const athleteAlias = (await currentAuthorizedAthlete())?.athleteAlias;
     if (multiProfileMode() && !athleteAlias)
       return new NextResponse(null, { status: 303, headers: { Location: "/?intervals=session-required" } });
     const baseUrl = process.env.ONFLOWS_API_BASE_URL;

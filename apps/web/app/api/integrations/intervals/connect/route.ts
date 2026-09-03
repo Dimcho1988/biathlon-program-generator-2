@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { retryableInfrastructureStatus, waitForApi } from "../../../../../lib/api-readiness";
+import { createClient } from "../../../../../lib/supabase/server";
 
 const apiConfiguration = () => {
   const baseUrl = process.env.ONFLOWS_API_BASE_URL;
@@ -23,6 +24,17 @@ const startAuthorization = (baseUrl: string, token: string) =>
 export async function GET(request: Request) {
   let stage = "configuration";
   try {
+    const supabase = await createClient({ requestTimeoutMs: 10_000 });
+    const { data } = await supabase.auth.getClaims();
+    const userId = data?.claims?.sub;
+    if (!userId)
+      return new NextResponse(null, { status: 303, headers: { Location: "/login" } });
+    const { data: profile, error: profileError } = await supabase.from("onflows_profiles")
+      .select("user_id")
+      .eq("user_id", userId)
+      .maybeSingle<{ user_id: string }>();
+    if (profileError || !profile)
+      return new NextResponse(null, { status: 303, headers: { Location: "/account?error=profile" } });
     const { baseUrl, token } = apiConfiguration();
     if (new URL(request.url).searchParams.get("wake") !== "ready") {
       const wakeUrl = new URL("/api/v2/wake", baseUrl);

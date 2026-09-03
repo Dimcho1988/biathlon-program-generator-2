@@ -5,13 +5,14 @@ import type { RecoveryHistory } from "../lib/recovery-history";
 import type { VolumeHistory } from "../lib/volume-history";
 import { Dashboard } from "../components/dashboard";
 import { ErrorState } from "../components/error-state";
-import { currentAthleteAlias, multiProfileMode } from "../lib/athlete-session";
+import { multiProfileMode } from "../lib/athlete-session";
 import { AthleteSettingsForm } from "../components/athlete-settings-form";
 import { redirect } from "next/navigation";
 import type { SyncState } from "../lib/sync";
 import { syncInProgress } from "../lib/sync";
 import { SyncPendingState } from "../components/sync-pending-state";
 import { currentAccountDisplayName } from "../lib/account-profile";
+import { currentAccountRoles, currentAuthorizedAthlete } from "../lib/account-access";
 
 type PageResult =
   | { ok: true; value: TrainingStatusResult; completedWork: CompletedWork | null; loadHistory: LoadHistory | null; recoveryHistory: RecoveryHistory | null; volumeHistory: VolumeHistory | null; generationId?: string | null; generationRevision?: number; generationActivatedAt?: string | null; completedWorkMessage?: string; loadHistoryMessage?: string; recoveryHistoryMessage?: string; volumeHistoryMessage?: string }
@@ -42,6 +43,7 @@ const settingsNotices: Record<string, string> = {
   saved: "Индивидуалните настройки са запазени. Обновете реалните данни, за да преизчислите анализа.",
   invalid: "Границите трябва да са шест последователно нарастващи цели стойности между 30 и 240 уд/мин.",
   error: "Настройките не бяха запазени. Опитайте отново.",
+  forbidden: "Този профил е достъпен само за преглед. Главният треньор може да даде право за редакция.",
 };
 
 const syncNotices: Record<string, string> = {
@@ -50,20 +52,26 @@ const syncNotices: Record<string, string> = {
   "enqueue-error": "Не успяхме да потвърдим новата заявка. Проверяваме запазения статус, без да стартираме автоматично второ обновяване.",
 };
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ intervals?: string; settings?: string; sync?: string; wake?: string; report_start?: string; report_end?: string }> }) {
+const profileNotices: Record<string, string> = {
+  selected: "Избраният профил на спортист е активен.",
+};
+
+export default async function Page({ searchParams }: { searchParams: Promise<{ intervals?: string; settings?: string; sync?: string; profile?: string; wake?: string; report_start?: string; report_end?: string }> }) {
   const query = await searchParams;
   let result: PageResult;
   const integrationActions = process.env.ONFLOWS_API_RESOURCE === "real";
   const multiProfile = integrationActions && multiProfileMode();
-  const [athleteAlias, accountDisplayName] = multiProfile
-    ? await Promise.all([currentAthleteAlias(), currentAccountDisplayName()])
-    : [null, null];
+  const [athleteAccess, accountDisplayName, accountRoles] = multiProfile
+    ? await Promise.all([currentAuthorizedAthlete(), currentAccountDisplayName(), currentAccountRoles()])
+    : [null, null, []];
+  const athleteAlias = athleteAccess?.athleteAlias ?? null;
 
   if (multiProfile && !athleteAlias) {
     const notice = query.intervals ? notices[query.intervals] : undefined;
     return <ErrorState
-      message="Няма активна защитена сесия за спортист."
+      message="Няма избран достъпен профил на спортист."
       integrationActions
+      profileSelectionAvailable
       refreshAvailable={false}
       notice={notice}
     />;
@@ -80,6 +88,11 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
   }
 
   if (query.settings === "edit" && multiProfile && athleteAlias) {
+    if (!athleteAccess?.canEditPlan) return <ErrorState
+      message="Нямаш право да променяш зоните и HRmax на този спортист."
+      profileSelectionAvailable
+      retryAvailable
+    />;
     let settings: Awaited<ReturnType<typeof getAthleteSettings>> | null = null;
     let settingsError: string | null = null;
     try {
@@ -188,9 +201,10 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
     ? undefined
     : query.intervals ? notices[query.intervals] : undefined;
   const syncNotice = query.sync ? syncNotices[query.sync] : undefined;
-  const notice = settingsNotice ?? syncNotice ?? integrationNotice ?? (syncStatusUnavailable ? "Статусът на обновяването временно не е достъпен; показваме последната активна версия." : undefined);
+  const profileNotice = query.profile ? profileNotices[query.profile] : undefined;
+  const notice = settingsNotice ?? syncNotice ?? profileNotice ?? integrationNotice ?? (syncStatusUnavailable ? "Статусът на обновяването временно не е достъпен; показваме последната активна версия." : undefined);
   return result.ok
-    ? <Dashboard {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} generationId={result.generationId} generationRevision={result.generationRevision} generationActivatedAt={result.generationActivatedAt} syncState={syncState} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} accountDisplayName={accountDisplayName} notice={notice} />
+    ? <Dashboard {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} generationId={result.generationId} generationRevision={result.generationRevision} generationActivatedAt={result.generationActivatedAt} syncState={syncState} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} athleteCanEdit={athleteAccess?.canEditPlan ?? false} accountDisplayName={accountDisplayName} accountRoles={accountRoles} athleteDisplayName={athleteAccess?.displayName} notice={notice} />
     : <ErrorState
       message={result.message}
       integrationActions={integrationActions}

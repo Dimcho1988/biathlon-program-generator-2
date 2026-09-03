@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
-import { currentAthleteAlias, multiProfileMode } from "../../../../../lib/athlete-session";
+import { currentAuthorizedAthlete } from "../../../../../lib/account-access";
+import { multiProfileMode } from "../../../../../lib/athlete-session";
 import { getSyncState } from "../../../../../lib/api";
 
 const noStoreHeaders = { "Cache-Control": "no-store, max-age=0" };
 
 export async function GET() {
-  const athleteAlias = await currentAthleteAlias();
+  const athleteAlias = (await currentAuthorizedAthlete())?.athleteAlias;
   if (multiProfileMode() && !athleteAlias)
     return NextResponse.json(
       { error: "athlete_session_required" },

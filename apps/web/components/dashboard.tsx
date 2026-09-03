@@ -15,6 +15,7 @@ import type { SyncState } from "../lib/sync";
 import { syncInProgress } from "../lib/sync";
 import { SyncStatusPanel } from "./sync-status-panel";
 import { SyncActionForm } from "./sync-action-form";
+import { roleLabel, type AccountRole } from "../lib/account-access";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
 const decimal = (value: number) => number.format(value);
@@ -66,7 +67,10 @@ export function Dashboard({
   syncState = null,
   integrationActions = false,
   sessionActions = false,
+  athleteCanEdit = false,
   accountDisplayName,
+  accountRoles = [],
+  athleteDisplayName,
   notice,
 }: {
   data: TrainingStatus;
@@ -85,7 +89,10 @@ export function Dashboard({
   syncState?: SyncState | null;
   integrationActions?: boolean;
   sessionActions?: boolean;
+  athleteCanEdit?: boolean;
   accountDisplayName?: string | null;
+  accountRoles?: AccountRole[];
+  athleteDisplayName?: string | null;
   notice?: string;
 }) {
   const qualityScore = data.data_quality.latest_activity_quality_score;
@@ -95,7 +102,7 @@ export function Dashboard({
       <header className="hero">
         <nav aria-label="Основна навигация">
           <a className="brand" href="#top" aria-label="onFlows начало"><Image src="/brand/onflows-mark.png" width={33} height={40} alt="onFlows лого" priority /><span>onFlows</span></a>
-          <div className="nav-actions"><span className="product">Performance intelligence</span>{sessionActions && <Link href="/account">Акаунт</Link>}{sessionActions && <Link href="/?settings=edit">Зони и HRmax</Link>}<ThemeToggle /></div>
+          <div className="nav-actions"><span className="product">Performance intelligence</span>{sessionActions && <Link href="/account">Акаунт</Link>}{sessionActions && athleteCanEdit && <Link href="/?settings=edit">Зони и HRmax</Link>}<ThemeToggle /></div>
         </nav>
         <div id="top" className="hero-grid">
           <div>
@@ -105,7 +112,9 @@ export function Dashboard({
           </div>
           <dl className="identity">
             {accountDisplayName && <div><dt>Акаунт</dt><dd>{accountDisplayName}</dd></div>}
-            <div><dt>Профил за анализ</dt><dd>{data.athlete_id}</dd></div>
+            {accountRoles.length > 0 && <div><dt>Работни роли</dt><dd>{accountRoles.map(roleLabel).join(" · ")}</dd></div>}
+            <div><dt>Избран спортист</dt><dd>{athleteDisplayName ?? data.athlete_id}</dd></div>
+            {athleteDisplayName && athleteDisplayName !== data.athlete_id && <div><dt>Технически профил</dt><dd>{data.athlete_id}</dd></div>}
             <div><dt>Анализ към</dt><dd><time dateTime={data.as_of}>{date(data.as_of)}</time></dd></div>
             {generationRevision !== undefined && generationRevision > 0 && <div><dt>Активна версия</dt><dd>№ {generationRevision}</dd></div>}
             {mode === "fixture" && <div className="demo-badge" aria-label="Режим с демо данни"><span aria-hidden="true" />Демо данни</div>}
@@ -114,7 +123,7 @@ export function Dashboard({
       </header>
 
       <section className="content" aria-label="Тренировъчен анализ">
-        <AnalysisNavigation planningAvailable={sessionActions} />
+        <AnalysisNavigation planningAvailable={sessionActions && athleteCanEdit} />
         <div className="analysis-main">
         {syncState && <SyncStatusPanel key={`${syncState.job_id ?? "idle"}:${syncState.state}:${generationId ?? "none"}`} initialState={syncState} renderedGenerationId={generationId ?? null} />}
         {notice && <p className="connection-notice">{notice}</p>}
@@ -154,7 +163,7 @@ export function Dashboard({
         </details>
         </div>
       </section>
-      <footer><span className="footer-brand">onFlows</span><p>Данните са диагностичен изглед на съществуващия модел.</p><div>{integrationActions && <SyncActionForm busy={syncBusy} className="text-action" />}{sessionActions && <Link className="text-action" href="/?settings=edit">Настройки</Link>}{sessionActions && <form action="/api/session/logout" method="post"><button className="text-action" type="submit">Смени профила</button></form>}</div></footer>
+      <footer><span className="footer-brand">onFlows</span><p>Данните са диагностичен изглед на съществуващия модел.</p><div>{integrationActions && <SyncActionForm busy={syncBusy} className="text-action" />}{sessionActions && athleteCanEdit && <Link className="text-action" href="/?settings=edit">Настройки</Link>}{sessionActions && <form action="/api/session/logout" method="post"><button className="text-action" type="submit">Смени профила</button></form>}</div></footer>
     </main>
   );
 }

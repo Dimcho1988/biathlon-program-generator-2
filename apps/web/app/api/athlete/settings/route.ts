@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { currentAthleteAlias, multiProfileMode } from "../../../../lib/athlete-session";
+import { currentAuthorizedAthlete } from "../../../../lib/account-access";
+import { multiProfileMode } from "../../../../lib/athlete-session";
 import { waitForApi } from "../../../../lib/api-readiness";
 
 const fieldNames = ["z1_low", "z2_low", "z3_low", "z4_low", "z5_low", "z5_high"] as const;
@@ -7,9 +8,12 @@ const fieldNames = ["z1_low", "z2_low", "z3_low", "z4_low", "z5_low", "z5_high"]
 export async function POST(request: Request) {
   let stage = "session";
   try {
-    const athleteAlias = await currentAthleteAlias();
+    const athlete = await currentAuthorizedAthlete();
+    const athleteAlias = athlete?.athleteAlias;
     if (!multiProfileMode() || !athleteAlias)
       return new NextResponse(null, { status: 303, headers: { Location: "/?intervals=session-required" } });
+    if (!athlete.canEditPlan)
+      return new NextResponse(null, { status: 303, headers: { Location: "/?settings=forbidden" } });
     const baseUrl = process.env.ONFLOWS_API_BASE_URL;
     const token = process.env.ONFLOWS_SERVICE_TOKEN;
     if (!baseUrl || !token) throw new Error("Server integration configuration is incomplete");
