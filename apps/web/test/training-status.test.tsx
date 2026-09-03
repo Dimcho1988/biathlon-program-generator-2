@@ -276,6 +276,21 @@ describe("API readiness", () => {
 });
 
 describe("dashboard", () => {
+  it("prioritizes an existing accessible profile over starting a new OAuth connection", () => {
+    const html = renderToStaticMarkup(<ErrorState
+      message="Няма избран достъпен профил на спортист."
+      integrationActions
+      profileSelectionAvailable
+      refreshAvailable={false}
+    />);
+    const selectProfileIndex = html.indexOf("Избери достъпен профил");
+    const connectProfileIndex = html.indexOf("Свържи нов Intervals профил");
+    expect(selectProfileIndex).toBeGreaterThan(-1);
+    expect(connectProfileIndex).toBeGreaterThan(selectProfileIndex);
+    expect(html).toContain('href="/account"');
+    expect(html).toContain('class="action-button secondary"');
+    expect(html).toContain("Ново свързване с Intervals е необходимо само при добавяне на друг профил.");
+  });
   it("does not offer a new OAuth connection for an already active athlete session", () => {
     const html = renderToStaticMarkup(<ErrorState
       message="API услугата не се събуди навреме."
