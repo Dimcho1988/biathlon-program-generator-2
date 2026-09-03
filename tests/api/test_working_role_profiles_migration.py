@@ -2,10 +2,15 @@ from pathlib import Path
 
 
 MIGRATION = Path("supabase/migrations/202609020002_working_role_profiles.sql")
+FOLLOWUP_MIGRATION = Path("supabase/migrations/202609030001_role_profile_security_followup.sql")
 
 
 def migration_sql() -> str:
     return MIGRATION.read_text(encoding="utf-8").lower()
+
+
+def followup_migration_sql() -> str:
+    return FOLLOWUP_MIGRATION.read_text(encoding="utf-8").lower()
 
 
 def test_working_roles_are_database_authorized_not_ui_only():
@@ -56,3 +61,9 @@ def test_direct_role_escalation_and_non_atomic_membership_writes_are_revoked():
     assert "revoke insert, update on public.onflows_organizations from authenticated" in sql
     assert "drop policy memberships_update" in sql
     assert "revoke insert, update, delete on public.onflows_organization_memberships from authenticated" in sql
+
+
+def test_security_followup_handles_clean_databases_without_auto_rls_function():
+    sql = followup_migration_sql()
+    assert "to_regprocedure('public.rls_auto_enable()') is not null" in sql
+    assert "execute 'revoke all on function public.rls_auto_enable() from public, anon, authenticated'" in sql
