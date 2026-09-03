@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MagicLinkForm } from "../components/magic-link-form";
+import { MagicLinkForm, magicLinkResponseState } from "../components/magic-link-form";
 import { POST as saveProfile } from "../app/api/account/profile/route";
 import { GET as completeAuthCallback } from "../app/auth/callback/route";
 import { POST as logout } from "../app/api/auth/logout/route";
@@ -58,6 +58,12 @@ describe("onFlows account foundation", () => {
     const html = renderToStaticMarkup(<MagicLinkForm callbackError />);
     expect(html).toContain("Линкът е невалиден или е изтекъл");
     expect(html).toContain("Изпрати си нов линк");
+  });
+
+  it("distinguishes a temporary email limit from a connection failure", () => {
+    expect(magicLinkResponseState({ ok: false, status: 429 })).toBe("rate-limited");
+    expect(magicLinkResponseState({ ok: false, status: 502 })).toBe("error");
+    expect(magicLinkResponseState({ ok: true, status: 200 })).toBe("sent");
   });
 
   it("sends magic links server-side with a same-origin callback", async () => {
