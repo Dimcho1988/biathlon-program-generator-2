@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { ShadowActivityPanel } from "../components/shadow-activity-panel";
 
 const payload = {
-  vflat_model_version: "vflat_b65_dynamic_v3",
-  vflat_config_version: "vflat_b65_config_v3",
+  vflat_model_version: "vflat_b65_inertia_extrapolation_v4",
+  vflat_config_version: "vflat_b65_config_v4",
   hrmod_model_version: "hrmod_mirror_area_shift_v6",
   hrmod_config_version: "hrmod_config_v6",
   terrain_model_version: "terrain_downhill_donor_exclusion_v4",
@@ -40,7 +40,7 @@ describe("Raw ↔ Shadow comparison", () => {
       "Receiver и donor интервали", "Raw ↔ HRmod времена по зони",
       "15-секундни сегменти (1)", "HR вълни, receiver и donor (1)",
     ]) expect(html).toContain(label);
-    expect(html).toContain("vflat_b65_dynamic_v3");
+    expect(html).toContain("vflat_b65_inertia_extrapolation_v4");
     expect(html).toContain("hrmod_mirror_area_shift_v6");
     expect(html).toContain("RECEIVER_DOWNHILL_OVERLAP");
     expect(html).toContain("89ABCDEF");

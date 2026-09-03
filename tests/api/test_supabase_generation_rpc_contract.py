@@ -95,8 +95,8 @@ def test_shadow_publish_allows_large_atomic_payload_to_finish() -> None:
         derived_payload={
             "schema_version": "activity-shadow-derived-v1",
             "result_hash": "b" * 64,
-            "vflat_model_version": "vflat_b65_dynamic_v3",
-            "vflat_config_version": "vflat_b65_config_v3",
+            "vflat_model_version": "vflat_b65_inertia_extrapolation_v4",
+            "vflat_config_version": "vflat_b65_config_v4",
             "hrmod_model_version": "hrmod_mirror_area_shift_v6",
             "hrmod_config_version": "hrmod_config_v6",
             "terrain_model_version": "terrain_segments_v1",

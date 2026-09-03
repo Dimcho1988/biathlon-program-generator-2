@@ -66,6 +66,7 @@ def test_shadow_results_have_parallel_fields_and_missing_hrmax_fails_closed() ->
         "hr_clean_bpm", "hrmod_candidate_bpm", "hrmod_final_bpm",
         "hrmod_delta_bpm", "grade_raw_pct", "grade_smoothed_pct",
         "vflat_model_version", "hrmod_model_version", "terrain_model_version",
+        "vflat_inertia_extrapolated", "vflat_inertia_reason",
         "quality_flags", "exclusion_reason",
     }
     assert required <= set(derived["timeseries"][0])

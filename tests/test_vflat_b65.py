@@ -36,13 +36,18 @@ GOLDEN = {
 
 def test_locked_versions_defaults_and_golden_multipliers() -> None:
     config = VFlatB65Config()
-    assert MODEL_VERSION == "vflat_b65_dynamic_v3"
-    assert CONFIG_VERSION == "vflat_b65_config_v3"
-    assert config.speed_smoothing_s == 11
-    assert config.transition_anchor_strength == 0.90
-    assert config.transition_accel_scale_mps2 == 0.10
-    assert config.transition_decay_s == 18.0
-    assert config.output_smoothing_s == 21
+    assert MODEL_VERSION == "vflat_b65_inertia_extrapolation_v4"
+    assert CONFIG_VERSION == "vflat_b65_config_v4"
+    assert config.speed_smoothing_s == 3
+    assert config.output_smoothing_s == 1
+    assert config.mild_descent_threshold_pct == -1.0
+    assert config.steep_descent_threshold_pct == -3.0
+    assert config.mild_inertia_accel_mps2 == 0.05
+    assert config.mild_margin_before_s == 5
+    assert config.mild_margin_after_s == 15
+    assert config.steep_margin_before_s == 15
+    assert config.steep_margin_after_s == 15
+    assert config.extrapolation_history_s == 10
     grades = np.asarray(list(GOLDEN))
     expected = np.asarray(list(GOLDEN.values()))
     assert stationary_multiplier_b65(grades, config) == pytest.approx(
@@ -63,7 +68,7 @@ def test_stationary_curve_is_continuous_at_locked_boundaries(boundary: float) ->
     assert abs(values[2] - values[1]) < 1e-6
 
 
-def test_stationary_cap_does_not_cap_actual_grade_memory_or_mutate_raw() -> None:
+def test_stationary_cap_does_not_cap_actual_grade_or_mutate_raw() -> None:
     grade = np.r_[np.full(20, -20.0), np.zeros(25), np.full(20, 20.0), np.zeros(25)]
     source = pd.DataFrame(
         {
@@ -81,8 +86,8 @@ def test_stationary_cap_does_not_cap_actual_grade_memory_or_mutate_raw() -> None
     assert set(result.loc[45:64, "grade_stationary_pct"]) == {15.0}
     assert set(result.loc[:19, "grade_actual_pct"]) == {-20.0}
     assert set(result.loc[45:64, "grade_actual_pct"]) == {20.0}
-    assert result.loc[20, "descent_memory_term_kmh"] < 0.0
-    assert result.loc[65, "climb_memory_term_kmh"] > 0.0
+    assert result.loc[0, "inertia_extrapolated"]
+    assert not result.loc[65, "inertia_extrapolated"]
 
 
 def test_no_time_shift_and_parallel_fields_are_present() -> None:
@@ -109,10 +114,9 @@ def test_no_time_shift_and_parallel_fields_are_present() -> None:
     } <= set(result)
 
 
-def test_transition_anchor_only_follows_accelerating_descent_entry() -> None:
-    grade = np.r_[np.zeros(20), np.full(25, -4.0), np.zeros(20)]
+def test_steep_descent_and_15_second_margins_use_preceding_level() -> None:
+    grade = np.r_[np.zeros(25), np.full(10, -4.0), np.zeros(25)]
     accel = np.zeros(len(grade))
-    accel[20] = 0.2
     source = pd.DataFrame(
         {
             "grade_pct": grade,
@@ -125,10 +129,53 @@ def test_transition_anchor_only_follows_accelerating_descent_entry() -> None:
 
     result = apply_vflat_b65(source)
 
-    assert result.loc[20, "transition_weight"] == pytest.approx(1.0)
-    assert 0.0 < result.loc[37, "transition_weight"] < 0.1
-    assert result.loc[38, "transition_weight"] == pytest.approx(0.0)
-    assert result.loc[19, "transition_weight"] == 0.0
+    assert not result.loc[9, "inertia_extrapolated"]
+    assert result.loc[10:49, "inertia_extrapolated"].all()
+    assert not result.loc[50, "inertia_extrapolated"]
+    assert result.loc[25, "vflat_direct_kmh"] < 18.0
+    assert result.loc[25, "vflat_b65_kmh"] == pytest.approx(18.0)
+    assert result.loc[25, "inertia_reference_kmh"] == pytest.approx(18.0)
+
+
+def test_accelerating_mild_descent_uses_shorter_explicit_margins() -> None:
+    grade = np.r_[np.zeros(20), np.full(20, -2.0), np.zeros(20)]
+    accel = np.zeros(len(grade))
+    accel[20:22] = 0.08
+    source = pd.DataFrame(
+        {
+            "grade_pct": grade,
+            "speed_mps": np.full(len(grade), 5.0),
+            "accel_mps2": accel,
+            "block": np.ones(len(grade), dtype=int),
+            "turn_flag": np.zeros(len(grade), dtype=bool),
+        }
+    )
+
+    result = apply_vflat_b65(source)
+
+    assert not result.loc[14, "inertia_extrapolated"]
+    assert result.loc[15:36, "mild_descent_inertia"].all()
+    assert not result.loc[37, "inertia_extrapolated"]
+    assert result.loc[20, "vflat_b65_kmh"] == pytest.approx(18.0)
+
+
+def test_nonaccelerating_mild_descent_keeps_direct_b65_value() -> None:
+    source = pd.DataFrame(
+        {
+            "grade_pct": np.full(30, -2.0),
+            "speed_mps": np.full(30, 5.0),
+            "accel_mps2": np.zeros(30),
+            "block": np.ones(30, dtype=int),
+            "turn_flag": np.zeros(30, dtype=bool),
+        }
+    )
+
+    result = apply_vflat_b65(source)
+
+    assert not result["inertia_extrapolated"].any()
+    assert result["vflat_b65_kmh"].to_numpy() == pytest.approx(
+        result["vflat_direct_kmh"].to_numpy()
+    )
 
 
 def test_flat_sprint_does_not_activate_transition_anchor() -> None:
@@ -146,5 +193,23 @@ def test_flat_sprint_does_not_activate_transition_anchor() -> None:
 
     result = apply_vflat_b65(source)
 
-    assert np.all(result["transition_weight"].to_numpy() == 0.0)
+    assert not result["inertia_extrapolated"].any()
     assert result.loc[25, "vflat_b65_kmh"] > 20.0
+
+
+def test_inertia_margins_do_not_cross_gap_blocks() -> None:
+    grade = np.r_[np.zeros(20), np.full(5, -4.0), np.zeros(25)]
+    source = pd.DataFrame(
+        {
+            "grade_pct": grade,
+            "speed_mps": np.full(len(grade), 5.0),
+            "accel_mps2": np.zeros(len(grade)),
+            "block": np.r_[np.zeros(20, dtype=int), np.ones(30, dtype=int)],
+            "turn_flag": np.zeros(len(grade), dtype=bool),
+        }
+    )
+
+    result = apply_vflat_b65(source)
+
+    assert not result.loc[:19, "inertia_extrapolated"].any()
+    assert result.loc[20, "inertia_extrapolated"]

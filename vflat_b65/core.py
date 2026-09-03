@@ -1,8 +1,9 @@
-"""Transparent Vflat B65 stationary and dynamic model.
+"""Transparent Vflat B65 model with explicit descent-inertia replacement.
 
-The stationary path uses a clipped grade.  The unclipped measured/derived
-grade remains the sole input to the two terrain-memory states.  No value is
-shifted in time.
+The trustworthy path is deliberately small: minimally denoised measured speed
+is multiplied by the stationary B65 grade factor.  Samples around steep
+descents, plus accelerating transitions on milder descents, are treated as
+gravity/inertia contaminated and replaced by the preceding stable Vflat level.
 """
 
 from __future__ import annotations
@@ -15,8 +16,8 @@ import pandas as pd
 from scipy.signal import savgol_filter
 
 
-MODEL_VERSION = "vflat_b65_dynamic_v3"
-CONFIG_VERSION = "vflat_b65_config_v3"
+MODEL_VERSION = "vflat_b65_inertia_extrapolation_v4"
+CONFIG_VERSION = "vflat_b65_config_v4"
 
 # Authoritative B65 multipliers supplied for the locked model.  Above +5%,
 # these anchors define the approved literature reference curve used by the
@@ -45,10 +46,10 @@ class VFlatB65Config:
     config_version: str = CONFIG_VERSION
 
     altitude_smoothing_m: int = 75
-    # Eleven centred 1 Hz samples span approximately ten elapsed seconds and
-    # remain symmetric around the current sample.
-    speed_smoothing_s: int = 11
-    output_smoothing_s: int = 21
+    # Three centred samples remove isolated device spikes while retaining
+    # short, intentional accelerations.
+    speed_smoothing_s: int = 3
+    output_smoothing_s: int = 1
     segment_s: int = 15
     max_gap_s: int = 10
 
@@ -63,20 +64,14 @@ class VFlatB65Config:
     stationary_min_grade_pct: float = -3.0
     stationary_max_grade_pct: float = 15.0
 
-    acceleration_gain: float = 8.5
-    deceleration_gain: float = 21.5
-    descent_threshold_pct: float = -3.0
-    descent_full_effect_pct: float = -8.0
-    descent_memory_s: float = 18.0
-    descent_memory_strength_kmh: float = 20.0
-    climb_threshold_pct: float = 5.0
-    climb_full_effect_pct: float = 10.0
-    climb_memory_s: float = 12.0
-    climb_memory_strength_kmh: float = 1.0
-    transition_reference_s: int = 61
-    transition_anchor_strength: float = 0.90
-    transition_accel_scale_mps2: float = 0.10
-    transition_decay_s: float = 18.0
+    mild_descent_threshold_pct: float = -1.0
+    steep_descent_threshold_pct: float = -3.0
+    mild_inertia_accel_mps2: float = 0.05
+    mild_margin_before_s: int = 5
+    mild_margin_after_s: int = 15
+    steep_margin_before_s: int = 15
+    steep_margin_after_s: int = 15
+    extrapolation_history_s: int = 10
 
     min_speed_kmh: float = 5.0
     turn_threshold_deg: float = 55.0
@@ -93,12 +88,28 @@ class VFlatB65Config:
             raise ValueError("invalid B65 blend interval")
         if not 0.0 <= self.steep_blend_weight <= 1.0:
             raise ValueError("B65 blend weight must be in [0, 1]")
-        if self.output_smoothing_s != 21:
-            raise ValueError("Vflat B65 output smoothing is locked at 21 s")
+        if self.output_smoothing_s != 1:
+            raise ValueError("Vflat B65 v4 output smoothing is locked off")
         if self.speed_smoothing_s <= 0 or self.speed_smoothing_s % 2 == 0:
             raise ValueError("Vflat B65 speed smoothing must be a positive odd window")
-        if self.transition_decay_s <= 0.0:
-            raise ValueError("Vflat B65 transition decay must be positive")
+        if not (
+            self.steep_descent_threshold_pct
+            < self.mild_descent_threshold_pct
+            < 0.0
+        ):
+            raise ValueError("invalid Vflat descent thresholds")
+        if self.mild_inertia_accel_mps2 <= 0.0:
+            raise ValueError("mild-descent inertia acceleration must be positive")
+        margins = (
+            self.mild_margin_before_s,
+            self.mild_margin_after_s,
+            self.steep_margin_before_s,
+            self.steep_margin_after_s,
+        )
+        if any(value < 0 for value in margins):
+            raise ValueError("Vflat inertia margins must be non-negative")
+        if self.extrapolation_history_s <= 0:
+            raise ValueError("Vflat extrapolation history must be positive")
 
     def to_dict(self) -> dict[str, float | int | str]:
         return asdict(self)
@@ -204,119 +215,100 @@ def derive_grade_from_altitude_distance(
     return result
 
 
-def _terrain_memory(
-    grade: np.ndarray,
-    *,
-    threshold: float,
-    full_effect: float,
-    tau_s: float,
-    direction: str,
-) -> tuple[np.ndarray, np.ndarray]:
-    state = np.zeros(len(grade), dtype=float)
-    post = np.zeros(len(grade), dtype=float)
-    decay = math.exp(-1.0 / max(float(tau_s), 1.0))
-    span = max(abs(full_effect - threshold), 0.1)
-    if direction == "descent":
-        stimulus = np.clip((threshold - grade) / span, 0.0, 1.0)
-        active = grade < threshold
-    else:
-        stimulus = np.clip((grade - threshold) / span, 0.0, 1.0)
-        active = grade > threshold
-    value = 0.0
-    for index in range(len(grade)):
-        if not np.isfinite(grade[index]):
-            value *= decay
-            state[index] = value
-            continue
-        value = decay * value + (1.0 - decay) * float(stimulus[index])
-        state[index] = value
-        post[index] = 0.0 if active[index] else value
-    return state, post
+def _expand_mask(mask: np.ndarray, *, before_s: int, after_s: int) -> np.ndarray:
+    """Expand true samples by explicit 1 Hz margins without crossing a block."""
+    expanded = np.zeros(len(mask), dtype=bool)
+    for index in np.flatnonzero(mask):
+        left = max(0, int(index) - int(before_s))
+        right = min(len(mask), int(index) + int(after_s) + 1)
+        expanded[left:right] = True
+    return expanded
 
 
-def _rolling_median(values: pd.Series, blocks: pd.Series, window_s: int) -> pd.Series:
-    result = pd.Series(np.nan, index=values.index, dtype=float)
-    for _, index in blocks.groupby(blocks).groups.items():
-        part = values.loc[index]
-        window = min(max(1, int(window_s)), len(part))
-        if window % 2 == 0:
-            window = max(1, window - 1)
-        result.loc[index] = part.rolling(
-            window, center=True, min_periods=max(1, window // 3)
-        ).median()
-    return result
-
-
-def _memory_by_block(grade: pd.Series, blocks: pd.Series, **kwargs: float | str):
-    state = np.zeros(len(grade), dtype=float)
-    post = np.zeros(len(grade), dtype=float)
-    positions = pd.Series(np.arange(len(grade)), index=grade.index)
-    for _, index in blocks.groupby(blocks).groups.items():
-        block_state, block_post = _terrain_memory(
-            grade.loc[index].to_numpy(dtype=float), **kwargs
-        )
-        target = positions.loc[index].to_numpy(dtype=int)
-        state[target], post[target] = block_state, block_post
-    return state, post
-
-
-def _descent_transition_anchor_weight(
-    grade: np.ndarray,
-    accel: np.ndarray,
-    *,
-    threshold_pct: float,
-    accel_scale_mps2: float,
-    decay_s: float,
-) -> np.ndarray:
-    """Gate the local-speed anchor to gravity-assisted descent entries.
-
-    A transition starts only when grade crosses from the threshold or above to
-    below it while speed is increasing.  Its initial strength follows the
-    measured positive acceleration and then falls linearly to zero.  The short
-    tail deliberately survives the end of the descent to account for inertia.
-    """
-    weight = np.zeros(len(grade), dtype=float)
-    remaining_weight = 0.0
-    step = 1.0 / max(float(decay_s), 1.0)
-    for index in range(len(grade)):
-        if index > 0 and (
-            np.isfinite(grade[index - 1])
-            and np.isfinite(grade[index])
-            and grade[index - 1] >= threshold_pct
-            and grade[index] < threshold_pct
-            and np.isfinite(accel[index])
-            and accel[index] > 0.0
-        ):
-            remaining_weight = float(
-                np.clip(accel[index] / max(accel_scale_mps2, 1e-9), 0.0, 1.0)
-            )
-        weight[index] = remaining_weight
-        remaining_weight = max(0.0, remaining_weight - step)
-    return weight
-
-
-def _descent_transition_anchor_weight_by_block(
+def _inertia_mask_by_block(
     grade: pd.Series,
     accel: np.ndarray,
     blocks: pd.Series,
-    *,
-    threshold_pct: float,
-    accel_scale_mps2: float,
-    decay_s: float,
-) -> np.ndarray:
-    weight = np.zeros(len(grade), dtype=float)
+    config: VFlatB65Config,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Identify steep descents and accelerating mild-descent transitions."""
+    combined = np.zeros(len(grade), dtype=bool)
+    steep_result = np.zeros(len(grade), dtype=bool)
+    mild_result = np.zeros(len(grade), dtype=bool)
     positions = pd.Series(np.arange(len(grade)), index=grade.index)
     accel_series = pd.Series(accel, index=grade.index)
     for _, index in blocks.groupby(blocks).groups.items():
         target = positions.loc[index].to_numpy(dtype=int)
-        weight[target] = _descent_transition_anchor_weight(
-            grade.loc[index].to_numpy(dtype=float),
-            accel_series.loc[index].to_numpy(dtype=float),
-            threshold_pct=threshold_pct,
-            accel_scale_mps2=accel_scale_mps2,
-            decay_s=decay_s,
+        block_grade = grade.loc[index].to_numpy(dtype=float)
+        block_accel = accel_series.loc[index].to_numpy(dtype=float)
+        steep = np.isfinite(block_grade) & (
+            block_grade < config.steep_descent_threshold_pct
         )
-    return weight
+        mild_trigger = (
+            np.isfinite(block_grade)
+            & np.isfinite(block_accel)
+            & (block_grade < config.mild_descent_threshold_pct)
+            & (block_grade >= config.steep_descent_threshold_pct)
+            & (block_accel >= config.mild_inertia_accel_mps2)
+        )
+        steep_expanded = _expand_mask(
+            steep,
+            before_s=config.steep_margin_before_s,
+            after_s=config.steep_margin_after_s,
+        )
+        mild_expanded = _expand_mask(
+            mild_trigger,
+            before_s=config.mild_margin_before_s,
+            after_s=config.mild_margin_after_s,
+        )
+        steep_result[target] = steep_expanded
+        mild_result[target] = mild_expanded
+        combined[target] = steep_expanded | mild_expanded
+    return combined, steep_result, mild_result
+
+
+def _extrapolate_preceding_level_by_block(
+    direct_vflat: np.ndarray,
+    mask: np.ndarray,
+    blocks: pd.Series,
+    *,
+    history_s: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Replace each masked run with its preceding stable median level.
+
+    This is a bounded zero-order extrapolation.  Unlike a linear projection it
+    cannot drift to impossible speeds during a long descent.  If an activity
+    block starts inside a masked region, the first subsequent valid level is
+    used as a documented fallback.
+    """
+    result = np.asarray(direct_vflat, dtype=float).copy()
+    reference = np.full(len(result), np.nan, dtype=float)
+    positions = pd.Series(np.arange(len(result)), index=blocks.index)
+    for _, index in blocks.groupby(blocks).groups.items():
+        target = positions.loc[index].to_numpy(dtype=int)
+        local_mask = mask[target]
+        local_values = result[target]
+        cursor = 0
+        while cursor < len(target):
+            if not local_mask[cursor]:
+                cursor += 1
+                continue
+            start = cursor
+            while cursor < len(target) and local_mask[cursor]:
+                cursor += 1
+            end = cursor
+            history = local_values[max(0, start - history_s):start]
+            history = history[np.isfinite(history)]
+            if history.size:
+                level = float(np.median(history))
+            else:
+                future = local_values[end:]
+                future = future[np.isfinite(future)]
+                level = float(future[0]) if future.size else math.nan
+            local_values[start:end] = level
+            reference[target[start:end]] = level
+        result[target] = local_values
+    return result, reference
 
 
 def apply_vflat_b65(
@@ -340,61 +332,29 @@ def apply_vflat_b65(
     speed_kmh = out.speed_mps.to_numpy(dtype=float) * 3.6
     stationary = speed_kmh * multiplier
     accel = out.accel_mps2.to_numpy(dtype=float)
-    acceleration_term = selected.acceleration_gain * np.maximum(accel, 0.0)
-    deceleration_term = -selected.deceleration_gain * np.maximum(-accel, 0.0)
-    descent_state, post_descent = _memory_by_block(
-        out.grade_pct, out.block,
-        threshold=selected.descent_threshold_pct,
-        full_effect=selected.descent_full_effect_pct,
-        tau_s=selected.descent_memory_s,
-        direction="descent",
-    )
-    climb_state, post_climb = _memory_by_block(
-        out.grade_pct, out.block,
-        threshold=selected.climb_threshold_pct,
-        full_effect=selected.climb_full_effect_pct,
-        tau_s=selected.climb_memory_s,
-        direction="climb",
-    )
-    descent_term = -selected.descent_memory_strength_kmh * post_descent
-    climb_term = selected.climb_memory_strength_kmh * post_climb
-    dynamic_raw = np.maximum(
-        stationary + acceleration_term + deceleration_term + descent_term + climb_term,
-        0.0,
-    )
-    local_reference = _rolling_median(
-        pd.Series(dynamic_raw, index=out.index), out.block, selected.transition_reference_s
-    )
-    transition_weight = _descent_transition_anchor_weight_by_block(
+    inertia_mask, steep_mask, mild_mask = _inertia_mask_by_block(
         out.grade_pct,
         accel,
         out.block,
-        threshold_pct=selected.descent_threshold_pct,
-        accel_scale_mps2=selected.transition_accel_scale_mps2,
-        decay_s=selected.transition_decay_s,
+        selected,
     )
-    anchored = dynamic_raw + selected.transition_anchor_strength * transition_weight * (
-        local_reference.to_numpy(dtype=float) - dynamic_raw
+    extrapolated, inertia_reference = _extrapolate_preceding_level_by_block(
+        stationary,
+        inertia_mask,
+        out.block,
+        history_s=selected.extrapolation_history_s,
     )
-    final = _rolling_median(
-        pd.Series(anchored, index=out.index), out.block, selected.output_smoothing_s
-    )
+    final = extrapolated
     out["speed_raw_kmh"] = speed_kmh
     out["grade_actual_pct"] = actual_grade
     out["grade_stationary_pct"] = stationary_grade
     out["stationary_multiplier_b65"] = multiplier
     out["vflat_stationary_kmh"] = stationary
-    out["acceleration_term_kmh"] = acceleration_term
-    out["deceleration_term_kmh"] = deceleration_term
-    out["descent_memory"] = descent_state
-    out["post_descent_memory"] = post_descent
-    out["descent_memory_term_kmh"] = descent_term
-    out["climb_memory"] = climb_state
-    out["post_climb_memory"] = post_climb
-    out["climb_memory_term_kmh"] = climb_term
-    out["transition_weight"] = transition_weight
-    out["local_reference_kmh"] = local_reference
-    out["vflat_anchored_kmh"] = anchored
+    out["vflat_direct_kmh"] = stationary
+    out["inertia_extrapolated"] = inertia_mask
+    out["steep_descent_inertia"] = steep_mask
+    out["mild_descent_inertia"] = mild_mask & ~steep_mask
+    out["inertia_reference_kmh"] = inertia_reference
     out["vflat_b65_kmh"] = final
     out["vflat_delta_kmh"] = final - speed_kmh
     out["vflat_model_version"] = MODEL_VERSION
