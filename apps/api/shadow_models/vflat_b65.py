@@ -24,15 +24,6 @@ def run_vflat_b65_shadow(
             if raw_speed_mps is not None and pd.notna(raw_speed_mps)
             else None
         )
-        quality_flags = set(row.get("quality_flags") or ())
-        inertia_extrapolated = bool(row.get("inertia_extrapolated"))
-        if inertia_extrapolated:
-            quality_flags.add("VFLAT_INERTIA_EXTRAPOLATED")
-        inertia_reason = None
-        if bool(row.get("steep_descent_inertia")):
-            inertia_reason = "STEEP_DESCENT_OR_15S_MARGIN"
-        elif bool(row.get("mild_descent_inertia")):
-            inertia_reason = "ACCELERATING_MILD_DESCENT_OR_MARGIN"
         rows.append(
             {
                 "timestamp": (
@@ -49,10 +40,8 @@ def run_vflat_b65_shadow(
                 ),
                 "grade_raw_pct": row.get("grade_actual_pct"),
                 "grade_smoothed_pct": row.get("grade_pct"),
-                "quality_flags": sorted(quality_flags),
+                "quality_flags": list(row.get("quality_flags") or ()),
                 "exclusion_reason": None if row.get("valid") else "VFLAT_SAMPLE_EXCLUDED",
-                "inertia_extrapolated": inertia_extrapolated,
-                "inertia_reason": inertia_reason,
                 "vflat_model_version": MODEL_VERSION,
                 "vflat_config_version": CONFIG_VERSION,
             }
@@ -64,16 +53,5 @@ def run_vflat_b65_shadow(
         "model_version": MODEL_VERSION,
         "config_version": CONFIG_VERSION,
         "config": selected.to_dict(),
-        "diagnostics": {
-            "inertia_extrapolated_sample_count": int(
-                result["inertia_extrapolated"].sum()
-            ),
-            "steep_descent_inertia_sample_count": int(
-                result["steep_descent_inertia"].sum()
-            ),
-            "mild_descent_inertia_sample_count": int(
-                result["mild_descent_inertia"].sum()
-            ),
-        },
         "timeseries": rows,
     }

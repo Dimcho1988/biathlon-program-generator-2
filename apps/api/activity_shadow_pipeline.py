@@ -375,10 +375,6 @@ def compute_activity_shadow(
                 ),
                 "vflat_b65_kmh": _plain_number(vf_row.get("vflat_b65_kmh")),
                 "vflat_delta_kmh": _plain_number(vf_row.get("vflat_delta_kmh")),
-                "vflat_inertia_extrapolated": bool(
-                    vf_row.get("inertia_extrapolated", False)
-                ),
-                "vflat_inertia_reason": vf_row.get("inertia_reason"),
                 "hr_raw_bpm": _plain_number(
                     hr_row.get("hr_raw_bpm", sample.heart_rate_bpm)
                 ),
@@ -427,10 +423,7 @@ def compute_activity_shadow(
         "zone_summary": hrmod.get("zones", []),
         "diagnostics": {
             "hrmod": hrmod.get("diagnostics", {}),
-            "vflat": {
-                "status": vflat.get("status"),
-                **dict(vflat.get("diagnostics") or {}),
-            },
+            "vflat": {"status": vflat.get("status")},
         },
         "hashes": {
             "hr_input_hash": hrmod.get("hr_input_hash"),
