@@ -427,7 +427,10 @@ def compute_activity_shadow(
         "zone_summary": hrmod.get("zones", []),
         "diagnostics": {
             "hrmod": hrmod.get("diagnostics", {}),
-            "vflat": {"status": vflat.get("status")},
+            "vflat": {
+                "status": vflat.get("status"),
+                **dict(vflat.get("diagnostics") or {}),
+            },
         },
         "hashes": {
             "hr_input_hash": hrmod.get("hr_input_hash"),

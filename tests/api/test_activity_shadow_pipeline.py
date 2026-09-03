@@ -71,6 +71,11 @@ def test_shadow_results_have_parallel_fields_and_missing_hrmax_fails_closed() ->
     }
     assert required <= set(derived["timeseries"][0])
     assert derived["timeseries"][0]["exclusion_reason"] == "EXPLICIT_HRMAX_MISSING"
+    assert {
+        "inertia_extrapolated_sample_count",
+        "steep_descent_inertia_sample_count",
+        "mild_descent_inertia_sample_count",
+    } <= set(derived["diagnostics"]["vflat"])
     assert len(derived["segments_15s"]) >= 6
 
 
