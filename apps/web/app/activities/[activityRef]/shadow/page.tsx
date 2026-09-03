@@ -1,13 +1,14 @@
 import Link from "next/link";
 import { ShadowActivityPanel } from "../../../../components/shadow-activity-panel";
 import { ErrorState } from "../../../../components/error-state";
-import { currentAthleteAlias, multiProfileMode } from "../../../../lib/athlete-session";
+import { currentAuthorizedAthlete } from "../../../../lib/account-access";
+import { multiProfileMode } from "../../../../lib/athlete-session";
 import { getActivityView, getAthleteSettings } from "../../../../lib/api";
 import type { ActivityView } from "../../../../lib/activities";
 
 export default async function ActivityShadowPage({ params }: { params: Promise<{ activityRef: string }> }) {
   const { activityRef } = await params;
-  const athleteAlias = multiProfileMode() ? await currentAthleteAlias() : undefined;
+  const athleteAlias = multiProfileMode() ? (await currentAuthorizedAthlete())?.athleteAlias : undefined;
   if (multiProfileMode() && !athleteAlias) return <ErrorState message="Няма активна защитена сесия за спортист." integrationActions refreshAvailable={false} />;
   let view: ActivityView;
   let profileHrRange: readonly [number, number] | null = null;

@@ -304,7 +304,7 @@ describe("dashboard", () => {
     expect(html).toContain('href="/activities"');
     expect(html).toContain("Активности");
     expect(html).not.toContain('href="/planning"');
-    const protectedHtml = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="api" sessionActions />);
+    const protectedHtml = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="api" sessionActions athleteCanEdit />);
     expect(protectedHtml).toContain('href="/planning"');
     expect(protectedHtml).toContain("Профил за планиране");
     expect(protectedHtml).toContain('href="/?settings=edit"');
@@ -323,7 +323,7 @@ describe("dashboard", () => {
     const html = renderToStaticMarkup(<Dashboard data={{ ...trainingStatusFixture, athlete_id: "ath-private-alias" }} mode="api" sessionActions accountDisplayName="Dimcho Mitsov" />);
     expect(html).toContain("Акаунт");
     expect(html).toContain("Dimcho Mitsov");
-    expect(html).toContain("Профил за анализ");
+    expect(html).toContain("Избран спортист");
     expect(html).toContain("ath-private-alias");
     expect(html).not.toContain("<dt>Спортист</dt>");
   });

@@ -3,7 +3,8 @@ import Link from "next/link";
 import { ActivityCalendarView } from "../../components/activity-calendar";
 import { ErrorState } from "../../components/error-state";
 import { ThemeToggle } from "../../components/theme-toggle";
-import { currentAthleteAlias, multiProfileMode } from "../../lib/athlete-session";
+import { currentAuthorizedAthlete } from "../../lib/account-access";
+import { multiProfileMode } from "../../lib/athlete-session";
 import { getActivityCalendar, getSyncState } from "../../lib/api";
 import { syncInProgress } from "../../lib/sync";
 import { SyncStatusPanel } from "../../components/sync-status-panel";
@@ -15,7 +16,7 @@ const validDate = (value?: string) => value && /^\d{4}-\d{2}-\d{2}$/.test(value)
 
 export default async function ActivitiesPage({ searchParams }: { searchParams: Promise<{ start?: string; end?: string; sync?: string }> }) {
   const query = await searchParams;
-  const athleteAlias = multiProfileMode() ? await currentAthleteAlias() : undefined;
+  const athleteAlias = multiProfileMode() ? (await currentAuthorizedAthlete())?.athleteAlias : undefined;
   if (multiProfileMode() && !athleteAlias) return <ErrorState message="Няма активна защитена сесия за спортист." integrationActions refreshAvailable={false} />;
   const today = new Date();
   const end = validDate(query.end) ?? iso(today);

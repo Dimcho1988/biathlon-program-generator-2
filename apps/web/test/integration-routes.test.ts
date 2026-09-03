@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cookies } from "next/headers";
 import { GET as connect } from "../app/api/integrations/intervals/connect/route";
 import * as refreshRoute from "../app/api/integrations/intervals/refresh/route";
@@ -9,10 +9,36 @@ import { POST as saveMesocycleAccents } from "../app/api/athlete/mesocycle-accen
 import { POST as savePlanningCalendar } from "../app/api/athlete/planning-calendar/route";
 import { GET as complete } from "../app/api/session/complete/route";
 import { createAthleteSession, verifyAthleteSession } from "../lib/athlete-session";
+import { currentAuthorizedAthlete } from "../lib/account-access";
+import { createClient } from "../lib/supabase/server";
 
 vi.mock("next/headers", () => ({ cookies: vi.fn() }));
+vi.mock("../lib/account-access", () => ({ currentAuthorizedAthlete: vi.fn() }));
+vi.mock("../lib/supabase/server", () => ({ createClient: vi.fn() }));
 
 describe("integration route redirects behind a reverse proxy", () => {
+  beforeEach(() => {
+    vi.mocked(currentAuthorizedAthlete).mockResolvedValue({
+      userId: "auth-user-1",
+      athleteAlias: "ath-test-profile",
+      displayName: "Test athlete",
+      isOwner: true,
+      canEditPlan: true,
+    });
+    vi.mocked(createClient).mockResolvedValue({
+      auth: { getClaims: vi.fn().mockResolvedValue({ data: { claims: { sub: "auth-user-1" } } }) },
+      from: vi.fn((table: string) => table === "onflows_profiles"
+        ? {
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({ data: { user_id: "auth-user-1" }, error: null }),
+            }),
+          }),
+        }
+        : { upsert: vi.fn().mockResolvedValue({ error: null }) }),
+    } as never);
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
@@ -246,6 +272,7 @@ describe("integration route redirects behind a reverse proxy", () => {
     process.env.ONFLOWS_PROFILE_MODE = "multi";
     process.env.ONFLOWS_SESSION_SECRET = "a-secret-value-with-at-least-32-characters";
     vi.mocked(cookies).mockResolvedValue({ get: () => undefined } as never);
+    vi.mocked(currentAuthorizedAthlete).mockResolvedValue(null);
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
@@ -326,6 +353,27 @@ describe("integration route redirects behind a reverse proxy", () => {
       timezone: "Europe/Sofia",
       hrmax_bpm: 205,
     });
+  });
+
+  it("does not let a view-only coach change athlete settings", async () => {
+    process.env.ONFLOWS_PROFILE_MODE = "multi";
+    vi.mocked(currentAuthorizedAthlete).mockResolvedValue({
+      userId: "athlete-user-1",
+      athleteAlias: "ath-test-profile",
+      displayName: "Test athlete",
+      isOwner: false,
+      canEditPlan: false,
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await saveSettings(new Request(
+      "https://web.example.test/api/athlete/settings",
+      { method: "POST", body: new FormData() },
+    ));
+
+    expect(response.headers.get("location")).toBe("/?settings=forbidden");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("saves planning inputs only for the signed athlete session", async () => {

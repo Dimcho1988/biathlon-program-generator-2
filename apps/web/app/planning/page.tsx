@@ -1,6 +1,7 @@
 import { ErrorState } from "../../components/error-state";
 import { PlanningProfileForm } from "../../components/planning-profile-form";
-import { currentAthleteAlias, multiProfileMode } from "../../lib/athlete-session";
+import { currentAuthorizedAthlete } from "../../lib/account-access";
+import { multiProfileMode } from "../../lib/athlete-session";
 import {
   getAthletePlanningProfile,
   getMesocycleAccentPreferences,
@@ -18,6 +19,7 @@ const notices: Record<string, string> = {
   error: "Профилът за планиране не беше запазен. Опитайте отново.",
   "accents-error": "Правилото за акцентите не беше запазено. Опитайте отново.",
   "calendar-error": "Календарът не беше запазен. Опитайте отново.",
+  forbidden: "Този профил е достъпен само за преглед. Главният треньор може да даде право за редакция.",
 };
 
 export default async function PlanningPage({
@@ -26,11 +28,17 @@ export default async function PlanningPage({
   searchParams: Promise<{ planning?: string }>;
 }) {
   const query = await searchParams;
-  const athleteAlias = multiProfileMode() ? await currentAthleteAlias() : null;
-  if (!athleteAlias) return <ErrorState
+  const athlete = multiProfileMode() ? await currentAuthorizedAthlete() : null;
+  const athleteAlias = athlete?.athleteAlias ?? null;
+  if (!athlete || !athleteAlias) return <ErrorState
     message="Няма активна защитена сесия за спортист."
     integrationActions
     refreshAvailable={false}
+  />;
+  if (!athlete.canEditPlan) return <ErrorState
+    message="Нямаш право да променяш плана на този спортист."
+    profileSelectionAvailable
+    retryAvailable
   />;
   let result;
   let methodology;

@@ -143,7 +143,7 @@ describe("onFlows account foundation", () => {
     const response = await saveProfile(request("/api/account/profile", body));
 
     expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe("https://web.example.test/account?saved=1");
+    expect(response.headers.get("location")).toBe("https://web.example.test/account?saved=profile");
     expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
       user_id: "auth-user-1",
       display_name: "Димчо",
@@ -191,7 +191,7 @@ describe("onFlows account foundation", () => {
     const response = await saveProfile(proxiedRequest("/api/account/profile", body));
 
     expect(response.status).toBe(303);
-    expect(response.headers.get("location")).toBe("https://web.example.test/account?saved=1");
+    expect(response.headers.get("location")).toBe("https://web.example.test/account?saved=profile");
   });
 
   it("signs out through a POST-only route", async () => {
@@ -202,6 +202,8 @@ describe("onFlows account foundation", () => {
 
     expect(signOut).toHaveBeenCalledOnce();
     expect(response.headers.get("location")).toBe("https://web.example.test/login");
+    expect(response.headers.get("set-cookie")).toContain("onflows-athlete-session=;");
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
   });
 
   it("redirects sign-out to the public Render origin", async () => {
