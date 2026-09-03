@@ -46,6 +46,10 @@ const dateTime = (value: unknown): string => {
     hour: "2-digit", minute: "2-digit", timeZone: "Europe/Sofia",
   }).format(parsed);
 };
+const shortModelLabel = (prefix: string, value: unknown): string => {
+  const match = typeof value === "string" ? value.match(/_v(\d+)$/) : null;
+  return match ? `${prefix} v${match[1]}` : prefix;
+};
 
 function MiniPlot({ rows, series, title }: {
   rows: Row[];
@@ -169,6 +173,7 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
     const modulated = number(zone.hrmod_final_seconds ?? zone.hrmod_seconds);
     return clean === null || modulated === null ? sum : sum + Math.abs(modulated - clean);
   }, 0) / 2;
+  const hrmodLabel = shortModelLabel("HRmod", payload.hrmod_model_version);
 
   return (
     <div className="shadow-lab">
@@ -181,7 +186,7 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
         <fieldset className="shadow-toggles">
           <legend>Диагностични канали</legend>
           <label><input type="checkbox" checked={vflatEnabled} onChange={(event) => setVflatEnabled(event.target.checked)} /> Vflat B65</label>
-          <label><input type="checkbox" checked={hrmodEnabled} onChange={(event) => setHrmodEnabled(event.target.checked)} /> HRmod v4</label>
+          <label><input type="checkbox" checked={hrmodEnabled} onChange={(event) => setHrmodEnabled(event.target.checked)} /> {hrmodLabel}</label>
         </fieldset>
       </section>
 
@@ -234,7 +239,7 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
       </details>
 
       <details className="shadow-details">
-        <summary><span><small>HRmod v4</small>HR вълни, receiver и donor ({waves.length})</span><span className="chevron" aria-hidden="true">⌄</span></summary>
+        <summary><span><small>{hrmodLabel}</small>HR вълни, receiver и donor ({waves.length})</span><span className="chevron" aria-hidden="true">⌄</span></summary>
         <div className="shadow-table-wrap shadow-scroll-table"><table><thead><tr>
           <th>ID</th><th>Status</th><th>Receiver</th><th>Donor</th><th>Added area</th><th>Removed area</th><th>Moved area</th><th>Capacity</th><th>Downhill</th><th>Flags / exclusion</th>
         </tr></thead><tbody>{waves.map((wave) => <tr key={text(wave.wave_id)}>

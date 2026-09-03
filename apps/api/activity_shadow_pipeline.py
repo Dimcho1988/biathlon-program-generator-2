@@ -219,8 +219,9 @@ def _model_inputs(detail: Mapping[str, Any], normalized: IntervalAwareResult):
         np.nan if _first(point, _DISTANCE_NAMES) is None else _first(point, _DISTANCE_NAMES)
         for point in points
     ], dtype=float)
+    vflat_config = VFlatB65Config()
     derived_grade = derive_grade_from_altitude_distance(
-        altitude, distance, smoothing_m=VFlatB65Config().altitude_smoothing_m
+        altitude, distance, smoothing_m=vflat_config.altitude_smoothing_m
     )
     grade = np.where(np.isfinite(derived_grade), derived_grade, provider_grade)
     blocks = np.full(len(points), -1, dtype=int)
@@ -228,7 +229,9 @@ def _model_inputs(detail: Mapping[str, Any], normalized: IntervalAwareResult):
         blocks[left:right] = block_id
     flags = [tuple(sorted(set(point.quality_flags) | set(timestamp_flags))) for point in points]
     smooth_speed = pd.Series(speed).rolling(
-        15, center=True, min_periods=5
+        vflat_config.speed_smoothing_s,
+        center=True,
+        min_periods=max(1, vflat_config.speed_smoothing_s // 3),
     ).median().to_numpy()
     acceleration = np.gradient(smooth_speed) if len(smooth_speed) else np.asarray([])
     vflat_frame = pd.DataFrame(

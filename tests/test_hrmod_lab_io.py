@@ -372,8 +372,8 @@ def test_e2e_tcx_produces_core_summaries_diagnostics_and_separate_exports() -> N
 
     config_export = json.loads(files["run_configuration.json"])
     diagnostics_export = json.loads(files["diagnostics.json"])
-    assert config_export["model_version"] == "hrmod_mirror_area_shift_v5"
-    assert config_export["config"]["config_version"] == "hrmod_config_v5"
+    assert config_export["model_version"] == "hrmod_mirror_area_shift_v6"
+    assert config_export["config"]["config_version"] == "hrmod_config_v6"
     assert "model_variant" not in config_export["config"]
     assert diagnostics_export["diagnostics"]["detected_wave_count"] >= 1
 

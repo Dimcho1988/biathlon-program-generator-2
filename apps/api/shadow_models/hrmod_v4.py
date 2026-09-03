@@ -148,7 +148,10 @@ def run_hrmod_v4_shadow(
         removed = max(0.0, (clean or 0.0) - (final or 0.0)) if clean is not None and final is not None else 0.0
         delta = final - clean if clean is not None and final is not None else None
         model_flags = set(point.model_flags)
-        if delta is not None and abs(delta) > EXTREME_DELTA_THRESHOLD_BPM:
+        if (
+            delta is not None
+            and abs(delta) > EXTREME_DELTA_THRESHOLD_BPM + 1e-9
+        ):
             model_flags.add("HRMOD_EXTREME_DELTA")
             extreme_count += 1
         if final is not None:

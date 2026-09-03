@@ -36,8 +36,9 @@ GOLDEN = {
 
 def test_locked_versions_defaults_and_golden_multipliers() -> None:
     config = VFlatB65Config()
-    assert MODEL_VERSION == "vflat_b65_dynamic_v2"
-    assert CONFIG_VERSION == "vflat_b65_config_v2"
+    assert MODEL_VERSION == "vflat_b65_dynamic_v3"
+    assert CONFIG_VERSION == "vflat_b65_config_v3"
+    assert config.speed_smoothing_s == 11
     assert config.transition_anchor_strength == 0.90
     assert config.transition_accel_scale_mps2 == 0.10
     assert config.transition_decay_s == 18.0

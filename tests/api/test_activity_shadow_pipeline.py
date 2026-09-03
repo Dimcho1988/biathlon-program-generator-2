@@ -144,7 +144,7 @@ def test_explicit_hrmax_enables_hrmod_without_changing_immutable_input() -> None
         explicit_hrmax_bpm=200,
     )
     assert immutable_with == immutable_without
-    assert derived["hrmod_model_version"] == "hrmod_mirror_area_shift_v5"
+    assert derived["hrmod_model_version"] == "hrmod_mirror_area_shift_v6"
 
 
 def test_hr_below_z1_does_not_exclude_the_whole_activity() -> None:

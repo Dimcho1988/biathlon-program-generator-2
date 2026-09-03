@@ -15,8 +15,8 @@ import pandas as pd
 from scipy.signal import savgol_filter
 
 
-MODEL_VERSION = "vflat_b65_dynamic_v2"
-CONFIG_VERSION = "vflat_b65_config_v2"
+MODEL_VERSION = "vflat_b65_dynamic_v3"
+CONFIG_VERSION = "vflat_b65_config_v3"
 
 # Authoritative B65 multipliers supplied for the locked model.  Above +5%,
 # these anchors define the approved literature reference curve used by the
@@ -45,7 +45,9 @@ class VFlatB65Config:
     config_version: str = CONFIG_VERSION
 
     altitude_smoothing_m: int = 75
-    speed_smoothing_s: int = 15
+    # Eleven centred 1 Hz samples span approximately ten elapsed seconds and
+    # remain symmetric around the current sample.
+    speed_smoothing_s: int = 11
     output_smoothing_s: int = 21
     segment_s: int = 15
     max_gap_s: int = 10
@@ -93,6 +95,8 @@ class VFlatB65Config:
             raise ValueError("B65 blend weight must be in [0, 1]")
         if self.output_smoothing_s != 21:
             raise ValueError("Vflat B65 output smoothing is locked at 21 s")
+        if self.speed_smoothing_s <= 0 or self.speed_smoothing_s % 2 == 0:
+            raise ValueError("Vflat B65 speed smoothing must be a positive odd window")
         if self.transition_decay_s <= 0.0:
             raise ValueError("Vflat B65 transition decay must be positive")
 

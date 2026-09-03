@@ -26,5 +26,9 @@ export default async function ActivityShadowPage({ params }: { params: Promise<{
   if (view.shadow === null) return <ErrorState message="За тази активност няма generation-pinned experimental резултат." retryAvailable />;
   const activity = view.activity;
   const payload = view.shadow;
-  return <main className="shadow-page"><nav className="detail-top-nav" aria-label="Навигация на experimental анализа"><Link href={`/activities/${activityRef}`}>← Canonical активност</Link>{multiProfileMode() && <Link href="/?settings=edit">Зони и HRmax</Link>}</nav><header className="shadow-hero"><div><p className="eyebrow">Experimental / shadow</p><h1>{activity.name || `${activity.sport} · ${activity.local_time}`}</h1><p className="shadow-intro">Vflat B65 и HRmod v4 са диагностични канали. Не променят canonical load, recovery, 7/40, реалните HR зони или тренировъчния план.</p></div><span className="configuration-badge">Не влияе на основния модел</span></header><ShadowActivityPanel payload={payload} activityRef={activityRef} profileHrRange={profileHrRange} /></main>;
+  const hrmodMatch = typeof payload.hrmod_model_version === "string"
+    ? payload.hrmod_model_version.match(/_v(\d+)$/)
+    : null;
+  const hrmodLabel = hrmodMatch ? `HRmod v${hrmodMatch[1]}` : "HRmod";
+  return <main className="shadow-page"><nav className="detail-top-nav" aria-label="Навигация на experimental анализа"><Link href={`/activities/${activityRef}`}>← Canonical активност</Link>{multiProfileMode() && <Link href="/?settings=edit">Зони и HRmax</Link>}</nav><header className="shadow-hero"><div><p className="eyebrow">Experimental / shadow</p><h1>{activity.name || `${activity.sport} · ${activity.local_time}`}</h1><p className="shadow-intro">Vflat B65 и {hrmodLabel} са диагностични канали. Не променят canonical load, recovery, 7/40, реалните HR зони или тренировъчния план.</p></div><span className="configuration-badge">Не влияе на основния модел</span></header><ShadowActivityPanel payload={payload} activityRef={activityRef} profileHrRange={profileHrRange} /></main>;
 }
