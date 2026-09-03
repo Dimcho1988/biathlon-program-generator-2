@@ -1061,6 +1061,7 @@ class SupabasePilotRepository(SnapshotRepository):
                 "p_result_payload": dict(derived_payload),
             },
             headers={"Prefer": "return=minimal"},
+            timeout=httpx.Timeout(60.0, connect=5.0),
         )
         return run_key
 

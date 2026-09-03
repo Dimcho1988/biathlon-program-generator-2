@@ -45,15 +45,16 @@ class SupabaseHTTPHarness:
             if request.content
             else None
         )
-        self.requests.append(
-            {
-                "method": request.method,
-                "path": request.url.path,
-                "query": request.url.query.decode("ascii"),
-                "json": body,
-                "prefer": request.headers.get("Prefer"),
-            }
-        )
+        captured_request = {
+            "method": request.method,
+            "path": request.url.path,
+            "query": request.url.query.decode("ascii"),
+            "json": body,
+            "prefer": request.headers.get("Prefer"),
+        }
+        if request.url.path == rpc_path("publish_onflows_activity_shadow"):
+            captured_request["timeout"] = request.extensions.get("timeout")
+        self.requests.append(captured_request)
         queued = self._responses.get(request.url.path)
         if not queued:
             raise AssertionError(
@@ -76,6 +77,44 @@ def repository(harness: SupabaseHTTPHarness) -> SupabasePilotRepository:
 
 def rpc_path(name: str) -> str:
     return f"/rest/v1/rpc/{name}"
+
+
+def test_shadow_publish_allows_large_atomic_payload_to_finish() -> None:
+    harness = SupabaseHTTPHarness()
+    harness.respond(rpc_path("publish_onflows_activity_shadow"), None)
+    repo = repository(harness)
+
+    run_key = repo.publish_activity_shadow(
+        athlete_alias=ALIAS,
+        activity_ref=ACTIVITY_REF,
+        input_payload={
+            "schema_version": "activity-model-input-v1",
+            "input_hash": "a" * 64,
+            "samples": [{"hr_raw_bpm": 140.0}],
+        },
+        derived_payload={
+            "schema_version": "activity-shadow-derived-v1",
+            "result_hash": "b" * 64,
+            "vflat_model_version": "vflat_b65_dynamic_v3",
+            "vflat_config_version": "vflat_b65_config_v3",
+            "hrmod_model_version": "hrmod_mirror_area_shift_v6",
+            "hrmod_config_version": "hrmod_config_v6",
+            "terrain_model_version": "terrain_segments_v1",
+        },
+    )
+
+    assert len(run_key) == 64
+    assert len(harness.requests) == 1
+    captured = harness.requests[0]
+    assert captured["method"] == "POST"
+    assert captured["path"] == rpc_path("publish_onflows_activity_shadow")
+    assert captured["prefer"] == "return=minimal"
+    assert captured["timeout"] == {
+        "connect": 5.0,
+        "read": 60.0,
+        "write": 60.0,
+        "pool": 60.0,
+    }
 
 
 def pointer_row() -> dict[str, Any]:
