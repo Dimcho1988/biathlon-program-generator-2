@@ -78,7 +78,7 @@ def test_production_adapter_preserves_streamlit_v4_candidate_and_raw_hr() -> Non
     )
     assert result["model_version"] == "hrmod_mirror_area_shift_v6"
     assert result["config_version"] == "hrmod_config_v6"
-    assert result["source_commit"] == "2314ff10d65d1287f15930f9e0b8b63cfc6afffa"
+    assert result["source_commit"] == "35df9b2a8a38779039c4dcf65bcdf117f24966ae"
     assert result["affects_canonical_load"] is False
 
 
