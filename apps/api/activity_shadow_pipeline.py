@@ -256,7 +256,9 @@ def _profile(
         raise ValueError("HR zones must lie at or below explicit HRmax")
     return AthleteHRProfile(
         hrmax_bpm=float(hrmax_bpm),
-        hr_floor_bpm=bounds[0],
+        # This is a technical plausibility limit, not the lower edge of Z1.
+        # Valid recovery HR below Z1 must not exclude the whole activity.
+        hr_floor_bpm=30.0,
         zones=tuple(
             HRZone(f"Z{index + 1}", bounds[index], bounds[index + 1])
             for index in range(5)

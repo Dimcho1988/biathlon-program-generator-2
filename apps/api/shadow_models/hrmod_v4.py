@@ -1,4 +1,4 @@
-"""Production adapter for the numerically unchanged HRmod v4 candidate.
+"""Production adapter for the versioned HR-only HRmod candidate.
 
 Everything added here is observational.  Diagnostics are calculated after the
 HR-only candidate and post-core terrain result already exist.
@@ -30,7 +30,7 @@ from hrmod_lab.terrain_gate import (
 
 
 EXTREME_DELTA_THRESHOLD_BPM = 20.0
-SOURCE_COMMIT = "40b7d17a61c0bce0c3ffcf7b9381a6fe5645373f"
+SOURCE_COMMIT = "2314ff10d65d1287f15930f9e0b8b63cfc6afffa"
 
 
 def _finite(value: float | None) -> float | None:

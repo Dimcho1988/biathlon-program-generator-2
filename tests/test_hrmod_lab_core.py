@@ -92,7 +92,7 @@ def _corrected_waves(result):
     return [wave for wave in result.wave_summary if wave.corrected]
 
 
-def test_v4_core_signature_schema_and_model_are_strictly_hr_only() -> None:
+def test_v5_core_signature_schema_and_model_are_strictly_hr_only() -> None:
     parameters = inspect.signature(compute_hrmod_hr_only).parameters
     assert tuple(parameters) == ("hr_samples", "athlete_profile", "config")
     forbidden_inputs = {
@@ -107,8 +107,8 @@ def test_v4_core_signature_schema_and_model_are_strictly_hr_only() -> None:
         "sport",
     }
     assert forbidden_inputs.isdisjoint(HRSample.__dataclass_fields__)
-    assert MODEL_VERSION == "hrmod_mirror_area_shift_v4"
-    assert CONFIG_VERSION == "hrmod_config_v4"
+    assert MODEL_VERSION == "hrmod_mirror_area_shift_v5"
+    assert CONFIG_VERSION == "hrmod_config_v5"
     with pytest.raises(TypeError):
         compute_hrmod_hr_only(  # type: ignore[call-arg]
             hr_samples=_samples([100.0] * 20),
@@ -117,13 +117,13 @@ def test_v4_core_signature_schema_and_model_are_strictly_hr_only() -> None:
         )
 
 
-def test_v4_config_defaults_and_no_retired_model_fields() -> None:
+def test_v5_config_defaults_and_no_retired_model_fields() -> None:
     config = HRmodConfig()
     assert config.alpha == 1.0
     assert config.rise_threshold_bpm_s == 0.15
     assert config.min_rise_bpm == 5.0
     assert config.smoothing_window_s == 5.0
-    assert config.mirror_min_peak_fraction_hrmax == 0.80
+    assert config.mirror_min_peak_fraction_hrmax == 0.75
     assert config.mirror_max_wave_duration_s == 180.0
     names = {item.name for item in fields(HRmodConfig)}
     forbidden = {
@@ -182,9 +182,9 @@ def test_v4_mirror_maps_early_donor_near_peak_and_late_tail_near_start() -> None
     assert sum(allocation.added) == pytest.approx(sum(allocation.removed))
 
 
-def test_v4_mirror_fails_closed_below_peak_or_above_duration() -> None:
+def test_v5_mirror_fails_closed_below_peak_or_above_duration() -> None:
     below = compute_hrmod_hr_only(
-        hr_samples=_samples(_triangle(baseline=120.0, peak=159.0)),
+        hr_samples=_samples(_triangle(baseline=120.0, peak=145.0)),
         athlete_profile=_profile(),
         config=HRmodConfig(),
     )
@@ -701,4 +701,3 @@ def test_clean_hr_outside_explicit_profile_is_not_silently_clipped() -> None:
             athlete_profile=profile,
             config=_config(),
         )
-

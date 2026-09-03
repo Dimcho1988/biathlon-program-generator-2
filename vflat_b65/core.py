@@ -15,8 +15,8 @@ import pandas as pd
 from scipy.signal import savgol_filter
 
 
-MODEL_VERSION = "vflat_b65_dynamic_v1"
-CONFIG_VERSION = "vflat_b65_config_v1"
+MODEL_VERSION = "vflat_b65_dynamic_v2"
+CONFIG_VERSION = "vflat_b65_config_v2"
 
 # Authoritative B65 multipliers supplied for the locked model.  Above +5%,
 # these anchors define the approved literature reference curve used by the
@@ -74,6 +74,7 @@ class VFlatB65Config:
     transition_reference_s: int = 61
     transition_anchor_strength: float = 0.90
     transition_accel_scale_mps2: float = 0.10
+    transition_decay_s: float = 18.0
 
     min_speed_kmh: float = 5.0
     turn_threshold_deg: float = 55.0
@@ -92,6 +93,8 @@ class VFlatB65Config:
             raise ValueError("B65 blend weight must be in [0, 1]")
         if self.output_smoothing_s != 21:
             raise ValueError("Vflat B65 output smoothing is locked at 21 s")
+        if self.transition_decay_s <= 0.0:
+            raise ValueError("Vflat B65 transition decay must be positive")
 
     def to_dict(self) -> dict[str, float | int | str]:
         return asdict(self)
@@ -253,6 +256,65 @@ def _memory_by_block(grade: pd.Series, blocks: pd.Series, **kwargs: float | str)
     return state, post
 
 
+def _descent_transition_anchor_weight(
+    grade: np.ndarray,
+    accel: np.ndarray,
+    *,
+    threshold_pct: float,
+    accel_scale_mps2: float,
+    decay_s: float,
+) -> np.ndarray:
+    """Gate the local-speed anchor to gravity-assisted descent entries.
+
+    A transition starts only when grade crosses from the threshold or above to
+    below it while speed is increasing.  Its initial strength follows the
+    measured positive acceleration and then falls linearly to zero.  The short
+    tail deliberately survives the end of the descent to account for inertia.
+    """
+    weight = np.zeros(len(grade), dtype=float)
+    remaining_weight = 0.0
+    step = 1.0 / max(float(decay_s), 1.0)
+    for index in range(len(grade)):
+        if index > 0 and (
+            np.isfinite(grade[index - 1])
+            and np.isfinite(grade[index])
+            and grade[index - 1] >= threshold_pct
+            and grade[index] < threshold_pct
+            and np.isfinite(accel[index])
+            and accel[index] > 0.0
+        ):
+            remaining_weight = float(
+                np.clip(accel[index] / max(accel_scale_mps2, 1e-9), 0.0, 1.0)
+            )
+        weight[index] = remaining_weight
+        remaining_weight = max(0.0, remaining_weight - step)
+    return weight
+
+
+def _descent_transition_anchor_weight_by_block(
+    grade: pd.Series,
+    accel: np.ndarray,
+    blocks: pd.Series,
+    *,
+    threshold_pct: float,
+    accel_scale_mps2: float,
+    decay_s: float,
+) -> np.ndarray:
+    weight = np.zeros(len(grade), dtype=float)
+    positions = pd.Series(np.arange(len(grade)), index=grade.index)
+    accel_series = pd.Series(accel, index=grade.index)
+    for _, index in blocks.groupby(blocks).groups.items():
+        target = positions.loc[index].to_numpy(dtype=int)
+        weight[target] = _descent_transition_anchor_weight(
+            grade.loc[index].to_numpy(dtype=float),
+            accel_series.loc[index].to_numpy(dtype=float),
+            threshold_pct=threshold_pct,
+            accel_scale_mps2=accel_scale_mps2,
+            decay_s=decay_s,
+        )
+    return weight
+
+
 def apply_vflat_b65(
     timeseries: pd.DataFrame,
     config: VFlatB65Config | None = None,
@@ -299,15 +361,14 @@ def apply_vflat_b65(
     local_reference = _rolling_median(
         pd.Series(dynamic_raw, index=out.index), out.block, selected.transition_reference_s
     )
-    transition_weight = np.maximum.reduce([
-        post_descent,
-        post_climb,
-        np.clip(
-            np.abs(accel) / selected.transition_accel_scale_mps2,
-            0.0,
-            1.0,
-        ),
-    ])
+    transition_weight = _descent_transition_anchor_weight_by_block(
+        out.grade_pct,
+        accel,
+        out.block,
+        threshold_pct=selected.descent_threshold_pct,
+        accel_scale_mps2=selected.transition_accel_scale_mps2,
+        decay_s=selected.transition_decay_s,
+    )
     anchored = dynamic_raw + selected.transition_anchor_strength * transition_weight * (
         local_reference.to_numpy(dtype=float) - dynamic_raw
     )
