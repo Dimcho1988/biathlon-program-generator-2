@@ -3,9 +3,15 @@
 import { FormEvent, useState } from "react";
 
 const REQUEST_TIMEOUT_MS = 15_000;
+type MagicLinkState = "idle" | "sending" | "sent" | "rate-limited" | "error";
+
+export function magicLinkResponseState(response: Pick<Response, "ok" | "status">): MagicLinkState {
+  if (response.ok) return "sent";
+  return response.status === 429 ? "rate-limited" : "error";
+}
 
 export function MagicLinkForm({ callbackError = false }: { callbackError?: boolean }) {
-  const [state, setState] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const [state, setState] = useState<MagicLinkState>("idle");
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -20,7 +26,7 @@ export function MagicLinkForm({ callbackError = false }: { callbackError?: boole
         body: JSON.stringify({ email }),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
-      setState(response.ok ? "sent" : "error");
+      setState(magicLinkResponseState(response));
     } catch {
       setState("error");
     }
@@ -32,6 +38,7 @@ export function MagicLinkForm({ callbackError = false }: { callbackError?: boole
       {state === "sending" ? "Изпращане…" : state === "sent" ? "Линкът е изпратен" : "Изпрати защитен линк"}
     </button>
     {state === "sent" && <p className="form-success" role="status">Провери email-а си и отвори линка от същото устройство.</p>}
+    {state === "rate-limited" && <p className="form-error" role="alert">Достигнат е временният лимит за email съобщения. Изчакай до един час и опитай отново.</p>}
     {state === "error" && <p className="form-error" role="alert">Линкът не беше изпратен. Провери връзката и опитай отново.</p>}
     {state === "idle" && callbackError && <p className="form-error" role="alert">Линкът е невалиден или е изтекъл. Изпрати си нов линк.</p>}
   </form>;
