@@ -1,3 +1,4 @@
+# Production services follow the dedicated production branch and deploy only after explicit approval.
 envVarGroups:
   - name: onflows-preview-shared
     envVars:
@@ -9,9 +10,9 @@ services:
     name: onflows-api-preview
     plan: free
     region: frankfurt
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: "off"
     runtime: python
-    branch: codex/build-end-to-end-cloud-integration
+    branch: production
     buildFilter:
       paths:
         - apps/api/**
@@ -61,9 +62,9 @@ services:
     name: onflows-sync-worker-preview
     plan: starter
     region: frankfurt
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: "off"
     runtime: python
-    branch: codex/build-end-to-end-cloud-integration
+    branch: production
     numInstances: 1
     maxShutdownDelaySeconds: 300
     buildFilter:
@@ -93,9 +94,9 @@ services:
     name: onflows-web-preview
     plan: free
     region: frankfurt
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: "off"
     runtime: node
-    branch: codex/build-end-to-end-cloud-integration
+    branch: production
     rootDir: apps/web
     buildCommand: npm ci && npm run build
     startCommand: npm start
