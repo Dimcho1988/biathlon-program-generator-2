@@ -30,7 +30,7 @@ from hrmod_lab.terrain_gate import (
 
 
 EXTREME_DELTA_THRESHOLD_BPM = 30.0
-SOURCE_COMMIT = "35df9b2a8a38779039c4dcf65bcdf117f24966ae"
+SOURCE_COMMIT = "63ef533975f05817db8c0dbbd7a30611124a2afe"
 
 
 def _finite(value: float | None) -> float | None:
