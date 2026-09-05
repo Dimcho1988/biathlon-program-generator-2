@@ -13,8 +13,8 @@ from math import isfinite
 from typing import Any, Mapping
 
 
-MODEL_VERSION = "hrmod_mirror_area_shift_v6"
-CONFIG_VERSION = "hrmod_config_v6"
+MODEL_VERSION = "hrmod_mirror_area_shift_v7"
+CONFIG_VERSION = "hrmod_config_v7"
 
 
 def _finite(name: str, value: float) -> float:
@@ -163,13 +163,13 @@ class HRmodConfig:
     edge_wave_policy: str = "skip_incomplete"
     # Physiological guardrails take precedence over moving the full donor area.
     # The allocator also applies the athlete HRmax/HR floor, so the effective
-    # bounds are min(clean + 20, HRmax) and max(clean - 20, HR floor).
-    max_addition_bpm: float | None = 20.0
-    max_removal_bpm: float | None = 20.0
+    # bounds are min(clean + 30, HRmax) and max(clean - 30, HR floor).
+    max_addition_bpm: float | None = 30.0
+    max_removal_bpm: float | None = 30.0
 
     # Mirror model eligibility.  These are HR-only morphology controls;
     # terrain remains a separate post-core phase.
-    mirror_min_peak_fraction_hrmax: float = 0.75
+    mirror_min_peak_fraction_hrmax: float = 0.78
     mirror_max_wave_duration_s: float = 180.0
 
     # Robust detection and transparent cleaning details.

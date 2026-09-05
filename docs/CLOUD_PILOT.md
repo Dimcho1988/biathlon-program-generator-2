@@ -113,13 +113,16 @@ Start with exactly one worker instance; the process-wide Intervals pacer is
 deliberately the provider-budget guard until a global limiter and incremental
 sync are added.
 
-Each refresh also computes the experimental Vflat B65 and HRmod v4 channels
-once during ingest and publishes a separate versioned derived run. The stored
-results are read through `GET /api/v2/real/activity-shadows` and
+Each refresh also computes the experimental Vflat B65 and HRmod channels once
+during ingest and publishes a separate versioned derived run. Vflat speed and
+the lightweight SPRINT/STR detector are versioned independently, so sprint
+diagnostics can evolve without silently changing the Vflat numeric series. The
+stored results are read through `GET /api/v2/real/activity-shadows` and
 `GET /api/v2/real/activity-shadow?activity_ref=...`; opening the `/shadow`
 page never recomputes either model. HRmod candidate remains HR-only, terrain is
-a separate post-core layer, and Vflat is only a parallel reference channel.
-Neither model changes canonical training load, recovery or real HR zones.
+a separate post-core layer, and Vflat/SPRINT-STR are only parallel reference
+channels. They do not double-count HR-zone time. None of these shadow channels
+changes canonical training load, recovery or real HR zones.
 
 The same atomic snapshot can include `recovery-history-v1`, exposed through
 `GET /api/v2/real/recovery-history`. It contains the canonical precomputed

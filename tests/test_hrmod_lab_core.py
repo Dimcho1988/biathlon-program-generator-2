@@ -107,10 +107,10 @@ def test_v5_core_signature_schema_and_model_are_strictly_hr_only() -> None:
         "sport",
     }
     assert forbidden_inputs.isdisjoint(HRSample.__dataclass_fields__)
-    assert MODEL_VERSION == "hrmod_mirror_area_shift_v6"
-    assert CONFIG_VERSION == "hrmod_config_v6"
-    assert HRmodConfig().max_addition_bpm == 20.0
-    assert HRmodConfig().max_removal_bpm == 20.0
+    assert MODEL_VERSION == "hrmod_mirror_area_shift_v7"
+    assert CONFIG_VERSION == "hrmod_config_v7"
+    assert HRmodConfig().max_addition_bpm == 30.0
+    assert HRmodConfig().max_removal_bpm == 30.0
     with pytest.raises(TypeError):
         compute_hrmod_hr_only(  # type: ignore[call-arg]
             hr_samples=_samples([100.0] * 20),
@@ -125,7 +125,7 @@ def test_v5_config_defaults_and_no_retired_model_fields() -> None:
     assert config.rise_threshold_bpm_s == 0.15
     assert config.min_rise_bpm == 5.0
     assert config.smoothing_window_s == 5.0
-    assert config.mirror_min_peak_fraction_hrmax == 0.75
+    assert config.mirror_min_peak_fraction_hrmax == 0.78
     assert config.mirror_max_wave_duration_s == 180.0
     names = {item.name for item in fields(HRmodConfig)}
     forbidden = {

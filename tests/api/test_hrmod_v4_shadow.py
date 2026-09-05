@@ -76,8 +76,8 @@ def test_production_adapter_preserves_streamlit_v4_candidate_and_raw_hr() -> Non
     assert [row["hr_raw_bpm"] for row in result["timeseries"]] == pytest.approx(
         [sample.heart_rate_bpm for sample in samples]
     )
-    assert result["model_version"] == "hrmod_mirror_area_shift_v6"
-    assert result["config_version"] == "hrmod_config_v6"
+    assert result["model_version"] == "hrmod_mirror_area_shift_v7"
+    assert result["config_version"] == "hrmod_config_v7"
     assert result["source_commit"] == "35df9b2a8a38779039c4dcf65bcdf117f24966ae"
     assert result["affects_canonical_load"] is False
 
@@ -204,9 +204,9 @@ def test_default_production_guardrails_prevent_extreme_delta() -> None:
     flagged = [
         row for row in result["timeseries"]
         if row["hrmod_delta_bpm"] is not None
-        and abs(row["hrmod_delta_bpm"]) > 20.0 + 1e-9
+        and abs(row["hrmod_delta_bpm"]) > 30.0 + 1e-9
     ]
     assert flagged == []
-    assert result["diagnostics"]["max_added_bpm"] <= 20.0 + 1e-9
-    assert result["diagnostics"]["max_removed_bpm"] <= 20.0 + 1e-9
+    assert result["diagnostics"]["max_added_bpm"] <= 30.0 + 1e-9
+    assert result["diagnostics"]["max_removed_bpm"] <= 30.0 + 1e-9
     assert result["diagnostics"]["extreme_delta_sample_count"] == 0

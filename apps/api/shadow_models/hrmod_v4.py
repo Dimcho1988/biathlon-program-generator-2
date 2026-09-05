@@ -29,7 +29,7 @@ from hrmod_lab.terrain_gate import (
 )
 
 
-EXTREME_DELTA_THRESHOLD_BPM = 20.0
+EXTREME_DELTA_THRESHOLD_BPM = 30.0
 SOURCE_COMMIT = "35df9b2a8a38779039c4dcf65bcdf117f24966ae"
 
 

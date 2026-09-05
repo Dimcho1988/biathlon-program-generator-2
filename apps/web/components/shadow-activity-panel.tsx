@@ -122,14 +122,16 @@ function IntervalBands({ rows }: { rows: Row[] }) {
   };
   const receiver = runs("receiver_flag");
   const donor = runs("donor_flag");
+  const sprint = runs("sprint_str_flag");
   return (
     <section className="shadow-chart shadow-intervals">
-      <h3>Receiver и donor интервали</h3>
-      <svg viewBox="0 0 1000 96" role="img" aria-label="Receiver и donor интервали">
-        <text x="4" y="31">Receiver</text><text x="4" y="68">Donor</text>
-        <line x1="105" x2="970" y1="26" y2="26" /><line x1="105" x2="970" y1="63" y2="63" />
+      <h3>Receiver, donor и SPRINT/STR интервали</h3>
+      <svg viewBox="0 0 1000 133" role="img" aria-label="Receiver, donor и SPRINT/STR интервали">
+        <text x="4" y="31">Receiver</text><text x="4" y="68">Donor</text><text x="4" y="105">SPRINT/STR</text>
+        <line x1="105" x2="970" y1="26" y2="26" /><line x1="105" x2="970" y1="63" y2="63" /><line x1="105" x2="970" y1="100" y2="100" />
         {receiver.map(([start, end], index) => <rect key={`r-${index}`} x={105 + start / maxElapsed * 865} y="15" width={Math.max((end - start) / maxElapsed * 865, 2)} height="22" rx="3" fill="#16a34a" />)}
         {donor.map(([start, end], index) => <rect key={`d-${index}`} x={105 + start / maxElapsed * 865} y="52" width={Math.max((end - start) / maxElapsed * 865, 2)} height="22" rx="3" fill="#dc2626" />)}
+        {sprint.map(([start, end], index) => <rect key={`s-${index}`} x={105 + start / maxElapsed * 865} y="89" width={Math.max((end - start) / maxElapsed * 865, 2)} height="22" rx="3" fill="#2563eb" />)}
       </svg>
     </section>
   );
@@ -142,6 +144,8 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
   const waves = Array.isArray(payload.hrmod_waves) ? payload.hrmod_waves as Row[] : [];
   const zones = Array.isArray(payload.zone_summary) ? payload.zone_summary as Row[] : [];
   const segments = Array.isArray(payload.segments_15s) ? payload.segments_15s as Row[] : [];
+  const sprintIntervals = Array.isArray(payload.sprint_str_intervals) ? payload.sprint_str_intervals as Row[] : [];
+  const sprintSummary = (payload.sprint_str_summary && typeof payload.sprint_str_summary === "object") ? payload.sprint_str_summary as Row : {};
   const diagnostics = (payload.diagnostics && typeof payload.diagnostics === "object") ? payload.diagnostics as Row : {};
   const hrDiagnostics = (diagnostics.hrmod && typeof diagnostics.hrmod === "object") ? diagnostics.hrmod as Row : {};
   const hrDiagnosticFlags = Array.isArray(hrDiagnostics.flags) ? hrDiagnostics.flags.map(String) : [];
@@ -195,6 +199,7 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
         <article><span>Среден пулс</span><strong>{fixed(cleanHr)} → {hrmodEnabled ? fixed(finalHr) : "off"} bpm</strong><small>Δ {hrmodEnabled && cleanHr !== null && finalHr !== null ? signed(finalHr - cleanHr) : "—"}</small></article>
         <article><span>Преразпределено по зони</span><strong>{duration(redistributedZoneSeconds)}</strong><small>½ Σ |HRmod final − Clean|</small></article>
         <article><span>HR вълни</span><strong>{text(hrDiagnostics.corrected_wave_count ?? 0)} коригирани</strong><small>{waves.length} открити общо</small></article>
+        <article><span>SPRINT/STR</span><strong>{text(sprintSummary.candidate_count ?? 0)} импулса</strong><small>{duration(sprintSummary.candidate_active_seconds)} активно ядро · без двоен HR товар</small></article>
         <article><span>Диагностични сигнали</span><strong>{allFlags.length} flags</strong><small>{allExclusions.length} exclusions</small></article>
       </section>
 
@@ -231,8 +236,15 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
         </table></div>}
       </section>
 
+      <details className="shadow-details" open>
+        <summary><span><small>Vflat · отделен диагностичен стимул</small>SPRINT/STR импулси ({sprintIntervals.length})</span><span className="chevron" aria-hidden="true">⌄</span></summary>
+        {sprintIntervals.length === 0 ? <p className="detail-empty">Няма открити кратки скоростни импулси. Този канал не променя HR зоните или canonical load.</p> : <div className="shadow-table-wrap shadow-scroll-table"><table><thead><tr><th>ID</th><th>Интервал</th><th>Ядро</th><th>Raw peak</th><th>Vflat peak</th><th>Скок</th><th>Среден наклон</th></tr></thead>
+          <tbody>{sprintIntervals.map((sprint) => <tr key={text(sprint.sprint_id)}><th>{text(sprint.sprint_id)}</th><td>{duration(sprint.start_elapsed_s)}–{duration(sprint.end_elapsed_s)}</td><td>{duration(sprint.duration_s)}</td><td>{fixed(sprint.peak_raw_speed_kmh)} km/h</td><td>{fixed(sprint.peak_vflat_b65_kmh)} km/h</td><td>{signed(sprint.max_speed_rise_kmh)} km/h</td><td>{fixed(sprint.mean_grade_pct)}%</td></tr>)}</tbody>
+        </table></div>}
+      </details>
+
       <details className="shadow-details">
-        <summary><span><small>Възпроизводимо сравнение</small>15-секундни сегменти ({segments.length})</span><span className="chevron" aria-hidden="true">⌄</span></summary>
+        <summary><span><small>Възпроизводимо сравнение · и двете скорости са средни</small>15-секундни сегменти ({segments.length})</span><span className="chevron" aria-hidden="true">⌄</span></summary>
         <div className="shadow-table-wrap shadow-scroll-table"><table><thead><tr><th>Сегмент</th><th>Raw km/h</th><th>Vflat km/h</th><th>Δ speed</th><th>Raw HR</th><th>HRmod HR</th><th>Δ HR</th><th>Наклон</th></tr></thead>
           <tbody>{segments.map((segment) => <tr key={text(segment.segment_index)}><td>{duration(segment.start_elapsed_s)}–{duration(segment.end_elapsed_s)}</td><td>{fixed(segment.speed_raw_kmh)}</td><td>{vflatEnabled ? fixed(segment.vflat_b65_kmh) : "off"}</td><td>{vflatEnabled ? signed(difference(segment.vflat_b65_kmh, segment.speed_raw_kmh)) : "off"}</td><td>{fixed(segment.hr_raw_bpm)}</td><td>{hrmodEnabled ? fixed(segment.hrmod_final_bpm) : "off"}</td><td>{hrmodEnabled ? signed(difference(segment.hrmod_final_bpm, segment.hr_raw_bpm)) : "off"}</td><td>{number(segment.grade_smoothed_pct) === null ? "—" : `${fixed(segment.grade_smoothed_pct)}%`}</td></tr>)}</tbody>
         </table></div>
@@ -262,6 +274,7 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
             ["skipped waves", hrDiagnostics.skipped_wave_count], ["incomplete waves", hrDiagnostics.incomplete_wave_count],
           ].map(([label, value]) => <div key={String(label)}><dt>{text(label)}</dt><dd>{text(value)}</dd></div>)}</dl>
           <p><strong>Vflat:</strong> {text(payload.vflat_model_version)} / {text(payload.vflat_config_version)}</p>
+          <p><strong>SPRINT/STR:</strong> {text(payload.sprint_str_model_version)} / {text(payload.sprint_str_config_version)}</p>
           <p><strong>HRmod:</strong> {text(payload.hrmod_model_version)} / {text(payload.hrmod_config_version)}</p>
           <p><strong>Terrain:</strong> {text(payload.terrain_model_version)}</p>
           <div className="shadow-chip-list">{allFlags.length ? allFlags.map((flag) => <span key={flag}>{flag}</span>) : <span>Няма flags</span>}</div>

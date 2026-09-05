@@ -26,14 +26,16 @@ from intervals_inspector.stream_normalizer import IntervalAwareResult, materiali
 from vflat_b65 import (
     CONFIG_VERSION as VFLAT_CONFIG_VERSION,
     MODEL_VERSION as VFLAT_MODEL_VERSION,
+    SPRINT_STR_CONFIG_VERSION,
+    SPRINT_STR_MODEL_VERSION,
     VFlatB65Config,
     derive_grade_from_altitude_distance,
 )
 
 
 INPUT_SCHEMA_VERSION = "activity-model-input-v1"
-DERIVED_SCHEMA_VERSION = "activity-shadow-derived-v2"
-SHADOW_CONFIGURATION_SCHEMA_VERSION = "activity-shadow-configuration-v2"
+DERIVED_SCHEMA_VERSION = "activity-shadow-derived-v3"
+SHADOW_CONFIGURATION_SCHEMA_VERSION = "activity-shadow-configuration-v3"
 
 _HR_NAMES = ("heartrate", "fixed_heartrate", "heart_rate", "hr")
 _SPEED_NAMES = ("velocity_smooth", "fixed_velocity_smooth", "speed", "velocity")
@@ -102,6 +104,8 @@ def activity_shadow_configuration_fingerprint(
         "explicit_hrmax_bpm": explicit_hrmax_bpm,
         "vflat_model_version": VFLAT_MODEL_VERSION,
         "vflat_config_version": VFLAT_CONFIG_VERSION,
+        "sprint_str_model_version": SPRINT_STR_MODEL_VERSION,
+        "sprint_str_config_version": SPRINT_STR_CONFIG_VERSION,
         "hrmod_model_version": HRMOD_MODEL_VERSION,
         "hrmod_config_version": HRMOD_CONFIG_VERSION,
         "hrmod_source_commit": SOURCE_COMMIT,
@@ -296,6 +300,9 @@ def _segments_15s(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "added_bpm": mean("added_bpm"),
                 "removed_bpm": mean("removed_bpm"),
                 "grade_smoothed_pct": mean("grade_smoothed_pct"),
+                "sprint_str_seconds": sum(
+                    1.0 for row in values if row.get("sprint_str_flag") is True
+                ),
             }
         )
     return result
@@ -375,6 +382,13 @@ def compute_activity_shadow(
                 ),
                 "vflat_b65_kmh": _plain_number(vf_row.get("vflat_b65_kmh")),
                 "vflat_delta_kmh": _plain_number(vf_row.get("vflat_delta_kmh")),
+                "sprint_str_flag": vf_row.get("sprint_str_flag", False),
+                "sprint_str_reference_kmh": _plain_number(
+                    vf_row.get("sprint_str_reference_kmh")
+                ),
+                "sprint_str_rise_kmh": _plain_number(
+                    vf_row.get("sprint_str_rise_kmh")
+                ),
                 "hr_raw_bpm": _plain_number(
                     hr_row.get("hr_raw_bpm", sample.heart_rate_bpm)
                 ),
@@ -413,17 +427,24 @@ def compute_activity_shadow(
         "configuration_fingerprint": configuration_fingerprint,
         "vflat_model_version": VFLAT_MODEL_VERSION,
         "vflat_config_version": VFLAT_CONFIG_VERSION,
+        "sprint_str_model_version": vflat.get("sprint_str_model_version"),
+        "sprint_str_config_version": vflat.get("sprint_str_config_version"),
         "hrmod_model_version": hrmod.get("model_version"),
         "hrmod_config_version": hrmod.get("config_version"),
         "hrmod_source_commit": hrmod.get("source_commit"),
         "terrain_model_version": hrmod.get("terrain_model_version"),
         "timeseries": rows,
         "segments_15s": _segments_15s(rows),
+        "sprint_str_summary": vflat.get("sprint_str_summary", {}),
+        "sprint_str_intervals": vflat.get("sprint_str_intervals", []),
         "hrmod_waves": hrmod.get("waves", []),
         "zone_summary": hrmod.get("zones", []),
         "diagnostics": {
             "hrmod": hrmod.get("diagnostics", {}),
-            "vflat": {"status": vflat.get("status")},
+            "vflat": {
+                "status": vflat.get("status"),
+                "sprint_str": vflat.get("sprint_str_summary", {}),
+            },
         },
         "hashes": {
             "hr_input_hash": hrmod.get("hr_input_hash"),

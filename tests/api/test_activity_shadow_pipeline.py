@@ -65,12 +65,16 @@ def test_shadow_results_have_parallel_fields_and_missing_hrmax_fails_closed() ->
         "speed_raw_kmh", "vflat_b65_kmh", "vflat_delta_kmh", "hr_raw_bpm",
         "hr_clean_bpm", "hrmod_candidate_bpm", "hrmod_final_bpm",
         "hrmod_delta_bpm", "grade_raw_pct", "grade_smoothed_pct",
+        "sprint_str_flag", "sprint_str_reference_kmh", "sprint_str_rise_kmh",
         "vflat_model_version", "hrmod_model_version", "terrain_model_version",
         "quality_flags", "exclusion_reason",
     }
     assert required <= set(derived["timeseries"][0])
     assert derived["timeseries"][0]["exclusion_reason"] == "EXPLICIT_HRMAX_MISSING"
     assert len(derived["segments_15s"]) >= 6
+    assert derived["sprint_str_model_version"] == "vflat_sprint_str_v1"
+    assert derived["sprint_str_summary"]["affects_canonical_load"] is False
+    assert derived["sprint_str_summary"]["double_counts_hr_zones"] is False
 
 
 def test_hr_only_shadow_normalizes_unavailable_vflat_numbers_to_null() -> None:
@@ -144,7 +148,7 @@ def test_explicit_hrmax_enables_hrmod_without_changing_immutable_input() -> None
         explicit_hrmax_bpm=200,
     )
     assert immutable_with == immutable_without
-    assert derived["hrmod_model_version"] == "hrmod_mirror_area_shift_v6"
+    assert derived["hrmod_model_version"] == "hrmod_mirror_area_shift_v7"
 
 
 def test_hr_below_z1_does_not_exclude_the_whole_activity() -> None:
@@ -170,7 +174,7 @@ def test_hr_below_z1_does_not_exclude_the_whole_activity() -> None:
     ]
     assert any(row["hr_clean_bpm"] == 75.0 for row in derived["timeseries"])
     assert any(row["hr_clean_bpm"] is not None for row in derived["timeseries"])
-    assert derived["schema_version"] == "activity-shadow-derived-v2"
+    assert derived["schema_version"] == "activity-shadow-derived-v3"
     assert len(derived["zone_summary"]) == 5
     assert {
         "raw_seconds",

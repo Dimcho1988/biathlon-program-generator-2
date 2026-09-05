@@ -8,7 +8,7 @@ import pandas as pd
 
 from hrmod_lab.hrmod_core import compute_hrmod_hr_only
 from hrmod_lab.schemas import AthleteHRProfile, HRmodConfig, HRSample, HRZone
-from vflat_b65 import apply_vflat_b65
+from vflat_b65 import apply_vflat_b65, detect_sprint_str
 
 
 def test_hrmod_v4_and_vflat_b65_process_at_least_10000_samples() -> None:
@@ -44,7 +44,13 @@ def test_hrmod_v4_and_vflat_b65_process_at_least_10000_samples() -> None:
         config=HRmodConfig(),
     )
     vflat = apply_vflat_b65(frame)
+    sprint_str = detect_sprint_str(
+        vflat.assign(
+            timestamp=[start + timedelta(seconds=index) for index in range(count)]
+        )
+    )
     elapsed = perf_counter() - started
     assert len(hrmod.timeseries) == count
     assert len(vflat) == count
+    assert len(sprint_str.sample_mask) == count
     assert elapsed < 15.0
