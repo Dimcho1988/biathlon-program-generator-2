@@ -4,6 +4,7 @@
 # `render.staging.yaml`.  The API and web service are isolated from production.
 # All services follow the integration branch, with automatic deploys disabled,
 # so each staging candidate remains an explicit controlled rollout.
+# Controlled rollout candidate: HRmod v7 + Vflat SPRINT/STR v1.
 
 envVarGroups:
   - name: onflows-staging-shared
