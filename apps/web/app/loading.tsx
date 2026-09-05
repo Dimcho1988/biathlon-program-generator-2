@@ -4,7 +4,7 @@ export default function Loading() {
       <div className="loader" aria-hidden="true" />
       <p className="eyebrow">onFlows · анализ</p>
       <h1>Зареждане на тренировъчния статус…</h1>
-      <p className="muted">Проверяваме данните и версията на договора.</p>
+      <p className="muted">Проверяваме данните. При събуждане на Free preview това може да отнеме около минута — не е нужно да натискате отново.</p>
     </main>
   );
 }

@@ -1,6 +1,12 @@
 # onFlows web dashboard
 
-Next.js App Router frontend for the existing `training-status-v1` API contract. The frontend validates and presents model output; it does not calculate physiological values.
+Next.js App Router frontend for the `training-status-v1`, `load-history-v1`,
+`completed-work-v1`, `volume-history-v1`, and `recovery-history-v1` API
+contracts. The frontend validates and presents
+precomputed model output; it does not calculate physiological values.
+The real-data load and recovery payloads also expose a separate optional
+`STR` history derived from explicit Intervals strength activity types and
+recorded duration; it is never folded into the Z1–Z5 HR series.
 
 ## Local development
 
@@ -30,7 +36,7 @@ uvicorn apps.api.main:app --reload
 ONFLOWS_API_BASE_URL=http://127.0.0.1:8000 npm run dev
 ```
 
-When fixture mode is not explicitly selected, `ONFLOWS_API_BASE_URL` is required. The server fetches `/api/v1/demo/training-status` with an eight-second timeout. Request, HTTP, JSON, and contract-validation failures render an error and never fall back to the fixture.
+When fixture mode is not explicitly selected, `ONFLOWS_API_BASE_URL` is required. The server allows up to 150 seconds for a sleeping preview API to become healthy, then applies a separate 75-second resource timeout. A wake timeout renders a bounded automatic retry on the same page; request, HTTP, JSON, and contract-validation failures never fall back to the fixture.
 
 ## Environment variables
 
@@ -38,6 +44,13 @@ When fixture mode is not explicitly selected, `ONFLOWS_API_BASE_URL` is required
 | --- | --- | --- |
 | `ONFLOWS_DATA_MODE` | `fixture` | Explicitly use the deterministic local contract fixture. Omit for API mode. |
 | `ONFLOWS_API_BASE_URL` | e.g. `http://127.0.0.1:8000` | FastAPI origin used in API mode. |
+| `ONFLOWS_API_RESOURCE` | `real` | Use the protected persisted real-data snapshot. |
+| `ONFLOWS_SERVICE_TOKEN` | server-only secret | Authenticate Next.js to FastAPI; never expose with `NEXT_PUBLIC_`. |
+
+In real mode the same-origin `/api/integrations/intervals/connect` route starts
+the Intervals OAuth flow without exposing the FastAPI service token. After a
+successful connection, `/api/integrations/intervals/refresh` triggers the
+explicit read-only refresh and returns to the dashboard.
 
 ## Verification
 

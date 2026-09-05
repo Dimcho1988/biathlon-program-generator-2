@@ -11,7 +11,7 @@ from copy import deepcopy
 from typing import Any, Iterable, Mapping
 
 
-REGISTRY_VERSION = "shadow-model-registry-v3-equivalent-time"
+REGISTRY_VERSION = "shadow-model-registry-v4-bounded-tref"
 VISIBLE_ROLES = ("athlete", "coach", "tester", "administrator")
 EDITOR_ROLES = ("tester", "administrator")
 
@@ -128,16 +128,29 @@ PARAMETER_TEMPLATES: dict[str, dict[str, Any]] = {
         allowed_range=(0.0, 1.0),
         editable_roles=EDITOR_ROLES,
     ),
-    "tref_minutes": _definition(
-        "parameter.{zone}.tref_minutes",
-        "Tref",
-        "Фиксиран начален Tref",
-        "Началният експертен капацитет на зоната, независим от H40.",
-        "Tref_z = initial_expert_value_z",
+    "tref_min": _definition(
+        "parameter.{zone}.tref_min",
+        "Tref min",
+        "Долна експертна граница на Tref",
+        "Минималната допустима стойност на индивидуалния 40-дневен Tref.",
+        "Tref_z = clamp(7 × mean(E_z, previous up-to-40 days), min_z, max_z)",
+        "приравнени минут",
+        interpretation="Границата е фиксирана; Tref вътре в диапазона се определя от реалния E на спортиста.",
+        inputs=("предходни до 40 завършени календарни дни с E_z",),
+        dependencies=("Tref", "spillover", "recovery"),
+        limitations=("Фиксиран научен параметър; само за четене.",),
+    ),
+    "tref_max": _definition(
+        "parameter.{zone}.tref_max",
+        "Tref max",
+        "Горна експертна граница на Tref",
+        "Максималната допустима стойност на индивидуалния 40-дневен Tref.",
+        "Tref_z = clamp(7 × mean(E_z, previous up-to-40 days), min_z, max_z)",
         "приравнени минути",
-        interpretation="H40 остава диагностичен и участва в 7/40, но не променя Tref.",
-        dependencies=("spillover", "recovery"),
-        limitations=("Само за четене на този етап.",),
+        interpretation="При липса на история тази горна стойност е детерминираният cold-start Tref.",
+        inputs=("предходни до 40 завършени календарни дни с E_z",),
+        dependencies=("Tref", "spillover", "recovery"),
+        limitations=("Фиксиран научен параметър; само за четене.",),
     ),
     "profile_version": _definition(
         "parameter.{zone}.profile_version",
@@ -164,11 +177,11 @@ PARAMETER_TEMPLATES: dict[str, dict[str, Any]] = {
     "tref_profile_version": _definition(
         "parameter.{zone}.tref_profile_version",
         "Tref version",
-        "Версия на фиксирания Tref профил",
-        "Версията фиксира началните експертни Tref стойности.",
+        "Версия на ограничения 40-дневен Tref профил",
+        "Версията фиксира експертните граници, 40-дневния прозорец и cold-start правилото.",
         "—",
         "версия",
-        interpretation="Позволява възпроизводимост без исторически clamp.",
+        interpretation="Позволява възпроизводимост на историческото изчисление и clamp-а.",
         dependencies=("Tref",),
         limitations=("Само за четене в пилотния интерфейс.",),
     ),
@@ -191,7 +204,7 @@ RESULT_DEFINITIONS: dict[str, dict[str, Any]] = {
         limitations=("Липсващ или неизползваем HR не се допълва.",),
     ),
     "result.direct_ratio": _definition(
-        "result.direct_ratio", "% от Tref", "Директен дял от Tref", "Отношението на приравненото време към фиксирания Tref.",
+        "result.direct_ratio", "% от Tref", "Директен дял от Tref", "Отношението на приравненото време към приложимия за деня Tref.",
         "direct_ratio_z = T_eq,z / Tref_z", "дял",
         interpretation="0.50 е директният праг за вторична зона; стойността не включва cascade или входящ spillover.",
         inputs=("T_eq,z", "Tref"), dependencies=("spillover", "диагностично планиране"),
@@ -219,18 +232,18 @@ RESULT_DEFINITIONS: dict[str, dict[str, Any]] = {
         limitations=("Не включва readiness, wellness или recovery модификатори в shadow пилота.",),
     ),
     "result.h40": _definition(
-        "result.h40", "H40", "Диагностична 40-дневна база", "Седмичният еквивалент на средното дневно приравнено време за предходните до 40 календарни дни.",
-        "H_N,z = (7/N) × Σ T_eq,day,z", "приравнени минути/седмица",
-        interpretation="H40 участва в 7/40, но не променя фиксирания Tref.",
-        inputs=("предходно дневно T_eq,z",), dependencies=("7/40",),
+        "result.h40", "H40", "40-дневна база", "Седмичният еквивалент на средния дневен ефективен E за предходните до 40 завършени календарни дни.",
+        "H_N,z = (7/N) × Σ E_day,z", "приравнени минути/седмица",
+        interpretation="H40 е raw Tref преди прилагане на фиксираните експертни граници.",
+        inputs=("предходен дневен E_z",), dependencies=("7/40", "Tref"),
         limitations=("Текущият и бъдещите дни са изключени; почивните дни са T_eq=0.",),
     ),
     "result.tref_effective": _definition(
-        "result.tref_effective", "Tref", "Фиксиран начален Tref", "Началната експертна стойност за зоната.",
-        "Tref_z = initial_expert_value_z", "приравнени минути",
-        interpretation="Стойността е независима от H40 и няма clamp диапазон.",
-        inputs=("фиксиран Tref профил",), dependencies=("spillover", "recovery"),
-        limitations=("Начална експертна настройка, не окончателна индивидуална калибрация.",),
+        "result.tref_effective", "Tref", "Ограничен 40-дневен Tref", "Реалната персонална 40-дневна референция, ограничена в фиксираните експертни граници на зоната.",
+        "Tref_z = clamp(7 × mean(E_z, previous up-to-40 days), min_z, max_z)", "приравнени минути",
+        interpretation="При непълна история стойността е временна; без нито един ден се използва горната експертна стойност.",
+        inputs=("дневен E_z", "Tref min/max"), dependencies=("spillover", "recovery"),
+        limitations=("Текущият ден е изключен от собствения си causal Tref.",),
     ),
     "result.hr_coverage": _definition(
         "result.hr_coverage", "HR coverage", "Покритие на активното време с валиден HR", "Делът от активното време, който може надеждно да се класифицира.",
@@ -307,7 +320,7 @@ WARNING_DEFINITIONS: dict[str, dict[str, Any]] = {
     "warning.incomplete_history": _definition(
         "warning.incomplete_history", "Непълна история", "Непълен диагностичен H40 прозорец",
         "Налични са по-малко от 40 завършени календарни дни.", "history_days < 40", "дни",
-        interpretation="H40 е ограничен от наличната история; фиксираният Tref не се променя.", dependencies=("H40", "7/40"),
+        interpretation="Изчислява се временен bounded Tref от всички налични завършени календарни дни.", dependencies=("H40", "7/40", "Tref"),
         limitations=("Почивен ден е T_eq=0 само когато календарният прозорец е зареден успешно.",),
     ),
     "warning.low_hr_coverage": _definition(

@@ -69,7 +69,7 @@
 - каноничен `effective_hr = raw_hr` адаптер, който подготвя бъдеща HR модулация, без да я прилага сега;
 - реално време, линейно приравнено време `T_eq` при `3 pp/bpm`, времево претеглен среден HR и средна стойност на минутата;
 - единна аеробна доза `T_eq` за Tref сравнението, 7/40, възстановяването, каскадата и spillover-а;
-- компонентен индекс 7/40, диагностичен H40 и фиксиран аеробен `Tref` от 300/180/70/20/20 приравнени минути за Z1–Z5;
+- компонентен индекс 7/40 и причинно изчислен аеробен `Tref = 7 × mean(E)` от предходните до 40 завършени дни, ограничен по зони в експертните граници Z1 180–300, Z2 90–180, Z3 40–70, Z4 10–20 и Z5 10–20 приравнени минути;
 - каскада от високи към ниски зони и прагова компонента на разлив;
 - експоненциална динамика на остатъчната умора и readiness;
 - ръчен дневен мониторинг: сън, умора, стрес, болезненост, болка, сутрешен пулс, HRV и др.;
@@ -196,7 +196,7 @@ python -m pytest -q
 app.py                         Streamlit интерфейс и навигация
 biathlon/demo_data.py          тестови спортисти, активности, мониторинг, тестове и календар
 biathlon/preferences.py        годишна цел, седмична структура и ръчна история
-biathlon/physiology.py         T_real → T_eq → E, 7/40, фиксиран аеробен Tref, умора, readiness, обратна задача
+biathlon/physiology.py         T_real → T_eq → E, 7/40, bounded 40-дневен аеробен Tref, умора, readiness, обратна задача
 biathlon/monitoring.py         субективни/обективни показатели и твърди флагове
 biathlon/testing.py            контролни тестове и ограничени корекции
 biathlon/mesocycles.py         стабилна мезоциклична опора и лагерни задания
@@ -208,4 +208,4 @@ biathlon/constants.py          начални експертни парамет�
 tests/                         unit, pipeline и Streamlit smoke тестове
 ```
 
-Подробните формули са в [`docs/MODEL_LOGIC.md`](docs/MODEL_LOGIC.md), а входният договор е в [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md).
+Подробните формули са в [`docs/MODEL_LOGIC.md`](docs/MODEL_LOGIC.md), входният договор е в [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md), а редът за queue/worker rollout, canary и rollback е в [`docs/SYNC_GENERATION_OPERATIONS.md`](docs/SYNC_GENERATION_OPERATIONS.md).

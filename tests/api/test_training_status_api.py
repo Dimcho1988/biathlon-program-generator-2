@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import math
 import os
 import subprocess
@@ -9,7 +10,7 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
-from apps.api.main import app
+from apps.api.main import app, health, model_health
 from apps.api.training_status import DEMO_AS_OF, DEMO_ATHLETE_ID
 from biathlon.demo_data import DEMO_SEED, generate_demo_bundle
 from biathlon.effective_hr import EFFECTIVE_HR_ADAPTER_VERSION, EFFECTIVE_HR_SOURCE
@@ -28,9 +29,49 @@ EXPECTED_ZONE_FIELDS = {
 
 
 def test_health() -> None:
+    assert inspect.iscoroutinefunction(health)
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_model_health_exposes_deployed_shadow_versions() -> None:
+    assert inspect.iscoroutinefunction(model_health)
+    response = client.get("/health/models")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "vflat_model_version": "vflat_b65_dynamic_v3",
+        "sprint_str_model_version": "vflat_sprint_str_v1",
+        "hrmod_model_version": "hrmod_mirror_area_shift_v7",
+        "hrmod_source_commit": "63ef533975f05817db8c0dbbd7a30611124a2afe",
+    }
+
+
+def test_browser_wake_redirect_is_fixed_to_the_configured_web_service(monkeypatch) -> None:
+    monkeypatch.setenv("ONFLOWS_WEB_BASE_URL", "https://web.example.test")
+    response = client.get(
+        "/api/v2/wake?intervals=refresh-error&settings=saved",
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "https://web.example.test/?wake=ready&intervals=refresh-error&settings=saved"
+    )
+    assert client.get(
+        "/api/v2/wake?intervals=https://attacker.example",
+        follow_redirects=False,
+    ).status_code == 400
+
+
+def test_browser_wake_can_resume_only_the_oauth_start(monkeypatch) -> None:
+    monkeypatch.setenv("ONFLOWS_WEB_BASE_URL", "https://web.example.test")
+    response = client.get("/api/v2/wake?resume=connect", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "https://web.example.test/api/integrations/intervals/connect?wake=ready"
+    )
+    assert client.get("/api/v2/wake?resume=refresh", follow_redirects=False).status_code == 400
 
 
 def test_training_status_exact_schema_and_zone_order() -> None:

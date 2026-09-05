@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from intervals_inspector.intervals_client import IntervalsResponse
@@ -39,7 +40,7 @@ class _SyntheticUIClient:
         *,
         include_intervals: bool = False,
     ) -> IntervalsResponse:
-        assert include_intervals is False
+        assert include_intervals is True
         activity_day = self.activities[activity_id]
         return IntervalsResponse(
             200,
@@ -124,19 +125,22 @@ def test_load_settings_and_recovery_share_the_new_real_model_contract() -> None:
     )
     assert len(app.metric) >= 5
     metrics = {element.label: str(element.value) for element in app.metric}
-    assert metrics["Tref"] == "300.0"
+    assert metrics["Tref"] == (
+        f"{float(dataset.load_stats.loc['Z1', 'Tref']):.1f}"
+    )
     load_captions = _values(app.caption)
     assert any(
         "raw HR → effective HR → приравнено време" in value
         for value in load_captions
     )
     assert any(
-        "H40 използва само завършени календарни дни" in value
+        "Raw Tref = 7 × средния дневен ефективен E" in value
         for value in load_captions
     )
     assert any(
-        "Tref е фиксирана начална експертна настройка" in value
-        and "7/40" in value
+        "Текущият Tref след края на периода включва последния завършен ден"
+        in value
+        and "фиксираните експертни граници" in value
         for value in load_captions
     )
 
@@ -144,23 +148,33 @@ def test_load_settings_and_recovery_share_the_new_real_model_contract() -> None:
     h40_table = next(
         frame
         for frame in dataframes
-        if "H40 (диагностично)" in frame.columns
-        and "Завършени дни" in frame.columns
+        if "Raw Tref (H40) преди деня" in frame.columns
+        and "Предходни дни" in frame.columns
     )
     assert list(h40_table.columns) == [
         "Зона",
-        "H40 (диагностично)",
-        "Tref",
-        "Източник",
-        "Завършени дни",
+        "Raw Tref (H40) преди деня",
+        "Tref за деня",
+        "Текущ Tref след деня",
+        "Tref min",
+        "Tref max",
+        "Приложена граница",
+        "Източник за деня",
+        "Предходни дни",
     ]
-    assert dict(zip(h40_table["Зона"], h40_table["Tref"])) == {
-        "Z1": 300.0,
-        "Z2": 180.0,
-        "Z3": 70.0,
-        "Z4": 20.0,
-        "Z5": 20.0,
-    }
+    expected_daily = dataset.daily_zones.loc[
+        dataset.daily_zones["date"] == dataset.daily_zones["date"].max()
+    ].set_index("zone")
+    for row in h40_table.to_dict("records"):
+        zone = str(row["Зона"])
+        assert float(row["Tref за деня"]) == pytest.approx(
+            float(expected_daily.loc[zone, "tref_effective"])
+        )
+        assert float(row["Текущ Tref след деня"]) == pytest.approx(
+            float(dataset.load_stats.loc[zone, "Tref"])
+        )
+        assert float(row["Tref min"]) <= float(row["Tref за деня"])
+        assert float(row["Tref за деня"]) <= float(row["Tref max"])
     activity_table = next(
         frame
         for frame in dataframes
@@ -172,8 +186,11 @@ def test_load_settings_and_recovery_share_the_new_real_model_contract() -> None:
         "Среден HR (времево претеглен)",
         "Средна стойност на минутата (%)",
         "% от Tref",
-        "H40 (диагностично)",
+        "Raw Tref (H40)",
         "Tref",
+        "Tref min",
+        "Tref max",
+        "Приложена граница",
     } <= set(activity_table.columns)
     assert not any(
         "Qref" in str(column) or str(column) in {"Q", "Q_z"}
@@ -185,26 +202,28 @@ def test_load_settings_and_recovery_share_the_new_real_model_contract() -> None:
     app.run()
     assert not app.exception
     assert any(
-        "Tref е фиксирана начална експертна настройка" in value
+        "Tref се изчислява от реалния E" in value
+        and "фиксираните експертни граници" in value
         and "Линейният pp/bpm параметър" in value
         for value in _values(app.warning)
     )
     assert "_real_tref_configuration" in app.session_state
     settings_markdown = _values(app.markdown)
     for value in (
-        "300 приравнени мин",
-        "180 приравнени мин",
-        "70 приравнени мин",
-        "20 приравнени мин",
+        "180–300 приравнени мин",
+        "90–180 приравнени мин",
+        "40–70 приравнени мин",
+        "10–20 приравнени мин",
     ):
         assert value in settings_markdown
-    assert settings_markdown.count("Начална експертна настройка") == 5
-    assert "**Tref**" in settings_markdown
-    assert "**pp/bpm**" in settings_markdown
-    assert not any(
-        label in settings_markdown
-        for label in ("Tref минимум", "Tref максимум", "Tref ограничение")
+    assert (
+        settings_markdown.count(
+            "Реален E за до 40 дни · cold start = max"
+        )
+        == 5
     )
+    assert "**Tref граници**" in settings_markdown
+    assert "**pp/bpm**" in settings_markdown
     slope_inputs = {
         element.label: float(element.value)
         for element in app.number_input
@@ -220,6 +239,7 @@ def test_load_settings_and_recovery_share_the_new_real_model_contract() -> None:
     visible_settings_text = "\n".join(
         _values(app.warning) + _values(app.caption) + settings_markdown
     )
+    assert "фиксирана начална експертна настройка" not in visible_settings_text
     assert "Qref" not in visible_settings_text
 
     app.query_params["page"] = "recovery"
