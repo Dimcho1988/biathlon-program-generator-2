@@ -17,6 +17,13 @@ class HealthResponse(StrictModel):
     status: Literal["ok"]
 
 
+class ModelHealthResponse(HealthResponse):
+    vflat_model_version: str
+    sprint_str_model_version: str
+    hrmod_model_version: str
+    hrmod_source_commit: str
+
+
 class SyncJobRequest(StrictModel):
     scope: Literal["FULL", "WELLNESS", "RECOVERY"]
 

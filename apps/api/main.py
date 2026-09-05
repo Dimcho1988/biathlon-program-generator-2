@@ -16,6 +16,9 @@ from biathlon.methodology import (
     CANONICAL_METHODOLOGY_VERSION,
     canonical_methodology,
 )
+from hrmod_lab.schemas import MODEL_VERSION as HRMOD_MODEL_VERSION
+from vflat_b65 import MODEL_VERSION as VFLAT_MODEL_VERSION
+from vflat_b65 import SPRINT_STR_MODEL_VERSION
 
 from .cloud import (
     MESOCYCLE_ACCENT_COMPONENTS,
@@ -72,6 +75,7 @@ from .schemas import (
     MesocycleAccentPreferencesInput,
     MesocycleAccentPreferencesResponse,
     MesocycleAccentResolution,
+    ModelHealthResponse,
     OAuthAuthorizationResponse,
     OAuthConnectionStatusResponse,
     PlanningCalendarInput,
@@ -102,6 +106,21 @@ async def health() -> HealthResponse:
     """Keep Render liveness independent from the synchronous worker pool."""
 
     return HealthResponse(status="ok")
+
+
+@app.get("/health/models", response_model=ModelHealthResponse)
+async def model_health() -> ModelHealthResponse:
+    """Expose non-sensitive shadow versions for deployment verification."""
+
+    from .shadow_models.hrmod_v4 import SOURCE_COMMIT
+
+    return ModelHealthResponse(
+        status="ok",
+        vflat_model_version=VFLAT_MODEL_VERSION,
+        sprint_str_model_version=SPRINT_STR_MODEL_VERSION,
+        hrmod_model_version=HRMOD_MODEL_VERSION,
+        hrmod_source_commit=SOURCE_COMMIT,
+    )
 
 
 def _web_base_url() -> str:

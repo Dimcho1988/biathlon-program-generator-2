@@ -10,7 +10,7 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
-from apps.api.main import app, health
+from apps.api.main import app, health, model_health
 from apps.api.training_status import DEMO_AS_OF, DEMO_ATHLETE_ID
 from biathlon.demo_data import DEMO_SEED, generate_demo_bundle
 from biathlon.effective_hr import EFFECTIVE_HR_ADAPTER_VERSION, EFFECTIVE_HR_SOURCE
@@ -33,6 +33,19 @@ def test_health() -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_model_health_exposes_deployed_shadow_versions() -> None:
+    assert inspect.iscoroutinefunction(model_health)
+    response = client.get("/health/models")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "vflat_model_version": "vflat_b65_dynamic_v3",
+        "sprint_str_model_version": "vflat_sprint_str_v1",
+        "hrmod_model_version": "hrmod_mirror_area_shift_v7",
+        "hrmod_source_commit": "63ef533975f05817db8c0dbbd7a30611124a2afe",
+    }
 
 
 def test_browser_wake_redirect_is_fixed_to_the_configured_web_service(monkeypatch) -> None:

@@ -16,7 +16,7 @@ services:
     name: onflows-api-staging
     plan: free
     region: frankfurt
-    autoDeployTrigger: "off"
+    autoDeployTrigger: commit
     runtime: python
     branch: codex/build-end-to-end-cloud-integration
     buildFilter:
@@ -61,7 +61,7 @@ services:
     name: onflows-sync-worker-staging
     plan: starter
     region: frankfurt
-    autoDeployTrigger: "off"
+    autoDeployTrigger: commit
     runtime: python
     branch: codex/build-end-to-end-cloud-integration
     numInstances: 1
@@ -94,7 +94,7 @@ services:
     name: onflows-web-staging
     plan: free
     region: frankfurt
-    autoDeployTrigger: "off"
+    autoDeployTrigger: commit
     runtime: node
     branch: codex/build-end-to-end-cloud-integration
     rootDir: apps/web
