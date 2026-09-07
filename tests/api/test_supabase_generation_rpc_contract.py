@@ -13,6 +13,7 @@ import pytest
 
 from apps.api.oauth_store import PersistentStoreFailure, SupabasePilotRepository
 from apps.api.sync_contracts import ClaimedSyncJob
+from apps.api.shadow_storage import CODEC, decode_shadow_payload, encode_shadow_payload
 
 
 ALIAS = "ath-rpc-contract"
@@ -115,6 +116,44 @@ def test_shadow_publish_allows_large_atomic_payload_to_finish() -> None:
         "write": 60.0,
         "pool": 60.0,
     }
+
+
+def test_large_shadow_publish_and_all_read_paths_preserve_the_logical_payload():
+    harness = SupabaseHTTPHarness()
+    repo = repository(harness)
+    original = {
+        "result_hash": "a" * 64, "configuration_fingerprint": "b" * 64,
+        "trainability_index": {"general": {"index": 8.5}},
+        "timeseries": [{"elapsed_s": i, "hrmod_final_bpm": 150.123456789,
+                        "vflat_b65_kmh": 17.123456789, "quality_flags": []} for i in range(2000)],
+    }
+    harness.respond(rpc_path("publish_onflows_activity_shadow"), None)
+    key = repo.publish_activity_shadow(athlete_alias=ALIAS, activity_ref=ACTIVITY_REF,
+        input_payload={"input_hash": "c" * 64}, derived_payload=original)
+    packed = harness.requests[-1]["json"]["p_result_payload"]
+    assert packed["timeseries"]["codec"] == CODEC
+    assert decode_shadow_payload(packed) == original
+    assert harness.requests[-1]["json"]["p_result_hash"] == original["result_hash"]
+    assert harness.requests[-1]["json"]["p_run_key"] == key
+
+    pointer = pointer_row()
+    harness.respond(rpc_path("active_onflows_activity"), [pointer])
+    harness.respond("/rest/v1/onflows_activity_derived_runs", [{"result_payload": packed}])
+    assert repo.activity_shadow(ALIAS, ACTIVITY_REF) == original
+
+    view = {**pointer, "series_payload": {"samples": []}, "shadow_payload": packed}
+    harness.respond(rpc_path("active_onflows_activity_view"), [view])
+    assert repo.active_activity_view(ALIAS, ACTIVITY_REF)["shadow_payload"] == original
+
+    repo._generation_reads = False
+    harness.respond("/rest/v1/onflows_activity_derived_runs", [{"result_payload": packed}])
+    assert repo.activity_shadow(ALIAS, ACTIVITY_REF) == original
+
+    malformed = encode_shadow_payload(original)
+    malformed["timeseries"]["sha256"] = "0" * 64
+    harness.respond("/rest/v1/onflows_activity_derived_runs", [{"result_payload": malformed}])
+    with pytest.raises(PersistentStoreFailure, match="encoding is invalid"):
+        repo.activity_shadow(ALIAS, ACTIVITY_REF)
 
 
 def pointer_row() -> dict[str, Any]:

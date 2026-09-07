@@ -20,6 +20,8 @@ from urllib.parse import quote
 import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from .shadow_storage import decode_shadow_payload, encode_shadow_payload
+
 from .cloud import (
     AthleteMesocycleAccentPreferences,
     AthleteModelSettings,
@@ -749,7 +751,7 @@ class SupabasePilotRepository(SnapshotRepository):
             **dict(row),
             "catalog_payload": dict(catalog),
             "series_payload": dict(series) if isinstance(series, Mapping) else None,
-            "shadow_payload": dict(shadow) if isinstance(shadow, Mapping) else None,
+            "shadow_payload": self._decode_shadow(shadow) if isinstance(shadow, Mapping) else None,
         }
 
     def replace(self, athlete_alias: str, snapshot: Mapping[str, Any]) -> None:
@@ -1058,7 +1060,7 @@ class SupabasePilotRepository(SnapshotRepository):
                 "p_hrmod_model_version": derived_payload.get("hrmod_model_version"),
                 "p_hrmod_config_version": derived_payload.get("hrmod_config_version"),
                 "p_terrain_model_version": derived_payload.get("terrain_model_version"),
-                "p_result_payload": dict(derived_payload),
+                "p_result_payload": encode_shadow_payload(derived_payload),
             },
             headers={"Prefer": "return=minimal"},
             timeout=httpx.Timeout(60.0, connect=5.0),
@@ -1191,7 +1193,7 @@ class SupabasePilotRepository(SnapshotRepository):
                 raise PersistentStoreFailure(
                     "Pinned activity shadow result is invalid"
                 )
-            return dict(result)
+            return self._decode_shadow(result)
         alias = quote(athlete_alias, safe="")
         reference = quote(activity_ref, safe="")
         response = self._request(
@@ -1207,7 +1209,14 @@ class SupabasePilotRepository(SnapshotRepository):
         result = row.get("result_payload") if isinstance(row, Mapping) else None
         if not isinstance(result, Mapping):
             raise PersistentStoreFailure("Stored activity shadow result is invalid")
-        return dict(result)
+        return self._decode_shadow(result)
+
+    @staticmethod
+    def _decode_shadow(payload: Mapping[str, Any]) -> dict[str, Any]:
+        try:
+            return decode_shadow_payload(payload)
+        except ValueError as exc:
+            raise PersistentStoreFailure("Stored activity shadow encoding is invalid") from exc
 
     def trainability_summaries(
         self, athlete_alias: str, run_keys: tuple[str, ...]
