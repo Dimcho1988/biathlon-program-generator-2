@@ -41,7 +41,7 @@ def test_model_health_exposes_deployed_shadow_versions() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
-        "vflat_model_version": "vflat_b65_dynamic_v3",
+        "vflat_model_version": "vflat_b65_dynamic_v3_uphill150",
         "sprint_str_model_version": "vflat_sprint_str_v1",
         "hrmod_model_version": "hrmod_mirror_area_shift_v7",
         "hrmod_source_commit": "63ef533975f05817db8c0dbbd7a30611124a2afe",

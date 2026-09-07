@@ -15,8 +15,8 @@ import pandas as pd
 from scipy.signal import savgol_filter
 
 
-MODEL_VERSION = "vflat_b65_dynamic_v3"
-CONFIG_VERSION = "vflat_b65_config_v3"
+MODEL_VERSION = "vflat_b65_dynamic_v3_uphill150"
+CONFIG_VERSION = "vflat_b65_config_v3_uphill150"
 
 # Authoritative B65 multipliers supplied for the locked model.  Above +5%,
 # these anchors define the approved literature reference curve used by the
@@ -166,7 +166,13 @@ def stationary_multiplier_b65(
         selected.steep_blend_start_pct,
         selected.steep_blend_end_pct,
     )
-    return base + selected.steep_blend_weight * smooth * (literature - base)
+    multiplier = base + selected.steep_blend_weight * smooth * (literature - base)
+    # Increase only the uphill increment over flat speed by 50%, once after blending.
+    return np.where(
+        stationary_grade > selected.flat_band_pct,
+        1.0 + 1.5 * (multiplier - 1.0),
+        multiplier,
+    )
 
 
 def derive_grade_from_altitude_distance(
