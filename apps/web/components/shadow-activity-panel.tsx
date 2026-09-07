@@ -1,5 +1,8 @@
 "use client";
 
+import { TrainabilitySummary } from "./trainability-summary";
+import { parseTrainabilityIndex } from "../lib/trainability";
+
 import { useState } from "react";
 import Link from "next/link";
 
@@ -202,6 +205,8 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
         <article><span>SPRINT/STR</span><strong>{text(sprintSummary.candidate_count ?? 0)} импулса</strong><small>{duration(sprintSummary.candidate_active_seconds)} активно ядро · без двоен HR товар</small></article>
         <article><span>Диагностични сигнали</span><strong>{allFlags.length} flags</strong><small>{allExclusions.length} exclusions</small></article>
       </section>
+
+      <TrainabilitySummary index={parseTrainabilityIndex(payload.trainability_index)} />
 
       <div className="shadow-plots">
         <MiniPlot title="Реална скорост ↔ Vflat B65" rows={rows} series={[

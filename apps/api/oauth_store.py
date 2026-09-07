@@ -1209,6 +1209,33 @@ class SupabasePilotRepository(SnapshotRepository):
             raise PersistentStoreFailure("Stored activity shadow result is invalid")
         return dict(result)
 
+    def trainability_summaries(
+        self, athlete_alias: str, run_keys: tuple[str, ...]
+    ) -> Mapping[str, Mapping[str, Any]]:
+        """Read only small summaries for immutable keys from one pinned calendar."""
+        if any(not re.fullmatch(r"[a-f0-9]{64}", key) for key in run_keys):
+            raise PersistentStoreFailure("Invalid trainability run key")
+        result: dict[str, Mapping[str, Any]] = {}
+        unique_keys = sorted(set(run_keys))
+        for offset in range(0, len(unique_keys), 50):
+            batch = unique_keys[offset:offset + 50]
+            response = self._request(
+                "GET", "/onflows_activity_derived_runs?select=run_key,activity_ref,"
+                "trainability_index:result_payload->trainability_index"
+                f"&athlete_alias=eq.{quote(athlete_alias, safe='') }"
+                f"&run_key=in.({','.join(batch)})&limit=50",
+            )
+            rows = self._json(response)
+            if not isinstance(rows, list):
+                raise PersistentStoreFailure("Stored trainability summaries are invalid")
+            for row in rows:
+                if not isinstance(row, Mapping) or row.get("run_key") not in batch:
+                    raise PersistentStoreFailure("Stored trainability summary is invalid")
+                result[str(row["run_key"])] = dict(row)
+        if set(result) != set(unique_keys):
+            raise PersistentStoreFailure("Pinned trainability results are unavailable")
+        return result
+
     def activity_shadow_index(
         self, athlete_alias: str
     ) -> tuple[Mapping[str, Any], ...]:

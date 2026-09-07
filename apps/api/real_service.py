@@ -1227,6 +1227,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         )
         parameters = fresh_parameters()
         stage = "history"
+        from intervals_inspector.real_data_source import _activity_duration_seconds, is_strength_activity
         from .activity_shadow_pipeline import (
             activity_shadow_configuration_fingerprint,
             build_immutable_activity_input,
@@ -1283,7 +1284,8 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                     "affects_canonical_load": False,
                 }
             configuration_fingerprint = activity_shadow_configuration_fingerprint(
-                context.zone_bounds_bpm, context.hrmax_bpm
+                context.zone_bounds_bpm, context.hrmax_bpm,
+                activity_duration_s=_activity_duration_seconds(detail, strength_activity=is_strength_activity(detail)),
             )
             if repository.latest_activity_input_hash(
                 context.public_alias, activity_ref

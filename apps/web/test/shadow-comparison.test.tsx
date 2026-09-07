@@ -44,6 +44,7 @@ describe("Raw ↔ Shadow comparison", () => {
       "Средна скорост", "Среден пулс", "Преразпределено по зони",
       "Реална скорост ↔ Vflat B65", "Raw / clean HR ↔ HRmod candidate / final",
       "Receiver, donor и SPRINT/STR интервали", "Raw ↔ HRmod времена по зони",
+      "Индекс на тренираност",
       "SPRINT/STR импулси (1)", "15-секундни сегменти (1)", "HR вълни, receiver и donor (1)",
     ]) expect(html).toContain(label);
     expect(html).toContain("vflat_b65_dynamic_v3");

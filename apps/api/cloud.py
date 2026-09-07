@@ -909,6 +909,10 @@ class SnapshotRepository(Protocol):
         input_payload: Mapping[str, Any],
         derived_payload: Mapping[str, Any],
     ) -> str: ...
+    def trainability_summaries(
+        self, athlete_alias: str, run_keys: tuple[str, ...]
+    ) -> Mapping[str, Mapping[str, Any]]: ...
+
     def publish_canonical_activity_result(
         self,
         *,
@@ -2011,6 +2015,21 @@ class InMemorySnapshotRepository:
                     }
                 )
         return run_key
+
+    def trainability_summaries(
+        self, athlete_alias: str, run_keys: tuple[str, ...]
+    ) -> Mapping[str, Mapping[str, Any]]:
+        requested = set(run_keys)
+        with self._lock:
+            return {
+                run["run_key"]: {
+                    "run_key": run["run_key"], "activity_ref": activity_ref,
+                    "trainability_index": deepcopy(run["result_payload"].get("trainability_index")),
+                }
+                for (alias, activity_ref), runs in self._activity_runs.items()
+                if alias == athlete_alias
+                for run in runs if run["run_key"] in requested
+            }
 
     def publish_canonical_activity_result(
         self,

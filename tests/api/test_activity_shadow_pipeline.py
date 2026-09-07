@@ -31,6 +31,24 @@ def _normalized(count: int = 100):
     )
 
 
+def test_duration_gate_invalidates_cache_without_splitting_comparable_activities():
+    outputs = []
+    for duration in (419, 420):
+        _, derived = compute_activity_shadow(
+            detail={"start_date": "2026-01-01T10:00:00Z", "moving_time": duration},
+            normalized=_normalized(), zone_bounds_bpm=(50, 137, 147, 158, 170, 178),
+            explicit_hrmax_bpm=178,
+        )
+        outputs.append(derived)
+    short, long = outputs
+    assert short["configuration_fingerprint"] != long["configuration_fingerprint"]
+    assert short["trainability_index"]["comparison_key"] == long["trainability_index"]["comparison_key"]
+    assert short["trainability_index"]["general"]["invalid_reason"] == "ACTIVITY_BELOW_7MIN"
+    assert long["trainability_index"]["general"]["invalid_reason"] != "ACTIVITY_BELOW_7MIN"
+    for key in ("timeseries", "zone_summary", "hrmod_waves", "segments_15s"):
+        assert short[key] == long[key]
+
+
 def test_immutable_input_is_minimal_and_original_normalized_data_is_unchanged() -> None:
     detail = {"start_date": "2026-01-01T10:00:00Z", "name": "private name"}
     normalized = _normalized()
