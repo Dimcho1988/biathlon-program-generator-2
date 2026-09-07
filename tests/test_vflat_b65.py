@@ -21,23 +21,23 @@ GOLDEN = {
     -1.0: 1.0,
     0.0: 1.0,
     1.0: 1.0,
-    5.0: 1.613135482,
-    6.0: 1.700138717,
-    7.0: 1.849621614,
-    8.0: 2.034843677,
-    10.0: 2.357542699,
-    12.0: 2.710460948,
-    13.0: 2.899228838,
-    14.0: 3.096657638,
-    15.0: 3.303062049,
-    18.0: 3.303062049,
+    5.0: 1.919703223,
+    6.0: 2.0502080755,
+    7.0: 2.274432421,
+    8.0: 2.5522655155,
+    10.0: 3.0363140485,
+    12.0: 3.565691422,
+    13.0: 3.848843257,
+    14.0: 4.144986457,
+    15.0: 4.4545930735,
+    18.0: 4.4545930735,
 }
 
 
 def test_locked_versions_defaults_and_golden_multipliers() -> None:
     config = VFlatB65Config()
-    assert MODEL_VERSION == "vflat_b65_dynamic_v3"
-    assert CONFIG_VERSION == "vflat_b65_config_v3"
+    assert MODEL_VERSION == "vflat_b65_dynamic_v3_uphill150"
+    assert CONFIG_VERSION == "vflat_b65_config_v3_uphill150"
     assert config.speed_smoothing_s == 11
     assert config.transition_anchor_strength == 0.90
     assert config.transition_accel_scale_mps2 == 0.10
