@@ -36,7 +36,7 @@ export default async function ActivitiesPage({ searchParams }: { searchParams: P
   const span = Math.max(1, Math.round((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86400000) + 1);
   return <main className="activities-page">
     <header className="activities-hero">
-      <nav aria-label="Основна навигация"><Link className="brand" href="/"><Image src="/brand/onflows-mark.png" width={33} height={40} alt="onFlows лого" priority /><span>onFlows</span></Link><div className="nav-actions"><Link href="/">Тренировъчен статус</Link>{multiProfileMode() && <Link href="/?settings=edit">Зони и HRmax</Link>}<ThemeToggle /></div></nav>
+      <nav aria-label="Основна навигация"><Link className="brand" href="/"><Image src="/brand/onflows-mark.png" width={33} height={40} alt="onFlows лого" priority /><span>onFlows</span></Link><div className="nav-actions"><Link href="/">Тренировъчен статус</Link><Link href="/trainability">Индекс на тренираност</Link>{multiProfileMode() && <Link href="/?settings=edit">Зони и HRmax</Link>}<ThemeToggle /></div></nav>
       <div className="activities-title"><div><p className="eyebrow">Реално завършена работа</p><h1>Активности</h1><p>Календар, canonical анализи и ясна връзка към experimental сравненията.</p></div><span>{calendar.activities.length} активности · {calendar.period_start} — {calendar.period_end}{calendar.revision ? ` · версия ${calendar.revision}` : ""}</span></div>
     </header>
     {syncState && <SyncStatusPanel key={`${syncState.job_id ?? "idle"}:${syncState.state}:${calendar.generation_id ?? "none"}`} initialState={syncState} renderedGenerationId={calendar.generation_id ?? null} returnTo={`/activities?start=${calendar.period_start}&end=${calendar.period_end}`} />}

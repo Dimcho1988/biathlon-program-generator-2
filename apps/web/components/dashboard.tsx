@@ -46,6 +46,7 @@ function AnalysisNavigation({ planningAvailable }: { planningAvailable: boolean 
     <p className="analysis-nav-label">Модули</p>
     {analysisSections.map(([href, label]) => <a key={href} href={href}>{label}</a>)}
     <Link href="/activities">Активности</Link>
+    <Link href="/trainability">Индекс на тренираност</Link>
     {planningAvailable && <Link href="/planning">Профил за планиране</Link>}
   </nav>;
 }

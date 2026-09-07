@@ -4,10 +4,10 @@ import { multiProfileMode } from "../../../../../lib/athlete-session";
 import { parseSyncEnqueueResponse, type SyncScope } from "../../../../../lib/sync";
 
 function safeReturnTo(value: FormDataEntryValue | null) {
-  if (typeof value !== "string" || !value.startsWith("/activities")) return "/";
+  if (typeof value !== "string" || !value.startsWith("/")) return "/";
   try {
     const parsed = new URL(value, "https://onflows.invalid");
-    if (parsed.origin !== "https://onflows.invalid" || parsed.pathname !== "/activities") return "/";
+    if (parsed.origin !== "https://onflows.invalid" || !["/activities", "/trainability"].includes(parsed.pathname)) return "/";
     const start = parsed.searchParams.get("start");
     const end = parsed.searchParams.get("end");
     if (start && !/^\d{4}-\d{2}-\d{2}$/.test(start)) return "/";

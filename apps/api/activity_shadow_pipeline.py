@@ -13,6 +13,7 @@ import pandas as pd
 
 from apps.api.shadow_models.hrmod_v4 import SOURCE_COMMIT, run_hrmod_v4_shadow
 from apps.api.shadow_models.vflat_b65 import run_vflat_b65_shadow
+from apps.api.trainability import MODEL_VERSION as TRAINABILITY_MODEL_VERSION, compute_trainability
 from hrmod_lab.schemas import (
     CONFIG_VERSION as HRMOD_CONFIG_VERSION,
     MODEL_VERSION as HRMOD_MODEL_VERSION,
@@ -23,6 +24,7 @@ from hrmod_lab.schemas import (
 from hrmod_lab.tcx_adapter import ReferenceChannels, ReferenceSample
 from hrmod_lab.terrain_gate import TERRAIN_CONFIG_VERSION, TERRAIN_MODEL_VERSION
 from intervals_inspector.stream_normalizer import IntervalAwareResult, materialize_1hz
+from intervals_inspector.real_data_source import _activity_duration_seconds, is_strength_activity
 from vflat_b65 import (
     CONFIG_VERSION as VFLAT_CONFIG_VERSION,
     MODEL_VERSION as VFLAT_MODEL_VERSION,
@@ -90,7 +92,8 @@ def _canonical_hash(payload: Any) -> str:
 
 
 def activity_shadow_configuration_fingerprint(
-    zone_bounds_bpm: Sequence[int], explicit_hrmax_bpm: int | None
+    zone_bounds_bpm: Sequence[int], explicit_hrmax_bpm: int | None,
+    *, activity_duration_s: float | None = None,
 ) -> str:
     """Identify every setting that can change a derived shadow result.
 
@@ -100,6 +103,8 @@ def activity_shadow_configuration_fingerprint(
     """
     payload = {
         "schema_version": SHADOW_CONFIGURATION_SCHEMA_VERSION,
+        "trainability_model_version": TRAINABILITY_MODEL_VERSION,
+        "activity_duration_s": activity_duration_s,
         "zone_bounds_bpm": [int(value) for value in zone_bounds_bpm],
         "explicit_hrmax_bpm": explicit_hrmax_bpm,
         "vflat_model_version": VFLAT_MODEL_VERSION,
@@ -326,7 +331,8 @@ def compute_activity_shadow(
         "PROFILE", lambda: _profile(zone_bounds_bpm, explicit_hrmax_bpm)
     )
     configuration_fingerprint = activity_shadow_configuration_fingerprint(
-        zone_bounds_bpm, explicit_hrmax_bpm
+        zone_bounds_bpm, explicit_hrmax_bpm,
+        activity_duration_s=_activity_duration_seconds(detail, strength_activity=is_strength_activity(detail)),
     )
     if profile is None:
         hrmod = {
@@ -425,6 +431,18 @@ def compute_activity_shadow(
         "affects_canonical_load": False,
         "input_hash": immutable_input["input_hash"],
         "configuration_fingerprint": configuration_fingerprint,
+        "trainability_index": compute_trainability(
+            hrmod["timeseries"], vflat["timeseries"],
+            zone_bounds_bpm=zone_bounds_bpm,
+            hrmax_bpm=explicit_hrmax_bpm,
+            activity_duration_s=_activity_duration_seconds(
+                detail, strength_activity=is_strength_activity(detail)
+            ) or sum(float(row["dt_s"]) for row in vflat["timeseries"]),
+            comparison_key=activity_shadow_configuration_fingerprint(zone_bounds_bpm, explicit_hrmax_bpm),
+            source_versions={
+                "vflat": VFLAT_MODEL_VERSION, "hrmod": HRMOD_MODEL_VERSION,
+            },
+        ),
         "vflat_model_version": VFLAT_MODEL_VERSION,
         "vflat_config_version": VFLAT_CONFIG_VERSION,
         "sprint_str_model_version": vflat.get("sprint_str_model_version"),

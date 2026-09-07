@@ -611,6 +611,55 @@ def real_activity_shadow_index(
     return {"schema_version": "activity-shadow-index-v1", "activities": rows}
 
 
+@app.get("/api/v2/real/trainability")
+def real_trainability_history(
+    period_start: date | None = None,
+    period_end: date | None = None,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+):
+    _authorize(authorization)
+    alias = _validated_alias(athlete_alias)
+    end = period_end or date.today()
+    start = period_start or end - timedelta(days=89)
+    if start > end or (end - start).days >= 90:
+        raise HTTPException(status_code=422, detail="Index period must contain 1–90 days")
+    try:
+        repository = _repository()
+        envelope = repository.active_activity_calendar(alias, start, end)
+        if not isinstance(envelope, Mapping):
+            raise ValueError("No active analysis generation")
+        rows = envelope.get("activities")
+        if not isinstance(rows, list) or not all(isinstance(row, Mapping) for row in rows):
+            raise ValueError("Invalid active activity calendar")
+        keys = tuple(str(row["latest_shadow_run_key"]) for row in rows if row.get("latest_shadow_run_key"))
+        summaries = repository.trainability_summaries(alias, keys)
+        activities = []
+        for row in rows:
+            key = row.get("latest_shadow_run_key")
+            summary = summaries.get(key) if key else None
+            if key and (summary is None or summary.get("activity_ref") != row.get("activity_ref")):
+                raise ValueError("Pinned trainability activity mismatch")
+            index = summary.get("trainability_index") if summary else None
+            if index is not None and not isinstance(index, Mapping):
+                raise ValueError("Invalid trainability index")
+            activities.append({
+                "activity_ref": row["activity_ref"], "name": row.get("name"),
+                "sport": row.get("sport") or "Unknown",
+                "start_at_utc": row["start_at_utc"], "local_date": row["local_date"],
+                "index": index,
+                "unavailable_reason": (None if index else "REFRESH_REQUIRED" if key else "NO_SHADOW"),
+            })
+        return {
+            "schema_version": "trainability-history-v1", "period_start": start.isoformat(),
+            "period_end": end.isoformat(), "generation_id": envelope.get("generation_id"),
+            "revision": envelope.get("revision", 0),
+            "activities": sorted(activities, key=lambda row: (row["start_at_utc"], row["activity_ref"])),
+        }
+    except (PersistentStoreFailure, TypeError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=503, detail="Trainability history is unavailable") from exc
+
+
 @app.get("/api/v2/real/activities", response_model=ActivityCalendarResponse)
 def real_activity_calendar(
     period_start: date | None = None,

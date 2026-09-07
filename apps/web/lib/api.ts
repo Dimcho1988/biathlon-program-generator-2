@@ -32,6 +32,7 @@ import {
 } from "./activities";
 import { parseDashboardView, type DashboardView } from "./dashboard-view";
 import { parseSyncState, type SyncState } from "./sync";
+import { parseTrainabilityHistory, type TrainabilityHistory } from "./trainability";
 
 // Render Free can take more than 50 seconds to wake the API after inactivity.
 // Keep the preview reliable without introducing a paid always-on service.
@@ -121,6 +122,19 @@ async function fetchApiResource(
     throw new Error("API услугата не отговори навреме или не е достъпна.", { cause: requestError });
   if (!response.ok) throw new Error(`API услугата върна грешка (${response.status}).`);
   try { return await response.json(); } catch (error) { throw new Error("API услугата върна невалиден JSON.", { cause: error }); }
+}
+
+export async function getTrainabilityHistory(athleteAlias?: string, start?: string, end?: string): Promise<TrainabilityHistory> {
+  if (process.env.ONFLOWS_DATA_MODE === "fixture") {
+    const { trainabilityFixture } = await import("./trainability-fixture");
+    return parseTrainabilityHistory(trainabilityFixture);
+  }
+  const token = process.env.ONFLOWS_SERVICE_TOKEN;
+  if (!token) throw new Error("ONFLOWS_SERVICE_TOKEN не е зададен на Next.js server.");
+  const query = new URLSearchParams();
+  if (start) query.set("period_start", start);
+  if (end) query.set("period_end", end);
+  return parseTrainabilityHistory(await fetchApiResource(`/api/v2/real/trainability?${query}`, token, athleteAlias));
 }
 
 export async function getSyncState(
