@@ -19,6 +19,7 @@ from biathlon.methodology import (
 from hrmod_lab.schemas import MODEL_VERSION as HRMOD_MODEL_VERSION
 from vflat_b65 import MODEL_VERSION as VFLAT_MODEL_VERSION
 from vflat_b65 import SPRINT_STR_MODEL_VERSION
+from .trainability import MODEL_VERSION as TRAINABILITY_MODEL_VERSION, SCHEMA_VERSION as TRAINABILITY_SCHEMA_VERSION
 
 from .cloud import (
     MESOCYCLE_ACCENT_COMPONENTS,
@@ -643,6 +644,9 @@ def real_trainability_history(
             index = summary.get("trainability_index") if summary else None
             if index is not None and not isinstance(index, Mapping):
                 raise ValueError("Invalid trainability index")
+            if index is not None:
+                if index.get("schema_version") != TRAINABILITY_SCHEMA_VERSION or index.get("model_version") != TRAINABILITY_MODEL_VERSION:
+                    index = None  # Never mix the legacy bpm scale with %HRmax.
             activities.append({
                 "activity_ref": row["activity_ref"], "name": row.get("name"),
                 "sport": row.get("sport") or "Unknown",
