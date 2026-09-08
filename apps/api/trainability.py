@@ -7,8 +7,9 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-MODEL_VERSION = "trainability_rank_v1"
-MIN_SECONDS = 60.0
+SCHEMA_VERSION = "trainability-index-v2"
+MODEL_VERSION = "trainability_rank_hrmax_v2"
+MIN_SECONDS_BY_BAND = {"Z1": 420.0, "Z2": 420.0, "Z3": 420.0, "Z4": 420.0, "Z5": 300.0, "GENERAL": 420.0}
 MIN_ACTIVITY_SECONDS = 420.0
 GENERAL_RANGE = (0.75, 0.92)
 MIN_GRADE_PCT = -3.0
@@ -72,6 +73,7 @@ def compute_trainability(
     speed_total = float(weights.sum())
 
     def band(name: str, lower: float | None, upper: float | None, inclusive: bool):
+        minimum_seconds = MIN_SECONDS_BY_BAND[name]
         mask = np.zeros(len(hrs), dtype=bool)
         above = mask.copy()
         if lower is not None and upper is not None:
@@ -84,6 +86,7 @@ def compute_trainability(
         overlap = np.maximum(0.0, np.minimum(ends, right) - np.maximum(starts, left))
         allocated = float(overlap.sum())
         hr_mean = float(np.dot(hr_values[mask], hr_weights[mask]) / seconds) if seconds else None
+        hr_percent_of_max = hr_mean / hrmax_bpm * 100 if hr_mean is not None and hrmax_bpm else None
         speed_mean = float(np.dot(values, overlap) / allocated) if allocated else None
         reason = None
         if activity_duration_s is None:
@@ -92,20 +95,21 @@ def compute_trainability(
             reason = "ACTIVITY_BELOW_7MIN"
         elif hrmax_bpm is None:
             reason = "HRMAX_MISSING"
-        elif seconds + 1e-9 < MIN_SECONDS:
-            reason = "HR_TIME_BELOW_60S"
-        elif allocated + 1e-9 < MIN_SECONDS:
-            reason = "SPEED_TIME_BELOW_60S"
+        elif seconds + 1e-9 < minimum_seconds:
+            reason = "HR_TIME_BELOW_MINIMUM"
+        elif allocated + 1e-9 < minimum_seconds:
+            reason = "SPEED_TIME_BELOW_MINIMUM"
         elif speed_mean is None or speed_mean <= 0:
             reason = "ZERO_SPEED"
         return {
             "name": name, "lower_bpm": lower, "upper_bpm": upper,
+            "minimum_seconds": minimum_seconds,
             "hr_seconds": seconds, "hr_percent": share * 100,
             "speed_seconds": allocated,
             "mean_hrmod_bpm": hr_mean,
-            "mean_hrmax_percent": hr_mean / hrmax_bpm * 100 if hr_mean is not None and hrmax_bpm else None,
+            "mean_hrmax_percent": hr_percent_of_max,
             "mean_vflat_kmh": speed_mean,
-            "index": hr_mean / speed_mean if reason is None else None,
+            "index": hr_percent_of_max / speed_mean if reason is None else None,
             "valid": reason is None, "invalid_reason": reason,
         }
 
@@ -115,12 +119,13 @@ def compute_trainability(
     if hrmax_bpm is not None and hrmax_bpm <= 0:
         raise ValueError("HRmax must be positive")
     return {
-        "schema_version": "trainability-index-v1", "model_version": MODEL_VERSION,
+        "schema_version": SCHEMA_VERSION, "model_version": MODEL_VERSION,
+        "normalization": "percent_hrmax",
         "comparison_key": comparison_key, "source_versions": dict(source_versions),
         "hrmax_bpm": hrmax_bpm, "zone_bounds_bpm": bounds,
         "activity_duration_s": activity_duration_s,
         "minimum_activity_seconds": MIN_ACTIVITY_SECONDS,
-        "minimum_seconds": MIN_SECONDS, "minimum_grade_pct": MIN_GRADE_PCT,
+        "minimum_seconds_by_band": dict(MIN_SECONDS_BY_BAND), "minimum_grade_pct": MIN_GRADE_PCT,
         "general_range_percent": [75, 92],
         "hr_seconds": hr_total, "eligible_speed_seconds": speed_total,
         "downhill_excluded_seconds": downhill_seconds,

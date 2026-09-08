@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from apps.api import main
 from apps.api.oauth_store import PersistentStoreFailure, SupabasePilotRepository
+from apps.api.trainability import compute_trainability
 
 
 KEY = "a" * 64
@@ -52,6 +53,32 @@ def test_history_fails_closed_if_pinned_summary_belongs_to_other_activity(monkey
         response = client.get("/api/v2/real/trainability" + PERIOD, headers=HEADERS)
     assert response.status_code == 503
     assert "another-activity" not in response.text
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_history_serves_only_the_current_normalized_model(monkeypatch, legacy):
+    index = compute_trainability(
+        [{"hrmod_final_bpm": 154, "dt_s": 420}],
+        [{"vflat_b65_kmh": 20, "dt_s": 420, "grade_raw_pct": 0}],
+        zone_bounds_bpm=[50,137,147,158,170,178], hrmax_bpm=178,
+        activity_duration_s=420, comparison_key="current", source_versions={},
+    )
+    if legacy:
+        index = {"schema_version": "trainability-index-v1", "model_version": "trainability_rank_v1", "general": {"index": 7.7}}
+
+    class WithIndex(PinnedRepository):
+        def trainability_summaries(self, alias, keys):
+            assert keys == (KEY,)
+            return {KEY: {"activity_ref": REF, "trainability_index": index}}
+
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
+    monkeypatch.setattr(main, "_repository", lambda: WithIndex())
+    with TestClient(main.app) as client:
+        response = client.get("/api/v2/real/trainability" + PERIOD, headers=HEADERS)
+    assert response.status_code == 200
+    row = response.json()["activities"][0]
+    assert row["unavailable_reason"] == ("REFRESH_REQUIRED" if legacy else None)
+    assert row["index"] == (None if legacy else index)
 
 
 def test_summary_store_batches_exact_keys_and_only_projects_small_index():

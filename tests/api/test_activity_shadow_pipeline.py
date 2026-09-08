@@ -49,6 +49,17 @@ def test_duration_gate_invalidates_cache_without_splitting_comparable_activities
         assert short[key] == long[key]
 
 
+def test_index_version_invalidates_cache_and_comparison_key(monkeypatch):
+    from apps.api import activity_shadow_pipeline as pipeline
+
+    kwargs = dict(zone_bounds_bpm=(50, 137, 147, 158, 170, 178), explicit_hrmax_bpm=178)
+    current = activity_shadow_configuration_fingerprint(**kwargs, activity_duration_s=900)
+    current_comparison = activity_shadow_configuration_fingerprint(**kwargs)
+    monkeypatch.setattr(pipeline, "TRAINABILITY_MODEL_VERSION", "trainability_rank_v1")
+    assert activity_shadow_configuration_fingerprint(**kwargs, activity_duration_s=900) != current
+    assert activity_shadow_configuration_fingerprint(**kwargs) != current_comparison
+
+
 def test_immutable_input_is_minimal_and_original_normalized_data_is_unchanged() -> None:
     detail = {"start_date": "2026-01-01T10:00:00Z", "name": "private name"}
     normalized = _normalized()
