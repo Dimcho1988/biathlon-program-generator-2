@@ -210,6 +210,8 @@ describe("working role profiles", () => {
     } as never);
 
     await expect(currentAuthorizedAthlete()).resolves.toEqual({
+      actorUserId: userId,
+      canViewRecovery: true,
       userId: athleteId,
       athleteAlias: "ath-biathlon-01",
       displayName: "Мария Иванова",

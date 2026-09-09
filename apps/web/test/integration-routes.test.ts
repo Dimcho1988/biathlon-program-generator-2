@@ -20,6 +20,8 @@ describe("integration route redirects behind a reverse proxy", () => {
   beforeEach(() => {
     vi.mocked(currentAuthorizedAthlete).mockResolvedValue({
       userId: "auth-user-1",
+      actorUserId: "auth-user-1",
+      canViewRecovery: true,
       athleteAlias: "ath-test-profile",
       displayName: "Test athlete",
       isOwner: true,
@@ -359,6 +361,8 @@ describe("integration route redirects behind a reverse proxy", () => {
     process.env.ONFLOWS_PROFILE_MODE = "multi";
     vi.mocked(currentAuthorizedAthlete).mockResolvedValue({
       userId: "athlete-user-1",
+      actorUserId: "coach-user-1",
+      canViewRecovery: true,
       athleteAlias: "ath-test-profile",
       displayName: "Test athlete",
       isOwner: false,
