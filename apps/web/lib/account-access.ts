@@ -23,6 +23,7 @@ type SharingGrantRow = {
   owner_user_id: string;
   viewer_user_id: string;
   edit_plan: boolean;
+  view_recovery?: boolean;
 };
 type InviteRow = {
   id: string;
@@ -87,7 +88,14 @@ export interface AccountWorkspace {
   invites: AccountInvite[];
 }
 
-export type CurrentAthleteAccess = AccessibleAthlete;
+export type CurrentAthleteAccess = AccessibleAthlete & { actorUserId: string; canViewRecovery: boolean };
+
+export function canViewAthleteRecovery(userId:string, athleteUserId:string, memberships:MembershipRow[], assignments:AssignmentRow[], grants:SharingGrantRow[]) {
+  if (userId===athleteUserId || grants.some(g=>g.owner_user_id===athleteUserId && g.viewer_user_id===userId && g.view_recovery===true)) return true;
+  return memberships.some(a=>a.user_id===athleteUserId && a.role==="ATHLETE" && a.status==="ACTIVE"
+    && memberships.some(c=>c.user_id===userId && c.organization_id===a.organization_id && c.status==="ACTIVE"
+      && (["ADMIN","HEAD_COACH"].includes(c.role) || (c.role==="COACH" && assignments.some(s=>s.organization_id===a.organization_id && s.coach_user_id===userId && s.athlete_user_id===athleteUserId)))));
+}
 
 const uniqueRoles = (roles: AccountRole[]) => ACCOUNT_ROLES.filter((role) => roles.includes(role));
 
@@ -247,10 +255,13 @@ export async function currentAuthorizedAthlete(): Promise<CurrentAthleteAccess |
       supabase.from("onflows_coach_athlete_assignments")
         .select("organization_id, coach_user_id, athlete_user_id, can_edit_plan"),
       supabase.from("onflows_sharing_grants")
-        .select("owner_user_id, viewer_user_id, edit_plan"),
+        .select("owner_user_id, viewer_user_id, edit_plan, view_recovery"),
     ]);
     if (membershipsResult.error || assignmentsResult.error || sharingResult.error) return null;
     return {
+      actorUserId: claimsData.claims.sub,
+      canViewRecovery: canViewAthleteRecovery(claimsData.claims.sub, athlete.user_id,
+        (membershipsResult.data??[]) as MembershipRow[], (assignmentsResult.data??[]) as AssignmentRow[], (sharingResult.data??[]) as SharingGrantRow[]),
       userId: athlete.user_id,
       athleteAlias: athlete.athlete_alias,
       displayName: profileResult.data?.display_name ?? "Спортист",

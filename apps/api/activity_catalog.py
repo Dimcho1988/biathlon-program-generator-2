@@ -154,6 +154,7 @@ def extract_activity_metadata(activity_ref: str, detail: Mapping[str, Any]) -> d
         "average_speed_mps": _number(detail.get("average_speed")),
         "max_speed_mps": _number(detail.get("max_speed")),
         "provider_training_load": _number(detail.get("icu_training_load")),
+        "provider_rpe": (rpe if (rpe := _number(detail.get("icu_rpe"))) is not None and rpe <= 10 else None),
         "provider_created_at": _timestamp(detail.get("created")),
         "provider_sync_at": _timestamp(detail.get("icu_sync_date")),
         "provider_analyzed_at": _timestamp(detail.get("analyzed")),

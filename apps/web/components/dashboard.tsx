@@ -47,6 +47,7 @@ function AnalysisNavigation({ planningAvailable }: { planningAvailable: boolean 
     {analysisSections.map(([href, label]) => <a key={href} href={href}>{label}</a>)}
     <Link href="/activities">Активности</Link>
     <Link href="/trainability">Индекс на тренираност</Link>
+    <Link href="/response">Стрес и възстановяване</Link>
     {planningAvailable && <Link href="/planning">Профил за планиране</Link>}
   </nav>;
 }

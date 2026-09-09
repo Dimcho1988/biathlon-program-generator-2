@@ -41,6 +41,14 @@ const DIRECT_WAKE_TIMEOUT_MS = 25_000;
 const DIRECT_WAKE_RETRY_DELAY_MS = 2_000;
 const DIRECT_WAKE_ATTEMPTS = 3;
 export type DataMode = "api" | "fixture";
+
+export async function getResponseHistory(athleteAlias:string,start?:string,end?:string) {
+  const {parseResponseHistory} = await import("./response-monitoring");
+  const params = new URLSearchParams();
+  if (start) params.set("period_start",start);
+  if (end) params.set("period_end",end);
+  return parseResponseHistory(await fetchApiResource(`/api/v2/athlete/response?${params}`,process.env.ONFLOWS_SERVICE_TOKEN,athleteAlias));
+}
 export interface TrainingStatusResult { data: TrainingStatus; mode: DataMode }
 export interface AthleteSettings {
   configured: boolean;
