@@ -47,6 +47,7 @@ function AnalysisNavigation({ planningAvailable }: { planningAvailable: boolean 
     {analysisSections.map(([href, label]) => <a key={href} href={href}>{label}</a>)}
     <Link href="/activities">Активности</Link>
     <Link href="/trainability">Индекс на тренираност</Link>
+    <Link href="/speed">Скорост и продължителност</Link>
     <Link href="/response">Стрес и възстановяване</Link>
     {planningAvailable && <Link href="/planning">Профил за планиране</Link>}
   </nav>;
@@ -149,7 +150,7 @@ export function Dashboard({
         <CompletedWorkSection report={completedWork} message={completedWorkMessage} selectable={mode === "api"} availablePeriodStart={loadHistory?.period_start} availablePeriodEnd={loadHistory?.period_end} />
         <VolumeHistorySection history={volumeHistory} message={volumeHistoryMessage} />
         <LoadHistorySection history={loadHistory} message={loadHistoryMessage} />
-        <RecoveryHistorySection history={recoveryHistory} message={recoveryHistoryMessage} refreshAvailable={integrationActions} syncBusy={syncBusy} fullRefreshRequired={loadHistory?.schema_version !== "load-history-v2"} />
+        <RecoveryHistorySection history={recoveryHistory} message={recoveryHistoryMessage} refreshAvailable={integrationActions} syncBusy={syncBusy} fullRefreshRequired={loadHistory?.schema_version !== "load-history-v2"} canEdit={athleteCanEdit} />
 
         <details id="model-metadata" className="metadata">
           <summary><span><small>Техническа информация</small>Метаданни на модела</span><span className="chevron" aria-hidden="true">⌄</span></summary>

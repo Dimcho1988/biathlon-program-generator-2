@@ -20,7 +20,7 @@ MIN_COMPRESS_BYTES = 64 * 1024
 MAX_DECODE_BYTES = 256 * 1024 * 1024
 
 
-def encode_shadow_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _encode_main_series(payload: Mapping[str, Any]) -> dict[str, Any]:
     result = dict(payload)
     rows = result.get("timeseries")
     if not isinstance(rows, list) or not rows:
@@ -40,7 +40,7 @@ def encode_shadow_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def decode_shadow_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _decode_main_series(payload: Mapping[str, Any]) -> dict[str, Any]:
     result = dict(payload)
     packed = result.get("timeseries")
     if packed is None or isinstance(packed, list):
@@ -66,4 +66,18 @@ def decode_shadow_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(rows, list) or len(rows) != count or not all(isinstance(row, dict) for row in rows):
         raise ValueError("Invalid decoded shadow time series")
     result["timeseries"] = rows
+    return result
+
+
+def encode_shadow_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    result = _encode_main_series(payload)
+    if "speed_test_series" in payload:
+        result["speed_test_series"] = _encode_main_series({"timeseries": payload["speed_test_series"]})["timeseries"]
+    return result
+
+
+def decode_shadow_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    result = _decode_main_series(payload)
+    if "speed_test_series" in payload:
+        result["speed_test_series"] = _decode_main_series({"timeseries": payload["speed_test_series"]})["timeseries"]
     return result

@@ -258,3 +258,20 @@ def test_hrmod_keeps_original_irregular_timestamps_and_gap_flags() -> None:
     assert [row["elapsed_s"] for row in derived["timeseries"]] == offsets
     assert len(immutable["samples"]) == len(offsets)
     assert any(row["quality_flags"] for row in derived["timeseries"])
+
+
+def test_speed_test_series_is_full_one_hz_and_does_not_require_hr():
+    from apps.api.model_service import segment_measurement
+    normalized = normalize_stream_intervals(NormalizerInput(
+        offsets=list(range(0, 721, 5)),
+        metrics={"velocity_smooth": [6.0]*145, "gradient": [0.0]*145},
+    ))
+    _, derived = compute_activity_shadow(
+        detail={"start_date": "2026-01-01T10:00:00Z"}, normalized=normalized,
+        zone_bounds_bpm=(80,100,120,140,160,180), explicit_hrmax_bpm=None,
+    )
+    assert len(derived["timeseries"]) == 145
+    assert len(derived["speed_test_series"]) == 721
+    measured = segment_measurement(derived, 0, 720)
+    assert measured["coverage_percent"] == 100
+    assert measured["speed_kmh"] == pytest.approx(21.6)

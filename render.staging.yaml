@@ -53,6 +53,8 @@ services:
         value: tref-bounded-40d-expert-v1
       - key: ONFLOWS_RECOVERY_VERSION
         value: main-load-recovery-v1
+      - key: ONFLOWS_RECOVERY_V2_ENABLED
+        value: "true"
       - key: ONFLOWS_HISTORY_DAYS
         value: "90"
       - key: ONFLOWS_WEB_BASE_URL

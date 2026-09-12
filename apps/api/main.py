@@ -97,12 +97,74 @@ from .sync_contracts import PUBLIC_SCOPE_BY_JOB_KIND
 from .training_status import build_demo_training_status
 from .response_monitoring import DailyReport, SessionReport, ResponseBlock, OptionalTest
 from . import response_service
+from . import model_service
+from .model_schemas import RecoveryConfigInput, SpeedTestInput, RecoveryHistoryV2
 
 app = FastAPI(title="onFlows API", version="1.0.0")
 logger = logging.getLogger(__name__)
 ATHLETE_ALIAS_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{2,63}$")
 SAFE_WEB_NOTICE_PATTERN = re.compile(r"^[a-z0-9-]{1,64}$")
 ACTIVITY_SHADOW_REF_PATTERN = re.compile(r"^(?:shadow-|act_)[a-f0-9]{32}$")
+
+
+def _model_alias(authorization, athlete_alias):
+    _authorize(authorization)
+    alias = _validated_alias(athlete_alias, fallback=False)
+    if not alias:
+        raise HTTPException(401, "Athlete session is required")
+    return alias
+
+
+@app.get("/api/v2/athlete/models/recovery")
+def recovery_configuration(authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None):
+    alias = _model_alias(authorization, athlete_alias)
+    try:
+        return model_service.ModelStore(_repository()).config(alias)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503,"Model settings are unavailable") from exc
+
+
+@app.put("/api/v2/athlete/models/recovery")
+def save_recovery_configuration(body: RecoveryConfigInput,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None):
+    alias = _model_alias(authorization, athlete_alias)
+    if actor is None: raise HTTPException(401,"Actor session is required")
+    try:
+        return model_service.save_config(_repository(),alias,body,actor)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503,"Model settings could not be saved") from exc
+
+
+@app.get("/api/v2/athlete/models/speed")
+def speed_model(sport: str | None = None, duration_s: float | None = None,
+    distance_m: float | None = None, speed_kmh: float | None = None,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None):
+    alias = _model_alias(authorization, athlete_alias)
+    try:
+        return model_service.speed_view(_repository(),alias,sport,duration_s=duration_s,distance_m=distance_m,speed_kmh=speed_kmh)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503,"Speed model sources are unavailable") from exc
+
+
+@app.put("/api/v2/athlete/models/speed-test")
+def save_speed_test(body: SpeedTestInput,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None):
+    alias = _model_alias(authorization, athlete_alias)
+    if actor is None: raise HTTPException(401,"Actor session is required")
+    try:
+        return model_service.save_test(_repository(),alias,body,actor)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503,"Speed test could not be saved") from exc
+
+
+def _model_snapshot(repository, alias):
+    return model_service.project_recovery(repository,alias,repository.latest(alias))
 
 @app.get("/api/v2/athlete/response")
 def response_history(period_start: date | None = None, period_end: date | None = None,
@@ -180,6 +242,8 @@ async def model_health() -> ModelHealthResponse:
         sprint_str_model_version=SPRINT_STR_MODEL_VERSION,
         hrmod_model_version=HRMOD_MODEL_VERSION,
         hrmod_source_commit=SOURCE_COMMIT,
+        recovery_model_version=model_service.recovery_v2.VERSION if model_service.enabled() else "main-load-recovery-v1",
+        speed_model_version=model_service.speed_duration.VERSION,
     )
 
 
@@ -446,7 +510,10 @@ def real_training_status(
             status_code=503, detail="No valid real-data snapshot is available"
         )
     try:
+        snapshot = model_service.project_recovery(_repository(),_validated_alias(athlete_alias),snapshot)
         return training_status_from_persisted(snapshot)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503,"Model settings are unavailable") from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=503, detail="Stored real-data snapshot is invalid"
@@ -544,7 +611,7 @@ def real_volume_history(
         ) from exc
 
 
-@app.get("/api/v2/real/recovery-history", response_model=RecoveryHistoryResponse)
+@app.get("/api/v2/real/recovery-history", response_model=RecoveryHistoryResponse | RecoveryHistoryV2)
 def real_recovery_history(
     authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[
@@ -563,7 +630,10 @@ def real_recovery_history(
             status_code=503, detail="No valid real-data snapshot is available"
         )
     try:
+        snapshot = model_service.project_recovery(_repository(),_validated_alias(athlete_alias),snapshot)
         return recovery_history_from_persisted(snapshot)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503,"Model settings are unavailable") from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=503,
@@ -587,12 +657,15 @@ def real_dashboard_view(
 
     _authorize(authorization)
     try:
-        envelope = _repository().active_analysis(_validated_alias(athlete_alias))
+        repository = _repository()
+        alias = _validated_alias(athlete_alias)
+        envelope = repository.active_analysis(alias)
         if not isinstance(envelope, Mapping):
             raise ValueError("No active analysis is available")
         payload = envelope.get("snapshot_payload")
         if not isinstance(payload, Mapping):
             raise ValueError("Active analysis payload is invalid")
+        payload = model_service.project_recovery(repository,alias,payload)
         snapshot = AthleteSnapshot.model_validate(payload)
         revision = int(envelope.get("revision") or 0)
         if revision < 0:
@@ -1422,7 +1495,7 @@ def _planning_calendar_response(
         accent_preferences=repository.athlete_mesocycle_accent_preferences(
             athlete_alias
         ),
-        training_snapshot=repository.latest(athlete_alias),
+        training_snapshot=_model_snapshot(repository,athlete_alias),
         as_of=date.today(),
     )
     return PlanningCalendarResponse(

@@ -22,6 +22,8 @@ class ModelHealthResponse(HealthResponse):
     sprint_str_model_version: str
     hrmod_model_version: str
     hrmod_source_commit: str
+    recovery_model_version: str | None = None
+    speed_model_version: str | None = None
 
 
 class SyncJobRequest(StrictModel):
@@ -739,13 +741,16 @@ class RecoveryHistoryResponse(StrictModel):
     strength: RecoveryStrengthHistory | None = None
 
 
+from .model_schemas import RecoveryHistoryV2
+
+
 class AthleteSnapshot(StrictModel):
     """Persisted aggregate envelope; no raw streams or provider identifiers."""
 
     schema_version: Literal["athlete-snapshot-v1"]
     training_status: TrainingStatusResponse
     load_history: LoadHistoryResponse
-    recovery_history: RecoveryHistoryResponse | None = None
+    recovery_history: RecoveryHistoryResponse | RecoveryHistoryV2 | None = None
     wellness_calendar: list[DailyWellnessSummary] = []
 
 
@@ -758,5 +763,5 @@ class DashboardViewResponse(StrictModel):
     training_status: TrainingStatusResponse
     completed_work: CompletedWorkResponse
     load_history: LoadHistoryResponse
-    recovery_history: RecoveryHistoryResponse | None
+    recovery_history: RecoveryHistoryResponse | RecoveryHistoryV2 | None
     volume_history: VolumeHistoryResponse
