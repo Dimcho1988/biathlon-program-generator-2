@@ -126,6 +126,9 @@ def test_preview_measures_without_writing_and_matches_saved_test():
     result=preview(repo,"ath-test",REF,120,720)
     assert repo.saved==[]
     assert result["status"]=="READY" and len(result["series"])<=360
+    # 1000 seconds / 360 buckets is not an integer. Splitting sample overlaps
+    # must still show full coverage in every display bucket of this clean trace.
+    assert all(p["eligible_fraction"]==pytest.approx(1) for p in result["series"])
     selection=result["selection"]
     assert selection["eligible"] and selection["coverage_percent"]==100
     body=SpeedTestInput(activity_ref=REF,start_s=120,duration_s=720,maximal=True,comparable=True,
