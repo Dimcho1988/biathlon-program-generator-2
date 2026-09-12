@@ -44,6 +44,14 @@ time until readiness ≥90 is solved against total_F≤10, assuming no new loads
 The per-dose amplitude ceiling therefore never discards previous fatigue.
 Changing configuration re-evaluates the historical projection deterministically.
 
+The recovery section is keyed by athlete identity, not configuration revision.
+Saving settings therefore preserves chart filters, the selected diagnostic zone
+and expanded details. The editor refreshes its inputs on a new server revision,
+keeps edits on a failed write, and only confirms applied settings when the returned
+revision is present in the displayed projection. Unsaved edits are explicitly
+labelled; no Intervals re-import is necessary. The common fixed chart time axis
+also prevents a changed duration from being hidden by automatic rescaling.
+
 Cold-start expert prior (E minutes/day): Z1=40, Z2=20, Z3=8, Z4=4, Z5=2, STR=8.
 The blending weight is `min(1, covered_days/7, sum_E/(7*initial_daily))`.
 Zero history retains the prior; sparse positive history approaches it continuously.
@@ -120,6 +128,24 @@ idempotence and unauthorized actor checks; no verification records persisted.
 Enable the API flag and deploy API, worker and web from the integration branch.
 The new page is `/speed`, linked from the dashboard and each activity detail.
 Recovery settings save and refresh the projection immediately.
+
+### Recovery chart and traceability
+
+The overview displays all five zones and STR on the same calendar axis, from
+five days before the projection date to two days after it. Solid lines join
+consecutive recorded daily readiness values; missing days stay disconnected.
+Dashed lines forecast no new training. Today uses the same current value as the
+zone card. Individual zones can be hidden and values inspected by day/hour.
+Every zone's API forecast covers at least two days, includes hourly samples and
+its exact 90% crossing; a crossing beyond two days is outside the overview.
+
+Daily rows also expose `residual_fatigue_now`, calculated from each original
+impulse at the projection date. Their sum is current residual fatigue. The UI
+lists the largest contributors with the effective dose, baseline at that time,
+and isolated deadline counted from the dose date. This explains long tails in
+sparsely trained zones: a small historical denominator can produce a long
+isolated recovery duration. This display update changes no recovery equation,
+settings, baseline, cascade, spillover or stored loads.
 
 Validation covers isolated and accumulated recovery, tiny doses, missing/sparse
 history, future-data exclusion, C1/inverse curves, incompatible tests, corrections,

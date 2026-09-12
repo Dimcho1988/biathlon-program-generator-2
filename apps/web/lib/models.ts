@@ -10,7 +10,7 @@ export interface RecoveryV2 {
   model:{algorithm_version:"recovery-daily-e-biexponential-v2"|"recovery-daily-e-biexponential-v2.1";parameter_version:string;parameter_fingerprint:string;practical_full_recovery_percent:90};
   config_revision:number;settings:Record<ModelZone,ZoneConfig>;
   current:Array<Baseline & {zone:ModelZone;readiness_percent:number;residual_fatigue:number;days_to_practical_recovery:number}>;
-  daily:Array<Baseline & {date:string;zone:ModelZone;readiness_before_percent:number;readiness_after_percent:number;residual_fatigue_after:number;impulse:number;effective_load:number;isolated_days_to_90:number}>;
+  daily:Array<Baseline & {date:string;zone:ModelZone;readiness_before_percent:number;readiness_after_percent:number;residual_fatigue_after:number;impulse:number;effective_load:number;isolated_days_to_90:number;residual_fatigue_now?:number|null}>;
   forecast:Array<{zone:ModelZone;days:number;readiness_percent:number}>;
   source_as_of:string;source_stale:boolean;warnings:string[];
   wellness_diagnostics?:WellnessCoverageDiagnostics|null;

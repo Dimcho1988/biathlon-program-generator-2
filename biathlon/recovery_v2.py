@@ -136,6 +136,7 @@ def simulate(daily, configs=None, *, target=None):
         config = configs[z]
         doses = grouped[z]
         impulses = []
+        contributions = []
         last_baseline = baseline([], config["initial_daily_min"])
         for day in sorted(d for d in doses if d <= target):
             previous = [v for d,v in sorted(doses.items()) if day-timedelta(days=40) <= d < day]
@@ -152,15 +153,23 @@ def simulate(daily, configs=None, *, target=None):
                 "effective_load":doses[day], "baseline_daily_min":used,
                 "baseline_raw_daily_min":raw, "history_days":n, "baseline_source":source,
                 "isolated_days_to_90":days_to_ready([added],day) if added else 0.})
+            contributions.append((rows[-1], added))
             last_baseline = used, raw, n, source
+        # Attribute today's fatigue to its original daily doses. This is a
+        # diagnostic projection; the history, rates and readiness are unchanged.
+        for row, added in contributions:
+            row["residual_fatigue_now"] = added.residual((target-added.day).days) if added else 0.
         f = residual(impulses, target)
         horizon = days_to_ready(impulses, target)
         current.append({"zone":z, "readiness_percent":max(0.,100.-f),
             "residual_fatigue":f, "days_to_practical_recovery":horizon,
             "baseline_daily_min":last_baseline[0], "baseline_raw_daily_min":last_baseline[1],
             "history_days":last_baseline[2], "baseline_source":last_baseline[3]})
-        end = max(1., horizon * 1.2)
-        forecast.extend({"zone":z,"days":end*i/60,"readiness_percent":max(0.,100.-residual(impulses,target,end*i/60))} for i in range(61))
+        end = max(2., horizon * 1.2)
+        # All zones share a complete two-day view. Keep hourly samples even
+        # with long residual tails, plus the exact absolute-90% crossing.
+        times = sorted({end*i/60 for i in range(61)} | {i/24 for i in range(49)} | {horizon})
+        forecast.extend({"zone":z,"days":t,"readiness_percent":max(0.,100.-residual(impulses,target,t))} for t in times)
     return {"daily":sorted(rows,key=lambda r:(r["date"],r["zone"])),
             "current":current,"forecast":forecast,"as_of":target.isoformat(),
             "time_resolution":"calendar-day", "ready_threshold_percent":90.}

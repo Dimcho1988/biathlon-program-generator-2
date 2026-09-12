@@ -100,7 +100,7 @@ function RecoveryChart({ history }: { history: LegacyRecoveryHistory }) {
 }
 
 export function RecoveryHistorySection({ history, message, refreshAvailable = false, syncBusy = false, fullRefreshRequired = false, canEdit = false }: { history: RecoveryHistory | null; message?: string; refreshAvailable?: boolean; syncBusy?: boolean; fullRefreshRequired?: boolean; canEdit?:boolean }) {
-  if(history?.schema_version === "recovery-history-v2") return <><RecoveryV2Section key={history.config_revision} history={history} canEdit={canEdit}/>{history.wellness_diagnostics&&<WellnessCoveragePanel diagnostics={history.wellness_diagnostics}/>}</>;
+  if(history?.schema_version === "recovery-history-v2") return <><RecoveryV2Section key={history.athlete_id} history={history} canEdit={canEdit}/>{history.wellness_diagnostics&&<WellnessCoveragePanel diagnostics={history.wellness_diagnostics}/>}</>;
   if (!history) return message || refreshAvailable ? <section className="history-section" aria-labelledby="recovery-title">
     <div className="section-heading"><div><p className="section-kicker">Canonical recovery</p><h2 id="recovery-title">Товарно възстановяване</h2></div></div>
     <div className="history-unavailable">

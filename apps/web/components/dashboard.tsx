@@ -144,7 +144,7 @@ export function Dashboard({
         <section className="zones-section" aria-labelledby="zones-title">
           <div className="section-heading"><div><p className="section-kicker">Z1—Z5</p><h2 id="zones-title">Статус по зони</h2></div><p>Последна активност и текущ модел на възстановяване</p></div>
           {data.zones.length === 0 ? <div className="empty"><h3>Няма зонални данни</h3><p>API отговорът е валиден, но не съдържа зони за този анализ.</p></div> :
-            <div className="zone-list">{data.zones.map((zone) => <ZoneCard key={zone.zone} zone={zone} />)}</div>}
+            <div className="zone-list">{data.zones.map((zone) => <ZoneCard key={zone.zone} zone={zone} recoveryV2={recoveryHistory?.schema_version === "recovery-history-v2"} />)}</div>}
         </section>
 
         <CompletedWorkSection report={completedWork} message={completedWorkMessage} selectable={mode === "api"} availablePeriodStart={loadHistory?.period_start} availablePeriodEnd={loadHistory?.period_end} />
@@ -171,12 +171,12 @@ export function Dashboard({
   );
 }
 
-function ZoneCard({ zone }: { zone: ZoneTrainingStatus }) {
+function ZoneCard({ zone, recoveryV2 = false }: { zone: ZoneTrainingStatus; recoveryV2?: boolean }) {
   const [trefMin, trefMax] = TREF_BOUNDS_MINUTES[zone.zone];
   return (
     <article className={`zone-card ${zone.zone.toLowerCase()}`} aria-labelledby={`title-${zone.zone}`}>
       <div className="zone-id"><span className="zone-mark" aria-hidden="true" /><div><p>Зона</p><h3 id={`title-${zone.zone}`}>{zone.zone}</h3></div></div>
-      <dl>{metrics.map(([key, label, format]) => <div key={key}><dt>{label}</dt><dd>{format(zone[key] as number)}</dd>{key === "tref_min" && <small className="tref-bounds">7 × E40/ден · граници {trefMin}–{trefMax}</small>}</div>)}</dl>
+      <dl>{metrics.map(([key, label, format]) => <div key={key}><dt>{key === "recovery_days_to_full" && recoveryV2 ? "Дни до 90% готовност" : label}</dt><dd>{format(zone[key] as number)}</dd>{key === "tref_min" && <small className="tref-bounds">7 × E40/ден · граници {trefMin}–{trefMax}</small>}</div>)}</dl>
     </article>
   );
 }
