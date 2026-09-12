@@ -61,6 +61,35 @@ def test_missing_calendar_days_are_not_invented_rest():
     assert result["daily"][-1]["history_days"]==2
     with pytest.raises(ValueError): r.simulate(rows+[rows[0]],target=TODAY)
 
+
+def test_shared_forecast_covers_two_days_and_matches_each_zone_deadline():
+    rows = [{"date": TODAY.isoformat(), "zone": z, "effective_load": dose}
+            for z, dose in zip(r.ZONES, (0, .5, 20, 60, 80, 5))]
+    result = r.simulate(rows, target=TODAY)
+    for current in result["current"]:
+        points = [p for p in result["forecast"] if p["zone"] == current["zone"]]
+        assert points[0]["readiness_percent"] == current["readiness_percent"]
+        assert points[-1]["days"] >= 2
+        assert all(any(p["days"] == hour / 24 for p in points) for hour in range(49))
+        deadline = current["days_to_practical_recovery"]
+        at_deadline = next(p for p in points if p["days"] == deadline)
+        if deadline:
+            assert at_deadline["readiness_percent"] == pytest.approx(90)
+        else:
+            assert at_deadline["readiness_percent"] >= 90
+        assert all(a["readiness_percent"] <= b["readiness_percent"] for a, b in zip(points, points[1:]))
+
+
+def test_residual_attribution_preserves_old_doses_and_sums_to_current_fatigue():
+    rows = [{"date": (TODAY-timedelta(days=age)).isoformat(), "zone": z, "effective_load": dose}
+            for z in r.ZONES for age, dose in ((21, 60), (20, 40), (2, 5), (0, 0))]
+    result = r.simulate(rows, target=TODAY)
+    for current in result["current"]:
+        daily = [row for row in result["daily"] if row["zone"] == current["zone"]]
+        assert math.fsum(row["residual_fatigue_now"] for row in daily) == pytest.approx(current["residual_fatigue"])
+        assert daily[-1]["residual_fatigue_now"] == 0
+        assert all(row["residual_fatigue_now"] >= 0 for row in daily)
+
 def observations():
     return [{"duration_s":120,"speed_kmh":25.92,"use_for_cs":True},
             {"duration_s":720,"speed_kmh":21.6,"use_for_cs":True},

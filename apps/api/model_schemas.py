@@ -58,6 +58,7 @@ class RecoveryDailyV2(Baseline):
     impulse: Nonnegative
     effective_load: Nonnegative
     isolated_days_to_90: Nonnegative
+    residual_fatigue_now: Nonnegative | None = None
 
 class RecoveryForecastV2(Strict):
     zone: Zone

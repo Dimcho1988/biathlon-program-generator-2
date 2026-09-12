@@ -22,6 +22,9 @@ describe("Recovery v2 interface",()=>{
     const html=renderToStaticMarkup(<RecoveryV2Section history={fixture} canEdit/>);
     for(const text of ["праг 90%","Стръмност","Среднодневна база","STR","Запази и преизчисли"])expect(html).toContain(text);
     expect(html).not.toContain("NaN");
+    for(const zone of MODEL_ZONES) expect(html).toContain(`data-recovery-zone="${zone}"`);
+    expect(html).toContain("5 дни назад · днес · 2 дни напред");
+    expect(html).toContain("Защо срокът е такъв?");
     const readOnly=renderToStaticMarkup(<RecoveryV2Section history={fixture} canEdit={false}/>);
     expect(readOnly).not.toContain("Запази и преизчисли");expect(readOnly).toContain("disabled");
   });
