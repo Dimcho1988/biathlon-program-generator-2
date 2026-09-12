@@ -114,7 +114,7 @@ def save_test(repository,alias,body,actor):
     today=datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
     if not day or not (today-timedelta(days=90)).isoformat()<=day<=today.isoformat():
         raise HTTPException(422,"Choose a test within the last 90 days")
-    measured=segment_measurement(shadow,body.start_s,body.duration_s)
+    measured=segment_measurement(shadow,body.start_s,body.duration_s,body.test_mode)
     payload=body.model_dump(mode="json",exclude={"expected_revision","expected_source_run_key"})
     payload.update(measured)
     payload.update({"schema_version":"speed-test-v1","day":day,"sport":activity["sport"],
@@ -151,6 +151,9 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     try: curve=speed_duration.calibrated(tests)
     except ValueError:
         curve=speed_duration.calibrated([]); tests=[]; warnings.append("CONFLICTING_TESTS")
+    exploratory_count=sum(t.get("test_mode")=="EXPLORATORY" for t in tests)
+    if exploratory_count:
+        warnings.append("EXPLORATORY_CALIBRATION")
     recent=[a for a in activities if a["sport"]==sport and a.get("local_date","") >= (today-timedelta(days=40)).isoformat()]
     keys=tuple(a["latest_shadow_run_key"] for a in recent if a.get("latest_shadow_run_key"))
     summaries=repository.trainability_summaries(alias,keys) if keys else {}
@@ -209,6 +212,7 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     return {"schema_version":"speed-model-v1","model_version":speed_duration.VERSION,"sport":sport,"sports":sports,
         "activities":[{"activity_ref":a["activity_ref"],"name":a.get("name") or a["sport"],"day":a.get("local_date"),"sport":a["sport"],"elapsed_s":a.get("elapsed_time_s")} for a in activities],
         "status":"CALIBRATED" if tests else "REFERENCE_ONLY","tests":entries,"active_test_count":len(tests),
+        "exploratory_test_count":exploratory_count,
         "active_test_keys":[e["entry_key"] for e in entries if e["payload"] in tests],
         "points":[prediction(math.exp(tuned._x[0]+(tuned._x[-1]-tuned._x[0])*i/180)) for i in range(181)],
         "volume_weekly_min":volumes,"history_days":n,"zone_corrections":dict(zip(volumes,corrections)),

@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from apps.api import main, model_service as m
 from apps.api.model_schemas import RecoveryConfigInput,SpeedTestInput,initial_settings
-from apps.api.speed_segments import preview
+from apps.api.speed_segments import preview, measure
 
 NOW=datetime(2026,9,12,12,tzinfo=timezone.utc)
 REF="act_"+"1"*32
@@ -209,3 +209,75 @@ def test_saved_anchor_unlocks_all_three_prediction_directions_and_errors_stay_in
     assert outside["prediction"] is None and outside["prediction_error"]=="OUTSIDE_PREDICTION_RANGE"
     assert outside["points"] and outside["status"]=="CALIBRATED"
     assert m.speed_view(repo,"ath-test","Ride")["status"]=="REFERENCE_ONLY"
+
+
+class ComplexSpeedStore(SpeedStore):
+    def active_activity_view(self,alias,ref):
+        row=super().active_activity_view(alias,ref)
+        row["catalog_payload"]["sport"]="Walk"
+        row["shadow_payload"]["speed_test_series"]=[
+            {"elapsed_s":t,"dt_s":0 if t%10==9 else 1,
+             "vflat_b65_kmh":80 if t%10==8 else 20,"grade_smoothed_pct":-4 if t%10==8 else 0}
+            for t in range(1,1001)]
+        return row
+
+
+def exploratory_input(**extra):
+    return SpeedTestInput(**{"activity_ref":REF,"start_s":0,"duration_s":1000,"test_mode":"EXPLORATORY",
+        "maximal":False,"exploratory_confirmed":True,"comparable":True,"conditions":"Complex synthetic control",
+        **extra})
+
+
+def test_exploratory_walk_preview_save_and_prediction_share_coverage_and_elapsed_basis():
+    repo=ComplexSpeedStore()
+    strict=preview(repo,"ath-test",REF,0,1000)["selection"]
+    assert not strict["eligible"] and strict["speed_kmh"] is None
+    trial=preview(repo,"ath-test",REF,0,1000,"EXPLORATORY")["selection"]
+    assert trial["eligible"] and trial["minimum_coverage_percent"]==70
+    assert trial["coverage_percent"]==80
+    assert trial["duration_s"]==1000 and trial["measured_duration_s"]==800
+    assert trial["speed_kmh"]==20
+    assert trial["distance_m"]==pytest.approx(20*1000/3.6)
+    assert trial["measured_distance_m"]==pytest.approx(20*800/3.6)
+    assert trial["excluded_seconds"]=={"downhill":100,"invalid":0,"missing_or_paused":100}
+    assert repo.saved==[]
+    strict_body=SpeedTestInput(activity_ref=REF,start_s=0,duration_s=1000,maximal=True,comparable=True,conditions="same course")
+    actor=UUID("11111111-1111-4111-8111-111111111111")
+    with pytest.raises(HTTPException):m.save_test(repo,"ath-test",strict_body,actor)
+    assert repo.saved==[]
+    m.save_test(repo,"ath-test",exploratory_input(),actor)
+    write=repo.saved[0];payload=write["p_payload"]
+    for key in ("test_mode","speed_kmh","coverage_percent","duration_s","measured_duration_s","measured_distance_m","excluded_seconds"):
+        assert payload[key]==trial[key]
+    assert payload["sport"]=="Walk" and payload["maximal"] is False and payload["use_for_cs"] is False
+    repo.rows=[{"kind":"SPEED_TEST","entry_key":write["p_key"],"revision":1,"payload":payload}]
+    result=m.speed_view(repo,"ath-test","Walk",duration_s=1000)
+    assert result["status"]=="CALIBRATED" and result["exploratory_test_count"]==1
+    assert "EXPLORATORY_CALIBRATION" in result["warnings"]
+    assert result["prediction"]["speed_kmh"]==pytest.approx(20)
+    assert result["critical_speed"]["count"]==0
+    assert m.speed_view(repo,"ath-test","NordicSki")["status"]=="REFERENCE_ONLY"
+
+
+def test_exploratory_floor_and_attestations_do_not_relax_strict_tests():
+    assert measure([(0,700,20,None)],0,1000,"EXPLORATORY")["eligible"]
+    assert not measure([(0,699.9,20,None)],0,1000,"EXPLORATORY")["eligible"]
+    assert not measure([(0,700,20,None)],0,1000,"STRICT")["eligible"]
+    assert measure([],0,1000,"EXPLORATORY")["speed_kmh"] is None
+    for change in ({"exploratory_confirmed":False},{"maximal":True},{"use_for_cs":True},{"test_mode":"ANYTHING"}):
+        with pytest.raises(ValueError):exploratory_input(**change)
+    with pytest.raises(ValueError):exploratory_input(test_mode="STRICT")
+    with pytest.raises(HTTPException):preview(ComplexSpeedStore(),"ath-test",REF,0,1000,"ANYTHING")
+
+
+def test_preview_api_respects_explicit_mode_and_existing_auth(monkeypatch):
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN","service-secret")
+    repo=ComplexSpeedStore();monkeypatch.setattr(main,"_repository",lambda:repo)
+    client=TestClient(main.app)
+    url=f"/api/v2/athlete/models/speed-preview?activity_ref={REF}&start_s=0&duration_s=1000"
+    headers={"Authorization":"Bearer service-secret","X-OnFlows-Athlete-Alias":"ath-test"}
+    assert not client.get(url,headers=headers).json()["selection"]["eligible"]
+    assert client.get(url+"&test_mode=EXPLORATORY",headers=headers).json()["selection"]["eligible"]
+    assert client.get(url+"&test_mode=EXPLORATORY").status_code==401
+    assert client.get(url+"&test_mode=OPEN",headers=headers).status_code==422
+    assert repo.saved==[]

@@ -31,13 +31,26 @@ class SpeedTestInput(Strict):
     activity_ref: str = Field(pattern=r"^act_[a-f0-9]{32}$")
     start_s: int = Field(ge=0,le=172800,strict=True)
     duration_s: int = Field(ge=11,le=43516,strict=True)
-    maximal: Literal[True]
+    test_mode: Literal["STRICT","EXPLORATORY"] = "STRICT"
+    maximal: bool = Field(strict=True)
+    exploratory_confirmed: bool = Field(default=False,strict=True)
     comparable: Literal[True]
     enabled: bool = True
     use_for_cs: bool = False
     conditions: str = Field(min_length=3,max_length=400)
     expected_revision: int = Field(default=0,ge=0,strict=True)
     expected_source_run_key: str | None = Field(default=None,pattern=r"^[a-f0-9]{64}$")
+
+    @model_validator(mode="after")
+    def attest_test_mode(self):
+        if self.test_mode == "STRICT" and not self.maximal:
+            raise ValueError("A strict test requires a maximal continuous effort")
+        if self.test_mode == "EXPLORATORY":
+            if not self.exploratory_confirmed:
+                raise ValueError("Confirm exploratory calibration")
+            if self.maximal or self.use_for_cs:
+                raise ValueError("Exploratory records are not continuous maximal or critical-speed tests")
+        return self
 
 class Baseline(Strict):
     baseline_daily_min: float = Field(gt=0)
