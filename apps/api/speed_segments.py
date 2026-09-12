@@ -102,17 +102,17 @@ def preview(repository, alias, activity_ref, start=None, duration=None):
     width = max(1., elapsed / 360)
     buckets = {}
     for left, right, speed, reason in intervals:
-        index = min(359, int(left / width))
-        bucket = buckets.setdefault(index, [0., 0., 0.])
-        dt = right - left
-        if speed is not None:
-            bucket[0] += dt * speed
-            bucket[1] += dt
-        if reason is None:
-            bucket[2] += dt
+        for index in range(int(left / width), min(360, math.ceil(right / width))):
+            dt = max(0., min(right, (index + 1) * width, elapsed) - max(left, index * width))
+            bucket = buckets.setdefault(index, [0., 0., 0.])
+            if speed is not None:
+                bucket[0] += dt * speed
+                bucket[1] += dt
+            if reason is None:
+                bucket[2] += dt
     series = [{"elapsed_s": min(elapsed, (i + .5) * width),
                "speed_kmh": buckets[i][0] / buckets[i][1] if i in buckets and buckets[i][1] else None,
-               "eligible_fraction": min(1., buckets[i][2] / width) if i in buckets else 0.}
+               "eligible_fraction": min(1., buckets[i][2] / min(width, elapsed - i * width)) if i in buckets else 0.}
               for i in range(min(360, math.ceil(elapsed / width)))]
     return {"schema_version": "speed-test-preview-v1", "activity_ref": activity_ref,
             "sport": activity["sport"], "name": activity.get("name") or activity["sport"], "day": day,
