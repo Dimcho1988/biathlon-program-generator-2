@@ -133,6 +133,32 @@ or more expose distance RMSE. Nonpositive/unphysical fits are withheld. Distance
 are Vflat equivalents, so CS is correspondingly an estimate for flat conditions.
 Predictions support duration, equivalent distance or speed as the single input.
 
+### Test selection and preview
+
+`/speed` explains the reference-only state and links directly to test selection.
+The activity picker uses the selected source sport, newest first, with name/date
+search. Opening the model from an activity preserves that activity selection.
+Elapsed start/end can be entered as `minutes:seconds` or `hours:minutes:seconds`,
+set with sliders, or placed on a speed chart. They include pauses in the source
+record; moving time and HR-zone time are not used as interval boundaries.
+
+The authenticated, athlete-scoped `GET /api/v2/athlete/models/speed-preview`
+does not write a test or assert a maximal effort. It reports duration, eligible
+coverage and (only at >=98%) Vflat speed/equivalent distance, along with excluded
+descent, invalid-data and missing/paused seconds. Its display is bounded to 360
+buckets; measurement and save share the full-resolution interval integrator,
+including fractional samples overlapping either boundary. Missing analyses and
+out-of-window activities are explicit. An arbitrary activity is never selected
+as maximal automatically.
+
+After a successful preview, saving still requires maximal/comparability
+attestations and conditions. Changing the bounds invalidates the preview and
+clears attestations. Save checks the preview's source run against the current
+analysis and the existing test revision. The UI waits for the saved revision in
+the refreshed model before reporting that the curve is updated. Prediction
+range errors remain inside the page, with the submitted unit/value preserved.
+The speed-duration equations, 98% gate and 90-day window are unchanged.
+
 ## Storage and rollout
 
 `onflows_model_entries` contains profile-scoped RECOVERY and SPEED_TEST records.

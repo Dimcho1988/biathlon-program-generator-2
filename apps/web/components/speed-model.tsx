@@ -1,35 +1,35 @@
 "use client";
 import Link from "next/link";
-import {useState,type FormEvent} from "react";
+import {useState} from "react";
 import {useRouter} from "next/navigation";
 import {saveModel,type SpeedModel,type SpeedTest} from "../lib/models";
+import {SpeedTestEditor} from "./speed-test-editor";
+import {clockTime} from "../lib/speed-tests";
 const n=(v:number)=>new Intl.NumberFormat("bg-BG",{maximumFractionDigits:2}).format(v);
-const time=(s:number)=>`${Math.floor(Math.round(s)/60)}:${String(Math.round(s)%60).padStart(2,"0")}`;
-export function SpeedModelPanel({model,canEdit,activityRef}:{model:SpeedModel;canEdit:boolean;activityRef?:string}){
+const time=clockTime;
+export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minutes",predictionValue="3"}:{model:SpeedModel;canEdit:boolean;activityRef?:string;predictionInput?:string;predictionValue?:string}){
   const router=useRouter();
   const [busy,setBusy]=useState(false),[message,setMessage]=useState("");
-  const [selected,setSelected]=useState(activityRef||model.activities.find(a=>a.sport===model.sport)?.activity_ref||"");
+  const [input,setInput]=useState(predictionInput),[value,setValue]=useState(predictionValue);
+  const [cursor,setCursor]=useState(60);
+  const [pending,setPending]=useState<{key:string;revision:number}|null>(null);
+  const arrived=pending&&model.tests.some(t=>t.entry_key===pending.key&&t.revision>=pending.revision);
+  const waiting=Boolean(pending&&!arrived);
+  const sample=model.points[Math.min(cursor,model.points.length-1)];
+  const limits=input==="minutes"?[model.points[0].duration_s/60,model.points.at(-1)!.duration_s/60]:input==="km"?[model.points[0].distance_m/1000,model.points.at(-1)!.distance_m/1000]:[model.points.at(-1)!.speed_kmh,model.points[0].speed_kmh];
   const lo=Math.log(model.points[0]?.duration_s||10.8),hi=Math.log(model.points.at(-1)?.duration_s||43516);
   const vmax=Math.ceil((model.points[0]?.speed_kmh||40)/5)*5;
   const x=(t:number)=>48+852*(Math.log(t)-lo)/(hi-lo),y=(v:number)=>270-230*v/vmax;
-  async function saveTest(event:FormEvent<HTMLFormElement>){
-    event.preventDefault();setBusy(true);setMessage("");
-    const f=new FormData(event.currentTarget),duration=Number(f.get("duration_s")),start=Number(f.get("start_s"));
-    const previous=model.tests.find(t=>t.payload.activity_ref===selected&&t.payload.start_s===start&&t.payload.duration_s===duration);
-    try{
-      await saveModel("speed-test",{activity_ref:selected,start_s:start,duration_s:duration,maximal:f.get("maximal")==="on",comparable:f.get("comparable")==="on",enabled:true,use_for_cs:f.get("use_for_cs")==="on",conditions:String(f.get("conditions")),expected_revision:previous?.revision||0});
-      setMessage("Тестът е запазен. Обновяваме индивидуалната крива.");router.refresh();
-    }catch(e){setMessage(e instanceof Error?e.message:"Неуспешен запис.");}finally{setBusy(false);}
-  }
   async function toggle(t:SpeedTest){
-    setBusy(true);setMessage("");
+    setBusy(true);setMessage("");setPending(null);
     const p=t.payload;
-    try{await saveModel("speed-test",{activity_ref:p.activity_ref,start_s:p.start_s,duration_s:p.duration_s,maximal:true,comparable:true,enabled:!p.enabled,use_for_cs:p.use_for_cs,conditions:p.conditions,expected_revision:t.revision});router.refresh();}
+    try{const result=await saveModel("speed-test",{activity_ref:p.activity_ref,start_s:p.start_s,duration_s:p.duration_s,maximal:true,comparable:true,enabled:!p.enabled,use_for_cs:p.use_for_cs,conditions:p.conditions,expected_revision:t.revision});setPending({key:t.entry_key,revision:result.revision});router.refresh();}
     catch(e){setMessage(e instanceof Error?e.message:"Неуспешен запис.");}finally{setBusy(false);}
   }
   return <>
     <section className="history-section"><form method="get" className="model-controls"><label>Спорт<select name="sport" defaultValue={model.sport}>{[...new Set([model.sport,...model.sports])].map(s=><option key={s}>{s}</option>)}</select></label><button className="action-button secondary">Покажи</button></form>
       <p>{model.status==="CALIBRATED"?`Индивидуална крива · ${model.active_test_count} максимални теста` :"Референтна крива · добавете максимален тест за индивидуална прогноза"}</p>
+      {model.status!=="CALIBRATED"&&<div className="speed-onboarding"><strong>За {model.sport} още няма активен максимален тест.</strong><p>Кривата показва експертен пример. Индивидуалното изчисление се отключва след поне един потвърден тест от последните 90 дни.</p><a className="action-button" href="#speed-tests">Избери и провери тестова активност</a></div>}
       {model.warnings.includes("CONFLICTING_TESTS")&&<p role="alert">Избраните тестове си противоречат. Изключете несъпоставимия тест; индивидуалните прогнози са спрени.</p>}
       {model.warnings.includes("INCOMPARABLE_MODEL_VERSIONS")&&<p role="alert">Тестовете използват различни версии на Vflat. Изключете или преизчислете старите тестове, преди да ги сравнявате.</p>}
       <figure className="history-chart"><svg viewBox="0 0 920 320" role="img" aria-label="Средна максимална скорост според продължителността">
@@ -38,17 +38,21 @@ export function SpeedModelPanel({model,canEdit,activityRef}:{model:SpeedModel;ca
         {model.tests.filter(t=>model.active_test_keys.includes(t.entry_key)).map(t=><circle key={t.entry_key} cx={x(t.payload.duration_s)} cy={y(t.payload.speed_kmh)} r="5" fill="#ef9c45"><title>{t.payload.day} · {time(t.payload.duration_s)} · {n(t.payload.speed_kmh)} км/ч</title></circle>)}
         {[60,180,720,3600,21600].filter(t=>Math.log(t)>=lo&&Math.log(t)<=hi).map(t=><text key={t} x={x(t)} y="297" textAnchor="middle" fill="currentColor" fontSize="12">{t/60} мин</text>)}
         <text x="48" y="20" fill="currentColor" fontSize="12">км/ч · Vflat</text>
-      </svg><figcaption>Времето е по логаритмична скала. Точките са измерени тестове. Формата извън тях е оценка от референтния модел.</figcaption></figure>
+      </svg><div className="speed-curve-readout"><strong>{model.status==="CALIBRATED"?"По индивидуалната крива":"Референтен пример"}: {time(sample.duration_s)} · {n(sample.speed_kmh)} км/ч · {n(sample.distance_m/1000)} км</strong><label>Разгледай кривата<input type="range" min="0" max={model.points.length-1} step="1" value={cursor} onChange={e=>setCursor(Number(e.target.value))}/></label></div><figcaption>Времето е по логаритмична скала. Точките са измерени тестове. Формата извън тях е оценка от референтния модел.</figcaption></figure>
     </section>
-    <section className="history-section"><h2>Прогноза</h2><form method="get" className="model-controls"><input type="hidden" name="sport" value={model.sport}/><label>Известна величина<select name="input"><option value="minutes">Време, минути</option><option value="km">Дистанция, километри</option><option value="speed">Скорост, км/ч</option></select></label><label>Стойност<input name="value" type="number" min=".01" step="any" defaultValue="3" required/></label><button className="action-button" disabled={model.status!=="CALIBRATED"}>Изчисли</button></form>
+    <section className="history-section"><h2>Прогноза</h2><form method="get" className="model-controls"><input type="hidden" name="sport" value={model.sport}/><label>Известна величина<select name="input" value={input} onChange={e=>setInput(e.target.value)}><option value="minutes">Време, минути</option><option value="km">Дистанция, километри</option><option value="speed">Скорост, км/ч</option></select></label><label>Стойност<input name="value" type="number" min={limits[0]} max={limits[1]} step="any" value={value} onChange={e=>setValue(e.target.value)} required/></label><button className="action-button" disabled={model.status!=="CALIBRATED"} aria-describedby="speed-prediction-help">Изчисли</button></form><p id="speed-prediction-help">{model.status!=="CALIBRATED"?<>Първо <a href="#speed-tests">добави максимален тест</a> за {model.sport}, за да изчислиш лична прогноза.</>:`Обхват: ${n(limits[0])}–${n(limits[1])} ${input==="minutes"?"минути":input==="km"?"км":"км/ч"}.`}</p>{model.prediction_error&&model.prediction_error!=="MAXIMAL_TEST_REQUIRED"&&<p role="alert">Стойността е извън допустимия обхват или е невалидна. Провери величината и стойността; формата и кривата остават достъпни.</p>}
       {model.prediction&&<dl className="model-prediction"><div><dt>Продължителност</dt><dd>{time(model.prediction.duration_s)}</dd></div><div><dt>Скорост</dt><dd>{n(model.prediction.speed_kmh)} км/ч</dd></div><div><dt>Дистанция</dt><dd>{n(model.prediction.distance_m/1000)} км</dd></div><div><dt>Оценен пулс</dt><dd>{model.prediction.estimated_hr_bpm===null?"Извън наличната HR–скоростна база":`${n(model.prediction.estimated_hr_bpm)} уд/мин`}</dd></div></dl>}
       <p>Пулсът се оценява от индекса на тренираност в диапазона с налични данни. При кратки максимални усилия тази оценка не служи за дозиране. Дистанцията е еквивалент за равен терен.</p>
     </section>
+    <section className="history-section" id="speed-tests"><h2>Максимални тестове и контролни стартове</h2>
+      <SpeedTestEditor model={model} canEdit={canEdit} activityRef={activityRef}/>
+      <h3>Записани тестове · {model.sport}</h3>
+      <p role="status">{message|| (pending?(arrived?"Изборът е запазен и моделът е обновен.":"Изборът е запазен. Обновяваме модела…"):"")}</p>
+      {waiting&&<button type="button" onClick={()=>router.refresh()}>Обнови модела</button>}
+      {!model.tests.some(t=>t.payload.sport===model.sport)?<p>Още няма записани тестове за този спорт.</p>:<div className="activity-table-wrap"><table><thead><tr><th>Дата / участък</th><th>Време</th><th>Vflat</th><th>Участие в кривата</th><th>Активност</th></tr></thead><tbody>{model.tests.filter(t=>t.payload.sport===model.sport).map(t=><tr key={t.entry_key}><td>{t.payload.day}<br/>{time(t.payload.start_s)}–{time(t.payload.start_s+t.payload.duration_s)}</td><td>{time(t.payload.duration_s)}</td><td>{n(t.payload.speed_kmh)} км/ч</td><td><p>{model.active_test_keys.includes(t.entry_key)?"Участва":!t.payload.enabled?"Изключен":"Не участва · провери датата или съпоставимостта"}</p>{canEdit&&<button type="button" onClick={()=>toggle(t)} disabled={busy||waiting}>{t.payload.enabled?"Изключи от модела":"Включи в модела"}</button>}</td><td><Link href={`/activities/${t.payload.activity_ref}`}>Отвори</Link></td></tr>)}</tbody></table></div>}
+    </section>
     <section className="history-section"><h2>Критична скорост</h2>{model.critical_speed.speed_kmh!==undefined?<p><strong>{n(model.critical_speed.speed_kmh)} км/ч</strong> · D′ {n(model.critical_speed.d_prime_m||0)} м · {model.critical_speed.count} теста. {model.critical_speed.count===2?"Предварителна оценка: два теста не позволяват независима проверка на грешката.":`Средноквадратична грешка по дистанция: ${n(model.critical_speed.distance_rmse_m||0)} м.`}</p>:<p>Нужни са поне два избрани съпоставими теста между 2 и 20 минути с достатъчно различна продължителност. Препоръчително е да има и трети тест.</p>}<p>Оценка по Vflat и действителните тестови продължителности; референтните точки не участват.</p></section>
     <section className="history-section"><h2>Донастройка чрез обема по зони</h2><p>Директно приравнено време за {model.history_days} предходни календарни дни, приведено към седмица. Корекцията се изглажда между зоните и изчезва в измерените тестови точки.</p><div className="activity-table-wrap"><table><thead><tr><th>Зона</th><th>Седмичен еквивалент</th><th>Заявена корекция на времето</th></tr></thead><tbody>{Object.entries(model.volume_weekly_min).map(([z,v])=><tr key={z}><th>{z}</th><td>{v===null?"Няма история":`${n(v)} мин`}</td><td>{n(100*model.zone_corrections[z])}%</td></tr>)}</tbody></table></div><p>{model.correction_applied_fraction===0?"Корекцията не е приложена — нужни са тест и подходяща HR–скоростна база, или корекциите са неутрални.":`Приложена сила на корекцията: ${n(100*model.correction_applied_fraction)}%. При ограничение тя се намалява, за да остане кривата монотонна.`}</p></section>
-    <section className="history-section"><h2>Максимални тестове и контролни стартове</h2><p>Изберете един непрекъснат максимален участък без загряване и разпускане. Времето в пулсовите зони не се използва като продължителност на теста.</p>
-      {canEdit&&<form onSubmit={saveTest} className="model-test-form"><label>Активност<select value={selected} onChange={e=>setSelected(e.target.value)} required><option value="">Изберете активност</option>{model.activities.map(a=><option key={a.activity_ref} value={a.activity_ref}>{a.day} · {a.name} · {a.sport}</option>)}</select></label><div className="model-controls"><label>Начало от записа, секунди<input name="start_s" type="number" min="0" step="1" defaultValue="0" required/></label><label>Продължителност, секунди<input name="duration_s" type="number" min="11" max="43516" step="1" defaultValue="720" required/></label></div><label>Условия и съпоставимост<input name="conditions" minLength={3} maxLength={400} placeholder="Напр. равен терен, същите ролки, без спирания" required/></label><label><input type="checkbox" name="maximal" required/> Максимално непрекъснато усилие</label><label><input type="checkbox" name="comparable" required/> Условията са съпоставими с другите избрани тестове</label><label><input type="checkbox" name="use_for_cs"/> Използвай и за критична скорост</label><button className="action-button" disabled={busy}>Запази тестовия участък</button></form>}
-      <p role="status">{message}</p><div className="activity-table-wrap"><table><thead><tr><th>Дата / спорт</th><th>Време</th><th>Vflat</th><th>Състояние</th><th>Активност</th></tr></thead><tbody>{model.tests.map(t=><tr key={t.entry_key}><td>{t.payload.day} · {t.payload.sport}</td><td>{time(t.payload.duration_s)}</td><td>{n(t.payload.speed_kmh)} км/ч</td><td>{canEdit?<button type="button" onClick={()=>toggle(t)} disabled={busy}>{t.payload.enabled?"Изключи от модела":"Включи в модела"}</button>:t.payload.enabled?"Избран":"Изключен"}</td><td><Link href={`/activities/${t.payload.activity_ref}`}>Отвори</Link></td></tr>)}</tbody></table></div>
-    </section><p className="muted-copy">Моделът използва експертната референтна таблица и личните тестове от последните 90 дни. Приложимостта на еднаква форма към различните спортове предстои да се калибрира.</p>
+<p className="muted-copy">Моделът използва експертната референтна таблица и личните тестове от последните 90 дни. Приложимостта на еднаква форма към различните спортове предстои да се калибрира.</p>
   </>;
 }

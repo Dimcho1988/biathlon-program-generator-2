@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { currentAuthorizedAthlete } from "../../../../lib/account-access";
 import { isSameOrigin } from "../../../../lib/account-route";
 import { waitForApi } from "../../../../lib/api-readiness";
+import { speedTestError } from "../../../../lib/speed-tests";
 
 export async function POST(request:Request){
   try{
@@ -22,7 +23,11 @@ export async function POST(request:Request){
     const result=await fetch(new URL(`/api/v2/athlete/models/${kind}`,base),{method:"PUT",cache:"no-store",
       headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json","X-OnFlows-Athlete-Alias":access.athleteAlias,"X-OnFlows-Actor-Id":access.actorUserId},
       body:JSON.stringify(payload),signal:AbortSignal.timeout(75000)});
-    if(!result.ok)return NextResponse.json({error:result.status===409?"Данните са променени или липсва необходимият анализ. Презаредете.":result.status===422?"Проверете стойностите. За теста е нужен непрекъснат максимален участък с достатъчно Vflat данни и съгласуваност с останалите тестове.":"Записването временно не е достъпно."},{status:[404,409,422].includes(result.status)?result.status:503});
+    if(!result.ok){
+      const body=await result.json().catch(()=>null);
+      const error=kind==="speed-test"&&[404,409,422].includes(result.status)?speedTestError(body?.detail):result.status===409?"Данните са променени. Презаредете.":result.status===422?"Проверете стойностите на настройките.":"Записването временно не е достъпно.";
+      return NextResponse.json({error},{status:[404,409,422].includes(result.status)?result.status:503});
+    }
     return NextResponse.json(await result.json());
   }catch{return NextResponse.json({error:"Неуспешен запис. Въведеното остава във формата."},{status:503});}
 }

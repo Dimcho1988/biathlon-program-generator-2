@@ -163,6 +163,24 @@ def save_speed_test(body: SpeedTestInput,
         raise HTTPException(503,"Speed test could not be saved") from exc
 
 
+@app.get("/api/v2/athlete/models/speed-preview")
+def speed_test_preview(activity_ref: str, start_s: int | None = None, duration_s: int | None = None,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None):
+    from .speed_segments import preview
+    alias = _model_alias(authorization, athlete_alias)
+    if not re.fullmatch(r"act_[a-f0-9]{32}", activity_ref):
+        raise HTTPException(422, "Invalid activity reference")
+    if ((start_s is None) != (duration_s is None) or
+        start_s is not None and not 0 <= start_s <= 172800 or
+        duration_s is not None and not 11 <= duration_s <= 43516):
+        raise HTTPException(422, "Invalid segment bounds")
+    try:
+        return preview(_repository(), alias, activity_ref, start_s, duration_s)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Speed test preview is unavailable") from exc
+
+
 def _model_snapshot(repository, alias):
     return model_service.project_recovery(repository,alias,repository.latest(alias))
 

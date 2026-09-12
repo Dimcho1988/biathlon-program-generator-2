@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from biathlon import recovery_v2, speed_duration
 from .model_schemas import RecoveryConfigInput, RecoveryHistoryV2, initial_settings
 from .oauth_store import PersistentStoreFailure
+from .speed_segments import segment_measurement
 
 
 def enabled():
@@ -93,34 +94,6 @@ def save_config(repository,alias,body,actor):
     return ModelStore(repository).save(alias,"RECOVERY","recovery-v2",{"schema_version":"recovery-config-v2","zones":body.model_dump(mode="json")["zones"]},body.expected_revision,actor)
 
 
-def segment_measurement(shadow,start,duration):
-    """Read full 1 Hz derived samples, never display/chart aggregates."""
-    independent = shadow.get("speed_test_series")
-    rows=sorted(independent if independent is not None else shadow.get("timeseries") or [],key=lambda r:r.get("elapsed_s",-1))
-    if not rows: raise HTTPException(409,"Full Vflat samples are required")
-    total=weighted=0.
-    for i,row in enumerate(rows):
-        elapsed=row.get("elapsed_s")
-        if not isinstance(elapsed,(int,float)) or not start<=elapsed<=start+duration: continue
-        if independent is not None:
-            # Vflat dt ends at the sample timestamp. Integrate intersections of
-            # these explicit active intervals with the selected elapsed window.
-            dt=max(0.,min(elapsed,start+duration)-max(start,elapsed-row.get("dt_s",0)))
-        else:
-            next_t=rows[i+1].get("elapsed_s",elapsed+1) if i+1<len(rows) else elapsed+1
-            dt=min(1.,max(0.,next_t-elapsed),start+duration-elapsed)
-        speed=row.get("vflat_b65_kmh")
-        grade=row.get("grade_smoothed_pct")
-        if not isinstance(speed,(int,float)) or not math.isfinite(speed) or speed<=0: continue
-        if not isinstance(grade,(int,float)) or not math.isfinite(grade) or grade < -3: continue
-        if row.get("exclusion_reason"): continue
-        total+=dt; weighted+=dt*speed
-    if total/duration < .98:
-        raise HTTPException(422,"A continuous segment with at least 98% eligible Vflat coverage is required; refresh older activity analyses first")
-    return {"duration_s":duration,"speed_kmh":weighted/total,"coverage_percent":100*total/duration,
-        "distance_m":weighted/total*duration/3.6,"distance_basis":"VFLAT_EQUIVALENT"}
-
-
 def save_test(repository,alias,body,actor):
     key=sha256(f"{body.activity_ref}:{body.start_s}:{body.duration_s}".encode()).hexdigest()[:32]
     entries=ModelStore(repository).entries(alias)
@@ -134,13 +107,15 @@ def save_test(repository,alias,body,actor):
     activity=row["catalog_payload"]
     shadow=row.get("shadow_payload")
     if not shadow: raise HTTPException(409,"Activity requires a shadow refresh")
+    if body.expected_source_run_key and body.expected_source_run_key != row.get("shadow_run_key"):
+        raise HTTPException(409,"Activity analysis changed; preview the segment again")
     day=activity.get("local_date") or activity.get("date")
     settings=repository.athlete_settings(alias)
     today=datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
     if not day or not (today-timedelta(days=90)).isoformat()<=day<=today.isoformat():
         raise HTTPException(422,"Choose a test within the last 90 days")
     measured=segment_measurement(shadow,body.start_s,body.duration_s)
-    payload=body.model_dump(mode="json",exclude={"expected_revision"})
+    payload=body.model_dump(mode="json",exclude={"expected_revision","expected_source_run_key"})
     payload.update(measured)
     payload.update({"schema_version":"speed-test-v1","day":day,"sport":activity["sport"],
         "input_hash":shadow.get("input_hash"),"configuration_fingerprint":shadow.get("configuration_fingerprint"),
@@ -219,20 +194,24 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
         hr=hr_fn(v) if hr_fn and points[0][0]<=v<=points[-1][0] else None
         return {"duration_s":t,"speed_kmh":v,"distance_m":t*v/3.6,"estimated_hr_bpm":hr}
     output=None
+    prediction_error=None
     supplied=sum(v is not None for v in (duration_s,distance_m,speed_kmh))
     if supplied>1: raise HTTPException(422,"Choose one prediction input")
     if supplied:
-        if not tests: raise HTTPException(409,"Select a maximal test before predicting")
-        try:
-            t=duration_s if duration_s is not None else tuned.inverse(distance_m,distance=True) if distance_m is not None else tuned.inverse(speed_kmh/3.6)
-            output=prediction(t)
-        except ValueError as exc: raise HTTPException(422,str(exc)) from exc
+        if not tests:
+            prediction_error="MAXIMAL_TEST_REQUIRED"
+        else:
+            try:
+                t=duration_s if duration_s is not None else tuned.inverse(distance_m,distance=True) if distance_m is not None else tuned.inverse(speed_kmh/3.6)
+                output=prediction(t)
+            except ValueError:
+                prediction_error="OUTSIDE_PREDICTION_RANGE"
     return {"schema_version":"speed-model-v1","model_version":speed_duration.VERSION,"sport":sport,"sports":sports,
-        "activities":[{"activity_ref":a["activity_ref"],"name":a.get("name") or a["sport"],"day":a.get("local_date"),"sport":a["sport"]} for a in activities],
+        "activities":[{"activity_ref":a["activity_ref"],"name":a.get("name") or a["sport"],"day":a.get("local_date"),"sport":a["sport"],"elapsed_s":a.get("elapsed_time_s")} for a in activities],
         "status":"CALIBRATED" if tests else "REFERENCE_ONLY","tests":entries,"active_test_count":len(tests),
         "active_test_keys":[e["entry_key"] for e in entries if e["payload"] in tests],
         "points":[prediction(math.exp(tuned._x[0]+(tuned._x[-1]-tuned._x[0])*i/180)) for i in range(181)],
         "volume_weekly_min":volumes,"history_days":n,"zone_corrections":dict(zip(volumes,corrections)),
         "correction_applied_fraction":factor,"critical_speed":speed_duration.critical_speed(tests),
-        "prediction":output,"warnings":warnings,"source_generation_id":calendar.get("generation_id"),
+        "prediction":output,"prediction_error":prediction_error,"warnings":warnings,"source_generation_id":calendar.get("generation_id"),
         "source_revision":calendar.get("revision"),"hr_speed_range_kmh":[points[0][0],points[-1][0]] if hr_fn else None}

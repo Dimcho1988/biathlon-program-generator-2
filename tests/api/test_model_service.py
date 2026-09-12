@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from apps.api import main, model_service as m
 from apps.api.model_schemas import RecoveryConfigInput,SpeedTestInput,initial_settings
+from apps.api.speed_segments import preview
 
 NOW=datetime(2026,9,12,12,tzinfo=timezone.utc)
 REF="act_"+"1"*32
@@ -118,3 +119,90 @@ def test_independent_vflat_ignores_hr_exclusions_and_obeys_active_interval_bound
     assert result["distance_m"]==pytest.approx(3600)
     for r in shadow["speed_test_series"][300:400]:r["dt_s"]=0
     with pytest.raises(HTTPException):m.segment_measurement(shadow,120,600)
+
+
+def test_preview_measures_without_writing_and_matches_saved_test():
+    repo=Store()
+    result=preview(repo,"ath-test",REF,120,720)
+    assert repo.saved==[]
+    assert result["status"]=="READY" and len(result["series"])<=360
+    selection=result["selection"]
+    assert selection["eligible"] and selection["coverage_percent"]==100
+    body=SpeedTestInput(activity_ref=REF,start_s=120,duration_s=720,maximal=True,comparable=True,
+        conditions="same course",expected_source_run_key=result["source_run_key"])
+    m.save_test(repo,"ath-test",body,UUID("11111111-1111-4111-8111-111111111111"))
+    for key in ("speed_kmh","distance_m","coverage_percent","duration_s"):
+        assert repo.saved[0]["p_payload"][key]==selection[key]
+
+
+def test_preview_reports_downhill_pauses_and_missing_analysis_without_a_prediction():
+    repo=Store();row=repo.active_activity_view("ath-test",REF)
+    for sample in row["shadow_payload"]["timeseries"][100:200]: sample["grade_smoothed_pct"]=-4
+    row["shadow_payload"]["timeseries"]=row["shadow_payload"]["timeseries"][:500]+row["shadow_payload"]["timeseries"][600:]
+    repo.active_activity_view=lambda alias,ref:row
+    result=preview(repo,"ath-test",REF,0,720)["selection"]
+    assert not result["eligible"] and result["speed_kmh"] is None
+    assert result["coverage_percent"]==pytest.approx(100*520/720)
+    assert result["excluded_seconds"]=={"downhill":100,"invalid":0,"missing_or_paused":100}
+    row["shadow_payload"]=None
+    assert preview(repo,"ath-test",REF)["status"]=="ANALYSIS_REQUIRED"
+    assert repo.saved==[]
+
+
+def test_preview_and_save_reject_outside_bounds_and_stale_analysis():
+    repo=Store()
+    assert preview(repo,"ath-test",REF,900,120)["selection"]["status"]=="OUTSIDE_ACTIVITY"
+    body=SpeedTestInput(activity_ref=REF,start_s=0,duration_s=720,maximal=True,comparable=True,
+        conditions="same course",expected_source_run_key="e"*64)
+    with pytest.raises(HTTPException) as error:
+        m.save_test(repo,"ath-test",body,UUID("11111111-1111-4111-8111-111111111111"))
+    assert error.value.status_code==409 and repo.saved==[]
+    with pytest.raises(HTTPException):m.segment_measurement(repo.active_activity_view("ath-test",REF)["shadow_payload"],900,120)
+
+
+def test_fractional_last_sample_intersects_the_selected_window():
+    shadow={"speed_test_series":[{"elapsed_s":t+.5,"dt_s":1,"vflat_b65_kmh":18 if t<720 else 36,
+        "grade_smoothed_pct":0} for t in range(1000)]}
+    result=m.segment_measurement(shadow,120,600)
+    assert result["coverage_percent"]==100
+    assert result["speed_kmh"]==pytest.approx((599.5*18+.5*36)/600)
+
+
+def test_preview_endpoint_requires_athlete_session_and_valid_window(monkeypatch):
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN","service-secret")
+    repo=Store();monkeypatch.setattr(main,"_repository",lambda:repo)
+    client=TestClient(main.app)
+    url=f"/api/v2/athlete/models/speed-preview?activity_ref={REF}"
+    headers={"Authorization":"Bearer service-secret","X-OnFlows-Athlete-Alias":"ath-test"}
+    assert client.get(url).status_code==401
+    assert client.get(url,headers={"Authorization":"Bearer service-secret"}).status_code==401
+    for suffix in ("&start_s=-1&duration_s=120","&start_s=1","&start_s=0&duration_s=10","&start_s=0&duration_s=nan"):
+        assert client.get(url+suffix,headers=headers).status_code==422
+    assert client.get(url+"&start_s=120&duration_s=720",headers=headers).json()["selection"]["eligible"]
+    assert repo.saved==[]
+
+
+class SpeedStore(Store):
+    def active_activity_calendar(self,alias,start,today):
+        return {"activities":[{"activity_ref":REF,"sport":"Run","local_date":today.isoformat()}],"snapshot_payload":{}}
+
+
+def test_saved_anchor_unlocks_all_three_prediction_directions_and_errors_stay_inline():
+    repo=SpeedStore()
+    empty=m.speed_view(repo,"ath-test","Run",duration_s=720)
+    assert empty["status"]=="REFERENCE_ONLY" and empty["prediction"] is None
+    assert empty["prediction_error"]=="MAXIMAL_TEST_REQUIRED"
+    body=SpeedTestInput(activity_ref=REF,start_s=0,duration_s=720,maximal=True,comparable=True,conditions="same course")
+    m.save_test(repo,"ath-test",body,UUID("11111111-1111-4111-8111-111111111111"))
+    write=repo.saved[0]
+    repo.rows=[{"kind":"SPEED_TEST","entry_key":write["p_key"],"revision":1,"payload":write["p_payload"]}]
+    for kwargs in ({"duration_s":720},{"distance_m":4000},{"speed_kmh":20}):
+        model=m.speed_view(repo,"ath-test","Run",**kwargs)
+        assert model["status"]=="CALIBRATED" and model["active_test_count"]==1
+        assert model["prediction"]["duration_s"]==pytest.approx(720)
+        assert model["prediction"]["speed_kmh"]==pytest.approx(20)
+        assert model["prediction"]["distance_m"]==pytest.approx(4000)
+    outside=m.speed_view(repo,"ath-test","Run",duration_s=2)
+    assert outside["prediction"] is None and outside["prediction_error"]=="OUTSIDE_PREDICTION_RANGE"
+    assert outside["points"] and outside["status"]=="CALIBRATED"
+    assert m.speed_view(repo,"ath-test","Ride")["status"]=="REFERENCE_ONLY"
