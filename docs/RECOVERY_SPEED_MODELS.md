@@ -26,12 +26,17 @@ within-day timestamps. Only prior days enter the baseline, including recorded
 rest days; absent rows are unknown days. The mean is not multiplied by seven
 and is not clamped to expert Tref limits.
 
-The positive `rate` is solved so `F(D)=10` when `A>10`. With sensitivity 1,
+Recovery algorithm `recovery-daily-e-biexponential-v2.1` solves the positive
+`rate` so `F(D)=10` when `A>=20`. With sensitivity 1,
 E=60 and baseline=20, D=3 days and readiness is 53.584%, 78.456%, 90% at days
 1, 2, 3 for shape 1. Shape 1 is one exponential; shape 1–10 mixes fast and slow
 recovery while preserving this isolated-dose deadline. If A≤10 the isolated
 dose is already above the readiness threshold, but its residual still persists.
-For these small doses D is the 90%-reduction time of that impulse.
+For small doses (A<20), the target fraction is 0.5: at least half of the
+impulse decays within D, and absolute readiness may be reached earlier. In all
+cases `target_fraction=min(0.5,10/A)`. This continuous decay floor avoids an
+almost permanent tail when A is only infinitesimally above 10. The displayed
+isolated deadline is solved against absolute F<=10, including these small doses.
 
 All prior impulses are retained with their individual rates. Total fatigue is
 their sum, without a total-fatigue ceiling. Readiness is `max(0,100-total_F)`;

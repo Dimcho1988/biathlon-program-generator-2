@@ -1,7 +1,7 @@
 """Causal daily E recovery, independent of the bounded Tref denominator.
 
 Each day's dose has its own immutable decay rates. The two exponential terms
-allow curve shape to change while preserving the isolated dose's time to 90%
+allow curve shape to change while preserving material doses' time to 90%
 readiness. E already includes cascade/spillover; never apply them again here.
 This is an expert model, not a validated physiological recovery measurement.
 """
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 import math
 
-VERSION = "recovery-daily-e-biexponential-v2"
+VERSION = "recovery-daily-e-biexponential-v2.1"
 ZONES = ("Z1", "Z2", "Z3", "Z4", "Z5", "STR")
 INITIAL_DAILY = dict(zip(ZONES, (40., 20., 8., 4., 2., 8.)))
 SENSITIVITY = dict(zip(ZONES, (.55, .70, .88, 1., 1.12, .95)))
@@ -78,7 +78,10 @@ def impulse(day, effective, daily_baseline, config):
     amplitude = min(100., 100. * sensitivity * dose)
     # Small impulses can already satisfy the absolute 90% readiness threshold;
     # they still persist and sum with previous fatigue. Never reset to 0% ready.
-    fraction = min(.1, 10. / amplitude) if amplitude <= 10 else 10. / amplitude
+    # Near the readiness threshold, solving F(D)=10 without a decay floor
+    # makes A=10+epsilon persist almost indefinitely. Require at least a
+    # half-life per nominal window; material doses (A>=20) still reach 10 at D.
+    fraction = min(.5, 10. / amplitude)
     lo, hi = 0., -math.log(fraction)
     for _ in range(55):
         mid = (lo + hi) / 2
@@ -148,7 +151,7 @@ def simulate(daily, configs=None, *, target=None):
                 "residual_fatigue_after":after, "impulse":added.amplitude if added else 0.,
                 "effective_load":doses[day], "baseline_daily_min":used,
                 "baseline_raw_daily_min":raw, "history_days":n, "baseline_source":source,
-                "isolated_days_to_90":added.nominal_days if added and added.amplitude > 10 else 0.})
+                "isolated_days_to_90":days_to_ready([added],day) if added else 0.})
             last_baseline = used, raw, n, source
         f = residual(impulses, target)
         horizon = days_to_ready(impulses, target)
