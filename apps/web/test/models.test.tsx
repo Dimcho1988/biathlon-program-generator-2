@@ -28,6 +28,18 @@ describe("Recovery v2 interface",()=>{
     const readOnly=renderToStaticMarkup(<RecoveryV2Section history={fixture} canEdit={false}/>);
     expect(readOnly).not.toContain("Запази и преизчисли");expect(readOnly).toContain("disabled");
   });
+  it("accepts v2.2 and exposes the permanent addition without mislabelling older projections",()=>{
+    const additive=structuredClone(fixture);
+    additive.model.algorithm_version="recovery-daily-e-biexponential-v2.2";
+    for(const row of additive.current) row.baseline_daily_min=40;
+    expect(parseRecoveryV2(additive).current[0].baseline_daily_min).toBe(40);
+    const html=renderToStaticMarkup(<RecoveryV2Section history={additive} canEdit/>);
+    for(const text of ["Постоянна добавка","Лична средна","База за Recovery","Базова добавка, мин/ден","Recovery v2.2"])expect(html).toContain(text);
+    expect(html).not.toContain("плавно отстъпва");
+    expect(renderToStaticMarkup(<RecoveryV2Section history={fixture} canEdit/>)).toContain("Начална база, мин/ден");
+    additive.current[0].baseline_daily_min=20;
+    expect(()=>parseRecoveryV2(additive)).toThrow(/базова добавка/);
+  });
 });
 describe("profile-scoped model writes",()=>{
   const owner={userId:"athlete",actorUserId:"athlete",athleteAlias:"ath-test",displayName:"Fixture",isOwner:true,canEditPlan:true,canViewRecovery:true};

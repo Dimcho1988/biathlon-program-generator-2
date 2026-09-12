@@ -7,7 +7,7 @@ interface Baseline {baseline_daily_min:number;baseline_raw_daily_min:number|null
 export interface RecoveryV2 {
   schema_version:"recovery-history-v2";athlete_id:string;period_start:string;period_end:string;as_of:string;
   basis:"load-only";time_resolution:"calendar-day";ready_threshold_percent:90;
-  model:{algorithm_version:"recovery-daily-e-biexponential-v2"|"recovery-daily-e-biexponential-v2.1";parameter_version:string;parameter_fingerprint:string;practical_full_recovery_percent:90};
+  model:{algorithm_version:"recovery-daily-e-biexponential-v2"|"recovery-daily-e-biexponential-v2.1"|"recovery-daily-e-biexponential-v2.2";parameter_version:string;parameter_fingerprint:string;practical_full_recovery_percent:90};
   config_revision:number;settings:Record<ModelZone,ZoneConfig>;
   current:Array<Baseline & {zone:ModelZone;readiness_percent:number;residual_fatigue:number;days_to_practical_recovery:number}>;
   daily:Array<Baseline & {date:string;zone:ModelZone;readiness_before_percent:number;readiness_after_percent:number;residual_fatigue_after:number;impulse:number;effective_load:number;isolated_days_to_90:number;residual_fatigue_now?:number|null}>;
@@ -19,7 +19,7 @@ const finite=(v:unknown):v is number=>typeof v==="number"&&Number.isFinite(v);
 export function parseRecoveryV2(value:unknown):RecoveryV2 {
   const r=value as RecoveryV2;
   if(!r || r.schema_version!=="recovery-history-v2" || r.ready_threshold_percent!==90 || r.basis!=="load-only"
-    || r.time_resolution!=="calendar-day" || !r.model || !["recovery-daily-e-biexponential-v2","recovery-daily-e-biexponential-v2.1"].includes(r.model.algorithm_version)
+    || r.time_resolution!=="calendar-day" || !r.model || !["recovery-daily-e-biexponential-v2","recovery-daily-e-biexponential-v2.1","recovery-daily-e-biexponential-v2.2"].includes(r.model.algorithm_version)
     || r.model.practical_full_recovery_percent!==90 || !Number.isInteger(r.config_revision)
     || !Array.isArray(r.current)||r.current.length!==6||!Array.isArray(r.daily)||!Array.isArray(r.forecast)||!r.settings) throw new Error("Невалиден Recovery v2 модел.");
   for(const [i,c] of r.current.entries()) {
@@ -29,6 +29,10 @@ export function parseRecoveryV2(value:unknown):RecoveryV2 {
       ||!finite(c.baseline_daily_min)||c.baseline_daily_min<=0) throw new Error("Несъгласувана готовност.");
     const s=r.settings[c.zone];
     if(!s||!Object.values(s).every(v=>finite(v)&&v>0)||s.shape<1||s.shape>10)throw new Error("Невалидни коефициенти.");
+    if(r.model.algorithm_version==="recovery-daily-e-biexponential-v2.2"
+      && ((c.baseline_raw_daily_min!==null&&(!finite(c.baseline_raw_daily_min)||c.baseline_raw_daily_min<0))
+        ||Math.abs(c.baseline_daily_min-s.initial_daily_min-(c.baseline_raw_daily_min??0))>.001))
+      throw new Error("Несъгласувана базова добавка.");
   }
   for(const p of r.forecast) if(!MODEL_ZONES.includes(p.zone)||!finite(p.days)||p.days<0||!finite(p.readiness_percent)||p.readiness_percent<0||p.readiness_percent>100)throw new Error("Невалидна възстановителна крива.");
   for(const d of r.daily) if(!MODEL_ZONES.includes(d.zone)||!/^\d{4}-\d{2}-\d{2}$/.test(d.date)||!finite(d.readiness_after_percent)||d.readiness_after_percent<0||d.readiness_after_percent>100)throw new Error("Невалидна история на възстановяването.");

@@ -4,14 +4,14 @@ import { useState, useTransition, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { MODEL_ZONES, saveModel, type RecoveryV2, type ZoneConfig } from "../lib/models";
 
-const parameters: Array<{ key: keyof ZoneConfig; label: string; min: number; max: number }> = [
-  { key: "duration_coefficient", label: "Продължителност ×", min: .1, max: 5 },
-  { key: "shape", label: "Стръмност", min: 1, max: 10 },
-  { key: "sensitivity", label: "Чувствителност", min: .05, max: 3 },
-  { key: "initial_daily_min", label: "Начална база, мин/ден", min: .1, max: 600 },
-];
-
 export function RecoverySettingsEditor({ history, canEdit }: { history: RecoveryV2; canEdit: boolean }) {
+  const permanentBase = history.model.algorithm_version === "recovery-daily-e-biexponential-v2.2";
+  const parameters: Array<{ key: keyof ZoneConfig; label: string; min: number; max: number }> = [
+    { key: "duration_coefficient", label: "Продължителност ×", min: .1, max: 5 },
+    { key: "shape", label: "Стръмност", min: 1, max: 10 },
+    { key: "sensitivity", label: "Чувствителност", min: .05, max: 3 },
+    { key: "initial_daily_min", label: permanentBase ? "Базова добавка, мин/ден" : "Начална база, мин/ден", min: .1, max: 600 },
+  ];
   const router = useRouter();
   const [draft, setDraft] = useState({ revision: history.config_revision, zones: history.settings });
   const [saving, setSaving] = useState(false);
@@ -65,8 +65,12 @@ export function RecoverySettingsEditor({ history, canEdit }: { history: Recovery
               setDraft({ ...draft, zones: { ...draft.zones, [zone]: { ...draft.zones[zone], [parameter.key]: Number(event.target.value) } } });
             }} style={{ width: "6rem" }} />
         </td>)}</tr>)}</tbody></table></div>
-      <p>Чувствителността определя първоначалната умора. Началната база плавно отстъпва при поне 7 дни история и натрупан товар, равен на 7 начални дневни дози. При нулев или съвсем малък товар остава експертна опора.</p>
-      <p>Началната база има значение при недостатъчна история. Когато се използва личната средна, промяната ѝ може да няма видим ефект. За по-кратко или по-дълго възстановяване променете „Продължителност ×“ за съответната зона.</p>
+      <p>Чувствителността определя първоначалната умора. {permanentBase
+        ? "Базовата добавка участва постоянно в делителя заедно с личния среднодневен товар за предходните до 40 дни. При липсваща история се използва само добавката, без да се удвоява."
+        : "Началната база плавно отстъпва при поне 7 дни история и натрупан товар, равен на 7 начални дневни дози. При нулев или съвсем малък товар остава експертна опора."}</p>
+      <p>{permanentBase
+        ? "По-голяма базова добавка намалява относителната доза и скъсява възстановяването и при пълна история. Тя не добавя тренировъчен товар или начална умора."
+        : "Началната база има значение при недостатъчна история. Когато се използва личната средна, промяната ѝ може да няма видим ефект. За по-кратко или по-дълго възстановяване променете „Продължителност ×“ за съответната зона."}</p>
       {canEdit && <button type="submit" className="action-button" disabled={busy || awaitingResult || !dirty}>{busy ? "Записване и преизчисляване…" : "Запази и преизчисли"}</button>}
       <p role="status" aria-live="polite">{message}</p>
       {awaitingResult && !busy && <button type="button" className="action-button secondary" onClick={refresh}>Покажи преизчисления резултат</button>}
