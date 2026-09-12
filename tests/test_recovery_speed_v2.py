@@ -117,3 +117,20 @@ def test_cs_uses_real_eligible_tests_with_residuals():
     result=s.critical_speed(observations())
     assert result["status"]=="FITTED" and result["distance_rmse_m"]>0
     assert 0<result["speed_kmh"]<min(t["speed_kmh"] for t in observations())
+
+
+@pytest.mark.parametrize("shape",[1,5,10])
+def test_near_ready_doses_have_finite_decay_and_continuous_residuals(shape):
+    # A tiny change around A=10 must not introduce a nearly permanent tail.
+    for boundary in (10.,20.):
+        impulses=[r.impulse(TODAY,a/100*20,20,config(shape=shape))
+                  for a in (boundary-1e-7,boundary,boundary+1e-7)]
+        future=[i.residual(.5) for i in impulses]
+        assert max(future)-min(future)<1e-5
+    near=r.impulse(TODAY,2.00000002,20,config(shape=shape))
+    assert near.residual(near.nominal_days)<=near.amplitude*.5+1e-10
+    assert r.days_to_ready([near],TODAY)<1e-5
+    row=r.simulate([{"date":TODAY.isoformat(),"zone":"Z2","effective_load":3}],
+                  {**r.defaults(),"Z2":config(shape=shape)},target=TODAY)["daily"][0]
+    assert row["isolated_days_to_90"]==pytest.approx(r.days_to_ready([
+        r.impulse(TODAY,3,20,config(shape=shape))],TODAY))
