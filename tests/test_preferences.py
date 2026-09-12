@@ -44,7 +44,7 @@ def test_normalization_rejects_all_rest_days_safely():
 
 
 def test_double_threshold_can_activate_when_rules_are_met():
-    bundle = generate_demo_bundle(history_days=120)
+    bundle = generate_demo_bundle(history_days=120, reference_date=date(2026, 6, 20))
     prefs = bundle["planning_preferences"]["A"]
     prefs.update(
         {

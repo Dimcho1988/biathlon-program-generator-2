@@ -42,6 +42,13 @@ const DIRECT_WAKE_RETRY_DELAY_MS = 2_000;
 const DIRECT_WAKE_ATTEMPTS = 3;
 export type DataMode = "api" | "fixture";
 
+export async function getSpeedModel(athleteAlias:string,query:Record<string,string>={}) {
+  const token=process.env.ONFLOWS_SERVICE_TOKEN;
+  if(!token)throw new Error("Server configuration is unavailable");
+  const {parseSpeedModel}=await import("./models");
+  return parseSpeedModel(await fetchApiResource(`/api/v2/athlete/models/speed?${new URLSearchParams(query)}`,token,athleteAlias));
+}
+
 export async function getResponseHistory(athleteAlias:string,start?:string,end?:string) {
   const {parseResponseHistory} = await import("./response-monitoring");
   const params = new URLSearchParams();

@@ -37,7 +37,7 @@ from vflat_b65 import (
 
 INPUT_SCHEMA_VERSION = "activity-model-input-v1"
 DERIVED_SCHEMA_VERSION = "activity-shadow-derived-v3"
-SHADOW_CONFIGURATION_SCHEMA_VERSION = "activity-shadow-configuration-v3"
+SHADOW_CONFIGURATION_SCHEMA_VERSION = "activity-shadow-configuration-v4"
 
 _HR_NAMES = ("heartrate", "fixed_heartrate", "heart_rate", "hr")
 _SPEED_NAMES = ("velocity_smooth", "fixed_velocity_smooth", "speed", "velocity")
@@ -425,6 +425,7 @@ def compute_activity_shadow(
                 "exclusion_reason": exclusion,
             }
         )
+    activity_start = _start_time(detail)[0]
     payload = {
         "schema_version": DERIVED_SCHEMA_VERSION,
         "experimental": True,
@@ -452,6 +453,14 @@ def compute_activity_shadow(
         "hrmod_source_commit": hrmod.get("source_commit"),
         "terrain_model_version": hrmod.get("terrain_model_version"),
         "timeseries": rows,
+        # Independent 1 Hz Vflat samples for maximal tests. Combined rows above
+        # retain original HR timestamps and HR exclusions, so cannot supply this.
+        "speed_test_series": [{
+            "elapsed_s": (datetime.fromisoformat(r["timestamp"])-activity_start).total_seconds(),
+            "dt_s": r["dt_s"], "vflat_b65_kmh": _plain_number(r.get("vflat_b65_kmh")),
+            "grade_smoothed_pct": _plain_number(r.get("grade_raw_pct")),
+            "exclusion_reason": r.get("exclusion_reason"),
+        } for r in vflat["timeseries"]],
         "segments_15s": _segments_15s(rows),
         "sprint_str_summary": vflat.get("sprint_str_summary", {}),
         "sprint_str_intervals": vflat.get("sprint_str_intervals", []),

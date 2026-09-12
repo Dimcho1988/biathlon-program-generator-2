@@ -59,3 +59,13 @@ def test_damaged_or_unbounded_payloads_fail_closed(field, value):
     packed["timeseries"][field] = value
     with pytest.raises(ValueError):
         decode_shadow_payload(packed)
+
+
+def test_independent_speed_series_round_trips_and_checks_integrity():
+    original = large_payload()
+    original["speed_test_series"] = deepcopy(original["timeseries"])
+    packed = encode_shadow_payload(original)
+    assert packed["speed_test_series"]["codec"] == CODEC
+    assert decode_shadow_payload(packed) == original
+    packed["speed_test_series"]["sha256"] = "0"*64
+    with pytest.raises(ValueError): decode_shadow_payload(packed)

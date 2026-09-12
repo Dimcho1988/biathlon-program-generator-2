@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
-import type { RecoveryHistory, WellnessCoverageDiagnostics, WellnessCoverageField } from "../lib/recovery-history";
+import type { RecoveryHistory, LegacyRecoveryHistory, WellnessCoverageDiagnostics, WellnessCoverageField } from "../lib/recovery-history";
+import { RecoveryV2Section } from "./recovery-v2";
 import { ZONES, type Zone } from "../lib/training-status";
 import { SyncActionForm } from "./sync-action-form";
 
@@ -76,7 +77,7 @@ function RecoverySettingsHelp() {
   </details>;
 }
 
-function RecoveryChart({ history }: { history: RecoveryHistory }) {
+function RecoveryChart({ history }: { history: LegacyRecoveryHistory }) {
   const dates = [...new Set(history.daily.map((row) => row.date))];
   if (dates.length < 2) return <p className="muted-copy">Няма достатъчно дни за recovery графика.</p>;
   const width = 920, height = 300, left = 48, right = 16, top = 22, bottom = 42;
@@ -98,7 +99,8 @@ function RecoveryChart({ history }: { history: RecoveryHistory }) {
   </figure>;
 }
 
-export function RecoveryHistorySection({ history, message, refreshAvailable = false, syncBusy = false, fullRefreshRequired = false }: { history: RecoveryHistory | null; message?: string; refreshAvailable?: boolean; syncBusy?: boolean; fullRefreshRequired?: boolean }) {
+export function RecoveryHistorySection({ history, message, refreshAvailable = false, syncBusy = false, fullRefreshRequired = false, canEdit = false }: { history: RecoveryHistory | null; message?: string; refreshAvailable?: boolean; syncBusy?: boolean; fullRefreshRequired?: boolean; canEdit?:boolean }) {
+  if(history?.schema_version === "recovery-history-v2") return <><RecoveryV2Section key={history.config_revision} history={history} canEdit={canEdit}/>{history.wellness_diagnostics&&<WellnessCoveragePanel diagnostics={history.wellness_diagnostics}/>}</>;
   if (!history) return message || refreshAvailable ? <section className="history-section" aria-labelledby="recovery-title">
     <div className="section-heading"><div><p className="section-kicker">Canonical recovery</p><h2 id="recovery-title">Товарно възстановяване</h2></div></div>
     <div className="history-unavailable">

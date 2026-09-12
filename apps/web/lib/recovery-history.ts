@@ -1,6 +1,8 @@
 import { exactKeys, finite, isCalendarDate, isRecord, ZONES, type Zone } from "./training-status";
+import { parseRecoveryV2, type RecoveryV2 } from "./models";
 
-export interface RecoveryHistory {
+export type RecoveryHistory = LegacyRecoveryHistory | RecoveryV2;
+export interface LegacyRecoveryHistory {
   schema_version: "recovery-history-v1";
   athlete_id: string;
   period_start: string;
@@ -135,6 +137,7 @@ function zoneArray<T>(value: unknown, parser: (item: unknown, index: number) => 
 }
 
 export function parseRecoveryHistory(value: unknown): RecoveryHistory {
+  if(isRecord(value) && value.schema_version === "recovery-history-v2") return parseRecoveryV2(value);
   if (!isRecord(value) || ![rootKeys, wellnessRootKeys, strengthRootKeys, legacyRootKeys].some((keys) => exactKeys(value, keys))) throw new Error("Невалидна структура на recovery историята.");
   if (value.schema_version !== "recovery-history-v1" || value.basis !== "load-only") throw new Error("Неподдържана recovery версия или основа.");
   if (typeof value.athlete_id !== "string" || !value.athlete_id ||
@@ -150,21 +153,21 @@ export function parseRecoveryHistory(value: unknown): RecoveryHistory {
   const settings = zoneArray(value.settings, (item, index) => {
     if (!isRecord(item) || !exactKeys(item, settingKeys) || !zoneAt(item.zone, index) ||
         !settingKeys.slice(1).every((key) => finite(item[key]) && item[key] >= 0)) throw new Error("Невалидни recovery настройки.");
-    return item as unknown as RecoveryHistory["settings"][number];
+    return item as unknown as LegacyRecoveryHistory["settings"][number];
   });
   const current = zoneArray(value.current, (item, index) => {
     if (!isRecord(item) || !exactKeys(item, currentKeys) || !zoneAt(item.zone, index) ||
         !percentage(item.readiness_percent) || !currentKeys.slice(2).every((key) => finite(item[key]) && item[key] >= 0)) {
       throw new Error("Невалиден текущ recovery статус.");
     }
-    return item as unknown as RecoveryHistory["current"][number];
+    return item as unknown as LegacyRecoveryHistory["current"][number];
   });
   if (!Array.isArray(value.daily) || value.daily.length % ZONES.length !== 0) throw new Error("Невалидна дневна recovery история.");
   const daily = value.daily.map((item, index) => {
     if (!isRecord(item) || !exactKeys(item, dailyKeys) || !isCalendarDate(item.date) || !zoneAt(item.zone, index % ZONES.length) ||
         !percentage(item.readiness_before_percent) || !percentage(item.readiness_after_percent) ||
         !dailyKeys.slice(4).every((key) => finite(item[key]) && item[key] >= 0)) throw new Error("Невалиден дневен recovery ред.");
-    return item as unknown as RecoveryHistory["daily"][number];
+    return item as unknown as LegacyRecoveryHistory["daily"][number];
   });
   let wellnessDiagnostics: WellnessCoverageDiagnostics | null | undefined;
   if ("wellness_diagnostics" in value) {
@@ -216,7 +219,7 @@ export function parseRecoveryHistory(value: unknown): RecoveryHistory {
       wellnessDiagnostics = { ...diagnostics, fields } as unknown as WellnessCoverageDiagnostics;
     }
   }
-  let strength: RecoveryHistory["strength"];
+  let strength: LegacyRecoveryHistory["strength"];
   if ("strength" in value) {
     if (value.strength === null) strength = null;
     else {
@@ -240,9 +243,9 @@ export function parseRecoveryHistory(value: unknown): RecoveryHistory {
             !strengthDailyKeys.slice(3).every((key) => finite(item[key]) && item[key] >= 0)) {
           throw new Error("Невалиден дневен recovery ред за сила.");
         }
-        return item as unknown as NonNullable<RecoveryHistory["strength"]>["daily"][number];
+        return item as unknown as NonNullable<LegacyRecoveryHistory["strength"]>["daily"][number];
       });
-      strength = { ...raw, settings: strengthSettings, current: strengthCurrent, daily: strengthDaily } as unknown as NonNullable<RecoveryHistory["strength"]>;
+      strength = { ...raw, settings: strengthSettings, current: strengthCurrent, daily: strengthDaily } as unknown as NonNullable<LegacyRecoveryHistory["strength"]>;
     }
   }
   return { ...value, wellness_diagnostics: wellnessDiagnostics, settings, current, daily, strength } as unknown as RecoveryHistory;
