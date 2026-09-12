@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 import math
 
-VERSION = "recovery-daily-e-biexponential-v2.1"
+VERSION = "recovery-daily-e-biexponential-v2.2"
 ZONES = ("Z1", "Z2", "Z3", "Z4", "Z5", "STR")
 INITIAL_DAILY = dict(zip(ZONES, (40., 20., 8., 4., 2., 8.)))
 SENSITIVITY = dict(zip(ZONES, (.55, .70, .88, 1., 1.12, .95)))
@@ -31,22 +31,24 @@ def defaults():
             for z in ZONES}
 
 
-def baseline(previous, initial):
-    """Only explicitly covered, completed days; zero is a real rest day.
+def baseline(previous, base_daily):
+    """Permanent expert addition plus the preceding covered-day mean of E.
 
-    Seven days and one initial-equivalent week of E form the expert cold-start
-    transition. This avoids a discontinuity from zero to near-zero zone history.
-    The raw mean is always returned separately and is never clamped.
+    Only explicitly covered, completed days enter the mean; zero is a real
+    rest day. The base is added exactly once even with no or sparse history.
+    Coverage flags describe the history, without changing this denominator.
+    The stored `initial_daily_min` setting now supplies the permanent addition;
+    it never creates effective load or an initial fatigue impulse.
     """
     values = [number(v, "history") for v in previous]
-    initial = number(initial, "initial daily load", positive=True)
+    base_daily = number(base_daily, "base daily addition", positive=True)
     n = len(values)
     raw = math.fsum(values) / n if n else None
     if not n or raw == 0:
-        return initial, raw, n, "NO_HISTORY" if not n else "NO_ZONE_LOAD"
-    weight = min(1., n / 7., math.fsum(values) / (7. * initial))
-    source = "PERSONAL" if weight==1 else "SHORT_HISTORY" if n<7 else "SPARSE_ZONE_HISTORY"
-    return weight * raw + (1. - weight) * initial, raw, n, source
+        return base_daily, raw, n, "NO_HISTORY" if not n else "NO_ZONE_LOAD"
+    source = ("SHORT_HISTORY" if n < 7 else
+              "SPARSE_ZONE_HISTORY" if math.fsum(values) < 7. * base_daily else "PERSONAL")
+    return base_daily + raw, raw, n, source
 
 
 @dataclass(frozen=True)

@@ -40,11 +40,40 @@ def test_tiny_load_does_not_reset_readiness_but_still_accumulates():
 def test_baseline_calendar_rest_days_and_zero_history():
     assert r.baseline([],20)==(20,None,0,"NO_HISTORY")
     assert r.baseline([0]*40,20)==(20,0,40,"NO_ZONE_LOAD")
-    assert r.baseline([140]+[0]*6,20)==(20,20,7,"PERSONAL")
-    assert r.baseline([10],20)[0]==pytest.approx(20-10/14)
+    assert r.baseline([140]+[0]*6,20)==(40,20,7,"PERSONAL")
+    assert r.baseline([10],20)==(30,10,1,"SHORT_HISTORY")
     assert r.baseline([1e-9]+[0]*39,20)[0]==pytest.approx(20)
     assert r.baseline([1]+[0]*39,20)[3]=="SPARSE_ZONE_HISTORY"
-    assert r.baseline([1000]*40,20)[0]==1000  # no Tref bounds
+    assert r.baseline([1000]*40,20)[0]==1020  # no Tref bounds
+
+def test_permanent_base_prevents_sparse_zone_tail_and_remains_editable():
+    rows=[{"date":(TODAY-timedelta(days=n)).isoformat(),"zone":"Z5","effective_load":.4}
+          for n in range(1,41)]
+    rows.append({"date":TODAY.isoformat(),"zone":"Z5","effective_load":10})
+    result=r.simulate(rows,target=TODAY)
+    dose=result["daily"][-1]
+    assert dose["baseline_raw_daily_min"]==pytest.approx(.4)
+    assert dose["baseline_daily_min"]==pytest.approx(2.4)
+    assert dose["isolated_days_to_90"]==pytest.approx(10/2.4)
+    current=next(row for row in result["current"] if row["zone"]=="Z5")
+    assert current["days_to_practical_recovery"]>dose["isolated_days_to_90"]
+    cfg=r.defaults();cfg["Z5"]["initial_daily_min"]=4
+    changed=r.simulate(rows,cfg,target=TODAY)["daily"][-1]
+    assert changed["baseline_daily_min"]==pytest.approx(4.4)
+    assert changed["isolated_days_to_90"]==pytest.approx(10/4.4)
+    assert changed["effective_load"]==dose["effective_load"]
+
+@pytest.mark.parametrize("covered_days",[0,40])
+def test_base_addition_never_creates_load_or_initial_fatigue(covered_days):
+    rows=[{"date":(TODAY-timedelta(days=n)).isoformat(),"zone":z,"effective_load":0}
+          for z in r.ZONES for n in range(covered_days)]
+    result=r.simulate(rows,target=TODAY)
+    for current in result["current"]:
+        assert current["baseline_daily_min"]==r.INITIAL_DAILY[current["zone"]]
+        assert current["residual_fatigue"]==0
+        assert current["readiness_percent"]==100
+        assert current["days_to_practical_recovery"]==0
+    assert all(row["impulse"]==0 and row["effective_load"]==0 for row in result["daily"])
 
 def test_future_doses_cannot_change_past_recovery():
     rows=[{"date":(TODAY-timedelta(days=n)).isoformat(),"zone":"Z2","effective_load":20} for n in range(41)]
@@ -53,7 +82,7 @@ def test_future_doses_cannot_change_past_recovery():
     assert r.simulate(rows,target=TODAY)==first
     final=[x for x in first["daily"] if x["date"]==TODAY.isoformat()][0]
     assert final["history_days"]==40
-    assert final["baseline_daily_min"]==20
+    assert final["baseline_daily_min"]==40
 
 def test_missing_calendar_days_are_not_invented_rest():
     rows=[{"date":(TODAY-timedelta(days=n)).isoformat(),"zone":"Z2","effective_load":20} for n in (4,2,0)]

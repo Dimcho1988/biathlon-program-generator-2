@@ -14,6 +14,7 @@ schema and parameter fingerprint. Turning the flag off restores the v1 view.
 For a zone and a completed-day history of at most 40 calendar days:
 
 ```
+baseline_E_per_calendar_day = permanent_base + prior_40_day_mean_E
 ratio = E_today / baseline_E_per_calendar_day
 D = duration_coefficient * ratio                         # days
 A = min(100, 100 * sensitivity * ratio)                   # one daily impulse
@@ -26,9 +27,9 @@ within-day timestamps. Only prior days enter the baseline, including recorded
 rest days; absent rows are unknown days. The mean is not multiplied by seven
 and is not clamped to expert Tref limits.
 
-Recovery algorithm `recovery-daily-e-biexponential-v2.1` solves the positive
+Recovery algorithm `recovery-daily-e-biexponential-v2.2` solves the positive
 `rate` so `F(D)=10` when `A>=20`. With sensitivity 1,
-E=60 and baseline=20, D=3 days and readiness is 53.584%, 78.456%, 90% at days
+E=60 and total baseline=20, D=3 days and readiness is 53.584%, 78.456%, 90% at days
 1, 2, 3 for shape 1. Shape 1 is one exponential; shape 1–10 mixes fast and slow
 recovery while preserving this isolated-dose deadline. If A≤10 the isolated
 dose is already above the readiness threshold, but its residual still persists.
@@ -52,13 +53,31 @@ revision is present in the displayed projection. Unsaved edits are explicitly
 labelled; no Intervals re-import is necessary. The common fixed chart time axis
 also prevents a changed duration from being hidden by automatic rescaling.
 
-Cold-start expert prior (E minutes/day): Z1=40, Z2=20, Z3=8, Z4=4, Z5=2, STR=8.
-The blending weight is `min(1, covered_days/7, sum_E/(7*initial_daily))`.
-Zero history retains the prior; sparse positive history approaches it continuously.
-The raw personal mean, used baseline, covered days and source flag remain visible.
+Permanent expert addition (E minutes/day): Z1=40, Z2=20, Z3=8, Z4=4, Z5=2, STR=8.
+In v2.2 this addition remains in the denominator at all history lengths. The
+stored/editable `initial_daily_min` key is retained for existing profiles, but
+the UI now labels it "Базова добавка, мин/ден". No settings migration or reset
+is required. This uses a fixed profile addition, not the adaptive 7/40 base;
+the 7/40 calculation itself remains unchanged.
+
+With no history or a zero mean, the denominator is the addition alone; it is
+never doubled. Otherwise it is exactly addition + unmodified prior mean. There
+is no cold-start blending weight. Short/sparse source flags remain coverage
+diagnostics only (fewer than 7 days or less than 7 base daily doses of E).
+The addition never creates E, an impulse, or initial fatigue. Zero actual load
+still produces zero fatigue. Historical impulses are reconstructed with the
+new denominator; residual accumulation, decay shape and the 90% threshold are
+unchanged, and there is no hard maximum recovery duration.
+
+For example, a synthetic Z5 dose of 10 E minutes after a prior mean of 0.4 now
+has denominator 2.4 and an isolated 90% deadline of 4.167 days at coefficient 1,
+rather than a denominator of 0.4 and a deadline of 25 days. The cards show the
+addition, raw personal mean and total baseline separately; covered days and
+source flags remain visible. The algorithm version changes the model fingerprint
+even when the profile settings revision stays the same.
 Sensitivity defaults (.55,.70,.88,1,1.12,.95) are retained as expert amplitude
 settings, with the new denominator explicitly versioned. Duration and shape
-start at 1. The initial prior, sensitivity, duration and shape are editable.
+start at 1. The permanent addition, sensitivity, duration and shape are editable.
 
 Fatigue before the available history is unknown. Stale source dates are shown
 explicitly; projected rest after the last source day is an assumption. Wellness
@@ -129,6 +148,11 @@ Enable the API flag and deploy API, worker and web from the integration branch.
 The new page is `/speed`, linked from the dashboard and each activity detail.
 Recovery settings save and refresh the projection immediately.
 
+For the v2.2 update, deploy the web first: its parser and labels support both
+v2/v2.1 and v2.2 responses. Then deploy the API, which reprojects existing
+canonical snapshots on read. No database migration, worker deploy or activity
+re-import is needed for this update.
+
 ### Recovery chart and traceability
 
 The overview displays all five zones and STR on the same calendar axis, from
@@ -142,10 +166,10 @@ its exact 90% crossing; a crossing beyond two days is outside the overview.
 Daily rows also expose `residual_fatigue_now`, calculated from each original
 impulse at the projection date. Their sum is current residual fatigue. The UI
 lists the largest contributors with the effective dose, baseline at that time,
-and isolated deadline counted from the dose date. This explains long tails in
-sparsely trained zones: a small historical denominator can produce a long
-isolated recovery duration. This display update changes no recovery equation,
-settings, baseline, cascade, spillover or stored loads.
+and isolated deadline counted from the dose date. In v2.2 the displayed baseline
+includes the permanent addition, preventing a near-zero personal mean from
+becoming a near-zero denominator. Cascade, spillover and stored loads remain
+unchanged.
 
 Validation covers isolated and accumulated recovery, tiny doses, missing/sparse
 history, future-data exclusion, C1/inverse curves, incompatible tests, corrections,
