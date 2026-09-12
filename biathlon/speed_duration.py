@@ -170,7 +170,7 @@ def adjusted(curve, tests, hr_for_speed, centers, corrections):
 def critical_speed(tests):
     # Explicit eligibility; do not fit from reference/model-generated points.
     chosen=sorted((t["duration_s"],t["duration_s"]*t["speed_kmh"]/3.6)
-                  for t in tests if t.get("use_for_cs") and 120<=t["duration_s"]<=1200)
+                  for t in tests if t.get("use_for_cs") and t.get("test_mode","STRICT")=="STRICT" and 120<=t["duration_s"]<=1200)
     if len(chosen)<2:
         return {"status":"INSUFFICIENT_TESTS","count":len(chosen)}
     if chosen[-1][0]/chosen[0][0]<2:

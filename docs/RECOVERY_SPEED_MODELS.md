@@ -157,7 +157,34 @@ clears attestations. Save checks the preview's source run against the current
 analysis and the existing test revision. The UI waits for the saved revision in
 the refreshed model before reporting that the curve is updated. Prediction
 range errors remain inside the page, with the submitted unit/value preserved.
-The speed-duration equations, 98% gate and 90-day window are unchanged.
+The speed-duration equations, strict 98% gate and 90-day window are unchanged.
+
+### Exploratory complex-session calibration
+
+An explicit `test_mode=EXPLORATORY` admits >=70% eligible Vflat coverage for
+provisional calibration from complex workouts with descents and stops, including
+biathlon recorded under the source sport `Walk`. `STRICT` remains the default
+at >=98%, with its maximal continuous-effort attestation. Source sport labels and
+athlete access permissions are unchanged; this is a measurement-quality option.
+
+Both modes keep the selected **elapsed duration** (including pauses) and use the
+time-weighted mean of eligible Vflat samples. Excluded speeds never enter that
+mean. `measured_duration_s`, `measured_distance_m` and the exclusion breakdown
+are returned and persisted. The full-window equivalent distance projects that
+eligible mean over the entire elapsed window; the exploratory UI calls it an
+estimate and also shows distance integrated only over the included samples.
+The 70% threshold is an experimental engineering setting, not a validated
+physiological criterion. Interrupted work is not equivalent to a continuous
+maximal test even when its recording coverage is high.
+
+Exploratory saving requires a separate explicit confirmation, conditions and
+comparability; it stores `maximal=false` and cannot set `use_for_cs=true`.
+Any active exploratory entry labels the whole curve and its predictions as
+provisional and adds `EXPLORATORY_CALIBRATION` plus `exploratory_test_count`.
+Critical speed always excludes exploratory entries, even if stored data were
+incorrectly marked CS-eligible. Switching mode invalidates the old preview and
+attestations and requests a new measurement. The existing revision/source-run
+checks apply. Entries can be disabled to restore a curve using only strict tests.
 
 ## Storage and rollout
 

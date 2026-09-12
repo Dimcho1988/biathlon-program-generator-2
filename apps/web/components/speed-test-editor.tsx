@@ -3,7 +3,7 @@ import Link from "next/link";
 import {useEffect, useState, type FormEvent, type MouseEvent} from "react";
 import {useRouter} from "next/navigation";
 import {saveModel, type SpeedModel} from "../lib/models";
-import {clockTime, parseClock, parseSpeedPreview, speedNumber as n, testActivities, type SpeedPreview} from "../lib/speed-tests";
+import {clockTime, parseClock, parseSpeedPreview, speedNumber as n, testActivities, testModeLabel, type SpeedPreview, type SpeedTestMode} from "../lib/speed-tests";
 
 export function SpeedTestEditor({model, canEdit, activityRef}:{model:SpeedModel;canEdit:boolean;activityRef?:string}) {
   const [search,setSearch]=useState("");
@@ -27,7 +27,9 @@ export function SpeedTestEditor({model, canEdit, activityRef}:{model:SpeedModel;
 function SpeedSegmentEditor({activityRef,model,canEdit}:{activityRef:string;model:SpeedModel;canEdit:boolean}) {
   const router=useRouter();
   const [preview,setPreview]=useState<SpeedPreview|null>(null);
-  const [request,setRequest]=useState<{start?:number;duration?:number;attempt:number}>({attempt:0});
+  const [mode,setMode]=useState<SpeedTestMode>("STRICT");
+  const exploratory=mode==="EXPLORATORY";
+  const [request,setRequest]=useState<{start?:number;duration?:number;attempt:number;mode:SpeedTestMode}>({attempt:0,mode:"STRICT"});
   const [loading,setLoading]=useState(true),[error,setError]=useState("");
   const [startText,setStartText]=useState("0:00"),[endText,setEndText]=useState("");
   const [handle,setHandle]=useState<"start"|"end">("start");
@@ -39,12 +41,12 @@ function SpeedSegmentEditor({activityRef,model,canEdit}:{activityRef:string;mode
   const start=parseClock(startText),end=parseClock(endText),duration=start!==null&&end!==null?end-start:null;
   const valid=start!==null&&start<=172800&&end!==null&&duration!==null&&duration>=11&&duration<=43516&&Boolean(preview&&end<=preview.elapsed_s);
   const selection=preview?.selection;
-  const fresh=Boolean(valid&&selection&&selection.start_s===start&&selection.duration_s===duration);
+  const fresh=Boolean(valid&&selection&&selection.start_s===start&&selection.duration_s===duration&&(selection.test_mode??"STRICT")===mode);
   const ready=fresh&&selection?.eligible&&!loading&&!error;
 
   useEffect(()=>{
     const controller=new AbortController();
-    const params=new URLSearchParams({activity_ref:activityRef});
+    const params=new URLSearchParams({activity_ref:activityRef,test_mode:request.mode});
     if(request.start!==undefined&&request.duration!==undefined){params.set("start_s",String(request.start));params.set("duration_s",String(request.duration));}
     fetch(`/api/athlete/models/speed-preview?${params}`,{cache:"no-store",signal:controller.signal})
       .then(async response=>{const body=await response.json();if(!response.ok)throw new Error(body.error||"Прегледът не е достъпен.");return parseSpeedPreview(body);})
@@ -61,7 +63,12 @@ function SpeedSegmentEditor({activityRef,model,canEdit}:{activityRef:string;mode
   function check() {
     if(!valid||start===null||duration===null)return;
     setLoading(true);setError("");setSaveError("");setSaved(null);
-    setRequest(old=>({start,duration,attempt:old.attempt+1}));
+    setRequest(old=>({start,duration,attempt:old.attempt+1,mode}));
+  }
+  function changeMode(next:SpeedTestMode) {
+    setMode(next);setMaximal(false);setComparable(false);setUseCS(false);setSaved(null);setSaveError("");
+    setLoading(true);setError("");
+    setRequest(old=>({...(valid&&start!==null&&duration!==null?{start,duration}:{}),attempt:old.attempt+1,mode:next}));
   }
   async function save(event:FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -70,8 +77,8 @@ function SpeedSegmentEditor({activityRef,model,canEdit}:{activityRef:string;mode
     const previous=model.tests.find(t=>t.payload.activity_ref===activityRef&&t.payload.start_s===start&&t.payload.duration_s===duration);
     setSaving(true);setSaveError("");setSaved(null);
     try {
-      const result=await saveModel("speed-test",{activity_ref:activityRef,start_s:start,duration_s:duration,maximal,comparable,
-        enabled:true,use_for_cs:useCS&&duration>=120&&duration<=1200,conditions:String(form.get("conditions")).trim(),
+      const result=await saveModel("speed-test",{activity_ref:activityRef,start_s:start,duration_s:duration,test_mode:mode,maximal:!exploratory&&maximal,exploratory_confirmed:exploratory&&maximal,comparable,
+        enabled:true,use_for_cs:!exploratory&&useCS&&duration>=120&&duration<=1200,conditions:String(form.get("conditions")).trim(),
         expected_revision:previous?.revision||0,expected_source_run_key:preview.source_run_key});
       setSaved({revision:result.revision,start,duration});router.refresh();
     } catch(e){setSaveError(e instanceof Error?e.message:"Записването не завърши.");}
@@ -94,8 +101,10 @@ function SpeedSegmentEditor({activityRef,model,canEdit}:{activityRef:string;mode
     {loading&&<p role="status">Проверяваме подробните данни за скоростта…</p>}
     {!preview&&error&&<button type="button" className="action-button secondary" onClick={()=>{setLoading(true);setError("");setRequest(r=>({...r,attempt:r.attempt+1}));}}>Опитай отново</button>}
     {preview&&<>
-      <h3>2. Избери непрекъснат участък</h3>
+      <h3>2. Избери участък и режим</h3>
       <p>Запис: {clockTime(preview.elapsed_s)} · време от началото, включително паузите. Изключи загряването и разпускането.</p>
+      <div className="model-controls"><label>Режим на теста<select value={mode} disabled={busy||loading} onChange={e=>changeMode(e.target.value as SpeedTestMode)}><option value="STRICT">{testModeLabel("STRICT")}</option><option value="EXPLORATORY">{testModeLabel("EXPLORATORY")}</option></select></label></div>
+      {exploratory&&<div className="speed-onboarding"><strong>Пробна калибрация · допуска спускания и спирания</strong><p>Нужни са поне 70% подходящи скоростни данни. Запазваме пълната продължителност на участъка, включително паузите; средната Vflat скорост е само от включените проби. Кривата и прогнозите ще са обозначени като пробни. Този запис не участва в критичната скорост.</p></div>}
       {preview.status==="READY"&&preview.uses_legacy_samples&&<p>За този запис е наличен по-стар анализ. Ако покритието не достига, обнови анализите от <Link href="/">началния екран</Link> и провери отново.</p>}
       {preview.status==="ANALYSIS_REQUIRED"?<p role="alert">Липсват подробни данни за скоростта. Отвори <Link href="/">началния екран</Link> → „Обнови данните“ и обнови анализите на активностите.</p>:preview.status==="OUTSIDE_TEST_WINDOW"?<p role="alert">Тази активност е извън последните 90 дни. Избери по-скорошен тест.</p>:<>
         <div className="model-controls" role="group" aria-label="Избор върху графиката"><button type="button" className="action-button secondary" aria-pressed={handle==="start"} disabled={busy} onClick={()=>setHandle("start")}>Постави начало</button><button type="button" className="action-button secondary" aria-pressed={handle==="end"} disabled={busy} onClick={()=>setHandle("end")}>Постави край</button><span>Натисни върху графиката или използвай полетата и плъзгачите.</span></div>
@@ -114,19 +123,22 @@ function SpeedSegmentEditor({activityRef,model,canEdit}:{activityRef:string;mode
         <div className="speed-range-controls"><label>Начало на участъка<input type="range" min="0" max={preview.elapsed_s} step="1" value={Math.min(start??0,preview.elapsed_s)} disabled={busy} onChange={e=>bounds("start",clockTime(Number(e.target.value)))}/></label><label>Край на участъка<input type="range" min="0" max={preview.elapsed_s} step="1" value={Math.min(end??0,preview.elapsed_s)} disabled={busy} onChange={e=>bounds("end",clockTime(Number(e.target.value)))}/></label></div>
         {!valid&&<p role="alert">Задай начало и край в рамките на записа. Продължителността трябва да е от 0:11 до 725:16.</p>}
         <button type="button" className="action-button secondary" disabled={!valid||loading||busy} onClick={check}>Провери участъка без запис</button>
-        {selection&&!fresh&&<p role="status">Участъкът е променен. Провери го отново преди запис.</p>}
+        {selection&&!fresh&&<p role="status">Участъкът или режимът е променен. Нужна е нова проверка преди запис.</p>}
         {fresh&&selection&&<section className="speed-selection-result" aria-label="Проверка на избрания участък">
-          <h3>3. Провери резултата</h3><dl className="model-prediction"><div><dt>Продължителност</dt><dd>{clockTime(selection.duration_s)}</dd></div><div><dt>Подходящи данни</dt><dd>{n(selection.coverage_percent)}%</dd></div><div><dt>Средна Vflat скорост</dt><dd>{selection.speed_kmh===null?"—":`${n(selection.speed_kmh)} км/ч`}</dd></div><div><dt>Еквивалентна дистанция</dt><dd>{selection.distance_m===null?"—":`${n(selection.distance_m/1000)} км`}</dd></div></dl>
-          {selection.eligible?<p>Покритието е достатъчно. Само ти можеш да потвърдиш дали това е било максимално усилие и при какви условия.</p>:<><p role="alert">{selection.status==="OUTSIDE_ACTIVITY"?"Краят е извън наличния скоростен запис. Измести го навътре в графиката.":"Не достигат необходимите 98% подходящи данни. Избери непрекъснат участък с по-добро покритие."}</p><p>Спускане под −3%: {clockTime(selection.excluded_seconds.downhill)} · други изключени данни: {clockTime(selection.excluded_seconds.invalid)} · липсващ запис или паузи: {clockTime(selection.excluded_seconds.missing_or_paused)}.</p></>}
+          <h3>3. Провери резултата</h3><dl className="model-prediction"><div><dt>Продължителност</dt><dd>{clockTime(selection.duration_s)}</dd></div><div><dt>Подходящи данни · праг {selection.minimum_coverage_percent??98}%</dt><dd>{n(selection.coverage_percent)}%</dd></div><div><dt>Средна Vflat скорост</dt><dd>{selection.speed_kmh===null?"—":`${n(selection.speed_kmh)} км/ч`}</dd></div><div><dt>{exploratory?"Дистанция за целия участък · оценка":"Еквивалентна дистанция"}</dt><dd>{selection.distance_m===null?"—":`${n(selection.distance_m/1000)} км`}</dd></div></dl>
+          {selection.eligible?<p>{exploratory?"Покритието е достатъчно за пробна калибрация. Потвърди, че искаш да използваш този участък за експериментиране.":"Покритието е достатъчно. Само ти можеш да потвърдиш дали това е било максимално усилие и при какви условия."}</p>:<p role="alert">{selection.status==="OUTSIDE_ACTIVITY"?"Краят е извън наличния скоростен запис. Измести го навътре в графиката.":`Не достигат необходимите ${selection.minimum_coverage_percent??98}% подходящи данни. Избери участък с по-добро покритие.`}</p>}
+          {exploratory&&selection.measured_duration_s!==undefined&&<p>Използвано време: <strong>{clockTime(selection.measured_duration_s)}</strong> от {clockTime(selection.duration_s)} · Vflat дистанция по включените проби: <strong>{n((selection.measured_distance_m??0)/1000)} км</strong>. Оценката за целия участък пренася средната скорост и върху изключеното време.</p>}
+          {(exploratory||!selection.eligible)&&<p>Спускане под −3%: {clockTime(selection.excluded_seconds.downhill)} · други изключени данни: {clockTime(selection.excluded_seconds.invalid)} · липсващ запис или паузи: {clockTime(selection.excluded_seconds.missing_or_paused)}.</p>}
+          {!exploratory&&!selection.eligible&&selection.status==="INSUFFICIENT_COVERAGE"&&selection.coverage_percent>=70&&<button type="button" className="action-button secondary" disabled={loading||busy} onClick={()=>changeMode("EXPLORATORY")}>Пробвай с праг 70%</button>}
           <p className="muted-copy">Прегледът не записва тест и не променя индивидуалната крива.</p>
         </section>}
         {canEdit&&<form onSubmit={save} className="model-test-form"><fieldset disabled={!ready||busy}>
-          <legend>Потвърди максималния тест</legend>
+          <legend>{exploratory?"Потвърди пробната калибрация":"Потвърди максималния тест"}</legend>
           <label>Условия и съпоставимост<input name="conditions" minLength={3} maxLength={400} required placeholder="Напр. същите ролки и техника, сух асфалт, без спирания"/></label>
-          <label><input type="checkbox" checked={maximal} onChange={e=>setMaximal(e.target.checked)} required/> Това е максимално непрекъснато усилие</label>
+          <label><input type="checkbox" checked={maximal} onChange={e=>setMaximal(e.target.checked)} required/> {exploratory?"Използвай този комплексен участък за пробна калибрация":"Това е максимално непрекъснато усилие"}</label>
           <label><input type="checkbox" checked={comparable} onChange={e=>setComparable(e.target.checked)} required/> Условията са съпоставими с другите тестове; при първи тест ги описах по-горе</label>
-          <label><input type="checkbox" checked={useCS&&Boolean(duration&&duration>=120&&duration<=1200)} disabled={!duration||duration<120||duration>1200} onChange={e=>setUseCS(e.target.checked)}/> Използвай и за критична скорост · само от 2 до 20 минути</label>
-        </fieldset><button className="action-button" disabled={!ready||!maximal||!comparable||busy||!preview.source_run_key}>{saving?"Записваме…":waiting?"Обновяваме кривата…":"Запази теста и обнови кривата"}</button></form>}
+          <label><input type="checkbox" checked={!exploratory&&useCS&&Boolean(duration&&duration>=120&&duration<=1200)} disabled={exploratory||!duration||duration<120||duration>1200} onChange={e=>setUseCS(e.target.checked)}/> {exploratory?"Критична скорост · недостъпна за пробни записи":"Използвай и за критична скорост · само от 2 до 20 минути"}</label>
+        </fieldset><button className="action-button" disabled={!ready||!maximal||!comparable||busy||!preview.source_run_key}>{saving?"Записваме…":waiting?"Обновяваме кривата…":exploratory?"Запази пробната точка и обнови кривата":"Запази теста и обнови кривата"}</button></form>}
       </>}
     </>}
     {saveError&&<p role="alert">{saveError}</p>}

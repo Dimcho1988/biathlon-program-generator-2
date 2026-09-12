@@ -50,6 +50,17 @@ describe("speed test selection and prediction",()=>{
     expect(html).not.toMatch(/disabled=""[^>]*>Изчисли/);
     expect(html).toContain("Максимални тестове и контролни стартове");
   });
+  it("labels a curve containing an exploratory record and its predictions as provisional",()=>{
+    const trial:SpeedModel={...model,status:"CALIBRATED",active_test_count:1,active_test_keys:["trial"],exploratory_test_count:1,
+      tests:[{kind:"SPEED_TEST",entry_key:"trial",revision:1,recorded_at:"2026-09-12",payload:{activity_ref:ref,start_s:0,duration_s:1000,
+        speed_kmh:20,day:"2026-09-10",sport:"Run",enabled:true,use_for_cs:false,maximal:false,comparable:true,
+        test_mode:"EXPLORATORY",exploratory_confirmed:true,conditions:"Synthetic complex session",coverage_percent:80}}]};
+    const html=renderToStaticMarkup(<SpeedModelPanel model={trial} canEdit/>);
+    expect(html).toContain("Пробна крива");expect(html).toContain("Пробна прогноза");
+    expect(html).toContain("Пробен ·");expect(html).toContain("80");
+    expect(html).not.toContain("Индивидуална крива");
+    expect(html).toContain("Критичната скорост използва само стандартните максимални тестове");
+  });
 });
 
 describe("private read-only preview route",()=>{
@@ -62,6 +73,13 @@ describe("private read-only preview route",()=>{
     const result=await GET(request("&start_s=120&duration_s=720&athlete_alias=someone-else"));
     expect(result.status).toBe(200);expect(result.headers.get("Cache-Control")).toContain("no-store");
     expect(getSpeedPreview).toHaveBeenCalledWith("ath-test",{activity_ref:ref,start_s:"120",duration_s:"720"});
+  });
+  it("forwards only an explicit supported calibration mode",async()=>{
+    expect((await GET(request("&start_s=0&duration_s=1000&test_mode=EXPLORATORY"))).status).toBe(200);
+    expect(getSpeedPreview).toHaveBeenCalledWith("ath-test",{activity_ref:ref,start_s:"0",duration_s:"1000",test_mode:"EXPLORATORY"});
+    vi.mocked(getSpeedPreview).mockClear();
+    expect((await GET(request("&test_mode=OPEN"))).status).toBe(422);
+    expect(getSpeedPreview).not.toHaveBeenCalled();
   });
   it("rejects missing permissions and invalid windows before fetching data",async()=>{
     vi.mocked(currentAuthorizedAthlete).mockResolvedValue(null);expect((await GET(request())).status).toBe(401);

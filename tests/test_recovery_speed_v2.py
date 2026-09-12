@@ -175,6 +175,10 @@ def test_cs_uses_real_eligible_tests_with_residuals():
     result=s.critical_speed(observations())
     assert result["status"]=="FITTED" and result["distance_rmse_m"]>0
     assert 0<result["speed_kmh"]<min(t["speed_kmh"] for t in observations())
+    # Even an incorrectly marked exploratory entry must not become a CS anchor.
+    exploratory=[{**t,"test_mode":"EXPLORATORY","use_for_cs":True} for t in observations()]
+    assert s.critical_speed(exploratory)["count"]==0
+    assert s.critical_speed(observations()+exploratory)==result
 
 
 @pytest.mark.parametrize("shape",[1,5,10])
