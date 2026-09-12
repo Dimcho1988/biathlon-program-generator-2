@@ -37,6 +37,7 @@ class SpeedTestInput(Strict):
     use_for_cs: bool = False
     conditions: str = Field(min_length=3,max_length=400)
     expected_revision: int = Field(default=0,ge=0,strict=True)
+    expected_source_run_key: str | None = Field(default=None,pattern=r"^[a-f0-9]{64}$")
 
 class Baseline(Strict):
     baseline_daily_min: float = Field(gt=0)

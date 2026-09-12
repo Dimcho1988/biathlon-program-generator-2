@@ -11,10 +11,14 @@ export default async function SpeedPage({searchParams}:{searchParams:Promise<{sp
   if(!access.canViewRecovery)return <ErrorState message="Нямате достъп до физиологичните данни на този профил." refreshAvailable={false}/>;
   const q=await searchParams,query:Record<string,string>={};
   if(q.sport)query.sport=q.sport;
-  if(q.value){const value=Number(q.value);if(Number.isFinite(value)&&value>0){if(q.input==="minutes")query.duration_s=String(value*60);else if(q.input==="km")query.distance_m=String(value*1000);else if(q.input==="speed")query.speed_kmh=String(value);}}
+  const predictionInput=["minutes","km","speed"].includes(q.input||"")?q.input!:"minutes";
+  const value=Number(q.value);
+  const invalid=q.value!==undefined&&(!Number.isFinite(value)||value<=0||q.input!==predictionInput);
+  if(q.value&&!invalid)query[predictionInput==="minutes"?"duration_s":predictionInput==="km"?"distance_m":"speed_kmh"]=String(value*(predictionInput==="minutes"?60:predictionInput==="km"?1000:1));
   let model;
   try{
     model=await getSpeedModel(access.athleteAlias,query);
+    if(invalid)model={...model,prediction_error:"INVALID_PREDICTION_INPUT"};
   }catch(error){return <ErrorState message={error instanceof Error?error.message:"Скоростният модел временно не е достъпен."} retryAvailable retryHref="/speed"/>;}
-  return <main className="activities-page speed-page"><nav className="detail-top-nav"><Link href="/">onFlows · Статус</Link><Link href="/activities">Активности</Link><Link href="/trainability">Индекс на тренираност</Link></nav><h1>Скорост, време и дистанция</h1><p>{access.displayName}</p><SpeedModelPanel model={model} canEdit={access.canEditPlan} activityRef={q.activity_ref}/></main>;
+  return <main className="activities-page speed-page"><nav className="detail-top-nav"><Link href="/">onFlows · Статус</Link><Link href="/activities">Активности</Link><Link href="/trainability">Индекс на тренираност</Link></nav><h1>Скорост, време и дистанция</h1><p>{access.displayName}</p><SpeedModelPanel key={`${access.athleteAlias}:${model.sport}`} model={model} canEdit={access.canEditPlan} activityRef={q.activity_ref} predictionInput={predictionInput} predictionValue={q.value??"3"}/></main>;
 }
