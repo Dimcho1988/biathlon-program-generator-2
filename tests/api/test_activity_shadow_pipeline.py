@@ -223,7 +223,7 @@ def test_explicit_hrmax_enables_hrmod_without_changing_immutable_input() -> None
         explicit_hrmax_bpm=200,
     )
     assert immutable_with == immutable_without
-    assert derived["hrmod_model_version"] == "hrmod_mirror_area_shift_v7"
+    assert derived["hrmod_model_version"] == "hrmod_mirror_area_shift_v8"
 
 
 def test_hr_below_z1_does_not_exclude_the_whole_activity() -> None:
@@ -321,3 +321,15 @@ def test_speed_test_series_is_full_one_hz_and_does_not_require_hr():
     measured = segment_measurement(derived, 0, 720)
     assert measured["coverage_percent"] == 100
     assert measured["speed_kmh"] == pytest.approx(21.6)
+
+
+def test_hrmod_v8_invalidates_v7_cache_and_index_comparison(monkeypatch):
+    from apps.api import activity_shadow_pipeline as pipeline
+
+    kwargs = dict(zone_bounds_bpm=(80, 137, 148, 160, 170, 180), explicit_hrmax_bpm=180)
+    current = activity_shadow_configuration_fingerprint(**kwargs, activity_duration_s=900)
+    comparison = activity_shadow_configuration_fingerprint(**kwargs)
+    monkeypatch.setattr(pipeline, 'HRMOD_MODEL_VERSION', 'hrmod_mirror_area_shift_v7')
+    monkeypatch.setattr(pipeline, 'HRMOD_CONFIG_VERSION', 'hrmod_config_v7')
+    assert activity_shadow_configuration_fingerprint(**kwargs, activity_duration_s=900) != current
+    assert activity_shadow_configuration_fingerprint(**kwargs) != comparison

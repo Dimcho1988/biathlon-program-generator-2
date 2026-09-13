@@ -13,8 +13,8 @@ from math import isfinite
 from typing import Any, Mapping
 
 
-MODEL_VERSION = "hrmod_mirror_area_shift_v7"
-CONFIG_VERSION = "hrmod_config_v7"
+MODEL_VERSION = "hrmod_mirror_area_shift_v8"
+CONFIG_VERSION = "hrmod_config_v8"
 
 
 def _finite(name: str, value: float) -> float:
@@ -170,7 +170,7 @@ class HRmodConfig:
     # Mirror model eligibility.  These are HR-only morphology controls;
     # terrain remains a separate post-core phase.
     mirror_min_peak_fraction_hrmax: float = 0.78
-    mirror_max_wave_duration_s: float = 180.0
+    mirror_max_wave_duration_s: float = 320.0
 
     # Robust detection and transparent cleaning details.
     smoothing_method: str = "robust_local_linear"

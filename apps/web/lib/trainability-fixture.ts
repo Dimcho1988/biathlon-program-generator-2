@@ -8,7 +8,7 @@ const template: TrainabilityIndex = {
   "comparison_key": "fixture-current-v2",
   "source_versions": {
     "vflat": "vflat_b65_dynamic_v3_uphill150",
-    "hrmod": "hrmod_mirror_area_shift_v7"
+    "hrmod": "hrmod_mirror_area_shift_v8"
   },
   "hrmax_bpm": 178,
   "zone_bounds_bpm": [

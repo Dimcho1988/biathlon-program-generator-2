@@ -1,4 +1,4 @@
-"""Deterministic HR-only rise--peak--fall detection for mirror v4."""
+"""HR-only accumulated-rise and plateau-end detection for mirror v8."""
 
 from __future__ import annotations
 
@@ -225,6 +225,47 @@ def _trough_before_rise(
     return start + int(relative[-1])
 
 
+def _accumulated_rise_candidate(
+    candidate: int | None,
+    index: int,
+    *,
+    rise_condition: bool,
+    lower_bound: int,
+    elapsed_s: np.ndarray,
+    h_detect: np.ndarray,
+    config: HRmodConfig,
+) -> int | None:
+    """Retain a local rise through holds and sub-threshold reversals.
+
+    A qualifying slope still starts the candidate. Neutral samples do not
+    erase the accumulated excursion. A new low, a genuine falling reversal,
+    or the duration limit releases it, so unrelated slow drift cannot retain
+    an old trough indefinitely. Durations use timestamps, not sample counts.
+    """
+    if candidate is not None:
+        expired = elapsed_s[index] - elapsed_s[candidate] > config.mirror_max_wave_duration_s
+        new_low = h_detect[index] < h_detect[candidate] - 1e-9
+        reversal = (
+            np.max(h_detect[candidate : index + 1]) - h_detect[index]
+            >= config.min_fall_bpm
+        )
+        if expired or new_low or reversal:
+            candidate = None
+    if candidate is None and rise_condition:
+        candidate = index
+        # Sparse/rounded HR can have no positive fitted slope at the trough.
+        # Anchor the excursion at that local trough, not several bpm later
+        # at the first slope-qualified sample. Never cross the prior wave.
+        for previous in range(index - 1, lower_bound - 1, -1):
+            if elapsed_s[index] - elapsed_s[previous] > config.mirror_max_wave_duration_s:
+                break
+            if h_detect[previous] - h_detect[candidate] >= config.min_fall_bpm:
+                break
+            if h_detect[previous] < h_detect[candidate] - 1e-9:
+                candidate = previous
+    return candidate
+
+
 def detect_hr_waves(
     *,
     elapsed_s: np.ndarray,
@@ -266,6 +307,7 @@ def detect_hr_waves(
         segment_end = int(segment[-1])
 
         state = "seeking_rise"
+        search_start = segment_start
         rise_candidate: int | None = None
         active_start: int | None = None
         active_baseline: float | None = None
@@ -275,12 +317,14 @@ def detect_hr_waves(
         next_rise_candidate: int | None = None
         neutral_candidate: int | None = None
         confirmed_fall_start: int | None = None
+        plateau_end: int | None = None
 
         def start_confirmed_wave(start_index: int) -> None:
             nonlocal state, active_start, active_baseline, fall_candidate
             nonlocal peak_index, return_candidate, next_rise_candidate
             nonlocal neutral_candidate, rise_candidate
             nonlocal confirmed_fall_start
+            nonlocal plateau_end
             active_start = start_index
             active_baseline = _local_baseline(
                 rise_start_index=start_index,
@@ -292,6 +336,7 @@ def detect_hr_waves(
             )
             state = "awaiting_fall"
             peak_index = start_index
+            plateau_end = start_index
             fall_candidate = None
             return_candidate = None
             next_rise_candidate = None
@@ -346,9 +391,12 @@ def detect_hr_waves(
             )
 
             if state == "seeking_rise":
-                if rise_condition:
-                    if rise_candidate is None:
-                        rise_candidate = index
+                rise_candidate = _accumulated_rise_candidate(
+                    rise_candidate, index, rise_condition=rise_condition,
+                    lower_bound=search_start,
+                    elapsed_s=elapsed_s, h_detect=h_detect, config=config,
+                )
+                if rise_candidate is not None:
                     sustained = (
                         elapsed_s[index] - elapsed_s[rise_candidate]
                         >= config.min_sustained_rise_s
@@ -356,8 +404,6 @@ def detect_hr_waves(
                     total_rise = h_detect[index] - h_detect[rise_candidate]
                     if sustained and total_rise >= config.min_rise_bpm:
                         start_confirmed_wave(rise_candidate)
-                else:
-                    rise_candidate = None
                 index += 1
                 continue
 
@@ -381,12 +427,24 @@ def detect_hr_waves(
                 active_baseline = None
                 peak_index = None
                 rise_candidate = None
+                search_start = index + 1
                 index += 1
                 continue
 
             if state == "awaiting_fall":
                 if h_detect[index] >= h_detect[peak_index]:
                     peak_index = index
+                    plateau_end = index
+                    fall_candidate = None
+                elif (
+                    h_detect[index] >= h_detect[peak_index] - config.return_tolerance_bpm
+                    and supported[index]
+                    and slope >= -config.neutral_slope_tolerance_bpm_s
+                ):
+                    # A slightly lower flat top is still part of the receiver.
+                    # The split is the end of that top, not its absolute max.
+                    plateau_end = index
+                    fall_candidate = None
                 fall_condition = bool(
                     supported[index]
                     and np.isfinite(slope)
@@ -395,22 +453,19 @@ def detect_hr_waves(
                 if fall_condition:
                     if fall_candidate is None:
                         fall_candidate = index
+                if fall_candidate is not None:
                     sustained = (
                         elapsed_s[index] - elapsed_s[fall_candidate]
                         >= config.min_sustained_fall_s
                     )
                     total_fall = h_detect[peak_index] - h_detect[index]
                     if sustained and total_fall >= config.min_fall_bpm:
-                        confirmed_fall_start = fall_candidate
-                        peak_index = _last_maximum_index(
-                            h_detect, active_start, index
-                        )
+                        peak_index = max(peak_index, plateau_end or peak_index)
+                        confirmed_fall_start = peak_index + 1
                         state = "following_tail"
                         return_candidate = None
                         next_rise_candidate = None
                         neutral_candidate = None
-                else:
-                    fall_candidate = None
                 index += 1
                 continue
 
@@ -436,9 +491,12 @@ def detect_hr_waves(
             else:
                 return_candidate = None
 
-            if rise_condition:
-                if next_rise_candidate is None:
-                    next_rise_candidate = index
+            next_rise_candidate = _accumulated_rise_candidate(
+                next_rise_candidate, index, rise_condition=rise_condition,
+                lower_bound=peak_index + 2,
+                elapsed_s=elapsed_s, h_detect=h_detect, config=config,
+            )
+            if next_rise_candidate is not None:
                 sustained = (
                     elapsed_s[index] - elapsed_s[next_rise_candidate]
                     >= config.min_sustained_rise_s
@@ -451,8 +509,6 @@ def detect_hr_waves(
                     closure_candidates.append(
                         (trough, 1, "new_rise_trough", next_rise_candidate)
                     )
-            else:
-                next_rise_candidate = None
 
             neutral_condition = bool(
                 supported[index]
@@ -497,6 +553,7 @@ def detect_hr_waves(
                     # Revisit the samples after the backdated boundary so a
                     # later rise that began during confirmation is not lost.
                     index = max(end_index + 1, segment_start)
+                    search_start = index
                 continue
 
             if (
@@ -515,6 +572,7 @@ def detect_hr_waves(
                 active_baseline = None
                 peak_index = None
                 rise_candidate = None
+                search_start = index + 1
 
             index += 1
 
@@ -583,4 +641,3 @@ def detect_hr_waves(
 
 
 __all__ = ["DetectedWave", "WaveDetectionResult", "detect_hr_waves"]
-
