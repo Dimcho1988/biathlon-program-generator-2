@@ -66,6 +66,21 @@ describe("Raw ↔ Shadow comparison", () => {
     expect(html).toContain("Обнови данните");
   });
 
+  it("renders the V4 calculated grade alongside the actual grade", () => {
+    const v4 = {
+      ...payload,
+      vflat_model_version: "vflat_b65_dynamic_v4_uphill120_memory170",
+      vflat_config_version: "vflat_b65_config_v4_uphill120_memory170",
+      timeseries: payload.timeseries.map((row, index) => ({
+        ...row, grade_vflat_stationary_pct: [-3, -0.2, 2][index],
+      })),
+    };
+    const html = renderToStaticMarkup(<ShadowActivityPanel payload={v4} activityRef="shadow-0123456789abcdef0123456789abcdef" />);
+    expect(html).toContain("Изчислителен наклон Vflat");
+    expect(html).toContain("vflat_b65_dynamic_v4_uphill120_memory170");
+    expect(html).toContain("Raw/provider grade");
+  });
+
   it("shows the exact profile-range exclusion without blaming a valid zero-wave result", () => {
     const excluded = {
       ...payload,

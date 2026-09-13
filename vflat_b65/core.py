@@ -1,13 +1,14 @@
 """Transparent Vflat B65 stationary and dynamic model.
 
-The stationary path uses a clipped grade.  The unclipped measured/derived
-grade remains the sole input to the two terrain-memory states.  No value is
-shifted in time.
+The stationary path uses the current grade plus a fading negative-grade
+memory, then clips it. Terrain events still use the unclipped actual grade.
+No value is shifted in time.
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from collections import deque
 import math
 
 import numpy as np
@@ -15,8 +16,8 @@ import pandas as pd
 from scipy.signal import savgol_filter
 
 
-MODEL_VERSION = "vflat_b65_dynamic_v3_uphill150"
-CONFIG_VERSION = "vflat_b65_config_v3_uphill150"
+MODEL_VERSION = "vflat_b65_dynamic_v4_uphill120_memory170"
+CONFIG_VERSION = "vflat_b65_config_v4_uphill120_memory170"
 
 # Authoritative B65 multipliers supplied for the locked model.  Above +5%,
 # these anchors define the approved literature reference curve used by the
@@ -56,6 +57,8 @@ class VFlatB65Config:
     uphill_amplitude: float = 1.20
     uphill_scale_pct: float = 14.34
     uphill_shape: float = 0.53
+    # V3 used 1.50; 1.20 = 1.50 * 0.80, reducing only its uphill increment.
+    uphill_increment_scale: float = 1.20
     negative_grade_gain: float = 0.229
     steep_blend_start_pct: float = 5.0
     steep_blend_end_pct: float = 8.0
@@ -68,7 +71,11 @@ class VFlatB65Config:
     descent_threshold_pct: float = -3.0
     descent_full_effect_pct: float = -8.0
     descent_memory_s: float = 18.0
-    descent_memory_strength_kmh: float = 20.0
+    descent_memory_strength_kmh: float = 0.0
+    descent_grade_weight: float = 1.70
+    descent_grade_horizon_s: float = 20.0
+    descent_stop_speed_kmh: float = 1.0
+    descent_stop_duration_s: float = 3.0
     climb_threshold_pct: float = 5.0
     climb_full_effect_pct: float = 10.0
     climb_memory_s: float = 12.0
@@ -99,6 +106,14 @@ class VFlatB65Config:
             raise ValueError("Vflat B65 speed smoothing must be a positive odd window")
         if self.transition_decay_s <= 0.0:
             raise ValueError("Vflat B65 transition decay must be positive")
+        for name in ("uphill_increment_scale", "descent_grade_weight", "descent_stop_speed_kmh"):
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) < 0:
+                raise ValueError(f"{name} must be finite and non-negative")
+        for name in ("descent_memory_s", "descent_grade_horizon_s", "descent_stop_duration_s", "segment_s"):
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        if self.descent_memory_strength_kmh != 0.0:
+            raise ValueError("V4 uses grade memory; descent speed subtraction must be disabled")
 
     def to_dict(self) -> dict[str, float | int | str]:
         return asdict(self)
@@ -167,10 +182,10 @@ def stationary_multiplier_b65(
         selected.steep_blend_end_pct,
     )
     multiplier = base + selected.steep_blend_weight * smooth * (literature - base)
-    # Increase only the uphill increment over flat speed by 50%, once after blending.
+    # Scale only the uphill increment, once after blending; downhill is unchanged.
     return np.where(
         stationary_grade > selected.flat_band_pct,
-        1.0 + 1.5 * (multiplier - 1.0),
+        1.0 + selected.uphill_increment_scale * (multiplier - 1.0),
         multiplier,
     )
 
@@ -325,6 +340,91 @@ def _descent_transition_anchor_weight_by_block(
     return weight
 
 
+def _descent_grade_memory(
+    frame: pd.DataFrame, config: VFlatB65Config,
+) -> dict[str, np.ndarray]:
+    """V4: current grade + weighted prior negative grade, returning at 20 s.
+
+    The reference is the mean of negative samples in the preceding 15 elapsed
+    seconds. Stop detection uses speed BEFORE the input median and is causal:
+    four 1 Hz low-speed points span three seconds. A stop cancels memory until
+    a new descent is entered while moving; resuming the same descent cannot
+    re-arm it. Recording blocks and gaps never share memory.
+    """
+    n = len(frame)
+    actual = frame.grade_pct.to_numpy(dtype=float)
+    effective = actual.copy()
+    reference = np.full(n, np.nan)
+    age = np.full(n, np.nan)
+    weight = np.zeros(n)
+    locked_rows = np.zeros(n, dtype=bool)
+    raw_speed = frame.get("speed_raw_mps", frame.speed_mps).to_numpy(dtype=float) * 3.6
+    if "timestamp" in frame:
+        stamps = pd.to_datetime(frame.timestamp, utc=True)
+        times = (stamps - stamps.iloc[0]).dt.total_seconds().to_numpy() if n else np.asarray([])
+    elif "elapsed_s" in frame:
+        times = frame.elapsed_s.to_numpy(dtype=float)
+    else:
+        times = np.arange(n, dtype=float)  # Prepared rows are 1 Hz.
+    tail = math.exp(-config.descent_grade_horizon_s / config.descent_memory_s)
+    denominator = -math.expm1(-config.descent_grade_horizon_s / config.descent_memory_s)
+    for block, positions in frame.groupby("block", sort=False).indices.items():
+        if block == -1:
+            continue
+        history: deque[tuple[float, float]] = deque()
+        previous_grade = np.nan
+        previous_time = None
+        stop_start = None
+        locked = False
+        active = None
+        for i in positions:
+            t, g = float(times[i]), float(actual[i])
+            if previous_time is not None and (t <= previous_time or t - previous_time > config.max_gap_s):
+                history.clear()
+                previous_grade = np.nan
+                stop_start = active = None
+                locked = False
+            previous_time = t
+            while history and history[0][0] < t - config.segment_s:
+                history.popleft()
+            low = np.isfinite(raw_speed[i]) and raw_speed[i] <= config.descent_stop_speed_kmh
+            if low:
+                if stop_start is None:
+                    stop_start = t
+                if t - stop_start >= config.descent_stop_duration_s:
+                    active = None
+                    locked = True
+            else:
+                stop_start = None
+            if not np.isfinite(g):
+                active = None
+                locked = True
+            else:
+                entry = previous_grade >= config.descent_threshold_pct and g < config.descent_threshold_pct
+                if entry and locked and raw_speed[i] > config.descent_stop_speed_kmh:
+                    locked = False
+                    history.clear()
+                if g < config.descent_threshold_pct:
+                    active = None
+                elif previous_grade < config.descent_threshold_pct:
+                    active = (t, float(np.mean([value for _, value in history]))) if history and not locked else None
+                if active is not None:
+                    dt = t - active[0]
+                    if dt <= config.descent_grade_horizon_s:
+                        w = (math.exp(-dt / config.descent_memory_s) - tail) / denominator if dt < config.descent_grade_horizon_s else 0.0
+                        reference[i], age[i], weight[i] = active[1], dt, w
+                        effective[i] = g + config.descent_grade_weight * active[1] * w
+                    else:
+                        active = None
+                if g < 0:
+                    history.append((t, g))
+            locked_rows[i] = locked
+            previous_grade = g
+    return {"grade_effective_pct": effective, "descent_grade_reference_pct": reference,
+            "descent_grade_age_s": age, "descent_grade_memory_weight": weight,
+            "descent_stop_locked": locked_rows}
+
+
 def apply_vflat_b65(
     timeseries: pd.DataFrame,
     config: VFlatB65Config | None = None,
@@ -337,12 +437,14 @@ def apply_vflat_b65(
         raise ValueError(f"Missing prepared columns: {sorted(missing)}")
     out = timeseries.copy(deep=True)
     actual_grade = out.grade_pct.to_numpy(dtype=float)
+    grade_memory = _descent_grade_memory(out, selected)
+    effective_grade = grade_memory["grade_effective_pct"]
     stationary_grade = np.clip(
-        actual_grade,
+        effective_grade,
         selected.stationary_min_grade_pct,
         selected.stationary_max_grade_pct,
     )
-    multiplier = stationary_multiplier_b65(actual_grade, selected)
+    multiplier = stationary_multiplier_b65(effective_grade, selected)
     speed_kmh = out.speed_mps.to_numpy(dtype=float) * 3.6
     stationary = speed_kmh * multiplier
     accel = out.accel_mps2.to_numpy(dtype=float)
@@ -387,6 +489,8 @@ def apply_vflat_b65(
     )
     out["speed_raw_kmh"] = speed_kmh
     out["grade_actual_pct"] = actual_grade
+    for name, values in grade_memory.items():
+        out[name] = values
     out["grade_stationary_pct"] = stationary_grade
     out["stationary_multiplier_b65"] = multiplier
     out["vflat_stationary_kmh"] = stationary

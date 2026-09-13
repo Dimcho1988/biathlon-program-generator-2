@@ -61,6 +61,8 @@ def run_vflat_b65_shadow(
                 ),
                 "grade_raw_pct": row.get("grade_actual_pct"),
                 "grade_smoothed_pct": row.get("grade_pct"),
+                "grade_effective_pct": row.get("grade_effective_pct"),
+                "grade_stationary_pct": row.get("grade_stationary_pct"),
                 "sprint_str_flag": sprint_detection.sample_mask[position],
                 "sprint_str_reference_kmh": (
                     sprint_detection.local_reference_kmh[position]
