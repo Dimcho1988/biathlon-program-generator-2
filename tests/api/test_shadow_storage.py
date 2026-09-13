@@ -18,7 +18,7 @@ def large_payload():
             "elapsed_s": i, "hrmod_final_bpm": 140.123456789 + i % 15,
             "vflat_b65_kmh": 12.3456789 + i % 8, "quality_flags": [],
             "optional": None, "receiver_flag": bool(i % 2), "signed_zero": -0.0,
-            "hrmod_model_version": "hrmod_mirror_area_shift_v7",
+            "hrmod_model_version": "hrmod_mirror_area_shift_v8",
         } for i in range(2000)],
     }
 
