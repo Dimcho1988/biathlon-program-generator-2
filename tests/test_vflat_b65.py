@@ -36,8 +36,11 @@ GOLDEN = {
 
 def test_locked_versions_defaults_and_golden_multipliers() -> None:
     config = VFlatB65Config()
-    assert MODEL_VERSION == "vflat_b65_dynamic_v3_uphill150"
-    assert CONFIG_VERSION == "vflat_b65_config_v3_uphill150"
+    assert MODEL_VERSION == "vflat_b65_dynamic_v4_uphill120_memory170"
+    assert CONFIG_VERSION == "vflat_b65_config_v4_uphill120_memory170"
+    assert config.descent_grade_weight == 1.7
+    assert config.descent_grade_horizon_s == 20.0
+    assert config.descent_memory_strength_kmh == 0.0
     assert config.speed_smoothing_s == 11
     assert config.transition_anchor_strength == 0.90
     assert config.transition_accel_scale_mps2 == 0.10
@@ -45,6 +48,8 @@ def test_locked_versions_defaults_and_golden_multipliers() -> None:
     assert config.output_smoothing_s == 21
     grades = np.asarray(list(GOLDEN))
     expected = np.asarray(list(GOLDEN.values()))
+    # Approved V3 anchors reduced by 20% only above the flat multiplier.
+    expected = np.where(grades > 1.0, 1.0 + 0.8 * (expected - 1.0), expected)
     assert stationary_multiplier_b65(grades, config) == pytest.approx(
         expected, abs=1e-9
     )
@@ -81,7 +86,8 @@ def test_stationary_cap_does_not_cap_actual_grade_memory_or_mutate_raw() -> None
     assert set(result.loc[45:64, "grade_stationary_pct"]) == {15.0}
     assert set(result.loc[:19, "grade_actual_pct"]) == {-20.0}
     assert set(result.loc[45:64, "grade_actual_pct"]) == {20.0}
-    assert result.loc[20, "descent_memory_term_kmh"] < 0.0
+    assert result.loc[20, "grade_effective_pct"] == pytest.approx(-34.0)
+    assert (result.descent_memory_term_kmh == 0.0).all()
     assert result.loc[65, "climb_memory_term_kmh"] > 0.0
 
 
@@ -148,3 +154,79 @@ def test_flat_sprint_does_not_activate_transition_anchor() -> None:
 
     assert np.all(result["transition_weight"].to_numpy() == 0.0)
     assert result.loc[25, "vflat_b65_kmh"] > 20.0
+
+
+def _prepared(grade):
+    return pd.DataFrame({
+        "timestamp": pd.date_range("2026-01-01", periods=len(grade), freq="s", tz="UTC"),
+        "grade_pct": grade, "speed_raw_mps": 5.0, "speed_mps": 5.0,
+        "accel_mps2": 0.0, "block": 0, "turn_flag": False,
+    })
+
+
+@pytest.mark.parametrize("timestamp_unit", ("ns", "us", "s"))
+def test_v4_tracks_current_grade_and_returns_exactly_at_20_seconds(timestamp_unit):
+    source = _prepared(np.r_[np.full(20, -6.0), np.linspace(1.0, 10.0, 30)])
+    source["timestamp"] = source.timestamp.dt.as_unit(timestamp_unit)
+    out = apply_vflat_b65(source)
+    assert out.loc[20, "grade_effective_pct"] == pytest.approx(-9.2)
+    assert out.loc[20, "grade_stationary_pct"] == -3.0
+    w10 = (np.exp(-10 / 18) - np.exp(-20 / 18)) / (1 - np.exp(-20 / 18))
+    assert out.loc[30, "grade_effective_pct"] == pytest.approx(source.loc[30, "grade_pct"] - 10.2 * w10)
+    assert out.loc[39, "grade_effective_pct"] < source.loc[39, "grade_pct"]
+    assert out.loc[40, "grade_effective_pct"] == source.loc[40, "grade_pct"]
+    assert (out.loc[40:, "descent_grade_memory_weight"] == 0.0).all()
+    assert out.loc[20, "descent_grade_reference_pct"] == -6.0
+
+
+def test_v4_stop_uses_unsmoothed_speed_and_requires_a_new_moving_descent():
+    grade = np.r_[np.full(20, -6.0), np.full(10, 10.0), np.full(10, -6.0),
+                  np.full(10, 3.0), np.full(15, -5.0), np.full(25, 4.0)]
+    source = _prepared(grade)
+    source.loc[30:33, "speed_raw_mps"] = 0.0
+    out = apply_vflat_b65(source)
+    assert out.loc[20, "grade_effective_pct"] == pytest.approx(-0.2)
+    assert not out.loc[32, "descent_stop_locked"]
+    assert out.loc[33, "descent_stop_locked"]
+    assert out.loc[40, "descent_grade_memory_weight"] == 0.0
+    assert out.loc[40, "grade_effective_pct"] == 3.0
+    assert not out.loc[50, "descent_stop_locked"]
+    assert out.loc[65, "descent_grade_reference_pct"] == -5.0
+    assert out.loc[65, "grade_effective_pct"] == pytest.approx(-4.5)
+
+
+def test_v4_stop_cancels_an_active_tail_at_confirmation_not_retroactively():
+    source = _prepared(np.r_[np.full(20, -6.0), np.full(30, 10.0)])
+    source.loc[22:25, "speed_raw_mps"] = 0.0
+    out = apply_vflat_b65(source)
+    assert out.loc[24, "descent_grade_memory_weight"] > 0.0
+    assert (out.loc[25:, "descent_grade_memory_weight"] == 0.0).all()
+
+
+def test_v4_reference_uses_only_prior_15_seconds_and_resets_at_recording_gaps():
+    source = _prepared(np.r_[np.full(10, -20.0), np.full(15, -4.0), np.full(30, 10.0)])
+    source.index = np.arange(len(source)) * 3 + 7  # No RangeIndex assumption.
+    out = apply_vflat_b65(source)
+    assert out.iloc[25].descent_grade_reference_pct == -4.0
+    source.loc[source.index[28:], "block"] = 1
+    out = apply_vflat_b65(source)
+    assert out.iloc[27].descent_grade_memory_weight > 0
+    assert (out.iloc[28:].descent_grade_memory_weight == 0).all()
+    source["block"] = 0
+    source.loc[source.index[28:], "timestamp"] += pd.Timedelta(seconds=60)
+    out = apply_vflat_b65(source)
+    assert (out.iloc[28:].descent_grade_memory_weight == 0).all()
+
+
+def test_v4_reentry_cancels_tail_and_next_exit_starts_a_new_window():
+    source = _prepared(np.r_[np.full(20, -6.0), np.full(5, 4.0), np.full(20, -8.0), np.full(25, 5.0)])
+    out = apply_vflat_b65(source)
+    assert out.loc[24, "descent_grade_memory_weight"] > 0
+    assert (out.loc[25:44, "descent_grade_memory_weight"] == 0).all()
+    assert out.loc[45, "descent_grade_reference_pct"] == -8.0
+    assert out.loc[45, "descent_grade_age_s"] == 0.0
+
+
+def test_v4_does_not_double_apply_the_old_speed_memory():
+    with pytest.raises(ValueError, match="speed subtraction"):
+        VFlatB65Config(descent_memory_strength_kmh=20.0)

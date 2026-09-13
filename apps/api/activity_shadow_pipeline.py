@@ -229,20 +229,26 @@ def _model_inputs(detail: Mapping[str, Any], normalized: IntervalAwareResult):
         for point in points
     ], dtype=float)
     vflat_config = VFlatB65Config()
-    derived_grade = derive_grade_from_altitude_distance(
-        altitude, distance, smoothing_m=vflat_config.altitude_smoothing_m
-    )
-    grade = np.where(np.isfinite(derived_grade), derived_grade, provider_grade)
+    grade = provider_grade.copy()
     blocks = np.full(len(points), -1, dtype=int)
+    smooth_speed = np.full(len(points), np.nan)
+    acceleration = np.full(len(points), np.nan)
     for block_id, (left, right) in enumerate(one_hz.segment_slices):
         blocks[left:right] = block_id
+        derived_grade = derive_grade_from_altitude_distance(
+            altitude[left:right], distance[left:right],
+            smoothing_m=vflat_config.altitude_smoothing_m,
+        )
+        grade[left:right] = np.where(np.isfinite(derived_grade), derived_grade, provider_grade[left:right])
+        # Keep the same block boundaries as terrain memory: recording gaps
+        # must not contribute height, speed or acceleration to either side.
+        local_speed = pd.Series(speed[left:right]).rolling(
+            vflat_config.speed_smoothing_s, center=True,
+            min_periods=max(1, vflat_config.speed_smoothing_s // 3),
+        ).median().to_numpy()
+        smooth_speed[left:right] = local_speed
+        acceleration[left:right] = np.gradient(local_speed) if len(local_speed) > 1 else 0.0
     flags = [tuple(sorted(set(point.quality_flags) | set(timestamp_flags))) for point in points]
-    smooth_speed = pd.Series(speed).rolling(
-        vflat_config.speed_smoothing_s,
-        center=True,
-        min_periods=max(1, vflat_config.speed_smoothing_s // 3),
-    ).median().to_numpy()
-    acceleration = np.gradient(smooth_speed) if len(smooth_speed) else np.asarray([])
     vflat_frame = pd.DataFrame(
         {
             "timestamp": timestamps,
@@ -305,6 +311,9 @@ def _segments_15s(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "added_bpm": mean("added_bpm"),
                 "removed_bpm": mean("removed_bpm"),
                 "grade_smoothed_pct": mean("grade_smoothed_pct"),
+                "grade_vflat_actual_pct": mean("grade_vflat_actual_pct"),
+                "grade_vflat_effective_pct": mean("grade_vflat_effective_pct"),
+                "grade_vflat_stationary_pct": mean("grade_vflat_stationary_pct"),
                 "sprint_str_seconds": sum(
                     1.0 for row in values if row.get("sprint_str_flag") is True
                 ),
@@ -388,6 +397,9 @@ def compute_activity_shadow(
                 ),
                 "vflat_b65_kmh": _plain_number(vf_row.get("vflat_b65_kmh")),
                 "vflat_delta_kmh": _plain_number(vf_row.get("vflat_delta_kmh")),
+                "grade_vflat_actual_pct": _plain_number(vf_row.get("grade_raw_pct")),
+                "grade_vflat_effective_pct": _plain_number(vf_row.get("grade_effective_pct")),
+                "grade_vflat_stationary_pct": _plain_number(vf_row.get("grade_stationary_pct")),
                 "sprint_str_flag": vf_row.get("sprint_str_flag", False),
                 "sprint_str_reference_kmh": _plain_number(
                     vf_row.get("sprint_str_reference_kmh")

@@ -222,6 +222,7 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
         <MiniPlot title="Наклон под времевите графики" rows={rows} series={[
           { key: "grade_raw_pct", label: "Raw/provider grade", color: "#64748b" },
           { key: "grade_smoothed_pct", label: "Smoothed grade", color: "#7c3aed" },
+          { key: "grade_vflat_stationary_pct", label: "Изчислителен наклон Vflat", color: "#d97706", enabled: vflatEnabled },
         ]} />
         <IntervalBands rows={rows} />
         <MiniPlot title="Добавен ↔ отнет пулс" rows={rows} series={[

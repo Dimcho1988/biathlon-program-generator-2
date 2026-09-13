@@ -60,6 +60,52 @@ def test_index_version_invalidates_cache_and_comparison_key(monkeypatch):
     assert activity_shadow_configuration_fingerprint(**kwargs) != current_comparison
 
 
+def test_vflat_v4_version_invalidates_old_cached_results(monkeypatch):
+    from apps.api import activity_shadow_pipeline as pipeline
+
+    kwargs = dict(zone_bounds_bpm=(50, 137, 147, 158, 170, 178), explicit_hrmax_bpm=178)
+    current = activity_shadow_configuration_fingerprint(**kwargs)
+    monkeypatch.setattr(pipeline, "VFLAT_MODEL_VERSION", "vflat_b65_dynamic_v3_uphill150")
+    monkeypatch.setattr(pipeline, "VFLAT_CONFIG_VERSION", "vflat_b65_config_v3_uphill150")
+    assert activity_shadow_configuration_fingerprint(**kwargs) != current
+
+
+def test_vflat_preparation_does_not_smooth_across_recording_gaps():
+    from apps.api.activity_shadow_pipeline import _model_inputs
+    import numpy as np
+
+    offsets = list(range(40)) + list(range(100, 140))
+    normalized = normalize_stream_intervals(NormalizerInput(offsets=offsets, metrics={
+        "heartrate": [145.0] * 80,
+        "velocity_smooth": [3.0] * 40 + [8.0] * 40,
+        "altitude": [100.0] * 40 + [500.0] * 40,
+        "distance": [i * 3.0 for i in range(40)] + [1000.0 + i * 8.0 for i in range(40)],
+    }))
+    _, _, frame = _model_inputs({"start_date": "2026-01-01T10:00:00Z"}, normalized)
+    active = frame[frame.block >= 0]
+    assert active.block.nunique() == 2
+    np.testing.assert_allclose(active.accel_mps2, 0.0, atol=1e-12)
+    np.testing.assert_allclose(active.grade_pct, 0.0, atol=1e-8)
+
+
+def test_vflat_v4_calculated_grade_reaches_payload_and_segments():
+    offsets = list(range(90))
+    normalized = normalize_stream_intervals(NormalizerInput(offsets=offsets, metrics={
+        "heartrate": [145.0] * 90, "velocity_smooth": [5.0] * 90,
+        "gradient": [-6.0] * 30 + [10.0] * 60,
+    }))
+    _, derived = compute_activity_shadow(
+        detail={"start_date": "2026-01-01T10:00:00Z", "moving_time": 900},
+        normalized=normalized, zone_bounds_bpm=(50, 137, 147, 158, 170, 178), explicit_hrmax_bpm=178,
+    )
+    row = derived["timeseries"][30]
+    assert row["grade_vflat_actual_pct"] == 10.0
+    assert row["grade_vflat_effective_pct"] == pytest.approx(-0.2)
+    assert row["grade_vflat_stationary_pct"] == pytest.approx(-0.2)
+    assert derived["segments_15s"][2]["grade_vflat_effective_pct"] < 10.0
+    assert derived["vflat_model_version"] == "vflat_b65_dynamic_v4_uphill120_memory170"
+
+
 def test_immutable_input_is_minimal_and_original_normalized_data_is_unchanged() -> None:
     detail = {"start_date": "2026-01-01T10:00:00Z", "name": "private name"}
     normalized = _normalized()
