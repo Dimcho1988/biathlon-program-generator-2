@@ -107,8 +107,8 @@ def test_v5_core_signature_schema_and_model_are_strictly_hr_only() -> None:
         "sport",
     }
     assert forbidden_inputs.isdisjoint(HRSample.__dataclass_fields__)
-    assert MODEL_VERSION == "hrmod_mirror_area_shift_v8"
-    assert CONFIG_VERSION == "hrmod_config_v8"
+    assert MODEL_VERSION == "hrmod_mirror_area_shift_v9"
+    assert CONFIG_VERSION == "hrmod_config_v9"
     assert HRmodConfig().max_addition_bpm == 30.0
     assert HRmodConfig().max_removal_bpm == 30.0
     with pytest.raises(TypeError):

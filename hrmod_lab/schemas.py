@@ -13,8 +13,8 @@ from math import isfinite
 from typing import Any, Mapping
 
 
-MODEL_VERSION = "hrmod_mirror_area_shift_v8"
-CONFIG_VERSION = "hrmod_config_v8"
+MODEL_VERSION = "hrmod_mirror_area_shift_v9"
+CONFIG_VERSION = "hrmod_config_v9"
 
 
 def _finite(name: str, value: float) -> float:
@@ -154,6 +154,9 @@ class HRmodConfig:
     return_tolerance_bpm: float = 2.0
     return_sustain_s: float = 3.0
     neutral_slope_tolerance_bpm_s: float = 0.05
+    # Require a sustained top; single neutral samples on a descent do not count.
+    plateau_min_duration_s: float = 15.0
+    plateau_range_bpm: float = 1.5
     neutral_trough_timeout_s: float = 8.0
     min_receiver_duration_s: float = 3.0
     min_donor_duration_s: float = 3.0
@@ -204,6 +207,8 @@ class HRmodConfig:
             "return_tolerance_bpm",
             "return_sustain_s",
             "neutral_slope_tolerance_bpm_s",
+            "plateau_min_duration_s",
+            "plateau_range_bpm",
             "neutral_trough_timeout_s",
             "min_receiver_duration_s",
             "min_donor_duration_s",
@@ -229,6 +234,8 @@ class HRmodConfig:
         if self.mirror_max_wave_duration_s <= 0.0:
             raise ValueError("mirror_max_wave_duration_s must be positive")
         positive_fields = (
+            "plateau_min_duration_s",
+            "plateau_range_bpm",
             "rise_threshold_bpm_s",
             "min_rise_bpm",
             "smoothing_window_s",
