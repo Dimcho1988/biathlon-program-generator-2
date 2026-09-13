@@ -1,4 +1,4 @@
-"""HR-only accumulated-rise and plateau-end detection for mirror v8."""
+"""HR-only accumulated excursions and sustained plateau detection for v9."""
 
 from __future__ import annotations
 
@@ -266,6 +266,34 @@ def _accumulated_rise_candidate(
     return candidate
 
 
+def _is_sustained_top(
+    index: int, start: int, peak: int, *, elapsed_s: np.ndarray,
+    h_detect: np.ndarray, trend: np.ndarray, config: HRmodConfig,
+) -> bool:
+    """A top needs time support; isolated neutral descent steps are not a top."""
+    left = max(start, int(np.searchsorted(
+        elapsed_s, elapsed_s[index] - config.plateau_min_duration_s,
+        side="right",
+    )) - 1)
+    duration = elapsed_s[index] - elapsed_s[left]
+    if duration < config.plateau_min_duration_s or index - left < 2:
+        return False
+    values = h_detect[left : index + 1]
+    times = elapsed_s[left : index + 1]
+    centered_time = times - np.mean(times)
+    slope = float(np.dot(centered_time, values - np.mean(values))
+                  / np.dot(centered_time, centered_time))
+    return bool(
+        abs(trend[left]) <= config.neutral_slope_tolerance_bpm_s
+        and abs(trend[index]) <= config.neutral_slope_tolerance_bpm_s
+        and np.min(values) >= h_detect[peak] - config.plateau_range_bpm - 1e-9
+        and np.ptp(values) <= config.plateau_range_bpm + 1e-9
+        and abs(values[-1] - values[0]) / duration
+        <= config.neutral_slope_tolerance_bpm_s
+        and abs(slope) <= config.neutral_slope_tolerance_bpm_s
+    )
+
+
 def detect_hr_waves(
     *,
     elapsed_s: np.ndarray,
@@ -436,15 +464,13 @@ def detect_hr_waves(
                     peak_index = index
                     plateau_end = index
                     fall_candidate = None
-                elif (
-                    h_detect[index] >= h_detect[peak_index] - config.return_tolerance_bpm
-                    and supported[index]
-                    and slope >= -config.neutral_slope_tolerance_bpm_s
+                elif _is_sustained_top(
+                    index, active_start, peak_index, elapsed_s=elapsed_s,
+                    h_detect=h_detect, trend=trend, config=config,
                 ):
-                    # A slightly lower flat top is still part of the receiver.
-                    # The split is the end of that top, not its absolute max.
+                    # A sustained noisy top remains receiver. A short hold
+                    # within a falling staircase cannot erase its descent.
                     plateau_end = index
-                    fall_candidate = None
                 fall_condition = bool(
                     supported[index]
                     and np.isfinite(slope)

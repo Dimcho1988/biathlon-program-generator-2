@@ -83,3 +83,43 @@ def test_high_hr_noise_and_unfinished_plateau_cannot_donate():
     assert unfinished.wave_summary
     assert not any(w.corrected for w in unfinished.wave_summary)
     assert all(p.added_bpm == p.removed_bpm == 0 for p in unfinished.timeseries)
+
+
+@pytest.mark.parametrize('spacing', [1, 2, 3])
+def test_short_descending_holds_do_not_extend_the_top(spacing):
+    values = [135] * 30 + list(np.linspace(135, 155, 25)) + [155] * 3
+    top_end = len(values) - 1
+    values += [154] * 6 + [153] * 6 + [152] * 6
+    values += list(np.linspace(151, 135, 20)) + [135] * 20
+    times = list(range(0, len(values), spacing))
+    result = run([values[i] for i in times], times)
+    wave = next(w for w in result.wave_summary if w.corrected)
+    assert wave.peak_elapsed_s <= top_end + spacing
+    assert any(p.donor_flag for p in result.timeseries
+               if top_end + spacing < p.elapsed_s < top_end + 12)
+    assert_bounds_and_area(result)
+
+
+@pytest.mark.parametrize('spacing', [1, 2, 3])
+def test_accumulated_four_bpm_fall_separates_two_rises(spacing):
+    values = [140] * 30 + list(np.linspace(140, 155, 30)) + [155] * 8
+    first_top_end = len(values) - 1
+    values += [154] * 8 + [153] * 8 + [152] * 8 + [151] * 8
+    second_start = len(values)
+    values += list(np.linspace(151, 163, 30))
+    values += list(np.linspace(163, 140, 30)) + [140] * 30
+    times = list(range(0, len(values), spacing))
+    result = run([values[i] for i in times], times)
+    waves = [w for w in result.wave_summary if w.corrected]
+    assert len(waves) == 2
+    assert waves[0].peak_elapsed_s <= first_top_end + spacing
+    assert waves[0].tail_end_elapsed_s < second_start
+    assert waves[1].rise_start_elapsed_s >= first_top_end
+    assert_bounds_and_area(result)
+
+
+@pytest.mark.parametrize('field', ['plateau_min_duration_s', 'plateau_range_bpm'])
+@pytest.mark.parametrize('value', [0, -1, float('nan'), float('inf')])
+def test_plateau_controls_require_finite_positive_values(field, value):
+    with pytest.raises(ValueError):
+        HRmodConfig(**{field: value})

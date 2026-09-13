@@ -7,8 +7,8 @@ const payload = {
   vflat_config_version: "vflat_b65_config_v3",
   sprint_str_model_version: "vflat_sprint_str_v1",
   sprint_str_config_version: "vflat_sprint_str_config_v1",
-  hrmod_model_version: "hrmod_mirror_area_shift_v8",
-  hrmod_config_version: "hrmod_config_v8",
+  hrmod_model_version: "hrmod_mirror_area_shift_v9",
+  hrmod_config_version: "hrmod_config_v9",
   terrain_model_version: "terrain_downhill_donor_exclusion_v4",
   timeseries: [
     { timestamp: "2026-08-22T08:00:00Z", elapsed_s: 0, speed_raw_kmh: 12, vflat_b65_kmh: 13, hr_raw_bpm: 140, hr_clean_bpm: 140, hrmod_candidate_bpm: 142, hrmod_final_bpm: 142, grade_raw_pct: 2, grade_smoothed_pct: 2, added_bpm: 2, removed_bpm: 0, receiver_flag: true, donor_flag: false, quality_flags: [], model_flags: [] },
@@ -48,7 +48,7 @@ describe("Raw ↔ Shadow comparison", () => {
       "SPRINT/STR импулси (1)", "15-секундни сегменти (1)", "HR вълни, receiver и donor (1)",
     ]) expect(html).toContain(label);
     expect(html).toContain("vflat_b65_dynamic_v3");
-    expect(html).toContain("hrmod_mirror_area_shift_v8");
+    expect(html).toContain("hrmod_mirror_area_shift_v9");
     expect(html).toContain("vflat_sprint_str_v1");
     expect(html).toContain("RECEIVER_DOWNHILL_OVERLAP");
     expect(html).toContain("89ABCDEF");
