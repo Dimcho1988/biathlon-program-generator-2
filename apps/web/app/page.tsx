@@ -13,6 +13,7 @@ import { SyncPendingState } from "../components/sync-pending-state";
 import { currentAccountDisplayName } from "../lib/account-profile";
 import { currentAccountRoles, currentAuthorizedAthlete } from "../lib/account-access";
 import { dashboardView } from "../lib/dashboard-navigation";
+import { API_RATE_LIMIT_MESSAGE } from "../lib/api-wake";
 
 type PageResult =
   | { ok: true; value: TrainingStatusResult; completedWork: CompletedWork | null; loadHistory: LoadHistory | null; recoveryHistory: RecoveryHistory | null; volumeHistory: VolumeHistory | null; generationId?: string | null; generationRevision?: number; generationActivatedAt?: string | null; completedWorkMessage?: string; loadHistoryMessage?: string; recoveryHistoryMessage?: string; volumeHistoryMessage?: string }
@@ -174,7 +175,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ v
 
   const settingsNotice = query.settings ? settingsNotices[query.settings] : undefined;
   let athleteSettingsRequired = false;
-  if (!result.ok && multiProfile && athleteAlias) {
+  if (!result.ok && multiProfile && athleteAlias && result.message !== API_RATE_LIMIT_MESSAGE && result.message !== "API услугата не се събуди навреме.") {
     try {
       const settings = await getAthleteSettings(athleteAlias);
       athleteSettingsRequired = !settings.configured;
@@ -193,7 +194,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ v
     : query.intervals ? notices[query.intervals] : undefined;
   const syncNotice = query.sync ? syncNotices[query.sync] : undefined;
   const profileNotice = query.profile ? profileNotices[query.profile] : undefined;
-  const notice = settingsNotice ?? syncNotice ?? profileNotice ?? integrationNotice ?? (syncStatusUnavailable ? "Статусът на обновяването временно не е достъпен; показваме последната активна версия." : undefined);
+  const notice = settingsNotice ?? syncNotice ?? profileNotice ?? integrationNotice ?? (syncStatusUnavailable && result.ok ? "Статусът на обновяването временно не е достъпен; показваме последната активна версия." : undefined);
   return result.ok
     ? <Dashboard view={view} reportStart={query.report_start} reportEnd={query.report_end} {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} generationId={result.generationId} generationRevision={result.generationRevision} generationActivatedAt={result.generationActivatedAt} syncState={syncState} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} athleteCanEdit={athleteAccess?.canEditPlan ?? false} accountDisplayName={accountDisplayName} accountRoles={accountRoles} athleteDisplayName={athleteAccess?.displayName} notice={notice} />
     : <ErrorState

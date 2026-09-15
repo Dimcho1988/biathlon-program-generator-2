@@ -17,6 +17,7 @@ import {
   type PlanningCalendarResponse,
 } from "./planning-calendar";
 import { waitForApi } from "./api-readiness";
+import { API_RATE_LIMIT_MESSAGE } from "./api-wake";
 import {
   activityCalendarFixture,
   activityDetailFixture,
@@ -106,6 +107,8 @@ async function fetchApiResource(
     try {
       await waitForApi(baseUrl);
     } catch (error) {
+      if (error instanceof Error && "status" in error && error.status === 429)
+        throw new Error(API_RATE_LIMIT_MESSAGE, { cause: error });
       if (!reliability.continueAfterReadinessFailure)
         throw new Error("API услугата не се събуди навреме.", { cause: error });
       readinessFailed = true;
