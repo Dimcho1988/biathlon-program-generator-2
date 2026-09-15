@@ -10,6 +10,10 @@ const retryableInfrastructureStatus = (status: number) => status === 502 || stat
 const pause = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const pendingChecks = new Map<string, Promise<void>>();
 
+export class ApiReadinessError extends Error {
+  constructor(public readonly status: number) { super(`API health check failed (${status})`); }
+}
+
 async function probeUntilReady(baseUrl: string) {
   const deadline = Date.now() + WAKE_WINDOW_MS;
   while (Date.now() < deadline) {
@@ -25,7 +29,7 @@ async function probeUntilReady(baseUrl: string) {
     }
     if (response?.ok) return;
     if (response && !retryableInfrastructureStatus(response.status))
-      throw new Error(`API health check failed (${response.status})`);
+      throw new ApiReadinessError(response.status);
     const remaining = deadline - Date.now();
     if (remaining > 0) await pause(Math.min(RETRY_DELAY_MS, remaining));
   }
