@@ -20,7 +20,7 @@ export function CompletedWorkSection({ report, message, selectable = false, avai
       </div>
 
       {selectable && <form className="report-period" method="get">
-        <input type="hidden" name="wake" value="ready" />
+        <input type="hidden" name="view" value="report" />
         <label>От <input type="date" name="report_start" defaultValue={report.period_start} min={availablePeriodStart ?? report.period_start} max={availablePeriodEnd ?? report.period_end} required /></label>
         <label>До <input type="date" name="report_end" defaultValue={report.period_end} min={availablePeriodStart ?? report.period_start} max={availablePeriodEnd ?? report.period_end} required /></label>
         <button className="action-button secondary" type="submit">Покажи периода</button>

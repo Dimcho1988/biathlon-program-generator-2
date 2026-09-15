@@ -1,5 +1,6 @@
 import { currentAthleteAlias } from "./athlete-session";
 import { createClient } from "./supabase/server";
+import { cache } from "react";
 
 export const ACCOUNT_ROLES = ["ADMIN", "HEAD_COACH", "COACH", "ATHLETE"] as const;
 export type AccountRole = typeof ACCOUNT_ROLES[number];
@@ -233,7 +234,9 @@ export async function loadAccountWorkspace(): Promise<AccountWorkspace | null> {
   };
 }
 
-export async function currentAuthorizedAthlete(): Promise<CurrentAthleteAccess | null> {
+// Share authorization between the persistent shell and page during one render.
+// React invalidates this cache for every server request; access is never global.
+export const currentAuthorizedAthlete = cache(async (): Promise<CurrentAthleteAccess | null> => {
   const athleteAlias = await currentAthleteAlias();
   if (!athleteAlias) return null;
   try {
@@ -278,7 +281,7 @@ export async function currentAuthorizedAthlete(): Promise<CurrentAthleteAccess |
   } catch {
     return null;
   }
-}
+});
 
 export async function currentAccountRoles(): Promise<AccountRole[]> {
   try {

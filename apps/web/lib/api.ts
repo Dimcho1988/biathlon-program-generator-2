@@ -169,7 +169,7 @@ export async function getSyncState(
     "/api/v2/real/sync-status",
     token,
     athleteAlias,
-    options.direct ? { skipReadiness: true, timeoutMs: 10_000, attempts: 1 } : {},
+    { skipReadiness: options.direct ?? false, timeoutMs: 10_000, attempts: 1 },
   );
   return parseSyncState(payload);
 }
