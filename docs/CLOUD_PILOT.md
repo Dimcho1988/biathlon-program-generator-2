@@ -1,0 +1,131 @@
+# onFlows cloud pilot configuration
+
+The API is read-only. Each athlete authorizes the existing onFlows OAuth app
+directly in Intervals.icu. The authorization code and provider access token
+remain server-side; Next.js receives neither.
+
+## Persistent data boundary
+
+Apply the migrations in `supabase/migrations/` once, in filename order, in the
+Supabase SQL editor. They create RLS-enabled, server-only tables for:
+
+* one-time OAuth state hashes;
+* encrypted Intervals access tokens and the minimum connection metadata;
+* short-lived, one-use login tickets;
+* athlete-specific HR boundaries and timezone;
+* aggregate athlete snapshots containing `training-status-v1` and versioned
+  `load-history-v1`/`load-history-v2` read models;
+* immutable, privacy-minimized activity model inputs and append-only,
+  versioned experimental Vflat/HRmod derived runs.
+* durable sync jobs, immutable analysis generations and an atomic active
+  generation pointer per athlete.
+
+The activity model input retains only timestamps, raw HR, raw speed,
+raw/provider grade when available, altitude, cumulative distance and quality
+flags. GPS coordinates, activity names and the full provider payload are never
+stored. Original model inputs are never overwritten. Supabase `anon` and
+`authenticated` roles receive no table access. Only the FastAPI service uses
+the Supabase secret key.
+
+Intervals access tokens do not use refresh tokens. A new OAuth grant replaces
+the previous token; disconnect/revoke requires a new authorization.
+
+## Backend environment
+
+Never prefix these values with `NEXT_PUBLIC_` and never commit their values.
+
+* `ONFLOWS_SERVICE_TOKEN` — generated in the shared Render environment group.
+* `INTERVALS_CLIENT_ID` — existing onFlows OAuth client ID.
+* `INTERVALS_CLIENT_SECRET` — existing onFlows OAuth client secret.
+* `INTERVALS_REDIRECT_URI` — exact FastAPI callback HTTPS URL.
+* `OAUTH_STATE_SECRET` — independent generated state-signing secret.
+* `SUPABASE_URL` — Supabase project origin (for example,
+  `https://project-ref.supabase.co`), without `/rest/v1`; the server client
+  appends the REST path.
+* `SUPABASE_SECRET_KEY` — server-only Supabase secret key; never a publishable
+  or anon key.
+* `ONFLOWS_TOKEN_ENCRYPTION_KEY` — generated 256-bit Render value used for
+  AES-256-GCM token encryption.
+* `ONFLOWS_ATHLETE_ALIAS` — pseudonymous public alias for the original pilot.
+* `ONFLOWS_HR_ZONE_BOUNDS` — six comma-separated integer HR boundaries used
+  only as the original pilot's backward-compatible fallback.
+* `ONFLOWS_ATHLETE_TIMEZONE` — original pilot's fallback IANA timezone.
+* `ONFLOWS_HRMAX_BPM` — original pilot's optional explicit individual HRmax;
+  HRmod fails closed when it is absent and never infers it from Z5 or observed HR.
+* `ONFLOWS_INTRAZONE_VERSION` — `intra_zone_linear_v1`.
+* `ONFLOWS_TREF_VERSION` — `tref-bounded-40d-expert-v1`; startup fails closed
+  for any other value.
+* `ONFLOWS_RECOVERY_VERSION` — approved canonical recovery parameter version.
+* `ONFLOWS_HISTORY_DAYS` — `41` through `90` (default `90`).
+* `ONFLOWS_SNAPSHOT_SALT` — generated private salt for provider-safe cache keys.
+* `ONFLOWS_ACTIVITY_ID_SECRET` — generated private HMAC key for stable,
+  provider-safe activity references.
+* `ONFLOWS_WEB_BASE_URL` — exact Next.js HTTPS origin.
+
+There is no manually entered `INTERVALS_ACCESS_TOKEN` or
+`INTERVALS_ATHLETE_ID`. Both arrive through the verified OAuth grant.
+
+## Next.js server environment
+
+* `ONFLOWS_DATA_MODE` — `fixture` or `api`.
+* `ONFLOWS_API_RESOURCE` — `real` for the protected endpoint.
+* `ONFLOWS_API_BASE_URL` — HTTPS FastAPI origin.
+* `ONFLOWS_SERVICE_TOKEN` — inherited from the same shared Render environment
+  group as FastAPI.
+
+The browser starts OAuth through a same-origin Next.js route. Next.js calls the
+protected FastAPI authorization endpoint server-side and validates that the
+returned destination is exactly `https://intervals.icu/oauth/authorize`.
+
+New profiles must save six individually established HR boundaries, an explicit
+individual HRmax and an IANA timezone before their first refresh. These inputs are scoped to the signed
+athlete session. A profile never inherits another athlete's physiological
+inputs. Tref, intra-zone and recovery model versions remain approved,
+service-wide configuration rather than duplicated per athlete.
+
+Sync remains explicit. `POST /api/v2/real/sync-jobs` enqueues `FULL`,
+`WELLNESS` or `RECOVERY`; the legacy refresh routes delegate to the same
+durable queue and never perform provider or model work in the API process. A
+single background worker claims a fenced lease, builds an invisible staged
+generation and atomically activates it only after the snapshot and exact
+activity run pointers are complete. Retrieval, worker termination or analysis
+failures retain the previous active generation. The browser polls
+`GET /api/v2/real/sync-status` and keeps displaying that last valid version.
+Fixture mode remains available only when `ONFLOWS_DATA_MODE=fixture` is set
+explicitly.
+
+The coherent dashboard aggregate is available at
+`GET /api/v2/real/dashboard-view`; compatibility resources such as
+`GET /api/v2/real/training-status` remain available. The precomputed 90-day zonal series and
+privacy-minimized activity aggregates are available at
+`GET /api/v2/real/load-history`. Neither endpoint returns raw streams or
+provider identifiers. Existing `training-status-v1` rows remain readable
+during rollout; one successful full sync upgrades the stored envelope to
+`load-history-v2` with the exact per-day Tref used for deterministic Recovery
+restore.
+
+The Render API and worker consume the same existing `SUPABASE_URL`,
+`SUPABASE_SECRET_KEY`, `ONFLOWS_TOKEN_ENCRYPTION_KEY`,
+`ONFLOWS_SNAPSHOT_SALT` and `ONFLOWS_ACTIVITY_ID_SECRET` from the manually
+managed `onflows-preview-analysis-shared` environment group. Never redeclare or
+regenerate these values per service. Model-version values must also match.
+Start with exactly one worker instance; the process-wide Intervals pacer is
+deliberately the provider-budget guard until a global limiter and incremental
+sync are added.
+
+Each refresh also computes the experimental Vflat B65 and HRmod channels once
+during ingest and publishes a separate versioned derived run. Vflat speed and
+the lightweight SPRINT/STR detector are versioned independently, so sprint
+diagnostics can evolve without silently changing the Vflat numeric series. The
+stored results are read through `GET /api/v2/real/activity-shadows` and
+`GET /api/v2/real/activity-shadow?activity_ref=...`; opening the `/shadow`
+page never recomputes either model. HRmod candidate remains HR-only, terrain is
+a separate post-core layer, and Vflat/SPRINT-STR are only parallel reference
+channels. They do not double-count HR-zone time. None of these shadow channels
+changes canonical training load, recovery or real HR zones.
+
+The same atomic snapshot can include `recovery-history-v1`, exposed through
+`GET /api/v2/real/recovery-history`. It contains the canonical precomputed
+load-readiness history and read-only recovery parameters. Wellness freshness
+and coverage are explicit, but wellness does not alter readiness until an
+approved integrated-recovery model is available.

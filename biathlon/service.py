@@ -12,6 +12,7 @@ import pandas as pd
 
 from .constants import COMPONENTS, STRENGTH_COEFFICIENTS, STRENGTH_LABELS, STRENGTH_TYPES
 from .mesocycles import empty_camp_prescriptions, normalize_camp_prescriptions
+from .methodology import methodology_snapshot_metadata
 from .monitoring import analyze_wellness, integrate_component_readiness
 from .physiology import (
     activities_to_activity_summaries,
@@ -345,6 +346,7 @@ def analyze_athlete(
         "data_version": int(bundle.get("version", 1)),
         "algorithm_version": "streamlit-demo-0.6.0",
         "parameter_version": int(bundle.get("version", 1)),
+        "planning_methodology": methodology_snapshot_metadata(),
         "inputs_hash": _hash_inputs(
             bundle,
             athlete_id,

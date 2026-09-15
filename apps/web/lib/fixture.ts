@@ -1,4 +1,8 @@
 import type { TrainingStatus } from "./training-status";
+import type { LoadHistory } from "./load-history";
+import type { RecoveryHistory } from "./recovery-history";
+import type { CompletedWork } from "./completed-work";
+import type { VolumeHistory } from "./volume-history";
 
 export const trainingStatusFixture: TrainingStatus = {
   schema_version: "training-status-v1",
@@ -22,4 +26,288 @@ export const trainingStatusFixture: TrainingStatus = {
     { zone: "Z4", raw_time_min: 0.0, equivalent_time_min: 0.0, tref_min: 20.0, status_7_40: 0.9629033091221942, recovery_readiness_percent: 53.87736142712738, recovery_days_to_full: 3.6660788874004906 },
     { zone: "Z5", raw_time_min: 0.0, equivalent_time_min: 0.0, tref_min: 20.0, status_7_40: 0.8922692813680896, recovery_readiness_percent: 71.07073249428917, recovery_days_to_full: 3.510831773387006 },
   ],
+};
+
+const fixtureDates = Array.from({ length: 40 }, (_, index) => {
+  const value = new Date(Date.UTC(2026, 4, 12 + index));
+  return value.toISOString().slice(0, 10);
+});
+const fixtureBase = [40, 20, 8, 4, 2];
+
+export const loadHistoryFixture: LoadHistory = {
+  schema_version: "load-history-v1",
+  athlete_id: "A",
+  period_start: fixtureDates[0],
+  period_end: fixtureDates.at(-1)!,
+  quality: {
+    processed_activities: 24,
+    limited_activities: 1,
+    excluded_activities: 0,
+    no_activity_days: 16,
+    warnings: [],
+  },
+  zones: trainingStatusFixture.zones.map((zone, index) => ({
+    zone: zone.zone,
+    e7_daily: fixtureBase[index] * (0.86 + index * 0.025),
+    e40_daily: fixtureBase[index],
+    status_7_40: zone.status_7_40,
+    tref_min: zone.tref_min,
+    history_reliability: 1,
+  })),
+  daily: fixtureDates.flatMap((day, dayIndex) => trainingStatusFixture.zones.map((zone, zoneIndex) => {
+    const wave = 0.82 + 0.18 * Math.sin((dayIndex + zoneIndex * 2) / 5);
+    const recent = dayIndex > 32 ? 0.82 + zoneIndex * 0.035 : 1;
+    return {
+      date: day,
+      zone: zone.zone,
+      effective_load: dayIndex % 3 === 0 ? fixtureBase[zoneIndex] * wave : 0,
+      e7_daily: fixtureBase[zoneIndex] * wave * recent,
+      e40_daily: fixtureBase[zoneIndex],
+      status_7_40: 0.9 + 0.12 * Math.sin((dayIndex + zoneIndex) / 7) * recent,
+    };
+  })),
+  activities: [
+    {
+      activity_ref: "activity-002",
+      date: "2026-06-20",
+      sport: "NordicSki",
+      duration_min: 51,
+      strength_time_min: 0,
+      quality_status: "valid",
+      hr_coverage_percent: 96,
+      zones: trainingStatusFixture.zones.map((zone) => ({
+        zone: zone.zone,
+        raw_time_min: zone.raw_time_min,
+        equivalent_time_min: zone.equivalent_time_min,
+        effective_load: zone.equivalent_time_min,
+        mean_effective_hr_bpm: null,
+        average_minute_value_percent: zone.raw_time_min > 0 ? 42.9 : null,
+      })),
+    },
+    {
+      activity_ref: "activity-001",
+      date: "2026-06-18",
+      sport: "Run",
+      duration_min: 42,
+      strength_time_min: 0,
+      quality_status: "limited",
+      hr_coverage_percent: 88.4,
+      zones: trainingStatusFixture.zones.map((zone, index) => ({
+        zone: zone.zone,
+        raw_time_min: index < 2 ? 21 : 0,
+        equivalent_time_min: index === 0 ? 16.8 : index === 1 ? 15.3 : 0,
+        effective_load: index === 0 ? 16.8 : index === 1 ? 15.3 : 0,
+        mean_effective_hr_bpm: index === 0 ? 121 : index === 1 ? 138 : null,
+        average_minute_value_percent: index === 0 ? 80 : index === 1 ? 72.9 : null,
+      })),
+    },
+    {
+      activity_ref: "activity-strength-001",
+      date: "2026-06-17",
+      sport: "WeightTraining",
+      duration_min: 35,
+      strength_time_min: 35,
+      quality_status: "valid",
+      hr_coverage_percent: 0,
+      zones: trainingStatusFixture.zones.map((zone) => ({
+        zone: zone.zone,
+        raw_time_min: 0,
+        equivalent_time_min: 0,
+        effective_load: 0,
+        mean_effective_hr_bpm: null,
+        average_minute_value_percent: null,
+      })),
+    },
+  ],
+  strength: {
+    model: {
+      classification_version: "intervals-strength-activity-type-v1",
+      source: "intervals-activity-type-duration",
+      duration_basis: "recording-time-first",
+      equivalent_time_coefficient: 1,
+      aerobic_hr_counted: false,
+    },
+    summary: {
+      recorded_activities: 4,
+      real_time_7d_min: 35,
+      real_time_40d_min: 155,
+      e7_daily: 5,
+      e40_daily: 3.875,
+      status_7_40: 1.08,
+      tref_min: 56,
+      history_reliability: 1,
+    },
+    daily: fixtureDates.map((day, dayIndex) => {
+      const real = dayIndex % 10 === 2 ? 35 : 0;
+      return {
+        date: day,
+        real_time_min: real,
+        equivalent_time_min: real,
+        effective_load: real,
+        e7_daily: dayIndex > 32 ? 5 : 3.5,
+        e40_daily: 3.875,
+        status_7_40: dayIndex > 32 ? 1.08 : 0.98,
+      };
+    }),
+  },
+};
+
+export const completedWorkFixture: CompletedWork = {
+  schema_version: "completed-work-v1",
+  athlete_id: "A",
+  period_start: loadHistoryFixture.period_start,
+  period_end: loadHistoryFixture.period_end,
+  model: {
+    aggregation_version: "completed-work-snapshot-aggregation-v1",
+    source_schema_version: "load-history-v1",
+    sport_grouping: "provider-label-exact",
+  },
+  quality: {
+    modeled_activities: 2,
+    limited_activities: 1,
+    missing_duration_activities: 0,
+  },
+  totals: {
+    activity_duration_min: 93,
+    zoned_hr_time_min: 92.9,
+  },
+  zones: [
+    { zone: "Z1", raw_time_min: 71.9, equivalent_time_min: 38.648825, effective_load: 38.648825 },
+    { zone: "Z2", raw_time_min: 21, equivalent_time_min: 15.3, effective_load: 15.3 },
+    { zone: "Z3", raw_time_min: 0, equivalent_time_min: 0, effective_load: 0 },
+    { zone: "Z4", raw_time_min: 0, equivalent_time_min: 0, effective_load: 0 },
+    { zone: "Z5", raw_time_min: 0, equivalent_time_min: 0, effective_load: 0 },
+  ],
+  sports: [
+    { sport: "NordicSki", activities_count: 1, activity_duration_min: 51, zoned_hr_time_min: 50.9 },
+    { sport: "Run", activities_count: 1, activity_duration_min: 42, zoned_hr_time_min: 42 },
+  ],
+};
+
+export const volumeHistoryFixture: VolumeHistory = {
+  schema_version: "volume-history-v1",
+  athlete_id: "A",
+  period_start: loadHistoryFixture.period_start,
+  period_end: loadHistoryFixture.period_end,
+  model: {
+    aggregation_version: "volume-history-calendar-week-v1",
+    source_schema_version: "load-history-v1",
+    calendar_week_start: "monday",
+    activity_duration_handling: "known-values-only",
+  },
+  quality: {
+    modeled_activities: 2,
+    limited_activities: 1,
+    missing_duration_activities: 0,
+  },
+  weekly: [
+    { week_start: "2026-05-11", week_end: "2026-05-17", observed_days: 6, activities_count: 0, limited_activities: 0, missing_duration_activities: 0, activity_duration_min: 0, zoned_hr_time_min: 0 },
+    { week_start: "2026-05-18", week_end: "2026-05-24", observed_days: 7, activities_count: 0, limited_activities: 0, missing_duration_activities: 0, activity_duration_min: 0, zoned_hr_time_min: 0 },
+    { week_start: "2026-05-25", week_end: "2026-05-31", observed_days: 7, activities_count: 0, limited_activities: 0, missing_duration_activities: 0, activity_duration_min: 0, zoned_hr_time_min: 0 },
+    { week_start: "2026-06-01", week_end: "2026-06-07", observed_days: 7, activities_count: 0, limited_activities: 0, missing_duration_activities: 0, activity_duration_min: 0, zoned_hr_time_min: 0 },
+    { week_start: "2026-06-08", week_end: "2026-06-14", observed_days: 7, activities_count: 0, limited_activities: 0, missing_duration_activities: 0, activity_duration_min: 0, zoned_hr_time_min: 0 },
+    { week_start: "2026-06-15", week_end: "2026-06-21", observed_days: 6, activities_count: 2, limited_activities: 1, missing_duration_activities: 0, activity_duration_min: 93, zoned_hr_time_min: 92.9 },
+  ],
+};
+
+export const recoveryHistoryFixture: RecoveryHistory = {
+  schema_version: "recovery-history-v1",
+  athlete_id: "A",
+  period_start: fixtureDates[0],
+  period_end: fixtureDates.at(-1)!,
+  basis: "load-only",
+  wellness_freshness: "fresh",
+  wellness_coverage_percent: 66.7,
+  wellness_diagnostics: {
+    schema_version: "wellness-coverage-v1",
+    period_start: fixtureDates[0],
+    period_end: fixtureDates.at(-1)!,
+    calendar_days: 40,
+    records_received: 34,
+    days_with_any_recognized_data: 32,
+    daily_presence_percent: 80,
+    recognized_field_coverage_percent: 53.75,
+    latest_observed_date: fixtureDates.at(-1)!,
+    freshness: "fresh",
+    fields: [
+      { field: "sleep_duration", source_fields: ["sleepSecs"], present_days: 30, valid_days: 30, invalid_days: 0, coverage_percent: 75 },
+      { field: "sleep_score", source_fields: ["sleepScore"], present_days: 28, valid_days: 28, invalid_days: 0, coverage_percent: 70 },
+      { field: "sleep_quality", source_fields: ["sleepQuality"], present_days: 28, valid_days: 28, invalid_days: 0, coverage_percent: 70 },
+      { field: "resting_hr", source_fields: ["restingHR"], present_days: 30, valid_days: 30, invalid_days: 0, coverage_percent: 75 },
+      { field: "average_sleeping_hr", source_fields: ["avgSleepingHR"], present_days: 29, valid_days: 29, invalid_days: 0, coverage_percent: 72.5 },
+      { field: "hrv", source_fields: ["hrv"], present_days: 29, valid_days: 29, invalid_days: 0, coverage_percent: 72.5 },
+      { field: "hrv_sdnn", source_fields: ["hrvSDNN"], present_days: 0, valid_days: 0, invalid_days: 0, coverage_percent: 0 },
+      { field: "readiness", source_fields: ["readiness"], present_days: 29, valid_days: 29, invalid_days: 0, coverage_percent: 72.5 },
+      { field: "respiration", source_fields: ["respiration"], present_days: 30, valid_days: 30, invalid_days: 0, coverage_percent: 75 },
+      { field: "spo2", source_fields: ["spO2"], present_days: 30, valid_days: 30, invalid_days: 0, coverage_percent: 75 },
+      { field: "fatigue", source_fields: ["fatigue"], present_days: 26, valid_days: 25, invalid_days: 1, coverage_percent: 62.5 },
+      { field: "stress", source_fields: ["stress"], present_days: 20, valid_days: 20, invalid_days: 0, coverage_percent: 50 },
+      { field: "mood", source_fields: ["mood"], present_days: 18, valid_days: 18, invalid_days: 0, coverage_percent: 45 },
+      { field: "motivation", source_fields: ["motivation"], present_days: 18, valid_days: 18, invalid_days: 0, coverage_percent: 45 },
+      { field: "soreness", source_fields: ["soreness"], present_days: 0, valid_days: 0, invalid_days: 0, coverage_percent: 0 },
+      { field: "injury", source_fields: ["injury"], present_days: 0, valid_days: 0, invalid_days: 0, coverage_percent: 0 },
+    ],
+    unresolved_canonical_inputs: ["soreness_legs", "soreness_upper", "pain", "illness"],
+    model_status: "diagnostic-only",
+    affects_recovery: false,
+  },
+  model: {
+    algorithm_version: "main-load-recovery-v3-equivalent-time-fixed-tref",
+    parameter_version: "main-load-recovery-v1",
+    parameter_fingerprint: "fixture-recovery-parameters-v1",
+    practical_full_recovery_percent: 95,
+  },
+  settings: trainingStatusFixture.zones.map((zone, index) => ({
+    zone: zone.zone,
+    tref_min: zone.tref_min,
+    sensitivity: [0.55, 0.70, 0.88, 1.00, 1.12][index],
+    tau_days: [0.75, 1.00, 1.35, 1.65, 2.00][index],
+    fatigue_cap: [130, 135, 145, 155, 165][index],
+  })),
+  current: trainingStatusFixture.zones.map((zone) => ({
+    zone: zone.zone,
+    readiness_percent: zone.recovery_readiness_percent,
+    residual_fatigue: 100 - zone.recovery_readiness_percent,
+    days_to_practical_recovery: zone.recovery_days_to_full,
+  })),
+  daily: fixtureDates.flatMap((day, dayIndex) => trainingStatusFixture.zones.map((zone, zoneIndex) => {
+    const impulse = dayIndex % 3 === 0 ? 5 + zoneIndex * 5 : 0;
+    const readinessAfter = Math.max(0, Math.min(100, 94 - 12 * Math.sin((dayIndex + zoneIndex * 2) / 5) - impulse));
+    return {
+      date: day,
+      zone: zone.zone,
+      readiness_before_percent: Math.min(100, readinessAfter + impulse),
+      readiness_after_percent: readinessAfter,
+      residual_fatigue_after: 100 - readinessAfter,
+      impulse,
+      effective_load: loadHistoryFixture.daily[dayIndex * 5 + zoneIndex].effective_load,
+      tref_min: zone.tref_min,
+    };
+  })),
+  strength: {
+    settings: {
+      tref_min: 56,
+      sensitivity: 0.95,
+      tau_days: 1.7,
+      fatigue_cap: 150,
+    },
+    current: {
+      readiness_percent: 84,
+      residual_fatigue: 16,
+      days_to_practical_recovery: 0.9,
+    },
+    daily: fixtureDates.map((day, dayIndex) => {
+      const impulse = loadHistoryFixture.strength?.daily[dayIndex].effective_load ?? 0;
+      const readinessAfter = Math.max(0, 96 - impulse * 0.8);
+      return {
+        date: day,
+        readiness_before_percent: Math.min(100, readinessAfter + impulse),
+        readiness_after_percent: readinessAfter,
+        residual_fatigue_after: 100 - readinessAfter,
+        impulse,
+        effective_load: impulse,
+        tref_min: 56,
+      };
+    }),
+  },
 };
