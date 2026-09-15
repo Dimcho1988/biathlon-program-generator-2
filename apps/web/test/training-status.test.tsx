@@ -302,31 +302,18 @@ describe("dashboard", () => {
     expect(html).toContain("Подготвяме автоматичен повторен опит");
     expect(html).not.toContain("Свържи Intervals");
   });
-  it("renders the official logo and accessible theme control without losing content", () => {
-    const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" />);
-    expect(html).toContain('%2Fbrand%2Fonflows-mark.png');
-    expect(html).toContain('alt="onFlows лого"');
-    expect(html).toContain('aria-label="Превключи светла или тъмна тема"');
-    expect(html).toContain("Тренировъчен статус");
-  });
-  it("renders an accessible ordered module navigation without client state", () => {
+  it("keeps the overview concise and moves full charts to separate views", () => {
     const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" completedWork={completedWorkFixture} volumeHistory={volumeHistoryFixture} loadHistory={loadHistoryFixture} recoveryHistory={recoveryHistoryFixture} />);
-    expect(html).toContain('aria-label="Модули на тренировъчния анализ"');
-    expect([...html.matchAll(/href="(#(?:quality|zones|completed-work|volume|history|recovery)-title|#model-metadata)"/g)].map((match) => match[1])).toEqual([
-      "#quality-title", "#zones-title", "#completed-work-title", "#volume-title", "#history-title", "#recovery-title", "#model-metadata",
-    ]);
-    for (const label of ["Качество", "Статус по зони", "Извършена работа", "Общ обем", "7/40 и зонален товар", "Възстановяване", "Версии на моделите"]) expect(html).toContain(label);
-    expect(html).toContain('href="/activities"');
-    expect(html).toContain("Активности");
-    expect(html).not.toContain('href="/planning"');
-    const protectedHtml = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="api" sessionActions athleteCanEdit />);
-    expect(protectedHtml).toContain('href="/planning"');
-    expect(protectedHtml).toContain("Профил за планиране");
-    expect(protectedHtml).toContain('href="/?settings=edit"');
-    expect(protectedHtml).toContain("Зони и HRmax");
+    expect(html).toContain("Общ статус");
+    expect(html).toContain("Възстановяване по зони");
+    expect(html).toContain('aria-label="Изглед на общия статус"');
+    for (const view of ["load", "recovery", "report", "details"]) expect(html).toContain(`href="/?view=${view}"`);
+    expect(html).not.toContain("Дневен ефективен товар E по зони");
+    expect(html).not.toContain("Отчет за извършеното натоварване");
+    expect(html).not.toContain("Generation ID");
   });
   it("labels fixture mode and renders ordered zones with every required field", () => {
-    const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" />);
+    const html = renderToStaticMarkup(<Dashboard view="details" data={trainingStatusFixture} mode="fixture" />);
     expect(html).toContain("Демо данни");
     expect([...html.matchAll(/id="title-(Z[1-5])"/g)].map((match) => match[1])).toEqual(["Z1", "Z2", "Z3", "Z4", "Z5"]);
     for (const label of ["Реално време", "Еквивалентно време", "Tref", "7/40", "Готовност за натоварване", "Дни до пълно възстановяване"]) expect(html).toContain(label);
@@ -335,7 +322,7 @@ describe("dashboard", () => {
     expect(html).toContain("7 × E40/ден · граници 10–20");
   });
   it("separates the signed-in account name from the technical analysis profile", () => {
-    const html = renderToStaticMarkup(<Dashboard data={{ ...trainingStatusFixture, athlete_id: "ath-private-alias" }} mode="api" sessionActions accountDisplayName="Dimcho Mitsov" />);
+    const html = renderToStaticMarkup(<Dashboard view="details" data={{ ...trainingStatusFixture, athlete_id: "ath-private-alias" }} mode="api" sessionActions accountDisplayName="Dimcho Mitsov" />);
     expect(html).toContain("Акаунт");
     expect(html).toContain("Dimcho Mitsov");
     expect(html).toContain("Избран спортист");
@@ -347,6 +334,7 @@ describe("dashboard", () => {
     const html = renderToStaticMarkup(<Dashboard
       data={trainingStatusFixture}
       mode="api"
+      view="details"
       generationId="gen-41"
       generationRevision={41}
       generationActivatedAt="2026-08-26T18:00:00Z"
@@ -357,7 +345,7 @@ describe("dashboard", () => {
     expect(html).toContain("gen-41");
   });
   it("renders 7/40 and canonical daily effective-load dynamics with aggregate activity detail", () => {
-    const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" loadHistory={loadHistoryFixture} />);
+    const html = renderToStaticMarkup(<Dashboard view="load" data={trainingStatusFixture} mode="fixture" loadHistory={loadHistoryFixture} />);
     expect(html).toContain("Натоварване и динамика");
     expect(html).toContain("Динамика на индекса 7/40 по зони");
     expect(html).toContain("Дневен ефективен товар E по зони");
@@ -372,7 +360,7 @@ describe("dashboard", () => {
     expect(html).toContain("Tref · 10–20");
   });
   it("renders weekly real volume without inventing a total effective load", () => {
-    const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" volumeHistory={volumeHistoryFixture} />);
+    const html = renderToStaticMarkup(<Dashboard view="load" data={trainingStatusFixture} mode="fixture" volumeHistory={volumeHistoryFixture} />);
     expect(html).toContain("Обща динамика на реалния обем");
     expect(html).toContain("Реален седмичен обем");
     expect(html).toContain("Продължителност на активностите");
@@ -381,7 +369,7 @@ describe("dashboard", () => {
     expect(html).toContain("STR компонент");
   });
   it("renders the completed-work report without reclassifying provider sport labels", () => {
-    const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" completedWork={completedWorkFixture} />);
+    const html = renderToStaticMarkup(<Dashboard view="report" data={trainingStatusFixture} mode="fixture" completedWork={completedWorkFixture} />);
     expect(html).toContain("Отчет за извършеното натоварване");
     expect(html).toContain("Натоварване по пулсови зони");
     expect(html).toContain("По вид активност от Intervals");
@@ -390,7 +378,7 @@ describe("dashboard", () => {
     expect(html).not.toContain("Покажи периода");
   });
   it("renders canonical load-only recovery dynamics and read-only settings", () => {
-    const html = renderToStaticMarkup(<Dashboard data={trainingStatusFixture} mode="fixture" recoveryHistory={recoveryHistoryFixture} />);
+    const html = renderToStaticMarkup(<Dashboard view="recovery" data={trainingStatusFixture} mode="fixture" recoveryHistory={recoveryHistoryFixture} />);
     expect(html).toContain("Товарно възстановяване");
     expect(html).toContain("Динамика на товарната готовност по компоненти");
     expect(html).toContain("Load-only резултат");
@@ -413,6 +401,7 @@ describe("dashboard", () => {
       data={trainingStatusFixture}
       mode="api"
       loadHistory={loadHistoryFixture}
+      view="recovery"
       recoveryHistory={null}
       recoveryHistoryMessage="API услугата върна грешка (503)."
       integrationActions
@@ -438,6 +427,7 @@ describe("dashboard", () => {
           daily: loadHistoryFixture.strength.daily.map((row) => ({ ...row, tref_used_min: 90 })),
         } : loadHistoryFixture.strength,
       }}
+      view="recovery"
       recoveryHistory={null}
       integrationActions
     />);

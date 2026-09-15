@@ -1,4 +1,3 @@
-import Link from "next/link";
 import {currentAuthorizedAthlete} from "../../lib/account-access";
 import {getSpeedModel} from "../../lib/api";
 import {ErrorState} from "../../components/error-state";
@@ -20,5 +19,5 @@ export default async function SpeedPage({searchParams}:{searchParams:Promise<{sp
     model=await getSpeedModel(access.athleteAlias,query);
     if(invalid)model={...model,prediction_error:"INVALID_PREDICTION_INPUT"};
   }catch(error){return <ErrorState message={error instanceof Error?error.message:"Скоростният модел временно не е достъпен."} retryAvailable retryHref="/speed"/>;}
-  return <main className="activities-page speed-page"><nav className="detail-top-nav"><Link href="/">onFlows · Статус</Link><Link href="/activities">Активности</Link><Link href="/trainability">Индекс на тренираност</Link></nav><h1>Скорост, време и дистанция</h1><p>{access.displayName}</p><SpeedModelPanel key={`${access.athleteAlias}:${model.sport}`} model={model} canEdit={access.canEditPlan} activityRef={q.activity_ref} predictionInput={predictionInput} predictionValue={q.value??"3"}/></main>;
+  return <main className="activities-page speed-page"><h1>Скорост, време и дистанция</h1><p>{access.displayName}</p><SpeedModelPanel key={`${access.athleteAlias}:${model.sport}`} model={model} canEdit={access.canEditPlan} activityRef={q.activity_ref} predictionInput={predictionInput} predictionValue={q.value??"3"}/></main>;
 }

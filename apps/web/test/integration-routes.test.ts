@@ -196,6 +196,24 @@ describe("integration route redirects behind a reverse proxy", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ scope: "WELLNESS" });
   });
 
+  it("returns a dashboard refresh to the same view and report period", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({
+      schema_version: "sync-enqueue-v1", job_id: "sync-job-2", scope: "WELLNESS", state: "QUEUED", coalesced: false,
+    }, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const body = new FormData();
+    body.set("returnTo", "/?view=report&report_start=2026-07-15&report_end=2026-08-25");
+    body.set("scope", "wellness");
+
+    const response = await refreshRoute.POST(new Request("https://web.example.test/api/integrations/intervals/refresh", { method: "POST", body }));
+
+    expect(response.headers.get("location")).toBe("/?view=report&report_start=2026-07-15&report_end=2026-08-25&sync=queued&wake=ready");
+    expect(String(fetchMock.mock.calls[0][0])).toBe("https://api.example.test/api/v2/real/sync-jobs");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ scope: "WELLNESS" });
+  });
+
   it("enqueues recovery restore through the same durable job boundary", async () => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
     process.env.ONFLOWS_API_RESOURCE = "real";

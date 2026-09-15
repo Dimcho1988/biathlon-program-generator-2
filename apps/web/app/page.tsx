@@ -7,12 +7,12 @@ import { Dashboard } from "../components/dashboard";
 import { ErrorState } from "../components/error-state";
 import { multiProfileMode } from "../lib/athlete-session";
 import { AthleteSettingsForm } from "../components/athlete-settings-form";
-import { redirect } from "next/navigation";
 import type { SyncState } from "../lib/sync";
 import { syncInProgress } from "../lib/sync";
 import { SyncPendingState } from "../components/sync-pending-state";
 import { currentAccountDisplayName } from "../lib/account-profile";
 import { currentAccountRoles, currentAuthorizedAthlete } from "../lib/account-access";
+import { dashboardView } from "../lib/dashboard-navigation";
 
 type PageResult =
   | { ok: true; value: TrainingStatusResult; completedWork: CompletedWork | null; loadHistory: LoadHistory | null; recoveryHistory: RecoveryHistory | null; volumeHistory: VolumeHistory | null; generationId?: string | null; generationRevision?: number; generationActivatedAt?: string | null; completedWorkMessage?: string; loadHistoryMessage?: string; recoveryHistoryMessage?: string; volumeHistoryMessage?: string }
@@ -56,13 +56,14 @@ const profileNotices: Record<string, string> = {
   selected: "Избраният профил на спортист е активен.",
 };
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ intervals?: string; settings?: string; sync?: string; profile?: string; wake?: string; report_start?: string; report_end?: string }> }) {
+export default async function Page({ searchParams }: { searchParams: Promise<{ view?: string; intervals?: string; settings?: string; sync?: string; profile?: string; wake?: string; report_start?: string; report_end?: string }> }) {
   const query = await searchParams;
+  const view = dashboardView(query.view);
   let result: PageResult;
   const integrationActions = process.env.ONFLOWS_API_RESOURCE === "real";
   const multiProfile = integrationActions && multiProfileMode();
   const [athleteAccess, accountDisplayName, accountRoles] = multiProfile
-    ? await Promise.all([currentAuthorizedAthlete(), currentAccountDisplayName(), currentAccountRoles()])
+    ? await Promise.all([currentAuthorizedAthlete(), view === "details" ? currentAccountDisplayName() : null, view === "details" ? currentAccountRoles() : []])
     : [null, null, []];
   const athleteAlias = athleteAccess?.athleteAlias ?? null;
 
@@ -75,16 +76,6 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
       refreshAvailable={false}
       notice={notice}
     />;
-  }
-
-  if (multiProfile && athleteAlias && query.wake !== "ready") {
-    const baseUrl = process.env.ONFLOWS_API_BASE_URL;
-    if (baseUrl) {
-      const wakeUrl = new URL("/api/v2/wake", baseUrl);
-      if (query.intervals) wakeUrl.searchParams.set("intervals", query.intervals);
-      if (query.settings) wakeUrl.searchParams.set("settings", query.settings);
-      redirect(wakeUrl.toString());
-    }
   }
 
   if (query.settings === "edit" && multiProfile && athleteAlias) {
@@ -121,7 +112,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
   let syncStatusUnavailable = false;
   if (integrationActions) {
     const [viewResult, syncResult] = await Promise.allSettled([
-      getDashboardView(athleteAlias ?? undefined, query.report_start, query.report_end),
+      getDashboardView(athleteAlias ?? undefined, view === "report" ? query.report_start : undefined, view === "report" ? query.report_end : undefined),
       getSyncState(athleteAlias ?? undefined),
     ]);
     if (syncResult.status === "fulfilled") syncState = syncResult.value;
@@ -204,7 +195,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ i
   const profileNotice = query.profile ? profileNotices[query.profile] : undefined;
   const notice = settingsNotice ?? syncNotice ?? profileNotice ?? integrationNotice ?? (syncStatusUnavailable ? "Статусът на обновяването временно не е достъпен; показваме последната активна версия." : undefined);
   return result.ok
-    ? <Dashboard {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} generationId={result.generationId} generationRevision={result.generationRevision} generationActivatedAt={result.generationActivatedAt} syncState={syncState} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} athleteCanEdit={athleteAccess?.canEditPlan ?? false} accountDisplayName={accountDisplayName} accountRoles={accountRoles} athleteDisplayName={athleteAccess?.displayName} notice={notice} />
+    ? <Dashboard view={view} reportStart={query.report_start} reportEnd={query.report_end} {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} generationId={result.generationId} generationRevision={result.generationRevision} generationActivatedAt={result.generationActivatedAt} syncState={syncState} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} athleteCanEdit={athleteAccess?.canEditPlan ?? false} accountDisplayName={accountDisplayName} accountRoles={accountRoles} athleteDisplayName={athleteAccess?.displayName} notice={notice} />
     : <ErrorState
       message={result.message}
       integrationActions={integrationActions}

@@ -1,4 +1,3 @@
-import Image from "next/image";
 import Link from "next/link";
 import type { DataMode } from "../lib/api";
 import type { CompletedWork } from "../lib/completed-work";
@@ -8,7 +7,6 @@ import { LoadHistorySection } from "./load-history-section";
 import { CompletedWorkSection } from "./completed-work-section";
 import type { RecoveryHistory } from "../lib/recovery-history";
 import { RecoveryHistorySection } from "./recovery-history-section";
-import { ThemeToggle } from "./theme-toggle";
 import type { VolumeHistory } from "../lib/volume-history";
 import { VolumeHistorySection } from "./volume-history-section";
 import type { SyncState } from "../lib/sync";
@@ -16,6 +14,8 @@ import { syncInProgress } from "../lib/sync";
 import { SyncStatusPanel } from "./sync-status-panel";
 import { SyncActionForm } from "./sync-action-form";
 import { roleLabel, type AccountRole } from "../lib/account-access";
+import { DASHBOARD_VIEWS, dashboardHref, type DashboardViewKey } from "../lib/dashboard-navigation";
+import { StatusOverview } from "./status-overview";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
 const decimal = (value: number) => number.format(value);
@@ -31,29 +31,10 @@ const metrics: Array<[keyof ZoneTrainingStatus, string, (value: number) => strin
   ["recovery_days_to_full", "Дни до пълно възстановяване", (value) => `${decimal(value)} дни`],
 ];
 
-const analysisSections = [
-  ["#quality-title", "Качество"],
-  ["#zones-title", "Статус по зони"],
-  ["#completed-work-title", "Извършена работа"],
-  ["#volume-title", "Общ обем"],
-  ["#history-title", "7/40 и зонален товар"],
-  ["#recovery-title", "Възстановяване"],
-  ["#model-metadata", "Версии на моделите"],
-] as const;
-
-function AnalysisNavigation({ planningAvailable }: { planningAvailable: boolean }) {
-  return <nav className="analysis-nav" aria-label="Модули на тренировъчния анализ">
-    <p className="analysis-nav-label">Модули</p>
-    {analysisSections.map(([href, label]) => <a key={href} href={href}>{label}</a>)}
-    <Link href="/activities">Активности</Link>
-    <Link href="/trainability">Индекс на тренираност</Link>
-    <Link href="/speed">Скорост и продължителност</Link>
-    <Link href="/response">Стрес и възстановяване</Link>
-    {planningAvailable && <Link href="/planning">Профил за планиране</Link>}
-  </nav>;
-}
-
 export function Dashboard({
+  view = "overview",
+  reportStart,
+  reportEnd,
   data,
   mode,
   completedWork = null,
@@ -76,6 +57,9 @@ export function Dashboard({
   athleteDisplayName,
   notice,
 }: {
+  view?: DashboardViewKey;
+  reportStart?: string;
+  reportEnd?: string;
   data: TrainingStatus;
   mode: DataMode;
   completedWork?: CompletedWork | null;
@@ -101,36 +85,19 @@ export function Dashboard({
   const qualityScore = data.data_quality.latest_activity_quality_score;
   const syncBusy = Boolean(syncState && syncInProgress(syncState));
   return (
-    <main>
-      <header className="hero">
-        <nav aria-label="Основна навигация">
-          <a className="brand" href="#top" aria-label="onFlows начало"><Image src="/brand/onflows-mark.png" width={33} height={40} alt="onFlows лого" priority /><span>onFlows</span></a>
-          <div className="nav-actions"><span className="product">Performance intelligence</span>{sessionActions && <Link href="/account">Акаунт</Link>}{sessionActions && athleteCanEdit && <Link href="/?settings=edit">Зони и HRmax</Link>}<ThemeToggle /></div>
-        </nav>
-        <div id="top" className="hero-grid">
-          <div>
-            <p className="eyebrow">Анализ на натоварването</p>
-            <h1>Тренировъчен статус</h1>
-            <p className="intro">Ясен зонален поглед върху текущото натоварване и възстановяване.</p>
-          </div>
-          <dl className="identity">
-            {accountDisplayName && <div><dt>Акаунт</dt><dd>{accountDisplayName}</dd></div>}
-            {accountRoles.length > 0 && <div><dt>Работни роли</dt><dd>{accountRoles.map(roleLabel).join(" · ")}</dd></div>}
-            <div><dt>Избран спортист</dt><dd>{athleteDisplayName ?? data.athlete_id}</dd></div>
-            {athleteDisplayName && athleteDisplayName !== data.athlete_id && <div><dt>Технически профил</dt><dd>{data.athlete_id}</dd></div>}
-            <div><dt>Анализ към</dt><dd><time dateTime={data.as_of}>{date(data.as_of)}</time></dd></div>
-            {generationRevision !== undefined && generationRevision > 0 && <div><dt>Активна версия</dt><dd>№ {generationRevision}</dd></div>}
-            {mode === "fixture" && <div className="demo-badge" aria-label="Режим с демо данни"><span aria-hidden="true" />Демо данни</div>}
-          </dl>
-        </div>
+    <main className="dashboard-page">
+      <header className="page-heading" id="top">
+        <div><p className="eyebrow">Тренировъчен анализ</p><h1>Общ статус</h1><p>{athleteDisplayName ?? "Тренировъчен статус"} · Данни до <time dateTime={data.as_of}>{date(data.as_of)}</time>{mode === "fixture" && <span className="demo-badge">Демо данни</span>}</p></div>
+        {integrationActions && <SyncActionForm busy={syncBusy} returnTo={dashboardHref(view, reportStart, reportEnd)} />}
       </header>
-
-      <section className="content" aria-label="Тренировъчен анализ">
-        <AnalysisNavigation planningAvailable={sessionActions && athleteCanEdit} />
-        <div className="analysis-main">
-        {syncState && <SyncStatusPanel key={`${syncState.job_id ?? "idle"}:${syncState.state}:${generationId ?? "none"}`} initialState={syncState} renderedGenerationId={generationId ?? null} />}
+      <nav className="dashboard-tabs" aria-label="Изглед на общия статус">{DASHBOARD_VIEWS.map(([key, label]) => <Link key={key} href={dashboardHref(key, reportStart, reportEnd)} prefetch={false} aria-current={view === key ? "page" : undefined}>{label}</Link>)}</nav>
+      <section className="dashboard-content" aria-label="Тренировъчен анализ">
+        {syncState && <SyncStatusPanel key={`${syncState.job_id ?? "idle"}:${syncState.state}:${generationId ?? "none"}`} initialState={syncState} renderedGenerationId={generationId ?? null} returnTo={dashboardHref(view, reportStart, reportEnd)} />}
         {notice && <p className="connection-notice">{notice}</p>}
-        <section className="quality-panel" aria-labelledby="quality-title">
+        {view === "overview" && <StatusOverview data={data} recovery={recoveryHistory} load={loadHistory} />}
+        {(view === "overview" || view === "details") && <details className="overview-quality">
+          <summary>Качество на данните{data.data_quality.warnings.length > 0 && <small className="quality-warning-count">{data.data_quality.warnings.length} бележки</small>} <span>История {decimal(data.data_quality.history_reliability * 100)}% · Последна активност {qualityScore === null ? "няма данни" : `${decimal(qualityScore * 100)}%`}</span><span aria-hidden="true">⌄</span></summary>
+          <section className="quality-panel" aria-labelledby="quality-title">
           <div><p className="section-kicker">Надеждност</p><h2 id="quality-title">Качество на данните</h2></div>
           <dl className="quality-values">
             <div><dt>История</dt><dd>{decimal(data.data_quality.history_reliability * 100)}%</dd></div>
@@ -139,22 +106,27 @@ export function Dashboard({
           {data.data_quality.warnings.length > 0 ? (
             <ul className="warnings" aria-label="Предупреждения">{data.data_quality.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
           ) : <p className="quality-ok"><span aria-hidden="true">✓</span> Няма предупреждения за качеството</p>}
-        </section>
+          </section>
+        </details>}
 
-        <section className="zones-section" aria-labelledby="zones-title">
+        {view === "details" && <section className="zones-section" aria-labelledby="zones-title">
           <div className="section-heading"><div><p className="section-kicker">Z1—Z5</p><h2 id="zones-title">Статус по зони</h2></div><p>Последна активност и текущ модел на възстановяване</p></div>
           {data.zones.length === 0 ? <div className="empty"><h3>Няма зонални данни</h3><p>API отговорът е валиден, но не съдържа зони за този анализ.</p></div> :
             <div className="zone-list">{data.zones.map((zone) => <ZoneCard key={zone.zone} zone={zone} recoveryV2={recoveryHistory?.schema_version === "recovery-history-v2"} />)}</div>}
-        </section>
+        </section>}
 
-        <CompletedWorkSection report={completedWork} message={completedWorkMessage} selectable={mode === "api"} availablePeriodStart={loadHistory?.period_start} availablePeriodEnd={loadHistory?.period_end} />
-        <VolumeHistorySection history={volumeHistory} message={volumeHistoryMessage} />
-        <LoadHistorySection history={loadHistory} message={loadHistoryMessage} />
-        <RecoveryHistorySection history={recoveryHistory} message={recoveryHistoryMessage} refreshAvailable={integrationActions} syncBusy={syncBusy} fullRefreshRequired={loadHistory?.schema_version !== "load-history-v2"} canEdit={athleteCanEdit} />
+        {view === "report" && <CompletedWorkSection report={completedWork} message={completedWorkMessage} selectable={mode === "api"} availablePeriodStart={loadHistory?.period_start} availablePeriodEnd={loadHistory?.period_end} />}
+        {view === "load" && <><LoadHistorySection history={loadHistory} message={loadHistoryMessage} /><VolumeHistorySection history={volumeHistory} message={volumeHistoryMessage} /></>}
+        {view === "recovery" && <RecoveryHistorySection history={recoveryHistory} message={recoveryHistoryMessage} refreshAvailable={integrationActions} syncBusy={syncBusy} fullRefreshRequired={loadHistory?.schema_version !== "load-history-v2"} canEdit={athleteCanEdit} />}
 
-        <details id="model-metadata" className="metadata">
+        {view === "details" && <details id="model-metadata" className="metadata">
           <summary><span><small>Техническа информация</small>Метаданни на модела</span><span className="chevron" aria-hidden="true">⌄</span></summary>
           <dl>
+            {accountDisplayName && <div><dt>Акаунт</dt><dd>{accountDisplayName}</dd></div>}
+            {accountRoles.length > 0 && <div><dt>Работни роли</dt><dd>{accountRoles.map(roleLabel).join(" · ")}</dd></div>}
+            <div><dt>Избран спортист</dt><dd>{athleteDisplayName ?? data.athlete_id}</dd></div>
+            <div><dt>Технически профил</dt><dd>{data.athlete_id}</dd></div>
+            {generationRevision !== undefined && generationRevision > 0 && <div><dt>Активна версия</dt><dd>№ {generationRevision}</dd></div>}
             <div><dt>Версия на договора</dt><dd>{data.schema_version}</dd></div>
             <div><dt>Алгоритъм</dt><dd>{data.model.algorithm_version}</dd></div>
             <div><dt>Effective HR версия</dt><dd>{data.model.effective_hr_version}</dd></div>
@@ -163,10 +135,9 @@ export function Dashboard({
             {generationId && <div><dt>Generation ID</dt><dd>{generationId}</dd></div>}
             {generationActivatedAt && <div><dt>Активирана</dt><dd><time dateTime={generationActivatedAt}>{timestamp(generationActivatedAt)}</time></dd></div>}
           </dl>
-        </details>
-        </div>
+        </details>}
       </section>
-      <footer><span className="footer-brand">onFlows</span><p>Данните са диагностичен изглед на съществуващия модел.</p><div>{integrationActions && <SyncActionForm busy={syncBusy} className="text-action" />}{sessionActions && athleteCanEdit && <Link className="text-action" href="/?settings=edit">Настройки</Link>}{sessionActions && <form action="/api/session/logout" method="post"><button className="text-action" type="submit">Смени профила</button></form>}</div></footer>
+      {view === "details" && sessionActions && athleteCanEdit && <p className="dashboard-settings-link"><Link href="/?settings=edit">Зони и HRmax →</Link></p>}
     </main>
   );
 }
