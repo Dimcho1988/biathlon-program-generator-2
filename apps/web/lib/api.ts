@@ -98,6 +98,7 @@ async function fetchApiResource(
   athleteAlias?: string,
   reliability: ResourceReliabilityOptions = {},
 ): Promise<unknown> {
+  const startedAt = Date.now();
   const baseUrl = process.env.ONFLOWS_API_BASE_URL;
   if (!baseUrl) throw new Error("ONFLOWS_API_BASE_URL не е зададен. Изберете API адрес или explicit fixture режим.");
   let readinessFailed = false;
@@ -111,6 +112,7 @@ async function fetchApiResource(
     }
   }
 
+  const readyAt = Date.now();
   // A healthy Render process can still return one transient gateway/store 5xx
   // while several dashboard resources read the same snapshot in parallel.
   // Retry only infrastructure responses; valid 4xx and contract failures still
@@ -143,7 +145,16 @@ async function fetchApiResource(
   if (!response)
     throw new Error("API услугата не отговори навреме или не е достъпна.", { cause: requestError });
   if (!response.ok) throw new Error(`API услугата върна грешка (${response.status}).`);
-  try { return await response.json(); } catch (error) { throw new Error("API услугата върна невалиден JSON.", { cause: error }); }
+  try {
+    const payload = await response.json();
+    const finishedAt = Date.now();
+    if (finishedAt - startedAt >= 1000) {
+      // Timing only: no athlete identifiers, query strings, headers or payloads.
+      const resource = path.split("?")[0].replace(/\/activities\/[^/]+/, "/activities/:activity");
+      console.info(`onflows_api_read resource=${resource} readiness_ms=${readyAt - startedAt} request_ms=${finishedAt - readyAt}`);
+    }
+    return payload;
+  } catch (error) { throw new Error("API услугата върна невалиден JSON.", { cause: error }); }
 }
 
 export async function getTrainabilityHistory(athleteAlias?: string, start?: string, end?: string): Promise<TrainabilityHistory> {

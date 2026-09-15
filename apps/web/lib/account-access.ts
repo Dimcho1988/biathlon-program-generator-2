@@ -237,6 +237,7 @@ export async function loadAccountWorkspace(): Promise<AccountWorkspace | null> {
 // Share authorization between the persistent shell and page during one render.
 // React invalidates this cache for every server request; access is never global.
 export const currentAuthorizedAthlete = cache(async (): Promise<CurrentAthleteAccess | null> => {
+  const startedAt = Date.now();
   const athleteAlias = await currentAthleteAlias();
   if (!athleteAlias) return null;
   try {
@@ -280,6 +281,9 @@ export const currentAuthorizedAthlete = cache(async (): Promise<CurrentAthleteAc
     };
   } catch {
     return null;
+  } finally {
+    const elapsed = Date.now() - startedAt;
+    if (elapsed >= 1000) console.info(`onflows_access_read elapsed_ms=${elapsed}`);
   }
 });
 
