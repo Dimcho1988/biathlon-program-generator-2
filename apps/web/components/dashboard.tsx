@@ -96,7 +96,7 @@ export function Dashboard({
         {notice && <p className="connection-notice">{notice}</p>}
         {view === "overview" && <StatusOverview data={data} recovery={recoveryHistory} load={loadHistory} />}
         {(view === "overview" || view === "details") && <details className="overview-quality">
-          <summary>Качество на данните{data.data_quality.warnings.length > 0 && <small className="quality-warning-count">{data.data_quality.warnings.length} бележки</small>} <span>История {decimal(data.data_quality.history_reliability * 100)}% · Последна активност {qualityScore === null ? "няма данни" : `${decimal(qualityScore * 100)}%`}</span><span aria-hidden="true">⌄</span></summary>
+          <summary>Качество на данните{data.data_quality.warnings.length > 0 && <small className="quality-warning-count">{data.data_quality.warnings.length} {data.data_quality.warnings.length === 1 ? "бележка" : "бележки"}</small>} <span>История {decimal(data.data_quality.history_reliability * 100)}% · Последна активност {qualityScore === null ? "няма данни" : `${decimal(qualityScore * 100)}%`}</span><span aria-hidden="true">⌄</span></summary>
           <section className="quality-panel" aria-labelledby="quality-title">
           <div><p className="section-kicker">Надеждност</p><h2 id="quality-title">Качество на данните</h2></div>
           <dl className="quality-values">

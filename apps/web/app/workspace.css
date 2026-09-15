@@ -30,7 +30,7 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-even
 .workspace-content h1 { font-size: clamp(28px,3.1vw,42px); letter-spacing: -.04em; line-height: 1.12; }
 .workspace-content h2 { font-size: 22px; }
 .workspace-content .activities-page, .workspace-content .activity-detail-page, .workspace-content .shadow-page { padding: 0; }
-.workspace-content .activities-hero, .workspace-content .hero { padding: 0; background: none; border: 0; }
+.workspace-content .activities-hero, .workspace-content .hero { margin: 0; padding: 0; background: none; border: 0; }
 .workspace-content .activities-title { padding: 0; margin: 0 0 30px; gap: 16px; align-items: flex-start; }
 .workspace-content .activities-title p { max-width: 75ch; font-size: 14px; line-height: 1.65; }
 .workspace-content .activities-title > span { font-size: 11px; max-width: 280px; color: var(--text-muted); white-space: normal; }
