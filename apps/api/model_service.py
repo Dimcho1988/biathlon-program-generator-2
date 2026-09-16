@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 
 from biathlon import recovery_v2, speed_duration
-from .trainability_history import history_from_calendar, robust_mean
+from .trainability_history import history_from_calendar, robust_mean, read_calendar
 from .model_schemas import RecoveryConfigInput, RecoveryHistoryV2, initial_settings
 from .oauth_store import PersistentStoreFailure
 from .speed_segments import segment_measurement
@@ -139,7 +139,7 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     if settings is None: raise HTTPException(409,"Athlete settings are required")
     today=datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
     start=today-timedelta(days=90)
-    calendar=repository.active_activity_calendar(alias,date.min,today) or {"activities":[]}
+    calendar=read_calendar(repository,alias,date.min,today) or {"activities":[]}
     activities=[a for a in (calendar.get("activities") or []) if a["local_date"]>=start.isoformat()]
     entries=[e for e in ModelStore(repository).entries(alias) if e["kind"]=="SPEED_TEST"]
     sports=sorted({r["sport"] for r in activities}|{e["payload"]["sport"] for e in entries})

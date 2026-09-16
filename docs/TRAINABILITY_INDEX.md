@@ -45,7 +45,9 @@ recovery and the total-volume load accounting retain their own definitions.
    admission explicitly says `INSUFFICIENT_HISTORY`.
 
 Admission reads the complete pinned active generation, then applies UI date
-filters. Thus narrowing the displayed dates does not alter admission. Decisions
+filters. A lightweight paginated catalog captures the generation once, follows
+its immutable activity-set pointer, and checks the expected row count. It avoids
+loading the unrelated large HRmod documents used by the ordinary calendar. Thus narrowing the displayed dates does not alter admission. Decisions
 can change when the available generation/history changes; this is not persisted
 as a claim that the original sensor record is false. Source payloads remain
 immutable. The activity-detail summary displays the raw candidate and links to

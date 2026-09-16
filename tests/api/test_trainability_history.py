@@ -162,3 +162,45 @@ def test_robust_aggregation_limits_extreme_values():
     assert robust_mean([5,5.1,4.9,5.05,4.95,5.02,40],[600]*7)<5.2
     assert robust_mean([5]*7+[40],[600]*8)==5
     assert robust_mean([4,6],[1,3])==5.5
+
+
+def test_lightweight_calendar_pins_generation_and_avoids_large_hrmod_payloads():
+    from datetime import date
+    class Catalog(SupabasePilotRepository):
+        def __init__(self):self.calls=[];self.captures=0
+        def active_analysis(self, alias):
+            self.captures+=1
+            return {'generation_id':'captured-generation','revision':41,'snapshot_payload':{}}
+        def active_activity_calendar(self,*args):raise AssertionError('Heavy calendar must not be used')
+        def _json(self,value):return value
+        def _request(self,method,path,**kwargs):
+            self.calls.append(path)
+            assert method=='GET' and 'athlete_alias=eq.ath-test' in path
+            if path.startswith('/onflows_analysis_generations?'):
+                assert 'generation_id=eq.captured-generation' in path
+                return [{'activity_set_generation_id':'pinned-activity-set','activity_count':201}]
+            assert 'generation_id=eq.pinned-activity-set' in path and 'result_payload' not in path
+            offset=int(path.split('offset=')[1])
+            return [{'activity_ref':f'act_{i:032x}','catalog_payload':{'sport':'Walk','name':'synthetic'},
+                'shadow_run_key':f'{i:064x}','canonical_run_key':None,'input_key':None,
+                'start_at_utc':'2026-08-10T10:00:00Z','local_date':'2026-08-10'}
+                for i in range(offset,min(201,offset+200))]
+    repo=Catalog()
+    result=repo.active_trainability_calendar('ath-test',date(2026,8,1),date(2026,8,31))
+    assert repo.captures==1 and len(repo.calls)==3
+    assert result['generation_id']=='captured-generation' and result['revision']==41
+    assert len(result['activities'])==201
+    assert result['activities'][-1]['latest_shadow_run_key']==f'{200:064x}'
+    assert not repo.active_trainability_calendar('ath-test',date(2026,9,1),date(2026,9,30))['activities']
+
+
+def test_lightweight_calendar_fails_closed_if_a_pinned_page_is_pruned():
+    from datetime import date
+    class Pruned(SupabasePilotRepository):
+        def __init__(self):pass
+        def active_analysis(self,alias):return {'generation_id':'captured','revision':41,'snapshot_payload':{}}
+        def _json(self,value):return value
+        def _request(self,method,path,**kwargs):
+            return [{'activity_set_generation_id':'captured','activity_count':1}] if 'analysis_generations?' in path else []
+    with pytest.raises(PersistentStoreFailure,match='incomplete'):
+        Pruned().active_trainability_calendar('ath-test',date.min,date.max)
