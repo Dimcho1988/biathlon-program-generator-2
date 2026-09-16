@@ -46,7 +46,7 @@ def test_model_health_exposes_deployed_shadow_versions() -> None:
         "hrmod_model_version": "hrmod_mirror_area_shift_v9",
         "hrmod_source_commit": "63ef533975f05817db8c0dbbd7a30611124a2afe",
         "recovery_model_version": "main-load-recovery-v1",
-        "speed_model_version": "speed-duration-c1-bounded-v1",
+        "speed_model_version": "speed-duration-c1-duration-volume-v2",
     }
 
 

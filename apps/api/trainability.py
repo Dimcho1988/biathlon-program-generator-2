@@ -1,135 +1,117 @@
-"""Duration-weighted rank index over immutable HRmod and Vflat outputs."""
-
+"""Time-paired raw-HR/Vflat index with a whole-activity signal screen."""
 from __future__ import annotations
-
+from datetime import datetime
 import math
 from typing import Any, Mapping, Sequence
-
 import numpy as np
 
-SCHEMA_VERSION = "trainability-index-v2"
-MODEL_VERSION = "trainability_rank_hrmax_v2"
-MIN_SECONDS_BY_BAND = {"Z1": 420.0, "Z2": 420.0, "Z3": 420.0, "Z4": 420.0, "Z5": 300.0, "GENERAL": 420.0}
-MIN_ACTIVITY_SECONDS = 420.0
-GENERAL_RANGE = (0.75, 0.92)
-MIN_GRADE_PCT = -3.0
+SCHEMA_VERSION = "trainability-index-v3"
+MODEL_VERSION = "trainability_paired_raw_lag20_v3"
+MIN_SECONDS_BY_BAND = {"Z1":420.,"Z2":420.,"Z3":420.,"Z4":420.,"Z5":300.,"GENERAL":420.}
+MIN_ACTIVITY_SECONDS = 420.
+GENERAL_RANGE = (.75,.92)
+MIN_GRADE_PCT = -3.
+LAG_SECONDS = 20.
+MAX_GAP_SECONDS = 10.
 
 
 def _number(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
+    if isinstance(value,bool): return None
+    try: number=float(value)
+    except (TypeError,ValueError): return None
     return number if math.isfinite(number) else None
 
 
-def compute_trainability(
-    hr_rows: Sequence[Mapping[str, Any]],
-    speed_rows: Sequence[Mapping[str, Any]],
-    *,
-    zone_bounds_bpm: Sequence[int],
-    hrmax_bpm: int | None,
-    activity_duration_s: float | None,
-    comparison_key: str,
-    source_versions: Mapping[str, str],
-) -> dict[str, Any]:
-    """Allocate the complete eligible speed distribution before validating bands.
+def _time(row):
+    if row.get("timestamp") is not None:
+        try: return datetime.fromisoformat(str(row["timestamp"]).replace("Z","+00:00")).timestamp()
+        except (ValueError,TypeError): return None
+    return _number(row.get("elapsed_s"))
 
-    HR weights are the existing HRmod dt_s, including its gap semantics. Vflat
-    weights are active 1 Hz intervals supplied by the adapter. Do not use the
-    combined shadow exclusion flag: an uncorrected HR wave is still valid HR.
-    """
-    hrs = [
-        (hr, dt)
-        for row in hr_rows
-        if (hr := _number(row.get("hrmod_final_bpm"))) is not None
-        and (dt := _number(row.get("dt_s"))) is not None and dt > 0
-    ]
-    hr_values = np.asarray([value for value, _ in hrs], dtype=float)
-    hr_weights = np.asarray([dt for _, dt in hrs], dtype=float)
-    hr_total = float(hr_weights.sum())
-    speeds: list[tuple[float, float]] = []
-    downhill_seconds = unavailable_seconds = 0.0
+
+def signal_quality(hr_rows):
+    points=sorted((t,h) for r in hr_rows if (t:=_time(r)) is not None
+                  and (h:=_number(r.get("hr_raw_bpm"))) is not None and h>0)
+    episodes=[]
+    for (t0,h0),(t1,h1) in zip(points,points[1:]):
+        if 0<t1-t0<=5 and abs(h1-h0)>=15:
+            if episodes and t0-episodes[-1][1]<=15: episodes[-1][1]=t1
+            else: episodes.append([t0,t1])
+    return {"status":"EXCLUDED" if len(episodes)>=3 else "PASSED_SCREEN",
+            "reason":"HR_SIGNAL_SUSPECT" if len(episodes)>=3 else None,
+            "rapid_change_episodes":len(episodes),"threshold_bpm":15,"window_s":5,
+            "minimum_episodes":3,"validated":False}
+
+
+def compute_trainability(hr_rows: Sequence[Mapping[str,Any]], speed_rows: Sequence[Mapping[str,Any]], *,
+    zone_bounds_bpm: Sequence[int],hrmax_bpm:int|None,activity_duration_s:float|None,
+    comparison_key:str,source_versions:Mapping[str,str]) -> dict[str,Any]:
+    bounds=[float(x) for x in zone_bounds_bpm]
+    if len(bounds)!=6 or any(not math.isfinite(x) for x in bounds) or any(a>=b for a,b in zip(bounds,bounds[1:])):
+        raise ValueError("Trainability requires five ordered HR zones")
+    if hrmax_bpm is not None and (not math.isfinite(hrmax_bpm) or hrmax_bpm<=0): raise ValueError("HRmax must be positive")
+    quality=signal_quality(hr_rows)
+    # Preserve missing HR timestamps. Never join across missing observations.
+    hr_by_time={t:_number(r.get("hr_raw_bpm")) for r in hr_rows if (t:=_time(r)) is not None}
+    ordered=sorted(hr_by_time)
+    times=np.asarray(ordered,float)
+    hrs=np.asarray([hr_by_time[t] if hr_by_time[t] is not None else np.nan for t in ordered],float)
+    # HRmax is a normalization setting, not a sensor-validity cutoff.
+    good=np.isfinite(hrs)&(hrs>=30)&(hrs<=300)
+    pairs=[];downhill=unavailable=0.
     for row in speed_rows:
-        dt = _number(row.get("dt_s"))
-        if dt is None or dt <= 0:
-            continue
-        speed = _number(row.get("vflat_b65_kmh"))
-        # This is the unclipped, spatially smoothed grade actually used by Vflat.
-        grade = _number(row.get("grade_raw_pct"))
-        if speed is None or speed < 0 or grade is None or row.get("exclusion_reason"):
-            unavailable_seconds += dt
-        elif grade < MIN_GRADE_PCT:
-            downhill_seconds += dt
-        else:
-            speeds.append((speed, dt))
-    speeds.sort(key=lambda pair: pair[0], reverse=True)
-    values = np.asarray([value for value, _ in speeds], dtype=float)
-    weights = np.asarray([dt for _, dt in speeds], dtype=float)
-    ends = np.cumsum(weights)
-    starts = ends - weights
-    speed_total = float(weights.sum())
-
-    def band(name: str, lower: float | None, upper: float | None, inclusive: bool):
-        minimum_seconds = MIN_SECONDS_BY_BAND[name]
-        mask = np.zeros(len(hrs), dtype=bool)
-        above = mask.copy()
-        if lower is not None and upper is not None:
-            above = hr_values > upper if inclusive else hr_values >= upper
-            mask = (hr_values >= lower) & ~above
-        seconds = float(hr_weights[mask].sum())
-        share = seconds / hr_total if hr_total > 0 else 0.0
-        rank_start = float(hr_weights[above].sum()) / hr_total if hr_total > 0 else 0.0
-        left, right = rank_start * speed_total, (rank_start + share) * speed_total
-        overlap = np.maximum(0.0, np.minimum(ends, right) - np.maximum(starts, left))
-        allocated = float(overlap.sum())
-        hr_mean = float(np.dot(hr_values[mask], hr_weights[mask]) / seconds) if seconds else None
-        hr_percent_of_max = hr_mean / hrmax_bpm * 100 if hr_mean is not None and hrmax_bpm else None
-        speed_mean = float(np.dot(values, overlap) / allocated) if allocated else None
-        reason = None
-        if activity_duration_s is None:
-            reason = "ACTIVITY_DURATION_MISSING"
-        elif activity_duration_s < MIN_ACTIVITY_SECONDS:
-            reason = "ACTIVITY_BELOW_7MIN"
-        elif hrmax_bpm is None:
-            reason = "HRMAX_MISSING"
-        elif seconds + 1e-9 < minimum_seconds:
-            reason = "HR_TIME_BELOW_MINIMUM"
-        elif allocated + 1e-9 < minimum_seconds:
-            reason = "SPEED_TIME_BELOW_MINIMUM"
-        elif speed_mean is None or speed_mean <= 0:
-            reason = "ZERO_SPEED"
-        return {
-            "name": name, "lower_bpm": lower, "upper_bpm": upper,
-            "minimum_seconds": minimum_seconds,
-            "hr_seconds": seconds, "hr_percent": share * 100,
-            "speed_seconds": allocated,
-            "mean_hrmod_bpm": hr_mean,
-            "mean_hrmax_percent": hr_percent_of_max,
-            "mean_vflat_kmh": speed_mean,
-            "index": hr_percent_of_max / speed_mean if reason is None else None,
-            "valid": reason is None, "invalid_reason": reason,
-        }
-
-    bounds = [float(value) for value in zone_bounds_bpm]
-    if len(bounds) != 6 or any(a >= b for a, b in zip(bounds, bounds[1:])):
-        raise ValueError("Trainability requires the existing five HR zones")
-    if hrmax_bpm is not None and hrmax_bpm <= 0:
-        raise ValueError("HRmax must be positive")
-    return {
-        "schema_version": SCHEMA_VERSION, "model_version": MODEL_VERSION,
-        "normalization": "percent_hrmax",
-        "comparison_key": comparison_key, "source_versions": dict(source_versions),
-        "hrmax_bpm": hrmax_bpm, "zone_bounds_bpm": bounds,
-        "activity_duration_s": activity_duration_s,
-        "minimum_activity_seconds": MIN_ACTIVITY_SECONDS,
-        "minimum_seconds_by_band": dict(MIN_SECONDS_BY_BAND), "minimum_grade_pct": MIN_GRADE_PCT,
-        "general_range_percent": [75, 92],
-        "hr_seconds": hr_total, "eligible_speed_seconds": speed_total,
-        "downhill_excluded_seconds": downhill_seconds,
-        "unavailable_speed_seconds": unavailable_seconds,
-        "zones": [band(f"Z{i + 1}", bounds[i], bounds[i + 1], i == 4) for i in range(5)],
-        "general": band("GENERAL", *(tuple(hrmax_bpm * p for p in GENERAL_RANGE) if hrmax_bpm else (None, None)), True),
-    }
+        dt=_number(row.get("dt_s"));end=_time(row)
+        if dt is None or dt<=0: continue
+        v=_number(row.get("vflat_b65_kmh"));grade=_number(row.get("grade_raw_pct"))
+        if end is None or dt>MAX_GAP_SECONDS or v is None or v<=0 or grade is None or row.get("exclusion_reason"):
+            unavailable+=dt;continue
+        if grade<MIN_GRADE_PCT: downhill+=dt;continue
+        pairs.append((end-dt/2,dt,v))
+    h=np.asarray([],float);v=h.copy();weights=h.copy()
+    if len(times)>=2 and pairs:
+        p=np.asarray(pairs);start=p[:,0];query=start+LAG_SECONDS
+        left=np.searchsorted(times,start,side="right")-1
+        right=np.searchsorted(times,query,side="left")
+        a=np.searchsorted(times,query,side="right")-1;b=a+1
+        exact=a>=0
+        exact[exact] &= times[a[exact]]==query[exact]
+        b=np.where(exact,a,b)
+        in_range=(left>=0)&(right<len(times))&(a>=0)&(b<len(times))
+        left=np.clip(left,0,len(times)-1);right=np.clip(right,0,len(times)-1)
+        a=np.clip(a,0,len(times)-1);b=np.clip(b,0,len(times)-1)
+        bad_point=np.r_[0,np.cumsum(~good)]
+        bad_gap=np.r_[0,np.cumsum(np.diff(times)>MAX_GAP_SECONDS)]
+        valid=in_range&(bad_point[right+1]-bad_point[left]==0)&(bad_gap[right]-bad_gap[left]==0)
+        span=times[b]-times[a]
+        fraction=np.divide(query-times[a],span,out=np.zeros(len(query)),where=span>0)
+        interpolated=hrs[a]+fraction*(hrs[b]-hrs[a])
+        valid &= np.isfinite(interpolated)
+        unavailable+=float(p[~valid,1].sum())
+        h=interpolated[valid];v=p[valid,2];weights=p[valid,1]
+    elif pairs: unavailable+=sum(p[1] for p in pairs)
+    total=float(weights.sum())
+    def band(name,lo,hi,inclusive=False):
+        mask=(h>=lo)&((h<=hi) if inclusive else (h<hi)) if lo is not None else np.zeros(len(h),bool)
+        seconds=float(weights[mask].sum());hh=float(np.average(h[mask],weights=weights[mask])) if seconds else None
+        vv=float(np.average(v[mask],weights=weights[mask])) if seconds else None
+        hp=hh/hrmax_bpm*100 if hh is not None and hrmax_bpm else None
+        reason=quality["reason"]
+        if not reason:
+            if activity_duration_s is None: reason="ACTIVITY_DURATION_MISSING"
+            elif activity_duration_s<MIN_ACTIVITY_SECONDS: reason="ACTIVITY_BELOW_7MIN"
+            elif hrmax_bpm is None: reason="HRMAX_MISSING"
+            elif seconds+1e-9<MIN_SECONDS_BY_BAND[name]: reason="PAIRED_TIME_BELOW_MINIMUM"
+            elif vv is None or vv<=0: reason="ZERO_SPEED"
+        return {"name":name,"lower_bpm":lo,"upper_bpm":hi,"minimum_seconds":MIN_SECONDS_BY_BAND[name],
+                "hr_seconds":seconds,"speed_seconds":seconds,"hr_percent":100*seconds/total if total else 0.,
+                "mean_hr_bpm":hh,"mean_hrmax_percent":hp,"mean_vflat_kmh":vv,
+                "index":hp/vv if not reason else None,"valid":reason is None,"invalid_reason":reason}
+    return {"schema_version":SCHEMA_VERSION,"model_version":MODEL_VERSION,"normalization":"percent_hrmax",
+            "hr_source":"raw","lag_seconds":LAG_SECONDS,"signal_quality":quality,
+            "comparison_key":comparison_key,"source_versions":dict(source_versions),"hrmax_bpm":hrmax_bpm,
+            "zone_bounds_bpm":bounds,"activity_duration_s":activity_duration_s,"minimum_activity_seconds":MIN_ACTIVITY_SECONDS,
+            "minimum_seconds_by_band":dict(MIN_SECONDS_BY_BAND),"minimum_grade_pct":MIN_GRADE_PCT,
+            "general_range_percent":[75,92],"hr_seconds":total,"eligible_speed_seconds":total,
+            "downhill_excluded_seconds":downhill,"unavailable_speed_seconds":unavailable,
+            "zones":[band(f"Z{i+1}",bounds[i],bounds[i+1],i==4) for i in range(5)],
+            "general":band("GENERAL",*(tuple(hrmax_bpm*p for p in GENERAL_RANGE) if hrmax_bpm else (None,None)),True)}

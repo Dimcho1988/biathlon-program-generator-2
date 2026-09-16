@@ -9,7 +9,7 @@ from bisect import bisect_right
 from dataclasses import dataclass
 import math
 
-VERSION = "speed-duration-c1-bounded-v1"
+VERSION = "speed-duration-c1-duration-volume-v2"
 REFERENCE_TIMES = (10.8, 60., 180., 1200., 7200., 43516.)
 REFERENCE_SPEEDS = (9.405516961260822, 8.543876534348628, 7.346875281685026,
                     6.271989154390681, 5.698632863726023, 3.7974582869384923)
@@ -137,15 +137,16 @@ def zone_adjustment(hr, centers, corrections):
     return corrections[i]*(1-w)+corrections[i+1]*w
 
 
-def adjusted(curve, tests, hr_for_speed, centers, corrections):
+def adjusted(curve, tests, hr_for_speed, centers, corrections, *, duration_centers=None):
     """Warp duration, fade the correction to zero at observed anchors.
 
     Build the resulting C1 bounded curve, reducing correction if necessary.
     This validates speed and distance monotonicity mathematically per segment,
     rather than trusting a chart grid to establish physical invertibility.
     """
-    if not hr_for_speed or not tests or not any(corrections):
+    if (not hr_for_speed and duration_centers is None) or not tests or not any(corrections):
         return curve,0.
+    locations = [-math.log(c) for c in duration_centers] if duration_centers is not None else centers
     anchors=[math.log(t["duration_s"]) for t in tests]
     x0,x1=curve._x[0],curve._x[-1]
     fixed=sorted(set([t["duration_s"] for t in tests]+list(curve.times)))
@@ -158,7 +159,8 @@ def adjusted(curve, tests, hr_for_speed, centers, corrections):
             fade=math.prod(smoothstep(abs(math.log(t)-a)/.35) for a in anchors)
             # Keep the reference domain endpoints fixed as well.
             fade*=smoothstep((math.log(t)-x0)/.2)*smoothstep((x1-math.log(t))/.2)
-            correction=zone_adjustment(hr_for_speed(v*3.6),centers,corrections)*fade*factor
+            position = -math.log(t) if duration_centers is not None else hr_for_speed(v*3.6)
+            correction=zone_adjustment(position,locations,corrections)*fade*factor
             pairs.append((t*(1+correction),v))
         try:
             return Curve(tuple(t for t,v in pairs),tuple(v for t,v in pairs)),factor

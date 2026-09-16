@@ -14,6 +14,14 @@ describe("trainability", () => {
     malformed.activities[5].index!.general.invalid_reason = null;
     expect(() => parseTrainabilityHistory(malformed)).toThrow();
   });
+  it("rejects valid indices on a rejected workout and mismatched paired times", () => {
+    const index = structuredClone(trainabilityFixture.activities[0].index!);
+    index.signal_quality = {status:"EXCLUDED", reason:"HR_SIGNAL_SUSPECT", rapid_change_episodes:3};
+    expect(() => parseTrainabilityIndex(index)).toThrow();
+    index.signal_quality.status="PASSED_SCREEN";
+    index.general.speed_seconds += 1;
+    expect(() => parseTrainabilityIndex(index)).toThrow();
+  });
   it("breaks lines at invalid activities and configuration changes", () => {
     const rows = structuredClone(trainabilityFixture.activities);
     expect(lineSegments(rows, "GENERAL").map(s => s.length)).toEqual([5, 6]);
@@ -34,7 +42,7 @@ describe("trainability", () => {
     for (const field of ["hr_seconds", "speed_seconds"] as const) {
       const index = structuredClone(trainabilityFixture.activities[0].index!);
       const band = name === "GENERAL" ? index.general : index.zones.find(b => b.name === name)!;
-      band[field] = band.minimum_seconds;
+      band.hr_seconds = band.speed_seconds = band.minimum_seconds;
       expect(parseTrainabilityIndex(index)).not.toBeNull();
       band[field] -= 0.001;
       expect(() => parseTrainabilityIndex(index)).toThrow();
@@ -42,7 +50,7 @@ describe("trainability", () => {
   });
   it("rejects an old ratio or a weakened minimum disguised as the new contract", () => {
     const wrongScale = structuredClone(trainabilityFixture.activities[0].index!);
-    wrongScale.general.index = wrongScale.general.mean_hrmod_bpm! / wrongScale.general.mean_vflat_kmh!;
+    wrongScale.general.index = wrongScale.general.mean_hr_bpm! / wrongScale.general.mean_vflat_kmh!;
     expect(() => parseTrainabilityIndex(wrongScale)).toThrow();
     const wrongMinimum = structuredClone(trainabilityFixture.activities[0].index!);
     wrongMinimum.zones[4].minimum_seconds = 60;
@@ -52,13 +60,13 @@ describe("trainability", () => {
     const index = structuredClone(trainabilityFixture.activities[0].index!);
     for (const band of [index.zones[0], index.zones[4]]) {
       band.valid = false; band.index = null;
-      band.hr_seconds = band.minimum_seconds - 1;
-      band.invalid_reason = "HR_TIME_BELOW_MINIMUM";
+      band.hr_seconds = band.speed_seconds = band.minimum_seconds - 1;
+      band.invalid_reason = "PAIRED_TIME_BELOW_MINIMUM";
     }
     const html = renderToStaticMarkup(<TrainabilitySummary index={parseTrainabilityIndex(index)} />);
-    expect(html).toContain("Под 7 мин HRmod");
-    expect(html).toContain("Под 5 мин HRmod");
-    expect(html).toContain("HRmod (%HRmax) / Vflat (km/h)");
+    expect(html).toContain("Под 7 мин съпоставени пулс и скорост");
+    expect(html).toContain("Под 5 мин съпоставени пулс и скорост");
+    expect(html).toContain("Суров пулс (%HRmax) / Vflat (km/h)");
   });
   it("shows missing values and short-activity reasons rather than zeros", () => {
     const html = renderToStaticMarkup(<TrainabilitySummary index={trainabilityFixture.activities[5].index} />);
