@@ -31,7 +31,7 @@ export default async function TrainabilityPage({ searchParams }: { searchParams:
   const fixture = process.env.ONFLOWS_DATA_MODE === "fixture";
   return <main className="activities-page trainability-page">
     <header className="activities-hero">
-      <div className="activities-title"><div><p className="eyebrow">Динамика по активности</p><h1>Индекс на тренираност</h1><p>HRmod (%HRmax) / Vflat · Z1–Z5 и отделен общ индекс за 75–92% HRmax.</p><Link href="/response">Стрес и възстановяване →</Link></div><span>{fixture ? "Примерни данни" : `Версия на данните № ${history.revision}`}</span></div></header>
+      <div className="activities-title"><div><p className="eyebrow">Динамика по активности</p><h1>Индекс на тренираност</h1><p>Суров пулс (%HRmax) / Vflat · изместване 20 сек · Z1–Z5 и отделен общ индекс за 75–92% HRmax.</p><Link href="/response">Стрес и възстановяване →</Link></div><span>{fixture ? "Примерни данни" : `Версия на данните № ${history.revision}`}</span></div></header>
     <section className="index-period-controls" aria-label="Период на индекса"><form method="get"><label>От<input type="date" name="start" defaultValue={start} required /></label><label>До<input type="date" name="end" defaultValue={end} required /></label><button className="action-button secondary" type="submit">Покажи периода</button></form>{!fixture && <SyncActionForm returnTo={returnTo} busy={Boolean(sync && syncInProgress(sync))} />}</section>
     {sync && <SyncStatusPanel key={`${sync.job_id}:${sync.state}:${history.generation_id}`} initialState={sync} renderedGenerationId={history.generation_id} returnTo={returnTo} />}
     <TrainabilityHistoryView key={`${start}:${end}:${history.generation_id}`} history={history} />
