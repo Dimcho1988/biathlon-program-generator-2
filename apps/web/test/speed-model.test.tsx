@@ -42,6 +42,14 @@ describe("speed test selection and prediction",()=>{
     expect(html).not.toContain("Запази тестовия участък");
     expect(html).toMatch(/disabled=""[^>]*>Изчисли/);
   });
+  it("labels shared volumes explicitly while accepting older same-sport responses",()=>{
+    const shared=renderToStaticMarkup(<SpeedModelPanel model={{...model,volume_scope:"ALL_SPORTS"}} canEdit/>);
+    expect(shared).toContain("Донастройка чрез общия обем по зони");
+    expect(shared).toContain("от всички спортове за 40 предходни календарни дни, приведено към седмица");
+    const legacy=renderToStaticMarkup(<SpeedModelPanel model={model} canEdit/>);
+    expect(legacy).toContain("от избрания спорт");
+    expect(legacy).not.toContain("от всички спортове");
+  });
   it("keeps submitted prediction units/value and surfaces range errors without losing the form",()=>{
     const html=renderToStaticMarkup(<SpeedModelPanel model={{...model,status:"CALIBRATED",prediction_error:"OUTSIDE_PREDICTION_RANGE"}} canEdit predictionInput="km" predictionValue="5"/>);
     expect(html).toContain('value="km" selected=""');

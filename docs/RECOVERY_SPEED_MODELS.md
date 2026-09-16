@@ -113,13 +113,28 @@ be disabled without deleting the activity. Active tests use a 90-day window and
 are separated by sport; different Vflat model/configuration versions cannot share a curve.
 
 Zone-volume correction uses direct equivalent time Q, separately from Recovery E:
-7 × the preceding up-to-40-calendar-day mean for the same sport. Weekly ranges
+7 × the preceding up-to-40-calendar-day mean across **all sports** for the athlete,
+separately for Z1–Z5. Only completed calendar days enter this mean; the current
+day and older/out-of-window activities are excluded. Rest days remain in the
+calendar denominator. The direct Q values are summed once, without cascade,
+received spillover, or conversion of the separate STR component into zone minutes.
+Weekly ranges
 (minutes) are Z1 240–840, Z2 60–300, Z3 30–120, Z4 10–40, Z5 5–30. Lower/mid/upper
 give −10%/0/+10% predicted-duration adjustment; raw history is never clamped.
 Only the correction is capped, and missing history is neutral. Smoothstep blends
 adjacent zone corrections, including +8% to −4%. Corrections fade to zero at
 measured tests and domain endpoints. The final bounded C1 curve is reconstructed;
 correction strength is reduced and disclosed if required for monotonicity.
+
+The response identifies this basis with `volume_scope=ALL_SPORTS`. The weekly
+volumes and requested zone corrections therefore stay the same when selecting
+another sport. Measured tests, Vflat, HR-speed summaries, and the calibrated curve
+remain sport-specific; the final correction strength can differ by curve. This
+shared volume basis is an explicit expert modeling assumption about cross-sport
+training exposure, not a measured equal transfer of performance between sports.
+It changes neither canonical Tref nor Recovery and requires no snapshot rebuild.
+The UI supports older responses without `volume_scope` as same-sport volumes
+during deployment, then labels the shared basis explicitly once available.
 
 HR-speed mapping uses weighted valid zone summaries from the existing rank-based
 trainability index, with current HRmax/zones and same sport. It is an inferred
