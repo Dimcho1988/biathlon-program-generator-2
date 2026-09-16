@@ -13,7 +13,7 @@ from typing import Any
 
 PROFILE_SCHEMA_VERSION = "onflows-zone-profile-v2-linear-equivalence"
 INTRA_ZONE_EQUIVALENCE_VERSION = "intra_zone_linear_v1"
-DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM = 3.0
+from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM
 DEFAULT_PROFILE_SOURCE = "default_demo_profile"
 MANUAL_PROFILE_SOURCE = "manual_session_profile"
 _ALLOWED_SOURCES = frozenset(

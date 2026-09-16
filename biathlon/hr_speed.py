@@ -6,7 +6,7 @@ chosen once at construction, never independently for each query direction.
 """
 from bisect import bisect_right
 import math
-from intervals_inspector.onflows_zone_profile import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM
+from .equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM
 
 VERSION='hr-speed-bounded-paired-v1'
 TMAX_RANGES_S={'Z1':(7200.,18000.),'Z2':(5400.,10800.),'Z3':(1800.,4800.),'Z4':(600.,1800.)}
