@@ -186,8 +186,10 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     n=max(0,(last-first).days+1)
     volumes={z:None for z in speed_duration.VOLUME_RANGES_MIN}
     if n:
-        volumes={z:7*sum(r["equivalent_time_min"] for a in source.get("activities",[]) if a["sport"]==sport
-            and first.isoformat()<=a["date"]<=last.isoformat() for r in a["zones"] if r["zone"]==z)/n for z in volumes}
+        # Volume describes the athlete's total zone exposure across sports.
+        # Tests and HR-speed summaries above remain specific to the chosen sport.
+        volumes={z:7*sum(r["equivalent_time_min"] for a in source.get("activities",[])
+            if first.isoformat()<=a["date"]<=last.isoformat() for r in a["zones"] if r["zone"]==z)/n for z in volumes}
     corrections=[speed_duration.volume_correction(z,volumes[z]) for z in volumes]
     centers=[(a+b)/2 for a,b in zip(settings.zone_bounds_bpm,settings.zone_bounds_bpm[1:])]
     tuned,factor=speed_duration.adjusted(curve,tests,hr_fn,centers,corrections)
@@ -215,7 +217,7 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
         "exploratory_test_count":exploratory_count,
         "active_test_keys":[e["entry_key"] for e in entries if e["payload"] in tests],
         "points":[prediction(math.exp(tuned._x[0]+(tuned._x[-1]-tuned._x[0])*i/180)) for i in range(181)],
-        "volume_weekly_min":volumes,"history_days":n,"zone_corrections":dict(zip(volumes,corrections)),
+        "volume_scope":"ALL_SPORTS","volume_weekly_min":volumes,"history_days":n,"zone_corrections":dict(zip(volumes,corrections)),
         "correction_applied_fraction":factor,"critical_speed":speed_duration.critical_speed(tests),
         "prediction":output,"prediction_error":prediction_error,"warnings":warnings,"source_generation_id":calendar.get("generation_id"),
         "source_revision":calendar.get("revision"),"hr_speed_range_kmh":[points[0][0],points[-1][0]] if hr_fn else None}

@@ -190,11 +190,66 @@ class SpeedStore(Store):
         return {"activities":[{"activity_ref":REF,"sport":"Run","local_date":today.isoformat()}],"snapshot_payload":{}}
 
 
+@pytest.mark.parametrize("history_days",[7,40])
+def test_shared_zone_volume_keeps_tests_and_hr_mapping_sport_specific(monkeypatch,history_days):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls,tz=None): return NOW.astimezone(tz)
+    monkeypatch.setattr(m,"datetime",FixedDatetime)
+    today=NOW.date();first=today-timedelta(days=history_days)
+    sports={"Run":(100,60,15),"NordicSki":(900,540,25),"Ride":(1400,1200,30)}
+    repo=SpeedStore()
+    activities=[];loads=[]
+    for i,(sport,(z1,z2,speed)) in enumerate(sports.items()):
+        day=(first if i==0 else today-timedelta(days=1)).isoformat()
+        activities.append({"activity_ref":sport,"sport":sport,"local_date":day,"latest_shadow_run_key":sport})
+        loads.append({"date":day,"sport":sport,"zones":[
+            {"zone":zone,"equivalent_time_min":q,"effective_load":99999}
+            for zone,q in (("Z1",z1),("Z2",z2),("STR",99999))]})
+        repo.rows.append({"kind":"SPEED_TEST","entry_key":sport,"revision":1,"payload":{
+            "sport":sport,"day":day,"enabled":True,"duration_s":600,"speed_kmh":speed,
+            "vflat_version":"v-test","vflat_config_version":"cfg"}})
+    for day in (first-timedelta(days=1),today,today+timedelta(days=1)):
+        loads.append({"date":day.isoformat(),"sport":"Run","zones":[{"zone":"Z1","equivalent_time_min":99999}]})
+    calendar={"activities":activities,"snapshot_payload":{"load_history":{
+        "period_start":first.isoformat(),"period_end":(today+timedelta(days=1)).isoformat(),"activities":loads}}}
+    original=deepcopy(calendar)
+    repo.active_activity_calendar=lambda alias,start,end:calendar
+    requested=[]
+    def summaries(alias,keys):
+        assert alias=="ath-test"
+        requested.append(keys)
+        return {sport:{"trainability_index":{"hrmax_bpm":190,"zone_bounds_bpm":[100,125,145,160,175,190],
+            "source_versions":{"vflat":"v-test"},"zones":[
+                {"name":zone,"valid":True,"hr_seconds":600,"mean_vflat_kmh":v,"mean_hrmod_bpm":hr}
+                for zone,v,hr in (("Z1",sports[sport][2]*.6,115),("Z2",sports[sport][2],135),
+                                  ("Z3",sports[sport][2]*1.2,152))]}}
+            for sport in keys}
+    repo.trainability_summaries=summaries
+    expected={"Z1":2400*7/history_days,"Z2":1800*7/history_days,"Z3":0,"Z4":0,"Z5":0}
+    models=[]
+    for sport,(_,_,speed) in sports.items():
+        model=m.speed_view(repo,"ath-test",sport,duration_s=600)
+        models.append(model)
+        assert model["volume_scope"]=="ALL_SPORTS" and model["history_days"]==history_days
+        assert model["volume_weekly_min"]==pytest.approx(expected)
+        assert model["active_test_keys"]==[sport]
+        assert model["prediction"]["speed_kmh"]==pytest.approx(speed)
+        assert model["prediction"]["estimated_hr_bpm"]==pytest.approx(135)
+        assert model["hr_speed_range_kmh"]==pytest.approx([speed*.6,speed*1.2])
+        assert requested[-1]==(sport,)
+    assert all(model["zone_corrections"]==models[0]["zone_corrections"] for model in models)
+    assert models[0]["zone_corrections"]["Z1"]==pytest.approx(-.04 if history_days==40 else .1)
+    assert calendar==original and repo.saved==[]
+
+
 def test_saved_anchor_unlocks_all_three_prediction_directions_and_errors_stay_inline():
     repo=SpeedStore()
     empty=m.speed_view(repo,"ath-test","Run",duration_s=720)
     assert empty["status"]=="REFERENCE_ONLY" and empty["prediction"] is None
     assert empty["prediction_error"]=="MAXIMAL_TEST_REQUIRED"
+    assert empty["volume_weekly_min"]==dict.fromkeys(("Z1","Z2","Z3","Z4","Z5"))
+    assert set(empty["zone_corrections"].values())=={0}
     body=SpeedTestInput(activity_ref=REF,start_s=0,duration_s=720,maximal=True,comparable=True,conditions="same course")
     m.save_test(repo,"ath-test",body,UUID("11111111-1111-4111-8111-111111111111"))
     write=repo.saved[0]
