@@ -74,3 +74,8 @@ def history_from_calendar(repository,alias,calendar):
                      'start_at_utc':r.get('start_at_utc') or r['local_date']+'T00:00:00Z','local_date':r['local_date'],
                      'index':index,'unavailable_reason':None if index else 'REFRESH_REQUIRED' if key else 'NO_SHADOW'})
     return admit_activities(rows)
+
+
+def read_calendar(repository, alias, start, end):
+    reader = getattr(repository, "active_trainability_calendar", None) or repository.active_activity_calendar
+    return reader(alias, start, end)

@@ -20,7 +20,7 @@ from biathlon.methodology import (
 from hrmod_lab.schemas import MODEL_VERSION as HRMOD_MODEL_VERSION
 from vflat_b65 import MODEL_VERSION as VFLAT_MODEL_VERSION
 from vflat_b65 import SPRINT_STR_MODEL_VERSION
-from .trainability_history import history_from_calendar
+from .trainability_history import history_from_calendar, read_calendar
 
 from .cloud import (
     MESOCYCLE_ACCENT_COMPONENTS,
@@ -777,7 +777,7 @@ def real_trainability_history(
         raise HTTPException(status_code=422, detail="Index period must contain 1–90 days")
     try:
         repository = _repository()
-        envelope = repository.active_activity_calendar(alias, date.min, end)
+        envelope = read_calendar(repository, alias, date.min, end)
         if not isinstance(envelope, Mapping):
             raise ValueError("No active analysis generation")
         activities = history_from_calendar(repository, alias, envelope)

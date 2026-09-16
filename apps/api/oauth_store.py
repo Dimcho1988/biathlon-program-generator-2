@@ -678,6 +678,62 @@ class SupabasePilotRepository(SnapshotRepository):
             "snapshot_payload": dict(snapshot),
         }
 
+    def active_trainability_calendar(
+        self, athlete_alias: str, period_start: date, period_end: date
+    ) -> Mapping[str, Any] | None:
+        """Pin one generation and read its small catalog without full HRmod runs.
+
+        The ordinary calendar also loads HRmod zone summaries from large JSON
+        documents. TI only needs immutable run keys; its summaries are fetched
+        separately. Keep the captured generation even if a sync activates midway.
+        """
+        analysis = self.active_analysis(athlete_alias)
+        if analysis is None:
+            return None
+        generation_id = analysis.get("generation_id")
+        if generation_id is None:
+            return self.active_activity_calendar(athlete_alias, period_start, period_end)
+        alias = quote(athlete_alias, safe="")
+        generations = self._json(self._request(
+            "GET", "/onflows_analysis_generations?select=activity_set_generation_id,activity_count"
+            f"&athlete_alias=eq.{alias}&generation_id=eq.{quote(generation_id, safe='')}&limit=1",
+        ))
+        if not isinstance(generations, list) or len(generations) != 1 or not isinstance(generations[0], Mapping):
+            raise PersistentStoreFailure("Pinned trainability generation is unavailable")
+        generation = generations[0]
+        source_id = generation.get("activity_set_generation_id") or generation_id
+        expected = generation.get("activity_count")
+        if not isinstance(source_id, str) or isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
+            raise PersistentStoreFailure("Pinned trainability generation is invalid")
+        records = []
+        while len(records) < expected:
+            page = self._json(self._request(
+                "GET", "/onflows_analysis_generation_activities?select=activity_ref,catalog_payload,"
+                "shadow_run_key,canonical_run_key,input_key,start_at_utc,local_date"
+                f"&athlete_alias=eq.{alias}&generation_id=eq.{quote(source_id, safe='')}"
+                f"&order=start_at_utc.asc.nullslast,activity_ref.asc&limit=200&offset={len(records)}",
+            ))
+            if not isinstance(page, list) or not page:
+                raise PersistentStoreFailure("Pinned trainability catalog is incomplete")
+            records.extend(page)
+        if len(records) != expected:
+            raise PersistentStoreFailure("Pinned trainability catalog count changed")
+        activities = []
+        seen = set()
+        for row in records:
+            if not isinstance(row, Mapping) or not isinstance(row.get("catalog_payload"), Mapping):
+                raise PersistentStoreFailure("Pinned trainability activity is invalid")
+            ref = row.get("activity_ref")
+            if not isinstance(ref, str) or ref in seen or not isinstance(row.get("local_date"), str):
+                raise PersistentStoreFailure("Pinned trainability activity identity is invalid")
+            seen.add(ref)
+            if period_start.isoformat() <= row["local_date"] <= period_end.isoformat():
+                activities.append({**row["catalog_payload"], "activity_ref": ref,
+                    "start_at_utc": row["start_at_utc"], "local_date": row["local_date"],
+                    "latest_shadow_run_key": row.get("shadow_run_key"),
+                    "latest_canonical_run_key": row.get("canonical_run_key"), "input_key": row.get("input_key")})
+        return {**analysis, "activities": activities}
+
     def active_activity_calendar(
         self, athlete_alias: str, period_start: date, period_end: date
     ) -> Mapping[str, Any] | None:
