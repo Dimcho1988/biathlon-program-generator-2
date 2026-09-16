@@ -58,8 +58,8 @@ def test_history_fails_closed_if_pinned_summary_belongs_to_other_activity(monkey
 @pytest.mark.parametrize("legacy", [False, True])
 def test_history_serves_only_the_current_normalized_model(monkeypatch, legacy):
     index = compute_trainability(
-        [{"hrmod_final_bpm": 154, "dt_s": 420}],
-        [{"vflat_b65_kmh": 20, "dt_s": 420, "grade_raw_pct": 0}],
+        [{"elapsed_s":t,"hr_raw_bpm":154} for t in range(442)],
+        [{"elapsed_s":t,"vflat_b65_kmh":20,"dt_s":1,"grade_raw_pct":0} for t in range(1,421)],
         zone_bounds_bpm=[50,137,147,158,170,178], hrmax_bpm=178,
         activity_duration_s=420, comparison_key="current", source_versions={},
     )
@@ -78,7 +78,12 @@ def test_history_serves_only_the_current_normalized_model(monkeypatch, legacy):
     assert response.status_code == 200
     row = response.json()["activities"][0]
     assert row["unavailable_reason"] == ("REFRESH_REQUIRED" if legacy else None)
-    assert row["index"] == (None if legacy else index)
+    if legacy:
+        assert row["index"] is None
+    else:
+        assert row["index"].pop("admission")["status"] == "ACCEPTED"
+        assert row["index"] == index
+        assert index["general"]["valid"]
 
 
 def test_summary_store_batches_exact_keys_and_only_projects_small_index():
@@ -104,3 +109,56 @@ def test_summary_store_batches_exact_keys_and_only_projects_small_index():
     assert len(calls) == 2
     with pytest.raises(PersistentStoreFailure):
         repository.trainability_summaries("ath-test", ("invalid-query-key",))
+
+
+def history_row(day, value=5, sport='Walk', key='same'):
+    from apps.api.trainability import MODEL_VERSION,SCHEMA_VERSION
+    band=lambda name:{'name':name,'valid':True,'index':value,'hr_seconds':600,'invalid_reason':None}
+    return {'activity_ref':str(day)+sport,'local_date':f'2026-08-{day:02d}',
+            'start_at_utc':f'2026-08-{day:02d}T10:00:00Z','sport':sport,
+            'index':{'model_version':MODEL_VERSION,'schema_version':SCHEMA_VERSION,'comparison_key':key,
+                     'signal_quality':{'status':'PASSED_SCREEN','reason':None},
+                     'zones':[band(f'Z{i}') for i in range(1,6)],'general':band('GENERAL')}}
+
+
+def test_causal_screen_uses_prior_same_sport_and_rejects_whole_activity_without_mutation():
+    from copy import deepcopy
+    from apps.api.trainability_history import admit_activities
+    rows=[history_row(i) for i in range(1,8)]+[history_row(8,6.01),history_row(9,5),history_row(10,20,'NordicSki')]
+    before=deepcopy(rows)
+    out=admit_activities(rows)
+    assert rows==before
+    assert out[6]['index']['admission']['reference_status']=='INSUFFICIENT_HISTORY'
+    assert out[7]['index']['admission']['reason']=='INDEX_OUTLIER'
+    assert all(b['index'] is None for b in [*out[7]['index']['zones'],out[7]['index']['general']])
+    assert out[8]['index']['admission']['checked_bands'][0]['reference_count']==7
+    assert out[9]['index']['admission']['reference_status']=='INSUFFICIENT_HISTORY'
+    # Adding a future extreme workout cannot change earlier decisions.
+    assert admit_activities(rows+[history_row(11,100)])[:len(rows)]==out
+
+
+def test_exact_twenty_percent_is_allowed_and_one_bad_zone_excludes_all():
+    from apps.api.trainability_history import admit_activities
+    base=[history_row(i) for i in range(1,8)]
+    assert admit_activities(base+[history_row(8,6)])[-1]['index']['admission']['status']=='ACCEPTED'
+    last=history_row(8);last['index']['zones'][0]['index']=3.99
+    result=admit_activities(base+[last])[-1]['index']
+    assert [b['zone'] for b in result['admission']['flagged_bands']]==['Z1']
+    assert not result['general']['valid']
+
+
+def test_reference_excludes_signal_failures_other_settings_and_old_days():
+    from apps.api.trainability_history import admit_activities
+    rows=[history_row(i) for i in range(1,8)]
+    rows[0]['index']['signal_quality']={'status':'EXCLUDED','reason':'HR_SIGNAL_SUSPECT'}
+    rows[1]['index']['comparison_key']='different-settings'
+    rows[2]['local_date']='2026-06-01';rows[2]['start_at_utc']='2026-06-01T10:00:00Z'
+    result=admit_activities(rows+[history_row(8,10)])[-1]
+    assert result['index']['admission']['reference_status']=='INSUFFICIENT_HISTORY'
+
+
+def test_robust_aggregation_limits_extreme_values():
+    from apps.api.trainability_history import robust_mean
+    assert robust_mean([5,5.1,4.9,5.05,4.95,5.02,40],[600]*7)<5.2
+    assert robust_mean([5]*7+[40],[600]*8)==5
+    assert robust_mean([4,6],[1,3])==5.5

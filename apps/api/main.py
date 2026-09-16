@@ -20,7 +20,7 @@ from biathlon.methodology import (
 from hrmod_lab.schemas import MODEL_VERSION as HRMOD_MODEL_VERSION
 from vflat_b65 import MODEL_VERSION as VFLAT_MODEL_VERSION
 from vflat_b65 import SPRINT_STR_MODEL_VERSION
-from .trainability import MODEL_VERSION as TRAINABILITY_MODEL_VERSION, SCHEMA_VERSION as TRAINABILITY_SCHEMA_VERSION
+from .trainability_history import history_from_calendar
 
 from .cloud import (
     MESOCYCLE_ACCENT_COMPONENTS,
@@ -140,12 +140,12 @@ def save_recovery_configuration(body: RecoveryConfigInput,
 
 @app.get("/api/v2/athlete/models/speed")
 def speed_model(sport: str | None = None, duration_s: float | None = None,
-    distance_m: float | None = None, speed_kmh: float | None = None,
+    distance_m: float | None = None, speed_kmh: float | None = None, hr_bpm: float | None = None,
     authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None):
     alias = _model_alias(authorization, athlete_alias)
     try:
-        return model_service.speed_view(_repository(),alias,sport,duration_s=duration_s,distance_m=distance_m,speed_kmh=speed_kmh)
+        return model_service.speed_view(_repository(),alias,sport,duration_s=duration_s,distance_m=distance_m,speed_kmh=speed_kmh,hr_bpm=hr_bpm)
     except PersistentStoreFailure as exc:
         raise HTTPException(503,"Speed model sources are unavailable") from exc
 
@@ -777,33 +777,11 @@ def real_trainability_history(
         raise HTTPException(status_code=422, detail="Index period must contain 1–90 days")
     try:
         repository = _repository()
-        envelope = repository.active_activity_calendar(alias, start, end)
+        envelope = repository.active_activity_calendar(alias, date.min, end)
         if not isinstance(envelope, Mapping):
             raise ValueError("No active analysis generation")
-        rows = envelope.get("activities")
-        if not isinstance(rows, list) or not all(isinstance(row, Mapping) for row in rows):
-            raise ValueError("Invalid active activity calendar")
-        keys = tuple(str(row["latest_shadow_run_key"]) for row in rows if row.get("latest_shadow_run_key"))
-        summaries = repository.trainability_summaries(alias, keys)
-        activities = []
-        for row in rows:
-            key = row.get("latest_shadow_run_key")
-            summary = summaries.get(key) if key else None
-            if key and (summary is None or summary.get("activity_ref") != row.get("activity_ref")):
-                raise ValueError("Pinned trainability activity mismatch")
-            index = summary.get("trainability_index") if summary else None
-            if index is not None and not isinstance(index, Mapping):
-                raise ValueError("Invalid trainability index")
-            if index is not None:
-                if index.get("schema_version") != TRAINABILITY_SCHEMA_VERSION or index.get("model_version") != TRAINABILITY_MODEL_VERSION:
-                    index = None  # Never mix the legacy bpm scale with %HRmax.
-            activities.append({
-                "activity_ref": row["activity_ref"], "name": row.get("name"),
-                "sport": row.get("sport") or "Unknown",
-                "start_at_utc": row["start_at_utc"], "local_date": row["local_date"],
-                "index": index,
-                "unavailable_reason": (None if index else "REFRESH_REQUIRED" if key else "NO_SHADOW"),
-            })
+        activities = history_from_calendar(repository, alias, envelope)
+        activities = [row for row in activities if start.isoformat() <= row["local_date"] <= end.isoformat()]
         return {
             "schema_version": "trainability-history-v1", "period_start": start.isoformat(),
             "period_end": end.isoformat(), "generation_id": envelope.get("generation_id"),

@@ -1,6 +1,6 @@
 import { isCalendarDate, isRecord } from "./training-status";
 
-export const TRAINABILITY_MODEL_VERSION = "trainability_rank_hrmax_v2";
+export const TRAINABILITY_MODEL_VERSION = "trainability_paired_raw_lag20_v3";
 export const MINIMUM_SECONDS_BY_BAND: Record<string, number> = { Z1: 420, Z2: 420, Z3: 420, Z4: 420, Z5: 300, GENERAL: 420 };
 
 export interface IndexBand {
@@ -11,7 +11,7 @@ export interface IndexBand {
   hr_seconds: number;
   hr_percent: number;
   speed_seconds: number;
-  mean_hrmod_bpm: number | null;
+  mean_hr_bpm: number | null;
   mean_hrmax_percent: number | null;
   mean_vflat_kmh: number | null;
   index: number | null;
@@ -19,8 +19,12 @@ export interface IndexBand {
   invalid_reason: string | null;
 }
 export interface TrainabilityIndex {
-  schema_version: "trainability-index-v2";
+  schema_version: "trainability-index-v3";
   model_version: string;
+  hr_source: "raw";
+  lag_seconds: 20;
+  signal_quality: {status: "EXCLUDED" | "PASSED_SCREEN"; reason: string | null; rapid_change_episodes: number};
+  admission?: {status: "EXCLUDED" | "ACCEPTED"; reason: string | null; reference_status: string; flagged_bands: Array<{zone: string; deviation_fraction: number; reference_index: number}>};
   normalization: "percent_hrmax";
   comparison_key: string;
   source_versions: Record<string, string>;
@@ -62,8 +66,9 @@ const bad = () => new Error("Невалиден отговор за индекс
 export function parseIndexBand(v: unknown): IndexBand {
   if (!isRecord(v) || typeof v.name !== "string" || typeof v.valid !== "boolean" ||
     !Object.hasOwn(MINIMUM_SECONDS_BY_BAND, v.name) || v.minimum_seconds !== MINIMUM_SECONDS_BY_BAND[v.name] ||
-    !["lower_bpm", "upper_bpm", "mean_hrmod_bpm", "mean_hrmax_percent", "mean_vflat_kmh", "index"].every(k => nullableNumber(v[k])) ||
+    !["lower_bpm", "upper_bpm", "mean_hr_bpm", "mean_hrmax_percent", "mean_vflat_kmh", "index"].every(k => nullableNumber(v[k])) ||
     !["hr_seconds", "hr_percent", "speed_seconds"].every(k => finite(v[k]) && v[k] >= 0) ||
+    Math.abs(Number(v.hr_seconds) - Number(v.speed_seconds)) > 1e-8 ||
     !(v.invalid_reason === null || typeof v.invalid_reason === "string") ||
     (v.valid && (!finite(v.index) || v.invalid_reason !== null || Number(v.hr_seconds) < Number(v.minimum_seconds) - 1e-9 || Number(v.speed_seconds) < Number(v.minimum_seconds) - 1e-9)) ||
     (!v.valid && (v.index !== null || v.invalid_reason === null))) throw bad();
@@ -71,9 +76,11 @@ export function parseIndexBand(v: unknown): IndexBand {
 }
 export function parseTrainabilityIndex(v: unknown): TrainabilityIndex | null {
   if (v === null || v === undefined) return null;
-  if (isRecord(v) && v.schema_version === "trainability-index-v1" && v.model_version === "trainability_rank_v1") return null;
-  if (!isRecord(v) || v.schema_version !== "trainability-index-v2" ||
-    v.model_version !== TRAINABILITY_MODEL_VERSION || v.normalization !== "percent_hrmax" || typeof v.comparison_key !== "string" ||
+  if (isRecord(v) && ["trainability-index-v1", "trainability-index-v2"].includes(String(v.schema_version))) return null;
+  if (!isRecord(v) || v.schema_version !== "trainability-index-v3" ||
+    v.model_version !== TRAINABILITY_MODEL_VERSION || v.hr_source !== "raw" || v.lag_seconds !== 20 ||
+    !isRecord(v.signal_quality) || !["EXCLUDED", "PASSED_SCREEN"].includes(String(v.signal_quality.status)) ||
+    !finite(v.signal_quality.rapid_change_episodes) || v.normalization !== "percent_hrmax" || typeof v.comparison_key !== "string" ||
     !isRecord(v.source_versions) || !Object.values(v.source_versions).every(x => typeof x === "string") ||
     !nullableNumber(v.hrmax_bpm) || (v.hrmax_bpm !== null && Number(v.hrmax_bpm) <= 0) ||
     !Array.isArray(v.zone_bounds_bpm) || v.zone_bounds_bpm.length !== 6 || !v.zone_bounds_bpm.every(finite) ||
@@ -85,13 +92,14 @@ export function parseTrainabilityIndex(v: unknown): TrainabilityIndex | null {
     !Array.isArray(v.zones) || v.zones.length !== 5) throw bad();
   const zones = v.zones.map(parseIndexBand);
   const general = parseIndexBand(v.general);
+  if ((v.signal_quality.status === "EXCLUDED" || (isRecord(v.admission) && v.admission.status === "EXCLUDED")) && [...zones, general].some(b => b.valid)) throw bad();
   if (zones.some((z, i) => z.name !== `Z${i + 1}`) || general.name !== "GENERAL" ||
     ((v.activity_duration_s === null || (v.activity_duration_s as number) < 420) && [...zones, general].some(b => b.valid))) throw bad();
   for (const band of [...zones, general]) {
     if (!band.valid) continue;
-    if (!finite(v.hrmax_bpm) || !finite(band.mean_hrmod_bpm) || band.mean_hrmod_bpm <= 0 ||
+    if (!finite(v.hrmax_bpm) || !finite(band.mean_hr_bpm) || band.mean_hr_bpm <= 0 ||
       !finite(band.mean_hrmax_percent) || !finite(band.mean_vflat_kmh) || band.mean_vflat_kmh <= 0 ||
-      Math.abs(band.mean_hrmax_percent - 100 * band.mean_hrmod_bpm / v.hrmax_bpm) > 1e-8 ||
+      Math.abs(band.mean_hrmax_percent - 100 * band.mean_hr_bpm / v.hrmax_bpm) > 1e-8 ||
       Math.abs(band.index! - band.mean_hrmax_percent / band.mean_vflat_kmh) > 1e-8) throw bad();
   }
   return { ...v, zones, general } as unknown as TrainabilityIndex;
@@ -114,6 +122,8 @@ export function parseTrainabilityHistory(v: unknown): TrainabilityHistory {
 export const indexNumber = (value: number | null, digits = 2) => value === null ? "—" : value.toLocaleString("bg-BG", { maximumFractionDigits: digits, minimumFractionDigits: digits });
 export const indexTime = (seconds: number) => `${Math.floor(Math.round(seconds) / 60)}:${String(Math.round(seconds) % 60).padStart(2, "0")}`;
 export const invalidLabel = (reason: string | null, minimumSeconds: number) => ({
+  HR_SIGNAL_SUSPECT: "Цялата тренировка е изключена: съмнителен пулс", INDEX_OUTLIER: "Цялата тренировка е изключена: отклонение на ТИ над 20%",
+  PAIRED_TIME_BELOW_MINIMUM: `Под ${minimumSeconds / 60} мин съпоставени пулс и скорост`,
   HR_TIME_BELOW_MINIMUM: `Под ${minimumSeconds / 60} мин HRmod`, SPEED_TIME_BELOW_MINIMUM: `Под ${minimumSeconds / 60} мин разпределени скорости`,
   HRMAX_MISSING: "Липсва HRmax", ZERO_SPEED: "Нулева средна скорост",
   ACTIVITY_BELOW_7MIN: "Активност под 7 мин", ACTIVITY_DURATION_MISSING: "Липсва продължителност",

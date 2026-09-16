@@ -219,12 +219,16 @@ def test_shared_zone_volume_keeps_tests_and_hr_mapping_sport_specific(monkeypatc
     def summaries(alias,keys):
         assert alias=="ath-test"
         requested.append(keys)
-        return {sport:{"trainability_index":{"hrmax_bpm":190,"zone_bounds_bpm":[100,125,145,160,175,190],
+        from apps.api.trainability import MODEL_VERSION,SCHEMA_VERSION
+        return {sport:{"activity_ref":sport,"trainability_index":{
+            "schema_version":SCHEMA_VERSION,"model_version":MODEL_VERSION,"comparison_key":"same",
+            "hrmax_bpm":190,"zone_bounds_bpm":[100,125,145,160,175,190],
+            "signal_quality":{"status":"PASSED_SCREEN","reason":None},
             "source_versions":{"vflat":"v-test"},"zones":[
-                {"name":zone,"valid":True,"hr_seconds":600,"mean_vflat_kmh":v,"mean_hrmod_bpm":hr}
+                {"name":zone,"valid":True,"hr_seconds":600,"index":100*hr/190/v}
                 for zone,v,hr in (("Z1",sports[sport][2]*.6,115),("Z2",sports[sport][2],135),
-                                  ("Z3",sports[sport][2]*1.2,152))]}}
-            for sport in keys}
+                                  ("Z3",sports[sport][2]*1.2,152))],
+            "general":{"name":"GENERAL","valid":False}}} for sport in keys}
     repo.trainability_summaries=summaries
     expected={"Z1":2400*7/history_days,"Z2":1800*7/history_days,"Z3":0,"Z4":0,"Z5":0}
     models=[]
@@ -235,9 +239,12 @@ def test_shared_zone_volume_keeps_tests_and_hr_mapping_sport_specific(monkeypatc
         assert model["volume_weekly_min"]==pytest.approx(expected)
         assert model["active_test_keys"]==[sport]
         assert model["prediction"]["speed_kmh"]==pytest.approx(speed)
-        assert model["prediction"]["estimated_hr_bpm"]==pytest.approx(135)
-        assert model["hr_speed_range_kmh"]==pytest.approx([speed*.6,speed*1.2])
-        assert requested[-1]==(sport,)
+        assert model["index_summary"]["Z2"]["index"]==pytest.approx(100*135/190/speed)
+        assert model["volume_position_basis"]=="EXPERT_DURATION"
+        hr_model=m.speed_view(repo,"ath-test",sport,hr_bpm=155)
+        inverse=m.speed_view(repo,"ath-test",sport,speed_kmh=hr_model["prediction"]["speed_kmh"])
+        assert inverse["prediction"]["estimated_hr_bpm"]==pytest.approx(155)
+        assert requested[-1]==tuple(sports)
     assert all(model["zone_corrections"]==models[0]["zone_corrections"] for model in models)
     assert models[0]["zone_corrections"]["Z1"]==pytest.approx(-.04 if history_days==40 else .1)
     assert calendar==original and repo.saved==[]

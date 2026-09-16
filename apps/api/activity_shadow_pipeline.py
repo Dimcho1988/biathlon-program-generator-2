@@ -445,7 +445,7 @@ def compute_activity_shadow(
         "input_hash": immutable_input["input_hash"],
         "configuration_fingerprint": configuration_fingerprint,
         "trainability_index": compute_trainability(
-            hrmod["timeseries"], vflat["timeseries"],
+            rows, vflat["timeseries"],
             zone_bounds_bpm=zone_bounds_bpm,
             hrmax_bpm=explicit_hrmax_bpm,
             activity_duration_s=_activity_duration_seconds(

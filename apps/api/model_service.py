@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 
 from biathlon import recovery_v2, speed_duration
+from .trainability_history import history_from_calendar, robust_mean
 from .model_schemas import RecoveryConfigInput, RecoveryHistoryV2, initial_settings
 from .oauth_store import PersistentStoreFailure
 from .speed_segments import segment_measurement
@@ -132,20 +133,21 @@ def save_test(repository,alias,body,actor):
     return ModelStore(repository).save(alias,"SPEED_TEST",key,payload,body.expected_revision,actor)
 
 
-def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,speed_kmh=None):
+def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,speed_kmh=None,hr_bpm=None):
+    from biathlon import hr_speed
     settings=repository.athlete_settings(alias)
     if settings is None: raise HTTPException(409,"Athlete settings are required")
     today=datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
     start=today-timedelta(days=90)
-    calendar=repository.active_activity_calendar(alias,start,today) or {}
-    activities=calendar.get("activities") or []
+    calendar=repository.active_activity_calendar(alias,date.min,today) or {"activities":[]}
+    activities=[a for a in (calendar.get("activities") or []) if a["local_date"]>=start.isoformat()]
     entries=[e for e in ModelStore(repository).entries(alias) if e["kind"]=="SPEED_TEST"]
     sports=sorted({r["sport"] for r in activities}|{e["payload"]["sport"] for e in entries})
     sport=sport or (sports[0] if sports else "Run")
     tests=[e["payload"] for e in entries if e["payload"].get("enabled") and e["payload"]["sport"]==sport
            and start.isoformat()<=e["payload"]["day"]<=today.isoformat()]
     versions={t.get("vflat_version") for t in tests}
-    warnings=["EXPERT_REFERENCE_NOT_POPULATION_VALIDATED", "HEART_RATE_ESTIMATE_FROM_RANK_INDEX"]
+    warnings=["EXPERT_REFERENCE_NOT_POPULATION_VALIDATED", "HEART_RATE_ESTIMATE_FROM_PAIRED_INDEX"]
     if len({(t.get("vflat_version"),t.get("vflat_config_version")) for t in tests})>1:
         tests=[]; warnings.append("INCOMPARABLE_MODEL_VERSIONS")
     try: curve=speed_duration.calibrated(tests)
@@ -154,32 +156,21 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     exploratory_count=sum(t.get("test_mode")=="EXPLORATORY" for t in tests)
     if exploratory_count:
         warnings.append("EXPLORATORY_CALIBRATION")
-    recent=[a for a in activities if a["sport"]==sport and a.get("local_date","") >= (today-timedelta(days=40)).isoformat()]
-    keys=tuple(a["latest_shadow_run_key"] for a in recent if a.get("latest_shadow_run_key"))
-    summaries=repository.trainability_summaries(alias,keys) if keys else {}
-    bands=[]
-    for value in summaries.values():
-        index=value.get("trainability_index") or {}
-        if index.get("hrmax_bpm")!=settings.hrmax_bpm or list(index.get("zone_bounds_bpm",[]))!=list(settings.zone_bounds_bpm): continue
-        if versions and index.get("source_versions",{}).get("vflat") not in versions: continue
-        bands += [b for b in index.get("zones",[]) if b.get("valid")]
-    points=[]
-    for zone in speed_duration.VOLUME_RANGES_MIN:
-        b=[b for b in bands if b["name"]==zone]
-        weight=sum(r["hr_seconds"] for r in b)
-        if weight:
-            points.append((sum(r["mean_vflat_kmh"]*r["hr_seconds"] for r in b)/weight,
-                sum(r["mean_hrmod_bpm"]*r["hr_seconds"] for r in b)/weight))
-    hr_fn=None
-    if len(points)>=2 and all(a[0]<b[0] and a[1]<b[1] for a,b in zip(points,points[1:])):
-        def estimate(v):
-            if v<=points[0][0]: return min(settings.hrmax_bpm,points[0][1]*v/points[0][0])
-            if v>=points[-1][0]: return min(settings.hrmax_bpm,points[-1][1]*v/points[-1][0])
-            for (v0,h0),(v1,h1) in zip(points,points[1:]):
-                if v0<=v<=v1:
-                    w=speed_duration.smoothstep((v-v0)/(v1-v0)); return h0+(h1-h0)*w
-        hr_fn=estimate
-    else: warnings.append("INSUFFICIENT_HR_SPEED_DATA")
+    history=history_from_calendar(repository,alias,calendar)
+    recent=[a for a in history if a["sport"]==sport and a["local_date"] >= (today-timedelta(days=40)).isoformat()]
+    indices={}
+    for zone in [*speed_duration.VOLUME_RANGES_MIN,"GENERAL"]:
+        values=[];weights=[]
+        for activity in recent:
+            index=activity.get("index")
+            if not index or index.get("hrmax_bpm")!=settings.hrmax_bpm or list(index.get("zone_bounds_bpm",[]))!=list(settings.zone_bounds_bpm):continue
+            if versions and index.get("source_versions",{}).get("vflat") not in versions:continue
+            for band in [*index["zones"],index["general"]]:
+                if band["name"]==zone and band["valid"]:
+                    values.append(band["index"]);weights.append(band["hr_seconds"])
+        indices[zone]={"index":robust_mean(values,weights) if values else None,"count":len(values),"seconds":sum(weights)}
+    admission={"activities":len(recent),"excluded":sum(a.get("index",{}).get("admission",{}).get("status")=="EXCLUDED" for a in recent if a.get("index")),
+               "refresh_required":sum(a["unavailable_reason"]=="REFRESH_REQUIRED" for a in recent)}
     source=(calendar.get("snapshot_payload") or {}).get("load_history") or {}
     first=max(date.fromisoformat(source.get("period_start",today.isoformat())),today-timedelta(days=40))
     last=min(date.fromisoformat(source.get("period_end",today.isoformat())),today-timedelta(days=1))
@@ -191,23 +182,32 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
         volumes={z:7*sum(r["equivalent_time_min"] for a in source.get("activities",[])
             if first.isoformat()<=a["date"]<=last.isoformat() for r in a["zones"] if r["zone"]==z)/n for z in volumes}
     corrections=[speed_duration.volume_correction(z,volumes[z]) for z in volumes]
-    centers=[(a+b)/2 for a,b in zip(settings.zone_bounds_bpm,settings.zone_bounds_bpm[1:])]
-    tuned,factor=speed_duration.adjusted(curve,tests,hr_fn,centers,corrections)
-    if factor<1 and hr_fn and tests and any(corrections): warnings.append("CORRECTION_REDUCED_FOR_MONOTONICITY")
+    centers=hr_speed.volume_duration_centers(settings.zone_bounds_bpm)
+    tuned,factor=speed_duration.adjusted(curve,tests,None,[],corrections,duration_centers=centers)
+    if factor<1 and tests and any(corrections): warnings.append("CORRECTION_REDUCED_FOR_MONOTONICITY")
+    predictor=hr_speed.Predictor(tuned,settings.zone_bounds_bpm,settings.hrmax_bpm,indices) if tests and settings.hrmax_bpm else None
     def prediction(t):
         v=tuned.speed(t)*3.6
-        hr=hr_fn(v) if hr_fn and points[0][0]<=v<=points[-1][0] else None
-        return {"duration_s":t,"speed_kmh":v,"distance_m":t*v/3.6,"estimated_hr_bpm":hr}
+        hr=None;meta={"hr_prediction_source":None,"hr_prediction_reason":None,"zone":None}
+        if predictor:
+            try:
+                hr=predictor.hr_for_duration(t);meta=predictor.metadata(hr)
+            except ValueError:pass
+        return {"duration_s":t,"speed_kmh":v,"distance_m":t*v/3.6,"estimated_hr_bpm":hr,**meta}
     output=None
     prediction_error=None
-    supplied=sum(v is not None for v in (duration_s,distance_m,speed_kmh))
+    supplied=sum(v is not None for v in (duration_s,distance_m,speed_kmh,hr_bpm))
     if supplied>1: raise HTTPException(422,"Choose one prediction input")
     if supplied:
         if not tests:
             prediction_error="MAXIMAL_TEST_REQUIRED"
         else:
             try:
-                t=duration_s if duration_s is not None else tuned.inverse(distance_m,distance=True) if distance_m is not None else tuned.inverse(speed_kmh/3.6)
+                if hr_bpm is not None:
+                    if predictor is None:raise ValueError("HR profile required")
+                    t=predictor.duration(hr_bpm)
+                else:
+                    t=duration_s if duration_s is not None else tuned.inverse(distance_m,distance=True) if distance_m is not None else tuned.inverse(speed_kmh/3.6)
                 output=prediction(t)
             except ValueError:
                 prediction_error="OUTSIDE_PREDICTION_RANGE"
@@ -220,4 +220,6 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
         "volume_scope":"ALL_SPORTS","volume_weekly_min":volumes,"history_days":n,"zone_corrections":dict(zip(volumes,corrections)),
         "correction_applied_fraction":factor,"critical_speed":speed_duration.critical_speed(tests),
         "prediction":output,"prediction_error":prediction_error,"warnings":warnings,"source_generation_id":calendar.get("generation_id"),
-        "source_revision":calendar.get("revision"),"hr_speed_range_kmh":[points[0][0],points[-1][0]] if hr_fn else None}
+        "source_revision":calendar.get("revision"),"hr_speed_range_kmh":list(predictor.speed_range) if predictor else None,
+        "hr_model":predictor.summary() if predictor else None,"index_summary":indices,"index_admission":admission,
+        "volume_position_basis":"EXPERT_DURATION"}

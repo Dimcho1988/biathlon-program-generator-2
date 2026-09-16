@@ -1,89 +1,66 @@
-# Trainability index, staging v2
+# Trainability index: paired raw HR and Vflat
 
-The index is an exploratory longitudinal descriptor, in percentage points of HRmax per (km/h).
-Lower values mean less relative modulated heart rate per allocated flat-equivalent speed. It is not a
-validated fitness or physiological threshold estimate.
+`trainability-index-v3` / `trainability_paired_raw_lag20_v3` replaces the rank-based
+v2 index. Old summaries are marked `REFRESH_REQUIRED`, never mixed into v3.
+The model version participates in the shadow configuration fingerprint. Refresh
+staging's analysis generation after deploying API, worker and web together.
 
-## Calculation contract
+## Pairing and zones
 
-- Consume the existing HRmod final and Vflat B65 outputs without changing them.
-  The previously deployed uphill increment multiplier of 1.5 remains in Vflat.
-- HR uses the model's own valid interval durations, retaining uncorrected waves.
-  Speed exclusions never remove HR time. Gaps retain each source's time semantics.
-- Speeds use active one-second intervals, existing Vflat validity, and the
-  unclipped, spatially smoothed grade supplied to Vflat. Exclude grades strictly
-  below -3%; retain exactly -3%. Do not add a second inertia correction.
-- Rank eligible speeds descending, weighted by duration. For each HR band,
-  let `p = HR seconds in band / all valid HR seconds`, and let `q` be the fraction
-  of valid HR time above that band. Allocate the speed-duration quantile interval
-  `[q, q+p]`. Split boundary intervals proportionally; never round sample counts.
-- Index = `(100 * duration-weighted mean HRmod / explicit HRmax)` divided by
-  duration-weighted mean allocated Vflat (km/h). Use percentage points (78, not
-  0.78). For HRmod 154, HRmax 178 and Vflat 20 the index is 4.3258426966.
-  Apply the same normalization to all zones and the independent general band.
-  HR and speed are independently
-  ranked distributions, not measurements necessarily taken at the same instant.
-- Z1–Z5 use the existing profile boundaries: lower inclusive, upper exclusive,
-  except the last upper bound inclusive. HR outside the zone range retains its
-  rank share. Invalid bands also retain their reserved speed shares.
-- The general index independently uses HRmod in `[0.75 HRmax, 0.92 HRmax]`, both
-  inclusive, skipping the speed share corresponding to HR above 92%. It is not
-  the arithmetic mean of the five zone indices.
+- Use independent Vflat B65 intervals and original HR observations.
+- For a speed interval's midpoint t, interpolate raw HR at t + 20 seconds.
+  The lag is elapsed time, not a number of samples. No end extrapolation.
+- Require continuous HR coverage through the lag window: no missing/invalid
+  observation (outside 30–300 bpm) and no gap greater than 10 seconds. HRmax is
+  normalization, not a sensor-validity cutoff.
+- Exclude speed intervals with missing/invalid speed, missing actual grade,
+  Vflat exclusion flags, dt > 10 s, or actual grade below −3%. Exactly −3% stays.
+  An excluded interval removes the whole HR–speed pair.
+- Assign each pair to the zone of its shifted raw HR. Lower boundaries are
+  inclusive, upper exclusive except the top of Z5. There is no speed sorting.
+- Time-weight both members by the eligible speed interval's duration.
+- TI = (100 × mean paired HR / explicit HRmax) / mean paired Vflat in km/h.
+  GENERAL independently uses 75–92% HRmax, inclusive, not mean zonal indices.
+- Require activity duration ≥ 7 min; paired time ≥ 7 min in Z1–Z4 and GENERAL,
+  ≥ 5 min in Z5. Compare unrounded durations. Null index means unavailable.
 
-## Validity and time
+This changes TI zone allocation only. Canonical load, HRmod wave correction,
+recovery and the total-volume load accounting retain their own definitions.
 
-All indices are null for activities shorter than 420 seconds. Exactly 420 seconds
-can qualify. Use the same provider-duration priority as the existing activity
-model: moving time for endurance, recording/elapsed time for strength; fall back
-to active stream duration when duration metadata is unavailable. This avoids
-counting long pauses as training time. Missing duration fails closed.
+## Whole-activity admission
 
-Each band independently needs a minimum of BOTH unrounded HR seconds and
-allocated eligible speed seconds, with a positive mean speed:
+1. Raw-HR screen: absolute change ≥15 bpm within ≤5 s, merging events within
+   15 s into one episode. At least three episodes excludes the entire workout
+   from TI (`HR_SIGNAL_SUSPECT`). This is a configurable-in-code screening
+   heuristic, not proof of sensor truth. A passed screen does not certify HR.
+2. Index screen: compare each valid zonal and GENERAL index with previously
+   accepted comparable same-sport workouts in the previous 40 calendar days.
+   At least seven earlier valid observations of that band are required. More
+   than ±20% from the reference excludes the whole workout (`INDEX_OUTLIER`),
+   including its other bands. Exactly ±20% stays. Different configuration keys,
+   future/equal-start activities and rejected activities do not form references.
+3. Reference and predictor aggregation are time weighted. With ≥7 observations,
+   use Huber location (1.5 × MAD scale); zero MAD uses the median. With fewer
+   observations, predictor aggregation uses the weighted mean and historical
+   admission explicitly says `INSUFFICIENT_HISTORY`.
 
-| Band | Minimum for each time |
-| --- | --- |
-| Z1, Z2, Z3, Z4, GENERAL | 420 seconds |
-| Z5 | 300 seconds |
+Admission reads the complete pinned active generation, then applies UI date
+filters. Thus narrowing the displayed dates does not alter admission. Decisions
+can change when the available generation/history changes; this is not persisted
+as a claim that the original sensor record is false. Source payloads remain
+immutable. The activity-detail summary displays the raw candidate and links to
+history for final participation; history and prediction share the same admission.
 
-These are cumulative valid times within one activity, including separate bouts.
-Exactly 420/300 seconds qualifies; 419.999/299.999 does not. A seven-minute
-activity alone does not qualify the general band: seven minutes must fall in
-75–92% HRmax, and its allocated speed share must also contain seven minutes.
-Invalid bands retain their percentile allocation before validation, so their
-fastest speeds are never reassigned to lower zones. Invalid indices are null,
-never zero. The UI explains the band-specific reason and does not draw a point.
+Both screens only affect TI/prediction. They do not remove workouts from total
+training volume and do not disable HRmod solely due to an index outlier.
 
-## Persistence and display
+Sports remain separate; source labels Walk and NordicSki are not automatically
+merged because not every walk is roller skiing. Comparable equipment and
+conditions remain an expert assumption within a source sport.
 
-`trainability-index-v2` / `trainability_rank_hrmax_v2` results are stored inside the existing immutable shadow
-JSON payload. The model version and activity duration join the cache fingerprint;
-duration is omitted from the comparison key. Source model versions, HRmax and
-zone bounds identify comparable configurations. No database migration is needed.
+## HR–speed prediction
 
-The protected `/api/v2/real/trainability` endpoint reads one active calendar
-generation, then projects only index summaries for its pinned immutable run keys
-and current athlete. It never selects the latest mutable result independently.
-Periods cover at most 90 days. Missing or older-model indices request a full
-refresh. The new API hides legacy summaries, and the new web parser also handles
-v1 summaries from a still-old API or a pinned activity detail by showing a refresh
-message. Never relabel or plot legacy bpm values on the normalized scale.
-
-`/trainability` separates sports and configurations. It offers general and Z1–Z5
-lines, activity details, a values table and date filtering. Invalid activities
-break lines; source configuration changes are not connected. The activity's
-HRmod/Vflat page displays the same stored summary.
-
-Deploy API and web to staging from the same reviewed integration commit before
-deploying the worker. Wait for the old worker to exit before submitting the full
-refresh; Render can briefly keep the old worker polling after the new one is live.
-Run the existing FULL_SYNC queue to recompute the history and atomically activate
-the new generation. Keep the v2-aware web/API when rolling the worker back because
-immutable v2 rows may already exist. No schema, RLS, or permission changes.
-Production and canonical load/recovery calculations are unaffected.
-
-HRmax normalization is not a validation of between-athlete fitness ranking.
-Comparison still requires comparable sport, technique, equipment, conditions and
-physiological zone definitions. With fixed HRmax, v2 is a constant rescaling of
-v1 for bands qualifying under both minimum-time rules. HRmax/zone changes remain
-separate comparison groups; do not present configuration changes as adaptation.
+See `RECOVERY_SPEED_MODELS.md`. One monotone HR–duration map is composed with the
+personal Vflat–duration curve for both forward and inverse predictions. Outputs
+identify index-based anchors versus expert midpoint fallbacks. No physiological
+validation or precise effort prescription is implied by numerical reversibility.

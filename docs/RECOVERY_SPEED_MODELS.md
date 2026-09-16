@@ -136,17 +136,45 @@ It changes neither canonical Tref nor Recovery and requires no snapshot rebuild.
 The UI supports older responses without `volume_scope` as same-sport volumes
 during deployment, then labels the shared basis explicitly once available.
 
-HR-speed mapping uses weighted valid zone summaries from the existing rank-based
-trainability index, with current HRmax/zones and same sport. It is an inferred
-mapping, not a validated paired HR–speed regression. HR predictions are returned
-only within the observed speed range, and not prescribed for short maximal work.
-The mapping permits zone-based volume adjustment; absent data leaves it neutral.
+HR–speed mapping now uses admitted paired-raw-HR v3 indices from the selected
+sport and current HR profile (see `TRAINABILITY_INDEX.md`). At each upper HR
+boundary of Z1–Z4, candidate Vflat = (100 × HR / HRmax) / zonal TI. Invert the
+already volume-adjusted personal curve to obtain candidate Tmax:
+
+| Zone upper boundary | Allowed Tmax | Fallback midpoint |
+| --- | --- | --- |
+| Z1 | 2–5 hours | 3 hours 30 minutes |
+| Z2 | 90–180 minutes | 135 minutes |
+| Z3 | 30–80 minutes | 55 minutes |
+| Z4 | 10–30 minutes | 20 minutes |
+
+Missing/out-of-range candidates use the midpoint, then Vflat from the curve.
+If independently chosen anchors violate decreasing duration, all four revert to
+ordered expert midpoints and expose `CONFLICTING_ZONE_ANCHORS`. Z5 starts at the
+shared upper-Z4 boundary; no independent Z5 top-duration constraint is invented.
+
+Within a zone T(HR) = Tupper / (1 − .03 × (HRupper − HR)), using the existing
+3 percentage points/bpm equivalence. For example, a Z3 upper time of 55 minutes
+at 160 bpm gives 64.706 minutes at 155 bpm. Short log-linear joins at lower zone
+boundaries ensure continuity between different anchor times; joins expand when
+needed for monotonicity. Z5 continues T4 / (1 + .03 × (HR − HR4)). The Z1 domain
+is truncated at the speed curve's maximum supported duration. Both directions
+use this same map, not separately clamped answers. Metadata distinguishes expert
+fallbacks from index-supported anchors. These are modeled effort guides, not
+validated individual HR measurements. Without a selected calibration test the
+model remains reference-only.
+
+Volume correction positions now use the four independent expert-duration
+midpoints above; Z5 continues from the shared Z4 boundary at its middle HR.
+Corrections interpolate over negative log duration and still vanish at measured
+tests. No predicted HR or TI is used to place volume corrections, avoiding a
+circular dependency. `volume_position_basis=EXPERT_DURATION` identifies this path.
 
 Critical speed fits `S=CS*t+D′` only to explicitly selected real tests of 2–20 min
 with at least twofold duration spread. Two tests are labeled preliminary; three
 or more expose distance RMSE. Nonpositive/unphysical fits are withheld. Distances
 are Vflat equivalents, so CS is correspondingly an estimate for flat conditions.
-Predictions support duration, equivalent distance or speed as the single input.
+Predictions support duration, equivalent distance, speed or HR as the single input.
 
 ### Test selection and preview
 
