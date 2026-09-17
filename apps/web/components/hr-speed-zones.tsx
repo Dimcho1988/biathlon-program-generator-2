@@ -35,7 +35,7 @@ export function HrSpeedZones({model,admission}:{model:HrModel;admission?:SpeedMo
         <td>{z.candidate_duration_s==null?"—":duration(z.candidate_duration_s)}</td>
         <td>{duration(z.duration_min_s)}–{duration(z.duration_max_s)}</td>
         <td>{duration(z.duration_s)}<br/>{n(z.speed_kmh)} км/ч</td>
-        <td>{z.source==="Z4_SHARED_BOUNDARY"?"Обща граница със Z4; не се изчислява отделно от ТИ за Z5.":<>
+        <td style={{whiteSpace:"normal",minWidth:220,maxWidth:300}}>{z.source==="Z4_SHARED_BOUNDARY"?"Обща граница със Z4; не се изчислява отделно от ТИ за Z5.":<>
           <strong>{z.source==="INDEX"?"Приет ТИ":"Среда на експертния диапазон"}</strong><br/>
           {candidateExplanation(z)}
           {z.reason==="CONFLICTING_ZONE_ANCHORS"&&<> Обща замяна заради конфликт между зоните.</>}
