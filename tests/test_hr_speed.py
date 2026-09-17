@@ -32,6 +32,23 @@ def test_conflicting_anchors_fall_back_together_to_preserve_order():
     p=make(indices)
     assert p.times==(12600,8100,3300,1200)
     assert all(a['reason']=='CONFLICTING_ZONE_ANCHORS' for a in p.anchors)
+    assert p.summary()['conflicting_zones']==[['Z1','Z2']]
+    assert p.anchors[0]['candidate_duration_s']==pytest.approx(7300)
+    assert all(a['candidate_reason']=='ACCEPTED' for a in p.anchors)
+
+def test_diagnostics_distinguish_curve_domain_from_zone_limits_without_extrapolation():
+    c=make().curve
+    for speed,reason,t in [(c.speed(c.times[-1])*3.6/2,'SPEED_BELOW_CURVE',None),
+                           (c.speed(c.times[0])*3.6*2,'SPEED_ABOVE_CURVE',None),
+                           (c.speed(900)*3.6,'DURATION_BELOW_MIN',900),
+                           (c.speed(6000)*3.6,'DURATION_ABOVE_MAX',6000),
+                           (c.speed(2700)*3.6,'ACCEPTED',2700)]:
+        a=make({'Z3':{'index':100*160/180/speed,'count':8}}).anchors[2]
+        assert a['candidate_speed_kmh']==pytest.approx(speed)
+        assert a['candidate_reason']==reason
+        assert a['candidate_duration_s']==(pytest.approx(t) if t else None)
+        assert a['duration_s']==pytest.approx(2700 if reason=='ACCEPTED' else 3300)
+    assert make().anchors[2]['candidate_reason']=='NO_VALID_INDEX'
 
 def test_randomized_profiles_are_continuous_monotone_and_bidirectionally_consistent():
     rng=random.Random(123)
