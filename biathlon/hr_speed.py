@@ -28,21 +28,29 @@ class Predictor:
             raise ValueError('Invalid HR profile')
         self.anchors=[]
         for i,(zone,limits) in enumerate(TMAX_RANGES_S.items()):
-            estimate=indices.get(zone,{}).get('index');candidate=None
+            estimate=indices.get(zone,{}).get('index');candidate=None;speed=None
+            candidate_reason='NO_VALID_INDEX'
             if estimate is not None and math.isfinite(estimate) and estimate>0:
                 speed=(100*self.bounds[i+1]/self.hrmax)/estimate
                 try:candidate=curve.inverse(speed/3.6)
                 except ValueError:pass
+                if candidate is None:
+                    candidate_reason='SPEED_BELOW_CURVE' if speed<curve.speed(curve.times[-1])*3.6 else 'SPEED_ABOVE_CURVE'
+                elif candidate<limits[0]:candidate_reason='DURATION_BELOW_MIN'
+                elif candidate>limits[1]:candidate_reason='DURATION_ABOVE_MAX'
+                else:candidate_reason='ACCEPTED'
             accepted=candidate is not None and limits[0]<=candidate<=limits[1]
             duration=candidate if accepted else sum(limits)/2
             self.anchors.append({'zone':zone,'hr_bpm':self.bounds[i+1],'duration_s':duration,
                                  'duration_min_s':limits[0],'duration_max_s':limits[1],
                                  'candidate_duration_s':candidate,'index':estimate,'count':indices.get(zone,{}).get('count',0),
+                                 'candidate_speed_kmh':speed,'candidate_reason':candidate_reason,
                                  'source':'INDEX' if accepted else 'EXPERT_MIDPOINT',
                                  'reason':None if accepted else 'NO_VALID_INDEX' if estimate is None else 'INDEX_OUTSIDE_DURATION_BOUNDS'})
         # Overlapping ranges cannot guarantee monotonic anchors independently.
         # Fall back to the agreed ordered midpoints rather than clip/reorder HR.
-        if any(a['duration_s']<=b['duration_s'] for a,b in zip(self.anchors,self.anchors[1:])):
+        self.conflicting_zones=[[a['zone'],b['zone']] for a,b in zip(self.anchors,self.anchors[1:]) if a['duration_s']<=b['duration_s']]
+        if self.conflicting_zones:
             for a in self.anchors:
                 a['duration_s']=(a['duration_min_s']+a['duration_max_s'])/2
                 a['source']='EXPERT_MIDPOINT';a['reason']='CONFLICTING_ZONE_ANCHORS'
@@ -99,8 +107,12 @@ class Predictor:
         return {'hr_prediction_source':anchor['source'],'hr_prediction_reason':anchor['reason'],'zone':f'Z{i+1}'}
     def summary(self):
         return {'model_version':VERSION,'hr_range_bpm':[self.min_hr,self.max_hr],
+                'curve_duration_range_s':[self.curve.times[0],self.curve.times[-1]],
+                'curve_speed_range_kmh':[self.curve.speed(self.curve.times[-1])*3.6,self.curve.speed(self.curve.times[0])*3.6],
+                'conflicting_zones':self.conflicting_zones,
                 'speed_range_kmh':list(self.speed_range),'equivalence_slope_percent_per_bpm':SLOPE*100,
                 'zones':self.anchors+[{'zone':'Z5','hr_bpm':self.bounds[4],'duration_s':self.times[3],
                                      'duration_min_s':TMAX_RANGES_S['Z4'][0],'duration_max_s':TMAX_RANGES_S['Z4'][1],
                                      'speed_kmh':self.curve.speed(self.times[3])*3.6,'source':'Z4_SHARED_BOUNDARY',
-                                     'index':None,'count':0,'reason':None,'candidate_duration_s':None}]}
+                                     'index':None,'count':0,'reason':None,'candidate_duration_s':None,
+                                     'candidate_speed_kmh':None,'candidate_reason':'Z4_SHARED_BOUNDARY'}]}

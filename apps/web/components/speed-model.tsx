@@ -3,6 +3,7 @@ import Link from "next/link";
 import {useState} from "react";
 import {useRouter} from "next/navigation";
 import {saveModel,type SpeedModel,type SpeedTest} from "../lib/models";
+import {HrSpeedZones} from "./hr-speed-zones";
 import {SpeedTestEditor} from "./speed-test-editor";
 import {clockTime} from "../lib/speed-tests";
 const n=(v:number)=>new Intl.NumberFormat("bg-BG",{maximumFractionDigits:2}).format(v);
@@ -47,7 +48,7 @@ export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minu
       {model.prediction?.hr_prediction_source === "EXPERT_MIDPOINT" && <p role="status">Използван е ориентир по времевите граници за {model.prediction.zone}: индексът липсва или не съответства на допустимата продължителност.</p>}
       <p>Пулсът и скоростта са моделни ориентири от ТИ и допустимите продължителности по зони. При липсващ или неподходящ индекс се използва средата на експертния диапазон. При кратки максимални усилия тази оценка не служи за дозиране. Дистанцията е еквивалент за равен терен.</p>
     </section>
-    {model.hr_model && <section className="history-section"><h2>Връзка пулс–скорост по зони</h2><p>Границите са за максимално непрекъснато усилие, не за продължителността на тренировката. Z1–Z4 са при горната пулсова граница; Z5 започва от общата граница със Z4.</p><div className="activity-table-wrap"><table><thead><tr><th>Зона</th><th>Пулс</th><th>Допустимо време</th><th>Използвано време</th><th>Vflat</th><th>Основание</th></tr></thead><tbody>{model.hr_model.zones.map(z=><tr key={z.zone}><th>{z.zone}</th><td>{n(z.hr_bpm)}</td><td>{time(z.duration_min_s)}–{time(z.duration_max_s)}</td><td>{time(z.duration_s)}</td><td>{n(z.speed_kmh)} км/ч</td><td>{z.source==="INDEX"?`ТИ · ${z.count} тренировки`:z.source==="Z4_SHARED_BOUNDARY"?"Обща граница със Z4":"Среда на експертния диапазон"}</td></tr>)}</tbody></table></div>{model.index_admission && <p>{model.index_admission.activities} скорошни тренировки · {model.index_admission.excluded} изключени от ТИ · {model.index_admission.refresh_required} изискват обновяване.</p>}</section>}
+    {model.hr_model && <HrSpeedZones model={model.hr_model} admission={model.index_admission}/>}
     <section className="history-section" id="speed-tests"><h2>Максимални тестове и контролни стартове</h2>
       <SpeedTestEditor model={model} canEdit={canEdit} activityRef={activityRef}/>
       <h3>Записани тестове · {model.sport}</h3>
