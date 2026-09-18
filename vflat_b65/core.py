@@ -14,10 +14,13 @@ import math
 import numpy as np
 import pandas as pd
 from scipy.signal import savgol_filter
+from typing import Any, Mapping
+
+from .terrain_correction import terrain_correction
 
 
-MODEL_VERSION = "vflat_b65_dynamic_v4_uphill120_memory170"
-CONFIG_VERSION = "vflat_b65_config_v4_uphill120_memory170"
+MODEL_VERSION = "vflat_b65_dynamic_v5_terrain_density"
+CONFIG_VERSION = "vflat_b65_config_v5_terrain_density"
 
 # Authoritative B65 multipliers supplied for the locked model.  Above +5%,
 # these anchors define the approved literature reference curve used by the
@@ -428,6 +431,8 @@ def _descent_grade_memory(
 def apply_vflat_b65(
     timeseries: pd.DataFrame,
     config: VFlatB65Config | None = None,
+    *,
+    activity_detail: Mapping[str, Any] | None = None,
 ) -> pd.DataFrame:
     """Calculate B65 once on prepared aligned rows without mutating input."""
     selected = config or VFlatB65Config()
@@ -515,4 +520,9 @@ def apply_vflat_b65(
         & (speed_kmh >= selected.min_speed_kmh)
         & (~out.turn_flag.astype(bool))
     )
+    correction = terrain_correction(out, activity_detail)
+    out["vflat_before_terrain_kmh"] = out["vflat_b65_kmh"]
+    out["vflat_b65_kmh"] *= correction["factor"]
+    out["vflat_delta_kmh"] = out["vflat_b65_kmh"] - speed_kmh
+    out.attrs["terrain_correction"] = correction
     return out
