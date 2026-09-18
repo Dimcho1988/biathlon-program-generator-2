@@ -14,6 +14,7 @@ import pandas as pd
 from apps.api.shadow_models.hrmod_v4 import SOURCE_COMMIT, run_hrmod_v4_shadow
 from apps.api.shadow_models.vflat_b65 import run_vflat_b65_shadow
 from apps.api.trainability import MODEL_VERSION as TRAINABILITY_MODEL_VERSION, compute_trainability
+from vflat_b65.terrain_correction import terrain_metadata
 from hrmod_lab.schemas import (
     CONFIG_VERSION as HRMOD_CONFIG_VERSION,
     MODEL_VERSION as HRMOD_MODEL_VERSION,
@@ -94,6 +95,7 @@ def _canonical_hash(payload: Any) -> str:
 def activity_shadow_configuration_fingerprint(
     zone_bounds_bpm: Sequence[int], explicit_hrmax_bpm: int | None,
     *, activity_duration_s: float | None = None,
+    activity_detail: Mapping[str, Any] | None = None,
 ) -> str:
     """Identify every setting that can change a derived shadow result.
 
@@ -117,6 +119,10 @@ def activity_shadow_configuration_fingerprint(
         "terrain_model_version": TERRAIN_MODEL_VERSION,
         "terrain_config_version": TERRAIN_CONFIG_VERSION,
     }
+    # Session metadata belongs in the cache fingerprint, not the comparison
+    # key: different routes remain comparable under the same model.
+    if activity_detail is not None:
+        payload["vflat_terrain_metadata"] = terrain_metadata(activity_detail)
     return _canonical_hash(payload)
 
 
@@ -334,7 +340,7 @@ def compute_activity_shadow(
         "MODEL_INPUTS", lambda: _model_inputs(detail, normalized)
     )
     vflat = _validated_stage(
-        "VFLAT", lambda: run_vflat_b65_shadow(vflat_frame)
+        "VFLAT", lambda: run_vflat_b65_shadow(vflat_frame, activity_detail=detail)
     )
     profile = _validated_stage(
         "PROFILE", lambda: _profile(zone_bounds_bpm, explicit_hrmax_bpm)
@@ -342,6 +348,7 @@ def compute_activity_shadow(
     configuration_fingerprint = activity_shadow_configuration_fingerprint(
         zone_bounds_bpm, explicit_hrmax_bpm,
         activity_duration_s=_activity_duration_seconds(detail, strength_activity=is_strength_activity(detail)),
+        activity_detail=detail,
     )
     if profile is None:
         hrmod = {
@@ -396,6 +403,7 @@ def compute_activity_shadow(
                     )
                 ),
                 "vflat_b65_kmh": _plain_number(vf_row.get("vflat_b65_kmh")),
+                "vflat_before_terrain_kmh": _plain_number(vf_row.get("vflat_before_terrain_kmh")),
                 "vflat_delta_kmh": _plain_number(vf_row.get("vflat_delta_kmh")),
                 "grade_vflat_actual_pct": _plain_number(vf_row.get("grade_raw_pct")),
                 "grade_vflat_effective_pct": _plain_number(vf_row.get("grade_effective_pct")),
@@ -482,6 +490,7 @@ def compute_activity_shadow(
             "hrmod": hrmod.get("diagnostics", {}),
             "vflat": {
                 "status": vflat.get("status"),
+                "terrain_correction": vflat.get("terrain_correction"),
                 "sprint_str": vflat.get("sprint_str_summary", {}),
             },
         },

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 import pandas as pd
 
@@ -23,9 +23,10 @@ def run_vflat_b65_shadow(
     *,
     config: VFlatB65Config | None = None,
     sprint_config: SprintSTRConfig | None = None,
+    activity_detail: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     selected = config or VFlatB65Config()
-    result = apply_vflat_b65(prepared_timeseries, selected)
+    result = apply_vflat_b65(prepared_timeseries, selected, activity_detail=activity_detail)
     sprint_detection = detect_sprint_str(result, sprint_config)
     rows = []
     previous_timestamp = previous_block = None
@@ -54,6 +55,7 @@ def run_vflat_b65_shadow(
                 "speed_raw_kmh": raw_speed_kmh,
                 "dt_s": dt_s if 0 < dt_s <= 1.0 else 0.0,
                 "vflat_b65_kmh": row.get("vflat_b65_kmh"),
+                "vflat_before_terrain_kmh": row.get("vflat_before_terrain_kmh"),
                 "vflat_delta_kmh": (
                     row.get("vflat_b65_kmh") - raw_speed_kmh
                     if raw_speed_kmh is not None and pd.notna(row.get("vflat_b65_kmh"))
@@ -83,6 +85,7 @@ def run_vflat_b65_shadow(
         "sprint_str_model_version": SPRINT_STR_MODEL_VERSION,
         "sprint_str_config_version": SPRINT_STR_CONFIG_VERSION,
         "config": selected.to_dict(),
+        "terrain_correction": result.attrs["terrain_correction"],
         "sprint_str_summary": sprint_detection.summary,
         "sprint_str_intervals": list(sprint_detection.intervals),
         "timeseries": rows,

@@ -103,7 +103,7 @@ def test_vflat_v4_calculated_grade_reaches_payload_and_segments():
     assert row["grade_vflat_effective_pct"] == pytest.approx(-0.2)
     assert row["grade_vflat_stationary_pct"] == pytest.approx(-0.2)
     assert derived["segments_15s"][2]["grade_vflat_effective_pct"] < 10.0
-    assert derived["vflat_model_version"] == "vflat_b65_dynamic_v4_uphill120_memory170"
+    assert derived["vflat_model_version"] == "vflat_b65_dynamic_v5_terrain_density"
 
 
 def test_immutable_input_is_minimal_and_original_normalized_data_is_unchanged() -> None:
