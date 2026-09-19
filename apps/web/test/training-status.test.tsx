@@ -316,10 +316,10 @@ describe("dashboard", () => {
     const html = renderToStaticMarkup(<Dashboard view="details" data={trainingStatusFixture} mode="fixture" />);
     expect(html).toContain("Демо данни");
     expect([...html.matchAll(/id="title-(Z[1-5])"/g)].map((match) => match[1])).toEqual(["Z1", "Z2", "Z3", "Z4", "Z5"]);
-    for (const label of ["Реално време", "Еквивалентно време", "Tref", "7/40", "Готовност за натоварване", "Дни до пълно възстановяване"]) expect(html).toContain(label);
-    expect(html).toContain("50,9 мин"); expect(html).toContain("97,8%"); expect(html).toContain("3,5 дни");
-    expect(html).toContain("Tref · 40 дни");
-    expect(html).toContain("7 × E40/ден · граници 10–20");
+    for (const label of ["Последен тренировъчен ден", "Приравнено · 7 дни", "Tref", "7/40", "Готовност за натоварване", "Дни до пълно възстановяване"]) expect(html).toContain(label);
+    expect(html).toContain("Няма налична дата на тренировката"); expect(html).not.toContain("50,9 мин"); expect(html).toContain("97,8%"); expect(html).toContain("3,5 дни");
+    expect(html).toContain("Технически параметри · Tref");
+    expect(html).toContain("граници 10–20 мин");
   });
   it("separates the signed-in account name from the technical analysis profile", () => {
     const html = renderToStaticMarkup(<Dashboard view="details" data={{ ...trainingStatusFixture, athlete_id: "ath-private-alias" }} mode="api" sessionActions accountDisplayName="Dimcho Mitsov" />);
@@ -357,7 +357,8 @@ describe("dashboard", () => {
     expect(html).toContain("STR · без двойно HR");
     expect(html).toContain("Коефициент 1,0");
     expect(html).toContain("Tref е 7 × средния дневен E");
-    expect(html).toContain("Tref · 10–20");
+    expect(html).toContain("Приравнено · седмица от 40 дни");
+    expect(html).toContain("Технически параметри · Tref");
   });
   it("renders weekly real volume without inventing a total effective load", () => {
     const html = renderToStaticMarkup(<Dashboard view="load" data={trainingStatusFixture} mode="fixture" volumeHistory={volumeHistoryFixture} />);
