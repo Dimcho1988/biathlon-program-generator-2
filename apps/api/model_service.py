@@ -15,10 +15,12 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 
 from biathlon import recovery_v2, speed_duration
-from .trainability_history import history_from_calendar, robust_mean, read_calendar
+from .trainability_history import HISTORY_DAYS, history_from_calendar, robust_mean, read_calendar, window_start
 from .model_schemas import RecoveryConfigInput, RecoveryHistoryV2, initial_settings
 from .oauth_store import PersistentStoreFailure
 from .speed_segments import segment_measurement
+
+SPEED_TEST_DAYS=90
 
 
 def enabled():
@@ -113,7 +115,7 @@ def save_test(repository,alias,body,actor):
     day=activity.get("local_date") or activity.get("date")
     settings=repository.athlete_settings(alias)
     today=datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
-    if not day or not (today-timedelta(days=90)).isoformat()<=day<=today.isoformat():
+    if not day or not window_start(today,SPEED_TEST_DAYS).isoformat()<=day<=today.isoformat():
         raise HTTPException(422,"Choose a test within the last 90 days")
     measured=segment_measurement(shadow,body.start_s,body.duration_s,body.test_mode)
     payload=body.model_dump(mode="json",exclude={"expected_revision","expected_source_run_key"})
@@ -127,7 +129,7 @@ def save_test(repository,alias,body,actor):
         and e["payload"].get("enabled") and e["payload"].get("sport")==payload["sport"]
         and (e["payload"].get("source")=="MANUAL" or
              (e["payload"].get("vflat_version"),e["payload"].get("vflat_config_version"))==(payload["vflat_version"],payload["vflat_config_version"]))
-        and e["payload"].get("day","") >= (today-timedelta(days=90)).isoformat()]
+        and window_start(today,SPEED_TEST_DAYS).isoformat()<=e["payload"].get("day","")<=today.isoformat()]
     if body.enabled:
         try: speed_duration.calibrated(comparable+[payload])
         except ValueError as exc: raise HTTPException(422,str(exc)) from exc
@@ -149,7 +151,7 @@ def save_manual_test(repository,alias,body,actor):
         settings=repository.athlete_settings(alias)
         if settings is None: raise HTTPException(409,"Athlete settings are required")
         today=datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
-        start=today-timedelta(days=90)
+        start=window_start(today,SPEED_TEST_DAYS)
         if not start<=body.day<=today:
             raise HTTPException(422,"Choose a test within the last 90 days")
         speed=body.speed_kmh if body.speed_kmh is not None else body.distance_m/body.duration_s*3.6
@@ -173,19 +175,20 @@ def save_manual_test(repository,alias,body,actor):
 
 def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,speed_kmh=None,hr_bpm=None):
     from biathlon import hr_speed
+    from .activity_shadow_pipeline import activity_shadow_configuration_fingerprint
+    from vflat_b65 import MODEL_VERSION as VFLAT_VERSION, CONFIG_VERSION as VFLAT_CONFIG
     settings=repository.athlete_settings(alias)
     if settings is None: raise HTTPException(409,"Athlete settings are required")
     today=datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
-    start=today-timedelta(days=90)
+    start=window_start(today,SPEED_TEST_DAYS)
     calendar=read_calendar(repository,alias,date.min,today) or {"activities":[]}
-    activities=[a for a in (calendar.get("activities") or []) if a["local_date"]>=start.isoformat()]
+    activities=[a for a in (calendar.get("activities") or []) if start.isoformat()<=a["local_date"]<=today.isoformat()]
     entries=[e for e in ModelStore(repository).entries(alias) if e["kind"]=="SPEED_TEST"]
     sports=sorted({r["sport"] for r in activities}|{e["payload"]["sport"] for e in entries})
     sport=sport or (sports[0] if sports else "Run")
     tests=[e["payload"] for e in entries if e["payload"].get("enabled") and e["payload"]["sport"]==sport
            and start.isoformat()<=e["payload"]["day"]<=today.isoformat()]
     imported=[t for t in tests if t.get("source")!="MANUAL"]
-    versions={t.get("vflat_version") for t in imported}
     warnings=["EXPERT_REFERENCE_NOT_POPULATION_VALIDATED", "HEART_RATE_ESTIMATE_FROM_PAIRED_INDEX"]
     if len({(t.get("vflat_version"),t.get("vflat_config_version")) for t in imported})>1:
         tests=[]; warnings.append("INCOMPARABLE_MODEL_VERSIONS")
@@ -196,20 +199,41 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     if exploratory_count:
         warnings.append("EXPLORATORY_CALIBRATION")
     history=history_from_calendar(repository,alias,calendar)
-    recent=[a for a in history if a["sport"]==sport and a["local_date"] >= (today-timedelta(days=40)).isoformat()]
+    index_start=window_start(today)
+    recent=[a for a in history if a["sport"]==sport and index_start.isoformat()<=a["local_date"]<=today.isoformat()]
+    comparison_key=activity_shadow_configuration_fingerprint(settings.zone_bounds_bpm,settings.hrmax_bpm)
+    # Imported Vflat tests are frozen measurements. A config change can alter
+    # speed even when its public model version stays the same. Manual flat tests
+    # have no Vflat dependency and remain compatible with the current index.
+    tests_match_index=all(t.get("source")=="MANUAL" or
+        (t.get("vflat_version"),t.get("vflat_config_version"))==(VFLAT_VERSION,VFLAT_CONFIG) for t in tests)
+    compatible=[];incompatible=0
+    for activity in recent:
+        index=activity.get("index")
+        if not index or index.get("admission",{}).get("status")!="ACCEPTED":continue
+        if (not tests_match_index or index.get("hrmax_bpm")!=settings.hrmax_bpm
+            or list(index.get("zone_bounds_bpm",[]))!=list(settings.zone_bounds_bpm)
+            or index.get("comparison_key")!=comparison_key
+            or index.get("source_versions",{}).get("vflat")!=VFLAT_VERSION):
+            incompatible+=1;continue
+        compatible.append(activity)
+    if incompatible or not tests_match_index:warnings.append("INCOMPARABLE_INDEX_CONFIGURATION")
     indices={}
+    used_dates=[]
+    for activity in compatible:
+        if any(b["valid"] for b in [*activity["index"]["zones"],activity["index"]["general"]]):
+            used_dates.append(activity["local_date"])
     for zone in [*speed_duration.VOLUME_RANGES_MIN,"GENERAL"]:
         values=[];weights=[]
-        for activity in recent:
-            index=activity.get("index")
-            if not index or index.get("hrmax_bpm")!=settings.hrmax_bpm or list(index.get("zone_bounds_bpm",[]))!=list(settings.zone_bounds_bpm):continue
-            if versions and index.get("source_versions",{}).get("vflat") not in versions:continue
+        for activity in compatible:
+            index=activity["index"]
             for band in [*index["zones"],index["general"]]:
                 if band["name"]==zone and band["valid"]:
                     values.append(band["index"]);weights.append(band["hr_seconds"])
         indices[zone]={"index":robust_mean(values,weights) if values else None,"count":len(values),"seconds":sum(weights)}
     admission={"activities":len(recent),"excluded":sum(a.get("index",{}).get("admission",{}).get("status")=="EXCLUDED" for a in recent if a.get("index")),
-               "refresh_required":sum(a["unavailable_reason"]=="REFRESH_REQUIRED" for a in recent)}
+               "refresh_required":sum(a["unavailable_reason"]=="REFRESH_REQUIRED" for a in recent),
+               "used":len(used_dates),"incompatible":incompatible}
     source=(calendar.get("snapshot_payload") or {}).get("load_history") or {}
     first=max(date.fromisoformat(source.get("period_start",today.isoformat())),today-timedelta(days=40))
     last=min(date.fromisoformat(source.get("period_end",today.isoformat())),today-timedelta(days=1))
@@ -252,6 +276,8 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
                 prediction_error="OUTSIDE_PREDICTION_RANGE"
     return {"schema_version":"speed-model-v1","model_version":speed_duration.VERSION,"sport":sport,"sports":sports,
         "test_window":{"start":start.isoformat(),"end":today.isoformat()},
+        "index_window":{"start":index_start.isoformat(),"end":today.isoformat(),"days":HISTORY_DAYS,
+                        "last_activity_date":max(used_dates) if used_dates else None},
         "activities":[{"activity_ref":a["activity_ref"],"name":a.get("name") or a["sport"],"day":a.get("local_date"),"sport":a["sport"],"elapsed_s":a.get("elapsed_time_s")} for a in activities],
         "status":"CALIBRATED" if tests else "REFERENCE_ONLY","tests":entries,"active_test_count":len(tests),
         "exploratory_test_count":exploratory_count,

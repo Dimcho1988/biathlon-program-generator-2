@@ -147,7 +147,7 @@ def test_manual_critical_speed_and_expired_disabling():
     assert not repo.writes[-1]["p_payload"]["enabled"]
 
 
-@pytest.mark.parametrize("offset", [-91, 1])
+@pytest.mark.parametrize("offset", [-91, -90, 1])
 def test_manual_test_date_must_be_in_recent_window(offset):
     repo = Repository()
     with pytest.raises(HTTPException) as error:

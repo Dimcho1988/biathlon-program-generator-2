@@ -39,6 +39,7 @@ export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minu
       {exploratory&&<div className="speed-onboarding"><strong>Пробна калибрация</strong><p>В кривата участват записи от комплексни тренировки с по-ниско покритие. Прогнозата е за тестване на модела. Критичната скорост използва само стандартните максимални тестове.</p></div>}
       {model.warnings.includes("CONFLICTING_TESTS")&&<p role="alert">Избраните тестове си противоречат. Изключете несъпоставимия тест; индивидуалните прогнози са спрени.</p>}
       {model.warnings.includes("INCOMPARABLE_MODEL_VERSIONS")&&<p role="alert">Тестовете използват различни версии на Vflat. Изключете или преизчислете старите тестове, преди да ги сравнявате.</p>}
+      {model.warnings.includes("INCOMPARABLE_INDEX_CONFIGURATION")&&<p role="status">Има несъпоставими резултати след промяна на настройките. Обновете активностите и при нужда запишете тестовете отново. При липса на подходящ ТИ връзката пулс–скорост използва експертните ориентири.</p>}
       <figure className="history-chart"><svg viewBox="0 0 920 320" role="img" aria-label={exploratory?"Пробна скорост според продължителността":"Средна максимална скорост според продължителността"}>
         {[0,.25,.5,.75,1].map(f=><g key={f}><line x1="48" x2="900" y1={y(vmax*f)} y2={y(vmax*f)} stroke="currentColor" opacity=".12"/><text x="40" y={y(vmax*f)+4} textAnchor="end" fill="currentColor" fontSize="12">{n(vmax*f)}</text></g>)}
         <polyline points={model.points.map(p=>`${x(p.duration_s)},${y(p.speed_kmh)}`).join(" ")} fill="none" stroke="var(--accent,#41b88c)" strokeWidth="3"/>
@@ -52,7 +53,7 @@ export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minu
       {model.prediction?.hr_prediction_source === "EXPERT_MIDPOINT" && <p role="status">Използван е ориентир по времевите граници за {model.prediction.zone}: индексът липсва или не съответства на допустимата продължителност.</p>}
       <p>Пулсът и скоростта са моделни ориентири от ТИ и допустимите продължителности по зони. При липсващ или неподходящ индекс се използва средата на експертния диапазон. При кратки максимални усилия тази оценка не служи за дозиране. Дистанцията е еквивалент за равен терен.</p>
     </section>
-    {model.hr_model && <HrSpeedZones model={model.hr_model} admission={model.index_admission}/>}
+    {model.hr_model && <HrSpeedZones model={model.hr_model} admission={model.index_admission} indexWindow={model.index_window}/>}
     <section className="history-section" id="speed-tests"><h2>Максимални тестове и контролни стартове</h2>
       {canEdit&&<div className="model-controls" role="group" aria-label="Източник на теста">
         <button type="button" className="action-button secondary" aria-pressed={testSource==="ACTIVITY"} onClick={()=>setTestSource("ACTIVITY")}>От записана активност</button>
