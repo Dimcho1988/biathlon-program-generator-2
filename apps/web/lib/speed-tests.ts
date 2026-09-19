@@ -1,4 +1,4 @@
-import type {SpeedModel} from "./models";
+import type {SpeedModel, SpeedTest} from "./models";
 export type SpeedTestMode = "STRICT"|"EXPLORATORY";
 export const testModeLabel = (mode:SpeedTestMode) => mode==="EXPLORATORY"?"Пробен · комплексна тренировка · праг 70%":"Стандартен · максимален тест · праг 98%";
 
@@ -14,6 +14,26 @@ export function parseClock(value:string):number|null {
   if (values.at(-1)! >= 60 || parts.length === 3 && values[1] >= 60) return null;
   const seconds = values.reduce((sum,v) => sum * 60 + v, 0);
   return Number.isSafeInteger(seconds) && seconds <= 216316 ? seconds : null;
+}
+export function parseManualClock(value:string):number|null {
+  const parts=value.trim().replace(",",".").split(":");
+  if(parts.length<2||parts.length>3||parts.slice(0,-1).some(p=>!/^\d+$/.test(p))||!/^\d+(\.\d{1,3})?$/.test(parts.at(-1)!))return null;
+  const values=parts.map(Number);
+  if(values.at(-1)!>=60||parts.length===3&&values[1]>=60)return null;
+  const seconds=values.reduce((sum,v)=>sum*60+v,0);
+  return Number.isFinite(seconds)&&seconds>=10.8&&seconds<=43516?seconds:null;
+}
+export function manualClockTime(seconds:number):string {
+  const totalMs=Math.round(seconds*1000),minutes=Math.floor(totalMs/60000);
+  const remainder=String((totalMs%60000)/1000).split(".");
+  return `${minutes}:${remainder[0].padStart(2,"0")}${remainder[1]?","+remainder[1]:""}`;
+}
+export function manualTestPayload(test:SpeedTest,enabled:boolean) {
+  const p=test.payload;
+  return {test_id:p.test_id,name:p.name,day:p.day,sport:p.sport,duration_s:p.duration_s,
+    ...(p.measurement_input==="SPEED"?{speed_kmh:p.speed_kmh}:{distance_m:p.distance_m}),
+    maximal:true,comparable:true,flat_terrain:true,conditions:p.conditions,use_for_cs:p.use_for_cs,
+    enabled,expected_revision:test.revision};
 }
 export function testActivities(activities:SpeedModel["activities"], sport:string, query="") {
   const search = query.trim().toLocaleLowerCase("bg");
@@ -55,6 +75,7 @@ export function speedTestError(detail:unknown):string {
     "Exploratory calibration requires at least 70% eligible Vflat coverage":"За пробна калибрация са нужни поне 70% подходящи данни. Изберете участък с по-добро покритие.",
     "Outside the calibrated duration range":"Продължителността е извън обхвата на модела.",
     "Outside the activity range":"Краят на участъка е извън записа. Проверете началото и края.",
+    "Resolve incompatible Vflat test versions first":"Има включени тестове от различни версии на Vflat. Първо изключете или преизчислете старите тестове.",
   };
-  return typeof detail === "string" && messages[detail] || "Проверете участъка и потвържденията. Записването не завърши.";
+  return typeof detail === "string" && messages[detail] || "Проверете времето, дистанцията или скоростта и потвържденията. Записването не завърши.";
 }

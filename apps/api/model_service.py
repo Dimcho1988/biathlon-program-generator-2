@@ -125,12 +125,50 @@ def save_test(repository,alias,body,actor):
         "source_run_key":row.get("shadow_run_key")})
     comparable=[e["payload"] for e in entries if e["kind"]=="SPEED_TEST" and e["entry_key"]!=key
         and e["payload"].get("enabled") and e["payload"].get("sport")==payload["sport"]
-        and (e["payload"].get("vflat_version"),e["payload"].get("vflat_config_version"))==(payload["vflat_version"],payload["vflat_config_version"])
+        and (e["payload"].get("source")=="MANUAL" or
+             (e["payload"].get("vflat_version"),e["payload"].get("vflat_config_version"))==(payload["vflat_version"],payload["vflat_config_version"]))
         and e["payload"].get("day","") >= (today-timedelta(days=90)).isoformat()]
     if body.enabled:
         try: speed_duration.calibrated(comparable+[payload])
         except ValueError as exc: raise HTTPException(422,str(exc)) from exc
     return ModelStore(repository).save(alias,"SPEED_TEST",key,payload,body.expected_revision,actor)
+
+
+def save_manual_test(repository,alias,body,actor):
+    key=f"manual_{body.test_id.hex}"
+    store=ModelStore(repository)
+    entries=store.entries(alias)
+    old=next((e for e in entries if e["kind"]=="SPEED_TEST" and e["entry_key"]==key),None)
+    if (body.expected_revision or not body.enabled) and old is None:
+        raise HTTPException(404,"Saved test is unavailable")
+    if old and old["payload"].get("source")!="MANUAL":
+        raise HTTPException(409,"Model input changed; reload before editing")
+    if not body.enabled:
+        payload={**old["payload"],"enabled":False}
+    else:
+        settings=repository.athlete_settings(alias)
+        if settings is None: raise HTTPException(409,"Athlete settings are required")
+        today=datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
+        start=today-timedelta(days=90)
+        if not start<=body.day<=today:
+            raise HTTPException(422,"Choose a test within the last 90 days")
+        speed=body.speed_kmh if body.speed_kmh is not None else body.distance_m/body.duration_s*3.6
+        payload=body.model_dump(mode="json",exclude={"expected_revision"})
+        payload.update({"schema_version":"speed-test-v1","source":"MANUAL","test_mode":"STRICT",
+            "start_s":0,"speed_kmh":speed,
+            "distance_m":body.distance_m if body.distance_m is not None else speed*body.duration_s/3.6,
+            "measurement_input":"DISTANCE" if body.distance_m is not None else "SPEED",
+            "distance_basis":"MEASURED_FLAT","coverage_percent":None})
+        comparable=[e["payload"] for e in entries if e["kind"]=="SPEED_TEST" and e["entry_key"]!=key
+            and e["payload"].get("enabled") and e["payload"].get("sport")==body.sport
+            and start.isoformat()<=e["payload"].get("day","")<=today.isoformat()]
+        imported=[t for t in comparable if t.get("source")!="MANUAL"]
+        if len({(t.get("vflat_version"),t.get("vflat_config_version")) for t in imported})>1:
+            raise HTTPException(422,"Resolve incompatible Vflat test versions first")
+        try: speed_duration.calibrated(comparable+[payload])
+        except ValueError as exc: raise HTTPException(422,str(exc)) from exc
+    result=store.save(alias,"SPEED_TEST",key,payload,body.expected_revision,actor)
+    return {**result,"entry_key":key}
 
 
 def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,speed_kmh=None,hr_bpm=None):
@@ -146,9 +184,10 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     sport=sport or (sports[0] if sports else "Run")
     tests=[e["payload"] for e in entries if e["payload"].get("enabled") and e["payload"]["sport"]==sport
            and start.isoformat()<=e["payload"]["day"]<=today.isoformat()]
-    versions={t.get("vflat_version") for t in tests}
+    imported=[t for t in tests if t.get("source")!="MANUAL"]
+    versions={t.get("vflat_version") for t in imported}
     warnings=["EXPERT_REFERENCE_NOT_POPULATION_VALIDATED", "HEART_RATE_ESTIMATE_FROM_PAIRED_INDEX"]
-    if len({(t.get("vflat_version"),t.get("vflat_config_version")) for t in tests})>1:
+    if len({(t.get("vflat_version"),t.get("vflat_config_version")) for t in imported})>1:
         tests=[]; warnings.append("INCOMPARABLE_MODEL_VERSIONS")
     try: curve=speed_duration.calibrated(tests)
     except ValueError:
@@ -212,6 +251,7 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
             except ValueError:
                 prediction_error="OUTSIDE_PREDICTION_RANGE"
     return {"schema_version":"speed-model-v1","model_version":speed_duration.VERSION,"sport":sport,"sports":sports,
+        "test_window":{"start":start.isoformat(),"end":today.isoformat()},
         "activities":[{"activity_ref":a["activity_ref"],"name":a.get("name") or a["sport"],"day":a.get("local_date"),"sport":a["sport"],"elapsed_s":a.get("elapsed_time_s")} for a in activities],
         "status":"CALIBRATED" if tests else "REFERENCE_ONLY","tests":entries,"active_test_count":len(tests),
         "exploratory_test_count":exploratory_count,

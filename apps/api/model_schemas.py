@@ -1,5 +1,6 @@
 """Versioned editable scientific inputs and Recovery v2 response contract."""
 from datetime import date
+from uuid import UUID
 from typing import Literal, Annotated
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from biathlon.recovery_v2 import ZONES, defaults
@@ -50,6 +51,37 @@ class SpeedTestInput(Strict):
                 raise ValueError("Confirm exploratory calibration")
             if self.maximal or self.use_for_cs:
                 raise ValueError("Exploratory records are not continuous maximal or critical-speed tests")
+        return self
+
+class ManualSpeedTestInput(Strict):
+    test_id: UUID
+    name: str = Field(min_length=1,max_length=120)
+    day: date
+    sport: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_]{0,39}$")
+    duration_s: float = Field(ge=10.8,le=43516,strict=True)
+    distance_m: float | None = Field(default=None,gt=0,le=1000000,strict=True)
+    speed_kmh: float | None = Field(default=None,gt=0,le=150,strict=True)
+    maximal: Literal[True]
+    comparable: Literal[True]
+    flat_terrain: Literal[True]
+    enabled: bool = Field(default=True,strict=True)
+    use_for_cs: bool = Field(default=False,strict=True)
+    conditions: str = Field(min_length=3,max_length=400)
+    expected_revision: int = Field(default=0,ge=0,strict=True)
+
+    @model_validator(mode="after")
+    def measurements(self):
+        self.name=self.name.strip()
+        self.conditions=self.conditions.strip()
+        if not self.name or len(self.conditions)<3:
+            raise ValueError("Describe the manual test and its conditions")
+        if (self.distance_m is None)==(self.speed_kmh is None):
+            raise ValueError("Enter either distance or speed")
+        speed=self.speed_kmh if self.speed_kmh is not None else self.distance_m/self.duration_s*3.6
+        if not 0 < speed <= 150:
+            raise ValueError("Manual test speed must be between 0 and 150 km/h")
+        if self.use_for_cs and not 120 <= self.duration_s <= 1200:
+            raise ValueError("Critical speed tests must last 2 to 20 minutes")
         return self
 
 class Baseline(Strict):
