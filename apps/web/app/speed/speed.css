@@ -1,0 +1,22 @@
+.speed-page{max-width:1200px;margin:auto;padding:24px}.model-controls{display:flex;align-items:end;flex-wrap:wrap;gap:16px;margin:16px 0}.model-controls label,.model-test-form>label{display:flex;flex-direction:column;gap:7px}.model-controls input,.model-controls select,.model-test-form input:not([type=checkbox]),.model-test-form select{font:inherit;color:inherit;background:transparent;border:1px solid #8886;border-radius:8px;padding:10px;max-width:100%}.model-test-form{display:grid;gap:14px;max-width:800px}.model-test-form>label:has(input[type=checkbox]){display:block}.model-prediction{display:flex;flex-wrap:wrap;gap:28px;margin:24px 0}.model-prediction dd{font-size:1.6rem;margin:6px 0}.speed-page .history-section{margin:24px 0}.speed-page table{width:100%}.speed-page th,.speed-page td{text-align:left;padding:12px}.speed-page svg{width:100%;height:auto}.speed-page figcaption{opacity:.75}
+.speed-onboarding{border:1px solid var(--accent);border-radius:14px;padding:20px;margin:20px 0;background:color-mix(in srgb,var(--accent) 6%,transparent)}
+.speed-test-editor{border:1px solid #8885;border-radius:14px;padding:20px;margin:20px 0}
+.speed-activity-choice{flex:1;min-width:min(100%,280px)}
+.speed-activity-choice select{width:100%}
+.speed-test-editor .model-controls input,.speed-test-editor .model-controls select{background:var(--surface,#fff);color:var(--text,#142633)}
+.speed-test-editor fieldset{border:1px solid #8885;border-radius:10px;padding:18px;display:grid;gap:16px}
+.speed-test-editor fieldset label:first-of-type{display:grid;gap:8px}
+.speed-test-editor fieldset input:not([type=checkbox]){width:100%;box-sizing:border-box}
+.speed-test-editor fieldset:disabled{opacity:.55}
+.speed-range-controls{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:18px 0}
+.speed-range-controls label,.speed-curve-readout label{display:grid;gap:8px}
+.speed-range-controls input,.speed-curve-readout input{width:100%;accent-color:var(--accent)}
+.speed-curve-readout{display:grid;gap:12px;margin:14px 0}
+.speed-segment-chart{margin:16px 0}
+.speed-segment-chart svg{cursor:crosshair}
+.speed-selection-result{border-left:3px solid var(--accent);padding:0 20px;margin:24px 0}
+.speed-page [aria-pressed=true]{outline:2px solid var(--accent);outline-offset:2px}
+.speed-page button:disabled{cursor:not-allowed;opacity:.5}
+.speed-page #speed-tests{scroll-margin-top:24px}
+.speed-page input:focus-visible,.speed-page select:focus-visible,.speed-page button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+@media(max-width:640px){.speed-page{padding:16px}.speed-test-editor{padding:14px}.speed-range-controls{grid-template-columns:1fr}.speed-test-editor .model-controls>label{width:100%}.speed-test-editor .model-controls input{box-sizing:border-box;width:100%}.speed-selection-result{padding:0 12px}.speed-page h1{font-size:clamp(2rem,8vw,3.4rem)}}

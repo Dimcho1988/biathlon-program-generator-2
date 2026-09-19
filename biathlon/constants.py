@@ -7,13 +7,23 @@ from copy import deepcopy
 COMPONENTS = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"]
 AEROBIC_COMPONENTS = COMPONENTS[:5]
 
-FIXED_AEROBIC_TREF_MINUTES = {
-    "Z1": 300.0,
-    "Z2": 180.0,
-    "Z3": 70.0,
-    "Z4": 20.0,
-    "Z5": 20.0,
+# Tref is athlete-specific inside fixed expert limits.  The upper value is
+# also the deterministic cold-start value until at least one completed
+# calendar day is available.  These limits are model parameters, not
+# user-editable profile settings.
+AEROBIC_TREF_BOUNDS_MINUTES = {
+    "Z1": (180.0, 300.0),
+    "Z2": (90.0, 180.0),
+    "Z3": (40.0, 70.0),
+    "Z4": (10.0, 20.0),
+    "Z5": (10.0, 20.0),
 }
+AEROBIC_TREF_INITIAL_MINUTES = {
+    component: upper
+    for component, (_lower, upper) in AEROBIC_TREF_BOUNDS_MINUTES.items()
+}
+TREF_HISTORY_WINDOW_DAYS = 40
+FIXED_STRENGTH_TREF_MINUTES = 56.0
 
 # Силата остава един физиологичен компонент в модела 7/40, но реалното
 # време се съхранява по четири вида. Всеки вид има собствен фиксиран

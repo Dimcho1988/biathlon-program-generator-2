@@ -44,7 +44,7 @@ def test_normalization_rejects_all_rest_days_safely():
 
 
 def test_double_threshold_can_activate_when_rules_are_met():
-    bundle = generate_demo_bundle(history_days=120)
+    bundle = generate_demo_bundle(history_days=120, reference_date=date(2026, 6, 20))
     prefs = bundle["planning_preferences"]["A"]
     prefs.update(
         {
@@ -125,7 +125,11 @@ def test_annual_goal_factor_is_bounded_and_history_weighted():
 def test_annual_goal_changes_plan_but_never_rewrites_history():
     from copy import deepcopy
 
-    base = generate_demo_bundle(seed=20250315, history_days=150)
+    base = generate_demo_bundle(
+        seed=20250315,
+        history_days=150,
+        reference_date=date(2026, 6, 20),
+    )
     low_bundle = deepcopy(base)
     high_bundle = deepcopy(base)
     low_bundle["planning_preferences"]["A"]["annual_target_hours"] = 500.0

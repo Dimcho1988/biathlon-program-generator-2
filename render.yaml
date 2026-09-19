@@ -1,0 +1,120 @@
+# Production services follow the dedicated production branch and deploy only after explicit approval.
+envVarGroups:
+  - name: onflows-preview-shared
+    envVars:
+      - key: ONFLOWS_SERVICE_TOKEN
+        generateValue: true
+
+services:
+  - type: web
+    name: onflows-api-preview
+    plan: free
+    region: frankfurt
+    autoDeployTrigger: "off"
+    runtime: python
+    branch: production
+    buildFilter:
+      paths:
+        - apps/api/**
+        - biathlon/**
+        - hrmod_lab/**
+        - intervals_inspector/**
+        - vflat_b65/**
+        - requirements-api.txt
+        - render.yaml
+    buildCommand: pip install -r requirements-api.txt
+    startCommand: uvicorn apps.api.application:app --host 0.0.0.0 --port $PORT --no-access-log
+    healthCheckPath: /health
+    envVars:
+      - fromGroup: onflows-preview-shared
+      # Manually managed shared analysis secrets. API and worker must consume
+      # the same existing values; never redeclare or regenerate them per service.
+      - fromGroup: onflows-preview-analysis-shared
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: INTERVALS_CLIENT_ID
+        sync: false
+      - key: INTERVALS_CLIENT_SECRET
+        sync: false
+      - key: INTERVALS_REDIRECT_URI
+        value: https://onflows-api-preview.onrender.com/api/v2/integrations/intervals/callback
+      - key: INTERVALS_WEBHOOK_SECRET
+        sync: false
+      - key: OAUTH_STATE_SECRET
+        generateValue: true
+      - key: ONFLOWS_ATHLETE_ALIAS
+        sync: false
+      - key: ONFLOWS_HR_ZONE_BOUNDS
+        sync: false
+      - key: ONFLOWS_ATHLETE_TIMEZONE
+        sync: false
+      - key: ONFLOWS_INTRAZONE_VERSION
+        value: intra_zone_linear_v1
+      - key: ONFLOWS_TREF_VERSION
+        value: tref-bounded-40d-expert-v1
+      - key: ONFLOWS_RECOVERY_VERSION
+        value: main-load-recovery-v1
+      - key: ONFLOWS_HISTORY_DAYS
+        value: "90"
+      - key: ONFLOWS_WEB_BASE_URL
+        value: https://onflows-web-preview.onrender.com
+  - type: worker
+    name: onflows-sync-worker-preview
+    plan: starter
+    region: frankfurt
+    autoDeployTrigger: "off"
+    runtime: python
+    branch: production
+    numInstances: 1
+    maxShutdownDelaySeconds: 300
+    buildFilter:
+      paths:
+        - apps/api/**
+        - biathlon/**
+        - hrmod_lab/**
+        - intervals_inspector/**
+        - vflat_b65/**
+        - requirements-api.txt
+        - render.yaml
+    buildCommand: pip install -r requirements-api.txt
+    startCommand: python -m apps.api.sync_worker --lease-seconds 300
+    envVars:
+      - fromGroup: onflows-preview-analysis-shared
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: ONFLOWS_INTRAZONE_VERSION
+        value: intra_zone_linear_v1
+      - key: ONFLOWS_TREF_VERSION
+        value: tref-bounded-40d-expert-v1
+      - key: ONFLOWS_RECOVERY_VERSION
+        value: main-load-recovery-v1
+      - key: ONFLOWS_HISTORY_DAYS
+        value: "90"
+  - type: web
+    name: onflows-web-preview
+    plan: free
+    region: frankfurt
+    autoDeployTrigger: "off"
+    runtime: node
+    branch: production
+    rootDir: apps/web
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    envVars:
+      - fromGroup: onflows-preview-shared
+      - key: NODE_VERSION
+        value: 22.14.0
+      - key: ONFLOWS_DATA_MODE
+        value: api
+      - key: ONFLOWS_API_RESOURCE
+        value: real
+      - key: ONFLOWS_API_BASE_URL
+        sync: false
+      - key: ONFLOWS_PROFILE_MODE
+        value: multi
+      - key: ONFLOWS_SESSION_SECRET
+        generateValue: true
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+        sync: false
