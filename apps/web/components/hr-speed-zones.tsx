@@ -18,10 +18,12 @@ function candidateExplanation(z:Zone){
     default:return z.reason==="NO_VALID_INDEX"?"Няма валиден зонален ТИ.":z.source==="INDEX"?"В допустимия диапазон.":"Подробната причина още не е налична.";
   }
 }
-export function HrSpeedZones({model,admission}:{model:HrModel;admission?:SpeedModel["index_admission"]}){
+export function HrSpeedZones({model,admission,indexWindow}:{model:HrModel;admission?:SpeedModel["index_admission"];indexWindow?:SpeedModel["index_window"]}){
   const conflict=model.zones.some(z=>z.reason==="CONFLICTING_ZONE_ANCHORS");
+  const day=(value:string)=>value.split("-").reverse().join(".");
   return <section className="history-section">
     <h2>Връзка пулс–скорост по зони</h2>
+    {indexWindow&&<p>ТИ за избрания спорт: последните {indexWindow.days} календарни дни ({day(indexWindow.start)}–{day(indexWindow.end)}), включително днес. {indexWindow.last_activity_date?`Последна включена тренировка: ${day(indexWindow.last_activity_date)}.`:"Няма подходящ индекс в този период; използват се експертните ориентири."}</p>}
     <p>Границите са за максимално непрекъснато усилие, не за продължителността на тренировката. Z1–Z4 са при горната пулсова граница; Z5 започва от общата граница със Z4.</p>
     <p>Първо: пулс + ТИ → скорост → максимално време по персоналната крива. След проверката: приетото време → използвана скорост.</p>
     {model.curve_duration_range_s && model.curve_speed_range_kmh && <p>Обхват на кривата: {n(model.curve_speed_range_kmh[0])}–{n(model.curve_speed_range_kmh[1])} км/ч · {duration(model.curve_duration_range_s[0])}–{duration(model.curve_duration_range_s[1])}. Извън него не екстраполираме време.</p>}
@@ -42,6 +44,6 @@ export function HrSpeedZones({model,admission}:{model:HrModel;admission?:SpeedMo
         </>}</td>
       </tr>)}</tbody>
     </table></div>
-    {admission&&<p>{admission.activities} скорошни тренировки · {admission.excluded} изключени от ТИ · {admission.refresh_required} изискват обновяване.</p>}
+    {admission&&<p>{admission.activities} скорошни тренировки{admission.used!==undefined&&<> · {admission.used} с използван индекс</>} · {admission.excluded} изключени от ТИ · {admission.refresh_required} изискват обновяване{Boolean(admission.incompatible)&&<> · {admission.incompatible} с несъпоставими настройки</>}.</p>}
   </section>;
 }

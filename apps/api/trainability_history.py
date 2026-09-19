@@ -9,6 +9,11 @@ MIN_REFERENCE_ACTIVITIES=7
 MAX_INDEX_DEVIATION=.20
 
 
+def window_start(end,days=HISTORY_DAYS):
+    """Inclusive calendar window: today plus the preceding days - 1 dates."""
+    return end-timedelta(days=days-1)
+
+
 def robust_mean(values,weights):
     x=np.asarray(values,float);w=np.asarray(weights,float)
     if not len(x) or np.any(~np.isfinite(x)) or np.any(x<=0) or np.any(~np.isfinite(w)) or np.any(w<=0): raise ValueError("Invalid index observations")
@@ -32,7 +37,7 @@ def admit_activities(activities):
         if index is None:continue
         if index.get('model_version')!=MODEL_VERSION or index.get('schema_version')!=SCHEMA_VERSION:
             row['index']=None;row['unavailable_reason']='REFRESH_REQUIRED';continue
-        first=(date.fromisoformat(row['local_date'])-timedelta(days=HISTORY_DAYS)).isoformat()
+        first=window_start(date.fromisoformat(row['local_date'])).isoformat()
         previous=[r for r in accepted if r['sport']==row['sport'] and r['index']['comparison_key']==index['comparison_key']
                   and first<=r['local_date']<=row['local_date'] and r['start_at_utc']<row['start_at_utc']]
         flags=[];checked=[]

@@ -192,6 +192,8 @@ class SpeedStore(Store):
 
 @pytest.mark.parametrize("history_days",[7,40])
 def test_shared_zone_volume_keeps_tests_and_hr_mapping_sport_specific(monkeypatch,history_days):
+    from apps.api.activity_shadow_pipeline import activity_shadow_configuration_fingerprint
+    from vflat_b65 import MODEL_VERSION as VF_VERSION, CONFIG_VERSION as VF_CONFIG
     class FixedDatetime(datetime):
         @classmethod
         def now(cls,tz=None): return NOW.astimezone(tz)
@@ -201,14 +203,14 @@ def test_shared_zone_volume_keeps_tests_and_hr_mapping_sport_specific(monkeypatc
     repo=SpeedStore()
     activities=[];loads=[]
     for i,(sport,(z1,z2,speed)) in enumerate(sports.items()):
-        day=(first if i==0 else today-timedelta(days=1)).isoformat()
+        day=(max(first,today-timedelta(days=39)) if i==0 else today-timedelta(days=1)).isoformat()
         activities.append({"activity_ref":sport,"sport":sport,"local_date":day,"latest_shadow_run_key":sport})
         loads.append({"date":day,"sport":sport,"zones":[
             {"zone":zone,"equivalent_time_min":q,"effective_load":99999}
             for zone,q in (("Z1",z1),("Z2",z2),("STR",99999))]})
         repo.rows.append({"kind":"SPEED_TEST","entry_key":sport,"revision":1,"payload":{
             "sport":sport,"day":day,"enabled":True,"duration_s":600,"speed_kmh":speed,
-            "vflat_version":"v-test","vflat_config_version":"cfg"}})
+            "vflat_version":VF_VERSION,"vflat_config_version":VF_CONFIG}})
     for day in (first-timedelta(days=1),today,today+timedelta(days=1)):
         loads.append({"date":day.isoformat(),"sport":"Run","zones":[{"zone":"Z1","equivalent_time_min":99999}]})
     calendar={"activities":activities,"snapshot_payload":{"load_history":{
@@ -221,10 +223,11 @@ def test_shared_zone_volume_keeps_tests_and_hr_mapping_sport_specific(monkeypatc
         requested.append(keys)
         from apps.api.trainability import MODEL_VERSION,SCHEMA_VERSION
         return {sport:{"activity_ref":sport,"trainability_index":{
-            "schema_version":SCHEMA_VERSION,"model_version":MODEL_VERSION,"comparison_key":"same",
+            "schema_version":SCHEMA_VERSION,"model_version":MODEL_VERSION,
+            "comparison_key":activity_shadow_configuration_fingerprint([100,125,145,160,175,190],190),
             "hrmax_bpm":190,"zone_bounds_bpm":[100,125,145,160,175,190],
             "signal_quality":{"status":"PASSED_SCREEN","reason":None},
-            "source_versions":{"vflat":"v-test"},"zones":[
+            "source_versions":{"vflat":VF_VERSION},"zones":[
                 {"name":zone,"valid":True,"hr_seconds":600,"index":100*hr/190/v}
                 for zone,v,hr in (("Z1",sports[sport][2]*.6,115),("Z2",sports[sport][2],135),
                                   ("Z3",sports[sport][2]*1.2,152))],
