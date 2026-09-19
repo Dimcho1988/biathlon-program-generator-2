@@ -16,7 +16,7 @@ export async function POST(request:Request){
     let input;
     try{input=JSON.parse(text);}catch{return NextResponse.json({error:"Невалидни настройки."},{status:422});}
     const {kind,payload}=input||{};
-    if(!["recovery","speed-test"].includes(kind)||!payload||typeof payload!=="object")return NextResponse.json({error:"Невалидни настройки."},{status:422});
+    if(!["recovery","speed-test","speed-test-manual"].includes(kind)||!payload||typeof payload!=="object")return NextResponse.json({error:"Невалидни настройки."},{status:422});
     const base=process.env.ONFLOWS_API_BASE_URL,token=process.env.ONFLOWS_SERVICE_TOKEN;
     if(!base||!token||!access.actorUserId)throw new Error("Missing configuration");
     await waitForApi(base);
@@ -25,7 +25,7 @@ export async function POST(request:Request){
       body:JSON.stringify(payload),signal:AbortSignal.timeout(75000)});
     if(!result.ok){
       const body=await result.json().catch(()=>null);
-      const error=kind==="speed-test"&&[404,409,422].includes(result.status)?speedTestError(body?.detail):result.status===409?"Данните са променени. Презаредете.":result.status===422?"Проверете стойностите на настройките.":"Записването временно не е достъпно.";
+      const error=kind.startsWith("speed-test")&&[404,409,422].includes(result.status)?speedTestError(body?.detail):result.status===409?"Данните са променени. Презаредете.":result.status===422?"Проверете стойностите на настройките.":"Записването временно не е достъпно.";
       return NextResponse.json({error},{status:[404,409,422].includes(result.status)?result.status:503});
     }
     return NextResponse.json(await result.json());

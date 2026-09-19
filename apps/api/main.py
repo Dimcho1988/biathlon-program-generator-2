@@ -98,7 +98,7 @@ from .training_status import build_demo_training_status
 from .response_monitoring import DailyReport, SessionReport, ResponseBlock, OptionalTest
 from . import response_service
 from . import model_service
-from .model_schemas import RecoveryConfigInput, SpeedTestInput, RecoveryHistoryV2
+from .model_schemas import RecoveryConfigInput, SpeedTestInput, ManualSpeedTestInput, RecoveryHistoryV2
 
 app = FastAPI(title="onFlows API", version="1.0.0")
 logger = logging.getLogger(__name__)
@@ -159,6 +159,19 @@ def save_speed_test(body: SpeedTestInput,
     if actor is None: raise HTTPException(401,"Actor session is required")
     try:
         return model_service.save_test(_repository(),alias,body,actor)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503,"Speed test could not be saved") from exc
+
+
+@app.put("/api/v2/athlete/models/speed-test-manual")
+def save_manual_speed_test(body: ManualSpeedTestInput,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None):
+    alias = _model_alias(authorization, athlete_alias)
+    if actor is None: raise HTTPException(401,"Actor session is required")
+    try:
+        return model_service.save_manual_test(_repository(),alias,body,actor)
     except PersistentStoreFailure as exc:
         raise HTTPException(503,"Speed test could not be saved") from exc
 

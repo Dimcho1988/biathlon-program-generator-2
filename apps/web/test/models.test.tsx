@@ -62,4 +62,12 @@ describe("profile-scoped model writes",()=>{
     vi.stubGlobal("fetch",vi.fn().mockResolvedValue(Response.json({detail:"changed"},{status:409})));
     expect((await POST(request())).status).toBe(409);expect(fetch).toHaveBeenCalledTimes(1);
   });
+  it("routes manual tests through the same verified profile and edit permissions",async()=>{
+    const manual=()=>new Request("http://internal/api/athlete/models",{method:"POST",headers:{origin:"https://web.example.test","x-forwarded-host":"web.example.test","x-forwarded-proto":"https","Content-Type":"application/json"},body:JSON.stringify({kind:"speed-test-manual",payload:{test_id:"test"}})});
+    expect((await POST(manual())).status).toBe(200);
+    expect(fetch).toHaveBeenCalledWith(new URL("https://api.example.test/api/v2/athlete/models/speed-test-manual"),expect.objectContaining({headers:expect.objectContaining({"X-OnFlows-Athlete-Alias":"ath-test","X-OnFlows-Actor-Id":"athlete"})}));
+    vi.mocked(fetch).mockClear();
+    vi.mocked(currentAuthorizedAthlete).mockResolvedValue({...owner,canEditPlan:false});
+    expect((await POST(manual())).status).toBe(403);expect(fetch).not.toHaveBeenCalled();
+  });
 });
