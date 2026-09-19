@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { DataMode } from "../lib/api";
 import type { CompletedWork } from "../lib/completed-work";
 import type { LoadHistory } from "../lib/load-history";
-import { TREF_BOUNDS_MINUTES, type TrainingStatus, type ZoneTrainingStatus } from "../lib/training-status";
+import { type TrainingStatus, type ZoneTrainingStatus } from "../lib/training-status";
 import { LoadHistorySection } from "./load-history-section";
 import { CompletedWorkSection } from "./completed-work-section";
 import type { RecoveryHistory } from "../lib/recovery-history";
@@ -16,20 +16,15 @@ import { SyncActionForm } from "./sync-action-form";
 import { roleLabel, type AccountRole } from "../lib/account-access";
 import { DASHBOARD_VIEWS, dashboardHref, type DashboardViewKey } from "../lib/dashboard-navigation";
 import { StatusOverview } from "./status-overview";
+import { equivalentWindow, latestTrainingDay, displayDate } from "../lib/dashboard-periods";
+import { VolumePeriodNote } from "./volume-period-note";
+import { TrefDetails } from "./tref-details";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
 const decimal = (value: number) => number.format(value);
 const date = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "2-digit", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
 const timestamp = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC", timeZoneName: "short" }).format(new Date(value));
 
-const metrics: Array<[keyof ZoneTrainingStatus, string, (value: number) => string]> = [
-  ["raw_time_min", "Реално време", (value) => `${decimal(value)} мин`],
-  ["equivalent_time_min", "Еквивалентно време", (value) => `${decimal(value)} мин`],
-  ["tref_min", "Tref · 40 дни", (value) => `${decimal(value)} мин`],
-  ["status_7_40", "7/40", decimal],
-  ["recovery_readiness_percent", "Готовност за натоварване", (value) => `${decimal(value)}%`],
-  ["recovery_days_to_full", "Дни до пълно възстановяване", (value) => `${decimal(value)} дни`],
-];
 
 export function Dashboard({
   view = "overview",
@@ -82,6 +77,11 @@ export function Dashboard({
   athleteDisplayName?: string | null;
   notice?: string;
 }) {
+  const latest = loadHistory ? latestTrainingDay(loadHistory) : null;
+  const short = loadHistory ? equivalentWindow(loadHistory, 7) : null;
+  const long = loadHistory ? equivalentWindow(loadHistory, 40) : null;
+  const recoveryV2 = recoveryHistory?.schema_version === "recovery-history-v2" ? recoveryHistory : null;
+  const recoveryDate = recoveryV2?.as_of ?? recoveryHistory?.period_end ?? data.as_of;
   const qualityScore = data.data_quality.latest_activity_quality_score;
   const syncBusy = Boolean(syncState && syncInProgress(syncState));
   return (
@@ -109,11 +109,26 @@ export function Dashboard({
           </section>
         </details>}
 
-        {view === "details" && <section className="zones-section" aria-labelledby="zones-title">
-          <div className="section-heading"><div><p className="section-kicker">Z1—Z5</p><h2 id="zones-title">Статус по зони</h2></div><p>Последна активност и текущ модел на възстановяване</p></div>
-          {data.zones.length === 0 ? <div className="empty"><h3>Няма зонални данни</h3><p>API отговорът е валиден, но не съдържа зони за този анализ.</p></div> :
-            <div className="zone-list">{data.zones.map((zone) => <ZoneCard key={zone.zone} zone={zone} recoveryV2={recoveryHistory?.schema_version === "recovery-history-v2"} />)}</div>}
-        </section>}
+        {view === "details" && <>
+          <section className="history-section" aria-labelledby="latest-day-title">
+            <div className="section-heading"><div><p className="section-kicker">Извършено натоварване</p><h2 id="latest-day-title">Последен тренировъчен ден</h2></div><p>{latest ? `${displayDate(latest.day)} · ${latest.activities.length} ${latest.activities.length === 1 ? "активност" : "активности"}` : "Няма налична дата на тренировката"}</p></div>
+            <p className="muted-copy">Всички обработени активности за посочената дата. Приравнените минути са към горната пулсова граница на зоната, без влияние от другите зони.</p>
+            {latest ? <>
+              <div className="activity-table-wrap"><table><thead><tr><th>Зона</th><th>Реално време</th><th>Приравнено време</th></tr></thead><tbody>{latest.zones.map((z) => <tr key={z.zone}><th>{z.zone}</th><td>{decimal(z.raw)} мин</td><td>{decimal(z.equivalent)} мин</td></tr>)}</tbody></table></div>
+              {latest.strength > 0 && <p>Силова тренировка STR: {decimal(latest.strength)} мин; отделно от Z1–Z5.</p>}
+              {latest.limited && <p className="muted-copy">Има активност с ограничено пулсово покритие; минутите по зони може да са непълни.</p>}
+            </> : <p className="history-unavailable">Няма история за показване на тренировъчния ден. Не приписваме недатирани стойности на днешната дата.</p>}
+          </section>
+          <section className="zones-section" aria-labelledby="zones-title">
+            <div className="section-heading"><div><p className="section-kicker">Z1—Z5</p><h2 id="zones-title">Текущо състояние по зони</h2></div><p>Готовност към {displayDate(recoveryDate)} · натоварване до {displayDate(loadHistory?.period_end ?? data.as_of)}</p></div>
+            <p className="muted-copy">Готовността отчита остатъчната умора от предходните тренировки. Срокът е прогноза без ново натоварване, с дневна точност; 0 дни означава достигнат праг, а не липса на умора.</p>
+            {recoveryV2?.source_stale && <p className="history-unavailable">Тренировъчната история изостава от датата на прогнозата. Приема се, че след последните данни няма ново натоварване.</p>}
+            {loadHistory ? <VolumePeriodNote history={loadHistory} /> : <p className="muted-copy">Историята за обема не е налична.</p>}
+            {data.zones.length === 0 ? <div className="empty"><h3>Няма зонални данни</h3><p>Няма зони за този анализ.</p></div> :
+              <div className="zone-list">{data.zones.map((zone) => <ZoneCard key={zone.zone} zone={zone} recoveryV2={Boolean(recoveryV2)} volume7={short?.totals?.[zone.zone]} volume40={long?.weekly?.[zone.zone]} />)}</div>}
+            <p className="muted-copy">7/40 сравнява ефективния товар E със стабилизираща база. Приравненият обем е отделен показател.</p>
+          </section>
+        </>}
 
         {view === "report" && <CompletedWorkSection report={completedWork} message={completedWorkMessage} selectable={mode === "api"} availablePeriodStart={loadHistory?.period_start} availablePeriodEnd={loadHistory?.period_end} />}
         {view === "load" && <><LoadHistorySection history={loadHistory} message={loadHistoryMessage} /><VolumeHistorySection history={volumeHistory} message={volumeHistoryMessage} /></>}
@@ -121,6 +136,7 @@ export function Dashboard({
 
         {view === "details" && <details id="model-metadata" className="metadata">
           <summary><span><small>Техническа информация</small>Метаданни на модела</span><span className="chevron" aria-hidden="true">⌄</span></summary>
+          <TrefDetails zones={data.zones} strength={loadHistory?.strength?.summary.tref_min} />
           <dl>
             {accountDisplayName && <div><dt>Акаунт</dt><dd>{accountDisplayName}</dd></div>}
             {accountRoles.length > 0 && <div><dt>Работни роли</dt><dd>{accountRoles.map(roleLabel).join(" · ")}</dd></div>}
@@ -142,12 +158,16 @@ export function Dashboard({
   );
 }
 
-function ZoneCard({ zone, recoveryV2 = false }: { zone: ZoneTrainingStatus; recoveryV2?: boolean }) {
-  const [trefMin, trefMax] = TREF_BOUNDS_MINUTES[zone.zone];
-  return (
-    <article className={`zone-card ${zone.zone.toLowerCase()}`} aria-labelledby={`title-${zone.zone}`}>
-      <div className="zone-id"><span className="zone-mark" aria-hidden="true" /><div><p>Зона</p><h3 id={`title-${zone.zone}`}>{zone.zone}</h3></div></div>
-      <dl>{metrics.map(([key, label, format]) => <div key={key}><dt>{key === "recovery_days_to_full" && recoveryV2 ? "Дни до 90% готовност" : label}</dt><dd>{format(zone[key] as number)}</dd>{key === "tref_min" && <small className="tref-bounds">7 × E40/ден · граници {trefMin}–{trefMax}</small>}</div>)}</dl>
-    </article>
-  );
+function ZoneCard({ zone, recoveryV2 = false, volume7, volume40 }: { zone: ZoneTrainingStatus; recoveryV2?: boolean; volume7?: number; volume40?: number }) {
+  const volume = (v: number | undefined) => v === undefined ? "Няма данни" : `${decimal(v)} мин`;
+  return <article className={`zone-card current-zone-card ${zone.zone.toLowerCase()}`} aria-labelledby={`title-${zone.zone}`}>
+    <div className="zone-id"><span className="zone-mark" aria-hidden="true" /><div><p>Зона</p><h3 id={`title-${zone.zone}`}>{zone.zone}</h3></div></div>
+    <dl>
+      <div><dt>Приравнено · 7 дни</dt><dd>{volume(volume7)}</dd></div>
+      <div><dt>Приравнено · седмица от 40 дни</dt><dd>{volume(volume40)}</dd></div>
+      <div><dt>7/40 · ефективен товар</dt><dd>{decimal(zone.status_7_40)}</dd></div>
+      <div><dt>Готовност за натоварване</dt><dd>{decimal(zone.recovery_readiness_percent)}%</dd></div>
+      <div><dt>{recoveryV2 ? "Дни до 90% готовност" : "Дни до пълно възстановяване"}</dt><dd>{decimal(zone.recovery_days_to_full)} дни</dd></div>
+    </dl>
+  </article>;
 }

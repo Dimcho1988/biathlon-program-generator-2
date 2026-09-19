@@ -1,3 +1,4 @@
+import { durationHms } from "../lib/duration-format";
 import type { CompletedWork } from "../lib/completed-work";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
@@ -7,7 +8,7 @@ const date = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "2-digit
 export function CompletedWorkSection({ report, message, selectable = false, availablePeriodStart, availablePeriodEnd }: { report: CompletedWork | null; message?: string; selectable?: boolean; availablePeriodStart?: string; availablePeriodEnd?: string }) {
   if (!report) return message ? (
     <section className="completed-work-section" aria-labelledby="completed-work-title">
-      <div className="section-heading"><div><p className="section-kicker">Запазен snapshot</p><h2 id="completed-work-title">Отчет за извършеното натоварване</h2></div></div>
+      <div className="section-heading"><div><p className="section-kicker">Извършено натоварване</p><h2 id="completed-work-title">Отчет за извършеното натоварване</h2></div></div>
       <p className="history-unavailable">{message}</p>
     </section>
   ) : null;
@@ -26,21 +27,22 @@ export function CompletedWorkSection({ report, message, selectable = false, avai
         <button className="action-button secondary" type="submit">Покажи периода</button>
       </form>}
 
+      <p className="report-note">Всички продължителности са във формат ч:мм:сс. Приравненото време е към горната пулсова граница на зоната; ефективният товар E е отделна моделна величина.</p>
       <div className="report-totals">
-        <dl><div><dt>Продължителност на активностите</dt><dd>{decimal(report.totals.activity_duration_min)} мин</dd></div><div><dt>HR-зонирано реално време</dt><dd>{decimal(report.totals.zoned_hr_time_min)} мин</dd></div></dl>
+        <dl><div><dt>Продължителност на активностите</dt><dd>{durationHms(report.totals.activity_duration_min)}</dd></div><div><dt>HR-зонирано реално време</dt><dd>{durationHms(report.totals.zoned_hr_time_min)}</dd></div></dl>
         {report.quality.missing_duration_activities > 0 && <p className="quality-limited">{report.quality.missing_duration_activities} активности са без надеждна обща продължителност и не са заместени с предполагаема стойност.</p>}
       </div>
 
       <div className="report-table-wrap"><table>
         <caption>Натоварване по пулсови зони</caption>
         <thead><tr><th>Зона</th><th>Реално време</th><th>Еквивалентно време</th><th>Ефективен товар E</th></tr></thead>
-        <tbody>{report.zones.map((zone) => <tr key={zone.zone}><th>{zone.zone}</th><td>{decimal(zone.raw_time_min)} мин</td><td>{decimal(zone.equivalent_time_min)} мин</td><td>{decimal(zone.effective_load)}</td></tr>)}</tbody>
+        <tbody>{report.zones.map((zone) => <tr key={zone.zone}><th>{zone.zone}</th><td>{durationHms(zone.raw_time_min)}</td><td>{durationHms(zone.equivalent_time_min)}</td><td>{decimal(zone.effective_load)}</td></tr>)}</tbody>
       </table></div>
 
       <div className="report-table-wrap"><table>
         <caption>По вид активност от Intervals</caption>
         <thead><tr><th>Етикет от източника</th><th>Активности</th><th>Продължителност</th><th>HR-зонирано време</th></tr></thead>
-        <tbody>{report.sports.length > 0 ? report.sports.map((sport) => <tr key={sport.sport}><th>{sport.sport}</th><td>{sport.activities_count}</td><td>{decimal(sport.activity_duration_min)} мин</td><td>{decimal(sport.zoned_hr_time_min)} мин</td></tr>) : <tr><td colSpan={4}>Няма моделирани активности в избрания период.</td></tr>}</tbody>
+        <tbody>{report.sports.length > 0 ? report.sports.map((sport) => <tr key={sport.sport}><th>{sport.sport}</th><td>{sport.activities_count}</td><td>{durationHms(sport.activity_duration_min)}</td><td>{durationHms(sport.zoned_hr_time_min)}</td></tr>) : <tr><td colSpan={4}>Няма моделирани активности в избрания период.</td></tr>}</tbody>
       </table></div>
       <p className="report-note">Видовете активности са показани с точните етикети от Intervals. Те не са автоматично интерпретирани като научна класификация на тренировъчните средства.</p>
     </section>
