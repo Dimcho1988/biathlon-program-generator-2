@@ -1,3 +1,5 @@
+import { getManagementProfile } from "../../lib/management-server";
+import "../management/management.css";
 import { ErrorState } from "../../components/error-state";
 import { PlanningProfileForm } from "../../components/planning-profile-form";
 import { currentAuthorizedAthlete } from "../../lib/account-access";
@@ -40,16 +42,18 @@ export default async function PlanningPage({
     profileSelectionAvailable
     retryAvailable
   />;
+  let managementProfile;
   let result;
   let methodology;
   let accentPreferences;
   let planningCalendar;
   try {
-    [result, methodology, accentPreferences, planningCalendar] = await Promise.all([
+    [result, methodology, accentPreferences, planningCalendar, managementProfile] = await Promise.all([
       getAthletePlanningProfile(athleteAlias),
       getPlanningMethodology(athleteAlias),
       getMesocycleAccentPreferences(athleteAlias),
       getPlanningCalendar(athleteAlias),
+      getManagementProfile(athleteAlias, athlete.actorUserId),
     ]);
   } catch (error) {
     return <ErrorState
@@ -59,6 +63,7 @@ export default async function PlanningPage({
     />;
   }
   return <PlanningProfileForm
+    managementProfile={managementProfile}
     profile={result.profile}
     methodology={methodology}
     accentPreferences={accentPreferences}

@@ -39,6 +39,8 @@ const methodology: PlanningMethodology = {
   },
 };
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+
 const profile: PlanningProfile = {
   schema_version: "planning-profile-v1",
   season_start: "2026-01-01",

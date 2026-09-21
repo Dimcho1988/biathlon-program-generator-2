@@ -50,3 +50,35 @@
 .management-execution { margin-top: .8rem; }
 .management-reference { border-left: 2px dashed #bdc8c1; padding-left: .6rem; }
 @media print { .management-page button,.management-day-actions,.management-profile { display: none; } .management-day { break-inside: avoid; } }
+
+/* One planning workspace, one compact program viewer. */
+.management-page { max-width: 1080px; }
+.management-page .activities-hero { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; align-items: center; }
+.management-page .management-profile h2,.management-next-step h2 { margin-top: .4rem; }
+.management-next-step { border-left: 4px solid #07879a; padding: 1.5rem; }
+.management-view-switch { display: flex; gap: .5rem; margin: 1.2rem 0; flex-wrap: wrap; }
+.management-view-switch button,.management-week-list button,.management-zone-legend button { font: inherit; color: inherit; background: #fff; border: 1px solid #cadce0; border-radius: 10px; padding: .75rem 1rem; cursor: pointer; }
+.management-view-switch button[aria-pressed="true"],.management-week-list button[aria-pressed="true"] { color: #075d6a; background: #e5f5f6; border-color: #07879a; box-shadow: inset 0 0 0 1px #07879a; }
+.management-view-switch button:focus-visible,.management-week-list button:focus-visible,.management-zone-legend button:focus-visible { outline: 3px solid #48a0b0; outline-offset: 3px; }
+.management-week-list { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); gap: .45rem; }
+.management-week-list button { padding: .8rem .6rem; text-align: left; display: flex; flex-direction: column; gap: .6rem; font-size: .8rem; line-height: 1.4; min-width: 0; }
+.management-week-date { font-weight: 750; }
+.management-week-list small { margin-top: auto; }
+.management-generate fieldset { display: flex; align-items: end; gap: 1rem; flex-wrap: wrap; }
+.management-phase-list { display: flex; flex-wrap: wrap; gap: .5rem; }
+.management-phase-list>div { flex: 1 1 140px; padding: .9rem; border-radius: 10px; border-top: 4px solid #b6cfd1; background: #f4f8f9; display: flex; flex-direction: column; gap: .5rem; }
+.management-phase-list>div.is-current { border-color: #07879a; background: #e5f5f6; }
+.management-phase-list span,.management-phase-list small { font-size: .8rem; color: #546a74; }
+.management-chart-wrap { overflow-x: auto; }
+.management-outlook-chart { display: block; width: 100%; min-width: 580px; }
+.management-outlook-chart text { font-size: 12px; fill: #4f626b; }
+.management-zone-legend { display: flex; gap: .45rem; flex-wrap: wrap; }
+.management-zone-legend button { padding: .4rem .65rem; display: flex; align-items: center; gap: .4rem; }
+.management-zone-legend button[aria-pressed="false"] { opacity: .45; }
+.management-zone-legend i { width: .65rem; height: .65rem; border-radius: 100%; }
+.management-week-context { margin-top: 1rem; }
+.management-page details>summary { cursor: pointer; }
+.management-page .planning-calendar-card { padding-inline: 0; border: 0; box-shadow: none; }
+.management-page .management-profile fieldset { padding: 0; border: 0; }
+.management-page .management-profile h3 { margin-top: 1.7rem; }
+@media(max-width: 800px) { .management-week-list { display: flex; overflow-x: auto; padding-bottom: .5rem; } .management-week-list button { flex: 0 0 125px; } }

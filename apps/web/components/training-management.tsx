@@ -5,11 +5,15 @@ import { useEffect, useState, type FormEvent } from "react";
 import { durationHms } from "../lib/duration-format";
 import { isRecord } from "../lib/training-status";
 import { ActiveTrainingPlan } from "./active-training-plan";
-import { ManagementRules } from "./management-rules";
-import { WEEKDAYS } from "../lib/planning-profile";
+import { TrainingPlanWeek } from "./training-plan-week";
+import { TrainingPlanOverview } from "./training-plan-overview";
+import { managementGuidance, hasProgramDays } from "../lib/management-guidance";
+import { SyncActionForm } from "./sync-action-form";
+import { SyncStatusPanel } from "./sync-status-panel";
+import type { SyncState } from "../lib/sync";
 import {
-  CAPACITY_LABELS, COMPONENTS, PHASE_LABELS, defaultManagementProfile, parseDraftRecord, parseDrafts, parseManagementProfile,
-  parseManagementProfileResponse, parseActivePlanResponse, type ActivePlanResponse, type DraftDay, type DraftRecord, type ManagementProfile, type ManagementProfileResponse,
+  CAPACITY_LABELS, COMPONENTS, PHASE_LABELS, parseDraftRecord, parseDrafts,
+  parseActivePlanResponse, type ActivePlanResponse, type DraftDay, type DraftRecord, type ManagementProfileResponse,
 } from "../lib/training-management";
 
 const number = (value: unknown, digits = 1) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("bg-BG", { maximumFractionDigits: digits }) : "—";
@@ -72,22 +76,23 @@ async function requestJson(path: string, method: "GET" | "PUT" | "POST", body?: 
   return value;
 }
 
-export function TrainingManagement({ athleteName, canEdit, initialProfile, initialDrafts, initialActive = { active: null, history: [] }, today }: {
-  athleteName: string; canEdit: boolean; initialProfile: ManagementProfileResponse; initialDrafts: DraftRecord[]; initialActive?: ActivePlanResponse; today: string;
+export function TrainingManagement({ athleteName, canEdit, initialProfile, initialDrafts, initialActive = { active: null, history: [] }, initialSyncState = null, syncError = false, today }: {
+  athleteName: string; canEdit: boolean; initialProfile: ManagementProfileResponse; initialDrafts: DraftRecord[]; initialActive?: ActivePlanResponse; initialSyncState?: SyncState | null; syncError?: boolean; today: string;
 }) {
   const [active, setActive] = useState(initialActive);
-  const [saved, setSaved] = useState(initialProfile);
-  const [profile, setProfile] = useState<ManagementProfile>(initialProfile.profile ?? defaultManagementProfile(today));
+  const saved = initialProfile;
   const [drafts, setDrafts] = useState(initialDrafts);
   const [selected, setSelected] = useState(0);
-  const [startDate, setStartDate] = useState(datePlus(today, 1));
-  const [busy, setBusy] = useState<"save" | "generate" | "activate" | null>(null);
+  const [startDate, setStartDate] = useState(() => { const earliest = saved.profile && saved.profile.program_start > today ? saved.profile.program_start : today; const latest = saved.profile && saved.profile.program_end < datePlus(today, 7) ? saved.profile.program_end : datePlus(today, 7); return earliest > datePlus(today, 1) ? earliest : latest < datePlus(today, 1) ? latest : datePlus(today, 1); });
+  const [busy, setBusy] = useState<"generate" | "activate" | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const draft = drafts[selected];
-  const dirty = JSON.stringify(profile) !== JSON.stringify(saved.profile);
-  const update = <K extends keyof ManagementProfile>(key: K, value: ManagementProfile[K]) => setProfile(previous => ({ ...previous, [key]: value }));
-  const optionalNumber = (value: string) => value === "" ? null : Number(value);
+  const guidance = saved.profile && saved.profile.program_end < today ? { step: "PROFILE", title: "Периодът на подготовката е приключил", description: "Задай следващия период в профила, за да подготвим нова програма." } : saved.profile && saved.profile.program_start > datePlus(today, 7) ? { step: "WAIT", title: "Подготовката започва по-късно", description: "Седмичната програма може да бъде подготвена до седем дни преди началото. При нужда промени датите в профила." } : managementGuidance({ configured: saved.configured, dirty: false, draft, sync: initialSyncState, today });
+  const [view, setView] = useState<"week" | "overview">("week");
+  const [newDraft, setNewDraft] = useState(false);
+  const showDraft = !active.active || newDraft;
+  const overviewPlan = showDraft ? draft?.payload : (active.active?.payload.proposal ?? active.active?.payload.plan);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,21 +109,8 @@ export function TrainingManagement({ athleteName, canEdit, initialProfile, initi
     setBusy("activate"); setError("");
     try {
       const result = await requestJson("activate", "POST", { start_date: draft.payload.start_date, draft_revision: draft.revision, expected_revision: active.active?.revision ?? 0 });
-      setActive(parseActivePlanResponse(result)); setNotice("Програмата е утвърдена. Текущите задачи са най-горе.");
+      setActive(parseActivePlanResponse(result)); setNewDraft(false); setNotice("Програмата е започната. Избери ден, за да видиш тренировката.");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Програмата не беше утвърдена."); }
-    finally { setBusy(null); }
-  }
-
-  async function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setError(""); setNotice(""); setBusy("save");
-    try {
-      const checked = parseManagementProfile(profile);
-      const result = parseManagementProfileResponse(await requestJson("profile", "PUT", { profile: checked, expected_revision: saved.revision }));
-      setSaved(result); if (result.profile) setProfile(result.profile);
-      setDrafts(previous => previous.map(item => ({ ...item, stale: true, stale_reason: "Профилът е променен след създаването на този проект." })));
-      if (active.active) setActive(previous => ({ ...previous, active: previous.active ? { ...previous.active, stale: true, actionable: false, stale_reason: "Профилът е променен; новите правила изискват преглед." } : null }));
-      setNotice(`Профилът е запазен като версия ${result.revision}. Промените ще се използват при следващото генериране. Съществуващите програми запазват своите настройки.`);
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "Профилът не беше записан."); }
     finally { setBusy(null); }
   }
 
@@ -130,7 +122,7 @@ export function TrainingManagement({ athleteName, canEdit, initialProfile, initi
       const generated = parseDraftRecord(await requestJson("generate", "POST", { start_date: startDate, expected_profile_revision: saved.revision, expected_draft_revision: existing }));
       const record = { ...generated, stale: false };
       setDrafts(previous => [record, ...previous.filter(item => !(item.entry_key === record.entry_key && item.revision === record.revision))]); setSelected(0);
-      setNotice(record.payload.status === "BLOCKED" ? "Програмата изисква допълнителни данни. Причините са показани по-долу." : "Новият проект е готов за преглед. Не е публикуван в тренировъчния календар.");
+      setNotice(record.payload.status === "BLOCKED" ? "Нужна е още една стъпка. Виж указанието по-долу." : "Програмата е подготвена. Прегледай я преди започване.");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Програмата не беше създадена."); }
     finally { setBusy(null); }
   }
@@ -142,63 +134,37 @@ export function TrainingManagement({ athleteName, canEdit, initialProfile, initi
     anchor.href = url; anchor.download = `onflows-plan-${draft.payload.start_date}-v${draft.revision}.json`; anchor.click(); URL.revokeObjectURL(url);
   }
 
+  const generateForm = <form className="management-generate" onSubmit={generate}><fieldset disabled={!canEdit || busy !== null || !saved.configured}><label>Начало на седмицата<input aria-label="Начална дата на програмата" required type="date" min={saved.profile && saved.profile.program_start > today ? saved.profile.program_start : today} max={saved.profile && saved.profile.program_end < datePlus(today, 7) ? saved.profile.program_end : datePlus(today, 7)} value={startDate} onChange={event => setStartDate(event.target.value)} /></label><button className="action-button" type="submit">{busy === "generate" ? "Подготвям програмата…" : "Подготви програма"}</button></fieldset></form>;
   return <main className="activities-page management-page">
-    <header className="activities-hero"><div className="activities-title"><div><p className="eyebrow">Индивидуална подготовка</p><h1>Управление и програма</h1><p>{athleteName} · Индивидуален план и реално изпълнение</p></div></div></header>
-    <p className="management-intro">Периодът задава целта. Скорост–време оценява капацитета, методът определя дозата, а натоварването и възстановяването определят приложимостта ѝ.</p>
-
-    {!canEdit && <p className="management-notice">Имате достъп за преглед. Редактирането на профила и създаването на програма изискват право за промяна на плана.</p>}
+    <header className="activities-hero"><div className="activities-title"><div><p className="eyebrow">{athleteName}</p><h1>Тренировъчен план</h1><p>Подготовката в перспектива. Конкретната задача за всеки ден.</p></div></div><Link className="text-action" href="/planning">Профил за планиране →</Link></header>
+    {!canEdit && <p className="management-notice">Имате достъп за преглед. Промените изискват право за редакция на плана.</p>}
     {error && <p className="management-error" role="alert">{error}</p>}{notice && <p className="management-notice" role="status">{notice}</p>}
-    <ActiveTrainingPlan value={active} onChange={setActive} canEdit={canEdit} today={today} renderDay={day => <DayCard day={day} expanded={day.date === today} />} />
-    <details className="management-profile management-panel" open={!saved.configured}>
-      <summary>Профил и настройки <span>{saved.configured ? `Версия ${saved.revision}` : "Нужна е начална настройка"}</span></summary>
-      <form onSubmit={save}><fieldset disabled={!canEdit || busy !== null}><div className="management-form-grid">
-        <label>Основен спорт<select value={profile.sport} onChange={event => { const sport = event.target.value as ManagementProfile["sport"]; setProfile(previous => ({ ...previous, sport, actual_sport: sport })); }}><option value="Run">Бягане</option><option value="NordicSki">Ски бягане</option></select></label>
-        <label>Средство за тази програма<select value={profile.actual_sport} onChange={event => update("actual_sport", event.target.value as ManagementProfile["actual_sport"])}><option value="Run">Бягане</option>{profile.sport === "NordicSki" && <><option value="NordicSki">Ски бягане</option><option value="RollerSki">Ролкови ски</option></>}</select></label>
-        <label>Дисциплина<input required maxLength={100} value={profile.discipline} placeholder="Напр. 5000 m или 10 km свободен стил" onChange={event => update("discipline", event.target.value)} /></label>
-        <label>Очаквана продължителност на старта, мин<input type="number" min="0.1" max="1440" step="0.1" value={profile.race_duration_min ?? ""} onChange={event => update("race_duration_min", optionalNumber(event.target.value))} /></label>
-        <label>Възраст, години<input type="number" min="10" max="100" value={profile.age_years ?? ""} onChange={event => update("age_years", optionalNumber(event.target.value))} /></label>
-        <label>Спортен стаж, години<input type="number" min="0" max="85" step="0.5" value={profile.training_experience_years ?? ""} onChange={event => update("training_experience_years", optionalNumber(event.target.value))} /></label>
-        <label>Начало на подготовката<input required type="date" value={profile.program_start} onChange={event => update("program_start", event.target.value)} /></label>
-        <label>Край на периода<input required type="date" min={profile.program_start} value={profile.program_end} onChange={event => update("program_end", event.target.value)} /></label>
-      </div><h3>Налично време по дни</h3><p className="management-muted">Минути за цялата сесия, включително загрявка и разпускане. Нула означава свободен от тренировки ден.</p>
-      <div className="management-week-grid">{WEEKDAYS.map((day, index) => <label key={day}>{day}<input aria-label={`${day}, налични минути`} required type="number" min="0" max="360" step="5" value={profile.available_minutes[index]} onChange={event => update("available_minutes", profile.available_minutes.map((value, dayIndex) => dayIndex === index ? Number(event.target.value) : value))} /></label>)}</div>
-      <label className="management-check"><input type="checkbox" checked={profile.recent_weekly_hours !== null} onChange={event => update("recent_weekly_hours", event.target.checked ? [0, 0, 0, 0] : null)} />Въвеждам обема за последните четири завършени седмици</label>
-      <p className="management-muted">Допълва началната картина при липса на достатъчно история. Не замества данните за възстановяване.</p>
-      {profile.recent_weekly_hours && <div className="management-form-grid">{profile.recent_weekly_hours.map((hours, index) => <label key={index}>{index === 3 ? "Последна завършена седмица" : `Преди ${4 - index} седмици`}, часове<input required type="number" min="0" max="80" step="0.1" value={hours} onChange={event => update("recent_weekly_hours", profile.recent_weekly_hours!.map((value, week) => week === index ? Number(event.target.value) : value))} /></label>)}</div>}
-      <details className="management-detail"><summary>Методически настройки и граници</summary><p>Тези начални треньорски правила се записват с версията на профила. Настройките не променят вече създадени програми.</p><div className="management-form-grid">
-        <label>Вработване, дни<input type="number" min="0" max="21" placeholder="Автоматично" value={profile.reentry_days ?? ""} onChange={event => update("reentry_days", optionalNumber(event.target.value))} /></label>
-        <label>Тейпър в края на предсъстезателния период, дни<input required type="number" min="0" max="21" value={profile.taper_days} onChange={event => update("taper_days", Number(event.target.value))} /></label>
-        <label>Максимум ключови сесии седмично<input required type="number" min="0" max="3" value={profile.max_key_sessions_per_week} onChange={event => update("max_key_sessions_per_week", Number(event.target.value))} /></label>
-        <label>Изграждаща доза Z1–Z3, %<input required type="number" min="50" max="60" step="1" value={Math.round(profile.building_fraction * 100)} onChange={event => update("building_fraction", Number(event.target.value) / 100)} /></label>
-        <label>Поддържаща доза Z1–Z3, %<input required type="number" min="30" max="40" step="1" value={Math.round(profile.maintenance_fraction * 100)} onChange={event => update("maintenance_fraction", Number(event.target.value) / 100)} /></label>
-        <label>Изграждаща доза при вработване, %<input required type="number" min="40" max="50" step="1" value={Math.round(profile.reentry_fraction * 100)} onChange={event => update("reentry_fraction", Number(event.target.value) / 100)} /></label>
-        <label>Таван на възстановителната сесия, мин<input required type="number" min="5" max="45" value={profile.recovery_session_cap_min} onChange={event => update("recovery_session_cap_min", Number(event.target.value))} /></label>
-      </div><label className="management-check"><input type="checkbox" checked={profile.allow_expert_fallback} onChange={event => update("allow_expert_fallback", event.target.checked)} />Разрешавам експертен Tref при недостатъчно надеждна оценка от скорост–време</label>
-      <ManagementRules profile={profile} onChange={setProfile} today={today} />
-      <p className="management-muted">Tref тук означава непрекъсната устойчивост при конкретна интензивност и средство. Историческият обем и C40 са различни величини.</p></details>
-      <div className="management-actions"><button className="action-button" type="submit" disabled={!dirty}>{busy === "save" ? "Запазване…" : "Запази профила"}</button><Link href="/planning">Стартове и лагери в календара →</Link></div>
-      </fieldset></form>
-    </details>
-    <details className="management-drafts management-panel" open={!active.active}><summary>Нов проект и запазени проекти</summary>
-    <section className="management-panel"><h2>Следващите седем дни</h2><form className="management-generate" onSubmit={generate}><label>Начална дата<input aria-label="Начална дата на програмата" required type="date" min={saved.profile && saved.profile.program_start > today ? saved.profile.program_start : today} max={saved.profile && saved.profile.program_end < datePlus(today, 7) ? saved.profile.program_end : datePlus(today, 7)} value={startDate} onChange={event => setStartDate(event.target.value)} disabled={!canEdit || busy !== null} /></label><button className="action-button" type="submit" disabled={!canEdit || busy !== null || !saved.configured || dirty}>{busy === "generate" ? "Подготвям програмата…" : "Създай проект за преглед"}</button></form>
-      <p className="management-muted">Началото може да е днес или в следващите седем дни. В края на подготовката се показват само оставащите дни.</p>
-      {dirty && <p className="management-muted">Запазете профила, за да използвате тези настройки в новия проект.</p>}
-      <p className="management-muted">След преглед утвърдете проекта, за да стане действаща програма. Изпълнението идва от реалните активности; wellness остава диагностичен.</p>
-    </section>
-    {draft ? <section className="management-plan" aria-label="Проект на тренировъчна програма"><div className="management-plan-heading"><div><h2>{dateLabel(draft.payload.start_date)} – {dateLabel(draft.payload.end_date)}</h2><p>{draft.payload.status === "BLOCKED" ? "Нужни са допълнителни данни" : draft.payload.status === "LIMITED_DRAFT" ? "Проект с ограничения — прегледайте причините" : "Проект за треньорски преглед"} · Версия {draft.revision}</p></div>
-      <label>Запазени проекти<select value={selected} onChange={event => setSelected(Number(event.target.value))}>{drafts.map((item, index) => <option key={`${item.entry_key}-${item.revision}`} value={index}>{item.payload.start_date} · v{item.revision}{item.recorded_at ? ` · ${new Date(item.recorded_at).toLocaleString("bg-BG")}` : ""}</option>)}</select></label></div>
-      {draft.stale === true && <p className="management-notice" role="status">{draft.stale_reason ?? "Входните данни са променени — създайте нов проект."}</p>}
-      {draft.stale === null && <p className="management-notice" role="status">Актуалността на входните данни не е потвърдена. Прегледайте данните преди използване.</p>}
-      {draft.payload.warnings.length > 0 && <details className="management-notice" open={draft.payload.status === "BLOCKED"}><summary>Условия и пояснения · {draft.payload.warnings.length}</summary><ul>{draft.payload.warnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}</ul></details>}
-      <div className="management-actions"><button type="button" className="action-button" disabled={!canEdit || busy !== null || dirty || draft.stale !== false || draft.payload.activation_eligible !== true} onClick={activateDraft}>{busy === "activate" ? "Утвърждаване…" : "Утвърди тази програма"}</button><p className="management-muted">Утвърждавате и избрания режим на адаптация. Можете да поставите програмата на пауза по всяко време.</p></div>
-      <div className="management-days">{draft.payload.days.map(day => <DayCard key={day.date} day={day} />)}</div>
-      <details className="management-panel management-detail"><summary>Периодизация, източници и настройки на този проект</summary><p>Програмата запазва входните данни и версиите, с които е изчислена. По-късни настройки се използват в следващ проект.</p>
-        <PeriodizationTable value={draft.payload.periodization} />
-        <dl className="management-facts"><div><dt>Управляващ модел</dt><dd>{draft.payload.engine_version}</dd></div><div><dt>Скорост–време</dt><dd>{String(draft.payload.source.speed_model_version ?? "Няма версия")}</dd></div><div><dt>Recovery</dt><dd>{String(draft.payload.source.recovery_model_version ?? "Няма версия")}</dd></div><div><dt>Дни история</dt><dd>{number(draft.payload.source.history_days, 0)}</dd></div></dl>
-        <details><summary>Точни параметри и периоди</summary><pre>{JSON.stringify({ periodization: draft.payload.periodization, parameters: draft.payload.parameters, source: draft.payload.source, catalog: draft.payload.catalog }, null, 2)}</pre></details>
-        <button type="button" className="action-button secondary" onClick={exportDraft}>Изтегли пълния отчет</button>
-      </details>
-    </section> : <section className="management-panel"><h2>Все още няма проект</h2><p>Попълнете профила и стартовете. Първата програма ще покаже конкретните задачи и причините за избраната доза.</p></section>}
+    {syncError && <p className="management-error" role="alert">Обновяването не започна. Опитай отново или провери връзката с Intervals в настройките.</p>}
+    {initialSyncState && <SyncStatusPanel initialState={initialSyncState} renderedGenerationId={initialSyncState.active_generation_id} returnTo="/management" compact />}
+    <nav className="management-view-switch" aria-label="Изглед на плана"><button type="button" aria-pressed={view === "week"} onClick={() => setView("week")}>Седмична програма</button><button type="button" aria-pressed={view === "overview"} onClick={() => setView("overview")}>Дългосрочна подготовка</button></nav>
+    {view === "overview" ? <TrainingPlanOverview plan={overviewPlan} outcomes={active.active?.payload.outcomes ?? []} today={today} stale={showDraft ? draft?.stale !== false : active.active?.stale} /> : <>
+      {active.active && !newDraft && <ActiveTrainingPlan value={active} onChange={setActive} canEdit={canEdit} today={today} renderDay={day => <DayCard day={day} expanded />} />}
+      {showDraft && <>
+        <section className="management-panel management-next-step" aria-label="Следваща стъпка"><p className="eyebrow">{guidance.step === "REVIEW" ? "Преглед преди започване" : "Следваща стъпка"}</p><h2>{guidance.title}</h2><p>{guidance.description}</p>
+          {guidance.step === "PROFILE" && <Link className="action-button" href="/planning#basic-profile">Попълни профила →</Link>}
+          {guidance.step === "SYNC" && canEdit && <SyncActionForm scope="FULL" returnTo="/management" label="Обнови тренировките" />}
+          {["GENERATE", "START_DATE"].includes(guidance.step) && generateForm}
+          {guidance.step === "CHECK" && <div className="management-actions"><a href="#plan-details">Виж конкретните причини ↓</a><Link href="/planning">Провери профила →</Link></div>}
+          {guidance.step === "REVIEW" && <><p className="management-muted">{saved.profile?.adaptation_mode === "AUTO" ? "След започване следващите дни ще се адаптират автоматично според реалното изпълнение." : "Промените ще се предлагат за твое утвърждаване."} Можеш да поставиш програмата на пауза.</p><button type="button" className="action-button" disabled={!canEdit || busy !== null || draft?.stale !== false || draft?.payload.activation_eligible !== true} onClick={activateDraft}>{busy === "activate" ? "Започване…" : "Започни програмата"}</button></>}
+        </section>
+        {draft && hasProgramDays(draft.payload) && <section className="management-plan" aria-label="Проект на тренировъчна програма"><h2>{dateLabel(draft.payload.start_date)} – {dateLabel(draft.payload.end_date)}</h2><p className="management-muted">{draft.stale !== false ? "Предишна версия — само за справка. Входните данни са променени или актуалността им не е потвърдена." : "Предложение за преглед — още не е започната програма."}</p><TrainingPlanWeek days={draft.payload.days} today={today} renderDay={day => <DayCard day={day} expanded />} /></section>}
+      </>}
+    </>}
+    <details className="management-panel" id="plan-details"><summary>Подробности и предишни програми</summary>
+      {active.active && <button type="button" className="action-button secondary" onClick={() => { setNewDraft(!newDraft); setView("week"); }}>{newDraft ? "Обратно към активната програма" : "Подготви друга програма"}</button>}
+      {draft && <><label>Запазени програми<select value={selected} onChange={event => { setSelected(Number(event.target.value)); setNewDraft(true); }}>{drafts.map((item, index) => <option key={`${item.entry_key}-${item.revision}`} value={index}>{item.payload.start_date} · версия {item.revision}</option>)}</select></label>
+        {draft.stale_reason && <p>{draft.stale_reason}</p>}
+        <details><summary>Всички условия и пояснения · {draft.payload.warnings.length}</summary><ul>{draft.payload.warnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}</ul></details>
+        {!hasProgramDays(draft.payload) && <details><summary>Оценка по дни</summary>{draft.payload.days.map(day => <DayCard key={day.date} day={day} />)}</details>}
+        <details><summary>Периодизация и източници</summary><PeriodizationTable value={draft.payload.periodization} /><pre>{JSON.stringify({ periodization: draft.payload.periodization, parameters: draft.payload.parameters, source: draft.payload.source, catalog: draft.payload.catalog }, null, 2)}</pre></details>
+        <button type="button" className="action-button secondary" onClick={exportDraft}>Изтегли пълния отчет</button></>}
+      {guidance.step !== "GENERATE" && guidance.step !== "START_DATE" && saved.configured && <details><summary>Преизчисли за друга начална дата</summary>{generateForm}</details>}
+      {canEdit && guidance.step !== "SYNC" && guidance.step !== "WAIT" && <SyncActionForm scope="FULL" returnTo="/management" label="Обнови тренировките от Intervals" />}
     </details>
   </main>;
 }

@@ -358,6 +358,64 @@ def _accents(period, preferences):
     return (manual + [z for z in ordered if z not in manual])[:limit] if mode == "HYBRID" else ordered[:limit]
 
 
+def _long_term_outlook(profile, periodization, reference, accents, preferences, rows, today, limited):
+    """Read-only target envelope using the same goals as the daily planner.
+
+    No synthetic sessions or future recovery. Ratios use the current actual
+    C40 and B50, frozen explicitly; they are targets, not forecast 7/40 values.
+    Camps are calendar context, never an automatic permission to add load.
+    """
+    start = max(today, date.fromisoformat(profile["program_start"]))
+    end = date.fromisoformat(profile["program_end"])
+    anchor = date.fromisoformat(str(preferences.get("mesocycle_anchor_date", profile["program_start"])))
+    length = preferences.get("mesocycle_length_weeks", 4)
+    baseline = _budgets(rows, today)
+    base_loads = fresh_parameters()["base_loads"]
+    actual_base = {}
+    for z in COMPONENTS:
+        r50 = [r["effective_load"] for r in rows if r["zone"] == z and
+               (today - timedelta(days=50)).isoformat() <= r["date"] < today.isoformat()]
+        r40 = [r["effective_load"] for r in rows if r["zone"] == z and
+               (today - timedelta(days=40)).isoformat() <= r["date"] < today.isoformat()]
+        actual_base[z] = {"b50": max(base_loads[z], .5 * sum(r50) / len(r50)) if r50 else base_loads[z],
+                          "c40": sum(r40) / len(r40) if r40 else 0., "known": len(r40) >= 20}
+    weeks = []
+    day = start
+    while day <= end:
+        left, right = day, min(day + timedelta(days=6), end)
+        targets = {z: [] for z in COMPONENTS}
+        phases, selected, meso_weeks = [], [], []
+        while day <= right:
+            period, taper = _phase(periodization, day)
+            week = max(0, (day - anchor).days // 7) % length
+            focus = _accents(period, accents)
+            goals = training_targets.component_targets(reference, profile, focus, week, length,
+                                                        period, taper, limited, _taper_factor(periodization, day))
+            for z in COMPONENTS:
+                targets[z].append(goals[z]["target"])
+            phases.append(period)
+            selected.extend(focus)
+            meso_weeks.append(week + 1)
+            day += timedelta(days=1)
+        components = {}
+        for z in COMPONENTS:
+            target = sum(targets[z]) / len(targets[z])
+            known = actual_base[z]["known"] or z in profile.get("component_targets_weekly", {})
+            base = actual_base[z]
+            components[z] = {"target_weekly_effective": _round(target) if known else None,
+                             "target_index_7_40": _round((base["b50"] + target / 7) / (base["b50"] + base["c40"])) if base["known"] else None}
+        weeks.append({"start_date": left.isoformat(), "end_date": right.isoformat(),
+                      "days": (right - left).days + 1, "phases": list(dict.fromkeys(phases)),
+                      "accents": list(dict.fromkeys(selected)), "mesocycle_weeks": list(dict.fromkeys(meso_weeks)),
+                      "components": components})
+    return {"schema_version": "training-outlook-v1", "as_of": today.isoformat(),
+            "basis": "CURRENT_ACTUAL_REFERENCE_FROZEN", "targets_version": training_targets.VERSION,
+            "reference_cutoff": reference["cutoff"], "limited": limited,
+            "readiness_forecast": False, "automatic_camp_load_increase": False,
+            "baseline": {z: {**actual_base[z], "actual_index_7_40": baseline[z]["index_7_40"] if actual_base[z]["known"] else None} for z in COMPONENTS},
+            "weeks": weeks}
+
+
 def generate_plan(repository, alias: str, profile: dict, *, start_date: date, now: datetime | None = None,
                   decisions: dict | None = None, locked_day: dict | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
@@ -821,6 +879,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             "generated_at": now.isoformat(), "start_date": start_date.isoformat(), "end_date": end_date.isoformat(),
             "activation_eligible": activation_eligible,
             "source": provenance, "periodization": periodization, "days": result_days,
+            "long_term": _long_term_outlook(profile, periodization, target_reference, accents, preferences, rows, today, limited),
             "parameters": parameters, "warnings": warnings, "catalog": catalog(profile),
             "summary": {"sessions": sessions, "key_sessions": key_sessions,
                         "planned_minutes": _round(sum(d["session"]["total_minutes"] for d in result_days if d["session"])),
