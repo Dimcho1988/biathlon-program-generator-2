@@ -28,6 +28,24 @@ export interface ManagementProfile {
   strength_enabled: boolean;
   strength_circuits: number;
   transition_days: number;
+  planning_controls?: PlanningControls | null;
+}
+
+export interface CycleDirective {
+  start_date: string; end_date: string; name: string; kind: "BUILD" | "MAINTAIN" | "STRESS" | "RECOVERY";
+  accents: Component[]; target_index: number; volume_factor: number; recovery_days: number;
+}
+export interface PlanningControls {
+  sessions_per_week: number; intensity_days: number[]; strength_days: number[]; long_session_day: number | null;
+  capacity_policy?: "OBSERVED_ONLY" | "MODEL_WITH_PRIOR"; max_strength_sessions: number; training_sports: ManagementProfile["actual_sport"][]; weekly_target_hours: number | null;
+  mesocycle_anchor: string | null; wave: number[]; accent_mode: "AUTO" | "MANUAL" | "HYBRID";
+  accent_limit: number; accents: Component[]; accent_index: number; maintenance_index: number; cycles: CycleDirective[];
+}
+export interface VolumeHistory { as_of?: string | null; covered_days: number; by_sport_weekly_minutes: Record<string, number>; all_sports_weekly_minutes: number; weeks: Array<{ start_date: string; end_date: string; actual_minutes: number | null; covered_days: number }> }
+export function defaultPlanningControls(sport: ManagementProfile["actual_sport"]): PlanningControls {
+  return { sessions_per_week: 7, intensity_days: [], strength_days: [], long_session_day: null, max_strength_sessions: 2,
+    training_sports: [sport], weekly_target_hours: null, capacity_policy: "MODEL_WITH_PRIOR", mesocycle_anchor: null, wave: [.96, 1.04, 1.10, .78],
+    accent_mode: "AUTO", accent_limit: 2, accents: [], accent_index: 1.1, maintenance_index: 1, cycles: [] };
 }
 
 export interface IntervalDoseProfile {
@@ -37,7 +55,7 @@ export interface IntervalDoseProfile {
   total_capacity_ratio: number; reserve_repetitions: number; target_speed_kmh: number | null; speed_basis?: "ACTUAL" | "FLAT_EQUIVALENT";
 }
 
-export interface ManagementProfileResponse { configured: boolean; profile: ManagementProfile | null; revision: number; today?: string; timezone?: string }
+export interface ManagementProfileResponse { configured: boolean; profile: ManagementProfile | null; revision: number; today?: string; timezone?: string; history?: VolumeHistory | null }
 export interface DraftRecord { entry_key: string; revision: number; recorded_at?: string; stale?: boolean | null; stale_reason?: string | null; payload: PlanningDraft }
 export type Component = "Z1" | "Z2" | "Z3" | "Z4" | "Z5" | "STR";
 export const COMPONENTS: Component[] = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"];
@@ -104,6 +122,34 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     || !Object.entries(normalized.component_targets_weekly).every(([k, v]) => COMPONENTS.includes(k as Component) && range(v, 0, 3000))
     || !Array.isArray(normalized.interval_profiles) || normalized.interval_profiles.length > 2) throw new Error("Невалидни правила за адаптация или компонентни цели.");
   const seen = new Set<string>();
+  if (normalized.planning_controls != null) {
+    const c = normalized.planning_controls;
+    const days = (v: unknown): v is number[] => Array.isArray(v) && new Set(v).size === v.length && v.every(d => integer(d, 0, 6) && Number((value.available_minutes as number[])[d]) > 0);
+    const zones = (v: unknown): v is Component[] => Array.isArray(v) && new Set(v).size === v.length && v.every(z => COMPONENTS.includes(z));
+    if (!isRecord(c) || (c.capacity_policy !== undefined && !["OBSERVED_ONLY", "MODEL_WITH_PRIOR"].includes(String(c.capacity_policy))) || !integer(c.sessions_per_week, 1, 7) || !days(c.intensity_days) || !days(c.strength_days)
+      || !(c.long_session_day === null || (integer(c.long_session_day, 0, 6) && days([c.long_session_day])))
+      || !integer(c.max_strength_sessions, 0, 3) || !Array.isArray(c.training_sports) || c.training_sports.length > 3
+      || (c.training_sports.length > 0 && !c.training_sports.includes(String(value.actual_sport)))
+      || new Set(c.training_sports).size !== c.training_sports.length || !c.training_sports.every(s => ["Run", "NordicSki", "RollerSki"].includes(s) && (value.sport !== "Run" || s === "Run"))
+      || !optionalRange(c.weekly_target_hours, .01, 42) || !(c.mesocycle_anchor === null || isCalendarDate(c.mesocycle_anchor))
+      || !Array.isArray(c.wave) || c.wave.length < 2 || c.wave.length > 6 || !c.wave.every(v => range(v, .5, 1.5)) || Number(c.wave.at(-1)) >= 1
+      || !["AUTO", "MANUAL", "HYBRID"].includes(String(c.accent_mode)) || !integer(c.accent_limit, 1, 6) || !zones(c.accents)
+      || c.accents.length > c.accent_limit || (c.accent_mode !== "AUTO" && !c.accents.length)
+      || !range(c.accent_index, .5, 2) || !range(c.maintenance_index, .5, 1.2) || !Array.isArray(c.cycles) || c.cycles.length > 52 || !c.cycles.every(isRecord))
+      throw new Error("Провери дните, акцентите и вълната. Последната седмица трябва да е разтоварваща.");
+    let occupiedEnd = "";
+    for (const d of [...c.cycles].filter(isRecord).sort((a,b) => String(a.start_date).localeCompare(String(b.start_date)))) {
+      if (!isRecord(d) || !isCalendarDate(d.start_date) || !isCalendarDate(d.end_date) || d.end_date < d.start_date
+        || d.start_date < value.program_start || d.end_date > value.program_end || d.start_date <= occupiedEnd
+        || typeof d.name !== "string" || !d.name.trim() || d.name.length > 80 || !["BUILD", "MAINTAIN", "STRESS", "RECOVERY"].includes(String(d.kind))
+        || !zones(d.accents) || !d.accents.length || !range(d.target_index, .5, 2) || !range(d.volume_factor, .5, 1.5) || !integer(d.recovery_days, 7, 14)
+        || Date.parse(d.end_date)-Date.parse(d.start_date) >= (d.kind === "STRESS" ? 7 : 42)*86400000
+        || (d.kind === "STRESS" && d.target_index <= 1) || (d.kind === "RECOVERY" && (d.target_index > 1 || d.volume_factor > 1)))
+        throw new Error("Провери мезоциклите. Стресовата седмица е до 7 дни и има 7–14 дни разтоварване без застъпване.");
+      occupiedEnd = new Date(Date.parse(d.end_date)+(d.kind === "STRESS" ? d.recovery_days : 0)*86400000).toISOString().slice(0,10);
+      if (occupiedEnd > value.program_end) throw new Error("Разтоварването след стресовия блок трябва да е в периода на програмата.");
+    }
+  }
   for (const p of normalized.interval_profiles) {
     if (!isRecord(p) || !["Z4", "Z5"].includes(String(p.zone)) || seen.has(String(p.zone)) || p.sport !== value.actual_sport
       || !range(p.continuous_capacity_min, .001, 60) || !isCalendarDate(p.assessed_on)
@@ -124,7 +170,7 @@ export function parseManagementProfileResponse(value: unknown): ManagementProfil
   if (!isRecord(value) || typeof value.configured !== "boolean" || !integer(value.revision, 0, Number.MAX_SAFE_INTEGER)) throw new Error("Невалиден профил за управление.");
   if (value.today !== undefined && !isCalendarDate(value.today)) throw new Error("Невалидна местна дата на спортиста.");
   if (value.timezone !== undefined && typeof value.timezone !== "string") throw new Error("Невалидна часова зона на спортиста.");
-  const metadata = { ...(typeof value.today === "string" ? { today: value.today } : {}), ...(typeof value.timezone === "string" ? { timezone: value.timezone } : {}) };
+  const metadata = { ...(typeof value.today === "string" ? { today: value.today } : {}), ...(typeof value.timezone === "string" ? { timezone: value.timezone } : {}), ...(isRecord(value.history) ? { history: value.history as unknown as VolumeHistory } : {}) };
   if (!value.configured) {
     if (value.profile !== null) throw new Error("Неконфигурираният профил съдържа стойности.");
     return { configured: false, profile: null, revision: value.revision, ...metadata };
@@ -190,14 +236,14 @@ export const PHASE_LABELS: Record<string, string> = {
   COMPETITION: "Състезателен", TRANSITION: "Преходен", TAPER: "Тейпър",
 };
 export const CAPACITY_LABELS: Record<string, string> = {
-  SPEED_TIME: "Индивидуална скорост–време", SPEED_DURATION: "Индивидуална скорост–време",
+  SPEED_DURATION_PRIOR: "Скорост–време с индивидуална опора и експертна форма", SPEED_TIME: "Индивидуална скорост–време", SPEED_DURATION: "Индивидуална скорост–време",
   EXPERT_TREF: "Експертен Tref — резервна оценка", EXPERT_FALLBACK: "Експертен Tref — резервна оценка", EXPERT_CONTINUOUS_TREF: "Експертен Tref — резервна оценка",
   COACH_EFFORT_CAPACITY: "Индивидуална устойчивост при описаното усилие",
   STRENGTH_METHOD_PROFILE: "Отделен силов профил с упражнения и резерв",
 };
 
 export interface PlanChange { date: string; before: string | null; after: string | null; before_minutes: number; after_minutes: number; reason: string }
-export interface PlanOutcome { date: string; status: string; planned_title: string | null; planned_minutes: number; actual_minutes: number | null }
+export interface PlanOutcome { planned_load?: Partial<Record<Component, number>> | null; actual_load?: Partial<Record<Component, number>> | null; date: string; status: string; planned_title: string | null; planned_minutes: number; actual_minutes: number | null }
 export interface ActivePlanRecord {
   revision: number; stale: boolean; actionable: boolean; stale_reason?: string | null;
   payload: { schema_version: "active-plan-v2"; status: "ACTIVE" | "PAUSED" | "REVIEW_REQUIRED" | "COMPLETED";

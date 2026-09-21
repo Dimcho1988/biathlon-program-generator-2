@@ -7,7 +7,7 @@ export async function AthleteNavigation() {
   const access = await currentAuthorizedAthlete();
   if (!access) return <Link href="/account" prefetch={false}>Избери спортист →</Link>;
   return <>
-    {access.canEditPlan && <nav className="workspace-profile-links" aria-label="Планиране и настройки"><Link href="/planning" prefetch={false}>Профил за планиране</Link><Link href="/?settings=edit" prefetch={false}>Зони и HRmax</Link></nav>}
+    {access.canEditPlan && <nav className="workspace-profile-links" aria-label="Планиране и настройки"><Link href="/?settings=edit" prefetch={false}>Зони и HRmax</Link></nav>}
     <Link className="workspace-profile" href="/account" prefetch={false}><span className="workspace-avatar" aria-hidden="true">{access.displayName.trim().charAt(0)}</span><span><small>Избран спортист</small><strong>{access.displayName}</strong><small>Смени спортиста →</small></span></Link>
   </>;
 }

@@ -10,11 +10,10 @@ export function ManagementRules({ profile, onChange, today, hideAutomation = fal
   return <>
     <div className="management-form-grid">
       {!hideAutomation && <label>След утвърждаване<select value={profile.adaptation_mode} onChange={e => update("adaptation_mode", e.target.value as "AUTO" | "REVIEW")}><option value="AUTO">Адаптирай следващите дни автоматично</option><option value="REVIEW">Предлагай промените за преглед</option></select></label>}
-      <label>Развитие в натоварващите седмици, до %<input type="number" min="0" max="10" step="0.5" value={profile.progression_percent} onChange={e => update("progression_percent", Number(e.target.value))} /></label>
       <label>Преход след последния основен старт, дни<input type="number" min="0" max="28" value={profile.transition_days} onChange={e => update("transition_days", Number(e.target.value))} /></label>
     </div>
     {!hideAutomation && <label className="management-check"><input type="checkbox" checked={profile.auto_import_enabled} onChange={e => update("auto_import_enabled", e.target.checked)} />Обновявай свързаните активности автоматично — до веднъж на час, докато програмата работи</label>}
-    <p className="management-muted">Прогресията е спрямо реалната база на цикъла, само за развиваните компоненти и при достатъчно данни. 0% запазва поддържане. Разтоварващата седмица и тейпърът остават отделни ограничения.</p>
+    <p className="management-muted">Целите и вълната са в стъпка 3. Тук се задават методът и дозата; Recovery остава отделна проверка.</p>
     <details className="management-detail"><summary>Индивидуални цели по компоненти</summary>
       <p>Обичайно системата извежда целите от реалната история и периода. Попълнете тук само изрична треньорска цел — включително при въвеждане на нов компонент. Това са седмични приравнени минути, а не Tref или продължителност на тренировка.</p>
       <div className="management-form-grid">{COMPONENTS.map(zone => <label key={zone}>{zone} · седмична цел<input type="number" min="0" max="3000" step="0.5" placeholder="Автоматично" value={profile.component_targets_weekly[zone] ?? ""} onChange={e => {
@@ -23,13 +22,13 @@ export function ManagementRules({ profile, onChange, today, hideAutomation = fal
         update("component_targets_weekly", targets);
       }} /></label>)}</div>
     </details>
-    <details className="management-detail"><summary>Обща силова подготовка</summary>
+    <details className="management-detail"><summary>Обща силова подготовка · {profile.strength_enabled ? "включена" : "не е включена"}</summary>
       <label className="management-check"><input type="checkbox" checked={profile.strength_enabled} onChange={e => update("strength_enabled", e.target.checked)} />Включи общия силов профил</label>
       <p>9 упражнения за долна част, торс и горна част. Работа по 20 секунди, 30 секунди преход, 2 минути между кръговете. Използвайте усвоени, безболезнени движения и съпротивление с поне 3 качествени повторения в резерв.</p>
       <p className="management-muted">Силата има собствен бюджет и възстановяване. Пулсът от силовата част не добавя втори аеробен товар. В комбинирана сесия остава само един кръг и намалена аеробна доза.</p>
       <label>Максимум кръгове<select value={profile.strength_circuits} onChange={e => update("strength_circuits", Number(e.target.value))}><option value={2}>2</option><option value={3}>3</option></select></label>
     </details>
-    <details className="management-detail"><summary>Интервални профили за Z4 и Z5</summary>
+    <details className="management-detail"><summary>Интервали Z4/Z5 · {profile.interval_profiles.length ? `${profile.interval_profiles.length} профил(а)` : "нужен е индивидуален профил"}</summary>
       <p>Тук се задава устойчивостта при конкретно описано усилие за избраното средство. Тя не се извежда от пиков пулс. Тези профили са за възрастни с поне една година тренировъчен опит. Нужни са попълнени възраст и стаж.</p>
       <p className="management-muted">Повторенията, почивките и общият дял се проверяват заедно. Над 100% е разрешимо само за сумарната работа в този профил. Индивидуалната опора се преглежда отново след 42 дни; това е видима начална настройка.</p>
       {profile.interval_profiles.map((p, index) => <section key={p.zone} className="management-panel"><h4>{p.zone} · {p.sport === "Run" ? "Бягане" : p.sport === "NordicSki" ? "Ски бягане" : "Ролкови ски"}</h4>

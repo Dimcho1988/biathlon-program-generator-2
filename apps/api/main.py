@@ -131,8 +131,16 @@ def management_profile(
         profile = ManagementStore(repository).profile(alias)
         settings = repository.athlete_settings(alias)
         athlete_timezone = settings.timezone if settings else "UTC"
+        today = datetime.now(timezone.utc).astimezone(ZoneInfo(athlete_timezone)).date()
+        history = None
+        if hasattr(repository, "active_analysis"):
+            from biathlon.planning_controls import volume_history
+            analysis = repository.active_analysis(alias) or {}
+            source = (analysis.get("snapshot_payload") or {}).get("load_history") or {}
+            covered = len({r["date"] for r in source.get("daily", []) if (today-timedelta(days=28)).isoformat() <= r["date"] < today.isoformat()})
+            history = {**volume_history(source, today, covered), "as_of": source.get("period_end")}
         return {**profile, "timezone": athlete_timezone,
-                "today": datetime.now(timezone.utc).astimezone(ZoneInfo(athlete_timezone)).date().isoformat()}
+                "today": today.isoformat(), "history": history}
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "Management storage is unavailable") from exc
 

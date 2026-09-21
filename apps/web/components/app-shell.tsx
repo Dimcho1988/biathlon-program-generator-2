@@ -13,7 +13,9 @@ const sections = [
   { href: "/trainability", label: "Индекс на тренираност", icon: "trend" },
   { href: "/speed", label: "Скорост и време", icon: "speed" },
   { href: "/response", label: "Стрес и възстановяване", icon: "response" },
-  { href: "/management", label: "Тренировъчен план", icon: "calendar" },
+  { href: "/planning", label: "Профил за планиране", icon: "overview" },
+  { href: "/management", label: "Седмична програма", icon: "calendar" },
+  { href: "/management/outlook", label: "Дългосрочен план", icon: "trend" },
 ] as const;
 
 function NavIcon({ name }: { name: string }) {
@@ -58,7 +60,7 @@ export function AppShell({ children, athlete }: { children: ReactNode; athlete: 
       <div id="workspace-navigation" className={`workspace-navigation${menuOpen ? " is-open" : ""}`}>
         <p className="workspace-label">Тренировъчен дневник</p>
         <nav className="workspace-links" aria-label="Основна навигация">
-          {sections.map(({ href, label, icon }) => <Link key={href} href={href} prefetch={false} aria-current={pathname === href || (href !== "/" && pathname.startsWith(`${href}/`)) ? "page" : undefined} onNavigate={(event) => navigate(href, event)}><NavIcon name={icon} /><span>{label}</span></Link>)}
+          {sections.map(({ href, label, icon }) => <Link key={href} href={href} prefetch={false} aria-current={pathname === href || (href !== "/" && href !== "/management" && pathname.startsWith(`${href}/`)) ? "page" : undefined} onNavigate={(event) => navigate(href, event)}><NavIcon name={icon} /><span>{label}</span></Link>)}
         </nav>
         <div className="workspace-athlete" onClick={(event) => { if ((event.target as HTMLElement).closest("a")) closeMenu(); }}>{athlete}</div>
         <div className="workspace-tools"><Link href="/account" prefetch={false} onClick={closeMenu} aria-current={pathname === "/account" ? "page" : undefined}>Акаунт и спортисти</Link><ThemeToggle /></div>

@@ -9,7 +9,7 @@ import "./management.css";
 
 export const dynamic = "force-dynamic";
 
-export default async function ManagementPage({ searchParams }: { searchParams: Promise<{ sync?: string }> }) {
+export default async function ManagementPage({ searchParams }: { searchParams: Promise<{ sync?: string; view?: "week" | "overview" }> }) {
   const query = await searchParams;
   const access = await currentAuthorizedAthlete();
   if (!access) return <ErrorState message="Влезте в профила си, за да отворите управлението на подготовката." integrationActions refreshAvailable={false} />;
@@ -39,6 +39,6 @@ export default async function ManagementPage({ searchParams }: { searchParams: P
   } catch (caught) {
     return <ErrorState message={caught instanceof Error ? caught.message : "Управлението временно не е достъпно."} retryAvailable retryHref="/management" />;
   }
-  return <TrainingManagement key={`${access.athleteAlias}:${sync?.active_generation_id ?? "none"}:${query.sync ?? ""}`} athleteName={access.displayName} canEdit={access.canEditPlan}
+  return <TrainingManagement key={`${access.athleteAlias}:${sync?.active_generation_id ?? "none"}:${query.sync ?? ""}`} initialView={query.view ?? "week"} athleteName={access.displayName} canEdit={access.canEditPlan}
     initialSyncState={sync} syncError={query.sync === "enqueue-error"} initialProfile={profile} initialDrafts={drafts} initialActive={active} today={profile.today ?? new Date().toISOString().slice(0, 10)} />;
 }
