@@ -39,7 +39,7 @@ describe("one next action without relaxing publication gates", () => {
     const html = renderToStaticMarkup(<ManagementProfileEditor initialProfile={{ configured: false, profile: null, revision: 0 }} today={today} />);
     expect(html).toContain("Дисциплина · задължително");
     expect(html).toContain("Възраст, години · по желание");
-    expect(html).toContain("Напред: време за тренировки");
+    expect(html).toContain("2. Дни и обем");
     expect(html).not.toContain("Изграждаща доза");
     expect(html).not.toContain("Започни програмата");
   });

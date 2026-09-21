@@ -7,7 +7,7 @@ this subset. Z3 never receives the Z4/Z5 interval exception.
 """
 from copy import deepcopy
 
-VERSION = "training-methods-v2"
+VERSION = "training-methods-v3"
 COMMON = ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "COMPETITION")
 METHODS = (
     {"id": "RUN-REC-EASY-01", "title": "Леко възстановително бягане", "zone": "Z1",
@@ -66,6 +66,29 @@ def resolved_methods(profile):
     No elite source variant inherits numeric defaults from its parent card.
     """
     methods = deepcopy(list(METHODS))
+    methods.extend([
+        {"id": "END-CROSS-TRAIN-01-Z2", "title": "Равномерна аеробна работа в Z2", "zone": "Z2",
+         "sports": ("Run", "NordicSki", "RollerSki"), "purpose": "MAINTENANCE", "position": .5,
+         "structure": "CONTINUOUS", "periods": (*COMMON, "PRECOMPETITION"),
+         "min_work_min": 15., "max_work_min": 90., "warmup_min": 8., "cooldown_min": 5.,
+         "source_id": "END-CROSS-TRAIN-01", "source_version": "0.2",
+         "adaptation": "Равномерна Z2 с поддържаща доза; конкретните граници са начални треньорски настройки.",
+         "instructions": "Равномерно умерено усилие и запазен дихателен резерв. Не преминавай към прагова работа."},
+        {"id": "END-THR-TIME-01-FLEX", "title": "Прагoви интервали по време", "zone": "Z3",
+         "sports": ("Run", "NordicSki", "RollerSki"), "purpose": "BUILDING", "position": .75,
+         "structure": "THRESHOLD_REPETITIONS", "periods": ("GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"),
+         "min_work_min": 12., "max_work_min": 60., "warmup_min": 12., "cooldown_min": 8.,
+         "recovery_min": 2., "source_id": "END-THR-TIME-01", "source_version": "0.2.1",
+         "adaptation": "2–8 повторения по 6–12 минути, 2 минути активна почивка. Общата работа остава в процентната доза за Z3.",
+         "instructions": "Контролирано прагово усилие с технически резерв. Еднакъв ритъм в повторенията; без финал до изчерпване."},
+        {"id": "END-ALT-10-05-01", "title": "Аеробно редуване: 10 мин Z2 / 5 мин Z1", "zone": "Z2",
+         "sports": ("Run", "NordicSki", "RollerSki"), "purpose": "BUILDING", "position": .7,
+         "structure": "CRUISE_ALTERNATING", "periods": ("GENERAL_PREPARATION", "SPECIAL_PREPARATION"),
+         "min_work_min": 45., "max_work_min": 150., "warmup_min": 10., "cooldown_min": 5.,
+         "source_id": "END-ALT-10-05-01", "source_version": "0.2",
+         "adaptation": "3–10 цели цикъла. Дозата е споделена между компонентите; леките части не са допълнителна пълна доза.",
+         "instructions": "10 минути устойчиво усилие в Z2, последвани от 5 минути осезаемо по-леко движение в Z1. Не съкращавай леката част."},
+    ])
     methods.append({"id": "END-THR-LONG-01", "title": "Продължителна контролирана прагова работа", "zone": "Z3",
         "sports": ("Run", "NordicSki", "RollerSki"), "purpose": "BUILDING", "position": .65,
         "structure": "CONTINUOUS", "periods": ("GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION"),

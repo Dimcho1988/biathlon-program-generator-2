@@ -85,7 +85,7 @@ def reconcile(plan, source, today, decisions, previous_outcomes=()):
     daily = source.get("daily", [])
     planned_days = {o["date"]: {"date": o["date"], "session": {
         "title": o.get("planned_title"), "total_minutes": o.get("planned_minutes", 0),
-        "sport": o.get("planned_sport")} if o.get("planned_title") else None} for o in previous_outcomes}
+        "sport": o.get("planned_sport"), "canonical_effective_load": o.get("planned_load")} if o.get("planned_title") else None} for o in previous_outcomes}
     planned_days.update({d["date"]: d for d in plan.get("days", [])})
     for day in planned_days.values():
         key = day["date"]
@@ -106,6 +106,10 @@ def reconcile(plan, source, today, decisions, previous_outcomes=()):
             "planned_sport": session.get("sport") if session else None,
             "planned_minutes": session.get("total_minutes", 0.) if session else 0.,
             "actual_minutes": round(sum(float(a.get("duration_min") or 0.) for a in actual), 2) if covered or actual else None,
+            "planned_load": session.get("canonical_effective_load") if session else None,
+            "actual_load": {z: round(sum(float(r["effective_load"]) for r in (daily if z != "STR" else (source.get("strength") or {}).get("daily", []))
+                                         if r["date"] == key and (z == "STR" or r["zone"] == z)), 3)
+                            for z in ("Z1", "Z2", "Z3", "Z4", "Z5", "STR")} if covered else None,
             "activity_refs": [a.get("activity_ref") for a in actual],
             "matching": "CALENDAR_DAY_AND_ACTUAL_SPORT_NOT_INFERRED_WORKOUT_IDENTITY",
             "load_source": "IMPORTED_ACTUAL_ONLY", "catchup_required": False}

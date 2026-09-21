@@ -37,6 +37,70 @@ class IntervalDoseProfile(BaseModel):
         return self
 
 
+class CycleDirective(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    start_date: date
+    end_date: date
+    name: str = Field(default="Мезоцикъл", min_length=1, max_length=80)
+    kind: Literal["BUILD", "MAINTAIN", "STRESS", "RECOVERY"] = "BUILD"
+    accents: list[Literal["Z1", "Z2", "Z3", "Z4", "Z5", "STR"]] = Field(min_length=1, max_length=6)
+    target_index: float = Field(ge=.5, le=2)
+    volume_factor: float = Field(default=1, ge=.5, le=1.5)
+    recovery_days: int = Field(default=7, ge=7, le=14)
+
+    @model_validator(mode="after")
+    def coherent(self):
+        if not 0 <= (self.end_date-self.start_date).days < (7 if self.kind == "STRESS" else 42):
+            raise ValueError("A stress microcycle lasts up to 7 days; other directives up to 6 weeks")
+        if not self.name.strip():
+            raise ValueError("Name the cycle directive")
+        if len(set(self.accents)) != len(self.accents):
+            raise ValueError("Duplicate accents")
+        if self.kind == "STRESS" and self.target_index <= 1:
+            raise ValueError("Enter an explicit stress target above 1")
+        if self.kind == "RECOVERY" and (self.target_index > 1 or self.volume_factor > 1):
+            raise ValueError("Recovery must not increase the target or volume")
+        return self
+
+
+class PlanningControls(BaseModel):
+    """One set of executable controls; ratios are coach goals, not safety limits."""
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    sessions_per_week: int = Field(default=7, ge=1, le=7)
+    intensity_days: list[int] = Field(default_factory=list, max_length=7)
+    strength_days: list[int] = Field(default_factory=list, max_length=7)
+    long_session_day: int | None = Field(default=None, ge=0, le=6)
+    max_strength_sessions: int = Field(default=2, ge=0, le=3)
+    training_sports: list[Literal["Run", "NordicSki", "RollerSki"]] = Field(default_factory=list, max_length=3)
+    weekly_target_hours: float | None = Field(default=None, gt=0, le=42)
+    capacity_policy: Literal["OBSERVED_ONLY", "MODEL_WITH_PRIOR"] = "MODEL_WITH_PRIOR"
+    mesocycle_anchor: date | None = None
+    wave: list[float] = Field(default_factory=lambda: [.96, 1.04, 1.10, .78], min_length=2, max_length=6)
+    accent_mode: Literal["AUTO", "MANUAL", "HYBRID"] = "AUTO"
+    accent_limit: int = Field(default=2, ge=1, le=6)
+    accents: list[Literal["Z1", "Z2", "Z3", "Z4", "Z5", "STR"]] = Field(default_factory=list, max_length=6)
+    accent_index: float = Field(default=1.1, ge=.5, le=2)
+    maintenance_index: float = Field(default=1, ge=.5, le=1.2)
+    cycles: list[CycleDirective] = Field(default_factory=list, max_length=52)
+
+    @model_validator(mode="after")
+    def coherent(self):
+        for days in (self.intensity_days, self.strength_days):
+            if len(set(days)) != len(days) or any(type(d) is not int or not 0 <= d <= 6 for d in days):
+                raise ValueError("Choose distinct weekdays")
+        if any(not .5 <= v <= 1.5 for v in self.wave) or self.wave[-1] >= 1:
+            raise ValueError("The final week must unload; wave values must be .5 to 1.5")
+        if len(set(self.training_sports)) != len(self.training_sports) or len(set(self.accents)) != len(self.accents):
+            raise ValueError("Duplicate sports or accents")
+        if len(self.accents) > self.accent_limit or (self.accent_mode != "AUTO" and not self.accents):
+            raise ValueError("Choose accents within the configured limit")
+        ordered = sorted(self.cycles, key=lambda c: c.start_date)
+        from datetime import timedelta
+        if any(a.end_date + timedelta(days=a.recovery_days if a.kind == "STRESS" else 0) >= b.start_date for a,b in zip(ordered, ordered[1:])):
+            raise ValueError("Cycle directives and mandatory post-stress recovery must not overlap")
+        return self
+
+
 class ManagementProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -69,6 +133,7 @@ class ManagementProfile(BaseModel):
     strength_enabled: bool = False
     strength_circuits: int = Field(default=2, ge=2, le=3)
     transition_days: int = Field(default=0, ge=0, le=28)
+    planning_controls: PlanningControls | None = None
 
     @model_validator(mode="after")
     def coherent(self):
@@ -87,6 +152,18 @@ class ManagementProfile(BaseModel):
                 raise ValueError("Training experience cannot exceed age")
         if not self.discipline.strip() or self.discipline != self.discipline.strip():
             raise ValueError("Enter a discipline without surrounding whitespace")
+        if self.planning_controls:
+            c = self.planning_controls
+            if c.training_sports and self.actual_sport not in c.training_sports:
+                raise ValueError("The primary means must be included")
+            if self.sport == "Run" and any(s != "Run" for s in c.training_sports):
+                raise ValueError("Choose running means for a running programme")
+            if any(self.available_minutes[d] == 0 for d in [*c.intensity_days, *c.strength_days, *([] if c.long_session_day is None else [c.long_session_day])]):
+                raise ValueError("A preferred session day cannot be a rest day")
+            if any(x.start_date < self.program_start or x.end_date > self.program_end for x in c.cycles):
+                raise ValueError("Cycle directives must lie within the programme")
+            if any(x.kind == "STRESS" and (self.program_end-x.end_date).days < x.recovery_days for x in c.cycles):
+                raise ValueError("Keep the entire post-stress unloading period within the programme")
         if any(not 0 <= value <= 3000 for value in self.component_targets_weekly.values()):
             raise ValueError("Component goals must be finite weekly equivalent minutes, 0 to 3000")
         if len({p.zone for p in self.interval_profiles}) != len(self.interval_profiles):

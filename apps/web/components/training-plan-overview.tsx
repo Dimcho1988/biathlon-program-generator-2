@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { PlanComparison } from "./plan-comparison";
 import { useState } from "react";
 import { isRecord } from "../lib/training-status";
 import { COMPONENTS, PHASE_LABELS, type Component, type PlanningDraft, type PlanOutcome } from "../lib/training-management";
@@ -11,11 +12,11 @@ const label = (value: unknown) => String(value ?? "");
 const shortDate = (day: string) => day.slice(8, 10) + "." + day.slice(5, 7);
 const numeric = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? value : null;
 const display = (value: number | null) => value === null ? "—" : value.toLocaleString("bg-BG", { maximumFractionDigits: 2 });
-interface Week { start_date: string; end_date: string; accents: string[]; phases: string[]; components: Partial<Record<Component, { target_weekly_effective: number | null; target_index_7_40: number | null }>> }
+interface Week { cycle?: Record<string, unknown>; start_date: string; end_date: string; accents: string[]; phases: string[]; components: Partial<Record<Component, { target_weekly_effective: number | null; target_index_7_40: number | null }>> }
 function outlookWeeks(plan?: PlanningDraft): Week[] {
   const outlook = plan?.long_term;
   if (!isRecord(outlook) || outlook.schema_version !== "training-outlook-v1" || !Array.isArray(outlook.weeks)) return [];
-  return outlook.weeks.filter(isRecord).map(w => ({ start_date: label(w.start_date), end_date: label(w.end_date), accents: Array.isArray(w.accents) ? w.accents.map(label) : [], phases: Array.isArray(w.phases) ? w.phases.map(label) : [], components: Object.fromEntries(COMPONENTS.map(z => {
+  return outlook.weeks.filter(isRecord).map(w => ({ cycle: isRecord(w.cycle) ? w.cycle : undefined, start_date: label(w.start_date), end_date: label(w.end_date), accents: Array.isArray(w.accents) ? w.accents.map(label) : [], phases: Array.isArray(w.phases) ? w.phases.map(label) : [], components: Object.fromEntries(COMPONENTS.map(z => {
     const c = isRecord(w.components) && isRecord(w.components[z]) ? w.components[z] : {};
     return [z, { target_weekly_effective: numeric(c.target_weekly_effective), target_index_7_40: numeric(c.target_index_7_40) }];
   })) }));
@@ -36,14 +37,6 @@ export function TrainingPlanOverview({ plan, outcomes, today, stale }: { plan?: 
   const maximum = Math.max(metric === "target_index_7_40" ? 1.2 : 1, ...weeks.flatMap(w => zones.map(z => w.components[z]?.[metric] ?? 0))) * 1.1;
   const x = (index: number) => 60 + index * 770 / Math.max(1, weeks.length - 1);
   const y = (value: number) => 260 - value * 220 / maximum;
-  const weeklyActual = new Map<string, { planned: number; actual: number; known: boolean; days: number }>();
-  for (const day of outcomes) {
-    const date = new Date(`${day.date}T12:00:00Z`); date.setUTCDate(date.getUTCDate() - (date.getUTCDay() + 6) % 7);
-    const key = date.toISOString().slice(0, 10);
-    const row = weeklyActual.get(key) ?? { planned: 0, actual: 0, known: true, days: 0 };
-    row.planned += day.planned_minutes; row.actual += day.actual_minutes ?? 0; row.known &&= day.actual_minutes !== null; row.days += 1;
-    weeklyActual.set(key, row);
-  }
   return <section className="management-overview" aria-label="Дългосрочна подготовка">
     <section className="management-panel"><h2>Посока на подготовката</h2>
       {!plan ? <p>Подготви първата програма от седмичния изглед, за да видиш разпределението според твоя профил и календар.</p> : <>
@@ -67,14 +60,14 @@ export function TrainingPlanOverview({ plan, outcomes, today, stale }: { plan?: 
         </svg></div>
         <p className="management-muted">★ Основен старт · Л Лагер · ● Контролен старт, тест или недостъпен период</p>
         <label>Разгледай седмица<select value={Math.min(selected, weeks.length - 1)} onChange={e => setSelected(Number(e.target.value))}>{weeks.map((w, i) => <option key={w.start_date} value={i}>{shortDate(w.start_date)} – {shortDate(w.end_date)} · {w.accents.join(", ")}</option>)}</select></label>
-        {current && <div className="management-week-context"><p><strong>{current.phases.map(p => PHASE_LABELS[p] ?? p).join(" → ")}</strong> · Акценти: {current.accents.join(", ")}</p>
+        {current && <div className="management-week-context">{current.cycle && <p><strong>{label(current.cycle.name)}</strong> · {label(current.cycle.kind) === "STRESS" ? "Стресов микроцикъл" : label(current.cycle.kind) === "RECOVERY" ? "Разтоварване" : "Тренировъчен блок"} · седмица {label(current.cycle.week)}</p>}<p><strong>{current.phases.map(p => PHASE_LABELS[p] ?? p).join(" → ")}</strong> · Акценти: {current.accents.join(", ")}</p>
           {shownEvents.map((e, i) => <p key={i}>{EVENT[label(e.event_type)] ?? label(e.event_type)}: <strong>{label(e.name)}</strong> · {shortDate(label(e.start_date))} – {shortDate(label(e.end_date))}</p>)}
           <div className="management-table-wrap"><table><thead><tr><th>Компонент</th><th>Целеви товар / 7 дни</th><th>Целеви 7/40</th></tr></thead><tbody>{COMPONENTS.map(z => <tr key={z}><th>{z}</th><td>{display(current.components[z]?.target_weekly_effective ?? null)}</td><td>{display(current.components[z]?.target_index_7_40 ?? null)}</td></tr>)}</tbody></table></div>
         </div>}
         <details className="management-detail"><summary>Как се изчислява динамиката?</summary><p>Използват се същите компонентни цели и правила за мезоцикъл и тейпър като при седмичната програма. Показана е средната цел за 7 дни в съответния отрязък, включително при смяна на периода. Историческата база остава фиксирана към датата на изчисление; бъдещи тренировки не я увеличават изкуствено.</p><p>7/40 = (B50 + целеви седмичен товар / 7) / (B50 + C40). Празна стойност означава недостатъчна реална история. Лагерът е календарен контекст и не разрешава автоматично увеличение на товара.</p></details>
       </>}
     </section>
-    <section className="management-panel"><h2>План и реално изпълнение</h2>{weeklyActual.size === 0 ? <p>Сравнението ще се появи след започване на програмата и отчитане на реални тренировки.</p> : <><div className="management-table-wrap"><table><thead><tr><th>Седмица от</th><th>План, часа</th><th>Изпълнено, часа</th><th>Отчетени дни</th></tr></thead><tbody>{[...weeklyActual].sort(([a], [b]) => a.localeCompare(b)).map(([week, row]) => <tr key={week}><th>{shortDate(week)}</th><td>{display(row.planned / 60)}</td><td>{row.known ? display(row.actual / 60) : "Непълни данни"}</td><td>{row.days} / 7</td></tr>)}</tbody></table></div><p className="management-muted">Сумите са само за отчетените дни на активната програма. Липсващо изпълнение не се приема за нула.</p></>}</section>
+    <PlanComparison plan={plan} outcomes={outcomes} />
     <Link href="/planning#planning-calendar">Промени стартовете и лагерите в профила →</Link>
   </section>;
 }

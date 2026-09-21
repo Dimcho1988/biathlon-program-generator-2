@@ -1,5 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { defaultManagementProfile, defaultPlanningControls } from "../lib/training-management";
+import { PlanningControlsEditor } from "../components/planning-controls-editor";
 import { PlanningProfileForm } from "../components/planning-profile-form";
 import {
   getAthletePlanningProfile,
@@ -141,7 +143,8 @@ describe("planning-profile-v1 contract", () => {
       accentPreferences={unconfiguredAccents}
       planningCalendar={planningCalendar}
     />);
-    expect(html).toContain("Стойностите не се предполагат автоматично");
+    expect(html).toContain("Начална настройка · стъпка 1 от 4");
+    expect(html).not.toContain("Профилът е попълнен");
     expect(html).not.toContain('name="annual_target_hours" type="number" min="50" max="1500" step="1" value=');
   });
 
@@ -152,23 +155,19 @@ describe("planning-profile-v1 contract", () => {
       accentPreferences={accentPreferences}
       planningCalendar={planningCalendar}
     />);
-    for (const label of [
-      "Сезонна цел",
-      "Седмична структура",
-      "Мезоцикъл",
-      "Двойна прагова тренировка",
-      "Целеви обем",
-      "Дни за пълна почивка",
-    ]) expect(html).toContain(label);
-    expect(html).toContain('action="/api/athlete/planning-profile"');
-    expect(html).toContain("още една само за всеки изрично избран двоен ден");
-    expect(html).toContain("трябва да е избран и като ден с две сесии");
+    for (const label of ["Спорт и цел", "Дни и обем", "Мезоцикли и акценти", "Методи и дозиране"])
+      expect(html).toContain(label);
+    expect(html).toContain('href="/management"');
+    expect(html).toContain('href="/management/outlook"');
+    const inputs = renderToStaticMarkup(<PlanningControlsEditor profile={{...defaultManagementProfile("2026-09-21"),planning_controls:defaultPlanningControls("Run")}} onChange={()=>{}} today="2026-09-21" stage="days"/>);
+    expect(inputs).toContain("Тренировъчни дни · задължително");
+    expect(inputs).toContain("Максимум сесии за 7 дни");
     expect(html).not.toContain("annual_goal_influence");
     expect(html).not.toContain("double_threshold_min_readiness");
     expect(html).not.toContain("between_sessions_recovery_days");
   });
 
-  it("shows the immutable methodology and inactive stress policy", () => {
+  it("preserves the legacy methodology contract and exposes executable cycle controls", () => {
     expect(parsePlanningMethodology(methodology)).toEqual(methodology);
     expect(() => parsePlanningMethodology({
       ...methodology,
@@ -185,10 +184,12 @@ describe("planning-profile-v1 contract", () => {
       planningCalendar={planningCalendar}
     />);
 
-    expect(html).toContain("onflows-canonical-v1");
-    expect(html).toContain("96% · 104% · 110% · 78%");
-    expect(html).toContain("AUTO · MANUAL · HYBRID");
-    expect(html).toContain("неактивен до одобрена доза");
+    expect(html).not.toContain("STRESS остава неактивен");
+    const cycles = renderToStaticMarkup(<PlanningControlsEditor profile={{...defaultManagementProfile("2026-09-21"),planning_controls:defaultPlanningControls("Run")}} onChange={()=>{}} today="2026-09-21" stage="cycles"/>);
+    expect(cycles).toContain("Целеви 7/40 за акцент");
+    expect(cycles).toContain("стресова седмица");
+    expect(cycles).toContain("разтоварване");
+
   });
 
   it("renders and validates the stored hybrid accent resolution without guessing components", () => {
@@ -208,11 +209,9 @@ describe("planning-profile-v1 contract", () => {
       planningCalendar={planningCalendar}
     />);
 
-    expect(html).toContain('action="/api/athlete/mesocycle-accents"');
-    expect(html).toContain("Z5 · ръчно");
-    expect(html).toContain("AUTO 1");
-    expect(html).toContain("AUTO 2");
-    expect(html).toContain("STRESS остава неактивен");
+    expect(html).not.toContain('action="/api/athlete/mesocycle-accents"');
+    expect(html).toContain("3. Мезоцикли и акценти");
+
   });
 
   it("loads the profile through server-only authentication for one athlete alias", async () => {
