@@ -150,7 +150,7 @@ def test_generation_start_uses_athlete_local_day(api, monkeypatch):
 def test_draft_history_marks_changed_inputs_without_rewriting_evidence(api, monkeypatch):
     _, store, repository = api
     state = {"generation_id": "generation-a", "analysis_revision": 1}
-    fingerprint = service._hash({**state, "management_profile": PROFILE, "profile_revision": 2})
+    fingerprint = service._hash({**state, "management_profile": ManagementProfile.model_validate(PROFILE).model_dump(mode="json"), "profile_revision": 2})
     rows = [{"revision": 1, "payload": {"input_fingerprint": fingerprint, "days": []}}]
     frozen = deepcopy(rows)
     monkeypatch.setattr(store, "drafts", lambda _: rows)
@@ -176,9 +176,9 @@ def test_draft_history_retains_evidence_if_freshness_cannot_be_checked(api, monk
     assert row["payload"] == {"days": []}
 
 
-def test_all_seven_days_must_fit_program(api):
+def test_draft_start_must_fit_program(api):
     _, store, repository = api
-    store.current["profile"]["program_end"] = "2026-09-25"
+    store.current["profile"]["program_end"] = "2026-09-21"
     with pytest.raises(HTTPException) as error:
         service.generate(repository, "ath-test", request(), ACTOR, now=NOW)
     assert error.value.status_code == 422 and not store.saved

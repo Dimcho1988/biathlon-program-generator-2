@@ -7,6 +7,36 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+class IntervalDoseProfile(BaseModel):
+    """A coach-resolved effort anchor, never inferred from peak HR."""
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    zone: Literal["Z4", "Z5"]
+    sport: Literal["Run", "NordicSki", "RollerSki"]
+    continuous_capacity_min: float = Field(gt=0, le=60)
+    assessed_on: date
+    effort: str = Field(min_length=8, max_length=250)
+    work_seconds: int = Field(ge=15, le=360)
+    recovery_seconds: int = Field(ge=15, le=600)
+    min_repetitions: int = Field(ge=2, le=20)
+    max_repetitions: int = Field(ge=2, le=20)
+    total_capacity_ratio: float = Field(gt=0, le=3)
+    reserve_repetitions: int = Field(ge=1, le=4)
+    target_speed_kmh: float | None = Field(default=None, gt=0, le=80)
+    speed_basis: Literal["ACTUAL", "FLAT_EQUIVALENT"] = "ACTUAL"
+
+    @model_validator(mode="after")
+    def coherent(self):
+        if self.min_repetitions > self.max_repetitions:
+            raise ValueError("Invalid repetition range")
+        if self.work_seconds >= self.continuous_capacity_min * 60:
+            raise ValueError("One repetition must stay below continuous capacity")
+        if self.min_repetitions * self.work_seconds > self.continuous_capacity_min * 60 * self.total_capacity_ratio:
+            raise ValueError("The minimum method dose exceeds the total capacity budget")
+        if not self.effort.strip():
+            raise ValueError("Describe the effort associated with this capacity")
+        return self
+
+
 class ManagementProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -29,6 +59,16 @@ class ManagementProfile(BaseModel):
     reentry_fraction: float = Field(default=.4, ge=.4, le=.5)
     recovery_session_cap_min: float = Field(default=30, ge=5, le=45)
     allow_expert_fallback: bool = True
+    # New optional fields preserve stored v1 profiles. The activation freezes
+    # these rules; editing them subsequently requires a fresh approval.
+    adaptation_mode: Literal["AUTO", "REVIEW"] = "AUTO"
+    auto_import_enabled: bool = True
+    progression_percent: float = Field(default=5, ge=0, le=10)
+    component_targets_weekly: dict[Literal["Z1", "Z2", "Z3", "Z4", "Z5", "STR"], float] = Field(default_factory=dict)
+    interval_profiles: list[IntervalDoseProfile] = Field(default_factory=list, max_length=2)
+    strength_enabled: bool = False
+    strength_circuits: int = Field(default=2, ge=2, le=3)
+    transition_days: int = Field(default=0, ge=0, le=28)
 
     @model_validator(mode="after")
     def coherent(self):
@@ -47,6 +87,15 @@ class ManagementProfile(BaseModel):
                 raise ValueError("Training experience cannot exceed age")
         if not self.discipline.strip() or self.discipline != self.discipline.strip():
             raise ValueError("Enter a discipline without surrounding whitespace")
+        if any(not 0 <= value <= 3000 for value in self.component_targets_weekly.values()):
+            raise ValueError("Component goals must be finite weekly equivalent minutes, 0 to 3000")
+        if len({p.zone for p in self.interval_profiles}) != len(self.interval_profiles):
+            raise ValueError("Configure at most one complete interval profile per zone")
+        if any(p.sport != self.actual_sport for p in self.interval_profiles):
+            raise ValueError("Interval capacity must belong to the actual means")
+        if self.interval_profiles and (self.age_years is None or self.age_years < 18 or
+                                      self.training_experience_years is None or self.training_experience_years < 1):
+            raise ValueError("These interval profiles require an adult with at least one year of training; youth/novice profiles require separate rules")
         return self
 
 
@@ -61,3 +110,24 @@ class ManagementGenerateRequest(BaseModel):
     start_date: date
     expected_profile_revision: int = Field(ge=1, strict=True)
     expected_draft_revision: int = Field(default=0, ge=0, strict=True)
+
+
+class ManagementActivateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start_date: date
+    draft_revision: int = Field(ge=1, strict=True)
+    expected_revision: int = Field(ge=0, strict=True)
+
+
+class ManagementPlanAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["PAUSE", "RESUME", "REFRESH", "APPROVE"]
+    expected_revision: int = Field(ge=1, strict=True)
+
+
+class ManagementDayAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    date: date
+    action: Literal["SKIP", "REST", "CLEAR"]
+    expected_revision: int = Field(ge=1, strict=True)
+    note: str = Field(default="", max_length=250)

@@ -7,7 +7,7 @@ this subset. Z3 never receives the Z4/Z5 interval exception.
 """
 from copy import deepcopy
 
-VERSION = "training-methods-pilot-v1"
+VERSION = "training-methods-v2"
 COMMON = ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "COMPETITION")
 METHODS = (
     {"id": "RUN-REC-EASY-01", "title": "Леко възстановително бягане", "zone": "Z1",
@@ -53,16 +53,81 @@ METHODS = (
      "instructions": "Две еднакви части в Z3 с 3 минути леко движение между тях. Запази резерв. Сумарната работа остава в общата доза; почивката не разрешава допълнителен товар."},
 )
 
-DISABLED_METHODS = (
-    {"component": "Z4", "reason": "Нужен е одобрен конкретен интервален профил с повторения, почивки и резерв."},
-    {"component": "Z5", "reason": "Метаболитните интервали и кратките спринтове изискват отделни профили; не се използва универсален множител."},
-    {"component": "STR", "reason": "Силовият компонент се отчита в историята и Recovery; предписването изисква отделен одобрен профил с конкретни упражнения и резерв."},
+EXERCISES = (
+    "Контролиран клек със собствено тегло", "Редуващ се напад назад", "Повдигане на пръсти",
+    "Планк", "Страничен планк — смени страната по средата", "Редуване ръка–крак от тилен лег",
+    "Лицеви опори на стена", "Лопатъчни лицеви опори на стена", "Повдигане на ръце в Y от лицев лег",
 )
 
 
-def catalog():
-    return {"version": VERSION, "library_version": "v0.7", "status": "PILOT_SUBSET",
-            "methods": deepcopy(list(METHODS)), "disabled": deepcopy(list(DISABLED_METHODS)),
+def resolved_methods(profile):
+    """Only complete individual profiles can unlock metabolic intervals.
+
+    No elite source variant inherits numeric defaults from its parent card.
+    """
+    methods = deepcopy(list(METHODS))
+    methods.append({"id": "END-THR-LONG-01", "title": "Продължителна контролирана прагова работа", "zone": "Z3",
+        "sports": ("Run", "NordicSki", "RollerSki"), "purpose": "BUILDING", "position": .65,
+        "structure": "CONTINUOUS", "periods": ("GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION"),
+        "min_work_min": 15., "max_work_min": 40., "warmup_min": 12., "cooldown_min": 8.,
+        "source_id": "END-THR-LONG-01", "source_version": "0.2",
+        "instructions": "Влез плавно в работното усилие. Поддържай равен ритъм и технически резерв; това не е тест до изчерпване.",
+        "adaptation": "Един блок 15–40 минути в рамките на индивидуалния процентен бюджет; позицията в зоната следва дисциплината."})
+    methods.append({"id": "END-ALT-Z1Z2-01", "title": "Редуване на леко и умерено усилие", "zone": "Z2",
+        "sports": ("Run", "NordicSki", "RollerSki"), "purpose": "BUILDING", "position": .7,
+        "structure": "ALTERNATING", "periods": ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION"),
+        "min_work_min": 20., "max_work_min": 60., "warmup_min": 8., "cooldown_min": 5.,
+        "source_id": "END-ALT-Z1Z2-01", "source_version": "0.2",
+        "instructions": "Два цикъла Z1 → Z2, с плавна промяна на усилието. Запази свободно дишане в леките части.",
+        "adaptation": "Два цикъла с равни дялове и един споделен бюджет; начална настройка."})
+    if profile.get("strength_enabled"):
+        strength = {"id": "STR-CIRCUIT-RUN-01", "title": "Обща сила и стабилност", "zone": "STR",
+            "sports": ("Run", "NordicSki", "RollerSki"), "purpose": "BUILDING", "position": 0.,
+            "structure": "STRENGTH_CIRCUIT", "periods": ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"),
+            "min_work_min": 6., "max_work_min": profile.get("strength_circuits", 2) * 3.,
+            "warmup_min": 10., "cooldown_min": 5., "source_id": "STR-CIRCUIT-RUN-01", "source_version": "0.1",
+            "instructions": "20 секунди контролирана работа, 30 секунди преход. Съпротивление с поне 3 качествени повторения в резерв. Спри при болка или загуба на техника.",
+            "adaptation": "Общ силов профил: 9 упражнения, 2–3 кръга, 2 минути между кръговете. При ски е обща, а не специфична силова подготовка.",
+            "circuits": profile.get("strength_circuits", 2)}
+        methods.append(strength)
+        methods.append({**strength, "id": "END-AER-STR-COMBINATION-V2", "title": "Леко аеробно движение и обща сила",
+            "structure": "AEROBIC_STRENGTH", "min_work_min": 13., "max_work_min": 33.,
+            "adaptation": "Половин аеробна поддържаща доза и един кръг от силовия профил; обща сесийна граница."})
+    for p in profile.get("interval_profiles", []):
+        zone = p["zone"]
+        method = {"id": f"END-VO2-TREF-01-{zone}", "title": f"Контролирани интервали в {zone}", "zone": zone,
+            "sports": (p["sport"],), "purpose": "BUILDING", "position": .5, "structure": "METABOLIC_INTERVALS",
+            "periods": ("GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"),
+            "min_work_min": p["min_repetitions"] * p["work_seconds"] / 60,
+            "max_work_min": p["max_repetitions"] * p["work_seconds"] / 60,
+            "warmup_min": 15., "cooldown_min": 10., "source_id": "END-VO2-TREF-01", "source_version": "0.3",
+            "instructions": f"{p['effort']} Запази резерв от {p['reserve_repetitions']} качествени повторения. Прекрати при загуба на повторяем ритъм или техника. Не ускорявай, за да достигнеш пулсово число.",
+            "interval_profile": deepcopy(p), "adaptation": "Числата са от индивидуалния треньорски профил; не са наследени от елитен източников пример."}
+        methods.append(method)
+        methods.append({**method, "id": f"END-MIX-Z3-HI-01-{zone}", "title": f"Контролирана Z3 с кратък завършек в {zone}",
+            "structure": "THRESHOLD_HIGH", "zone": "Z3", "position": .75,
+            "periods": ("SPECIAL_PREPARATION", "PRECOMPETITION"), "min_work_min": 6., "max_work_min": 12.,
+            "source_id": "END-MIX-Z3-HI-01", "source_version": "0.2",
+            "adaptation": "До половината Z3 доза и половината интервален бюджет. Минималният интервален вариант остава задължителен; иначе комбинацията отпада."})
+    return methods
+
+
+DISABLED_METHODS = (
+    {"component": "NMS", "reason": "Кратките спринтове и плиометрията изискват отделна механична опора; не се маскират като метаболитна Z5."},
+    {"component": "SOURCE_VARIANTS", "reason": "Незатворените източникови и норвежки кандидати не се активират чрез наследени числа."},
+)
+
+
+def catalog(profile=None):
+    profile = profile or {}
+    disabled = deepcopy(list(DISABLED_METHODS))
+    for z in ("Z4", "Z5"):
+        if not any(p["zone"] == z for p in profile.get("interval_profiles", [])):
+            disabled.append({"component": z, "reason": "Добавете индивидуален интервален профил: устойчивост при описаното усилие, повторения, паузи и резерв."})
+    if not profile.get("strength_enabled"):
+        disabled.append({"component": "STR", "reason": "Включете общата силова подготовка в профила след проверка на упражненията."})
+    return {"version": VERSION, "library_version": "v0.7", "status": "RESOLVED_PROFILES",
+            "methods": resolved_methods(profile), "disabled": disabled,
             "source": "onflows_training_method_library_v0.7.yaml, revision 8; договорени дозови правила.",
             "validation": "EXPERT_IMPLEMENTATION_PROFILE_NOT_SCIENTIFIC_VALIDATION",
             "implementation_defaults": "Позицията в зоната, абсолютните граници на работата и неуточнените загрявки/разпускания са видими пилотни настройки, не научни норми."}

@@ -43,3 +43,10 @@
 .management-page th,.management-page td { text-align: left; padding: .65rem; border-bottom: 1px solid var(--border,#dbe4e3); white-space: nowrap; }
 .management-page pre { font-size: .75rem; max-height: 26rem; overflow: auto; padding: 1rem; border-radius: 8px; background: #f4f7f5; }
 @media(max-width: 700px) { .management-form-grid,.management-facts { grid-template-columns: 1fr; } .management-week-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .management-panel,.management-day { padding: 1rem; } .management-plan-heading label { width: 100%; } }
+
+.management-current-heading { border-top: 4px solid #397e68; }
+.management-current-heading h2 { margin-block: .2rem .8rem; }
+.management-day-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: -.5rem 0 1.5rem 1rem; }
+.management-execution { margin-top: .8rem; }
+.management-reference { border-left: 2px dashed #bdc8c1; padding-left: .6rem; }
+@media print { .management-page button,.management-day-actions,.management-profile { display: none; } .management-day { break-inside: avoid; } }

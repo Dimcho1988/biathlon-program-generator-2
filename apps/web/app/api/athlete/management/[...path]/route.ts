@@ -13,7 +13,7 @@ async function proxy(request: Request, context: Context) {
   try {
     const { path } = await context.params;
     const endpoint = path.length === 1 ? path[0] : "";
-    const permitted = request.method === "GET" ? ["profile", "drafts"] : request.method === "PUT" ? ["profile"] : ["generate"];
+    const permitted = request.method === "GET" ? ["profile", "drafts", "active"] : request.method === "PUT" ? ["profile"] : ["generate", "activate", "action", "day"];
     if (!permitted.includes(endpoint)) return error("Адресът не е намерен.", 404);
     const startDate = request.method === "GET" && endpoint === "drafts" ? new URL(request.url).searchParams.get("start_date") : null;
     if (startDate !== null && !isCalendarDate(startDate)) return error("Невалидна начална дата на програмата.", 422);
@@ -35,6 +35,15 @@ async function proxy(request: Request, context: Context) {
         if (!revision(input.expected_revision)) return error("Липсва версия на профила. Презаредете страницата.", 422);
         try { body = JSON.stringify({ profile: parseManagementProfile(input.profile), expected_revision: input.expected_revision }); }
         catch (caught) { return error(caught instanceof Error ? caught.message : "Невалиден профил.", 422); }
+      } else if (endpoint === "activate") {
+        if (!isCalendarDate(input.start_date) || !revision(input.draft_revision) || Number(input.draft_revision) < 1 || !revision(input.expected_revision)) return error("Проверете версията на проекта.", 422);
+        body = JSON.stringify({ start_date: input.start_date, draft_revision: input.draft_revision, expected_revision: input.expected_revision });
+      } else if (endpoint === "action") {
+        if (!["PAUSE", "RESUME", "REFRESH", "APPROVE"].includes(String(input.action)) || !revision(input.expected_revision) || Number(input.expected_revision) < 1) return error("Невалидно действие за програмата.", 422);
+        body = JSON.stringify({ action: input.action, expected_revision: input.expected_revision });
+      } else if (endpoint === "day") {
+        if (!isCalendarDate(input.date) || !["SKIP", "REST", "CLEAR"].includes(String(input.action)) || !revision(input.expected_revision) || Number(input.expected_revision) < 1 || typeof input.note !== "string" || input.note.length > 250) return error("Проверете деня и избраното действие.", 422);
+        body = JSON.stringify({ date: input.date, action: input.action, note: input.note, expected_revision: input.expected_revision });
       } else {
         if (!isCalendarDate(input.start_date) || !revision(input.expected_profile_revision) || !revision(input.expected_draft_revision)) return error("Проверете началната дата и версията на програмата.", 422);
         body = JSON.stringify({ start_date: input.start_date, expected_profile_revision: input.expected_profile_revision, expected_draft_revision: input.expected_draft_revision });

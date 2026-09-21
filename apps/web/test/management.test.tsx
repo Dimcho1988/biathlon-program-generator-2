@@ -78,7 +78,8 @@ describe("management API access and optimistic revision", () => {
   it("uses verified identities and only forwards expected mutation fields", async () => {
     const result = await PUT(request("PUT", { profile, expected_revision: 3, athlete_alias: "other", actor_id: "forged" }), context("profile"));
     expect(result.status).toBe(200);
-    expect(fetch).toHaveBeenCalledWith(new URL("https://api.example.test/api/v2/athlete/management/profile"), expect.objectContaining({ headers: expect.objectContaining({ "X-OnFlows-Athlete-Alias": "ath-test", "X-OnFlows-Actor-Id": "coach", Authorization: "Bearer private-test-token" }), body: JSON.stringify({ profile, expected_revision: 3 }) }));
+    expect(fetch).toHaveBeenCalledWith(new URL("https://api.example.test/api/v2/athlete/management/profile"), expect.objectContaining({ headers: expect.objectContaining({ "X-OnFlows-Athlete-Alias": "ath-test", "X-OnFlows-Actor-Id": "coach", Authorization: "Bearer private-test-token" }), body: expect.any(String) }));
+    expect(JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string)).toEqual({ profile, expected_revision: 3 });
     expect(await result.text()).not.toContain("private-test-token");
   });
   it("permits an authorized reader but prevents generation and cross-origin changes", async () => {
@@ -119,5 +120,35 @@ describe("management API access and optimistic revision", () => {
     expect(result.status).toBe(409);
     expect((await result.json()).error).toContain("Презаредете");
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("active plan access", () => {
+  const access = { userId: "athlete", actorUserId: "coach", athleteAlias: "ath-test", displayName: "Fixture", isOwner: false, canEditPlan: true, canViewPlan: true, canViewRecovery: false };
+  const ctx = (path: string) => ({ params: Promise.resolve({ path: [path] }) });
+  const req = (body: unknown) => new Request("https://web.test/api/athlete/management/action", { method: "POST", headers: { Origin: "https://web.test", "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  beforeEach(() => {
+    vi.mocked(currentAuthorizedAthlete).mockResolvedValue(access);
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "private-test-token";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ active: null, history: [] })));
+  });
+  afterEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals(); delete process.env.ONFLOWS_API_BASE_URL; delete process.env.ONFLOWS_SERVICE_TOKEN; });
+  it("forwards only the explicit approval revision and trusted actor", async () => {
+    expect((await POST(req({ action: "APPROVE", expected_revision: 4, actor_id: "fake", plan: { status: "ACTIVE" } }), ctx("action"))).status).toBe(200);
+    const options = vi.mocked(fetch).mock.calls[0][1]!;
+    expect(JSON.parse(options.body as string)).toEqual({ action: "APPROVE", expected_revision: 4 });
+    expect(options.headers).toMatchObject({ "X-OnFlows-Actor-Id": "coach" });
+  });
+  it("rejects missing versions and invented completion without actual load", async () => {
+    expect((await POST(req({ action: "APPROVE" }), ctx("action"))).status).toBe(422);
+    expect((await POST(req({ date: "2026-09-21", action: "MARK_COMPLETED", expected_revision: 2, note: "" }), ctx("day"))).status).toBe(422);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("prevents a viewer from activating or changing a program", async () => {
+    vi.mocked(currentAuthorizedAthlete).mockResolvedValue({ ...access, canEditPlan: false });
+    for (const path of ["activate", "action", "day"]) expect((await POST(req({}), ctx(path))).status).toBe(403);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

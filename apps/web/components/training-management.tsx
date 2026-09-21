@@ -1,20 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { durationHms } from "../lib/duration-format";
 import { isRecord } from "../lib/training-status";
+import { ActiveTrainingPlan } from "./active-training-plan";
+import { ManagementRules } from "./management-rules";
 import { WEEKDAYS } from "../lib/planning-profile";
 import {
   CAPACITY_LABELS, COMPONENTS, PHASE_LABELS, defaultManagementProfile, parseDraftRecord, parseDrafts, parseManagementProfile,
-  parseManagementProfileResponse, type DraftDay, type DraftRecord, type ManagementProfile, type ManagementProfileResponse,
+  parseManagementProfileResponse, parseActivePlanResponse, type ActivePlanResponse, type DraftDay, type DraftRecord, type ManagementProfile, type ManagementProfileResponse,
 } from "../lib/training-management";
 
 const number = (value: unknown, digits = 1) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("bg-BG", { maximumFractionDigits: digits }) : "—";
 const dateLabel = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString("bg-BG", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 const datePlus = (day: string, days: number) => { const value = new Date(`${day}T12:00:00Z`); value.setUTCDate(value.getUTCDate() + days); return value.toISOString().slice(0, 10); };
-const STATUS_LABELS: Record<string, string> = { TRAINING: "Тренировка", REST: "Почивка", EXISTING_ACTIVITY: "Има изпълнена активност", UNAVAILABLE: "Няма свободно време", RACE: "Състезание", REVIEW_REQUIRED: "Нужен е преглед" };
-const LIMIT_LABELS: Record<string, string> = { METHOD_WORK_CAP: "Максимална основна работа за метода", DAILY_AVAILABLE_WORK: "Оставащо време след загрявка и разпускане", REMAINING_WEEKLY_WORK: "Оставащ седмичен обем за основна работа", LOW_ABSOLUTE_RECOVERY_CAP: "Лимит на възстановителната работа", TAPER_DAILY_WORK_CAP: "Лимит за предсъстезателно разтоварване" };
+const STATUS_LABELS: Record<string, string> = { TRAINING: "Тренировка", REST: "Почивка", EXISTING_ACTIVITY: "Има изпълнена активност", UNAVAILABLE: "Няма свободно време", RACE: "Състезание", REVIEW_REQUIRED: "Нужен е преглед", SKIPPED: "Пропусната тренировка" };
+const LIMIT_LABELS: Record<string, string> = { METHOD_WORK_CAP: "Максимална основна работа за метода", DAILY_AVAILABLE_WORK: "Оставащо време след загрявка и разпускане", REMAINING_WEEKLY_WORK: "Оставащ седмичен обем за основна работа", LOW_ABSOLUTE_RECOVERY_CAP: "Лимит на възстановителната работа", TAPER_DAILY_WORK_CAP: "Лимит за предсъстезателно разтоварване", ROLLING_7_40_COMPONENT_BUDGET: "Оставащ компонентен бюджет", RACE_DURATION_WORK_CAP: "Граница според дисциплината", RESERVE_KEY_SESSION_TIME: "Запазено време за ключовите сесии" };
 const FALLBACK_LABELS: Record<string, string> = {
   NO_INDIVIDUAL_SPEED_CURVE: "Все още няма индивидуално калибрирана крива скорост–време.",
   EXPLORATORY_OR_NONMAXIMAL_TESTS: "Наличните тестове са ориентировъчни или не са максимални.",
@@ -34,7 +36,7 @@ function PeriodizationTable({ value }: { value: unknown }) {
     <details><summary>Защо са избрани тези периоди?</summary><ul>{phases.map((phase, index) => <li key={index}><strong>{PHASE_LABELS[String(phase.kind)] ?? String(phase.kind)}:</strong> {String(phase.reason ?? "")}</li>)}</ul></details></>;
 }
 
-function DayCard({ day }: { day: DraftDay }) {
+function DayCard({ day, expanded = false }: { day: DraftDay; expanded?: boolean }) {
   const session = day.session;
   const evidence = session?.dose_evidence;
   return <article className={`management-day ${session ? "has-session" : ""}`}>
@@ -42,12 +44,12 @@ function DayCard({ day }: { day: DraftDay }) {
       <span className="management-badge">{PHASE_LABELS[day.period] ?? day.period}{day.taper ? " · тейпър" : ""}</span></header>
     {session && <p className="management-session-total"><strong>{durationHms(session.total_minutes)}</strong> общо · {durationHms(session.main_work_minutes)} основна работа · {session.zone}</p>}
     <p>{day.explanation}</p>
-    {session && <ol className="management-blocks">{session.blocks.map((block, index) => <li key={`${block.kind}-${index}`}><div><strong>{block.label}</strong><span>{durationHms(block.duration_min)} · {block.zone}</span></div><p>{block.instructions}</p>
-      {(block.target_hr_bpm !== null || block.target_speed_kmh !== null) && <small>{block.target_hr_bpm !== null ? `${number(block.target_hr_bpm, 0)} уд./мин` : ""}{block.target_hr_bpm !== null && block.target_speed_kmh !== null ? " · " : ""}{block.target_speed_kmh !== null ? `${number(block.target_speed_kmh)} km/h` : ""}</small>}
-    </li>)}</ol>}
+    {session && <details className="management-execution" open={expanded}><summary>Как да изпълня тренировката</summary><ol className="management-blocks">{session.blocks.map((block, index) => <li key={`${block.kind}-${index}`}><div><strong>{block.label}</strong><span>{durationHms(block.duration_min)} · {block.zone}</span></div><p>{block.instructions}</p>
+      {(block.target_hr_bpm !== null || block.target_speed_kmh !== null) && <small>{block.target_hr_bpm !== null ? `${number(block.target_hr_bpm, 0)} уд./мин` : ""}{block.target_hr_bpm !== null && block.target_speed_kmh !== null ? " · " : ""}{block.target_speed_kmh !== null ? `${number(block.target_speed_kmh)} km/h${block.primary_control === "EFFORT_AND_QUALITY" && block.speed_basis !== "FLAT_EQUIVALENT" ? " · зададена скорост" : " · равнинна референция, не темпо по наклон"}` : ""}</small>}
+    </li>)}</ol></details>}
     <details className="management-detail"><summary>Защо тази задача и доза?</summary>
       {evidence && <><p><strong>Основа: {CAPACITY_LABELS[evidence.capacity_source] ?? evidence.capacity_source}.</strong></p><p>{evidence.explanation}</p>
-        <dl className="management-facts"><div><dt>Непрекъсната устойчивост</dt><dd>{durationHms(evidence.capacity_minutes)}</dd></div><div><dt>Дял според метода</dt><dd>{number(evidence.fraction * 100)}%</dd></div><div><dt>Първоначално поискана работа</dt><dd>{durationHms(evidence.requested_work_minutes)}</dd></div><div><dt>Предписана основна работа</dt><dd>{durationHms(evidence.prescribed_work_minutes)}</dd></div></dl>
+        <dl className="management-facts"><div><dt>{evidence.capacity_source === "STRENGTH_METHOD_PROFILE" ? "Работна граница на силовия профил" : "Непрекъсната устойчивост"}</dt><dd>{durationHms(evidence.capacity_minutes)}</dd></div><div><dt>Дял според метода</dt><dd>{number(evidence.fraction * 100)}%</dd></div><div><dt>Първоначално поискана работа</dt><dd>{durationHms(evidence.requested_work_minutes)}</dd></div><div><dt>Предписана основна работа</dt><dd>{durationHms(evidence.prescribed_work_minutes)}</dd></div></dl>
         {evidence.limits.length > 0 && <><h4>Приложени ограничения</h4><ul>{evidence.limits.map((limit, index) => <li key={`${limit.code}-${index}`}>{LIMIT_LABELS[limit.code] ?? limit.code}: {durationHms(limit.limit_minutes)}</li>)}</ul></>}
         {evidence.fallback_reasons.length > 0 && <><h4>Защо е използвана резервната оценка?</h4><ul>{evidence.fallback_reasons.map((reason, index) => <li key={index}>{FALLBACK_LABELS[reason] ?? reason}</li>)}</ul></>}
         <p className="management-muted">Метод: {session.method_id} · Версия на оценката: {evidence.model_version}</p>
@@ -70,21 +72,42 @@ async function requestJson(path: string, method: "GET" | "PUT" | "POST", body?: 
   return value;
 }
 
-export function TrainingManagement({ athleteName, canEdit, initialProfile, initialDrafts, today }: {
-  athleteName: string; canEdit: boolean; initialProfile: ManagementProfileResponse; initialDrafts: DraftRecord[]; today: string;
+export function TrainingManagement({ athleteName, canEdit, initialProfile, initialDrafts, initialActive = { active: null, history: [] }, today }: {
+  athleteName: string; canEdit: boolean; initialProfile: ManagementProfileResponse; initialDrafts: DraftRecord[]; initialActive?: ActivePlanResponse; today: string;
 }) {
+  const [active, setActive] = useState(initialActive);
   const [saved, setSaved] = useState(initialProfile);
   const [profile, setProfile] = useState<ManagementProfile>(initialProfile.profile ?? defaultManagementProfile(today));
   const [drafts, setDrafts] = useState(initialDrafts);
   const [selected, setSelected] = useState(0);
   const [startDate, setStartDate] = useState(datePlus(today, 1));
-  const [busy, setBusy] = useState<"save" | "generate" | null>(null);
+  const [busy, setBusy] = useState<"save" | "generate" | "activate" | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const draft = drafts[selected];
   const dirty = JSON.stringify(profile) !== JSON.stringify(saved.profile);
   const update = <K extends keyof ManagementProfile>(key: K, value: ManagementProfile[K]) => setProfile(previous => ({ ...previous, [key]: value }));
   const optionalNumber = (value: string) => value === "" ? null : Number(value);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      if (document.visibilityState !== "visible") return;
+      try { const latest = parseActivePlanResponse(await requestJson("active", "GET")); if (!cancelled) setActive(latest); } catch { /* Keep the last known state; writes still enforce current revisions. */ }
+    };
+    const timer = setInterval(refresh, 60_000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, []);
+
+  async function activateDraft() {
+    if (!draft) return;
+    setBusy("activate"); setError("");
+    try {
+      const result = await requestJson("activate", "POST", { start_date: draft.payload.start_date, draft_revision: draft.revision, expected_revision: active.active?.revision ?? 0 });
+      setActive(parseActivePlanResponse(result)); setNotice("Програмата е утвърдена. Текущите задачи са най-горе.");
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Програмата не беше утвърдена."); }
+    finally { setBusy(null); }
+  }
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError(""); setNotice(""); setBusy("save");
@@ -93,6 +116,7 @@ export function TrainingManagement({ athleteName, canEdit, initialProfile, initi
       const result = parseManagementProfileResponse(await requestJson("profile", "PUT", { profile: checked, expected_revision: saved.revision }));
       setSaved(result); if (result.profile) setProfile(result.profile);
       setDrafts(previous => previous.map(item => ({ ...item, stale: true, stale_reason: "Профилът е променен след създаването на този проект." })));
+      if (active.active) setActive(previous => ({ ...previous, active: previous.active ? { ...previous.active, stale: true, actionable: false, stale_reason: "Профилът е променен; новите правила изискват преглед." } : null }));
       setNotice(`Профилът е запазен като версия ${result.revision}. Промените ще се използват при следващото генериране. Съществуващите програми запазват своите настройки.`);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Профилът не беше записан."); }
     finally { setBusy(null); }
@@ -103,7 +127,8 @@ export function TrainingManagement({ athleteName, canEdit, initialProfile, initi
     try {
       const currentHistory = parseDrafts(await requestJson(`drafts?start_date=${encodeURIComponent(startDate)}`, "GET"));
       const existing = currentHistory.filter(item => item.payload.start_date === startDate).reduce((maximum, item) => Math.max(maximum, item.revision), 0);
-      const record = parseDraftRecord(await requestJson("generate", "POST", { start_date: startDate, expected_profile_revision: saved.revision, expected_draft_revision: existing }));
+      const generated = parseDraftRecord(await requestJson("generate", "POST", { start_date: startDate, expected_profile_revision: saved.revision, expected_draft_revision: existing }));
+      const record = { ...generated, stale: false };
       setDrafts(previous => [record, ...previous.filter(item => !(item.entry_key === record.entry_key && item.revision === record.revision))]); setSelected(0);
       setNotice(record.payload.status === "BLOCKED" ? "Програмата изисква допълнителни данни. Причините са показани по-долу." : "Новият проект е готов за преглед. Не е публикуван в тренировъчния календар.");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Програмата не беше създадена."); }
@@ -118,11 +143,12 @@ export function TrainingManagement({ athleteName, canEdit, initialProfile, initi
   }
 
   return <main className="activities-page management-page">
-    <header className="activities-hero"><div className="activities-title"><div><p className="eyebrow">Индивидуална подготовка</p><h1>Управление и програма</h1><p>{athleteName} · Седемдневен проект за треньорски преглед</p></div></div></header>
+    <header className="activities-hero"><div className="activities-title"><div><p className="eyebrow">Индивидуална подготовка</p><h1>Управление и програма</h1><p>{athleteName} · Индивидуален план и реално изпълнение</p></div></div></header>
     <p className="management-intro">Периодът задава целта. Скорост–време оценява капацитета, методът определя дозата, а натоварването и възстановяването определят приложимостта ѝ.</p>
-    <p className="management-notice">Първа версия: конкретни задачи в Z1–Z3, с консервативни граници спрямо досегашното натоварване и C40. Z4, Z5 и силовите сесии предстоят. Възрастта, стажът и състезателната продължителност се записват в профила; автоматичната прогресия според тях предстои.</p>
+
     {!canEdit && <p className="management-notice">Имате достъп за преглед. Редактирането на профила и създаването на програма изискват право за промяна на плана.</p>}
     {error && <p className="management-error" role="alert">{error}</p>}{notice && <p className="management-notice" role="status">{notice}</p>}
+    <ActiveTrainingPlan value={active} onChange={setActive} canEdit={canEdit} today={today} renderDay={day => <DayCard day={day} expanded={day.date === today} />} />
     <details className="management-profile management-panel" open={!saved.configured}>
       <summary>Профил и настройки <span>{saved.configured ? `Версия ${saved.revision}` : "Нужна е начална настройка"}</span></summary>
       <form onSubmit={save}><fieldset disabled={!canEdit || busy !== null}><div className="management-form-grid">
@@ -148,20 +174,23 @@ export function TrainingManagement({ athleteName, canEdit, initialProfile, initi
         <label>Изграждаща доза при вработване, %<input required type="number" min="40" max="50" step="1" value={Math.round(profile.reentry_fraction * 100)} onChange={event => update("reentry_fraction", Number(event.target.value) / 100)} /></label>
         <label>Таван на възстановителната сесия, мин<input required type="number" min="5" max="45" value={profile.recovery_session_cap_min} onChange={event => update("recovery_session_cap_min", Number(event.target.value))} /></label>
       </div><label className="management-check"><input type="checkbox" checked={profile.allow_expert_fallback} onChange={event => update("allow_expert_fallback", event.target.checked)} />Разрешавам експертен Tref при недостатъчно надеждна оценка от скорост–време</label>
+      <ManagementRules profile={profile} onChange={setProfile} today={today} />
       <p className="management-muted">Tref тук означава непрекъсната устойчивост при конкретна интензивност и средство. Историческият обем и C40 са различни величини.</p></details>
       <div className="management-actions"><button className="action-button" type="submit" disabled={!dirty}>{busy === "save" ? "Запазване…" : "Запази профила"}</button><Link href="/planning">Стартове и лагери в календара →</Link></div>
       </fieldset></form>
     </details>
-    <section className="management-panel"><h2>Следващите седем дни</h2><form className="management-generate" onSubmit={generate}><label>Начална дата<input aria-label="Начална дата на програмата" required type="date" min={saved.profile && saved.profile.program_start > today ? saved.profile.program_start : today} max={saved.profile && datePlus(saved.profile.program_end, -6) < datePlus(today, 7) ? datePlus(saved.profile.program_end, -6) : datePlus(today, 7)} value={startDate} onChange={event => setStartDate(event.target.value)} disabled={!canEdit || busy !== null} /></label><button className="action-button" type="submit" disabled={!canEdit || busy !== null || !saved.configured || dirty}>{busy === "generate" ? "Подготвям програмата…" : "Създай проект за преглед"}</button></form>
-      <p className="management-muted">Началото може да е днес или в следващите седем дни. Целият проект трябва да се побира в периода на подготовка.</p>
+    <details className="management-drafts management-panel" open={!active.active}><summary>Нов проект и запазени проекти</summary>
+    <section className="management-panel"><h2>Следващите седем дни</h2><form className="management-generate" onSubmit={generate}><label>Начална дата<input aria-label="Начална дата на програмата" required type="date" min={saved.profile && saved.profile.program_start > today ? saved.profile.program_start : today} max={saved.profile && saved.profile.program_end < datePlus(today, 7) ? saved.profile.program_end : datePlus(today, 7)} value={startDate} onChange={event => setStartDate(event.target.value)} disabled={!canEdit || busy !== null} /></label><button className="action-button" type="submit" disabled={!canEdit || busy !== null || !saved.configured || dirty}>{busy === "generate" ? "Подготвям програмата…" : "Създай проект за преглед"}</button></form>
+      <p className="management-muted">Началото може да е днес или в следващите седем дни. В края на подготовката се показват само оставащите дни.</p>
       {dirty && <p className="management-muted">Запазете профила, за да използвате тези настройки в новия проект.</p>}
-      <p className="management-muted">Проектът не се изпраща към Intervals и не променя автоматично календара. Wellness остава диагностичен; готовността използва само натоварването.</p>
+      <p className="management-muted">След преглед утвърдете проекта, за да стане действаща програма. Изпълнението идва от реалните активности; wellness остава диагностичен.</p>
     </section>
     {draft ? <section className="management-plan" aria-label="Проект на тренировъчна програма"><div className="management-plan-heading"><div><h2>{dateLabel(draft.payload.start_date)} – {dateLabel(draft.payload.end_date)}</h2><p>{draft.payload.status === "BLOCKED" ? "Нужни са допълнителни данни" : draft.payload.status === "LIMITED_DRAFT" ? "Проект с ограничения — прегледайте причините" : "Проект за треньорски преглед"} · Версия {draft.revision}</p></div>
       <label>Запазени проекти<select value={selected} onChange={event => setSelected(Number(event.target.value))}>{drafts.map((item, index) => <option key={`${item.entry_key}-${item.revision}`} value={index}>{item.payload.start_date} · v{item.revision}{item.recorded_at ? ` · ${new Date(item.recorded_at).toLocaleString("bg-BG")}` : ""}</option>)}</select></label></div>
       {draft.stale === true && <p className="management-notice" role="status">{draft.stale_reason ?? "Входните данни са променени — създайте нов проект."}</p>}
       {draft.stale === null && <p className="management-notice" role="status">Актуалността на входните данни не е потвърдена. Прегледайте данните преди използване.</p>}
-      {draft.payload.warnings.length > 0 && <div className="management-notice"><ul>{draft.payload.warnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}</ul></div>}
+      {draft.payload.warnings.length > 0 && <details className="management-notice" open={draft.payload.status === "BLOCKED"}><summary>Условия и пояснения · {draft.payload.warnings.length}</summary><ul>{draft.payload.warnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}</ul></details>}
+      <div className="management-actions"><button type="button" className="action-button" disabled={!canEdit || busy !== null || dirty || draft.stale !== false || draft.payload.activation_eligible !== true} onClick={activateDraft}>{busy === "activate" ? "Утвърждаване…" : "Утвърди тази програма"}</button><p className="management-muted">Утвърждавате и избрания режим на адаптация. Можете да поставите програмата на пауза по всяко време.</p></div>
       <div className="management-days">{draft.payload.days.map(day => <DayCard key={day.date} day={day} />)}</div>
       <details className="management-panel management-detail"><summary>Периодизация, източници и настройки на този проект</summary><p>Програмата запазва входните данни и версиите, с които е изчислена. По-късни настройки се използват в следващ проект.</p>
         <PeriodizationTable value={draft.payload.periodization} />
@@ -170,5 +199,6 @@ export function TrainingManagement({ athleteName, canEdit, initialProfile, initi
         <button type="button" className="action-button secondary" onClick={exportDraft}>Изтегли пълния отчет</button>
       </details>
     </section> : <section className="management-panel"><h2>Все още няма проект</h2><p>Попълнете профила и стартовете. Първата програма ще покаже конкретните задачи и причините за избраната доза.</p></section>}
+    </details>
   </main>;
 }

@@ -857,7 +857,17 @@ def run_worker(
     stopping = stop_event or Event()
     idle_delay = poll_seconds
     maintenance_at_by_alias: dict[str, float] = {}
+    next_management_check = 0.
     while not stopping.is_set():
+        management_tick = getattr(repository, "refresh_due_training_plans", None)
+        if callable(management_tick):
+            management_now = monotonic_clock()
+            if management_now >= next_management_check:
+                next_management_check = management_now + 60.
+                try:
+                    management_tick()
+                except Exception as exc:
+                    logger.warning("management_tick_deferred error_type=%s", type(exc).__name__)
         try:
             claim = repository.claim_sync_job(
                 worker_id=worker_id,
@@ -892,6 +902,14 @@ def run_worker(
             result.outcome,
             result.failure_code or "none",
         )
+        adapt = getattr(repository, "adapt_training_plan", None)
+        if result.outcome == "ACTIVATED" and callable(adapt):
+            try:
+                adapt(claim["athlete_alias"])
+            except Exception as exc:
+                # A valid imported generation remains successful even when
+                # replanning needs a retry, more data or renewed coach access.
+                logger.warning("management_after_sync_deferred error_type=%s", type(exc).__name__)
         if once:
             return 0
         athlete_alias = claim.get("athlete_alias")
