@@ -742,6 +742,18 @@ class SupabasePilotRepository(SnapshotRepository):
                     "latest_canonical_run_key": row.get("canonical_run_key"), "input_key": row.get("input_key")})
         return {**analysis, "activities": activities}
 
+    def active_planning_calendar(
+        self, athlete_alias: str, period_start: date, period_end: date
+    ) -> Mapping[str, Any] | None:
+        """Read the pinned load snapshot and session metadata, without HRmod JSON.
+
+        Planning checks recorded sessions and immutable source identities. The
+        generation-pinned TI reader already provides those fields and validates
+        every page before returning. Detailed per-activity analyses are not input
+        to this calendar read; speed/TI models load their own summaries separately.
+        """
+        return self.active_trainability_calendar(athlete_alias, period_start, period_end)
+
     def active_activity_calendar(
         self, athlete_alias: str, period_start: date, period_end: date
     ) -> Mapping[str, Any] | None:

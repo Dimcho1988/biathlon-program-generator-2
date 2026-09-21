@@ -161,7 +161,8 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
             decisions.pop(day_action.date.isoformat(), None)
         else:
             decisions[day_action.date.isoformat()] = {"action": day_action.action, "note": day_action.note}
-    envelope = repository.active_activity_calendar(alias, today - timedelta(days=89), today) or {}
+    calendar_reader = getattr(repository, "active_planning_calendar", None) or repository.active_activity_calendar
+    envelope = calendar_reader(alias, today - timedelta(days=89), today) or {}
     source = (envelope.get("snapshot_payload") or {}).get("load_history") or {}
     payload["outcomes"] = reconcile(old["plan"], source, today, decisions, old.get("outcomes", []))
     payload.update(evaluated_on=today.isoformat(), processed_input_fingerprint=fingerprint)
