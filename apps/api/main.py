@@ -99,9 +99,11 @@ from .response_monitoring import DailyReport, SessionReport, ResponseBlock, Opti
 from . import response_service
 from . import model_service
 from .model_schemas import RecoveryConfigInput, SpeedTestInput, ManualSpeedTestInput, RecoveryHistoryV2
-from .management_schemas import ManagementProfileWrite, ManagementGenerateRequest
+from .management_schemas import (ManagementProfileWrite, ManagementGenerateRequest,
+                                 ManagementActivateRequest, ManagementPlanAction, ManagementDayAction)
 from .management_store import ManagementStore
 from . import management_service
+from . import management_lifecycle
 
 app = FastAPI(title="onFlows API", version="1.0.0")
 logger = logging.getLogger(__name__)
@@ -182,6 +184,60 @@ def generate_management_draft(
         return management_service.generate(_repository(), alias, body, actor)
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "A management draft could not be saved") from exc
+
+
+@app.get("/api/v2/athlete/management/active")
+def management_active(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+):
+    alias = _model_alias(authorization, athlete_alias)
+    try:
+        return management_lifecycle.current(_repository(), alias)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Active planning is temporarily unavailable") from exc
+
+
+def _management_action(operation, body, authorization, athlete_alias, actor):
+    alias = _model_alias(authorization, athlete_alias)
+    if actor is None:
+        raise HTTPException(401, "Actor session is required")
+    try:
+        repository = _repository()
+        if operation == "activate":
+            management_lifecycle.activate(repository, alias, body, actor)
+        elif operation == "day":
+            management_lifecycle.refresh(repository, alias, actor, expected_revision=body.expected_revision,
+                                         force=True, day_action=body)
+        else:
+            management_lifecycle.action(repository, alias, body, actor)
+        return management_lifecycle.current(repository, alias)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "The active plan could not be updated") from exc
+
+
+@app.post("/api/v2/athlete/management/activate")
+def management_activate(body: ManagementActivateRequest,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None):
+    return _management_action("activate", body, authorization, athlete_alias, actor)
+
+
+@app.post("/api/v2/athlete/management/action")
+def management_plan_action(body: ManagementPlanAction,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None):
+    return _management_action("action", body, authorization, athlete_alias, actor)
+
+
+@app.post("/api/v2/athlete/management/day")
+def management_day_action(body: ManagementDayAction,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None):
+    return _management_action("day", body, authorization, athlete_alias, actor)
 
 
 @app.get("/api/v2/athlete/models/recovery")

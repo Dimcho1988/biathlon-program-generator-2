@@ -20,13 +20,28 @@ export interface ManagementProfile {
   reentry_fraction: number;
   recovery_session_cap_min: number;
   allow_expert_fallback: boolean;
+  adaptation_mode: "AUTO" | "REVIEW";
+  auto_import_enabled: boolean;
+  progression_percent: number;
+  component_targets_weekly: Partial<Record<Component, number>>;
+  interval_profiles: IntervalDoseProfile[];
+  strength_enabled: boolean;
+  strength_circuits: number;
+  transition_days: number;
+}
+
+export interface IntervalDoseProfile {
+  zone: "Z4" | "Z5"; sport: "Run" | "NordicSki" | "RollerSki";
+  continuous_capacity_min: number; assessed_on: string; effort: string;
+  work_seconds: number; recovery_seconds: number; min_repetitions: number; max_repetitions: number;
+  total_capacity_ratio: number; reserve_repetitions: number; target_speed_kmh: number | null; speed_basis?: "ACTUAL" | "FLAT_EQUIVALENT";
 }
 
 export interface ManagementProfileResponse { configured: boolean; profile: ManagementProfile | null; revision: number; today?: string; timezone?: string }
 export interface DraftRecord { entry_key: string; revision: number; recorded_at?: string; stale?: boolean | null; stale_reason?: string | null; payload: PlanningDraft }
 export type Component = "Z1" | "Z2" | "Z3" | "Z4" | "Z5" | "STR";
 export const COMPONENTS: Component[] = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"];
-export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string }
+export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string }
 export interface DoseEvidence {
   capacity_source: string; capacity_minutes: number; target_hr_bpm: number | null; target_speed_kmh: number | null;
   fraction: number; requested_work_minutes: number; prescribed_work_minutes: number;
@@ -81,7 +96,28 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     || !range(value.recovery_session_cap_min, 5, 45) || typeof value.allow_expert_fallback !== "boolean") {
     throw new Error("Проверете датите, наличното време и параметрите на профила.");
   }
-  return value as unknown as ManagementProfile;
+  const normalized: Record<string, unknown> = { adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, component_targets_weekly: {},
+    interval_profiles: [], strength_enabled: false, strength_circuits: 2, transition_days: 0, ...value };
+  if (typeof normalized.auto_import_enabled !== "boolean" || !["AUTO", "REVIEW"].includes(String(normalized.adaptation_mode)) || !range(normalized.progression_percent, 0, 10)
+    || typeof normalized.strength_enabled !== "boolean" || !integer(normalized.strength_circuits, 2, 3)
+    || !integer(normalized.transition_days, 0, 28) || !isRecord(normalized.component_targets_weekly)
+    || !Object.entries(normalized.component_targets_weekly).every(([k, v]) => COMPONENTS.includes(k as Component) && range(v, 0, 3000))
+    || !Array.isArray(normalized.interval_profiles) || normalized.interval_profiles.length > 2) throw new Error("Невалидни правила за адаптация или компонентни цели.");
+  const seen = new Set<string>();
+  for (const p of normalized.interval_profiles) {
+    if (!isRecord(p) || !["Z4", "Z5"].includes(String(p.zone)) || seen.has(String(p.zone)) || p.sport !== value.actual_sport
+      || !range(p.continuous_capacity_min, .001, 60) || !isCalendarDate(p.assessed_on)
+      || typeof p.effort !== "string" || p.effort.trim().length < 8 || p.effort.length > 250
+      || !integer(p.work_seconds, 15, 360) || !integer(p.recovery_seconds, 15, 600)
+      || !integer(p.min_repetitions, 2, 20) || !integer(p.max_repetitions, p.min_repetitions, 20)
+      || !range(p.total_capacity_ratio, .001, 3) || !integer(p.reserve_repetitions, 1, 4)
+      || !optionalRange(p.target_speed_kmh, .001, 80) || (p.speed_basis !== undefined && !["ACTUAL", "FLAT_EQUIVALENT"].includes(String(p.speed_basis)))
+      || p.work_seconds >= p.continuous_capacity_min * 60
+      || p.min_repetitions * p.work_seconds > p.continuous_capacity_min * 60 * p.total_capacity_ratio
+      || !range(value.age_years, 18, 100) || !range(value.training_experience_years, 1, 85)) throw new Error("Проверете целия интервален профил, възрастта и стажа. Минималната структура трябва да се побира в дозата.");
+    seen.add(String(p.zone));
+  }
+  return normalized as unknown as ManagementProfile;
 }
 
 export function parseManagementProfileResponse(value: unknown): ManagementProfileResponse {
@@ -142,6 +178,8 @@ export function defaultManagementProfile(today: string): ManagementProfile {
     recent_weekly_hours: null, reentry_days: null, taper_days: 7, max_key_sessions_per_week: 2,
     building_fraction: .5, maintenance_fraction: .3, reentry_fraction: .4,
     recovery_session_cap_min: 30, allow_expert_fallback: true,
+    adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, component_targets_weekly: {}, interval_profiles: [],
+    strength_enabled: false, strength_circuits: 2, transition_days: 0,
   };
 }
 
@@ -154,4 +192,29 @@ export const PHASE_LABELS: Record<string, string> = {
 export const CAPACITY_LABELS: Record<string, string> = {
   SPEED_TIME: "Индивидуална скорост–време", SPEED_DURATION: "Индивидуална скорост–време",
   EXPERT_TREF: "Експертен Tref — резервна оценка", EXPERT_FALLBACK: "Експертен Tref — резервна оценка", EXPERT_CONTINUOUS_TREF: "Експертен Tref — резервна оценка",
+  COACH_EFFORT_CAPACITY: "Индивидуална устойчивост при описаното усилие",
+  STRENGTH_METHOD_PROFILE: "Отделен силов профил с упражнения и резерв",
 };
+
+export interface PlanChange { date: string; before: string | null; after: string | null; before_minutes: number; after_minutes: number; reason: string }
+export interface PlanOutcome { date: string; status: string; planned_title: string | null; planned_minutes: number; actual_minutes: number | null }
+export interface ActivePlanRecord {
+  revision: number; stale: boolean; actionable: boolean; stale_reason?: string | null;
+  payload: { schema_version: "active-plan-v2"; status: "ACTIVE" | "PAUSED" | "REVIEW_REQUIRED" | "COMPLETED";
+    mode: "AUTO" | "REVIEW"; reason: string; plan: PlanningDraft; proposal: PlanningDraft | null;
+    changes: PlanChange[]; outcomes: PlanOutcome[]; decisions: Record<string, { action: string; note: string }> };
+}
+export interface ActivePlanResponse { active: ActivePlanRecord | null; history: Array<{ revision: number; operation: string; recorded_at: string; reason: string; changes: PlanChange[] }> }
+export function parseActivePlanResponse(value: unknown): ActivePlanResponse {
+  if (!isRecord(value) || !Array.isArray(value.history)) throw new Error("Невалидна история на активния план.");
+  if (value.active === null) return { active: null, history: [] };
+  const row = value.active;
+  if (!isRecord(row) || !integer(row.revision, 1, Number.MAX_SAFE_INTEGER) || typeof row.stale !== "boolean" || typeof row.actionable !== "boolean" || !isRecord(row.payload)) throw new Error("Невалидна активна програма.");
+  const p = row.payload;
+  if (p.schema_version !== "active-plan-v2" || !["ACTIVE", "PAUSED", "REVIEW_REQUIRED", "COMPLETED"].includes(String(p.status))
+    || !["AUTO", "REVIEW"].includes(String(p.mode)) || typeof p.reason !== "string" || !Array.isArray(p.changes)
+    || !Array.isArray(p.outcomes) || !isRecord(p.decisions)) throw new Error("Невалидно състояние на програмата.");
+  parseDraftRecord({ entry_key: "active", revision: row.revision, payload: p.plan });
+  if (p.proposal !== null) parseDraftRecord({ entry_key: "proposal", revision: row.revision, payload: p.proposal });
+  return value as unknown as ActivePlanResponse;
+}

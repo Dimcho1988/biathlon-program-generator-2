@@ -2,7 +2,7 @@ import { currentAuthorizedAthlete } from "../../lib/account-access";
 import { waitForApi } from "../../lib/api-readiness";
 import { ErrorState } from "../../components/error-state";
 import { TrainingManagement } from "../../components/training-management";
-import { parseDrafts, parseManagementProfileResponse, type DraftRecord, type ManagementProfileResponse } from "../../lib/training-management";
+import { parseDrafts, parseManagementProfileResponse, parseActivePlanResponse, type ActivePlanResponse, type DraftRecord, type ManagementProfileResponse } from "../../lib/training-management";
 import "./management.css";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +13,7 @@ export default async function ManagementPage() {
   if (!access.canViewPlan) return <ErrorState message="Този спортист не е споделил тренировъчния си план с вас." refreshAvailable={false} />;
   let profile: ManagementProfileResponse;
   let drafts: DraftRecord[];
+  let active: ActivePlanResponse;
   try {
     const base = process.env.ONFLOWS_API_BASE_URL;
     const token = process.env.ONFLOWS_SERVICE_TOKEN;
@@ -26,12 +27,13 @@ export default async function ManagementPage() {
       if (!response.ok) throw new Error("Профилът и програмите временно не са достъпни.");
       return response.json();
     };
-    const [profileData, draftData] = await Promise.all([resource("profile"), resource("drafts")]);
+    const [profileData, draftData, activeData] = await Promise.all([resource("profile"), resource("drafts"), resource("active")]);
+    active = parseActivePlanResponse(activeData);
     profile = parseManagementProfileResponse(profileData);
     drafts = parseDrafts(draftData);
   } catch (caught) {
     return <ErrorState message={caught instanceof Error ? caught.message : "Управлението временно не е достъпно."} retryAvailable retryHref="/management" />;
   }
-  return <TrainingManagement athleteName={access.displayName} canEdit={access.canEditPlan}
-    initialProfile={profile} initialDrafts={drafts} today={profile.today ?? new Date().toISOString().slice(0, 10)} />;
+  return <TrainingManagement key={access.athleteAlias} athleteName={access.displayName} canEdit={access.canEditPlan}
+    initialProfile={profile} initialDrafts={drafts} initialActive={active} today={profile.today ?? new Date().toISOString().slice(0, 10)} />;
 }

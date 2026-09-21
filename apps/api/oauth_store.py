@@ -152,6 +152,14 @@ class TokenCipher:
 class SupabasePilotRepository(SnapshotRepository):
     """Minimal PostgREST client using a server-only Supabase secret key."""
 
+    def adapt_training_plan(self, athlete_alias):
+        from .management_lifecycle import refresh
+        return refresh(self, athlete_alias, automatic=True)
+
+    def refresh_due_training_plans(self):
+        from .management_lifecycle import run_due
+        return run_due(self)
+
     def __init__(
         self,
         *,

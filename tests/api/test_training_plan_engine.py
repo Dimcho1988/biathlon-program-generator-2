@@ -312,7 +312,7 @@ def test_three_week_mesocycle_unloads_in_third_week():
     assert result["parameters"]["mesocycle_length_weeks"] == 3
     assert result["parameters"]["mesocycle_factor"] == .78
     assert result["days"][0]["load_budget"]["mesocycle_factor"] == .78
-    assert result["days"][-1]["load_budget"]["mesocycle_factor"] == .96
+    assert result["days"][-1]["load_budget"]["mesocycle_factor"] == 1.
 
 
 def test_actual_key_session_preserves_minimum_spacing():

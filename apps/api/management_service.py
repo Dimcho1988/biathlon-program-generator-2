@@ -65,12 +65,12 @@ def input_state(repository, alias, *, evaluated_at=None):
     }
 
 
-def generate(repository, alias, body, actor, *, now=None):
+def build_draft(repository, alias, start_date, expected_profile_revision, *, now=None, decisions=None, locked_day=None):
     store = ManagementStore(repository)
     stored = store.profile(alias)
     if not stored["configured"]:
         raise HTTPException(409, "Complete the management profile first")
-    if stored["revision"] != body.expected_profile_revision:
+    if stored["revision"] != expected_profile_revision:
         raise HTTPException(409, "The management profile changed; reload before generating")
     profile = ManagementProfile.model_validate(stored["profile"])
     settings = repository.athlete_settings(alias)
@@ -78,13 +78,14 @@ def generate(repository, alias, body, actor, *, now=None):
         raise HTTPException(409, "Configure athlete HR zones and timezone before generating")
     now = now or datetime.now(timezone.utc)
     today = now.astimezone(ZoneInfo(settings.timezone)).date()
-    if not today <= body.start_date <= today + timedelta(days=7):
+    if not today <= start_date <= today + timedelta(days=7):
         raise HTTPException(422, "Choose a start from today through the next seven days")
-    if body.start_date < profile.program_start or body.start_date + timedelta(days=6) > profile.program_end:
-        raise HTTPException(422, "The full seven-day draft must fit within the planning period")
+    if start_date < profile.program_start or start_date > profile.program_end:
+        raise HTTPException(422, "The draft must start within the planning period")
     before = input_state(repository, alias, evaluated_at=now)
     payload = training_plan_engine.generate_plan(
-        repository, alias, profile.model_dump(mode="json"), start_date=body.start_date, now=now,
+        repository, alias, profile.model_dump(mode="json"), start_date=start_date, now=now,
+        decisions=decisions, locked_day=locked_day,
     )
     after = input_state(repository, alias, evaluated_at=now)
     if _hash(before) != _hash(after):
@@ -95,12 +96,16 @@ def generate(repository, alias, body, actor, *, now=None):
     frozen = {**before, "management_profile": profile.model_dump(mode="json"),
               "profile_revision": stored["revision"]}
     payload.update({"input_snapshot": frozen, "input_fingerprint": _hash(frozen),
-                    "review_required": True, "automatically_published": False})
-    return store.save_draft(
-        alias, payload, actor, body.expected_profile_revision,
-        expected_revision=body.expected_draft_revision,
-        check_generation=True, expected_generation_id=before["generation_id"],
-    )
+                    "review_required": True, "automatically_published": False,
+                    "operational_context": {"decisions": decisions or {}, "locked_day": locked_day}})
+    return payload
+
+
+def generate(repository, alias, body, actor, *, now=None):
+    payload = build_draft(repository, alias, body.start_date, body.expected_profile_revision, now=now)
+    return ManagementStore(repository).save_draft(
+        alias, payload, actor, body.expected_profile_revision, expected_revision=body.expected_draft_revision,
+        check_generation=True, expected_generation_id=payload["source"]["generation_id"])
 
 
 def history(repository, alias, *, start_date=None):
@@ -116,7 +121,8 @@ def history(repository, alias, *, start_date=None):
     try:
         profile = store.profile(alias)
         state = input_state(repository, alias)
-        fingerprint = _hash({**state, "management_profile": profile["profile"],
+        normalized = ManagementProfile.model_validate(profile["profile"]).model_dump(mode="json") if profile["profile"] else None
+        fingerprint = _hash({**state, "management_profile": normalized,
                              "profile_revision": profile["revision"]})
     except PersistentStoreFailure:
         return {"drafts": [{**row, "stale": None,

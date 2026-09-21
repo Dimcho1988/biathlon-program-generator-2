@@ -112,7 +112,7 @@ def test_explicit_entry_reserves_days_and_zero_suppresses_entry():
     assert any(row["code"] == "REENTRY_TRUNCATED_BY_RACE" for row in too_short["warnings"])
 
 
-def test_no_target_and_context_do_not_invent_tapers_or_load():
+def test_control_race_uses_short_freshening_without_inventing_main_target():
     inputs = [event(START + timedelta(days=4), kind, identifier=kind)
               for kind in ("CONTROL_RACE", "CAMP", "TEST", "UNAVAILABLE")]
     before = deepcopy(inputs)
@@ -120,10 +120,12 @@ def test_no_target_and_context_do_not_invent_tapers_or_load():
     assert inputs == before
     assert result["next_main_race"] is None
     assert lengths(result) == (0, 28, 0, 0)
-    assert result["taper_windows"] == []
+    assert len(result["taper_windows"]) == 1
+    assert result["taper_windows"][0]["kind"] == "CONTROL_FRESHENING"
+    assert result["taper_windows"][0]["volume_factor"] == .8
     assert {row["event_type"] for row in result["calendar_context"]} == {row["event_type"] for row in inputs}
     assert "TRANSITION" in result["parameters"]["phase_labels_bg"]
-    assert result["parameters"]["transition_policy"] == "COACH_DECISION_REQUIRED"
+    assert result["parameters"]["transition_policy"] == "EXPLICIT_DURATION_AFTER_FINAL_MAIN_RACE"
     assert_contiguous(result)
 
 

@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 
-ENGINE_VERSION = "periodization-v1"
+ENGINE_VERSION = "periodization-v2"
 DAY = timedelta(days=1)
 PHASE_LABELS_BG = {
     "RE_ENTRY": "Вработващ",
@@ -91,6 +91,8 @@ def build_periodization(
     *,
     reentry_days_override: int | None = None,
     taper_days: int = 7,
+    transition_days: int = 0,
+    control_taper_days: int = 2,
 ) -> dict[str, Any]:
     """Build a calendar template of at most 366 inclusive calendar days.
 
@@ -112,6 +114,10 @@ def build_periodization(
         raise ValueError("periodization horizon must contain 1 to 366 inclusive days")
     _bounded_days(reentry_days_override, "reentry_days_override", optional=True)
     _bounded_days(taper_days, "taper_days")
+    if type(transition_days) is not int or not 0 <= transition_days <= 28:
+        raise ValueError("transition_days must be 0 to 28")
+    if type(control_taper_days) is not int or not 0 <= control_taper_days <= 3:
+        raise ValueError("control_taper_days must be 0 to 3")
     if not isinstance(events, list):
         raise ValueError("events must be a list of event dictionaries")
 
@@ -231,6 +237,7 @@ def build_periodization(
                             "reason": "Част от предсъстезателния период. Намаленият товар е "
                                       "планиран и не се запълва автоматично поради дефицит в 7/40.",
                             "prevent_deficit_refill": True,
+                            "volume_factor": .5,
                         })
                     if length < taper_days:
                         warn("TAPER_TRUNCATED_BY_AVAILABLE_PREPARATION",
@@ -245,13 +252,29 @@ def build_periodization(
             break
 
     if cursor < stop:
+        if previous_race and transition_days:
+            transition_stop = min(stop, cursor + timedelta(days=transition_days))
+            add_phase("TRANSITION", cursor, transition_stop,
+                      "Преход след последния основен старт с изрично зададената продължителност.", previous_race["event_id"])
+            cursor = transition_stop
         add_phase("GENERAL_PREPARATION", cursor, stop,
                   "Условна обща подготовка без следваща основна цел; не е автоматично "
                   "предписание за натоварване и изисква съобразяване с историята.", None)
-        if previous_race:
+        if previous_race and not transition_days:
             warn("POST_RACE_PERIOD_REQUIRES_REVIEW",
                  "След последния основен старт няма следваща цел. Преходният период и "
                  "връщането към подготовка не са автоматично определени.")
+
+    for event in normalized:
+        if event["event_type"] == "CONTROL_RACE" and control_taper_days:
+            right = min(stop, _date(event["start_date"], "control.start"))
+            left = max(start, _date(event["start_date"], "control.start") - timedelta(days=control_taper_days))
+            if left < right:
+                tapers.append({"kind": "CONTROL_FRESHENING", "start_date": left.isoformat(),
+                    "end_date": (right-DAY).isoformat(), "days": (right-left).days,
+                    "main_race_event_id": event["event_id"], "volume_factor": .8,
+                    "label_bg": "Кратко освежаване преди контролен старт", "prevent_deficit_refill": True,
+                    "reason": "Два дни с по-малък обем; начално правило, различно от тейпъра за основния старт."})
 
     context_notes = {
         "MAIN_RACE": "Основна цел за периодизацията.",
@@ -290,7 +313,8 @@ def build_periodization(
             "taper_is_overlay": True,
             "dense_main_race_gap_days": DENSE_MAIN_RACE_GAP_DAYS,
             "phase_labels_bg": dict(PHASE_LABELS_BG),
-            "transition_policy": "COACH_DECISION_REQUIRED",
+            "transition_policy": "EXPLICIT_DURATION_AFTER_FINAL_MAIN_RACE",
+            "transition_days": transition_days, "control_taper_days": control_taper_days,
             "readiness_inferred_from_calendar": False,
         },
     }
