@@ -1,0 +1,45 @@
+.management-page { max-width: 1160px; margin-inline: auto; }
+.management-intro { max-width: 78ch; line-height: 1.7; }
+.management-panel,.management-day { padding: 1.3rem; margin-block: 1rem; border: 1px solid var(--border,#dbe4e3); border-radius: 16px; background: var(--surface,#fff); }
+.management-page summary { cursor: pointer; font-weight: 650; padding-block: .35rem; }
+.management-profile>summary { display: flex; gap: .6rem; justify-content: space-between; flex-wrap: wrap; }
+.management-profile>summary span,.management-muted { color: var(--muted,#5b6e6b); font-size: .9rem; line-height: 1.55; }
+.management-page fieldset { margin: 1rem 0 0; border: 0; padding: 0; min-width: 0; }
+.management-page fieldset:disabled { opacity: .7; }
+.management-form-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1rem; }
+.management-page label { display: flex; flex-direction: column; gap: .4rem; font-size: .9rem; font-weight: 550; }
+.management-page input,.management-page select { border: 1px solid var(--border,#cad8d5); border-radius: 8px; padding: .65rem; background: var(--surface,#fff); color: inherit; min-width: 0; width: 100%; font: inherit; }
+.management-page input:focus-visible,.management-page select:focus-visible,.management-page summary:focus-visible { outline: 3px solid #78b8a8; outline-offset: 2px; }
+.management-week-grid { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); gap: .65rem; }
+.management-week-grid label { font-size: .75rem; }
+.management-page .management-check { flex-direction: row; align-items: center; margin-top: 1.2rem; }
+.management-check input { width: 1.05rem; height: 1.05rem; flex-shrink: 0; }
+.management-detail { border-top: 1px solid var(--border,#dbe4e3); margin-top: 1rem; padding-top: .75rem; }
+.management-detail h4 { margin-block: 1.2rem .5rem; }
+.management-actions,.management-generate { display: flex; align-items: end; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
+.management-actions a { padding-block: .6rem; }
+.management-page button:disabled { opacity: .5; cursor: not-allowed; }
+.management-notice,.management-error { border-radius: 10px; padding: .9rem 1rem; line-height: 1.6; background: #eef5ef; color: #264e37; }
+.management-error { background: #fff0ec; color: #8b3021; }
+.management-notice ul { margin: 0; padding-left: 1.2rem; }
+.management-plan-heading,.management-day header { display: flex; justify-content: space-between; align-items: start; gap: 1rem; flex-wrap: wrap; }
+.management-plan-heading h2,.management-day h3 { margin-block: 0 .4rem; }
+.management-day { border-left: 4px solid #bfcfca; }
+.management-day.has-session { border-left-color: #397e68; }
+.management-day-date { font-size: .85rem; font-weight: 650; color: #4f6960; margin: 0 0 .4rem; }
+.management-badge { font-size: .75rem; border-radius: 1rem; background: #eef3f1; padding: .35rem .65rem; }
+.management-session-total { color: #3c5d51; }
+.management-blocks { list-style: none; counter-reset: block; padding: 0; margin-block: 1rem; }
+.management-blocks li { counter-increment: block; padding: .75rem 0 .75rem 2rem; position: relative; border-top: 1px solid var(--border,#e2e9e6); }
+.management-blocks li:before { content: counter(block); position: absolute; left: 0; color: #658276; }
+.management-blocks li>div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; }
+.management-blocks p { margin: .4rem 0; line-height: 1.5; }
+.management-blocks small { color: #476457; }
+.management-facts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1rem; }
+.management-facts dt { color: var(--muted,#5b6e6b); font-size: .85rem; }
+.management-facts dd { margin: .25rem 0 0; font-weight: 600; overflow-wrap: anywhere; }
+.management-table-wrap { overflow-x: auto; }
+.management-page table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+.management-page th,.management-page td { text-align: left; padding: .65rem; border-bottom: 1px solid var(--border,#dbe4e3); white-space: nowrap; }
+.management-page pre { font-size: .75rem; max-height: 26rem; overflow: auto; padding: 1rem; border-radius: 8px; background: #f4f7f5; }
+@media(max-width: 700px) { .management-form-grid,.management-facts { grid-template-columns: 1fr; } .management-week-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .management-panel,.management-day { padding: 1rem; } .management-plan-heading label { width: 100%; } }

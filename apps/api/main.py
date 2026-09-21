@@ -99,6 +99,9 @@ from .response_monitoring import DailyReport, SessionReport, ResponseBlock, Opti
 from . import response_service
 from . import model_service
 from .model_schemas import RecoveryConfigInput, SpeedTestInput, ManualSpeedTestInput, RecoveryHistoryV2
+from .management_schemas import ManagementProfileWrite, ManagementGenerateRequest
+from .management_store import ManagementStore
+from . import management_service
 
 app = FastAPI(title="onFlows API", version="1.0.0")
 logger = logging.getLogger(__name__)
@@ -113,6 +116,72 @@ def _model_alias(authorization, athlete_alias):
     if not alias:
         raise HTTPException(401, "Athlete session is required")
     return alias
+
+
+@app.get("/api/v2/athlete/management/profile")
+def management_profile(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+):
+    alias = _model_alias(authorization, athlete_alias)
+    try:
+        repository = _repository()
+        profile = ManagementStore(repository).profile(alias)
+        settings = repository.athlete_settings(alias)
+        athlete_timezone = settings.timezone if settings else "UTC"
+        return {**profile, "timezone": athlete_timezone,
+                "today": datetime.now(timezone.utc).astimezone(ZoneInfo(athlete_timezone)).date().isoformat()}
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Management storage is unavailable") from exc
+
+
+@app.put("/api/v2/athlete/management/profile")
+def save_management_profile(
+    body: ManagementProfileWrite,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None,
+):
+    alias = _model_alias(authorization, athlete_alias)
+    if actor is None:
+        raise HTTPException(401, "Actor session is required")
+    try:
+        result = ManagementStore(_repository()).save_profile(
+            alias, body.profile.model_dump(mode="json"), body.expected_revision, actor,
+        )
+        return {"configured": True, "profile": body.profile.model_dump(mode="json"),
+                "revision": result["revision"]}
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Management profile could not be saved") from exc
+
+
+@app.get("/api/v2/athlete/management/drafts")
+def management_drafts(
+    start_date: date | None = None,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+):
+    alias = _model_alias(authorization, athlete_alias)
+    try:
+        return management_service.history(_repository(), alias, start_date=start_date)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Management drafts are unavailable") from exc
+
+
+@app.post("/api/v2/athlete/management/generate")
+def generate_management_draft(
+    body: ManagementGenerateRequest,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None,
+):
+    alias = _model_alias(authorization, athlete_alias)
+    if actor is None:
+        raise HTTPException(401, "Actor session is required")
+    try:
+        return management_service.generate(_repository(), alias, body, actor)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "A management draft could not be saved") from exc
 
 
 @app.get("/api/v2/athlete/models/recovery")

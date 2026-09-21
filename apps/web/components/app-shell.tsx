@@ -13,6 +13,7 @@ const sections = [
   { href: "/trainability", label: "Индекс на тренираност", icon: "trend" },
   { href: "/speed", label: "Скорост и време", icon: "speed" },
   { href: "/response", label: "Стрес и възстановяване", icon: "response" },
+  { href: "/management", label: "Тренировъчен план", icon: "calendar" },
 ] as const;
 
 function NavIcon({ name }: { name: string }) {

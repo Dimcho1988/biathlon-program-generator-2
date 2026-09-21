@@ -212,6 +212,7 @@ describe("working role profiles", () => {
     await expect(currentAuthorizedAthlete()).resolves.toEqual({
       actorUserId: userId,
       canViewRecovery: true,
+      canViewPlan: true,
       userId: athleteId,
       athleteAlias: "ath-biathlon-01",
       displayName: "Мария Иванова",
