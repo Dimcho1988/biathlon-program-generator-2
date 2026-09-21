@@ -24,6 +24,7 @@ type SharingGrantRow = {
   owner_user_id: string;
   viewer_user_id: string;
   edit_plan: boolean;
+  view_plan?: boolean;
   view_recovery?: boolean;
 };
 type InviteRow = {
@@ -89,7 +90,22 @@ export interface AccountWorkspace {
   invites: AccountInvite[];
 }
 
-export type CurrentAthleteAccess = AccessibleAthlete & { actorUserId: string; canViewRecovery: boolean };
+// Optional in the structural type for existing consumers; new plan surfaces
+// require === true. The real authorization result always sets this property.
+export type CurrentAthleteAccess = AccessibleAthlete & { actorUserId: string; canViewRecovery: boolean; canViewPlan?: boolean };
+
+export function canViewAthletePlan(userId: string, athleteUserId: string, memberships: MembershipRow[], assignments: AssignmentRow[], grants: SharingGrantRow[]) {
+  if (userId === athleteUserId || grants.some(grant => grant.owner_user_id === athleteUserId
+    && grant.viewer_user_id === userId && grant.view_plan === true)) return true;
+  return memberships.some(athlete => athlete.user_id === athleteUserId
+    && athlete.role === "ATHLETE" && athlete.status === "ACTIVE"
+    && memberships.some(viewer => viewer.user_id === userId
+      && viewer.organization_id === athlete.organization_id && viewer.status === "ACTIVE"
+      && (["ADMIN", "HEAD_COACH"].includes(viewer.role)
+        || (viewer.role === "COACH" && assignments.some(assignment =>
+          assignment.organization_id === athlete.organization_id
+          && assignment.coach_user_id === userId && assignment.athlete_user_id === athleteUserId)))));
+}
 
 export function canViewAthleteRecovery(userId:string, athleteUserId:string, memberships:MembershipRow[], assignments:AssignmentRow[], grants:SharingGrantRow[]) {
   if (userId===athleteUserId || grants.some(g=>g.owner_user_id===athleteUserId && g.viewer_user_id===userId && g.view_recovery===true)) return true;
@@ -100,7 +116,7 @@ export function canViewAthleteRecovery(userId:string, athleteUserId:string, memb
 
 const uniqueRoles = (roles: AccountRole[]) => ACCOUNT_ROLES.filter((role) => roles.includes(role));
 
-const canEditAthlete = ({
+export const canEditAthlete = ({
   userId,
   athleteUserId,
   isOwner,
@@ -128,7 +144,10 @@ const canEditAthlete = ({
   return assignments.some((assignment) => assignment.coach_user_id === userId
     && assignment.athlete_user_id === athleteUserId
     && assignment.can_edit_plan
-    && athleteOrganizations.has(assignment.organization_id));
+    && athleteOrganizations.has(assignment.organization_id)
+    && memberships.some(membership => membership.user_id === userId
+      && membership.organization_id === assignment.organization_id
+      && membership.role === "COACH" && membership.status === "ACTIVE"));
 };
 
 export const roleLabel = (role: AccountRole) => ({
@@ -259,11 +278,13 @@ export const currentAuthorizedAthlete = cache(async (): Promise<CurrentAthleteAc
       supabase.from("onflows_coach_athlete_assignments")
         .select("organization_id, coach_user_id, athlete_user_id, can_edit_plan"),
       supabase.from("onflows_sharing_grants")
-        .select("owner_user_id, viewer_user_id, edit_plan, view_recovery"),
+        .select("owner_user_id, viewer_user_id, edit_plan, view_plan, view_recovery"),
     ]);
     if (membershipsResult.error || assignmentsResult.error || sharingResult.error) return null;
     return {
       actorUserId: claimsData.claims.sub,
+      canViewPlan: canViewAthletePlan(claimsData.claims.sub, athlete.user_id,
+        (membershipsResult.data ?? []) as MembershipRow[], (assignmentsResult.data ?? []) as AssignmentRow[], (sharingResult.data ?? []) as SharingGrantRow[]),
       canViewRecovery: canViewAthleteRecovery(claimsData.claims.sub, athlete.user_id,
         (membershipsResult.data??[]) as MembershipRow[], (assignmentsResult.data??[]) as AssignmentRow[], (sharingResult.data??[]) as SharingGrantRow[]),
       userId: athlete.user_id,
