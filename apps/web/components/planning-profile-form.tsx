@@ -1,3 +1,5 @@
+import { ManagementProfileEditor } from "./management-profile-editor";
+import type { ManagementProfileResponse } from "../lib/training-management";
 import Link from "next/link";
 import {
   WEEKDAYS,
@@ -39,28 +41,31 @@ function WeekdaySelect({
 
 export function PlanningProfileForm({
   profile,
+  managementProfile,
   methodology,
   accentPreferences,
   planningCalendar,
   notice,
 }: {
   profile: PlanningProfile | null;
+  managementProfile?: ManagementProfileResponse;
   methodology: PlanningMethodology;
   accentPreferences: MesocycleAccentPreferencesResponse;
   planningCalendar: PlanningCalendarResponse;
   notice?: string;
 }) {
-  return <main className="state-page settings-page planning-page">
+  return <main className="activities-page management-page planning-page">
     <p className="eyebrow">Индивидуални входове за планиране</p>
     <h1>Профил за планиране</h1>
     <p className="muted">
-      Тук се задават само личните цели и седмичната структура. Общите научни
-      коефициенти остават versioned в модела и не се копират в профила.
+      Всичко нужно за индивидуалната програма е тук. Провери спорта и времето си; останалите настройки са по желание.
     </p>
     {notice && <p className="connection-notice">{notice}</p>}
-    {!profile && <p className="planning-unconfigured">
-      Профилът още не е конфигуриран. Стойностите не се предполагат автоматично.
-    </p>}
+    <ManagementProfileEditor initialProfile={managementProfile ?? { configured: false, profile: null, revision: 0 }} today={managementProfile?.today ?? new Date().toISOString().slice(0, 10)} />
+    <details className="management-panel" id="planning-calendar"><summary>3. Стартове и лагери · по желание</summary><p>Добави известните събития за по-точно разпределение на подготовката. Можеш да ги допълниш по-късно.</p><PlanningCalendarPanel response={planningCalendar} /></details>
+    <details className="management-panel"><summary>Допълнителни треньорски настройки · по желание</summary><p>Основният профил работи с автоматично разпределение. Тук можеш да запазиш допълнителни предпочитания и ръчни акценти.</p>
+    <p className="management-muted">Използват се почивните дни, броят сесии, лимитът на ключовите тренировки, предпочитаните интензивни дни и структурата на мезоцикъла. Годишният обем, денят за дълга тренировка и двойните сесии остават записани предпочитания; текущият генератор не ги реализира изцяло.</p>
+    <details><summary>Вградена методология и версии</summary>
     <section className="methodology-card" aria-labelledby="methodology-title">
       <div>
         <p className="eyebrow">Вградена методология</p>
@@ -84,12 +89,13 @@ export function PlanningProfileForm({
         валидиран versioned файл след треньорски преглед, без AI при всяко отваряне.
       </p>
     </section>
+    </details>
     <MesocycleAccentEditor
       response={accentPreferences}
       methodology={methodology}
       profileConfigured={profile !== null}
     />
-    <PlanningCalendarPanel response={planningCalendar} />
+    <details><summary>Ръчна седмична структура</summary><p>Попълни всички полета само ако искаш да замениш автоматичната структура. Стойностите не се предполагат автоматично.</p>
     <form className="planning-profile-form" action="/api/athlete/planning-profile" method="post">
       <input type="hidden" name="schema_version" value="planning-profile-v1" />
 
@@ -146,11 +152,11 @@ export function PlanningProfileForm({
         <p className="muted">Когато двойната прагова тренировка е разрешена, предпочитаният ден трябва да е избран и като ден с две сесии.</p>
       </fieldset>
 
-      <button className="action-button" type="submit">Запази профила за планиране</button>
-    </form>
+      <button className="action-button" type="submit">Запази ръчната структура</button>
+    </form></details></details>
     <p className="state-help">
       Записът не генерира програма самостоятелно и не променя текущия анализ.
     </p>
-    <Link className="text-action" href="/">Към тренировъчния анализ</Link>
+    <Link className="text-action" href="/management">Към тренировъчния план</Link>
   </main>;
 }

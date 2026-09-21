@@ -1,6 +1,8 @@
 "use client";
 
-import Link from "next/link";
+import { TrainingPlanWeek } from "./training-plan-week";
+import { SyncActionForm } from "./sync-action-form";
+import { hasProgramDays } from "../lib/management-guidance";
 import { useState, type ReactNode } from "react";
 import { isRecord } from "../lib/training-status";
 import { durationHms } from "../lib/duration-format";
@@ -16,7 +18,7 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const record = value.active;
-  if (!record) return <section className="management-panel"><h2>Твоята програма</h2><p>Запази профила, създай проект и го прегледай. След утвърждаване тук ще виждаш текущите задачи и адаптациите им.</p></section>;
+  if (!record) return null;
   const p = record.payload;
   const display = p.proposal ?? p.plan;
   async function mutate(endpoint: string, body: Record<string, unknown>) {
@@ -41,17 +43,17 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay 
     {error && <p className="management-error" role="alert">{error}</p>}
     {record.stale && <p className="management-notice" role="status">{record.stale_reason} Последната версия е показана само за справка.</p>}
     {p.status === "REVIEW_REQUIRED" && <div className="management-notice"><p>Предложението по-долу още не е действаща задача.</p>
-      {p.proposal?.activation_eligible === true ? <button type="button" className="action-button" disabled={actionsDisabled || record.stale} onClick={() => mutate("action", { action: "APPROVE" })}>Утвърди актуалната адаптация</button> : <Link href="/">Обнови реалните активности от началния екран →</Link>}
+      {p.proposal?.activation_eligible === true ? <button type="button" className="action-button" disabled={actionsDisabled || record.stale} onClick={() => mutate("action", { action: "APPROVE" })}>Утвърди актуалната адаптация</button> : canEdit ? <SyncActionForm scope="FULL" returnTo="/management" label="Обнови тренировките" /> : <p>Треньорът трябва да прегледа актуалните данни.</p>}
     </div>}
     {p.changes.length > 0 && <details className="management-panel"><summary>Какво се промени и защо · {p.changes.length} дни</summary><ul>{p.changes.map(change => <li key={change.date}><strong>{change.date}:</strong> {change.before ? `${change.before} → ` : ""}{change.after}<p>{change.reason}</p></li>)}</ul></details>}
-    {p.status !== "COMPLETED" && <div className={`management-days ${record.actionable ? "" : "management-reference"}`}>{display.days.map(day => <div key={day.date}>
+    {p.status !== "COMPLETED" && hasProgramDays(display) && <div className={`management-days ${record.actionable ? "" : "management-reference"}`}><TrainingPlanWeek days={display.days} today={today} renderDay={day => <div key={day.date}>
       {renderDay(day)}
       {canEdit && ["ACTIVE", "REVIEW_REQUIRED"].includes(p.status) && day.date >= today && day.status !== "EXISTING_ACTIVITY" && day.status !== "RACE" && <div className="management-day-actions">
         <button type="button" className="action-button secondary" disabled={busy || record.stale} onClick={() => mutate("day", { date: day.date, action: "REST", note: "" })}>Почивка на {day.date}</button>
         {day.session && <button type="button" className="action-button secondary" disabled={busy || record.stale} onClick={() => mutate("day", { date: day.date, action: "SKIP", note: "" })}>Пропускам тази тренировка</button>}
         {p.decisions[day.date] && <button type="button" className="action-button secondary" disabled={busy || record.stale} onClick={() => mutate("day", { date: day.date, action: "CLEAR", note: "" })}>Върни избора на системата</button>}
       </div>}
-    </div>)}</div>}
+    </div>} /></div>}
     <p className="management-muted">Изпълнението се отчита от реалните активности. Приравненият товар и готовността се преизчисляват от тях; отбелязването „Пропускам“ не създава измислено натоварване.</p>
     {p.outcomes.length > 0 && <details className="management-panel"><summary>План и реално изпълнение</summary><div className="management-table-wrap"><table><thead><tr><th>Ден</th><th>Резултат</th><th>План</th><th>Изпълнено</th></tr></thead><tbody>{p.outcomes.slice(-28).reverse().map(o => <tr key={o.date}><td>{o.date}</td><td>{OUTCOME[o.status] ?? o.status}</td><td>{durationHms(o.planned_minutes)}</td><td>{o.actual_minutes === null ? "Няма данни" : durationHms(o.actual_minutes)}</td></tr>)}</tbody></table></div><p>Съпоставянето е по ден и средство. Наличието на активност не доказва, че всички предписани блокове са изпълнени.</p></details>}
     <details className="management-panel"><summary>История и пълна проследимост</summary><ol>{value.history.map(h => <li key={h.revision}><strong>Версия {h.revision}</strong> · {new Date(h.recorded_at).toLocaleString("bg-BG")}<p>{h.reason}</p></li>)}</ol>

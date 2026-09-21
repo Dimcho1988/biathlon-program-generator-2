@@ -1,3 +1,5 @@
+import { getSyncState } from "../../lib/api";
+import type { SyncState } from "../../lib/sync";
 import { currentAuthorizedAthlete } from "../../lib/account-access";
 import { waitForApi } from "../../lib/api-readiness";
 import { ErrorState } from "../../components/error-state";
@@ -7,10 +9,12 @@ import "./management.css";
 
 export const dynamic = "force-dynamic";
 
-export default async function ManagementPage() {
+export default async function ManagementPage({ searchParams }: { searchParams: Promise<{ sync?: string }> }) {
+  const query = await searchParams;
   const access = await currentAuthorizedAthlete();
   if (!access) return <ErrorState message="Влезте в профила си, за да отворите управлението на подготовката." integrationActions refreshAvailable={false} />;
   if (!access.canViewPlan) return <ErrorState message="Този спортист не е споделил тренировъчния си план с вас." refreshAvailable={false} />;
+  let sync: SyncState | null = null;
   let profile: ManagementProfileResponse;
   let drafts: DraftRecord[];
   let active: ActivePlanResponse;
@@ -27,13 +31,14 @@ export default async function ManagementPage() {
       if (!response.ok) throw new Error("Профилът и програмите временно не са достъпни.");
       return response.json();
     };
-    const [profileData, draftData, activeData] = await Promise.all([resource("profile"), resource("drafts"), resource("active")]);
+    const [profileData, draftData, activeData, syncData] = await Promise.all([resource("profile"), resource("drafts"), resource("active"), getSyncState(access.athleteAlias, { direct: true }).catch(() => null)]);
+    sync = syncData;
     active = parseActivePlanResponse(activeData);
     profile = parseManagementProfileResponse(profileData);
     drafts = parseDrafts(draftData);
   } catch (caught) {
     return <ErrorState message={caught instanceof Error ? caught.message : "Управлението временно не е достъпно."} retryAvailable retryHref="/management" />;
   }
-  return <TrainingManagement key={access.athleteAlias} athleteName={access.displayName} canEdit={access.canEditPlan}
-    initialProfile={profile} initialDrafts={drafts} initialActive={active} today={profile.today ?? new Date().toISOString().slice(0, 10)} />;
+  return <TrainingManagement key={`${access.athleteAlias}:${sync?.active_generation_id ?? "none"}:${query.sync ?? ""}`} athleteName={access.displayName} canEdit={access.canEditPlan}
+    initialSyncState={sync} syncError={query.sync === "enqueue-error"} initialProfile={profile} initialDrafts={drafts} initialActive={active} today={profile.today ?? new Date().toISOString().slice(0, 10)} />;
 }

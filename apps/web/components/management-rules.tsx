@@ -2,18 +2,18 @@
 
 import { COMPONENTS, type ManagementProfile, type IntervalDoseProfile } from "../lib/training-management";
 
-export function ManagementRules({ profile, onChange, today }: {
-  profile: ManagementProfile; onChange: (profile: ManagementProfile) => void; today: string;
+export function ManagementRules({ profile, onChange, today, hideAutomation = false }: {
+  profile: ManagementProfile; onChange: (profile: ManagementProfile) => void; today: string; hideAutomation?: boolean;
 }) {
   const update = <K extends keyof ManagementProfile>(key: K, value: ManagementProfile[K]) => onChange({ ...profile, [key]: value });
   const interval = (index: number, patch: Partial<IntervalDoseProfile>) => update("interval_profiles", profile.interval_profiles.map((p, i) => i === index ? { ...p, ...patch } : p));
   return <>
     <div className="management-form-grid">
-      <label>След утвърждаване<select value={profile.adaptation_mode} onChange={e => update("adaptation_mode", e.target.value as "AUTO" | "REVIEW")}><option value="AUTO">Адаптирай следващите дни автоматично</option><option value="REVIEW">Предлагай промените за преглед</option></select></label>
+      {!hideAutomation && <label>След утвърждаване<select value={profile.adaptation_mode} onChange={e => update("adaptation_mode", e.target.value as "AUTO" | "REVIEW")}><option value="AUTO">Адаптирай следващите дни автоматично</option><option value="REVIEW">Предлагай промените за преглед</option></select></label>}
       <label>Развитие в натоварващите седмици, до %<input type="number" min="0" max="10" step="0.5" value={profile.progression_percent} onChange={e => update("progression_percent", Number(e.target.value))} /></label>
       <label>Преход след последния основен старт, дни<input type="number" min="0" max="28" value={profile.transition_days} onChange={e => update("transition_days", Number(e.target.value))} /></label>
     </div>
-    <label className="management-check"><input type="checkbox" checked={profile.auto_import_enabled} onChange={e => update("auto_import_enabled", e.target.checked)} />Обновявай свързаните активности автоматично — до веднъж на час, докато програмата работи</label>
+    {!hideAutomation && <label className="management-check"><input type="checkbox" checked={profile.auto_import_enabled} onChange={e => update("auto_import_enabled", e.target.checked)} />Обновявай свързаните активности автоматично — до веднъж на час, докато програмата работи</label>}
     <p className="management-muted">Прогресията е спрямо реалната база на цикъла, само за развиваните компоненти и при достатъчно данни. 0% запазва поддържане. Разтоварващата седмица и тейпърът остават отделни ограничения.</p>
     <details className="management-detail"><summary>Индивидуални цели по компоненти</summary>
       <p>Обичайно системата извежда целите от реалната история и периода. Попълнете тук само изрична треньорска цел — включително при въвеждане на нов компонент. Това са седмични приравнени минути, а не Tref или продължителност на тренировка.</p>

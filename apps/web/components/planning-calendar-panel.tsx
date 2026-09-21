@@ -6,7 +6,6 @@ import {
   type PlanningCalendarEvent,
   type PlanningCalendarResponse,
   type PlanningEventType,
-  type PlanningMissingInput,
 } from "../lib/planning-calendar";
 
 const eventTypeLabels: Record<PlanningEventType, string> = {
@@ -15,13 +14,6 @@ const eventTypeLabels: Record<PlanningEventType, string> = {
   CAMP: "Лагер",
   TEST: "Тест",
   UNAVAILABLE: "Недостъпен период",
-};
-
-const missingInputLabels: Record<PlanningMissingInput, string> = {
-  PLANNING_PROFILE: "Профил за планиране",
-  MESOCYCLE_ACCENTS: "Мезоциклични акценти",
-  FUTURE_MAIN_RACE: "Реално бъдещо основно състезание",
-  TRAINING_SNAPSHOT: "Актуален тренировъчен snapshot",
 };
 
 const emptyEvent = (): PlanningCalendarEvent => ({
@@ -40,7 +32,6 @@ export function PlanningCalendarPanel({
   const [events, setEvents] = useState<PlanningCalendarEvent[]>(
     response.calendar?.events ?? [],
   );
-  const context = response.context;
   const updateEvent = <Field extends keyof Omit<PlanningCalendarEvent, "event_id">>(
     eventId: string,
     field: Field,
@@ -57,44 +48,10 @@ export function PlanningCalendarPanel({
     || left.event_id.localeCompare(right.event_id));
 
   return <>
-    <section className="planning-readiness-card" aria-labelledby="planning-readiness-title">
-      <div className="accent-editor-heading">
-        <div>
-          <p className="eyebrow">Planning context · {context.schema_version}</p>
-          <h2 id="planning-readiness-title">Готовност за генериране</h2>
-        </div>
-        <span className={`configuration-badge ${context.ready_for_generation ? "configured" : ""}`}>
-          {context.ready_for_generation ? "Входовете са готови" : "Има липсващи входове"}
-        </span>
-      </div>
-      {context.missing_inputs.length > 0
-        ? <div className="readiness-missing">
-          <p>Преди активиране на генератора са нужни:</p>
-          <ul>{context.missing_inputs.map((item) => <li key={item}>{missingInputLabels[item]}</li>)}</ul>
-        </div>
-        : <p className="readiness-ok">
-          Всички задължителни входове са налични. Това още не създава тренировъчна програма.
-        </p>}
-      <dl className="readiness-metadata">
-        <div><dt>Генератор</dt><dd>Неактивен</dd></div>
-        <div><dt>Методика</dt><dd>{context.methodology_version}</dd></div>
-        <div><dt>Recovery основа</dt><dd>Само тренировъчно натоварване</dd></div>
-        <div><dt>Wellness</dt><dd>Само диагностика</dd></div>
-      </dl>
-      {context.next_main_race && <p className="next-main-race">
-        Следващ основен старт: <strong>{context.next_main_race.name}</strong>
-        {" · "}{context.next_main_race.start_date}
-      </p>}
-      <p className="methodology-note">
-        onFlows не създава виртуално състезание. Готовността означава само, че
-        входовете са комплектовани; генераторът остава изключен до отделно одобрение.
-      </p>
-    </section>
-
     <section className="planning-calendar-card" aria-labelledby="planning-calendar-title">
       <div className="accent-editor-heading">
         <div>
-          <p className="eyebrow">Индивидуален календар · planning-calendar-v1</p>
+          <p className="eyebrow">Събития в подготовката</p>
           <h2 id="planning-calendar-title">Ключови периоди и състезания</h2>
           <p className="muted">
             Събитията принадлежат само на активния спортист и не променят текущия анализ.
@@ -109,8 +66,7 @@ export function PlanningCalendarPanel({
         <input type="hidden" name="events_json" value={JSON.stringify(canonicalEvents)} />
         <div className="planning-calendar-events">
           {events.length === 0 && <p className="calendar-empty">
-            Няма добавени събития. Добавете поне едно реално бъдещо основно състезание,
-            за да се изпълни календарната проверка.
+            Все още няма събития. Можеш да продължиш без тях; подготовката няма да бъде насочена към конкретен основен старт.
           </p>}
           {events.map((event) => <fieldset className="planning-calendar-event" key={event.event_id}>
             <legend>{eventTypeLabels[event.event_type]}</legend>

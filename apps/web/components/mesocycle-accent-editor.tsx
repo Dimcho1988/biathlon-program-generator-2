@@ -69,7 +69,7 @@ export function MesocycleAccentEditor({
       определят от периодизацията при генериране на плана, когато има календарен контекст.
     </p>
     {!profileConfigured && <p className="planning-unconfigured">
-      Първо запази основния профил за планиране.
+      За ръчни акценти първо запази ръчната седмична структура по-долу. Автоматичните акценти работят и без нея.
     </p>}
     <form className="accent-editor-form" action="/api/athlete/mesocycle-accents" method="post">
       <input type="hidden" name="schema_version" value="mesocycle-accent-preferences-v1" />

@@ -60,13 +60,11 @@ describe("planning-calendar-v1 contract", () => {
     })).toThrow(/готовност/);
   });
 
-  it("shows readiness separately from generator activation", () => {
+  it("keeps calendar editing independent of obsolete v1 generator readiness", () => {
     const html = renderToStaticMarkup(<PlanningCalendarPanel response={response} />);
-    expect(html).toContain("Готовност за генериране");
-    expect(html).toContain("Входовете са готови");
-    expect(html).toContain("Генератор");
-    expect(html).toContain("Неактивен");
-    expect(html).toContain("не създава виртуално състезание");
+    expect(html).not.toContain("Готовност за генериране");
+    expect(html).not.toContain("Неактивен");
+    expect(html).not.toContain("липсващи входове");
     expect(html).toContain('action="/api/athlete/planning-calendar"');
     expect(html).toContain("Основен старт");
   });

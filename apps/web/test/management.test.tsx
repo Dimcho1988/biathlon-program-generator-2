@@ -50,7 +50,7 @@ describe("management data and review interface", () => {
   });
   it("explains capacity, fallback and projected readiness in Bulgarian with exact durations", () => {
     const html = renderToStaticMarkup(<TrainingManagement athleteName="Тестов спортист" canEdit initialProfile={{ configured: true, profile, revision: 1 }} initialDrafts={[record]} today="2026-09-21" />);
-    for (const expected of ["Равномерна аеробна работа", "0:45:00", "0:30:00", "Защо тази задача и доза?", "Експертен Tref", "Избраната продължителност е извън диапазона", "Специално подготвителен", "Историческият обем и C40 са различни", "90% готовност не означава 90%", "Изтегли пълния отчет"]) expect(html).toContain(expected);
+    for (const expected of ["Равномерна аеробна работа", "0:45:00", "0:30:00", "Защо тази задача и доза?", "Експертен Tref", "Избраната продължителност е извън диапазона", "Специално подготвителен", "90% готовност не означава 90%", "Изтегли пълния отчет"]) expect(html).toContain(expected);
     expect(html).not.toContain("NaN");
     expect(html).not.toContain("Активирай");
   });

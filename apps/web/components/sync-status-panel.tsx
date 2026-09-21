@@ -16,10 +16,12 @@ export function SyncStatusPanel({
   initialState,
   renderedGenerationId,
   returnTo,
+  compact = false,
 }: {
   initialState: SyncState;
   renderedGenerationId: string | null;
   returnTo?: string;
+  compact?: boolean;
 }) {
   const router = useRouter();
   const [state, setState] = useState(initialState);
@@ -118,6 +120,7 @@ export function SyncStatusPanel({
   </section>;
 
   const retry = state.state === "RETRY_WAIT";
+  if (compact) return <section className="sync-status running" role="status"><div><strong>{retry ? "Обновяването ще опита отново" : "Обновяваме тренировките"}</strong><span>Когато приключи, екранът ще се обнови автоматично.</span>{statusUnavailable && <small>Проверката на напредъка ще продължи автоматично.</small>}</div><progress max={100} value={state.progress_percent} aria-label="Напредък на обновяването" /></section>;
   return <section className="sync-status running" role="status" aria-live="polite">
     <div>
       <strong>{retry ? "Изчакваме безопасен повторен опит" : `Обновяваме ${scope}`}</strong>
