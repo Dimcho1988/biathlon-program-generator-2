@@ -23,8 +23,8 @@ from biathlon.physiology import _causal_tref, effective_from_direct_vector, line
 from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VERSION, catalog, resolved_methods
 from . import model_service
 
-VERSION = "training-management-v3"
-PARAMETER_VERSION = "management-parameters-v3"
+VERSION = "training-management-v3.1"
+PARAMETER_VERSION = "management-parameters-v3.1"
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
     "RE_ENTRY": ("Z1", "STR"),
@@ -394,7 +394,28 @@ def _goals(profile, day, period, taper, reference, accents, week, length, rows, 
     return goals, focus, state
 
 
-def _long_term_outlook(profile, periodization, reference, accents, preferences, rows, today, limited):
+def _volume_ceiling(profile, periodization, events, available, baseline, start, end, preferences, limited):
+    anchor = date.fromisoformat(str(preferences.get("mesocycle_anchor_date", profile["program_start"])))
+    length = preferences.get("mesocycle_length_weeks", 4)
+    weighted = available_window = 0.
+    for i in range((end-start).days+1):
+        day = start+timedelta(days=i)
+        phase, _ = _phase(periodization, day)
+        reserved = any(e["event_type"] in {"MAIN_RACE", "CONTROL_RACE", "TEST", "UNAVAILABLE"}
+                       and str(e["start_date"]) <= day.isoformat() <= str(e["end_date"]) for e in events)
+        if reserved or not phase:
+            continue
+        available_window += available[day.weekday()]
+        state = planning_controls.resolve(profile, day, phase, list(PRIORITIES.get(phase, ("Z1",))))
+        week = max(0, (day-anchor).days//7) % length
+        factor = state["volume_factor"] if state else training_targets.cycle_factor(
+            week, length, profile.get("progression_percent", 5),
+            development=not limited and phase in {"GENERAL_PREPARATION", "SPECIAL_PREPARATION"})
+        weighted += available[day.weekday()]*factor*_taper_factor(periodization, day)
+    return min(available_window, baseline*weighted/max(1., sum(available)))
+
+
+def _long_term_outlook(profile, periodization, reference, accents, preferences, rows, today, limited, *, volume=None, events=None):
     """Read-only target envelope using the same goals as the daily planner.
 
     No synthetic sessions or future recovery. Ratios use the current actual
@@ -442,7 +463,8 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
         weeks.append({"start_date": left.isoformat(), "end_date": right.isoformat(),
                       "days": (right - left).days + 1, "cycle": cycle, "phases": list(dict.fromkeys(phases)),
                       "accents": list(dict.fromkeys(selected)), "mesocycle_weeks": list(dict.fromkeys(meso_weeks)),
-                      "components": components})
+                      "components": components,
+                      **({"volume_budget_minutes": _round(_volume_ceiling(profile, periodization, events or [], profile["available_minutes"], volume["baseline_weekly_minutes"], left, right, preferences, limited))} if volume else {})})
     return {"schema_version": "training-outlook-v1", "as_of": today.isoformat(),
             "basis": "CURRENT_ACTUAL_REFERENCE_FROZEN", "targets_version": training_targets.VERSION,
             "reference_cutoff": reference["cutoff"], "limited": limited,
@@ -540,38 +562,22 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     if speed and speed.get("sport") != sport:
         blocked = True
         warnings.append(_warning("SPEED_SPORT_MISMATCH", "Оценката скорост–време е за различно средство и не може да се използва за този проект."))
-    manual_hours = profile.get("recent_weekly_hours")
-    history_activities = [a for a in source.get("activities", [])
-                          if (today - timedelta(days=28)).isoformat() <= a["date"] < today.isoformat()]
     covered28 = len([d for d in completed if d >= (today - timedelta(days=28)).isoformat()])
     volume_evidence = planning_controls.volume_history(source, today, covered28)
     by_sport_minutes = volume_evidence["by_sport_weekly_minutes"]
-    if covered28 >= 14 and history_activities:
-        mode_activities = [a for a in history_activities if a.get("sport") in training_sports]
-        weekly_minutes = sum(float(a.get("duration_min") or 0.) for a in mode_activities) * 7 / covered28
-        volume_source = "ACTUAL_SELECTED_SPORTS_28_DAY_MEAN" if len(training_sports) > 1 else "ACTUAL_SAME_SPORT_28_DAY_MEAN"
-        if not mode_activities:
-            limited = True
-            warnings.append(_warning("NO_ACTUAL_MODE_EXPOSURE", "Няма скорошен обем за избраното средство. Обем от друг спорт не разрешава същия обем тук; нужен е преглед и ограничено въвеждане."))
-            if manual_hours:
-                weekly_minutes = sum(manual_hours) / len(manual_hours) * 60
-                volume_source = "REPORTED_FOUR_WEEK_MEAN_UNVERIFIED_MODE"
-    elif manual_hours:
-        weekly_minutes = sum(manual_hours) / len(manual_hours) * 60
-        volume_source = "REPORTED_FOUR_WEEK_MEAN"
+    volume = planning_controls.volume_basis(profile, volume_evidence)
+    weekly_minutes = volume["baseline_weekly_minutes"]
+    volume_source = volume["weekly_volume_source"]
+    historical_weekly_minutes = volume["historical_selected_weekly_minutes"]
+    if volume["reported_history_only"]:
         limited = True
         warnings.append(_warning("AGGREGATE_HISTORY_ONLY", "Въведеният седмичен обем ограничава проекта, но не се превръща в измислени дневни товари или известна готовност."))
-    else:
-        weekly_minutes = 0.
-        volume_source = "MISSING"
+    if volume["missing_history"]:
         blocked = True
         warnings.append(_warning("WEEKLY_VOLUME_REQUIRED", "Нужна е достатъчна реална история или обемите от последните четири седмици."))
-    if profile.get("strength_enabled") and controls:
-        weekly_minutes += by_sport_minutes.get("WeightTraining", 0.)
-    historical_weekly_minutes = weekly_minutes
-    if controls and controls.get("weekly_target_hours") is not None:
-        weekly_minutes = controls["weekly_target_hours"] * 60
-        volume_source = "COACH_WEEKLY_GOAL_WITH_SPORT_EXPOSURE_LIMITS"
+    if not any(by_sport_minutes.get(s, 0.) for s in training_sports):
+        limited = True
+        warnings.append(_warning("NO_ACTUAL_MODE_EXPOSURE", "Няма скорошен обем за избраните средства. Общият бюджет не замества опита и капацитета за конкретното средство; предложенията са ограничени."))
     available = list(profile["available_minutes"])
     for weekday in preferences.get("rest_days", []):
         available[weekday] = 0
@@ -593,15 +599,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         return week, state["volume_factor"] if state else training_targets.cycle_factor(week, meso_length, profile.get("progression_percent", 5), development=development)
     target_reference = training_targets.development_reference(rows, today, meso_anchor, meso_length)
     meso_week, meso_factor = meso_at(start_date)
-    weighted_factors = []
-    for i in range(horizon):
-        forecast_day = start_date + timedelta(days=i)
-        phase, taper = _phase(periodization, forecast_day)
-        reserved = any(e["event_type"] in {"MAIN_RACE", "CONTROL_RACE", "TEST", "UNAVAILABLE"}
-                       and str(e["start_date"]) <= forecast_day.isoformat() <= str(e["end_date"]) for e in events)
-        weighted_factors.append(0. if reserved or not phase else
-                                available[forecast_day.weekday()] * meso_at(forecast_day)[1] * _taper_factor(periodization, forecast_day))
-    weekly_ceiling = min(sum(available), weekly_minutes * sum(weighted_factors) / max(1., sum(available)))
+    weekly_ceiling = _volume_ceiling(profile, periodization, events, available, weekly_minutes,
+                                     start_date, end_date, preferences, limited)
     remaining = weekly_ceiling
     sport_spent = {s: sum(float(a.get("duration_min") or 0.) for a in source.get("activities", [])
                             if a.get("sport") == s and a["date"] == today.isoformat()) if start_date == today else 0.
@@ -737,6 +736,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     rejection = ("PERIOD_NOT_SUPPORTED", "Методът не е включен в този период.")
                 elif limited and method["purpose"] != "RECOVERY":
                     rejection = ("INSUFFICIENT_HISTORY", "При ограничена история са разрешени само леки ограничени предложения.")
+                elif controls and not is_strength and not by_sport_minutes.get(sport, 0.) and method["purpose"] != "RECOVERY":
+                    rejection = ("NO_ACTUAL_MODE_EXPOSURE", "За това средство няма скорошна история. Допуска се само ограничено леко въвеждане, независимо от опита в други спортове.")
                 elif is_strength and (strength_sessions >= (controls or {}).get("max_strength_sessions", 2) or (last_strength_day and (day-last_strength_day).days < 2)):
                     rejection = ("STRENGTH_SESSION_LIMIT", "Достигнат е силовият лимит или липсва достатъчно разстояние между силовите сесии.")
                 elif is_strength and preferences.get("strength_days") and day.weekday() not in preferences["strength_days"]:
@@ -804,12 +805,15 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 limits = [{"code": "METHOD_WORK_CAP", "limit_minutes": method["max_work_min"]},
                           {"code": "DAILY_AVAILABLE_WORK", "limit_minutes": max(0., available[day.weekday()] - overhead)},
                           {"code": "REMAINING_WEEKLY_WORK", "limit_minutes": max(0., remaining - overhead)}]
+                session_ceiling = float("inf")
                 if controls and not is_strength:
-                    mode_base = by_sport_minutes.get(sport, 0.)
-                    if mode_base <= 0 and sport == primary_sport and manual_hours:
-                        mode_base = sum(manual_hours)/len(manual_hours)*60
-                    mode_ceiling = mode_base * max(1., day_meso_factor)
-                    limits.append({"code": "ACTUAL_SPORT_EXPOSURE", "limit_minutes": max(0., mode_ceiling-sport_spent.get(sport, 0.)-overhead)})
+                    # The old cumulative weekly ceiling incorrectly made the
+                    # athlete's total programme equal the history of one means.
+                    # Keep the observed session exposure separate from total
+                    # volume and from the capacity estimate for this exact means.
+                    observed = volume_evidence["max_session_minutes_by_sport"].get(sport, 0.)
+                    session_ceiling = observed * max(1., day_meso_factor) if observed else profile.get("recovery_session_cap_min", 30.) + overhead
+                    limits.append({"code": "ACTUAL_SPORT_SESSION_EXPOSURE", "limit_minutes": max(0., session_ceiling-overhead)})
                 if event_specificity["work_cap_min"] is not None:
                     limits.append({"code": "RACE_DURATION_WORK_CAP", "limit_minutes": event_specificity["work_cap_min"]})
                 if controls and not is_key and not is_strength:
@@ -835,7 +839,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 blocks = _blocks(method, work, evidence, settings)
                 # Whole repetitions/circuits, active rests and transitions all
                 # have to fit. Lower work never authorizes a longer rest.
-                while work >= method["min_work_min"] and blocks and sum(b["duration_min"] for b in blocks) > min(available[day.weekday()], remaining) + .001:
+                while work >= method["min_work_min"] and blocks and sum(b["duration_min"] for b in blocks) > min(available[day.weekday()], remaining, session_ceiling) + .001:
                     work -= .5
                     blocks = _blocks(method, work, evidence, settings)
                 if not blocks or work < method["min_work_min"]:
@@ -960,6 +964,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                   "reentry_fraction": profile.get("reentry_fraction", .4), "recovery_session_cap_min": profile.get("recovery_session_cap_min", 30),
                   "weekly_volume_source": volume_source, "baseline_weekly_minutes": _round(weekly_minutes),
                   "historical_selected_weekly_minutes": _round(historical_weekly_minutes),
+                  "historical_training_weekly_minutes": volume["historical_training_weekly_minutes"],
                   "available_weekly_minutes": sum(available), "training_sports": training_sports,
                   "planning_controls": controls, "volume_evidence": volume_evidence,
                   "weekly_minutes_ceiling": _round(weekly_ceiling), "mesocycle_week_index": meso_week,
@@ -991,7 +996,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             "generated_at": now.isoformat(), "start_date": start_date.isoformat(), "end_date": end_date.isoformat(),
             "activation_eligible": activation_eligible,
             "source": provenance, "periodization": periodization, "days": result_days,
-            "long_term": _long_term_outlook(profile, periodization, target_reference, accents, preferences, rows, today, limited),
+            "long_term": _long_term_outlook(profile, periodization, target_reference, accents, preferences, rows, today, limited, volume=volume, events=events),
             "parameters": parameters, "warnings": warnings, "catalog": catalog(profile),
             "history_comparison": volume_evidence["weeks"],
             "summary": {"sessions": sessions, "key_sessions": key_sessions,

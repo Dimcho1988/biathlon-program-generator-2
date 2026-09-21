@@ -41,7 +41,7 @@ export interface PlanningControls {
   mesocycle_anchor: string | null; wave: number[]; accent_mode: "AUTO" | "MANUAL" | "HYBRID";
   accent_limit: number; accents: Component[]; accent_index: number; maintenance_index: number; cycles: CycleDirective[];
 }
-export interface VolumeHistory { as_of?: string | null; covered_days: number; by_sport_weekly_minutes: Record<string, number>; all_sports_weekly_minutes: number; weeks: Array<{ start_date: string; end_date: string; actual_minutes: number | null; covered_days: number }> }
+export interface VolumeHistory { suggested_available_minutes?: number[] | null; as_of?: string | null; covered_days: number; by_sport_weekly_minutes: Record<string, number>; all_sports_weekly_minutes: number; weeks: Array<{ start_date: string; end_date: string; actual_minutes: number | null; covered_days: number }> }
 export function defaultPlanningControls(sport: ManagementProfile["actual_sport"]): PlanningControls {
   return { sessions_per_week: 7, intensity_days: [], strength_days: [], long_session_day: null, max_strength_sessions: 2,
     training_sports: [sport], weekly_target_hours: null, capacity_policy: "MODEL_WITH_PRIOR", mesocycle_anchor: null, wave: [.96, 1.04, 1.10, .78],
@@ -77,7 +77,23 @@ export interface DraftDay {
   load_budget: { remaining_weekly_minutes: number; components: Record<Component, { e7_daily: number; e40_daily: number; index_7_40: number | null; target_weekly_effective: number; rolling_7d_effective: number; deficit_effective: number }> };
   explanation: string; rejected_alternatives: Array<{ method_id: string; reason: string; code: string }>;
 }
-export interface PlanningDraft {
+export interface PlanProjection {
+  long_term?: unknown; periodization?: unknown; input_snapshot?: unknown; history_comparison?: unknown;
+}
+export interface ManagementOutlook extends PlanProjection {
+  schema_version: "training-outlook-preview-v1"; profile_revision: number;
+  generated_at: string; volume_context: Record<string, unknown>;
+}
+export function parseManagementOutlook(value: unknown): ManagementOutlook | null {
+  if (!isRecord(value)) throw new Error("Дългосрочният план не е достъпен.");
+  if (value.configured === false && value.outlook === null) return null;
+  const p = value.outlook;
+  if (!isRecord(p) || p.schema_version !== "training-outlook-preview-v1" || !Number.isSafeInteger(p.profile_revision)
+    || typeof p.generated_at !== "string" || !isRecord(p.volume_context) || !isRecord(p.long_term)
+    || !Array.isArray(p.long_term.weeks)) throw new Error("Дългосрочният план не е достъпен.");
+  return p as unknown as ManagementOutlook;
+}
+export interface PlanningDraft extends PlanProjection {
   schema_version: "planning-draft-v1";
   status: "DRAFT" | "LIMITED_DRAFT" | "BLOCKED";
   start_date: string;

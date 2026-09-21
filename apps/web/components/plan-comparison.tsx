@@ -1,9 +1,9 @@
 "use client";
 import { useState } from "react";
 import { isRecord } from "../lib/training-status";
-import { COMPONENTS, type Component, type PlanningDraft, type PlanOutcome } from "../lib/training-management";
+import { COMPONENTS, type Component, type PlanProjection, type PlanOutcome } from "../lib/training-management";
 const fmt=(x:unknown)=>typeof x==="number"?x.toLocaleString("bg-BG",{maximumFractionDigits:2}):"—";
-export function PlanComparison({plan,outcomes}:{plan?:PlanningDraft;outcomes:PlanOutcome[]}) {
+export function PlanComparison({plan,outcomes}:{plan?:PlanProjection;outcomes:PlanOutcome[]}) {
   const [measure,setMeasure]=useState<"minutes"|Component>("minutes");
   const history=Array.isArray(plan?.history_comparison)?plan.history_comparison.filter(isRecord):[];
   return <section className="management-panel"><h2>Планирано и изпълнено</h2>

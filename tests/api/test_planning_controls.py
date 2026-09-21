@@ -55,7 +55,7 @@ def test_selected_sports_add_their_own_history_and_keep_distinct_capacity_source
     assert result['source']['speed_models_by_sport'].keys()=={'Run','NordicSki'}
 
 
-def test_unsupported_sport_volume_never_becomes_running_budget(monkeypatch):
+def test_whole_training_budget_retains_means_specific_dosing_and_availability(monkeypatch):
     repo=Repository();s=repo.envelope['snapshot_payload']['load_history']
     s['activities'] += [{**a,'sport':'Ride','duration_min':600} for a in list(s['activities'])]
     monkeypatch.setattr(engine.model_service,'speed_view',reference_speed)
@@ -63,7 +63,42 @@ def test_unsupported_sport_volume_never_becomes_running_budget(monkeypatch):
     v=result['parameters']['volume_evidence']
     assert v['all_sports_weekly_minutes'] > result['parameters']['historical_selected_weekly_minutes']*5
     assert result['parameters']['historical_selected_weekly_minutes']==pytest.approx(v['by_sport_weekly_minutes']['Run'],abs=.001)
+    assert result['parameters']['baseline_weekly_minutes'] == pytest.approx(v['all_sports_weekly_minutes'], abs=.002)
+    assert result['parameters']['weekly_minutes_ceiling'] <= sum(profile()['available_minutes'])
+    for d in result['days']:
+        if d['session']:
+            assert d['session']['sport'] == 'Run'
+            # Cycling's 600-minute sessions must not authorize such a run.
+            assert d['session']['total_minutes'] <= 60*max(1, d['load_budget']['mesocycle_factor'])+.002
+            assert any(l['code']=='ACTUAL_SPORT_SESSION_EXPOSURE' for l in d['session']['dose_evidence']['limits'])
     assert all(w['planned_minutes'] is None for w in result['history_comparison'])
+
+
+def test_volume_basis_excludes_disabled_strength_and_suggests_observed_weekdays():
+    source = Repository().envelope['snapshot_payload']['load_history']
+    source['activities'] += [{**a,'sport':'WeightTraining','duration_min':30} for a in list(source['activities'])]
+    evidence = planning_controls.volume_history(source, TODAY, 28)
+    p = profile(planning_controls=controls())
+    without = planning_controls.volume_basis(p, evidence)
+    with_strength = planning_controls.volume_basis({**p,'strength_enabled':True}, evidence)
+    assert with_strength['baseline_weekly_minutes']-without['baseline_weekly_minutes'] == pytest.approx(evidence['by_sport_weekly_minutes']['WeightTraining'], abs=.002)
+    assert len(evidence['suggested_available_minutes']) == 7
+    assert sum(evidence['suggested_available_minutes']) == pytest.approx(evidence['all_sports_weekly_minutes'], abs=18)
+    source['strength']['daily'] = []
+    assert planning_controls.volume_history(source, TODAY, 28)['suggested_available_minutes'] is None
+
+
+def test_new_means_can_only_get_light_introduction_despite_large_other_sport_history(monkeypatch):
+    monkeypatch.setattr(engine.model_service, 'speed_view', reference_speed)
+    p = profile(sport='NordicSki', actual_sport='NordicSki', reentry_days=0,
+                planning_controls=controls(training_sports=['NordicSki', 'Run']))
+    result = engine.generate_plan(Repository(), 'athlete', p, start_date=TODAY+timedelta(days=1), now=NOW)
+    for d in result['days']:
+        s = d['session']
+        if s and s['sport'] == 'NordicSki':
+            assert s['purpose'] == 'RECOVERY' and s['zone'] in {'Z1', 'Z2'}
+            assert s['main_work_minutes'] <= 30
+    assert any(r['code'] == 'NO_ACTUAL_MODE_EXPOSURE' for d in result['days'] for r in d['rejected_alternatives'])
 
 
 def test_model_prior_is_explicit_and_does_not_bypass_stale_or_exploratory_data():

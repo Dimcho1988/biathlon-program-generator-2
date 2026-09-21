@@ -165,6 +165,18 @@ def save_management_profile(
         raise HTTPException(503, "Management profile could not be saved") from exc
 
 
+@app.get("/api/v2/athlete/management/outlook")
+def management_outlook(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+):
+    alias = _model_alias(authorization, athlete_alias)
+    try:
+        return management_service.outlook(_repository(), alias)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Training outlook is unavailable") from exc
+
+
 @app.get("/api/v2/athlete/management/drafts")
 def management_drafts(
     start_date: date | None = None,

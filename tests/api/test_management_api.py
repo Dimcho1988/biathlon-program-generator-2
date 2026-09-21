@@ -73,6 +73,21 @@ def test_management_requires_explicit_athlete_and_actor(api):
     assert client.put("/api/v2/athlete/management/profile", json={"profile": PROFILE, "expected_revision": 2}, headers=HEADERS).status_code == 200
 
 
+def test_outlook_read_is_scoped_and_needs_neither_actor_nor_existing_draft(api):
+    client, store, repository = api
+    repository.active_analysis = lambda _: {}
+    assert client.get("/api/v2/athlete/management/outlook").status_code == 401
+    assert client.get("/api/v2/athlete/management/outlook", headers={"Authorization": "Bearer service-secret"}).status_code == 401
+    response = client.get("/api/v2/athlete/management/outlook", headers={k:v for k,v in HEADERS.items() if k != "X-OnFlows-Actor-Id"})
+    assert response.status_code == 200
+    result = response.json()["outlook"]
+    assert result["profile_revision"] == 2 and result["schema_version"] == "training-outlook-preview-v1"
+    assert result["long_term"]["limited"] is True
+    assert not store.saved
+    store.current.update(configured=False, profile=None)
+    assert client.get("/api/v2/athlete/management/outlook", headers=HEADERS).json() == {"configured": False, "outlook": None}
+
+
 @pytest.mark.parametrize("patch", [
     {"building_fraction": .7}, {"maintenance_fraction": .5}, {"reentry_fraction": .6},
     {"available_minutes": [0, 0, 0, -1, 0, 0, 0]},

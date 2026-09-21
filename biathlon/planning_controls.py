@@ -97,6 +97,15 @@ def volume_history(source, today, covered_days):
     zone_dates = [{r["date"] for r in daily if r["zone"] == z} for z in COMPONENTS if z != "STR"]
     zone_dates.append({r["date"] for r in source.get("strength", {}).get("daily", [])})
     complete_dates = set.intersection(*zone_dates)
+    # Suggest availability from observed weekdays, counting confirmed rest days.
+    # This is an editable suggestion only; it never changes the saved profile.
+    recent_dates = [date.fromisoformat(d) for d in complete_dates
+                    if (today-timedelta(days=28)).isoformat() <= d < today.isoformat()]
+    suggested = []
+    for weekday in range(7):
+        dates = {d.isoformat() for d in recent_dates if d.weekday() == weekday}
+        minutes = sum(float(a.get("duration_min") or 0.) for a in activities if a["date"] in dates)
+        suggested.append(min(360, int(5*round(minutes/max(1, len(dates))/5))))
     for offset in range(4, 0, -1):
         start, end = today-timedelta(days=7*offset), today-timedelta(days=7*(offset-1)+1)
         covered = len({d for d in complete_dates if start.isoformat() <= d <= end.isoformat()})
@@ -105,4 +114,39 @@ def volume_history(source, today, covered_days):
                       "actual_minutes": round(sum(float(a.get("duration_min") or 0) for a in selected), 3) if covered == 7 else None,
                       "planned_minutes": None, "plan_status": "ACTUAL_HISTORY_ONLY"})
     return {"basis": "ACTUAL_28_DAY_HISTORY", "covered_days": covered_days, "by_sport_weekly_minutes": weekly,
-            "all_sports_weekly_minutes": round(sum(weekly.values()), 3), "weeks": weeks}
+            "all_sports_weekly_minutes": round(sum(weekly.values()), 3), "weeks": weeks,
+            "suggested_available_minutes": suggested if len(recent_dates) >= 14 else None,
+            "max_session_minutes_by_sport": {s: max(float(a.get("duration_min") or 0.) for a in activities if a.get("sport", "Unknown") == s) for s in by_sport}}
+
+
+def volume_basis(profile, evidence):
+    """Whole-training time is a budget, never transferable speed or capacity.
+
+    Legacy profiles retain their original same-sport rule. Strength is separate
+    and only enters the new planner's time budget when strength is enabled.
+    """
+    controls = profile.get("planning_controls")
+    sports = (controls.get("training_sports") if controls else None) or [profile.get("actual_sport") or profile["sport"]]
+    by_sport = evidence["by_sport_weekly_minutes"]
+    selected = sum(by_sport.get(s, 0.) for s in sports)
+    reported = profile.get("recent_weekly_hours")
+    reliable = evidence["covered_days"] >= 14 and bool(by_sport)
+    if reliable:
+        historical = (sum(v for s, v in by_sport.items() if s != "WeightTraining") if controls else selected)
+        if controls and profile.get("strength_enabled"):
+            historical += by_sport.get("WeightTraining", 0.)
+        basis = "ACTUAL_ALL_TRAINING_28_DAY_MEAN" if controls else "ACTUAL_SAME_SPORT_28_DAY_MEAN"
+    elif reported:
+        historical = sum(reported)/len(reported)*60
+        basis = "REPORTED_FOUR_WEEK_MEAN"
+    else:
+        historical, basis = 0., "MISSING"
+    baseline = historical
+    if controls and controls.get("weekly_target_hours") is not None:
+        baseline = controls["weekly_target_hours"]*60
+        basis = "COACH_WEEKLY_GOAL_WITH_INDIVIDUAL_DOSE_CHECKS"
+    return {"historical_training_weekly_minutes": round(historical, 3),
+            "historical_selected_weekly_minutes": round(selected, 3),
+            "baseline_weekly_minutes": round(baseline, 3), "weekly_volume_source": basis,
+            "reported_history_only": not reliable and bool(reported),
+            "missing_history": not reliable and not reported}

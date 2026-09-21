@@ -8,6 +8,51 @@ from biathlon.periodization import build_periodization
 from tests.api.test_training_plan_engine import Repository, TODAY, profile
 
 
+def test_live_outlook_uses_saved_accents_and_wave_without_generating_or_writing(monkeypatch):
+    from types import SimpleNamespace
+    from apps.api import management_service as service
+    from apps.api.management_schemas import PlanningControls
+    from tests.api.test_training_plan_engine import NOW
+    repo = Repository()
+    repo.active_analysis = lambda _: deepcopy(repo.envelope)
+    controls = PlanningControls(accent_mode="MANUAL", accents=["Z3"], mesocycle_anchor=TODAY).model_dump(mode="json")
+    saved = {"configured": True, "revision": 1, "profile": profile(discipline="5000 m", reentry_days=0, planning_controls=controls)}
+    original = deepcopy(repo.envelope)
+    monkeypatch.setattr(service, "ManagementStore", lambda _: SimpleNamespace(profile=lambda _: deepcopy(saved)))
+    monkeypatch.setattr(engine, "generate_plan", lambda *a, **kw: pytest.fail("outlook must not generate or save a draft"))
+    monkeypatch.setattr(engine.model_service, "speed_view", lambda *a, **kw: pytest.fail("outlook does not need speed evaluation"))
+    first = service.outlook(repo, "athlete", now=NOW)["outlook"]
+    frozen = deepcopy(first)
+    saved["revision"] = 2
+    controls.update(accents=["Z4"], wave=[.96, 1.4, 1.5, .78])
+    second = service.outlook(repo, "athlete", now=NOW)["outlook"]
+    assert second["profile_revision"] == 2
+    week1, week2 = first["long_term"]["weeks"][2], second["long_term"]["weeks"][2]
+    assert week1["accents"] == ["Z3"] and week2["accents"] == ["Z4"]
+    assert week2["components"]["Z4"]["target_index_7_40"] == pytest.approx(1.65)
+    assert week1["components"]["Z4"]["target_index_7_40"] != week2["components"]["Z4"]["target_index_7_40"]
+    assert first == frozen and repo.envelope == original
+    assert second["long_term"]["readiness_forecast"] is False
+
+
+def test_outlook_and_week_share_calendar_volume_limit_for_partial_weeks():
+    from biathlon import planning_controls
+    from apps.api.management_schemas import PlanningControls
+    repo = Repository()
+    body = profile(reentry_days=0, program_end=(TODAY+timedelta(days=8)).isoformat(),
+                   planning_controls=PlanningControls().model_dump(mode="json"))
+    rows = engine._daily_rows(repo.envelope["snapshot_payload"]["load_history"], TODAY)
+    evidence = planning_controls.volume_history(repo.envelope["snapshot_payload"]["load_history"], TODAY, 28)
+    volume = planning_controls.volume_basis(body, evidence)
+    phases = build_periodization(body["program_start"], body["program_end"], [], reentry_days_override=0)
+    ref = training_targets.development_reference(rows, TODAY, TODAY, 4)
+    result = engine._long_term_outlook(body, phases, ref, None, {}, rows, TODAY, False, volume=volume)
+    for w in result["weeks"]:
+        expected = engine._volume_ceiling(body, phases, [], body["available_minutes"], volume["baseline_weekly_minutes"], engine.date.fromisoformat(w["start_date"]), engine.date.fromisoformat(w["end_date"]), {}, False)
+        assert w["volume_budget_minutes"] == pytest.approx(expected, abs=.001)
+    assert result["weeks"][-1]["volume_budget_minutes"] <= 150
+
+
 def inputs(repo=None, body=None, limited=False):
     repo, body = repo or Repository(), body or profile()
     rows = engine._daily_rows(repo.envelope["snapshot_payload"]["load_history"], TODAY)

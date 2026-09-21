@@ -5,7 +5,7 @@ activity calendar, or an approved training prescription.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 import json
 from zoneinfo import ZoneInfo
@@ -18,6 +18,55 @@ from .management_store import ManagementStore
 from .model_service import ModelStore
 from .oauth_store import PersistentStoreFailure
 from . import training_plan_engine
+
+
+def outlook(repository, alias, *, now=None):
+    """Current saved goals, independent of any frozen draft or active plan.
+
+    Only reads profile, calendar and one actual analysis snapshot. No speed
+    model evaluation, future sessions, lifecycle refresh, or persistence.
+    """
+    stored = ManagementStore(repository).profile(alias)
+    if not stored["configured"]:
+        return {"configured": False, "outlook": None}
+    profile = ManagementProfile.model_validate(stored["profile"]).model_dump(mode="json")
+    settings = repository.athlete_settings(alias)
+    now = now or datetime.now(timezone.utc)
+    today = now.astimezone(ZoneInfo(settings.timezone) if settings else timezone.utc).date()
+    engine = training_plan_engine
+    analysis = repository.active_analysis(alias) or {}
+    source = (analysis.get("snapshot_payload") or {}).get("load_history") or {}
+    rows = engine._daily_rows(source, today)
+    calendar = engine._read_optional(repository, "athlete_planning_calendar", alias) or {"events": []}
+    preferences = engine._read_optional(repository, "athlete_planning_profile", alias) or {}
+    accents = engine._read_optional(repository, "athlete_mesocycle_accent_preferences", alias)
+    controls = profile.get("planning_controls")
+    if controls:
+        preferences = {"mesocycle_anchor_date": controls.get("mesocycle_anchor") or profile["program_start"],
+                       "mesocycle_length_weeks": len(controls["wave"])}
+    anchor = date.fromisoformat(str(preferences.get("mesocycle_anchor_date", profile["program_start"])))
+    length = preferences.get("mesocycle_length_weeks", 4)
+    reference = engine.training_targets.development_reference(rows, today, anchor, length)
+    quality = source.get("quality") or {}
+    limited = (any(not v["known"] for v in engine.planning_controls.reference(rows, today).values())
+               or bool(quality.get("limited_activities") or quality.get("excluded_activities"))
+               or source.get("period_end") != today.isoformat())
+    covered = len({r["date"] for r in rows if (today-timedelta(days=28)).isoformat() <= r["date"] < today.isoformat()})
+    history = engine.planning_controls.volume_history(source, today, covered)
+    volume = engine.planning_controls.volume_basis(profile, history)
+    phases = engine.build_periodization(profile["program_start"], profile["program_end"], calendar["events"],
+                                       reentry_days_override=profile.get("reentry_days"),
+                                       taper_days=profile["taper_days"], transition_days=profile["transition_days"])
+    projection = engine._long_term_outlook(profile, phases, reference, accents, preferences, rows, today,
+                                         limited, volume=volume, events=calendar["events"])
+    return {"configured": True, "outlook": {
+        "schema_version": "training-outlook-preview-v1", "profile_revision": stored["revision"],
+        "generated_at": now.isoformat(), "engine_version": engine.VERSION,
+        "source": {"generation_id": analysis.get("generation_id"), "revision": analysis.get("revision"), "as_of": source.get("period_end")},
+        "periodization": phases, "long_term": projection, "history_comparison": history["weeks"],
+        "input_snapshot": {"calendar": calendar, "profile_revision": stored["revision"]},
+        "volume_context": {**volume, "available_weekly_minutes": sum(profile["available_minutes"]), "volume_evidence": history},
+    }}
 
 
 def _hash(value):
