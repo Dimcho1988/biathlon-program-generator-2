@@ -164,7 +164,8 @@ def test_robust_aggregation_limits_extreme_values():
     assert robust_mean([4,6],[1,3])==5.5
 
 
-def test_lightweight_calendar_pins_generation_and_avoids_large_hrmod_payloads():
+@pytest.mark.parametrize("reader", ["active_trainability_calendar", "active_planning_calendar"])
+def test_lightweight_calendar_pins_generation_and_avoids_large_hrmod_payloads(reader):
     from datetime import date
     class Catalog(SupabasePilotRepository):
         def __init__(self):self.calls=[];self.captures=0
@@ -186,15 +187,16 @@ def test_lightweight_calendar_pins_generation_and_avoids_large_hrmod_payloads():
                 'start_at_utc':'2026-08-10T10:00:00Z','local_date':'2026-08-10'}
                 for i in range(offset,min(201,offset+200))]
     repo=Catalog()
-    result=repo.active_trainability_calendar('ath-test',date(2026,8,1),date(2026,8,31))
+    result=getattr(repo,reader)('ath-test',date(2026,8,1),date(2026,8,31))
     assert repo.captures==1 and len(repo.calls)==3
     assert result['generation_id']=='captured-generation' and result['revision']==41
     assert len(result['activities'])==201
     assert result['activities'][-1]['latest_shadow_run_key']==f'{200:064x}'
-    assert not repo.active_trainability_calendar('ath-test',date(2026,9,1),date(2026,9,30))['activities']
+    assert not getattr(repo,reader)('ath-test',date(2026,9,1),date(2026,9,30))['activities']
 
 
-def test_lightweight_calendar_fails_closed_if_a_pinned_page_is_pruned():
+@pytest.mark.parametrize("reader", ["active_trainability_calendar", "active_planning_calendar"])
+def test_lightweight_calendar_fails_closed_if_a_pinned_page_is_pruned(reader):
     from datetime import date
     class Pruned(SupabasePilotRepository):
         def __init__(self):pass
@@ -203,4 +205,4 @@ def test_lightweight_calendar_fails_closed_if_a_pinned_page_is_pruned():
         def _request(self,method,path,**kwargs):
             return [{'activity_set_generation_id':'captured','activity_count':1}] if 'analysis_generations?' in path else []
     with pytest.raises(PersistentStoreFailure,match='incomplete'):
-        Pruned().active_trainability_calendar('ath-test',date.min,date.max)
+        getattr(Pruned(),reader)('ath-test',date.min,date.max)

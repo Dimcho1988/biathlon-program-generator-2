@@ -442,7 +442,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     periodization = build_periodization(program_start, program_end, events,
                                         reentry_days_override=profile.get("reentry_days"),
                                         taper_days=profile.get("taper_days", 7), transition_days=profile.get("transition_days", 0))
-    envelope = repository.active_activity_calendar(alias, today - timedelta(days=89), end_date) or {}
+    calendar_reader = getattr(repository, "active_planning_calendar", None) or repository.active_activity_calendar
+    envelope = calendar_reader(alias, today - timedelta(days=89), end_date) or {}
     snapshot = envelope.get("snapshot_payload") or {}
     source = snapshot.get("load_history") or {}
     rows = _daily_rows(source, today)

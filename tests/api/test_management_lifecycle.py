@@ -11,6 +11,10 @@ from tests.api.test_training_plan_engine import Repository, NOW, TODAY, profile,
 ACTOR = "11111111-1111-4111-8111-111111111111"
 
 class ActiveRepository(Repository):
+    def active_planning_calendar(self, alias, start, end):
+        return deepcopy(self.envelope)
+    def active_activity_calendar(self, *args):
+        raise AssertionError("Lifecycle must use the pinned planning metadata reader")
     def active_analysis(self, alias):
         return deepcopy(self.envelope)
     def athlete_planning_calendar(self, alias):

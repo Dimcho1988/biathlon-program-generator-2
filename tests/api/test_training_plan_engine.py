@@ -336,3 +336,28 @@ def test_positive_actual_load_cannot_be_erased_when_calendar_metadata_is_missing
     assert result["days"][0]["session"] is None
     assert all(d["status"] == "REVIEW_REQUIRED" for d in result["days"][1:])
     assert any(w["code"] == "ACTUAL_LOAD_WITHOUT_SESSION_METADATA" for w in result["warnings"])
+
+
+def test_planner_uses_pinned_metadata_reader_and_retains_actual_session_guard():
+    class PinnedRepository(Repository):
+        def active_planning_calendar(self, alias, start, end):
+            return deepcopy(self.envelope)
+        def active_activity_calendar(self, *args):
+            raise AssertionError("Planning must not load large per-activity HRmod documents")
+    repo = PinnedRepository()
+    repo.envelope["activities"].append({"activity_ref": "already-done", "local_date": TODAY.isoformat(), "sport": "Run"})
+    result = generate(repo, start=TODAY)
+    assert result["source"]["generation_id"] == repo.envelope["generation_id"]
+    assert result["days"][0]["status"] == "EXISTING_ACTIVITY"
+    assert result["days"][0]["session"] is None
+
+
+def test_planner_does_not_fall_back_when_pinned_metadata_is_incomplete():
+    from apps.api.oauth_store import PersistentStoreFailure
+    class Incomplete(Repository):
+        def active_planning_calendar(self, *args):
+            raise PersistentStoreFailure("Pinned catalog is incomplete")
+        def active_activity_calendar(self, *args):
+            raise AssertionError("Do not substitute a different source")
+    with pytest.raises(PersistentStoreFailure, match="incomplete"):
+        generate(Incomplete())
