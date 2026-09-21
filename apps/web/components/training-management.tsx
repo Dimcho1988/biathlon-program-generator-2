@@ -15,14 +15,14 @@ import { SyncStatusPanel } from "./sync-status-panel";
 import type { SyncState } from "../lib/sync";
 import {
   CAPACITY_LABELS, COMPONENTS, PHASE_LABELS, parseDraftRecord, parseDrafts,
-  parseActivePlanResponse, type ActivePlanResponse, type DraftDay, type DraftRecord, type ManagementProfileResponse,
+  parseActivePlanResponse, type ActivePlanResponse, type ManagementOutlook, type DraftDay, type DraftRecord, type ManagementProfileResponse,
 } from "../lib/training-management";
 
 const number = (value: unknown, digits = 1) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("bg-BG", { maximumFractionDigits: digits }) : "—";
 const dateLabel = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString("bg-BG", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 const datePlus = (day: string, days: number) => { const value = new Date(`${day}T12:00:00Z`); value.setUTCDate(value.getUTCDate() + days); return value.toISOString().slice(0, 10); };
 const STATUS_LABELS: Record<string, string> = { TRAINING: "Тренировка", REST: "Почивка", EXISTING_ACTIVITY: "Има изпълнена активност", UNAVAILABLE: "Няма свободно време", RACE: "Състезание", REVIEW_REQUIRED: "Нужен е преглед", SKIPPED: "Пропусната тренировка" };
-const LIMIT_LABELS: Record<string, string> = { ACTUAL_SPORT_EXPOSURE: "Историческа поносимост за конкретното средство", RESERVE_LONG_SESSION_TIME: "Запазено време за дългата тренировка", METHOD_WORK_CAP: "Максимална основна работа за метода", DAILY_AVAILABLE_WORK: "Оставащо време след загрявка и разпускане", REMAINING_WEEKLY_WORK: "Оставащ седмичен обем за основна работа", LOW_ABSOLUTE_RECOVERY_CAP: "Лимит на възстановителната работа", TAPER_DAILY_WORK_CAP: "Лимит за предсъстезателно разтоварване", ROLLING_7_40_COMPONENT_BUDGET: "Оставащ компонентен бюджет", RACE_DURATION_WORK_CAP: "Граница според дисциплината", RESERVE_KEY_SESSION_TIME: "Запазено време за ключовите сесии" };
+const LIMIT_LABELS: Record<string, string> = { ACTUAL_SPORT_EXPOSURE: "Историческа поносимост за конкретното средство", ACTUAL_SPORT_SESSION_EXPOSURE: "Най-дълга скорошна сесия за това средство × вълна", RESERVE_LONG_SESSION_TIME: "Запазено време за дългата тренировка", METHOD_WORK_CAP: "Максимална основна работа за метода", DAILY_AVAILABLE_WORK: "Оставащо време след загрявка и разпускане", REMAINING_WEEKLY_WORK: "Оставащ седмичен обем за основна работа", LOW_ABSOLUTE_RECOVERY_CAP: "Лимит на възстановителната работа", TAPER_DAILY_WORK_CAP: "Лимит за предсъстезателно разтоварване", ROLLING_7_40_COMPONENT_BUDGET: "Оставащ компонентен бюджет", RACE_DURATION_WORK_CAP: "Граница според дисциплината", RESERVE_KEY_SESSION_TIME: "Запазено време за ключовите сесии" };
 const FALLBACK_LABELS: Record<string, string> = {
   NO_INDIVIDUAL_SPEED_CURVE: "Все още няма индивидуално калибрирана крива скорост–време.",
   EXPLORATORY_OR_NONMAXIMAL_TESTS: "Наличните тестове са ориентировъчни или не са максимални.",
@@ -78,8 +78,8 @@ async function requestJson(path: string, method: "GET" | "PUT" | "POST", body?: 
   return value;
 }
 
-export function TrainingManagement({ initialView = "week", athleteName, canEdit, initialProfile, initialDrafts, initialActive = { active: null, history: [] }, initialSyncState = null, syncError = false, today }: {
-  initialView?: "week" | "overview"; athleteName: string; canEdit: boolean; initialProfile: ManagementProfileResponse; initialDrafts: DraftRecord[]; initialActive?: ActivePlanResponse; initialSyncState?: SyncState | null; syncError?: boolean; today: string;
+export function TrainingManagement({ initialView = "week", initialOutlook = null, athleteName, canEdit, initialProfile, initialDrafts, initialActive = { active: null, history: [] }, initialSyncState = null, syncError = false, today }: {
+  initialOutlook?: ManagementOutlook | null; initialView?: "week" | "overview"; athleteName: string; canEdit: boolean; initialProfile: ManagementProfileResponse; initialDrafts: DraftRecord[]; initialActive?: ActivePlanResponse; initialSyncState?: SyncState | null; syncError?: boolean; today: string;
 }) {
   const [active, setActive] = useState(initialActive);
   const saved = initialProfile;
@@ -144,9 +144,9 @@ export function TrainingManagement({ initialView = "week", athleteName, canEdit,
     {syncError && <p className="management-error" role="alert">Обновяването не започна. Опитай отново или провери връзката с Intervals в настройките.</p>}
     {initialSyncState && <SyncStatusPanel initialState={initialSyncState} renderedGenerationId={initialSyncState.active_generation_id} returnTo="/management" compact />}
     <nav className="management-view-switch" aria-label="Изглед на плана"><Link href="/management" aria-current={view === "week" ? "page" : undefined}>Седмична програма</Link><Link href="/management/outlook" aria-current={view === "overview" ? "page" : undefined}>Дългосрочен план</Link></nav>
-    {overviewPlan && <TrainingPlanSummary plan={overviewPlan} />}
+    {view === "week" && overviewPlan && <TrainingPlanSummary plan={overviewPlan} />}
 
-    {view === "overview" ? <TrainingPlanOverview plan={overviewPlan} outcomes={active.active?.payload.outcomes ?? []} today={today} stale={showDraft ? draft?.stale !== false : active.active?.stale} /> : <>
+    {view === "overview" ? <TrainingPlanOverview plan={initialOutlook ?? undefined} outcomes={active.active?.payload.outcomes ?? []} today={today} currentProfileRevision={initialOutlook?.profile_revision} volumeContext={initialOutlook?.volume_context} /> : <>
       {active.active && !newDraft && <ActiveTrainingPlan value={active} onChange={setActive} canEdit={canEdit} today={today} renderDay={day => <DayCard day={day} expanded />} />}
       {showDraft && <>
         <section className="management-panel management-next-step" aria-label="Следваща стъпка"><p className="eyebrow">{guidance.step === "REVIEW" ? "Преглед преди започване" : "Следваща стъпка"}</p><h2>{guidance.title}</h2><p>{guidance.description}</p>

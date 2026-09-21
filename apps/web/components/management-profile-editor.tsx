@@ -32,7 +32,7 @@ export function ManagementProfileEditor({ initialProfile, today, canEdit = true,
       const response=await fetch("/api/athlete/management/profile",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({profile:checked,expected_revision:saved.revision})});
       const data:unknown=await response.json();if(!response.ok)throw new Error(isRecord(data)&&typeof data.error==="string"?data.error:"Профилът не беше записан.");
       const result=parseManagementProfileResponse(data);setSaved(result);if(result.profile)setProfile(result.profile);
-      setNotice("Профилът е запазен. Подготви нова седмична програма, за да приложиш настройките.");router.refresh();
+      setNotice("Профилът е запазен. Дългосрочният план вече използва новите настройки. Подготви нова седмична програма, за да ги приложиш и към тренировките.");router.refresh();
     }catch(caught){setError(caught instanceof Error?caught.message:"Профилът не беше записан.");}finally{setBusy(false);}
   }
   return <section className="management-panel management-profile" id="basic-profile">

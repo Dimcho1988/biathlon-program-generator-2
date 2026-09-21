@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TrainingManagement } from "../components/training-management";
 import { currentAuthorizedAthlete } from "../lib/account-access";
-import { defaultManagementProfile, parseDraftRecord, parseDrafts, parseManagementProfile, parseManagementProfileResponse, COMPONENTS } from "../lib/training-management";
+import { defaultManagementProfile, parseDraftRecord, parseDrafts, parseManagementProfile, parseManagementProfileResponse, parseManagementOutlook, COMPONENTS } from "../lib/training-management";
 import { GET, POST, PUT } from "../app/api/athlete/management/[...path]/route";
 
 vi.mock("../lib/account-access", () => ({ currentAuthorizedAthlete: vi.fn() }));
@@ -34,6 +34,27 @@ const record = parseDraftRecord({
 });
 
 describe("management data and review interface", () => {
+  it("shows the current saved outlook without borrowing a stale weekly draft", () => {
+    const outlook = parseManagementOutlook({ configured: true, outlook: {
+      schema_version: "training-outlook-preview-v1", profile_revision: 8, generated_at: "2026-09-21T10:00:00Z",
+      volume_context: { historical_training_weekly_minutes: 744, available_weekly_minutes: 390 },
+      long_term: { schema_version: "training-outlook-v1", weeks: [{ start_date: "2026-09-21", end_date: "2026-09-27", accents: ["Z4"], phases: ["SPECIAL_PREPARATION"], volume_budget_minutes: 390,
+        components: { Z4: { target_weekly_effective: 321, target_index_7_40: 1.65 } } }] },
+      periodization: { phases: [] }, history_comparison: [],
+    } });
+    const props = { athleteName: "Спортист", canEdit: true, initialProfile: { configured: true, profile, revision: 8 }, initialDrafts: [record], today: "2026-09-21" };
+    const html = renderToStaticMarkup(<TrainingManagement {...props} initialView="overview" initialOutlook={outlook} />);
+    expect(html).toContain("Актуални цели от записания профил");
+    expect(html).toContain("версия 8");
+    expect(html).toContain("1,65");
+    expect(html).toContain("321");
+    expect(html).toContain("Записаното свободно време е по-малко");
+    expect(html).not.toContain("Равномерна аеробна работа");
+    expect(html).not.toContain("Показана е запазената версия");
+    const absent = renderToStaticMarkup(<TrainingManagement {...props} initialView="overview" />);
+    expect(absent).not.toContain("Равномерна аеробна работа");
+    expect(() => parseManagementOutlook({ configured: true, outlook: record.payload })).toThrow();
+  });
   it("accepts a valid profile, keeps unknown history null and rejects contradictory input", () => {
     expect(parseManagementProfile(profile).recent_weekly_hours).toBeNull();
     for (const bad of [{ available_minutes: [60] }, { actual_sport: "RollerSki" }, { recent_weekly_hours: [1, 2, 3] }, { age_years: 20, training_experience_years: 25 }, { building_fraction: .7 }]) expect(() => parseManagementProfile({ ...profile, ...bad })).toThrow();
@@ -88,6 +109,15 @@ describe("management API access and optimistic revision", () => {
     expect((await POST(request("POST", {}), context("generate"))).status).toBe(403);
     vi.mocked(currentAuthorizedAthlete).mockResolvedValue(access);
     expect((await PUT(request("PUT", {}, "https://attacker.test"), context("profile"))).status).toBe(403);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it("reads the live outlook with plan permissions and refuses it as a write endpoint", async () => {
+    vi.mocked(currentAuthorizedAthlete).mockResolvedValue({ ...access, canEditPlan: false });
+    expect((await GET(request("GET"), context("outlook"))).status).toBe(200);
+    expect(fetch).toHaveBeenCalledWith(new URL("https://api.example.test/api/v2/athlete/management/outlook"), expect.objectContaining({ cache: "no-store", method: "GET" }));
+    expect((await POST(request("POST", {}), context("outlook"))).status).toBe(404);
+    vi.mocked(currentAuthorizedAthlete).mockResolvedValue({ ...access, canViewPlan: false });
+    expect((await GET(request("GET"), context("outlook"))).status).toBe(403);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
   it("rejects anonymous access, unsupported paths, missing versions and large bodies", async () => {
