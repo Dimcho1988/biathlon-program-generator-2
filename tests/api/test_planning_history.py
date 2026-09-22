@@ -93,16 +93,16 @@ def test_auto_week_has_no_template_or_history_wave_cap_and_keeps_canonical_gates
 def test_automatic_z4_dose_has_complete_reps_and_does_not_inherit_z5_capacity():
     repo=Repository(); settings=repo.settings
     methods=resolved_methods(profile(planning_controls=controls()))
-    method=next(m for m in methods if m['id']=='ONFLOWS-CONTROLLED-Z4-V1')
+    method=next(m for m in methods if m['id']=='ONFLOWS-CONTROLLED-Z4-V2')
     method['actual_sport']='NordicSki'
     cap=engine.capacity_for(method,settings,None,(None,[],['NO_INDIVIDUAL_SPEED_CURVE']),TODAY)
     assert cap['effort_profile']['sport']=='NordicSki'
-    blocks=engine._blocks(method,min(cap['capacity_minutes']*.4,method['max_work_min']),cap,settings)
+    blocks=engine._blocks(method,min(cap['capacity_minutes']*method['interval_template']['total_capacity_ratio'],method['max_work_min']),cap,settings)
     works=[b for b in blocks if b['kind']=='WORK'];rests=[b for b in blocks if b['kind']=='RECOVERY']
     assert 3 <= len(works) <= 6 and len(rests)==len(works)-1
     assert all(b['target_hr_bpm'] is None and b['reserve_repetitions']==2 for b in works)
-    assert all(b['duration_min']==2 for b in rests)
-    assert sum(b['duration_min'] for b in works)<=cap['capacity_minutes']*.4
+    assert all(b['duration_min']==3 for b in rests)
+    assert sum(b['duration_min'] for b in works)<=cap['capacity_minutes']*method['interval_template']['total_capacity_ratio']
     z5=next(m for m in methods if m['zone']=='Z5')
     assert engine.capacity_for(z5,settings,None,(None,[],[]),TODAY) is None
 

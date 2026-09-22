@@ -1,7 +1,7 @@
 """Explicit, revisioned inputs for the coach-reviewed training management pilot."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class IntervalDoseProfile(BaseModel):
     """A coach-resolved effort anchor, never inferred from peak HR."""
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    goal: Literal["AEROBIC_POWER", "THRESHOLD"] = "AEROBIC_POWER"
     zone: Literal["Z4", "Z5"]
     sport: Literal["Run", "NordicSki", "RollerSki"]
     continuous_capacity_min: float = Field(gt=0, le=60)
@@ -26,6 +27,8 @@ class IntervalDoseProfile(BaseModel):
 
     @model_validator(mode="after")
     def coherent(self):
+        if self.goal == "THRESHOLD" and self.zone != "Z4":
+            raise ValueError("A threshold profile must use Z4, never Z5")
         if self.min_repetitions > self.max_repetitions:
             raise ValueError("Invalid repetition range")
         if self.work_seconds >= self.continuous_capacity_min * 60:
@@ -66,7 +69,12 @@ class CycleDirective(BaseModel):
 class PlanningControls(BaseModel):
     """One set of executable controls; ratios are coach goals, not safety limits."""
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    sessions_per_week: int = Field(default=7, ge=1, le=7)
+    sessions_per_week: int = Field(default=7, ge=1, le=21)
+    sessions_by_day: tuple[int, int, int, int, int, int, int] | None = None
+    threshold_days: list[int] = Field(default_factory=list, max_length=7)
+    threshold_method: Literal["AUTO", "CONTINUOUS", "INTERVALS"] = "AUTO"
+    double_threshold_days: list[int] = Field(default_factory=list, max_length=3)
+    double_threshold_components: list[Literal["Z3", "Z4"]] = Field(default_factory=lambda: ["Z3"], min_length=1, max_length=2)
     intensity_days: list[int] = Field(default_factory=list, max_length=7)
     strength_days: list[int] = Field(default_factory=list, max_length=7)
     long_session_day: int | None = Field(default=None, ge=0, le=6)
@@ -87,9 +95,15 @@ class PlanningControls(BaseModel):
 
     @model_validator(mode="after")
     def coherent(self):
-        for days in (self.intensity_days, self.strength_days):
+        for days in (self.intensity_days, self.strength_days, self.threshold_days, self.double_threshold_days):
             if len(set(days)) != len(days) or any(type(d) is not int or not 0 <= d <= 6 for d in days):
                 raise ValueError("Choose distinct weekdays")
+        if self.sessions_by_day is not None and any(not 0 <= v <= 3 for v in self.sessions_by_day):
+            raise ValueError("Choose zero to three sessions per day")
+        if len(set(self.double_threshold_components)) != len(self.double_threshold_components):
+            raise ValueError("Duplicate double-threshold components")
+        if self.sessions_per_week < 2*len(self.double_threshold_days) or (self.sessions_by_day is not None and any(self.sessions_by_day[d] < 2 for d in self.double_threshold_days)):
+            raise ValueError("Double threshold requires two daily and weekly session slots")
         if any(not .5 <= v <= 1.5 for v in self.wave) or self.wave[-1] >= 1:
             raise ValueError("The final week must unload; wave values must be .5 to 1.5")
         if len(set(self.training_sports)) != len(self.training_sports) or len(set(self.accents)) != len(self.accents):
@@ -115,13 +129,14 @@ class ManagementProfile(BaseModel):
     race_duration_min: float | None = Field(default=None, gt=0, le=1440)
     program_start: date
     program_end: date
+    horizon_mode: Literal["AUTO_CALENDAR", "MANUAL"] = "AUTO_CALENDAR"
     availability_mode: Literal["AUTO_HISTORY", "MANUAL"] | None = None
     training_days: list[int] | None = None
     available_minutes: tuple[float, float, float, float, float, float, float]
     recent_weekly_hours: tuple[float, float, float, float] | None = None
     reentry_days: int | None = Field(default=None, ge=0, le=21)
     taper_days: int = Field(default=7, ge=0, le=21)
-    max_key_sessions_per_week: int = Field(default=2, ge=0, le=3)
+    max_key_sessions_per_week: int = Field(default=2, ge=0, le=8)
     building_fraction: float = Field(default=.5, ge=.5, le=.6)
     maintenance_fraction: float = Field(default=.3, ge=.3, le=.4)
     reentry_fraction: float = Field(default=.4, ge=.4, le=.5)
@@ -166,11 +181,16 @@ class ManagementProfile(BaseModel):
                 raise ValueError("Choose running means for a running programme")
             from biathlon.planning_history import availability
             resolved_available = availability(self.model_dump(mode="json"))
-            if any(resolved_available[d] == 0 for d in [*c.intensity_days, *c.strength_days, *([] if c.long_session_day is None else [c.long_session_day])]):
+            if any(resolved_available[d] == 0 for d in [*c.intensity_days, *c.strength_days, *c.threshold_days, *c.double_threshold_days, *([] if c.long_session_day is None else [c.long_session_day])]):
                 raise ValueError("A preferred session day cannot be a rest day")
-            if any(x.start_date < self.program_start or x.end_date > self.program_end for x in c.cycles):
+            if c.double_threshold_days and ((self.age_years or 0) < 18 or (self.training_experience_years or 0) < 1):
+                raise ValueError("Double threshold requires known adult age and at least one training year")
+            if self.max_key_sessions_per_week < 2*len(c.double_threshold_days):
+                raise ValueError("Each double-threshold day counts as two key sessions")
+            control_end = self.program_end if self.horizon_mode == "MANUAL" else self.program_start + timedelta(days=365)
+            if any(x.start_date < self.program_start or x.end_date > control_end for x in c.cycles):
                 raise ValueError("Cycle directives must lie within the programme")
-            if any(x.kind == "STRESS" and (self.program_end-x.end_date).days < x.recovery_days for x in c.cycles):
+            if any(x.kind == "STRESS" and (control_end-x.end_date).days < x.recovery_days for x in c.cycles):
                 raise ValueError("Keep the entire post-stress unloading period within the programme")
         if any(not 0 <= value <= 3000 for value in self.component_targets_weekly.values()):
             raise ValueError("Component goals must be finite weekly equivalent minutes, 0 to 3000")

@@ -112,7 +112,7 @@ def test_race_duration_changes_specific_z3_intensity_without_a_second_index_fact
 
 
 def test_last_days_of_program_and_explicit_transition_are_supported():
-    result = plan(program_end=(TODAY+timedelta(days=3)).isoformat())
+    result = plan(horizon_mode="MANUAL", program_end=(TODAY+timedelta(days=3)).isoformat())
     assert len(result["days"]) == 3 and result["end_date"] == (TODAY+timedelta(days=3)).isoformat()
     race = {"event_type": "MAIN_RACE", "start_date": (TODAY+timedelta(days=10)).isoformat(), "end_date": (TODAY+timedelta(days=10)).isoformat()}
     periods = build_periodization(TODAY, TODAY+timedelta(days=30), [race], transition_days=7)

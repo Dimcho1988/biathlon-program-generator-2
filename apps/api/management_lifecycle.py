@@ -3,6 +3,7 @@
 The daily worker and post-sync hook share this idempotent service. A paused plan
 cannot be restarted by a worker. Missing load coverage never means a rest day.
 """
+from biathlon.planning_schedule import day_sessions, day_totals
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -96,9 +97,10 @@ def reconcile(plan, source, today, decisions, previous_outcomes=()):
         covered = covered and any(r["date"] == key for r in (source.get("strength") or {}).get("daily", []))
         if key in outcomes and not covered and not actual:
             continue  # An older outcome outside the current import window stays historical evidence.
-        session = day.get("session")
+        totals = day_totals(day)
+        session = {**totals, "sport": totals["sports"][0] if totals["sports"] else None} if day_sessions(day) else None
         status = "RECORDED" if actual else "SKIPPED" if decisions.get(key, {}).get("action") == "SKIP" else "MISSED" if covered and session else "REST" if covered else "UNKNOWN"
-        same_sport = [a for a in actual if a.get("sport") == (session or {}).get("sport")]
+        same_sport = [a for a in actual if a.get("sport") in totals["sports"]]
         if actual and session and not same_sport:
             status = "DIFFERENT_ACTIVITY"
         outcomes[key] = {"date": key, "status": status,
@@ -121,10 +123,10 @@ def changes_between(old, new):
     changes = []
     for day in new.get("days", []):
         before = previous.get(day["date"])
-        prior = before.get("session") if before else None
-        following = day.get("session")
-        signature = lambda s: (s.get("method_id"), s.get("total_minutes"), s.get("blocks")) if s else None
-        if before is None or signature(prior) != signature(following) or before["status"] != day["status"]:
+        prior = day_totals(before) if before and day_sessions(before) else None
+        following = day_totals(day) if day_sessions(day) else None
+        signature = lambda d: [(s.get("method_id"), s.get("total_minutes"), s.get("blocks")) for s in day_sessions(d or {})]
+        if before is None or signature(before) != signature(day) or before["status"] != day["status"]:
             changes.append({"date": day["date"], "before": prior.get("title") if prior else None,
                             "after": following.get("title") if following else day["explanation"],
                             "before_minutes": prior.get("total_minutes") if prior else 0,

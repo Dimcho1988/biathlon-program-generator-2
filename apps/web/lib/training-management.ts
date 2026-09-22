@@ -10,6 +10,7 @@ export interface ManagementProfile {
   race_duration_min: number | null;
   program_start: string;
   program_end: string;
+  horizon_mode?: "AUTO_CALENDAR" | "MANUAL";
   available_minutes: number[];
   availability_mode?: "AUTO_HISTORY" | "MANUAL" | null;
   training_days?: number[] | null;
@@ -38,6 +39,8 @@ export interface CycleDirective {
   accents: Component[]; target_index: number; volume_factor: number; recovery_days: number;
 }
 export interface PlanningControls {
+  sessions_by_day?: number[] | null; threshold_days?: number[]; threshold_method?: "AUTO" | "CONTINUOUS" | "INTERVALS";
+  double_threshold_days?: number[]; double_threshold_components?: ("Z3" | "Z4")[];
   history_gap_days?: number; automatic_intervals?: boolean;
   sessions_per_week: number; intensity_days: number[]; strength_days: number[]; long_session_day: number | null;
   capacity_policy?: "OBSERVED_ONLY" | "MODEL_WITH_PRIOR"; max_strength_sessions: number; training_sports: ManagementProfile["actual_sport"][]; weekly_target_hours: number | null;
@@ -52,12 +55,13 @@ export function trainingDays(profile: Pick<ManagementProfile, "availability_mode
   return profile.training_days ?? (availabilityMode(profile) === "AUTO_HISTORY" ? [0,1,2,3,4,5,6] : profile.available_minutes.flatMap((v,i) => v > 0 ? [i] : []));
 }
 export function defaultPlanningControls(sport: ManagementProfile["actual_sport"]): PlanningControls {
-  return { history_gap_days: 10, automatic_intervals: true, sessions_per_week: 7, intensity_days: [], strength_days: [], long_session_day: null, max_strength_sessions: 2,
+  return { sessions_by_day: null, threshold_days: [], threshold_method: "AUTO", double_threshold_days: [], double_threshold_components: ["Z3"], history_gap_days: 10, automatic_intervals: true, sessions_per_week: 7, intensity_days: [], strength_days: [], long_session_day: null, max_strength_sessions: 2,
     training_sports: [sport], weekly_target_hours: null, capacity_policy: "MODEL_WITH_PRIOR", mesocycle_anchor: null, wave: [.96, 1.04, 1.10, .78],
     accent_mode: "AUTO", accent_limit: 2, accents: [], accent_index: 1.1, maintenance_index: 1, cycles: [] };
 }
 
 export interface IntervalDoseProfile {
+  goal?: "AEROBIC_POWER" | "THRESHOLD";
   zone: "Z4" | "Z5"; sport: "Run" | "NordicSki" | "RollerSki";
   continuous_capacity_min: number; assessed_on: string; effort: string;
   work_seconds: number; recovery_seconds: number; min_repetitions: number; max_repetitions: number;
@@ -81,11 +85,14 @@ export interface DraftSession {
   direct_equivalent_minutes: Record<Component, number>; dose_evidence: DoseEvidence;
 }
 export interface DraftDay {
+  sessions?: DraftSession[];
   date: string; status: string; period: string; taper: boolean; session: DraftSession | null;
   readiness_before: Record<Component, number | null>; readiness_after: Record<Component, number | null>;
   load_budget: { remaining_weekly_minutes: number | null; components: Record<Component, { e7_daily: number; e40_daily: number; index_7_40: number | null; target_weekly_effective: number; rolling_7d_effective: number; deficit_effective: number }> };
   explanation: string; rejected_alternatives: Array<{ method_id: string; reason: string; code: string }>;
 }
+export function daySessions(day: DraftDay): DraftSession[] { return day.sessions ?? (day.session ? [day.session] : []); }
+
 export interface PlanProjection {
   long_term?: unknown; periodization?: unknown; input_snapshot?: unknown; history_comparison?: unknown;
 }
@@ -128,6 +135,7 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     || !(value.age_years === null || integer(value.age_years, 10, 100))
     || !optionalRange(value.training_experience_years, 0, 85)
     || !(value.race_duration_min === null || range(value.race_duration_min, .01, 1440))
+    || (value.horizon_mode !== undefined && !["AUTO_CALENDAR", "MANUAL"].includes(String(value.horizon_mode)))
     || !isCalendarDate(value.program_start) || !isCalendarDate(value.program_end) || value.program_end < value.program_start
     || (Date.parse(value.program_end) - Date.parse(value.program_start)) > 365 * 86_400_000
     || (finite(value.age_years) && finite(value.training_experience_years) && value.training_experience_years > value.age_years)
@@ -136,13 +144,13 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     || (value.training_days != null && (!Array.isArray(value.training_days) || new Set(value.training_days).size !== value.training_days.length || !value.training_days.every(d => integer(d, 0, 6))))
     || (value.recent_weekly_hours !== null && (!Array.isArray(value.recent_weekly_hours) || value.recent_weekly_hours.length !== 4 || !value.recent_weekly_hours.every(v => range(v, 0, 80))))
     || !(value.reentry_days === null || integer(value.reentry_days, 0, 21))
-    || !integer(value.taper_days, 0, 21) || !integer(value.max_key_sessions_per_week, 0, 3)
+    || !integer(value.taper_days, 0, 21) || !integer(value.max_key_sessions_per_week, 0, 8)
     || !range(value.building_fraction, .5, .6) || !range(value.maintenance_fraction, .3, .4) || !range(value.reentry_fraction, .4, .5)
     || !range(value.recovery_session_cap_min, 5, 45) || typeof value.allow_expert_fallback !== "boolean") {
     throw new Error("Проверете датите, наличното време и параметрите на профила.");
   }
   const normalized: Record<string, unknown> = { adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, component_targets_weekly: {},
-    interval_profiles: [], strength_enabled: false, strength_circuits: 2, transition_days: 0, ...value };
+    horizon_mode: "AUTO_CALENDAR", interval_profiles: [], strength_enabled: false, strength_circuits: 2, transition_days: 0, ...value };
   if (typeof normalized.auto_import_enabled !== "boolean" || !["AUTO", "REVIEW"].includes(String(normalized.adaptation_mode)) || !range(normalized.progression_percent, 0, 10)
     || typeof normalized.strength_enabled !== "boolean" || !integer(normalized.strength_circuits, 2, 3)
     || !integer(normalized.transition_days, 0, 28) || !isRecord(normalized.component_targets_weekly)
@@ -154,7 +162,7 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     const allowed = trainingDays(value as unknown as ManagementProfile).filter(d => availabilityMode(value as unknown as ManagementProfile) === "AUTO_HISTORY" || Number((value.available_minutes as number[])[d]) > 0);
     const days = (v: unknown): v is number[] => Array.isArray(v) && new Set(v).size === v.length && v.every(d => integer(d, 0, 6) && allowed.includes(d));
     const zones = (v: unknown): v is Component[] => Array.isArray(v) && new Set(v).size === v.length && v.every(z => COMPONENTS.includes(z));
-    if (!isRecord(c) || (c.history_gap_days !== undefined && !integer(c.history_gap_days, 5, 14)) || (c.automatic_intervals !== undefined && typeof c.automatic_intervals !== "boolean") || (c.capacity_policy !== undefined && !["OBSERVED_ONLY", "MODEL_WITH_PRIOR"].includes(String(c.capacity_policy))) || !integer(c.sessions_per_week, 1, 7) || !days(c.intensity_days) || !days(c.strength_days)
+    if (!isRecord(c) || (c.history_gap_days !== undefined && !integer(c.history_gap_days, 5, 14)) || (c.automatic_intervals !== undefined && typeof c.automatic_intervals !== "boolean") || (c.capacity_policy !== undefined && !["OBSERVED_ONLY", "MODEL_WITH_PRIOR"].includes(String(c.capacity_policy))) || !integer(c.sessions_per_week, 1, 21) || !days(c.intensity_days) || !days(c.strength_days)
       || !(c.long_session_day === null || (integer(c.long_session_day, 0, 6) && days([c.long_session_day])))
       || !integer(c.max_strength_sessions, 0, 3) || !Array.isArray(c.training_sports) || c.training_sports.length > 3
       || (c.training_sports.length > 0 && !c.training_sports.includes(String(value.actual_sport)))
@@ -165,21 +173,31 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
       || c.accents.length > c.accent_limit || (c.accent_mode !== "AUTO" && !c.accents.length)
       || !range(c.accent_index, .5, 2) || !range(c.maintenance_index, .5, 1.2) || !Array.isArray(c.cycles) || c.cycles.length > 52 || !c.cycles.every(isRecord))
       throw new Error("Провери дните, акцентите и вълната. Последната седмица трябва да е разтоварваща.");
+    if ((c.sessions_by_day != null && (!Array.isArray(c.sessions_by_day) || c.sessions_by_day.length !== 7 || !c.sessions_by_day.every(v => integer(v, 0, 3))))
+      || !days(c.threshold_days ?? []) || !days(c.double_threshold_days ?? [])
+      || !["AUTO", "CONTINUOUS", "INTERVALS"].includes(String(c.threshold_method ?? "AUTO"))) throw new Error("Провери броя сесии по дни и праговите предпочитания.");
+    const doubleDays = (c.double_threshold_days ?? []) as number[];
+    const doubleComponents = c.double_threshold_components ?? ["Z3"];
+    if (!Array.isArray(doubleComponents) || !doubleComponents.length || doubleComponents.length > 2 || new Set(doubleComponents).size !== doubleComponents.length || !doubleComponents.every(z => z === "Z3" || z === "Z4")
+      || doubleDays.length > 3 || c.sessions_per_week < 2*doubleDays.length || value.max_key_sessions_per_week < 2*doubleDays.length
+      || (doubleDays.length > 0 && (!range(value.age_years, 18, 100) || !range(value.training_experience_years, 1, 85)))
+      || (Array.isArray(c.sessions_by_day) && doubleDays.some(d => Number((c.sessions_by_day as unknown[])[d]) < 2))) throw new Error("За двойния праг въведи възраст и стаж и разреши две сесии в съответните дни и седмични лимити.");
+    const controlEnd = normalized.horizon_mode === "MANUAL" ? value.program_end : new Date(Date.parse(value.program_start)+365*86400000).toISOString().slice(0,10);
     let occupiedEnd = "";
     for (const d of [...c.cycles].filter(isRecord).sort((a,b) => String(a.start_date).localeCompare(String(b.start_date)))) {
       if (!isRecord(d) || !isCalendarDate(d.start_date) || !isCalendarDate(d.end_date) || d.end_date < d.start_date
-        || d.start_date < value.program_start || d.end_date > value.program_end || d.start_date <= occupiedEnd
+        || d.start_date < value.program_start || d.end_date > controlEnd || d.start_date <= occupiedEnd
         || typeof d.name !== "string" || !d.name.trim() || d.name.length > 80 || !["BUILD", "MAINTAIN", "STRESS", "RECOVERY"].includes(String(d.kind))
         || !zones(d.accents) || !d.accents.length || !range(d.target_index, .5, 2) || !range(d.volume_factor, .5, 1.5) || !integer(d.recovery_days, 7, 14)
         || Date.parse(d.end_date)-Date.parse(d.start_date) >= (d.kind === "STRESS" ? 7 : 42)*86400000
         || (d.kind === "STRESS" && d.target_index <= 1) || (d.kind === "RECOVERY" && (d.target_index > 1 || d.volume_factor > 1)))
         throw new Error("Провери мезоциклите. Стресовата седмица е до 7 дни и има 7–14 дни разтоварване без застъпване.");
       occupiedEnd = new Date(Date.parse(d.end_date)+(d.kind === "STRESS" ? d.recovery_days : 0)*86400000).toISOString().slice(0,10);
-      if (occupiedEnd > value.program_end) throw new Error("Разтоварването след стресовия блок трябва да е в периода на програмата.");
+      if (occupiedEnd > controlEnd) throw new Error("Разтоварването след стресовия блок трябва да е в периода на програмата.");
     }
   }
   for (const p of normalized.interval_profiles) {
-    if (!isRecord(p) || !["Z4", "Z5"].includes(String(p.zone)) || seen.has(String(p.zone)) || p.sport !== value.actual_sport
+    if (!isRecord(p) || (p.goal !== undefined && !["AEROBIC_POWER", "THRESHOLD"].includes(String(p.goal))) || (p.goal === "THRESHOLD" && p.zone !== "Z4") || !["Z4", "Z5"].includes(String(p.zone)) || seen.has(String(p.zone)) || p.sport !== value.actual_sport
       || !range(p.continuous_capacity_min, .001, 60) || !isCalendarDate(p.assessed_on)
       || typeof p.effort !== "string" || p.effort.trim().length < 8 || p.effort.length > 250
       || !integer(p.work_seconds, 15, 360) || !integer(p.recovery_seconds, 15, 600)
@@ -223,8 +241,9 @@ export function parseDraftRecord(value: unknown): DraftRecord {
     for (const component of COMPONENTS) {
       if (!optionalRange(day.readiness_before[component], 0, 100) || !optionalRange(day.readiness_after[component], 0, 100)) throw new Error("Невалидна оценка на готовността.");
     }
-    if (day.session !== null) {
-      const session = day.session;
+    if (day.sessions !== undefined && (!Array.isArray(day.sessions) || day.sessions.length > 3)) throw new Error("Невалиден брой дневни сесии.");
+    const sessions = day.sessions ?? (day.session !== null ? [day.session] : []);
+    for (const session of sessions as unknown[]) {
       if (!isRecord(session) || typeof session.title !== "string" || typeof session.method_id !== "string"
         || !range(session.main_work_minutes, 0, 1440) || !range(session.total_minutes, 0, 1440)
         || session.main_work_minutes > session.total_minutes || !Array.isArray(session.blocks)
@@ -248,7 +267,7 @@ export function defaultManagementProfile(today: string): ManagementProfile {
   return {
     schema_version: "management-profile-v1", sport: "Run", actual_sport: "Run", discipline: "",
     age_years: null, training_experience_years: null, race_duration_min: null,
-    program_start: today, program_end: end.toISOString().slice(0, 10), available_minutes: [60, 60, 60, 60, 60, 90, 0], availability_mode: "AUTO_HISTORY", training_days: [0,1,2,3,4,5,6],
+    horizon_mode: "AUTO_CALENDAR", program_start: today, program_end: end.toISOString().slice(0, 10), available_minutes: [60, 60, 60, 60, 60, 90, 0], availability_mode: "AUTO_HISTORY", training_days: [0,1,2,3,4,5,6],
     recent_weekly_hours: null, reentry_days: null, taper_days: 7, max_key_sessions_per_week: 2,
     building_fraction: .5, maintenance_fraction: .3, reentry_fraction: .4,
     recovery_session_cap_min: 30, allow_expert_fallback: true,

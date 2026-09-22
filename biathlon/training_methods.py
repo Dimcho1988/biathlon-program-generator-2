@@ -7,7 +7,7 @@ this subset. Z3 never receives the Z4/Z5 interval exception.
 """
 from copy import deepcopy
 
-VERSION = "training-methods-v4"
+VERSION = "training-methods-v5"
 COMMON = ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "COMPETITION")
 METHODS = (
     {"id": "RUN-REC-EASY-01", "title": "Леко възстановително бягане", "zone": "Z1",
@@ -134,20 +134,21 @@ def resolved_methods(profile):
             "adaptation": "До половината Z3 доза и половината интервален бюджет. Минималният интервален вариант остава задължителен; иначе комбинацията отпада."})
     controls = profile.get("planning_controls")
     if controls and controls.get("automatic_intervals", True):
-        for zone, work, rest in (("Z4", 60, 120), ("Z5", 30, 60)):
+        for zone, work, rest, minimum, maximum, ratio in (("Z4", 180, 180, 3, 6, 1.2), ("Z5", 30, 30, 6, 20, 1.5)):
             if any(p["zone"] == zone for p in profile.get("interval_profiles", [])):
                 continue
-            methods.append({"id": f"ONFLOWS-CONTROLLED-{zone}-V1", "title": f"Повторяеми интервали в {zone}",
+            methods.append({"id": f"ONFLOWS-CONTROLLED-{zone}-V2", "title": f"Повторяеми интервали в {zone}",
                 "zone": zone, "sports": ("Run", "NordicSki", "RollerSki"), "purpose": "BUILDING", "position": .5,
                 "structure": "MODEL_INTERVALS", "periods": ("GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"),
-                "min_work_min": 3*work/60, "max_work_min": 6*work/60, "warmup_min": 15., "cooldown_min": 10.,
+                "min_work_min": minimum*work/60, "max_work_min": maximum*work/60, "warmup_min": 15., "cooldown_min": 10.,
                 "source_id": "END-VO2-TREF-01", "source_version": "0.3",
-                "implementation_profile": "onflows-controlled-intervals-v1",
+                "implementation_profile": "onflows-metabolic-intervals-v2",
                 "interval_template": {"zone": zone, "work_seconds": work, "recovery_seconds": rest,
-                                      "min_repetitions": 3, "max_repetitions": 6, "reserve_repetitions": 2,
-                                      "building_ratio": .6, "maintenance_ratio": .4},
+                                      "min_repetitions": minimum, "max_repetitions": maximum, "reserve_repetitions": 2,
+                                      "total_capacity_ratio": ratio, "rest_type": "ACTIVE_Z1",
+                                      "dose_status": "VERSIONED_COACH_DEFAULT_NOT_VALIDATED_NORM"},
                 "instructions": "Силно, но повторяемо усилие; без спринт или финал до отказ. Остави резерв за още две качествени отсечки. Запази ритъма и техниката; прекрати при разпадането им. Не ускорявай, за да достигнеш пулсово число.",
-                "adaptation": "Отделен начален onFlows профил: 3–6 × 1 min / 2 min за Z4 или 3–6 × 30 s / 60 s за Z5; работа до 60% от капацитета, 40% за поддържане. Не активира източников елитен вариант или изключението над 100%. Изисква скорошна експозиция в действителното средство."})
+                "adaptation": "Отделни onFlows профили v2: Z4 — 3–6 × 3 min / 3 min, общ работен бюджет до 1,2 от непрекъснатия капацитет; Z5 — 6–20 × 30 s / 30 s, до 1,5. Това са конкретни начални треньорски настройки, не универсални множители или научно валидирани норми. Поддържането използва минималния цял вариант. Цели повторения, почивки, резерв и всички бюджети се проверяват съвместно. Индивидуалният профил замества тези настройки."})
     return methods
 
 

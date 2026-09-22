@@ -1,3 +1,4 @@
+import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
 import { currentAuthorizedAthlete } from "../../../../lib/account-access";
 import { multiProfileMode } from "../../../../lib/athlete-session";
@@ -70,6 +71,9 @@ export async function POST(request: Request) {
     if (response.status === 409 || response.status === 422)
       return redirect("calendar-invalid");
     if (!response.ok) throw new Error("Planning calendar update failed");
+    revalidatePath("/planning");
+    revalidatePath("/management");
+    revalidatePath("/management/outlook");
     return redirect("calendar-saved");
   } catch {
     console.error(`Planning calendar update failed [${stage}]`);

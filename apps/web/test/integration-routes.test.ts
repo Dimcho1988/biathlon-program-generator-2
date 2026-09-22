@@ -1,3 +1,5 @@
+import { revalidatePath } from "next/cache";
+vi.mock("next/cache", () => ({revalidatePath: vi.fn()}));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cookies } from "next/headers";
 import { GET as connect } from "../app/api/integrations/intervals/connect/route";
@@ -601,6 +603,7 @@ describe("integration route redirects behind a reverse proxy", () => {
     ));
 
     expect(response.headers.get("location")).toBe("/planning?planning=calendar-saved");
+    for (const path of ["/planning", "/management", "/management/outlook"]) expect(revalidatePath).toHaveBeenCalledWith(path);
     const [, init] = fetchMock.mock.calls[1];
     expect(init.headers["X-OnFlows-Athlete-Alias"]).toBe("ath-test-profile");
     expect(JSON.parse(init.body)).toEqual({

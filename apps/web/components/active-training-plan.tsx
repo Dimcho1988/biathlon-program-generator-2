@@ -50,7 +50,7 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay 
       {renderDay(day)}
       {canEdit && ["ACTIVE", "REVIEW_REQUIRED"].includes(p.status) && day.date >= today && day.status !== "EXISTING_ACTIVITY" && day.status !== "RACE" && <div className="management-day-actions">
         <button type="button" className="action-button secondary" disabled={busy || record.stale} onClick={() => mutate("day", { date: day.date, action: "REST", note: "" })}>Почивка на {day.date}</button>
-        {day.session && <button type="button" className="action-button secondary" disabled={busy || record.stale} onClick={() => mutate("day", { date: day.date, action: "SKIP", note: "" })}>Пропускам тази тренировка</button>}
+        {day.session && <button type="button" className="action-button secondary" disabled={busy || record.stale} onClick={() => mutate("day", { date: day.date, action: "SKIP", note: "" })}>Пропускам тренировките за деня</button>}
         {p.decisions[day.date] && <button type="button" className="action-button secondary" disabled={busy || record.stale} onClick={() => mutate("day", { date: day.date, action: "CLEAR", note: "" })}>Върни избора на системата</button>}
       </div>}
     </div>} /></div>}
