@@ -6,8 +6,9 @@ below are visible starting rules, not population safety thresholds.
 from datetime import date, timedelta
 
 from .constants import COMPONENTS
+from .planning_history import MINIMUM_DAYS
 
-VERSION = "training-targets-v2"
+VERSION = "training-targets-v2.1"
 
 
 def development_reference(actual_rows, today, anchor, cycle_weeks):
@@ -16,7 +17,7 @@ def development_reference(actual_rows, today, anchor, cycle_weeks):
     cutoff = min(today, cycle_start)
     selected = [r for r in actual_rows if (cutoff - timedelta(days=40)).isoformat() <= r["date"] < cutoff.isoformat()]
     coverage = {z: len({r["date"] for r in selected if r["zone"] == z}) for z in COMPONENTS}
-    if min(coverage.values()) < 20:
+    if min(coverage.values()) < MINIMUM_DAYS:
         cutoff = today
         selected = [r for r in actual_rows if (today - timedelta(days=40)).isoformat() <= r["date"] < today.isoformat()]
     weekly = {}

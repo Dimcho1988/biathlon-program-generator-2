@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import type { PlanningProfile, MesocycleAccentPreferencesResponse } from "../lib/planning-profile";
 import { isRecord } from "../lib/training-status";
-import { defaultManagementProfile, defaultPlanningControls, parseManagementProfile, parseManagementProfileResponse, type ManagementProfile, type ManagementProfileResponse } from "../lib/training-management";
+import { trainingDays, defaultManagementProfile, defaultPlanningControls, parseManagementProfile, parseManagementProfileResponse, type ManagementProfile, type ManagementProfileResponse } from "../lib/training-management";
 import { ManagementRules } from "./management-rules";
 import { PlanningControlsEditor } from "./planning-controls-editor";
 
@@ -17,7 +17,7 @@ export function ManagementProfileEditor({ initialProfile, today, canEdit = true,
     const c=defaultPlanningControls(p.actual_sport);
     if(legacy) Object.assign(c,{sessions_per_week:Math.min(7,legacy.sessions_per_week),intensity_days:legacy.intensity_days,strength_days:legacy.strength_days,long_session_day:legacy.long_session_day,mesocycle_anchor:legacy.mesocycle_anchor_date});
     if(legacyAccents?.preferences) Object.assign(c,{accent_mode:legacyAccents.preferences.accent_mode,accent_limit:legacyAccents.preferences.accent_limit,accents:legacyAccents.preferences.manual_components});
-    return {...p,planning_controls:c,available_minutes:p.available_minutes.map((v,i)=>legacy?.rest_days.includes(i)?0:v)};
+    return {...p,planning_controls:c,training_days:trainingDays(p).filter(i=>!legacy?.rest_days.includes(i)),available_minutes:p.available_minutes.map((v,i)=>legacy?.rest_days.includes(i)?0:v)};
   });
   const [step,setStep]=useState(1), [busy,setBusy]=useState(false), [error,setError]=useState(""), [notice,setNotice]=useState("");
   const dirty=JSON.stringify(profile)!==JSON.stringify(saved.profile);
@@ -49,7 +49,7 @@ export function ManagementProfileEditor({ initialProfile, today, canEdit = true,
       <label>Възраст, години · по желание<input type="number" min="10" max="100" value={profile.age_years??""} onChange={e=>update("age_years",optional(e.target.value))}/></label>
       <label>Спортен стаж, години · по желание<input type="number" min="0" max="85" step=".5" value={profile.training_experience_years??""} onChange={e=>update("training_experience_years",optional(e.target.value))}/></label>
       <label>Начало · задължително<input required type="date" value={profile.program_start} onChange={e=>update("program_start",e.target.value)}/></label><label>Край · задължително<input required type="date" min={profile.program_start} value={profile.program_end} onChange={e=>update("program_end",e.target.value)}/></label>
-      <label>Начало на подготовката<select value={profile.reentry_days===0?"continue":profile.reentry_days===null?"auto":"manual"} onChange={e=>update("reentry_days",e.target.value==="continue"?0:e.target.value==="auto"?null:7)}><option value="auto">Автоматично календарно вработване</option><option value="continue">Продължавам текуща подготовка · без ново вработване</option><option value="manual">Задавам дни за вработване</option></select></label>{profile.reentry_days!==null&&profile.reentry_days>0&&<label>Вработване, дни<input type="number" min="1" max="21" value={profile.reentry_days} onChange={e=>update("reentry_days",Number(e.target.value))}/></label>}
+      <label>Начало на подготовката<select value={profile.reentry_days===0?"continue":profile.reentry_days===null?"auto":"manual"} onChange={e=>update("reentry_days",e.target.value==="continue"?0:e.target.value==="auto"?null:7)}><option value="auto">Автоматично според историята и прекъсванията</option><option value="continue">Продължавам текуща подготовка · без ново вработване</option><option value="manual">Задавам дни за вработване</option></select></label>{profile.reentry_days!==null&&profile.reentry_days>0&&<label>Вработване, дни<input type="number" min="1" max="21" value={profile.reentry_days} onChange={e=>update("reentry_days",Number(e.target.value))}/></label>}
     </div><p className="management-muted">Началото на програмата не е непременно начало на спортната подготовка. Избери „Продължавам“, ако вече тренираш последователно. Реалната история и готовността се проверяват отделно.</p></>}
     {step===2&&<><PlanningControlsEditor profile={profile} onChange={setProfile} stage="days" today={today} history={initialProfile.history}/><details><summary>Нямам внесена история · въвеждане на обем</summary><label className="management-check"><input type="checkbox" checked={profile.recent_weekly_hours!==null} onChange={e=>update("recent_weekly_hours",e.target.checked?[0,0,0,0]:null)}/>Въвеждам четири завършени седмици за основното средство</label>{profile.recent_weekly_hours&&<div className="management-form-grid">{profile.recent_weekly_hours.map((v,i)=><label key={i}>Преди {4-i} седмици, часа<input type="number" min="0" max="80" step=".1" value={v} onChange={e=>update("recent_weekly_hours",profile.recent_weekly_hours!.map((x,j)=>j===i?Number(e.target.value):x))}/></label>)}</div>}<p>Тези стойности не създават измислени дневни товари или известна готовност.</p></details></>}
     {step===3&&<PlanningControlsEditor profile={profile} onChange={setProfile} stage="cycles" today={today}/>}

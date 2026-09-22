@@ -6,8 +6,9 @@ All references below contain actual observations only, never synthetic history.
 from datetime import date, timedelta
 import math
 from .constants import COMPONENTS, fresh_parameters
+from . import planning_history
 
-VERSION = "planning-controls-v1"
+VERSION = "planning-controls-v2"
 
 
 def resolve(profile, day, period, automatic_accents):
@@ -50,7 +51,7 @@ def reference(rows, today):
                   (today-timedelta(days=40)).isoformat() <= r["date"] < today.isoformat()]
         baseline = [r["effective_load"] for r in rows if r["zone"] == z and
                     (today-timedelta(days=50)).isoformat() <= r["date"] < today.isoformat()]
-        result[z] = {"c40": sum(recent)/len(recent) if recent else 0., "known": len(recent) >= 20,
+        result[z] = {"c40": sum(recent)/len(recent) if recent else 0., "known": len(recent) >= planning_history.MINIMUM_DAYS,
                      "b50": max(fresh_parameters()["base_loads"][z], .5*sum(baseline)/len(baseline) if baseline else 0.)}
     return result
 
@@ -84,14 +85,22 @@ def goals(profile, state, actual_base, legacy, *, limited, taper_factor):
     return result
 
 
-def volume_history(source, today, covered_days):
+def volume_history(source, today, covered_days, *, gap_days=planning_history.DEFAULT_GAP_DAYS):
+    policy = planning_history.assess(source, today, gap_days=gap_days)
     activities = [a for a in source.get("activities", []) if
                   (today-timedelta(days=28)).isoformat() <= a["date"] < today.isoformat()]
     by_sport = {}
     for a in activities:
         sport = a.get("sport", "Unknown")
         by_sport[sport] = by_sport.get(sport, 0.) + float(a.get("duration_min") or 0.)
-    weekly = {s: round(v*7/max(1, covered_days), 3) for s,v in by_sport.items()}
+    observed_dates = {r["date"] for r in source.get("daily", []) if (today-timedelta(days=28)).isoformat() <= r["date"] < today.isoformat()}
+    weekly = {s: round(v*7/max(1, len(observed_dates)), 3) for s,v in by_sport.items()}
+    reference_activities = [a for a in activities if a["date"] in policy["complete_dates"]]
+    reference_by_sport = {}
+    for a in reference_activities:
+        sport = a.get("sport", "Unknown")
+        reference_by_sport[sport] = reference_by_sport.get(sport, 0.) + float(a.get("duration_min") or 0.)
+    reference_weekly = {s: round(v*7/max(1, policy["reference_days"]), 3) for s,v in reference_by_sport.items()}
     weeks = []
     daily = source.get("daily", [])
     zone_dates = [{r["date"] for r in daily if r["zone"] == z} for z in COMPONENTS if z != "STR"]
@@ -113,10 +122,11 @@ def volume_history(source, today, covered_days):
         weeks.append({"start_date": start.isoformat(), "end_date": end.isoformat(), "covered_days": covered,
                       "actual_minutes": round(sum(float(a.get("duration_min") or 0) for a in selected), 3) if covered == 7 else None,
                       "planned_minutes": None, "plan_status": "ACTUAL_HISTORY_ONLY"})
-    return {"basis": "ACTUAL_28_DAY_HISTORY", "covered_days": covered_days, "by_sport_weekly_minutes": weekly,
+    return {"basis": "ACTUAL_28_DAY_HISTORY", "covered_days": policy["covered_days"], "by_sport_weekly_minutes": weekly,
             "all_sports_weekly_minutes": round(sum(weekly.values()), 3), "weeks": weeks,
-            "suggested_available_minutes": suggested if len(recent_dates) >= 14 else None,
-            "max_session_minutes_by_sport": {s: max(float(a.get("duration_min") or 0.) for a in activities if a.get("sport", "Unknown") == s) for s in by_sport}}
+            "suggested_available_minutes": suggested if policy["usable"] and all(any(d.weekday() == w for d in recent_dates) for w in range(7)) else None,
+            "history_policy": policy, "reference_by_sport_weekly_minutes": reference_weekly,
+            "max_session_minutes_by_sport": {s: max(float(a.get("duration_min") or 0.) for a in reference_activities if a.get("sport", "Unknown") == s) for s in reference_by_sport}}
 
 
 def volume_basis(profile, evidence):
@@ -127,26 +137,30 @@ def volume_basis(profile, evidence):
     """
     controls = profile.get("planning_controls")
     sports = (controls.get("training_sports") if controls else None) or [profile.get("actual_sport") or profile["sport"]]
-    by_sport = evidence["by_sport_weekly_minutes"]
+    by_sport = evidence.get("reference_by_sport_weekly_minutes", evidence["by_sport_weekly_minutes"])
+    if not by_sport and not evidence.get("history_policy", {}).get("trimmed_before_break"):
+        by_sport = evidence["by_sport_weekly_minutes"]
     selected = sum(by_sport.get(s, 0.) for s in sports)
     reported = profile.get("recent_weekly_hours")
-    reliable = evidence["covered_days"] >= 14 and bool(by_sport)
+    reliable = evidence.get("history_policy", {}).get("usable", evidence["covered_days"] >= 10) and bool(by_sport)
     if reliable:
         historical = (sum(v for s, v in by_sport.items() if s != "WeightTraining") if controls else selected)
         if controls and profile.get("strength_enabled"):
             historical += by_sport.get("WeightTraining", 0.)
         basis = "ACTUAL_ALL_TRAINING_28_DAY_MEAN" if controls else "ACTUAL_SAME_SPORT_28_DAY_MEAN"
+    elif by_sport:
+        historical = sum(v for s,v in by_sport.items() if s != "WeightTraining" or profile.get("strength_enabled")) if controls else selected
+        basis = "LIMITED_OBSERVED_HISTORY"
     elif reported:
         historical = sum(reported)/len(reported)*60
         basis = "REPORTED_FOUR_WEEK_MEAN"
     else:
         historical, basis = 0., "MISSING"
     baseline = historical
-    if controls and controls.get("weekly_target_hours") is not None:
-        baseline = controls["weekly_target_hours"]*60
-        basis = "COACH_WEEKLY_GOAL_WITH_INDIVIDUAL_DOSE_CHECKS"
+    # Explicit time limits constrain scheduling, not the historical baseline
+    # or the component targets obtained by inverting 7/40.
     return {"historical_training_weekly_minutes": round(historical, 3),
             "historical_selected_weekly_minutes": round(selected, 3),
             "baseline_weekly_minutes": round(baseline, 3), "weekly_volume_source": basis,
-            "reported_history_only": not reliable and bool(reported),
-            "missing_history": not reliable and not reported}
+            "reported_history_only": not by_sport and bool(reported),
+            "missing_history": not by_sport and not reported}

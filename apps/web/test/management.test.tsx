@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TrainingManagement } from "../components/training-management";
 import { currentAuthorizedAthlete } from "../lib/account-access";
-import { defaultManagementProfile, parseDraftRecord, parseDrafts, parseManagementProfile, parseManagementProfileResponse, parseManagementOutlook, COMPONENTS } from "../lib/training-management";
+import { availabilityMode, trainingDays, defaultPlanningControls, defaultManagementProfile, parseDraftRecord, parseDrafts, parseManagementProfile, parseManagementProfileResponse, parseManagementOutlook, COMPONENTS } from "../lib/training-management";
 import { GET, POST, PUT } from "../app/api/athlete/management/[...path]/route";
 
 vi.mock("../lib/account-access", () => ({ currentAuthorizedAthlete: vi.fn() }));
@@ -34,6 +34,25 @@ const record = parseDraftRecord({
 });
 
 describe("management data and review interface", () => {
+  it("defaults to historical planning and preserves explicit day limits", () => {
+    expect(availabilityMode(profile)).toBe("AUTO_HISTORY");
+    expect(trainingDays(profile)).toEqual([0,1,2,3,4,5,6]);
+    const old = {...profile, availability_mode: null, training_days: null};
+    expect(availabilityMode(old)).toBe("AUTO_HISTORY");
+    expect(availabilityMode({...old,available_minutes:[90,90,0,60,90,120,0]})).toBe("MANUAL");
+    expect(availabilityMode({...old,availability_mode:"MANUAL"})).toBe("MANUAL");
+    expect(parseManagementProfile({...profile,training_days:[0,2],planning_controls:{...defaultPlanningControls("Run"),intensity_days:[2]}}).training_days).toEqual([0,2]);
+    expect(()=>parseManagementProfile({...profile,training_days:[0,2],planning_controls:{...defaultPlanningControls("Run"),intensity_days:[1]}})).toThrow();
+  });
+  it("does not present automatic time as zero or warn of a fictitious time shortage", () => {
+    const auto = structuredClone(record);
+    auto.payload.parameters = {availability_mode:"AUTO_HISTORY",available_weekly_minutes:null,weekly_minutes_ceiling:null,historical_training_weekly_minutes:840,volume_governor:"COMPONENT_7_40"};
+    const html=renderToStaticMarkup(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:1}} initialDrafts={[auto]} today="2026-09-21"/>);
+    expect(html).toContain("7/40 по компоненти");
+    expect(html).toContain("Автоматично");
+    expect(html).not.toContain("Свободното време в профила е под историческия обем");
+    expect(html).toContain("Кои качества тренираме тази седмица?");
+  });
   it("shows the current saved outlook without borrowing a stale weekly draft", () => {
     const outlook = parseManagementOutlook({ configured: true, outlook: {
       schema_version: "training-outlook-preview-v1", profile_revision: 8, generated_at: "2026-09-21T10:00:00Z",

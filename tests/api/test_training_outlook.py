@@ -35,7 +35,7 @@ def test_live_outlook_uses_saved_accents_and_wave_without_generating_or_writing(
     assert second["long_term"]["readiness_forecast"] is False
 
 
-def test_outlook_and_week_share_calendar_volume_limit_for_partial_weeks():
+def test_outlook_duration_is_a_component_target_equivalent_not_a_second_time_limit():
     from biathlon import planning_controls
     from apps.api.management_schemas import PlanningControls
     repo = Repository()
@@ -47,10 +47,15 @@ def test_outlook_and_week_share_calendar_volume_limit_for_partial_weeks():
     phases = build_periodization(body["program_start"], body["program_end"], [], reentry_days_override=0)
     ref = training_targets.development_reference(rows, TODAY, TODAY, 4)
     result = engine._long_term_outlook(body, phases, ref, None, {}, rows, TODAY, False, volume=volume)
+    base = planning_controls.reference(rows, TODAY)
+    observed = sum(base[z]["c40"]*7 for z in engine.COMPONENTS if z != "STR")
     for w in result["weeks"]:
-        expected = engine._volume_ceiling(body, phases, [], body["available_minutes"], volume["baseline_weekly_minutes"], engine.date.fromisoformat(w["start_date"]), engine.date.fromisoformat(w["end_date"]), {}, False)
+        target = sum(w["components"][z]["target_weekly_effective"] for z in engine.COMPONENTS if z != "STR")
+        expected = volume["baseline_weekly_minutes"]*target/observed*w["days"]/7
         assert w["volume_budget_minutes"] == pytest.approx(expected, abs=.001)
-    assert result["weeks"][-1]["volume_budget_minutes"] <= 150
+        assert w["volume_role"] == "HISTORICAL_MIX_EQUIVALENT_NOT_TIME_LIMIT"
+    assert result["weeks"][-1]["days"] == 2
+
 
 
 def inputs(repo=None, body=None, limited=False):
