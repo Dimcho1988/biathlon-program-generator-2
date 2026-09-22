@@ -49,5 +49,6 @@ def day_totals(day):
     return {"title": " + ".join(s["title"] for s in sessions) or None,
             "total_minutes": sum(s["total_minutes"] for s in sessions),
             "sports": list(dict.fromkeys(s["sport"] for s in sessions)),
-            "canonical_effective_load": {z: sum((s.get("canonical_effective_load") or {}).get(z, 0.) for s in sessions)
-                                         for z in ("Z1", "Z2", "Z3", "Z4", "Z5", "STR")}}
+            "canonical_effective_load": None if any(s.get("canonical_effective_load") is None for s in sessions) else
+                {z: sum(s["canonical_effective_load"].get(z, 0.) for s in sessions)
+                 for z in ("Z1", "Z2", "Z3", "Z4", "Z5", "STR")}}

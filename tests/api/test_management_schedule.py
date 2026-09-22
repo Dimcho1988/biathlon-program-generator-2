@@ -174,3 +174,9 @@ def test_scarce_slots_reserve_the_selected_weekdays_before_optional_easy_days():
     p = body(sessions_per_week=2, intensity_days=[4], strength_days=[1])
     schedule = planning_schedule.slots(p, [360]*7, TODAY, TODAY+timedelta(days=6))
     assert {d.weekday() for d, _, count in schedule if count} == {1,4}
+
+
+def test_legacy_unknown_planned_load_is_not_replaced_with_zero():
+    day = {"session": {"title": "Older session", "sport": "Run", "total_minutes": 30,
+                       "canonical_effective_load": None}}
+    assert planning_schedule.day_totals(day)["canonical_effective_load"] is None
