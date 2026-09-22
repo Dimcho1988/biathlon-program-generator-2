@@ -96,9 +96,15 @@ describe("management data and review interface", () => {
   });
   it("shows unknown readiness and stale inputs without hiding the original draft", () => {
     const stale = structuredClone(record); stale.stale = true; stale.payload.days[0].readiness_before.Z1 = null;
+    stale.payload.parameters = { available_weekly_minutes: 390, historical_training_weekly_minutes: 840, weekly_minutes_ceiling: 390 };
     const html = renderToStaticMarkup(<TrainingManagement athleteName="Спортист" canEdit={false} initialProfile={{ configured: true, profile, revision: 2 }} initialDrafts={[stale]} today="2026-09-21" />);
     expect(html).toContain('fieldset disabled=""');
-    expect(html).toContain("Входните данни са променени");
+    const current = html.split('<details class="management-panel" id="plan-details">')[0];
+    expect(current).toContain("Показваният досега проект е остарял");
+    expect(current).not.toContain("6:30:00");
+    expect(current).not.toContain("Равномерна аеробна работа");
+    expect(html).toContain("Предишен проект — само за справка");
+    expect(html).toContain("6:30:00");
     expect(html).toContain("Равномерна аеробна работа");
     expect(html).toContain("<td>—</td>");
   });

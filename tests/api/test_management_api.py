@@ -105,6 +105,42 @@ def test_profile_history_uses_the_same_saved_break_rule_as_the_planner(api, monk
     assert ordinary["gap_threshold_days"] == 10 and ordinary["usable"] is True
 
 
+def test_stale_daily_data_does_not_clip_coach_outlook_or_blend_microcycle_peaks(api):
+    from datetime import timedelta
+    from tests.api.test_training_plan_engine import Repository, TODAY
+    from tests.api.test_planning_controls import controls
+    _, store, repository = api
+    source = deepcopy(Repository().envelope)
+    repository.active_analysis = lambda _: source
+    store.current['profile'].update(
+        program_start=TODAY.isoformat(), reentry_days=0,
+        available_minutes=[60, 60, 60, 60, 60, 90, 0],
+        planning_controls=controls(accent_mode='MANUAL', accents=['Z3'],
+                                   wave=[.96, 1.4, 1.5, .78], accent_index=1.1))
+    # Replay the actual report: the latest analysis is yesterday and the coach
+    # has a legacy 6.5-hour template plus a 1.5 wave, with no explicit time cap.
+    result = service.outlook(repository, 'ath-test', now=NOW+timedelta(days=1))['outlook']
+    assert result['long_term']['limited'] is True
+    assert result['volume_context']['availability_mode'] == 'AUTO_HISTORY'
+    assert result['volume_context']['available_weekly_minutes'] is None
+    weeks = result['long_term']['weeks']
+    assert weeks[0]['days'] == 6
+    assert weeks[0]['end_date'] == (TODAY+timedelta(days=6)).isoformat()
+    assert weeks[2]['components']['Z3']['target_index_7_40'] == pytest.approx(1.65)
+    assert weeks[2]['components']['Z2']['target_index_7_40'] == pytest.approx(1.5)
+    assert weeks[3]['components']['Z3']['target_index_7_40'] == pytest.approx(.858)
+    assert result['long_term']['readiness_forecast'] is False
+    assert not store.saved
+
+    # The identical intent must still respect the daily incomplete-data gate.
+    engine = service.training_plan_engine
+    rows = engine._daily_rows(source['snapshot_payload']['load_history'], TODAY)
+    normalized = ManagementProfile.model_validate(store.current['profile']).model_dump(mode='json')
+    goals, _, _ = engine._goals(normalized, TODAY+timedelta(days=14), 'GENERAL_PREPARATION',
+                               False, {}, None, 2, 4, rows, TODAY, True, 1.)
+    assert goals['Z3']['target_index'] == pytest.approx(1.)
+
+
 @pytest.mark.parametrize("patch", [
     {"building_fraction": .7}, {"maintenance_fraction": .5}, {"reentry_fraction": .6},
     {"available_minutes": [0, 0, 0, -1, 0, 0, 0]},

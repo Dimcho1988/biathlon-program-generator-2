@@ -95,6 +95,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   const [newDraft, setNewDraft] = useState(false);
   const showDraft = !active.active || newDraft;
   const overviewPlan = showDraft ? draft?.payload : (active.active?.payload.proposal ?? active.active?.payload.plan);
+  const archivedDraft = showDraft && !!draft && draft.stale !== false;
 
   useEffect(() => {
     let cancelled = false;
@@ -144,25 +145,27 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     {syncError && <p className="management-error" role="alert">Обновяването не започна. Опитай отново или провери връзката с Intervals в настройките.</p>}
     {initialSyncState && <SyncStatusPanel initialState={initialSyncState} renderedGenerationId={initialSyncState.active_generation_id} returnTo="/management" compact />}
     <nav className="management-view-switch" aria-label="Изглед на плана"><Link href="/management" aria-current={view === "week" ? "page" : undefined}>Седмична програма</Link><Link href="/management/outlook" aria-current={view === "overview" ? "page" : undefined}>Дългосрочен план</Link></nav>
-    {view === "week" && overviewPlan && <TrainingPlanSummary plan={overviewPlan} />}
+    {view === "week" && overviewPlan && !archivedDraft && <TrainingPlanSummary plan={overviewPlan} />}
 
     {view === "overview" ? <TrainingPlanOverview plan={initialOutlook ?? undefined} outcomes={active.active?.payload.outcomes ?? []} today={today} currentProfileRevision={initialOutlook?.profile_revision} volumeContext={initialOutlook?.volume_context} /> : <>
       {active.active && !newDraft && <ActiveTrainingPlan value={active} onChange={setActive} canEdit={canEdit} today={today} renderDay={day => <DayCard day={day} expanded />} />}
       {showDraft && <>
         <section className="management-panel management-next-step" aria-label="Следваща стъпка"><p className="eyebrow">{guidance.step === "REVIEW" ? "Преглед преди започване" : "Следваща стъпка"}</p><h2>{guidance.title}</h2><p>{guidance.description}</p>
+          {archivedDraft && <p className="management-notice">Показваният досега проект е остарял. Неговите часове и тренировки не отразяват текущите настройки. Обновяването на данните и подготовката на нов проект са отделни стъпки.</p>}
           {guidance.step === "PROFILE" && <Link className="action-button" href="/planning#basic-profile">Попълни профила →</Link>}
           {guidance.step === "SYNC" && canEdit && <SyncActionForm scope="FULL" returnTo="/management" label="Обнови тренировките" />}
           {["GENERATE", "START_DATE"].includes(guidance.step) && generateForm}
           {guidance.step === "CHECK" && <div className="management-actions"><a href="#plan-details">Виж конкретните причини ↓</a><Link href="/planning">Провери профила →</Link></div>}
           {guidance.step === "REVIEW" && <><p className="management-muted">{saved.profile?.adaptation_mode === "AUTO" ? "След започване следващите дни ще се адаптират автоматично според реалното изпълнение." : "Промените ще се предлагат за твое утвърждаване."} Можеш да поставиш програмата на пауза.</p><button type="button" className="action-button" disabled={!canEdit || busy !== null || draft?.stale !== false || draft?.payload.activation_eligible !== true} onClick={activateDraft}>{busy === "activate" ? "Започване…" : "Започни програмата"}</button></>}
         </section>
-        {draft && hasProgramDays(draft.payload) && <section className="management-plan" aria-label="Проект на тренировъчна програма"><h2>{dateLabel(draft.payload.start_date)} – {dateLabel(draft.payload.end_date)}</h2><p className="management-muted">{draft.stale !== false ? "Предишна версия — само за справка. Входните данни са променени или актуалността им не е потвърдена." : "Предложение за преглед — още не е започната програма."}</p><TrainingPlanWeek days={draft.payload.days} today={today} renderDay={day => <DayCard day={day} expanded />} /></section>}
+        {draft && !archivedDraft && hasProgramDays(draft.payload) && <section className="management-plan" aria-label="Проект на тренировъчна програма"><h2>{dateLabel(draft.payload.start_date)} – {dateLabel(draft.payload.end_date)}</h2><p className="management-muted">Предложение за преглед — още не е започната програма.</p><TrainingPlanWeek days={draft.payload.days} today={today} renderDay={day => <DayCard day={day} expanded />} /></section>}
       </>}
     </>}
-    {view === "week" && <PlanComparison plan={overviewPlan} outcomes={active.active?.payload.outcomes ?? []} />}
+    {view === "week" && !archivedDraft && <PlanComparison plan={overviewPlan} outcomes={active.active?.payload.outcomes ?? []} />}
     <details className="management-panel" id="plan-details"><summary>Подробности и предишни програми</summary>
       {active.active && <button type="button" className="action-button secondary" onClick={() => { setNewDraft(!newDraft); }}>{newDraft ? "Обратно към активната програма" : "Подготви друга програма"}</button>}
       {draft && <><label>Запазени програми<select value={selected} onChange={event => { setSelected(Number(event.target.value)); setNewDraft(true); }}>{drafts.map((item, index) => <option key={`${item.entry_key}-${item.revision}`} value={index}>{item.payload.start_date} · версия {item.revision}</option>)}</select></label>
+        {archivedDraft && <details><summary>Предишен проект — само за справка</summary><p>Това са запазени изчисления от {draft.recorded_at ? dateLabel(draft.recorded_at.slice(0, 10)) : dateLabel(draft.payload.start_date)}. За текущата програма следвай стъпката по-горе.</p><TrainingPlanSummary plan={draft.payload} />{hasProgramDays(draft.payload) && <TrainingPlanWeek days={draft.payload.days} today={today} renderDay={day => <DayCard day={day} expanded />} />}</details>}
         {draft.stale_reason && <p>{draft.stale_reason}</p>}
         <details><summary>Всички условия и пояснения · {draft.payload.warnings.length}</summary><ul>{draft.payload.warnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}</ul></details>
         {!hasProgramDays(draft.payload) && <details><summary>Оценка по дни</summary>{draft.payload.days.map(day => <DayCard key={day.date} day={day} />)}</details>}
