@@ -38,6 +38,7 @@ def outlook(repository, alias, *, now=None):
     source = (analysis.get("snapshot_payload") or {}).get("load_history") or {}
     rows = engine._daily_rows(source, today)
     calendar = engine._read_optional(repository, "athlete_planning_calendar", alias) or {"events": []}
+    profile, horizon = engine.planning_schedule.horizon(profile, calendar["events"])
     preferences = engine._read_optional(repository, "athlete_planning_profile", alias) or {}
     accents = engine._read_optional(repository, "athlete_mesocycle_accent_preferences", alias)
     controls = profile.get("planning_controls")
@@ -65,7 +66,8 @@ def outlook(repository, alias, *, now=None):
         "generated_at": now.isoformat(), "engine_version": engine.VERSION,
         "source": {"generation_id": analysis.get("generation_id"), "revision": analysis.get("revision"), "as_of": source.get("period_end")},
         "periodization": phases, "long_term": projection, "history_comparison": history["weeks"],
-        "input_snapshot": {"calendar": calendar, "profile_revision": stored["revision"]},
+        "input_snapshot": {"calendar": calendar, "profile_revision": stored["revision"], "horizon": horizon,
+                           "planning_controls": controls},
         "volume_context": {**volume, "available_weekly_minutes": sum(engine.planning_history.availability(profile)) if engine.planning_history.availability_mode(profile) == "MANUAL" else None,
                            "availability_mode": engine.planning_history.availability_mode(profile), "history_policy": history["history_policy"], "volume_evidence": history},
     }}
@@ -131,7 +133,9 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
     today = now.astimezone(ZoneInfo(settings.timezone)).date()
     if not today <= start_date <= today + timedelta(days=7):
         raise HTTPException(422, "Choose a start from today through the next seven days")
-    if start_date < profile.program_start or start_date > profile.program_end:
+    calendar = training_plan_engine._read_optional(repository, "athlete_planning_calendar", alias) or {"events": []}
+    resolved, _ = training_plan_engine.planning_schedule.horizon(profile.model_dump(mode="json"), calendar["events"])
+    if start_date < profile.program_start or start_date > date.fromisoformat(resolved["program_end"]):
         raise HTTPException(422, "The draft must start within the planning period")
     before = input_state(repository, alias, evaluated_at=now)
     payload = training_plan_engine.generate_plan(
@@ -179,7 +183,7 @@ def history(repository, alias, *, start_date=None):
         return {"drafts": [{**row, "stale": None,
                             "stale_reason": "Актуалността на входните данни не е потвърдена."}
                            for row in rows]}
-    return {"drafts": [{**row,
+    return {"current_input_fingerprint": fingerprint, "drafts": [{**row,
                         "stale": row["payload"].get("input_fingerprint") != fingerprint,
                         "stale_reason": (
                             "Данните, моделът или денят на оценката са променени — създай нов проект."

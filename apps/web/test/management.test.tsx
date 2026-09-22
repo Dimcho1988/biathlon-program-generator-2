@@ -6,6 +6,7 @@ import { availabilityMode, trainingDays, defaultPlanningControls, defaultManagem
 import { GET, POST, PUT } from "../app/api/athlete/management/[...path]/route";
 
 vi.mock("../lib/account-access", () => ({ currentAuthorizedAthlete: vi.fn() }));
+vi.mock("next/cache", () => ({revalidatePath: vi.fn()}));
 vi.mock("../lib/api-readiness", () => ({ waitForApi: vi.fn() }));
 
 const profile = { ...defaultManagementProfile("2026-09-21"), discipline: "5000 m" };
@@ -94,7 +95,7 @@ describe("management data and review interface", () => {
     expect(html).not.toContain("NaN");
     expect(html).not.toContain("Активирай");
   });
-  it("shows unknown readiness and stale inputs without hiding the original draft", () => {
+  it("hides obsolete programme menus and all outdated training totals", () => {
     const stale = structuredClone(record); stale.stale = true; stale.payload.days[0].readiness_before.Z1 = null;
     stale.payload.parameters = { available_weekly_minutes: 390, historical_training_weekly_minutes: 840, weekly_minutes_ceiling: 390 };
     const html = renderToStaticMarkup(<TrainingManagement athleteName="Спортист" canEdit={false} initialProfile={{ configured: true, profile, revision: 2 }} initialDrafts={[stale]} today="2026-09-21" />);
@@ -103,10 +104,10 @@ describe("management data and review interface", () => {
     expect(current).toContain("Показваният досега проект е остарял");
     expect(current).not.toContain("6:30:00");
     expect(current).not.toContain("Равномерна аеробна работа");
-    expect(html).toContain("Предишен проект — само за справка");
-    expect(html).toContain("6:30:00");
-    expect(html).toContain("Равномерна аеробна работа");
-    expect(html).toContain("<td>—</td>");
+    expect(html).not.toContain("Предишен проект — само за справка");
+    expect(html).not.toContain("6:30:00");
+    expect(html).not.toContain("Равномерна аеробна работа");
+    expect(html).not.toContain("Запазени програми");
   });
 });
 

@@ -1,3 +1,4 @@
+import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
 import { currentAuthorizedAthlete } from "../../../../../lib/account-access";
 import { waitForApi } from "../../../../../lib/api-readiness";
@@ -64,6 +65,11 @@ async function proxy(request: Request, context: Context) {
       ? "Профилът, програмата или входните данни са променени. Презаредете и прегледайте последната версия."
       : response.status === 422 ? "Проверете профила, периода и календара. Програмата не беше записана."
         : "Управлението временно не е достъпно. Въведените стойности остават във формата.", [404, 409, 422].includes(response.status) ? response.status : 503);
+    if (request.method !== "GET") {
+      revalidatePath("/planning");
+      revalidatePath("/management");
+      revalidatePath("/management/outlook");
+    }
     return NextResponse.json(await response.json(), { headers: { "Cache-Control": "no-store" } });
   } catch { return error("Управлението временно не е достъпно. Опитайте отново.", 503); }
 }

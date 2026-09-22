@@ -19,6 +19,7 @@ export default async function ManagementPage({ searchParams }: { searchParams: P
   let drafts: DraftRecord[];
   let active: ActivePlanResponse;
   let outlook: ManagementOutlook | null = null;
+  let inputFingerprint = "";
   try {
     const base = process.env.ONFLOWS_API_BASE_URL;
     const token = process.env.ONFLOWS_SERVICE_TOKEN;
@@ -38,9 +39,10 @@ export default async function ManagementPage({ searchParams }: { searchParams: P
     active = parseActivePlanResponse(activeData);
     profile = parseManagementProfileResponse(profileData);
     drafts = parseDrafts(draftData);
+    inputFingerprint = typeof draftData.current_input_fingerprint === "string" ? draftData.current_input_fingerprint : "";
   } catch (caught) {
     return <ErrorState message={caught instanceof Error ? caught.message : "Управлението временно не е достъпно."} retryAvailable retryHref={query.view === "overview" ? "/management/outlook" : "/management"} />;
   }
-  return <TrainingManagement key={`${access.athleteAlias}:${sync?.active_generation_id ?? "none"}:${query.sync ?? ""}:${profile.revision}:${query.view ?? "week"}`} initialView={query.view ?? "week"} athleteName={access.displayName} canEdit={access.canEditPlan}
+  return <TrainingManagement key={`${access.athleteAlias}:${sync?.active_generation_id ?? "none"}:${query.sync ?? ""}:${profile.revision}:${inputFingerprint}:${query.view ?? "week"}`} initialView={query.view ?? "week"} athleteName={access.displayName} canEdit={access.canEditPlan}
     initialOutlook={outlook} initialSyncState={sync} syncError={query.sync === "enqueue-error"} initialProfile={profile} initialDrafts={drafts} initialActive={active} today={profile.today ?? new Date().toISOString().slice(0, 10)} />;
 }

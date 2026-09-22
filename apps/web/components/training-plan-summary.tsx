@@ -1,14 +1,14 @@
 import Link from "next/link";
 import { isRecord } from "../lib/training-status";
 import { durationHms } from "../lib/duration-format";
-import { COMPONENTS, type PlanningDraft, type VolumeHistory } from "../lib/training-management";
+import { daySessions, COMPONENTS, type PlanningDraft, type VolumeHistory } from "../lib/training-management";
 import { HistoryVolume } from "./planning-controls-editor";
 export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
   const p=isRecord(plan.parameters)?plan.parameters:{};
   const summary=isRecord(plan.summary)?plan.summary:{};
   const v=isRecord(p.volume_evidence)?p.volume_evidence as unknown as VolumeHistory:null;
   const sports=Array.isArray(p.training_sports)?p.training_sports.map(String):[];
-  const sessions=plan.days.flatMap(d=>d.session?[d.session]:[]);
+  const sessions=plan.days.flatMap(daySessions);
   const sources=Array.from(new Set(sessions.map(s=>s.dose_evidence.capacity_source)));
   const duration=(v:unknown)=>typeof v==="number"?durationHms(v):"—";
   const reasons=new Map<string,number>();
