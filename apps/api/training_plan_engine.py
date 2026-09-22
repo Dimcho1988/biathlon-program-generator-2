@@ -23,7 +23,7 @@ from biathlon.physiology import _causal_tref, effective_from_direct_vector, line
 from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VERSION, catalog, resolved_methods
 from . import model_service
 
-VERSION = "training-management-v4"
+VERSION = "training-management-v4.1"
 PARAMETER_VERSION = "management-parameters-v4"
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -465,7 +465,7 @@ def _volume_estimate(profile, components, baseline, actual_base, days):
 
 
 def _long_term_outlook(profile, periodization, reference, accents, preferences, rows, today, limited, *, volume=None, events=None):
-    """Read-only target envelope using the same goals as the daily planner.
+    """Read-only coach targets before the daily planner's eligibility gates.
 
     No synthetic sessions or future recovery. Ratios use the current actual
     C40 and B50, frozen explicitly; they are targets, not forecast 7/40 values.
@@ -488,14 +488,17 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
     weeks = []
     day = start
     while day <= end:
-        left, right = day, min(day + timedelta(days=6), end)
+        # Preserve the coach's microcycle boundaries. A rolling display starting
+        # today would blend adjacent waves and hide the peak of a stress week.
+        left = day
+        right = min(day + timedelta(days=6 - (day - anchor).days % 7), end)
         targets = {z: [] for z in COMPONENTS}
         phases, selected, meso_weeks = [], [], []
         while day <= right:
             period, taper = _phase(periodization, day)
             week = max(0, (day - anchor).days // 7) % length
             goals, focus, cycle = _goals(profile, day, period, taper, reference, accents, week, length,
-                                          rows, today, limited, _taper_factor(periodization, day))
+                                          rows, today, False, _taper_factor(periodization, day))
             for z in COMPONENTS:
                 targets[z].append(goals[z]["target"])
             phases.append(period)
@@ -518,6 +521,7 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
     return {"schema_version": "training-outlook-v1", "as_of": today.isoformat(),
             "basis": "CURRENT_ACTUAL_REFERENCE_FROZEN", "targets_version": training_targets.VERSION,
             "reference_cutoff": reference["cutoff"], "limited": limited,
+            "goal_role": "COACH_TARGETS_BEFORE_DAILY_GATES",
             "readiness_forecast": False, "automatic_camp_load_increase": False,
             "baseline": {z: {**actual_base[z], "actual_index_7_40": baseline[z]["index_7_40"] if actual_base[z]["known"] else None} for z in COMPONENTS},
             "weeks": weeks}

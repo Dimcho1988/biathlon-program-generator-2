@@ -39,7 +39,7 @@ def test_outlook_duration_is_a_component_target_equivalent_not_a_second_time_lim
     from biathlon import planning_controls
     from apps.api.management_schemas import PlanningControls
     repo = Repository()
-    body = profile(reentry_days=0, program_end=(TODAY+timedelta(days=8)).isoformat(),
+    body = profile(reentry_days=0, program_start=TODAY.isoformat(), program_end=(TODAY+timedelta(days=8)).isoformat(),
                    planning_controls=PlanningControls().model_dump(mode="json"))
     rows = engine._daily_rows(repo.envelope["snapshot_payload"]["load_history"], TODAY)
     evidence = planning_controls.volume_history(repo.envelope["snapshot_payload"]["load_history"], TODAY, 28)
