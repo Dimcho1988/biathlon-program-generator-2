@@ -66,6 +66,24 @@ def test_near_race_edit_rearranges_week_and_taper(monkeypatch):
     assert first["days"] != second["days"]
 
 
+def test_manual_low_z1_target_explains_blocked_training_without_overriding_the_coach(monkeypatch):
+    p = body(sessions_per_week=7)
+    p["max_key_sessions_per_week"] = 0
+    p["component_targets_weekly"] = {"Z1": 5}
+    original = deepcopy(p)
+    constrained = run(monkeypatch, p)
+    assert p == original
+    blocked = [d for d in constrained["days"] if "Ръчна цел за Z1" in d["explanation"]]
+    assert blocked
+    rejection = next(r for d in blocked for r in d["rejected_alternatives"] if r.get("manual_target_components"))
+    assert "Z1" in rejection["blocking_components"]
+    assert "нужни" in rejection["reason"] and "остават" in rejection["reason"]
+    assert all(not d["sessions"] for d in blocked)
+    restored = run(monkeypatch, {**p, "component_targets_weekly": {}})
+    assert restored["summary"]["sessions"] > constrained["summary"]["sessions"]
+    assert restored["days"][0]["readiness_before"] == constrained["days"][0]["readiness_before"]
+
+
 @pytest.mark.parametrize("count", [12, 16, 21])
 def test_more_than_seven_sessions_are_real_and_all_loads_are_counted(monkeypatch, count):
     p = body(sessions_per_week=count)

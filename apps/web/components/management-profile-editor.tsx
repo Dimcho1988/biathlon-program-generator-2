@@ -21,6 +21,11 @@ export function ManagementProfileEditor({ initialProfile, today, canEdit = true,
   });
   const [step,setStep]=useState(1), [busy,setBusy]=useState(false), [error,setError]=useState(""), [notice,setNotice]=useState("");
   const dirty=JSON.stringify(profile)!==JSON.stringify(saved.profile);
+  // Reconcile an external revision without remounting the form after our own save.
+  // Unsaved edits stay local; the API revision check still rejects stale writes.
+  if(initialProfile.revision>saved.revision&&!dirty&&!busy&&initialProfile.profile){
+    setSaved(initialProfile);setProfile(initialProfile.profile);setNotice("Заредена е по-нова записана версия на профила.");
+  }
   const update=<K extends keyof ManagementProfile>(key:K,value:ManagementProfile[K])=>setProfile(p=>({...p,[key]:value}));
   const optional=(v:string)=>v===""?null:Number(v);
   async function save(e:FormEvent<HTMLFormElement>){
@@ -30,16 +35,16 @@ export function ManagementProfileEditor({ initialProfile, today, canEdit = true,
       const checked=parseManagementProfile({...profile,discipline:profile.discipline.trim()});
       const response=await fetch("/api/athlete/management/profile",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({profile:checked,expected_revision:saved.revision})});
       const data:unknown=await response.json();if(!response.ok)throw new Error(isRecord(data)&&typeof data.error==="string"?data.error:"Профилът не беше записан.");
-      const result=parseManagementProfileResponse(data);setSaved(result);if(result.profile)setProfile(result.profile);
+      const result=parseManagementProfileResponse(data);setSaved({...saved,...result});if(result.profile)setProfile(result.profile);
       setNotice("Профилът е запазен. Дългосрочният план вече използва новите настройки. Седмичната програма ще провери промените при отваряне; утвърдените задачи следват избрания режим на адаптация.");router.refresh();
     }catch(caught){setError(caught instanceof Error?caught.message:"Профилът не беше записан.");}finally{setBusy(false);}
   }
   return <section className="management-panel management-profile" id="basic-profile">
     <p className="eyebrow">{saved.configured?"Профилът е попълнен":"Начална настройка"} · стъпка {step} от 4</p>
     <nav className="planning-step-tabs" aria-label="Стъпки на профила">{["Спорт и цел","Дни и обем","Мезоцикли и акценти","Методи и дозиране"].map((s,i)=><button type="button" key={s} aria-current={step===i+1?"step":undefined} onClick={()=>setStep(i+1)}>{i+1}. {s}</button>)}</nav>
-    {error&&<p className="management-error" role="alert">{error}</p>}{notice&&<p className="management-notice" role="status">{notice}</p>}
     {saved.configured&&!saved.profile?.planning_controls&&<p className="management-notice">Заредени са старите стойности. Прегледай дните, средствата и акцентите и запази пълния профил, за да използваш новото управление.</p>}
     <form onSubmit={save}><fieldset disabled={!canEdit||busy}>
+    {Object.keys(profile.component_targets_weekly).length>0&&<aside className="management-notice"><strong>Ръчни цели заместват автоматичния товар:</strong> {Object.entries(profile.component_targets_weekly).map(([z,v])=>`${z}: ${v} приравнени мин / 7 дни`).join("; ")}.<p>Това не са часове и не е индекс 7/40. Ниска цел за Z1 може да ограничи и по-високите зони, защото общият аеробен товар включва Z1.</p><button type="button" className="action-button secondary" onClick={()=>update("component_targets_weekly",{})}>Използвай автоматичните цели</button><p className="management-muted">Промяната влиза в сила след „Запази промените“.</p></aside>}
     {step===1&&<><h2>1. Спорт и цел</h2><p className="management-muted">Задължителни: спорт, средство, дисциплина и период на подготовката.</p><div className="management-form-grid">
       <label>Основен спорт · задължително<select value={profile.sport} onChange={e=>{const sport=e.target.value as ManagementProfile["sport"];setProfile(p=>({...p,sport,actual_sport:sport,planning_controls:{...p.planning_controls!,training_sports:[sport]}}));}}><option value="Run">Бягане</option><option value="NordicSki">Ски бягане</option></select></label>
       <label>Основно средство · задължително<select value={profile.actual_sport} onChange={e=>{const sport=e.target.value as ManagementProfile["actual_sport"];setProfile(p=>({...p,actual_sport:sport,planning_controls:{...p.planning_controls!,training_sports:Array.from(new Set([...p.planning_controls!.training_sports,sport]))}}));}}><option value="Run">Бягане</option>{profile.sport==="NordicSki"&&<><option value="NordicSki">Ски бягане</option><option value="RollerSki">Ролкови ски</option></>}</select></label>
@@ -59,7 +64,8 @@ export function ManagementProfileEditor({ initialProfile, today, canEdit = true,
       <ManagementRules profile={profile} onChange={setProfile} today={today} hideAutomation/>
     </>}
     {dirty&&<p role="status" className="management-muted">Има незаписани промени. Програмите използват последния записан профил.</p>}
-    <div className="management-actions">{step>1&&<button className="action-button secondary" type="button" onClick={()=>setStep(step-1)}>← Назад</button>}<button className="action-button" type="submit" disabled={!dirty}>{busy?"Запазване…":"Запази промените"}</button>{step<4&&<button className="action-button secondary" type="button" onClick={()=>setStep(step+1)}>Напред →</button>}</div>
+    <div className="management-actions">{step>1&&<button className="action-button secondary" type="button" onClick={()=>setStep(step-1)}>← Назад</button>}<button className="action-button" type="submit" disabled={!dirty}>{busy?"Запазване…":!dirty&&saved.configured?"Запазено":"Запази промените"}</button>{step<4&&<button className="action-button secondary" type="button" onClick={()=>setStep(step+1)}>Напред →</button>}</div>
+    {error&&<p className="management-error" role="alert">{error}</p>}{notice&&!dirty&&<p className="management-notice" role="status">{notice}</p>}
     </fieldset></form><div className="management-actions"><a href="#planning-calendar">Стартове и лагери ↓</a><Link href="/management">Седмична програма →</Link><Link href="/management/outlook">Дългосрочен план →</Link></div>
   </section>;
 }
