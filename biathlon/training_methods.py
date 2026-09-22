@@ -7,7 +7,7 @@ this subset. Z3 never receives the Z4/Z5 interval exception.
 """
 from copy import deepcopy
 
-VERSION = "training-methods-v3"
+VERSION = "training-methods-v4"
 COMMON = ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "COMPETITION")
 METHODS = (
     {"id": "RUN-REC-EASY-01", "title": "Леко възстановително бягане", "zone": "Z1",
@@ -61,7 +61,7 @@ EXERCISES = (
 
 
 def resolved_methods(profile):
-    """Only complete individual profiles can unlock metabolic intervals.
+    """Resolve individual profiles and bounded, exposure-gated pilot methods.
 
     No elite source variant inherits numeric defaults from its parent card.
     """
@@ -132,6 +132,22 @@ def resolved_methods(profile):
             "periods": ("SPECIAL_PREPARATION", "PRECOMPETITION"), "min_work_min": 6., "max_work_min": 12.,
             "source_id": "END-MIX-Z3-HI-01", "source_version": "0.2",
             "adaptation": "До половината Z3 доза и половината интервален бюджет. Минималният интервален вариант остава задължителен; иначе комбинацията отпада."})
+    controls = profile.get("planning_controls")
+    if controls and controls.get("automatic_intervals", True):
+        for zone, work, rest in (("Z4", 60, 120), ("Z5", 30, 60)):
+            if any(p["zone"] == zone for p in profile.get("interval_profiles", [])):
+                continue
+            methods.append({"id": f"ONFLOWS-CONTROLLED-{zone}-V1", "title": f"Повторяеми интервали в {zone}",
+                "zone": zone, "sports": ("Run", "NordicSki", "RollerSki"), "purpose": "BUILDING", "position": .5,
+                "structure": "MODEL_INTERVALS", "periods": ("GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"),
+                "min_work_min": 3*work/60, "max_work_min": 6*work/60, "warmup_min": 15., "cooldown_min": 10.,
+                "source_id": "END-VO2-TREF-01", "source_version": "0.3",
+                "implementation_profile": "onflows-controlled-intervals-v1",
+                "interval_template": {"zone": zone, "work_seconds": work, "recovery_seconds": rest,
+                                      "min_repetitions": 3, "max_repetitions": 6, "reserve_repetitions": 2,
+                                      "building_ratio": .6, "maintenance_ratio": .4},
+                "instructions": "Силно, но повторяемо усилие; без спринт или финал до отказ. Остави резерв за още две качествени отсечки. Запази ритъма и техниката; прекрати при разпадането им. Не ускорявай, за да достигнеш пулсово число.",
+                "adaptation": "Отделен начален onFlows профил: 3–6 × 1 min / 2 min за Z4 или 3–6 × 30 s / 60 s за Z5; работа до 60% от капацитета, 40% за поддържане. Не активира източников елитен вариант или изключението над 100%. Изисква скорошна експозиция в действителното средство."})
     return methods
 
 
@@ -145,7 +161,7 @@ def catalog(profile=None):
     profile = profile or {}
     disabled = deepcopy(list(DISABLED_METHODS))
     for z in ("Z4", "Z5"):
-        if not any(p["zone"] == z for p in profile.get("interval_profiles", [])):
+        if not any(p["zone"] == z for p in profile.get("interval_profiles", [])) and not (profile.get("planning_controls") and profile["planning_controls"].get("automatic_intervals", True)):
             disabled.append({"component": z, "reason": "Добавете индивидуален интервален профил: устойчивост при описаното усилие, повторения, паузи и резерв."})
     if not profile.get("strength_enabled"):
         disabled.append({"component": "STR", "reason": "Включете общата силова подготовка в профила след проверка на упражненията."})

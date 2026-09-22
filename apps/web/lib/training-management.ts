@@ -11,6 +11,8 @@ export interface ManagementProfile {
   program_start: string;
   program_end: string;
   available_minutes: number[];
+  availability_mode?: "AUTO_HISTORY" | "MANUAL" | null;
+  training_days?: number[] | null;
   recent_weekly_hours: number[] | null;
   reentry_days: number | null;
   taper_days: number;
@@ -36,14 +38,21 @@ export interface CycleDirective {
   accents: Component[]; target_index: number; volume_factor: number; recovery_days: number;
 }
 export interface PlanningControls {
+  history_gap_days?: number; automatic_intervals?: boolean;
   sessions_per_week: number; intensity_days: number[]; strength_days: number[]; long_session_day: number | null;
   capacity_policy?: "OBSERVED_ONLY" | "MODEL_WITH_PRIOR"; max_strength_sessions: number; training_sports: ManagementProfile["actual_sport"][]; weekly_target_hours: number | null;
   mesocycle_anchor: string | null; wave: number[]; accent_mode: "AUTO" | "MANUAL" | "HYBRID";
   accent_limit: number; accents: Component[]; accent_index: number; maintenance_index: number; cycles: CycleDirective[];
 }
-export interface VolumeHistory { suggested_available_minutes?: number[] | null; as_of?: string | null; covered_days: number; by_sport_weekly_minutes: Record<string, number>; all_sports_weekly_minutes: number; weeks: Array<{ start_date: string; end_date: string; actual_minutes: number | null; covered_days: number }> }
+export interface VolumeHistory { history_policy?: { usable: boolean; minimum_days: number; gap_threshold_days: number; reference_days: number; trimmed_before_break: boolean }; suggested_available_minutes?: number[] | null; as_of?: string | null; covered_days: number; by_sport_weekly_minutes: Record<string, number>; all_sports_weekly_minutes: number; weeks: Array<{ start_date: string; end_date: string; actual_minutes: number | null; covered_days: number }> }
+export function availabilityMode(profile: Pick<ManagementProfile, "availability_mode" | "available_minutes">): "AUTO_HISTORY" | "MANUAL" {
+  return profile.availability_mode ?? (JSON.stringify(profile.available_minutes) === "[60,60,60,60,60,90,0]" ? "AUTO_HISTORY" : "MANUAL");
+}
+export function trainingDays(profile: Pick<ManagementProfile, "availability_mode" | "available_minutes" | "training_days">): number[] {
+  return profile.training_days ?? (availabilityMode(profile) === "AUTO_HISTORY" ? [0,1,2,3,4,5,6] : profile.available_minutes.flatMap((v,i) => v > 0 ? [i] : []));
+}
 export function defaultPlanningControls(sport: ManagementProfile["actual_sport"]): PlanningControls {
-  return { sessions_per_week: 7, intensity_days: [], strength_days: [], long_session_day: null, max_strength_sessions: 2,
+  return { history_gap_days: 10, automatic_intervals: true, sessions_per_week: 7, intensity_days: [], strength_days: [], long_session_day: null, max_strength_sessions: 2,
     training_sports: [sport], weekly_target_hours: null, capacity_policy: "MODEL_WITH_PRIOR", mesocycle_anchor: null, wave: [.96, 1.04, 1.10, .78],
     accent_mode: "AUTO", accent_limit: 2, accents: [], accent_index: 1.1, maintenance_index: 1, cycles: [] };
 }
@@ -74,7 +83,7 @@ export interface DraftSession {
 export interface DraftDay {
   date: string; status: string; period: string; taper: boolean; session: DraftSession | null;
   readiness_before: Record<Component, number | null>; readiness_after: Record<Component, number | null>;
-  load_budget: { remaining_weekly_minutes: number; components: Record<Component, { e7_daily: number; e40_daily: number; index_7_40: number | null; target_weekly_effective: number; rolling_7d_effective: number; deficit_effective: number }> };
+  load_budget: { remaining_weekly_minutes: number | null; components: Record<Component, { e7_daily: number; e40_daily: number; index_7_40: number | null; target_weekly_effective: number; rolling_7d_effective: number; deficit_effective: number }> };
   explanation: string; rejected_alternatives: Array<{ method_id: string; reason: string; code: string }>;
 }
 export interface PlanProjection {
@@ -123,6 +132,8 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     || (Date.parse(value.program_end) - Date.parse(value.program_start)) > 365 * 86_400_000
     || (finite(value.age_years) && finite(value.training_experience_years) && value.training_experience_years > value.age_years)
     || !Array.isArray(value.available_minutes) || value.available_minutes.length !== 7 || !value.available_minutes.every(v => range(v, 0, 360))
+    || (value.availability_mode != null && !["AUTO_HISTORY", "MANUAL"].includes(String(value.availability_mode)))
+    || (value.training_days != null && (!Array.isArray(value.training_days) || new Set(value.training_days).size !== value.training_days.length || !value.training_days.every(d => integer(d, 0, 6))))
     || (value.recent_weekly_hours !== null && (!Array.isArray(value.recent_weekly_hours) || value.recent_weekly_hours.length !== 4 || !value.recent_weekly_hours.every(v => range(v, 0, 80))))
     || !(value.reentry_days === null || integer(value.reentry_days, 0, 21))
     || !integer(value.taper_days, 0, 21) || !integer(value.max_key_sessions_per_week, 0, 3)
@@ -140,9 +151,10 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
   const seen = new Set<string>();
   if (normalized.planning_controls != null) {
     const c = normalized.planning_controls;
-    const days = (v: unknown): v is number[] => Array.isArray(v) && new Set(v).size === v.length && v.every(d => integer(d, 0, 6) && Number((value.available_minutes as number[])[d]) > 0);
+    const allowed = trainingDays(value as unknown as ManagementProfile).filter(d => availabilityMode(value as unknown as ManagementProfile) === "AUTO_HISTORY" || Number((value.available_minutes as number[])[d]) > 0);
+    const days = (v: unknown): v is number[] => Array.isArray(v) && new Set(v).size === v.length && v.every(d => integer(d, 0, 6) && allowed.includes(d));
     const zones = (v: unknown): v is Component[] => Array.isArray(v) && new Set(v).size === v.length && v.every(z => COMPONENTS.includes(z));
-    if (!isRecord(c) || (c.capacity_policy !== undefined && !["OBSERVED_ONLY", "MODEL_WITH_PRIOR"].includes(String(c.capacity_policy))) || !integer(c.sessions_per_week, 1, 7) || !days(c.intensity_days) || !days(c.strength_days)
+    if (!isRecord(c) || (c.history_gap_days !== undefined && !integer(c.history_gap_days, 5, 14)) || (c.automatic_intervals !== undefined && typeof c.automatic_intervals !== "boolean") || (c.capacity_policy !== undefined && !["OBSERVED_ONLY", "MODEL_WITH_PRIOR"].includes(String(c.capacity_policy))) || !integer(c.sessions_per_week, 1, 7) || !days(c.intensity_days) || !days(c.strength_days)
       || !(c.long_session_day === null || (integer(c.long_session_day, 0, 6) && days([c.long_session_day])))
       || !integer(c.max_strength_sessions, 0, 3) || !Array.isArray(c.training_sports) || c.training_sports.length > 3
       || (c.training_sports.length > 0 && !c.training_sports.includes(String(value.actual_sport)))
@@ -236,7 +248,7 @@ export function defaultManagementProfile(today: string): ManagementProfile {
   return {
     schema_version: "management-profile-v1", sport: "Run", actual_sport: "Run", discipline: "",
     age_years: null, training_experience_years: null, race_duration_min: null,
-    program_start: today, program_end: end.toISOString().slice(0, 10), available_minutes: [60, 60, 60, 60, 60, 90, 0],
+    program_start: today, program_end: end.toISOString().slice(0, 10), available_minutes: [60, 60, 60, 60, 60, 90, 0], availability_mode: "AUTO_HISTORY", training_days: [0,1,2,3,4,5,6],
     recent_weekly_hours: null, reentry_days: null, taper_days: 7, max_key_sessions_per_week: 2,
     building_fraction: .5, maintenance_fraction: .3, reentry_fraction: .4,
     recovery_session_cap_min: 30, allow_expert_fallback: true,
@@ -252,7 +264,7 @@ export const PHASE_LABELS: Record<string, string> = {
   COMPETITION: "Състезателен", TRANSITION: "Преходен", TAPER: "Тейпър",
 };
 export const CAPACITY_LABELS: Record<string, string> = {
-  SPEED_DURATION_PRIOR: "Скорост–време с индивидуална опора и експертна форма", SPEED_TIME: "Индивидуална скорост–време", SPEED_DURATION: "Индивидуална скорост–време",
+  SPEED_DURATION_TEST_ANCHOR: "Скорошен максимален тест за конкретното усилие", SPEED_DURATION_PRIOR: "Скорост–време с индивидуална опора и експертна форма", SPEED_TIME: "Индивидуална скорост–време", SPEED_DURATION: "Индивидуална скорост–време",
   EXPERT_TREF: "Експертен Tref — резервна оценка", EXPERT_FALLBACK: "Експертен Tref — резервна оценка", EXPERT_CONTINUOUS_TREF: "Експертен Tref — резервна оценка",
   COACH_EFFORT_CAPACITY: "Индивидуална устойчивост при описаното усилие",
   STRENGTH_METHOD_PROFILE: "Отделен силов профил с упражнения и резерв",

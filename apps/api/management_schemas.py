@@ -73,6 +73,8 @@ class PlanningControls(BaseModel):
     max_strength_sessions: int = Field(default=2, ge=0, le=3)
     training_sports: list[Literal["Run", "NordicSki", "RollerSki"]] = Field(default_factory=list, max_length=3)
     weekly_target_hours: float | None = Field(default=None, gt=0, le=42)
+    history_gap_days: int = Field(default=10, ge=5, le=14)
+    automatic_intervals: bool = True
     capacity_policy: Literal["OBSERVED_ONLY", "MODEL_WITH_PRIOR"] = "MODEL_WITH_PRIOR"
     mesocycle_anchor: date | None = None
     wave: list[float] = Field(default_factory=lambda: [.96, 1.04, 1.10, .78], min_length=2, max_length=6)
@@ -113,6 +115,8 @@ class ManagementProfile(BaseModel):
     race_duration_min: float | None = Field(default=None, gt=0, le=1440)
     program_start: date
     program_end: date
+    availability_mode: Literal["AUTO_HISTORY", "MANUAL"] | None = None
+    training_days: list[int] | None = None
     available_minutes: tuple[float, float, float, float, float, float, float]
     recent_weekly_hours: tuple[float, float, float, float] | None = None
     reentry_days: int | None = Field(default=None, ge=0, le=21)
@@ -152,13 +156,17 @@ class ManagementProfile(BaseModel):
                 raise ValueError("Training experience cannot exceed age")
         if not self.discipline.strip() or self.discipline != self.discipline.strip():
             raise ValueError("Enter a discipline without surrounding whitespace")
+        if self.training_days is not None and (len(set(self.training_days)) != len(self.training_days) or any(type(d) is not int or not 0 <= d <= 6 for d in self.training_days)):
+            raise ValueError("Choose distinct training weekdays")
         if self.planning_controls:
             c = self.planning_controls
             if c.training_sports and self.actual_sport not in c.training_sports:
                 raise ValueError("The primary means must be included")
             if self.sport == "Run" and any(s != "Run" for s in c.training_sports):
                 raise ValueError("Choose running means for a running programme")
-            if any(self.available_minutes[d] == 0 for d in [*c.intensity_days, *c.strength_days, *([] if c.long_session_day is None else [c.long_session_day])]):
+            from biathlon.planning_history import availability
+            resolved_available = availability(self.model_dump(mode="json"))
+            if any(resolved_available[d] == 0 for d in [*c.intensity_days, *c.strength_days, *([] if c.long_session_day is None else [c.long_session_day])]):
                 raise ValueError("A preferred session day cannot be a rest day")
             if any(x.start_date < self.program_start or x.end_date > self.program_end for x in c.cycles):
                 raise ValueError("Cycle directives must lie within the programme")

@@ -138,7 +138,8 @@ def management_profile(
             analysis = repository.active_analysis(alias) or {}
             source = (analysis.get("snapshot_payload") or {}).get("load_history") or {}
             covered = len({r["date"] for r in source.get("daily", []) if (today-timedelta(days=28)).isoformat() <= r["date"] < today.isoformat()})
-            history = {**volume_history(source, today, covered), "as_of": source.get("period_end")}
+            history_controls = (profile.get("profile") or {}).get("planning_controls") or {}
+            history = {**volume_history(source, today, covered, gap_days=history_controls.get("history_gap_days", 10)), "as_of": source.get("period_end")}
         return {**profile, "timezone": athlete_timezone,
                 "today": today.isoformat(), "history": history}
     except PersistentStoreFailure as exc:

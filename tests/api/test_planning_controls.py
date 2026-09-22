@@ -132,7 +132,7 @@ def test_integrated_week_respects_separate_strength_days_and_uses_mixed_methods(
     p=profile(strength_enabled=True,reentry_days=0,planning_controls=controls(accent_mode='MANUAL',accents=['Z3','STR'],mesocycle_anchor=TODAY,intensity_days=[1,4],strength_days=[2,5],long_session_day=6))
     r=engine.generate_plan(Repository(),'athlete',p,start_date=TODAY+timedelta(days=1),now=NOW)
     sessions=[d for d in r['days'] if d['session']]
-    assert {d['session']['zone'] for d in sessions} >= {'Z1','Z2','Z3','STR'}
+    assert {b['zone'] for d in sessions for b in d['session']['blocks'] if b['kind']=='WORK'} >= {'Z1','Z2','Z3','STR'}
     for d in sessions:
         z=d['session']['zone'];weekday=engine.date.fromisoformat(d['date']).weekday()
         if z=='STR': assert weekday in [2,5]

@@ -48,15 +48,16 @@ def outlook(repository, alias, *, now=None):
     length = preferences.get("mesocycle_length_weeks", 4)
     reference = engine.training_targets.development_reference(rows, today, anchor, length)
     quality = source.get("quality") or {}
-    limited = (any(not v["known"] for v in engine.planning_controls.reference(rows, today).values())
+    history = engine.planning_controls.volume_history(source, today, 0, gap_days=(controls or {}).get("history_gap_days", engine.planning_history.DEFAULT_GAP_DAYS))
+    limited = (not history["history_policy"]["usable"] or any(not v["known"] for v in engine.planning_controls.reference(rows, today).values())
                or bool(quality.get("limited_activities") or quality.get("excluded_activities"))
                or source.get("period_end") != today.isoformat())
-    covered = len({r["date"] for r in rows if (today-timedelta(days=28)).isoformat() <= r["date"] < today.isoformat()})
-    history = engine.planning_controls.volume_history(source, today, covered)
     volume = engine.planning_controls.volume_basis(profile, history)
+    reentry_days, reentry_reason = engine.planning_history.reentry(profile, history)
     phases = engine.build_periodization(profile["program_start"], profile["program_end"], calendar["events"],
-                                       reentry_days_override=profile.get("reentry_days"),
+                                       reentry_days_override=reentry_days,
                                        taper_days=profile["taper_days"], transition_days=profile["transition_days"])
+    phases["entry_basis"] = {"days_override": reentry_days, "reason": reentry_reason}
     projection = engine._long_term_outlook(profile, phases, reference, accents, preferences, rows, today,
                                          limited, volume=volume, events=calendar["events"])
     return {"configured": True, "outlook": {
@@ -65,7 +66,8 @@ def outlook(repository, alias, *, now=None):
         "source": {"generation_id": analysis.get("generation_id"), "revision": analysis.get("revision"), "as_of": source.get("period_end")},
         "periodization": phases, "long_term": projection, "history_comparison": history["weeks"],
         "input_snapshot": {"calendar": calendar, "profile_revision": stored["revision"]},
-        "volume_context": {**volume, "available_weekly_minutes": sum(profile["available_minutes"]), "volume_evidence": history},
+        "volume_context": {**volume, "available_weekly_minutes": sum(engine.planning_history.availability(profile)) if engine.planning_history.availability_mode(profile) == "MANUAL" else None,
+                           "availability_mode": engine.planning_history.availability_mode(profile), "history_policy": history["history_policy"], "volume_evidence": history},
     }}
 
 

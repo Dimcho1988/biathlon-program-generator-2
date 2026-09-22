@@ -88,6 +88,23 @@ def test_outlook_read_is_scoped_and_needs_neither_actor_nor_existing_draft(api):
     assert client.get("/api/v2/athlete/management/outlook", headers=HEADERS).json() == {"configured": False, "outlook": None}
 
 
+def test_profile_history_uses_the_same_saved_break_rule_as_the_planner(api, monkeypatch):
+    from tests.api.test_training_plan_engine import Repository
+    client, store, repository = api
+    repository.active_analysis = lambda _: deepcopy(Repository().envelope)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz)
+    monkeypatch.setattr(main, "datetime", Clock)
+    store.current["profile"]["planning_controls"] = {"history_gap_days": 7}
+    restricted = client.get("/api/v2/athlete/management/profile", headers=HEADERS).json()["history"]["history_policy"]
+    assert restricted["gap_threshold_days"] == 7 and restricted["usable"] is False
+    store.current["profile"]["planning_controls"]["history_gap_days"] = 10
+    ordinary = client.get("/api/v2/athlete/management/profile", headers=HEADERS).json()["history"]["history_policy"]
+    assert ordinary["gap_threshold_days"] == 10 and ordinary["usable"] is True
+
+
 @pytest.mark.parametrize("patch", [
     {"building_fraction": .7}, {"maintenance_fraction": .5}, {"reentry_fraction": .6},
     {"available_minutes": [0, 0, 0, -1, 0, 0, 0]},
