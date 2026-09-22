@@ -8,7 +8,6 @@ import {
   getAthletePlanningProfile,
   getMesocycleAccentPreferences,
   getPlanningCalendar,
-  getPlanningMethodology,
 } from "../../lib/api";
 
 const notices: Record<string, string> = {
@@ -43,18 +42,19 @@ export default async function PlanningPage({
     retryAvailable
   />;
   let managementProfile;
-  let result;
-  let methodology;
-  let accentPreferences;
+  let result: Awaited<ReturnType<typeof getAthletePlanningProfile>> | null = null;
+  let accentPreferences: Awaited<ReturnType<typeof getMesocycleAccentPreferences>> | undefined;
   let planningCalendar;
   try {
-    [result, methodology, accentPreferences, planningCalendar, managementProfile] = await Promise.all([
-      getAthletePlanningProfile(athleteAlias),
-      getPlanningMethodology(athleteAlias),
-      getMesocycleAccentPreferences(athleteAlias),
+    [planningCalendar, managementProfile] = await Promise.all([
       getPlanningCalendar(athleteAlias),
       getManagementProfile(athleteAlias, athlete.actorUserId),
     ]);
+    if (!managementProfile.profile?.planning_controls) {
+      [result, accentPreferences] = await Promise.all([
+        getAthletePlanningProfile(athleteAlias), getMesocycleAccentPreferences(athleteAlias),
+      ]);
+    }
   } catch (error) {
     return <ErrorState
       message={error instanceof Error ? error.message : "Профилът за планиране не е достъпен."}
@@ -64,8 +64,8 @@ export default async function PlanningPage({
   }
   return <PlanningProfileForm
     managementProfile={managementProfile}
-    profile={result.profile}
-    methodology={methodology}
+    athleteAlias={athleteAlias}
+    profile={result?.profile??null}
     accentPreferences={accentPreferences}
     planningCalendar={planningCalendar}
     notice={query.planning ? notices[query.planning] : undefined}

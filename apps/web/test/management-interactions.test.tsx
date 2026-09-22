@@ -4,7 +4,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ManagementProfileEditor } from "../components/management-profile-editor";
 import { TrainingManagement } from "../components/training-management";
-import { defaultManagementProfile, parseDraftRecord, COMPONENTS } from "../lib/training-management";
+import { PlanningProfileForm } from "../components/planning-profile-form";
+import { TrainingPlanSummary } from "../components/training-plan-summary";
+import type { PlanningCalendarResponse } from "../lib/planning-calendar";
+import { defaultManagementProfile, defaultPlanningControls, parseDraftRecord, COMPONENTS } from "../lib/training-management";
 
 vi.mock("next/navigation", () => ({useRouter: () => ({refresh: vi.fn()})}));
 let root: Root, container: HTMLDivElement;
@@ -55,12 +58,60 @@ it("preserves a manual horizon and saves it without visiting all steps", async (
   expect(saved.horizon_mode).toBe("MANUAL");expect(saved.program_end).toBe("2027-02-12");
 });
 
+it("keeps the current step and save confirmation after the server refreshes its revision", async () => {
+  const fetchMock=vi.fn(async (_url,init)=>Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile}));vi.stubGlobal("fetch",fetchMock);
+  const calendar:PlanningCalendarResponse={configured:false,calendar:null,context:{schema_version:"planning-context-v1",as_of:"2026-09-21",ready_for_generation:false,generator_status:"NOT_ACTIVE",missing_inputs:[],next_main_race:null,methodology_version:"onflows-canonical-v1",recovery_basis:"LOAD_ONLY",wellness_integration:"DIAGNOSTIC_ONLY"}};
+  const renderForm=(revision:number,p=profile,athleteAlias="athlete-a")=><PlanningProfileForm athleteAlias={athleteAlias} profile={null} managementProfile={{configured:true,profile:p,revision}} planningCalendar={calendar}/>;
+  await mount(renderForm(1));
+  await click(button("4. Методи и дозиране"));
+  await enter(input("Максимум възстановителна работа, мин"),"25");
+  await click(button("Запази промените"));
+  const saved=JSON.parse(fetchMock.mock.calls[0][1].body).profile;
+  await mount(renderForm(2,saved));
+  expect(container.textContent).toContain("стъпка 4 от 4");
+  expect(container.textContent).toContain("Профилът е запазен");
+  expect(button("Запазено").disabled).toBe(true);
+  expect(input("Максимум възстановителна работа, мин").value).toBe("25");
+  await mount(renderForm(3,{...saved,recovery_session_cap_min:20}));
+  expect(input("Максимум възстановителна работа, мин").value).toBe("20");
+  await enter(input("Максимум възстановителна работа, мин"),"22");
+  await mount(renderForm(4,{...saved,recovery_session_cap_min:15}));
+  expect(input("Максимум възстановителна работа, мин").value).toBe("22");
+  await mount(renderForm(1,profile,"athlete-b"));
+  expect(container.textContent).toContain("стъпка 1 от 4");
+  expect(container.textContent).not.toContain("Профилът е запазен");
+});
+
+it("explains the actual daily session limit and restores automatic goals only after explicit editing and saving", async () => {
+  const fetchMock=vi.fn(async (_url,init)=>Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile}));vi.stubGlobal("fetch",fetchMock);
+  const p={...profile,component_targets_weekly:{Z1:5},planning_controls:{...defaultPlanningControls(profile.actual_sport),sessions_per_week:13,sessions_by_day:[2,2,1,1,2,1,0]}};
+  await mount(<ManagementProfileEditor initialProfile={{configured:true,profile:p,revision:1}} today="2026-09-21"/>);
+  expect(container.textContent).toContain("Z1: 5 приравнени мин / 7 дни");
+  await click(button("2. Дни и обем"));
+  expect(container.textContent).toContain("ограниченията по дни позволяват само 9");
+  await click(button("Използвай автоматичните цели"));
+  expect(fetchMock).not.toHaveBeenCalled();
+  await click(button("Запази промените"));
+  const saved=JSON.parse(fetchMock.mock.calls[0][1].body).profile;
+  expect(saved.component_targets_weekly).toEqual({});
+  expect(saved.planning_controls.sessions_by_day).toEqual(p.planning_controls.sessions_by_day);
+  expect(saved.planning_controls.sessions_per_week).toBe(13);
+});
+
 const vector=Object.fromEntries(COMPONENTS.map(z=>[z,95]));
 const session=(title:string,minutes:number)=>({title,method_id:title,sport:"Run",zone:"Z1",purpose:"MAINTENANCE",main_work_minutes:minutes,total_minutes:minutes,canonical_effective_load:vector,direct_equivalent_minutes:vector,
   blocks:[{kind:"WORK",label:title,zone:"Z1",duration_min:minutes,target_hr_bpm:null,target_speed_kmh:null,repetition:null,instructions:"Леко и равномерно."}],
   dose_evidence:{capacity_source:"EXPERT_CONTINUOUS_TREF",capacity_minutes:120,target_hr_bpm:null,target_speed_kmh:null,fraction:.3,requested_work_minutes:minutes,prescribed_work_minutes:minutes,limits:[],fallback_reasons:[],model_version:"v5",explanation:"Общ дневен бюджет.",technical_spill_reference:vector}});
 const draft=parseDraftRecord({entry_key:"2026-09-22",revision:1,stale:true,payload:{schema_version:"planning-draft-v1",engine_version:"v5",status:"DRAFT",start_date:"2026-09-22",end_date:"2026-09-28",source:{},warnings:[],summary:{planned_minutes:75},
   days:[{date:"2026-09-22",status:"TRAINING",period:"GENERAL_PREPARATION",taper:false,explanation:"Две сесии с общ бюджет.",session:session("Сутрешна работа",45),sessions:[session("Сутрешна работа",45),session("Следобедна работа",30)],readiness_before:vector,readiness_after:vector,rejected_alternatives:[],load_budget:{remaining_weekly_minutes:null,components:Object.fromEntries(COMPONENTS.map(z=>[z,{e7_daily:0,e40_daily:1,index_7_40:1,target_weekly_effective:100,rolling_7d_effective:0,deficit_effective:100}]))}}]}});
+
+it("shows a restrictive manual goal outside the collapsed explanations, including frozen v5 plans",async()=>{
+  await mount(<TrainingPlanSummary plan={{...draft.payload,input_snapshot:{management_profile:{component_targets_weekly:{Z1:5}}}}}/>);
+  const warning=container.querySelector<HTMLElement>('aside[role="status"]')!;
+  expect(warning.textContent).toContain("Z1: 5 приравнени мин / 7 дни");
+  expect(warning.closest("details")).toBeNull();
+  expect(warning.querySelector("a")?.getAttribute("href")).toBe("/planning");
+});
 
 it("automatically replaces a stale draft and displays every session and their total", async () => {
   const fetchMock=vi.fn<(url:string,init?:RequestInit)=>Promise<Response>>(async (url)=>Response.json(url.includes("drafts?")?{drafts:[draft]}:{...draft,revision:2,stale:false}));vi.stubGlobal("fetch",fetchMock);

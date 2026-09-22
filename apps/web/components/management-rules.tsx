@@ -14,7 +14,7 @@ export function ManagementRules({ profile, onChange, today, hideAutomation = fal
     </div>
     {!hideAutomation && <label className="management-check"><input type="checkbox" checked={profile.auto_import_enabled} onChange={e => update("auto_import_enabled", e.target.checked)} />Обновявай свързаните активности автоматично — до веднъж на час, докато програмата работи</label>}
     <p className="management-muted">Целите и вълната са в стъпка 3. Тук се задават методът и дозата; Recovery остава отделна проверка.</p>
-    <details className="management-detail"><summary>Индивидуални цели по компоненти</summary>
+    <details className="management-detail" open={Object.keys(profile.component_targets_weekly).length>0}><summary>Индивидуални цели по компоненти · приравнени минути</summary>
       <p>Обичайно системата извежда целите от реалната история и периода. Попълнете тук само изрична треньорска цел — включително при въвеждане на нов компонент. Това са седмични приравнени минути, а не Tref или продължителност на тренировка.</p>
       <div className="management-form-grid">{COMPONENTS.map(zone => <label key={zone}>{zone} · седмична цел<input type="number" min="0" max="3000" step="0.5" placeholder="Автоматично" value={profile.component_targets_weekly[zone] ?? ""} onChange={e => {
         const targets = { ...profile.component_targets_weekly };

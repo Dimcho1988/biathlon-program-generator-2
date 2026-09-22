@@ -23,7 +23,7 @@ from biathlon.physiology import _causal_tref, effective_from_direct_vector, line
 from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VERSION, catalog, resolved_methods
 from . import model_service
 
-VERSION = "training-management-v5"
+VERSION = "training-management-v5.1"
 PARAMETER_VERSION = "management-parameters-v5"
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -53,6 +53,17 @@ def _round(value):
 
 def _warning(code, message):
     return {"code": code, "message": message}
+
+
+def _budget_rejection(method_id, effective, budgets, profile):
+    blocked = [z for z in COMPONENTS if effective[z] > budgets[z]["deficit_effective"] + .001]
+    manual = [z for z in blocked if z in profile.get("component_targets_weekly", {})]
+    details = "; ".join(f"{z}: нужни {effective[z]:.1f}, остават {budgets[z]['deficit_effective']:.1f}" for z in blocked)
+    reason = f"Няма бюджет за минималния цял вариант: {details} приравнени минути."
+    if manual:
+        reason += " Ръчната цел за " + ", ".join(manual) + " замества автоматичната цел от историята и 7/40."
+    return {"method_id": method_id, "code": "COMPONENT_BUDGET_EXHAUSTED", "reason": reason,
+            "blocking_components": blocked, "manual_target_components": manual}
 
 
 def _hash(value):
@@ -1021,7 +1032,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         minimum_blocks = _blocks(method, method["min_work_min"], evidence, settings)
                         _, minimum_load, _ = _candidate_load(minimum_blocks, settings, day_start_rows, day)
                         if not minimum_blocks or not fits_component_budget(minimum_load):
-                            item["rejected_alternatives"].append({"method_id": method["id"], "code": "COMPONENT_BUDGET_EXHAUSTED", "reason": "Няма бюджет за минималния цял вариант на метода."})
+                            item["rejected_alternatives"].append(_budget_rejection(method["id"], minimum_load, budgets, profile))
                             continue
                         lo, hi = method["min_work_min"], work
                         for _ in range(24):
@@ -1035,7 +1046,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         work = math.floor(lo * 2) / 2
                         limits.append({"code": "ROLLING_7_40_COMPONENT_BUDGET", "limit_minutes": _round(work)})
                         if work < method["min_work_min"]:
-                            item["rejected_alternatives"].append({"method_id": method["id"], "code": "COMPONENT_BUDGET_EXHAUSTED", "reason": "Приравненият товар, включително загрявката и разлива, надхвърля оставащия компонентен бюджет 7/40."})
+                            item["rejected_alternatives"].append(_budget_rejection(method["id"], effective, budgets, profile))
                             continue
                         blocks = _blocks(method, work, evidence, settings)
                         if not blocks:
@@ -1147,6 +1158,11 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     last_key_day = day
             else:
                 item["explanation"] = "Няма метод с едновременно подходяща доза, бюджет и готовност. Почивката е допустим резултат."
+                manual_blockers = sorted({z for r in item["rejected_alternatives"] for z in r.get("manual_target_components", [])})
+                if manual_blockers:
+                    item["explanation"] = ("Ръчна цел за " + ", ".join(manual_blockers)
+                        + " ограничава тренировките. Провери „Индивидуални цели по компоненти“ в профила. "
+                        "Стойностите са приравнени минути за 7 дни; ниска цел за Z1 ограничава и по-високите аеробни зони.")
         if day_spent and item["session"] is None:
             after_day = recovery_v2.simulate(forecast_rows, configs["zones"], target=day)
             item["readiness_after"] = {r["zone"]: _round(r["readiness_percent"]) if forecast_known else None for r in after_day["current"]}

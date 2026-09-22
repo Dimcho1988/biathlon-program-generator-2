@@ -9,11 +9,16 @@ export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
   const v=isRecord(p.volume_evidence)?p.volume_evidence as unknown as VolumeHistory:null;
   const sports=Array.isArray(p.training_sports)?p.training_sports.map(String):[];
   const sessions=plan.days.flatMap(daySessions);
+  const snapshot=isRecord(plan.input_snapshot)?plan.input_snapshot:{};
+  const profile=isRecord(snapshot.management_profile)?snapshot.management_profile:{};
+  const manual=isRecord(profile.component_targets_weekly)?Object.entries(profile.component_targets_weekly).filter(([,v])=>typeof v==="number"):[];
   const sources=Array.from(new Set(sessions.map(s=>s.dose_evidence.capacity_source)));
   const duration=(v:unknown)=>typeof v==="number"?durationHms(v):"—";
   const reasons=new Map<string,number>();
   for(const d of plan.days.filter(d=>!d.session)) for(const r of d.rejected_alternatives) reasons.set(r.reason,(reasons.get(r.reason)??0)+1);
-  return <section className="management-panel"><h2>Обем и основа на програмата</h2><div className="management-metrics">
+  return <section className="management-panel"><h2>Обем и основа на програмата</h2>
+    {manual.length>0&&<aside className="management-notice" role="status"><strong>Програмата използва ръчни цели:</strong> {manual.map(([z,v])=>`${z}: ${v} приравнени мин / 7 дни`).join("; ")}.<p>Те заместват автоматичните цели от историята. Нисък бюджет за Z1 може да блокира и по-високите аеробни зони. Ако целта е въведена по погрешка, избери „Използвай автоматичните цели“ в профила и запази.</p><Link href="/planning">Провери ръчните цели →</Link></aside>}
+    <div className="management-metrics">
     <div><small>Историческа основа за програмата</small><strong>{duration(p.historical_training_weekly_minutes??p.historical_selected_weekly_minutes??p.baseline_weekly_minutes)}</strong><span>средно за 7 дни</span></div>
     <div><small>Налично време</small><strong>{p.availability_mode==="AUTO_HISTORY"?"Автоматично":duration(p.available_weekly_minutes)}</strong><span>{p.availability_mode==="AUTO_HISTORY"?"от историята и 7/40":"за 7 дни"}</span></div>
     <div><small>Управление на товара</small><strong>{p.volume_governor==="COMPONENT_7_40"?"7/40 по компоненти":duration(p.weekly_minutes_ceiling)}</strong><span>{p.volume_governor==="COMPONENT_7_40"?"метод + дневна готовност":"ограничение при кратка история"}</span></div>
