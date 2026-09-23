@@ -71,3 +71,18 @@ def test_low_manual_goal_still_blocks_and_reports_shortfall(monkeypatch):
     z1 = report["components"]["Z1"]
     assert z1["planned_effective"] <= z1["target_effective"]+.01
     assert p["component_targets_weekly"] == {"Z1":5}
+
+
+def test_lower_future_target_does_not_force_filling_available_sessions(monkeypatch):
+    p = body(sessions_per_week=21, sessions_by_day=[3]*7,
+             mesocycle_anchor=(TODAY-timedelta(days=5)).isoformat(), wave=[1.,.5,1.,.5])
+    p["component_targets_weekly"] = {z:40. if z == "Z1" else 0. for z in COMPONENTS}
+    p["max_key_sessions_per_week"] = 0
+    plan = run(monkeypatch, p, Repository())
+    assert plan["summary"]["sessions"] > 0
+    assert any(r["code"] == "WEEKLY_NEED_COVERED" for d in plan["days"] for r in d["rejected_alternatives"])
+    # Once the end-window need is covered, later available slots stay empty,
+    # even if the earlier calendar-day ceiling still has headroom.
+    for d in plan["days"]:
+        if all(v <= .001 for v in d["load_budget"]["component_allocation"].values()):
+            assert not d["sessions"]

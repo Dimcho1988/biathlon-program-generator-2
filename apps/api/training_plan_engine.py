@@ -961,6 +961,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     rejection = ("RECOVERY_BELOW_90", f"Прогнозната готовност за {z} е {_round(ready[z])}%, под 90%.")
                 elif not limited and budgets[z]["target_weekly_effective"] <= 0:
                     rejection = ("NO_COMPONENT_TARGET", "Липсва установена компонентна база. Въвеждането на нов развиващ товар изисква отделна треньорска цел.")
+                elif allocation is not None and allocation[z] <= .001:
+                    rejection = ("WEEKLY_NEED_COVERED", "Не остава разпределен товар за този компонент в седмицата. Свободната сесия не се запълва задължително.")
                 elif z != "Z1" and ready["Z1"] < 90.:
                     rejection = ("WARMUP_NOT_READY", "Не е възстановен компонентът за загрявката и разпускането.")
                 if rejection:
