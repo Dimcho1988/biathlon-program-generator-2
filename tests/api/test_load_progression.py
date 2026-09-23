@@ -191,6 +191,31 @@ def test_backdated_outcome_without_retained_history_is_explicitly_unavailable():
     assert not load_adaptation.assess(entries,TODAY+timedelta(days=50),rows=[])["components"]
 
 
+def test_editing_earlier_outcome_prefers_its_own_frozen_evidence():
+    from copy import deepcopy
+    from hashlib import sha256
+    from tests.api.test_response_monitoring import Repository as ReportRepository, ACTOR
+    from apps.api.response_monitoring import OptionalTest
+    from apps.api import response_service
+    entries,rows=response_fixture()
+    body=OptionalTest(**entries[-1]["payload"],expected_revision=1)
+    key=sha256(f"{body.day}:{body.protocol}:{body.protocol_version}".encode()).hexdigest()[:32]
+    entries[-1]["entry_key"]=key
+    entries[-1]["payload"].update(observed_load_windows=load_adaptation.load_observations(entries,rows,TODAY),
+        load_source={"generation_id":"original","revision":1})
+    later=deepcopy(entries[-1])
+    later["entry_key"]="later-outcome"
+    later["payload"]["day"]=(TODAY+timedelta(days=1)).isoformat()
+    later["payload"]["load_source"]={"generation_id":"later-correction","revision":2}
+    later["payload"]["observed_load_windows"][0]["current"]["Z3"]=200
+    repo=ReportRepository([*entries,later])
+    response_service.save_report(repo,"ath-test","TEST",body,ACTOR,now=NOW+timedelta(days=50))
+    window=repo.saved["p_payload"]["observed_load_windows"][0]
+    assert window["current"]["Z3"]==168
+    assert window["source"]=={"generation_id":"original","revision":1}
+    assert window["retained_from"]["entry_key"]==key
+
+
 def test_archived_window_is_not_reused_for_different_block_dates():
     entries,rows=response_fixture()
     entries[-1]["payload"]["observed_load_windows"]=load_adaptation.load_observations(entries,rows,TODAY)

@@ -132,7 +132,7 @@ def save_report(repository, alias, kind, body, actor, now=None):
         entries = store.entries(alias)
         if quality.get("limited_activities") or quality.get("excluded_activities"):
             rows = []
-        payload["observed_load_windows"] = load_observations(entries, rows, body.day)
+        payload["observed_load_windows"] = load_observations(entries, rows, body.day, test_key=key)
         related = [key for (entry_kind,key),entry in latest_entries(entries).items()
                    if entry_kind == "BLOCK" and entry["payload"]["phase"] == "BUILD"
                    and entry["payload"]["recovery_end"] < day <= (date.fromisoformat(entry["payload"]["recovery_end"])+timedelta(days=14)).isoformat()]

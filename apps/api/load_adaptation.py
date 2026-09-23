@@ -10,7 +10,7 @@ from biathlon.constants import COMPONENTS
 VERSION = "observed-load-adaptation-v1"
 
 
-def load_observations(entries, rows, test_day):
+def load_observations(entries, rows, test_day, *, test_key=None):
     """Freeze observed load with the outcome test so learning survives imports.
 
     These are actual-data sums, not fitted parameters or synthetic daily loads.
@@ -19,7 +19,10 @@ def load_observations(entries, rows, test_day):
     loads = {(r["date"],r["zone"]):r["effective_load"] for r in rows}
     selected = latest_entries(entries)
     archived = {}
-    for entry in sorted(selected.values(), key=lambda e: (e["payload"].get("day", ""), e["revision"])):
+    # An edited outcome owns its frozen evidence; another outcome is a fallback.
+    for entry in sorted(selected.values(), key=lambda e: (
+            e["kind"] == "TEST" and e["entry_key"] == test_key,
+            e["payload"].get("day", ""), e["revision"])):
         if entry["kind"] != "TEST":
             continue
         for observation in entry["payload"].get("observed_load_windows", []):
