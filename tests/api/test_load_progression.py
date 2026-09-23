@@ -151,6 +151,53 @@ def test_saving_outcome_preserves_actual_load_in_the_same_revision():
     assert saved["automatic_weight"]==0  # Daily stress score remains independent.
 
 
+@pytest.mark.parametrize("quality", [{}, {"excluded_activities": 1}])
+def test_editing_old_outcome_retains_observed_windows_and_original_source(quality):
+    from tests.api.test_response_monitoring import Repository as ReportRepository, ACTOR
+    from apps.api.response_monitoring import OptionalTest
+    from apps.api import response_service
+    entries,rows=response_fixture()
+    body=OptionalTest(**entries[-1]["payload"],expected_revision=1)
+    frozen=load_adaptation.load_observations(entries,rows,TODAY)
+    entries[-1]["payload"].update(observed_load_windows=frozen,
+        load_source={"generation_id":"original-generation","revision":3})
+    repo=ReportRepository(entries)
+    repo.active_activity_calendar=lambda *args:{"generation_id":"new-generation","revision":5,
+        "snapshot_payload":{"load_history":{"daily":[],"quality":quality}}}
+    response_service.save_report(repo,"ath-test","TEST",body,ACTOR,now=NOW+timedelta(days=50))
+    saved=repo.saved["p_payload"]
+    window=saved["observed_load_windows"][0]
+    assert window["current"]==frozen[0]["current"]
+    assert window["previous"]==frozen[0]["previous"]
+    assert window["source"]=={"generation_id":"original-generation","revision":3}
+    assert window["retained_from"]=={"entry_key":entries[-1]["entry_key"],"revision":1}
+    assert saved["load_observation_status"]=="ARCHIVED"
+    entries[-1]["payload"]=saved
+    assert load_adaptation.assess(entries,TODAY+timedelta(days=50),rows=[])["components"]["Z3"]["growth_factor"]==.75
+
+
+def test_backdated_outcome_without_retained_history_is_explicitly_unavailable():
+    from tests.api.test_response_monitoring import Repository as ReportRepository, ACTOR
+    from apps.api.response_monitoring import OptionalTest
+    from apps.api import response_service
+    entries,_=response_fixture()
+    repo=ReportRepository(entries[:-1])
+    response_service.save_report(repo,"ath-test","TEST",OptionalTest(**entries[-1]["payload"]),ACTOR,now=NOW+timedelta(days=50))
+    saved=repo.saved["p_payload"]
+    assert saved["value"]==90
+    assert saved["observed_load_windows"]==[]
+    assert saved["load_observation_status"]=="UNAVAILABLE"
+    entries[-1]["payload"]=saved
+    assert not load_adaptation.assess(entries,TODAY+timedelta(days=50),rows=[])["components"]
+
+
+def test_archived_window_is_not_reused_for_different_block_dates():
+    entries,rows=response_fixture()
+    entries[-1]["payload"]["observed_load_windows"]=load_adaptation.load_observations(entries,rows,TODAY)
+    entries[0]["payload"]["recovery_end"]=(TODAY-timedelta(days=2)).isoformat()
+    assert load_adaptation.load_observations(entries,[],TODAY)==[]
+
+
 def test_new_week_obeys_whole_dose_time_and_no_catchup(monkeypatch):
     monkeypatch.setattr(engine.model_service,"speed_view",reference_speed)
     repo,_,_=observed();p=configured()

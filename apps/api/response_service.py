@@ -122,12 +122,23 @@ def save_report(repository, alias, kind, body, actor, now=None):
         # Persist actual load windows with the outcome, so the learner retains
         # its observations after the import's rolling history has moved on.
         from .load_adaptation import load_observations
-        # Align backdated outcomes with their own observation date. Missing
-        # historical data stays unknown; it is never manufactured as zero load.
-        data = sources(repository,alias,body.day-timedelta(days=89),body.day)
+        # Calendar dates filter activities, not the pinned load snapshot.
+        # Reuse frozen evidence when editing old outcomes; this read does not
+        # reconstruct history that was never retained.
+        data = sources(repository,alias,today-timedelta(days=89),today)
         source = data["load_history"]
         rows = [*source.get("daily", []), *[{**r,"zone":"STR"} for r in source.get("strength", {}).get("daily", [])]]
         quality = source.get("quality") or {}
-        payload["observed_load_windows"] = [] if quality.get("limited_activities") or quality.get("excluded_activities") else load_observations(store.entries(alias), rows, body.day)
+        entries = store.entries(alias)
+        if quality.get("limited_activities") or quality.get("excluded_activities"):
+            rows = []
+        payload["observed_load_windows"] = load_observations(entries, rows, body.day)
+        related = [key for (entry_kind,key),entry in latest_entries(entries).items()
+                   if entry_kind == "BLOCK" and entry["payload"]["phase"] == "BUILD"
+                   and entry["payload"]["recovery_end"] < day <= (date.fromisoformat(entry["payload"]["recovery_end"])+timedelta(days=14)).isoformat()]
+        observed = {o["block"] for o in payload["observed_load_windows"]}
+        payload["load_observation_status"] = ("NOT_APPLICABLE" if not related else
+            "UNAVAILABLE" if any(key not in observed for key in related) else
+            "ARCHIVED" if any(o.get("retained_from") for o in payload["observed_load_windows"]) else "COMPLETE")
         payload["load_source"] = {"generation_id":data["generation_id"],"revision":data["revision"]}
     return store.save(alias,kind,key,day,payload,body.expected_revision,str(actor))
