@@ -95,3 +95,41 @@
 .management-view-switch>a { padding:.75rem 1rem; border-radius:.6rem; border:1px solid var(--border,#d4e2e5); text-decoration:none; }
 .management-view-switch>a[aria-current="page"] {background:#e6f4f5;color:#086476;border-color:#078399;font-weight:700;}
 @media(max-width:700px) {.planning-step-tabs,.management-metrics {grid-template-columns:repeat(2,minmax(0,1fr));}}
+
+/* Shared calendar and time axis for the full preparation year. */
+.season-toolbar,.season-navigation,.season-legend { display:flex; align-items:center; gap:.7rem; flex-wrap:wrap; }
+.season-toolbar { justify-content:space-between; margin-block:1rem; }
+.season-navigation strong { min-width:5rem; text-align:center; }
+.season-kind { max-width:25rem; margin-block:1rem; }
+.season-months { display:grid; gap:1.2rem; max-width:520px; }
+.season-months.season-year { max-width:none; grid-template-columns:repeat(3,minmax(0,1fr)); }
+.season-month { min-width:0; border:1px solid var(--border); border-radius:12px; padding:.6rem; }
+.season-month h4 { margin:.35rem 0 .7rem; text-transform:capitalize; }
+.season-days { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:2px; }
+.season-weekday { text-align:center; font-size:.7rem; color:var(--text-muted); padding:.3rem 0; }
+.season-day { position:relative; min-width:0; min-height:36px; border:1px solid transparent; border-radius:6px; background:var(--surface); color:var(--text); cursor:pointer; font:inherit; font-size:.8rem; padding:3px 1px; user-select:none; }
+.season-day.has-phase { border-bottom-color:#78a7ab; }
+.season-day[aria-current="date"] { font-weight:800; text-decoration:underline; }
+.season-day[aria-pressed="true"] { background:#d6f1f2; color:#074c57; border-color:#087e90; }
+.season-day:hover { box-shadow:inset 0 0 0 1px #078399; }
+.season-day:focus-visible,.season-bar:focus-visible { outline:3px solid #078399; outline-offset:2px; z-index:2; }
+.season-day-marks { display:flex; gap:2px; justify-content:center; min-height:4px; margin-top:3px; }
+.season-day-marks i { width:6px; height:4px; border-radius:2px; }
+.season-legend { font-size:.75rem; margin-block:1rem; }
+.season-legend>span { display:flex; align-items:center; gap:.3rem; }
+.season-legend i { width:9px; height:9px; border-radius:3px; }
+.season-timeline { margin-top:1.5rem; border-top:1px solid var(--border); }
+.season-timeline-scroll { overflow-x:auto; padding:4px; }
+.season-timeline-track { min-width:660px; padding-top:1.7rem; }
+.season-timeline-months { position:relative; height:1.6rem; border-bottom:2px solid var(--accent); }
+.season-timeline-months span { position:absolute; font-size:.75rem; top:0; }
+.season-timeline-lane { padding-top:.7rem; }
+.season-timeline-lane>strong { font-size:.8rem; }
+.season-timeline-row { position:relative; height:31px; margin-top:4px; background:var(--surface-secondary); border-radius:5px; }
+.season-timeline-empty { margin:.4rem 0; font-size:.8rem; color:var(--text-muted); }
+.season-bar { position:absolute; top:2px; height:27px; min-width:5px; border:1px solid rgba(0,0,0,.15); border-radius:4px; cursor:pointer; padding:3px 0; color:#fff; text-align:left; font-size:.7rem; }
+.season-bar>span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-inline:4px; }
+.season-selection { padding:.8rem; border-left:3px solid var(--accent); background:var(--surface-secondary); }
+.tone-camp { background:#28679d; }.tone-main_race { background:#b23943; }.tone-control_race,.tone-test { background:#986313; }.tone-unavailable { background:#626975; }.tone-build,.tone-accent { background:#785397; }.tone-maintain,.tone-phase { background:#397e88; }.tone-stress { background:#c1502b; }.tone-recovery { background:#347957; }
+@media(max-width:900px) { .season-months.season-year { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:540px) { .season-months.season-year { grid-template-columns:1fr; } .season-day { min-height:42px; } .season-toolbar { align-items:stretch; } .season-navigation { justify-content:space-between; } }

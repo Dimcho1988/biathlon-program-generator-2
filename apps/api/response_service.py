@@ -122,7 +122,9 @@ def save_report(repository, alias, kind, body, actor, now=None):
         # Persist actual load windows with the outcome, so the learner retains
         # its observations after the import's rolling history has moved on.
         from .load_adaptation import load_observations
-        data = sources(repository,alias,today-timedelta(days=89),today)
+        # Align backdated outcomes with their own observation date. Missing
+        # historical data stays unknown; it is never manufactured as zero load.
+        data = sources(repository,alias,body.day-timedelta(days=89),body.day)
         source = data["load_history"]
         rows = [*source.get("daily", []), *[{**r,"zone":"STR"} for r in source.get("strength", {}).get("daily", [])]]
         quality = source.get("quality") or {}

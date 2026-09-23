@@ -187,7 +187,8 @@ describe("planning-profile-v1 contract", () => {
     expect(html).not.toContain("STRESS остава неактивен");
     const cycles = renderToStaticMarkup(<PlanningControlsEditor profile={{...defaultManagementProfile("2026-09-21"),planning_controls:defaultPlanningControls("Run")}} onChange={()=>{}} today="2026-09-21" stage="cycles"/>);
     expect(cycles).toContain("Целеви 7/40 за акцент");
-    expect(cycles).toContain("стресова седмица");
+    expect(cycles).toContain('href="#planning-calendar"');
+    expect(cycles).toContain("стресовите блокове");
     expect(cycles).toContain("разтоварване");
 
   });

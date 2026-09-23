@@ -1,5 +1,8 @@
 "use client";
 import Link from "next/link";
+import { PlanningCalendarPanel } from "./planning-calendar-panel";
+import type { PlanningCalendarResponse } from "../lib/planning-calendar";
+import type { PlanProjection } from "../lib/training-management";
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import type { PlanningProfile, MesocycleAccentPreferencesResponse } from "../lib/planning-profile";
@@ -9,7 +12,7 @@ import { LoadProgressionEditor } from "./load-progression-editor";
 import { ManagementRules } from "./management-rules";
 import { PlanningControlsEditor } from "./planning-controls-editor";
 
-export function ManagementProfileEditor({ initialProfile, today, canEdit = true, legacy, legacyAccents }: { initialProfile: ManagementProfileResponse; today: string; canEdit?: boolean; legacy?: PlanningProfile|null; legacyAccents?: MesocycleAccentPreferencesResponse }) {
+export function ManagementProfileEditor({ initialProfile, today, canEdit = true, legacy, legacyAccents, calendar, outlook }: { calendar?: PlanningCalendarResponse; outlook?: PlanProjection | null; initialProfile: ManagementProfileResponse; today: string; canEdit?: boolean; legacy?: PlanningProfile|null; legacyAccents?: MesocycleAccentPreferencesResponse }) {
   const router = useRouter();
   const [saved, setSaved] = useState(initialProfile);
   const [profile, setProfile] = useState<ManagementProfile>(()=>{
@@ -30,17 +33,18 @@ export function ManagementProfileEditor({ initialProfile, today, canEdit = true,
   }
   const update=<K extends keyof ManagementProfile>(key:K,value:ManagementProfile[K])=>setProfile(p=>({...p,[key]:value}));
   const optional=(v:string)=>v===""?null:Number(v);
-  async function save(e:FormEvent<HTMLFormElement>){
-    e.preventDefault();setError("");setNotice("");
+  async function saveProfile(){
+    setError("");setNotice("");
     setBusy(true);
     try{
       const checked=parseManagementProfile({...profile,discipline:profile.discipline.trim()});
       const response=await fetch("/api/athlete/management/profile",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({profile:checked,expected_revision:saved.revision})});
       const data:unknown=await response.json();if(!response.ok)throw new Error(isRecord(data)&&typeof data.error==="string"?data.error:"Профилът не беше записан.");
       const result=parseManagementProfileResponse(data);setSaved({...saved,...result});if(result.profile)setProfile(result.profile);
-      setNotice("Профилът е запазен. Дългосрочният план вече използва новите настройки. Седмичната програма ще провери промените при отваряне; утвърдените задачи следват избрания режим на адаптация.");router.refresh();
-    }catch(caught){setError(caught instanceof Error?caught.message:"Профилът не беше записан.");}finally{setBusy(false);}
+      setNotice("Профилът е запазен. Дългосрочният план вече използва новите настройки. Седмичната програма ще провери промените при отваряне; утвърдените задачи следват избрания режим на адаптация.");router.refresh(); return true;
+    }catch(caught){setError(caught instanceof Error?caught.message:"Профилът не беше записан."); return false;}finally{setBusy(false);}
   }
+  function save(e: FormEvent<HTMLFormElement>) { e.preventDefault(); void saveProfile(); }
   return <section className="management-panel management-profile" id="basic-profile">
     <p className="eyebrow">{saved.configured?"Профилът е попълнен":"Начална настройка"} · стъпка {step} от 4</p>
     <nav className="planning-step-tabs" aria-label="Стъпки на профила">{["Спорт и цел","Дни и обем","Мезоцикли и акценти","Методи и дозиране"].map((s,i)=><button type="button" key={s} aria-current={step===i+1?"step":undefined} onClick={()=>setStep(i+1)}>{i+1}. {s}</button>)}</nav>
@@ -70,5 +74,6 @@ export function ManagementProfileEditor({ initialProfile, today, canEdit = true,
     <div className="management-actions">{step>1&&<button className="action-button secondary" type="button" onClick={()=>setStep(step-1)}>← Назад</button>}<button className="action-button" type="submit" disabled={!dirty}>{busy?"Запазване…":!dirty&&saved.configured?"Запазено":"Запази промените"}</button>{step<4&&<button className="action-button secondary" type="button" onClick={()=>setStep(step+1)}>Напред →</button>}</div>
     {error&&<p className="management-error" role="alert">{error}</p>}{notice&&!dirty&&<p className="management-notice" role="status">{notice}</p>}
     </fieldset></form><div className="management-actions"><a href="#planning-calendar">Стартове и лагери ↓</a><Link href="/management">Седмична програма →</Link><Link href="/management/outlook">Дългосрочен план →</Link></div>
+    {calendar && <section id="planning-calendar"><PlanningCalendarPanel response={calendar} today={today} profile={profile} onProfileChange={setProfile} onSaveProfile={saveProfile} profileDirty={dirty && (saved.configured || !!profile.discipline.trim() || !!profile.planning_controls?.cycles.length)} plan={outlook} disabled={!canEdit || busy}/></section>}
   </section>;
 }

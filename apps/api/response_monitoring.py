@@ -55,6 +55,12 @@ class ResponseBlock(InputModel):
     def dates(self):
         if not self.start <= self.load_end < self.recovery_end or (self.recovery_end-self.start).days > 56:
             raise ValueError("Block dates must be ordered with recovery within 56 days")
+        # Two complete equal load windows plus the 14-day outcome window must
+        # fit the ordinary 90-day import when a BUILD block is assessed on time.
+        if self.phase == "BUILD" and (self.recovery_end-self.start).days >= 38:
+            raise ValueError("A learning block including recovery must be at most 38 days")
+        if self.phase == "BUILD" and (self.recovery_end-self.load_end).days < 2:
+            raise ValueError("A learning block needs at least two days after loading")
         return self
 
 

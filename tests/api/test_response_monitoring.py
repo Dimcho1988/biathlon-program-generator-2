@@ -242,6 +242,18 @@ def test_input_contract_rejects_extra_fields_floats_and_invalid_block():
     with pytest.raises(ValidationError): OptionalTest(day=TODAY,protocol="CMJ",protocol_version="1",value=float("nan"),unit="cm",direction="HIGHER",conditions="same")
 
 
+def test_learning_block_fits_two_load_windows_and_allows_two_recovery_observations():
+    end = TODAY + timedelta(days=37)
+    accepted = ResponseBlock(start=TODAY, load_end=end-timedelta(days=2), recovery_end=end, phase="BUILD")
+    first_required = accepted.start-timedelta(days=38)
+    latest_outcome = accepted.recovery_end+timedelta(days=14)
+    assert (latest_outcome-first_required).days == 89
+    with pytest.raises(ValidationError, match="38 days"):
+        ResponseBlock(start=TODAY, load_end=end-timedelta(days=2), recovery_end=end+timedelta(days=1), phase="BUILD")
+    with pytest.raises(ValidationError, match="two days"):
+        ResponseBlock(start=TODAY, load_end=end-timedelta(days=1), recovery_end=end, phase="BUILD")
+
+
 def test_api_requires_service_alias_actor_and_validates_request(monkeypatch):
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN","service-secret")
     monkeypatch.setattr(main,"_repository",lambda:Repository())
