@@ -29,6 +29,16 @@ async function choose(element: HTMLSelectElement, value: string) {
 }
 const profile = {...defaultManagementProfile("2026-09-21"), discipline:"5000 m", age_years:30, training_experience_years:10};
 
+it("shows component shortfalls separately from session counts and elapsed duration", async () => {
+  const draft=parseDraftRecord({entry_key:"test",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v6",status:"DRAFT",start_date:"2026-09-23",end_date:"2026-09-29",days:[],source:{},parameters:{},warnings:[],summary:{planned_minutes:0}}});
+  await mount(<TrainingPlanSummary plan={{...draft.payload,allocation:{window_start:"2026-09-23",window_end:"2026-09-29",scheduled_slots:9,weekly_session_limit:13,components:{Z1:{target_effective:700,actual_effective:100,planned_effective:400,unallocated_effective:200}},constraints:[{code:"THRESHOLD_DAY_RESERVED",reason:"Този ден е избран за прагова работа."}],dose_limits:["METHOD_CAPACITY_FRACTION"]}}}/>);
+  expect(container.textContent).toContain("Остава непланиран товар: Z1");
+  expect(container.textContent).toContain("0 предложени сесии от 9 възможни по дните");
+  expect(container.textContent).toContain("Седмичен максимум в профила: 13");
+  expect(container.textContent).toContain("Те не се събират като обща продължителност");
+  expect(container.querySelector("table")?.textContent).toContain("700100400200");
+});
+
 it("saves 16 sessions and double-threshold preferences directly from step two", async () => {
   const fetchMock = vi.fn(async (_url, init) => Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile})); vi.stubGlobal("fetch",fetchMock);
   await mount(<ManagementProfileEditor initialProfile={{configured:true,profile,revision:1}} today="2026-09-21"/>);

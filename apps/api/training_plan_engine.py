@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from biathlon import hr_speed, recovery_v2, speed_duration, training_targets, planning_controls, planning_history, planning_schedule
+from biathlon import hr_speed, recovery_v2, speed_duration, training_targets, planning_controls, planning_history, planning_schedule, planning_allocation
 from biathlon.constants import COMPONENTS, fresh_parameters
 from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM
 from biathlon.periodization import build_periodization
@@ -23,8 +23,8 @@ from biathlon.physiology import _causal_tref, effective_from_direct_vector, line
 from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VERSION, catalog, resolved_methods
 from . import model_service
 
-VERSION = "training-management-v5.1"
-PARAMETER_VERSION = "management-parameters-v5"
+VERSION = "training-management-v6"
+PARAMETER_VERSION = "management-parameters-v6"
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
     "RE_ENTRY": ("Z1", "STR"),
@@ -123,10 +123,10 @@ def _add_forecast_session(rows, day, effective):
     return _with_forecast_day(rows, day, {z: current.get(z, 0.) + effective.get(z, 0.) for z in COMPONENTS})
 
 
-def _candidate_load(blocks, settings, rows, day):
+def _candidate_load(blocks, settings, rows, day, *, technical_reference=None):
     direct, effective, technical = {z: 0. for z in COMPONENTS}, {z: 0. for z in COMPONENTS}, {}
     for slot in sorted({b.get("session_index", 1) for b in blocks}):
-        d, e, technical = _canonical_load([b for b in blocks if b.get("session_index", 1) == slot], settings, rows, day)
+        d, e, technical = _canonical_load([b for b in blocks if b.get("session_index", 1) == slot], settings, rows, day, technical_reference=technical_reference)
         for z in COMPONENTS:
             direct[z] += d[z]
             effective[z] += e[z]
@@ -403,7 +403,7 @@ def _blocks(method, work, evidence, settings):
     return blocks
 
 
-def _canonical_load(blocks, settings, rows, day):
+def _canonical_load(blocks, settings, rows, day, *, technical_reference=None):
     parameters = fresh_parameters()
     direct = {z: 0. for z in COMPONENTS}
     for block in blocks:
@@ -421,7 +421,7 @@ def _canonical_load(blocks, settings, rows, day):
         direct[z] += block["duration_min"] * coefficient
     lower = (day - timedelta(days=40)).isoformat()
     upper = day.isoformat()
-    technical = {z: _causal_tref(z, pd.Series([r["effective_load"] for r in rows
+    technical = technical_reference if technical_reference is not None else {z: _causal_tref(z, pd.Series([r["effective_load"] for r in rows
                     if r["zone"] == z and lower <= r["date"] < upper], dtype=float), parameters["base_loads"])
                  for z in COMPONENTS}
     vector = effective_from_direct_vector(direct, technical, parameters)
@@ -778,6 +778,31 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             key_slots.append(d)
             reserved_key_count += needed
     covered_slots = {}
+    # Establish the entire week's component intent before choosing methods.
+    # Calendar changes inside the week retain separate rolling targets.
+    goal_windows, day_goals = {}, {}
+    for offset in range(horizon):
+        d = start_date + timedelta(days=offset)
+        period, taper = _phase(periodization, d)
+        week, _ = meso_at(d)
+        day_goals[d] = _goals(profile, d, period, taper, target_reference, accents,
+                             week, meso_length, rows, today, limited, _taper_factor(periodization, d))
+        goal_windows[d] = day_goals[d][0]
+    opportunities = {z: [] for z in COMPONENTS}
+    for d, slot, count in schedule:
+        if not count or any(e["event_type"] in {"MAIN_RACE", "CONTROL_RACE", "TEST", "UNAVAILABLE"}
+                            and str(e["start_date"]) <= d.isoformat() <= str(e["end_date"]) for e in events):
+            continue
+        if any(a.get("date") == d.isoformat() for a in source.get("activities", [])):
+            continue
+        for z in COMPONENTS:
+            if z in {"Z3", "Z4", "Z5"} and d not in key_slots:
+                continue
+            if z in {"Z3", "Z4", "Z5"} and slot >= (2 if d.weekday() in double_days and count >= 2 else 1):
+                continue
+            if z == "STR" and (not profile.get("strength_enabled") or preferences.get("strength_days") and d.weekday() not in preferences["strength_days"]):
+                continue
+            opportunities[z].append((d, slot))
     for day, slot_index, slots_today in schedule:
         if slot_index < covered_slots.get(day, 0):
             continue
@@ -791,19 +816,25 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         # Calendar-day Recovery cannot infer intraday recovery. Forecast the
         # cumulative load, but assess the bundle against day-start readiness.
         day_start_rows = [r for r in forecast_rows if r["date"] != key] + [r for r in rows if r["date"] == key]
+        # Dose trials on this day use the same causal spill reference. Compute
+        # it once; it is not a dose capacity and never reads future proposals.
+        technical_reference = _canonical_load([], settings, day_start_rows, day)[2]
+        def candidate_load(blocks):
+            return _candidate_load(blocks, settings, day_start_rows, day, technical_reference=technical_reference)
         recovery_before = recovery_v2.simulate(day_start_rows, configs["zones"], target=day)
         ready = {r["zone"]: r["readiness_percent"] for r in recovery_before["current"]}
         day_meso_week, day_meso_factor = meso_at(day)
-        goals, selected_accents, cycle_state = _goals(profile, day, period, taper, target_reference, accents,
-                                                      day_meso_week, meso_length, rows, today, limited,
-                                                      _taper_factor(periodization, day))
+        goals, selected_accents, cycle_state = day_goals[day]
         budgets = _budgets(forecast_rows, day, taper, day_meso_factor, actual_rows=rows, targets=goals)
+        allocation = planning_allocation.quota(goal_windows, opportunities, forecast_rows, day, slot_index) if component_governed else None
         visible_ready = {z: _round(ready[z]) if forecast_known else None for z in COMPONENTS}
         item = {"date": key, "status": "REST", "period": period, "taper": taper,
                 "session": None, "slot": slot_index + 1, "readiness_scope": "DAY_START_BUNDLE_NOT_INTRADAY_FORECAST", "readiness_before": visible_ready, "readiness_after": dict(visible_ready),
                 "load_budget": {"remaining_weekly_minutes": None if automatic_time else _round(max(0., remaining)), "components": budgets,
                                 "mesocycle_week_index": day_meso_week, "mesocycle_factor": day_meso_factor},
                 "rejected_alternatives": [], "explanation": "Почивка; не е необходимо да се запълва всяка свободна минута."}
+        if allocation is not None:
+            item["load_budget"]["component_allocation"] = {z: _round(v) for z, v in allocation.items()}
         events_today = [e for e in events if str(e["start_date"]) <= key <= str(e["end_date"])]
         existing = [a for a in actual_activities if a.get("local_date") == key]
         if not existing:
@@ -940,8 +971,24 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     reason = "За автоматична Z5 е нужен скорошен максимален тест над подкрепената граница Z4/Z5 или индивидуален интервален профил. Пулсът не дава отделен Z5 Tref." if method["structure"] == "MODEL_INTERVALS" and z == "Z5" else "Няма допустима оценка на капацитета за този метод и средство."
                     item["rejected_alternatives"].append({"method_id": method["id"], "code": "CAPACITY_UNAVAILABLE", "reason": reason})
                     continue
+                if method["structure"] in {"ALTERNATING", "CRUISE_ALTERNATING", "AEROBIC_STRENGTH"}:
+                    secondary = capacity_for({**method, "zone": "Z1", "position": .35, "structure": "CONTINUOUS"},
+                                             settings, speed, context, today, profile.get("allow_expert_fallback", True), use_model_prior=(controls or {}).get("capacity_policy") == "MODEL_WITH_PRIOR")
+                    if secondary is None:
+                        continue
+                    evidence["secondary_capacity"] = secondary
                 purpose = method["purpose"]
-                if purpose == "BUILDING" and (z not in selected_accents or taper or slot_index > 0):
+                # Easy endurance can need a full building-method dose to carry
+                # the weekly load, even while another quality is the accent.
+                # This uses the existing coach fraction, never a new multiplier.
+                endurance_allocation = False
+                if allocation and z in {"Z1", "Z2"} and purpose == "BUILDING" and not taper and slot_index == 0:
+                    maintenance_work = min(evidence["capacity_minutes"] * profile.get("maintenance_fraction", .3), method["max_work_min"])
+                    maintenance_blocks = _blocks(method, maintenance_work, evidence, settings)
+                    if maintenance_blocks:
+                        _, maintenance_load, _ = candidate_load(maintenance_blocks)
+                        endurance_allocation = allocation[z] > maintenance_load[z] + .5
+                if purpose == "BUILDING" and (z not in selected_accents and not endurance_allocation or taper or slot_index > 0):
                     purpose = "MAINTENANCE"
                 fraction = profile.get("maintenance_fraction", .3) if purpose in {"MAINTENANCE", "RECOVERY"} else profile.get("reentry_fraction", .4) if period == "RE_ENTRY" else profile.get("building_fraction", .5)
                 if method["structure"] == "MODEL_INTERVALS":
@@ -956,11 +1003,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     fraction = method["min_work_min"] / method["max_work_min"] if purpose == "MAINTENANCE" else 1.
                 requested = evidence["capacity_minutes"] * fraction
                 if method["structure"] in {"ALTERNATING", "CRUISE_ALTERNATING", "AEROBIC_STRENGTH"}:
-                    secondary = capacity_for({**method, "zone": "Z1", "position": .35, "structure": "CONTINUOUS"},
-                                             settings, speed, context, today, profile.get("allow_expert_fallback", True), use_model_prior=(controls or {}).get("capacity_policy") == "MODEL_WITH_PRIOR")
-                    if secondary is None:
-                        continue
-                    evidence["secondary_capacity"] = secondary
+                    secondary = evidence["secondary_capacity"]
                     if method["structure"] in {"ALTERNATING", "CRUISE_ALTERNATING"}:
                         requested = min(requested, secondary["capacity_minutes"] * fraction)
                     else:
@@ -1024,13 +1067,34 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 if not blocks or work < method["min_work_min"]:
                     item["rejected_alternatives"].append({"method_id": method["id"], "code": "STRUCTURE_DOES_NOT_FIT", "reason": "Цели повторения, паузи и общата доза не се побират едновременно."})
                     continue
-                direct, effective, technical = _candidate_load(blocks, settings, day_start_rows, day)
+                direct, effective, technical = candidate_load(blocks)
+                # Allocate this opportunity's share before applying hard 7/40
+                # caps. Whole minimum variants may cross a soft share, never a
+                # rolling budget. Later slots see the resulting canonical load.
+                if allocation and effective[z] > allocation[z] and not method.get("double_threshold"):
+                    minimum_blocks = _blocks(method, method["min_work_min"], evidence, settings)
+                    if minimum_blocks:
+                        _, minimum_load, _ = candidate_load(minimum_blocks)
+                        share = max(allocation[z], minimum_load[z])
+                        lo, hi = method["min_work_min"], work
+                        for _ in range(16):
+                            midpoint = (lo+hi)/2
+                            trial = _blocks(method, midpoint, evidence, settings)
+                            _, trial_load, _ = candidate_load(trial)
+                            if trial and trial_load[z] <= share + .001:
+                                lo = midpoint
+                            else:
+                                hi = midpoint
+                        work = max(method["min_work_min"], math.floor(lo*2)/2)
+                        blocks = _blocks(method, work, evidence, settings)
+                        direct, effective, technical = candidate_load(blocks)
+                        limits.append({"code": "COMPONENT_SLOT_ALLOCATION", "limit_minutes": _round(work)})
                 if not limited:
                     def fits_component_budget(candidate):
                         return all(candidate[z] <= budgets[z]["deficit_effective"] + .001 for z in COMPONENTS)
                     if not fits_component_budget(effective):
                         minimum_blocks = _blocks(method, method["min_work_min"], evidence, settings)
-                        _, minimum_load, _ = _candidate_load(minimum_blocks, settings, day_start_rows, day)
+                        _, minimum_load, _ = candidate_load(minimum_blocks)
                         if not minimum_blocks or not fits_component_budget(minimum_load):
                             item["rejected_alternatives"].append(_budget_rejection(method["id"], minimum_load, budgets, profile))
                             continue
@@ -1038,7 +1102,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         for _ in range(24):
                             midpoint = (lo + hi) / 2
                             trial_blocks = _blocks(method, midpoint, evidence, settings)
-                            _, trial_effective, _ = _candidate_load(trial_blocks, settings, day_start_rows, day)
+                            _, trial_effective, _ = candidate_load(trial_blocks)
                             if trial_blocks and fits_component_budget(trial_effective):
                                 lo = midpoint
                             else:
@@ -1052,26 +1116,47 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         if not blocks:
                             item["rejected_alternatives"].append({"method_id": method["id"], "code": "MINIMUM_STRUCTURE_NOT_MET", "reason": "Бюджетът не допуска минималната цяла структура."})
                             continue
-                        direct, effective, technical = _candidate_load(blocks, settings, day_start_rows, day)
+                        direct, effective, technical = candidate_load(blocks)
                 after_rows = _add_forecast_session(forecast_rows, day, effective)
-                after = recovery_v2.simulate(after_rows, configs["zones"], target=day)
                 near_races = [e for e in events if e["event_type"] in {"MAIN_RACE", "CONTROL_RACE"}
                               and key < str(e["start_date"]) <= (day + timedelta(days=7)).isoformat()]
-                race_conflict = False
-                for race in near_races:
-                    race_recovery = recovery_v2.simulate(after_rows, configs["zones"], target=date.fromisoformat(str(race["start_date"])))
-                    if any(r["readiness_percent"] < 90. for r in race_recovery["current"] if r["zone"] != "STR"):
-                        race_conflict = True
-                        break
-                if race_conflict:
-                    item["rejected_alternatives"].append({"method_id": method["id"], "code": "RACE_RECOVERY_CONFLICT", "reason": "Прогнозното възстановяване след тази доза не достига 90% преди близък старт."})
+                def recovery_conflict(candidate_rows):
+                    for race in near_races:
+                        forecast = recovery_v2.simulate(candidate_rows, configs["zones"], target=date.fromisoformat(str(race["start_date"])))
+                        if any(r["readiness_percent"] < 90. for r in forecast["current"] if r["zone"] != "STR"):
+                            return "RACE_RECOVERY_CONFLICT", "Прогнозното възстановяване след тази доза не достига 90% преди близък старт."
+                    if not is_key and any(
+                        any(r["readiness_percent"] < 90 for r in recovery_v2.simulate(candidate_rows, configs["zones"], target=d)["current"] if r["zone"] in {"Z1", *selected_accents})
+                        for d in key_slots if day < d <= day + timedelta(days=2)
+                    ):
+                        return "RESERVE_KEY_SESSION_RECOVERY", "Леката добавка би затруднила готовността за предстоящата ключова сесия."
+                    return None
+                conflict = recovery_conflict(after_rows)
+                if conflict and allocation is not None:
+                    # A large optional dose failing a future readiness check
+                    # does not mean its minimum complete variant must fail.
+                    minimum_blocks = _blocks(method, method["min_work_min"], evidence, settings)
+                    _, minimum_load, _ = candidate_load(minimum_blocks)
+                    if minimum_blocks and not recovery_conflict(_add_forecast_session(forecast_rows, day, minimum_load)):
+                        lo, hi = method["min_work_min"], work
+                        while hi-lo > .25:
+                            midpoint = (lo+hi)/2
+                            trial = _blocks(method, midpoint, evidence, settings)
+                            _, trial_load, _ = candidate_load(trial)
+                            if trial and not recovery_conflict(_add_forecast_session(forecast_rows, day, trial_load)):
+                                lo = midpoint
+                            else:
+                                hi = midpoint
+                        work = max(method["min_work_min"], math.floor(lo*2)/2)
+                        blocks = _blocks(method, work, evidence, settings)
+                        direct, effective, technical = candidate_load(blocks)
+                        after_rows = _add_forecast_session(forecast_rows, day, effective)
+                        conflict = recovery_conflict(after_rows)
+                        limits.append({"code": "RECOVERY_RESERVATION_WORK_CAP", "limit_minutes": _round(work)})
+                if conflict:
+                    item["rejected_alternatives"].append({"method_id": method["id"], "code": conflict[0], "reason": conflict[1]})
                     continue
-                if not is_key and any(
-                    any(r["readiness_percent"] < 90 for r in recovery_v2.simulate(after_rows, configs["zones"], target=d)["current"] if r["zone"] in {"Z1", *selected_accents})
-                    for d in key_slots if day < d <= day + timedelta(days=2)
-                ):
-                    item["rejected_alternatives"].append({"method_id": method["id"], "code": "RESERVE_KEY_SESSION_RECOVERY", "reason": "Леката добавка би затруднила готовността за предстоящата ключова сесия."})
-                    continue
+                after = recovery_v2.simulate(after_rows, configs["zones"], target=day)
                 total = sum(b["duration_min"] for b in blocks)
                 actual_work = sum(b["duration_min"] for b in blocks if b["kind"] == "WORK")
                 evidence.update(fraction=fraction, requested_work_minutes=_round(requested + evidence.get("combination_high_work_cap", 0.)), prescribed_work_minutes=_round(actual_work),
@@ -1094,7 +1179,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     evidence["combination_allocation"] = "TWO_SESSIONS_ONE_THRESHOLD_WORK_BUDGET"
                     evidence["explanation"] += " Двойният праг дели една обща работна доза между две сесии със собствени загрявки, почивки и разпускане."
                 normalized_deficit = budgets[z]["deficit_effective"] / max(1., budgets[z]["target_weekly_effective"])
-                score = normalized_deficit + (1. if z in selected_accents else 0.)
+                score = (2. * planning_allocation.coverage(effective, allocation, selected_accents)
+                         if allocation is not None else normalized_deficit) + (1. if z in selected_accents else 0.)
                 # Cover qualities over actual execution plus this proposed
                 # week, counting WORK blocks, never warm-up/cascade as coverage.
                 trained_dates = {a["date"] for a in source.get("activities", []) if
@@ -1105,12 +1191,18 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 last_stimulus = max(trained_dates | proposed_dates, default=None)
                 since = (day-date.fromisoformat(last_stimulus)).days if last_stimulus else 28
                 maintenance_need = min(3., since/7)
-                score += maintenance_need - 2.5*len(proposed_dates)
+                score += maintenance_need - (0. if allocation is not None else 2.5*len(proposed_dates))
                 if is_key and len(key_slots) > 1 and day == key_slots[-1] and z not in selected_accents:
                     score += 1.5
                 evidence["selection"] = {"accent": z in selected_accents, "role": purpose,
                                          "days_since_component_work": since, "proposed_component_days": len(proposed_dates),
                                          "maintenance_priority": maintenance_need}
+                if allocation is not None:
+                    evidence["selection"].update(component_allocation={k: _round(v) for k, v in allocation.items()},
+                                                   coverage_score=_round(planning_allocation.coverage(effective, allocation, selected_accents)),
+                                                   endurance_dose_from_weekly_need=endurance_allocation)
+                    if endurance_allocation and purpose == "BUILDING" and z not in selected_accents:
+                        evidence["explanation"] += " За необходимия седмичен аеробен обем е използвана изграждащата доза на метода, въпреки че компонентът не е основен акцент. Дозата остава в зададения треньорски процент и споделя общия бюджет."
                 if is_strength and preferences.get("strength_days") and day.weekday() in preferences["strength_days"]:
                     score += 3.
                 if preferences.get("long_session_day") == day.weekday() and z in {"Z1", "Z2"} and purpose != "RECOVERY":
@@ -1126,7 +1218,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 if method["structure"] in {"ALTERNATING", "CRUISE_ALTERNATING", "AEROBIC_STRENGTH", "THRESHOLD_HIGH"}:
                     score += .15
                 if any(d.get("session", {}).get("method_id") == method["id"] for d in result_days if d.get("session")):
-                    score -= .35
+                    score -= .02 if allocation is not None else .35
                 if method.get("double_threshold"):
                     score += 10.
                 choices.append((score, method["id"], {"method_id": method["id"], "title": method["title"],
@@ -1185,6 +1277,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             combined["status"] = "TRAINING"
             combined["explanation"] = f"{len(combined['sessions'])} сесии · {sum(v['total_minutes'] for v in combined['sessions']):g} минути общо. Общ бюджет по компоненти; готовността е оценена за началото на деня."
     result_days = list(grouped.values())
+    allocation_report = planning_allocation.report(goal_windows, rows, forecast_rows, result_days,
+        sum(slot_counts.values()), session_limit, weekly_minutes) if component_governed and forecast_known and not blocked else None
     parameters = {"version": PARAMETER_VERSION, "status": "COACH_HEURISTICS_FOR_REVIEW",
                   "recovery_mode": "LOAD_ONLY", "ready_threshold_percent": 90,
                   "building_fraction": profile.get("building_fraction", .5), "maintenance_fraction": profile.get("maintenance_fraction", .3),
@@ -1196,6 +1290,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                   "availability_mode": availability_mode, "history_policy": history_policy, "training_sports": training_sports,
                   "planning_controls": controls, "volume_evidence": volume_evidence, "horizon": horizon_context,
                   "schedule_version": planning_schedule.VERSION, "max_sessions_per_day": 3,
+                  "component_allocation_version": planning_allocation.VERSION,
                   "weekly_minutes_ceiling": None if automatic_time else _round(weekly_ceiling),
                   "volume_governor": "COMPONENT_7_40" if component_governed else "LIMITED_HISTORY_ENVELOPE",
                   "mesocycle_week_index": meso_week,
@@ -1230,6 +1325,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             "source": provenance, "periodization": periodization, "days": result_days,
             "long_term": _long_term_outlook(profile, periodization, target_reference, accents, preferences, rows, today, limited, volume=volume, events=events),
             "parameters": parameters, "warnings": warnings, "catalog": catalog(profile),
+            "allocation": allocation_report,
             "history_comparison": volume_evidence["weeks"],
             "summary": {"sessions": sessions, "key_sessions": key_sessions,
                         "planned_minutes": _round(sum(v["total_minutes"] for d in result_days for v in planning_schedule.day_sessions(d))),
