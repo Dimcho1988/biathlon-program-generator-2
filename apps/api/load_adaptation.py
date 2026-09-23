@@ -10,15 +10,30 @@ from biathlon.constants import COMPONENTS
 VERSION = "observed-load-adaptation-v1"
 
 
-def load_observations(entries, rows, test_day):
+def load_observations(entries, rows, test_day, *, test_key=None):
     """Freeze observed load with the outcome test so learning survives imports.
 
     These are actual-data sums, not fitted parameters or synthetic daily loads.
     Saving the report and its observation uses the existing single revision.
     """
     loads = {(r["date"],r["zone"]):r["effective_load"] for r in rows}
+    selected = latest_entries(entries)
+    archived = {}
+    # An edited outcome owns its frozen evidence; another outcome is a fallback.
+    for entry in sorted(selected.values(), key=lambda e: (
+            e["kind"] == "TEST" and e["entry_key"] == test_key,
+            e["payload"].get("day", ""), e["revision"])):
+        if entry["kind"] != "TEST":
+            continue
+        for observation in entry["payload"].get("observed_load_windows", []):
+            if observation.get("basis") == "COMPLETE_ACTUAL_CANONICAL_E":
+                archived[observation["block"]] = {
+                    **observation,
+                    "source": observation.get("source") or entry["payload"].get("load_source"),
+                    "retained_from": {"entry_key": entry["entry_key"], "revision": entry["revision"]},
+                }
     result = []
-    for (kind,key),entry in latest_entries(entries).items():
+    for (kind,key),entry in selected.items():
         b = entry["payload"]
         if kind != "BLOCK" or not b["recovery_end"] < test_day.isoformat() <= (date.fromisoformat(b["recovery_end"])+timedelta(days=14)).isoformat():
             continue
@@ -31,6 +46,10 @@ def load_observations(entries, rows, test_day):
                            "basis":"COMPLETE_ACTUAL_CANONICAL_E", "days_per_window":length,
                            "previous":{z:sum(loads[(d,z)] for d in previous) for z in COMPONENTS},
                            "current":{z:sum(loads[(d,z)] for d in current) for z in COMPONENTS}})
+        elif key in archived:
+            frozen = archived[key]
+            if frozen["start"] == b["start"] and frozen["recovery_end"] == b["recovery_end"]:
+                result.append(frozen)
     return result
 
 

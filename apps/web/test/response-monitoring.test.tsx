@@ -39,6 +39,13 @@ describe("observation contract and interface",()=>{
     expect(html).toContain('fieldset disabled=""');
     expect(html).not.toContain("Задай следващ блок");
   });
+  it.each(["UNAVAILABLE","ARCHIVED"])("shows the retained load evidence status %s",status=>{
+    const h=structuredClone(responseFixture);
+    h.tests=[{kind:"TEST",entry_key:"old-test",revision:2,recorded_at:"2026-09-09T12:00:00Z",
+      payload:{day:"2026-09-01",protocol:"Контролен тест",value:100,unit:"W",load_observation_status:status}}];
+    const html=renderToStaticMarkup(<ResponseMonitoring history={h} canReport canEditPlan/>);
+    expect(html).toContain(status==="UNAVAILABLE"?"Липсва запазена пълна товарна история":"Използва се съхранената товарна история");
+  });
 });
 
 describe("recovery sharing scope",()=>{
