@@ -8,6 +8,8 @@ import {
   type PlanningCalendarResponse,
 } from "../lib/planning-calendar";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+
 const response: PlanningCalendarResponse = {
   configured: true,
   calendar: {
