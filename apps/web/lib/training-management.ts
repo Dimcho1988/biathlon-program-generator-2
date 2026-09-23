@@ -26,12 +26,24 @@ export interface ManagementProfile {
   adaptation_mode: "AUTO" | "REVIEW";
   auto_import_enabled: boolean;
   progression_percent: number;
+  load_progression?: LoadProgression | null;
   component_targets_weekly: Partial<Record<Component, number>>;
   interval_profiles: IntervalDoseProfile[];
   strength_enabled: boolean;
   strength_circuits: number;
   transition_days: number;
   planning_controls?: PlanningControls | null;
+}
+
+export interface LoadProgression {
+  enabled: boolean; low_volume_annual_percent: number; upper_volume_annual_percent: number;
+  ceiling_ratio: number; precompetition_factor: number; competition_factor: number;
+  max_dose_fraction: number; feedback_enabled: boolean;
+}
+export function defaultLoadProgression(): LoadProgression {
+  return { enabled: true, low_volume_annual_percent: 30, upper_volume_annual_percent: 10,
+    ceiling_ratio: 1.3, precompetition_factor: .15, competition_factor: .05,
+    max_dose_fraction: .8, feedback_enabled: true };
 }
 
 export interface CycleDirective {
@@ -74,6 +86,7 @@ export type Component = "Z1" | "Z2" | "Z3" | "Z4" | "Z5" | "STR";
 export const COMPONENTS: Component[] = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"];
 export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string }
 export interface DoseEvidence {
+  applied_structure_fraction?: number; max_dose_fraction?: number; shared_day_structure_fraction?: number;
   capacity_source: string; capacity_minutes: number; target_hr_bpm: number | null; target_speed_kmh: number | null;
   fraction: number; requested_work_minutes: number; prescribed_work_minutes: number;
   limits: Array<{ code: string; limit_minutes: number }>; fallback_reasons: string[]; model_version: string;
@@ -94,7 +107,7 @@ export interface DraftDay {
 export function daySessions(day: DraftDay): DraftSession[] { return day.sessions ?? (day.session ? [day.session] : []); }
 
 export interface PlanProjection {
-  long_term?: unknown; periodization?: unknown; input_snapshot?: unknown; history_comparison?: unknown;
+  long_term?: unknown; periodization?: unknown; input_snapshot?: unknown; history_comparison?: unknown; component_history?: unknown;
 }
 export interface ManagementOutlook extends PlanProjection {
   schema_version: "training-outlook-preview-v1"; profile_revision: number;
@@ -157,6 +170,14 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     || !Object.entries(normalized.component_targets_weekly).every(([k, v]) => COMPONENTS.includes(k as Component) && range(v, 0, 3000))
     || !Array.isArray(normalized.interval_profiles) || normalized.interval_profiles.length > 2) throw new Error("Невалидни правила за адаптация или компонентни цели.");
   const seen = new Set<string>();
+  if (normalized.load_progression != null) {
+    const p = normalized.load_progression;
+    if (!isRecord(p) || typeof p.enabled !== "boolean" || typeof p.feedback_enabled !== "boolean"
+      || !range(p.low_volume_annual_percent, 0, 30) || !range(p.upper_volume_annual_percent, 0, p.low_volume_annual_percent)
+      || !range(p.ceiling_ratio, 1.001, 1.3) || !range(p.precompetition_factor, 0, 1)
+      || !range(p.competition_factor, 0, p.precompetition_factor) || !range(p.max_dose_fraction, .5, .8))
+      throw new Error("Провери годишния прираст и тавана на дозата (до 80%).");
+  }
   if (normalized.planning_controls != null) {
     const c = normalized.planning_controls;
     const allowed = trainingDays(value as unknown as ManagementProfile).filter(d => availabilityMode(value as unknown as ManagementProfile) === "AUTO_HISTORY" || Number((value.available_minutes as number[])[d]) > 0);
@@ -271,7 +292,7 @@ export function defaultManagementProfile(today: string): ManagementProfile {
     recent_weekly_hours: null, reentry_days: null, taper_days: 7, max_key_sessions_per_week: 2,
     building_fraction: .5, maintenance_fraction: .3, reentry_fraction: .4,
     recovery_session_cap_min: 30, allow_expert_fallback: true,
-    adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, component_targets_weekly: {}, interval_profiles: [],
+    adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, load_progression: defaultLoadProgression(), component_targets_weekly: {}, interval_profiles: [],
     strength_enabled: false, strength_circuits: 2, transition_days: 0,
   };
 }

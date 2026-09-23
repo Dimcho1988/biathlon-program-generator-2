@@ -6,8 +6,12 @@ scientifically validated prescriptions. The older audit does not validate
 this subset. Z3 never receives the Z4/Z5 interval exception.
 """
 from copy import deepcopy
+from functools import lru_cache
+from hashlib import sha256
+import json
+from pathlib import Path
 
-VERSION = "training-methods-v5"
+VERSION = "training-methods-v6"
 COMMON = ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "COMPETITION")
 METHODS = (
     {"id": "RUN-REC-EASY-01", "title": "Леко възстановително бягане", "zone": "Z1",
@@ -66,6 +70,14 @@ def resolved_methods(profile):
     No elite source variant inherits numeric defaults from its parent card.
     """
     methods = deepcopy(list(METHODS))
+    if (profile.get("load_progression") or {}).get("enabled"):
+        methods.append({"id": "ONFLOWS-Z3-SUPPORT-01", "title": "Лека тренировка с поддържаща част в Z3", "zone": "Z3",
+            "sports": ("Run", "NordicSki", "RollerSki"), "purpose": "SUPPORTING", "position": .55,
+            "structure": "AEROBIC_SUPPORT", "periods": ("GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION"),
+            "min_work_min": 6., "max_work_min": 20., "warmup_min": 8., "cooldown_min": 5.,
+            "source_id": "ONFLOWS-Z3-SUPPORT-01", "source_version": "1",
+            "instructions": "Лека аеробна част и кратка контролирана част в Z3. Запази резерв; без финално ускоряване.",
+            "adaptation": "Начална треньорска настройка: Z1 е два пъти времето в Z3; сумата от относителните дози е в поддържащия лимит. Използва само оставащия бюджет след ключовите задачи."})
     methods.extend([
         {"id": "END-CROSS-TRAIN-01-Z2", "title": "Равномерна аеробна работа в Z2", "zone": "Z2",
          "sports": ("Run", "NordicSki", "RollerSki"), "purpose": "MAINTENANCE", "position": .5,
@@ -158,6 +170,15 @@ DISABLED_METHODS = (
 )
 
 
+@lru_cache(maxsize=1)
+def source_catalog():
+    data = (Path(__file__).parent / "data" / "methods_v08" / "onflows_training_method_library_v0.8.json").read_bytes()
+    value = json.loads(data)
+    return {"schema_version": value["schema_version"], "revision": value["library_revision"],
+            "sha256": sha256(data).hexdigest(), "method_count":len(value["methods"]),
+            "methods": [{k:m[k] for k in ("id", "title_bg", "activation_state", "source_definition_executable")} for m in value["methods"]]}
+
+
 def catalog(profile=None):
     profile = profile or {}
     disabled = deepcopy(list(DISABLED_METHODS))
@@ -166,8 +187,8 @@ def catalog(profile=None):
             disabled.append({"component": z, "reason": "Добавете индивидуален интервален профил: устойчивост при описаното усилие, повторения, паузи и резерв."})
     if not profile.get("strength_enabled"):
         disabled.append({"component": "STR", "reason": "Включете общата силова подготовка в профила след проверка на упражненията."})
-    return {"version": VERSION, "library_version": "v0.7", "status": "RESOLVED_PROFILES",
+    return {"version": VERSION, "library_version": "v0.8", "status": "RESOLVED_PROFILES", "source_catalog":deepcopy(source_catalog()),
             "methods": resolved_methods(profile), "disabled": disabled,
-            "source": "onflows_training_method_library_v0.7.yaml, revision 8; договорени дозови правила.",
+            "source": "onflows_training_method_library_v0.8.json; изрично разрешени работни профили и договорени дозови правила.",
             "validation": "EXPERT_IMPLEMENTATION_PROFILE_NOT_SCIENTIFIC_VALIDATION",
             "implementation_defaults": "Позицията в зоната, абсолютните граници на работата и неуточнените загрявки/разпускания са видими пилотни настройки, не научни норми."}

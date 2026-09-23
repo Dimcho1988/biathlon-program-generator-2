@@ -1,0 +1,743 @@
+{
+  "schema_version": "onflows-integration-contract-0.8",
+  "language": "bg",
+  "status": "IMPLEMENTATION_SPECIFICATION_NOT_DEPLOYMENT",
+  "verified_date": "2026-09-22",
+  "code": {
+    "checked_at": "2026-09-22",
+    "repository": "Dimcho1988/biathlon-program-generator-2",
+    "branch": "codex/build-end-to-end-cloud-integration",
+    "commit": "5e6933a0364f595ea16634102ec3b039b9f5a3c4",
+    "deployment_verified": false,
+    "files": [
+      {
+        "path": "biathlon/hr_speed.py",
+        "blob_sha": "50974487f666d6d21710a8b374699e789c823524",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/biathlon/hr_speed.py"
+      },
+      {
+        "path": "biathlon/speed_duration.py",
+        "blob_sha": "79acf7bba5dc50cb4e777819c40fe396065bde6b",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/biathlon/speed_duration.py"
+      },
+      {
+        "path": "biathlon/recovery_v2.py",
+        "blob_sha": "939591e7915cb4bad08856decd022d36869336aa",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/biathlon/recovery_v2.py"
+      },
+      {
+        "path": "biathlon/training_methods.py",
+        "blob_sha": "6e0492bbcc6076c7e382fab56775034ffe46261e",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/biathlon/training_methods.py"
+      },
+      {
+        "path": "biathlon/planning_controls.py",
+        "blob_sha": "430d0218ab31ae44f90f9c9b4943c520b30f7f79",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/biathlon/planning_controls.py"
+      },
+      {
+        "path": "biathlon/physiology.py",
+        "blob_sha": "70410d503e597e741a590ea766abada091f68aab",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/biathlon/physiology.py"
+      },
+      {
+        "path": "apps/api/model_service.py",
+        "blob_sha": "f7ba550369a6352604273205ea094a5bd3364429",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/apps/api/model_service.py"
+      },
+      {
+        "path": "apps/api/training_plan_engine.py",
+        "blob_sha": "e7803a3bd769d9f5fb2bbec49bc6854e12a3d581",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/apps/api/training_plan_engine.py"
+      },
+      {
+        "path": "apps/api/trainability.py",
+        "blob_sha": "8c7f4bc5036de9a700e3a180c1f150c62602a74f",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/apps/api/trainability.py"
+      },
+      {
+        "path": "apps/api/trainability_history.py",
+        "blob_sha": "17afa41299be816e6df236f128d5defa52589645",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/apps/api/trainability_history.py"
+      },
+      {
+        "path": "docs/TRAINABILITY_INDEX.md",
+        "blob_sha": "3908e2282715d66269ef0b525f5f1cff8b21e50b",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/docs/TRAINABILITY_INDEX.md"
+      },
+      {
+        "path": "docs/PLANNING_UI_FLOW_BG.md",
+        "blob_sha": "6f94f6431a979f91e9c7880c21dc469aa8b9a133",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/docs/PLANNING_UI_FLOW_BG.md"
+      },
+      {
+        "path": "docs/RECOVERY_SPEED_MODELS.md",
+        "blob_sha": "cff7e53a0d44688957ee4e31c50de8e629bab00d",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/docs/RECOVERY_SPEED_MODELS.md"
+      },
+      {
+        "path": "biathlon/constants.py",
+        "blob_sha": "f690c98e1fc6f2fe8bcc3444f44218d4b5d0cde4",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/biathlon/constants.py"
+      },
+      {
+        "path": "biathlon/equivalence.py",
+        "blob_sha": "c18a19c23d5a2efbd6d79bd9de591660c979bfc8",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/biathlon/equivalence.py"
+      },
+      {
+        "path": "biathlon/training_targets.py",
+        "blob_sha": "c36e7b1da12f1325effe267bd4262a048bbfd500",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/biathlon/training_targets.py"
+      },
+      {
+        "path": "biathlon/periodization.py",
+        "blob_sha": "043417cfd01975a4a6a176fbca28f6e3a6696cdb",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/biathlon/periodization.py"
+      },
+      {
+        "path": "biathlon/planning_schedule.py",
+        "blob_sha": "741c7e30facdcb8a531c5eada86c7856f6efb298",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/biathlon/planning_schedule.py"
+      },
+      {
+        "path": "apps/web/lib/planning-profile.ts",
+        "blob_sha": "000da4af596dc22b0bf76dd20b1b2744ac2915f2",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/apps/web/lib/planning-profile.ts"
+      },
+      {
+        "path": "apps/api/management_schemas.py",
+        "blob_sha": "e4d82f39bc60b38fe7abf71185bb147b30a9c718",
+        "url": "https://github.com/Dimcho1988/biathlon-program-generator-2/blob/5e6933a0364f595ea16634102ec3b039b9f5a3c4/apps/api/management_schemas.py"
+      }
+    ]
+  },
+  "authority": {
+    "current_rules": "integration_contract_v0.8.json",
+    "catalog": "onflows_training_method_library_v0.8.json",
+    "historical_reference": "reference/",
+    "historical_rules_executable": false,
+    "source_numeric_examples_are_prescriptions": false,
+    "code_verified_not_live_deployment": true
+  },
+  "units": {
+    "duration": "s",
+    "speed": "m/s",
+    "display_speed": "km/h",
+    "heart_rate": "bpm",
+    "load": "effective_min",
+    "equivalent_volume": "equivalent_min",
+    "readiness": "percent",
+    "dose_fraction": "dimensionless"
+  },
+  "scope": {
+    "training_domain": "physical_preparation",
+    "supported_primary_sports": [
+      "cross_country_skiing",
+      "biathlon",
+      "running"
+    ],
+    "running_scope": [
+      "middle_distance",
+      "long_distance"
+    ],
+    "generate_shooting_training": false,
+    "selection_collections": [
+      "methods"
+    ],
+    "excluded_collections": [
+      "archived_out_of_scope",
+      "source_registry"
+    ],
+    "source_records_are_not_prescriptions": true,
+    "physical_load_axes": [
+      "Z1",
+      "Z2",
+      "Z3",
+      "Z4",
+      "Z5",
+      "NMS",
+      "STR",
+      "MECH"
+    ],
+    "biathlon_context": {
+      "fields": [
+        "rifle_carried",
+        "rifle_mass_kg",
+        "movement_time_s",
+        "elapsed_time_s",
+        "observed_pause_segments"
+      ],
+      "rule": "Не се предписват изстрели, положения, попадения или стрелкови задачи. Пушката е контекст на двигателния товар. Реални прекъсвания се запазват в хронологията, без да се превръщат в работни минути.",
+      "source_removal_rule": "При премахване на стрелба от комбиниран източник се задава отделна физическа пауза. Не се слепват автоматично работните отсечки и не се приема, че неизвестната пауза е нула.",
+      "external_activity": "Готовността може да отчита умора след външно организирана сесия, без стрелкови формули и отделен стрелков модул."
+    }
+  },
+  "dose_policy": {
+    "status": "COACH_POLICY_NOT_UNIVERSAL_PHYSIOLOGICAL_LAW",
+    "building": [
+      0.5,
+      0.6
+    ],
+    "maintaining": [
+      0.3,
+      0.4
+    ],
+    "reentry_building": [
+      0.4,
+      0.5
+    ],
+    "recovery": {
+      "zones": [
+        "Z1",
+        "Z2"
+      ],
+      "fraction": [
+        0.3,
+        0.4
+      ],
+      "absolute_duration_limit_required": true,
+      "mechanical_limit_required": true
+    },
+    "continuous_dose": "sum(segment_work_s / continuous_capacity_s_at_segment_intensity)",
+    "variable_intensity": "integrate dt / Tref(intensity(t)); no mean-HR shortcut",
+    "mixed_budget": "component limits AND session limits AND day limits; never independent full doses added",
+    "high_interval_ratio_may_exceed_one": true,
+    "high_interval_ratio_requires_individual_profile": true,
+    "high_interval_ratio_not_minimum": true,
+    "no_fraction_applied_twice": true,
+    "strength_or_NMS_uses_metabolic_Tref": false
+  },
+  "capacity": {
+    "public_name": "Tref",
+    "internal_name": "continuous_capacity_s",
+    "meaning_bg": "Оценена максимална непрекъсната продължителност при конкретна интензивност, средство и условия.",
+    "historical_load_reference": "KEEP_EXISTING_CAUSAL_TREF_SEPARATE",
+    "current_adapter": "apps/api/training_plan_engine.py:capacity_for; biathlon/hr_speed.py; biathlon/speed_duration.py",
+    "speed_target_capacity": "inverse_duration(target_speed_mps)",
+    "forbidden": "speed_at(planned_workout_duration) as automatic workout target",
+    "duplicate_volume_or_index_adjustment": false,
+    "missing_data": "return explicit source, quality, limitations; never zero or invented individualized speed",
+    "expert_upper_boundary_s": {
+      "Z1": [
+        7200,
+        18000
+      ],
+      "Z2": [
+        5400,
+        10800
+      ],
+      "Z3": [
+        1800,
+        4800
+      ],
+      "Z4": [
+        600,
+        1800
+      ]
+    },
+    "out_of_range_index_anchor": "EXPERT_MIDPOINT_NOT_NEAREST_BOUND_CLAMP",
+    "conflicting_anchors": "CONFLICTING_ZONE_ANCHORS_ALL_EXPERT_MIDPOINTS",
+    "Z5_HR_continuation_valid_for_prescription": false
+  },
+  "index": {
+    "schema": "trainability-index-v3",
+    "model": "trainability_paired_raw_lag20_v3",
+    "pair": "raw_HR(t+20s) with Vflat(t)",
+    "formula": "(100 * paired_time_weighted_HR / HRmax) / paired_time_weighted_Vflat_kmh",
+    "direction": "lower_is_more_speed_per_relative_HR_under_comparable_conditions",
+    "HRmod_is_input": false,
+    "speed_sorting": false,
+    "window_calendar_days": 40,
+    "includes_today": true,
+    "same_sport_and_profile_required": true,
+    "minimum_activity_s": 420,
+    "minimum_eligible_zone_s": {
+      "Z1": 420,
+      "Z2": 420,
+      "Z3": 420,
+      "Z4": 420,
+      "Z5": 300,
+      "GENERAL": 420
+    },
+    "GENERAL_HRmax_fraction": [
+      0.75,
+      0.92
+    ],
+    "source_status": "ACCEPTED",
+    "stale_model": "REFRESH_REQUIRED",
+    "excluded_from_index_still_in_load": true
+  },
+  "speed_time": {
+    "model": "speed-duration-c1-duration-volume-v2",
+    "test_window_calendar_days": 90,
+    "reference_domain_s": [
+      10.8,
+      43516
+    ],
+    "strict_tests_required_for_individualization": true,
+    "single_test": "expert_shape_scaled_estimate",
+    "reference_only": "MAXIMAL_TEST_REQUIRED",
+    "volume_window": "previous up to 40 completed calendar days excluding today; all sports Q",
+    "volume_correction": "-10% / 0 / +10% duration at low / midpoint / high weekly volume; fades at tests and domain ends",
+    "weekly_Q_ranges_min": {
+      "Z1": [
+        240,
+        840
+      ],
+      "Z2": [
+        60,
+        300
+      ],
+      "Z3": [
+        30,
+        120
+      ],
+      "Z4": [
+        10,
+        40
+      ],
+      "Z5": [
+        5,
+        30
+      ]
+    },
+    "correction_applied_before_HR_map": true,
+    "extrapolated_or_prior_is_not_measured": true
+  },
+  "intensity": {
+    "patterns": [
+      "constant",
+      "ramp",
+      "steps",
+      "alternating"
+    ],
+    "primary_controls": [
+      "HR",
+      "SPEED",
+      "EFFORT_AND_QUALITY"
+    ],
+    "secondary_controls": [
+      "HR",
+      "SPEED",
+      "RPE",
+      "TECHNIQUE"
+    ],
+    "high_Z4_Z5": {
+      "primary": "EFFORT_AND_QUALITY_OR_VALIDATED_SPEED",
+      "HR_role": "OBSERVATION_ONLY",
+      "pulse_chasing_allowed": false,
+      "reserve_and_quality_stop_required": true
+    },
+    "speed_basis_required": [
+      "FLAT_EQUIVALENT",
+      "ACTUAL_TERRAIN",
+      "TRACK"
+    ],
+    "ramp_example": {
+      "duration_s": 1800,
+      "start_HR_bpm": 150,
+      "end_HR_bpm": 160,
+      "following": "hold near 160 only if individual zone and dose profile permits",
+      "status": "ILLUSTRATION_NOT_ATHLETE_PRESCRIPTION"
+    },
+    "no_universal_HRmax_zone_mapping": true
+  },
+  "load": {
+    "T": "elapsed actual time",
+    "Q": "direct equivalent minutes; count once",
+    "E": "effective minutes including existing cascade once",
+    "seven_forty_ratio": "(B50+A7)/(B50+C40)",
+    "B50": "max(base_load, 0.5 * mean(previous 50 daily E))",
+    "weekly_E_target": "max(0,7*(target_ratio*(B50+C40)-B50))",
+    "weekly_target_scope": "same axis and same units as B50 A7 C40",
+    "prospective_window": "day-6 through day inclusive; remove departing day and subtract already committed load",
+    "history_baseline_frozen": true,
+    "fill_remaining_volume_required": false,
+    "new_zone_without_history_auto_enabled": false
+  },
+  "recovery": {
+    "model": "recovery-daily-e-biexponential-v2.2",
+    "gate_percent": 90,
+    "multiply_dose_by_readiness_percent": false,
+    "resolution": "DAY",
+    "intraday_recovery_prediction_supported": false,
+    "baseline": "permanent addition + mean previous up to 40 covered completed daily E",
+    "permanent_addition_E_min_per_day": {
+      "Z1": 40,
+      "Z2": 20,
+      "Z3": 8,
+      "Z4": 4,
+      "Z5": 2,
+      "STR": 8
+    },
+    "hard_seven_day_cap": false,
+    "wellness": "LOAD_ONLY_DIAGNOSTIC_IN_CURRENT_IMPLEMENTATION",
+    "second_session": "shared daily budget; reassess available actual data without fabricated hourly recovery"
+  },
+  "periodization": {
+    "methodical_accents": {
+      "re_entry": {
+        "focus": [
+          "Z1",
+          "small_Z4_Z5_exposures_if_ready",
+          "NMS_technique"
+        ],
+        "building_fraction": [
+          0.4,
+          0.5
+        ],
+        "rules": [
+          "Поляризирана логика, но високата интензивност е кратка и се допуска само след механичен и Recovery шлюз.",
+          "Първо се увеличава честотата на безпроблемните експозиции, после обемът."
+        ]
+      },
+      "general_preparation": {
+        "focus": [
+          "Z2",
+          "Z3",
+          "general_strength",
+          "maximum_strength",
+          "aerobic_volume"
+        ],
+        "rules": [
+          "Паралелно се развиват обем и скорост: постепенно по-дълги устойчиви блокове плюс редки докосвания до гранични зони.",
+          "Вариативността на средствата е висока при ски/биатлон; интензивните сесии в едно и също средство се раздалечават."
+        ]
+      },
+      "special_preparation": {
+        "focus": [
+          "one_or_two_race_specific_sessions_per_week",
+          "mixed_zone_sessions",
+          "Z3",
+          "specific_strength"
+        ],
+        "rules": [
+          "Една или две тренировки моделират състезателната продължителност, терен, техника и преходи.",
+          "Състезателна скорост не означава състезателно усилие; запазва се резерв."
+        ]
+      },
+      "precompetition": {
+        "focus": [
+          "race_specific_load",
+          "Z3_building",
+          "pace_precision",
+          "dynamic_strength"
+        ],
+        "rules": [
+          "При наситен календар отделен дълъг период не е задължителен; стартовете изпълняват част от специфичната функция.",
+          "Обемът се редуцира, а интензивността и честотата обичайно се запазват според индивидуалния отговор."
+        ]
+      },
+      "competition": {
+        "focus": [
+          "competition",
+          "recovery",
+          "minimal_effective_dose",
+          "activation",
+          "technique"
+        ],
+        "rules": [
+          "Поддържат се всички качества с минимална ефективна доза.",
+          "След състезание нормализирана скорост не е достатъчно доказателство за възстановяване."
+        ]
+      },
+      "global_rule": "Фокусът се променя по периоди, но нито едно качество не изчезва напълно без конкретна причина."
+    },
+    "race_duration_policy": {
+      "principle": "Състезателната продължителност определя структурата и специфичността; Tref и готовността определят допустимата доза.",
+      "bands": [
+        {
+          "id": "RD_03_06",
+          "race_duration_min": [
+            3,
+            6
+          ],
+          "examples": [
+            "1500m_running"
+          ],
+          "specific_rep_fraction_of_race_time": [
+            0.15,
+            0.4
+          ],
+          "total_specific_work_fraction_of_race_time": [
+            0.75,
+            1.5
+          ],
+          "control": "intensity_led",
+          "example_family": "3–5 × приблизително 1 min около състезателната скорост за 4-min дисциплина"
+        },
+        {
+          "id": "RD_06_20",
+          "race_duration_min": [
+            6,
+            20
+          ],
+          "examples": [
+            "3000m_running",
+            "5000m_running",
+            "ski_sprint_long_format"
+          ],
+          "specific_rep_fraction_of_race_time": [
+            0.08,
+            0.25
+          ],
+          "total_specific_work_fraction_of_race_time": [
+            0.6,
+            1.4
+          ],
+          "control": "intensity_led"
+        },
+        {
+          "id": "RD_20_60",
+          "race_duration_min": [
+            20,
+            60
+          ],
+          "examples": [
+            "biathlon_sprint",
+            "biathlon_pursuit",
+            "10k_running",
+            "xc_distance"
+          ],
+          "specific_rep_fraction_of_race_time": [
+            0.08,
+            0.2
+          ],
+          "total_specific_work_fraction_of_race_time": [
+            0.5,
+            1.2
+          ],
+          "control": "intensity_led_with_duration_guardrail"
+        },
+        {
+          "id": "RD_60_150",
+          "race_duration_min": [
+            60,
+            150
+          ],
+          "examples": [
+            "half_marathon",
+            "marathon_fast",
+            "ski_marathon"
+          ],
+          "specific_rep_fraction_of_race_time": [
+            0.04,
+            0.12
+          ],
+          "total_specific_work_fraction_of_race_time": [
+            0.3,
+            0.8
+          ],
+          "control": "duration_led",
+          "example_family": "За около 2 h дисциплина: 8–10 × 8–10 min, ако Tref и седмичният контекст го разрешават."
+        },
+        {
+          "id": "RD_150_300",
+          "race_duration_min": [
+            150,
+            300
+          ],
+          "examples": [
+            "marathon_recreational",
+            "ultra_running",
+            "long_ski_events"
+          ],
+          "specific_rep_fraction_of_race_time": [
+            0.03,
+            0.1
+          ],
+          "total_specific_work_fraction_of_race_time": [
+            0.2,
+            0.6
+          ],
+          "control": "duration_and_durability_led"
+        }
+      ],
+      "Z3_rule": {
+        "under_60_min": "Интензивността/позицията в Z3 е водеща; обемът се редуцира първо.",
+        "over_60_min": "Общото устойчиво време е водещо; интензивността може да се премести надолу в зоната.",
+        "transition_50_70_min": "Използва се плавно смесване, а не твърд скок на 60-ата минута."
+      },
+      "warning": "Всички дроби са начални генераторни диапазони, а не доказани универсални рецепти. Крайният бюджет винаги минава през session_dose_engine."
+    },
+    "race_duration_policy_status": "COACH_HEURISTIC_NOT_UNIVERSAL_RECIPE",
+    "under_3_min_events": "EXPLICIT_PROFILE_REQUIRED_800M_NOT_IN_3_6_MIN_BAND",
+    "code_version": "periodization-v2",
+    "base_preparation_days": [
+      7,
+      28,
+      28,
+      14
+    ],
+    "extension_step_days": 14,
+    "extension_weights": [
+      1,
+      5,
+      5,
+      3
+    ],
+    "dense_main_race_gap_days": 14,
+    "default_taper_days": 7,
+    "default_control_taper_days": 2,
+    "default_transition_days": 0,
+    "taper_is_overlay": true,
+    "automatic_end": "last MAIN_RACE plus configured transition",
+    "defaults_are_coach_configuration": true
+  },
+  "scheduling": {
+    "management_model": "training-management-v5",
+    "controls_schema": "management-parameters-v5",
+    "sessions_per_week": [
+      1,
+      21
+    ],
+    "sessions_per_day": [
+      0,
+      3
+    ],
+    "limits_are_not_obligations": true,
+    "threshold_format": [
+      "AUTO",
+      "CONTINUOUS",
+      "INTERVALS"
+    ],
+    "double_threshold_day_limit": 3,
+    "Z4_label_is_not_physiological_threshold_proof": true,
+    "old_web_profile_1_14_needs_compatibility_check": true
+  },
+  "activation": {
+    "states": [
+      "CATALOG_ONLY",
+      "PROFILE_REQUIRED",
+      "READY_FOR_GENERATION",
+      "BLOCKED"
+    ],
+    "import_automatically_activates": false,
+    "required": [
+      "compatible sport and modality",
+      "resolved intensity and dose profile",
+      "fresh enough admissible model sources or explicit expert fallback",
+      "work and recovery structure",
+      "minimum effective dose and maximum limits",
+      "joint session and day load fit",
+      "mechanical suitability",
+      "complete Bulgarian explanations",
+      "source and policy version trace"
+    ],
+    "NMS_plyometrics_current_runtime": "DISABLED_PENDING_MECHANICAL_PROFILE",
+    "book_variant_default": "PROFILE_REQUIRED",
+    "personal_interval_profile_validity_days": 42,
+    "personal_interval_ratio_api_cap": 3,
+    "api_cap_is_methodological_recommendation": false,
+    "reserve_reps_api_range": [
+      1,
+      4
+    ]
+  },
+  "current_interval_defaults": {
+    "status": "EXISTING_CODE_DEFAULTS_NOT_ALL_METHODS",
+    "Z4": {
+      "reps": [
+        3,
+        6
+      ],
+      "work_s": 180,
+      "rest_s": 180,
+      "total_capacity_ratio": 1.2,
+      "reserve_reps": 2
+    },
+    "Z5": {
+      "reps": [
+        6,
+        20
+      ],
+      "work_s": 30,
+      "rest_s": 30,
+      "total_capacity_ratio": 1.5,
+      "reserve_reps": 2
+    },
+    "mixed_Z3_high_recipe": "existing 0.5 + 0.5 allocation is one recipe, not universal split"
+  },
+  "open_integration_issues": [
+    {
+      "id": "I01",
+      "issue": "Personal METABOLIC_INTERVALS path can use unadjusted calibrated test curve while general capacity uses volume-adjusted curve.",
+      "action": "Unify or explicitly justify model basis; record chosen curve fingerprint before claiming equivalent doses."
+    },
+    {
+      "id": "I02",
+      "issue": "Nested controls accept 21 weekly sessions; legacy web profile caps at 14.",
+      "action": "Test actual UI-to-API path; do not assume both describe the same active field."
+    },
+    {
+      "id": "I03",
+      "issue": "Automatic Z4 path internally derives continuous capacity at middle-zone position.",
+      "action": "Do not reuse that capacity for an upper-Z4 speed target without resolving capacity at actual target."
+    },
+    {
+      "id": "I04",
+      "issue": "Only a starter subset of the 42-method catalog is represented in runtime.",
+      "action": "Import by stable IDs; add resolved profiles and adapters before enabling remaining methods."
+    }
+  ],
+  "block_contract": {
+    "required": [
+      "block_id",
+      "type",
+      "duration_s",
+      "intensity",
+      "load_axes",
+      "source_profile_id"
+    ],
+    "types": [
+      "warmup",
+      "drill",
+      "work",
+      "recovery",
+      "transition",
+      "cooldown",
+      "strength",
+      "neuromuscular"
+    ],
+    "structure": "session -> ordered blocks or sets -> repetitions -> work and explicit recovery",
+    "rest_gaps": "n-1 inside each set unless explicit final recovery; separate between-set gap without double counting",
+    "null_means": "UNRESOLVED_NOT_ZERO",
+    "one_second_one_timeline_position": true,
+    "additional_axes_do_not_add_elapsed_time": true,
+    "pace_to_duration": "duration_s = distance_m / speed_mps only with compatible basis"
+  },
+  "explanation_contract": {
+    "language": "bg",
+    "required": [
+      "purpose",
+      "effort",
+      "execution",
+      "success_criteria",
+      "adjustment_rules",
+      "common_errors"
+    ],
+    "session_additions": [
+      "why_today",
+      "resolved_targets",
+      "resolved_reserve",
+      "allowed_adjustment",
+      "stop_conditions"
+    ],
+    "unresolved_placeholders_allowed_in_final_session": false,
+    "LLM_API_required": false,
+    "engine": "deterministic approved templates plus resolved numerical values",
+    "source_variant_inherits_parent_explanation_automatically": false
+  },
+  "source_zone_mapping": {
+    "scope": "the two Bulgarian biathlon Word plans only",
+    "map": {
+      "КР": "Z1",
+      "АР1": "Z2",
+      "АР2": "Z3",
+      "СР": "Z4",
+      "АнР": "Z5"
+    },
+    "foreign_book_or_Norway_mapping_requires_resolution": true
+  }
+}

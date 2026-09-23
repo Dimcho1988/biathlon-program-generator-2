@@ -59,13 +59,15 @@ def outlook(repository, alias, *, now=None):
                                        reentry_days_override=reentry_days,
                                        taper_days=profile["taper_days"], transition_days=profile["transition_days"])
     phases["entry_basis"] = {"days_override": reentry_days, "reason": reentry_reason}
+    progression = engine.progression_context(repository, alias, profile, source, rows, today)
     projection = engine._long_term_outlook(profile, phases, reference, accents, preferences, rows, today,
-                                         limited, volume=volume, events=calendar["events"])
+                                         limited, volume=volume, events=calendar["events"], progression=progression)
     return {"configured": True, "outlook": {
         "schema_version": "training-outlook-preview-v1", "profile_revision": stored["revision"],
         "generated_at": now.isoformat(), "engine_version": engine.VERSION,
         "source": {"generation_id": analysis.get("generation_id"), "revision": analysis.get("revision"), "as_of": source.get("period_end")},
         "periodization": phases, "long_term": projection, "history_comparison": history["weeks"],
+        "component_history": engine.load_progression.history(source, rows, today),
         "input_snapshot": {"calendar": calendar, "profile_revision": stored["revision"], "horizon": horizon,
                            "planning_controls": controls},
         "volume_context": {**volume, "available_weekly_minutes": sum(engine.planning_history.availability(profile)) if engine.planning_history.availability_mode(profile) == "MANUAL" else None,
@@ -82,7 +84,7 @@ def _payload(value):
     return value.to_payload() if value is not None else None
 
 
-def input_state(repository, alias, *, evaluated_at=None):
+def input_state(repository, alias, *, evaluated_at=None, include_response=False):
     """Capture settings and source identity; never store credentials or wellness."""
     settings = repository.athlete_settings(alias)
     analysis = repository.active_analysis(alias) or {}
@@ -102,6 +104,7 @@ def input_state(repository, alias, *, evaluated_at=None):
         "analysis_revision": analysis.get("revision"),
         "analysis_as_of": analysis.get("analysis_as_of"),
         "snapshot_fingerprint": _hash(analysis.get("snapshot_payload")),
+        "response_fingerprint": _hash(training_plan_engine.ResponseStore(repository).entries(alias)) if include_response else None,
         "physiology": None if settings is None else {
             "zone_bounds_bpm": list(settings.zone_bounds_bpm),
             "hrmax_bpm": settings.hrmax_bpm,
@@ -137,12 +140,13 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
     resolved, _ = training_plan_engine.planning_schedule.horizon(profile.model_dump(mode="json"), calendar["events"])
     if start_date < profile.program_start or start_date > date.fromisoformat(resolved["program_end"]):
         raise HTTPException(422, "The draft must start within the planning period")
-    before = input_state(repository, alias, evaluated_at=now)
+    include_response = bool(profile.load_progression and profile.load_progression.enabled and profile.load_progression.feedback_enabled)
+    before = input_state(repository, alias, evaluated_at=now, include_response=include_response)
     payload = training_plan_engine.generate_plan(
         repository, alias, profile.model_dump(mode="json"), start_date=start_date, now=now,
         decisions=decisions, locked_day=locked_day,
     )
-    after = input_state(repository, alias, evaluated_at=now)
+    after = input_state(repository, alias, evaluated_at=now, include_response=include_response)
     if _hash(before) != _hash(after):
         raise HTTPException(409, "Analysis or planning inputs changed; generate a new draft")
     source_generation = (payload.get("source") or {}).get("generation_id")
@@ -175,8 +179,9 @@ def history(repository, alias, *, start_date=None):
         return {"drafts": []}
     try:
         profile = store.profile(alias)
-        state = input_state(repository, alias)
         normalized = ManagementProfile.model_validate(profile["profile"]).model_dump(mode="json") if profile["profile"] else None
+        progression = training_plan_engine.load_progression.settings(normalized or {})
+        state = input_state(repository, alias, include_response=bool(progression and progression["feedback_enabled"]))
         fingerprint = _hash({**state, "management_profile": normalized,
                              "profile_revision": profile["revision"]})
     except PersistentStoreFailure:

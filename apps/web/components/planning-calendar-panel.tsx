@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { PlanningRangeCalendar } from "./planning-range-calendar";
 import {
   PLANNING_EVENT_TYPES,
   type PlanningCalendarEvent,
@@ -26,8 +27,10 @@ const emptyEvent = (): PlanningCalendarEvent => ({
 
 export function PlanningCalendarPanel({
   response,
+  today,
 }: {
   response: PlanningCalendarResponse;
+  today?: string;
 }) {
   const [events, setEvents] = useState<PlanningCalendarEvent[]>(
     response.calendar?.events ?? [],
@@ -61,6 +64,7 @@ export function PlanningCalendarPanel({
           {response.configured ? `${response.calendar?.events.length ?? 0} запазени` : "Незаписан"}
         </span>
       </div>
+      {today&&<PlanningRangeCalendar today={today} events={events} onSelect={(start_date,end_date)=>setEvents(current=>[...current,{...emptyEvent(),start_date,end_date}])}/>}
       <form className="planning-calendar-form" action="/api/athlete/planning-calendar" method="post">
         <input type="hidden" name="schema_version" value="planning-calendar-v1" />
         <input type="hidden" name="events_json" value={JSON.stringify(canonicalEvents)} />
