@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { PlanComparison } from "./plan-comparison";
+import { LoadProgressionSummary } from "./load-progression-summary";
 import { useState } from "react";
 import { isRecord } from "../lib/training-status";
 import { COMPONENTS, PHASE_LABELS, type Component, type PlanProjection, type PlanOutcome } from "../lib/training-management";
@@ -38,6 +39,7 @@ export function TrainingPlanOverview({ plan, outcomes, today, stale, currentProf
   const x = (index: number) => 60 + index * 770 / Math.max(1, weeks.length - 1);
   const y = (value: number) => 260 - value * 220 / maximum;
   return <section className="management-overview" aria-label="Дългосрочна подготовка">
+    <LoadProgressionSummary plan={plan}/>
     {volumeContext && <section className="management-panel"><h2>Обем на подготовката</h2>
       <p className="management-muted">Актуални цели от записания профил · версия {currentProfileRevision}. Промените в профила се отразяват тук при отваряне; седмичните тренировки се подготвят отделно.</p>
       <div className="management-metrics"><div><small>Историческа основа за програмата</small><strong>{display(numeric(volumeContext.historical_training_weekly_minutes) === null ? null : Number(volumeContext.historical_training_weekly_minutes)/60)} ч</strong><span>средно за 7 дни</span></div><div><small>Налично време</small><strong>{volumeContext.availability_mode==="AUTO_HISTORY"?"Автоматично":`${display(numeric(volumeContext.available_weekly_minutes)===null?null:Number(volumeContext.available_weekly_minutes)/60)} ч`}</strong><span>{volumeContext.availability_mode==="AUTO_HISTORY"?"от историята и 7/40":"за 7 дни"}</span></div><div><small>Ориентировъчен обем за седмицата</small><strong>{display(current?.volume_budget_minutes == null ? null : current.volume_budget_minutes/60)} ч</strong><span>еквивалент при досегашната структура</span></div></div>

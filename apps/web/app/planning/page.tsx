@@ -1,4 +1,4 @@
-import { getManagementProfile } from "../../lib/management-server";
+import { getManagementProfile, getManagementOutlook } from "../../lib/management-server";
 import "../management/management.css";
 import { ErrorState } from "../../components/error-state";
 import { PlanningProfileForm } from "../../components/planning-profile-form";
@@ -45,10 +45,12 @@ export default async function PlanningPage({
   let result: Awaited<ReturnType<typeof getAthletePlanningProfile>> | null = null;
   let accentPreferences: Awaited<ReturnType<typeof getMesocycleAccentPreferences>> | undefined;
   let planningCalendar;
+  let outlook;
   try {
-    [planningCalendar, managementProfile] = await Promise.all([
+    [planningCalendar, managementProfile, outlook] = await Promise.all([
       getPlanningCalendar(athleteAlias),
       getManagementProfile(athleteAlias, athlete.actorUserId),
+      getManagementOutlook(athleteAlias, athlete.actorUserId).catch(()=>null),
     ]);
     if (!managementProfile.profile?.planning_controls) {
       [result, accentPreferences] = await Promise.all([
@@ -64,6 +66,7 @@ export default async function PlanningPage({
   }
   return <PlanningProfileForm
     managementProfile={managementProfile}
+    outlook={outlook}
     athleteAlias={athleteAlias}
     profile={result?.profile??null}
     accentPreferences={accentPreferences}

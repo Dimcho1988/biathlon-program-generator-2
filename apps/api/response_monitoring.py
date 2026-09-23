@@ -15,6 +15,13 @@ class InputModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_revision: int = Field(default=0, ge=0, strict=True)
 
+    @model_validator(mode="after")
+    def unique_components(self):
+        components = getattr(self, "components", [])
+        if len(set(components)) != len(components):
+            raise ValueError("Components must be distinct")
+        return self
+
 
 class DailyReport(InputModel):
     day: date
@@ -41,6 +48,7 @@ class ResponseBlock(InputModel):
     load_end: date
     recovery_end: date
     phase: Literal["BUILD", "MAINTAIN", "RECOVERY", "TAPER"]
+    components: list[Literal["Z1", "Z2", "Z3", "Z4", "Z5", "STR"]] = Field(default_factory=list, max_length=6)
     note: str = Field(default="", max_length=500)
 
     @model_validator(mode="after")
@@ -59,6 +67,8 @@ class OptionalTest(InputModel):
     direction: Literal["HIGHER", "LOWER"]
     conditions: str = Field(min_length=3, max_length=500)
     comparable: bool = False
+    components: list[Literal["Z1", "Z2", "Z3", "Z4", "Z5", "STR"]] = Field(default_factory=list, max_length=6)
+    meaningful_change_percent: float = Field(default=1., gt=0, le=20, allow_inf_nan=False)
 
 
 def number(v):

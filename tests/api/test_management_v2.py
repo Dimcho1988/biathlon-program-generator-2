@@ -30,16 +30,17 @@ def plan(repo=None, **changes):
                                 start_date=TODAY + timedelta(days=1), now=NOW)
 
 
-def test_effort_profile_can_exceed_continuous_capacity_with_whole_repetitions():
+def test_effort_profile_whole_repetitions_respect_eighty_percent_structure_cap():
     repo = Repository()
     repo.accents.update(accent_mode="MANUAL", manual_components=["Z4"])
     result = plan(repo, interval_profiles=[interval()])
     high = next(d["session"] for d in result["days"] if d["session"] and d["session"]["zone"] == "Z4")
     work = [b for b in high["blocks"] if b["kind"] == "WORK"]
     rests = [b for b in high["blocks"] if b["kind"] == "RECOVERY"]
-    assert len(work) == 5 and len(rests) == 4
-    assert high["main_work_minutes"] == 15 > high["dose_evidence"]["capacity_minutes"]
-    assert high["total_minutes"] == 15 + 12 + 15 + 10
+    assert len(work) == 4 and len(rests) == 3
+    assert high["main_work_minutes"] == 12
+    assert high["main_work_minutes"] <= .8*high["dose_evidence"]["capacity_minutes"]*1.25
+    assert high["total_minutes"] == 12 + 9 + 15 + 10
     assert all(b["target_hr_bpm"] is None and b["duration_min"] == 3 for b in work)
     assert high["canonical_effective_load"]["STR"] == 0
 

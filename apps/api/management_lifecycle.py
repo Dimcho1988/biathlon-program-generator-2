@@ -23,7 +23,9 @@ def _context(repository, alias, now):
     if not stored["configured"]:
         raise HTTPException(409, "Configure a planning profile first")
     profile = ManagementProfile.model_validate(stored["profile"]).model_dump(mode="json")
-    state = management_service.input_state(repository, alias, evaluated_at=now)
+    progression = management_service.training_plan_engine.load_progression.settings(profile)
+    state = management_service.input_state(repository, alias, evaluated_at=now,
+        include_response=bool(progression and progression["feedback_enabled"]))
     frozen = {**state, "management_profile": profile, "profile_revision": stored["revision"]}
     # Calendar/preferences edits and new speed observations are ordinary input
     # changes. New dosing rules, physiology or Recovery settings need approval.
@@ -194,8 +196,10 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
         if resume:
             payload["approved_by"] = str(actor)
     else:
+        illness_hold = any(w["code"] == "REPORTED_ILLNESS_OR_PAIN" for w in plan.get("warnings", []))
         payload.update(status="REVIEW_REQUIRED", proposal=plan,
-                       reason="Нужен е преглед на променените правила." if needs_rule_approval else
+                       reason="Новите задачи са задържани за преглед заради съобщена болка или заболяване." if illness_hold else
+                       "Нужен е преглед на променените правила." if needs_rule_approval else
                        "Предложената адаптация очаква утвърждаване." if _eligible(plan) else
                        "Липсват достатъчно актуални данни за следващата доза. Обновете активностите и прегледайте причините.")
         operation = "REVIEW"

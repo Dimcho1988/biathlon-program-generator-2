@@ -48,6 +48,7 @@ def sources(repository, alias, start, end):
     snapshot = calendar.get("snapshot_payload") or {}
     return {"timezone":settings.timezone,"generation_id":calendar.get("generation_id"),
         "revision":calendar.get("revision"),"wellness":snapshot.get("wellness_calendar") or [],
+        "load_history":snapshot.get("load_history") or {},
         "activities":calendar.get("activities") or []}
 
 
@@ -118,4 +119,13 @@ def save_report(repository, alias, kind, body, actor, now=None):
         key = sha256(f"{body.day}:{body.protocol}:{body.protocol_version}".encode()).hexdigest()[:32]
         day = body.day.isoformat()
         payload["automatic_weight"] = 0
+        # Persist actual load windows with the outcome, so the learner retains
+        # its observations after the import's rolling history has moved on.
+        from .load_adaptation import load_observations
+        data = sources(repository,alias,today-timedelta(days=89),today)
+        source = data["load_history"]
+        rows = [*source.get("daily", []), *[{**r,"zone":"STR"} for r in source.get("strength", {}).get("daily", [])]]
+        quality = source.get("quality") or {}
+        payload["observed_load_windows"] = [] if quality.get("limited_activities") or quality.get("excluded_activities") else load_observations(store.entries(alias), rows, body.day)
+        payload["load_source"] = {"generation_id":data["generation_id"],"revision":data["revision"]}
     return store.save(alias,kind,key,day,payload,body.expected_revision,str(actor))

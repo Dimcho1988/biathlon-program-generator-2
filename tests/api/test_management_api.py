@@ -222,7 +222,7 @@ def test_draft_history_marks_changed_inputs_without_rewriting_evidence(api, monk
     rows = [{"revision": 1, "payload": {"input_fingerprint": fingerprint, "days": []}}]
     frozen = deepcopy(rows)
     monkeypatch.setattr(store, "drafts", lambda _: rows)
-    monkeypatch.setattr(service, "input_state", lambda *_: deepcopy(state))
+    monkeypatch.setattr(service, "input_state", lambda *_, **__: deepcopy(state))
     fresh = service.history(repository, "ath-test")["drafts"][0]
     assert fresh["stale"] is False and fresh["stale_reason"] is None
     state["analysis_revision"] = 2
@@ -235,7 +235,7 @@ def test_draft_history_retains_evidence_if_freshness_cannot_be_checked(api, monk
     _, store, repository = api
     monkeypatch.setattr(store, "drafts", lambda _: [{"revision": 1, "payload": {"days": []}}])
 
-    def unavailable(*_):
+    def unavailable(*_, **__):
         raise PersistentStoreFailure("temporary service failure")
 
     monkeypatch.setattr(service, "input_state", unavailable)
