@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from apps.api import main, management_service as service
+from apps.api import main, model_service, management_service as service
 from apps.api.management_schemas import ManagementProfile, ManagementGenerateRequest
 from apps.api.oauth_store import PersistentStoreFailure
 
@@ -56,6 +56,7 @@ def api(monkeypatch):
     store = Store()
     repository = SimpleNamespace(athlete_settings=lambda alias: SimpleNamespace(timezone="Europe/Sofia"))
     monkeypatch.setattr(main, "_repository", lambda: repository)
+    monkeypatch.setattr(model_service, "speed_view", lambda *args, **kwargs: {"status":"REFERENCE_ONLY"})
     monkeypatch.setattr(main, "ManagementStore", lambda repo: store)
     monkeypatch.setattr(service, "ManagementStore", lambda repo: store)
     return TestClient(main.app), store, repository
@@ -265,3 +266,21 @@ def test_dated_history_requests_latest_version_for_that_start_date(api, monkeypa
     assert result.status_code == 200
     assert calls == [(repository, "ath-test", date(2026, 9, 22))]
     assert client.get("/api/v2/athlete/management/drafts?start_date=2026-02-30", headers=HEADERS).status_code == 422
+
+
+def test_race_duration_preview_is_scoped_and_does_not_save_profile(api, monkeypatch):
+    from apps.api import race_duration
+    client, store, repository = api
+    calls=[]
+    def preview(repo,alias,p):
+        calls.append((repo,alias,p))
+        return {"source":"MANUAL","duration_min":12}
+    monkeypatch.setattr(race_duration,"preview",preview)
+    url="/api/v2/athlete/management/race-duration"
+    body={"sport":"NordicSki","discipline":"7.5 km sprint","race_duration_min":12}
+    assert client.post(url,json=body).status_code==401
+    assert client.post(url,json={**body,"sport":"RollerSki"},headers=HEADERS).status_code==422
+    result=client.post(url,json=body,headers=HEADERS)
+    assert result.status_code==200 and result.json()["duration_min"]==12
+    assert calls==[(repository,"ath-test",body)]
+    assert not store.saved

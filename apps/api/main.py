@@ -97,10 +97,10 @@ from .sync_contracts import PUBLIC_SCOPE_BY_JOB_KIND
 from .training_status import build_demo_training_status
 from .response_monitoring import DailyReport, SessionReport, ResponseBlock, OptionalTest
 from . import response_service
-from . import model_service
+from . import model_service, race_duration
 from .model_schemas import RecoveryConfigInput, SpeedTestInput, ManualSpeedTestInput, RecoveryHistoryV2
 from .management_schemas import (ManagementProfileWrite, ManagementGenerateRequest,
-                                 ManagementActivateRequest, ManagementPlanAction, ManagementDayAction)
+                                 ManagementActivateRequest, ManagementPlanAction, ManagementDayAction, RaceDurationRequest)
 from .management_store import ManagementStore
 from . import management_service
 from . import management_lifecycle
@@ -118,6 +118,19 @@ def _model_alias(authorization, athlete_alias):
     if not alias:
         raise HTTPException(401, "Athlete session is required")
     return alias
+
+
+@app.post("/api/v2/athlete/management/race-duration")
+def management_race_duration(
+    body: RaceDurationRequest,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+):
+    alias = _model_alias(authorization, athlete_alias)
+    try:
+        return race_duration.preview(_repository(), alias, body.model_dump())
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Race duration is temporarily unavailable") from exc
 
 
 @app.get("/api/v2/athlete/management/profile")

@@ -63,7 +63,10 @@ def history(repository, alias, start, end, now=None):
     if start>end or (end-start).days>=90 or end>today:
         raise HTTPException(422,"Choose a past or current period of 1 to 90 days")
     data = sources(repository,alias,start-timedelta(days=60),end)
-    result = build_history(entries=ResponseStore(repository).entries(alias),wellness=data["wellness"],activities=data["activities"],start=start,end=end,today=today)
+    from .load_adaptation import symptom_context
+    entries = ResponseStore(repository).entries(alias)
+    result = build_history(entries=entries,wellness=data["wellness"],activities=data["activities"],start=start,end=end,today=today)
+    result["symptom_context"] = symptom_context(entries, today)
     result.update({"timezone":data["timezone"],"generation_id":data["generation_id"],"revision":data["revision"]})
     return result
 

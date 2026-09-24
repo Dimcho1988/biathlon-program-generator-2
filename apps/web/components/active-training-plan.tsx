@@ -1,5 +1,6 @@
 "use client";
 
+import { SymptomNotice } from "./symptom-notice";
 import { TrainingPlanWeek } from "./training-plan-week";
 import { SyncActionForm } from "./sync-action-form";
 import { hasProgramDays } from "../lib/management-guidance";
@@ -21,6 +22,9 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay 
   if (!record) return null;
   const p = record.payload;
   const display = p.proposal ?? p.plan;
+  const progression = isRecord(display.parameters?.load_progression) ? display.parameters?.load_progression : {};
+  const feedback = isRecord(progression.adaptation) ? progression.adaptation : {};
+  const symptomHold = display.warnings.some(w => w.code === "REPORTED_ILLNESS_OR_PAIN");
   async function mutate(endpoint: string, body: Record<string, unknown>) {
     setBusy(true); setError("");
     try {
@@ -34,7 +38,7 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay 
   const actionsDisabled = !canEdit || busy;
   return <section className="management-active" aria-label="Активна тренировъчна програма">
     <div className="management-panel management-current-heading"><div><p className="eyebrow">Текущ план · версия {record.revision}</p><h2>{STATE[p.status]}</h2>
-      <p>{p.mode === "AUTO" ? "Следващите дни се адаптират автоматично след нов анализ и при смяна на деня." : "Адаптациите се предлагат за утвърждаване."}</p><p>{p.reason}</p></div>
+      <p>{p.mode === "AUTO" ? "Следващите дни се адаптират автоматично след нов анализ и при смяна на деня." : "Адаптациите се предлагат за утвърждаване."}</p>{!symptomHold && <p>{p.reason}</p>}</div>
       <div className="management-actions">
         {p.status !== "COMPLETED" && <button type="button" className="action-button secondary" disabled={actionsDisabled} onClick={() => mutate("action", { action: p.status === "PAUSED" ? "RESUME" : "PAUSE" })}>{p.status === "PAUSED" ? "Продължи с текущите настройки" : "Пауза"}</button>}
         {p.status !== "PAUSED" && p.status !== "COMPLETED" && <button type="button" className="action-button" disabled={actionsDisabled} onClick={() => mutate("action", { action: "REFRESH" })}>{busy ? "Обновяване…" : "Обнови сега"}</button>}
@@ -43,7 +47,7 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay 
     {error && <p className="management-error" role="alert">{error}</p>}
     {record.stale && <p className="management-notice" role="status">{record.stale_reason} Последната версия е показана само за справка.</p>}
     {p.status === "REVIEW_REQUIRED" && <div className="management-notice"><p>Предложението по-долу още не е действаща задача.</p>
-      {p.proposal?.activation_eligible === true ? <button type="button" className="action-button" disabled={actionsDisabled || record.stale} onClick={() => mutate("action", { action: "APPROVE" })}>Утвърди актуалната адаптация</button> : canEdit ? <SyncActionForm scope="FULL" returnTo="/management" label="Обнови тренировките" /> : <p>Треньорът трябва да прегледа актуалните данни.</p>}
+      {symptomHold ? <SymptomNotice day={feedback.latest_report_day}/> : p.proposal?.activation_eligible === true ? <button type="button" className="action-button" disabled={actionsDisabled || record.stale} onClick={() => mutate("action", { action: "APPROVE" })}>Утвърди актуалната адаптация</button> : canEdit ? <SyncActionForm scope="FULL" returnTo="/management" label="Обнови тренировките" /> : <p>Треньорът трябва да прегледа актуалните данни.</p>}
     </div>}
     {p.changes.length > 0 && <details className="management-panel"><summary>Какво се промени и защо · {p.changes.length} дни</summary><ul>{p.changes.map(change => <li key={change.date}><strong>{change.date}:</strong> {change.before ? `${change.before} → ` : ""}{change.after}<p>{change.reason}</p></li>)}</ul></details>}
     {p.status !== "COMPLETED" && hasProgramDays(display) && <div className={`management-days ${record.actionable ? "" : "management-reference"}`}><TrainingPlanWeek days={display.days} today={today} renderDay={day => <div key={day.date}>

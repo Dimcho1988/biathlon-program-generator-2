@@ -53,6 +53,23 @@ def load_observations(entries, rows, test_day, *, test_key=None):
     return result
 
 
+def symptom_context(entries, today):
+    selected = latest_entries(entries)
+    daily = {key:e["payload"] for (kind,key),e in selected.items() if kind == "DAILY" and key <= today.isoformat()}
+    day = max(daily) if daily else None
+    return {"latest_report_day": day,
+            "report_age_days": (today-date.fromisoformat(day)).days if day else None,
+            "hold_for_reported_illness_or_pain": bool(day and daily[day].get("pain_or_illness"))}
+
+
+def symptom_message(context):
+    day = context.get("latest_report_day")
+    label = date.fromisoformat(day).strftime("%d.%m.%Y") if day else "неуточнена дата"
+    return (f"В последната записана оценка от {label} има отметка за болка или заболяване. "
+            "Това е сигнал от този отчет, а не нова оценка на текущото състояние. "
+            "Запишете актуална сутрешна оценка в „Стрес и възстановяване“, след което обновете програмата.")
+
+
 def assess(entries, today, *, rows=()):
     selected = latest_entries(entries)
     daily = {key:e["payload"] for (kind,key),e in selected.items() if kind == "DAILY" and key <= today.isoformat()}
@@ -138,11 +155,10 @@ def assess(entries, today, *, rows=()):
                              "subjective_status":summary["status"], "coverage":round(coverage,3)})
     # Silence does not establish recovery from an explicit illness/pain report.
     # A newer report clears it; the flag is not a learned capacity estimate.
-    recent = daily[max(daily)] if daily else None
-    hold = bool(recent and recent.get("pain_or_illness"))
+    symptom = symptom_context(entries, today)
     return {"version":VERSION, "as_of":today.isoformat(), "global":global_state,
-            "latest_report_day":max(daily) if daily else None,
-            "components":components, "evidence":evidence, "hold_for_reported_illness_or_pain":hold,
+            **symptom,
+            "components":components, "evidence":evidence,
             "recovery_is_input":False, "missing_feedback_is_positive":False,
             "basis":"REPLAY_OF_PERSISTED_COMPLETED_BLOCKS_AND_COMPARABLE_TESTS",
             "settings":{"minimum_coverage":.7, "negative_growth_multiplier":.75,

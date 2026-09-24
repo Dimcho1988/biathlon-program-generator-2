@@ -107,7 +107,7 @@ export interface DraftDay {
 export function daySessions(day: DraftDay): DraftSession[] { return day.sessions ?? (day.session ? [day.session] : []); }
 
 export interface PlanProjection {
-  long_term?: unknown; periodization?: unknown; input_snapshot?: unknown; history_comparison?: unknown; component_history?: unknown;
+  race_duration?: unknown; parameters?: Record<string, unknown>; long_term?: unknown; periodization?: unknown; input_snapshot?: unknown; history_comparison?: unknown; component_history?: unknown;
 }
 export interface ManagementOutlook extends PlanProjection {
   schema_version: "training-outlook-preview-v1"; profile_revision: number;
@@ -206,6 +206,12 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     const controlEnd = normalized.horizon_mode === "MANUAL" ? value.program_end : new Date(Date.parse(value.program_start)+365*86400000).toISOString().slice(0,10);
     let occupiedEnd = "";
     for (const d of [...c.cycles].filter(isRecord).sort((a,b) => String(a.start_date).localeCompare(String(b.start_date)))) {
+      if (isCalendarDate(d.start_date) && d.start_date < value.program_start)
+        throw new Error(`Блокът „${d.name}“ започва на ${d.start_date}, преди началото на програмата ${value.program_start}. Промени началото на програмата или датите на блока в календара.`);
+      if (isCalendarDate(d.end_date) && d.end_date > controlEnd)
+        throw new Error(`Блокът „${d.name}“ завършва след края на програмата ${controlEnd}. Промени периода или датите на блока.`);
+      if (isCalendarDate(d.start_date) && d.start_date <= occupiedEnd)
+        throw new Error(`Блокът „${d.name}“ се застъпва с предишен блок или разтоварването му до ${occupiedEnd}. Промени датите в календара.`);
       if (!isRecord(d) || !isCalendarDate(d.start_date) || !isCalendarDate(d.end_date) || d.end_date < d.start_date
         || d.start_date < value.program_start || d.end_date > controlEnd || d.start_date <= occupiedEnd
         || typeof d.name !== "string" || !d.name.trim() || d.name.length > 80 || !["BUILD", "MAINTAIN", "STRESS", "RECOVERY"].includes(String(d.kind))

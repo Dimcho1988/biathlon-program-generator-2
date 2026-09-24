@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { PlanComparison } from "./plan-comparison";
 import { LoadProgressionSummary } from "./load-progression-summary";
+import { RaceDurationSummary } from "./race-duration-estimate";
 import { useState } from "react";
 import { isRecord } from "../lib/training-status";
 import { COMPONENTS, PHASE_LABELS, type Component, type PlanProjection, type PlanOutcome } from "../lib/training-management";
@@ -46,7 +47,7 @@ export function TrainingPlanOverview({ plan, outcomes, today, stale, currentProf
       {typeof volumeContext.available_weekly_minutes === "number" && Number(volumeContext.available_weekly_minutes) < Number(volumeContext.historical_training_weekly_minutes) && <p className="management-notice">Записаното свободно време е по-малко от историческия обем и ограничава програмата. <Link href="/planning">Провери дните и минутите в профила →</Link></p>}
       <p className="management-muted">Историята е началната база; 7/40 задава целевия товар по зони. Часовете са ориентир при досегашното съотношение между време и товар, а не лимит. Точният обем зависи от методите и дневната готовност. При изключена сила нейното време се отделя.</p>
     </section>}
-    <section className="management-panel"><h2>Посока на подготовката</h2>
+    <section className="management-panel"><h2>Посока на подготовката</h2><RaceDurationSummary value={plan?.race_duration ?? plan?.parameters?.race_duration}/>
       {!plan ? <p>Запази профил за планиране, за да видиш разпределението според целите и календара.</p> : <>
         {stale && <p className="management-notice">Показана е запазената версия. Преизчисли програмата от седмичния изглед, за да включиш последните данни.</p>}
         <div className="management-phase-list">{phases.map((p, i) => <div key={i} className={label(p.start_date) <= today && label(p.end_date) >= today ? "is-current" : ""}><span>{shortDate(label(p.start_date))} – {shortDate(label(p.end_date))}</span><strong>{PHASE_LABELS[label(p.kind)] ?? label(p.kind)}</strong><small>{label(p.days)} дни</small></div>)}</div>

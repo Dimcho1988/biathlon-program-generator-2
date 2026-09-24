@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { TrainingManagement } from "../components/training-management";
 import { currentAuthorizedAthlete } from "../lib/account-access";
 import { availabilityMode, trainingDays, defaultPlanningControls, defaultManagementProfile, parseDraftRecord, parseDrafts, parseManagementProfile, parseManagementProfileResponse, parseManagementOutlook, COMPONENTS } from "../lib/training-management";
+import { revalidatePath } from "next/cache";
 import { GET, POST, PUT } from "../app/api/athlete/management/[...path]/route";
 
 vi.mock("../lib/account-access", () => ({ currentAuthorizedAthlete: vi.fn() }));
@@ -170,6 +171,17 @@ describe("management API access and optimistic revision", () => {
     expect((await GET(invalid, context("drafts"))).status).toBe(422);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
+  it("previews duration with trusted scope and without invalidating saved plans", async () => {
+    const body={discipline:"7.5 km",sport:"NordicSki",race_duration_min:22};
+    expect((await POST(request("POST", {...body,athlete_alias:"forged"}),context("race-duration"))).status).toBe(200);
+    expect(JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string)).toEqual(body);
+    expect(revalidatePath).not.toHaveBeenCalled();
+    expect((await POST(request("POST", {...body,sport:"RollerSki"}),context("race-duration"))).status).toBe(422);
+    expect((await POST(request("POST", body,"https://attacker.test"),context("race-duration"))).status).toBe(403);
+    vi.mocked(currentAuthorizedAthlete).mockResolvedValue({...access,canEditPlan:false});
+    expect((await POST(request("POST", body),context("race-duration"))).status).toBe(403);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
   it("preserves conflicts without retrying or silently replacing a newer plan", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ detail: "conflict" }, { status: 409 })));
     const result = await POST(request("POST", { start_date: "2026-09-22", expected_profile_revision: 3, expected_draft_revision: 2 }), context("generate"));
@@ -207,4 +219,11 @@ describe("active plan access", () => {
     for (const path of ["activate", "action", "day"]) expect((await POST(req({}), ctx(path))).status).toBe(403);
     expect(fetch).not.toHaveBeenCalled();
   });
+});
+
+it("identifies the exact calendar block when program start moves past it", () => {
+  const cycle={name:"Септемврийски блок",kind:"BUILD",start_date:"2026-09-22",end_date:"2026-09-28",accents:["Z4","Z5"],target_index:1.72,volume_factor:1,recovery_days:7};
+  const p={...profile,program_start:"2026-09-24",planning_controls:{...defaultPlanningControls("Run"),cycles:[cycle]}};
+  expect(()=>parseManagementProfile(p)).toThrow(/Септемврийски блок.*2026-09-22.*2026-09-24/);
+  expect(()=>parseManagementProfile({...p,program_start:"2026-09-01"})).not.toThrow();
 });

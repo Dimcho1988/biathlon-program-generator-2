@@ -17,24 +17,30 @@ from .management_schemas import ManagementProfile
 from .management_store import ManagementStore
 from .model_service import ModelStore
 from .oauth_store import PersistentStoreFailure
-from . import training_plan_engine
+from . import training_plan_engine, race_duration
 
 
 def outlook(repository, alias, *, now=None):
     """Current saved goals, independent of any frozen draft or active plan.
 
-    Only reads profile, calendar and one actual analysis snapshot. No speed
-    model evaluation, future sessions, lifecycle refresh, or persistence.
+    Reads profile, calendar, actual history and the event's speed curve.
+    No future sessions, lifecycle refresh, or persistence.
     """
     stored = ManagementStore(repository).profile(alias)
     if not stored["configured"]:
         return {"configured": False, "outlook": None}
     profile = ManagementProfile.model_validate(stored["profile"]).model_dump(mode="json")
+    event_duration = race_duration.preview(repository, alias, profile)
     settings = repository.athlete_settings(alias)
     now = now or datetime.now(timezone.utc)
     today = now.astimezone(ZoneInfo(settings.timezone) if settings else timezone.utc).date()
     engine = training_plan_engine
     analysis = repository.active_analysis(alias) or {}
+    if event_duration["source"] == "SPEED_DURATION" and (
+            event_duration.get("source_generation_id") != analysis.get("generation_id") or
+            event_duration.get("source_revision") != analysis.get("revision")):
+        event_duration = {**race_duration.resolve(profile), "reason": "MODEL_UPDATED"}
+    profile = race_duration.applied(profile, event_duration)
     source = (analysis.get("snapshot_payload") or {}).get("load_history") or {}
     rows = engine._daily_rows(source, today)
     calendar = engine._read_optional(repository, "athlete_planning_calendar", alias) or {"events": []}
@@ -64,6 +70,7 @@ def outlook(repository, alias, *, now=None):
                                          limited, volume=volume, events=calendar["events"], progression=progression)
     return {"configured": True, "outlook": {
         "schema_version": "training-outlook-preview-v1", "profile_revision": stored["revision"],
+        "race_duration": event_duration,
         "generated_at": now.isoformat(), "engine_version": engine.VERSION,
         "source": {"generation_id": analysis.get("generation_id"), "revision": analysis.get("revision"), "as_of": source.get("period_end")},
         "periodization": phases, "long_term": projection, "history_comparison": history["weeks"],

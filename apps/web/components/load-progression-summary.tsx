@@ -1,3 +1,4 @@
+import { SymptomNotice } from "./symptom-notice";
 import { isRecord } from "../lib/training-status";
 import { COMPONENTS, type PlanProjection } from "../lib/training-management";
 
@@ -18,7 +19,7 @@ export function LoadProgressionSummary({plan}: {plan?: PlanProjection}) {
       return <tr key={z}><th>{z}</th><td>{n(c.weekly_q)}</td><td>{n(c.annual_rate_percent)}</td><td>{n(g.weekly_q)}</td><td>{n(g.weekly_effective)}</td></tr>;
     })}</tbody></table></div>
     <p className="management-muted">Реалната промяна сравнява два цели завършени мезоцикъла. Q е приравненото време преди преливането; E е ефективният товар след него. Липсващите данни са „—“. Процентите са начална треньорска настройка и не обещават достижим прираст.</p>
-    {feedback.hold_for_reported_illness_or_pain===true&&<p className="management-notice">Последният отчет съдържа сигнал за болка или заболяване: програмата изисква преглед.</p>}
+    {feedback.hold_for_reported_illness_or_pain===true&&<SymptomNotice day={feedback.latest_report_day}/>}
     <p>Обратна връзка: {outcomes.filter(e=>e.status==="POSITIVE"||e.status==="NEGATIVE").length} оценени реакции след завършен блок. Recovery се използва отделно за разпределянето на тренировките.</p>
     <details><summary>История по седмици: време, Q, E и 7/40</summary><div style={{overflowX:"auto"}}><table><thead><tr><th>Период</th><th>Компонент</th><th>Реални минути</th><th>Q</th><th>E</th><th>7/40</th></tr></thead><tbody>{history.flatMap(w=>COMPONENTS.map(z=>{
       const cs=isRecord(w.components)?w.components:{}; const c=isRecord(cs[z])?cs[z]:{};

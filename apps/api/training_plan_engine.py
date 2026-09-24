@@ -21,11 +21,11 @@ from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM
 from biathlon.periodization import build_periodization
 from biathlon.physiology import _causal_tref, effective_from_direct_vector, linear_equivalence_coefficient
 from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VERSION, catalog, resolved_methods
-from . import model_service, load_adaptation
+from . import model_service, load_adaptation, race_duration
 from .response_service import ResponseStore
 
-VERSION = "training-management-v7"
-PARAMETER_VERSION = "management-parameters-v7"
+VERSION = "training-management-v8"
+PARAMETER_VERSION = "management-parameters-v8"
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
     "RE_ENTRY": ("Z1", "STR"),
@@ -715,8 +715,6 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         warnings.append(_warning("LIMITED_LOAD_HISTORY", "Историята е кратка или съдържа непълни активности. Само ограничени леки предложения; липсващата умора не се приема за нулева."))
     methods = resolved_methods(profile)
     warnings.append(_warning("VERSIONED_COACHING_RULES", "Целите и прогресията използват видими начални треньорски правила. Нисък стрес сам по себе си не увеличава товара."))
-    if not profile.get("race_duration_min"):
-        warnings.append(_warning("RACE_DURATION_MISSING", "Добавете очакваната продължителност на основната дисциплина за по-точна специфична работа."))
     if (controls and controls.get("double_threshold_days") and "Z4" in controls.get("double_threshold_components", [])
             and not any(p.get("zone") == "Z4" and p.get("goal") == "THRESHOLD" for p in profile.get("interval_profiles", []))):
         warnings.append(_warning("DOUBLE_THRESHOLD_PROFILE_REQUIRED", "За прагова част в Z4 е нужен индивидуален прагoв интервален профил. Профил за аеробна мощност не го замества."))
@@ -725,7 +723,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     blocked = missing_days is not None and missing_days > 1
     if adaptation.get("hold_for_reported_illness_or_pain"):
         blocked = True
-        warnings.append(_warning("REPORTED_ILLNESS_OR_PAIN", "Последният отчет съдържа сигнал за болка или заболяване. Нужен е преглед преди нови задачи; Recovery не отменя този сигнал."))
+        warnings.append(_warning("REPORTED_ILLNESS_OR_PAIN", load_adaptation.symptom_message(adaptation)))
     if missing_days:
         limited = True
         warnings.append(_warning("STALE_LOAD_SNAPSHOT", "Има непокрити дни след последния анализ. Обновете активностите; липсата на запис не доказва почивка."))
@@ -752,6 +750,19 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     if speed and speed.get("sport") != sport:
         blocked = True
         warnings.append(_warning("SPEED_SPORT_MISMATCH", "Оценката скорост–време е за различно средство и не може да се използва за този проект."))
+    race_sport = profile["sport"]
+    race_speed = speed_by_sport.get(race_sport)
+    if race_speed is None and envelope and race_duration.distance_m(profile.get("discipline")) is not None:
+        race_speed = model_service.speed_view(repository, alias, race_sport)
+    event_duration = race_duration.resolve(profile, race_speed)
+    if event_duration["source"] == "SPEED_DURATION" and (
+            event_duration.get("source_generation_id") != envelope.get("generation_id") or
+            event_duration.get("source_revision") != envelope.get("revision")):
+        blocked = True
+        warnings.append(_warning("INPUT_GENERATION_CHANGED", "Моделът за състезателната продължителност се е обновил. Генерирайте отново."))
+    profile = race_duration.applied(profile, event_duration)
+    if not profile.get("race_duration_min"):
+        warnings.append(_warning("RACE_DURATION_MISSING", "Няма индивидуална оценка за тази дистанция. Въведете приблизителната продължителност на основната дисциплина в профила."))
     by_sport_minutes = volume_evidence["reference_by_sport_weekly_minutes"]
     volume = planning_controls.volume_basis(profile, volume_evidence)
     weekly_minutes = volume["baseline_weekly_minutes"]
@@ -1413,7 +1424,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     result_days = list(grouped.values())
     allocation_report = planning_allocation.report(goal_windows, rows, forecast_rows, result_days,
         sum(slot_counts.values()), session_limit, weekly_minutes) if component_governed and forecast_known and not blocked else None
-    parameters = {"version": PARAMETER_VERSION, "status": "COACH_HEURISTICS_FOR_REVIEW",
+    parameters = {"version": PARAMETER_VERSION, "race_duration": event_duration, "status": "COACH_HEURISTICS_FOR_REVIEW",
                   "recovery_mode": "LOAD_ONLY", "ready_threshold_percent": 90, "load_progression": progression,
                   "building_fraction": profile.get("building_fraction", .5), "maintenance_fraction": profile.get("maintenance_fraction", .3),
                   "reentry_fraction": profile.get("reentry_fraction", .4), "recovery_session_cap_min": profile.get("recovery_session_cap_min", 30),
