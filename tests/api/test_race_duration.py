@@ -80,3 +80,14 @@ def test_symptom_context_dates_old_reports_and_respects_edits_and_new_reports():
         assert not load_adaptation.symptom_context(entries+[extra],TODAY)["hold_for_reported_illness_or_pain"]
         assert not load_adaptation.assess(entries+[extra],TODAY)["hold_for_reported_illness_or_pain"]
     assert load_adaptation.symptom_context(entries+[report((TODAY+timedelta(days=1)).isoformat(),False)],TODAY)==context
+
+
+def test_missing_athlete_settings_preserves_manual_fallback_in_preview_and_outlook(monkeypatch):
+    repo=Repository(); repo.settings=None; repo.active_analysis=lambda _:deepcopy(repo.envelope)
+    p=ManagementProfile.model_validate(profile(discipline="5000 m",race_duration_min=22)).model_dump(mode="json")
+    monkeypatch.setattr(engine.model_service,"speed_view",lambda *args: pytest.fail("No model evaluation without its prerequisites"))
+    monkeypatch.setattr(management_service,"ManagementStore",lambda _:SimpleNamespace(profile=lambda _:{"configured":True,"revision":1,"profile":deepcopy(p)}))
+    result=race_duration.preview(repo,"athlete",p)
+    assert result["source"]=="MANUAL" and result["duration_min"]==22
+    assert management_service.outlook(repo,"athlete",now=NOW)["outlook"]["race_duration"]==result
+    assert race_duration.preview(repo,"athlete",{**p,"race_duration_min":None})["source"]=="UNAVAILABLE"

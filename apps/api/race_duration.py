@@ -56,7 +56,8 @@ def resolve(profile, view=None):
 
 def preview(repository, alias, profile):
     from . import model_service
-    view = model_service.speed_view(repository, alias, profile["sport"]) if distance_m(profile.get("discipline")) is not None else None
+    supported = distance_m(profile.get("discipline")) is not None and repository.athlete_settings(alias) is not None
+    view = model_service.speed_view(repository, alias, profile["sport"]) if supported else None
     return resolve(profile, view)
 
 
