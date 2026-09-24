@@ -134,3 +134,15 @@ it("automatically replaces a stale draft and displays every session and their to
   expect(container.textContent).not.toContain("Запазени програми");
   expect(container.textContent).not.toContain("Предишен проект");
 });
+
+it("previews race duration without saving and drops the preview when discipline changes", async()=>{
+  const fetchMock=vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async ()=>Response.json({source:"SPEED_DURATION",duration_min:4.5}));vi.stubGlobal("fetch",fetchMock);
+  await mount(<ManagementProfileEditor initialProfile={{configured:true,profile,revision:1}} today="2026-09-21"/>);
+  await click(button("Провери приблизителното време"));
+  expect(fetchMock.mock.calls[0][0]).toBe("/api/athlete/management/race-duration");
+  expect(container.textContent).toContain("около 4,5 мин");
+  expect(input("Продължителност на старта").value).toBe("");
+  await enter(input("Дисциплина"),"10 km");
+  expect(container.textContent).not.toContain("около 4,5 мин");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});

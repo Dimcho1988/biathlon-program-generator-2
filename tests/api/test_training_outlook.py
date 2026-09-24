@@ -5,7 +5,7 @@ import pytest
 from apps.api import training_plan_engine as engine
 from biathlon import training_targets
 from biathlon.periodization import build_periodization
-from tests.api.test_training_plan_engine import Repository, TODAY, profile
+from tests.api.test_training_plan_engine import Repository, TODAY, profile, reference_speed
 
 
 def test_live_outlook_uses_saved_accents_and_wave_without_generating_or_writing(monkeypatch):
@@ -20,13 +20,19 @@ def test_live_outlook_uses_saved_accents_and_wave_without_generating_or_writing(
     original = deepcopy(repo.envelope)
     monkeypatch.setattr(service, "ManagementStore", lambda _: SimpleNamespace(profile=lambda _: deepcopy(saved)))
     monkeypatch.setattr(engine, "generate_plan", lambda *a, **kw: pytest.fail("outlook must not generate or save a draft"))
-    monkeypatch.setattr(engine.model_service, "speed_view", lambda *a, **kw: pytest.fail("outlook does not need speed evaluation"))
+    speed_calls = []
+    def speed(repo, alias, sport):
+        speed_calls.append(sport)
+        return reference_speed(repo, alias, sport)
+    monkeypatch.setattr(engine.model_service, "speed_view", speed)
     first = service.outlook(repo, "athlete", now=NOW)["outlook"]
     frozen = deepcopy(first)
     saved["revision"] = 2
     controls.update(accents=["Z4"], wave=[.96, 1.4, 1.5, .78])
     second = service.outlook(repo, "athlete", now=NOW)["outlook"]
     assert second["profile_revision"] == 2
+    assert speed_calls == ["Run", "Run"]
+    assert second["race_duration"]["source"] == "UNAVAILABLE"
     week1, week2 = first["long_term"]["weeks"][2], second["long_term"]["weeks"][2]
     assert week1["accents"] == ["Z3"] and week2["accents"] == ["Z4"]
     assert week2["components"]["Z4"]["target_index_7_40"] == pytest.approx(1.65)

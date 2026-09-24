@@ -1,4 +1,5 @@
 "use client";
+import { SymptomNotice } from "./symptom-notice";
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -26,7 +27,7 @@ function SaveForm({kind,children,build,disabled=false}:{kind:string;children:Rea
     } catch(error){setMessage(error instanceof Error?error.message:"Опитайте отново.");}
     finally{setBusy(false);}
   }
-  return <form onSubmit={submit} className="response-form"><fieldset disabled={disabled||busy}>{children}<button className="action-button" disabled={busy||disabled} type="submit">{busy?"Записваме…":"Запази"}</button></fieldset><p role="status" aria-live="polite">{message}</p></form>;
+  return <form onSubmit={submit} className="response-form"><fieldset disabled={disabled||busy}>{children}<button className="action-button" disabled={busy||disabled} type="submit">{busy?"Записваме…":"Запази"}</button></fieldset><p role="status" aria-live="polite">{message}</p>{kind === "daily" && message === "Запазено успешно." && <Link href="/management">Към програмата · обнови според записаната оценка →</Link>}</form>;
 }
 
 function DailyForm({day,today,canReport}:{day:ResponseDay;today:string;canReport:boolean}) {
@@ -78,6 +79,7 @@ export function ResponseMonitoring({history,canReport,canEditPlan}:{history:Resp
   const x=(i:number)=>45+i*910/Math.max(1,history.days.length-1), y=(value:number)=>220-value*1.8;
   function path(channel:string) {let open=false;return history.days.map((d,i)=>{const v=channel==="total"?d.total:d.groups.find(g=>g.key===channel)?.score??null;if(v===null){open=false;return "";}const cmd=open?"L":"M";open=true;return `${cmd}${x(i)},${y(v)}`;}).join(" ");}
   return <>
+    {history.symptom_context?.hold_for_reported_illness_or_pain && <SymptomNotice day={history.symptom_context.latest_report_day}/>}
     <section className="response-card"><div className="response-heading"><div><p className="eyebrow">Натоварване · реакция · отзвучаване</p><h2>Тренд на стреса</h2></div><span className="response-badge">Наблюдение · пилотна версия</span></div>
       <p>Високата реакция се тълкува според фазата и отзвучаването. Ниската оценка не задейства увеличение на натоварването.</p>
       <div className="response-legend">{["total",...GROUPS].map(k=><label key={k} style={{color:colors[k as keyof typeof colors]}}><input type="checkbox" checked={visible[k]} onChange={e=>setVisible({...visible,[k]:e.target.checked})}/>{k==="total"?"Обща оценка":GROUP_LABELS[k as typeof GROUPS[number]]}</label>)}</div>
@@ -89,7 +91,7 @@ export function ResponseMonitoring({history,canReport,canEditPlan}:{history:Resp
       </svg>
       <div className="response-select-day"><label>Ден за подробности<select value={selected} onChange={e=>setSelected(Number(e.target.value))}>{history.days.map((d,i)=><option key={d.day} value={i}>{d.day} · {d.coverage}% покритие</option>)}</select></label><p>Изберете точка, за да видите приноса. Линиите се прекъсват при липсващи данни.</p></div>
     </section>
-    {day&&<><DayDetails day={day}/><section className="response-card"><DailyForm day={day} today={history.today} canReport={canReport}/></section></>}
+    {day&&<><DayDetails day={day}/><section className="response-card" id="daily-report"><DailyForm day={day} today={history.today} canReport={canReport}/></section></>}
     <section className="response-card"><h2>Възприето натоварване по активности</h2><p>Оценката от часовника се показва, когато Intervals я е предал. Поправката в onFlows има предимство и се пази при следващ импорт.</p>{history.sessions.length?history.sessions.slice().reverse().map(s=><SessionForm key={s.activity_ref} session={s} canReport={canReport}/>):<p>Няма активности в периода.</p>}</section>
     <section className="response-card"><h2>Реакция и отзвучаване по блокове</h2><p>Задайте предварително натоварващата част и края на разтоварването. Опорната база се фиксира при създаването. Започнал блок не се удължава със задна дата.</p><p>Обобщението тук следи субективното състояние. Проверявайте успоредно пулса, HRV и възприетото усилие в графиката. Прекъсване на оценките или ново покачване отменя потвърденото отзвучаване.</p>
       {history.blocks.map(b=><article key={b.entry_key} className="response-block"><strong>{PHASES[String(b.payload.phase)]} · {String(b.payload.start)} – {String(b.payload.recovery_end)}</strong><p>Край на натоварването: {String(b.payload.load_end)}. Пик: {fmt(b.summary?.peak_deviation)} лични отклонения; повишени дни: {b.summary?.elevated_days??0}; наблюдавани: {b.summary?.observed_days??0}/{b.summary?.tracked_days??0}.</p><p>{b.summary?.returned_on?`Наблюдавано връщане: ${b.summary.returned_on} (две последователни оценки).`:b.summary?.status==="IN_PROGRESS"?"Блокът продължава.":b.summary?.status==="REVIEW"?"Реакцията остава повишена в края на разтоварването.":"Недостатъчно данни за връщане към обичайното състояние."}</p></article>)}

@@ -108,3 +108,14 @@ describe("authenticated response writes",()=>{
     expect(fetch).not.toHaveBeenCalled();
   });
 });
+
+it("dates the symptom hold and offers the daily report without claiming current illness",()=>{
+  const history={...responseFixture,symptom_context:{latest_report_day:"2026-09-01",report_age_days:13,hold_for_reported_illness_or_pain:true}};
+  const html=renderToStaticMarkup(<ResponseMonitoring history={history} canReport canEditPlan/>);
+  expect(html).toContain("01.09.2026");
+  expect(html).toContain("а не нова оценка на текущото състояние");
+  expect(html).toContain('href="/response#daily-report"');
+  expect(html).toContain('id="daily-report"');
+  const cleared=renderToStaticMarkup(<ResponseMonitoring history={{...history,symptom_context:{...history.symptom_context,hold_for_reported_illness_or_pain:false}}} canReport canEditPlan/>);
+  expect(cleared).not.toContain("има отметка за болка или заболяване");
+});

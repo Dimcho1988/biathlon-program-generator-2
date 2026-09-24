@@ -196,9 +196,9 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
         if resume:
             payload["approved_by"] = str(actor)
     else:
-        illness_hold = any(w["code"] == "REPORTED_ILLNESS_OR_PAIN" for w in plan.get("warnings", []))
+        illness_hold = next((w for w in plan.get("warnings", []) if w["code"] == "REPORTED_ILLNESS_OR_PAIN"), None)
         payload.update(status="REVIEW_REQUIRED", proposal=plan,
-                       reason="Новите задачи са задържани за преглед заради съобщена болка или заболяване." if illness_hold else
+                       reason=illness_hold["message"] if illness_hold else
                        "Нужен е преглед на променените правила." if needs_rule_approval else
                        "Предложената адаптация очаква утвърждаване." if _eligible(plan) else
                        "Липсват достатъчно актуални данни за следващата доза. Обновете активностите и прегледайте причините.")

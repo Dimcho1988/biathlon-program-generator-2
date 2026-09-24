@@ -137,6 +137,13 @@ class LoadProgression(BaseModel):
         return self
 
 
+class RaceDurationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    discipline: str = Field(min_length=1, max_length=100)
+    sport: Literal["Run", "NordicSki"]
+    race_duration_min: float | None = Field(default=None, gt=0, le=1440)
+
+
 class ManagementProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
