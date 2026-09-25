@@ -75,6 +75,9 @@ export interface LoadHistory {
   period_start: string;
   period_end: string;
   tref_bounds_profile_version?: string | null;
+  equivalence_version?: string | null;
+  zone_bounds_bpm?: number[] | null;
+  hrmax_bpm?: number | null;
   quality: {
     processed_activities: number;
     limited_activities: number;
@@ -92,6 +95,7 @@ const legacyRootKeys = ["schema_version", "athlete_id", "period_start", "period_
 const rootKeys = [...legacyRootKeys, "strength"];
 const legacyRootKeysWithTrefProfile = [...legacyRootKeys, "tref_bounds_profile_version"];
 const rootKeysWithTrefProfile = [...rootKeys, "tref_bounds_profile_version"];
+const equivalenceKeys = ["equivalence_version", "zone_bounds_bpm", "hrmax_bpm"];
 const qualityKeys = ["processed_activities", "limited_activities", "excluded_activities", "no_activity_days", "warnings"];
 const summaryKeys = ["zone", "e7_daily", "e40_daily", "status_7_40", "tref_min", "history_reliability"];
 const dailyKeys = ["date", "zone", "effective_load", "e7_daily", "e40_daily", "status_7_40"];
@@ -121,11 +125,22 @@ export function parseLoadHistory(value: unknown): LoadHistory {
   if (!isRecord(value)) throw new Error("Невалидна структура на историята.");
   if (value.schema_version !== "load-history-v1" && value.schema_version !== "load-history-v2") throw new Error("Неподдържана версия на историята.");
   const version2 = value.schema_version === "load-history-v2";
+  const core = Object.fromEntries(Object.entries(value).filter(([key]) => !equivalenceKeys.includes(key)));
   const validRoot = version2
-    ? exactKeys(value, rootKeysWithTrefProfile)
-    : exactKeys(value, rootKeys) || exactKeys(value, legacyRootKeys) ||
-      exactKeys(value, rootKeysWithTrefProfile) || exactKeys(value, legacyRootKeysWithTrefProfile);
+    ? exactKeys(core, rootKeysWithTrefProfile)
+    : exactKeys(core, rootKeys) || exactKeys(core, legacyRootKeys) ||
+      exactKeys(core, rootKeysWithTrefProfile) || exactKeys(core, legacyRootKeysWithTrefProfile);
   if (!validRoot) throw new Error("Невалидна структура на историята.");
+  const validBpm = (bpm: unknown) => finite(bpm) && Number.isInteger(bpm) && bpm >= 30 && bpm <= 240;
+  const bounds = value.zone_bounds_bpm;
+  if ((value.equivalence_version != null &&
+      (typeof value.equivalence_version !== "string" || !value.equivalence_version.trim())) ||
+      (value.hrmax_bpm != null && !validBpm(value.hrmax_bpm)) ||
+      (bounds != null && (!Array.isArray(bounds) || bounds.length !== 6 ||
+        !bounds.every((bpm, index) => validBpm(bpm) && (index === 0 || bpm > bounds[index - 1])) ||
+        (finite(value.hrmax_bpm) && bounds[5] > value.hrmax_bpm)))) {
+    throw new Error("Невалидни данни за приравняването на историята.");
+  }
   if (version2) {
     if (typeof value.tref_bounds_profile_version !== "string" || value.tref_bounds_profile_version.length === 0) {
       throw new Error("Липсва версия на границите за Tref.");
