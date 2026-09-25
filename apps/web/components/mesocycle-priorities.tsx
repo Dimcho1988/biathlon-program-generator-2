@@ -9,7 +9,7 @@ export function MesocyclePriorities({ cycle }: { cycle?: Record<string,unknown> 
   const support = Array.isArray(cycle.accents) ? cycle.accents.map(String) : [];
   return <details className="management-detail"><summary>Роли и цели на компонентите</summary>
     {recovery ? <p>Разтоварване на водещите компоненти. Допълващо поддържане: <strong>{support.join(", ") || "няма подходящ компонент"}</strong>. Изборът е условен до проверката на дневната готовност; общият товар остава намален.</p> : <>
-      <ul>{Object.entries(cycle.component_indices).filter(([,v])=>typeof v === "number").map(([z,value])=><li key={z}><strong>{z === "STR" ? "Сила" : z}</strong> · {roles[String(isRecord(cycle.component_roles) ? cycle.component_roles[z] : "")] ?? "Приоритет"} · базова цел 7/40 <strong>{number(value as number)}</strong></li>)}</ul>
+      <ul>{Object.entries(cycle.component_indices).filter(([,v])=>typeof v === "number").map(([z,value])=><li key={z}><strong>{z === "STR" ? "Сила" : z}</strong> · {cycle.kind === "STRESS" && isRecord(cycle.component_roles) && cycle.component_roles[z] === "LIGHT_DEVELOPMENT" ? "Трети ударен приоритет" : roles[String(isRecord(cycle.component_roles) ? cycle.component_roles[z] : "")] ?? "Приоритет"} · базова цел 7/40 <strong>{number(value as number)}</strong></li>)}</ul>
       <p>Седмичната вълна променя тези цели, с таван 2. Приравненият обем Q и дневната готовност ограничават съставените тренировки. Целта не означава автоматично разрешена доза.</p>
       {cycle.background_development === true && <p>Останалите зони получават възможност за слабо развитие в общата подготовка. Третият приоритет има по-малък дял от прираста.</p>}
     </>}
