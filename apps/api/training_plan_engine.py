@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from biathlon import hr_speed, recovery_v2, speed_duration, training_targets, planning_controls, planning_history, planning_schedule, planning_allocation, load_progression
+from biathlon import hr_speed, recovery_v2, speed_duration, training_targets, planning_controls, planning_history, planning_schedule, planning_allocation, load_progression, mesocycle_focus
 from biathlon.constants import COMPONENTS, fresh_parameters
 from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM
 from biathlon.periodization import build_periodization
@@ -24,8 +24,8 @@ from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VER
 from . import model_service, load_adaptation, race_duration
 from .response_service import ResponseStore
 
-VERSION = "training-management-v8"
-PARAMETER_VERSION = "management-parameters-v8"
+VERSION = "training-management-v9"
+PARAMETER_VERSION = "management-parameters-v9"
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
     "RE_ENTRY": ("Z1", "STR"),
@@ -502,15 +502,22 @@ def _accents(period, preferences):
     return (manual + [z for z in ordered if z not in manual])[:limit] if mode == "HYBRID" else ordered[:limit]
 
 
-def _goals(profile, day, period, taper, reference, accents, week, length, rows, today, limited, taper_factor, progression=None):
+def _goals(profile, day, period, taper, reference, accents, week, length, rows, today, limited, taper_factor, progression=None, *, periodization=None, support_limited=None):
     automatic = load_progression.accents(profile, period, list(PRIORITIES.get(period, ("Z1",))))
-    state = planning_controls.resolve(profile, day, period, automatic)
+    state = planning_controls.resolve(profile, day, period, automatic, periodization=periodization)
+    if state is not None:
+        support = mesocycle_focus.recovery_support({**state, "kind": "RECOVERY"}, profile, rows, today,
+                   limited=limited if support_limited is None else support_limited,
+                   taper=taper or period not in mesocycle_focus.PREPARATION)
+        state = support if state["kind"] == "RECOVERY" else state
+        state["recovery_support_components"] = support["accents"]
     focus = state["accents"] if state else _accents(period, accents)
     legacy = training_targets.component_targets(reference, profile, focus, week, length, period, taper, limited, taper_factor) if state is None else {}
     goals = planning_controls.goals(profile, state, planning_controls.reference(rows, today), legacy,
                                      limited=limited, taper_factor=taper_factor)
     goals = load_progression.apply(goals, profile, state, progression, day, period, taper, limited,
                                    taper_factor, planning_controls.reference(rows, today))
+    goals = mesocycle_focus.cap_recovery(goals, profile, state, planning_controls.reference(rows, today))
     return goals, focus, state
 
 
@@ -617,7 +624,7 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
                 boundary = cycle_start + timedelta(days=((day-cycle_start).days//progression["cycle_days"])*progression["cycle_days"])
                 day_progression = {**progression, "projected_baseline_factors": projected_bases.get(boundary.isoformat(), {})}
             goals, focus, cycle = _goals(profile, day, period, taper, reference, accents, week, length,
-                                          rows, today, limited if progression else False, _taper_factor(periodization, day), day_progression)
+                                          rows, today, limited if progression else False, _taper_factor(periodization, day), day_progression, periodization=periodization, support_limited=limited)
             for z in COMPONENTS:
                 targets[z].append(goals[z]["target"])
             phases.append(period)
@@ -873,7 +880,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         period, taper = _phase(periodization, d)
         week, _ = meso_at(d)
         day_goals[d] = _goals(profile, d, period, taper, target_reference, accents,
-                             week, meso_length, rows, today, limited, _taper_factor(periodization, d), progression)
+                             week, meso_length, rows, today, limited, _taper_factor(periodization, d), progression, periodization=periodization)
         goal_windows[d] = day_goals[d][0]
     opportunities = {z: [] for z in COMPONENTS}
     for d, slot, count in schedule:
@@ -915,7 +922,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         budgets = _budgets(forecast_rows, day, taper, day_meso_factor, actual_rows=rows, targets=goals)
         allocation = planning_allocation.quota(goal_windows, opportunities, forecast_rows, day, slot_index) if component_governed else None
         visible_ready = {z: _round(ready[z]) if forecast_known else None for z in COMPONENTS}
-        item = {"date": key, "status": "REST", "period": period, "taper": taper,
+        item = {"date": key, "status": "REST", "period": period, "taper": taper, "cycle": cycle_state,
                 "session": None, "slot": slot_index + 1, "readiness_scope": "DAY_START_BUNDLE_NOT_INTRADAY_FORECAST", "readiness_before": visible_ready, "readiness_after": dict(visible_ready),
                 "load_budget": {"remaining_weekly_minutes": None if automatic_time else _round(max(0., remaining)), "components": budgets,
                                 "mesocycle_week_index": day_meso_week, "mesocycle_factor": day_meso_factor},
@@ -983,6 +990,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             candidates = [(m_sport, m) for m_sport in training_sports for m in methods
                           if m_sport in m["sports"] and (m["zone"] != "STR" or m_sport == primary_sport)]
             if (day.weekday() in double_days and slot_index == 0 and slots_today >= 2 and not limited and not taper
+                    and (not cycle_state or cycle_state["kind"] != "RECOVERY")
                     and sessions + 2 <= session_limit and key_sessions + 2 <= key_limit
                     and (profile.get("age_years") or 0) >= 18 and (profile.get("training_experience_years") or 0) >= 1):
                 pairs = []
@@ -1024,6 +1032,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 rejection = None
                 if period not in method["periods"]:
                     rejection = ("PERIOD_NOT_SUPPORTED", "Методът не е включен в този период.")
+                elif cycle_state and cycle_state["kind"] == "RECOVERY" and z in {"Z3", "Z4", "Z5", "STR"} and z not in selected_accents:
+                    rejection = ("RECOVERY_COMPONENT_DELOAD", "Компонентът се разтоварва; допълваща работа е допустима само за избрания по-слабо натоварен компонент.")
                 elif supporting and (not progression or taper or not key_slots or day <= key_slots[-1] or slot_index > 0):
                     rejection = ("SUPPORT_AFTER_KEY_WORK", "Поддържащият остатък се разпределя след основните задачи и само при свободен бюджет и готовност.")
                 elif limited and method["purpose"] != "RECOVERY":
@@ -1109,7 +1119,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     if maintenance_blocks:
                         _, maintenance_load, _ = candidate_load(maintenance_blocks)
                         endurance_allocation = allocation[z] > maintenance_load[z] + .5
-                if purpose == "BUILDING" and (z not in selected_accents and not endurance_allocation or taper or slot_index > 0):
+                if purpose == "BUILDING" and (z not in selected_accents and not endurance_allocation or taper or slot_index > 0 or cycle_state and cycle_state["kind"] == "RECOVERY"):
                     purpose = "MAINTENANCE"
                 fraction = profile.get("maintenance_fraction", .3) if purpose in {"MAINTENANCE", "RECOVERY", "SUPPORTING"} else profile.get("reentry_fraction", .4) if period == "RE_ENTRY" else profile.get("building_fraction", .5)
                 if method["structure"] == "MODEL_INTERVALS":
@@ -1194,7 +1204,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 blocks = _blocks(method, work, evidence, settings)
                 # An interval's denominator is the WHOLE approved structure's
                 # work capacity. Mixed components share the same fraction.
-                max_usage = min(dose_ceiling, profile.get("maintenance_fraction", .3)) if supporting else dose_ceiling
+                max_usage = min(dose_ceiling, profile.get("maintenance_fraction", .3)) if supporting or cycle_state and cycle_state["kind"] == "RECOVERY" else dose_ceiling
                 while blocks and _dose_usage(blocks, evidence, z) > max_usage + 1e-6 and work >= method["min_work_min"]:
                     work -= .5
                     blocks = _blocks(method, work, evidence, settings) if work >= method["min_work_min"] else []

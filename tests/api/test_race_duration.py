@@ -61,7 +61,9 @@ def test_draft_and_outlook_use_same_race_sport_estimate_without_mutating_profile
     assert outlook["race_duration"]["duration_min"] < 8
     assert not any(w["code"]=="RACE_DURATION_MISSING" for w in plan["warnings"])
     special = [w for w in outlook["long_term"]["weeks"] if w["phases"] == ["SPECIAL_PREPARATION"]]
-    assert special and all(w["accents"] == ["Z4","Z5"] for w in special)
+    assert special and any(w["accents"] == ["Z4","Z5"] for w in special)
+    assert any(w["accents"] != ["Z4","Z5"] for w in special)
+    assert plan["long_term"]["weeks"] == outlook["long_term"]["weeks"]
     assert p==original
 
 

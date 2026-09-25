@@ -129,7 +129,11 @@ def test_stale_daily_data_does_not_clip_coach_outlook_or_blend_microcycle_peaks(
     assert weeks[0]['end_date'] == (TODAY+timedelta(days=6)).isoformat()
     assert weeks[2]['components']['Z3']['target_index_7_40'] == pytest.approx(1.65)
     assert weeks[2]['components']['Z2']['target_index_7_40'] == pytest.approx(1.5)
-    assert weeks[3]['components']['Z3']['target_index_7_40'] == pytest.approx(.858)
+    # The final unloading ceiling also applies to a stale read-only outlook;
+    # it must not be refilled by the nominal 1.1 × .78 wave.
+    assert weeks[3]['components']['Z3']['target_index_7_40'] < .858
+    assert weeks[3]['components']['Z3']['target_weekly_effective'] <= .65*7*result['long_term']['baseline']['Z3']['c40']+.001
+    assert weeks[3]['cycle']['accents'] == []  # No support permission from stale data.
     assert result['long_term']['readiness_forecast'] is False
     assert not store.saved
 
