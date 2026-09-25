@@ -50,15 +50,29 @@ class ManagementStore:
         return {"configured": True, "profile": rows[0]["payload"], "revision": rows[0]["revision"]}
 
     def progression_reference(self, alias):
-        # Only the last server-created draft's small anchor, not twenty plans.
-        result = self.repository._json(self.repository._request(
-            "GET", "/onflows_management_entries?select=payload->parameters->load_progression->anchor"
-            f"&athlete_alias=eq.{quote(alias, safe='')}&kind=eq.DRAFT"
-            "&order=recorded_at.desc,revision.desc&limit=1"))
-        if not isinstance(result, list):
-            raise PersistentStoreFailure("Invalid progression reference")
-        value = result[0].get("anchor") if result else None
-        return value if isinstance(value, dict) else None
+        # Automatic adaptations live in plan revisions, not in the draft table.
+        # Read only the small anchors; proposals carry a new reference before approval.
+        scope = f"&athlete_alias=eq.{quote(alias, safe='')}"
+        paths = (
+            "/onflows_management_entries?select=recorded_at,anchor:payload->parameters->load_progression->anchor"
+            + scope + "&kind=eq.DRAFT&order=recorded_at.desc,revision.desc&limit=1",
+            "/onflows_management_plan_revisions?select=recorded_at,"
+            "proposal_anchor:payload->proposal->parameters->load_progression->anchor,"
+            "plan_anchor:payload->plan->parameters->load_progression->anchor"
+            + scope + "&order=revision.desc&limit=1",
+        )
+        candidates = []
+        for path in paths:
+            rows = self.repository._json(self.repository._request("GET", path))
+            if not isinstance(rows, list) or len(rows) > 1 or any(not isinstance(r, dict) for r in rows):
+                raise PersistentStoreFailure("Invalid progression reference")
+            if rows:
+                row = rows[0]
+                value = next((row[k] for k in ("proposal_anchor", "plan_anchor", "anchor")
+                              if isinstance(row.get(k), dict)), None)
+                if value is not None:
+                    candidates.append((str(row.get("recorded_at") or ""), value))
+        return max(candidates, key=lambda c: c[0])[1] if candidates else None
 
     def drafts(self, alias, limit=10, *, start_date: date | None = None):
         if type(limit) is not int:

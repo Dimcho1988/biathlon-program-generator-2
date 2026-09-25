@@ -56,6 +56,36 @@ def test_profile_returns_latest_revision_without_creating_defaults():
     assert len(repo.requests) == 1
 
 
+@pytest.mark.parametrize("active,expected", [
+    ({"proposal_anchor": {"key": "new"}, "plan_anchor": {"key": "old"}}, "new"),
+    ({"proposal_anchor": None, "plan_anchor": {"key": "approved"}}, "approved"),
+    ({"proposal_anchor": None, "plan_anchor": None}, "draft"),
+])
+def test_reference_survives_automatic_adaptations_and_proposal_approval(active, expected):
+    class ProjectionRepository(Repository):
+        def _request(self, method, path, **kwargs):
+            self.requests.append((method, path, kwargs))
+            if path.startswith("/onflows_management_plan_revisions?"):
+                return [{"recorded_at": "2026-09-25T12:00:00+00:00", **active}]
+            return [{"recorded_at": STAMP, "anchor": {"key": "draft"}}]
+    repo = ProjectionRepository()
+    assert ManagementStore(repo).progression_reference("ath&a=1") == {"key": expected}
+    assert all(method == "GET" and "athlete_alias=eq.ath%26a%3D1" in path
+               and "limit=1" in path for method, path, _ in repo.requests)
+    assert "proposal_anchor:payload->proposal->parameters->load_progression->anchor" in repo.requests[1][1]
+
+
+def test_reference_uses_newer_manual_draft_and_rejects_malformed_projection():
+    class ProjectionRepository(Repository):
+        def _request(self, method, path, **kwargs):
+            if path.startswith("/onflows_management_plan_revisions?"):
+                return [{"recorded_at": STAMP, "plan_anchor": {"key": "old"}}]
+            return [{"recorded_at": "2026-09-25T12:00:00+00:00", "anchor": {"key": "new"}}]
+    assert ManagementStore(ProjectionRepository()).progression_reference("athlete") == {"key": "new"}
+    with pytest.raises(PersistentStoreFailure, match="progression reference"):
+        ManagementStore(Repository(rows=[None])).progression_reference("athlete")
+
+
 def test_history_is_bounded_and_keeps_multiple_immutable_revisions():
     rows = [entry("DRAFT", 2), entry("DRAFT", 1)]
     repo = Repository(rows)
