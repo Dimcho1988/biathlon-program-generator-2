@@ -502,7 +502,7 @@ def _accents(period, preferences):
     return (manual + [z for z in ordered if z not in manual])[:limit] if mode == "HYBRID" else ordered[:limit]
 
 
-def _goals(profile, day, period, taper, reference, accents, week, length, rows, today, limited, taper_factor, progression=None, *, periodization=None, support_limited=None):
+def _goals(profile, day, period, taper, reference, accents, week, length, rows, today, limited, taper_factor, progression=None, *, periodization=None, support_limited=None, actual_reference=None):
     automatic = load_progression.accents(profile, period, list(PRIORITIES.get(period, ("Z1",))))
     state = planning_controls.resolve(profile, day, period, automatic, periodization=periodization)
     if state is not None:
@@ -513,11 +513,15 @@ def _goals(profile, day, period, taper, reference, accents, week, length, rows, 
         state["recovery_support_components"] = support["accents"]
     focus = state["accents"] if state else _accents(period, accents)
     legacy = training_targets.component_targets(reference, profile, focus, week, length, period, taper, limited, taper_factor) if state is None else {}
-    goals = planning_controls.goals(profile, state, planning_controls.reference(rows, today), legacy,
+    # Actual observations and their cutoff are constant throughout this read.
+    # The policy functions only read this reference; daily goals remain fresh.
+    if actual_reference is None:
+        actual_reference = planning_controls.reference(rows, today)
+    goals = planning_controls.goals(profile, state, actual_reference, legacy,
                                      limited=limited, taper_factor=taper_factor)
     goals = load_progression.apply(goals, profile, state, progression, day, period, taper, limited,
-                                   taper_factor, planning_controls.reference(rows, today))
-    goals = mesocycle_focus.cap_recovery(goals, profile, state, planning_controls.reference(rows, today))
+                                   taper_factor, actual_reference)
+    goals = mesocycle_focus.cap_recovery(goals, profile, state, actual_reference)
     return goals, focus, state
 
 
@@ -607,6 +611,7 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
                           "c40": sum(r40) / len(r40) if r40 else 0., "known": len(r40) >= planning_history.MINIMUM_DAYS}
     weeks = []
     projected_bases = load_progression.projected_cycle_bases(progression, periodization, end, profile)
+    actual_reference = planning_controls.reference(rows, today)
     day = start
     while day <= end:
         # Preserve the coach's microcycle boundaries. A rolling display starting
@@ -624,7 +629,7 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
                 boundary = cycle_start + timedelta(days=((day-cycle_start).days//progression["cycle_days"])*progression["cycle_days"])
                 day_progression = {**progression, "projected_baseline_factors": projected_bases.get(boundary.isoformat(), {})}
             goals, focus, cycle = _goals(profile, day, period, taper, reference, accents, week, length,
-                                          rows, today, limited if progression else False, _taper_factor(periodization, day), day_progression, periodization=periodization, support_limited=limited)
+                                          rows, today, limited if progression else False, _taper_factor(periodization, day), day_progression, periodization=periodization, support_limited=limited, actual_reference=actual_reference)
             for z in COMPONENTS:
                 targets[z].append(goals[z]["target"])
             phases.append(period)
