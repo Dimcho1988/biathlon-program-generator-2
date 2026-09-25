@@ -87,6 +87,7 @@ def test_outlook_reuses_daily_component_goals_without_compounding_or_mutation():
         for z in engine.COMPONENTS:
             target = sum(g[z]["target"] for g in goals) / len(goals)
             assert week["components"][z]["target_weekly_effective"] == pytest.approx(target, abs=.001)
+            assert week["components"][z]["target_period_effective"] == pytest.approx(sum(g[z]["target"] for g in goals)/7, abs=.001)
             baseline = result["baseline"][z]
             assert week["components"][z]["target_index_7_40"] == pytest.approx((baseline["b50"] + target / 7) / (baseline["b50"] + baseline["c40"]), abs=.001)
     assert rows == original_rows
@@ -112,6 +113,7 @@ def test_missing_history_has_unknown_targets_and_index_not_fake_zero_or_one():
     result, *_ = inputs(repo, profile(component_targets_weekly={"STR": 30}), limited=True)
     first = result["weeks"][0]["components"]
     assert first["Z1"]["target_weekly_effective"] is None
+    assert first["Z1"]["target_period_effective"] is None
     assert first["Z1"]["target_index_7_40"] is None
     assert first["STR"]["target_weekly_effective"] is not None
     assert first["STR"]["target_index_7_40"] is None

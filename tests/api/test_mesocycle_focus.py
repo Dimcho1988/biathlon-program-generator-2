@@ -41,6 +41,42 @@ def test_duration_guides_specific_blocks_even_without_growth_regulator(minutes,e
     assert state(p,28,"SPECIAL_PREPARATION")["accents"]!=expected
 
 
+@pytest.mark.parametrize("growth", [False, True])
+def test_rotation_changes_final_load_not_only_labels_and_maintenance_has_no_loading_peak(growth):
+    p=configured();p["planning_controls"]["wave"]=[.96,1.4,1.5,.78]
+    if growth:p["load_progression"]={"enabled":True}
+    repo=Repository();source=repo.envelope["snapshot_payload"]["load_history"]
+    for a in source["activities"]:
+        for z in a["zones"]:z["equivalent_time_min"]=z["raw_time_min"]*.8
+    rows=engine._daily_rows(source,TODAY)
+    base=planning_controls.reference(rows,TODAY)
+    ctx=load_progression.context(p,source,rows,TODAY)
+    values=[]
+    for offset in (14,42):
+        goals,focus,_=engine._goals(p,TODAY+timedelta(days=offset),"GENERAL_PREPARATION",False,{},None,2,4,rows,TODAY,False,1,ctx)
+        for z in engine.COMPONENTS:
+            if z not in focus:
+                assert goals[z]["target_index"]<=1+1e-9
+                assert goals[z]["target"]<=base[z]["c40"]*7+1e-9
+        values.append(goals)
+    # Same zone, same week in the wave and same history: a real difference
+    # must survive the growth regulator when its mesocycle role changes.
+    assert values[0]["Z3"]["target"] > 1.1*values[1]["Z3"]["target"]
+    assert values[1]["Z2"]["target"] > 1.1*values[0]["Z2"]["target"]
+
+
+def test_growth_ceiling_never_refills_a_deliberately_small_loading_wave():
+    p=configured(load_progression={"enabled":True});p["planning_controls"]["wave"]=[.7,.8,.8,.6]
+    repo=Repository();source=repo.envelope["snapshot_payload"]["load_history"]
+    rows=engine._daily_rows(source,TODAY);base=planning_controls.reference(rows,TODAY)
+    ctx=load_progression.context(p,source,rows,TODAY)
+    s=state(p,7)
+    raw=planning_controls.goals(p,s,base,{},limited=False,taper_factor=1)
+    result=load_progression.apply(raw,p,s,ctx,TODAY+timedelta(days=7),"GENERAL_PREPARATION",False,False,1,base)
+    requested=planning_controls.goals(p,s,base,{},limited=False,taper_factor=1)
+    assert all(result[z]["target"]<=requested[z]["target"] for z in engine.COMPONENTS)
+
+
 def test_manual_hybrid_and_calendar_directives_have_priority():
     p=configured();c=p["planning_controls"]
     c.update(accent_mode="MANUAL",accents=["Z5"])
