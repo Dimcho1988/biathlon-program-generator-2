@@ -5,6 +5,7 @@ replayed from those observations, never compounded by opening/regenerating a
 plan. Bounds are coaching priors, not validated safety thresholds.
 """
 from datetime import date, timedelta
+from copy import deepcopy
 from math import isfinite
 from statistics import median
 from hashlib import sha256
@@ -14,7 +15,7 @@ from .equivalence import EQUIVALENCE_VERSION
 from .constants import COMPONENTS
 from . import planning_controls
 
-VERSION = "load-progression-v3-stable-q"
+VERSION = "load-progression-v4-clamped-q"
 # Deliberately separate from speed-duration correction and canonical Tref.
 WEEKLY_Q_BOUNDS = {"Z1": (240., 840.), "Z2": (60., 300.), "Z3": (30., 120.),
                    "Z4": (10., 40.), "Z5": (5., 30.)}
@@ -126,6 +127,15 @@ def expert_positions(profile, source, rows, today):
                        "is_coaching_prior": True}
 
 
+def reference_from_history(q, prior, zone):
+    if zone not in WEEKLY_Q_BOUNDS:
+        return q, "OBSERVED" if q is not None else "UNKNOWN"
+    if q is None:
+        return prior, "EXPERT_FALLBACK"
+    low, high = WEEKLY_Q_BOUNDS[zone]
+    return min(high, max(low, q)), "LOWER_BOUND" if q < low else "UPPER_BOUND" if q > high else "OBSERVED"
+
+
 def context(profile, source, rows, today, adaptation=None, *, retained=None, physiology=None, periodization=None):
     config = settings(profile)
     controls = profile.get("planning_controls")
@@ -140,7 +150,13 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
     valid_units = history_matches(source, physiology)
     reliable = valid_units and not (quality.get("limited_activities") or quality.get("excluded_activities"))
     key = reference_key(profile, physiology)
-    frozen = retained if retained and retained.get("key") == key and retained.get("version") == VERSION else None
+    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v3-stable-q"} else None
+    if frozen and frozen["version"] != VERSION:
+        # Re-select the reference without replacing saved measurements or dates.
+        frozen = deepcopy(frozen)
+        frozen["version"] = VERSION
+        for z, c in frozen["components"].items():
+            c["reference_q"], c["reference_selection"] = reference_from_history(c["weekly_q"], c.get("expert_reference_q"), z)
     retained_valid = frozen
     if frozen and reliable and current["complete"] and any(frozen["components"][z]["weekly_q"] is None and current["components"][z]["weekly_q"] is not None for z in WEEKLY_Q_BOUNDS):
         frozen = None  # Fill missing components from first reliable observations.
@@ -160,10 +176,11 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
             effective = median(v["weekly_effective"] for v in samples) if samples else None
             low, high = WEEKLY_Q_BOUNDS.get(z, (None, None))
             prior = low + (high-low)*positions[z] if low is not None else None
+            reference_q, selection = reference_from_history(q, prior, z)
             frozen_components[z] = {"weekly_q": q, "weekly_effective": effective,
                 "weekly_minutes": median(v["weekly_minutes"] for v in samples) if samples else None,
                 "expert_reference_q": prior, "reference_position": positions.get(z),
-                "reference_q": max(q or 0., prior or 0.) if q is not None or prior is not None else None,
+                "reference_q": reference_q, "reference_selection": selection,
                 "source": "OBSERVED_CYCLES_AND_EXPERT" if samples else "EXPERT_ONLY" if prior is not None else "UNKNOWN",
                 "observed_windows": len(samples), "established_on": today.isoformat()}
         frozen = {"version": VERSION, "key": key, "created_on": today.isoformat(),
@@ -192,7 +209,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
            "anchor": frozen, "anchor_reused": reused, "reference": frozen,
            "previous_cycle": previous, "completed_cycle": current, "components": components,
            "adaptation": adaptation, "recovery_is_learning_input": False, "requires_catchup": False,
-           "reference_is_clamped": False, "percentages_are_coaching_parameters": True,
+           "reference_is_clamped": any(c["reference_selection"] in {"LOWER_BOUND", "UPPER_BOUND"} for c in components.values()), "percentages_are_coaching_parameters": True,
            "history_usable": reliable, "equivalence_version": EQUIVALENCE_VERSION,
            "overall_basis": "DIRECT_Q_COMPONENT_TARGETS_EFFECTIVE_LOAD_CHECKED_SEPARATELY"}
     if periodization:
@@ -205,7 +222,8 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
             c["attainable_q"] = c["weekly_q"]*point[z] if c["weekly_q"] is not None else None
             c["limitation"] = ("NO_RELIABLE_COMPONENT_HISTORY" if c["weekly_q"] is None else
                                "NO_OBSERVED_EXPOSURE" if c["weekly_q"] == 0 else
-                               "GRADUAL_APPROACH_TO_EXPERT_REFERENCE" if c["weekly_q"] < (c["expert_reference_q"] or 0) else None)
+                               "BELOW_REFERENCE_BOUND" if c["reference_selection"] == "LOWER_BOUND" else
+                               "ABOVE_REFERENCE_BOUND" if c["reference_selection"] == "UPPER_BOUND" else None)
     return ctx
 
 

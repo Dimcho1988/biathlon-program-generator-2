@@ -28,15 +28,15 @@ it("selects a range across months without creating an event until requested",asy
     expect(selected).toHaveBeenCalledWith("2026-09-29","2026-10-02");
   } finally {await act(async()=>root.unmount());}
 });
-it("keeps absent observed growth unknown and labels Q and E separately",()=>{
+it("keeps absent observed growth unknown and hides effective load",()=>{
   const html=renderToStaticMarkup(<LoadProgressionSummary plan={{long_term:{progression:{basis:"COMPLETED_CYCLE",components:{Z3:{weekly_q:90,annual_rate_percent:15,observed_cycle_growth_percent:{weekly_q:null,weekly_effective:null}}}}}}}/>);
   expect(html).toContain("завършен мезоцикъл");expect(html).toContain("Реална промяна Q");
-  expect(html).toContain("Реална промяна E");expect(html).toContain("—");
+  expect(html).not.toContain("Реална промяна E");expect(html).toContain("—");
 });
 it("separates the expert destination from the observed starting volume",()=>{
-  const html=renderToStaticMarkup(<LoadProgressionSummary plan={{long_term:{progression:{basis:"STABLE_PREPARATION_REFERENCE",anchor:{created_on:"2026-09-25",windows:[]},target_date:"2027-01-01",components:{Z5:{weekly_q:2,expert_reference_q:25,reference_q:25,target_q:26,attainable_q:2.08,annual_rate_percent:14,limitation:"GRADUAL_APPROACH_TO_EXPERT_REFERENCE"}}}}}}/>);
-  expect(html).toContain("0:02:00");expect(html).toContain("0:25:00");
-  expect(html).toContain("Постепенно приближаване");expect(html).toContain("5% за удар над долната");
+  const html=renderToStaticMarkup(<LoadProgressionSummary plan={{long_term:{progression:{basis:"STABLE_PREPARATION_REFERENCE",anchor:{created_on:"2026-09-25",windows:[]},target_date:"2027-01-01",components:{Z5:{weekly_q:2,expert_reference_q:25,expert_q_bounds:[5,30],reference_q:5,target_q:5.2,attainable_q:2.08,annual_rate_percent:14,limitation:"BELOW_REFERENCE_BOUND"}}}}}}/>);
+  expect(html).toContain("0:02:00");expect(html).toContain("0:05:00");expect(html).not.toContain("0:25:00");
+  expect(html).toContain("долната граница");expect(html).toContain("5% за удар над долната");
   expect(html).toContain("2027-01-01");expect(html).toContain("не е предписание за намаляване");
 });
 it("validates reference positions and preserves zero as an explicit choice",()=>{

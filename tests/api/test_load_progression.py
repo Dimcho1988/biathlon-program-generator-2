@@ -38,8 +38,8 @@ def test_curve_uses_separate_q_bounds_and_preserves_observed_outliers():
         for z in a["zones"]: z["equivalent_time_min"] = 1000
     ctx=policy.context(configured(),source,rows,TODAY)
     assert ctx["components"]["Z3"]["weekly_q"] > 1.3*120
-    assert ctx["components"]["Z3"]["annual_rate_percent"] == 0
-    assert ctx["reference_is_clamped"] is False
+    assert ctx["components"]["Z3"]["annual_rate_percent"] == 10
+    assert ctx["reference_is_clamped"] is True
 
 
 def test_complete_wave_including_recovery_has_bounded_growth_not_mean_ratio_growth():

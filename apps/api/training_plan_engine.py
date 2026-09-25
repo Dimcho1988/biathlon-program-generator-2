@@ -24,8 +24,8 @@ from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VER
 from . import model_service, load_adaptation, race_duration
 from .response_service import ResponseStore
 
-VERSION = "training-management-v12"
-PARAMETER_VERSION = "management-parameters-v12"
+VERSION = "training-management-v13"
+PARAMETER_VERSION = "management-parameters-v13"
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
     "RE_ENTRY": ("Z1", "STR"),
@@ -634,7 +634,8 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
                                           rows, today, limited if progression else False, _taper_factor(periodization, day), progression, periodization=periodization, support_limited=limited, actual_reference=actual_reference)
             for z in COMPONENTS:
                 targets[z].append(goals[z]["target"])
-                q_targets[z].append(goals[z].get("target_weekly_q"))
+                # Strength has no aerobic cascade: its direct Q equals its E.
+                q_targets[z].append(goals[z]["target"] if z == "STR" else goals[z].get("target_weekly_q"))
             phases.append(period)
             selected.extend(focus)
             meso_weeks.append(cycle["week"] if cycle else week + 1)
@@ -644,7 +645,9 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
             target = sum(targets[z]) / len(targets[z])
             known = actual_base[z]["known"] or z in profile.get("component_targets_weekly", {})
             base = actual_base[z]
-            components[z] = {"target_weekly_q": _round(sum(q_targets[z])/len(q_targets[z])) if all(v is not None for v in q_targets[z]) else None,
+            q_known = all(v is not None for v in q_targets[z]) and (z != "STR" or known)
+            components[z] = {"target_weekly_q": _round(sum(q_targets[z])/len(q_targets[z])) if q_known else None,
+                             "target_period_q": _round(sum(q_targets[z])/7) if q_known else None,
                              "target_weekly_effective": _round(target) if known else None,
                              "target_period_effective": _round(sum(targets[z])/7) if known else None,
                              "target_index_7_40": _round((base["b50"] + target / 7) / (base["b50"] + base["c40"])) if base["known"] else None}

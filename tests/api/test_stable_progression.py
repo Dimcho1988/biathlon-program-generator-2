@@ -20,6 +20,48 @@ def phases(p):
     return engine.build_periodization(p['program_start'], p['program_end'], [], reentry_days_override=0, taper_days=0)
 
 
+@pytest.mark.parametrize('observed_q,expected,selection', [(58,58,'OBSERVED'),(20,30,'LOWER_BOUND'),(150,120,'UPPER_BOUND'),(30,30,'OBSERVED'),(120,120,'OBSERVED')])
+def test_coach_reference_clamps_history_instead_of_replacing_it_with_expert_position(observed_q, expected, selection):
+    p=configured();_,source,rows=observed()
+    p['load_progression']['component_reference_positions']={'Z3':.95}
+    source['activities']=[{'date':(TODAY-timedelta(days=n)).isoformat(),'sport':'Run','duration_min':60,
+        'zones':[{'zone':z,'raw_time_min':observed_q if z=='Z3' else 0,
+                  'equivalent_time_min':observed_q if z=='Z3' else 0} for z in policy.WEEKLY_Q_BOUNDS]}
+        for n in (1,8,15,22)]
+    c=policy.context(p,source,rows,TODAY)['components']['Z3']
+    assert c['weekly_q']==pytest.approx(observed_q)
+    assert c['reference_q']==pytest.approx(expected)
+    assert c['reference_selection']==selection
+    assert c['annual_rate_percent']==pytest.approx(policy.annual_rate(expected,'Z3',policy.DEFAULTS))
+
+
+def test_legacy_anchor_migration_preserves_measurements_even_when_history_has_expired():
+    p=configured();_,source,rows=observed()
+    anchor=policy.context(p,source,rows,TODAY)['anchor']
+    anchor['version']='load-progression-v3-stable-q'
+    anchor['components']['Z3'].update(weekly_q=58,reference_q=110,expert_reference_q=110)
+    before=deepcopy(anchor)
+    ctx=policy.context(p,{'quality':{'excluded_activities':1}},[],TODAY+timedelta(days=100),retained=anchor)
+    assert ctx['anchor_reused'] and not ctx['history_usable']
+    assert ctx['anchor']['created_on']==before['created_on']
+    assert ctx['components']['Z3']['weekly_q']==58
+    assert ctx['components']['Z3']['reference_q']==58
+    assert anchor==before
+
+
+def test_outlook_exposes_direct_q_for_exact_period_and_strength_without_using_aerobic_e():
+    repo,_,_=observed()
+    plan=engine.generate_plan(repo,'athlete',configured(strength_enabled=True),start_date=TODAY,now=NOW)
+    weeks=plan['long_term']['weeks']
+    assert any(w['days']<7 for w in weeks)
+    for week in weeks:
+        for z in ('Z3','STR'):
+            c=week['components'][z]
+            assert c['target_period_q']==pytest.approx(c['target_weekly_q']*week['days']/7,abs=.002)
+        assert week['components']['STR']['target_period_q']==week['components']['STR']['target_period_effective']
+    assert any(w['components']['Z3']['target_period_q']!=w['components']['Z3']['target_period_effective'] for w in weeks)
+
+
 def test_reference_survives_rotation_loss_of_history_and_repeated_reads():
     p=configured(); _,source,rows=observed()
     original=deepcopy(source)
@@ -59,9 +101,9 @@ def test_low_observed_z5_gets_expert_destination_without_immediate_jump():
     ctx=policy.context(p,source,rows,TODAY,periodization=phases(p))
     c=ctx['components']['Z5']
     assert c['expert_reference_q']==25  # 5 + .8*(30-5), all in direct Q.
-    assert c['reference_q']==25 and c['weekly_q'] < 2.01
-    assert c['target_q']>=25 and c['attainable_q']<3
-    assert c['limitation']=='GRADUAL_APPROACH_TO_EXPERT_REFERENCE'
+    assert c['reference_q']==5 and c['weekly_q'] < 2.01
+    assert c['target_q']>=5 and c['attainable_q']<3
+    assert c['limitation']=='BELOW_REFERENCE_BOUND'
     goals,_,_=engine._goals(p,TODAY,'GENERAL_PREPARATION',False,{},None,0,4,rows,TODAY,False,1,ctx)
     assert goals['Z5']['target_weekly_q']<3
     assert ctx['components']['STR']['expert_reference_q'] is None
@@ -93,7 +135,7 @@ def test_three_whole_cycles_use_median_including_unloading():
     ctx=policy.context(p,source,rows,TODAY)
     assert len(ctx['anchor']['windows'])==3
     assert ctx['components']['Z5']['weekly_q']==140
-    assert ctx['components']['Z5']['annual_rate_percent']==0
+    assert ctx['components']['Z5']['annual_rate_percent']==10
 
 
 def test_trajectory_freezes_during_recovery_and_never_compresses_annual_growth():

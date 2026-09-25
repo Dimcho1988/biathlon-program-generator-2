@@ -60,15 +60,16 @@ describe("management data and review interface", () => {
       schema_version: "training-outlook-preview-v1", profile_revision: 8, generated_at: "2026-09-21T10:00:00Z",
       volume_context: { historical_training_weekly_minutes: 744, available_weekly_minutes: 390 },
       long_term: { schema_version: "training-outlook-v1", weeks: [{ start_date: "2026-09-21", end_date: "2026-09-27", accents: ["Z4"], phases: ["SPECIAL_PREPARATION"], volume_budget_minutes: 390,
-        components: { Z4: { target_weekly_effective: 321, target_index_7_40: 1.65 } } }] },
+        components: { Z4: { target_period_q: 58, target_weekly_effective: 321, target_index_7_40: 1.65 } } }] },
       periodization: { phases: [] }, history_comparison: [],
     } });
     const props = { athleteName: "Спортист", canEdit: true, initialProfile: { configured: true, profile, revision: 8 }, initialDrafts: [record], today: "2026-09-21" };
     const html = renderToStaticMarkup(<TrainingManagement {...props} initialView="overview" initialOutlook={outlook} />);
     expect(html).toContain("Актуални цели от записания профил");
     expect(html).toContain("версия 8");
-    expect(html).toContain("1,65");
-    expect(html).toContain("321");
+    expect(html).not.toContain("1,65");
+    expect(html).not.toContain("321");
+    expect(html).toContain("0:58:00");
     expect(html).toContain("Записаното свободно време е по-малко");
     expect(html).not.toContain("Равномерна аеробна работа");
     expect(html).not.toContain("Показана е запазената версия");
