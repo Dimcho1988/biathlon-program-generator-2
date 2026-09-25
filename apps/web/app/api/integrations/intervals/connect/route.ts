@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { retryableInfrastructureStatus, waitForApi } from "../../../../../lib/api-readiness";
+import { markApiUnavailable, retryableInfrastructureStatus, waitForApi } from "../../../../../lib/api-readiness";
 import { createClient } from "../../../../../lib/supabase/server";
 
 const apiConfiguration = () => {
@@ -47,6 +47,8 @@ export async function GET(request: Request) {
     let response = await startAuthorization(baseUrl, token);
     if (retryableInfrastructureStatus(response.status)) {
       stage = `api-wake-${response.status}`;
+      markApiUnavailable(baseUrl);
+      await response.body?.cancel();
       await waitForApi(baseUrl);
       stage = "api-retry";
       response = await startAuthorization(baseUrl, token);

@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+from time import perf_counter
 import re
 import secrets
 from typing import Any, Mapping
@@ -203,11 +204,14 @@ class SupabasePilotRepository(SnapshotRepository):
         )
 
     def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        from .request_metrics import current_metrics
         headers = {**self._headers, **kwargs.pop("headers", {})}
         resource = path.split("?", 1)[0]
         response: httpx.Response | None = None
         attempts = 2 if method.upper() == "GET" else 1
         for attempt in range(attempts):
+            started = perf_counter()
+            response = None
             try:
                 response = self._client.request(
                     method, self._base_url + path, headers=headers, **kwargs
@@ -219,6 +223,12 @@ class SupabasePilotRepository(SnapshotRepository):
                     resource,
                 )
                 raise PersistentStoreFailure("Persistent store is unavailable") from exc
+            finally:
+                metrics = current_metrics.get()
+                if metrics is not None:
+                    metrics.calls += 1
+                    metrics.seconds += perf_counter() - started
+                    metrics.bytes += len(response.content) if response is not None else 0
             if 200 <= response.status_code < 300:
                 return response
             if attempt == 0 and _retryable_store_auth_failure(response):
@@ -691,9 +701,9 @@ class SupabasePilotRepository(SnapshotRepository):
     ) -> Mapping[str, Any] | None:
         """Pin one generation and read its small catalog without full HRmod runs.
 
-        The ordinary calendar also loads HRmod zone summaries from large JSON
-        documents. TI only needs immutable run keys; its summaries are fetched
-        separately. Keep the captured generation even if a sync activates midway.
+        The ordinary calendar also includes HRmod zone summaries. TI only needs
+        immutable run keys; its own compact summaries are fetched separately.
+        Keep the captured generation even if a sync activates midway.
         """
         analysis = self.active_analysis(athlete_alias)
         if analysis is None:
@@ -1305,8 +1315,7 @@ class SupabasePilotRepository(SnapshotRepository):
         for offset in range(0, len(unique_keys), 50):
             batch = unique_keys[offset:offset + 50]
             response = self._request(
-                "GET", "/onflows_activity_derived_runs?select=run_key,activity_ref,"
-                "trainability_index:result_payload->trainability_index"
+                "GET", "/onflows_activity_run_summaries?select=run_key,activity_ref,trainability_index"
                 f"&athlete_alias=eq.{quote(athlete_alias, safe='') }"
                 f"&run_key=in.({','.join(batch)})&limit=50",
             )
@@ -1633,8 +1642,7 @@ class SupabasePilotRepository(SnapshotRepository):
         reference = quote(activity_ref, safe="")
         response = self._request(
             "GET",
-            "/onflows_activity_derived_runs?select=run_key,"
-            "configuration_fingerprint:result_payload->>configuration_fingerprint,created_at"
+            "/onflows_activity_run_summaries?select=run_key,configuration_fingerprint,created_at"
             f"&athlete_alias=eq.{alias}&activity_ref=eq.{reference}"
             "&order=created_at.desc&limit=1",
         )

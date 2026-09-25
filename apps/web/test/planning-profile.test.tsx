@@ -1,3 +1,4 @@
+import { markApiUnavailable } from "../lib/api-readiness";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultManagementProfile, defaultPlanningControls } from "../lib/training-management";
@@ -102,7 +103,7 @@ const planningCalendar: PlanningCalendarResponse = {
 };
 
 describe("planning-profile-v1 contract", () => {
-  afterEach(() => {
+  afterEach(() => { markApiUnavailable("https://api.example.test");
     vi.unstubAllGlobals();
     delete process.env.ONFLOWS_API_BASE_URL;
     delete process.env.ONFLOWS_SERVICE_TOKEN;

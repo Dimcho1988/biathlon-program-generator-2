@@ -63,7 +63,8 @@ async function proxy(request: Request, context: Context) {
     const url = new URL(`/api/v2/athlete/management/${endpoint}`, base);
     if (startDate !== null) url.searchParams.set("start_date", startDate);
     const response = await fetch(url, {
-      method: request.method, cache: "no-store", signal: AbortSignal.timeout(75_000),
+      method: request.method, cache: "no-store", signal: request.method === "GET"
+        ? AbortSignal.any([request.signal, AbortSignal.timeout(75_000)]) : AbortSignal.timeout(75_000),
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-OnFlows-Athlete-Alias": access.athleteAlias, "X-OnFlows-Actor-Id": access.actorUserId },
       ...(body ? { body } : {}),
     });

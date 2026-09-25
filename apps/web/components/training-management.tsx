@@ -78,8 +78,8 @@ function DayCard({ day, expanded = false }: { day: DraftDay; expanded?: boolean 
     <SingleSessionCard key={index} day={{...day, session, explanation: "Сесия "+(index+1)+" от "+sessions.length+". "+day.explanation}} expanded={expanded}/>)}</section>;
 }
 
-async function requestJson(path: string, method: "GET" | "PUT" | "POST", body?: unknown) {
-  const response = await fetch(`/api/athlete/management/${path}`, { method, cache: "no-store", headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+async function requestJson(path: string, method: "GET" | "PUT" | "POST", body?: unknown, signal?: AbortSignal) {
+  const response = await fetch(`/api/athlete/management/${path}`, { method, signal, cache: "no-store", headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const value: unknown = await response.json();
   if (!response.ok) throw new Error(isRecord(value) && typeof value.error === "string" ? value.error : "Неуспешна заявка.");
   return value;
@@ -104,14 +104,23 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   const archivedDraft = showDraft && !!draft && draft.stale !== false;
 
   useEffect(() => {
+    if (initialView !== "week") return;
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    let request: AbortController | null = null;
     const refresh = async () => {
-      if (document.visibilityState !== "visible") return;
-      try { const latest = parseActivePlanResponse(await requestJson("active", "GET")); if (!cancelled) setActive(latest); } catch { /* Keep the last known state; writes still enforce current revisions. */ }
+      try {
+        if (document.visibilityState !== "visible") return;
+        request = new AbortController();
+        const signal = AbortSignal.any([request.signal, AbortSignal.timeout(75_000)]);
+        const latest = parseActivePlanResponse(await requestJson("active", "GET", undefined, signal));
+        if (!cancelled) setActive(latest);
+      } catch { /* Keep the last known state; writes still enforce current revisions. */ }
+      finally { if (!cancelled) timer = setTimeout(refresh, 60_000); }
     };
-    const timer = setInterval(refresh, 60_000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, []);
+    timer = setTimeout(refresh, 60_000);
+    return () => { cancelled = true; clearTimeout(timer); request?.abort(); };
+  }, [initialView]);
 
   async function activateDraft() {
     if (!draft) return;
