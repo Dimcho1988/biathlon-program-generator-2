@@ -52,7 +52,10 @@ def test_complete_wave_including_recovery_has_bounded_growth_not_mean_ratio_grow
         values.append(goals["Z3"])
     reference=ctx["components"]["Z3"]["weekly_effective"]
     rate=ctx["components"]["Z3"]["governed_annual_rate_percent"]
-    assert sum(v["target"] for v in values)/4 == pytest.approx(reference*(1+rate/100)**(28/365.25))
+    # Recovery has a final independent ceiling; it may reduce the full-cycle
+    # mean but cannot be refilled to force the nominal annual growth.
+    assert sum(v["target"] for v in values)/4 <= reference*(1+rate/100)**(28/365.25)
+    assert values[-1]["target"] <= .65*base["Z3"]["c40"]*7
     assert values[-1]["target"] < reference < values[2]["target"]
     for v in values:
         assert v["target_index"] == pytest.approx((base["Z3"]["b50"]+v["target"]/7)/(base["Z3"]["b50"]+base["Z3"]["c40"]))

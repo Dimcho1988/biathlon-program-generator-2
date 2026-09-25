@@ -158,7 +158,7 @@ def projected_cycle_bases(context, periodization, end, profile=None):
         phase = next((p["kind"] for p in periodization["phases"] if p["start_date"] <= day.isoformat() <= p["end_date"]), None)
         taper = any(p["start_date"] <= day.isoformat() <= p["end_date"] for p in periodization.get("taper_windows", []))
         multiplier = phase_factor(phase, taper, config)
-        state = planning_controls.resolve(profile, day, phase, accents(profile, phase, ["Z1"])) if profile else None
+        state = planning_controls.resolve(profile, day, phase, accents(profile, phase, ["Z1"]), periodization=periodization) if profile else None
         for z,c in context["components"].items():
             rate = annual_rate(c["weekly_q"]*factors[z], z, config) if c["weekly_q"] is not None and c["annual_rate_percent"] is not None else 0.
             rate = min(rate or 0., c["governed_annual_rate_percent"] or 0.)
@@ -189,7 +189,7 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
         learning = min(adaptation.get("global", {}).get("growth_factor", 1.), feedback.get("growth_factor", 1.))
         if projection_factor != 1. and annual is not None:
             annual = min(annual, annual_rate(observed["weekly_q"]*projection_factor, z, config) or 0.)
-        rate = (annual or 0.)*phase*learning if not limited and z in state["accents"] else 0.
+        rate = (annual or 0.)*phase*learning if not limited and z in state.get("mesocycle_accents", state["accents"]) else 0.
         # Project one cycle from its observed or explicitly projected baseline.
         # Future bases remain outlook-only; they never create catch-up debt.
         growth_factor = (1+rate/100)**(context["cycle_days"]/365.25)
@@ -197,13 +197,16 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
         target = goal["target"]
         if automatic and baseline is not None and not limited and period in {"GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"}:
             base = actual_base[z]
-            accent_index = state["target_index"] if z in state["accents"] else state["maintenance_index"]
+            accent_index = state["target_index"] if z in state.get("mesocycle_accents", state["accents"]) else state["maintenance_index"]
             shape = []
             for i,wave in enumerate(controls["wave"]):
                 index = min(2., accent_index*wave)
                 if i == len(controls["wave"])-1:
                     index = min(index, .9)
-                shape.append(max(0., 7*(index*(base["b50"]+base["c40"])-base["b50"])))
+                value = max(0., 7*(index*(base["b50"]+base["c40"])-base["b50"]))
+                if i == len(controls["wave"])-1 and z in state.get("recovery_support_components", []):
+                    value = min(base["c40"]*7*.9, max(0., 7*(min(1., state["maintenance_index"])*(base["b50"]+base["c40"])-base["b50"])))
+                shape.append(value)
             mean = sum(shape)/len(shape)
             # Normalize the whole wave in E, not the arithmetic mean of R.
             target = baseline*growth_factor*shape[state["week"]-1]/mean if mean > 0 else 0.

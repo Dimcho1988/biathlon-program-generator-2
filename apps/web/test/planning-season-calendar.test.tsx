@@ -104,3 +104,14 @@ it("saves standalone events before a new athlete has completed the planning prof
   await click(day("2026-11-01")); await click(day("2026-11-05")); await click(button("Добави избрания период")); await click(button("Запази календара"));
   expect(fetchMock).toHaveBeenCalledTimes(1); expect(fetchMock.mock.calls[0][0]).toBe("/api/athlete/planning-calendar");
 });
+
+it("distinguishes mesocycle loading focus from conditional support during unloading", () => {
+  const plan = {long_term:{weeks:[{start_date:"2026-10-01",end_date:"2026-10-07",accents:["STR"],cycle:{kind:"RECOVERY",name:"Базов мезоцикъл",focus_role:"RECOVERY_SUPPORT",mesocycle_accents:["Z1","Z3"],reason:"Общият товар остава намален."}}]}};
+  const item=timelineItems([],[],plan)[0];
+  expect(item.label).toBe("Разтоварване · поддържане STR");
+  expect(item.detail).toContain("водещи за мезоцикъла: Z1, Z3");
+  expect(item.detail).toContain("Общият товар остава намален");
+  expect(item.tone).toBe("recovery");
+  plan.long_term.weeks[0].accents=[];
+  expect(timelineItems([],[],plan)[0].label).toBe("Разтоварване");
+});

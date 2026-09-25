@@ -29,7 +29,9 @@ export function timelineItems(events: PlanningCalendarEvent[], cycles: CycleDire
   for (const w of Array.isArray(longTerm.weeks) ? longTerm.weeks.filter(isRecord) : []) {
     if (!validPeriod(w.start_date, w.end_date)) continue;
     const cycle = isRecord(w.cycle) ? w.cycle : {};
-    items.push({ id: `week-${w.start_date}`, start: w.start_date, end: String(w.end_date), label: Array.isArray(w.accents) ? w.accents.join(" · ") : "Без акцент", detail: `${String(cycle.name ?? "Седмична вълна")} · план по запазените настройки`, tone: cycle.kind === "RECOVERY" ? "recovery" : cycle.kind === "STRESS" ? "stress" : "accent", lane: "Акценти" });
+    const accents = Array.isArray(w.accents) ? w.accents.join(" · ") : "";
+    const loading = Array.isArray(cycle.mesocycle_accents) ? cycle.mesocycle_accents.join(", ") : "";
+    items.push({ id: `week-${w.start_date}`, start: w.start_date, end: String(w.end_date), label: cycle.focus_role === "RECOVERY_SUPPORT" ? `Разтоварване${accents ? ` · поддържане ${accents}` : ""}` : accents || "Без акцент", detail: `${String(cycle.name ?? "Седмична вълна")}${loading ? ` · водещи за мезоцикъла: ${loading}` : ""}${cycle.reason ? ` · ${String(cycle.reason)}` : " · план по запазените настройки"}`, tone: cycle.kind === "RECOVERY" ? "recovery" : cycle.kind === "STRESS" ? "stress" : "accent", lane: "Акценти" });
   }
   return items;
 }
