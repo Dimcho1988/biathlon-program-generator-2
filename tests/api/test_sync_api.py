@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from apps.api import dependencies
+
+
 from copy import deepcopy
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
-from apps.api import main as api_main
 from apps.api.main import app
+from apps.api import sync_service
 from apps.api.training_status import build_demo_training_status
 
 
@@ -156,8 +159,8 @@ def test_sync_job_endpoint_is_strict_and_only_enqueues(monkeypatch):
 
     repository = Repository()
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
-    monkeypatch.setattr(api_main, "_repository", lambda: repository)
-    monkeypatch.setattr(api_main, "datetime", FixedDateTime)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
+    monkeypatch.setattr(sync_service, "datetime", FixedDateTime)
 
     response = TestClient(app).post(
         "/api/v2/real/sync-jobs",
@@ -213,7 +216,7 @@ def test_sync_status_maps_internal_worker_state_without_mutation(monkeypatch):
             }
 
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
-    monkeypatch.setattr(api_main, "_repository", lambda: Repository())
+    monkeypatch.setattr(dependencies, "repository", lambda: Repository())
 
     response = TestClient(app).get("/api/v2/real/sync-status", headers=AUTH)
 
@@ -267,7 +270,7 @@ def test_patch_enqueue_requires_an_activated_generation_base(monkeypatch):
     client = TestClient(app)
 
     current = Repository(_active_snapshot(), "generation-current")
-    monkeypatch.setattr(api_main, "_repository", lambda: current)
+    monkeypatch.setattr(dependencies, "repository", lambda: current)
     recovery = client.post(
         "/api/v2/real/sync-jobs", headers=AUTH, json={"scope": "RECOVERY"}
     )
@@ -283,7 +286,7 @@ def test_patch_enqueue_requires_an_activated_generation_base(monkeypatch):
     assert current.calls[1]["job_kind"] == "WELLNESS_SYNC"
 
     unsupported_source = Repository(_legacy_snapshot(), "generation-legacy-source")
-    monkeypatch.setattr(api_main, "_repository", lambda: unsupported_source)
+    monkeypatch.setattr(dependencies, "repository", lambda: unsupported_source)
     upgraded_source = client.post(
         "/api/v2/real/sync-jobs", headers=AUTH, json={"scope": "RECOVERY"}
     )
@@ -298,7 +301,7 @@ def test_patch_enqueue_requires_an_activated_generation_base(monkeypatch):
     assert unsupported_source.calls[1]["job_kind"] == "WELLNESS_SYNC"
 
     legacy = Repository(_active_snapshot(), None)
-    monkeypatch.setattr(api_main, "_repository", lambda: legacy)
+    monkeypatch.setattr(dependencies, "repository", lambda: legacy)
     upgraded_recovery = client.post(
         "/api/v2/real/sync-jobs", headers=AUTH, json={"scope": "RECOVERY"}
     )
@@ -313,7 +316,7 @@ def test_patch_enqueue_requires_an_activated_generation_base(monkeypatch):
     assert legacy.calls[1]["job_kind"] == "FULL_SYNC"
 
     missing = Repository(None, None)
-    monkeypatch.setattr(api_main, "_repository", lambda: missing)
+    monkeypatch.setattr(dependencies, "repository", lambda: missing)
     upgraded_missing = client.post(
         "/api/v2/real/sync-jobs", headers=AUTH, json={"scope": "RECOVERY"}
     )
@@ -346,7 +349,7 @@ def test_dashboard_view_uses_one_generation_pinned_repository_read(monkeypatch):
 
     repository = Repository()
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
-    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
 
     response = TestClient(app).get(
         "/api/v2/real/dashboard-view"
@@ -389,7 +392,7 @@ def test_dashboard_view_keeps_legacy_analysis_visible_without_recovery(monkeypat
             }
 
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
-    monkeypatch.setattr(api_main, "_repository", lambda: Repository())
+    monkeypatch.setattr(dependencies, "repository", lambda: Repository())
 
     response = TestClient(app).get(
         "/api/v2/real/dashboard-view"

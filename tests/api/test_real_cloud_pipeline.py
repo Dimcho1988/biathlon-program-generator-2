@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from apps.api import dependencies
+
+
 from datetime import date, datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
-from apps.api import main as api_main
 from apps.api.cloud import AthleteModelSettings, InMemorySnapshotRepository
 from apps.api.main import app
 from apps.api.real_service import (
@@ -452,7 +454,7 @@ def test_completed_work_endpoint_is_profile_scoped_and_validates_the_period(monk
     repo = InMemorySnapshotRepository()
     refresh(repo, environ=ENV, client=Client(), period_end=date(2026, 8, 15))
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
-    monkeypatch.setattr(api_main, "_repository", lambda: repo)
+    monkeypatch.setattr(dependencies, "repository", lambda: repo)
     client = TestClient(app)
     headers = {
         "Authorization": "Bearer service-secret",

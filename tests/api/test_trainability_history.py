@@ -1,3 +1,4 @@
+from apps.api import dependencies
 import base64
 from urllib.parse import parse_qs, urlparse
 
@@ -32,7 +33,7 @@ class PinnedRepository:
 
 def test_history_reads_pinned_keys_and_marks_old_results_for_refresh(monkeypatch):
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
-    monkeypatch.setattr(main, "_repository", lambda: PinnedRepository())
+    monkeypatch.setattr(dependencies, "repository", lambda: PinnedRepository())
     with TestClient(main.app) as client:
         assert client.get("/api/v2/real/trainability" + PERIOD).status_code == 401
         response = client.get("/api/v2/real/trainability" + PERIOD, headers=HEADERS)
@@ -48,7 +49,7 @@ def test_history_fails_closed_if_pinned_summary_belongs_to_other_activity(monkey
         def trainability_summaries(self, alias, keys):
             return {KEY: {"activity_ref": "another-activity", "trainability_index": {}}}
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
-    monkeypatch.setattr(main, "_repository", lambda: Mismatched())
+    monkeypatch.setattr(dependencies, "repository", lambda: Mismatched())
     with TestClient(main.app) as client:
         response = client.get("/api/v2/real/trainability" + PERIOD, headers=HEADERS)
     assert response.status_code == 503
@@ -72,7 +73,7 @@ def test_history_serves_only_the_current_normalized_model(monkeypatch, legacy):
             return {KEY: {"activity_ref": REF, "trainability_index": index}}
 
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
-    monkeypatch.setattr(main, "_repository", lambda: WithIndex())
+    monkeypatch.setattr(dependencies, "repository", lambda: WithIndex())
     with TestClient(main.app) as client:
         response = client.get("/api/v2/real/trainability" + PERIOD, headers=HEADERS)
     assert response.status_code == 200

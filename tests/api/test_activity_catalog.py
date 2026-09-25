@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from apps.api import dependencies
+
+
 from datetime import date, datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
-from apps.api import main as api_main
 from apps.api.activity_catalog import (
     activity_calendar_payload,
     extract_activity_metadata,
@@ -319,7 +321,7 @@ def test_calendar_contract_is_summary_only_and_athlete_isolated(monkeypatch):
         }],
     )
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
-    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
     response = TestClient(app).get(
         "/api/v2/real/activities?period_start=2026-08-01&period_end=2026-08-15",
         headers={
@@ -355,7 +357,7 @@ def test_calendar_adds_daily_wellness_and_hrmod_final_zone_visualization(monkeyp
         now=datetime(2026, 8, 15, 12, tzinfo=timezone.utc),
     )
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
-    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
 
     response = TestClient(app).get(
         "/api/v2/real/activities?period_start=2026-08-15&period_end=2026-08-15",
@@ -392,7 +394,7 @@ def test_calendar_marks_legacy_snapshot_as_wellness_refresh_required(monkeypatch
         "recovery_history": None,
     })
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
-    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
 
     response = TestClient(app).get(
         "/api/v2/real/activities?period_start=2026-08-15&period_end=2026-08-15",

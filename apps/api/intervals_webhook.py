@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from . import main as api_main
+from . import dependencies
 from .cloud import service_token_valid
 from .oauth_store import PersistentStoreFailure, SupabasePilotRepository
 
@@ -153,7 +153,7 @@ async def intervals_webhook(request: Request) -> dict[str, object]:
 
 def _enqueue_events(grouped: dict[str, list[Mapping[str, Any]]]) -> dict[str, object]:
     try:
-        repository = api_main._repository()
+        repository = dependencies.repository()
         scheduled = 0
         for provider_athlete_id, events in grouped.items():
             athlete_alias = repository.alias_for_provider(provider_athlete_id)

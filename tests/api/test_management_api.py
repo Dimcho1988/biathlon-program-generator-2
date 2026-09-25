@@ -1,3 +1,5 @@
+from apps.api.routes import management
+from apps.api import dependencies
 from copy import deepcopy
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
@@ -55,9 +57,9 @@ def api(monkeypatch):
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
     store = Store()
     repository = SimpleNamespace(athlete_settings=lambda alias: SimpleNamespace(timezone="Europe/Sofia"))
-    monkeypatch.setattr(main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
     monkeypatch.setattr(model_service, "speed_view", lambda *args, **kwargs: {"status":"REFERENCE_ONLY"})
-    monkeypatch.setattr(main, "ManagementStore", lambda repo: store)
+    monkeypatch.setattr(management, "ManagementStore", lambda repo: store)
     monkeypatch.setattr(service, "ManagementStore", lambda repo: store)
     return TestClient(main.app), store, repository
 
@@ -97,7 +99,7 @@ def test_profile_history_uses_the_same_saved_break_rule_as_the_planner(api, monk
         @classmethod
         def now(cls, tz=None):
             return NOW.astimezone(tz)
-    monkeypatch.setattr(main, "datetime", Clock)
+    monkeypatch.setattr(management, "datetime", Clock)
     store.current["profile"]["planning_controls"] = {"history_gap_days": 7}
     restricted = client.get("/api/v2/athlete/management/profile", headers=HEADERS).json()["history"]["history_policy"]
     assert restricted["gap_threshold_days"] == 7 and restricted["usable"] is False

@@ -1,3 +1,4 @@
+from apps.api import dependencies
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -170,7 +171,7 @@ def test_manual_measurements_and_attestations_are_validated(changes):
 def test_api_requires_authenticated_profile_and_actor(monkeypatch):
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "test-service-token")
     repo = Repository()
-    monkeypatch.setattr(main, "_repository", lambda: repo)
+    monkeypatch.setattr(dependencies, "repository", lambda: repo)
     client = TestClient(main.app)
     url = "/api/v2/athlete/models/speed-test-manual"
     payload = body().model_dump(mode="json")

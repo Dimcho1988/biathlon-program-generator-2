@@ -1,3 +1,4 @@
+from apps.api import dependencies, sync_service
 """Regression gates for read optimizations: identical results, fewer reads."""
 import asyncio
 from collections import Counter
@@ -99,11 +100,11 @@ def test_management_batch_equals_individual_resources_and_removes_repeat_reads(m
         'active': management_lifecycle.current(plain, 'ath-test'),
         'drafts': management_service.history(plain, 'ath-test') if view == 'week' else {'drafts': []},
         'outlook': management_service.outlook(plain, 'ath-test') if view == 'overview' else None,
-        'sync': main._public_sync_state(plain.sync_state('ath-test')).model_dump(mode='json'),
+        'sync': sync_service.public_sync_state(plain.sync_state('ath-test')).model_dump(mode='json'),
     }
     batched = Repository()
     monkeypatch.setenv('ONFLOWS_SERVICE_TOKEN', 'service-secret')
-    monkeypatch.setattr(main, '_repository', lambda: batched)
+    monkeypatch.setattr(dependencies, 'repository', lambda: batched)
     response = TestClient(main.app).get(f'/api/v2/athlete/management/view?view={view}', headers=HEADERS)
     assert response.status_code == 200, response.text
     assert response.json() == expected

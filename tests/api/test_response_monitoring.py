@@ -1,3 +1,4 @@
+from apps.api import dependencies
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -256,7 +257,7 @@ def test_learning_block_fits_two_load_windows_and_allows_two_recovery_observatio
 
 def test_api_requires_service_alias_actor_and_validates_request(monkeypatch):
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN","service-secret")
-    monkeypatch.setattr(main,"_repository",lambda:Repository())
+    monkeypatch.setattr(dependencies,"repository",lambda:Repository())
     with TestClient(main.app) as c:
         path = "/api/v2/athlete/response"
         assert c.get(path).status_code==401
