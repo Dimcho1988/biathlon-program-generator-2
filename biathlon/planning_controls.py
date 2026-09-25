@@ -8,7 +8,7 @@ import math
 from .constants import COMPONENTS, fresh_parameters
 from . import planning_history, mesocycle_focus
 
-VERSION = "planning-controls-v3"
+VERSION = "planning-controls-v4"
 
 
 def resolve(profile, day, period, automatic_accents, *, periodization=None):
@@ -63,6 +63,15 @@ def reference(rows, today):
     return result
 
 
+def component_index(state, accent, *, wave=None, recovery=None):
+    """Loading waves develop the focus; maintenance never rides their peaks."""
+    wave = state["wave_factor"] if wave is None else wave
+    recovery = state["kind"] == "RECOVERY" if recovery is None else recovery
+    factor = wave if accent else min(1., wave)
+    index = (state["target_index"] if accent else state["maintenance_index"]) * factor
+    return min(index, state["target_index"]*wave, .9) if recovery else index
+
+
 def goals(profile, state, actual_base, legacy, *, limited, taper_factor):
     if state is None:
         return legacy
@@ -70,9 +79,7 @@ def goals(profile, state, actual_base, legacy, *, limited, taper_factor):
     for z in COMPONENTS:
         base = actual_base[z]
         accent = z in state["accents"]
-        index = (state["target_index"] if accent else state["maintenance_index"])*state["wave_factor"]
-        if state["kind"] == "RECOVERY":
-            index = min(index, state["target_index"]*state["wave_factor"], .9)
+        index = component_index(state, accent)
         if limited:
             index = min(1., index)
         # Exact inversion of the displayed canonical ratio, including B50.

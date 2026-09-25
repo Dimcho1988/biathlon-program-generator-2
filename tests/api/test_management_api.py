@@ -130,7 +130,8 @@ def test_stale_daily_data_does_not_clip_coach_outlook_or_blend_microcycle_peaks(
     assert weeks[0]['days'] == 6
     assert weeks[0]['end_date'] == (TODAY+timedelta(days=6)).isoformat()
     assert weeks[2]['components']['Z3']['target_index_7_40'] == pytest.approx(1.65)
-    assert weeks[2]['components']['Z2']['target_index_7_40'] == pytest.approx(1.5)
+    # The loading peak belongs to Z3; Z2 retains its maintenance target.
+    assert weeks[2]['components']['Z2']['target_index_7_40'] == pytest.approx(1.)
     # The final unloading ceiling also applies to a stale read-only outlook;
     # it must not be refilled by the nominal 1.1 × .78 wave.
     assert weeks[3]['components']['Z3']['target_index_7_40'] < .858

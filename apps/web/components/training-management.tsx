@@ -102,6 +102,13 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   const showDraft = !active.active || newDraft;
   const overviewPlan = showDraft ? draft?.payload : (active.active?.payload.proposal ?? active.active?.payload.plan);
   const archivedDraft = showDraft && !!draft && draft.stale !== false;
+  const sessionsCurrent = overviewPlan && (showDraft ? !archivedDraft : active.active?.stale === false)
+    && (!initialOutlook?.engine_version || overviewPlan.engine_version === initialOutlook.engine_version);
+  const sessionStatus = !sessionsCurrent ? "Няма актуални съставени сесии. Подготви или обнови седмичната програма."
+    : showDraft ? "Времето е от проект за преглед; тренировките още не са утвърдени."
+    : active.active?.payload.proposal ? "Времето е от предложена адаптация за преглед; тя още не е действаща програма."
+    : active.active?.payload.status === "ACTIVE" ? "Времето е от текущата утвърдена програма."
+    : "Времето е от запазена програма, която в момента не е активна.";
 
   useEffect(() => {
     if (initialView !== "week") return;
@@ -182,7 +189,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     <nav className="management-view-switch" aria-label="Изглед на плана"><Link href="/management" aria-current={view === "week" ? "page" : undefined}>Седмична програма</Link><Link href="/management/outlook" aria-current={view === "overview" ? "page" : undefined}>Дългосрочен план</Link></nav>
     {view === "week" && overviewPlan && !archivedDraft && <TrainingPlanSummary plan={overviewPlan} />}
 
-    {view === "overview" ? <TrainingPlanOverview plan={initialOutlook ?? undefined} outcomes={active.active?.payload.outcomes ?? []} today={today} currentProfileRevision={initialOutlook?.profile_revision} volumeContext={initialOutlook?.volume_context} /> : <>
+    {view === "overview" ? <TrainingPlanOverview plan={initialOutlook ?? undefined} outcomes={active.active?.payload.outcomes ?? []} today={today} currentProfileRevision={initialOutlook?.profile_revision} volumeContext={initialOutlook?.volume_context} sessions={sessionsCurrent ? overviewPlan : undefined} sessionStatus={sessionStatus} /> : <>
       {active.active && !newDraft && <ActiveTrainingPlan value={active} onChange={setActive} canEdit={canEdit} today={today} renderDay={day => <DayCard day={day} expanded />} />}
       {showDraft && <>
         <section className="management-panel management-next-step" aria-label="Следваща стъпка"><p className="eyebrow">{guidance.step === "REVIEW" ? "Преглед преди започване" : "Следваща стъпка"}</p><h2>{guidance.title}</h2><p>{guidance.description}</p>

@@ -110,6 +110,7 @@ export interface PlanProjection {
   race_duration?: unknown; parameters?: Record<string, unknown>; long_term?: unknown; periodization?: unknown; input_snapshot?: unknown; history_comparison?: unknown; component_history?: unknown;
 }
 export interface ManagementOutlook extends PlanProjection {
+  engine_version?: string;
   schema_version: "training-outlook-preview-v1"; profile_revision: number;
   generated_at: string; volume_context: Record<string, unknown>;
 }

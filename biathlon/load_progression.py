@@ -10,7 +10,7 @@ from math import isfinite
 from .constants import COMPONENTS
 from . import planning_controls
 
-VERSION = "load-progression-v1"
+VERSION = "load-progression-v2"
 # Deliberately separate from speed-duration correction and canonical Tref.
 WEEKLY_Q_BOUNDS = {"Z1": (240., 840.), "Z2": (60., 300.), "Z3": (30., 120.),
                    "Z4": (10., 40.), "Z5": (5., 30.)}
@@ -197,21 +197,22 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
         target = goal["target"]
         if automatic and baseline is not None and not limited and period in {"GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"}:
             base = actual_base[z]
-            accent_index = state["target_index"] if z in state.get("mesocycle_accents", state["accents"]) else state["maintenance_index"]
+            is_focus = z in state.get("mesocycle_accents", state["accents"])
             shape = []
             for i,wave in enumerate(controls["wave"]):
-                index = min(2., accent_index*wave)
-                if i == len(controls["wave"])-1:
-                    index = min(index, .9)
+                index = min(2., planning_controls.component_index(state, is_focus, wave=wave,
+                                    recovery=i == len(controls["wave"])-1))
                 value = max(0., 7*(index*(base["b50"]+base["c40"])-base["b50"]))
                 if i == len(controls["wave"])-1 and z in state.get("recovery_support_components", []):
                     value = min(base["c40"]*7*.9, max(0., 7*(min(1., state["maintenance_index"])*(base["b50"]+base["c40"])-base["b50"])))
                 shape.append(value)
             mean = sum(shape)/len(shape)
-            # Normalize the whole wave in E, not the arithmetic mean of R.
-            target = baseline*growth_factor*shape[state["week"]-1]/mean if mean > 0 else 0.
-            target *= taper_factor
-            goal["basis"] = "ACTUAL_CYCLE_GROWTH_WITH_7_40_WAVE"
+            # Growth is a ceiling, not a quota. In particular, never refill
+            # maintenance weeks to compensate for the smaller recovery dose.
+            scale = min(1., baseline*growth_factor/mean) if mean > 0 else 1.
+            target *= scale
+            goal["basis"] = "ACTUAL_CYCLE_GROWTH_CEILING"
+            goal["growth_ceiling_scale"] = scale
         # A completed poor-response block reduces only the affected component
         # (or the whole plan for general evidence); never alter Recovery itself.
         dose_factor = min(adaptation.get("global", {}).get("load_factor", 1.), feedback.get("load_factor", 1.))
