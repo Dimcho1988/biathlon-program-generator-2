@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from apps.api import dependencies
+
+
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
@@ -65,7 +68,7 @@ def test_intervals_analyzed_webhook_enqueues_durable_full_sync(monkeypatch):
 
     repository = Repository()
     monkeypatch.setenv("INTERVALS_WEBHOOK_SECRET", "webhook-secret")
-    monkeypatch.setattr(intervals_webhook.api_main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
     monkeypatch.setattr(intervals_webhook, "datetime", FixedDateTime)
 
     response = TestClient(app).post(WEBHOOK_URL, json=_payload())
@@ -107,7 +110,7 @@ def test_intervals_uploaded_webhook_enqueues_durable_full_sync(monkeypatch):
 
     repository = Repository()
     monkeypatch.setenv("INTERVALS_WEBHOOK_SECRET", "webhook-secret")
-    monkeypatch.setattr(intervals_webhook.api_main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
 
     response = TestClient(app).post(
         WEBHOOK_URL,
@@ -142,7 +145,7 @@ def test_intervals_webhook_retry_uses_same_idempotency_key(monkeypatch):
 
     repository = Repository()
     monkeypatch.setenv("INTERVALS_WEBHOOK_SECRET", "webhook-secret")
-    monkeypatch.setattr(intervals_webhook.api_main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
 
     client = TestClient(app)
     assert client.post(WEBHOOK_URL, json=_payload()).status_code == 200
@@ -167,7 +170,7 @@ def test_unconsumed_webhook_type_is_acknowledged_without_storage(monkeypatch):
     def fail_if_called():
         raise AssertionError("repository should not be opened")
 
-    monkeypatch.setattr(intervals_webhook.api_main, "_repository", fail_if_called)
+    monkeypatch.setattr(dependencies, "repository", fail_if_called)
     response = TestClient(app).post(WEBHOOK_URL, json=payload)
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "scheduled": 0}
@@ -189,7 +192,7 @@ def test_waiting_for_webhook_storage_does_not_block_health(monkeypatch):
         def enqueue_sync_job(self, **kwargs):
             return {'status': 'QUEUED'}
     monkeypatch.setenv('INTERVALS_WEBHOOK_SECRET', 'webhook-secret')
-    monkeypatch.setattr(intervals_webhook.api_main, '_repository', SlowRepository)
+    monkeypatch.setattr(dependencies, 'repository', SlowRepository)
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:

@@ -1,3 +1,4 @@
+from apps.api import dependencies
 from datetime import date, datetime, timedelta, timezone
 import json
 import math
@@ -21,8 +22,8 @@ from apps.api.cloud import (
     wellness_rows_from_payload,
 )
 from apps.api.hrmod import calculate_hrmod
-from apps.api import main as api_main
 from apps.api.main import app
+from apps.api.routes import integrations
 from apps.api.schemas import AthletePlanningProfileResponse
 from apps.api.oauth_service import OAuthFlowError
 from apps.api.oauth_store import PersistentStoreFailure
@@ -379,7 +380,7 @@ def test_legacy_full_refresh_only_enqueues_worker_job(monkeypatch):
 
     repository = Repository()
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
-    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
 
     response = TestClient(app).post(
         "/api/v2/real/refresh",
@@ -410,7 +411,7 @@ def test_legacy_full_refresh_fails_closed_when_enqueue_fails(monkeypatch):
             raise PersistentStoreFailure("private store detail")
 
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
-    monkeypatch.setattr(api_main, "_repository", lambda: Repository())
+    monkeypatch.setattr(dependencies, "repository", lambda: Repository())
 
     response = TestClient(app).post(
         "/api/v2/real/refresh",
@@ -442,7 +443,7 @@ def test_legacy_recovery_restore_auto_upgrades_to_full_sync(monkeypatch):
 
     repository = Repository()
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
-    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
 
     response = TestClient(app).post(
         "/api/v2/real/recovery/restore",
@@ -495,7 +496,7 @@ def test_real_endpoint_selects_only_the_server_authenticated_athlete(monkeypatch
     repository = Repository()
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
     monkeypatch.setenv("ONFLOWS_ATHLETE_ALIAS", "pilot")
-    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
     client = TestClient(app)
 
     response = client.get(
@@ -529,7 +530,7 @@ def test_athlete_settings_are_scoped_to_the_authenticated_profile(monkeypatch):
 
     repository = Repository()
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
-    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
     client = TestClient(app)
     headers = {
         "Authorization": "Bearer secret-value",
@@ -567,7 +568,7 @@ def test_planning_profile_is_scoped_and_rejects_inconsistent_structure(monkeypat
 
     repository = Repository()
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
-    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
     client = TestClient(app)
     headers = {
         "Authorization": "Bearer secret-value",
@@ -615,7 +616,7 @@ def test_mesocycle_accent_preferences_are_scoped_and_require_a_profile(monkeypat
 
     repository = Repository()
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
-    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
     client = TestClient(app)
     headers = {
         "Authorization": "Bearer secret-value",
@@ -706,7 +707,7 @@ def test_planning_calendar_is_scoped_and_reports_generation_readiness(monkeypatc
 
     repository = Repository()
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
-    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
     client = TestClient(app)
     headers = {
         "Authorization": "Bearer secret-value",
@@ -762,7 +763,7 @@ def test_login_ticket_is_consumed_through_the_protected_server_boundary(monkeypa
 
     repository = Repository()
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
-    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
     client = TestClient(app)
     body = {"ticket": "one-time-ticket-value-with-32-chars"}
 
@@ -791,12 +792,12 @@ def test_oauth_callback_exposes_only_safe_failure_stage(monkeypatch):
     )
     monkeypatch.setenv("OAUTH_STATE_SECRET", "state-secret")
     monkeypatch.setenv("ONFLOWS_WEB_BASE_URL", "https://web.example.test")
-    monkeypatch.setattr(api_main, "_repository", lambda: object())
+    monkeypatch.setattr(dependencies, "repository", lambda: object())
 
     def fail_safely(*_args, **_kwargs):
         raise OAuthFlowError("provider detail remains private", stage="permissions")
 
-    monkeypatch.setattr(api_main, "complete_authorization", fail_safely)
+    monkeypatch.setattr(integrations, "complete_authorization", fail_safely)
     response = TestClient(app).get(
         "/api/v2/integrations/intervals/callback?code=private&state=private",
         follow_redirects=False,

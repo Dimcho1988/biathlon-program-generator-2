@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from apps.api import dependencies
+
+
 from fastapi.testclient import TestClient
 
-from apps.api import main as api_main
 from apps.api.main import app
 
 
@@ -100,7 +102,7 @@ def test_activity_view_is_one_generation_pinned_repository_read(monkeypatch):
 
     repository = Repository()
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
-    monkeypatch.setattr(api_main, "_repository", lambda: repository)
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
 
     response = TestClient(app).get(
         f"/api/v2/real/activities/{ACTIVITY_REF}/view", headers=AUTH
@@ -140,7 +142,7 @@ def test_activity_view_retains_revision_zero_rollout_compatibility(monkeypatch):
             }
 
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
-    monkeypatch.setattr(api_main, "_repository", lambda: Repository())
+    monkeypatch.setattr(dependencies, "repository", lambda: Repository())
 
     response = TestClient(app).get(
         f"/api/v2/real/activities/{ACTIVITY_REF}/view", headers=AUTH
@@ -161,7 +163,7 @@ def test_activity_view_fails_closed_when_a_pointer_payload_is_missing(monkeypatc
             return {**_active_row(), "series_payload": None}
 
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
-    monkeypatch.setattr(api_main, "_repository", lambda: Repository())
+    monkeypatch.setattr(dependencies, "repository", lambda: Repository())
 
     response = TestClient(app).get(
         f"/api/v2/real/activities/{ACTIVITY_REF}/view", headers=AUTH

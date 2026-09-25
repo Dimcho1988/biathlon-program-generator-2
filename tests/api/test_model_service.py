@@ -1,3 +1,4 @@
+from apps.api import dependencies
 from copy import deepcopy
 from datetime import date,datetime,timedelta,timezone
 from types import SimpleNamespace
@@ -91,7 +92,7 @@ def test_saved_test_has_pinned_measurement_and_actor():
 
 def test_api_rejects_missing_session_actor_and_invalid_coefficients(monkeypatch):
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN","service-secret")
-    repo=Store();monkeypatch.setattr(main,"_repository",lambda:repo)
+    repo=Store();monkeypatch.setattr(dependencies,"repository",lambda:repo)
     client=TestClient(main.app)
     headers={"Authorization":"Bearer service-secret","X-OnFlows-Athlete-Alias":"ath-test","X-OnFlows-Actor-Id":"11111111-1111-4111-8111-111111111111"}
     payload={"expected_revision":0,"zones":initial_settings()}
@@ -173,7 +174,7 @@ def test_fractional_last_sample_intersects_the_selected_window():
 
 def test_preview_endpoint_requires_athlete_session_and_valid_window(monkeypatch):
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN","service-secret")
-    repo=Store();monkeypatch.setattr(main,"_repository",lambda:repo)
+    repo=Store();monkeypatch.setattr(dependencies,"repository",lambda:repo)
     client=TestClient(main.app)
     url=f"/api/v2/athlete/models/speed-preview?activity_ref={REF}"
     headers={"Authorization":"Bearer service-secret","X-OnFlows-Athlete-Alias":"ath-test"}
@@ -337,7 +338,7 @@ def test_exploratory_floor_and_attestations_do_not_relax_strict_tests():
 
 def test_preview_api_respects_explicit_mode_and_existing_auth(monkeypatch):
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN","service-secret")
-    repo=ComplexSpeedStore();monkeypatch.setattr(main,"_repository",lambda:repo)
+    repo=ComplexSpeedStore();monkeypatch.setattr(dependencies,"repository",lambda:repo)
     client=TestClient(main.app)
     url=f"/api/v2/athlete/models/speed-preview?activity_ref={REF}&start_s=0&duration_s=1000"
     headers={"Authorization":"Bearer service-secret","X-OnFlows-Athlete-Alias":"ath-test"}
