@@ -1,3 +1,4 @@
+import { markApiUnavailable } from "../lib/api-readiness";
 import { revalidatePath } from "next/cache";
 vi.mock("next/cache", () => ({revalidatePath: vi.fn()}));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,7 +44,7 @@ describe("integration route redirects behind a reverse proxy", () => {
     } as never);
   });
 
-  afterEach(() => {
+  afterEach(() => { markApiUnavailable("https://api.example.test");
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.clearAllMocks();

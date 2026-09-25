@@ -18,6 +18,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 from . import main as api_main
 from .cloud import service_token_valid
@@ -145,6 +146,12 @@ async def intervals_webhook(request: Request) -> dict[str, object]:
     if not grouped:
         return {"status": "ok", "scheduled": 0}
 
+    # The repository uses synchronous HTTP. Keep durable queue operations off
+    # the event loop so an import notification cannot stall unrelated pages.
+    return await run_in_threadpool(_enqueue_events, grouped)
+
+
+def _enqueue_events(grouped: dict[str, list[Mapping[str, Any]]]) -> dict[str, object]:
     try:
         repository = api_main._repository()
         scheduled = 0

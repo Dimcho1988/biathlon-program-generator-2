@@ -360,8 +360,8 @@ def test_latest_shadow_metadata_reads_configuration_fingerprint_without_full_res
         "configuration_fingerprint": fingerprint,
     }
     assert client.url is not None
-    assert "configuration_fingerprint:result_payload->>configuration_fingerprint" in client.url
-    assert "result_payload," not in client.url
+    assert "/onflows_activity_run_summaries?select=run_key,configuration_fingerprint,created_at" in client.url
+    assert "result_payload" not in client.url
 
 
 def test_shadow_zone_summaries_are_loaded_in_one_projection_query():

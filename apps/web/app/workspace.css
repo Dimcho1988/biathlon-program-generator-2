@@ -133,3 +133,16 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-even
 }
 @media (max-width: 360px) { .readiness-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *, *::before, *::after { transition: none !important; animation: none !important; } }
+.workspace-navigation-progress {
+  position: fixed;
+  top: .75rem;
+  right: 1rem;
+  z-index: 60;
+  padding: .65rem 1rem;
+  border-radius: .75rem;
+  background: var(--surface, #fff);
+  color: var(--text, #163a34);
+  border: 1px solid currentColor;
+  box-shadow: 0 3px 16px #0002;
+  pointer-events: none;
+}

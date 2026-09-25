@@ -9,6 +9,12 @@ const RETRY_DELAY_MS = 3_000;
 const retryableInfrastructureStatus = (status: number) => status === 502 || status === 503 || status === 504;
 const pause = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const pendingChecks = new Map<string, Promise<void>>();
+const readyUntil = new Map<string, number>();
+const READY_TTL_MS = 30_000;
+
+export function markApiUnavailable(baseUrl: string) {
+  readyUntil.delete(baseUrl);
+}
 
 export class ApiReadinessError extends Error {
   constructor(public readonly status: number) { super(`API health check failed (${status})`); }
@@ -37,9 +43,14 @@ async function probeUntilReady(baseUrl: string) {
 }
 
 export function waitForApi(baseUrl: string): Promise<void> {
+  // Health only: never cache athlete data or authorization across requests.
+  if ((readyUntil.get(baseUrl) ?? 0) > Date.now()) return Promise.resolve();
   const existing = pendingChecks.get(baseUrl);
   if (existing) return existing;
-  const check = probeUntilReady(baseUrl).finally(() => pendingChecks.delete(baseUrl));
+  const check = probeUntilReady(baseUrl)
+    .then(() => { readyUntil.set(baseUrl, Date.now() + READY_TTL_MS); })
+    .catch((error) => { markApiUnavailable(baseUrl); throw error; })
+    .finally(() => pendingChecks.delete(baseUrl));
   pendingChecks.set(baseUrl, check);
   return check;
 }

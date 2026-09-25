@@ -20,6 +20,26 @@ from .oauth_store import PersistentStoreFailure
 from . import training_plan_engine, race_duration
 
 
+def profile_view(repository, alias, *, now=None):
+    """Saved profile and its historical volume basis, without generating a plan."""
+    profile = ManagementStore(repository).profile(alias)
+    settings = repository.athlete_settings(alias)
+    athlete_timezone = settings.timezone if settings else "UTC"
+    today = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(athlete_timezone)).date()
+    history = None
+    if hasattr(repository, "active_analysis"):
+        from biathlon.planning_controls import volume_history
+        analysis = repository.active_analysis(alias) or {}
+        source = (analysis.get("snapshot_payload") or {}).get("load_history") or {}
+        covered = len({r["date"] for r in source.get("daily", [])
+                       if (today-timedelta(days=28)).isoformat() <= r["date"] < today.isoformat()})
+        history_controls = (profile.get("profile") or {}).get("planning_controls") or {}
+        history = {**volume_history(source, today, covered,
+                                   gap_days=history_controls.get("history_gap_days", 10)),
+                   "as_of": source.get("period_end")}
+    return {**profile, "timezone": athlete_timezone, "today": today.isoformat(), "history": history}
+
+
 def outlook(repository, alias, *, now=None):
     """Current saved goals, independent of any frozen draft or active plan.
 

@@ -171,3 +171,35 @@ def test_unconsumed_webhook_type_is_acknowledged_without_storage(monkeypatch):
     response = TestClient(app).post(WEBHOOK_URL, json=payload)
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "scheduled": 0}
+
+
+def test_waiting_for_webhook_storage_does_not_block_health(monkeypatch):
+    import asyncio
+    from threading import Event
+    import httpx
+
+    entered, release = Event(), Event()
+    class SlowRepository:
+        def alias_for_provider(self, provider):
+            entered.set()
+            assert release.wait(2), 'storage was not released'
+            return 'ath-webhook-test'
+        def athlete_settings(self, alias):
+            return {'timezone': 'UTC'}
+        def enqueue_sync_job(self, **kwargs):
+            return {'status': 'QUEUED'}
+    monkeypatch.setenv('INTERVALS_WEBHOOK_SECRET', 'webhook-secret')
+    monkeypatch.setattr(intervals_webhook.api_main, '_repository', SlowRepository)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            webhook = asyncio.create_task(client.post(WEBHOOK_URL, json=_payload()))
+            try:
+                assert await asyncio.to_thread(entered.wait, 1)
+                response = await asyncio.wait_for(client.get('/health'), .5)
+                assert response.status_code == 200
+                assert not webhook.done(), 'health waited for the blocked storage request'
+            finally:
+                release.set()
+            assert (await webhook).json() == {'status': 'ok', 'scheduled': 1}
+    asyncio.run(run())

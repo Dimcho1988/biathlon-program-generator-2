@@ -35,14 +35,15 @@ class PlanStore:
         return records[0]
 
     def history(self, alias):
-        result = self.request("GET", "/onflows_management_plan_revisions?select=revision,operation,recorded_at,payload"
+        result = self.request("GET", "/onflows_management_plan_revisions?select=revision,operation,recorded_at,"
+                              "status:payload->status,changes:payload->changes,reason:payload->reason"
                               f"&athlete_alias=eq.{quote(alias, safe='')}&order=revision.desc&limit=10")
         if not isinstance(result, list):
             raise PersistentStoreFailure("Invalid active plan history")
         # Full evidence remains in immutable storage; the UI gets a compact log.
         return [{"revision": r["revision"], "operation": r["operation"], "recorded_at": r["recorded_at"],
-                 "status": r["payload"]["status"], "changes": r["payload"].get("changes", []),
-                 "reason": r["payload"].get("reason")} for r in result]
+                 "status": r["status"], "changes": r.get("changes") or [],
+                 "reason": r.get("reason")} for r in result]
 
     def save(self, alias, payload, expected_revision, actor, operation, profile_revision, checkpoint, *, automatic=False):
         result = self.request("POST", "/rpc/save_onflows_management_plan", json={

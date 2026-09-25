@@ -16,7 +16,7 @@ import {
   parsePlanningCalendarResponse,
   type PlanningCalendarResponse,
 } from "./planning-calendar";
-import { waitForApi } from "./api-readiness";
+import { markApiUnavailable, waitForApi } from "./api-readiness";
 import { API_RATE_LIMIT_MESSAGE } from "./api-wake";
 import {
   activityCalendarFixture,
@@ -85,6 +85,7 @@ export interface ActivityShadowIndex {
 }
 
 interface ResourceReliabilityOptions {
+  actorUserId?: string;
   continueAfterReadinessFailure?: boolean;
   skipReadiness?: boolean;
   timeoutMs?: number;
@@ -93,7 +94,7 @@ interface ResourceReliabilityOptions {
 
 const pause = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-async function fetchApiResource(
+export async function fetchApiResource(
   path: string,
   token?: string,
   athleteAlias?: string,
@@ -131,6 +132,7 @@ async function fetchApiResource(
           Accept: "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
           ...(athleteAlias ? { "X-OnFlows-Athlete-Alias": athleteAlias } : {}),
+          ...(reliability.actorUserId ? { "X-OnFlows-Actor-Id": reliability.actorUserId } : {}),
         },
       });
       requestError = undefined;
@@ -143,6 +145,8 @@ async function fetchApiResource(
       (response.ok && !(response.headers.get("content-type") ?? "").toLowerCase().includes("application/json"))
     );
     if (response && !retryableResponse) break;
+    markApiUnavailable(baseUrl);
+    await response?.body?.cancel();
     if (attempt < attempts) await pause(DIRECT_WAKE_RETRY_DELAY_MS);
   }
   if (!response)

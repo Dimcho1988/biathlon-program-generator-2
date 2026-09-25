@@ -95,8 +95,9 @@ def test_summary_store_batches_exact_keys_and_only_projects_small_index():
             query = parse_qs(urlparse(url).query)
             calls.append(query)
             assert method == "GET"
+            assert urlparse(url).path.endswith("/onflows_activity_run_summaries")
             assert query["athlete_alias"] == ["eq.ath-test"]
-            assert query["select"] == ["run_key,activity_ref,trainability_index:result_payload->trainability_index"]
+            assert query["select"] == ["run_key,activity_ref,trainability_index"]
             selected = query["run_key"][0][4:-1].split(",")
             assert len(selected) <= 50
             return httpx.Response(200, json=[{"run_key": key, "activity_ref": REF, "trainability_index": None} for key in selected])

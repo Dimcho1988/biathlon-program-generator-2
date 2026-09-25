@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState, useTransition, type ReactNode } from "react";
 import { ThemeToggle } from "./theme-toggle";
 import { rememberedNavigationHref } from "../lib/dashboard-navigation";
 
@@ -33,18 +33,23 @@ export function AppShell({ children, athlete }: { children: ReactNode; athlete: 
   const pathname = usePathname();
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const [destinationLabel, setDestinationLabel] = useState("");
   const toggleRef = useRef<HTMLButtonElement>(null);
   if (pathname === "/login" || pathname.startsWith("/auth/")) return <>{children}</>;
   const closeMenu = () => setMenuOpen(false);
-  const navigate = (href: string, event: { preventDefault: () => void }) => {
+  const navigate = (href: string, label: string, event: { preventDefault: () => void }) => {
     closeMenu();
+    let destination = href;
     try {
       const prefix = "onflows-view:";
       const current = `${window.location.pathname}${window.location.search}`;
       sessionStorage.setItem(`${prefix}${pathname}`, rememberedNavigationHref(pathname, current));
-      const destination = rememberedNavigationHref(href, sessionStorage.getItem(`${prefix}${href}`));
-      if (destination !== href) { event.preventDefault(); router.push(destination); }
+      destination = rememberedNavigationHref(href, sessionStorage.getItem(`${prefix}${href}`));
     } catch { /* Navigation also works when browser storage is disabled. */ }
+    event.preventDefault();
+    setDestinationLabel(label);
+    startTransition(() => router.push(destination));
   };
   return <div className="workspace-shell">
     <a className="skip-to-content" href="#workspace-content">Към съдържанието</a>
@@ -60,12 +65,15 @@ export function AppShell({ children, athlete }: { children: ReactNode; athlete: 
       <div id="workspace-navigation" className={`workspace-navigation${menuOpen ? " is-open" : ""}`}>
         <p className="workspace-label">Тренировъчен дневник</p>
         <nav className="workspace-links" aria-label="Основна навигация">
-          {sections.map(({ href, label, icon }) => <Link key={href} href={href} prefetch={false} aria-current={pathname === href || (href !== "/" && href !== "/management" && pathname.startsWith(`${href}/`)) ? "page" : undefined} onNavigate={(event) => navigate(href, event)}><NavIcon name={icon} /><span>{label}</span></Link>)}
+          {sections.map(({ href, label, icon }) => <Link key={href} href={href} prefetch={false} aria-current={pathname === href || (href !== "/" && href !== "/management" && pathname.startsWith(`${href}/`)) ? "page" : undefined} onNavigate={(event) => navigate(href, label, event)}><NavIcon name={icon} /><span>{label}</span></Link>)}
         </nav>
         <div className="workspace-athlete" onClick={(event) => { if ((event.target as HTMLElement).closest("a")) closeMenu(); }}>{athlete}</div>
         <div className="workspace-tools"><Link href="/account" prefetch={false} onClick={closeMenu} aria-current={pathname === "/account" ? "page" : undefined}>Акаунт и спортисти</Link><ThemeToggle /></div>
       </div>
     </aside>
-    <div id="workspace-content" className="workspace-content" tabIndex={-1}>{children}</div>
+    <div id="workspace-content" className="workspace-content" tabIndex={-1} aria-busy={pending}>
+      {pending && <div className="workspace-navigation-progress" role="status">Зареждаме „{destinationLabel}“…</div>}
+      {children}
+    </div>
   </div>;
 }

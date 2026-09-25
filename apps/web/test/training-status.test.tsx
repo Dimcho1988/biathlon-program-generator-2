@@ -10,7 +10,7 @@ import { parseRecoveryHistory } from "../lib/recovery-history";
 import { parseVolumeHistory } from "../lib/volume-history";
 import { applyTheme, resolveInitialTheme, THEME_STORAGE_KEY } from "../components/theme-toggle";
 import { ErrorState } from "../components/error-state";
-import { waitForApi } from "../lib/api-readiness";
+import { markApiUnavailable, waitForApi } from "../lib/api-readiness";
 
 describe("training-status-v1 contract", () => {
   it("accepts the canonical fixture", () => expect(parseTrainingStatus(trainingStatusFixture)).toEqual(trainingStatusFixture));
@@ -138,7 +138,7 @@ describe("recovery-history-v1 contract", () => {
 });
 
 describe("data access", () => {
-  afterEach(() => { vi.unstubAllGlobals(); delete process.env.ONFLOWS_DATA_MODE; delete process.env.ONFLOWS_API_BASE_URL; delete process.env.ONFLOWS_API_RESOURCE; delete process.env.ONFLOWS_SERVICE_TOKEN; });
+  afterEach(() => { markApiUnavailable("https://api.example.test"); vi.unstubAllGlobals(); delete process.env.ONFLOWS_DATA_MODE; delete process.env.ONFLOWS_API_BASE_URL; delete process.env.ONFLOWS_API_RESOURCE; delete process.env.ONFLOWS_SERVICE_TOKEN; });
   it("returns an explicit API error without falling back to fixture", async () => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
     vi.stubGlobal("fetch", vi.fn()

@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import secrets
-from typing import Annotated, Mapping
+from typing import Annotated, Literal, Mapping
 from urllib.parse import quote, urlencode, urlsplit
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -104,8 +104,12 @@ from .management_schemas import (ManagementProfileWrite, ManagementGenerateReque
 from .management_store import ManagementStore
 from . import management_service
 from . import management_lifecycle
+from .http_runtime import lifespan, store_client
+from .read_session import ReadSession
+from .request_metrics import RequestMetricsMiddleware
 
-app = FastAPI(title="onFlows API", version="1.0.0")
+app = FastAPI(title="onFlows API", version="1.0.0", lifespan=lifespan)
+app.add_middleware(RequestMetricsMiddleware)
 logger = logging.getLogger(__name__)
 ATHLETE_ALIAS_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{2,63}$")
 SAFE_WEB_NOTICE_PATTERN = re.compile(r"^[a-z0-9-]{1,64}$")
@@ -140,23 +144,32 @@ def management_profile(
 ):
     alias = _model_alias(authorization, athlete_alias)
     try:
-        repository = _repository()
-        profile = ManagementStore(repository).profile(alias)
-        settings = repository.athlete_settings(alias)
-        athlete_timezone = settings.timezone if settings else "UTC"
-        today = datetime.now(timezone.utc).astimezone(ZoneInfo(athlete_timezone)).date()
-        history = None
-        if hasattr(repository, "active_analysis"):
-            from biathlon.planning_controls import volume_history
-            analysis = repository.active_analysis(alias) or {}
-            source = (analysis.get("snapshot_payload") or {}).get("load_history") or {}
-            covered = len({r["date"] for r in source.get("daily", []) if (today-timedelta(days=28)).isoformat() <= r["date"] < today.isoformat()})
-            history_controls = (profile.get("profile") or {}).get("planning_controls") or {}
-            history = {**volume_history(source, today, covered, gap_days=history_controls.get("history_gap_days", 10)), "as_of": source.get("period_end")}
-        return {**profile, "timezone": athlete_timezone,
-                "today": today.isoformat(), "history": history}
+        return management_service.profile_view(_repository(), alias, now=datetime.now(timezone.utc))
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "Management storage is unavailable") from exc
+
+
+@app.get("/api/v2/athlete/management/view")
+def management_view(
+    view: Literal["week", "overview"] = "week",
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+):
+    """Assemble one page with request-local read reuse; never modify a plan."""
+    alias = _model_alias(authorization, athlete_alias)
+    repository = ReadSession(_repository())
+    try:
+        profile = management_service.profile_view(repository, alias)
+        active = management_lifecycle.current(repository, alias)
+        drafts = management_service.history(repository, alias) if view == "week" else {"drafts": []}
+        outlook = management_service.outlook(repository, alias) if view == "overview" else None
+        try:
+            sync = _public_sync_state(repository.sync_state(alias))
+        except (PersistentStoreFailure, ValueError):
+            sync = None
+        return {"profile": profile, "active": active, "drafts": drafts, "outlook": outlook, "sync": sync}
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Management view is unavailable") from exc
 
 
 @app.put("/api/v2/athlete/management/profile")
@@ -493,7 +506,7 @@ def _authorize(authorization: str | None) -> None:
 
 def _repository() -> SupabasePilotRepository:
     try:
-        return SupabasePilotRepository.from_environment()
+        return SupabasePilotRepository.from_environment(client=store_client())
     except PersistentStoreConfigurationError as exc:
         raise HTTPException(
             status_code=503,
