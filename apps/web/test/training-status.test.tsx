@@ -63,6 +63,9 @@ describe("load-history-v1/v2 contract", () => {
       ...loadHistoryFixture,
       schema_version: "load-history-v2",
       tref_bounds_profile_version: "tref-bounds-profile-v1",
+      equivalence_version: "intra_zone_linear_v2_z5_5pp",
+      zone_bounds_bpm: [100, 120, 140, 160, 180, 200],
+      hrmax_bpm: 200,
       daily: loadHistoryFixture.daily.map((row) => ({ ...row, tref_used_min: 120 })),
       strength: loadHistoryFixture.strength ? {
         ...loadHistoryFixture.strength,
@@ -71,6 +74,9 @@ describe("load-history-v1/v2 contract", () => {
     };
     expect(parseLoadHistory(version2).schema_version).toBe("load-history-v2");
     expect(parseLoadHistory(version2).daily[0].tref_used_min).toBe(120);
+    expect(parseLoadHistory(version2).equivalence_version).toBe("intra_zone_linear_v2_z5_5pp");
+    expect(parseLoadHistory(version2).zone_bounds_bpm).toEqual(version2.zone_bounds_bpm);
+    expect(() => parseLoadHistory({ ...version2, unexpected: true })).toThrow(/структура/);
     expect(() => parseLoadHistory({ ...version2, tref_bounds_profile_version: null })).toThrow(/границите за Tref/);
     expect(() => parseLoadHistory({ ...version2, daily: loadHistoryFixture.daily })).toThrow(/дневен ред/);
   });
@@ -79,6 +85,9 @@ describe("load-history-v1/v2 contract", () => {
     const serializedLegacy = {
       ...loadHistoryFixture,
       tref_bounds_profile_version: null,
+      equivalence_version: null,
+      zone_bounds_bpm: null,
+      hrmax_bpm: null,
       daily: loadHistoryFixture.daily.map((row) => ({ ...row, tref_used_min: null })),
       strength: {
         ...loadHistoryFixture.strength!,
@@ -86,6 +95,17 @@ describe("load-history-v1/v2 contract", () => {
       },
     };
     expect(parseLoadHistory(serializedLegacy).schema_version).toBe("load-history-v1");
+  });
+  it("rejects malformed equivalence metadata without accepting arbitrary root fields", () => {
+    for (const metadata of [
+      { equivalence_version: "" }, { equivalence_version: 5 },
+      { zone_bounds_bpm: [100, 120] }, { zone_bounds_bpm: [100, 120, 140, 160, 180, 180] },
+      { zone_bounds_bpm: [100, 120, 140, 160, 180, "200"] },
+      { zone_bounds_bpm: [100, 120, 140, 160, 180, 200], hrmax_bpm: 190 },
+      { hrmax_bpm: "200" }, { hrmax_bpm: 200.5 }, { hrmax_bpm: 250 },
+    ]) {
+      expect(() => parseLoadHistory({ ...loadHistoryFixture, ...metadata })).toThrow(/приравняването/);
+    }
   });
 });
 
