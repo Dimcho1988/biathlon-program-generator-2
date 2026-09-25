@@ -45,11 +45,13 @@ it("switches between exact period targets and proposal time, showing missing fut
   const box = document.createElement("div"), root = createRoot(box);
   const weeks = ["2026-09-29", "2026-10-07"].map(start => ({ start_date: start,
     end_date: start === "2026-09-29" ? "2026-10-05" : "2026-10-13", accents: ["Z3"],
-    volume_budget_minutes: 420, components: {Z3:{target_period_effective:123}} }));
+    volume_budget_minutes: 420, components: {Z3:{target_period_q:75.9, target_period_effective:294.9}} }));
   try {
     await act(async () => root.render(<MicrocycleVolumes weeks={weeks} sessions={plan} status="Предложение за преглед"/>));
-    expect(box.textContent).toContain("123");
-    expect(box.textContent).toContain("7:00:00");
+    expect(box.textContent).toContain("1:15:54");
+    expect(box.textContent).not.toContain("294");
+    expect(box.querySelectorAll("table")).toHaveLength(1);
+    expect(box.textContent).not.toContain("7:00:00");
     await act(async () => [...box.querySelectorAll("button")].find(b=>b.textContent==="Време от съставените сесии")!.click());
     expect(box.textContent).toContain("Предложение за преглед");
     expect(box.textContent).toContain("1:10:00");
