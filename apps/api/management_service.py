@@ -98,6 +98,7 @@ def outlook(repository, alias, *, now=None):
         "input_snapshot": {"calendar": calendar, "profile_revision": stored["revision"], "horizon": horizon,
                            "planning_controls": controls},
         "volume_context": {**volume, "available_weekly_minutes": sum(engine.planning_history.availability(profile)) if engine.planning_history.availability_mode(profile) == "MANUAL" else None,
+                           "weekly_time_limit_minutes": controls["weekly_target_hours"]*60 if controls and controls.get("weekly_target_hours") is not None else None,
                            "availability_mode": engine.planning_history.availability_mode(profile), "history_policy": history["history_policy"], "volume_evidence": history},
     }}
 

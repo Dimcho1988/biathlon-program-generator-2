@@ -24,8 +24,8 @@ from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VER
 from . import model_service, load_adaptation, race_duration
 from .response_service import ResponseStore
 
-VERSION = "training-management-v10"
-PARAMETER_VERSION = "management-parameters-v10"
+VERSION = "training-management-v11"
+PARAMETER_VERSION = "management-parameters-v11"
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
     "RE_ENTRY": ("Z1", "STR"),
@@ -831,8 +831,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     strength_sessions = 0
     last_strength_day = max([date.fromisoformat(a["date"]) for a in source.get("activities", [])
                              if a.get("sport") == "WeightTraining" and a["date"] <= today.isoformat()] or [None])
-    if start_date == today:
-        remaining = max(0., remaining - sum(float(a.get("duration_min") or 0.) for a in source.get("activities", []) if a["date"] == today.isoformat()))
+    actual_window_minutes = sum(float(a.get("duration_min") or 0.) for a in source.get("activities", [])
+                                if start_date.isoformat() <= a["date"] <= end_date.isoformat())
+    remaining = max(0., remaining - actual_window_minutes)
     all_sources_known = not limited and missing_days == 0
     forecast_known = all_sources_known
     result_days = []
@@ -989,6 +990,12 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     if session["zone"] != "STR":
                         sport_spent[session["sport"]] = sport_spent.get(session["sport"], 0.) + session["total_minutes"]
                 sessions += len(preserved)
+        elif not automatic_time and remaining <= .001:
+            item.update(status="UNAVAILABLE", time_limit_exhausted=True,
+                        explanation="Лимитът за общо време в този период е изчерпан от изпълнените и вече планираните сесии. "
+                        "Това е ограничение за време, а не предписание за възстановяване. Провери „Максимум общо време за 7 дни“ и наличните минути по дни в профила.")
+            item["rejected_alternatives"].append({"method_id": "TIME_BUDGET", "code": "WEEKLY_TIME_LIMIT_EXHAUSTED",
+                                                   "reason": item["explanation"]})
         elif sessions >= session_limit:
             item["explanation"] = "Достигнат е предпочитаният брой сесии за седемдневния проект."
         else:
@@ -1205,7 +1212,11 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     limits.append({"code": "TAPER_DAILY_WORK_CAP", "limit_minutes": max(0., weekly_minutes / max(1, sum(v > 0 for v in available)) * _taper_factor(periodization, day) - overhead)})
                 work = math.floor(min(requested, *(r["limit_minutes"] for r in limits)) * 2) / 2
                 if work < method["min_work_min"]:
-                    item["rejected_alternatives"].append({"method_id": method["id"], "code": "INSUFFICIENT_DOSE_BUDGET", "reason": "Оставащият бюджет е под минималната работна доза на метода."})
+                    time_limited = not automatic_time and remaining < overhead + method["min_work_min"]
+                    item["rejected_alternatives"].append({"method_id": method["id"],
+                        "code": "INSUFFICIENT_TIME_BUDGET" if time_limited else "INSUFFICIENT_DOSE_BUDGET",
+                        "reason": (f"Остават {max(0., remaining):g} минути от лимита за периода; методът изисква поне {overhead + method['min_work_min']:g} минути с подготвителните части."
+                                   if time_limited else "Оставащият бюджет е под минималната работна доза на метода.")})
                     continue
                 blocks = _blocks(method, work, evidence, settings)
                 # An interval's denominator is the WHOLE approved structure's
@@ -1438,6 +1449,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             combined["status"] = "TRAINING"
             combined["explanation"] = f"{len(combined['sessions'])} сесии · {sum(v['total_minutes'] for v in combined['sessions']):g} минути общо. Общ бюджет по компоненти; готовността е оценена за началото на деня."
     result_days = list(grouped.values())
+    planned_sessions = [s for d in result_days for s in planning_schedule.day_sessions(d)]
     allocation_report = planning_allocation.report(goal_windows, rows, forecast_rows, result_days,
         sum(slot_counts.values()), session_limit, weekly_minutes) if component_governed and forecast_known and not blocked else None
     parameters = {"version": PARAMETER_VERSION, "race_duration": event_duration, "status": "COACH_HEURISTICS_FOR_REVIEW",
@@ -1453,6 +1465,15 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                   "schedule_version": planning_schedule.VERSION, "max_sessions_per_day": 3,
                   "component_allocation_version": planning_allocation.VERSION,
                   "weekly_minutes_ceiling": None if automatic_time else _round(weekly_ceiling),
+                  "weekly_time_limit_minutes": controls["weekly_target_hours"]*60 if controls and controls.get("weekly_target_hours") is not None else None,
+                  "time_budget": None if automatic_time else {
+                      "start_date": start_date.isoformat(), "end_date": end_date.isoformat(),
+                      "period_limit_minutes": _round(weekly_ceiling),
+                      "actual_minutes": _round(actual_window_minutes),
+                      "planned_minutes": _round(sum(s["total_minutes"] for s in planned_sessions)),
+                      "remaining_minutes": _round(max(0., remaining)),
+                      "actual_excess_minutes": _round(max(0., actual_window_minutes-weekly_ceiling)),
+                  },
                   "volume_governor": "COMPONENT_7_40" if component_governed else "LIMITED_HISTORY_ENVELOPE",
                   "mesocycle_week_index": meso_week,
                   "mesocycle_factor": meso_factor, "mesocycle_length_weeks": meso_length,
@@ -1489,6 +1510,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             "allocation": allocation_report,
             "history_comparison": volume_evidence["weeks"],
             "component_history": load_progression.history(source, rows, today),
-            "summary": {"sessions": sessions, "key_sessions": key_sessions,
-                        "planned_minutes": _round(sum(v["total_minutes"] for d in result_days for v in planning_schedule.day_sessions(d))),
+            "summary": {"sessions": len(planned_sessions),
+                        "key_sessions": sum(s.get("is_key_session", s["zone"] in {"Z3", "Z4", "Z5"}) for s in planned_sessions),
+                        "actual_sessions": len(existing_in_draft),
+                        "planned_minutes": _round(sum(s["total_minutes"] for s in planned_sessions)),
                         "unused_weekly_minutes": None if automatic_time else _round(max(0., remaining)), "requires_review": True}}

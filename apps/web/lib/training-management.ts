@@ -98,6 +98,7 @@ export interface DraftSession {
   direct_equivalent_minutes: Record<Component, number>; dose_evidence: DoseEvidence;
 }
 export interface DraftDay {
+  time_limit_exhausted?: boolean;
   sessions?: DraftSession[];
   date: string; status: string; period: string; taper: boolean; session: DraftSession | null;
   readiness_before: Record<Component, number | null>; readiness_after: Record<Component, number | null>;
