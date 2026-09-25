@@ -13,6 +13,7 @@ from apps.api import main, management_service, management_lifecycle, http_runtim
 from apps.api.management_plan_store import PlanStore
 from apps.api.management_store import PROFILE_KEY
 from apps.api.read_session import ReadSession
+from apps.api.oauth_store import SupabasePilotRepository
 from tests.api.test_management_api import PROFILE, HEADERS
 from tests.api.test_training_plan_engine import Repository as HistoryRepository
 
@@ -150,6 +151,54 @@ def test_plan_history_fetches_only_fields_shown_in_the_journal():
     path = next(iter(repo.calls))
     assert 'recorded_at,payload' not in path
     assert 'status:payload->status,changes:payload->changes,reason:payload->reason' in path
+
+
+def test_successful_void_plan_deferral_is_not_decoded_as_json():
+    calls = []
+    def request(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return httpx.Response(204)
+    repository = SimpleNamespace(_request=request, _json=SupabasePilotRepository._json)
+    assert PlanStore(repository).defer_check('ath-test', 7) is None
+    assert calls == [('POST', '/rpc/defer_onflows_management_check',
+                      {'json': {'p_alias': 'ath-test', 'p_revision': 7}})]
+
+
+@pytest.mark.parametrize('mode', ['legacy', 'controls', 'progression'])
+def test_outlook_reuses_actual_reference_without_changing_any_output(monkeypatch, mode):
+    from apps.api import training_plan_engine as engine
+    from apps.api.management_schemas import ManagementProfile, PlanningControls
+    from tests.api.test_training_plan_engine import TODAY, profile
+    source = HistoryRepository().envelope['snapshot_payload']['load_history']
+    values = profile(strength_enabled=True, discipline='10 km')
+    if mode != 'legacy':
+        values['planning_controls'] = PlanningControls(mesocycle_anchor=TODAY).model_dump(mode='json')
+    if mode == 'progression':
+        values['load_progression'] = {'enabled': True}
+    values = ManagementProfile.model_validate(values).model_dump(mode='json')
+    rows = engine._daily_rows(source, TODAY)
+    original_inputs = deepcopy((values, rows))
+    phases = engine.build_periodization(values['program_start'], values['program_end'], [])
+    reference = engine.training_targets.development_reference(rows, TODAY, TODAY, 4)
+    progression = engine.load_progression.context(values, source, rows, TODAY, None) if mode == 'progression' else None
+    arguments = (values, phases, reference, None, {}, rows, TODAY, False)
+    calls = []
+    real_reference = engine.planning_controls.reference
+    def counted(*args):
+        calls.append(1)
+        return real_reference(*args)
+    monkeypatch.setattr(engine.planning_controls, 'reference', counted)
+    optimized = engine._long_term_outlook(*arguments, progression=progression)
+    assert len(calls) == 1
+    goals = engine._goals
+    def recompute(*args, **kwargs):
+        kwargs.pop('actual_reference', None)
+        return goals(*args, **kwargs)
+    monkeypatch.setattr(engine, '_goals', recompute)
+    unshared = engine._long_term_outlook(*arguments, progression=progression)
+    assert optimized == unshared
+    assert len(calls) > 100
+    assert (values, rows) == original_inputs
 
 
 def test_http_pool_is_reused_and_closed_at_application_shutdown(monkeypatch):
