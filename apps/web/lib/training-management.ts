@@ -60,6 +60,7 @@ export interface PlanningControls {
   sessions_per_week: number; intensity_days: number[]; strength_days: number[]; long_session_day: number | null;
   capacity_policy?: "OBSERVED_ONLY" | "MODEL_WITH_PRIOR"; max_strength_sessions: number; training_sports: ManagementProfile["actual_sport"][]; weekly_target_hours: number | null;
   mesocycle_anchor: string | null; wave: number[]; accent_mode: "AUTO" | "MANUAL" | "HYBRID";
+  automatic_focus_count?: number; ranked_indices?: number[]; shock_indices?: number[];
   accent_limit: number; accents: Component[]; accent_index: number; maintenance_index: number; cycles: CycleDirective[];
 }
 export interface VolumeHistory { history_policy?: { usable: boolean; minimum_days: number; gap_threshold_days: number; reference_days: number; trimmed_before_break: boolean }; suggested_available_minutes?: number[] | null; as_of?: string | null; covered_days: number; by_sport_weekly_minutes: Record<string, number>; all_sports_weekly_minutes: number; weeks: Array<{ start_date: string; end_date: string; actual_minutes: number | null; covered_days: number }> }
@@ -72,7 +73,7 @@ export function trainingDays(profile: Pick<ManagementProfile, "availability_mode
 export function defaultPlanningControls(sport: ManagementProfile["actual_sport"]): PlanningControls {
   return { sessions_by_day: null, threshold_days: [], threshold_method: "AUTO", double_threshold_days: [], double_threshold_components: ["Z3"], history_gap_days: 10, automatic_intervals: true, sessions_per_week: 7, intensity_days: [], strength_days: [], long_session_day: null, max_strength_sessions: 2,
     training_sports: [sport], weekly_target_hours: null, capacity_policy: "MODEL_WITH_PRIOR", mesocycle_anchor: null, wave: [.96, 1.04, 1.10, .78],
-    accent_mode: "AUTO", accent_limit: 2, accents: [], accent_index: 1.1, maintenance_index: 1, cycles: [] };
+    accent_mode: "AUTO", automatic_focus_count: 3, ranked_indices: [1.6, 1.5, 1.2], shock_indices: [2, 1.8, 1.6], accent_limit: 2, accents: [], accent_index: 1.1, maintenance_index: 1, cycles: [] };
 }
 
 export interface IntervalDoseProfile {
@@ -101,6 +102,7 @@ export interface DraftSession {
   direct_equivalent_minutes: Record<Component, number>; dose_evidence: DoseEvidence;
 }
 export interface DraftDay {
+  cycle?: Record<string,unknown> | null;
   time_limit_exhausted?: boolean;
   sessions?: DraftSession[];
   date: string; status: string; period: string; taper: boolean; session: DraftSession | null;
@@ -207,6 +209,9 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     if ((c.sessions_by_day != null && (!Array.isArray(c.sessions_by_day) || c.sessions_by_day.length !== 7 || !c.sessions_by_day.every(v => integer(v, 0, 3))))
       || !days(c.threshold_days ?? []) || !days(c.double_threshold_days ?? [])
       || !["AUTO", "CONTINUOUS", "INTERVALS"].includes(String(c.threshold_method ?? "AUTO"))) throw new Error("Провери броя сесии по дни и праговите предпочитания.");
+    const regular = c.ranked_indices ?? [1.6, 1.5, 1.2], shock = c.shock_indices ?? [2, 1.8, 1.6];
+    const orderedIndices = (v: unknown): v is number[] => Array.isArray(v) && v.length === 3 && v.every((n,i) => range(n,1,2) && (i === 0 || v[i-1] >= n));
+    if (!integer(c.automatic_focus_count ?? 3, 1, 3) || !orderedIndices(regular) || !orderedIndices(shock) || shock.some((v,i)=>v < regular[i])) throw new Error("Целите трябва да намаляват от водещия към третия компонент и да са между 1 и 2. Ударните цели трябва да са поне колкото обичайните.");
     const doubleDays = (c.double_threshold_days ?? []) as number[];
     const doubleComponents = c.double_threshold_components ?? ["Z3"];
     if (!Array.isArray(doubleComponents) || !doubleComponents.length || doubleComponents.length > 2 || new Set(doubleComponents).size !== doubleComponents.length || !doubleComponents.every(z => z === "Z3" || z === "Z4")

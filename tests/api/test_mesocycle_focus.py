@@ -34,7 +34,7 @@ def test_loading_accents_are_stable_then_rotate_and_strength_is_not_truncated_fo
     assert len({state(p,i)["accents"][0] for i in (0,28,56)})>=2
 
 
-@pytest.mark.parametrize("minutes,expected",[(4,["Z4","Z5"]),(22,["Z3","Z4"]),(120,["Z2","Z3"])])
+@pytest.mark.parametrize("minutes,expected",[(4,["Z5","Z4","STR"]),(22,["Z4","Z3","STR"]),(120,["Z3","Z2","STR"])])
 def test_duration_guides_specific_blocks_even_without_growth_regulator(minutes,expected):
     p=configured();p["race_duration_min"]=minutes
     assert state(p,0,"SPECIAL_PREPARATION")["accents"]==expected
@@ -56,12 +56,12 @@ def test_rotation_changes_final_load_not_only_labels_and_maintenance_has_no_load
         goals,focus,_=engine._goals(p,TODAY+timedelta(days=offset),"GENERAL_PREPARATION",False,{},None,2,4,rows,TODAY,False,1,ctx)
         for z in engine.COMPONENTS:
             if z not in focus:
-                assert goals[z]["target_index"]<=1+1e-9
-                assert goals[z]["target"]<=base[z]["c40"]*7+1e-9
+                assert goals[z]["target_index"]<=1.1+1e-9
+                assert goals[z]["target"]<=7*(1.1*(base[z]["b50"]+base[z]["c40"])-base[z]["b50"])+1e-9
         values.append(goals)
     # Same zone, same week in the wave and same history: a real difference
     # must survive the growth regulator when its mesocycle role changes.
-    assert values[0]["Z3"]["target"] > 1.1*values[1]["Z3"]["target"]
+    assert values[0]["Z1"]["target"] > 1.1*values[1]["Z1"]["target"]
     assert values[1]["Z2"]["target"] > 1.1*values[0]["Z2"]["target"]
 
 
@@ -98,7 +98,7 @@ def test_calendar_phase_change_does_not_switch_focus_mid_loading_block():
     after=state(p,15,"SPECIAL_PREPARATION",periodization=phases)
     next_block=state(p,28,"SPECIAL_PREPARATION",periodization=phases)
     assert before["accents"]==after["accents"]
-    assert next_block["accents"]==["Z3","Z4"]
+    assert next_block["accents"]==["Z4","Z3","STR"]
     assert state(p,29,"TRANSITION",periodization=phases)["kind"]=="TRANSITION"
 
 

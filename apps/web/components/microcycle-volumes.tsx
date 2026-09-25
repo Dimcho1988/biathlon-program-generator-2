@@ -34,7 +34,7 @@ export function MicrocycleVolumes({ weeks, sessions, status }: { weeks: VolumeWe
         const v = microcycleVolume(sessions, w.start_date, w.end_date);
         return <tr key={w.start_date}>
           <th>{dateLabel(w.start_date)} – {dateLabel(w.end_date)}</th>
-          <td>{w.cycle?.kind === "RECOVERY" ? `Разтоварване${w.accents.length ? ` · поддържане ${w.accents.join(", ")}` : ""}` : w.accents.join(", ") || "Без акцент"}</td>
+          <td>{w.cycle?.kind === "RECOVERY" ? `Разтоварване${w.accents.length ? ` · поддържане ${w.accents.join(", ")}` : ""}` : `${w.cycle?.kind === "STRESS" ? "Ударен · " : ""}${w.accents.join(", ") || "Без акцент"}`}</td>
           {COMPONENTS.map(z => <td key={z}>{mode === "targets" ? time(w.components[z]?.target_period_q) : v.available ? durationHms(v.components[z]) : "—"}</td>)}
           {mode === "sessions" && <td>{v.available ? durationHms(v.unallocated) : "—"}</td>}
           <td>{mode === "targets" ? COMPONENTS.every(z => w.components[z]?.target_period_q != null) ? durationHms(COMPONENTS.reduce((sum, z) => sum + w.components[z]!.target_period_q!, 0)) : "—" : v.available ? durationHms(v.total) : "—"}</td>

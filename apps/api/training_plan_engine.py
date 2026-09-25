@@ -24,8 +24,8 @@ from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VER
 from . import model_service, load_adaptation, race_duration
 from .response_service import ResponseStore
 
-VERSION = "training-management-v13"
-PARAMETER_VERSION = "management-parameters-v13"
+VERSION = "training-management-v14"
+PARAMETER_VERSION = "management-parameters-v14"
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
     "RE_ENTRY": ("Z1", "STR"),
@@ -504,13 +504,13 @@ def _accents(period, preferences):
     return (manual + [z for z in ordered if z not in manual])[:limit] if mode == "HYBRID" else ordered[:limit]
 
 
-def _goals(profile, day, period, taper, reference, accents, week, length, rows, today, limited, taper_factor, progression=None, *, periodization=None, support_limited=None, actual_reference=None):
+def _goals(profile, day, period, taper, reference, accents, week, length, rows, today, limited, taper_factor, progression=None, *, periodization=None, support_limited=None, actual_reference=None, support_readiness=None):
     automatic = load_progression.accents(profile, period, list(PRIORITIES.get(period, ("Z1",))))
     state = planning_controls.resolve(profile, day, period, automatic, periodization=periodization)
     if state is not None:
         support = mesocycle_focus.recovery_support({**state, "kind": "RECOVERY"}, profile, rows, today,
                    limited=limited if support_limited is None else support_limited,
-                   taper=taper or period not in mesocycle_focus.PREPARATION)
+                   taper=taper or period not in mesocycle_focus.PREPARATION, readiness=support_readiness)
         state = support if state["kind"] == "RECOVERY" else state
         state["recovery_support_components"] = support["accents"]
     focus = state["accents"] if state else _accents(period, accents)
@@ -937,6 +937,11 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         ready = {r["zone"]: r["readiness_percent"] for r in recovery_before["current"]}
         day_meso_week, day_meso_factor = meso_at(day)
         goals, selected_accents, cycle_state = day_goals[day]
+        if cycle_state and cycle_state["kind"] == "RECOVERY":
+            goals, selected_accents, cycle_state = _goals(profile, day, period, taper, target_reference, accents,
+                day_meso_week, meso_length, rows, today, limited, _taper_factor(periodization, day), progression,
+                periodization=periodization, support_readiness=ready if forecast_known else {})
+            goal_windows[day] = goals
         budgets = _budgets(forecast_rows, day, taper, day_meso_factor, actual_rows=rows, targets=goals)
         q_remaining = load_progression.remaining_q(source, result_days, day, goals)
         for z, remaining_q in q_remaining.items():
@@ -1059,6 +1064,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 rejection = None
                 if period not in method["periods"]:
                     rejection = ("PERIOD_NOT_SUPPORTED", "Методът не е включен в този период.")
+                elif cycle_state and controls["accent_mode"] == "AUTO" and not cycle_state["explicit"] and period in {"PRECOMPETITION", "COMPETITION"} and method["purpose"] == "BUILDING" and not is_strength and z != cycle_state.get("race_component"):
+                    rejection = ("RACE_COMPONENT_PRIORITY", "Развиващата специална работа е насочена към състезателната зона; другите компоненти получават поддържане.")
                 elif cycle_state and cycle_state["kind"] == "RECOVERY" and z in {"Z3", "Z4", "Z5", "STR"} and z not in selected_accents:
                     rejection = ("RECOVERY_COMPONENT_DELOAD", "Компонентът се разтоварва; допълваща работа е допустима само за избрания по-слабо натоварен компонент.")
                 elif supporting and (not progression or taper or not key_slots or day <= key_slots[-1] or slot_index > 0):
@@ -1146,7 +1153,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     if maintenance_blocks:
                         _, maintenance_load, _ = candidate_load(maintenance_blocks)
                         endurance_allocation = allocation[z] > maintenance_load[z] + .5
-                if purpose == "BUILDING" and (z not in selected_accents and not endurance_allocation or taper or slot_index > 0 or cycle_state and cycle_state["kind"] == "RECOVERY"):
+                background_development = bool(cycle_state and cycle_state.get("background_development") and mesocycle_focus.growth_weight(cycle_state, z) > 0)
+                if purpose == "BUILDING" and (z not in selected_accents and not endurance_allocation and not background_development or taper or slot_index > 0 or cycle_state and cycle_state["kind"] == "RECOVERY"):
                     purpose = "MAINTENANCE"
                 fraction = profile.get("maintenance_fraction", .3) if purpose in {"MAINTENANCE", "RECOVERY", "SUPPORTING"} else profile.get("reentry_fraction", .4) if period == "RE_ENTRY" else profile.get("building_fraction", .5)
                 if method["structure"] == "MODEL_INTERVALS":
@@ -1368,8 +1376,11 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 if z != "STR":
                     evidence["explanation"] += f" Общият дял на цялата работна структура е до {max_usage*100:g}% от съответния капацитет."
                 normalized_deficit = budgets[z]["deficit_effective"] / max(1., budgets[z]["target_weekly_effective"])
+                priority_weight = mesocycle_focus.growth_weight(cycle_state, z) if cycle_state and cycle_state.get("component_indices") else float(z in selected_accents)
                 score = (2. * planning_allocation.coverage(effective, allocation, selected_accents)
-                         if allocation is not None else normalized_deficit) + (1. if z in selected_accents else 0.)
+                         if allocation is not None else normalized_deficit) + priority_weight
+                if period in {"PRECOMPETITION", "COMPETITION"} and sport == profile.get("actual_sport"):
+                    score += .25
                 # Cover qualities over actual execution plus this proposed
                 # week, counting WORK blocks, never warm-up/cascade as coverage.
                 trained_dates = {a["date"] for a in source.get("activities", []) if

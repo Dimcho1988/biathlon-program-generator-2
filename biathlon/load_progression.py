@@ -13,7 +13,7 @@ import json
 from .equivalence import EQUIVALENCE_VERSION
 
 from .constants import COMPONENTS
-from . import planning_controls
+from . import planning_controls, mesocycle_focus
 
 VERSION = "load-progression-v4-clamped-q"
 # Deliberately separate from speed-duration correction and canonical Tref.
@@ -254,8 +254,9 @@ def trajectory(ctx, profile, periodization):
             feedback = ctx.get("adaptation") or {}
             learned = min(feedback.get("global", {}).get("growth_factor", 1.), feedback.get("components", {}).get(z, {}).get("growth_factor", 1.))
             selected = (state and state["kind"] in {"BUILD", "STRESS"} and day.isoformat() >= c.get("established_on", ctx["anchor"]["created_on"])
-                        and not feedback.get("hold_for_reported_illness_or_pain") and z in state.get("mesocycle_accents", state["accents"]))
-            factors[z] *= (1+(rate or 0.)*phase_factor(period, taper, ctx["config"])*learned*bool(selected)/100)**(1/365.25)
+                        and not feedback.get("hold_for_reported_illness_or_pain"))
+            weight = mesocycle_focus.growth_weight(state, z) if state else 0.
+            factors[z] *= (1+(rate or 0.)*phase_factor(period, taper, ctx["config"])*learned*bool(selected)*weight/100)**(1/365.25)
         result[day.isoformat()] = dict(factors)
         day += timedelta(days=1)
     return result
@@ -274,9 +275,16 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
         c = context["components"][z]
         automatic = not state["explicit"] and z not in profile.get("component_targets_weekly", {})
         focus = z in state.get("mesocycle_accents", state["accents"])
-        component_shape = shape if focus else min(.9, state["wave_factor"]*.9)
+        weight = mesocycle_focus.growth_weight(state, z)
+        # Light development retains the observed base in loading weeks; it
+        # receives a smaller wave and annual increment than the primary zone.
+        component_shape = (1 + (shape-1)*weight if state.get("component_indices") and weight > 0
+                           else shape if focus else min(.9, state["wave_factor"]*.9))
+        component_shape = min(component_shape, state["wave_factor"]/ (sum(wave)/len(wave))) if state["wave_factor"] < 1 else component_shape
         if state["kind"] == "RECOVERY":
-            component_shape = min(.65, component_shape)
+            component_shape = .9 if z in state["accents"] else min(.65, component_shape)
+        if state["kind"] == "RE_ENTRY":
+            component_shape = min(.8, component_shape)
         factor = factors.get(z, 1.)
         # The prior is a destination, not an invented capacity. Actual zero and
         # missing observations cannot authorize an automatic high-intensity dose.
@@ -286,14 +294,15 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
         goal["target"] *= learning
         # Q controls progression; existing E/7–40 and Recovery gates still govern
         # every composed session. Never apply a Q percentage to an E baseline.
-        if automatic and z != "STR" and not limited and period in {"GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"}:
+        if automatic and z != "STR" and not limited and period in {"RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"}:
             goal["target_weekly_q"] = requested_q*learning if requested_q is not None else None
             goal["basis"] = "STABLE_Q_TARGET_WITH_7_40_GATE"
         base = actual_base[z]
         goal.update(factor=goal["target"]/max(1e-9, goal["reference"]),
                     target_index=(base["b50"]+goal["target"]/7)/(base["b50"]+base["c40"]),
                     progression={"annual_policy_percent": c["annual_rate_percent"],
-                        "effective_annual_percent": (c["annual_rate_percent"] or 0.)*phase_factor(period, taper, config) if focus and not limited else 0.,
+                        "effective_annual_percent": (c["annual_rate_percent"] or 0.)*phase_factor(period, taper, config)*weight if state["kind"] in {"BUILD", "STRESS"} and not limited else 0.,
+                        "role_growth_weight": weight,
                         "reference_weekly_q": c["reference_q"], "observed_weekly_q": q,
                         "target_weekly_q": goal.get("target_weekly_q"), "expert_reference_q": c["expert_reference_q"],
                         "cumulative_growth_percent": 100*(factor-1), "manual_override": not automatic,

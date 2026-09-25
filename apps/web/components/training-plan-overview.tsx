@@ -6,6 +6,7 @@ import { PlanComparison } from "./plan-comparison";
 import { LoadProgressionSummary } from "./load-progression-summary";
 import { RaceDurationSummary } from "./race-duration-estimate";
 import { MicrocycleVolumes } from "./microcycle-volumes";
+import { MesocyclePriorities } from "./mesocycle-priorities";
 import { durationHms } from "../lib/duration-format";
 import { useState } from "react";
 import { isRecord } from "../lib/training-status";
@@ -32,6 +33,7 @@ export function TrainingPlanOverview({ plan, outcomes, today, stale, currentProf
   const [selected, setSelected] = useState(0);
   const weeks = outlookWeeks(plan);
   const current = weeks[Math.min(selected, weeks.length - 1)];
+  const shockSchedule = Array.isArray(weeks[0]?.cycle?.shock_schedule) ? weeks[0].cycle.shock_schedule.filter(isRecord) : [];
   const periodization = isRecord(plan?.periodization) ? plan.periodization : {};
   const phases = Array.isArray(periodization.phases) ? periodization.phases.filter(isRecord) : [];
   const snapshot = isRecord(plan?.input_snapshot) ? plan.input_snapshot : {};
@@ -73,6 +75,7 @@ export function TrainingPlanOverview({ plan, outcomes, today, stale, currentProf
         <label>Разгледай седмица<select value={Math.min(selected, weeks.length - 1)} onChange={e => setSelected(Number(e.target.value))}>{weeks.map((w, i) => <option key={w.start_date} value={i}>{shortDate(w.start_date)} – {shortDate(w.end_date)} · {w.cycle?.kind === "RECOVERY" ? "Разтоварване" : w.accents.join(", ")}</option>)}</select></label>
         {current && <div className="management-week-context">{current.cycle && <p><strong>{label(current.cycle.name)}</strong> · {label(current.cycle.kind) === "STRESS" ? "Стресов микроцикъл" : label(current.cycle.kind) === "RECOVERY" ? "Разтоварване" : "Тренировъчен блок"} · седмица {label(current.cycle.week)}</p>}<p><strong>{current.phases.map(p => PHASE_LABELS[p] ?? p).join(" → ")}</strong> · {current.cycle?.focus_role === "RECOVERY_SUPPORT" ? "Допълващо поддържане" : "Акценти"}: {current.accents.join(", ") || "няма"}</p>
           {Array.isArray(current.cycle?.mesocycle_accents) && <p>Водещи за мезоцикъла: <strong>{current.cycle.mesocycle_accents.map(label).join(", ")}</strong> · {shortDate(label(current.cycle.mesocycle_start))} – {shortDate(label(current.cycle.mesocycle_end))}</p>}
+          <MesocyclePriorities cycle={current.cycle}/>
           {typeof current.cycle?.reason === "string" && <p className="management-muted">{current.cycle.reason}{current.cycle.focus_role === "RECOVERY_SUPPORT" ? " Изборът е условен по наличните данни и се проверява отново при генериране на седмицата." : ""}</p>}
           {shownEvents.map((e, i) => <p key={i}>{EVENT[label(e.event_type)] ?? label(e.event_type)}: <strong>{label(e.name)}</strong> · {shortDate(label(e.start_date))} – {shortDate(label(e.end_date))}</p>)}
         </div>}
@@ -80,6 +83,7 @@ export function TrainingPlanOverview({ plan, outcomes, today, stale, currentProf
       </>}
     </section>
     {weeks.length > 0 && <MicrocycleVolumes weeks={weeks} sessions={sessions} status={sessionStatus}/> }
+    {shockSchedule.length > 0 && <details className="management-panel"><summary>Ударни микроцикли и разтоварване</summary><ul>{shockSchedule.map((s,i)=><li key={i}><strong>{PHASE_LABELS[label(s.period)] ?? label(s.period)}</strong>: {s.status === "UNAVAILABLE" ? label(s.reason) : `${s.status === "MANUAL" ? "Ръчно зададен" : "Планиран"} · ${label(s.start_date)} – ${label(s.end_date)}${s.recovery_end ? ` · разтоварване до ${label(s.recovery_end)}` : ""}`}</li>)}</ul><p>Това са календарни намерения. Дневната готовност, наличният обем и ограниченията на методите определят дали ударната доза може да бъде изпълнена.</p></details>}
     <details className="management-panel"><summary>План и реално изпълнение</summary><PlanComparison plan={sessions ?? plan} outcomes={outcomes} /></details>
     <Link href="/planning#planning-calendar">Промени стартовете и лагерите в профила →</Link>
   </section>;
