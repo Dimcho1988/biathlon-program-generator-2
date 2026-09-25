@@ -49,6 +49,17 @@ class ManagementStore:
             return {"configured": False, "profile": None, "revision": 0}
         return {"configured": True, "profile": rows[0]["payload"], "revision": rows[0]["revision"]}
 
+    def progression_reference(self, alias):
+        # Only the last server-created draft's small anchor, not twenty plans.
+        result = self.repository._json(self.repository._request(
+            "GET", "/onflows_management_entries?select=payload->parameters->load_progression->anchor"
+            f"&athlete_alias=eq.{quote(alias, safe='')}&kind=eq.DRAFT"
+            "&order=recorded_at.desc,revision.desc&limit=1"))
+        if not isinstance(result, list):
+            raise PersistentStoreFailure("Invalid progression reference")
+        value = result[0].get("anchor") if result else None
+        return value if isinstance(value, dict) else None
+
     def drafts(self, alias, limit=10, *, start_date: date | None = None):
         if type(limit) is not int:
             raise ValueError("History limit must be an integer")

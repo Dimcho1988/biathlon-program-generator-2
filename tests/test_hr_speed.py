@@ -14,7 +14,7 @@ def test_guard_midpoints_existing_zone_weight_and_shared_z5_boundary():
     assert p.times==(12600,8100,3300,1200)
     assert p.duration(155)==pytest.approx(3300/.85)
     assert p.duration(170)==1200
-    assert p.duration(180)==pytest.approx(1200/1.3)
+    assert p.duration(180)==pytest.approx(1200/1.5)
     assert p.summary()['zones'][-1]['source']=='Z4_SHARED_BOUNDARY'
 
 def test_in_range_index_is_retained_and_out_of_range_uses_exact_midpoint():

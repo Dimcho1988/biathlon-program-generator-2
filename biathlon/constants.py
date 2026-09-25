@@ -114,7 +114,7 @@ DEFAULT_ZONE_PROFILE = [
         "component": "Z5",
         "hr_low": 178,
         "hr_high": 195,
-        "equivalence_slope_pp_per_bpm": 3.0,
+        "equivalence_slope_pp_per_bpm": 5.0,
     },
 ]
 

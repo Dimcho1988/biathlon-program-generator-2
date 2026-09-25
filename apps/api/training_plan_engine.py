@@ -17,15 +17,15 @@ import pandas as pd
 
 from biathlon import hr_speed, recovery_v2, speed_duration, training_targets, planning_controls, planning_history, planning_schedule, planning_allocation, load_progression, mesocycle_focus
 from biathlon.constants import COMPONENTS, fresh_parameters
-from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM
+from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, equivalence_slope
 from biathlon.periodization import build_periodization
 from biathlon.physiology import _causal_tref, effective_from_direct_vector, linear_equivalence_coefficient
 from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VERSION, catalog, resolved_methods
 from . import model_service, load_adaptation, race_duration
 from .response_service import ResponseStore
 
-VERSION = "training-management-v11"
-PARAMETER_VERSION = "management-parameters-v11"
+VERSION = "training-management-v12"
+PARAMETER_VERSION = "management-parameters-v12"
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
     "RE_ENTRY": ("Z1", "STR"),
@@ -443,11 +443,13 @@ def _canonical_load(blocks, settings, rows, day, *, technical_reference=None):
             continue
         idx = int(z[1:]) - 1
         low, high = settings.zone_bounds_bpm[idx:idx + 2]
+        if z == "Z5":
+            high = settings.hrmax_bpm or high
         # Effort-led intervals carry a planning estimate, never a fabricated
         # measured HR or an instruction to chase the HR target.
         load_hr = block["target_hr_bpm"] if block["target_hr_bpm"] is not None else high
         coefficient = linear_equivalence_coefficient(load_hr, low, high,
-                                                     DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, is_z5=z == "Z5")
+                                                     equivalence_slope(z), is_z5=z == "Z5")
         direct[z] += block["duration_min"] * coefficient
     lower = (day - timedelta(days=40)).isoformat()
     upper = day.isoformat()
@@ -525,12 +527,17 @@ def _goals(profile, day, period, taper, reference, accents, week, length, rows, 
     return goals, focus, state
 
 
-def progression_context(repository, alias, profile, source, rows, today):
+def progression_context(repository, alias, profile, source, rows, today, periodization=None):
     config = load_progression.settings(profile)
     if not config or not profile.get("planning_controls"):
         return None
     adaptation = load_adaptation.assess(ResponseStore(repository).entries(alias), today, rows=rows) if config["feedback_enabled"] else None
-    return load_progression.context(profile, source, rows, today, adaptation)
+    from .management_store import ManagementStore
+    retained = ManagementStore(repository).progression_reference(alias)
+    settings = repository.athlete_settings(alias)
+    physiology = {"bounds": list(settings.zone_bounds_bpm), "hrmax": settings.hrmax_bpm} if settings else None
+    return load_progression.context(profile, source, rows, today, adaptation, retained=retained,
+                                    physiology=physiology, periodization=periodization)
 
 
 def _dose_usage(blocks, evidence, zone):
@@ -610,7 +617,6 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
         actual_base[z] = {"b50": max(base_loads[z], .5 * sum(r50) / len(r50)) if r50 else base_loads[z],
                           "c40": sum(r40) / len(r40) if r40 else 0., "known": len(r40) >= planning_history.MINIMUM_DAYS}
     weeks = []
-    projected_bases = load_progression.projected_cycle_bases(progression, periodization, end, profile)
     actual_reference = planning_controls.reference(rows, today)
     day = start
     while day <= end:
@@ -619,19 +625,16 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
         left = day
         right = min(day + timedelta(days=6 - (day - anchor).days % 7), end)
         targets = {z: [] for z in COMPONENTS}
+        q_targets = {z: [] for z in COMPONENTS}
         phases, selected, meso_weeks = [], [], []
         while day <= right:
             period, taper = _phase(periodization, day)
             week = max(0, (day - anchor).days // 7) % length
-            day_progression = progression
-            if progression:
-                cycle_start = date.fromisoformat(progression["cycle_start"])
-                boundary = cycle_start + timedelta(days=((day-cycle_start).days//progression["cycle_days"])*progression["cycle_days"])
-                day_progression = {**progression, "projected_baseline_factors": projected_bases.get(boundary.isoformat(), {})}
             goals, focus, cycle = _goals(profile, day, period, taper, reference, accents, week, length,
-                                          rows, today, limited if progression else False, _taper_factor(periodization, day), day_progression, periodization=periodization, support_limited=limited, actual_reference=actual_reference)
+                                          rows, today, limited if progression else False, _taper_factor(periodization, day), progression, periodization=periodization, support_limited=limited, actual_reference=actual_reference)
             for z in COMPONENTS:
                 targets[z].append(goals[z]["target"])
+                q_targets[z].append(goals[z].get("target_weekly_q"))
             phases.append(period)
             selected.extend(focus)
             meso_weeks.append(cycle["week"] if cycle else week + 1)
@@ -641,7 +644,8 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
             target = sum(targets[z]) / len(targets[z])
             known = actual_base[z]["known"] or z in profile.get("component_targets_weekly", {})
             base = actual_base[z]
-            components[z] = {"target_weekly_effective": _round(target) if known else None,
+            components[z] = {"target_weekly_q": _round(sum(q_targets[z])/len(q_targets[z])) if all(v is not None for v in q_targets[z]) else None,
+                             "target_weekly_effective": _round(target) if known else None,
                              "target_period_effective": _round(sum(targets[z])/7) if known else None,
                              "target_index_7_40": _round((base["b50"] + target / 7) / (base["b50"] + base["c40"])) if base["known"] else None}
         weeks.append({"start_date": left.isoformat(), "end_date": right.isoformat(),
@@ -650,7 +654,7 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
                       "components": components,
                       **({"volume_budget_minutes": _volume_estimate(profile, components, volume["baseline_weekly_minutes"], actual_base, (right-left).days+1),
                           "volume_role": "HISTORICAL_MIX_EQUIVALENT_NOT_TIME_LIMIT"} if volume else {})})
-    return {"schema_version": "training-outlook-v1", "as_of": today.isoformat(), "progression": progression,
+    return {"schema_version": "training-outlook-v1", "as_of": today.isoformat(), "progression": load_progression.public_context(progression),
             "basis": "CURRENT_ACTUAL_REFERENCE_FROZEN", "targets_version": training_targets.VERSION,
             "reference_cutoff": reference["cutoff"], "limited": limited,
             "goal_role": "COACH_TARGETS_BEFORE_DAILY_GATES",
@@ -700,13 +704,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     rows = _daily_rows(source, today)
     volume_evidence = planning_controls.volume_history(source, today, 0, gap_days=(controls or {}).get("history_gap_days", planning_history.DEFAULT_GAP_DAYS))
     history_policy = volume_evidence["history_policy"]
-    progression = progression_context(repository, alias, profile, source, rows, today)
-    adaptation = (progression or {}).get("adaptation") or {}
     reentry_days, reentry_reason = planning_history.reentry(profile, volume_evidence)
     periodization = build_periodization(program_start, program_end, events,
                                         reentry_days_override=reentry_days,
                                         taper_days=profile.get("taper_days", 7), transition_days=profile.get("transition_days", 0))
     periodization["entry_basis"] = {"days_override": reentry_days, "reason": reentry_reason}
+    progression = progression_context(repository, alias, profile, source, rows, today, periodization)
+    adaptation = (progression or {}).get("adaptation") or {}
 
     actual_activities = [a for a in envelope.get("activities", []) if a.get("local_date", "") <= today.isoformat()]
     configs = model_service.ModelStore(repository).config(alias)
@@ -724,6 +728,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     as_of = source.get("period_end")
     missing_days = max(0, (today - date.fromisoformat(as_of)).days) if as_of else None
     limited = not history_policy["usable"] or min(component_history_days.values()) < planning_history.MINIMUM_DAYS or bool(quality.get("limited_activities") or quality.get("excluded_activities"))
+    equivalence_changed = not load_progression.history_matches(source, {"bounds": list(settings.zone_bounds_bpm), "hrmax": settings.hrmax_bpm})
+    if equivalence_changed:
+        limited = True
+        warnings.append(_warning("EQUIVALENCE_REANALYSIS_REQUIRED", "Нужен е нов анализ на активностите по текущите пулсови граници и приравняване (Z5: 5% за удар). До тогава новите дози са задържани."))
     if limited:
         warnings.append(_warning("LIMITED_LOAD_HISTORY", "Историята е кратка или съдържа непълни активности. Само ограничени леки предложения; липсващата умора не се приема за нулева."))
     methods = resolved_methods(profile)
@@ -733,7 +741,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         warnings.append(_warning("DOUBLE_THRESHOLD_PROFILE_REQUIRED", "За прагова част в Z4 е нужен индивидуален прагoв интервален профил. Профил за аеробна мощност не го замества."))
     for missing in catalog(profile)["disabled"]:
         warnings.append(_warning("METHOD_PROFILE_" + missing["component"], missing["reason"]))
-    blocked = missing_days is not None and missing_days > 1
+    blocked = equivalence_changed or (missing_days is not None and missing_days > 1)
     if adaptation.get("hold_for_reported_illness_or_pain"):
         blocked = True
         warnings.append(_warning("REPORTED_ILLNESS_OR_PAIN", load_adaptation.symptom_message(adaptation)))
@@ -927,6 +935,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         day_meso_week, day_meso_factor = meso_at(day)
         goals, selected_accents, cycle_state = day_goals[day]
         budgets = _budgets(forecast_rows, day, taper, day_meso_factor, actual_rows=rows, targets=goals)
+        q_remaining = load_progression.remaining_q(source, result_days, day, goals)
+        for z, remaining_q in q_remaining.items():
+            budgets[z].update(target_weekly_q=goals[z]["target_weekly_q"], remaining_q=remaining_q)
         allocation = planning_allocation.quota(goal_windows, opportunities, forecast_rows, day, slot_index) if component_governed else None
         visible_ready = {z: _round(ready[z]) if forecast_known else None for z in COMPONENTS}
         item = {"date": key, "status": "REST", "period": period, "taper": taper, "cycle": cycle_state,
@@ -1258,25 +1269,29 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         direct, effective, technical = candidate_load(blocks)
                         limits.append({"code": "COMPONENT_SLOT_ALLOCATION", "limit_minutes": _round(work)})
                 if not limited:
-                    def fits_component_budget(candidate):
-                        return all(candidate[z] <= budgets[z]["deficit_effective"] + .001 for z in COMPONENTS)
-                    if not fits_component_budget(effective):
+                    def fits_component_budget(candidate, candidate_q):
+                        return (all(candidate[z] <= budgets[z]["deficit_effective"] + .001 for z in COMPONENTS)
+                                and all(candidate_q[z] <= available_q + .001 for z, available_q in q_remaining.items()))
+                    if not fits_component_budget(effective, direct):
                         minimum_blocks = _blocks(method, method["min_work_min"], evidence, settings)
-                        _, minimum_load, _ = candidate_load(minimum_blocks)
-                        if not minimum_blocks or not fits_component_budget(minimum_load):
-                            item["rejected_alternatives"].append(_budget_rejection(method["id"], minimum_load, budgets, profile))
+                        minimum_q, minimum_load, _ = candidate_load(minimum_blocks)
+                        if not minimum_blocks or not fits_component_budget(minimum_load, minimum_q):
+                            q_blockers = [z for z,v in q_remaining.items() if minimum_q[z] > v + .001]
+                            item["rejected_alternatives"].append({"method_id": method["id"], "code": "DIRECT_Q_PROGRESSION_BUDGET",
+                                "reason": "Минималният вариант надвишава оставащия приравнен обем Q: " + "; ".join(f"{z}: нужни {minimum_q[z]:.1f}, остават {q_remaining[z]:.1f} мин" for z in q_blockers),
+                                "blocking_components": q_blockers} if q_blockers else _budget_rejection(method["id"], minimum_load, budgets, profile))
                             continue
                         lo, hi = method["min_work_min"], work
                         for _ in range(24):
                             midpoint = (lo + hi) / 2
                             trial_blocks = _blocks(method, midpoint, evidence, settings)
-                            _, trial_effective, _ = candidate_load(trial_blocks)
-                            if trial_blocks and fits_component_budget(trial_effective):
+                            trial_q, trial_effective, _ = candidate_load(trial_blocks)
+                            if trial_blocks and fits_component_budget(trial_effective, trial_q):
                                 lo = midpoint
                             else:
                                 hi = midpoint
                         work = math.floor(lo * 2) / 2
-                        limits.append({"code": "ROLLING_7_40_COMPONENT_BUDGET", "limit_minutes": _round(work)})
+                        limits.append({"code": "ROLLING_Q_AND_7_40_BUDGET", "limit_minutes": _round(work)})
                         if work < method["min_work_min"]:
                             item["rejected_alternatives"].append(_budget_rejection(method["id"], effective, budgets, profile))
                             continue
@@ -1453,7 +1468,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     allocation_report = planning_allocation.report(goal_windows, rows, forecast_rows, result_days,
         sum(slot_counts.values()), session_limit, weekly_minutes) if component_governed and forecast_known and not blocked else None
     parameters = {"version": PARAMETER_VERSION, "race_duration": event_duration, "status": "COACH_HEURISTICS_FOR_REVIEW",
-                  "recovery_mode": "LOAD_ONLY", "ready_threshold_percent": 90, "load_progression": progression,
+                  "recovery_mode": "LOAD_ONLY", "ready_threshold_percent": 90, "load_progression": load_progression.public_context(progression),
                   "building_fraction": profile.get("building_fraction", .5), "maintenance_fraction": profile.get("maintenance_fraction", .3),
                   "reentry_fraction": profile.get("reentry_fraction", .4), "recovery_session_cap_min": profile.get("recovery_session_cap_min", 30),
                   "weekly_volume_source": volume_source, "baseline_weekly_minutes": _round(weekly_minutes),

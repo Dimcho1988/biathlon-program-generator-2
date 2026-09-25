@@ -324,6 +324,9 @@ class LoadHistoryResponse(StrictModel):
     period_start: str
     period_end: str
     tref_bounds_profile_version: str | None = None
+    equivalence_version: str | None = None
+    zone_bounds_bpm: list[int] | None = None
+    hrmax_bpm: int | None = None
     quality: LoadHistoryQuality
     zones: list[ZoneLoadSummary]
     daily: list[DailyZoneLoad]

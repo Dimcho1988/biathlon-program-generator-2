@@ -6,18 +6,19 @@ chosen once at construction, never independently for each query direction.
 """
 from bisect import bisect_right
 import math
-from .equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM
+from .equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, Z5_EQUIVALENCE_SLOPE_PP_PER_BPM
 
-VERSION='hr-speed-bounded-paired-v1'
+VERSION='hr-speed-bounded-paired-v2-z5'
 TMAX_RANGES_S={'Z1':(7200.,18000.),'Z2':(5400.,10800.),'Z3':(1800.,4800.),'Z4':(600.,1800.)}
 SLOPE=DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM/100
+Z5_SLOPE=Z5_EQUIVALENCE_SLOPE_PP_PER_BPM/100
 
 
 def volume_duration_centers(bounds):
     # Locate volume corrections at the agreed Tmax midpoints. Do not apply the
     # HR equivalence to wide Z1 here: that could move its center beyond the curve.
     centers=[sum(limits)/2 for limits in TMAX_RANGES_S.values()]
-    centers.append(centers[-1]/(1+SLOPE*(bounds[5]-bounds[4])/2))
+    centers.append(centers[-1]/(1+Z5_SLOPE*(bounds[5]-bounds[4])/2))
     return centers
 
 
@@ -77,7 +78,7 @@ class Predictor:
         if not isinstance(hr,(int,float)) or isinstance(hr,bool) or not math.isfinite(hr) or not self.min_hr-1e-9<=hr<=self.max_hr+1e-9:
             raise ValueError('Outside HR prediction range')
         i=self.zone_index(hr)
-        if i==4:return self.times[3]/(1+SLOPE*(hr-self.bounds[4]))
+        if i==4:return self.times[3]/(1+Z5_SLOPE*(hr-self.bounds[4]))
         upper=self.bounds[i+1];k=1-SLOPE*(upper-hr)
         if i and hr<self.joins[i]:
             lower=self.bounds[i];join=self.joins[i]
@@ -111,6 +112,7 @@ class Predictor:
                 'curve_speed_range_kmh':[self.curve.speed(self.curve.times[-1])*3.6,self.curve.speed(self.curve.times[0])*3.6],
                 'conflicting_zones':self.conflicting_zones,
                 'speed_range_kmh':list(self.speed_range),'equivalence_slope_percent_per_bpm':SLOPE*100,
+                'z5_equivalence_slope_percent_per_bpm':Z5_SLOPE*100,
                 'zones':self.anchors+[{'zone':'Z5','hr_bpm':self.bounds[4],'duration_s':self.times[3],
                                      'duration_min_s':TMAX_RANGES_S['Z4'][0],'duration_max_s':TMAX_RANGES_S['Z4'][1],
                                      'speed_kmh':self.curve.speed(self.times[3])*3.6,'source':'Z4_SHARED_BOUNDARY',

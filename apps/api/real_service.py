@@ -545,6 +545,8 @@ def dataset_to_load_history(
         period_start=dataset.period_start,
         period_end=dataset.period_end,
         tref_bounds_profile_version=tref_profile_version,
+        equivalence_version=dataset.equivalence_version,
+        zone_bounds_bpm=list(context.zone_bounds_bpm), hrmax_bpm=context.hrmax_bpm,
         quality=LoadHistoryQuality(
             processed_activities=int(dataset.processed_activities),
             limited_activities=int(dataset.limited_activities),
@@ -1330,7 +1332,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         dataset = load_real_history(provider, profile_identifier=context.provider_athlete_id,
                                     session_salt=salt, parameters=parameters,
                                     period_end=end, days=days, loaded_at_utc=now,
-                                    configuration=configuration_with_hr_boundaries(context.zone_bounds_bpm),
+                                    configuration=configuration_with_hr_boundaries(context.zone_bounds_bpm, hrmax_bpm=context.hrmax_bpm),
                                     activity_shadow_processor=process_activity_shadow,
                                     activity_ref_resolver=resolve_activity_ref,
                                     activity_metadata_collector=collect_activity_metadata)

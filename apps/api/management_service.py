@@ -79,13 +79,14 @@ def outlook(repository, alias, *, now=None):
     limited = (not history["history_policy"]["usable"] or any(not v["known"] for v in engine.planning_controls.reference(rows, today).values())
                or bool(quality.get("limited_activities") or quality.get("excluded_activities"))
                or source.get("period_end") != today.isoformat())
+    limited = limited or not engine.load_progression.history_matches(source, {"bounds": list(settings.zone_bounds_bpm), "hrmax": settings.hrmax_bpm} if settings else None)
     volume = engine.planning_controls.volume_basis(profile, history)
     reentry_days, reentry_reason = engine.planning_history.reentry(profile, history)
     phases = engine.build_periodization(profile["program_start"], profile["program_end"], calendar["events"],
                                        reentry_days_override=reentry_days,
                                        taper_days=profile["taper_days"], transition_days=profile["transition_days"])
     phases["entry_basis"] = {"days_override": reentry_days, "reason": reentry_reason}
-    progression = engine.progression_context(repository, alias, profile, source, rows, today)
+    progression = engine.progression_context(repository, alias, profile, source, rows, today, phases)
     projection = engine._long_term_outlook(profile, phases, reference, accents, preferences, rows, today,
                                          limited, volume=volume, events=calendar["events"], progression=progression)
     return {"configured": True, "outlook": {

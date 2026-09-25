@@ -33,3 +33,15 @@ it("keeps absent observed growth unknown and labels Q and E separately",()=>{
   expect(html).toContain("завършен мезоцикъл");expect(html).toContain("Реална промяна Q");
   expect(html).toContain("Реална промяна E");expect(html).toContain("—");
 });
+it("separates the expert destination from the observed starting volume",()=>{
+  const html=renderToStaticMarkup(<LoadProgressionSummary plan={{long_term:{progression:{basis:"STABLE_PREPARATION_REFERENCE",anchor:{created_on:"2026-09-25",windows:[]},target_date:"2027-01-01",components:{Z5:{weekly_q:2,expert_reference_q:25,reference_q:25,target_q:26,attainable_q:2.08,annual_rate_percent:14,limitation:"GRADUAL_APPROACH_TO_EXPERT_REFERENCE"}}}}}}/>);
+  expect(html).toContain("0:02:00");expect(html).toContain("0:25:00");
+  expect(html).toContain("Постепенно приближаване");expect(html).toContain("5% за удар над долната");
+  expect(html).toContain("2027-01-01");expect(html).toContain("не е предписание за намаляване");
+});
+it("validates reference positions and preserves zero as an explicit choice",()=>{
+  const p={...defaultManagementProfile("2026-09-25"),discipline:"1500 m"};
+  const settings={...p.load_progression,training_level:"HIGH",component_reference_positions:{Z5:0},reference_revision:2};
+  expect(parseManagementProfile({...p,load_progression:settings}).load_progression?.component_reference_positions?.Z5).toBe(0);
+  expect(()=>parseManagementProfile({...p,load_progression:{...settings,component_reference_positions:{Z5:1.01}}})).toThrow();
+});

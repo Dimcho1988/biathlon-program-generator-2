@@ -234,7 +234,7 @@ def test_load_settings_and_recovery_share_the_new_real_model_contract() -> None:
         "Z2 pp/bpm": 3.0,
         "Z3 pp/bpm": 3.0,
         "Z4 pp/bpm": 3.0,
-        "Z5 pp/bpm": 3.0,
+        "Z5 pp/bpm": 5.0,
     }
     visible_settings_text = "\n".join(
         _values(app.warning) + _values(app.caption) + settings_markdown

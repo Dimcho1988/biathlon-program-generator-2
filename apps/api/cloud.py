@@ -18,6 +18,7 @@ from threading import RLock
 from typing import Any, Mapping, Protocol
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from biathlon.equivalence import EQUIVALENCE_VERSION
 
 
 @dataclass(frozen=True)
@@ -579,7 +580,8 @@ class AthleteContext:
         payload = {"alias": self.public_alias, "zones": self.zone_bounds_bpm,
                    "timezone": self.timezone, "intra": self.intra_zone_version,
                    "tref": self.tref_version, "recovery": self.recovery_parameter_version,
-                   "explicit_hrmax": self.hrmax_bpm}
+                   "explicit_hrmax": self.hrmax_bpm,
+                   "equivalence_policy": EQUIVALENCE_VERSION}
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
