@@ -6,6 +6,9 @@ import { ManagementProfileEditor } from "../components/management-profile-editor
 import { TrainingManagement } from "../components/training-management";
 import { PlanningProfileForm } from "../components/planning-profile-form";
 import { TrainingPlanSummary } from "../components/training-plan-summary";
+import { TimeAvailability, TimeLimitNotice } from "../components/planning-time-limit";
+import { changeActivePlan, newerActivePlan } from "../lib/active-plan-request";
+import type { ActivePlanResponse } from "../lib/training-management";
 import type { PlanningCalendarResponse } from "../lib/planning-calendar";
 import { defaultManagementProfile, defaultPlanningControls, parseDraftRecord, COMPONENTS } from "../lib/training-management";
 
@@ -145,4 +148,64 @@ it("previews race duration without saving and drops the preview when discipline 
   await enter(input("Дисциплина"),"10 km");
   expect(container.textContent).not.toContain("около 4,5 мин");
   expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+it("labels one hour as a total ceiling, preserves it on save and clears it only by explicit choice", async()=>{
+  const fetchMock=vi.fn(async (_url,init)=>Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile}));vi.stubGlobal("fetch",fetchMock);
+  const p={...profile,planning_controls:{...defaultPlanningControls(profile.actual_sport),weekly_target_hours:1}};
+  await mount(<ManagementProfileEditor initialProfile={{configured:true,profile:p,revision:1}} today="2026-09-21"/>);
+  await click(button("2. Дни и обем"));
+  expect(input("Максимум общо време за 7 дни").value).toBe("1");
+  expect(container.textContent).toContain("Стойност 1 означава максимум 1 час общо, не добавяне на 1 час");
+  await click(button("Премахни седмичния таван"));
+  expect(input("Максимум общо време за 7 дни").value).toBe("");
+  expect(fetchMock).not.toHaveBeenCalled();
+  await click(button("Запази промените"));
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).profile.planning_controls.weekly_target_hours).toBeNull();
+});
+
+it("shows a one-hour cap in automatic mode and explains actual time consuming it",async()=>{
+  const parameters={availability_mode:"AUTO_HISTORY",planning_controls:{weekly_target_hours:1},time_budget:{start_date:"2026-09-21",end_date:"2026-09-27",period_limit_minutes:60,actual_minutes:75,planned_minutes:0,remaining_minutes:0,actual_excess_minutes:15}};
+  await mount(<TrainingPlanSummary plan={{...draft.payload,days:[],summary:{planned_minutes:0},parameters}}/>);
+  expect(container.textContent).toContain("Лимит за време1:00:00максимум общо за 7 дни");
+  expect(container.textContent).not.toContain("Автоматично");
+  expect(container.textContent).toContain("изпълнено 1:15:00; предложено 0:00:00; оставащо време 0:00:00");
+  expect(container.textContent).toContain("Изпълненото вече надхвърля лимита");
+});
+
+it("shows the tighter time constraint and keeps long-term estimates distinct",async()=>{
+  const context={availability_mode:"MANUAL",weekly_time_limit_minutes:600,available_weekly_minutes:210};
+  await mount(<><TimeAvailability context={context}/><TimeLimitNotice context={context} forecast/></>);
+  expect(container.textContent).toContain("Лимит за време3:30:00");
+  expect(container.textContent).toContain("Записан седмичен таван: 10:00:00");
+  expect(container.textContent).toContain("еквивалент на компонентните цели преди ограниченията за време");
+});
+
+const activeResponse=(revision:number,stale=false):ActivePlanResponse=>({active:{revision,stale,actionable:false,payload:{schema_version:"active-plan-v2",status:"REVIEW_REQUIRED",mode:"AUTO",reason:"За преглед",plan:draft.payload,proposal:{...draft.payload,activation_eligible:true},changes:[],outcomes:[],decisions:{}}},history:[]});
+
+it("disables manual actions during automatic refresh and loads a concurrent newer version without replaying",async()=>{
+  let resolvePost!:(response:Response)=>void;
+  const fetchMock=vi.fn<(url:string,init?:RequestInit)=>Promise<Response>>((url)=>url.endsWith("/active")?Promise.resolve(Response.json(activeResponse(4))):new Promise(resolve=>{resolvePost=resolve;}));vi.stubGlobal("fetch",fetchMock);
+  await mount(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:2}} initialDrafts={[]} initialActive={activeResponse(3,true)} today="2026-09-21"/>);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(button("Обновяване…").disabled).toBe(true);
+  expect(button("Пауза").disabled).toBe(true);
+  expect(button("Утвърди актуалната адаптация").disabled).toBe(true);
+  await click(button("Обновяване…"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  await act(async()=>resolvePost(Response.json({error:"Conflict"},{status:409})));
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(container.textContent).toContain("Текущ план · версия 4");
+  expect(container.textContent).toContain("Заредена е последната версия");
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(button("Утвърди актуалната адаптация").disabled).toBe(false);
+});
+
+it("never automatically retries an approval after conflict or replaces a newer response with an older poll",async()=>{
+  const fetchMock=vi.fn<(url:string,init?:RequestInit)=>Promise<Response>>(async (_url,init)=>init?.method==="POST"?Response.json({error:"Conflict"},{status:409}):Response.json(activeResponse(8)));vi.stubGlobal("fetch",fetchMock);
+  const result=await changeActivePlan("action",{action:"APPROVE",expected_revision:7});
+  expect(result.conflict).toBe(true);
+  expect(result.value.active?.revision).toBe(8);
+  expect(fetchMock.mock.calls.filter(([,init])=>init?.method==="POST")).toHaveLength(1);
+  expect(newerActivePlan(result.value,activeResponse(7)).active?.revision).toBe(8);
 });

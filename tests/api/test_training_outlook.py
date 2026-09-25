@@ -26,11 +26,13 @@ def test_live_outlook_uses_saved_accents_and_wave_without_generating_or_writing(
         return reference_speed(repo, alias, sport)
     monkeypatch.setattr(engine.model_service, "speed_view", speed)
     first = service.outlook(repo, "athlete", now=NOW)["outlook"]
+    assert first["volume_context"]["weekly_time_limit_minutes"] is None
     frozen = deepcopy(first)
     saved["revision"] = 2
-    controls.update(accents=["Z4"], wave=[.96, 1.4, 1.5, .78])
+    controls.update(accents=["Z4"], wave=[.96, 1.4, 1.5, .78], weekly_target_hours=1)
     second = service.outlook(repo, "athlete", now=NOW)["outlook"]
     assert second["profile_revision"] == 2
+    assert second["volume_context"]["weekly_time_limit_minutes"] == 60
     assert speed_calls == ["Run", "Run"]
     assert second["race_duration"]["source"] == "UNAVAILABLE"
     week1, week2 = first["long_term"]["weeks"][2], second["long_term"]["weeks"][2]

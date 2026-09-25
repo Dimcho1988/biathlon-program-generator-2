@@ -4,20 +4,24 @@ import { SymptomNotice } from "./symptom-notice";
 import { TrainingPlanWeek } from "./training-plan-week";
 import { SyncActionForm } from "./sync-action-form";
 import { hasProgramDays } from "../lib/management-guidance";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { isRecord } from "../lib/training-status";
 import { durationHms } from "../lib/duration-format";
-import { parseActivePlanResponse, type ActivePlanResponse, type DraftDay } from "../lib/training-management";
+import { type ActivePlanResponse, type DraftDay } from "../lib/training-management";
+import { changeActivePlan, PLAN_CHANGED_NOTICE } from "../lib/active-plan-request";
 
 const STATE: Record<string, string> = { ACTIVE: "Активна програма", PAUSED: "Програмата е на пауза", REVIEW_REQUIRED: "Промяна за преглед", COMPLETED: "Завършена програма" };
 const OUTCOME: Record<string, string> = { RECORDED: "Има реално изпълнение", DIFFERENT_ACTIVITY: "Изпълнено е друго средство", MISSED: "Без изпълнена сесия", SKIPPED: "Пропусната", REST: "Почивка", UNKNOWN: "Липсват данни" };
 
-export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay }: {
+export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay, externalBusy = false, onBegin, onEnd }: {
   value: ActivePlanResponse; onChange: (v: ActivePlanResponse) => void; canEdit: boolean; today: string;
+  externalBusy?: boolean; onBegin?: () => boolean; onEnd?: () => void;
   renderDay: (day: DraftDay) => ReactNode;
 }) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<{ revision: number; message: string } | null>(null);
+  const [notice, setNotice] = useState("");
+  const inFlight = useRef(false);
   const record = value.active;
   if (!record) return null;
   const p = record.payload;
@@ -26,25 +30,27 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay 
   const feedback = isRecord(progression.adaptation) ? progression.adaptation : {};
   const symptomHold = display.warnings.some(w => w.code === "REPORTED_ILLNESS_OR_PAIN");
   async function mutate(endpoint: string, body: Record<string, unknown>) {
-    setBusy(true); setError("");
+    if (!canEdit || inFlight.current || externalBusy || (onBegin && !onBegin())) return;
+    inFlight.current = true;
+    setBusy(true); setError(null); setNotice("");
     try {
-      const response = await fetch(`/api/athlete/management/${endpoint}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, expected_revision: record!.revision }) });
-      const result: unknown = await response.json();
-      if (!response.ok) throw new Error(isRecord(result) && typeof result.error === "string" ? result.error : "Програмата не беше променена.");
-      onChange(parseActivePlanResponse(result));
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "Програмата не беше променена."); }
-    finally { setBusy(false); }
+      const result = await changeActivePlan(endpoint, { ...body, expected_revision: record!.revision });
+      onChange(result.value);
+      if (result.conflict) setNotice(PLAN_CHANGED_NOTICE);
+    } catch (caught) { setError({ revision: record!.revision, message: caught instanceof Error ? caught.message : "Програмата не беше променена." }); }
+    finally { inFlight.current = false; setBusy(false); onEnd?.(); }
   }
-  const actionsDisabled = !canEdit || busy;
+  const actionsDisabled = !canEdit || busy || externalBusy;
   return <section className="management-active" aria-label="Активна тренировъчна програма">
     <div className="management-panel management-current-heading"><div><p className="eyebrow">Текущ план · версия {record.revision}</p><h2>{STATE[p.status]}</h2>
       <p>{p.mode === "AUTO" ? "Следващите дни се адаптират автоматично след нов анализ и при смяна на деня." : "Адаптациите се предлагат за утвърждаване."}</p>{!symptomHold && <p>{p.reason}</p>}</div>
       <div className="management-actions">
         {p.status !== "COMPLETED" && <button type="button" className="action-button secondary" disabled={actionsDisabled} onClick={() => mutate("action", { action: p.status === "PAUSED" ? "RESUME" : "PAUSE" })}>{p.status === "PAUSED" ? "Продължи с текущите настройки" : "Пауза"}</button>}
-        {p.status !== "PAUSED" && p.status !== "COMPLETED" && <button type="button" className="action-button" disabled={actionsDisabled} onClick={() => mutate("action", { action: "REFRESH" })}>{busy ? "Обновяване…" : "Обнови сега"}</button>}
+        {p.status !== "PAUSED" && p.status !== "COMPLETED" && <button type="button" className="action-button" disabled={actionsDisabled} onClick={() => mutate("action", { action: "REFRESH" })}>{busy || externalBusy ? "Обновяване…" : "Обнови сега"}</button>}
       </div>
     </div>
-    {error && <p className="management-error" role="alert">{error}</p>}
+    {error?.revision === record.revision && <p className="management-error" role="alert">{error.message}</p>}
+    {notice && <p className="management-notice" role="status">{notice}</p>}
     {record.stale && <p className="management-notice" role="status">{record.stale_reason} Последната версия е показана само за справка.</p>}
     {p.status === "REVIEW_REQUIRED" && <div className="management-notice"><p>Предложението по-долу още не е действаща задача.</p>
       {symptomHold ? <SymptomNotice day={feedback.latest_report_day}/> : p.proposal?.activation_eligible === true ? <button type="button" className="action-button" disabled={actionsDisabled || record.stale} onClick={() => mutate("action", { action: "APPROVE" })}>Утвърди актуалната адаптация</button> : canEdit ? <SyncActionForm scope="FULL" returnTo="/management" label="Обнови тренировките" /> : <p>Треньорът трябва да прегледа актуалните данни.</p>}
@@ -53,9 +59,9 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay 
     {p.status !== "COMPLETED" && hasProgramDays(display) && <div className={`management-days ${record.actionable ? "" : "management-reference"}`}><TrainingPlanWeek days={display.days} today={today} renderDay={day => <div key={day.date}>
       {renderDay(day)}
       {canEdit && ["ACTIVE", "REVIEW_REQUIRED"].includes(p.status) && day.date >= today && day.status !== "EXISTING_ACTIVITY" && day.status !== "RACE" && <div className="management-day-actions">
-        <button type="button" className="action-button secondary" disabled={busy || record.stale} onClick={() => mutate("day", { date: day.date, action: "REST", note: "" })}>Почивка на {day.date}</button>
-        {day.session && <button type="button" className="action-button secondary" disabled={busy || record.stale} onClick={() => mutate("day", { date: day.date, action: "SKIP", note: "" })}>Пропускам тренировките за деня</button>}
-        {p.decisions[day.date] && <button type="button" className="action-button secondary" disabled={busy || record.stale} onClick={() => mutate("day", { date: day.date, action: "CLEAR", note: "" })}>Върни избора на системата</button>}
+        <button type="button" className="action-button secondary" disabled={actionsDisabled || record.stale} onClick={() => mutate("day", { date: day.date, action: "REST", note: "" })}>Почивка на {day.date}</button>
+        {day.session && <button type="button" className="action-button secondary" disabled={actionsDisabled || record.stale} onClick={() => mutate("day", { date: day.date, action: "SKIP", note: "" })}>Пропускам тренировките за деня</button>}
+        {p.decisions[day.date] && <button type="button" className="action-button secondary" disabled={actionsDisabled || record.stale} onClick={() => mutate("day", { date: day.date, action: "CLEAR", note: "" })}>Върни избора на системата</button>}
       </div>}
     </div>} /></div>}
     <p className="management-muted">Изпълнението се отчита от реалните активности. Приравненият товар и готовността се преизчисляват от тях; отбелязването „Пропускам“ не създава измислено натоварване.</p>

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { TimeAvailability, TimeLimitNotice } from "./planning-time-limit";
 import { PlanComparison } from "./plan-comparison";
 import { LoadProgressionSummary } from "./load-progression-summary";
 import { RaceDurationSummary } from "./race-duration-estimate";
@@ -45,8 +46,9 @@ export function TrainingPlanOverview({ plan, outcomes, today, stale, currentProf
     <LoadProgressionSummary plan={plan}/>
     {volumeContext && <section className="management-panel"><h2>Обем на подготовката</h2>
       <p className="management-muted">Актуални цели от записания профил · версия {currentProfileRevision}. Промените в профила се отразяват тук при отваряне; седмичните тренировки се подготвят отделно.</p>
-      <div className="management-metrics"><div><small>Историческа основа за програмата</small><strong>{numeric(volumeContext.historical_training_weekly_minutes) === null ? "—" : durationHms(Number(volumeContext.historical_training_weekly_minutes))}</strong><span>средно за 7 дни</span></div><div><small>Налично време</small><strong>{volumeContext.availability_mode==="AUTO_HISTORY"?"Автоматично":durationHms(Number(volumeContext.available_weekly_minutes))}</strong><span>{volumeContext.availability_mode==="AUTO_HISTORY"?"без ръчно зададен лимит":"за 7 дни"}</span></div><div><small>Прогнозно време за избрания период</small><strong>{current?.volume_budget_minutes == null ? "—" : durationHms(current.volume_budget_minutes)}</strong><span>{current ? `${shortDate(current.start_date)} – ${shortDate(current.end_date)} · ч:мм:сс` : "Няма избран период"}</span></div></div>
+      <div className="management-metrics"><div><small>Историческа основа за програмата</small><strong>{numeric(volumeContext.historical_training_weekly_minutes) === null ? "—" : durationHms(Number(volumeContext.historical_training_weekly_minutes))}</strong><span>средно за 7 дни</span></div><TimeAvailability context={volumeContext}/><div><small>Прогнозно време за избрания период</small><strong>{current?.volume_budget_minutes == null ? "—" : durationHms(current.volume_budget_minutes)}</strong><span>{current ? `${shortDate(current.start_date)} – ${shortDate(current.end_date)} · ч:мм:сс` : "Няма избран период"}</span></div></div>
       {typeof volumeContext.available_weekly_minutes === "number" && Number(volumeContext.available_weekly_minutes) < Number(volumeContext.historical_training_weekly_minutes) && <p className="management-notice">Записаното свободно време е по-малко от историческия обем и ограничава програмата. <Link href="/planning">Провери дните и минутите в профила →</Link></p>}
+      <TimeLimitNotice context={volumeContext} forecast/>
       <p className="management-muted">Историята е началната база; 7/40 задава целевия товар по зони. Прогнозното време използва досегашното съотношение между време и товар. То не е сбор от съставени тренировки и не е лимит. Точният обем зависи от методите и дневната готовност. При изключена сила нейното време се отделя.</p>
     </section>}
     <section className="management-panel"><h2>Посока на подготовката</h2><RaceDurationSummary value={plan?.race_duration ?? plan?.parameters?.race_duration}/>

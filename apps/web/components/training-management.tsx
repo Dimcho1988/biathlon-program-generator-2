@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { changeActivePlan, newerActivePlan, PLAN_CHANGED_NOTICE } from "../lib/active-plan-request";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { durationHms } from "../lib/duration-format";
 import { isRecord } from "../lib/training-status";
@@ -46,7 +47,7 @@ function SingleSessionCard({ day, expanded = false }: { day: DraftDay; expanded?
   const session = day.session;
   const evidence = session?.dose_evidence;
   return <article className={`management-day ${session ? "has-session" : ""}`}>
-    <header><div><p className="management-day-date">{dateLabel(day.date)}</p><h3>{session?.title ?? STATUS_LABELS[day.status] ?? day.status}</h3></div>
+    <header><div><p className="management-day-date">{dateLabel(day.date)}</p><h3>{session?.title ?? (day.time_limit_exhausted ? "Изчерпан лимит за време" : STATUS_LABELS[day.status]) ?? day.status}</h3></div>
       <span className="management-badge">{PHASE_LABELS[day.period] ?? day.period}{day.taper ? " · тейпър" : ""}</span></header>
     {session && <p className="management-session-total"><strong>{durationHms(session.total_minutes)}</strong> общо · {durationHms(session.main_work_minutes)} основна работа · {session.zone}</p>}
     <p>{day.explanation}</p>
@@ -95,6 +96,14 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   const [busy, setBusy] = useState<"generate" | "activate" | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const activeRequest = useRef(false);
+  const receiveActive = useCallback((value: ActivePlanResponse) => setActive(current => newerActivePlan(current, value)), []);
+  const beginActiveChange = useCallback(() => {
+    if (activeRequest.current) return false;
+    activeRequest.current = true; setBusy("generate"); setNotice(""); setError(""); return true;
+  }, []);
+  const endActiveChange = useCallback(() => { activeRequest.current = false; setBusy(null); }, []);
+
   const draft = drafts[0];
   const guidance = saved.profile?.horizon_mode === "MANUAL" && saved.profile.program_end < today ? { step: "PROFILE", title: "Периодът на подготовката е приключил", description: "Задай следващия период в профила, за да подготвим нова програма." } : saved.profile && saved.profile.program_start > datePlus(today, 7) ? { step: "WAIT", title: "Подготовката започва по-късно", description: "Седмичната програма може да бъде подготвена до седем дни преди началото. При нужда промени датите в профила." } : managementGuidance({ configured: saved.configured, dirty: false, draft, sync: initialSyncState, today });
   const view = initialView;
@@ -117,24 +126,24 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     let request: AbortController | null = null;
     const refresh = async () => {
       try {
-        if (document.visibilityState !== "visible") return;
+        if (document.visibilityState !== "visible" || activeRequest.current) return;
         request = new AbortController();
         const signal = AbortSignal.any([request.signal, AbortSignal.timeout(75_000)]);
         const latest = parseActivePlanResponse(await requestJson("active", "GET", undefined, signal));
-        if (!cancelled) setActive(latest);
+        if (!cancelled && !activeRequest.current) receiveActive(latest);
       } catch { /* Keep the last known state; writes still enforce current revisions. */ }
       finally { if (!cancelled) timer = setTimeout(refresh, 60_000); }
     };
     timer = setTimeout(refresh, 60_000);
     return () => { cancelled = true; clearTimeout(timer); request?.abort(); };
-  }, [initialView]);
+  }, [initialView, receiveActive]);
 
   async function activateDraft() {
     if (!draft) return;
     setBusy("activate"); setError("");
     try {
       const result = await requestJson("activate", "POST", { start_date: draft.payload.start_date, draft_revision: draft.revision, expected_revision: active.active?.revision ?? 0 });
-      setActive(parseActivePlanResponse(result)); setNewDraft(false); setNotice("Програмата е започната. Избери ден, за да видиш тренировката.");
+      receiveActive(parseActivePlanResponse(result)); setNewDraft(false); setNotice("Програмата е започната. Избери ден, за да видиш тренировката.");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Програмата не беше утвърдена."); }
     finally { setBusy(null); }
   }
@@ -162,15 +171,20 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     const current = active.active;
     if (current?.stale && !["PAUSED", "COMPLETED"].includes(current.payload.status)) {
       refreshed.current = true;
-      void Promise.resolve().then(() => {setBusy("generate"); return requestJson("action", "POST", {action: "REFRESH", expected_revision: current.revision});})
-        .then(value => {setActive(parseActivePlanResponse(value)); setNotice("Програмата е проверена спрямо новите настройки.");})
-        .catch(caught => setError(caught instanceof Error ? caught.message : "Обновяването не завърши."))
-        .finally(() => setBusy(null));
+      void Promise.resolve().then(async () => {
+        if (!beginActiveChange()) return;
+        try {
+          const result = await changeActivePlan("action", {action: "REFRESH", expected_revision: current.revision});
+          receiveActive(result.value);
+          setNotice(result.conflict ? PLAN_CHANGED_NOTICE : "Програмата е преизчислена. Прегледай предложението и ограниченията по-долу.");
+        } catch (caught) { setError(caught instanceof Error ? caught.message : "Обновяването не завърши."); }
+        finally { endActiveChange(); }
+      });
     } else if (!current && draft?.stale === true && ["GENERATE", "START_DATE"].includes(guidance.step)) {
       refreshed.current = true;
       void Promise.resolve().then(prepare);
     }
-  }, [active, busy, canEdit, draft, guidance.step, initialView, prepare, saved.configured]);
+  }, [active, busy, canEdit, draft, guidance.step, initialView, prepare, saved.configured, beginActiveChange, endActiveChange, receiveActive]);
 
   function exportDraft() {
     if (!draft) return;
@@ -187,10 +201,10 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     {syncError && <p className="management-error" role="alert">Обновяването не започна. Опитай отново или провери връзката с Intervals в настройките.</p>}
     {initialSyncState && <SyncStatusPanel initialState={initialSyncState} renderedGenerationId={initialSyncState.active_generation_id} returnTo="/management" compact />}
     <nav className="management-view-switch" aria-label="Изглед на плана"><Link href="/management" aria-current={view === "week" ? "page" : undefined}>Седмична програма</Link><Link href="/management/outlook" aria-current={view === "overview" ? "page" : undefined}>Дългосрочен план</Link></nav>
-    {view === "week" && overviewPlan && !archivedDraft && <TrainingPlanSummary plan={overviewPlan} />}
+    {view === "week" && overviewPlan && !archivedDraft && (showDraft || active.active?.stale === false) && <TrainingPlanSummary plan={overviewPlan} />}
 
     {view === "overview" ? <TrainingPlanOverview plan={initialOutlook ?? undefined} outcomes={active.active?.payload.outcomes ?? []} today={today} currentProfileRevision={initialOutlook?.profile_revision} volumeContext={initialOutlook?.volume_context} sessions={sessionsCurrent ? overviewPlan : undefined} sessionStatus={sessionStatus} /> : <>
-      {active.active && !newDraft && <ActiveTrainingPlan value={active} onChange={setActive} canEdit={canEdit} today={today} renderDay={day => <DayCard day={day} expanded />} />}
+      {active.active && !newDraft && <ActiveTrainingPlan value={active} onChange={receiveActive} externalBusy={busy !== null} onBegin={beginActiveChange} onEnd={endActiveChange} canEdit={canEdit} today={today} renderDay={day => <DayCard day={day} expanded />} />}
       {showDraft && <>
         <section className="management-panel management-next-step" aria-label="Следваща стъпка"><p className="eyebrow">{guidance.step === "REVIEW" ? "Преглед преди започване" : "Следваща стъпка"}</p><h2>{guidance.title}</h2><p>{guidance.description}</p>
           {archivedDraft && <p className="management-notice">Показваният досега проект е остарял. Неговите часове и тренировки не отразяват текущите настройки. Новият проект се преизчислява с актуалните записани данни. Ако това не завърши, използвай „Подготви програма“.</p>}
