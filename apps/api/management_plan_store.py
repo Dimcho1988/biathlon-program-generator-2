@@ -68,7 +68,10 @@ class PlanStore:
         return rows
 
     def defer_check(self, alias, revision):
-        self.request("POST", "/rpc/defer_onflows_management_check", json={"p_alias": alias, "p_revision": revision})
+        # This void RPC returns HTTP 204. Decoding JSON turns a successful
+        # deferral into a false store failure and repeats it in the error path.
+        self.repository._request("POST", "/rpc/defer_onflows_management_check",
+                                 json={"p_alias": alias, "p_revision": revision})
 
     def queue_import(self, alias):
         return self.request("POST", "/rpc/queue_onflows_management_import", json={"p_alias": alias})

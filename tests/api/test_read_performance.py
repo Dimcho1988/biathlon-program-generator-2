@@ -13,6 +13,7 @@ from apps.api import main, management_service, management_lifecycle, http_runtim
 from apps.api.management_plan_store import PlanStore
 from apps.api.management_store import PROFILE_KEY
 from apps.api.read_session import ReadSession
+from apps.api.oauth_store import SupabasePilotRepository
 from tests.api.test_management_api import PROFILE, HEADERS
 from tests.api.test_training_plan_engine import Repository as HistoryRepository
 
@@ -150,6 +151,17 @@ def test_plan_history_fetches_only_fields_shown_in_the_journal():
     path = next(iter(repo.calls))
     assert 'recorded_at,payload' not in path
     assert 'status:payload->status,changes:payload->changes,reason:payload->reason' in path
+
+
+def test_successful_void_plan_deferral_is_not_decoded_as_json():
+    calls = []
+    def request(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return httpx.Response(204)
+    repository = SimpleNamespace(_request=request, _json=SupabasePilotRepository._json)
+    assert PlanStore(repository).defer_check('ath-test', 7) is None
+    assert calls == [('POST', '/rpc/defer_onflows_management_check',
+                      {'json': {'p_alias': 'ath-test', 'p_revision': 7}})]
 
 
 def test_http_pool_is_reused_and_closed_at_application_shutdown(monkeypatch):
