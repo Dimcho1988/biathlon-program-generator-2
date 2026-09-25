@@ -10,6 +10,7 @@ import { TrainingPlanWeek } from "./training-plan-week";
 import { PlanComparison } from "./plan-comparison";
 import { TrainingPlanSummary } from "./training-plan-summary";
 import { TrainingPlanOverview } from "./training-plan-overview";
+import { MesocyclePriorities } from "./mesocycle-priorities";
 import { managementGuidance, hasProgramDays } from "../lib/management-guidance";
 import { SyncActionForm } from "./sync-action-form";
 import { SyncStatusPanel } from "./sync-status-panel";
@@ -51,6 +52,7 @@ function SingleSessionCard({ day, expanded = false }: { day: DraftDay; expanded?
       <span className="management-badge">{PHASE_LABELS[day.period] ?? day.period}{day.taper ? " · тейпър" : ""}</span></header>
     {session && <p className="management-session-total"><strong>{durationHms(session.total_minutes)}</strong> общо · {durationHms(session.main_work_minutes)} основна работа · {session.zone}</p>}
     <p>{day.explanation}</p>
+    <MesocyclePriorities cycle={isRecord(day.cycle) ? day.cycle : undefined}/>
     {session && <details className="management-execution" open={expanded}><summary>Как да изпълня тренировката</summary><ol className="management-blocks">{session.blocks.map((block, index) => <li key={`${block.kind}-${index}`}><div><strong>{block.label}</strong><span>{durationHms(block.duration_min)} · {block.zone}</span></div><p>{block.instructions}</p>
       {(block.target_hr_bpm !== null || block.target_speed_kmh !== null) && <small>{block.target_hr_bpm !== null ? `${number(block.target_hr_bpm, 0)} уд./мин` : ""}{block.target_hr_bpm !== null && block.target_speed_kmh !== null ? " · " : ""}{block.target_speed_kmh !== null ? `${number(block.target_speed_kmh)} km/h${block.primary_control === "EFFORT_AND_QUALITY" && block.speed_basis !== "FLAT_EQUIVALENT" ? " · зададена скорост" : " · равнинна референция, не темпо по наклон"}` : ""}</small>}
     </li>)}</ol></details>}

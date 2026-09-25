@@ -8,7 +8,7 @@ import math
 from .constants import COMPONENTS, fresh_parameters
 from . import planning_history, mesocycle_focus
 
-VERSION = "planning-controls-v4"
+VERSION = "planning-controls-v5-ranked"
 
 
 def resolve(profile, day, period, automatic_accents, *, periodization=None):
@@ -21,12 +21,17 @@ def resolve(profile, day, period, automatic_accents, *, periodization=None):
     automatic_accents, focus_context = mesocycle_focus.calendar_focus(profile, day, period, automatic_accents, periodization)
     manual = controls["accents"]
     mode = controls["accent_mode"]
+    limit = (6 if period == "RE_ENTRY" else controls.get("automatic_focus_count", 3)) if mode == "AUTO" else controls["accent_limit"]
     accents = (manual if mode == "MANUAL" else [*manual, *[z for z in automatic_accents if z not in manual]]
-               if mode == "HYBRID" else automatic_accents)[:controls["accent_limit"]]
+               if mode == "HYBRID" else automatic_accents)[:limit]
     state = {"kind": "RECOVERY" if week == len(wave)-1 else "BUILD", "name": "Базов мезоцикъл",
              "accents": accents, "wave_factor": wave[week], "week": week+1, "length": len(wave),
              "target_index": controls["accent_index"], "maintenance_index": controls["maintenance_index"],
              "volume_factor": wave[week], "explicit": False, **focus_context}
+    if mode == "AUTO":
+        shock = next((s for s in state["shock_schedule"] if s["status"] == "PLANNED" and s["start_date"] <= day.isoformat() <= s["end_date"]), None)
+        if shock:
+            state.update(kind="STRESS", name="Планиран ударен микроцикъл", automatic_shock=True, shock=shock)
     for cycle in controls["cycles"]:
         left, right = date.fromisoformat(cycle["start_date"]), date.fromisoformat(cycle["end_date"])
         if left <= day <= right:
@@ -44,9 +49,14 @@ def resolve(profile, day, period, automatic_accents, *, periodization=None):
         ceiling = .8 if period == "RE_ENTRY" else .6
         state.update(target_index=min(1., state["target_index"]), wave_factor=min(ceiling, state["wave_factor"]),
                      volume_factor=min(ceiling, state["volume_factor"]), kind=period)
+    if mode == "AUTO" and not state["explicit"]:
+        indices = controls.get("shock_indices", mesocycle_focus.SHOCK_INDICES) if state.get("automatic_shock") else controls.get("ranked_indices", mesocycle_focus.REGULAR_INDICES)
+        state["component_indices"] = {z: 1.2 if period == "RE_ENTRY" else indices[i] for i,z in enumerate(state["accents"])}
+        state["component_roles"] = {z: "INTRODUCTION" if period == "RE_ENTRY" else ("PRIMARY", "SECONDARY", "LIGHT_DEVELOPMENT")[i] for i,z in enumerate(state["accents"])}
+        state["background_development"] = period == "GENERAL_PREPARATION"
     state.update(mesocycle_accents=list(state["accents"]), focus_role="MESOCYCLE_DEVELOPMENT",
                  support_candidates=[z for z in dict.fromkeys([*automatic_accents, "Z1", "Z2", "STR", "Z3", "Z4", "Z5"])
-                                     if z not in state["accents"] and (z != "STR" or profile.get("strength_enabled"))],
+                                     if z not in (state["accents"][:2] if state.get("component_indices") else state["accents"]) and (z != "STR" or profile.get("strength_enabled"))],
                  reason="Акцентите се запазват през натоварващите микроцикли и се редуват в следващия мезоцикъл според периода и състезателното време." if mode != "MANUAL" and not state["explicit"] else "Запазен е ръчният избор на акценти.")
     return state
 
@@ -63,12 +73,19 @@ def reference(rows, today):
     return result
 
 
-def component_index(state, accent, *, wave=None, recovery=None):
+def component_index(state, accent, *, zone=None, wave=None, recovery=None):
     """Loading waves develop the focus; maintenance never rides their peaks."""
     wave = state["wave_factor"] if wave is None else wave
     recovery = state["kind"] == "RECOVERY" if recovery is None else recovery
     factor = wave if accent else min(1., wave)
-    index = (state["target_index"] if accent else state["maintenance_index"]) * factor
+    base_index = state.get("component_indices", {}).get(zone, state["target_index"] if accent else state["maintenance_index"])
+    if not accent and state.get("background_development"):
+        base_index = max(base_index, 1.1)
+    index = base_index * factor
+    if state.get("component_indices"):
+        index = min(2., index)
+    if state["kind"] == "RE_ENTRY":
+        return min(1.2, base_index)  # Daily Q, exposure and readiness remain separate gates.
     return min(index, state["target_index"]*wave, .9) if recovery else index
 
 
@@ -79,7 +96,7 @@ def goals(profile, state, actual_base, legacy, *, limited, taper_factor):
     for z in COMPONENTS:
         base = actual_base[z]
         accent = z in state["accents"]
-        index = component_index(state, accent)
+        index = component_index(state, accent, zone=z)
         if limited:
             index = min(1., index)
         # Exact inversion of the displayed canonical ratio, including B50.

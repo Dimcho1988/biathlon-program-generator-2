@@ -88,6 +88,9 @@ class PlanningControls(BaseModel):
     wave: list[float] = Field(default_factory=lambda: [.96, 1.04, 1.10, .78], min_length=2, max_length=6)
     accent_mode: Literal["AUTO", "MANUAL", "HYBRID"] = "AUTO"
     accent_limit: int = Field(default=2, ge=1, le=6)
+    automatic_focus_count: int = Field(default=3, ge=1, le=3)
+    ranked_indices: tuple[float, float, float] = (1.6, 1.5, 1.2)
+    shock_indices: tuple[float, float, float] = (2., 1.8, 1.6)
     accents: list[Literal["Z1", "Z2", "Z3", "Z4", "Z5", "STR"]] = Field(default_factory=list, max_length=6)
     accent_index: float = Field(default=1.1, ge=.5, le=2)
     maintenance_index: float = Field(default=1, ge=.5, le=1.2)
@@ -95,6 +98,11 @@ class PlanningControls(BaseModel):
 
     @model_validator(mode="after")
     def coherent(self):
+        for indices in (self.ranked_indices, self.shock_indices):
+            if any(not 1 <= v <= 2 for v in indices) or any(a < b for a,b in zip(indices, indices[1:])):
+                raise ValueError("Ranked targets must descend from primary to third within 1 to 2")
+        if any(a < b for a,b in zip(self.shock_indices, self.ranked_indices)):
+            raise ValueError("Shock targets must not be below the corresponding regular targets")
         for days in (self.intensity_days, self.strength_days, self.threshold_days, self.double_threshold_days):
             if len(set(days)) != len(days) or any(type(d) is not int or not 0 <= d <= 6 for d in days):
                 raise ValueError("Choose distinct weekdays")
