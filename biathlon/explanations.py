@@ -23,7 +23,7 @@ c_z(t)=\operatorname{clamp}\left(1-0.03[HR_{high,z}-effectiveHR(t)],0,1\right)
 За Z5 долната граница е 100%, а валидните стойности над HRmax не увеличават приравненото време:
 
 \[
-c_5(t)=1+0.03[\min(effectiveHR(t),HRmax)-HR_{low,5}]
+c_5(t)=1+0.05[\min(effectiveHR(t),HRmax)-HR_{low,5}]
 \]
 
 Приравненото време е:

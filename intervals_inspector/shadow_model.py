@@ -201,7 +201,7 @@ def default_shadow_configuration() -> ShadowModelConfiguration:
 
 
 def configuration_with_hr_boundaries(
-    boundaries: Sequence[int | float],
+    boundaries: Sequence[int | float], *, hrmax_bpm: float | None = None,
 ) -> ShadowModelConfiguration:
     """Build the approved model with athlete-specific integer zone membership.
 
@@ -220,7 +220,7 @@ def configuration_with_hr_boundaries(
         ZoneModelSettings(
             zone=zone.zone,
             hr_low=rendered[index],
-            hr_high=rendered[index + 1] - 1.0,
+            hr_high=(float(hrmax_bpm or rendered[-1]) if zone.zone == "Z5" else rendered[index + 1] - 1.0),
             equivalence_slope_pp_per_bpm=zone.equivalence_slope_pp_per_bpm,
             spill_threshold_fraction=zone.spill_threshold_fraction,
             spill_down_fraction=zone.spill_down_fraction,

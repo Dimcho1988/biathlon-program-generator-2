@@ -198,6 +198,6 @@ def test_complementary_recovery_redistributes_instead_of_creating_extra_cycle_gr
         g,_,s=engine._goals(p,TODAY+timedelta(days=i*7),'GENERAL_PREPARATION',False,{},None,i,4,rows,TODAY,False,1,ctx)
         values.append(g)
     assert s['accents']
-    for z in engine.COMPONENTS:
-        expected=ctx['components'][z]['weekly_effective']*(1+values[0][z]['progression']['cycle_growth_percent']/100)
-        assert sum(v[z]['target'] for v in values)/4<=expected+1e-6
+    for z in load_progression.WEEKLY_Q_BOUNDS:
+        expected=ctx['components'][z]['weekly_q']
+        assert sum(v[z]['target_weekly_q'] for v in values)/4<=expected+1e-6

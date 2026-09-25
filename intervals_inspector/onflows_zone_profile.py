@@ -12,8 +12,8 @@ from typing import Any
 
 
 PROFILE_SCHEMA_VERSION = "onflows-zone-profile-v2-linear-equivalence"
-INTRA_ZONE_EQUIVALENCE_VERSION = "intra_zone_linear_v1"
-from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM
+from biathlon.equivalence import EQUIVALENCE_VERSION, DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, Z5_EQUIVALENCE_SLOPE_PP_PER_BPM
+INTRA_ZONE_EQUIVALENCE_VERSION = EQUIVALENCE_VERSION
 DEFAULT_PROFILE_SOURCE = "default_demo_profile"
 MANUAL_PROFILE_SOURCE = "manual_session_profile"
 _ALLOWED_SOURCES = frozenset(
@@ -52,7 +52,7 @@ DEFAULT_PROFILE_ROWS: tuple[dict[str, float | str], ...] = (
         "zone": "Z5",
         "hr_low": 178.0,
         "hr_high": 195.0,
-        "equivalence_slope_pp_per_bpm": DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM,
+        "equivalence_slope_pp_per_bpm": Z5_EQUIVALENCE_SLOPE_PP_PER_BPM,
     },
 )
 

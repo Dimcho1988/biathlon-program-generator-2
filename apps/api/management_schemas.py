@@ -127,9 +127,14 @@ class LoadProgression(BaseModel):
     competition_factor: float = Field(default=.05, ge=0, le=1)
     max_dose_fraction: float = Field(default=.8, ge=.5, le=.8)
     feedback_enabled: bool = True
+    training_level: Literal["AUTO", "LOW", "MEDIUM", "HIGH"] = "AUTO"
+    component_reference_positions: dict[Literal["Z1", "Z2", "Z3", "Z4", "Z5"], float] = Field(default_factory=dict)
+    reference_revision: int = Field(default=0, ge=0, le=10000)
 
     @model_validator(mode="after")
     def declining_rate(self):
+        if any(not 0 <= p <= 1 for p in self.component_reference_positions.values()):
+            raise ValueError("Component reference positions must be between zero and one")
         if self.upper_volume_annual_percent > self.low_volume_annual_percent:
             raise ValueError("The growth rate must decrease with volume")
         if self.competition_factor > self.precompetition_factor:

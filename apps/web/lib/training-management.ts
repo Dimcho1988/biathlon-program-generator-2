@@ -39,11 +39,14 @@ export interface LoadProgression {
   enabled: boolean; low_volume_annual_percent: number; upper_volume_annual_percent: number;
   ceiling_ratio: number; precompetition_factor: number; competition_factor: number;
   max_dose_fraction: number; feedback_enabled: boolean;
+  training_level?: "AUTO" | "LOW" | "MEDIUM" | "HIGH";
+  component_reference_positions?: Partial<Record<Exclude<Component, "STR">, number>>;
+  reference_revision?: number;
 }
 export function defaultLoadProgression(): LoadProgression {
   return { enabled: true, low_volume_annual_percent: 30, upper_volume_annual_percent: 10,
     ceiling_ratio: 1.3, precompetition_factor: .15, competition_factor: .05,
-    max_dose_fraction: .8, feedback_enabled: true };
+    max_dose_fraction: .8, feedback_enabled: true, training_level: "AUTO", component_reference_positions: {}, reference_revision: 0 };
 }
 
 export interface CycleDirective {
@@ -174,6 +177,11 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
   const seen = new Set<string>();
   if (normalized.load_progression != null) {
     const p = normalized.load_progression;
+    if (!isRecord(p)) throw new Error("Невалидна настройка за прираста.");
+    if (p.training_level !== undefined && !["AUTO", "LOW", "MEDIUM", "HIGH"].includes(String(p.training_level))
+      || p.reference_revision !== undefined && !integer(p.reference_revision, 0, 10000)
+      || p.component_reference_positions !== undefined && (!isRecord(p.component_reference_positions) || Object.entries(p.component_reference_positions).some(([z,v]) => !["Z1","Z2","Z3","Z4","Z5"].includes(z) || !range(v,0,1))))
+      throw new Error("Провери нивото и позициите на експертната опора (0–100%).");
     if (!isRecord(p) || typeof p.enabled !== "boolean" || typeof p.feedback_enabled !== "boolean"
       || !range(p.low_volume_annual_percent, 0, 30) || !range(p.upper_volume_annual_percent, 0, p.low_volume_annual_percent)
       || !range(p.ceiling_ratio, 1.001, 1.3) || !range(p.precompetition_factor, 0, 1)
