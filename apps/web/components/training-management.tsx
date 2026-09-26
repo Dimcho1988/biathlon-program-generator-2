@@ -4,6 +4,8 @@ import Link from "next/link";
 import { changeActivePlan, newerActivePlan, PLAN_CHANGED_NOTICE } from "../lib/active-plan-request";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { durationHms } from "../lib/duration-format";
+import { componentColor, sessionSummary } from "../lib/training-visuals";
+import { SessionAccent, WorkoutProfile } from "./workout-profile";
 import { isRecord } from "../lib/training-status";
 import { ActiveTrainingPlan } from "./active-training-plan";
 import { TrainingPlanWeek } from "./training-plan-week";
@@ -47,13 +49,13 @@ function PeriodizationTable({ value }: { value: unknown }) {
 function SingleSessionCard({ day, expanded = false }: { day: DraftDay; expanded?: boolean }) {
   const session = day.session;
   const evidence = session?.dose_evidence;
-  return <article className={`management-day ${session ? "has-session" : ""}`}>
+  return <article className={`management-day ${session ? "has-session" : ""}`} style={session ? { borderLeftColor: componentColor(session.zone) } : undefined}>
     <header><div><p className="management-day-date">{dateLabel(day.date)}</p><h3>{session?.title ?? (day.time_limit_exhausted ? "Изчерпан лимит за време" : STATUS_LABELS[day.status]) ?? day.status}</h3></div>
       <span className="management-badge">{PHASE_LABELS[day.period] ?? day.period}{day.taper ? " · тейпър" : ""}</span></header>
-    {session && <p className="management-session-total"><strong>{durationHms(session.total_minutes)}</strong> общо · {durationHms(session.main_work_minutes)} основна работа · {session.zone}</p>}
+    {session && <div className="management-session-visual"><div className="management-session-total"><strong>{durationHms(session.total_minutes)}</strong> общо · {durationHms(session.main_work_minutes)} основна работа <SessionAccent zone={session.zone}/></div><p className="workout-summary">{sessionSummary(session)}</p><WorkoutProfile session={session}/><p className="workout-profile-note">Ширина: продължителност · височина: целева зона Z1–Z5. Силата е отделен компонент.</p></div>}
     <p>{day.explanation}</p>
     <MesocyclePriorities cycle={isRecord(day.cycle) ? day.cycle : undefined}/>
-    {session && <details className="management-execution" open={expanded}><summary>Как да изпълня тренировката</summary><ol className="management-blocks">{session.blocks.map((block, index) => <li key={`${block.kind}-${index}`}><div><strong>{block.label}</strong><span>{durationHms(block.duration_min)} · {block.zone}</span></div><p>{block.instructions}</p>
+    {session && <details className="management-execution" open={expanded}><summary>Как да изпълня тренировката</summary><ol className="management-blocks">{session.blocks.map((block, index) => <li key={`${block.kind}-${index}`} style={{ borderLeft: `3px solid ${componentColor(block.zone)}` }}><div><strong>{block.label}</strong><span>{durationHms(block.duration_min)} · {block.zone}</span></div><p>{block.instructions}</p>
       {(block.target_hr_bpm !== null || block.target_speed_kmh !== null) && <small>{block.target_hr_bpm !== null ? `${number(block.target_hr_bpm, 0)} уд./мин` : ""}{block.target_hr_bpm !== null && block.target_speed_kmh !== null ? " · " : ""}{block.target_speed_kmh !== null ? `${number(block.target_speed_kmh)} km/h${block.primary_control === "EFFORT_AND_QUALITY" && block.speed_basis !== "FLAT_EQUIVALENT" ? " · зададена скорост" : " · равнинна референция, не темпо по наклон"}` : ""}</small>}
     </li>)}</ol></details>}
     <details className="management-detail"><summary>Защо тази задача и доза?</summary>

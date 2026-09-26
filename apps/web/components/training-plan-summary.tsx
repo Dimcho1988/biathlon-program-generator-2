@@ -2,6 +2,7 @@ import Link from "next/link";
 import { TimeAvailability, TimeLimitNotice } from "./planning-time-limit";
 import { isRecord } from "../lib/training-status";
 import { durationHms } from "../lib/duration-format";
+import { componentColor, componentLabel } from "../lib/training-visuals";
 import { daySessions, COMPONENTS, type PlanningDraft, type VolumeHistory } from "../lib/training-management";
 import { HistoryVolume } from "./planning-controls-editor";
 export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
@@ -39,7 +40,7 @@ export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
         <div className="management-zone-legend">{COMPONENTS.map(z => {
           const values = sessions.map(s => s.direct_equivalent_minutes?.[z]);
           const known = values.every(v => typeof v === "number" && Number.isFinite(v));
-          return <span key={z}>{z}: <strong>{known ? durationHms(values.reduce<number>((sum, v) => sum + (v ?? 0), 0)) : "—"}</strong></span>;
+          return <span key={z}><i style={{background:componentColor(z)}} aria-hidden="true"/>{componentLabel(z)}: <strong>{known ? durationHms(values.reduce<number>((sum, v) => sum + (v ?? 0), 0)) : "—"}</strong></span>;
         })}</div>
         <p>{sessions.length} предложени сесии от {String(allocation.scheduled_slots)} възможни по дните. Седмичен максимум в профила: {String(allocation.weekly_session_limit)}.</p>
         {typeof allocation.scheduled_slots==="number"&&typeof allocation.weekly_session_limit==="number"&&allocation.scheduled_slots<allocation.weekly_session_limit&&<p>Избраните дни и броят сесии в тях разрешават по-малко тренировки от седмичния максимум. <Link href="/planning">Провери „Дни и обем“ →</Link></p>}
@@ -48,7 +49,7 @@ export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
         <p>Непокритата цел не доказва, че е нужна почивка или че по-пълен план е невъзможен. Това е резултатът при текущите методи, настройки и последователност на избора. Прегледай ограниченията преди промяна на целта.</p>
       </details>
     </>}
-    <details><summary>Кои качества тренираме тази седмица?</summary><p>Показана е основната работа. Загрявката, почивките и разливът на товара не се броят като отделна развиваща тренировка.</p><div className="management-zone-legend">{COMPONENTS.map(z=>{const blocks=sessions.flatMap(s=>s.blocks).filter(b=>b.kind==="WORK"&&b.zone===z);const minutes=blocks.reduce((sum,b)=>sum+b.duration_min,0);return <span key={z}>{z}: <strong>{minutes>0?duration(minutes):"без основна работа"}</strong></span>;})}</div><p>Акцентите получават приоритет; останалите качества се поддържат според нуждата и готовността. Не всяка зона изисква отделна тежка тренировка всяка седмица.</p></details>
+    <details><summary>Кои качества тренираме тази седмица?</summary><p>Показана е основната работа. Загрявката, почивките и разливът на товара не се броят като отделна развиваща тренировка.</p><div className="management-zone-legend">{COMPONENTS.map(z=>{const blocks=sessions.flatMap(s=>s.blocks).filter(b=>b.kind==="WORK"&&b.zone===z);const minutes=blocks.reduce((sum,b)=>sum+b.duration_min,0);return <span key={z}><i style={{background:componentColor(z)}} aria-hidden="true"/>{componentLabel(z)}: <strong>{minutes>0?duration(minutes):"без основна работа"}</strong></span>;})}</div><p>Акцентите получават приоритет; останалите качества се поддържат според нуждата и готовността. Не всяка зона изисква отделна тежка тренировка всяка седмица.</p></details>
     <details><summary>Защо обемът е такъв?</summary><HistoryVolume history={v} selected={sports}/><p>Първо се определя целта. Методът, капацитетът, времето, 7/40 и прогнозното възстановяване ограничават конкретната доза. Неизползваният бюджет не се наваксва задължително.</p>{reasons.size>0&&<ul>{[...reasons].sort((a,b)=>b[1]-a[1]).slice(0,5).map(([reason])=><li key={reason}>{reason}</li>)}</ul>}<Link href="/planning">Промени дни, средства, методи и акценти в профила →</Link></details>
   </section>;
 }

@@ -57,13 +57,9 @@
 .management-page .management-profile h2,.management-next-step h2 { margin-top: .4rem; }
 .management-next-step { border-left: 4px solid #07879a; padding: 1.5rem; }
 .management-view-switch { display: flex; gap: .5rem; margin: 1.2rem 0; flex-wrap: wrap; }
-.management-view-switch button,.management-week-list button,.management-zone-legend button { font: inherit; color: inherit; background: #fff; border: 1px solid #cadce0; border-radius: 10px; padding: .75rem 1rem; cursor: pointer; }
-.management-view-switch button[aria-pressed="true"],.management-week-list button[aria-pressed="true"] { color: #075d6a; background: #e5f5f6; border-color: #07879a; box-shadow: inset 0 0 0 1px #07879a; }
-.management-view-switch button:focus-visible,.management-week-list button:focus-visible,.management-zone-legend button:focus-visible { outline: 3px solid #48a0b0; outline-offset: 3px; }
-.management-week-list { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); gap: .45rem; }
-.management-week-list button { padding: .8rem .6rem; text-align: left; display: flex; flex-direction: column; gap: .6rem; font-size: .8rem; line-height: 1.4; min-width: 0; }
-.management-week-date { font-weight: 750; }
-.management-week-list small { margin-top: auto; }
+.management-view-switch button,.management-zone-legend button { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: .75rem 1rem; cursor: pointer; }
+.management-view-switch button[aria-pressed="true"] { color: var(--text); background: var(--surface-secondary); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.management-view-switch button:focus-visible,.management-zone-legend button:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 .management-generate fieldset { display: flex; align-items: end; gap: 1rem; flex-wrap: wrap; }
 .management-phase-list { display: flex; flex-wrap: wrap; gap: .5rem; }
 .management-phase-list>div { flex: 1 1 140px; padding: .9rem; border-radius: 10px; border-top: 4px solid #b6cfd1; background: #f4f8f9; display: flex; flex-direction: column; gap: .5rem; }
@@ -71,17 +67,69 @@
 .management-phase-list span,.management-phase-list small { font-size: .8rem; color: #546a74; }
 .management-chart-wrap { overflow-x: auto; }
 .management-outlook-chart { display: block; width: 100%; min-width: 580px; }
-.management-outlook-chart text { font-size: 12px; fill: #4f626b; }
+.management-outlook-chart text { font-size: 12px; fill: var(--text-secondary); }
 .management-zone-legend { display: flex; gap: .45rem; flex-wrap: wrap; }
 .management-zone-legend button { padding: .4rem .65rem; display: flex; align-items: center; gap: .4rem; }
 .management-zone-legend button[aria-pressed="false"] { opacity: .45; }
 .management-zone-legend i { width: .65rem; height: .65rem; border-radius: 100%; }
+.management-zone-legend>span { display: inline-flex; align-items: center; gap: .35rem; }
 .management-week-context { margin-top: 1rem; }
 .management-page details>summary { cursor: pointer; }
 .management-page .planning-calendar-card { padding-inline: 0; border: 0; box-shadow: none; }
 .management-page .management-profile fieldset { padding: 0; border: 0; }
 .management-page .management-profile h3 { margin-top: 1.7rem; }
-@media(max-width: 800px) { .management-week-list { display: flex; overflow-x: auto; padding-bottom: .5rem; } .management-week-list button { flex: 0 0 125px; } }
+
+/* A saved session's clock-time structure, shared by the week and day detail. */
+.workout-legend { display: flex; flex-wrap: wrap; gap: .55rem 1rem; margin-block: .8rem; font-size: .8rem; color: var(--text-secondary); }
+.workout-legend>span,.workout-target { display: inline-flex; align-items: center; gap: .35rem; }
+.workout-legend i,.workout-target i { display: inline-block; width: .7rem; height: .7rem; border-radius: 3px; flex-shrink: 0; }
+.workout-target { color: var(--text); font-size: .78rem; font-weight: 600; }
+.workout-target i { background: var(--session-color); }
+.management-workout-list { display: grid; gap: .55rem; }
+.management-workout-day { display: grid; grid-template-columns: 85px minmax(0,1fr); gap: .6rem 1rem; width: 100%; padding: 1rem; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.management-workout-day:hover { background: var(--surface-secondary); }
+.management-workout-day[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.management-workout-day:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.management-workout-date { display: flex; flex-direction: column; gap: .4rem; padding-top: .15rem; font-size: .86rem; }
+.management-workout-date small { color: var(--text-secondary); font-size: .75rem; }
+.management-workout-sessions { display: grid; gap: .85rem; min-width: 0; }
+.management-workout-session { display: grid; grid-template-columns: 155px minmax(0,1fr); gap: 1rem; min-width: 0; }
+.management-workout-session+.management-workout-session { border-top: 1px solid var(--border); padding-top: .85rem; }
+.management-workout-meta { display: flex; flex-direction: column; align-items: flex-start; gap: .4rem; border-left: 4px solid var(--session-color); padding-left: .65rem; font-size: .8rem; }
+.management-workout-meta>strong { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+.management-workout-shape { display: block; min-width: 0; }
+.management-workout-shape>strong { display: block; font-size: .9rem; line-height: 1.4; }
+.workout-summary { display: block; margin: .25rem 0 .45rem; font-size: .83rem; color: var(--text-secondary); line-height: 1.5; overflow-wrap: anywhere; }
+.management-workout-open { grid-column: 2; font-size: .72rem; color: var(--text-muted); }
+.management-workout-rest { padding: .15rem 0; color: var(--text-secondary); font-size: .9rem; }
+.workout-profile { display: block; width: 100%; min-width: 0; }
+.workout-profile-bars { display: flex; align-items: flex-end; height: 92px; background: var(--surface-secondary); border-radius: 4px 4px 0 0; overflow: hidden; }
+.workout-profile.is-compact .workout-profile-bars { height: 54px; }
+.workout-profile-slot { display: flex; align-items: flex-end; height: 100%; flex-shrink: 0; min-width: 0; }
+.workout-profile-bar { display: block; width: 100%; border-radius: 2px 2px 0 0; }
+.workout-profile-bar.is-pause { opacity: .55; }
+.workout-profile-axis { display: flex; justify-content: space-between; gap: .5rem; margin-top: .25rem; color: var(--text-muted); font-size: .7rem; font-variant-numeric: tabular-nums; }
+.workout-strength-lane { display: block; position: relative; margin-top: .25rem; }
+.workout-strength-lane .workout-profile-bars { height: 48px; }
+.workout-profile.is-compact .workout-strength-lane .workout-profile-bars { height: 36px; }
+.workout-lane-label { position: absolute; top: 2px; left: 5px; color: var(--text-secondary); font-size: .7rem; }
+.workout-profile-empty,.workout-profile-note { display: block; color: var(--text-muted); font-size: .75rem; line-height: 1.5; }
+.management-session-visual { max-width: 760px; margin-block: 1rem; }
+.management-session-total { color: var(--text-secondary); display: flex; gap: .45rem; flex-wrap: wrap; align-items: center; }
+.management-session-total>strong { color: var(--text); font-size: 1.25rem; }
+.management-day-date,.management-blocks small { color: var(--text-secondary); }
+.management-badge { background: var(--surface-secondary); color: var(--text-secondary); }
+.management-blocks li { padding-left: 2.25rem; }
+.management-blocks li:before { left: .5rem; color: var(--text-muted); }
+@media(max-width: 700px) {
+  .management-workout-day { grid-template-columns: minmax(0,1fr); padding: .8rem; }
+  .management-workout-date { flex-direction: row; flex-wrap: wrap; justify-content: space-between; }
+  .management-workout-open { grid-column: 1; }
+  .management-workout-session { grid-template-columns: minmax(0,1fr); gap: .65rem; }
+  .management-workout-meta { flex-direction: row; flex-wrap: wrap; align-items: center; gap: .4rem .7rem; }
+  .management-workout-meta>strong { font-size: 1.15rem; }
+}
+@media print { .management-page .management-workout-day { display: grid; break-inside: avoid; } .workout-profile { print-color-adjust: exact; } }
 
 .planning-step-tabs { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.5rem; margin:1rem 0 1.5rem; }
 .planning-step-tabs button { border:1px solid var(--border,#d4e2e5); border-radius:.6rem; background:var(--surface,#fff); color:var(--text,#173642); padding:.8rem; cursor:pointer; text-align:left; }

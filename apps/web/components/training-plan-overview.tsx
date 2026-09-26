@@ -9,11 +9,11 @@ import { MicrocycleVolumes } from "./microcycle-volumes";
 import { MesocyclePriorities } from "./mesocycle-priorities";
 import { LoadMeasureExplanation } from "./load-measure-explanation";
 import { durationHms } from "../lib/duration-format";
+import { COMPONENT_COLORS as COLORS, componentLabel } from "../lib/training-visuals";
 import { useState } from "react";
 import { isRecord } from "../lib/training-status";
 import { COMPONENTS, PHASE_LABELS, type Component, type PlanProjection, type PlanOutcome, type PlanningDraft } from "../lib/training-management";
 
-const COLORS: Record<Component, string> = { Z1: "#317997", Z2: "#33936b", Z3: "#b48211", Z4: "#d46b36", Z5: "#be4968", STR: "#7966ba" };
 const EVENT: Record<string, string> = { MAIN_RACE: "Основен старт", CONTROL_RACE: "Контролен старт", CAMP: "Лагер", TEST: "Тест", UNAVAILABLE: "Без тренировки" };
 const label = (value: unknown) => String(value ?? "");
 const shortDate = (day: string) => day.slice(8, 10) + "." + day.slice(5, 7);
@@ -70,7 +70,7 @@ export function TrainingPlanOverview({ plan, outcomes, today, stale, currentProf
           <button type="button" aria-pressed={metric === "volume"} onClick={()=>setMetric("volume")}>Приравнен обем</button>
           <button type="button" aria-pressed={metric === "index"} onClick={()=>setMetric("index")}>Цели 7/40</button>
         </div>
-        <div className="management-zone-legend" role="group" aria-label="Показани компоненти">{COMPONENTS.map(z => <button key={z} type="button" aria-pressed={zones.includes(z)} onClick={() => setZones(old => old.includes(z) ? old.filter(v => v !== z) : [...old, z])}><i style={{ background: COLORS[z] }} />{z}</button>)}</div>
+        <div className="management-zone-legend" role="group" aria-label="Показани компоненти">{COMPONENTS.map(z => <button key={z} type="button" aria-pressed={zones.includes(z)} onClick={() => setZones(old => old.includes(z) ? old.filter(v => v !== z) : [...old, z])}><i style={{ background: COLORS[z] }} />{componentLabel(z)}</button>)}</div>
         <p className="management-muted">{metric === "index" ? "Планови цели 7/40 спрямо текущата историческа основа. Това не е прогноза за бъдещата готовност или индекс, изчислен от съставени сесии. Стойност 1,20 не означава 20% повече тренировъчни минути." : "Приравнен обем за точните дати на микроцикъла, в ч:мм:сс; това не е продължителност на тренировките. Графиката и таблицата използват едни и същи стойности. Непълният микроцикъл съдържа само показаните дни. Това са цели преди проверката на ежедневната готовност."}</p>
         <div className="management-chart-wrap"><svg className="management-outlook-chart" viewBox="0 0 900 305" role="img" aria-label={metric === "index" ? "Цели 7/40 по микроцикли" : "Приравнен обем по микроцикли"}>
           <title>Дългосрочни цели по компоненти; точните стойности са в таблицата по микроцикли</title>
