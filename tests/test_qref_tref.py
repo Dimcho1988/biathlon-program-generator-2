@@ -2,8 +2,21 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import pandas as pd
 import pytest
 
+from biathlon.constants import (
+    AEROBIC_TREF_BOUNDS_MINUTES,
+    COMPONENTS,
+    FIXED_STRENGTH_TREF_MINUTES,
+    fresh_parameters,
+)
+from biathlon.physiology import (
+    compute_daily_load_history,
+    compute_load_statistics,
+    compute_readiness_history,
+    rolling_load_statistics,
+)
 from intervals_inspector.onflows_intrazone_load import (
     calculate_onflows_intrazone_load,
 )
@@ -30,12 +43,9 @@ from intervals_inspector.stream_normalizer import (
 )
 
 
-EXPECTED_TREF_MINUTES = {
-    "Z1": 300.0,
-    "Z2": 180.0,
-    "Z3": 70.0,
-    "Z4": 20.0,
-    "Z5": 20.0,
+EXPECTED_TREF_BOUNDS = dict(AEROBIC_TREF_BOUNDS_MINUTES)
+EXPECTED_INITIAL_TREF = {
+    zone: upper for zone, (_lower, upper) in EXPECTED_TREF_BOUNDS.items()
 }
 
 
@@ -68,10 +78,10 @@ def _history(
     current: date,
     days: int,
     *,
-    weekly_equivalent_time: float,
+    weekly_effective_load: float,
     zone: str = "Z2",
 ):
-    daily = weekly_equivalent_time / 7.0
+    daily = weekly_effective_load / 7.0
     return [
         {
             "date": (current - timedelta(days=days - index)).isoformat(),
@@ -85,27 +95,38 @@ def _rows(result):
     return {row["zone"]: row for row in result["rows"]}
 
 
-def test_01_fixed_tref_is_the_exact_expert_setting_for_every_zone() -> None:
+def test_01_no_history_uses_the_expert_upper_bound_for_every_zone() -> None:
     configuration = default_shadow_configuration()
     result = calculate_shadow_result(_empty_analysis(), configuration)
     rows = _rows(result)
 
-    assert {zone.zone: zone.tref_minutes for zone in configuration.zones} == (
-        EXPECTED_TREF_MINUTES
-    )
+    assert {
+        zone.zone: (zone.tref_min, zone.tref_max)
+        for zone in configuration.zones
+    } == EXPECTED_TREF_BOUNDS
     assert {
         zone: row["tref_effective"] for zone, row in rows.items()
-    } == EXPECTED_TREF_MINUTES
+    } == EXPECTED_INITIAL_TREF
     assert all(
-        row["tref_source"] == "initial expert setting"
+        row["tref_source"] == "expert upper-bound fallback"
         for row in rows.values()
     )
+    assert all(row["tref_bound_applied"] == "none" for row in rows.values())
     assert all(row["h40_equivalent_minutes"] is None for row in rows.values())
 
 
-@pytest.mark.parametrize("historical", (20.0, 180.0, 900.0))
-def test_02_h40_is_diagnostic_and_never_changes_fixed_tref(
-    historical: float,
+@pytest.mark.parametrize(
+    ("raw_tref", "expected_tref", "expected_bound"),
+    (
+        (20.0, 90.0, "lower"),
+        (120.0, 120.0, "none"),
+        (900.0, 180.0, "upper"),
+    ),
+)
+def test_02_real_40_day_tref_is_clamped_to_the_expert_bounds(
+    raw_tref: float,
+    expected_tref: float,
+    expected_bound: str,
 ) -> None:
     current = date(2026, 8, 9)
     result = calculate_shadow_result(
@@ -114,20 +135,22 @@ def test_02_h40_is_diagnostic_and_never_changes_fixed_tref(
         prior_daily_effective_load=_history(
             current,
             40,
-            weekly_equivalent_time=historical,
+            weekly_effective_load=raw_tref,
         ),
         activity_date=current,
     )
     row = _rows(result)["Z2"]
 
-    assert row["h40_equivalent_minutes"] == pytest.approx(historical)
-    assert row["tref_effective"] == pytest.approx(180.0)
-    assert row["tref_source"] == "initial expert setting"
+    assert row["h40_equivalent_minutes"] == pytest.approx(raw_tref)
+    assert row["tref_raw"] == pytest.approx(raw_tref)
+    assert row["tref_effective"] == pytest.approx(expected_tref)
+    assert row["tref_bound_applied"] == expected_bound
+    assert row["tref_source"] == "40-day history"
     assert row["tref_history_days"] == 40
 
 
 @pytest.mark.parametrize("days", (7, 20, 39))
-def test_03_partial_history_reports_hn_without_modifying_tref(days: int) -> None:
+def test_03_partial_history_produces_a_provisional_bounded_tref(days: int) -> None:
     current = date(2026, 8, 9)
     result = calculate_shadow_result(
         _empty_analysis(),
@@ -135,14 +158,16 @@ def test_03_partial_history_reports_hn_without_modifying_tref(days: int) -> None
         prior_daily_effective_load=_history(
             current,
             days,
-            weekly_equivalent_time=120.0,
+            weekly_effective_load=120.0,
         ),
         activity_date=current,
     )
     row = _rows(result)["Z2"]
 
     assert row["h40_equivalent_minutes"] == pytest.approx(120.0)
-    assert row["tref_effective"] == pytest.approx(180.0)
+    assert row["tref_effective"] == pytest.approx(120.0)
+    assert row["tref_source"] == "provisional history"
+    assert row["tref_bound_applied"] == "none"
     assert row["tref_history_days"] == days
     assert result["history_days"] == days
     assert any(
@@ -170,7 +195,8 @@ def test_04_rest_days_are_zero_calendar_days_in_h40_diagnostic() -> None:
 
     assert row["tref_history_days"] == 10
     assert row["h40_equivalent_minutes"] == pytest.approx(70.0)
-    assert row["tref_effective"] == pytest.approx(180.0)
+    assert row["tref_effective"] == pytest.approx(90.0)
+    assert row["tref_bound_applied"] == "lower"
 
 
 def test_05_current_and_future_data_are_excluded_from_h40() -> None:
@@ -178,7 +204,7 @@ def test_05_current_and_future_data_are_excluded_from_h40() -> None:
     past = _history(
         current,
         40,
-        weekly_equivalent_time=120.0,
+        weekly_effective_load=120.0,
     )
     with_current_and_future = [
         *past,
@@ -238,7 +264,7 @@ def test_07_explicit_equivalent_time_is_authoritative_over_legacy_alias() -> Non
     assert row["spillover_excess"] == pytest.approx(0.0)
 
 
-def test_08_direct_spillover_threshold_is_exactly_half_fixed_tref() -> None:
+def test_08_direct_spillover_threshold_uses_half_the_effective_tref() -> None:
     configuration = default_shadow_configuration()
     at_threshold = calculate_shadow_result(
         _empty_analysis(equivalent_time={"Z2": 90.0}),
@@ -353,3 +379,85 @@ def test_14_planning_settings_validate_the_complete_default_contract() -> None:
 def test_15_planning_helpers_reject_invalid_inputs(call, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         call()
+
+
+def test_16_daily_tref_is_causal_but_current_tref_includes_latest_day() -> None:
+    parameters = fresh_parameters()
+    rows = []
+    for day, z2_load in enumerate((30.0, 10.0, 50.0), start=1):
+        row = {"date": pd.Timestamp(2026, 8, day)}
+        for component in COMPONENTS:
+            row[f"q_{component}"] = z2_load if component == "Z2" else 0.0
+        rows.append(row)
+
+    daily = compute_daily_load_history(pd.DataFrame(rows), parameters)
+
+    # Day 1 has no completed history. Day 2 sees only day 1, and day 3 sees
+    # only days 1-2. The current/planning value after day 3 includes day 3.
+    assert daily.loc[pd.Timestamp("2026-08-01"), "tref_used_Z2"] == pytest.approx(
+        180.0
+    )
+    assert daily.loc[pd.Timestamp("2026-08-02"), "tref_used_Z2"] == pytest.approx(
+        180.0
+    )
+    assert daily.loc[pd.Timestamp("2026-08-03"), "tref_used_Z2"] == pytest.approx(
+        140.0
+    )
+    without_persisted_tref = daily.drop(
+        columns=[f"tref_used_{component}" for component in COMPONENTS]
+    )
+    rolling = rolling_load_statistics(without_persisted_tref, parameters)
+    assert rolling.loc[
+        rolling["component"] == "Z2", "Tref"
+    ].to_numpy() == pytest.approx((180.0, 180.0, 140.0))
+    current = compute_load_statistics(
+        daily, parameters, as_of=pd.Timestamp("2026-08-03")
+    )
+    assert current.loc["Z2", "Tref"] == pytest.approx(180.0)
+
+
+def test_17_recovery_reuses_causal_aerobic_tref_and_fixed_strength_tref() -> None:
+    parameters = fresh_parameters()
+    rows = []
+    for day in range(1, 4):
+        row = {"date": pd.Timestamp(2026, 8, day)}
+        for component in COMPONENTS:
+            row[f"q_{component}"] = (
+                20.0 if component in {"Z2", "STR"} else 0.0
+            )
+        rows.append(row)
+
+    daily = compute_daily_load_history(pd.DataFrame(rows), parameters)
+    readiness = compute_readiness_history(
+        daily, parameters, use_supplied_tref=True
+    )
+
+    for component in COMPONENTS:
+        actual = readiness.loc[
+            readiness["component"] == component, "Tref"
+        ].to_numpy()
+        expected = daily[f"tref_used_{component}"].to_numpy()
+        assert actual == pytest.approx(expected)
+    assert daily["tref_used_STR"].to_numpy() == pytest.approx(
+        FIXED_STRENGTH_TREF_MINUTES
+    )
+
+
+def test_18_tref_window_is_fixed_at_40_days_not_a_mutable_7_40_setting() -> None:
+    parameters = fresh_parameters()
+    parameters["long_window_days"] = 2
+    rows = []
+    for day, z2_load in enumerate((30.0, 30.0, 0.0, 0.0), start=1):
+        row = {"date": pd.Timestamp(2026, 8, day)}
+        for component in COMPONENTS:
+            row[f"q_{component}"] = z2_load if component == "Z2" else 0.0
+        rows.append(row)
+
+    daily = compute_daily_load_history(pd.DataFrame(rows), parameters)
+    assert daily.loc[pd.Timestamp("2026-08-04"), "tref_used_Z2"] == pytest.approx(
+        140.0
+    )
+    current = compute_load_statistics(
+        daily, parameters, as_of=pd.Timestamp("2026-08-04")
+    )
+    assert current.loc["Z2", "Tref"] == pytest.approx(105.0)

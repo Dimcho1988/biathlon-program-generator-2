@@ -1,0 +1,183 @@
+.management-page { max-width: 1160px; margin-inline: auto; }
+.management-intro { max-width: 78ch; line-height: 1.7; }
+.management-panel,.management-day { padding: 1.3rem; margin-block: 1rem; border: 1px solid var(--border,#dbe4e3); border-radius: 16px; background: var(--surface,#fff); }
+.management-page summary { cursor: pointer; font-weight: 650; padding-block: .35rem; }
+.management-profile>summary { display: flex; gap: .6rem; justify-content: space-between; flex-wrap: wrap; }
+.management-profile>summary span,.management-muted { color: var(--muted,#5b6e6b); font-size: .9rem; line-height: 1.55; }
+.management-page fieldset { margin: 1rem 0 0; border: 0; padding: 0; min-width: 0; }
+.management-page fieldset:disabled { opacity: .7; }
+.management-form-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1rem; }
+.management-page label { display: flex; flex-direction: column; gap: .4rem; font-size: .9rem; font-weight: 550; }
+.management-page input,.management-page select { border: 1px solid var(--border,#cad8d5); border-radius: 8px; padding: .65rem; background: var(--surface,#fff); color: inherit; min-width: 0; width: 100%; font: inherit; }
+.management-page input:focus-visible,.management-page select:focus-visible,.management-page summary:focus-visible { outline: 3px solid #78b8a8; outline-offset: 2px; }
+.management-week-grid { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); gap: .65rem; }
+.management-week-grid label { font-size: .75rem; }
+.management-page .management-check { flex-direction: row; align-items: center; margin-top: 1.2rem; }
+.management-check input { width: 1.05rem; height: 1.05rem; flex-shrink: 0; }
+.management-detail { border-top: 1px solid var(--border,#dbe4e3); margin-top: 1rem; padding-top: .75rem; }
+.management-detail h4 { margin-block: 1.2rem .5rem; }
+.management-actions,.management-generate { display: flex; align-items: end; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
+.management-actions a { padding-block: .6rem; }
+.management-page button:disabled { opacity: .5; cursor: not-allowed; }
+.management-notice,.management-error { border-radius: 10px; padding: .9rem 1rem; line-height: 1.6; background: #eef5ef; color: #264e37; }
+.management-error { background: #fff0ec; color: #8b3021; }
+.management-notice ul { margin: 0; padding-left: 1.2rem; }
+.management-plan-heading,.management-day header { display: flex; justify-content: space-between; align-items: start; gap: 1rem; flex-wrap: wrap; }
+.management-plan-heading h2,.management-day h3 { margin-block: 0 .4rem; }
+.management-day { border-left: 4px solid #bfcfca; }
+.management-day.has-session { border-left-color: #397e68; }
+.management-day-date { font-size: .85rem; font-weight: 650; color: #4f6960; margin: 0 0 .4rem; }
+.management-badge { font-size: .75rem; border-radius: 1rem; background: #eef3f1; padding: .35rem .65rem; }
+.management-session-total { color: #3c5d51; }
+.management-blocks { list-style: none; counter-reset: block; padding: 0; margin-block: 1rem; }
+.management-blocks li { counter-increment: block; padding: .75rem 0 .75rem 2rem; position: relative; border-top: 1px solid var(--border,#e2e9e6); }
+.management-blocks li:before { content: counter(block); position: absolute; left: 0; color: #658276; }
+.management-blocks li>div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; }
+.management-blocks p { margin: .4rem 0; line-height: 1.5; }
+.management-blocks small { color: #476457; }
+.management-facts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1rem; }
+.management-facts dt { color: var(--muted,#5b6e6b); font-size: .85rem; }
+.management-facts dd { margin: .25rem 0 0; font-weight: 600; overflow-wrap: anywhere; }
+.management-table-wrap { overflow-x: auto; }
+.management-page table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+.management-page th,.management-page td { text-align: left; padding: .65rem; border-bottom: 1px solid var(--border,#dbe4e3); white-space: nowrap; }
+.management-page pre { font-size: .75rem; max-height: 26rem; overflow: auto; padding: 1rem; border-radius: 8px; background: #f4f7f5; }
+@media(max-width: 700px) { .management-form-grid,.management-facts { grid-template-columns: 1fr; } .management-week-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .management-panel,.management-day { padding: 1rem; } .management-plan-heading label { width: 100%; } }
+
+.management-current-heading { border-top: 4px solid #397e68; }
+.management-current-heading h2 { margin-block: .2rem .8rem; }
+.management-day-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: -.5rem 0 1.5rem 1rem; }
+.management-execution { margin-top: .8rem; }
+.management-reference { border-left: 2px dashed #bdc8c1; padding-left: .6rem; }
+@media print { .management-page button,.management-day-actions,.management-profile { display: none; } .management-day { break-inside: avoid; } }
+
+/* One planning workspace, one compact program viewer. */
+.management-page { max-width: 1080px; }
+.management-page .activities-hero { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; align-items: center; }
+.management-page .management-profile h2,.management-next-step h2 { margin-top: .4rem; }
+.management-next-step { border-left: 4px solid #07879a; padding: 1.5rem; }
+.management-view-switch { display: flex; gap: .5rem; margin: 1.2rem 0; flex-wrap: wrap; }
+.management-view-switch button,.management-zone-legend button { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: .75rem 1rem; cursor: pointer; }
+.management-view-switch button[aria-pressed="true"] { color: var(--text); background: var(--surface-secondary); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.management-view-switch button:focus-visible,.management-zone-legend button:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.management-generate fieldset { display: flex; align-items: end; gap: 1rem; flex-wrap: wrap; }
+.management-phase-list { display: flex; flex-wrap: wrap; gap: .5rem; }
+.management-phase-list>div { flex: 1 1 140px; padding: .9rem; border-radius: 10px; border-top: 4px solid #b6cfd1; background: #f4f8f9; display: flex; flex-direction: column; gap: .5rem; }
+.management-phase-list>div.is-current { border-color: #07879a; background: #e5f5f6; }
+.management-phase-list span,.management-phase-list small { font-size: .8rem; color: #546a74; }
+.management-chart-wrap { overflow-x: auto; }
+.management-outlook-chart { display: block; width: 100%; min-width: 580px; }
+.management-outlook-chart text { font-size: 12px; fill: var(--text-secondary); }
+.management-zone-legend { display: flex; gap: .45rem; flex-wrap: wrap; }
+.management-zone-legend button { padding: .4rem .65rem; display: flex; align-items: center; gap: .4rem; }
+.management-zone-legend button[aria-pressed="false"] { opacity: .45; }
+.management-zone-legend i { width: .65rem; height: .65rem; border-radius: 100%; }
+.management-zone-legend>span { display: inline-flex; align-items: center; gap: .35rem; }
+.management-week-context { margin-top: 1rem; }
+.management-page details>summary { cursor: pointer; }
+.management-page .planning-calendar-card { padding-inline: 0; border: 0; box-shadow: none; }
+.management-page .management-profile fieldset { padding: 0; border: 0; }
+.management-page .management-profile h3 { margin-top: 1.7rem; }
+
+/* A saved session's clock-time structure, shared by the week and day detail. */
+.workout-legend { display: flex; flex-wrap: wrap; gap: .55rem 1rem; margin-block: .8rem; font-size: .8rem; color: var(--text-secondary); }
+.workout-legend>span,.workout-target { display: inline-flex; align-items: center; gap: .35rem; }
+.workout-legend i,.workout-target i { display: inline-block; width: .7rem; height: .7rem; border-radius: 3px; flex-shrink: 0; }
+.workout-target { color: var(--text); font-size: .78rem; font-weight: 600; }
+.workout-target i { background: var(--session-color); }
+.management-workout-list { display: grid; gap: .55rem; }
+.management-workout-day { display: grid; grid-template-columns: 85px minmax(0,1fr); gap: .6rem 1rem; width: 100%; padding: 1rem; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.management-workout-day:hover { background: var(--surface-secondary); }
+.management-workout-day[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.management-workout-day:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.management-workout-date { display: flex; flex-direction: column; gap: .4rem; padding-top: .15rem; font-size: .86rem; }
+.management-workout-date small { color: var(--text-secondary); font-size: .75rem; }
+.management-workout-sessions { display: grid; gap: .85rem; min-width: 0; }
+.management-workout-session { display: grid; grid-template-columns: 155px minmax(0,1fr); gap: 1rem; min-width: 0; }
+.management-workout-session+.management-workout-session { border-top: 1px solid var(--border); padding-top: .85rem; }
+.management-workout-meta { display: flex; flex-direction: column; align-items: flex-start; gap: .4rem; border-left: 4px solid var(--session-color); padding-left: .65rem; font-size: .8rem; }
+.management-workout-meta>strong { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+.management-workout-shape { display: block; min-width: 0; }
+.management-workout-shape>strong { display: block; font-size: .9rem; line-height: 1.4; }
+.workout-summary { display: block; margin: .25rem 0 .45rem; font-size: .83rem; color: var(--text-secondary); line-height: 1.5; overflow-wrap: anywhere; }
+.management-workout-open { grid-column: 2; font-size: .72rem; color: var(--text-muted); }
+.management-workout-rest { padding: .15rem 0; color: var(--text-secondary); font-size: .9rem; }
+.workout-profile { display: block; width: 100%; min-width: 0; }
+.workout-profile-bars { display: flex; align-items: flex-end; height: 92px; background: var(--surface-secondary); border-radius: 4px 4px 0 0; overflow: hidden; }
+.workout-profile.is-compact .workout-profile-bars { height: 54px; }
+.workout-profile-slot { display: flex; align-items: flex-end; height: 100%; flex-shrink: 0; min-width: 0; }
+.workout-profile-bar { display: block; width: 100%; border-radius: 2px 2px 0 0; }
+.workout-profile-bar.is-pause { opacity: .55; }
+.workout-profile-axis { display: flex; justify-content: space-between; gap: .5rem; margin-top: .25rem; color: var(--text-muted); font-size: .7rem; font-variant-numeric: tabular-nums; }
+.workout-strength-lane { display: block; position: relative; margin-top: .25rem; }
+.workout-strength-lane .workout-profile-bars { height: 48px; }
+.workout-profile.is-compact .workout-strength-lane .workout-profile-bars { height: 36px; }
+.workout-lane-label { position: absolute; top: 2px; left: 5px; color: var(--text-secondary); font-size: .7rem; }
+.workout-profile-empty,.workout-profile-note { display: block; color: var(--text-muted); font-size: .75rem; line-height: 1.5; }
+.management-session-visual { max-width: 760px; margin-block: 1rem; }
+.management-session-total { color: var(--text-secondary); display: flex; gap: .45rem; flex-wrap: wrap; align-items: center; }
+.management-session-total>strong { color: var(--text); font-size: 1.25rem; }
+.management-day-date,.management-blocks small { color: var(--text-secondary); }
+.management-badge { background: var(--surface-secondary); color: var(--text-secondary); }
+.management-blocks li { padding-left: 2.25rem; }
+.management-blocks li:before { left: .5rem; color: var(--text-muted); }
+@media(max-width: 700px) {
+  .management-workout-day { grid-template-columns: minmax(0,1fr); padding: .8rem; }
+  .management-workout-date { flex-direction: row; flex-wrap: wrap; justify-content: space-between; }
+  .management-workout-open { grid-column: 1; }
+  .management-workout-session { grid-template-columns: minmax(0,1fr); gap: .65rem; }
+  .management-workout-meta { flex-direction: row; flex-wrap: wrap; align-items: center; gap: .4rem .7rem; }
+  .management-workout-meta>strong { font-size: 1.15rem; }
+}
+@media print { .management-page .management-workout-day { display: grid; break-inside: avoid; } .workout-profile { print-color-adjust: exact; } }
+
+.planning-step-tabs { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.5rem; margin:1rem 0 1.5rem; }
+.planning-step-tabs button { border:1px solid var(--border,#d4e2e5); border-radius:.6rem; background:var(--surface,#fff); color:var(--text,#173642); padding:.8rem; cursor:pointer; text-align:left; }
+.planning-step-tabs button[aria-current="step"] { border-color:#078399; background:#e6f4f5; color:#086476; font-weight:700; }
+.management-history { background:var(--surface-soft,#eef5f6); border-radius:.75rem; padding:1rem; margin:1rem 0; }
+.management-history .management-zone-legend>span { border:1px solid var(--border,#d4e2e5); border-radius:.5rem; padding:.5rem; }
+.management-cycle { padding:1rem; margin:1rem 0; border:1px solid var(--border,#d4e2e5); border-radius:.75rem; }
+.management-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:1rem; }
+.management-metrics>div { display:grid; gap:.35rem; padding:.75rem; background:var(--surface-soft,#eef5f6); border-radius:.5rem; }
+.management-metrics strong { font-size:1.45rem; }.management-metrics span,.management-metrics small {font-size:.82rem; color:var(--muted,#5b6e6b);}
+.management-view-switch>a { padding:.75rem 1rem; border-radius:.6rem; border:1px solid var(--border,#d4e2e5); text-decoration:none; }
+.management-view-switch>a[aria-current="page"] {background:#e6f4f5;color:#086476;border-color:#078399;font-weight:700;}
+@media(max-width:700px) {.planning-step-tabs,.management-metrics {grid-template-columns:repeat(2,minmax(0,1fr));}}
+
+/* Shared calendar and time axis for the full preparation year. */
+.season-toolbar,.season-navigation,.season-legend { display:flex; align-items:center; gap:.7rem; flex-wrap:wrap; }
+.season-toolbar { justify-content:space-between; margin-block:1rem; }
+.season-navigation strong { min-width:5rem; text-align:center; }
+.season-kind { max-width:25rem; margin-block:1rem; }
+.season-months { display:grid; gap:1.2rem; max-width:520px; }
+.season-months.season-year { max-width:none; grid-template-columns:repeat(3,minmax(0,1fr)); }
+.season-month { min-width:0; border:1px solid var(--border); border-radius:12px; padding:.6rem; }
+.season-month h4 { margin:.35rem 0 .7rem; text-transform:capitalize; }
+.season-days { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:2px; }
+.season-weekday { text-align:center; font-size:.7rem; color:var(--text-muted); padding:.3rem 0; }
+.season-day { position:relative; min-width:0; min-height:36px; border:1px solid transparent; border-radius:6px; background:var(--surface); color:var(--text); cursor:pointer; font:inherit; font-size:.8rem; padding:3px 1px; user-select:none; }
+.season-day.has-phase { border-bottom-color:#78a7ab; }
+.season-day[aria-current="date"] { font-weight:800; text-decoration:underline; }
+.season-day[aria-pressed="true"] { background:#d6f1f2; color:#074c57; border-color:#087e90; }
+.season-day:hover { box-shadow:inset 0 0 0 1px #078399; }
+.season-day:focus-visible,.season-bar:focus-visible { outline:3px solid #078399; outline-offset:2px; z-index:2; }
+.season-day-marks { display:flex; gap:2px; justify-content:center; min-height:4px; margin-top:3px; }
+.season-day-marks i { width:6px; height:4px; border-radius:2px; }
+.season-legend { font-size:.75rem; margin-block:1rem; }
+.season-legend>span { display:flex; align-items:center; gap:.3rem; }
+.season-legend i { width:9px; height:9px; border-radius:3px; }
+.season-timeline { margin-top:1.5rem; border-top:1px solid var(--border); }
+.season-timeline-scroll { overflow-x:auto; padding:4px; }
+.season-timeline-track { min-width:660px; padding-top:1.7rem; }
+.season-timeline-months { position:relative; height:1.6rem; border-bottom:2px solid var(--accent); }
+.season-timeline-months span { position:absolute; font-size:.75rem; top:0; }
+.season-timeline-lane { padding-top:.7rem; }
+.season-timeline-lane>strong { font-size:.8rem; }
+.season-timeline-row { position:relative; height:31px; margin-top:4px; background:var(--surface-secondary); border-radius:5px; }
+.season-timeline-empty { margin:.4rem 0; font-size:.8rem; color:var(--text-muted); }
+.season-bar { position:absolute; top:2px; height:27px; min-width:5px; border:1px solid rgba(0,0,0,.15); border-radius:4px; cursor:pointer; padding:3px 0; color:#fff; text-align:left; font-size:.7rem; }
+.season-bar>span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-inline:4px; }
+.season-selection { padding:.8rem; border-left:3px solid var(--accent); background:var(--surface-secondary); }
+.tone-camp { background:#28679d; }.tone-main_race { background:#b23943; }.tone-control_race,.tone-test { background:#986313; }.tone-unavailable { background:#626975; }.tone-build,.tone-accent { background:#785397; }.tone-maintain,.tone-phase { background:#397e88; }.tone-stress { background:#c1502b; }.tone-recovery { background:#347957; }
+@media(max-width:900px) { .season-months.season-year { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:540px) { .season-months.season-year { grid-template-columns:1fr; } .season-day { min-height:42px; } .season-toolbar { align-items:stretch; } .season-navigation { justify-content:space-between; } }
