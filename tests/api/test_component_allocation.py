@@ -79,10 +79,116 @@ def test_lower_future_target_does_not_force_filling_available_sessions(monkeypat
     p["component_targets_weekly"] = {z:40. if z == "Z1" else 0. for z in COMPONENTS}
     p["max_key_sessions_per_week"] = 0
     plan = run(monkeypatch, p, Repository())
-    assert plan["summary"]["sessions"] > 0
-    assert any(r["code"] == "WEEKLY_NEED_COVERED" for d in plan["days"] for r in d["rejected_alternatives"])
-    # Once the end-window need is covered, later available slots stay empty,
-    # even if the earlier calendar-day ceiling still has headroom.
+    # A 40-minute E target is below the new complete relative minimum.
+    assert plan["summary"]["sessions"] == 0
+    assert any(r["code"] in {"COMPONENT_BUDGET_EXHAUSTED", "PERIOD_COMPONENT_REMAINDER", "INSUFFICIENT_DOSE_BUDGET"} for d in plan["days"] for r in d["rejected_alternatives"])
+    # Available slots never force a subminimum dose, including across a wave change.
     for d in plan["days"]:
         if all(v <= .001 for v in d["load_budget"]["component_allocation"].values()):
             assert not d["sessions"]
+
+
+@pytest.mark.parametrize("target", [180., 250., 400.])
+def test_feasible_volume_is_realized_in_complete_sessions(monkeypatch, target):
+    p = body(sessions_per_week=7, accent_mode="MANUAL", accents=["Z1"], mesocycle_anchor=TODAY)
+    p["component_targets_weekly"] = {z: target if z == "Z1" else 0. for z in COMPONENTS}
+    p["max_key_sessions_per_week"] = 0
+    plan = run(monkeypatch, p)
+    row = plan["allocation"]["components"]["Z1"]
+    assert row["remaining"] < .5  # only the half-minute dose grid remains
+    assert row["planned"] <= row["target"] + .005
+    selected = [s for d in plan["days"] for s in d["sessions"]]
+    assert 1 < len(selected) < 7
+    assert all(s["dose_evidence"]["applied_structure_fraction"] >= .25 for s in selected)
+
+
+def test_period_objective_integrates_wave_and_counts_q_without_cascade():
+    windows = {TODAY+timedelta(days=i): {z: {"target": 700., "target_weekly_q": 140. if i<2 else 70.}
+                                         for z in COMPONENTS} for i in range(4)}
+    actual = [{"date": d.isoformat(), "zone": z, "effective_load": 50.}
+              for d in [TODAY-timedelta(days=1), TODAY] for z in COMPONENTS]
+    source = {"activities": [{"date": TODAY.isoformat(), "zones": [{"zone": z, "equivalent_time_min": 10.} for z in COMPONENTS]}]}
+    session = {"direct_equivalent_minutes": {z: 5. for z in COMPONENTS}}
+    days = [{"date": TODAY.isoformat(), "sessions": [session]}]
+    forecast = actual + [{"date": (TODAY+timedelta(days=1)).isoformat(), "zone": z, "effective_load": 100.} for z in COMPONENTS]
+    obj = planning_allocation.objectives(windows, actual, forecast, source, days)
+    z1 = obj["Z1"]
+    assert z1["target"] == 60.  # 2*140/7 + 2*70/7; neither last-day nor full-week target
+    assert z1["actual"] == 10. and z1["planned"] == 5. and z1["remaining"] == 45.
+    assert z1["planned_effective"] == 100.  # E cascade cannot fill the Q objective
+    assert obj["STR"]["basis"] == "DIRECT_Q" and obj["STR"]["target"] == 400.
+    slots = {z: [(TODAY,0), (TODAY,1)] for z in COMPONENTS}
+    assert planning_allocation.quota(windows, slots, forecast, TODAY, 0, objectives=obj)["Z1"] == 45.
+    assert planning_allocation.dose_share(180., 50., 100., 12) == 90.
+    assert planning_allocation.dose_share(40., 50., 100., 12) is None
+    assert planning_allocation.dose_share(180., 50., 100., 1) is None
+
+
+def test_automatic_q_targets_match_outlook_and_no_micro_sessions(monkeypatch):
+    from tests.api.test_load_progression import observed
+    from apps.api.management_schemas import LoadProgression
+    repo, _, _ = observed()
+    p = body(sessions_per_week=12, accent_mode="MANUAL", accents=["Z3"], mesocycle_anchor=TODAY)
+    p["load_progression"] = LoadProgression().model_dump()
+    plan = run(monkeypatch, p, repo)
+    for z in COMPONENTS:
+        objective = plan["allocation"]["components"][z]
+        assert objective["target_q"] == pytest.approx(plan["long_term"]["weeks"][0]["components"][z]["target_period_q"], abs=.001)
+        assert objective["planned_q"] == pytest.approx(sum(s["direct_equivalent_minutes"][z] for d in plan["days"] for s in d["sessions"]), abs=.001)
+    selected = [s for d in plan["days"] for s in d["sessions"]]
+    assert selected
+    assert all(s["dose_evidence"]["applied_structure_fraction"] >= .25 for s in selected if s["zone"] != "STR")
+    assert all(s["total_minutes"] > 10 for s in selected if s["zone"] == "Z1")
+    # Unavailable Z5 model and disabled strength remain visible, not silently covered by spill.
+    assert plan["allocation"]["components"]["Z5"]["remaining"] > 0
+    assert plan["allocation"]["has_unallocated_load"]
+
+
+def test_feasible_automatic_q_target_is_realized_without_filling_e_headroom(monkeypatch):
+    from tests.api.test_management_schedule import high_capacity_history
+    from apps.api.management_schemas import LoadProgression
+    repo = high_capacity_history()
+    source = repo.envelope["snapshot_payload"]["load_history"]
+    for row in source["daily"] + source["strength"]["daily"]:
+        if row.get("zone", "STR") != "Z1":
+            row["effective_load"] = 0.
+    for a in source["activities"]:
+        a["zones"] = [{"zone": "Z1", "raw_time_min": 60., "equivalent_time_min": 50.}]
+    p = body(sessions_per_week=7, accent_mode="MANUAL", accents=["Z1"], mesocycle_anchor=TODAY)
+    p["load_progression"] = LoadProgression().model_dump()
+    p["max_key_sessions_per_week"] = 0
+    plan = run(monkeypatch, p, repo)
+    row = plan["allocation"]["components"]["Z1"]
+    assert row["basis"] == "DIRECT_Q"
+    assert 0 <= row["remaining"] < .5
+    assert row["target_q"] == plan["long_term"]["weeks"][0]["components"]["Z1"]["target_period_q"]
+    assert row["unallocated_effective"] > 1000  # a separate ceiling, not missing direct volume
+    assert not plan["allocation"]["has_unallocated_load"]
+
+
+def test_missing_actual_q_is_unknown_not_zero_coverage():
+    windows = {TODAY+timedelta(days=i): {z: {"target": 700., "target_weekly_q": 140.} for z in COMPONENTS} for i in range(7)}
+    source = {"activities": [{"date": TODAY.isoformat(), "zones": []}]}
+    row = planning_allocation.objectives(windows, [], [], source, [])["Z1"]
+    assert row["actual"] is None and row["actual_q"] is None and row["remaining"] is None
+
+
+def test_old_locked_micro_session_requires_review_instead_of_bypassing_minimum(monkeypatch):
+    from apps.api import training_plan_engine as engine
+    from tests.api.test_management_schedule import high_capacity_history
+    from tests.api.test_training_plan_engine import NOW, reference_speed
+    monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
+    repo = high_capacity_history()
+    p = body(sessions_per_week=7)
+    p["max_key_sessions_per_week"] = 0
+    method = next(m for m in engine.resolved_methods(p) if m['id'] == 'RUN-REC-EASY-01')
+    evidence = engine.capacity_for(method, repo.settings, None, (None, [], []), TODAY)
+    session = {"zone": "Z1", "sport": "Run", "blocks": engine._blocks(method, 10., evidence, repo.settings),
+               "dose_evidence": evidence, "total_minutes": 10., "is_key_session": False}
+    locked = {"date": TODAY.isoformat(), "session": session, "sessions": [session]}
+    original = deepcopy(locked)
+    plan = engine.generate_plan(repo, "athlete", p, start_date=TODAY, now=NOW, locked_day=locked)
+    assert plan["days"][0]["status"] == "REVIEW_REQUIRED"
+    assert not plan["days"][0]["sessions"]
+    assert any(r["code"] == "MINIMUM_CAPACITY_DOSE" for r in plan["days"][0]["rejected_alternatives"])
+    assert locked == original

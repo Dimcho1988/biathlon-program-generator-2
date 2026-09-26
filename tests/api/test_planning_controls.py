@@ -129,8 +129,12 @@ def test_threshold_repetitions_fit_one_shared_dose_and_discretize_down():
 
 def test_integrated_week_respects_separate_strength_days_and_covers_complementary_work(monkeypatch):
     monkeypatch.setattr(engine.model_service,'speed_view',reference_speed)
-    p=profile(strength_enabled=True,reentry_days=0,planning_controls=controls(accent_mode='MANUAL',accents=['Z3','STR'],mesocycle_anchor=TODAY,intensity_days=[1,4],strength_days=[2,5],long_session_day=6))
-    r=engine.generate_plan(Repository(),'athlete',p,start_date=TODAY+timedelta(days=1),now=NOW)
+    p=profile(strength_enabled=True,reentry_days=0,available_minutes=[120]*7,planning_controls=controls(accent_mode='MANUAL',accents=['Z3','STR'],mesocycle_anchor=TODAY,intensity_days=[1,4],strength_days=[2,5],long_session_day=6))
+    repo=Repository()
+    # Isolate component coverage from the separate session-exposure ceiling;
+    # the former 60-minute fixture cannot fit a complete 25% Z1 dose.
+    for a in repo.envelope['snapshot_payload']['load_history']['activities']: a['duration_min']=120
+    r=engine.generate_plan(repo,'athlete',p,start_date=TODAY+timedelta(days=1),now=NOW)
     sessions=[d for d in r['days'] if d['session']]
     assert {b['zone'] for d in sessions for b in d['session']['blocks'] if b['kind']=='WORK'} >= {'Z1','Z2','Z3','STR'}
     for d in sessions:
@@ -153,14 +157,17 @@ def test_combined_aerobic_method_remains_available_with_one_shared_dose(monkeypa
     # Isolate the mixed method's eligibility and dosing from competition with
     # other catalogue entries. Selection priority is tested in the full week.
     monkeypatch.setattr(engine,'resolved_methods',lambda p:[deepcopy(method)])
-    p=profile(reentry_days=0,planning_controls=controls(mesocycle_anchor=TODAY))
-    r=engine.generate_plan(Repository(),'athlete',p,start_date=TODAY+timedelta(days=1),now=NOW)
+    p=profile(reentry_days=0,available_minutes=[120]*7,planning_controls=controls(mesocycle_anchor=TODAY))
+    repo=Repository()
+    for a in repo.envelope['snapshot_payload']['load_history']['activities']: a['duration_min']=120
+    r=engine.generate_plan(repo,'athlete',p,start_date=TODAY+timedelta(days=1),now=NOW)
     mixed=[s for d in r['days'] for s in d['sessions']]
     assert mixed
     for s in mixed:
         e=s['dose_evidence']
         assert {b['zone'] for b in s['blocks'] if b['kind']=='WORK'}=={'Z1','Z2'}
-        assert s['main_work_minutes'] <= min(e['capacity_minutes'],e['secondary_capacity']['capacity_minutes'])*e['fraction']+.002
+        assert .25 <= e['applied_structure_fraction'] <= e['max_dose_fraction']+.001
+        assert sum(b['duration_min']/ (e['capacity_minutes'] if b['zone']=='Z2' else e['secondary_capacity']['capacity_minutes']) for b in s['blocks'] if b['kind']=='WORK') == pytest.approx(e['applied_structure_fraction'], abs=.001)
         assert s['total_minutes']==pytest.approx(sum(b['duration_min'] for b in s['blocks']),abs=.002)
         assert e['combination_allocation']=='ONE_SHARED_SESSION_BUDGET_REDUCED_COMPONENT_DOSES'
 
