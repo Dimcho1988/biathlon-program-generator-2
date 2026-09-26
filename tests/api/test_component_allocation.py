@@ -171,3 +171,24 @@ def test_missing_actual_q_is_unknown_not_zero_coverage():
     source = {"activities": [{"date": TODAY.isoformat(), "zones": []}]}
     row = planning_allocation.objectives(windows, [], [], source, [])["Z1"]
     assert row["actual"] is None and row["actual_q"] is None and row["remaining"] is None
+
+
+def test_old_locked_micro_session_requires_review_instead_of_bypassing_minimum(monkeypatch):
+    from apps.api import training_plan_engine as engine
+    from tests.api.test_management_schedule import high_capacity_history
+    from tests.api.test_training_plan_engine import NOW, reference_speed
+    monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
+    repo = high_capacity_history()
+    p = body(sessions_per_week=7)
+    p["max_key_sessions_per_week"] = 0
+    method = next(m for m in engine.resolved_methods(p) if m['id'] == 'RUN-REC-EASY-01')
+    evidence = engine.capacity_for(method, repo.settings, None, (None, [], []), TODAY)
+    session = {"zone": "Z1", "sport": "Run", "blocks": engine._blocks(method, 10., evidence, repo.settings),
+               "dose_evidence": evidence, "total_minutes": 10., "is_key_session": False}
+    locked = {"date": TODAY.isoformat(), "session": session, "sessions": [session]}
+    original = deepcopy(locked)
+    plan = engine.generate_plan(repo, "athlete", p, start_date=TODAY, now=NOW, locked_day=locked)
+    assert plan["days"][0]["status"] == "REVIEW_REQUIRED"
+    assert not plan["days"][0]["sessions"]
+    assert any(r["code"] == "MINIMUM_CAPACITY_DOSE" for r in plan["days"][0]["rejected_alternatives"])
+    assert locked == original

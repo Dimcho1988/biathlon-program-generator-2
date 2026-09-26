@@ -1021,7 +1021,14 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 for z in COMPONENTS:
                     effective[z] += load[z]
             total = sum(v["total_minutes"] for v in preserved)
-            if len(preserved) > slots_today or sessions + len(preserved) > session_limit or any(ready[z] < 90 or effective[z] > budgets[z]["deficit_effective"] + .001 for z in COMPONENTS if effective[z] > 0) or total > min(remaining, day_available) + .001:
+            below_minimum = any(s["zone"] != "STR" and
+                _dose_usage(s["blocks"], s["dose_evidence"], s["zone"]) + 1e-9 < MIN_AEROBIC_DOSE_FRACTION / (2 if s.get("double_threshold") else 1)
+                for s in preserved)
+            if below_minimum:
+                item.update(status="REVIEW_REQUIRED", explanation="Днешната утвърдена задача е под минималната относителна доза. Нужен е преглед; не се запазва автоматично кратката сесия.")
+                item["rejected_alternatives"].append({"method_id": "LOCKED_SESSION", "code": "MINIMUM_CAPACITY_DOSE", "reason": item["explanation"]})
+                activation_eligible = False
+            elif len(preserved) > slots_today or sessions + len(preserved) > session_limit or any(ready[z] < 90 or effective[z] > budgets[z]["deficit_effective"] + .001 for z in COMPONENTS if effective[z] > 0) or total > min(remaining, day_available) + .001:
                 item.update(status="REVIEW_REQUIRED", explanation="Новите данни изискват преглед на днешните утвърдени задачи.")
                 activation_eligible = False
             else:
