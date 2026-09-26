@@ -24,8 +24,8 @@ from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VER
 from . import model_service, load_adaptation, race_duration
 from .response_service import ResponseStore
 
-VERSION = "training-management-v15"
-PARAMETER_VERSION = "management-parameters-v15"
+VERSION = "training-management-v16"
+PARAMETER_VERSION = "management-parameters-v16"
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
     "RE_ENTRY": ("Z1", "STR"),
@@ -1063,11 +1063,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 is_strength = z == "STR"
                 is_threshold = z == "Z3" and method["structure"] in {"CONTINUOUS", "TWO_REPETITIONS", "THRESHOLD_REPETITIONS"} or method.get("interval_profile", {}).get("goal") == "THRESHOLD"
                 threshold_choice = (controls or {}).get("threshold_method", "AUTO")
+                race_development_zones = (([cycle_state["race_component"]] if period == "COMPETITION" else cycle_state["mesocycle_accents"])
+                                          if cycle_state and cycle_state.get("race_component") else [])
                 rejection = None
                 if period not in method["periods"]:
                     rejection = ("PERIOD_NOT_SUPPORTED", "Методът не е включен в този период.")
-                elif cycle_state and controls["accent_mode"] == "AUTO" and not cycle_state["explicit"] and period in {"PRECOMPETITION", "COMPETITION"} and method["purpose"] == "BUILDING" and not is_strength and z != cycle_state.get("race_component"):
-                    rejection = ("RACE_COMPONENT_PRIORITY", "Развиващата специална работа е насочена към състезателната зона; другите компоненти получават поддържане.")
+                elif cycle_state and controls["accent_mode"] == "AUTO" and not cycle_state["explicit"] and period in {"PRECOMPETITION", "COMPETITION"} and method["purpose"] == "BUILDING" and not is_strength and z not in race_development_zones:
+                    rejection = ("RACE_COMPONENT_PRIORITY", "Развиващата специална работа следва състезателните акценти за периода; останалите компоненти получават поддържане.")
                 elif cycle_state and cycle_state["kind"] == "RECOVERY" and z in {"Z3", "Z4", "Z5", "STR"} and z not in selected_accents:
                     rejection = ("RECOVERY_COMPONENT_DELOAD", "Компонентът се разтоварва; допълваща работа е допустима само за избрания по-слабо натоварен компонент.")
                 elif supporting and (not progression or taper or not key_slots or day <= key_slots[-1] or slot_index > 0):

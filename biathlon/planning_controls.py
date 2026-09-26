@@ -8,7 +8,7 @@ import math
 from .constants import COMPONENTS, fresh_parameters
 from . import planning_history, mesocycle_focus
 
-VERSION = "planning-controls-v5-ranked"
+VERSION = "planning-controls-v6-race-band"
 
 
 def resolve(profile, day, period, automatic_accents, *, periodization=None):

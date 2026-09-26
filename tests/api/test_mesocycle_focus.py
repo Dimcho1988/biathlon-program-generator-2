@@ -26,7 +26,8 @@ def test_loading_accents_are_stable_then_rotate_and_strength_is_not_truncated_fo
         loading=[state(p,start+i)["accents"] for i in range(21)]
         assert all(v==loading[0] for v in loading)
         blocks.append(loading[0])
-    assert len({tuple(v) for v in blocks})==3
+    assert len({tuple(v) for v in blocks})==2
+    assert set().union(*(set(v) for v in blocks[:2])) == set(engine.COMPONENTS)
     assert any("STR" in v for v in blocks)
     p["strength_enabled"]=False
     assert all("STR" not in state(p,i)["accents"] for i in range(84))
