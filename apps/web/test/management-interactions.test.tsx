@@ -210,3 +210,16 @@ it("never automatically retries an approval after conflict or replaces a newer r
   expect(fetchMock.mock.calls.filter(([,init])=>init?.method==="POST")).toHaveLength(1);
   expect(newerActivePlan(result.value,activeResponse(7)).active?.revision).toBe(8);
 });
+
+
+it("compares direct period volume with actual plus planned without counting cascade as coverage", async () => {
+  const draft=parseDraftRecord({entry_key:"test",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v17",status:"DRAFT",start_date:"2026-09-23",end_date:"2026-09-29",days:[],source:{},parameters:{},warnings:[],summary:{planned_minutes:0}}});
+  await mount(<TrainingPlanSummary plan={{...draft.payload,allocation:{scheduled_slots:7,weekly_session_limit:7,components:{Z1:{basis:"DIRECT_Q",target:120,actual:20,planned:70,remaining:30,target_effective:500,actual_effective:100,planned_effective:400,unallocated_effective:0}},constraints:[],dose_limits:[]}}}/>);
+  expect(container.textContent).toContain("Остава непланиран товар: Z1");
+  const table=container.querySelector("table")!;
+  expect(table.textContent).toContain("Изпълнено");
+  expect(table.textContent).toContain("Приравнен обем");
+  expect(table.textContent).toContain("2:00:00");
+  expect(table.textContent).toContain("0:30:00");
+  expect(table.textContent).toContain("75.0%");
+});

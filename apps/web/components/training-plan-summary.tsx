@@ -18,10 +18,11 @@ export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
   const allocation=isRecord(plan.allocation)?plan.allocation:null;
   const componentAllocation=allocation&&isRecord(allocation.components)?allocation.components:{};
   const allocationRows:Array<Record<string,unknown>&{zone:string}>=COMPONENTS.flatMap(z=>{const row=componentAllocation[z];return isRecord(row)?[{...row,zone:z}]:[];});
-  const shortfall=allocationRows.filter(r=>typeof r.unallocated_effective==="number"&&r.unallocated_effective>1).map(r=>r.zone);
+  const remainder=(r:Record<string,unknown>)=>"remaining" in r?r.remaining:r.unallocated_effective;
+  const shortfall=allocationRows.filter(r=>remainder(r)===null||typeof remainder(r)==="number"&&Number(remainder(r))>1).map(r=>r.zone);
   const constraints=allocation&&Array.isArray(allocation.constraints)?allocation.constraints.filter(isRecord):[];
   const limits=allocation&&Array.isArray(allocation.dose_limits)?allocation.dose_limits.map(String):[];
-  const limitLabels:Record<string,string>={RECOVERY_RESERVATION_WORK_CAP:"Готовността за предстоящата ключова тренировка или старт",METHOD_CAPACITY_FRACTION:"Делът от индивидуалния капацитет за метода",METHOD_WORK_CAP:"Максималната работа в методния профил",ACTUAL_SPORT_SESSION_EXPOSURE:"Досегашната продължителност на сесиите с конкретното средство",COMPONENT_SLOT_ALLOCATION:"Разпределението на товара между оставащите сесии",ROLLING_7_40_COMPONENT_BUDGET:"Оставащият товар по 7/40",DAILY_AVAILABLE_WORK:"Свободното време за деня",TECHNICAL_SESSION_CEILING:"Максималната продължителност за деня",TAPER_DAILY_WORK_CAP:"Разтоварването преди старт",LOW_ABSOLUTE_RECOVERY_CAP:"Лимитът за възстановителна работа",REMAINING_WEEKLY_WORK:"Седмичният лимит за време",RACE_DURATION_WORK_CAP:"Спецификата на състезателната дисциплина"};
+  const limitLabels:Record<string,string>={COMPLETE_DOSE_ALLOCATION:"Разпределение в цели сесии над минималната доза",ROLLING_Q_AND_7_40_BUDGET:"Приравненият обем и ограничението по 7/40",RECOVERY_RESERVATION_WORK_CAP:"Готовността за предстоящата ключова тренировка или старт",METHOD_CAPACITY_FRACTION:"Делът от индивидуалния капацитет за метода",METHOD_WORK_CAP:"Максималната работа в методния профил",ACTUAL_SPORT_SESSION_EXPOSURE:"Досегашната продължителност на сесиите с конкретното средство",COMPONENT_SLOT_ALLOCATION:"Разпределението на товара между оставащите сесии",ROLLING_7_40_COMPONENT_BUDGET:"Оставащият товар по 7/40",DAILY_AVAILABLE_WORK:"Свободното време за деня",TECHNICAL_SESSION_CEILING:"Максималната продължителност за деня",TAPER_DAILY_WORK_CAP:"Разтоварването преди старт",LOW_ABSOLUTE_RECOVERY_CAP:"Лимитът за възстановителна работа",REMAINING_WEEKLY_WORK:"Седмичният лимит за време",RACE_DURATION_WORK_CAP:"Спецификата на състезателната дисциплина"};
   const duration=(v:unknown)=>typeof v==="number"?durationHms(v):"—";
   const reasons=new Map<string,number>();
   for(const d of plan.days.filter(d=>!d.session)) for(const r of d.rejected_alternatives) reasons.set(r.reason,(reasons.get(r.reason)??0)+1);
@@ -34,7 +35,18 @@ export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
     <div><small>Продължителност на предложените тренировки</small><strong>{duration(summary.planned_minutes)}</strong><span>{sessions.length} сесии</span></div>
     </div><TimeLimitNotice context={p}/>{typeof p.available_weekly_minutes === "number" && typeof p.historical_training_weekly_minutes === "number" && Number(p.available_weekly_minutes) < p.historical_training_weekly_minutes && <p className="management-notice">Свободното време в профила е под историческия обем и ограничава седмицата. <Link href="/planning">Провери дните и минутите →</Link></p>}<p className="management-muted">{sources.includes("SPEED_DURATION")?"Използвана е индивидуалната крива скорост–време. ":""}{sources.includes("SPEED_DURATION_PRIOR")?"Използвана е индивидуално мащабирана крива с експертна форма. ":""}{sources.includes("EXPERT_CONTINUOUS_TREF")?"За част от дозите се използва експертен Tref — виж причината в конкретната тренировка. ":""}Наличието на модел не означава, че всяка негова оценка е достатъчно подкрепена за дозиране.</p>
     {allocation&&<>
-      {shortfall.length>0&&<aside className="management-notice" role="status"><strong>Остава непланиран товар: {shortfall.join(", ")}.</strong> Програмата покрива част от целите по 7/40. Виж разпределението и ограниченията по-долу; остатъкът не се наваксва автоматично.</aside>}
+      {shortfall.length>0&&<aside className="management-notice" role="status"><strong>Остава непланиран товар: {shortfall.join(", ")}.</strong> Целта за показаните дати не е покрита изцяло. Остатъкът остава видим за преглед на ограниченията и разпределението.</aside>}
+      {allocationRows.length>0&&<div className="management-table-wrap"><table>
+        <caption>Покритие на целите за периода · ч:мм:сс</caption>
+        <thead><tr><th>Компонент / величина</th><th>Цел</th><th>Изпълнено</th><th>Планирано</th><th>Остатък</th><th>Покритие</th></tr></thead>
+        <tbody>{allocationRows.map(r=>{
+          const target=r.target??r.target_effective;
+          const actual="actual" in r?r.actual:r.actual_effective;
+          const planned=r.planned??r.planned_effective;
+          const percent=typeof target==="number"&&target>0&&typeof actual==="number"&&typeof planned==="number"?Math.min(100,100*(actual+planned)/target):null;
+          return <tr key={r.zone}><th><span className="management-zone-legend"><i style={{background:componentColor(r.zone)}} aria-hidden="true"/>{componentLabel(r.zone)}</span><small>{r.basis==="DIRECT_Q"?"Приравнен обем":"Товар с разлив"}</small></th><td>{duration(target)}</td><td>{duration(actual)}</td><td>{duration(planned)}</td><td>{duration(remainder(r))}</td><td>{percent===null?"—":`${percent.toFixed(1)}%`}</td></tr>;
+        })}</tbody>
+      </table><p className="management-muted">Изпълненото и планираното са за точните дати на проекта. Приравненият обем следва дългосрочната цел с текущата адаптация; разливът не го замества. Ръчните цели за товар се показват в собствената им величина.</p></div>}
       <details><summary>Цел и планиран товар по компоненти</summary>
         <p>Приравнен обем от предложените сесии · ч:мм:сс. Отчита интензивността в зоната и се различава от продължителността на тренировките, показана по-горе.</p>
         <div className="management-zone-legend">{COMPONENTS.map(z => {
@@ -50,6 +62,6 @@ export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
       </details>
     </>}
     <details><summary>Кои качества тренираме тази седмица?</summary><p>Показана е основната работа. Загрявката, почивките и разливът на товара не се броят като отделна развиваща тренировка.</p><div className="management-zone-legend">{COMPONENTS.map(z=>{const blocks=sessions.flatMap(s=>s.blocks).filter(b=>b.kind==="WORK"&&b.zone===z);const minutes=blocks.reduce((sum,b)=>sum+b.duration_min,0);return <span key={z}><i style={{background:componentColor(z)}} aria-hidden="true"/>{componentLabel(z)}: <strong>{minutes>0?duration(minutes):"без основна работа"}</strong></span>;})}</div><p>Акцентите получават приоритет; останалите качества се поддържат според нуждата и готовността. Не всяка зона изисква отделна тежка тренировка всяка седмица.</p></details>
-    <details><summary>Защо обемът е такъв?</summary><HistoryVolume history={v} selected={sports}/><p>Първо се определя целта. Методът, капацитетът, времето, 7/40 и прогнозното възстановяване ограничават конкретната доза. Неизползваният бюджет не се наваксва задължително.</p>{reasons.size>0&&<ul>{[...reasons].sort((a,b)=>b[1]-a[1]).slice(0,5).map(([reason])=><li key={reason}>{reason}</li>)}</ul>}<Link href="/planning">Промени дни, средства, методи и акценти в профила →</Link></details>
+    <details><summary>Защо обемът е такъв?</summary><HistoryVolume history={v} selected={sports}/><p>Първо се определя целта. Методът, капацитетът, времето, 7/40 и прогнозното възстановяване ограничават конкретната доза. Целта направлява плана; непокритият обем остава видим и не се прикрива с кратки допълващи сесии.</p>{reasons.size>0&&<ul>{[...reasons].sort((a,b)=>b[1]-a[1]).slice(0,5).map(([reason])=><li key={reason}>{reason}</li>)}</ul>}<Link href="/planning">Промени дни, средства, методи и акценти в профила →</Link></details>
   </section>;
 }

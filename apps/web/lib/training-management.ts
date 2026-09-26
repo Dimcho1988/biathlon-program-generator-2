@@ -90,7 +90,7 @@ export type Component = "Z1" | "Z2" | "Z3" | "Z4" | "Z5" | "STR";
 export const COMPONENTS: Component[] = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"];
 export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string }
 export interface DoseEvidence {
-  applied_structure_fraction?: number; max_dose_fraction?: number; shared_day_structure_fraction?: number;
+  min_dose_fraction?: number | null; minimum_dose_scope?: string; applied_structure_fraction?: number; max_dose_fraction?: number; shared_day_structure_fraction?: number;
   capacity_source: string; capacity_minutes: number; target_hr_bpm: number | null; target_speed_kmh: number | null;
   fraction: number; requested_work_minutes: number; prescribed_work_minutes: number;
   limits: Array<{ code: string; limit_minutes: number }>; fallback_reasons: string[]; model_version: string;

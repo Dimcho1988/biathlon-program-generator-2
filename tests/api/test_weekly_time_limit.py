@@ -38,14 +38,18 @@ def test_one_hour_limit_consumed_by_actual_sessions_is_explicit_and_removable(mo
     assert repo.envelope == original
 
 
-def test_small_limit_without_actual_work_preserves_fitting_sessions(monkeypatch):
-    p = body(weekly_target_hours=1, sessions_per_week=7, intensity_days=[], strength_days=[])
+@pytest.mark.parametrize("hours, fits", [(1., False), (1.5, True)])
+def test_small_limit_preserves_only_complete_minimum_doses(monkeypatch, hours, fits):
+    p = body(weekly_target_hours=hours, sessions_per_week=7, intensity_days=[], strength_days=[])
     p["max_key_sessions_per_week"] = 0
     plan = run(monkeypatch, p)
-    assert 0 < plan["summary"]["planned_minutes"] <= 60
+    assert (plan["summary"]["planned_minutes"] > 0) is fits
+    assert plan["summary"]["planned_minutes"] <= hours * 60
+    if not fits:
+        assert any(r["code"] == "INSUFFICIENT_TIME_BUDGET" for d in plan["days"] for r in d["rejected_alternatives"])
     budget = plan["parameters"]["time_budget"]
     assert budget["actual_minutes"] == 0
-    assert budget["planned_minutes"] + budget["remaining_minutes"] == pytest.approx(60, abs=.002)
+    assert budget["planned_minutes"] + budget["remaining_minutes"] == pytest.approx(hours * 60, abs=.002)
 
 
 def test_short_period_prorates_total_ceiling_and_excludes_past_actuals(monkeypatch):
