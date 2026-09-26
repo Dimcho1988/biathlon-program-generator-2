@@ -4,11 +4,12 @@ Keep loading focus for a whole anchored mesocycle. Recovery support is a
 relative priority within a smaller budget, never permission for a new block.
 """
 from datetime import date, timedelta
+from functools import lru_cache
 
 from .constants import COMPONENTS, fresh_parameters
 from .hr_speed import TMAX_RANGES_S
 
-VERSION = "mesocycle-focus-v2-ranked"
+VERSION = "mesocycle-focus-v3-race-band"
 PREPARATION = {"GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"}
 RECOVERY_TOTAL_FACTOR = .78
 RECOVERY_LOADED_FACTOR = .65
@@ -32,16 +33,46 @@ def race_component(profile):
     return "Z5"
 
 
-def ordered(profile, period, serial, fallback):
+def race_band(component):
+    """Nearest three existing zones, ordered by the coach's dose priorities."""
+    if component is None:
+        return []
+    n = int(component[1])
+    if n == 1:
+        return ["Z1", "Z2", "Z3"]
+    if n == 5:
+        return ["Z5", "Z4", "Z3"]
+    return [component, f"Z{n-1}", f"Z{n+1}"]
+
+
+def general_rotation(profile):
+    """Cover enabled components before repeating, including with 1–2 roles.
+
+    Disabling strength does not add an extra aerobic focus to the first triple.
+    """
+    groups = [["Z1", "Z3", "STR"], ["Z2", "Z4", "Z5"]]
+    groups = [[z for z in group if z != "STR" or profile.get("strength_enabled")] for group in groups]
+    count = profile["planning_controls"].get("automatic_focus_count", 3)
+    if count == 3:
+        return groups
+    queue = [z for group in groups for z in group]
+    return [queue[i:i+count] for i in range(0, len(queue), count)]
+
+
+def ordered(profile, period, serial, fallback, *, race_specific=False):
     """Initial coach templates; duration bands are not metabolic measurements."""
     race = race_component(profile)
     n = int(race[1]) if race else 3
     below, above = f"Z{max(1, n-1)}", f"Z{min(5, n+1)}"
+    automatic = profile["planning_controls"]["accent_mode"] == "AUTO"
     if period == "GENERAL_PREPARATION":
-        templates = [["Z1", "Z3", "STR"], ["Z2", "Z3", "STR"], ["Z1", "Z2", "Z4"]]
+        templates = general_rotation(profile) if automatic else [["Z1", "Z3", "STR"], ["Z2", "Z3", "STR"], ["Z1", "Z2", "Z4"]]
     elif period == "SPECIAL_PREPARATION":
-        templates = [[f"Z{n}", below if n > 1 else "Z2", "STR"],
+        templates = [race_band(race or "Z3")] if automatic and race_specific else [
+                     [f"Z{n}", below if n > 1 else "Z2", "STR"],
                      ["Z5", "Z4", "Z3"] if n == 5 else [f"Z{n}", above, "STR"]]
+    elif period == "PRECOMPETITION" and automatic:
+        templates = [race_band(race or "Z3")]
     elif period in {"PRECOMPETITION", "COMPETITION"}:
         templates = [[f"Z{n}"]]
     elif period == "RE_ENTRY":
@@ -50,6 +81,65 @@ def ordered(profile, period, serial, fallback):
         templates = [list(fallback)]
     return list(dict.fromkeys(z for z in templates[serial % len(templates)]
                              if z != "STR" or profile.get("strength_enabled")))
+
+
+def _cycle_owner(start_key, end_key, phases):
+    owner = next((p for p in phases if p[1] <= start_key <= p[2]), None)
+    if owner and owner[0] in PREPARATION:
+        return owner
+    # Entry/transition can end inside an anchor. Its first preparation phase
+    # owns the remainder even if another preparation phase starts before it ends.
+    return next((p for p in sorted(phases, key=lambda p: p[1])
+                 if p[0] in PREPARATION and p[1] <= end_key and p[2] >= start_key), None)
+
+
+@lru_cache(maxsize=128)
+def _phase_cycles(anchor_key, length, program_start, program_end, phase, phases, blocked):
+    """Calendar-only candidates; never change a block in response to readiness.
+
+    A fragment following entry may own the first preparation block. A block
+    already owned by another preparation phase keeps that phase until its end.
+    Cache keys contain only calendar configuration, no observed load/readiness.
+    """
+    anchor = date.fromisoformat(anchor_key)
+    days = 7*length
+    _, start_key, end_key = phase
+    start, end = date.fromisoformat(start_key), date.fromisoformat(end_key)
+    left, right = max(start, date.fromisoformat(program_start)), min(end, date.fromisoformat(program_end))
+    if left > right:
+        return ()
+    first = (left-anchor).days//days
+    first_start = anchor+timedelta(days=first*days)
+    owner = _cycle_owner(first_start.isoformat(), (first_start+timedelta(days=days-1)).isoformat(), phases)
+    if owner and owner[0] in PREPARATION and owner != phase:
+        first += 1
+    last = (right-anchor).days//days
+    result = []
+    for serial in range(first, last+1):
+        cycle_start = anchor+timedelta(days=serial*days)
+        day, until = max(left, cycle_start), min(right, cycle_start+timedelta(days=days-1))
+        run = longest = 0
+        while day <= until:
+            eligible = ((day-anchor).days//7 % length != length-1 and
+                        not any(a <= day.isoformat() <= b for a,b in blocked))
+            run = run+1 if eligible else 0
+            longest = max(longest, run)
+            day += timedelta(days=1)
+        if longest:
+            result.append((serial, longest))
+    return tuple(result)
+
+
+def phase_cycles(profile, phase, periodization):
+    controls = profile["planning_controls"]
+    blocked = [(t["start_date"], t["end_date"]) for t in periodization.get("taper_windows", [])]
+    blocked += [(e["start_date"], e["end_date"]) for e in periodization.get("calendar_context", []) if e["event_type"] == "UNAVAILABLE"]
+    blocked += [(c["start_date"], (date.fromisoformat(c["end_date"])+timedelta(days=c.get("recovery_days", 0) if c["kind"] == "STRESS" else 0)).isoformat()) for c in controls["cycles"]]
+    return _phase_cycles(controls.get("mesocycle_anchor") or profile["program_start"], len(controls["wave"]),
+                         profile["program_start"], profile["program_end"],
+                         (phase["kind"], phase["start_date"], phase["end_date"]),
+                         tuple((p["kind"], p["start_date"], p["end_date"]) for p in periodization["phases"]),
+                         tuple(sorted(blocked)))
 
 
 def shock_schedule(profile, periodization):
@@ -116,17 +206,44 @@ def calendar_focus(profile, day, period, fallback, periodization=None):
     start = anchor + timedelta(days=serial*days)
     phase = period
     phase_start = anchor
+    selected = None
     if periodization and period in PREPARATION:
-        at_start = next((p for p in periodization["phases"] if p["start_date"] <= start.isoformat() <= p["end_date"]), None)
+        phase_keys = tuple((p["kind"], p["start_date"], p["end_date"]) for p in periodization["phases"])
+        owner = _cycle_owner(start.isoformat(), (start+timedelta(days=days-1)).isoformat(), phase_keys)
+        at_start = dict(zip(("kind", "start_date", "end_date"), owner)) if owner else None
         current = next((p for p in periodization["phases"] if p["start_date"] <= day.isoformat() <= p["end_date"]), None)
-        selected = at_start if at_start and at_start["kind"] in PREPARATION else current
+        selected = (current if period == "COMPETITION" and controls["accent_mode"] == "AUTO" else
+                    at_start if at_start and at_start["kind"] in PREPARATION else current)
         if selected:
             phase, phase_start = selected["kind"], date.fromisoformat(selected["start_date"])
     first_cycle = max(0, ((phase_start-anchor).days + days-1)//days)
-    order = ordered(profile, phase, max(0, serial-first_cycle), fallback)
+    position = max(0, serial-first_cycle)
+    automatic = controls["accent_mode"] == "AUTO"
+    candidates = phase_cycles(profile, selected, periodization) if selected and automatic else None
+    stage = {"GENERAL_PREPARATION":"GENERAL_COVERAGE", "SPECIAL_PREPARATION":"SPECIAL_FOUNDATION",
+             "PRECOMPETITION":"PRECOMPETITION_RACE_BAND", "COMPETITION":"COMPETITION"}.get(phase)
+    specific = False
+    metadata = {}
+    if candidates is not None:
+        serials = [n for n,_ in candidates]
+        position = sum(n < serial for n in serials)
+        metadata.update(phase_mesocycle_number=serials.index(serial)+1 if serial in serials else None,
+                        phase_mesocycle_count=len(serials))
+        if phase == "SPECIAL_PREPARATION" and candidates:
+            complete_weeks = [n for n, run in candidates if run >= 7]
+            terminal = (complete_weeks or serials)[-1]
+            specific = serial >= terminal
+            if specific:
+                stage = "SPECIAL_RACE_BAND"
+        if phase == "GENERAL_PREPARATION":
+            rotation = general_rotation(profile)
+            covered = {z for i in range(len(serials)) for z in rotation[i % len(rotation)]}
+            metadata["focus_coverage_missing"] = [z for z in COMPONENTS if z not in covered and (z != "STR" or profile.get("strength_enabled"))]
+    order = ordered(profile, phase, position, fallback, race_specific=specific)
     return order, {"mesocycle_id": start.isoformat(), "mesocycle_start": start.isoformat(),
                    "mesocycle_end": (start+timedelta(days=days-1)).isoformat(),
                    "focus_period": phase, "focus_version": VERSION,
+                   "focus_stage": stage if automatic else None, "race_band": race_band(race_component(profile)), **metadata,
                    "race_component": race_component(profile), "race_component_basis": "EXPERT_CONTINUOUS_UPPER_EDGE_MIDPOINTS",
                    "race_reference_minutes": {z: sum(v)/120 for z,v in TMAX_RANGES_S.items()},
                    "shock_schedule": shock_schedule(profile, periodization)}

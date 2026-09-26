@@ -30,10 +30,10 @@ def test_three_roles_are_distinct_and_wave_does_not_create_recovery_development(
 
 def test_rotation_and_optional_strength_and_count():
     p = configured()
-    assert [state(p,n)["accents"] for n in (0,28,56)] == [["Z1","Z3","STR"],["Z2","Z3","STR"],["Z1","Z2","Z4"]]
+    assert [state(p,n)["accents"] for n in (0,28,56)] == [["Z1","Z3","STR"],["Z2","Z4","Z5"],["Z1","Z3","STR"]]
     assert state(p,0,"SPECIAL_PREPARATION")["accents"] == ["Z4","Z3","STR"]
     assert state(p,28,"SPECIAL_PREPARATION")["accents"] == ["Z4","Z5","STR"]
-    assert state(p,0,"PRECOMPETITION")["accents"] == ["Z4"]
+    assert state(p,0,"PRECOMPETITION")["accents"] == ["Z4","Z3","Z5"]
     p["race_duration_min"] = 4
     assert state(p,28,"SPECIAL_PREPARATION")["accents"] == ["Z5","Z4","Z3"]
     p["strength_enabled"] = False
