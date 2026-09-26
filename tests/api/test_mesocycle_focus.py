@@ -199,5 +199,5 @@ def test_complementary_recovery_redistributes_instead_of_creating_extra_cycle_gr
         values.append(g)
     assert s['accents']
     for z in load_progression.WEEKLY_Q_BOUNDS:
-        expected=ctx['components'][z]['weekly_q']
-        assert sum(v[z]['target_weekly_q'] for v in values)/4<=expected+1e-6
+        expected=ctx['components'][z]['reference_q']
+        assert sum(v[z]['target_weekly_q'] for v in values)/4==pytest.approx(expected)

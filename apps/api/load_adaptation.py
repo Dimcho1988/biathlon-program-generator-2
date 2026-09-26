@@ -7,7 +7,7 @@ from datetime import date, timedelta
 from .response_monitoring import latest_entries, block_summary, subjective_score
 from biathlon.constants import COMPONENTS
 
-VERSION = "observed-load-adaptation-v1"
+VERSION = "observed-load-adaptation-v2-bidirectional"
 
 
 def load_observations(entries, rows, test_day, *, test_key=None):
@@ -77,7 +77,7 @@ def assess(entries, today, *, rows=()):
              and e["payload"]["day"] <= today.isoformat()]
     blocks = sorted([e for (kind,_),e in selected.items() if kind == "BLOCK"], key=lambda e:e["payload"]["start"])
     global_state = {"growth_factor": 1., "load_factor": 1., "observed_blocks": 0}
-    components, evidence = {}, []
+    components, evidence, adjustments = {}, [], []
     loads = {(r["date"],r["zone"]):r["effective_load"] for r in rows}
     archived = {o["block"]:o for t in sorted(tests,key=lambda t:t["day"]) for o in t.get("observed_load_windows", [])
                 if o.get("basis") == "COMPLETE_ACTUAL_CANONICAL_E"}
@@ -147,8 +147,13 @@ def assess(entries, today, *, rows=()):
             state = global_state if zone == "GLOBAL" else components.setdefault(zone, {"growth_factor":1., "load_factor":1., "observed_blocks":0})
             if status != "INCONCLUSIVE":
                 state["observed_blocks"] += 1
-                state["growth_factor"] = round(max(.25, state["growth_factor"]*.75) if status == "NEGATIVE" else min(1., state["growth_factor"]+.05), 4)
+                state["growth_factor"] = round(max(.25, state["growth_factor"]*.75) if status == "NEGATIVE" else min(1.5, state["growth_factor"]+.05), 4)
                 state["load_factor"] = .9 if status == "NEGATIVE" and (today-date.fromisoformat(b["recovery_end"])).days <= 28 else 1.
+                observed_on = max(d for d, _, _ in pairs)
+                adjustments.append({"component": zone, "observed_on": observed_on,
+                    "effective_from": (date.fromisoformat(observed_on)+timedelta(days=1)).isoformat(),
+                    "growth_factor": state["growth_factor"], "load_factor": .9 if status == "NEGATIVE" else 1.,
+                    "load_until": (date.fromisoformat(b["recovery_end"])+timedelta(days=28)).isoformat()})
             evidence.append({"block":entry["entry_key"], "revision":entry["revision"], "component":zone,
                              "status":status, "test_changes_percent":[round(v,3) for _,v,_ in pairs],
                              "observed_effective_load_change_percent":round(100*(current_load/prior_load-1),3),
@@ -158,9 +163,9 @@ def assess(entries, today, *, rows=()):
     symptom = symptom_context(entries, today)
     return {"version":VERSION, "as_of":today.isoformat(), "global":global_state,
             **symptom,
-            "components":components, "evidence":evidence,
+            "components":components, "evidence":evidence, "adjustments":adjustments,
             "recovery_is_input":False, "missing_feedback_is_positive":False,
             "basis":"REPLAY_OF_PERSISTED_COMPLETED_BLOCKS_AND_COMPARABLE_TESTS",
             "settings":{"minimum_coverage":.7, "negative_growth_multiplier":.75,
-                        "positive_growth_step":.05, "minimum_growth_factor":.25,
+                        "positive_growth_step":.05, "minimum_growth_factor":.25, "maximum_growth_factor":1.5,
                         "temporary_load_factor":.9, "temporary_load_days":28}}

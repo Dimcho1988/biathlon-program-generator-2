@@ -38,7 +38,7 @@ it("shows component shortfalls separately from session counts and elapsed durati
   expect(container.textContent).toContain("Остава непланиран товар: Z1");
   expect(container.textContent).toContain("0 предложени сесии от 9 възможни по дните");
   expect(container.textContent).toContain("Седмичен максимум в профила: 13");
-  expect(container.textContent).toContain("Приравнен обем Q от предложените сесии");
+  expect(container.textContent).toContain("Приравнен обем от предложените сесии");
   expect(container.textContent).not.toContain("700100400200");
   expect(container.textContent).toContain("0:00:00");
 });

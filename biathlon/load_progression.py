@@ -13,9 +13,9 @@ import json
 from .equivalence import EQUIVALENCE_VERSION
 
 from .constants import COMPONENTS
-from . import planning_controls, mesocycle_focus
+from . import planning_controls, planning_history, mesocycle_focus
 
-VERSION = "load-progression-v4-clamped-q"
+VERSION = "load-progression-v5-cycle-q"
 # Deliberately separate from speed-duration correction and canonical Tref.
 WEEKLY_Q_BOUNDS = {"Z1": (240., 840.), "Z2": (60., 300.), "Z3": (30., 120.),
                    "Z4": (10., 40.), "Z5": (5., 30.)}
@@ -150,7 +150,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
     valid_units = history_matches(source, physiology)
     reliable = valid_units and not (quality.get("limited_activities") or quality.get("excluded_activities"))
     key = reference_key(profile, physiology)
-    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v3-stable-q"} else None
+    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v4-clamped-q", "load-progression-v3-stable-q"} else None
     if frozen and frozen["version"] != VERSION:
         # Re-select the reference without replacing saved measurements or dates.
         frozen = deepcopy(frozen)
@@ -193,6 +193,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
                 frozen["components"][z] = old
         frozen["created_on"] = retained_valid["created_on"]
         frozen["windows"] = list({w["start_date"]:w for w in [*retained_valid["windows"], *frozen["windows"]]}.values())
+    recent = observed_window(source, rows, today-timedelta(days=40), today)
     components = {}
     for z in COMPONENTS:
         b = frozen["components"][z]
@@ -201,9 +202,11 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
                      a[k] is not None and p[k] is not None and p[k] > 0 else None)
                   for k in ("weekly_q", "weekly_minutes", "weekly_effective")}
         rate = annual_rate(b["reference_q"], z, config)
-        components[z] = {**b, "annual_rate_percent": rate, "governed_annual_rate_percent": rate,
+        components[z] = {**b, "annual_rate_percent": rate,
+                         "governed_annual_rate_percent": rate*feedback_factor(adaptation, z, "growth_factor", today) if rate is not None else None,
                          "expert_q_bounds": WEEKLY_Q_BOUNDS.get(z), "observed_cycle_growth_percent": growth,
-                         "current_observed_q": a["weekly_q"] if reliable and current["complete"] else None}
+                         "current_observed_q": a["weekly_q"] if reliable and current["complete"] else None,
+                         "recent_observed_q": recent["components"][z]["weekly_q"] if reliable and recent["covered_days"] >= planning_history.MINIMUM_DAYS else None}
     ctx = {"version": VERSION, "config": config, "basis": "STABLE_PREPARATION_REFERENCE",
            "as_of": today.isoformat(), "cycle_start": cycle_start.isoformat(), "cycle_days": days,
            "anchor": frozen, "anchor_reused": reused, "reference": frozen,
@@ -219,9 +222,10 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
         point = ctx["trajectory"].get(deadline, {z:1. for z in COMPONENTS})
         for z,c in components.items():
             c["target_q"] = c["reference_q"]*point[z] if c["reference_q"] is not None else None
-            c["attainable_q"] = c["weekly_q"]*point[z] if c["weekly_q"] is not None else None
-            c["limitation"] = ("NO_RELIABLE_COMPONENT_HISTORY" if c["weekly_q"] is None else
-                               "NO_OBSERVED_EXPOSURE" if c["weekly_q"] == 0 else
+            c["planned_growth_percent"] = 100*(point[z]-1) if c["reference_q"] is not None and c["annual_rate_percent"] is not None else None
+            c["target_is_before_daily_gates"] = True
+            c["limitation"] = ("NO_RELIABLE_COMPONENT_HISTORY" if c["recent_observed_q"] is None else
+                               "NO_OBSERVED_EXPOSURE" if c["recent_observed_q"] == 0 else
                                "BELOW_REFERENCE_BOUND" if c["reference_selection"] == "LOWER_BOUND" else
                                "ABOVE_REFERENCE_BOUND" if c["reference_selection"] == "UPPER_BOUND" else None)
     return ctx
@@ -235,11 +239,41 @@ def phase_factor(period, taper, config):
             "COMPETITION": config["competition_factor"]}.get(period, 0.)
 
 
+def feedback_factor(feedback, zone, key, day):
+    """Apply observed reactions prospectively; neutral global feedback is no veto.
+
+    A negative signal takes precedence; positive global/component signals are
+    not multiplied, which would count the same outcome twice.
+    """
+    feedback = feedback or {}
+    def value(scope):
+        if "adjustments" not in feedback:  # Older archived reports.
+            return (feedback.get("global", {}) if scope == "GLOBAL" else feedback.get("components", {}).get(scope, {})).get(key, 1.)
+        updates = [a for a in feedback["adjustments"] if a["component"] == scope and a["effective_from"] <= day.isoformat()]
+        if not updates:
+            return 1.
+        update = max(updates, key=lambda a: (a["effective_from"], a["observed_on"]))
+        if key == "load_factor" and day.isoformat() > update.get("load_until", ""):
+            return 1.
+        return update.get(key, 1.)
+    values = [value("GLOBAL"), value(zone)]
+    return min(values) if key == "load_factor" or min(values) < 1 else max(values)
+
+
+def development_weight(profile, state, zone, period):
+    # Roles shape the loading wave. General preparation develops all aerobic
+    # components at their own calendar rate, rather than attenuating it twice.
+    if period == "GENERAL_PREPARATION" and profile["planning_controls"]["accent_mode"] == "AUTO" and not state["explicit"]:
+        return float(zone != "STR")
+    return mesocycle_focus.growth_weight(state, zone)
+
+
 def trajectory(ctx, profile, periodization):
     """Replay calendar time from the frozen reference, never from a prior forecast.
 
-    Annual rates accrue in focus cycles only. No compression of a year of growth
-    into a short preparation, no catch-up, and no growth during unloading/taper.
+    The reference trend includes recovery within a complete mesocycle; recovery
+    DOSES remain lower. Entry, transition and taper do not accrue growth.
+    A shorter preparation never compresses a year of growth into fewer days.
     """
     day = date.fromisoformat(ctx["anchor"]["created_on"])
     end = date.fromisoformat(profile["program_end"])
@@ -250,16 +284,47 @@ def trajectory(ctx, profile, periodization):
         taper = any(p["start_date"] <= day.isoformat() <= p["end_date"] for p in periodization.get("taper_windows", []))
         state = planning_controls.resolve(profile, day, period, accents(profile, period, ["Z1"]), periodization=periodization)
         for z,c in ctx["components"].items():
-            rate = annual_rate(c["reference_q"]*factors[z], z, ctx["config"]) if c["reference_q"] is not None else 0.
+            rate = c["annual_rate_percent"] or 0.
             feedback = ctx.get("adaptation") or {}
-            learned = min(feedback.get("global", {}).get("growth_factor", 1.), feedback.get("components", {}).get(z, {}).get("growth_factor", 1.))
-            selected = (state and state["kind"] in {"BUILD", "STRESS"} and day.isoformat() >= c.get("established_on", ctx["anchor"]["created_on"])
-                        and not feedback.get("hold_for_reported_illness_or_pain"))
-            weight = mesocycle_focus.growth_weight(state, z) if state else 0.
+            learned = feedback_factor(feedback, z, "growth_factor", day)
+            selected = (state and state["kind"] in {"BUILD", "STRESS", "RECOVERY"} and day.isoformat() >= c.get("established_on", ctx["anchor"]["created_on"])
+                        and not (day.isoformat() >= ctx["as_of"] and feedback.get("hold_for_reported_illness_or_pain")))
+            weight = development_weight(profile, state, z, period) if state else 0.
             factors[z] *= (1+(rate or 0.)*phase_factor(period, taper, ctx["config"])*learned*bool(selected)*weight/100)**(1/365.25)
+            if z in WEEKLY_Q_BOUNDS and c["reference_q"]:
+                factors[z] = min(factors[z], WEEKLY_Q_BOUNDS[z][1]*ctx["config"]["ceiling_ratio"]/c["reference_q"])
         result[day.isoformat()] = dict(factors)
         day += timedelta(days=1)
     return result
+
+
+def cycle_shape(profile, state, zone):
+    """A whole-cycle mean of one, with the recovery dose reserved first.
+
+    Deliberately reduced waves and explicit calendar overrides are not refilled.
+    Recovery support is conditional and is re-evaluated by the daily planner.
+    """
+    wave = profile["planning_controls"]["wave"]
+    mean = sum(wave)/len(wave)
+    focus = zone in state.get("mesocycle_accents", state["accents"])
+    weight = mesocycle_focus.growth_weight(state, zone)
+    def raw(value):
+        shape = value/mean
+        result = (1+(shape-1)*weight if state.get("component_indices") and weight > 0
+                  else shape if focus else min(.9, value*.9))
+        return min(result, shape) if value < 1 else result
+    recovery = .9 if zone in state.get("recovery_support_components", state["accents"] if state["kind"] == "RECOVERY" else []) else .65
+    if state["kind"] == "RECOVERY":
+        return recovery
+    shape = raw(state["wave_factor"])
+    if state["kind"] == "RE_ENTRY":
+        return min(.8, state["wave_factor"], shape)
+    if max(wave[:-1], default=0) < 1:
+        return min(state["wave_factor"], shape)
+    if state["explicit"]:
+        return shape
+    loading = sum(raw(v) for v in wave[:-1])
+    return shape*(len(wave)-recovery)/loading if loading > 0 else 0.
 
 
 def apply(goals, profile, state, context, day, period, taper, limited, taper_factor, actual_base):
@@ -268,29 +333,22 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
     config = context["config"]
     feedback = context.get("adaptation") or {}
     factors = context.get("trajectory", {}).get(day.isoformat(), {})
-    # A full focus cycle preserves the mean before separate recovery constraints.
-    wave = profile["planning_controls"]["wave"]
-    shape = state["wave_factor"] / (sum(wave)/len(wave))
     for z, goal in goals.items():
         c = context["components"][z]
         automatic = not state["explicit"] and z not in profile.get("component_targets_weekly", {})
-        focus = z in state.get("mesocycle_accents", state["accents"])
-        weight = mesocycle_focus.growth_weight(state, z)
-        # Light development retains the observed base in loading weeks; it
-        # receives a smaller wave and annual increment than the primary zone.
-        component_shape = (1 + (shape-1)*weight if state.get("component_indices") and weight > 0
-                           else shape if focus else min(.9, state["wave_factor"]*.9))
-        component_shape = min(component_shape, state["wave_factor"]/ (sum(wave)/len(wave))) if state["wave_factor"] < 1 else component_shape
-        if state["kind"] == "RECOVERY":
-            component_shape = .9 if z in state["accents"] else min(.65, component_shape)
-        if state["kind"] == "RE_ENTRY":
-            component_shape = min(.8, component_shape)
+        weight = development_weight(profile, state, z, period)
+        component_shape = cycle_shape(profile, state, z)
         factor = factors.get(z, 1.)
-        # The prior is a destination, not an invented capacity. Actual zero and
-        # missing observations cannot authorize an automatic high-intensity dose.
-        q = c["weekly_q"]
+        # Use the SAME clamped reference for the trend and weekly intent. The
+        # current observed exposure, E/7-40 and Recovery govern execution.
+        q = c["reference_q"]
+        exposure = c.get("recent_observed_q", c["weekly_q"])
+        if exposure is None or exposure == 0:
+            q = exposure
+        if state["kind"] == "RE_ENTRY" and q is not None:
+            q = min(q, exposure)
         requested_q = q*factor*component_shape*taper_factor if q is not None else None
-        learning = min(feedback.get("global", {}).get("load_factor", 1.), feedback.get("components", {}).get(z, {}).get("load_factor", 1.))
+        learning = feedback_factor(feedback, z, "load_factor", day)
         goal["target"] *= learning
         # Q controls progression; existing E/7–40 and Recovery gates still govern
         # every composed session. Never apply a Q percentage to an E baseline.
@@ -301,9 +359,10 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
         goal.update(factor=goal["target"]/max(1e-9, goal["reference"]),
                     target_index=(base["b50"]+goal["target"]/7)/(base["b50"]+base["c40"]),
                     progression={"annual_policy_percent": c["annual_rate_percent"],
-                        "effective_annual_percent": (c["annual_rate_percent"] or 0.)*phase_factor(period, taper, config)*weight if state["kind"] in {"BUILD", "STRESS"} and not limited else 0.,
+                        "effective_annual_percent": (c["annual_rate_percent"] or 0.)*phase_factor(period, taper, config)*weight*feedback_factor(feedback, z, "growth_factor", day) if state["kind"] in {"BUILD", "STRESS", "RECOVERY"} and not limited else 0.,
                         "role_growth_weight": weight,
-                        "reference_weekly_q": c["reference_q"], "observed_weekly_q": q,
+                        "cycle_shape": component_shape,
+                        "reference_weekly_q": c["reference_q"], "observed_weekly_q": c["weekly_q"],
                         "target_weekly_q": goal.get("target_weekly_q"), "expert_reference_q": c["expert_reference_q"],
                         "cumulative_growth_percent": 100*(factor-1), "manual_override": not automatic,
                         "reference_source": c["source"], "reference_created_on": context["anchor"]["created_on"],

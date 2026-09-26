@@ -24,8 +24,8 @@ from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VER
 from . import model_service, load_adaptation, race_duration
 from .response_service import ResponseStore
 
-VERSION = "training-management-v14"
-PARAMETER_VERSION = "management-parameters-v14"
+VERSION = "training-management-v15"
+PARAMETER_VERSION = "management-parameters-v15"
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
     "RE_ENTRY": ("Z1", "STR"),
@@ -712,8 +712,6 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                                         reentry_days_override=reentry_days,
                                         taper_days=profile.get("taper_days", 7), transition_days=profile.get("transition_days", 0))
     periodization["entry_basis"] = {"days_override": reentry_days, "reason": reentry_reason}
-    progression = progression_context(repository, alias, profile, source, rows, today, periodization)
-    adaptation = (progression or {}).get("adaptation") or {}
 
     actual_activities = [a for a in envelope.get("activities", []) if a.get("local_date", "") <= today.isoformat()]
     configs = model_service.ModelStore(repository).config(alias)
@@ -745,9 +743,6 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     for missing in catalog(profile)["disabled"]:
         warnings.append(_warning("METHOD_PROFILE_" + missing["component"], missing["reason"]))
     blocked = equivalence_changed or (missing_days is not None and missing_days > 1)
-    if adaptation.get("hold_for_reported_illness_or_pain"):
-        blocked = True
-        warnings.append(_warning("REPORTED_ILLNESS_OR_PAIN", load_adaptation.symptom_message(adaptation)))
     if missing_days:
         limited = True
         warnings.append(_warning("STALE_LOAD_SNAPSHOT", "Има непокрити дни след последния анализ. Обновете активностите; липсата на запис не доказва почивка."))
@@ -785,6 +780,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         blocked = True
         warnings.append(_warning("INPUT_GENERATION_CHANGED", "Моделът за състезателната продължителност се е обновил. Генерирайте отново."))
     profile = race_duration.applied(profile, event_duration)
+    # Resolve the same race component before constructing the growth calendar
+    # in both the weekly generator and the read-only outlook.
+    progression = progression_context(repository, alias, profile, source, rows, today, periodization)
+    adaptation = (progression or {}).get("adaptation") or {}
+    if adaptation.get("hold_for_reported_illness_or_pain"):
+        blocked = True
+        warnings.append(_warning("REPORTED_ILLNESS_OR_PAIN", load_adaptation.symptom_message(adaptation)))
     if not profile.get("race_duration_min"):
         warnings.append(_warning("RACE_DURATION_MISSING", "Няма индивидуална оценка за тази дистанция. Въведете приблизителната продължителност на основната дисциплина в профила."))
     by_sport_minutes = volume_evidence["reference_by_sport_weekly_minutes"]
