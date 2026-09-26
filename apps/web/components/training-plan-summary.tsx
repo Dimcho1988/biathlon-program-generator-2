@@ -27,15 +27,15 @@ export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
   return <section className="management-panel"><h2>Обем и основа на програмата</h2>
     {manual.length>0&&<aside className="management-notice" role="status"><strong>Програмата използва ръчни цели:</strong> {manual.map(([z,v])=>`${z}: ${v} приравнени мин / 7 дни`).join("; ")}.<p>Те заместват автоматичните цели от историята. Нисък бюджет за Z1 може да блокира и по-високите аеробни зони. Ако целта е въведена по погрешка, избери „Използвай автоматичните цели“ в профила и запази.</p><Link href="/planning">Провери ръчните цели →</Link></aside>}
     <div className="management-metrics">
-    <div><small>Историческа основа за програмата</small><strong>{duration(p.historical_training_weekly_minutes??p.historical_selected_weekly_minutes??p.baseline_weekly_minutes)}</strong><span>средно за 7 дни</span></div>
+    <div><small>Средна продължителност от историята</small><strong>{duration(p.historical_training_weekly_minutes??p.historical_selected_weekly_minutes??p.baseline_weekly_minutes)}</strong><span>време за тренировки за 7 дни</span></div>
     <TimeAvailability context={p}/>
     <div><small>Управление на товара</small><strong>{p.volume_governor==="COMPONENT_7_40"?"7/40 по компоненти":duration(p.weekly_minutes_ceiling)}</strong><span>{p.volume_governor==="COMPONENT_7_40"?"метод + дневна готовност":"ограничение при кратка история"}</span></div>
-    <div><small>Предложени тренировки</small><strong>{duration(summary.planned_minutes)}</strong><span>{sessions.length} сесии</span></div>
+    <div><small>Продължителност на предложените тренировки</small><strong>{duration(summary.planned_minutes)}</strong><span>{sessions.length} сесии</span></div>
     </div><TimeLimitNotice context={p}/>{typeof p.available_weekly_minutes === "number" && typeof p.historical_training_weekly_minutes === "number" && Number(p.available_weekly_minutes) < p.historical_training_weekly_minutes && <p className="management-notice">Свободното време в профила е под историческия обем и ограничава седмицата. <Link href="/planning">Провери дните и минутите →</Link></p>}<p className="management-muted">{sources.includes("SPEED_DURATION")?"Използвана е индивидуалната крива скорост–време. ":""}{sources.includes("SPEED_DURATION_PRIOR")?"Използвана е индивидуално мащабирана крива с експертна форма. ":""}{sources.includes("EXPERT_CONTINUOUS_TREF")?"За част от дозите се използва експертен Tref — виж причината в конкретната тренировка. ":""}Наличието на модел не означава, че всяка негова оценка е достатъчно подкрепена за дозиране.</p>
     {allocation&&<>
       {shortfall.length>0&&<aside className="management-notice" role="status"><strong>Остава непланиран товар: {shortfall.join(", ")}.</strong> Програмата покрива част от целите по 7/40. Виж разпределението и ограниченията по-долу; остатъкът не се наваксва автоматично.</aside>}
       <details><summary>Цел и планиран товар по компоненти</summary>
-        <p>Приравнен обем Q от предложените сесии · ч:мм:сс. Включва всички части на тренировките. Липсващите данни не се заменят с ефективен товар.</p>
+        <p>Приравнен обем от предложените сесии · ч:мм:сс. Отчита интензивността в зоната и се различава от продължителността на тренировките, показана по-горе.</p>
         <div className="management-zone-legend">{COMPONENTS.map(z => {
           const values = sessions.map(s => s.direct_equivalent_minutes?.[z]);
           const known = values.every(v => typeof v === "number" && Number.isFinite(v));

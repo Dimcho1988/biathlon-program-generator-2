@@ -107,7 +107,7 @@ def test_light_and_background_q_progress_without_changing_frozen_reference():
     phases = {"phases":[{"kind":"GENERAL_PREPARATION","start_date":TODAY.isoformat(),"end_date":p["program_end"]}]}
     ctx = load_progression.context(p,source,rows,TODAY,periodization=phases)
     assert ctx["trajectory"][(TODAY+timedelta(days=20)).isoformat()]["Z5"] > 1
-    assert ctx["trajectory"][(TODAY+timedelta(days=27)).isoformat()]["Z5"] == ctx["trajectory"][(TODAY+timedelta(days=20)).isoformat()]["Z5"]
+    assert ctx["trajectory"][(TODAY+timedelta(days=27)).isoformat()]["Z5"] > ctx["trajectory"][(TODAY+timedelta(days=20)).isoformat()]["Z5"]
     assert ctx["components"]["Z5"]["weekly_q"] == 42
     assert ctx["components"]["Z5"]["reference_q"] == 30
 

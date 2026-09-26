@@ -52,7 +52,7 @@ it("switches between exact period targets and proposal time, showing missing fut
     expect(box.textContent).not.toContain("294");
     expect(box.querySelectorAll("table")).toHaveLength(1);
     expect(box.textContent).not.toContain("7:00:00");
-    await act(async () => [...box.querySelectorAll("button")].find(b=>b.textContent==="Време от съставените сесии")!.click());
+    await act(async () => [...box.querySelectorAll("button")].find(b=>b.textContent==="Продължителност на съставените сесии")!.click());
     expect(box.textContent).toContain("Предложение за преглед");
     expect(box.textContent).toContain("1:10:00");
     expect(box.textContent).toContain("0:20:00");

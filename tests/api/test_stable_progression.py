@@ -92,7 +92,7 @@ def test_reset_and_hr_changes_invalidate_the_reference_but_weekly_time_cap_does_
     assert not reset['anchor_reused']
 
 
-def test_low_observed_z5_gets_expert_destination_without_immediate_jump():
+def test_low_observed_z5_uses_the_clamped_reference_for_intent_with_separate_daily_gates():
     p=configured();_,source,rows=observed()
     p['planning_controls']['accents']=['Z5']
     p['load_progression']['component_reference_positions']={'Z5':.8}
@@ -102,10 +102,10 @@ def test_low_observed_z5_gets_expert_destination_without_immediate_jump():
     c=ctx['components']['Z5']
     assert c['expert_reference_q']==25  # 5 + .8*(30-5), all in direct Q.
     assert c['reference_q']==5 and c['weekly_q'] < 2.01
-    assert c['target_q']>=5 and c['attainable_q']<3
+    assert c['target_q']>=5 and c['target_is_before_daily_gates']
     assert c['limitation']=='BELOW_REFERENCE_BOUND'
     goals,_,_=engine._goals(p,TODAY,'GENERAL_PREPARATION',False,{},None,0,4,rows,TODAY,False,1,ctx)
-    assert goals['Z5']['target_weekly_q']<3
+    assert goals['Z5']['target_weekly_q'] == pytest.approx(5*ctx['trajectory'][TODAY.isoformat()]['Z5']*goals['Z5']['progression']['cycle_shape'])
     assert ctx['components']['STR']['expert_reference_q'] is None
 
 
@@ -115,11 +115,13 @@ def test_missing_or_zero_history_never_becomes_expert_actual_work():
         next(z for z in a['zones'] if z['zone']=='Z5')['equivalent_time_min']=0
     ctx=policy.context(p,source,rows,TODAY,periodization=phases(p))
     assert ctx['components']['Z5']['weekly_q']==0
-    assert ctx['components']['Z5']['attainable_q']==0
+    assert ctx['components']['Z5']['limitation']=='NO_OBSERVED_EXPOSURE'
+    goals,_,_=engine._goals(p,TODAY,'GENERAL_PREPARATION',False,{},None,0,4,rows,TODAY,False,1,ctx)
+    assert goals['Z5']['target_weekly_q']==0
     missing=policy.context(p,{'quality':{'excluded_activities':1}},[],TODAY,periodization=phases(p))
     assert missing['components']['Z5']['reference_q']>=5
     assert missing['components']['Z5']['weekly_q'] is None
-    assert missing['components']['Z5']['attainable_q'] is None
+    assert missing['components']['Z5']['recent_observed_q'] is None
     assert missing['components']['STR']['reference_q'] is None
 
 
@@ -138,13 +140,13 @@ def test_three_whole_cycles_use_median_including_unloading():
     assert ctx['components']['Z5']['annual_rate_percent']==10
 
 
-def test_trajectory_freezes_during_recovery_and_never_compresses_annual_growth():
+def test_reference_trend_includes_recovery_without_compressing_annual_growth():
     p=configured();_,source,rows=observed()
     periodization={'phases':[{'kind':'GENERAL_PREPARATION','start_date':TODAY.isoformat(),'end_date':p['program_end']}],'taper_windows':[]}
     ctx=policy.context(p,source,rows,TODAY,periodization=periodization)
     path=ctx['trajectory']
     assert 1<path[(TODAY+timedelta(days=20)).isoformat()]['Z3']<1.03
-    assert path[(TODAY+timedelta(days=27)).isoformat()]['Z3']==path[(TODAY+timedelta(days=20)).isoformat()]['Z3']
+    assert path[(TODAY+timedelta(days=27)).isoformat()]['Z3'] == pytest.approx((1+ctx['components']['Z3']['annual_rate_percent']/100)**(28/365.25))
     assert all(v['STR']==1 for v in path.values())
     assert path[(TODAY+timedelta(days=20)).isoformat()]['Z5']==1  # Not this cycle's focus.
 

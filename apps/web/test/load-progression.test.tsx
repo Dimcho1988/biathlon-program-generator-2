@@ -30,14 +30,16 @@ it("selects a range across months without creating an event until requested",asy
 });
 it("keeps absent observed growth unknown and hides effective load",()=>{
   const html=renderToStaticMarkup(<LoadProgressionSummary plan={{long_term:{progression:{basis:"COMPLETED_CYCLE",components:{Z3:{weekly_q:90,annual_rate_percent:15,observed_cycle_growth_percent:{weekly_q:null,weekly_effective:null}}}}}}}/>);
-  expect(html).toContain("завършен мезоцикъл");expect(html).toContain("Реална промяна Q");
+  expect(html).toContain("завършен мезоцикъл");expect(html).toContain("Измерена промяна в приравнения обем");
   expect(html).not.toContain("Реална промяна E");expect(html).toContain("—");
 });
-it("separates the expert destination from the observed starting volume",()=>{
-  const html=renderToStaticMarkup(<LoadProgressionSummary plan={{long_term:{progression:{basis:"STABLE_PREPARATION_REFERENCE",anchor:{created_on:"2026-09-25",windows:[]},target_date:"2027-01-01",components:{Z5:{weekly_q:2,expert_reference_q:25,expert_q_bounds:[5,30],reference_q:5,target_q:5.2,attainable_q:2.08,annual_rate_percent:14,limitation:"BELOW_REFERENCE_BOUND"}}}}}}/>);
+it("shows the operative reference and actual period growth without a competing historical trajectory",()=>{
+  const html=renderToStaticMarkup(<LoadProgressionSummary plan={{long_term:{progression:{basis:"STABLE_PREPARATION_REFERENCE",anchor:{created_on:"2026-09-25",windows:[]},target_date:"2027-01-01",components:{Z5:{weekly_q:2,expert_reference_q:25,expert_q_bounds:[5,30],reference_q:5,target_q:5.2,attainable_q:2.08,annual_rate_percent:14,governed_annual_rate_percent:14.7,planned_growth_percent:4,limitation:"BELOW_REFERENCE_BOUND"}}}}}}/>);
   expect(html).toContain("0:02:00");expect(html).toContain("0:05:00");expect(html).not.toContain("0:25:00");
   expect(html).toContain("долната граница");expect(html).toContain("5% за удар над долната");
   expect(html).toContain("2027-01-01");expect(html).toContain("не е предписание за намаляване");
+  expect(html).toContain("14,7");expect(html).toContain("0:05:12");expect(html).not.toContain("0:02:05");
+  expect(html).toContain("Планиран прираст до датата");expect(html).not.toContain("Измерена база Q");
 });
 it("validates reference positions and preserves zero as an explicit choice",()=>{
   const p={...defaultManagementProfile("2026-09-25"),discipline:"1500 m"};

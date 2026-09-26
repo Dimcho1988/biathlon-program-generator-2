@@ -64,6 +64,7 @@ def test_draft_and_outlook_use_same_race_sport_estimate_without_mutating_profile
     assert special and any(w["accents"] == ["Z5","Z4"] for w in special)
     assert any(w["accents"] != ["Z5","Z4"] for w in special)
     assert plan["long_term"]["weeks"] == outlook["long_term"]["weeks"]
+    assert plan["long_term"]["progression"]["components"] == outlook["long_term"]["progression"]["components"]
     assert p==original
 
 

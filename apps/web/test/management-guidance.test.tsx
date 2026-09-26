@@ -49,7 +49,7 @@ describe("one next action without relaxing publication gates", () => {
     const html = renderToStaticMarkup(<TrainingPlanOverview plan={plan} today={today} outcomes={[{ date: today, status: "UNKNOWN", planned_title: "Test", planned_minutes: 60, actual_minutes: null }]} />);
     expect(html).toContain("Непълни данни");
     expect(html).toContain("<td>—</td>");
-    expect(html).toContain("Приравнен обем Q");
+    expect(html).toContain("Приравнен обем");
     expect(html).not.toContain("NaN");
   });
 });
