@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .response_monitoring import InputModel
 
-VERSION = "body-observations-v1"
+VERSION = "body-observations-v2"
 MIN_MORNING_DAYS = 4  # Data coverage rule, NOT a physiological threshold.
 ANALYTES = {
     "UREA": ("mmol/L", {"mmol/L": 1, "mg/dL": 0.1665}),
@@ -50,6 +50,9 @@ class WeightReport(InputModel):
     morning_standardized: bool = False
     sessions: list[WeightPair] = Field(default_factory=list, max_length=4)
     note: str = Field(default="", max_length=500)
+    body_water_percent: float | None = Field(default=None, gt=0, le=100, allow_inf_nan=False)
+    body_fat_percent: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    composition_method: str = Field(default="", max_length=80)
 
     @model_validator(mode="after")
     def valid_measurements(self):
@@ -112,16 +115,16 @@ def weight_context(selected, day):
               and r.get("morning_standardized") and r.get("morning_kg") is not None]
     current = report.get("morning_kg") if report.get("morning_standardized") else None
     baseline = mean(values) if values else None
-    ratio = baseline / current if current and len(values) >= MIN_MORNING_DAYS else None
+    ratio = current / baseline if current and len(values) >= MIN_MORNING_DAYS else None
     pairs = []
     for p in report.get("sessions", []):
         before, after = p.get("before_kg"), p.get("after_kg")
         complete = before is not None and after is not None and p.get("comparable", False)
-        pairs.append({**p, "ratio": before / after if complete else None,
+        pairs.append({**p, "ratio": after / before if complete else None,
                       "mass_loss_percent": 100 * (before - after) / before if complete else None})
     valid = [p for p in pairs if p["ratio"] is not None]
     # Ratio of means in the workbook == ratio of sums, only for SAME paired sessions.
-    session_ratio = sum(p["before_kg"] for p in valid) / sum(p["after_kg"] for p in valid) if valid else None
+    session_ratio = sum(p["after_kg"] for p in valid) / sum(p["before_kg"] for p in valid) if valid else None
     prior = [d for d in reports if d < key and reports[d]["payload"].get("morning_kg") is not None]
     return {"report": report or None, "revision": entry["revision"] if entry else 0,
             "morning_mean_kg": baseline, "morning_count": len(values), "window_days": 7,

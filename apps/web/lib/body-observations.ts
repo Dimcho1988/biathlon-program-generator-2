@@ -10,7 +10,7 @@ export const ANALYTES = {
 } as const;
 export type Analyte = keyof typeof ANALYTES;
 export interface WeightPair {session:number;before_kg:number|null;after_kg:number|null;comparable:boolean;fluid_l:number|null;urine_l:number|null;ratio?:number|null;mass_loss_percent?:number|null}
-export interface WeightReport {day:string;morning_kg:number|null;morning_standardized:boolean;sessions:WeightPair[];note:string}
+export interface WeightReport {day:string;morning_kg:number|null;morning_standardized:boolean;sessions:WeightPair[];note:string;body_water_percent?:number|null;body_fat_percent?:number|null;composition_method?:string}
 export interface WeightContext {report:WeightReport|null;revision:number;morning_mean_kg:number|null;morning_count:number;window_days:number;minimum_morning_days:number;morning_ratio:number|null;morning_change_percent:number|null;status:string;gap_days:number|null;session_ratio:number|null;paired_sessions:number;sessions:WeightPair[];automatic_weight:0;validated:false}
 export interface LabResult {analyte:Analyte;value:number;unit:string;qualifier:"EQ"|"LT"|"GT";sample:"SERUM"|"PLASMA"|"WHOLE_BLOOD"|"SALIVA";reference_low:number|null;reference_high:number|null;normalized_value?:number;normalized_unit?:string;reference_status?:string;baseline_median?:number|null;baseline_count?:number;change_percent?:number|null}
 export interface LabPayload {sample_id:string;day:string;collection_time:string|null;laboratory:string;protocol:string;comparable:boolean;hours_since_training:number|null;fasting:"YES"|"NO"|"UNKNOWN";note:string;results:LabResult[]}
@@ -19,7 +19,7 @@ export interface BodyObservationsDay {weight:WeightContext;lab_sample_keys:strin
 
 export const optionalNumber = (f:FormData,key:string) => {const v=String(f.get(key)??"").trim();return v===""?null:Number(v);};
 export function weightPayload(f:FormData,day:string,revision:number) {
-  return {day,expected_revision:revision,morning_kg:optionalNumber(f,"morning_kg"),morning_standardized:f.get("morning_standardized")==="on",note:String(f.get("weight_note")||""),
+  return {day,expected_revision:revision,morning_kg:optionalNumber(f,"morning_kg"),morning_standardized:f.get("morning_standardized")==="on",note:String(f.get("weight_note")||""),body_water_percent:optionalNumber(f,"body_water_percent"),body_fat_percent:optionalNumber(f,"body_fat_percent"),composition_method:String(f.get("composition_method")||""),
     sessions:[1,2,3,4].map(session=>({session,before_kg:optionalNumber(f,`before_${session}`),after_kg:optionalNumber(f,`after_${session}`),comparable:f.get(`comparable_${session}`)==="on",fluid_l:optionalNumber(f,`fluid_${session}`),urine_l:optionalNumber(f,`urine_${session}`)})).filter(p=>p.before_kg!==null||p.after_kg!==null)};
 }
 export function labPayload(f:FormData,day:string,sampleId:string,revision:number) {

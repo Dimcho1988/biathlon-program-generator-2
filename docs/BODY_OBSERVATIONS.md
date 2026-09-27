@@ -1,24 +1,25 @@
 # Body mass and laboratory observations
 
-`body-observations-v1` extends the response dashboard and the append-only response
+`body-observations-v2` extends the response dashboard and the append-only response
 store. It adds authenticated entry, corrections, personal references and dated
 context. It does not establish a validated stress index from body mass or blood
-tests. The existing 50/30/20 pilot score, block return assessment, Recovery model
-and load progression controller retain their current meaning.
+tests. The approved multicomponent pilot score is documented in `STRESS_MODEL_V2.md`.
+Recovery and the load progression controller retain their current meaning.
 
 ## Author's weight indices
 
 The supplied workbook's intended ratios are:
 
-- Morning ratio = mean morning mass over the last 7 calendar days **including the
-  observation day**, divided by that day's morning mass.
-- Session ratio = mean pre-exercise mass divided by mean post-exercise mass.
+- Morning ratio = current morning mass divided by mean morning mass over the
+  last 7 calendar days **including the observation day**.
+- Session ratio = mean post-exercise mass divided by mean pre-exercise mass.
 
-The attachment available for inspection contained dates and formulas but no
-populated measurement cells. Some copied formulas also referenced other athletes'
-columns or Excel date serials. Consequently no performance association, fitted
-weights, physiological thresholds or validation statistics can be inferred from
-that file. Personal data from the workbook is not included in this repository.
+The corrected attachment supplied on 2026-09-27 contains 494 mass measurements
+for eight athletes across 16 populated daily rows. Its formulas are current/mean
+and after/before, the reciprocal of the initial attachment used for the draft.
+Version 2 follows the corrected workbook. These observations establish the
+formula/data contract, not predictive validation of fatigue or recovery. Athlete
+identities and the workbook are not included in the repository.
 
 Implementation preserves the intended ratios, with these explicit data rules:
 
@@ -37,7 +38,7 @@ Implementation preserves the intended ratios, with these explicit data rules:
 - Each pair also reports `100 * (before-after)/before`. Negative values (mass
   gain) are preserved. Fluid/urine intake are stored as context, not added to the
   author's ratio or presented as a validated sweat-loss estimate.
-- A morning ratio **above 1 means mass below the rolling mean**. Neither a rise
+- A morning ratio **below 1 means mass below the rolling mean**. Neither a rise
   nor a fall by itself proves fatigue, recovery, energy deficiency or fitness.
 
 ## Laboratory observations
@@ -84,11 +85,12 @@ remain separately visible even when the existing numeric score is low.
 
 The response API exposes versioned `body_observations` on each day and
 `lab_reports` with original inputs, normalization and comparison evidence. This
-unites the observations in the stress/recovery view, but their numerical score
-weight remains zero until prospective validation. To estimate that contribution,
-collect actual standardized measurements alongside workload, performance, RPE,
-symptoms and outcomes; assess held-out future blocks and incremental value beyond
-existing correlated signals. Do not train and evaluate on the same observations.
+unites the observations with the approved expert score: mass has 15% nominal
+weight, biochemistry 10%. These weights are configurable in the scientific core
+and explicitly unvalidated. Missing inputs are reweighted with visible coverage.
+The `automatic_weight: 0` observation metadata continues to mean no independent
+training-controller action; score contributions live in the versioned channels.
+Prospective outcomes, not the score itself, must validate future personalization.
 
 Potential confounding includes fluid/glycogen balance and intake for body mass;
 exercise type and sampling lag for CK; diet and hydration for urea; plasma volume

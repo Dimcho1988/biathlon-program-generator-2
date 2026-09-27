@@ -46,7 +46,7 @@ def sources(repository, alias, start, end):
         raise HTTPException(409,"Athlete settings are required")
     calendar = repository.active_activity_calendar(alias,start,end) or {}
     snapshot = calendar.get("snapshot_payload") or {}
-    return {"timezone":settings.timezone,"generation_id":calendar.get("generation_id"),
+    return {"timezone":settings.timezone,"generation_id":calendar.get("generation_id"), "calendar": calendar,
         "revision":calendar.get("revision"),"wellness":snapshot.get("wellness_calendar") or [],
         "load_history":snapshot.get("load_history") or {},
         "activities":calendar.get("activities") or []}
@@ -65,8 +65,15 @@ def history(repository, alias, start, end, now=None):
     data = sources(repository,alias,start-timedelta(days=60),end)
     from .load_adaptation import symptom_context
     entries = ResponseStore(repository).entries(alias)
-    result = build_history(entries=entries,wellness=data["wellness"],activities=data["activities"],start=start,end=end,today=today)
+    from .trainability_history import history_from_calendar
+    ti_unavailable = False
+    try:
+        ti = history_from_calendar(repository, alias, data["calendar"]) if data["calendar"].get("activities") else []
+    except (ValueError, PersistentStoreFailure):
+        ti, ti_unavailable = [], True
+    result = build_history(entries=entries,wellness=data["wellness"],activities=data["activities"],start=start,end=end,today=today,trainability=ti)
     result["symptom_context"] = symptom_context(entries, today)
+    result["trainability_unavailable"] = ti_unavailable
     result.update({"timezone":data["timezone"],"generation_id":data["generation_id"],"revision":data["revision"]})
     return result
 
@@ -105,7 +112,7 @@ def save_report(repository, alias, kind, body, actor, now=None):
         day = body.day.isoformat()
         if kind == "LAB" and body.collection_time and body.day == today and body.collection_time > now.astimezone(tz).strftime("%H:%M"):
             raise HTTPException(422,"Collection time cannot be in the future")
-        payload["schema_version"] = "body-observations-v1"
+        payload["schema_version"] = "body-observations-v2"
         payload["source"] = "ONFLOWS"
         payload["automatic_weight"] = 0
     elif kind == "BLOCK":
@@ -126,6 +133,10 @@ def save_report(repository, alias, kind, body, actor, now=None):
         devices = {r["date"]:r.get("metrics",{}) for r in data["wellness"]}
         payload["baseline"] = previous["payload"].get("baseline",{}) if previous else baselines(daily,devices,today)
         payload["baseline_frozen_on"] = previous["payload"].get("baseline_frozen_on") if previous else today.isoformat()
+        from .stress_model import freeze_baseline
+        from .trainability_history import history_from_calendar
+        ti = history_from_calendar(repository, alias, data["calendar"]) if data["calendar"].get("activities") else []
+        payload["stress_baseline"] = previous["payload"].get("stress_baseline", {}) if previous else freeze_baseline(existing, devices, today, ti)
     elif kind == "TEST":
         if not today-timedelta(days=90)<=body.day<=today:
             raise HTTPException(422,"Test date is outside the editable period")

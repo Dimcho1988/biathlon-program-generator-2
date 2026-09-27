@@ -11,9 +11,10 @@ const report:LabReport={entry_key:"a".repeat(32),revision:1,payload:{sample_id:"
 
 describe("body observation forms and context",()=>{
   it("validates the API extension and rejects a fabricated index across missing data",()=>{
-    expect(parseResponseHistory(responseFixture).body_observations_version).toBe("body-observations-v1");
+    expect(parseResponseHistory(responseFixture).body_observations_version).toBe("body-observations-v2");
     const bad=structuredClone(responseFixture);
     bad.days[0].body_observations!.weight.morning_ratio=1;
+    bad.days[0].body_observations!.weight.morning_count=3;
     expect(()=>parseResponseHistory(bad)).toThrow("Невалидни наблюдения");
     const legacy=structuredClone(responseFixture);
     delete legacy.body_observations_version;delete legacy.lab_reports;
@@ -38,7 +39,7 @@ describe("body observation forms and context",()=>{
   it("shows missing coverage, dates old findings, and does not call ratios validated stress",()=>{
     const day={...responseFixture.days.at(-1)!,body_observations:{weight,lab_sample_keys:[],context_status:"NO_OBSERVATIONS" as const}};
     const html=renderToStaticMarkup(<BodyObservations day={day} history={{...responseFixture,lab_reports:[report]}} canReport canEditPlan/>);
-    for(const text of ["3/7","не доказва възстановяване","отпреди 1 ден","Общата оценка не отменя този сигнал","не променят автоматично тренировката","Общ тестостерон","Трансферинова сатурация"])expect(html).toContain(text);
+    for(const text of ["3/7","Влияят гликогенът","отпреди 1 ден","Общата оценка не отменя този сигнал","работни настройки за тестване","Общ тестостерон","Трансферинова сатурация"])expect(html).toContain(text);
     expect(html).not.toContain("NaN");expect(html).toContain('name="before_1"');
   });
   it("hides future lab records and disables another athlete's weight entry",()=>{

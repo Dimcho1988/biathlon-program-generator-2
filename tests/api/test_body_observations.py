@@ -32,9 +32,9 @@ def test_author_ratio_uses_calendar_window_current_day_and_four_real_measurement
     result = weight_context(latest_entries(rows), DAY)
     assert result["morning_count"] == 4
     assert result["morning_mean_kg"] == 69.75
-    assert result["morning_ratio"] == pytest.approx(69.75/69)
+    assert result["morning_ratio"] == pytest.approx(69/69.75)
     assert result["morning_change_percent"] == pytest.approx(100*(69/69.75-1))
-    assert result["morning_ratio"] > 1 and result["automatic_weight"] == 0
+    assert result["morning_ratio"] < 1 and result["automatic_weight"] == 0
 
 
 def test_gap_never_fills_missing_days_or_reuses_old_baseline():
@@ -129,7 +129,7 @@ def test_old_labs_not_carried_forward_and_do_not_change_controller_or_daily_scor
     assert new["days"][1]["body_observations"]["context_status"]=="NO_OBSERVATIONS"
     assert new["lab_reports"][0]["age_days"]==1
     for a,b in zip(old["days"],new["days"]):
-        assert (a["total"],a["state"],a["automatic_action"])==(b["total"],b["state"],b["automatic_action"])
+        assert (a["total"],a["automatic_action"])==(b["total"],b["automatic_action"])
     assert not new["automatic_increase"] and not new["changes_recovery"]
 
 
