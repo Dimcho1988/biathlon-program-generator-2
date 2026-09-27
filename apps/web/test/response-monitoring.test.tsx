@@ -12,7 +12,7 @@ vi.mock("../lib/account-access",async importOriginal=>({...await importOriginal<
 vi.mock("../lib/api-readiness",()=>({waitForApi:vi.fn()}));
 
 describe("observation contract and interface",()=>{
-  it("validates all fixed contributions and rejects totals with missing inputs",()=>{
+  it("validates all fixed contributions and rejects incorrect normalized totals",()=>{
     expect(parseResponseHistory(responseFixture).days).toHaveLength(14);
     const bad=structuredClone(responseFixture);
     bad.days[7].total=50;
@@ -26,7 +26,7 @@ describe("observation contract and interface",()=>{
   });
   it("shows the trend, selectable day and exact component contribution",()=>{
     const html=renderToStaticMarkup(<ResponseMonitoring history={responseFixture} canReport canEditPlan/>);
-    for(const text of ["Тренд на стреса","Ден за подробности","Принос","50%","30%","20%","Ниската оценка не задейства увеличение","Доброволни контролни тестове"]) expect(html).toContain(text);
+    for(const text of ["Тренд на стреса","Ден за подробности","Принос","35%","25%","15%","10%","Ниската оценка не задейства увеличение","Доброволни контролни тестове"]) expect(html).toContain(text);
     expect(html).toContain('name="sleep_quality"');
     expect(html).toContain("Примерна тренировка");
     expect(html).not.toContain("NaN");
@@ -35,7 +35,7 @@ describe("observation contract and interface",()=>{
     const h=structuredClone(responseFixture);
     h.days=[h.days[7]];
     const html=renderToStaticMarkup(<ResponseMonitoring history={h} canReport={false} canEditPlan={false}/>);
-    expect(html).toContain("Непълни данни · 50% покритие");
+    expect(html).toContain("Частична оценка");
     expect(html).toContain('fieldset disabled=""');
     expect(html).not.toContain("Задай следващ блок");
   });
@@ -69,7 +69,7 @@ describe("authenticated response writes",()=>{
     vi.mocked(currentAuthorizedAthlete).mockResolvedValue(owner);
     process.env.ONFLOWS_API_BASE_URL="https://api.example.test";
     process.env.ONFLOWS_SERVICE_TOKEN="server-only-test";
-    vi.stubGlobal("fetch",vi.fn().mockResolvedValue(Response.json({saved:true,revision:1})));
+    vi.stubGlobal("fetch",vi.fn().mockImplementation(async()=>Response.json({saved:true,revision:1})));
   });
   afterEach(()=>{vi.unstubAllGlobals();vi.clearAllMocks();delete process.env.ONFLOWS_API_BASE_URL;delete process.env.ONFLOWS_SERVICE_TOKEN;});
   it("uses verified alias and actual actor behind the reverse proxy",async()=>{
@@ -89,11 +89,15 @@ describe("authenticated response writes",()=>{
     vi.mocked(currentAuthorizedAthlete).mockResolvedValue({...owner,actorUserId:"coach",isOwner:false});
     expect((await POST(request("daily"))).status).toBe(403);
     expect((await POST(request("session"))).status).toBe(403);
+    expect((await POST(request("weight"))).status).toBe(403);
+    expect((await POST(request("lab"))).status).toBe(200);
     expect((await POST(request("block"))).status).toBe(200);
   });
   it("requires recovery permission even when plan editing is allowed",async()=>{
     vi.mocked(currentAuthorizedAthlete).mockResolvedValue({...owner,actorUserId:"coach",isOwner:false,canViewRecovery:false});
     expect((await POST(request("test"))).status).toBe(403);
+    expect((await POST(request("lab"))).status).toBe(403);
+    expect((await POST(request("weight"))).status).toBe(403);
     expect(fetch).not.toHaveBeenCalled();
   });
   it("returns conflict without retry or overwriting input",async()=>{

@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import Header, HTTPException
 from ..oauth_store import PersistentStoreFailure
 from ..response_monitoring import DailyReport, SessionReport, ResponseBlock, OptionalTest
+from ..body_observations import WeightReport, LabReport
 from .. import response_service
 from fastapi import APIRouter
 from .. import dependencies
@@ -68,3 +69,19 @@ def save_optional_response_test(body: OptionalTest,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
     actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None):
     return _save_response("TEST",body,authorization,athlete_alias,actor)
+
+
+@router.put("/api/v2/athlete/response/weight")
+def save_weight_response(body: WeightReport,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None):
+    return _save_response("WEIGHT",body,authorization,athlete_alias,actor)
+
+
+@router.put("/api/v2/athlete/response/lab")
+def save_lab_response(body: LabReport,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None):
+    return _save_response("LAB",body,authorization,athlete_alias,actor)

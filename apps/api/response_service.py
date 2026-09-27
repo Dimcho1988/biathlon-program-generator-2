@@ -46,7 +46,7 @@ def sources(repository, alias, start, end):
         raise HTTPException(409,"Athlete settings are required")
     calendar = repository.active_activity_calendar(alias,start,end) or {}
     snapshot = calendar.get("snapshot_payload") or {}
-    return {"timezone":settings.timezone,"generation_id":calendar.get("generation_id"),
+    return {"timezone":settings.timezone,"generation_id":calendar.get("generation_id"), "calendar": calendar,
         "revision":calendar.get("revision"),"wellness":snapshot.get("wellness_calendar") or [],
         "load_history":snapshot.get("load_history") or {},
         "activities":calendar.get("activities") or []}
@@ -65,8 +65,15 @@ def history(repository, alias, start, end, now=None):
     data = sources(repository,alias,start-timedelta(days=60),end)
     from .load_adaptation import symptom_context
     entries = ResponseStore(repository).entries(alias)
-    result = build_history(entries=entries,wellness=data["wellness"],activities=data["activities"],start=start,end=end,today=today)
+    from .trainability_history import history_from_calendar
+    ti_unavailable = False
+    try:
+        ti = history_from_calendar(repository, alias, data["calendar"]) if data["calendar"].get("activities") else []
+    except (ValueError, PersistentStoreFailure):
+        ti, ti_unavailable = [], True
+    result = build_history(entries=entries,wellness=data["wellness"],activities=data["activities"],start=start,end=end,today=today,trainability=ti)
     result["symptom_context"] = symptom_context(entries, today)
+    result["trainability_unavailable"] = ti_unavailable
     result.update({"timezone":data["timezone"],"generation_id":data["generation_id"],"revision":data["revision"]})
     return result
 
@@ -98,6 +105,16 @@ def save_report(repository, alias, kind, body, actor, now=None):
             raise HTTPException(422,"Activity date is outside the editable period")
         key = body.activity_ref
         payload["source"] = "ONFLOWS"
+    elif kind in ("WEIGHT", "LAB"):
+        if not today-timedelta(days=90)<=body.day<=today:
+            raise HTTPException(422,"Observation date is outside the editable period")
+        key = body.day.isoformat() if kind == "WEIGHT" else body.sample_id
+        day = body.day.isoformat()
+        if kind == "LAB" and body.collection_time and body.day == today and body.collection_time > now.astimezone(tz).strftime("%H:%M"):
+            raise HTTPException(422,"Collection time cannot be in the future")
+        payload["schema_version"] = "body-observations-v2"
+        payload["source"] = "ONFLOWS"
+        payload["automatic_weight"] = 0
     elif kind == "BLOCK":
         key, day = body.start.isoformat(),body.start.isoformat()
         existing = latest_entries(store.entries(alias))
@@ -116,7 +133,11 @@ def save_report(repository, alias, kind, body, actor, now=None):
         devices = {r["date"]:r.get("metrics",{}) for r in data["wellness"]}
         payload["baseline"] = previous["payload"].get("baseline",{}) if previous else baselines(daily,devices,today)
         payload["baseline_frozen_on"] = previous["payload"].get("baseline_frozen_on") if previous else today.isoformat()
-    else:
+        from .stress_model import freeze_baseline
+        from .trainability_history import history_from_calendar
+        ti = history_from_calendar(repository, alias, data["calendar"]) if data["calendar"].get("activities") else []
+        payload["stress_baseline"] = previous["payload"].get("stress_baseline", {}) if previous else freeze_baseline(existing, devices, today, ti)
+    elif kind == "TEST":
         if not today-timedelta(days=90)<=body.day<=today:
             raise HTTPException(422,"Test date is outside the editable period")
         key = sha256(f"{body.day}:{body.protocol}:{body.protocol_version}".encode()).hexdigest()[:32]
@@ -144,4 +165,6 @@ def save_report(repository, alias, kind, body, actor, now=None):
             "UNAVAILABLE" if any(key not in observed for key in related) else
             "ARCHIVED" if any(o.get("retained_from") for o in payload["observed_load_windows"]) else "COMPLETE")
         payload["load_source"] = {"generation_id":data["generation_id"],"revision":data["revision"]}
+    else:
+        raise HTTPException(422,"Unknown observation kind")
     return store.save(alias,kind,key,day,payload,body.expected_revision,str(actor))

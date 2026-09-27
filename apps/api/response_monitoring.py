@@ -5,9 +5,9 @@ from statistics import median
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-VERSION = "response-monitoring-v1"
+VERSION = "response-monitoring-v2"
 FIELDS = ("sleep_quality", "fatigue", "soreness", "stress", "motivation")
-WEIGHTS = {"subjective": .5, "rpe": .3, "physiology": .2}
+WEIGHTS = {"subjective": .35, "functional": .25, "physiology": .15, "weight": .15, "biochemistry": .10}
 BASELINE_DAYS, MIN_BASELINE, MIN_COMPARABLE = 28, 14, 3
 
 
@@ -26,21 +26,40 @@ class InputModel(BaseModel):
 class DailyReport(InputModel):
     day: date
     observed_at: datetime | None = None
-    sleep_quality: int = Field(ge=1, le=5, strict=True)
-    fatigue: int = Field(ge=1, le=5, strict=True)
-    soreness: int = Field(ge=1, le=5, strict=True)
-    stress: int = Field(ge=1, le=5, strict=True)
-    motivation: int = Field(ge=1, le=5, strict=True)
+    sleep_quality: int | None = Field(default=None, ge=1, le=5, strict=True)
+    fatigue: int | None = Field(default=None, ge=1, le=5, strict=True)
+    soreness: int | None = Field(default=None, ge=1, le=5, strict=True)
+    stress: int | None = Field(default=None, ge=1, le=5, strict=True)
+    motivation: int | None = Field(default=None, ge=1, le=5, strict=True)
+    competition_motivation: int | None = Field(default=None, ge=1, le=5, strict=True)
+    sleep_hours: float | None = Field(default=None, ge=0, le=24, allow_inf_nan=False)
     pain_or_illness: bool = False
     note: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def has_observation(self):
+        if not any(getattr(self, f) is not None for f in (*FIELDS, "competition_motivation", "sleep_hours")) and not self.pain_or_illness:
+            raise ValueError("Provide at least one observation")
+        return self
 
 
 class SessionReport(InputModel):
     activity_ref: str = Field(pattern=r"^(?:act_|shadow-)[a-f0-9]{32}$")
-    rpe: int = Field(ge=0, le=10, strict=True)
-    timing: Literal["IMMEDIATE", "DELAYED", "NEXT_DAY"]
+    rpe: int | None = Field(default=None, ge=0, le=10, strict=True)
+    timing: Literal["IMMEDIATE", "DELAYED", "NEXT_DAY", "UNKNOWN"] = "UNKNOWN"
     duration_minutes: float = Field(gt=0, le=1440, allow_inf_nan=False)
     note: str = Field(default="", max_length=500)
+    planned_duration_minutes: float | None = Field(default=None, gt=0, le=1440, allow_inf_nan=False)
+    planned_speed_kmh: float | None = Field(default=None, gt=0, le=150, allow_inf_nan=False)
+    executed_speed_kmh: float | None = Field(default=None, gt=0, le=150, allow_inf_nan=False)
+    execution_comparable: bool = False
+    execution_reason: Literal["UNKNOWN", "AS_PLANNED", "FATIGUE", "TIME", "CONDITIONS", "COACH", "OTHER"] = "UNKNOWN"
+
+    @model_validator(mode="after")
+    def rpe_timing(self):
+        if self.rpe is not None and self.timing == "UNKNOWN":
+            raise ValueError("RPE needs its observation timing")
+        return self
 
 
 class ResponseBlock(InputModel):
@@ -176,6 +195,7 @@ def session_rows(activities, entries):
             "rpe":rpe,"duration_minutes":duration,"suggested_duration_minutes":(a.get("elapsed_time_s") or 0)/60 or None,
             "timing":m["timing"] if m else "UNKNOWN","source":"ONFLOWS" if m else "INTERVALS" if rpe is not None else None,
             "provider_rpe":imported,"revision":e["revision"] if e else 0,"note":m.get("note","") if m else "",
+            "execution":{k:(m or {}).get(k) for k in ("planned_duration_minutes","planned_speed_kmh","executed_speed_kmh","execution_comparable","execution_reason")},
             "srpe_load":round(rpe*duration,3) if rpe is not None and duration else None,
             "expected_rpe":None,"deviation_score":None,"comparable_count":0,"zone_vector":zone_vector(a)})
     rows.sort(key=lambda r:(r["day"],r["activity_ref"]))
@@ -193,15 +213,18 @@ def session_rows(activities, entries):
     return rows
 
 
-def build_history(*,entries,wellness,activities,start,end,today):
+def build_history(*,entries,wellness,activities,start,end,today,trainability=None):
     selected = latest_entries(entries)
     daily = {key:e["payload"] for (kind,key),e in selected.items() if kind=="DAILY"}
     devices = {r["date"]:r.get("metrics",{}) for r in wellness}
     blocks = sorted([e for (kind,_),e in selected.items() if kind=="BLOCK"],key=lambda e:e["entry_key"])
     sessions = session_rows(activities,selected)
     days = []
-    for offset in range((end-start).days+1):
-        day = start+timedelta(days=offset)
+    # Include two preceding calendar days so changing chart zoom does not
+    # change the three-day estimate at the first visible point.
+    calculation_start = start-timedelta(days=2)
+    for offset in range((end-calculation_start).days+1):
+        day = calculation_start+timedelta(days=offset)
         key, previous = day.isoformat(), (day-timedelta(days=1)).isoformat()
         manual, metrics = daily.get(key), devices.get(key,{})
         block = next((b for b in blocks if b["payload"]["start"]<=key<=b["payload"]["recovery_end"]),None)
@@ -214,13 +237,8 @@ def build_history(*,entries,wellness,activities,start,end,today):
         # High HRV is an atypical response too, not evidence for increasing load.
         if hrv_score is not None:
             hrv_score = 50+abs(hrv_score-50)
-        phys = round((rhr_score+hrv_score)/2,3) if rhr_score is not None and hrv_score is not None else None
         previous_sessions = [s for s in sessions if s["day"]==previous]
-        rpe = round(sum(s["deviation_score"]*s["duration_minutes"] for s in previous_sessions)/sum(s["duration_minutes"] for s in previous_sessions),3) if previous_sessions and all(s["deviation_score"] is not None for s in previous_sessions) else None
         subject = subjective_score(manual)
-        scores = {"subjective":subject,"rpe":rpe,"physiology":phys}
-        available = sum(WEIGHTS[k] for k,v in scores.items() if v is not None)
-        total = round(sum(scores[k]*WEIGHTS[k] for k in WEIGHTS),3) if all(v is not None for v in scores.values()) else None
         deviation = (subject-subject_base["median"])/subject_base["spread"] if subject is not None and subject_base else None
         state = "INSUFFICIENT_DATA" if deviation is None else "WITHIN_USUAL"
         if deviation is not None and deviation>1:
@@ -229,8 +247,7 @@ def build_history(*,entries,wellness,activities,start,end,today):
             state = "REVIEW_AFTER_RECOVERY"
         if manual and manual.get("pain_or_illness"):
             state = "REVIEW"
-        days.append({"day":key,"total":total,"coverage":round(available*100),
-            "groups":[{"key":k,"score":v,"weight":WEIGHTS[k],"contribution":round(v*WEIGHTS[k],3) if v is not None else None} for k,v in scores.items()],
+        days.append({"day":key,
             "state":state,"assessment_basis":"SUBJECTIVE","phase":("RECOVERY" if key>block["payload"]["load_end"] else block["payload"]["phase"]) if block else "UNSPECIFIED",
             "baseline":subject_base,"deviation":deviation,"baseline_anchor":anchor.isoformat(),
             "daily_report":manual,"daily_revision":selected.get(("DAILY",key),{}).get("revision",0),"device_metrics":metrics,
@@ -238,6 +255,12 @@ def build_history(*,entries,wellness,activities,start,end,today):
             "rpe_sessions":previous_sessions,"block_key":block["entry_key"] if block else None,"automatic_action":"NONE","data_age_days":(today-day).days})
     for e in blocks:
         e["summary"] = block_summary(e["payload"],daily,min(today,end))
-    return {"schema_version":VERSION,"today":today.isoformat(),"period_start":start.isoformat(),"period_end":end.isoformat(),"mode":"OBSERVATION_ONLY","automatic_increase":False,"changes_recovery":False,"weights":WEIGHTS,
+    result = {"schema_version":VERSION,"today":today.isoformat(),"period_start":start.isoformat(),"period_end":end.isoformat(),"mode":"OBSERVATION_ONLY","automatic_increase":False,"changes_recovery":False,"weights":WEIGHTS,
         "settings":{"baseline_days":BASELINE_DAYS,"minimum_baseline_days":MIN_BASELINE,"minimum_comparable_sessions":MIN_COMPARABLE,"elevation_threshold":1,"return_confirmations":2,"validated":False},
-        "days":days,"sessions":[s for s in sessions if start.isoformat()<=s["day"]<=end.isoformat()],"blocks":blocks,"tests":[e for (kind,_),e in selected.items() if kind=="TEST"]}
+        "days":days,"sessions":[s for s in sessions if calculation_start.isoformat()<=s["day"]<=end.isoformat()],"blocks":blocks,"tests":[e for (kind,_),e in selected.items() if kind=="TEST"]}
+    from .body_observations import attach_body_observations
+    from .stress_model import attach_stress_model
+    result = attach_stress_model(attach_body_observations(result, selected, end), selected, devices, trainability or [])
+    result["days"] = [d for d in result["days"] if d["day"] >= start.isoformat()]
+    result["sessions"] = [s for s in result["sessions"] if s["day"] >= start.isoformat()]
+    return result

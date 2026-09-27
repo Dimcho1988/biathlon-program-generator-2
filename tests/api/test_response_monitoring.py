@@ -55,25 +55,26 @@ def test_fixed_weights_exact_contributions_and_no_controller_mutations():
     result = build_history(**data)
     day = result["days"][0]
     assert day["total"] == 50
-    assert [g["contribution"] for g in day["groups"]] == [25,15,10]
-    assert day["coverage"] == 100 and day["automatic_action"] == "NONE"
+    assert [g["contribution"] for g in day["groups"]] == [32.558, None, 17.442, None, None]
+    assert day["coverage"] == 43 and day["automatic_action"] == "NONE"
     assert not result["automatic_increase"] and not result["changes_recovery"]
     assert data == untouched
 
 
-@pytest.mark.parametrize("missing", ["subjective","rpe","physiology"])
-def test_missing_components_break_total_never_reweight(missing):
+@pytest.mark.parametrize("missing", ["subjective", "rpe", "physiology"])
+def test_missing_components_reweight_only_observed_channels(missing):
     data = inputs()
-    if missing=="subjective":
-        data["entries"] = [e for e in data["entries"] if e["entry_key"]!=str(TODAY)]
-    elif missing=="rpe":
+    if missing == "subjective":
+        data["entries"] = [e for e in data["entries"] if e["entry_key"] != str(TODAY)]
+    elif missing == "rpe":
         data["activities"] = []
     else:
         data["wellness"][-1]["metrics"].pop("hrv")
     d = build_history(**data)["days"][0]
-    assert d["total"] is None
-    assert d["coverage"] == {"subjective":50,"rpe":70,"physiology":80}[missing]
-    assert next(g for g in d["groups"] if g["key"]==missing)["contribution"] is None
+    assert d["total"] == 50
+    assert d["coverage"] == {"subjective": 15, "rpe": 43, "physiology": 35}[missing]
+    assert d["assessment_quality"] == ("SUFFICIENT" if missing == "rpe" else "PARTIAL")
+    assert sum(g["contribution"] or 0 for g in d["groups"]) == pytest.approx(d["total"], abs=.002)
 
 
 def test_baseline_requires_14_prior_days_excludes_present_and_future():
@@ -91,7 +92,7 @@ def test_sdnn_and_invalid_device_values_do_not_replace_rmssd():
     d = build_history(**data)["days"][0]
     assert d["physiology"]["resting_hr"]["raw"] is None
     assert d["physiology"]["hrv"]["raw"] is None
-    assert d["total"] is None
+    assert d["total"] == 50 and d["assessment_quality"] == "PARTIAL"
 
 
 def test_rpe_manual_overrides_provider_and_unknown_duration_is_not_srpe():
@@ -116,7 +117,8 @@ def test_rpe_requires_three_prior_comparable_sessions(mismatch):
     if mismatch=="future": first["local_date"]=str(TODAY+timedelta(days=1))
     d = build_history(**data)["days"][0]
     assert d["rpe_sessions"][0]["comparable_count"] == 2
-    assert d["rpe_sessions"][0]["expected_rpe"] is None and d["total"] is None
+    assert d["rpe_sessions"][0]["expected_rpe"] is None
+    assert next(c for c in d["channels"] if c["key"]=="rpe")["score"] is None
 
 
 def test_low_stress_never_increases_load_and_pain_is_visible():
@@ -155,9 +157,9 @@ def test_high_subjective_response_in_build_does_not_move_recovery_goalposts():
     data["entries"].append(entry("BLOCK",b["start"],b))
     data["entries"].append(entry("DAILY","2026-09-01",report("2026-09-01",4),2))
     days = build_history(**data)["days"]
-    assert days[0]["state"] == "EXPECTED_ELEVATION"
+    assert days[0]["subjective_state"] == "EXPECTED_ELEVATION"
     assert days[0]["baseline_anchor"] == "2026-08-30"
-    assert days[-1]["phase"] == "RECOVERY" and days[-1]["state"] == "REVIEW_AFTER_RECOVERY"
+    assert days[-1]["phase"] == "RECOVERY" and days[-1]["subjective_state"] == "REVIEW_AFTER_RECOVERY"
 
 
 class Repository:
