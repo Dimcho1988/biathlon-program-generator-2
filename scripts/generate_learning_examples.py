@@ -38,7 +38,8 @@ def generate():
     result = []
     for identity, label, observations, state, settings in cases:
         report = model.decide(models=model.fit(observations, today), episodes=observations,
-            current=state, today=today, config=settings, allowed_components=["Z1"], phase="GENERAL_PREPARATION")
+            current=state, today=today, config=settings, allowed_components=["Z1"], phase="GENERAL_PREPARATION",
+            dose_reference={z: {"weekly_q": 100., "weekly_minutes": 100.} for z in COMPONENTS})
         report["limitations"] = ["Примерни данни. Реалните предложения зависят от индивидуалните наблюдения и ограниченията на плана."]
         result.append({"id": identity, "label": label, "report": public_learning(report)})
     return result

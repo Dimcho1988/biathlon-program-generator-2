@@ -18,13 +18,52 @@ import numpy as np
 
 from .constants import COMPONENTS
 
-VERSION = "individual-response-bayes-v1"
+VERSION = "individual-response-bayes-v2"
 FEATURES = tuple([f"volume:{z}" for z in COMPONENTS] + [f"intensity:{z}" for z in COMPONENTS if z != "STR"])
 VOLUME_SCALE = math.log(1.05)
 INTENSITY_SCALE = math.log(1.02)
 MIN_FIT = 4
 MIN_VALIDATION = 4
 PREPARATION = {"GENERAL_PREPARATION", "SPECIAL_PREPARATION"}
+DOSE_OFFSET = 1.  # One equivalent minute; numerical scale, not imputed exposure.
+TIME_OFFSET = 1.  # One clock minute; keeps known zero exposure finite.
+
+
+def dose_changes(bq, aq, bt, at):
+    """Finite dose/time coordinates, including observed starts and stops.
+
+    Both coordinates are zero at Q=time=0. Their difference approaches
+    log(Q/time) for substantial exposure, without inventing an effort at zero.
+    Missing measurements must be rejected before calling this function.
+    """
+    volume = math.log((aq+DOSE_OFFSET)/(bq+DOSE_OFFSET))
+    effort = volume-math.log((at+TIME_OFFSET)/(bt+TIME_OFFSET))
+    return volume, effort
+
+
+def action_contrast(component, kind, step, reference, intensity_scale=None):
+    """Transform the proposed physical Q/time change exactly like observations.
+
+    Volume scales Q and time together. Intensity preserves prescribed Q and
+    changes the time needed at the new Q/time, as the canonical planner does.
+    """
+    dose = (reference or {}).get(component) or {}
+    q, minutes = dose.get("weekly_q"), dose.get("weekly_minutes")
+    if not _number(q) or not _number(minutes) or q <= 0 or minutes <= 0:
+        return None
+    if kind == "volume":
+        aq, at = q*(1+step), minutes*(1+step)
+    else:
+        scale = (intensity_scale or {}).get(component)
+        if not _number(scale) or scale <= 0 or 1+step*scale <= 0:
+            return None
+        aq, at = q, minutes/(1+step*scale)
+    volume, effort = dose_changes(q, aq, minutes, at)
+    contrast = [0.]*(len(FEATURES)+1)
+    contrast[FEATURES.index(f"volume:{component}")+1] = volume/VOLUME_SCALE
+    if component != "STR":
+        contrast[FEATURES.index(f"intensity:{component}")+1] = effort/INTENSITY_SCALE
+    return contrast
 
 
 def _number(value):
@@ -173,7 +212,7 @@ def _neutral_components(reason):
 
 
 def decide(*, models, episodes, current, today, config, allowed_components, phase, taper=False,
-           retained=None, intensity_scale=None):
+           retained=None, intensity_scale=None, dose_reference=None):
     """Choose at most one bounded volume OR intensity experiment per 14 days.
 
     Generator feasibility is still authoritative. Zero is always a candidate.
@@ -199,7 +238,8 @@ def decide(*, models, episodes, current, today, config, allowed_components, phas
                or current.get("unresolved_recovery")
                or (_number(current.get("stress_score")) and current["stress_score"] >= 75))
     if caution:
-        report.update(status="CAUTION", summary="Има сигнал за преглед на състоянието. Пробните увеличения са задържани.")
+        report.update(status="CAUTION", summary="Има сигнал за преглед на състоянието. Самообучението не предлага промяна."
+                      + (" Недостатъчни са и актуалните данни." if uncertain else ""))
         return report
     if uncertain:
         report["summary"] = "Събираме актуални съпоставими данни; запазени са обичайните правила за плана."
@@ -208,7 +248,8 @@ def decide(*, models, episodes, current, today, config, allowed_components, phas
         report.update(status="SHADOW" if mode == "SHADOW" else "READY",
                       summary="Наученото се запазва; текущият период не допуска нов експеримент.")
         return report
-    eligible = [z for z in COMPONENTS if z in allowed_components]
+    eligible = [z for z in COMPONENTS if z in allowed_components
+                and action_contrast(z, "volume", 0., dose_reference) is not None]
     if not eligible:
         report["summary"] = "Ръчните цели и текущите акценти не допускат самостоятелна промяна."
         return report
@@ -238,12 +279,8 @@ def decide(*, models, episodes, current, today, config, allowed_components, phas
         if not choice.get("experimental"):
             model = models.get(choice.get("scope", "GLOBAL"), models["GLOBAL"])
             index = FEATURES.index(f"{choice['kind']}:{choice['component']}")+1
-            scale = (intensity_scale or {}).get(choice["component"])
-            dx = (math.log1p(choice["step"])/VOLUME_SCALE if choice["kind"] == "volume" else
-                  math.log1p(choice["step"]*scale)/INTENSITY_SCALE if _number(scale) and scale > 0 else None)
-            if dx is not None:
-                contrast = [0.]*(len(FEATURES)+1)
-                contrast[index] = dx
+            contrast = action_contrast(choice["component"], choice["kind"], choice["step"], dose_reference, intensity_scale)
+            if contrast is not None:
                 gain = predict(model["posterior"], contrast, observation=False)
                 burden = predict(models["burden"]["posterior"], contrast, observation=False)
                 recovery = predict(models["recovery"]["posterior"], contrast, observation=False)
@@ -274,11 +311,9 @@ def decide(*, models, episodes, current, today, config, allowed_components, phas
                 for step in steps:
                     if not step:
                         continue
-                    dx = math.log1p(step)/VOLUME_SCALE if kind == "volume" else math.log1p(step*scale)/INTENSITY_SCALE
-                    x = zero.copy()
-                    x[index] = dx
-                    contrast = [0.] + [0.]*len(FEATURES)
-                    contrast[index] = dx
+                    contrast = action_contrast(z, kind, step, dose_reference, intensity_scale)
+                    if contrast is None:
+                        continue
                     gain = predict(model["posterior"], contrast, observation=False)
                     burden = predict(burden_model, contrast, observation=False)
                     recovery = predict(recovery_model, contrast, observation=False)

@@ -23,7 +23,7 @@ it("validates generated examples and keeps selecting them separate from the real
   const liveSummary = panel.querySelector("summary")!.textContent;
   expect(panel.open).toBe(false);
   expect(container.querySelector("select")).toBeNull();
-  const preview = [...container.querySelectorAll<HTMLDetailsElement>("details")].find(item => item.querySelector("summary")?.textContent === "Разгледай примери")!;
+  const preview = [...container.querySelectorAll<HTMLDetailsElement>("details")].find(item => item.querySelector("summary")?.textContent === "Учебни примери · не са твоята програма")!;
   await act(async () => { preview.open = true; preview.dispatchEvent(new Event("toggle")); });
   expect(preview.textContent).toContain("Примерни данни · не променят програмата.");
   const select = preview.querySelector("select")!;

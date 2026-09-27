@@ -10,6 +10,7 @@ from biathlon.constants import COMPONENTS
 REPORT_FIELDS = frozenset({
     "version", "mode", "status", "as_of", "effective_from", "expires_on",
     "summary", "evidence_count", "confidence",
+    "examined_period_count", "archived_evidence_count", "out_of_support_count",
 })
 COMPONENT_FIELDS = frozenset({
     "volume_factor", "proposed_volume_factor", "intensity_delta", "proposed_intensity_delta",

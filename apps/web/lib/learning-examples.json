@@ -3,7 +3,7 @@
     "id": "missing",
     "label": "Оскъдни данни",
     "report": {
-      "version": "individual-response-bayes-v1",
+      "version": "individual-response-bayes-v2",
       "mode": "CONTROL",
       "status": "COLLECTING",
       "as_of": "2026-09-27",
@@ -89,7 +89,7 @@
     "id": "probe",
     "label": "Малка пробна промяна",
     "report": {
-      "version": "individual-response-bayes-v1",
+      "version": "individual-response-bayes-v2",
       "mode": "CONTROL",
       "status": "EXPERIMENT",
       "as_of": "2026-09-27",
@@ -175,7 +175,7 @@
     "id": "increase",
     "label": "Добър ефект и възстановяване",
     "report": {
-      "version": "individual-response-bayes-v1",
+      "version": "individual-response-bayes-v2",
       "mode": "CONTROL",
       "status": "READY",
       "as_of": "2026-09-27",
@@ -261,7 +261,7 @@
     "id": "decrease",
     "label": "По-добър ефект при намаление",
     "report": {
-      "version": "individual-response-bayes-v1",
+      "version": "individual-response-bayes-v2",
       "mode": "CONTROL",
       "status": "READY",
       "as_of": "2026-09-27",
@@ -347,13 +347,13 @@
     "id": "caution",
     "label": "Нов сигнал за преглед",
     "report": {
-      "version": "individual-response-bayes-v1",
+      "version": "individual-response-bayes-v2",
       "mode": "CONTROL",
       "status": "CAUTION",
       "as_of": "2026-09-27",
       "effective_from": "2026-09-27",
       "expires_on": "2026-10-10",
-      "summary": "Има сигнал за преглед на състоянието. Пробните увеличения са задържани.",
+      "summary": "Има сигнал за преглед на състоянието. Самообучението не предлага промяна.",
       "evidence_count": 16,
       "confidence": "LOW",
       "components": {
@@ -433,7 +433,7 @@
     "id": "shadow",
     "label": "Наблюдение без промяна на плана",
     "report": {
-      "version": "individual-response-bayes-v1",
+      "version": "individual-response-bayes-v2",
       "mode": "SHADOW",
       "status": "SHADOW",
       "as_of": "2026-09-27",

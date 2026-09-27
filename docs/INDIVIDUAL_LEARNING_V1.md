@@ -1,6 +1,6 @@
 # Individual learning v1 — staging pilot
 
-Version: `individual-response-bayes-v1`. This is an observational individual
+Version: `individual-response-bayes-v2`. This is an observational individual
 response model with a bounded planning policy. Its coefficients, thresholds and
 utility weights are explicit pilot settings, not validated physiological limits
 or proof that a recommended intervention causes improvement.
@@ -18,7 +18,8 @@ or proof that a recommended intervention causes improvement.
 
 The existing management worker and approval lifecycle persist immutable plans;
 there is no additional worker, queue, external AI call or pooled athlete model.
-Reading a page computes a report and never publishes a plan. Historical evidence
+The outlook computes a report without publishing; the weekly page may request
+an automatic refresh through the existing approval lifecycle. Historical evidence
 initializes associations; later executed loads and independent observations
 update them. Forecast loads, Recovery predictions, planned completion and prior
 model recommendations are never outcome labels.
@@ -45,11 +46,21 @@ plans remain proposals. Changing approved rules requires renewed approval.
   days, with the preceding seven days as dose/response baseline. The incomplete
   current day is never a training label. The calendar grid starts 2020-01-06.
 - Direct Q and measured minutes describe exposure separately from canonical E.
-  Features are `log(Q_exposure/Q_baseline)/log(1.05)` for Z1–Z5/STR and
-  `log((Q/min)_exposure/(Q/min)_baseline)/log(1.02)` for Z1–Z5. E remains context.
+  Let `dQ = log((Q_exposure+1)/(Q_baseline+1))` and
+  `dT = log((minutes_exposure+1)/(minutes_baseline+1))`.
+  Features are `dQ/log(1.05)` for Z1–Z5/STR and `(dQ-dT)/log(1.02)`
+  for Z1–Z5. The offsets are fixed numerical scales of one equivalent minute
+  and one clock minute, not added training or an inferred effort at zero.
+  At substantial exposure the second coordinate approaches a log Q/time ratio.
+  Known starts/stops and near-zero doses are finite and retain both Q and time
+  as covariates, preventing their effects being silently attributed elsewhere.
+  Candidate contrasts use these identical coordinates: volume scales Q/time
+  together; within-zone intensity holds Q and recomputes time. E remains context.
   Missing days are not rest days. All component Q/time/E windows must be known;
-  zero-to-positive changes, inconsistent Q/time and Q ratios outside 0.25–4
-  are excluded from fitting.
+  missing exposure and inconsistent Q/time remain excluded. Whole-week total Q
+  ratios outside 0.25–4, or a wholly inactive baseline/exposure week, are excluded
+  as nonlocal transitions. A sparse component ratio alone no longer excludes
+  every other component. The model/evidence versions invalidate v1 archives.
 - Response uses the same available **nonfunctional** channels before and after
   exposure: at least 20% nominal stress weight, three complete baseline days and
   four complete follow-up days. Functional TI/pace/RPE/test channels cannot
@@ -104,8 +115,13 @@ a calibrated probability of benefit. WARMUP and FAILED are distinct states.
 
 ## Support and decision safeguards
 
-Fitting uses locally comparable episodes: current 14-day weekly Q must be
-0.67–1.5 times each component's prior baseline, with matching zero exposure;
+Fitting uses locally comparable episodes: total current 14-day weekly Q must be
+0.67–1.5 times the prior baseline total. Components larger than 5% of the smaller
+week's total use the same 0.67–1.5 band on `(current_Q+1)/(baseline_Q+1)`.
+For two small component doses, known zero is admitted without a ratio gate;
+their observed differences still enter the joint model. This 5% is a local
+support setting, independent of the 5% maximum proposed volume step. Missing
+component Q is never interpreted as zero;
 non-strength Q/min must be within 0.85–1.15 when defined. Where a matching current
 GLOBAL TI is observed, its baseline ratio must also be 0.85–1.15. Missing current
 TI does not invent a fitness match. Unsupported episodes remain archived but do

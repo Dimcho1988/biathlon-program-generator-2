@@ -13,6 +13,7 @@ TODAY = date(2026, 9, 27)
 CONFIG = {"mode": "CONTROL", "exploration_enabled": False, "max_volume_step_percent": 5., "max_intensity_step": .02}
 CURRENT = {"latest_day": TODAY.isoformat(), "coverage": 60, "families": 3, "history_usable": True,
            "recovered": True, "stress_score": 45, "illness_hold": False, "lab_review": False, "execution_caution": False}
+REFERENCE = {z: {"weekly_q": 100., "weekly_minutes": 100.} for z in COMPONENTS}
 
 
 def episodes(n=16, slope=2., *, correlated=False, scope="GLOBAL", intensity=False):
@@ -36,7 +37,7 @@ def episodes(n=16, slope=2., *, correlated=False, scope="GLOBAL", intensity=Fals
 def decide(es, *, current=None, config=None, retained=None, phase="GENERAL_PREPARATION", taper=False, allowed=("Z1",), scales=None):
     return learner.decide(models=learner.fit(es, TODAY), episodes=es, current=current or CURRENT, today=TODAY,
                           config=config or CONFIG, allowed_components=allowed, phase=phase, taper=taper,
-                          retained=retained, intensity_scale=scales)
+                          retained=retained, intensity_scale=scales, dose_reference=REFERENCE)
 
 
 def test_bayesian_update_is_symmetric_positive_covariance_and_replayable():
@@ -193,7 +194,7 @@ def test_new_validation_failure_cancels_retained_learned_change():
     models = learner.fit(es, TODAY)
     models["GLOBAL"]["validation"]["status"] = "FAILED"
     report = learner.decide(models=models, episodes=es, current=CURRENT, today=TODAY,
-        config=CONFIG, allowed_components=["Z1"], phase="GENERAL_PREPARATION", retained={"decision": prior["decision"]})
+        config=CONFIG, allowed_components=["Z1"], phase="GENERAL_PREPARATION", retained={"decision": prior["decision"]}, dose_reference=REFERENCE)
     assert report["status"] == "CAUTION"
     assert report["components"]["Z1"]["volume_factor"] == 1
 
@@ -206,7 +207,7 @@ def test_updated_response_baseline_cancels_retained_increase(outcome, baseline):
     models = learner.fit(es, TODAY)
     models[outcome]["posterior"]["mean"][0] = baseline
     report = learner.decide(models=models, episodes=es, current=CURRENT, today=TODAY,
-        config=CONFIG, allowed_components=["Z1"], phase="GENERAL_PREPARATION", retained={"decision": prior["decision"]})
+        config=CONFIG, allowed_components=["Z1"], phase="GENERAL_PREPARATION", retained={"decision": prior["decision"]}, dose_reference=REFERENCE)
     assert report["status"] == "CAUTION"
     assert report["components"]["Z1"]["volume_factor"] == 1
 
@@ -227,3 +228,32 @@ def test_delayed_recovery_penalizes_previously_positive_dose_association():
         e["response"]["recovery_days"] = 4+2*e["dose_change"]["Z1"]/learner.VOLUME_SCALE
         e["response"]["burden_delta"] = 20*e["dose_change"]["Z1"]/learner.VOLUME_SCALE
     assert decide(es)["components"]["Z1"]["volume_factor"] == 1
+
+
+@pytest.mark.parametrize("q,minutes", [(100., 200.), (.001, .002), (20., 1.)])
+@pytest.mark.parametrize("kind,step", [("volume", .05), ("volume", -.05), ("intensity", .02), ("intensity", -.02)])
+def test_candidate_uses_exact_same_finite_coordinates_as_actual_execution(q, minutes, kind, step):
+    ref = {"Z1": {"weekly_q": q, "weekly_minutes": minutes}}
+    contrast = learner.action_contrast("Z1", kind, step, ref, {"Z1": 1.5})
+    aq, at = (q*(1+step), minutes*(1+step)) if kind == "volume" else (q, minutes/(1+step*1.5))
+    volume, intensity = learner.dose_changes(q, aq, minutes, at)
+    observation = learner.features({"dose_change": {"Z1": volume}, "intensity_change": {"Z1": intensity}})
+    assert contrast[0] == 0
+    assert contrast[1:] == pytest.approx(observation[1:])
+
+
+def test_intermittent_z5_changes_cannot_be_attributed_to_isolated_z1():
+    es = episodes()
+    for i, e in enumerate(es):
+        before, after = (0., 4.) if i % 2 else (4., 0.)
+        volume, intensity = learner.dose_changes(before, after, before/2, after/2)
+        e["dose_change"]["Z5"], e["intensity_change"]["Z5"] = volume, intensity
+    assert learner.fit(es, TODAY)["GLOBAL"]["posterior"]["count"] == 16
+    assert decide(es)["components"]["Z1"]["volume_factor"] == 1
+
+
+def test_missing_actual_reference_cannot_generate_an_action():
+    es = episodes()
+    report = learner.decide(models=learner.fit(es, TODAY), episodes=es, current=CURRENT, today=TODAY,
+        config={**CONFIG, "exploration_enabled": True}, allowed_components=["Z1"], phase="GENERAL_PREPARATION")
+    assert report["components"]["Z1"]["volume_factor"] == 1

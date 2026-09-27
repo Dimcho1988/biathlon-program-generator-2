@@ -33,6 +33,19 @@ def test_support_rejects_new_exposure_and_large_effort_change():
     assert service.local_evidence([episode()], r, [], TODAY) == []
 
 
+def test_small_known_zero_is_local_support_but_missing_or_major_redistribution_is_not():
+    e, r = episode(), recent()
+    e["dose"]["Z5"].update(baseline_q=0., baseline_minutes=0.)
+    r["components"]["Z5"].update(weekly_q=10., weekly_minutes=5.)
+    assert service.local_evidence([e], r, [], TODAY) == [e]
+    r["components"]["Z5"].update(weekly_q=200., weekly_minutes=100.)
+    assert service.local_evidence([e], r, [], TODAY) == []
+    r["components"]["Z5"]["weekly_q"] = None
+    assert service.local_evidence([e], r, [], TODAY) == []
+    r["components"]["Z5"].update(weekly_q=0., weekly_minutes=None)
+    assert service.local_evidence([e], r, [], TODAY) == []
+
+
 def test_changed_fitness_level_prevents_false_precision():
     ti = [{"sport": "Run", "local_date": (TODAY-timedelta(days=1)).isoformat(),
            "index": {"admission": {"status": "ACCEPTED"}, "comparison_key": "stable", "general": {"valid": True, "index": 7.}}}]
