@@ -69,7 +69,7 @@ describe("authenticated response writes",()=>{
     vi.mocked(currentAuthorizedAthlete).mockResolvedValue(owner);
     process.env.ONFLOWS_API_BASE_URL="https://api.example.test";
     process.env.ONFLOWS_SERVICE_TOKEN="server-only-test";
-    vi.stubGlobal("fetch",vi.fn().mockResolvedValue(Response.json({saved:true,revision:1})));
+    vi.stubGlobal("fetch",vi.fn().mockImplementation(async()=>Response.json({saved:true,revision:1})));
   });
   afterEach(()=>{vi.unstubAllGlobals();vi.clearAllMocks();delete process.env.ONFLOWS_API_BASE_URL;delete process.env.ONFLOWS_SERVICE_TOKEN;});
   it("uses verified alias and actual actor behind the reverse proxy",async()=>{
@@ -89,11 +89,15 @@ describe("authenticated response writes",()=>{
     vi.mocked(currentAuthorizedAthlete).mockResolvedValue({...owner,actorUserId:"coach",isOwner:false});
     expect((await POST(request("daily"))).status).toBe(403);
     expect((await POST(request("session"))).status).toBe(403);
+    expect((await POST(request("weight"))).status).toBe(403);
+    expect((await POST(request("lab"))).status).toBe(200);
     expect((await POST(request("block"))).status).toBe(200);
   });
   it("requires recovery permission even when plan editing is allowed",async()=>{
     vi.mocked(currentAuthorizedAthlete).mockResolvedValue({...owner,actorUserId:"coach",isOwner:false,canViewRecovery:false});
     expect((await POST(request("test"))).status).toBe(403);
+    expect((await POST(request("lab"))).status).toBe(403);
+    expect((await POST(request("weight"))).status).toBe(403);
     expect(fetch).not.toHaveBeenCalled();
   });
   it("returns conflict without retry or overwriting input",async()=>{

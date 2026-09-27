@@ -1,3 +1,5 @@
+import type {BodyObservationsDay, LabReport} from "./body-observations";
+import {ANALYTES} from "./body-observations";
 export const RESPONSE_VERSION = "response-monitoring-v1";
 export const GROUPS = ["subjective", "rpe", "physiology"] as const;
 export type Group = typeof GROUPS[number];
@@ -8,9 +10,9 @@ export const STATES: Record<string,string> = {INSUFFICIENT_DATA:"Натрупв�
 export interface Baseline {median:number;spread:number;count:number}
 export interface Session {activity_ref:string;day:string;name:string;sport:string;rpe:number|null;duration_minutes:number|null;suggested_duration_minutes:number|null;timing:string;source:string|null;provider_rpe:number|null;revision:number;note:string;srpe_load:number|null;expected_rpe:number|null;deviation_score:number|null;comparable_count:number}
 export interface DailyReport {day:string;observed_at:string|null;sleep_quality:number;fatigue:number;soreness:number;stress:number;motivation:number;pain_or_illness:boolean;note:string}
-export interface ResponseDay {day:string;total:number|null;coverage:number;groups:Array<{key:Group;score:number|null;weight:number;contribution:number|null}>;state:string;phase:string;baseline:Baseline|null;deviation:number|null;baseline_anchor:string;daily_report:DailyReport|null;daily_revision:number;device_metrics:Record<string,{value:number;unit:string}>;physiology:Record<string,{raw:number|null;score:number|null;baseline:Baseline|null}>;rpe_sessions:Session[];block_key:string|null;automatic_action:"NONE";data_age_days:number}
+export interface ResponseDay {body_observations?:BodyObservationsDay;day:string;total:number|null;coverage:number;groups:Array<{key:Group;score:number|null;weight:number;contribution:number|null}>;state:string;phase:string;baseline:Baseline|null;deviation:number|null;baseline_anchor:string;daily_report:DailyReport|null;daily_revision:number;device_metrics:Record<string,{value:number;unit:string}>;physiology:Record<string,{raw:number|null;score:number|null;baseline:Baseline|null}>;rpe_sessions:Session[];block_key:string|null;automatic_action:"NONE";data_age_days:number}
 export interface ResponseEntry {kind:string;entry_key:string;revision:number;payload:Record<string,unknown>;recorded_at:string;summary?:{peak_deviation:number|null;elevated_days:number;observed_days:number;tracked_days:number;returned_on:string|null;status:string}}
-export interface ResponseHistory {symptom_context?: {latest_report_day: string | null; report_age_days: number | null; hold_for_reported_illness_or_pain: boolean};schema_version:typeof RESPONSE_VERSION;today:string;timezone:string;period_start:string;period_end:string;mode:"OBSERVATION_ONLY";automatic_increase:false;changes_recovery:false;weights:Record<Group,number>;days:ResponseDay[];sessions:Session[];blocks:ResponseEntry[];tests:ResponseEntry[];revision:number|null}
+export interface ResponseHistory {body_observations_version?:"body-observations-v1";lab_reports?:LabReport[];symptom_context?: {latest_report_day: string | null; report_age_days: number | null; hold_for_reported_illness_or_pain: boolean};schema_version:typeof RESPONSE_VERSION;today:string;timezone:string;period_start:string;period_end:string;mode:"OBSERVATION_ONLY";automatic_increase:false;changes_recovery:false;weights:Record<Group,number>;days:ResponseDay[];sessions:Session[];blocks:ResponseEntry[];tests:ResponseEntry[];revision:number|null}
 const finite = (v:unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const nullable = (v:unknown) => v === null || finite(v);
 export function parseResponseHistory(value:unknown):ResponseHistory {
@@ -26,6 +28,23 @@ export function parseResponseHistory(value:unknown):ResponseHistory {
     const full = d.groups.every(g=>g.score!==null);
     if (full !== (d.total!==null) || Math.abs(d.coverage-d.groups.reduce((s,g)=>s+(g.score===null?0:g.weight*100),0))>.01
       || (d.total!==null && Math.abs(d.total-d.groups.reduce((s,g)=>s+g.contribution!,0))>.01)) throw new Error("Непълните данни не могат да бъдат обща оценка.");
+  }
+  if (r.body_observations_version !== undefined) {
+    if(r.body_observations_version!=="body-observations-v1" || !Array.isArray(r.lab_reports))throw new Error("Неподдържана версия на телесните наблюдения.");
+    for(const d of r.days){
+      const b=d.body_observations,w=b?.weight;
+      if(!b || !w || w.automatic_weight!==0 || w.validated!==false || !Array.isArray(w.sessions) || !Array.isArray(b.lab_sample_keys)
+        || !Number.isInteger(w.morning_count) || w.morning_count<0 || w.morning_count>7 || w.minimum_morning_days!==4 || w.window_days!==7
+        || ![w.morning_mean_kg,w.morning_ratio,w.morning_change_percent,w.session_ratio].every(nullable)
+        || (w.morning_ratio!==null && (w.morning_count<4 || w.morning_ratio<=0)))throw new Error("Невалидни наблюдения за теглото.");
+    }
+    for(const lab of r.lab_reports){
+      if(lab.automatic_weight!==0 || !lab.payload || !Array.isArray(lab.results) || !nullable(lab.testosterone_cortisol_ratio)
+        || new Set(lab.results.map(v=>v.analyte)).size!==lab.results.length)throw new Error("Невалидно лабораторно изследване.");
+      for(const v of lab.results)if(!Object.hasOwn(ANALYTES,v.analyte) || !finite(v.value) || !finite(v.normalized_value)
+        || !nullable(v.reference_low) || !nullable(v.reference_high) || !nullable(v.change_percent)
+        || !nullable(v.baseline_median))throw new Error("Невалиден лабораторен резултат.");
+    }
   }
   return r;
 }

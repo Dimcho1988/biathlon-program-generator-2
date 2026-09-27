@@ -1,0 +1,549 @@
+{
+  "days": {
+    "2026-08-27": {
+      "weight": {
+        "report": {
+          "expected_revision": 0,
+          "day": "2026-08-27",
+          "morning_kg": 70.0,
+          "morning_standardized": true,
+          "sessions": [],
+          "note": "Синтетични примерни данни."
+        },
+        "revision": 1,
+        "morning_mean_kg": 70.0,
+        "morning_count": 1,
+        "window_days": 7,
+        "minimum_morning_days": 4,
+        "morning_ratio": null,
+        "morning_change_percent": null,
+        "status": "INSUFFICIENT_HISTORY",
+        "gap_days": null,
+        "session_ratio": null,
+        "paired_sessions": 0,
+        "sessions": [],
+        "automatic_weight": 0,
+        "validated": false
+      },
+      "lab_sample_keys": [
+        "00000000000000000000000000000001"
+      ],
+      "context_status": "OBSERVATIONS_AVAILABLE"
+    },
+    "2026-08-28": {
+      "weight": {
+        "report": {
+          "expected_revision": 0,
+          "day": "2026-08-28",
+          "morning_kg": 69.97,
+          "morning_standardized": true,
+          "sessions": [],
+          "note": "Синтетични примерни данни."
+        },
+        "revision": 1,
+        "morning_mean_kg": 69.985,
+        "morning_count": 2,
+        "window_days": 7,
+        "minimum_morning_days": 4,
+        "morning_ratio": null,
+        "morning_change_percent": null,
+        "status": "INSUFFICIENT_HISTORY",
+        "gap_days": 1,
+        "session_ratio": null,
+        "paired_sessions": 0,
+        "sessions": [],
+        "automatic_weight": 0,
+        "validated": false
+      },
+      "lab_sample_keys": [],
+      "context_status": "OBSERVATIONS_AVAILABLE"
+    },
+    "2026-08-29": {
+      "weight": {
+        "report": {
+          "expected_revision": 0,
+          "day": "2026-08-29",
+          "morning_kg": 69.94,
+          "morning_standardized": true,
+          "sessions": [],
+          "note": "Синтетични примерни данни."
+        },
+        "revision": 1,
+        "morning_mean_kg": 69.97,
+        "morning_count": 3,
+        "window_days": 7,
+        "minimum_morning_days": 4,
+        "morning_ratio": null,
+        "morning_change_percent": null,
+        "status": "INSUFFICIENT_HISTORY",
+        "gap_days": 1,
+        "session_ratio": null,
+        "paired_sessions": 0,
+        "sessions": [],
+        "automatic_weight": 0,
+        "validated": false
+      },
+      "lab_sample_keys": [],
+      "context_status": "OBSERVATIONS_AVAILABLE"
+    },
+    "2026-08-30": {
+      "weight": {
+        "report": {
+          "expected_revision": 0,
+          "day": "2026-08-30",
+          "morning_kg": 69.91,
+          "morning_standardized": true,
+          "sessions": [],
+          "note": "Синтетични примерни данни."
+        },
+        "revision": 1,
+        "morning_mean_kg": 69.955,
+        "morning_count": 4,
+        "window_days": 7,
+        "minimum_morning_days": 4,
+        "morning_ratio": 1.0006436847375197,
+        "morning_change_percent": -0.06432706740047145,
+        "status": "AVAILABLE",
+        "gap_days": 1,
+        "session_ratio": null,
+        "paired_sessions": 0,
+        "sessions": [],
+        "automatic_weight": 0,
+        "validated": false
+      },
+      "lab_sample_keys": [],
+      "context_status": "OBSERVATIONS_AVAILABLE"
+    },
+    "2026-08-31": {
+      "weight": {
+        "report": null,
+        "revision": 0,
+        "morning_mean_kg": 69.955,
+        "morning_count": 4,
+        "window_days": 7,
+        "minimum_morning_days": 4,
+        "morning_ratio": null,
+        "morning_change_percent": null,
+        "status": "MISSING_CURRENT",
+        "gap_days": 1,
+        "session_ratio": null,
+        "paired_sessions": 0,
+        "sessions": [],
+        "automatic_weight": 0,
+        "validated": false
+      },
+      "lab_sample_keys": [],
+      "context_status": "NO_OBSERVATIONS"
+    },
+    "2026-09-01": {
+      "weight": {
+        "report": null,
+        "revision": 0,
+        "morning_mean_kg": 69.955,
+        "morning_count": 4,
+        "window_days": 7,
+        "minimum_morning_days": 4,
+        "morning_ratio": null,
+        "morning_change_percent": null,
+        "status": "MISSING_CURRENT",
+        "gap_days": 2,
+        "session_ratio": null,
+        "paired_sessions": 0,
+        "sessions": [],
+        "automatic_weight": 0,
+        "validated": false
+      },
+      "lab_sample_keys": [],
+      "context_status": "NO_OBSERVATIONS"
+    },
+    "2026-09-02": {
+      "weight": {
+        "report": {
+          "expected_revision": 0,
+          "day": "2026-09-02",
+          "morning_kg": 69.82,
+          "morning_standardized": true,
+          "sessions": [],
+          "note": "Синтетични примерни данни."
+        },
+        "revision": 1,
+        "morning_mean_kg": 69.928,
+        "morning_count": 5,
+        "window_days": 7,
+        "minimum_morning_days": 4,
+        "morning_ratio": 1.001546834717846,
+        "morning_change_percent": -0.15444457155932012,
+        "status": "AVAILABLE",
+        "gap_days": 3,
+        "session_ratio": null,
+        "paired_sessions": 0,
+        "sessions": [],
+        "automatic_weight": 0,
+        "validated": false
+      },
+      "lab_sample_keys": [],
+      "context_status": "OBSERVATIONS_AVAILABLE"
+    },
+    "2026-09-03": {
+      "weight": {
+        "report": {
+          "expected_revision": 0,
+          "day": "2026-09-03",
+          "morning_kg": 69.79,
+          "morning_standardized": true,
+          "sessions": [],
+          "note": "Синтетични примерни данни."
+        },
+        "revision": 1,
+        "morning_mean_kg": 69.886,
+        "morning_count": 5,
+        "window_days": 7,
+        "minimum_morning_days": 4,
+        "morning_ratio": 1.00137555523714,
+        "morning_change_percent": -0.13736656841140116,
+        "status": "AVAILABLE",
+        "gap_days": 1,
+        "session_ratio": null,
+        "paired_sessions": 0,
+        "sessions": [],
+        "automatic_weight": 0,
+        "validated": false
+      },
+      "lab_sample_keys": [],
+      "context_status": "OBSERVATIONS_AVAILABLE"
+    },
+    "2026-09-04": {
+      "weight": {
+        "report": null,
+        "revision": 0,
+        "morning_mean_kg": 69.865,
+        "morning_count": 4,
+        "window_days": 7,
+        "minimum_morning_days": 4,
+        "morning_ratio": null,
+        "morning_change_percent": null,
+        "status": "MISSING_CURRENT",
+        "gap_days": 1,
+        "session_ratio": null,
+        "paired_sessions": 0,
+        "sessions": [],
+        "automatic_weight": 0,
+        "validated": false
+      },
+      "lab_sample_keys": [],
+      "context_status": "NO_OBSERVATIONS"
+    },
+    "2026-09-05": {
+      "weight": {
+        "report": {
+          "expected_revision": 0,
+          "day": "2026-09-05",
+          "morning_kg": 69.73,
+          "morning_standardized": true,
+          "sessions": [],
+          "note": "Синтетични примерни данни."
+        },
+        "revision": 1,
+        "morning_mean_kg": 69.8125,
+        "morning_count": 4,
+        "window_days": 7,
+        "minimum_morning_days": 4,
+        "morning_ratio": 1.0011831349490894,
+        "morning_change_percent": -0.11817367949865654,
+        "status": "AVAILABLE",
+        "gap_days": 2,
+        "session_ratio": null,
+        "paired_sessions": 0,
+        "sessions": [],
+        "automatic_weight": 0,
+        "validated": false
+      },
+      "lab_sample_keys": [],
+      "context_status": "OBSERVATIONS_AVAILABLE"
+    },
+    "2026-09-06": {
+      "weight": {
+        "report": {
+          "expected_revision": 0,
+          "day": "2026-09-06",
+          "morning_kg": 69.7,
+          "morning_standardized": true,
+          "sessions": [],
+          "note": "Синтетични примерни данни."
+        },
+        "revision": 1,
+        "morning_mean_kg": 69.76,
+        "morning_count": 4,
+        "window_days": 7,
+        "minimum_morning_days": 4,
+        "morning_ratio": 1.0008608321377332,
+        "morning_change_percent": -0.08600917431192956,
+        "status": "AVAILABLE",
+        "gap_days": 1,
+        "session_ratio": null,
+        "paired_sessions": 0,
+        "sessions": [],
+        "automatic_weight": 0,
+        "validated": false
+      },
+      "lab_sample_keys": [],
+      "context_status": "OBSERVATIONS_AVAILABLE"
+    },
+    "2026-09-07": {
+      "weight": {
+        "report": {
+          "expected_revision": 0,
+          "day": "2026-09-07",
+          "morning_kg": 69.67,
+          "morning_standardized": true,
+          "sessions": [],
+          "note": "Синтетични примерни данни."
+        },
+        "revision": 1,
+        "morning_mean_kg": 69.742,
+        "morning_count": 5,
+        "window_days": 7,
+        "minimum_morning_days": 4,
+        "morning_ratio": 1.0010334433759152,
+        "morning_change_percent": -0.10323764732872442,
+        "status": "AVAILABLE",
+        "gap_days": 1,
+        "session_ratio": null,
+        "paired_sessions": 0,
+        "sessions": [],
+        "automatic_weight": 0,
+        "validated": false
+      },
+      "lab_sample_keys": [],
+      "context_status": "OBSERVATIONS_AVAILABLE"
+    },
+    "2026-09-08": {
+      "weight": {
+        "report": {
+          "expected_revision": 0,
+          "day": "2026-09-08",
+          "morning_kg": 69.64,
+          "morning_standardized": true,
+          "sessions": [],
+          "note": "Синтетични примерни данни."
+        },
+        "revision": 1,
+        "morning_mean_kg": 69.725,
+        "morning_count": 6,
+        "window_days": 7,
+        "minimum_morning_days": 4,
+        "morning_ratio": 1.0012205628948878,
+        "morning_change_percent": -0.12190749372533727,
+        "status": "AVAILABLE",
+        "gap_days": 1,
+        "session_ratio": null,
+        "paired_sessions": 0,
+        "sessions": [],
+        "automatic_weight": 0,
+        "validated": false
+      },
+      "lab_sample_keys": [],
+      "context_status": "OBSERVATIONS_AVAILABLE"
+    },
+    "2026-09-09": {
+      "weight": {
+        "report": {
+          "expected_revision": 0,
+          "day": "2026-09-09",
+          "morning_kg": 69.61,
+          "morning_standardized": true,
+          "sessions": [
+            {
+              "session": 1,
+              "before_kg": 70.0,
+              "after_kg": 69.4,
+              "comparable": true,
+              "fluid_l": null,
+              "urine_l": null
+            }
+          ],
+          "note": "Синтетични примерни данни."
+        },
+        "revision": 1,
+        "morning_mean_kg": 69.69,
+        "morning_count": 6,
+        "window_days": 7,
+        "minimum_morning_days": 4,
+        "morning_ratio": 1.0011492601637695,
+        "morning_change_percent": -0.11479408810446401,
+        "status": "AVAILABLE",
+        "gap_days": 1,
+        "session_ratio": 1.0086455331412103,
+        "paired_sessions": 1,
+        "sessions": [
+          {
+            "session": 1,
+            "before_kg": 70.0,
+            "after_kg": 69.4,
+            "comparable": true,
+            "fluid_l": null,
+            "urine_l": null,
+            "ratio": 1.0086455331412103,
+            "mass_loss_percent": 0.857142857142849
+          }
+        ],
+        "automatic_weight": 0,
+        "validated": false
+      },
+      "lab_sample_keys": [
+        "00000000000000000000000000000002"
+      ],
+      "context_status": "REVIEW_LAB_REFERENCE"
+    }
+  },
+  "lab_reports": [
+    {
+      "kind": "LAB",
+      "entry_key": "00000000000000000000000000000001",
+      "revision": 1,
+      "payload": {
+        "expected_revision": 0,
+        "sample_id": "00000000000000000000000000000001",
+        "day": "2026-08-27",
+        "collection_time": "08:00",
+        "laboratory": "Примерна лаборатория",
+        "protocol": "Примерни условия",
+        "comparable": false,
+        "hours_since_training": null,
+        "fasting": "UNKNOWN",
+        "note": "Синтетични примерни данни, без реален спортист.",
+        "results": [
+          {
+            "analyte": "CK",
+            "value": 120.0,
+            "unit": "U/L",
+            "qualifier": "EQ",
+            "sample": "SERUM",
+            "reference_low": null,
+            "reference_high": 180.0
+          },
+          {
+            "analyte": "HEMOGLOBIN",
+            "value": 145.0,
+            "unit": "g/L",
+            "qualifier": "EQ",
+            "sample": "WHOLE_BLOOD",
+            "reference_low": null,
+            "reference_high": null
+          }
+        ]
+      },
+      "recorded_at": "2026-08-27T10:00:00Z",
+      "results": [
+        {
+          "analyte": "CK",
+          "value": 120.0,
+          "unit": "U/L",
+          "qualifier": "EQ",
+          "sample": "SERUM",
+          "reference_low": null,
+          "reference_high": 180.0,
+          "normalized_value": 120.0,
+          "normalized_unit": "U/L",
+          "reference_status": "WITHIN_PROVIDED_LIMITS",
+          "baseline_median": null,
+          "baseline_count": 0,
+          "change_percent": null
+        },
+        {
+          "analyte": "HEMOGLOBIN",
+          "value": 145.0,
+          "unit": "g/L",
+          "qualifier": "EQ",
+          "sample": "WHOLE_BLOOD",
+          "reference_low": null,
+          "reference_high": null,
+          "normalized_value": 145.0,
+          "normalized_unit": "g/L",
+          "reference_status": "NO_REFERENCE",
+          "baseline_median": null,
+          "baseline_count": 0,
+          "change_percent": null
+        }
+      ],
+      "testosterone_cortisol_ratio": null,
+      "age_days": 13,
+      "outside_reference": false,
+      "automatic_weight": 0
+    },
+    {
+      "kind": "LAB",
+      "entry_key": "00000000000000000000000000000002",
+      "revision": 1,
+      "payload": {
+        "expected_revision": 0,
+        "sample_id": "00000000000000000000000000000002",
+        "day": "2026-09-09",
+        "collection_time": "08:00",
+        "laboratory": "Примерна лаборатория",
+        "protocol": "Примерни условия",
+        "comparable": false,
+        "hours_since_training": null,
+        "fasting": "UNKNOWN",
+        "note": "Синтетични примерни данни, без реален спортист.",
+        "results": [
+          {
+            "analyte": "CK",
+            "value": 220.0,
+            "unit": "U/L",
+            "qualifier": "EQ",
+            "sample": "SERUM",
+            "reference_low": null,
+            "reference_high": 180.0
+          },
+          {
+            "analyte": "HEMOGLOBIN",
+            "value": 145.0,
+            "unit": "g/L",
+            "qualifier": "EQ",
+            "sample": "WHOLE_BLOOD",
+            "reference_low": null,
+            "reference_high": null
+          }
+        ]
+      },
+      "recorded_at": "2026-09-09T10:00:00Z",
+      "results": [
+        {
+          "analyte": "CK",
+          "value": 220.0,
+          "unit": "U/L",
+          "qualifier": "EQ",
+          "sample": "SERUM",
+          "reference_low": null,
+          "reference_high": 180.0,
+          "normalized_value": 220.0,
+          "normalized_unit": "U/L",
+          "reference_status": "HIGH",
+          "baseline_median": null,
+          "baseline_count": 0,
+          "change_percent": null
+        },
+        {
+          "analyte": "HEMOGLOBIN",
+          "value": 145.0,
+          "unit": "g/L",
+          "qualifier": "EQ",
+          "sample": "WHOLE_BLOOD",
+          "reference_low": null,
+          "reference_high": null,
+          "normalized_value": 145.0,
+          "normalized_unit": "g/L",
+          "reference_status": "NO_REFERENCE",
+          "baseline_median": null,
+          "baseline_count": 0,
+          "change_percent": null
+        }
+      ],
+      "testosterone_cortisol_ratio": null,
+      "age_days": 0,
+      "outside_reference": true,
+      "automatic_weight": 0
+    }
+  ]
+}

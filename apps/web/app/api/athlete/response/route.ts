@@ -15,8 +15,8 @@ export async function POST(request:Request) {
     let input;
     try { input=JSON.parse(text); } catch {return NextResponse.json({error:"Невалидна оценка."},{status:422});}
     const {kind,payload} = input || {};
-    if (!["daily","session","block","test"].includes(kind) || !payload || typeof payload!=="object") return NextResponse.json({error:"Невалидна оценка."},{status:422});
-    if ((kind==="daily" || kind==="session") ? !access.isOwner : !access.canEditPlan) return NextResponse.json({error:"Нямате право да променяте тази оценка."},{status:403});
+    if (!["daily","session","block","test","weight","lab"].includes(kind) || !payload || typeof payload!=="object") return NextResponse.json({error:"Невалидна оценка."},{status:422});
+    if (["daily","session","weight"].includes(kind) ? !access.isOwner : !access.canEditPlan) return NextResponse.json({error:"Нямате право да променяте тази оценка."},{status:403});
     const base = process.env.ONFLOWS_API_BASE_URL;
     const token = process.env.ONFLOWS_SERVICE_TOKEN;
     if (!base || !token || !access.actorUserId) throw new Error("Missing server configuration");

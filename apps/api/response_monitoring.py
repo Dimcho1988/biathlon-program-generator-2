@@ -238,6 +238,8 @@ def build_history(*,entries,wellness,activities,start,end,today):
             "rpe_sessions":previous_sessions,"block_key":block["entry_key"] if block else None,"automatic_action":"NONE","data_age_days":(today-day).days})
     for e in blocks:
         e["summary"] = block_summary(e["payload"],daily,min(today,end))
-    return {"schema_version":VERSION,"today":today.isoformat(),"period_start":start.isoformat(),"period_end":end.isoformat(),"mode":"OBSERVATION_ONLY","automatic_increase":False,"changes_recovery":False,"weights":WEIGHTS,
+    result = {"schema_version":VERSION,"today":today.isoformat(),"period_start":start.isoformat(),"period_end":end.isoformat(),"mode":"OBSERVATION_ONLY","automatic_increase":False,"changes_recovery":False,"weights":WEIGHTS,
         "settings":{"baseline_days":BASELINE_DAYS,"minimum_baseline_days":MIN_BASELINE,"minimum_comparable_sessions":MIN_COMPARABLE,"elevation_threshold":1,"return_confirmations":2,"validated":False},
         "days":days,"sessions":[s for s in sessions if start.isoformat()<=s["day"]<=end.isoformat()],"blocks":blocks,"tests":[e for (kind,_),e in selected.items() if kind=="TEST"]}
+    from .body_observations import attach_body_observations
+    return attach_body_observations(result, selected, end)
