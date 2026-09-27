@@ -74,6 +74,13 @@ def history(repository, alias, start, end, now=None):
     result = build_history(entries=entries,wellness=data["wellness"],activities=data["activities"],start=start,end=end,today=today,trainability=ti)
     result["symptom_context"] = symptom_context(entries, today)
     result["trainability_unavailable"] = ti_unavailable
+    # The catalog is an optional entry aid; a profile read problem must not
+    # make already recorded stress observations disappear.
+    from .learning_methods import execution_catalog
+    try:
+        result["execution_methods"] = execution_catalog(repository, alias)
+    except PersistentStoreFailure:
+        result["execution_methods"] = []
     result.update({"timezone":data["timezone"],"generation_id":data["generation_id"],"revision":data["revision"]})
     return result
 
@@ -105,6 +112,8 @@ def save_report(repository, alias, kind, body, actor, now=None):
             raise HTTPException(422,"Activity date is outside the editable period")
         key = body.activity_ref
         payload["source"] = "ONFLOWS"
+        from .learning_methods import confirmed_descriptor
+        payload["executed_method"] = confirmed_descriptor(repository, alias, body, activity)
     elif kind in ("WEIGHT", "LAB"):
         if not today-timedelta(days=90)<=body.day<=today:
             raise HTTPException(422,"Observation date is outside the editable period")

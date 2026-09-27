@@ -1,5 +1,6 @@
 import type {BodyObservationsDay, LabReport} from "./body-observations";
 import {ANALYTES} from "./body-observations";
+import {isRecord} from "./training-status";
 export const RESPONSE_VERSION = "response-monitoring-v2";
 export const GROUPS = ["subjective", "functional", "physiology", "weight", "biochemistry"] as const;
 export type Group = typeof GROUPS[number];
@@ -11,19 +12,23 @@ export const PHASES:Record<string,string> = {BUILD:"Натрупване",MAINTA
 export const STATES:Record<string,string> = {PARTIAL:"Частична оценка",INSUFFICIENT_DATA:"Недостатъчно данни",WITHIN_USUAL:"В обичайния диапазон",EXPECTED_ELEVATION:"Покачване в натоварващ блок",ELEVATED:"Повишена реакция",REVIEW:"Нужен е преглед",REVIEW_AFTER_RECOVERY:"Задържане след разтоварване"};
 export const REASONS:Record<string,string> = {UNKNOWN:"Не е уточнено",AS_PLANNED:"Според плана",FATIGUE:"Умора / невъзможност",TIME:"Липса на време",CONDITIONS:"Терен / условия",COACH:"Треньорско решение",OTHER:"Друга причина"};
 export interface Baseline {median:number;spread:number;count:number}
-export interface Execution {planned_duration_minutes:number|null;planned_speed_kmh:number|null;executed_speed_kmh:number|null;execution_comparable:boolean|null;execution_reason:string|null}
+export interface ExecutionMethod {id:string;title:string;zone:string;sports:string[]}
+export interface Execution {planned_duration_minutes:number|null;planned_speed_kmh:number|null;executed_speed_kmh:number|null;execution_comparable:boolean|null;execution_reason:string|null;executed_method_id?:string|null;method_confirmed?:boolean|null;executed_method?:Record<string,unknown>|null}
 export interface Session {activity_ref:string;day:string;name:string;sport:string;rpe:number|null;duration_minutes:number|null;suggested_duration_minutes:number|null;timing:string;source:string|null;provider_rpe:number|null;revision:number;note:string;srpe_load:number|null;expected_rpe:number|null;deviation_score:number|null;comparable_count:number;execution?:Execution}
 export interface DailyReport {day:string;observed_at:string|null;sleep_quality:number|null;fatigue:number|null;soreness:number|null;stress:number|null;motivation:number|null;competition_motivation?:number|null;sleep_hours?:number|null;pain_or_illness:boolean;note:string}
 export interface Channel {key:string;group:Group;weight:number;effective_weight:number;contribution:number|null;score:number|null;raw:number|null;unit:string|null;source:string|null;observed_on:string|null;baseline:Baseline|null;status:string}
 export interface GroupScore {key:Group;score:number|null;weight:number;available_weight:number;effective_weight:number;contribution:number|null}
 export interface ResponseDay {body_observations?:BodyObservationsDay;day:string;total:number|null;coverage:number;groups:GroupScore[];channels:Channel[];assessment_quality:"NO_DATA"|"PARTIAL"|"SUFFICIENT";trend_3d:number|null;mix_changed:boolean;comparison_previous:{coverage:number;delta:number|null}|null;state:string;phase:string;baseline:Baseline|null;deviation:number|null;baseline_anchor:string;daily_report:DailyReport|null;daily_revision:number;device_metrics:Record<string,{value:number;unit:string}>;physiology:Record<string,{raw:number|null;score:number|null;baseline:Baseline|null}>;rpe_sessions:Session[];block_key:string|null;automatic_action:"NONE";data_age_days:number}
 export interface ResponseEntry {kind:string;entry_key:string;revision:number;payload:Record<string,unknown>;recorded_at:string;summary?:{peak_deviation:number|null;elevated_days:number;observed_days:number;tracked_days:number;returned_on:string|null;status:string}}
-export interface ResponseHistory {trainability_unavailable?:boolean;body_observations_version?:"body-observations-v2";lab_reports?:LabReport[];settings?:{indicator_weights:Record<string,number>;validated:false};symptom_context?:{latest_report_day:string|null;report_age_days:number|null;hold_for_reported_illness_or_pain:boolean};schema_version:typeof RESPONSE_VERSION;today:string;timezone:string;period_start:string;period_end:string;mode:"OBSERVATION_ONLY";automatic_increase:false;changes_recovery:false;weights:Record<Group,number>;days:ResponseDay[];sessions:Session[];blocks:ResponseEntry[];tests:ResponseEntry[];revision:number|null}
+export interface ResponseHistory {execution_methods?:ExecutionMethod[];trainability_unavailable?:boolean;body_observations_version?:"body-observations-v2";lab_reports?:LabReport[];settings?:{indicator_weights:Record<string,number>;validated:false};symptom_context?:{latest_report_day:string|null;report_age_days:number|null;hold_for_reported_illness_or_pain:boolean};schema_version:typeof RESPONSE_VERSION;today:string;timezone:string;period_start:string;period_end:string;mode:"OBSERVATION_ONLY";automatic_increase:false;changes_recovery:false;weights:Record<Group,number>;days:ResponseDay[];sessions:Session[];blocks:ResponseEntry[];tests:ResponseEntry[];revision:number|null}
 const finite=(v:unknown):v is number=>typeof v==="number"&&Number.isFinite(v);
 const nullable=(v:unknown)=>v===null||finite(v);
 export function parseResponseHistory(value:unknown):ResponseHistory {
   const r=value as ResponseHistory;
   if(!r||r.schema_version!==RESPONSE_VERSION||r.mode!=="OBSERVATION_ONLY"||r.automatic_increase!==false||r.changes_recovery!==false||!Array.isArray(r.days)||!Array.isArray(r.sessions)||!Array.isArray(r.blocks)||!Array.isArray(r.tests)||!r.weights||GROUPS.some(g=>r.weights[g]!==WEIGHTS[g]))throw new Error("Неподдържана версия на оценката.");
+  if(r.execution_methods !== undefined && (!Array.isArray(r.execution_methods) || r.execution_methods.some(method =>
+    !isRecord(method) || typeof method.id !== "string" || typeof method.title !== "string" || typeof method.zone !== "string"
+    || !Array.isArray(method.sports) || !method.sports.every(sport => typeof sport === "string")))) throw new Error("Невалиден списък на тренировъчните методи.");
   for(const d of r.days){
     if(!/^\d{4}-\d{2}-\d{2}$/.test(d.day)||!nullable(d.total)||!finite(d.coverage)||d.coverage<0||d.coverage>100||d.automatic_action!=="NONE"||!Array.isArray(d.groups)||d.groups.length!==5||new Set(d.groups.map(g=>g.key)).size!==5||!Array.isArray(d.channels)||d.channels.length!==22||new Set(d.channels.map(c=>c.key)).size!==22)throw new Error("Невалидна дневна оценка.");
     let available=0,sum=0;

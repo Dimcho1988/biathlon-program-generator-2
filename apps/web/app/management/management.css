@@ -181,3 +181,22 @@
 .tone-camp { background:#28679d; }.tone-main_race { background:#b23943; }.tone-control_race,.tone-test { background:#986313; }.tone-unavailable { background:#626975; }.tone-build,.tone-accent { background:#785397; }.tone-maintain,.tone-phase { background:#397e88; }.tone-stress { background:#c1502b; }.tone-recovery { background:#347957; }
 @media(max-width:900px) { .season-months.season-year { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media(max-width:540px) { .season-months.season-year { grid-template-columns:1fr; } .season-day { min-height:42px; } .season-toolbar { align-items:stretch; } .season-navigation { justify-content:space-between; } }
+
+.management-learning { min-width:0; }
+.management-learning>summary { position:relative; padding-right:1rem; }
+.management-learning-heading { display:inline-flex; align-items:center; flex-wrap:wrap; gap:.6rem; }
+.management-learning-summary { display:block; margin-top:.55rem; font-weight:400; line-height:1.5; }
+.management-learning-meta { display:block; margin-top:.5rem; color:var(--text-muted); font-size:.78rem; font-weight:400; }
+.management-learning-body { margin-top:1rem; }
+.management-learning .management-table-wrap { max-width:100%; }
+.management-learning table { min-width:650px; }
+.management-learning th,.management-learning td { vertical-align:top; }
+.management-learning td:nth-child(2),.management-learning td:nth-child(3) { min-width:130px; }
+.management-learning td small { display:block; color:var(--text-muted); margin-top:.35rem; }
+.management-learning-zone { display:inline-flex; align-items:center; gap:.4rem; white-space:nowrap; }
+.management-learning-zone i { width:.65rem; height:.65rem; border-radius:3px; }
+.management-learning-limitations { color:var(--text-secondary); font-size:.85rem; }
+.management-learning-settings { border-top:1px solid var(--border); margin-top:1.5rem; padding-top:1rem; }
+.management-learning-examples { border-block:1px solid var(--border); padding-block:.85rem; margin-block:1rem; }
+.management-learning-examples>label { display:grid; gap:.4rem; max-width:32rem; }
+.management-learning-examples select { max-width:100%; min-width:0; }

@@ -21,6 +21,7 @@ from ..read_session import ReadSession
 from fastapi import APIRouter
 from .. import dependencies
 from ..sync_service import public_sync_state
+from ..management_projection import public_management
 
 router = APIRouter()
 
@@ -45,7 +46,7 @@ def management_profile(
 ):
     alias = dependencies.model_alias(authorization, athlete_alias)
     try:
-        return management_service.profile_view(dependencies.repository(), alias, now=datetime.now(timezone.utc))
+        return public_management(management_service.profile_view(dependencies.repository(), alias, now=datetime.now(timezone.utc)))
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "Management storage is unavailable") from exc
 
@@ -68,7 +69,7 @@ def management_view(
             sync = public_sync_state(repository.sync_state(alias))
         except (PersistentStoreFailure, ValueError):
             sync = None
-        return {"profile": profile, "active": active, "drafts": drafts, "outlook": outlook, "sync": sync}
+        return public_management({"profile": profile, "active": active, "drafts": drafts, "outlook": outlook, "sync": sync})
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "Management view is unavailable") from exc
 
@@ -100,7 +101,7 @@ def management_outlook(
 ):
     alias = dependencies.model_alias(authorization, athlete_alias)
     try:
-        return management_service.outlook(dependencies.repository(), alias)
+        return public_management(management_service.outlook(dependencies.repository(), alias))
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "Training outlook is unavailable") from exc
 
@@ -113,7 +114,7 @@ def management_drafts(
 ):
     alias = dependencies.model_alias(authorization, athlete_alias)
     try:
-        return management_service.history(dependencies.repository(), alias, start_date=start_date)
+        return public_management(management_service.history(dependencies.repository(), alias, start_date=start_date))
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "Management drafts are unavailable") from exc
 
@@ -129,7 +130,7 @@ def generate_management_draft(
     if actor is None:
         raise HTTPException(401, "Actor session is required")
     try:
-        return management_service.generate(dependencies.repository(), alias, body, actor)
+        return public_management(management_service.generate(dependencies.repository(), alias, body, actor))
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "A management draft could not be saved") from exc
 
@@ -141,7 +142,7 @@ def management_active(
 ):
     alias = dependencies.model_alias(authorization, athlete_alias)
     try:
-        return management_lifecycle.current(dependencies.repository(), alias)
+        return public_management(management_lifecycle.current(dependencies.repository(), alias))
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "Active planning is temporarily unavailable") from exc
 
@@ -159,7 +160,7 @@ def _management_action(operation, body, authorization, athlete_alias, actor):
                                          force=True, day_action=body)
         else:
             management_lifecycle.action(repository, alias, body, actor)
-        return management_lifecycle.current(repository, alias)
+        return public_management(management_lifecycle.current(repository, alias))
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "The active plan could not be updated") from exc
 

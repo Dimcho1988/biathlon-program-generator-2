@@ -6,6 +6,7 @@ on:
       - codex/build-end-to-end-cloud-integration
     paths:
       - "supabase/**"
+      - "tests/database/**"
       - "tests/api/test_account_access_migration.py"
       - ".github/workflows/database-ci.yml"
 
@@ -28,3 +29,8 @@ jobs:
         run: supabase db reset --local
       - name: Verify local migration history
         run: supabase migration list --local
+      - name: Verify response-aware plan publication
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/management_response_checkpoint.sql

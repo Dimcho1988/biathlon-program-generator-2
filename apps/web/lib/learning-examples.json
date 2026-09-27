@@ -1,0 +1,518 @@
+[
+  {
+    "id": "missing",
+    "label": "Оскъдни данни",
+    "report": {
+      "version": "individual-response-bayes-v1",
+      "mode": "CONTROL",
+      "status": "COLLECTING",
+      "as_of": "2026-09-27",
+      "effective_from": "2026-09-27",
+      "expires_on": "2026-10-10",
+      "summary": "Събираме актуални съпоставими данни; запазени са обичайните правила за плана.",
+      "evidence_count": 0,
+      "confidence": "LOW",
+      "components": {
+        "Z1": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z2": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z3": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z4": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z5": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "STR": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        }
+      },
+      "validation": {
+        "status": "WARMUP",
+        "evaluated": 0,
+        "model_mae": null,
+        "baseline_mae": null
+      },
+      "limitations": [
+        "Примерни данни. Реалните предложения зависят от индивидуалните наблюдения и ограниченията на плана."
+      ]
+    }
+  },
+  {
+    "id": "probe",
+    "label": "Малка пробна промяна",
+    "report": {
+      "version": "individual-response-bayes-v1",
+      "mode": "CONTROL",
+      "status": "EXPERIMENT",
+      "as_of": "2026-09-27",
+      "effective_from": "2026-09-27",
+      "expires_on": "2026-10-10",
+      "summary": "Предложена промяна: Z1 +2.5% обем.",
+      "evidence_count": 2,
+      "confidence": "LOW",
+      "components": {
+        "Z1": {
+          "volume_factor": 1.025,
+          "proposed_volume_factor": 1.025,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Малка пробна промяна само в този компонент; резултатът предстои да се проследи.",
+          "confidence": "LOW",
+          "action": "INCREASE",
+          "evidence_count": 2
+        },
+        "Z2": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z3": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z4": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z5": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "STR": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        }
+      },
+      "validation": {
+        "status": "WARMUP",
+        "evaluated": 0,
+        "model_mae": null,
+        "baseline_mae": null
+      },
+      "limitations": [
+        "Примерни данни. Реалните предложения зависят от индивидуалните наблюдения и ограниченията на плана."
+      ]
+    }
+  },
+  {
+    "id": "increase",
+    "label": "Добър ефект и възстановяване",
+    "report": {
+      "version": "individual-response-bayes-v1",
+      "mode": "CONTROL",
+      "status": "READY",
+      "as_of": "2026-09-27",
+      "effective_from": "2026-09-27",
+      "expires_on": "2026-10-10",
+      "summary": "Предложена промяна: Z1 +5.0% обем.",
+      "evidence_count": 16,
+      "confidence": "MEDIUM",
+      "components": {
+        "Z1": {
+          "volume_factor": 1.05,
+          "proposed_volume_factor": 1.05,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Съпоставимите наблюдения и проверката върху по-късни резултати подкрепят тази ограничена промяна.",
+          "confidence": "MEDIUM",
+          "action": "INCREASE",
+          "evidence_count": 16
+        },
+        "Z2": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z3": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z4": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z5": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "STR": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        }
+      },
+      "validation": {
+        "status": "PASSED",
+        "evaluated": 12,
+        "model_mae": 0.1933,
+        "baseline_mae": 3.0
+      },
+      "limitations": [
+        "Примерни данни. Реалните предложения зависят от индивидуалните наблюдения и ограниченията на плана."
+      ]
+    }
+  },
+  {
+    "id": "decrease",
+    "label": "По-добър ефект при намаление",
+    "report": {
+      "version": "individual-response-bayes-v1",
+      "mode": "CONTROL",
+      "status": "READY",
+      "as_of": "2026-09-27",
+      "effective_from": "2026-09-27",
+      "expires_on": "2026-10-10",
+      "summary": "Предложена промяна: Z1 -5.0% обем.",
+      "evidence_count": 16,
+      "confidence": "MEDIUM",
+      "components": {
+        "Z1": {
+          "volume_factor": 0.95,
+          "proposed_volume_factor": 0.95,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Съпоставимите наблюдения и проверката върху по-късни резултати подкрепят тази ограничена промяна.",
+          "confidence": "MEDIUM",
+          "action": "DECREASE",
+          "evidence_count": 16
+        },
+        "Z2": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z3": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z4": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z5": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "STR": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        }
+      },
+      "validation": {
+        "status": "PASSED",
+        "evaluated": 12,
+        "model_mae": 0.1933,
+        "baseline_mae": 3.0
+      },
+      "limitations": [
+        "Примерни данни. Реалните предложения зависят от индивидуалните наблюдения и ограниченията на плана."
+      ]
+    }
+  },
+  {
+    "id": "caution",
+    "label": "Нов сигнал за преглед",
+    "report": {
+      "version": "individual-response-bayes-v1",
+      "mode": "CONTROL",
+      "status": "CAUTION",
+      "as_of": "2026-09-27",
+      "effective_from": "2026-09-27",
+      "expires_on": "2026-10-10",
+      "summary": "Има сигнал за преглед на състоянието. Пробните увеличения са задържани.",
+      "evidence_count": 16,
+      "confidence": "LOW",
+      "components": {
+        "Z1": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z2": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z3": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z4": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z5": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "STR": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        }
+      },
+      "validation": {
+        "status": "PASSED",
+        "evaluated": 12,
+        "model_mae": 0.1933,
+        "baseline_mae": 3.0
+      },
+      "limitations": [
+        "Примерни данни. Реалните предложения зависят от индивидуалните наблюдения и ограниченията на плана."
+      ]
+    }
+  },
+  {
+    "id": "shadow",
+    "label": "Наблюдение без промяна на плана",
+    "report": {
+      "version": "individual-response-bayes-v1",
+      "mode": "SHADOW",
+      "status": "SHADOW",
+      "as_of": "2026-09-27",
+      "effective_from": "2026-09-27",
+      "expires_on": "2026-10-10",
+      "summary": "Предложение за наблюдение: Z1 +5.0% обем.",
+      "evidence_count": 16,
+      "confidence": "MEDIUM",
+      "components": {
+        "Z1": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.05,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Съпоставимите наблюдения и проверката върху по-късни резултати подкрепят тази ограничена промяна.",
+          "confidence": "MEDIUM",
+          "action": "INCREASE",
+          "evidence_count": 16
+        },
+        "Z2": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z3": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z4": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "Z5": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        },
+        "STR": {
+          "volume_factor": 1.0,
+          "proposed_volume_factor": 1.0,
+          "intensity_delta": 0.0,
+          "proposed_intensity_delta": 0.0,
+          "reason": "Нужни са още съпоставими наблюдения за индивидуална промяна.",
+          "confidence": "LOW",
+          "action": "HOLD",
+          "evidence_count": 0
+        }
+      },
+      "validation": {
+        "status": "PASSED",
+        "evaluated": 12,
+        "model_mae": 0.1933,
+        "baseline_mae": 3.0
+      },
+      "limitations": [
+        "Примерни данни. Реалните предложения зависят от индивидуалните наблюдения и ограниченията на плана."
+      ]
+    }
+  }
+]

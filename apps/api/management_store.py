@@ -7,6 +7,7 @@ There is deliberately no activation, calendar publication or update operation.
 from __future__ import annotations
 
 from datetime import date
+from copy import deepcopy
 from urllib.parse import quote
 
 from fastapi import HTTPException
@@ -82,8 +83,55 @@ class ManagementStore:
         return self._rows(alias, "DRAFT", max(1, min(limit, MAX_HISTORY)),
                           entry_key=start_date.isoformat() if start_date is not None else None)
 
+    def learning_memory(self, alias):
+        """Read compact cumulative observations, never a previous forecast as truth.
+
+        The newest complete memory owns deletions/invalidation too. Blindly
+        unioning older snapshots would resurrect observations later corrected.
+        Every producer carries its retained archive into its next snapshot.
+        """
+        scope = f"&athlete_alias=eq.{quote(alias, safe='')}"
+        paths = (
+            "/onflows_management_entries?select=recorded_at,generated_at:payload->generated_at,"
+            "memory:payload->parameters->individual_learning->memory"
+            + scope + "&kind=eq.DRAFT&payload->parameters->individual_learning->>memory=not.is.null"
+            "&order=recorded_at.desc,revision.desc&limit=1",
+            "/onflows_management_plan_revisions?select=recorded_at,"
+            "proposal_generated_at:payload->proposal->generated_at,plan_generated_at:payload->plan->generated_at,"
+            "proposal_memory:payload->proposal->parameters->individual_learning->memory,"
+            "plan_memory:payload->plan->parameters->individual_learning->memory"
+            + scope + "&or=(payload->proposal->parameters->individual_learning->>memory.not.is.null,"
+            "payload->plan->parameters->individual_learning->>memory.not.is.null)&order=revision.desc&limit=1",
+        )
+        candidates = []
+        for path in paths:
+            rows = self.repository._json(self.repository._request("GET", path))
+            if not isinstance(rows, list) or len(rows) > 1 or any(not isinstance(r, dict) for r in rows):
+                raise PersistentStoreFailure("Invalid individual learning memory")
+            for row in rows:
+                for priority, key in enumerate(("plan_memory", "memory", "proposal_memory")):
+                    value = row.get(key)
+                    if value is None:
+                        continue
+                    if not isinstance(value, dict) or not isinstance(value.get("episodes"), list):
+                        raise PersistentStoreFailure("Invalid individual learning memory")
+                    if any(not isinstance(e, dict) or not isinstance(e.get("id"), str) for e in value["episodes"]):
+                        raise PersistentStoreFailure("Invalid individual learning episode")
+                    stamp_key = "proposal_generated_at" if key == "proposal_memory" else "plan_generated_at" if key == "plan_memory" else "generated_at"
+                    # A later PAUSE/APPROVE revision can re-store an older plan;
+                    # its record time must not outrank a newer observation pass.
+                    stamp = row.get(stamp_key) or row.get("recorded_at") or ""
+                    candidates.append((str(stamp), priority, value))
+        if not candidates:
+            return None
+        memory = deepcopy(max(candidates, key=lambda c: (c[0], c[1]))[2])
+        memory["episodes"] = list({e["id"]: e for e in memory["episodes"]}.values())
+        return memory
+
     def _save(self, alias, kind, key, payload, revision, actor, *,
-              profile_revision=None, expected_generation_id=None, check_generation=False):
+              profile_revision=None, expected_generation_id=None, check_generation=False,
+              expected_responses=None):
+        response_check = {"p_expected_responses": expected_responses} if expected_responses is not None else {}
         result = self.repository._json(self.repository._request(
             "POST", "/rpc/save_onflows_management_entry", json={
                 "p_alias": alias, "p_kind": kind, "p_key": key, "p_payload": payload,
@@ -91,6 +139,7 @@ class ManagementStore:
                 "p_expected_profile_revision": profile_revision,
                 "p_expected_generation_id": str(expected_generation_id) if expected_generation_id is not None else None,
                 "p_check_generation": check_generation,
+                **response_check,
             },
         ))
         if not isinstance(result, dict):
@@ -100,6 +149,8 @@ class ManagementStore:
                 "PROFILE_CHANGED": "Planning profile changed; regenerate the draft",
                 "ANALYSIS_CHANGED": "Athlete analysis changed; regenerate the draft",
                 "REVISION_CHANGED": "Planning input changed; reload before saving",
+                "RESPONSES_CHANGED": "Athlete observations changed; regenerate the draft",
+                "INPUTS_CHANGED": "Athlete observations changed; regenerate the draft",
             }
             raise HTTPException(409, messages.get(result.get("reason"), messages["REVISION_CHANGED"]))
         if (result.get("saved") is not True or type(result.get("revision")) is not int
@@ -113,7 +164,7 @@ class ManagementStore:
         return self._save(alias, "PROFILE", PROFILE_KEY, payload, expected_revision, actor)
 
     def save_draft(self, alias, payload, actor, expected_profile_revision, expected_revision=0, *,
-                   expected_generation_id=None, check_generation=False):
+                   expected_generation_id=None, check_generation=False, expected_responses=None):
         key = payload.get("start_date") if isinstance(payload, dict) else None
         try:
             if not isinstance(key, str) or date.fromisoformat(key).isoformat() != key:
@@ -124,4 +175,5 @@ class ManagementStore:
             alias, "DRAFT", key, payload, expected_revision, actor,
             profile_revision=expected_profile_revision,
             expected_generation_id=expected_generation_id, check_generation=check_generation,
+            expected_responses=expected_responses,
         )

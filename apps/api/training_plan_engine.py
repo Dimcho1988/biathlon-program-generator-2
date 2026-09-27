@@ -1,6 +1,6 @@
 """Reviewable seven-day physical-training drafts using the current model stack.
 
-Versioned candidates for the active planner; no wellness multiplier or legacy planner.
+Versioned candidates for the active planner, with bounded individual learning.
 Capacity (speed-duration / expert continuous Tref) is explicitly separate from
 historical C40 and the technical denominator used by canonical E spillover.
 """
@@ -23,9 +23,10 @@ from biathlon.physiology import _causal_tref, effective_from_direct_vector, line
 from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VERSION, catalog, resolved_methods
 from . import model_service, load_adaptation, race_duration
 from .response_service import ResponseStore
+from .management_projection import public_learning, public_management
 
-VERSION = "training-management-v17"
-PARAMETER_VERSION = "management-parameters-v17"
+VERSION = "training-management-v18"
+PARAMETER_VERSION = "management-parameters-v18"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -528,17 +529,71 @@ def _goals(profile, day, period, taper, reference, accents, week, length, rows, 
     return goals, focus, state
 
 
-def progression_context(repository, alias, profile, source, rows, today, periodization=None):
+def progression_context(repository, alias, profile, source, rows, today, periodization=None, *, envelope=None):
     config = load_progression.settings(profile)
     if not config or not profile.get("planning_controls"):
         return None
-    adaptation = load_adaptation.assess(ResponseStore(repository).entries(alias), today, rows=rows) if config["feedback_enabled"] else None
+    entries = ResponseStore(repository).entries(alias) if config["feedback_enabled"] else []
+    control = (profile.get("individual_learning") or {}).get("mode", "SHADOW") == "CONTROL"
+    adaptation = (load_adaptation.symptom_context(entries, today) if control else
+                  load_adaptation.assess(entries, today, rows=rows)) if config["feedback_enabled"] else None
     from .management_store import ManagementStore
     retained = ManagementStore(repository).progression_reference(alias)
     settings = repository.athlete_settings(alias)
     physiology = {"bounds": list(settings.zone_bounds_bpm), "hrmax": settings.hrmax_bpm} if settings else None
-    return load_progression.context(profile, source, rows, today, adaptation, retained=retained,
-                                    physiology=physiology, periodization=periodization)
+    result = load_progression.context(profile, source, rows, today, adaptation, retained=retained,
+                                      physiology=physiology, periodization=periodization)
+    if result is not None and config["feedback_enabled"]:
+        from . import learning_service
+        result["individual_learning"] = learning_service.context(
+            repository, alias, profile, source, rows, today, periodization=periodization, envelope=envelope, entries=entries)
+    return result
+
+
+def _learned_method(method, profile, progression, day, period, state, *, taper=False, limited=False):
+    """Change a single HR target before recalculating its complete capacity.
+
+    Composite and effort-led methods keep their approved target structure.
+    The passed method is already an isolated candidate copy.
+    """
+    adjustment = load_progression.individual_adjustment(progression, profile, method["zone"], day, period,
+                                                       state, taper=taper, limited=limited)
+    delta = adjustment["intensity_delta"]
+    if (not delta or method["zone"] == "STR" or method.get("double_threshold")
+            or method.get("paired_method") or method["structure"] not in
+            {"CONTINUOUS", "TWO_REPETITIONS", "THRESHOLD_REPETITIONS"}):
+        return None
+    old = method["position"]
+    method["position"] = min(1., max(0., old+delta))
+    return {**adjustment, "baseline_position": old, "applied_position": method["position"],
+            "applied_intensity_delta": method["position"]-old,
+            "capacity_recalculated": True}
+
+
+def _learned_preference(method, sport, profile, progression, day, period, state, *, purpose, duration,
+                        original_method=None, target_speed=None, taper=False, limited=False):
+    adjustment = load_progression.individual_adjustment(progression, profile, method["zone"], day, period,
+                                                       state, taper=taper, limited=limited)
+    if (not adjustment["eligible"] or taper or period not in {"GENERAL_PREPARATION", "SPECIAL_PREPARATION"}
+            or state.get("kind") != "BUILD"):
+        return None
+    preferences = ((progression or {}).get("individual_learning") or {}).get("method_preferences") or []
+    match = next((p for p in preferences if p.get("method_id") == method["id"]
+                  and p.get("sport") == sport and p.get("component") == method["zone"]
+                  and p.get("purpose") == purpose), None)
+    if not match or not isinstance(match.get("score_delta"), (int, float)) or not math.isfinite(match["score_delta"]):
+        return None
+    from .learning_methods import method_descriptor
+    if (match.get("version") != method_descriptor(original_method or method, sport)["version"]
+            or not isinstance(match.get("duration_min"), (int, float))
+            or not isinstance(match.get("duration_max"), (int, float))
+            or not match["duration_min"] <= duration <= match["duration_max"]):
+        return None
+    observed_speed = match.get("planned_speed_kmh")
+    if observed_speed is not None and (not isinstance(observed_speed, (int, float)) or observed_speed <= 0
+            or not isinstance(target_speed, (int, float)) or not .95 <= target_speed/observed_speed <= 1.05):
+        return None
+    return {**match, "applied_score_delta": min(.25, max(-.25, match["score_delta"]))}
 
 
 def _dose_usage(blocks, evidence, zone):
@@ -677,7 +732,9 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
                       "components": components,
                       **({"volume_budget_minutes": _volume_estimate(profile, components, volume["baseline_weekly_minutes"], actual_base, (right-left).days+1),
                           "volume_role": "HISTORICAL_MIX_EQUIVALENT_NOT_TIME_LIMIT"} if volume else {})})
-    return {"schema_version": "training-outlook-v1", "as_of": today.isoformat(), "progression": load_progression.public_context(progression),
+    return {"schema_version": "training-outlook-v1", "as_of": today.isoformat(),
+            "progression": public_management(load_progression.public_context(progression)),
+            "individual_learning": public_learning((progression or {}).get("individual_learning")),
             "basis": "CURRENT_ACTUAL_REFERENCE_FROZEN", "targets_version": training_targets.VERSION,
             "reference_cutoff": reference["cutoff"], "limited": limited,
             "goal_role": "COACH_TARGETS_BEFORE_DAILY_GATES",
@@ -802,11 +859,15 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     profile = race_duration.applied(profile, event_duration)
     # Resolve the same race component before constructing the growth calendar
     # in both the weekly generator and the read-only outlook.
-    progression = progression_context(repository, alias, profile, source, rows, today, periodization)
+    progression = progression_context(repository, alias, profile, source, rows, today, periodization, envelope=envelope)
     adaptation = (progression or {}).get("adaptation") or {}
     if adaptation.get("hold_for_reported_illness_or_pain"):
         blocked = True
         warnings.append(_warning("REPORTED_ILLNESS_OR_PAIN", load_adaptation.symptom_message(adaptation)))
+    individual = (progression or {}).get("individual_learning") or {}
+    if individual.get("mode") == "CONTROL" and (individual.get("current") or {}).get("lab_review"):
+        blocked = True
+        warnings.append(_warning("LEARNING_REVIEW", "Нужен е преглед на текущите наблюдения. Самообучението не променя програмата автоматично; прегледайте „Стрес и възстановяване“."))
     if not profile.get("race_duration_min"):
         warnings.append(_warning("RACE_DURATION_MISSING", "Няма индивидуална оценка за тази дистанция. Въведете приблизителната продължителност на основната дисциплина в профила."))
     by_sport_minutes = volume_evidence["reference_by_sport_weekly_minutes"]
@@ -1080,6 +1141,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 candidates = pairs + candidates
             for sport, method in candidates:
                 speed, context = speed_by_sport[sport], context_by_sport[sport]
+                original_method = method
                 method = deepcopy(method)
                 method["actual_sport"] = sport
                 race_minutes = profile.get("race_duration_min")
@@ -1149,11 +1211,15 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 if rejection:
                     item["rejected_alternatives"].append({"method_id": method["id"], "code": rejection[0], "reason": rejection[1]})
                     continue
+                learned_intensity = _learned_method(method, profile, progression, day, period, cycle_state,
+                                                     taper=taper, limited=limited)
                 evidence = capacity_for(method, settings, speed, context, today, profile.get("allow_expert_fallback", True), use_model_prior=(controls or {}).get("capacity_policy") == "MODEL_WITH_PRIOR")
                 if evidence is None:
                     reason = "За автоматична Z5 е нужен скорошен максимален тест над подкрепената граница Z4/Z5 или индивидуален интервален профил. Пулсът не дава отделен Z5 Tref." if method["structure"] == "MODEL_INTERVALS" and z == "Z5" else "Няма допустима оценка на капацитета за този метод и средство."
                     item["rejected_alternatives"].append({"method_id": method["id"], "code": "CAPACITY_UNAVAILABLE", "reason": reason})
                     continue
+                if learned_intensity:
+                    evidence["individual_learning"] = learned_intensity
                 if method["structure"] == "THREE_PROGRESSIVE_BLOCKS":
                     capacities = [capacity_for({**method,"position":position}, settings, speed, context, today,
                         profile.get("allow_expert_fallback", True), use_model_prior=(controls or {}).get("capacity_policy") == "MODEL_WITH_PRIOR") for position in (.2,.5,.85)]
@@ -1485,6 +1551,12 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     score -= .02 if allocation is not None else .35
                 if method.get("double_threshold"):
                     score += 10.
+                learned_preference = None if learned_intensity else _learned_preference(
+                    method, sport, profile, progression, day, period, cycle_state, purpose=purpose, duration=total,
+                    original_method=original_method, target_speed=evidence.get("target_speed_kmh"), taper=taper, limited=limited)
+                if learned_preference:
+                    score += learned_preference["applied_score_delta"]
+                    evidence["selection"]["individual_learning"] = learned_preference
                 choices.append((score, method["id"], {"method_id": method["id"], "title": method["title"],
                                 "sport": sport, "zone": z, "purpose": purpose, "blocks": blocks, "is_key_session": is_key,
                                 "double_threshold": method.get("double_threshold", False),
@@ -1546,7 +1618,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     allocation_report = planning_allocation.report(goal_windows, rows, forecast_rows, result_days,
         sum(slot_counts.values()), session_limit, weekly_minutes, source=source) if component_governed and forecast_known and not blocked else None
     parameters = {"version": PARAMETER_VERSION, "race_duration": event_duration, "status": "COACH_HEURISTICS_FOR_REVIEW",
-                  "recovery_mode": "LOAD_ONLY", "ready_threshold_percent": 90, "minimum_aerobic_dose_fraction": MIN_AEROBIC_DOSE_FRACTION, "load_progression": load_progression.public_context(progression),
+                  "individual_learning": (progression or {}).get("individual_learning"),
+                  "recovery_mode": "LOAD_ONLY", "ready_threshold_percent": 90, "minimum_aerobic_dose_fraction": MIN_AEROBIC_DOSE_FRACTION,
+                  "load_progression": public_management(load_progression.public_context(progression)),
                   "building_fraction": profile.get("building_fraction", .5), "maintenance_fraction": profile.get("maintenance_fraction", .3),
                   "reentry_fraction": profile.get("reentry_fraction", .4), "recovery_session_cap_min": profile.get("recovery_session_cap_min", 30),
                   "weekly_volume_source": volume_source, "baseline_weekly_minutes": _round(weekly_minutes),

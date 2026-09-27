@@ -327,6 +327,43 @@ def cycle_shape(profile, state, zone):
     return shape*(len(wave)-recovery)/loading if loading > 0 else 0.
 
 
+def individual_adjustment(context, profile, zone, day, period, state, *, taper=False, limited=False):
+    """One bounded decision, used by volume, intensity and candidate ranking.
+
+    Only currently effective CONTROL decisions can alter a prescription.
+    Shadow estimates, manual targets and unknown exposure are never applied.
+    """
+    neutral = {"volume_factor": 1., "intensity_delta": 0., "applied": False, "eligible": False}
+    config = settings(profile)
+    policy = profile.get("individual_learning") or {}
+    report = (context or {}).get("individual_learning") or {}
+    if (not config or not config["feedback_enabled"] or policy.get("mode", "SHADOW") != "CONTROL"
+            or report.get("mode") != "CONTROL" or limited or state is None
+            or state.get("explicit") or zone in profile.get("component_targets_weekly", {})
+            or not report.get("effective_from", "~") <= day.isoformat() <= report.get("expires_on", "")):
+        return neutral
+    decision = (report.get("components") or {}).get(zone) or {}
+    volume, intensity = decision.get("volume_factor", 1.), decision.get("intensity_delta", 0.)
+    if not all(isinstance(v, (float, int)) and not isinstance(v, bool) and isfinite(v) for v in (volume, intensity)):
+        return neutral
+    volume_limit = min(10., max(0., policy.get("max_volume_step_percent", 5.))) / 100
+    intensity_limit = min(.05, max(0., policy.get("max_intensity_step", .02)))
+    volume = max(1-volume_limit, min(1+volume_limit, volume))
+    intensity = max(-intensity_limit, min(intensity_limit, intensity))
+    if (taper or period not in {"GENERAL_PREPARATION", "SPECIAL_PREPARATION"}
+            or state.get("kind") not in {"BUILD", "MAINTAIN"}):
+        volume, intensity = min(1., volume), min(0., intensity)
+    component = (context or {}).get("components", {}).get(zone) or {}
+    if component.get("recent_observed_q") is None or component.get("recent_observed_q", 0.) <= 0:
+        return neutral
+    return {"volume_factor": volume, "intensity_delta": intensity,
+            "eligible": True,
+            "applied": volume != 1. or intensity != 0.,
+            "reason": decision.get("reason"), "confidence": decision.get("confidence"),
+            "action": decision.get("action"), "effective_from": report["effective_from"],
+            "expires_on": report["expires_on"]}
+
+
 def apply(goals, profile, state, context, day, period, taper, limited, taper_factor, actual_base):
     if context is None or state is None:
         return goals
@@ -355,6 +392,27 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
         if automatic and z != "STR" and not limited and period in {"RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"}:
             goal["target_weekly_q"] = requested_q*learning if requested_q is not None else None
             goal["basis"] = "STABLE_Q_TARGET_WITH_7_40_GATE"
+        individual = individual_adjustment(context, profile, z, day, period, state, taper=taper, limited=limited)
+        correction = individual["volume_factor"]
+        if correction != 1.:
+            # Q is corrected once for both the outlook and composed sessions.
+            # Its independent E/7–40 gate does not expand for a positive trial.
+            baseline_q = goal.get("target_weekly_q")
+            if baseline_q is not None and z != "STR":
+                ceiling = WEEKLY_Q_BOUNDS[z][1]*config["ceiling_ratio"]*component_shape*taper_factor
+                goal["target_weekly_q"] = min(baseline_q*correction, max(baseline_q, ceiling))
+                individual["baseline_weekly_q"] = baseline_q
+                individual["applied_volume_factor"] = goal["target_weekly_q"]/baseline_q if baseline_q else 1.
+            if z == "STR":
+                # Strength's existing E is its own exposure budget, not an
+                # aerobic Q target or an invented endurance capacity.
+                ceiling = max(0., 7*(2*actual_base[z]["c40"]+actual_base[z]["b50"]))
+                baseline_e = goal["target"]
+                goal["target"] = min(baseline_e*correction, max(baseline_e, ceiling))
+                individual["baseline_weekly_effective"] = baseline_e
+                individual["applied_volume_factor"] = goal["target"]/baseline_e if baseline_e else 1.
+            elif correction < 1.:
+                goal["target"] *= correction
         base = actual_base[z]
         goal.update(factor=goal["target"]/max(1e-9, goal["reference"]),
                     target_index=(base["b50"]+goal["target"]/7)/(base["b50"]+base["c40"]),
@@ -367,6 +425,7 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
                         "cumulative_growth_percent": 100*(factor-1), "manual_override": not automatic,
                         "reference_source": c["source"], "reference_created_on": context["anchor"]["created_on"],
                         "target_date": context.get("target_date"), "index_ceiling": 2.,
+                        "individual_learning": individual,
                         "outlook_is_conditional": True, "q_and_e_are_separate": True})
     return goals
 

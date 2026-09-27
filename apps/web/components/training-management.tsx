@@ -12,6 +12,7 @@ import { TrainingPlanWeek } from "./training-plan-week";
 import { PlanComparison } from "./plan-comparison";
 import { TrainingPlanSummary } from "./training-plan-summary";
 import { TrainingPlanOverview } from "./training-plan-overview";
+import { IndividualLearningPanel } from "./individual-learning-panel";
 import { MesocyclePriorities } from "./mesocycle-priorities";
 import { managementGuidance, hasProgramDays } from "../lib/management-guidance";
 import { SyncActionForm } from "./sync-action-form";
@@ -206,6 +207,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     {initialSyncState && <SyncStatusPanel initialState={initialSyncState} renderedGenerationId={initialSyncState.active_generation_id} returnTo="/management" compact />}
     <nav className="management-view-switch" aria-label="Изглед на плана"><Link href="/management" aria-current={view === "week" ? "page" : undefined}>Седмична програма</Link><Link href="/management/outlook" aria-current={view === "overview" ? "page" : undefined}>Дългосрочен план</Link></nav>
     {view === "week" && overviewPlan && !archivedDraft && (showDraft || active.active?.stale === false) && <TrainingPlanSummary plan={overviewPlan} />}
+    {(view === "overview" || (!archivedDraft && (showDraft || active.active?.stale === false))) && <IndividualLearningPanel plan={view === "overview" ? initialOutlook : overviewPlan} />}
 
     {view === "overview" ? <TrainingPlanOverview plan={initialOutlook ?? undefined} outcomes={active.active?.payload.outcomes ?? []} today={today} currentProfileRevision={initialOutlook?.profile_revision} volumeContext={initialOutlook?.volume_context} sessions={sessionsCurrent ? overviewPlan : undefined} sessionStatus={sessionStatus} /> : <>
       {active.active && !newDraft && <ActiveTrainingPlan value={active} onChange={receiveActive} externalBusy={busy !== null} onBegin={beginActiveChange} onEnd={endActiveChange} canEdit={canEdit} today={today} renderDay={day => <DayCard day={day} expanded />} />}

@@ -54,11 +54,15 @@ class SessionReport(InputModel):
     executed_speed_kmh: float | None = Field(default=None, gt=0, le=150, allow_inf_nan=False)
     execution_comparable: bool = False
     execution_reason: Literal["UNKNOWN", "AS_PLANNED", "FATIGUE", "TIME", "CONDITIONS", "COACH", "OTHER"] = "UNKNOWN"
+    executed_method_id: str | None = Field(default=None, min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_-]+$")
+    method_confirmed: bool = False
 
     @model_validator(mode="after")
     def rpe_timing(self):
         if self.rpe is not None and self.timing == "UNKNOWN":
             raise ValueError("RPE needs its observation timing")
+        if self.method_confirmed and not self.executed_method_id:
+            raise ValueError("Confirm the actually executed method by its catalog identifier")
         return self
 
 
@@ -195,7 +199,7 @@ def session_rows(activities, entries):
             "rpe":rpe,"duration_minutes":duration,"suggested_duration_minutes":(a.get("elapsed_time_s") or 0)/60 or None,
             "timing":m["timing"] if m else "UNKNOWN","source":"ONFLOWS" if m else "INTERVALS" if rpe is not None else None,
             "provider_rpe":imported,"revision":e["revision"] if e else 0,"note":m.get("note","") if m else "",
-            "execution":{k:(m or {}).get(k) for k in ("planned_duration_minutes","planned_speed_kmh","executed_speed_kmh","execution_comparable","execution_reason")},
+            "execution":{k:(m or {}).get(k) for k in ("planned_duration_minutes","planned_speed_kmh","executed_speed_kmh","execution_comparable","execution_reason", "executed_method_id", "method_confirmed", "executed_method")},
             "srpe_load":round(rpe*duration,3) if rpe is not None and duration else None,
             "expected_rpe":None,"deviation_score":None,"comparable_count":0,"zone_vector":zone_vector(a)})
     rows.sort(key=lambda r:(r["day"],r["activity_ref"]))
