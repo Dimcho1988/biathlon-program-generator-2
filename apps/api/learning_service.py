@@ -9,6 +9,7 @@ from datetime import date, timedelta
 from hashlib import sha256
 import json
 from statistics import median
+from math import isfinite
 
 from biathlon import individual_learning, load_progression, planning_controls
 from biathlon.constants import COMPONENTS
@@ -84,19 +85,31 @@ def local_evidence(episodes, recent, ti, today):
             index.setdefault(key, {}).setdefault(row["local_date"], []).append(value)
     selected = []
     for episode in episodes:
+        present = [recent["components"][z].get("weekly_q") for z in COMPONENTS]
+        baseline = [(episode.get("dose", {}).get(z) or {}).get("baseline_q") for z in COMPONENTS]
+        if any(not isinstance(q, (int, float)) or isinstance(q, bool) or not isfinite(q) or q < 0 for q in present+baseline):
+            continue
+        now_total, then_total = sum(present), sum(baseline)
+        if min(now_total, then_total) <= 0 or not .67 <= now_total/then_total <= 1.5:
+            continue
+        # Compare small components on the scale of the whole week. A known
+        # 0→small exposure is support, not missingness; it is still a covariate.
+        small = .05*min(now_total, then_total)
         supported = True
         for z in COMPONENTS:
             now = recent["components"][z]
             then = episode.get("dose", {}).get(z) or {}
             q, base = now.get("weekly_q"), then.get("baseline_q")
-            if q is None or base is None or (q == 0) != (base == 0):
-                supported = False
-                break
-            if q and not .67 <= q/base <= 1.5:
+            offset = individual_learning.DOSE_OFFSET
+            if max(q, base) > small and not .67 <= (q+offset)/(base+offset) <= 1.5:
                 supported = False
                 break
             minutes, old_minutes = now.get("weekly_minutes"), then.get("baseline_minutes")
-            if z != "STR" and q and minutes and old_minutes and not .85 <= (q/minutes)/(base/old_minutes) <= 1.15:
+            if (any(not isinstance(t, (int, float)) or isinstance(t, bool) or not isfinite(t) or t < 0 for t in (minutes, old_minutes))
+                    or (q == 0) != (minutes == 0) or (base == 0) != (old_minutes == 0)):
+                supported = False
+                break
+            if z != "STR" and q and base and minutes and old_minutes and not .85 <= (q/minutes)/(base/old_minutes) <= 1.15:
                 supported = False
                 break
         for o in episode.get("outcomes", []):
@@ -188,7 +201,7 @@ def context(repository, alias, profile, source, rows, today, *, periodization=No
     models = individual_learning.fit(supported, today)
     report = individual_learning.decide(models=models, episodes=supported, current=current,
         today=today, config=config, allowed_components=allowed, phase=phase, taper=taper,
-        retained=memory, intensity_scale=intensity_scale)
+        retained=memory, intensity_scale=intensity_scale, dose_reference=recent["components"])
     from .learning_methods import assess_methods
     method_source = {**source, "calendar": {"activities": envelope.get("activities") or []}}
     method_result = assess_methods(entries=entries, source=method_source, today=today,
@@ -207,6 +220,8 @@ def context(repository, alias, profile, source, rows, today, *, periodization=No
         report["limitations"].append("Съпоставимите данни за индекса на тренираност не са налични при тази оценка.")
     report["exclusions"] = evidence.get("exclusions", [])[-20:]
     report["archived_evidence_count"] = len(evidence["episodes"])
+    report["examined_period_count"] = len({e["id"] for e in evidence["episodes"]} |
+                                         {e["id"] for e in evidence.get("exclusions", []) if e.get("id")})
     report["memory_window_dropped"] = original_count-len(evidence["episodes"])
     report["out_of_support_count"] = len(evidence["episodes"])-len(supported)
     report["source"] = {"generation_id": envelope.get("generation_id"), "revision": envelope.get("revision"),

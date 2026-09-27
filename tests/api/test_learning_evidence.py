@@ -8,6 +8,7 @@ from apps.api import learning_evidence as evidence
 from apps.api.stress_model import CHANNELS
 from apps.api.trainability import MODEL_VERSION, SCHEMA_VERSION
 from biathlon.constants import COMPONENTS
+from biathlon.individual_learning import dose_changes
 
 
 START = evidence.ANCHOR+timedelta(days=14*170)
@@ -65,9 +66,9 @@ def episode(data):
 def test_automatic_episode_needs_no_manual_block_or_test_and_preserves_q_e_distinction():
     data = fixture()
     result = episode(data)
-    assert result["dose_change"]["Z3"] == pytest.approx(log(1.2))
+    assert result["dose_change"]["Z3"] == pytest.approx(log(85/71))
     assert result["dose_change"]["Z2"] == 0
-    assert result["intensity_change"]["Z3"] == pytest.approx(log(1.2))
+    assert result["intensity_change"]["Z3"] == pytest.approx(log(85/71))
     assert result["dose"]["Z2"]["actual_e"] > result["dose"]["Z2"]["baseline_e"]
     assert result["response"]["recovered"]
     assert result["response"]["recovery_days"] == 2
@@ -174,28 +175,45 @@ def test_reduced_actual_dose_is_supported_not_only_increases():
     for activity in data["source"]["activities"]:
         if str(START) <= activity["date"] <= str(START+timedelta(days=6)):
             activity["zones"][2]["equivalent_time_min"] = 8
-    assert episode(data)["dose_change"]["Z3"] == pytest.approx(log(.8))
+    assert episode(data)["dose_change"]["Z3"] == pytest.approx(log(57/71))
 
 
-@pytest.mark.parametrize("change", ["missing", "unknown_q", "zero_to_positive", "extreme", "duplicate", "limited"])
+@pytest.mark.parametrize("change", ["missing", "unknown_q", "extreme", "duplicate", "limited"])
 def test_missing_or_invalid_load_cannot_enter_learning(change):
     data = fixture()
     if change == "missing":
         data["rows"] = [r for r in data["rows"] if not (r["date"] == str(START) and r["zone"] == "Z2")]
     elif change == "unknown_q":
         data["source"]["activities"][14]["zones"][0]["equivalent_time_min"] = None
-    elif change == "zero_to_positive":
-        for a in data["source"]["activities"]:
-            if a["date"] < str(START):
-                a["zones"][2].update(equivalent_time_min=0, raw_time_min=0)
     elif change == "extreme":
         for a in data["source"]["activities"]:
             if str(START) <= a["date"] <= str(START+timedelta(days=6)):
-                a["zones"][2]["equivalent_time_min"] = 50
+                for zone in a["zones"]:
+                    zone["equivalent_time_min"] *= 5
     elif change == "duplicate":
         data["rows"].append(data["rows"][0])
     else:
         data["source"]["quality"]["limited_activities"] = 1
+    assert evidence.build_evidence(**data)["episodes"] == []
+
+
+@pytest.mark.parametrize("before,after", [(0., 2.), (2., 0.), (.001, 2.), (2., .001), (0., 0.)])
+def test_intermittent_zone_is_retained_as_an_observed_covariate(before, after):
+    data = fixture()
+    for a in data["source"]["activities"]:
+        q = before if a["date"] < str(START) else after
+        a["zones"][4].update(equivalent_time_min=q, raw_time_min=q/2)
+    result = episode(data)
+    assert result["dose"]["Z5"]["baseline_q"] == pytest.approx(before*7)
+    assert result["dose"]["Z5"]["actual_q"] == pytest.approx(after*7)
+    expected = dose_changes(before*7, after*7, before*3.5, after*3.5)
+    assert (result["dose_change"]["Z5"], result["intensity_change"]["Z5"]) == pytest.approx(expected)
+    assert result["outcomes"]  # Independent result survives, including Z5 covariates.
+
+
+def test_unknown_sparse_minutes_are_not_replaced_with_zero():
+    data = fixture()
+    data["source"]["activities"][14]["zones"][4]["raw_time_min"] = None
     assert evidence.build_evidence(**data)["episodes"] == []
 
 

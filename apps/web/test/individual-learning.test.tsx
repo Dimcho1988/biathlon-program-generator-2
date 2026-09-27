@@ -68,4 +68,14 @@ describe("individual learning presentation", () => {
     expect(html).toContain("Самообучение");
     expect(html).toContain("Действителната промяна може да е по-малка или нулева");
   });
+  it("distinguishes examined history from usable current evidence and explains activation", () => {
+    const value = { ...report, examined_period_count: 5, archived_evidence_count: 3, evidence_count: 2, out_of_support_count: 1 };
+    const html = renderToStaticMarkup(<IndividualLearningPanel plan={{ individual_learning: value }}/>);
+    expect(html).toContain("5 разгледани периода");
+    expect(html).toContain("3 с достатъчни наблюдения");
+    expect(html).toContain("2 съпоставими");
+    expect(html).toContain("5% е началната граница");
+    expect(html).toContain("Обнови сега");
+    expect(() => parseIndividualLearningReport({ ...value, examined_period_count: -1 })).toThrow();
+  });
 });

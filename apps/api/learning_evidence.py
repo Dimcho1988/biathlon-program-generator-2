@@ -15,12 +15,13 @@ from statistics import median
 
 from biathlon.constants import COMPONENTS
 from biathlon.load_progression import observed_window
+from biathlon.individual_learning import dose_changes
 from .response_monitoring import latest_entries, number, relative_score
 from .stress_model import CHANNELS
 from .trainability import MODEL_VERSION, SCHEMA_VERSION
 from .body_observations import normalize_result
 
-VERSION = "learning-evidence-v1"
+VERSION = "learning-evidence-v2"
 ANCHOR = date(2020, 1, 6)
 MAX_EPISODES = 78
 MIN_RESPONSE_COVERAGE = .20
@@ -251,6 +252,14 @@ def _dose(source, rows, start, load_end, end):
         (start-timedelta(days=7), start), (start, load_end+timedelta(days=1)), (load_end+timedelta(days=1), end+timedelta(days=1)))]
     if not all(w["complete"] for w in windows):
         return None, "INCOMPLETE_ACTUAL_LOAD"
+    if any(number(c[k]) is None or c[k] < 0 for w in windows for c in w["components"].values()
+           for k in ("weekly_q", "weekly_minutes", "weekly_effective")):
+        return None, "UNKNOWN_DIRECT_DOSE"
+    totals = [sum(w["components"][z]["weekly_q"] for z in COMPONENTS) for w in windows]
+    # A near-zero individual zone is common in real training. Only a wholesale
+    # discontinuity is outside this local model; all zone changes remain in x.
+    if min(totals[:2]) <= 0 or not .25 <= totals[1]/totals[0] <= 4:
+        return None, "EXTREME_TOTAL_DOSE_CHANGE"
     dose, changes, intensity = {}, {}, {}
     for z in COMPONENTS:
         before, after, follow = [w["components"][z] for w in windows]
@@ -258,16 +267,11 @@ def _dose(source, rows, start, load_end, end):
             return None, "UNKNOWN_DIRECT_DOSE"
         bq, aq = before["weekly_q"], after["weekly_q"]
         bt, at = before["weekly_minutes"], after["weekly_minutes"]
-        if (bq == 0) != (aq == 0):
-            return None, "UNIDENTIFIED_NEW_OR_REMOVED_EXPOSURE"
-        ratio = aq/bq if bq else 1.
-        if not .25 <= ratio <= 4:
-            return None, "EXTREME_DOSE_CHANGE"
-        if (bq and not bt) or (aq and not at) or (not bq and bt) or (not aq and at):
+        if any((c["weekly_q"] == 0) != (c["weekly_minutes"] == 0) for c in (before, after, follow)):
             return None, "INCONSISTENT_Q_TIME"
-        changes[z] = log(ratio)
+        changes[z], effort = dose_changes(bq, aq, bt, at)
         if z != "STR":
-            intensity[z] = log((aq/at)/(bq/bt)) if bq else 0.
+            intensity[z] = effort
         dose[z] = {"baseline_q": bq, "actual_q": aq, "baseline_minutes": bt, "actual_minutes": at,
                    "baseline_e": before["weekly_effective"], "actual_e": after["weekly_effective"],
                    "followup_q": follow["weekly_q"], "followup_minutes": follow["weekly_minutes"], "followup_e": follow["weekly_effective"]}

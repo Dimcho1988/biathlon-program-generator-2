@@ -29,6 +29,9 @@ export interface IndividualLearningReport {
   summary: string;
   evidence_count: number;
   confidence: LearningConfidence;
+  examined_period_count?: number;
+  archived_evidence_count?: number;
+  out_of_support_count?: number;
   validation: {
     status: "WARMUP" | "PASSED" | "FAILED";
     evaluated: number;
@@ -79,6 +82,9 @@ export function parseIndividualLearningReport(value: unknown): IndividualLearnin
     || !isRecord(value.validation) || !isRecord(value.components)
     || !Array.isArray(value.limitations) || !value.limitations.every(item => typeof item === "string")) throw error();
   const validation = value.validation;
+  for (const key of ["examined_period_count", "archived_evidence_count", "out_of_support_count"]) {
+    if (value[key] !== undefined && !count(value[key])) throw error();
+  }
   if (!["WARMUP", "PASSED", "FAILED"].includes(String(validation.status)) || !count(validation.evaluated)
     || !(validation.model_mae == null || range(validation.model_mae, 0, Number.MAX_VALUE))
     || !(validation.baseline_mae == null || range(validation.baseline_mae, 0, Number.MAX_VALUE))) throw error();
@@ -95,6 +101,9 @@ export function parseIndividualLearningReport(value: unknown): IndividualLearnin
     effective_from: value.effective_from as string | null ?? null,
     expires_on: value.expires_on as string | null ?? null,
     summary: value.summary, evidence_count: value.evidence_count, confidence: value.confidence,
+    examined_period_count: value.examined_period_count as number | undefined,
+    archived_evidence_count: value.archived_evidence_count as number | undefined,
+    out_of_support_count: value.out_of_support_count as number | undefined,
     validation: { status: validation.status as IndividualLearningReport["validation"]["status"],
       evaluated: validation.evaluated, model_mae: validation.model_mae as number | null ?? null,
       baseline_mae: validation.baseline_mae as number | null ?? null },

@@ -29,6 +29,13 @@ export function IndividualLearningPanel({ plan }: { plan?: PlanProjection | null
       <span className="management-learning-meta">{report.evidence_count} наблюдения · {LEARNING_CONFIDENCE_LABELS[report.confidence].toLocaleLowerCase("bg-BG")} увереност{changes.length > 0 ? ` · ${changes.map(key => key === "STR" ? "Сила" : key).join(", ")}` : ""}</span>
     </summary>
     <LearningReportDetails report={report}/>
+    <details className="management-learning-examples">
+      <summary>Как се учи и кога променя плана?</summary>
+      <p>Сравнява реално изпълненото натоварване по зони със стреса, възстановяването и по-късни съпоставими резултати. Липсващ отчет не се приема за добро възстановяване.</p>
+      <p>Предлага една ограничена промяна за 14 дни: в обема или в интензивността на един компонент. 5% е началната граница за обема, а не задължително увеличение.</p>
+      <p>В „Наблюдение“ предложенията не променят тренировките. За прилагане избери „Управление“ в настройките, запази и натисни „Обнови сега“ в седмичния план. Ако се появи предложение за преглед, то изисква одобрение.</p>
+      <p>След одобрение автоматичната адаптация преизчислява бъдещите задачи при нови данни. В режим с треньорско утвърждаване промените чакат одобрение. Периодизацията, възстановяването и ограниченията на плана остават в сила.</p>
+    </details>
     <LearningExamples/>
     <Link href="/planning#basic-profile">Настройки в „Мезоцикли и акценти“ →</Link>
   </details>;
@@ -36,6 +43,7 @@ export function IndividualLearningPanel({ plan }: { plan?: PlanProjection | null
 
 function LearningReportDetails({ report }: { report: IndividualLearningReport }) {
   return <div className="management-learning-body">
+      {report.examined_period_count !== undefined && <p className="management-muted">История: {report.examined_period_count} разгледани периода · {report.archived_evidence_count ?? 0} с достатъчни наблюдения · {report.evidence_count} съпоставими с текущото натоварване. Приети периоди без по-късен резултат учат само модела за реакция.</p>}
       {report.mode === "SHADOW" && <p className="management-notice">Предложенията са за наблюдение. Самообучението не променя предписаното натоварване.</p>}
       {report.mode === "CONTROL" && <p className="management-muted">„Допуснато в плана“ е разрешената корекция. Действителната промяна може да е по-малка или нулева според периода, готовността, избрания метод и ограниченията на деня.</p>}
       <div className="management-table-wrap" role="region" aria-label="Предложени и приложени промени" tabIndex={0}>
@@ -62,7 +70,7 @@ function LearningExamples() {
   try { report = parseIndividualLearningReport(example?.report); } catch { /* An unavailable example never affects the live plan. */ }
   if (!examples.length) return null;
   return <details className="management-learning-examples" onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary>Разгледай примери</summary>
+    <summary>Учебни примери · не са твоята програма</summary>
     {open && <>
       <p className="management-notice">Примерни данни · не променят програмата.</p>
       <label>Примерна ситуация<select value={selected} onChange={event => setSelected(event.target.value)}>
