@@ -157,6 +157,15 @@ class RaceDurationRequest(BaseModel):
     race_duration_min: float | None = Field(default=None, gt=0, le=1440)
 
 
+class IndividualLearning(BaseModel):
+    """Bounded policy above the methodological baseline, initially observed only."""
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    mode: Literal["OFF", "SHADOW", "CONTROL"] = "SHADOW"
+    exploration_enabled: bool = True
+    max_volume_step_percent: float = Field(default=5., ge=0, le=10)
+    max_intensity_step: float = Field(default=.02, ge=0, le=.05)
+
+
 class ManagementProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -188,6 +197,7 @@ class ManagementProfile(BaseModel):
     auto_import_enabled: bool = True
     progression_percent: float = Field(default=5, ge=0, le=10)
     load_progression: LoadProgression | None = None
+    individual_learning: IndividualLearning = Field(default_factory=IndividualLearning)
     component_targets_weekly: dict[Literal["Z1", "Z2", "Z3", "Z4", "Z5", "STR"], float] = Field(default_factory=dict)
     interval_profiles: list[IntervalDoseProfile] = Field(default_factory=list, max_length=2)
     strength_enabled: bool = False

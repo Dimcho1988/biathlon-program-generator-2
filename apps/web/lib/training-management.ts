@@ -1,4 +1,5 @@
 import { isCalendarDate, isRecord } from "./training-status";
+import { defaultIndividualLearning, parseIndividualLearningConfig, type IndividualLearningConfig } from "./individual-learning";
 
 export interface ManagementProfile {
   schema_version: "management-profile-v1";
@@ -27,6 +28,7 @@ export interface ManagementProfile {
   auto_import_enabled: boolean;
   progression_percent: number;
   load_progression?: LoadProgression | null;
+  individual_learning?: IndividualLearningConfig | null;
   component_targets_weekly: Partial<Record<Component, number>>;
   interval_profiles: IntervalDoseProfile[];
   strength_enabled: boolean;
@@ -113,7 +115,7 @@ export interface DraftDay {
 export function daySessions(day: DraftDay): DraftSession[] { return day.sessions ?? (day.session ? [day.session] : []); }
 
 export interface PlanProjection {
-  race_duration?: unknown; parameters?: Record<string, unknown>; long_term?: unknown; periodization?: unknown; input_snapshot?: unknown; history_comparison?: unknown; component_history?: unknown;
+  race_duration?: unknown; parameters?: Record<string, unknown>; individual_learning?: unknown; long_term?: unknown; periodization?: unknown; input_snapshot?: unknown; history_comparison?: unknown; component_history?: unknown;
 }
 export interface ManagementOutlook extends PlanProjection {
   engine_version?: string;
@@ -171,6 +173,7 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
   }
   const normalized: Record<string, unknown> = { adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, component_targets_weekly: {},
     horizon_mode: "AUTO_CALENDAR", interval_profiles: [], strength_enabled: false, strength_circuits: 2, transition_days: 0, ...value };
+  normalized.individual_learning = parseIndividualLearningConfig(value.individual_learning);
   if (typeof normalized.auto_import_enabled !== "boolean" || !["AUTO", "REVIEW"].includes(String(normalized.adaptation_mode)) || !range(normalized.progression_percent, 0, 10)
     || typeof normalized.strength_enabled !== "boolean" || !integer(normalized.strength_circuits, 2, 3)
     || !integer(normalized.transition_days, 0, 28) || !isRecord(normalized.component_targets_weekly)
@@ -313,7 +316,7 @@ export function defaultManagementProfile(today: string): ManagementProfile {
     recent_weekly_hours: null, reentry_days: null, taper_days: 7, max_key_sessions_per_week: 2,
     building_fraction: .5, maintenance_fraction: .3, reentry_fraction: .4,
     recovery_session_cap_min: 30, allow_expert_fallback: true,
-    adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, load_progression: defaultLoadProgression(), component_targets_weekly: {}, interval_profiles: [],
+    adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, load_progression: defaultLoadProgression(), individual_learning: defaultIndividualLearning(), component_targets_weekly: {}, interval_profiles: [],
     strength_enabled: false, strength_circuits: 2, transition_days: 0,
   };
 }

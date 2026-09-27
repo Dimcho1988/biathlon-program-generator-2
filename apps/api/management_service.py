@@ -18,6 +18,7 @@ from .management_store import ManagementStore
 from .model_service import ModelStore
 from .oauth_store import PersistentStoreFailure
 from . import training_plan_engine, race_duration
+from .management_projection import public_learning
 
 
 def profile_view(repository, alias, *, now=None):
@@ -86,7 +87,7 @@ def outlook(repository, alias, *, now=None):
                                        reentry_days_override=reentry_days,
                                        taper_days=profile["taper_days"], transition_days=profile["transition_days"])
     phases["entry_basis"] = {"days_override": reentry_days, "reason": reentry_reason}
-    progression = engine.progression_context(repository, alias, profile, source, rows, today, phases)
+    progression = engine.progression_context(repository, alias, profile, source, rows, today, phases, envelope=analysis)
     projection = engine._long_term_outlook(profile, phases, reference, accents, preferences, rows, today,
                                          limited, volume=volume, events=calendar["events"], progression=progression)
     return {"configured": True, "outlook": {
@@ -96,6 +97,7 @@ def outlook(repository, alias, *, now=None):
         "source": {"generation_id": analysis.get("generation_id"), "revision": analysis.get("revision"), "as_of": source.get("period_end")},
         "periodization": phases, "long_term": projection, "history_comparison": history["weeks"],
         "component_history": engine.load_progression.history(source, rows, today),
+        "individual_learning": public_learning((progression or {}).get("individual_learning")),
         "input_snapshot": {"calendar": calendar, "profile_revision": stored["revision"], "horizon": horizon,
                            "planning_controls": controls},
         "volume_context": {**volume, "available_weekly_minutes": sum(engine.planning_history.availability(profile)) if engine.planning_history.availability_mode(profile) == "MANUAL" else None,
@@ -118,6 +120,11 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False)
     settings = repository.athlete_settings(alias)
     analysis = repository.active_analysis(alias) or {}
     entries = ModelStore(repository).entries(alias)
+    from . import learning_service
+    responses = sorted([
+        {"kind": e["kind"], "entry_key": e["entry_key"], "revision": e["revision"]}
+        for e in training_plan_engine.ResponseStore(repository).entries(alias)
+    ], key=lambda e: (e["kind"], e["entry_key"])) if include_response else None
     evaluated_at = evaluated_at or datetime.now(timezone.utc)
     return {
         "evaluation_date": evaluated_at.astimezone(ZoneInfo(settings.timezone) if settings else timezone.utc).date().isoformat(),
@@ -128,12 +135,14 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False)
             "periodization": PERIODIZATION_VERSION,
             "speed_duration": training_plan_engine.speed_duration.VERSION,
             "recovery": training_plan_engine.recovery_v2.VERSION,
+            "individual_learning": learning_service.VERSION,
         },
         "generation_id": analysis.get("generation_id"),
         "analysis_revision": analysis.get("revision"),
         "analysis_as_of": analysis.get("analysis_as_of"),
         "snapshot_fingerprint": _hash(analysis.get("snapshot_payload")),
-        "response_fingerprint": _hash(training_plan_engine.ResponseStore(repository).entries(alias)) if include_response else None,
+        "response_fingerprint": _hash(responses) if responses is not None else None,
+        "response_revisions": responses,
         "physiology": None if settings is None else {
             "zone_bounds_bpm": list(settings.zone_bounds_bpm),
             "hrmax_bpm": settings.hrmax_bpm,
@@ -193,7 +202,8 @@ def generate(repository, alias, body, actor, *, now=None):
     payload = build_draft(repository, alias, body.start_date, body.expected_profile_revision, now=now)
     return ManagementStore(repository).save_draft(
         alias, payload, actor, body.expected_profile_revision, expected_revision=body.expected_draft_revision,
-        check_generation=True, expected_generation_id=payload["source"]["generation_id"])
+        check_generation=True, expected_generation_id=payload["source"]["generation_id"],
+        expected_responses=(payload.get("input_snapshot") or {}).get("response_revisions"))
 
 
 def history(repository, alias, *, start_date=None):

@@ -32,6 +32,27 @@ async function choose(element: HTMLSelectElement, value: string) {
 }
 const profile = {...defaultManagementProfile("2026-09-21"), discipline:"5000 m", age_years:30, training_experience_years:10};
 
+it("saves explicit learning controls without resetting the planning profile", async () => {
+  const fetchMock = vi.fn(async (_url, init) => Response.json({ configured: true, revision: 2, profile: JSON.parse(init.body).profile }));
+  vi.stubGlobal("fetch", fetchMock);
+  const savedProfile = { ...profile, available_minutes: [75, 90, 0, 60, 100, 120, 80], building_fraction: .6 };
+  await mount(<ManagementProfileEditor initialProfile={{ configured: true, profile: savedProfile, revision: 1 }} today="2026-09-21"/>);
+  await click(button("3. Мезоцикли и акценти"));
+  expect(select("Режим на самообучение").value).toBe("SHADOW");
+  await choose(select("Режим на самообучение"), "CONTROL");
+  await enter(input("Максимална стъпка на обема"), "4");
+  await enter(input("Максимална стъпка в зоната"), "1.5");
+  const exploration = [...container.querySelectorAll("label")].find(label => label.textContent?.includes("Допускай малки пробни промени"))!.querySelector("input")!;
+  await click(exploration);
+  await click(button("Запази промените"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const result = JSON.parse(fetchMock.mock.calls[0][1].body).profile;
+  expect(result.individual_learning).toEqual({ mode: "CONTROL", exploration_enabled: false, max_volume_step_percent: 4, max_intensity_step: .015 });
+  expect(result.available_minutes).toEqual(savedProfile.available_minutes);
+  expect(result.building_fraction).toBe(.6);
+  expect(result.load_progression).toEqual(savedProfile.load_progression);
+});
+
 it("shows component shortfalls separately from session counts and elapsed duration", async () => {
   const draft=parseDraftRecord({entry_key:"test",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v6",status:"DRAFT",start_date:"2026-09-23",end_date:"2026-09-29",days:[],source:{},parameters:{},warnings:[],summary:{planned_minutes:0}}});
   await mount(<TrainingPlanSummary plan={{...draft.payload,allocation:{window_start:"2026-09-23",window_end:"2026-09-29",scheduled_slots:9,weekly_session_limit:13,components:{Z1:{target_effective:700,actual_effective:100,planned_effective:400,unallocated_effective:200}},constraints:[{code:"THRESHOLD_DAY_RESERVED",reason:"Този ден е избран за прагова работа."}],dose_limits:["METHOD_CAPACITY_FRACTION"]}}}/>);
