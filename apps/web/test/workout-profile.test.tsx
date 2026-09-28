@@ -17,6 +17,15 @@ const session = (blocks: SessionBlock[], zone = "Z4"): DraftSession => ({
 });
 
 describe("saved workout visualization", () => {
+  it("renders neuromuscular work separately without treating it as aerobic Z5", () => {
+    const s = session([block("WARMUP", "Z1", 15), block("NEUROMUSCULAR", "NMS", 1/6), block("RECOVERY", "Z1", 2), block("WORK", "Z1", 20)], "Z1");
+    const html = renderToStaticMarkup(<WorkoutProfile session={s}/>);
+    expect(html).toContain('workout-lane-label">NMS');
+    expect(html).toContain("#a855f7");
+    expect(html).not.toContain("var(--zone-5)");
+    expect(sessionSummary(s)).toContain("ускорения");
+    expect(html).toContain("0:37:10");
+  });
   it("preserves five work intervals and only four recoveries, using elapsed time", () => {
     const blocks = [block("WARMUP", "Z1", 15), ...Array.from({ length: 5 }, (_, i) => [block("WORK", "Z4", 3), ...(i < 4 ? [block("RECOVERY", "Z1", 2)] : [])]).flat(), block("COOLDOWN", "Z1", 10)];
     const s = session(blocks);

@@ -1,3 +1,4 @@
+import { parseTrainingObservations, defaultNeuromuscular, type LactateProfile, type NeuromuscularProfile, type LactateReference, type NeuromuscularExposure } from "./training-observations";
 import { isCalendarDate, isRecord } from "./training-status";
 import { defaultIndividualLearning, parseIndividualLearningConfig, type IndividualLearningConfig } from "./individual-learning";
 
@@ -35,6 +36,9 @@ export interface ManagementProfile {
   strength_circuits: number;
   transition_days: number;
   planning_controls?: PlanningControls | null;
+  lactate_guidance_enabled?: boolean;
+  lactate_profiles?: LactateProfile[];
+  neuromuscular?: NeuromuscularProfile;
 }
 
 export interface LoadProgression {
@@ -90,7 +94,7 @@ export interface ManagementProfileResponse { configured: boolean; profile: Manag
 export interface DraftRecord { entry_key: string; revision: number; recorded_at?: string; stale?: boolean | null; stale_reason?: string | null; payload: PlanningDraft }
 export type Component = "Z1" | "Z2" | "Z3" | "Z4" | "Z5" | "STR";
 export const COMPONENTS: Component[] = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"];
-export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string }
+export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; lactate_reference?: LactateReference }
 export interface DoseEvidence {
   min_dose_fraction?: number | null; minimum_dose_scope?: string; applied_structure_fraction?: number; max_dose_fraction?: number; shared_day_structure_fraction?: number;
   capacity_source: string; capacity_minutes: number; target_hr_bpm: number | null; target_speed_kmh: number | null;
@@ -100,6 +104,7 @@ export interface DoseEvidence {
 }
 export interface DraftSession {
   method_id: string; title: string; sport: string; zone: string; purpose: string; blocks: SessionBlock[];
+  neuromuscular_exposure?: NeuromuscularExposure | null;
   main_work_minutes: number; total_minutes: number; canonical_effective_load: Record<Component, number>;
   direct_equivalent_minutes: Record<Component, number>; dose_evidence: DoseEvidence;
 }
@@ -254,7 +259,7 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
       || !range(value.age_years, 18, 100) || !range(value.training_experience_years, 1, 85)) throw new Error("Проверете целия интервален профил, възрастта и стажа. Минималната структура трябва да се побира в дозата.");
     seen.add(String(p.zone));
   }
-  return normalized as unknown as ManagementProfile;
+  return { ...normalized, ...parseTrainingObservations(normalized) } as unknown as ManagementProfile;
 }
 
 export function parseManagementProfileResponse(value: unknown): ManagementProfileResponse {
@@ -318,6 +323,7 @@ export function defaultManagementProfile(today: string): ManagementProfile {
     recovery_session_cap_min: 30, allow_expert_fallback: true,
     adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, load_progression: defaultLoadProgression(), individual_learning: defaultIndividualLearning(), component_targets_weekly: {}, interval_profiles: [],
     strength_enabled: false, strength_circuits: 2, transition_days: 0,
+    lactate_guidance_enabled: true, lactate_profiles: [], neuromuscular: defaultNeuromuscular(),
   };
 }
 

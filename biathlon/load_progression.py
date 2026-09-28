@@ -15,7 +15,7 @@ from .equivalence import EQUIVALENCE_VERSION
 from .constants import COMPONENTS
 from . import planning_controls, planning_history, mesocycle_focus
 
-VERSION = "load-progression-v5-cycle-q"
+VERSION = "load-progression-v6-individual-reference"
 # Deliberately separate from speed-duration correction and canonical Tref.
 WEEKLY_Q_BOUNDS = {"Z1": (240., 840.), "Z2": (60., 300.), "Z3": (30., 120.),
                    "Z4": (10., 40.), "Z5": (5., 30.)}
@@ -132,8 +132,9 @@ def reference_from_history(q, prior, zone):
         return q, "OBSERVED" if q is not None else "UNKNOWN"
     if q is None:
         return prior, "EXPERT_FALLBACK"
-    low, high = WEEKLY_Q_BOUNDS[zone]
-    return min(high, max(low, q)), "LOWER_BOUND" if q < low else "UPPER_BOUND" if q > high else "OBSERVED"
+    # A reliable personal observation is not truncated to a population range.
+    # This establishes an exposure reference, not proof of successful recovery.
+    return q, "OBSERVED"
 
 
 def context(profile, source, rows, today, adaptation=None, *, retained=None, physiology=None, periodization=None):
@@ -150,7 +151,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
     valid_units = history_matches(source, physiology)
     reliable = valid_units and not (quality.get("limited_activities") or quality.get("excluded_activities"))
     key = reference_key(profile, physiology)
-    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v4-clamped-q", "load-progression-v3-stable-q"} else None
+    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v5-cycle-q", "load-progression-v4-clamped-q", "load-progression-v3-stable-q"} else None
     if frozen and frozen["version"] != VERSION:
         # Re-select the reference without replacing saved measurements or dates.
         frozen = deepcopy(frozen)
@@ -212,7 +213,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
            "anchor": frozen, "anchor_reused": reused, "reference": frozen,
            "previous_cycle": previous, "completed_cycle": current, "components": components,
            "adaptation": adaptation, "recovery_is_learning_input": False, "requires_catchup": False,
-           "reference_is_clamped": any(c["reference_selection"] in {"LOWER_BOUND", "UPPER_BOUND"} for c in components.values()), "percentages_are_coaching_parameters": True,
+           "reference_is_clamped": False, "normative_role": "INITIAL_PRIOR_NOT_POTENTIAL_CEILING", "percentages_are_coaching_parameters": True,
            "history_usable": reliable, "equivalence_version": EQUIVALENCE_VERSION,
            "overall_basis": "DIRECT_Q_COMPONENT_TARGETS_EFFECTIVE_LOAD_CHECKED_SEPARATELY"}
     if periodization:
@@ -292,7 +293,10 @@ def trajectory(ctx, profile, periodization):
             weight = development_weight(profile, state, z, period) if state else 0.
             factors[z] *= (1+(rate or 0.)*phase_factor(period, taper, ctx["config"])*learned*bool(selected)*weight/100)**(1/365.25)
             if z in WEEKLY_Q_BOUNDS and c["reference_q"]:
-                factors[z] = min(factors[z], WEEKLY_Q_BOUNDS[z][1]*ctx["config"]["ceiling_ratio"]/c["reference_q"])
+                # The generic calendar trend may stop at its prior envelope,
+                # but it must never push an observed reference down to a norm.
+                # Evidence-based CONTROL trials are applied separately below.
+                factors[z] = min(factors[z], max(1., WEEKLY_Q_BOUNDS[z][1]*ctx["config"]["ceiling_ratio"]/c["reference_q"]))
         result[day.isoformat()] = dict(factors)
         day += timedelta(days=1)
     return result
@@ -376,7 +380,7 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
         weight = development_weight(profile, state, z, period)
         component_shape = cycle_shape(profile, state, z)
         factor = factors.get(z, 1.)
-        # Use the SAME clamped reference for the trend and weekly intent. The
+        # Use the SAME personal reference for the trend and weekly intent. The
         # current observed exposure, E/7-40 and Recovery govern execution.
         q = c["reference_q"]
         exposure = c.get("recent_observed_q", c["weekly_q"])
@@ -399,10 +403,12 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
             # Its independent E/7–40 gate does not expand for a positive trial.
             baseline_q = goal.get("target_weekly_q")
             if baseline_q is not None and z != "STR":
-                ceiling = WEEKLY_Q_BOUNDS[z][1]*config["ceiling_ratio"]*component_shape*taper_factor
-                goal["target_weekly_q"] = min(baseline_q*correction, max(baseline_q, ceiling))
+                # A currently supported, bounded individual decision can exceed
+                # the generic envelope. Do not turn a prior into a potential cap.
+                goal["target_weekly_q"] = baseline_q*correction
                 individual["baseline_weekly_q"] = baseline_q
                 individual["applied_volume_factor"] = goal["target_weekly_q"]/baseline_q if baseline_q else 1.
+                individual["normative_reference_exceeded"] = goal["target_weekly_q"] > WEEKLY_Q_BOUNDS[z][1]*config["ceiling_ratio"]*component_shape*taper_factor
             if z == "STR":
                 # Strength's existing E is its own exposure budget, not an
                 # aerobic Q target or an invented endurance capacity.

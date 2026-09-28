@@ -54,6 +54,41 @@ def test_control_volume_changes_direct_q_once_without_expanding_separate_e_gate(
     assert goals(profile, rows, context) == after
 
 
+def test_observed_athlete_and_control_trial_can_exceed_normative_envelope():
+    profile, _, source, rows, context = setup_context(intensity=0)
+    report = context["individual_learning"]
+    for a in source["activities"]:
+        for z in a["zones"]:
+            if z["zone"] == "Z3":
+                z["equivalent_time_min"] = 200.
+    phases = {"phases": [{"kind": "GENERAL_PREPARATION", "start_date": profile["program_start"],
+                          "end_date": profile["program_end"]}], "taper_windows": []}
+    context = policy.context(profile, source, rows, TODAY, periodization=phases)
+    c = context["components"]["Z3"]
+    assert c["reference_q"] == c["weekly_q"] > 156
+    assert all(point["Z3"] == 1. for point in context["trajectory"].values())
+    baseline = goals(profile, rows, context)["Z3"]
+    context["individual_learning"] = report
+    trial = goals(profile, rows, context)["Z3"]
+    assert trial["target_weekly_q"] == pytest.approx(baseline["target_weekly_q"]*1.05)
+    assert trial["progression"]["individual_learning"]["normative_reference_exceeded"]
+    assert trial["target"] == baseline["target"]  # Actual E / 7–40 remains independent.
+    report["expires_on"] = (TODAY-timedelta(days=1)).isoformat()
+    assert goals(profile, rows, context)["Z3"]["target_weekly_q"] == baseline["target_weekly_q"]
+
+
+def test_v5_anchor_reselects_outside_norms_without_rewriting_observations():
+    profile, _, _, _, context = setup_context()
+    anchor = deepcopy(context["anchor"])
+    anchor["version"] = "load-progression-v5-cycle-q"
+    anchor["components"]["Z3"].update(weekly_q=210., reference_q=120., reference_selection="UPPER_BOUND")
+    original = deepcopy(anchor)
+    migrated = policy.context(profile, {}, [], TODAY+timedelta(days=100), retained=anchor)
+    assert migrated["anchor_reused"] and migrated["anchor"]["created_on"] == anchor["created_on"]
+    assert migrated["components"]["Z3"]["reference_q"] == 210.
+    assert anchor == original
+
+
 @pytest.mark.parametrize("mode", ["OFF", "SHADOW"])
 def test_off_and_shadow_cannot_change_goals_or_intensity(mode):
     profile, _, _, rows, context = setup_context(mode)

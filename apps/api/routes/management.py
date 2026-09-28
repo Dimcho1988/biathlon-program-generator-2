@@ -3,6 +3,7 @@
 from datetime import date, datetime, timezone
 from typing import Annotated, Literal
 from uuid import UUID
+from zoneinfo import ZoneInfo
 from fastapi import Header, HTTPException
 from ..oauth_store import PersistentStoreFailure
 from .. import race_duration
@@ -85,6 +86,11 @@ def save_management_profile(
     if actor is None:
         raise HTTPException(401, "Actor session is required")
     try:
+        if body.profile.lactate_profiles:
+            settings = dependencies.repository().athlete_settings(alias)
+            today = datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone if settings else "UTC")).date()
+            if any(p.assessed_on > today for p in body.profile.lactate_profiles):
+                raise HTTPException(422, "A lactate observation cannot be in the future")
         result = ManagementStore(dependencies.repository()).save_profile(
             alias, body.profile.model_dump(mode="json"), body.expected_revision, actor,
         )

@@ -63,6 +63,10 @@ def test_whole_regular_cycle_preserves_component_means_including_recovery(suppor
 def test_all_general_components_receive_calendar_growth_and_shortening_does_not_compress_it():
     p,source,rows=setup()
     p["load_progression"].update(low_volume_annual_percent=25,upper_volume_annual_percent=25)
+    # Isolate elapsed-time growth from the separate high-volume prior curve.
+    for a in source["activities"]:
+        for z in a["zones"]:
+            z["equivalent_time_min"] = policy.WEEKLY_Q_BOUNDS[z["zone"]][0]/14
     for days in (28,108,365):
         p["program_end"]=(TODAY+timedelta(days=days-1)).isoformat()
         ctx=policy.context(p,source,rows,TODAY,periodization=preparation(p))
