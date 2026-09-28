@@ -47,3 +47,11 @@ it("validates reference positions and preserves zero as an explicit choice",()=>
   expect(parseManagementProfile({...p,load_progression:settings}).load_progression?.component_reference_positions?.Z5).toBe(0);
   expect(()=>parseManagementProfile({...p,load_progression:{...settings,component_reference_positions:{Z5:1.01}}})).toThrow();
 });
+it("distinguishes lower planning reference from observed history and a mandatory dose",()=>{
+  const html=renderToStaticMarkup(<LoadProgressionSummary plan={{long_term:{progression:{basis:"STABLE_PREPARATION_REFERENCE",normative_role:"LOWER_PLANNING_REFERENCE_NOT_POTENTIAL_CEILING",anchor:{created_on:"2026-09-28",windows:[]},components:{Z5:{weekly_q:110/60,reference_q:5,expert_q_bounds:[5,30],limitation:"BELOW_REFERENCE_BOUND"},Z3:{weekly_q:210,reference_q:210,expert_q_bounds:[30,120]}}}}}}/>);
+  expect(html).toContain("0:01:50");expect(html).toContain("0:05:00");expect(html).toContain("3:30:00");
+  expect(html).toContain("Измерената история не се променя");
+  expect(html).toContain("над горния ориентир");expect(html).toContain("7/40, Recovery");
+  expect(html).toContain("Разтоварването, тейпърът и непълният микроцикъл");
+  expect(html).not.toContain("Архивна версия");
+});

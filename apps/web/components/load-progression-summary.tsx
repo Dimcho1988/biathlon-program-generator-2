@@ -8,7 +8,7 @@ const time = (v: unknown) => typeof v === "number" && Number.isFinite(v) ? durat
 const reasons: Record<string,string> = {
   NO_RELIABLE_COMPONENT_HISTORY:"Липсва надеждна компонентна история; опората не разрешава нова доза.",
   NO_OBSERVED_EXPOSURE:"Няма измерено натоварване; въвеждането на компонента изисква треньорска преценка.",
-  BELOW_REFERENCE_BOUND:"Плановата основа е долната граница. Конкретната доза се проверява отделно спрямо актуалната история и готовност.",
+  BELOW_REFERENCE_BOUND:"Плановата основа е долната граница; измерената история остава непроменена. Това е седмична опора преди вълната, а не минимум за всяка тренировка. Изпълнимата доза се проверява по 7/40, Recovery и ограниченията на плана.",
   ABOVE_REFERENCE_BOUND:"Плановата основа е горната граница. Измереното изпълнение остава запазено без промяна.",
 };
 export function LoadProgressionSummary({plan}: {plan?: PlanProjection}) {
@@ -22,17 +22,19 @@ export function LoadProgressionSummary({plan}: {plan?: PlanProjection}) {
   const anchor = isRecord(model.anchor) ? model.anchor : {};
   const windows = Array.isArray(anchor.windows) ? anchor.windows.filter(isRecord) : [];
   const stable = model.basis === "STABLE_PREPARATION_REFERENCE";
+  const lowerPlanningReference = model.normative_role === "LOWER_PLANNING_REFERENCE_NOT_POTENTIAL_CEILING";
   return <section className="management-panel" aria-label="Прираст и изпълнен товар">
     <details><summary>Опорна база и прираст</summary>
     {stable ? <>
       <p>Устойчива база от {String(anchor.created_on ?? "—")}. Цел до {String(model.target_date ?? "края на подготовката")}. Смяната на акцента и разтоварването не зануляват базата.</p>
-      <p className="management-muted">Всички времена тук са приравнен обем за 7 дни, в ч:мм:сс. {model.normative_role === "INITIAL_PRIOR_NOT_POTENTIAL_CEILING" ? "Избраната основа запазва надеждно наблюдавания личен обем, включително извън общите ориентири. Одобрена индивидуална проба може да премине общия ориентир при проследяване на реакцията." : "Архивна версия: плановата основа е ограничена между експертните граници."} От плановата основа се изчисляват прирастът и седмичните цели.</p>
+      <p className="management-muted">Всички времена тук са приравнен обем за 7 дни, в ч:мм:сс. {lowerPlanningReference ? "При личен обем под долния ориентир плановата основа използва долната граница. По-високият личен обем се запазва и над горния ориентир. Измерената история не се променя. Одобрена индивидуална проба може да премине общия ориентир при проследяване на реакцията." : model.normative_role === "INITIAL_PRIOR_NOT_POTENTIAL_CEILING" ? "Избраната основа запазва надеждно наблюдавания личен обем, включително извън общите ориентири. Одобрена индивидуална проба може да премине общия ориентир при проследяване на реакцията." : "Архивна версия: плановата основа е ограничена между експертните граници."} От плановата основа се изчисляват прирастът и седмичните цели.</p>
       <div style={{overflowX:"auto"}}><table><thead><tr><th>Компонент</th><th>Историческа основа</th><th>Експертни граници</th><th>Избрана планова основа</th><th>Темп, %/год.</th><th>Планиран прираст до датата, %</th><th>Средна седмична цел до датата</th></tr></thead><tbody>{COMPONENTS.map(z=>{
         const c=isRecord(components[z])?components[z]:{};
         return <tr key={z}><th>{z}</th><td>{time(c.weekly_q)}</td><td>{Array.isArray(c.expert_q_bounds) ? c.expert_q_bounds.map(time).join(" – ") : "—"}</td><td>{time(c.reference_q)}</td><td>{n(c.governed_annual_rate_percent ?? c.annual_rate_percent)}</td><td>{n(c.planned_growth_percent)}</td><td>{time(c.target_q)}</td></tr>;
       })}</tbody></table></div>
       <p>Годишният темп включва оценената обратна връзка и се натрупва според календарното време. В общата подготовка се развиват всички аеробни компоненти; след това прирастът следва специалните приоритети и настройките по периоди. Отделната колона показва какъв прираст действително е заложен до посочената дата.</p>
       <p>Средната цел се разпределя между натоварващите и възстановителните микроцикли. Дневните ограничения могат да намалят съставените тренировки. Това е планова цел, не обещан резултат; няма автоматично наваксване.</p>
+      {lowerPlanningReference && <p>Долната опора не е задължителен обем за всяка седмица. Разтоварването, тейпърът и непълният микроцикъл могат да дадат по-ниска цел. Липсваща история или нулева скорошна експозиция не разрешава автоматично добавяне на натоварване.</p>}
       {model.history_usable===false&&<p role="status">Текущата история изисква проверка. Запазената опора не замества липсващите измервания или готовност.</p>}
       {COMPONENTS.map(z=>{const c=isRecord(components[z])?components[z]:{};return reasons[String(c.limitation)] ? <p key={z}><strong>{z}:</strong> {reasons[String(c.limitation)]}</p> : null;})}
       <details><summary>Произход на базата и приравняване</summary>

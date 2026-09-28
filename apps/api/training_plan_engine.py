@@ -26,8 +26,8 @@ from . import model_service, load_adaptation, race_duration
 from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 
-VERSION = "training-management-v20"
-PARAMETER_VERSION = "management-parameters-v20"
+VERSION = "training-management-v21"
+PARAMETER_VERSION = "management-parameters-v21"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
