@@ -104,12 +104,16 @@ def test_light_and_background_q_progress_without_changing_frozen_reference():
     p = configured(load_progression={"enabled":True})
     p["program_end"] = (TODAY+timedelta(days=83)).isoformat()
     _,source,rows = observed()
+    for activity in source["activities"]:
+        for z in activity["zones"]:
+            if z["zone"] == "Z5":
+                z["equivalent_time_min"] *= .5  # Below the generic prior envelope.
     phases = {"phases":[{"kind":"GENERAL_PREPARATION","start_date":TODAY.isoformat(),"end_date":p["program_end"]}]}
     ctx = load_progression.context(p,source,rows,TODAY,periodization=phases)
     assert ctx["trajectory"][(TODAY+timedelta(days=20)).isoformat()]["Z5"] > 1
     assert ctx["trajectory"][(TODAY+timedelta(days=27)).isoformat()]["Z5"] > ctx["trajectory"][(TODAY+timedelta(days=20)).isoformat()]["Z5"]
-    assert ctx["components"]["Z5"]["weekly_q"] == 42
-    assert ctx["components"]["Z5"]["reference_q"] == 30
+    assert ctx["components"]["Z5"]["weekly_q"] == 21
+    assert ctx["components"]["Z5"]["reference_q"] == 21
 
 
 @pytest.mark.parametrize("patch", [{"ranked_indices":[1.2,1.6,1.5]},{"ranked_indices":[1.6,1.5,2.1]},{"shock_indices":[1.5,1.5,1.2]},{"automatic_focus_count":4}])

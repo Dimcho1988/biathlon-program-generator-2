@@ -4,6 +4,8 @@ from math import isfinite, log
 from statistics import median
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from .training_observation_schemas import LactateSample, NeuromuscularReport
+from biathlon.training_guidance import lactate_comparisons
 
 VERSION = "response-monitoring-v2"
 FIELDS = ("sleep_quality", "fatigue", "soreness", "stress", "motivation")
@@ -56,6 +58,9 @@ class SessionReport(InputModel):
     execution_reason: Literal["UNKNOWN", "AS_PLANNED", "FATIGUE", "TIME", "CONDITIONS", "COACH", "OTHER"] = "UNKNOWN"
     executed_method_id: str | None = Field(default=None, min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_-]+$")
     method_confirmed: bool = False
+    lactate_samples: list[LactateSample] = Field(default_factory=list, max_length=20)
+    lactate_device: str = Field(default="", max_length=80)
+    neuromuscular: NeuromuscularReport | None = None
 
     @model_validator(mode="after")
     def rpe_timing(self):
@@ -200,6 +205,9 @@ def session_rows(activities, entries):
             "timing":m["timing"] if m else "UNKNOWN","source":"ONFLOWS" if m else "INTERVALS" if rpe is not None else None,
             "provider_rpe":imported,"revision":e["revision"] if e else 0,"note":m.get("note","") if m else "",
             "execution":{k:(m or {}).get(k) for k in ("planned_duration_minutes","planned_speed_kmh","executed_speed_kmh","execution_comparable","execution_reason", "executed_method_id", "method_confirmed", "executed_method")},
+            "lactate_samples": lactate_comparisons((m or {}).get("lactate_samples", [])),
+            "lactate_device": (m or {}).get("lactate_device", ""),
+            "neuromuscular": (m or {}).get("neuromuscular"),
             "srpe_load":round(rpe*duration,3) if rpe is not None and duration else None,
             "expected_rpe":None,"deviation_score":None,"comparable_count":0,"zone_vector":zone_vector(a)})
     rows.sort(key=lambda r:(r["day"],r["activity_ref"]))

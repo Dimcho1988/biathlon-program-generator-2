@@ -12,16 +12,18 @@ export function WorkoutProfile({ session, compact = false }: { session: DraftSes
   const blocks = visibleBlocks(session);
   const duration = blocks.reduce((sum, block) => sum + block.duration_min, 0);
   const hasStrength = blocks.some(block => block.zone === "STR");
+  const hasNms = blocks.some(block => block.zone === "NMS");
   const hasAerobic = blocks.some(block => /^Z[1-5]$/.test(block.zone));
   if (!blocks.length || duration <= 0) return <span className="workout-profile-empty">Няма записана структура на тренировката.</span>;
-  const lane = (strength: boolean) => <span className="workout-profile-bars" aria-hidden="true">{blocks.map((block, index) =>
+  const lane = (kind: "AEROBIC" | "STR" | "NMS") => <span className="workout-profile-bars" aria-hidden="true">{blocks.map((block, index) =>
     <span key={index} className="workout-profile-slot" style={{ width: `${block.duration_min / duration * 100}%` }}>
-      {(block.zone === "STR") === strength && <span className={`workout-profile-bar ${block.kind === "TRANSITION" || (strength && block.kind === "RECOVERY") ? "is-pause" : ""}`}
+      {(block.zone === "STR" ? "STR" : block.zone === "NMS" ? "NMS" : "AEROBIC") === kind && <span className={`workout-profile-bar ${block.kind === "TRANSITION" || (kind === "STR" && block.kind === "RECOVERY") ? "is-pause" : ""}`}
         style={{ height: `${blockHeight(block)}%`, background: componentColor(block.zone) }} title={`${block.label} · ${durationHms(block.duration_min)} · ${componentLabel(block.zone)}`}/>}</span>)}</span>;
   return <span className={`workout-profile ${compact ? "is-compact" : ""}`} role="img" aria-label={`Структура: ${sessionSummary(session)}. ${blocks.map(b => `${b.label}: ${durationHms(b.duration_min)} ${componentLabel(b.zone)}`).join("; ")}`}>
-    {hasAerobic && lane(false)}
-    {hasStrength && <span className="workout-strength-lane"><span className="workout-lane-label">Сила</span>{lane(true)}</span>}
-    {!hasAerobic && !hasStrength && lane(false)}
+    {hasAerobic && lane("AEROBIC")}
+    {hasStrength && <span className="workout-strength-lane"><span className="workout-lane-label">Сила</span>{lane("STR")}</span>}
+    {hasNms && <span className="workout-strength-lane"><span className="workout-lane-label">NMS</span>{lane("NMS")}</span>}
+    {!hasAerobic && !hasStrength && !hasNms && lane("AEROBIC")}
     <span className="workout-profile-axis" aria-hidden="true"><span>0:00:00</span><span>Време</span><span>{durationHms(duration)}</span></span>
   </span>;
 }

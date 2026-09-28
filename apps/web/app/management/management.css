@@ -200,3 +200,7 @@
 .management-learning-examples { border-block:1px solid var(--border); padding-block:.85rem; margin-block:1rem; }
 .management-learning-examples>label { display:grid; gap:.4rem; max-width:32rem; }
 .management-learning-examples select { max-width:100%; min-width:0; }
+
+.training-observation-settings { margin-block: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: 12px; }
+.training-observation-settings summary { cursor: pointer; font-weight: 600; }
+.training-observation-settings td input { width: 100%; min-width: 6rem; max-width: 12rem; }

@@ -21,12 +21,13 @@ from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, equivalen
 from biathlon.periodization import build_periodization
 from biathlon.physiology import _causal_tref, effective_from_direct_vector, linear_equivalence_coefficient
 from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VERSION, catalog, resolved_methods
+from biathlon import training_guidance
 from . import model_service, load_adaptation, race_duration
 from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 
-VERSION = "training-management-v18"
-PARAMETER_VERSION = "management-parameters-v18"
+VERSION = "training-management-v19"
+PARAMETER_VERSION = "management-parameters-v19"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -432,6 +433,10 @@ def _blocks(method, work, evidence, settings):
                              method["instructions"], speed=evidence["target_speed_kmh"]))
     if method["cooldown_min"]:
         blocks.append(_block("COOLDOWN", "Разпускане", "Z1", method["cooldown_min"], easy, "Постепенно намали усилието."))
+    if method.get("neuromuscular_profile"):
+        preparation = _block("PREPARATION", "Подготвителни упражнения", "Z1", 3., easy,
+                             "Мобилизация и няколко познати координационни упражнения. Подготви техниката за ускоренията.")
+        blocks[1:1] = [preparation, *training_guidance.neuromuscular_blocks(method["neuromuscular_profile"], easy)]
     return blocks
 
 
@@ -440,6 +445,10 @@ def _canonical_load(blocks, settings, rows, day, *, technical_reference=None):
     direct = {z: 0. for z in COMPONENTS}
     for block in blocks:
         z = block["zone"]
+        if z == "NMS":
+            # Unknown metabolic/mechanical contribution is disclosed separately.
+            # Never translate sprint seconds into Z5, STR, or zero measured load.
+            continue
         if z == "STR":
             direct[z] += block["duration_min"]
             continue
@@ -1161,6 +1170,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 rejection = None
                 if period not in method["periods"]:
                     rejection = ("PERIOD_NOT_SUPPORTED", "Методът не е включен в този период.")
+                elif method.get("neuromuscular_profile") and (slot_index != 0 or day.weekday() not in method["neuromuscular_profile"]["days"]):
+                    rejection = ("NMS_DAY_PREFERENCE", "Кратките ускорения са включени само в избраните дни и в първата подходяща сесия.")
                 elif cycle_state and controls["accent_mode"] == "AUTO" and not cycle_state["explicit"] and period in {"PRECOMPETITION", "COMPETITION"} and method["purpose"] == "BUILDING" and not is_strength and z not in race_development_zones:
                     rejection = ("RACE_COMPONENT_PRIORITY", "Развиващата специална работа следва състезателните акценти за периода; останалите компоненти получават поддържане.")
                 elif cycle_state and cycle_state["kind"] == "RECOVERY" and z in {"Z3", "Z4", "Z5", "STR"} and z not in selected_accents:
@@ -1551,14 +1562,18 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     score -= .02 if allocation is not None else .35
                 if method.get("double_threshold"):
                     score += 10.
+                if method.get("neuromuscular_profile"):
+                    score += 1.
                 learned_preference = None if learned_intensity else _learned_preference(
                     method, sport, profile, progression, day, period, cycle_state, purpose=purpose, duration=total,
                     original_method=original_method, target_speed=evidence.get("target_speed_kmh"), taper=taper, limited=limited)
                 if learned_preference:
                     score += learned_preference["applied_score_delta"]
                     evidence["selection"]["individual_learning"] = learned_preference
+                blocks = training_guidance.annotate_lactate(blocks, profile, sport, settings, day)
                 choices.append((score, method["id"], {"method_id": method["id"], "title": method["title"],
                                 "sport": sport, "zone": z, "purpose": purpose, "blocks": blocks, "is_key_session": is_key,
+                                "neuromuscular_exposure": training_guidance.nms_exposure(blocks),
                                 "double_threshold": method.get("double_threshold", False),
                                 "paired_session": {"zone":method["paired_method"]["zone"], "method_id":method["paired_method"]["id"]} if method.get("paired_method") else None,
                                 "main_work_minutes": _round(actual_work), "total_minutes": _round(total),

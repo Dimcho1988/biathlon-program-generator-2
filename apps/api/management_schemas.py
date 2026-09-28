@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from .training_observation_schemas import LactateProfile, NeuromuscularProfile
 
 
 class IntervalDoseProfile(BaseModel):
@@ -204,9 +205,14 @@ class ManagementProfile(BaseModel):
     strength_circuits: int = Field(default=2, ge=2, le=3)
     transition_days: int = Field(default=0, ge=0, le=28)
     planning_controls: PlanningControls | None = None
+    lactate_guidance_enabled: bool = True
+    lactate_profiles: list[LactateProfile] = Field(default_factory=list, max_length=3)
+    neuromuscular: NeuromuscularProfile = Field(default_factory=NeuromuscularProfile)
 
     @model_validator(mode="after")
     def coherent(self):
+        if len({p.sport for p in self.lactate_profiles}) != len(self.lactate_profiles):
+            raise ValueError("Keep one current lactate profile per sport")
         if not 0 <= (self.program_end - self.program_start).days <= 365:
             raise ValueError("Choose a planning period of 1 to 366 days")
         if any(not 0 <= value <= 360 for value in self.available_minutes):

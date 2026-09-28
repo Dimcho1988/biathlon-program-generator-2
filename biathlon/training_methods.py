@@ -11,7 +11,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
-VERSION = "training-methods-v6"
+VERSION = "training-methods-v7"
 COMMON = ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "COMPETITION")
 METHODS = (
     {"id": "RUN-REC-EASY-01", "title": "Леко възстановително бягане", "zone": "Z1",
@@ -161,6 +161,15 @@ def resolved_methods(profile):
                                       "dose_status": "VERSIONED_COACH_DEFAULT_NOT_VALIDATED_NORM"},
                 "instructions": "Силно, но повторяемо усилие; без спринт или финал до отказ. Остави резерв за още две качествени отсечки. Запази ритъма и техниката; прекрати при разпадането им. Не ускорявай, за да достигнеш пулсово число.",
                 "adaptation": "Отделни onFlows профили v2: Z4 — 3–6 × 3 min / 3 min, общ работен бюджет до 1,2 от непрекъснатия капацитет; Z5 — 6–20 × 30 s / 30 s, до 1,5. Това са конкретни начални треньорски настройки, не универсални множители или научно валидирани норми. Поддържането използва минималния цял вариант. Цели повторения, почивки, резерв и всички бюджети се проверяват съвместно. Индивидуалният профил замества тези настройки."})
+    nms = profile.get("neuromuscular") or {}
+    if nms.get("enabled"):
+        for base in list(methods):
+            if base["zone"] == "Z1" and base["purpose"] in {"BUILDING", "MAINTENANCE"} and base["structure"] == "CONTINUOUS":
+                methods.append({**deepcopy(base), "id": base["id"] + "-NMS",
+                    "title": base["title"] + " с кратки ускорения",
+                    "periods": tuple(p for p in base["periods"] if p not in {"RE_ENTRY", "TRANSITION"}),
+                    "warmup_min": 15., "neuromuscular_profile": deepcopy(nms),
+                    "adaptation": "Индивидуално включена NMS добавка: повторения, пълни почивки и дни от треньорския профил. Времето участва в общата сесия; пулсовият модел не оценява пълния механичен товар."})
     return methods
 
 
@@ -182,6 +191,8 @@ def source_catalog():
 def catalog(profile=None):
     profile = profile or {}
     disabled = deepcopy(list(DISABLED_METHODS))
+    if (profile.get("neuromuscular") or {}).get("enabled"):
+        disabled = [d for d in disabled if d["component"] != "NMS"]
     for z in ("Z4", "Z5"):
         if not any(p["zone"] == z for p in profile.get("interval_profiles", [])) and not (profile.get("planning_controls") and profile["planning_controls"].get("automatic_intervals", True)):
             disabled.append({"component": z, "reason": "Добавете индивидуален интервален профил: устойчивост при описаното усилие, повторения, паузи и резерв."})

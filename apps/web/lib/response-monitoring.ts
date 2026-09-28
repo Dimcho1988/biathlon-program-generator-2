@@ -1,3 +1,4 @@
+import type { LactateSample, NeuromuscularReport } from "./training-observations";
 import type {BodyObservationsDay, LabReport} from "./body-observations";
 import {ANALYTES} from "./body-observations";
 import {isRecord} from "./training-status";
@@ -14,7 +15,7 @@ export const REASONS:Record<string,string> = {UNKNOWN:"Не е уточнено"
 export interface Baseline {median:number;spread:number;count:number}
 export interface ExecutionMethod {id:string;title:string;zone:string;sports:string[]}
 export interface Execution {planned_duration_minutes:number|null;planned_speed_kmh:number|null;executed_speed_kmh:number|null;execution_comparable:boolean|null;execution_reason:string|null;executed_method_id?:string|null;method_confirmed?:boolean|null;executed_method?:Record<string,unknown>|null}
-export interface Session {activity_ref:string;day:string;name:string;sport:string;rpe:number|null;duration_minutes:number|null;suggested_duration_minutes:number|null;timing:string;source:string|null;provider_rpe:number|null;revision:number;note:string;srpe_load:number|null;expected_rpe:number|null;deviation_score:number|null;comparable_count:number;execution?:Execution}
+export interface Session {lactate_samples?:LactateSample[];lactate_device?:string;neuromuscular?:NeuromuscularReport|null;activity_ref:string;day:string;name:string;sport:string;rpe:number|null;duration_minutes:number|null;suggested_duration_minutes:number|null;timing:string;source:string|null;provider_rpe:number|null;revision:number;note:string;srpe_load:number|null;expected_rpe:number|null;deviation_score:number|null;comparable_count:number;execution?:Execution}
 export interface DailyReport {day:string;observed_at:string|null;sleep_quality:number|null;fatigue:number|null;soreness:number|null;stress:number|null;motivation:number|null;competition_motivation?:number|null;sleep_hours?:number|null;pain_or_illness:boolean;note:string}
 export interface Channel {key:string;group:Group;weight:number;effective_weight:number;contribution:number|null;score:number|null;raw:number|null;unit:string|null;source:string|null;observed_on:string|null;baseline:Baseline|null;status:string}
 export interface GroupScore {key:Group;score:number|null;weight:number;available_weight:number;effective_weight:number;contribution:number|null}

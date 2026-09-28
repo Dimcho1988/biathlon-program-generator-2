@@ -6,8 +6,8 @@ export const COMPONENT_COLORS: Record<Component, string> = {
   Z1: "var(--zone-1)", Z2: "var(--zone-2)", Z3: "var(--zone-3)",
   Z4: "var(--zone-4)", Z5: "var(--zone-5)", STR: "var(--strength)",
 };
-export const componentColor = (zone: string) => COMPONENT_COLORS[zone as Component] ?? "var(--text-muted)";
-export const componentLabel = (zone: string) => zone === "STR" ? "Сила" : zone || "Без зададена зона";
+export const componentColor = (zone: string) => zone === "NMS" ? "#a855f7" : COMPONENT_COLORS[zone as Component] ?? "var(--text-muted)";
+export const componentLabel = (zone: string) => zone === "STR" ? "Сила" : zone === "NMS" ? "Нервно-мускулна работа" : zone || "Без зададена зона";
 export const SPORT_LABELS: Record<string, string> = { Run: "Бягане", NordicSki: "Ски бягане", RollerSki: "Ролкови ски", Ride: "Колоездене", Walk: "Ходене", Hike: "Преход", Strength: "Сила" };
 
 export function visibleBlocks(session: DraftSession): SessionBlock[] {
@@ -16,6 +16,7 @@ export function visibleBlocks(session: DraftSession): SessionBlock[] {
 
 /** Ordinal zone steps, not a physiological load scale. Strength uses a separate lane. */
 export function blockHeight(block: SessionBlock): number {
+  if (block.zone === "NMS") return 60;
   if (block.zone === "STR") return block.kind === "WORK" ? 48 : 18;
   const zone = /^Z([1-5])$/.exec(block.zone);
   return zone ? 20 + Number(zone[1]) * 14 : 12;
@@ -30,6 +31,8 @@ const partLabel = (b: SessionBlock) => `${durationHms(b.duration_min)} ${compone
 export function sessionSummary(session: DraftSession): string {
   const blocks = visibleBlocks(session);
   const works = blocks.filter(b => b.kind === "WORK");
+  const nms = blocks.filter(b => b.zone === "NMS");
+  if (nms.length) return `${nms.length} × ${durationHms(nms[0].duration_min)} ускорения + ${durationHms(works.reduce((sum, b) => sum + b.duration_min, 0))} аеробна работа`;
   if (!works.length) return session.title;
   const main = blocks.slice(blocks.indexOf(works[0]), blocks.lastIndexOf(works.at(-1)!) + 1);
   const strength = works.filter(b => b.zone === "STR");
