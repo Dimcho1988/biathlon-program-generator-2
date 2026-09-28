@@ -76,7 +76,7 @@ def test_lactate_method_ceiling_never_overwrites_personal_reference():
 
 @pytest.mark.parametrize("ready,allowed", [(85., True), (69., False)])
 def test_mixed_candidate_below_90_uses_residual_budget_and_own_readiness_rule(monkeypatch, ready, allowed):
-    p = body(sessions_per_week=1, accent_mode="MANUAL", accents=["Z3"], accent_index=1.5)
+    p = body(sessions_per_week=7, intensity_days=[(TODAY.weekday()+6)%7], accent_mode="MANUAL", accents=["Z3"], accent_index=1.5)
     methods = [m for m in resolved_methods(p) if m.get("mixed_component") and m["zone"] == "Z3"]
     monkeypatch.setattr(engine, "resolved_methods", lambda _: deepcopy(methods))
     original = engine.recovery_v2.simulate
@@ -97,6 +97,7 @@ def test_mixed_candidate_below_90_uses_residual_budget_and_own_readiness_rule(mo
         work = sum(b["duration_min"] for b in s["blocks"] if b["kind"] == "WORK" and b["zone"] == "Z3")
         assert work <= s["dose_evidence"]["capacity_minutes"]*.15*s["dose_evidence"]["readiness_policy"]["dose_factor"]+.001
         d = next(d for d in plan["days"] if d["sessions"])
+        assert d["date"] == TODAY.isoformat()  # Easy day, outside the reserved key slot.
         assert all(v <= d["load_budget"]["components"][z]["deficit_effective"]+.001 for z, v in s["canonical_effective_load"].items())
     else:
         assert any(r["code"] == "MIXED_RECOVERY_BELOW_FLOOR" for d in plan["days"] for r in d["rejected_alternatives"])

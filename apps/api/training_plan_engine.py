@@ -1182,7 +1182,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     and sessions + 2 <= session_limit and key_sessions + 2 <= key_limit
                     and (profile.get("age_years") or 0) >= 18 and (profile.get("training_experience_years") or 0) >= 1):
                 candidates = adaptive_methods.threshold_pairs(candidates, controls.get("double_threshold_components", ["Z3"])) + candidates
+            slot_allocation = allocation
             for sport, method in candidates:
+                allocation = slot_allocation
                 speed, context = speed_by_sport[sport], context_by_sport[sport]
                 if method["structure"] == "MODEL_INTERVALS" and not method.get("developmental_variant"):
                     exposures = {a["date"] for a in source.get("activities", []) if a.get("sport") == sport
@@ -1202,6 +1204,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 z = method["zone"]
                 supporting = method["purpose"] == "SUPPORTING"
                 mixed = bool(method.get("mixed_component"))
+                if mixed and allocation is not None and period_objectives is not None:
+                    # Supplements can use residual component work on an easy
+                    # day; the key-session calendar must not zero this quota.
+                    allocation = {**allocation, z: period_objectives[z]["remaining"] or 0.}
                 readiness_rule = adaptive_methods.readiness_policy(method, profile, ready)
                 is_key = z in {"Z3", "Z4", "Z5"} and not supporting
                 is_strength = z == "STR"
@@ -1669,6 +1675,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             if choices:
                 choices.sort(key=lambda c: (-c[0], c[1]))
                 _, _, session, forecast_rows, after = choices[0]
+                if session.get("mixed_component") and session["dose_evidence"].get("selection", {}).get("component_allocation"):
+                    item["load_budget"]["component_allocation"] = session["dose_evidence"]["selection"]["component_allocation"]
                 after_ready = {r["zone"]: _round(r["readiness_percent"]) for r in after["current"]}
                 parts = _session_parts(session, settings, day_start_rows, day, slot_index)
                 covered_slots[day] = slot_index + len(parts)

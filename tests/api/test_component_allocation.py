@@ -39,7 +39,9 @@ def test_nonaccent_endurance_uses_weekly_need_without_raising_coach_fraction(mon
         if row["effective_load"] and row["zone"] == "Z1":
             row["effective_load"] = 140.
     p = body(sessions_per_week=9, sessions_by_day=[2,1,1,2,1,2,0],
-             accent_mode="MANUAL", accents=["Z4","Z5"], wave=[1.,1.,1.,.78])
+             accent_mode="MANUAL", accents=["Z4","Z5"], wave=[1.,1.,1.,.78], mixed_sessions_enabled=False)
+    # Isolate the full endurance method; mixed candidates now legitimately
+    # compete for the same slots and have their own allocation integration tests.
     p["max_key_sessions_per_week"] = 0
     original = deepcopy(p)
     plan = run(monkeypatch, p, repo)
