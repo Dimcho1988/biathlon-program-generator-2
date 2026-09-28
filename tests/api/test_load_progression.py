@@ -294,7 +294,7 @@ def test_mixed_double_threshold_has_distinct_capacities_and_one_dose_budget():
     blocks=engine._blocks(method,50,cap,settings)
     assert sum(b["duration_min"] for b in blocks if b["kind"]=="WORK" and b["session_index"]==1)==25
     assert sum(b["duration_min"] for b in blocks if b["kind"]=="WORK" and b["session_index"]==2)==5
-    assert engine._dose_usage(blocks,cap,"Z3")==pytest.approx(.5)
+    assert engine._dose_usage(blocks,cap,"Z3")==pytest.approx(.25)
 
 
 def test_interval_usage_counts_all_repetitions_against_structure_capacity():

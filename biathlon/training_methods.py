@@ -10,8 +10,9 @@ from functools import lru_cache
 from hashlib import sha256
 import json
 from pathlib import Path
+from . import adaptive_methods
 
-VERSION = "training-methods-v7"
+VERSION = "training-methods-v8"
 COMMON = ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "COMPETITION")
 METHODS = (
     {"id": "RUN-REC-EASY-01", "title": "Леко възстановително бягане", "zone": "Z1",
@@ -161,6 +162,11 @@ def resolved_methods(profile):
                                       "dose_status": "VERSIONED_COACH_DEFAULT_NOT_VALIDATED_NORM"},
                 "instructions": "Силно, но повторяемо усилие; без спринт или финал до отказ. Остави резерв за още две качествени отсечки. Запази ритъма и техниката; прекрати при разпадането им. Не ускорявай, за да достигнеш пулсово число.",
                 "adaptation": "Отделни onFlows профили v2: Z4 — 3–6 × 3 min / 3 min, общ работен бюджет до 1,2 от непрекъснатия капацитет; Z5 — 6–20 × 30 s / 30 s, до 1,5. Това са конкретни начални треньорски настройки, не универсални множители или научно валидирани норми. Поддържането използва минималния цял вариант. Цели повторения, почивки, резерв и всички бюджети се проверяват съвместно. Индивидуалният профил замества тези настройки."})
+    if adaptive_methods.developmental(profile):
+        methods = [adaptive_methods.short_variant(m) if m["structure"] in {"MODEL_INTERVALS", "METABOLIC_INTERVALS"}
+                   else m for m in methods if m["structure"] != "THRESHOLD_HIGH"]
+    if controls and controls.get("mixed_sessions_enabled", True):
+        methods.extend(adaptive_methods.mixed_variants(methods))
     nms = profile.get("neuromuscular") or {}
     if nms.get("enabled"):
         for base in list(methods):
