@@ -51,7 +51,13 @@ def test_selected_sports_add_their_own_history_and_keep_distinct_capacity_source
     assert result['parameters']['historical_selected_weekly_minutes']==pytest.approx(v['Run']+v['NordicSki'],abs=.002)
     assert seen==['NordicSki','Run']
     for d in result['days']:
-        if d['session'] and d['session']['zone'] in {'Z3','Z4','Z5'}: assert engine.date.fromisoformat(d['date']).weekday()==1
+        if d['session'] and d['session'].get('is_key_session'):
+            assert engine.date.fromisoformat(d['date']).weekday()==1
+        elif d['session'] and d['session']['zone'] in {'Z3','Z4','Z5'}:
+            # A small supplementary block can now use an easy day; it is not
+            # a second full key dose and still uses this sport's capacity.
+            assert d['session']['mixed_component']
+            assert d['session']['purpose']=='SUPPORTING'
     assert result['source']['speed_models_by_sport'].keys()=={'Run','NordicSki'}
 
 
