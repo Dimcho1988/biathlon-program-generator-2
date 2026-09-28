@@ -257,7 +257,9 @@ def test_reported_illness_blocks_new_tasks_even_with_good_recovery(monkeypatch):
 def test_residual_z3_uses_supporting_work_without_extra_key_sessions(monkeypatch):
     monkeypatch.setattr(engine.model_service,"speed_view",reference_speed)
     repo,_,_=observed();p=configured()
-    p["planning_controls"].update(intensity_days=[1,3],accent_index=1.5)
+    # This exercises the legacy post-key Z3 support method. Adaptive mixed
+    # blocks have their own readiness/dose rules and can precede a key day.
+    p["planning_controls"].update(intensity_days=[1,3],accent_index=1.5,mixed_sessions_enabled=False)
     result=engine.generate_plan(repo,"athlete",p,start_date=TODAY+timedelta(days=1),now=NOW)
     sessions=[(d,s) for d in result["days"] for s in d["sessions"]]
     keys=[d["date"] for d,s in sessions if s.get("is_key_session")]

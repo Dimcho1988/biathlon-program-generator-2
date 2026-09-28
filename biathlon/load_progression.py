@@ -15,7 +15,7 @@ from .equivalence import EQUIVALENCE_VERSION
 from .constants import COMPONENTS
 from . import planning_controls, planning_history, mesocycle_focus
 
-VERSION = "load-progression-v6-individual-reference"
+VERSION = "load-progression-v7-lower-planning-reference"
 # Deliberately separate from speed-duration correction and canonical Tref.
 WEEKLY_Q_BOUNDS = {"Z1": (240., 840.), "Z2": (60., 300.), "Z3": (30., 120.),
                    "Z4": (10., 40.), "Z5": (5., 30.)}
@@ -132,9 +132,11 @@ def reference_from_history(q, prior, zone):
         return q, "OBSERVED" if q is not None else "UNKNOWN"
     if q is None:
         return prior, "EXPERT_FALLBACK"
-    # A reliable personal observation is not truncated to a population range.
-    # This establishes an exposure reference, not proof of successful recovery.
-    return q, "OBSERVED"
+    # The lower prior guides planning without rewriting measured exposure.
+    # It is not a session minimum or permission to bypass E/7–40 and Recovery.
+    # Higher personal references remain uncapped by the population range.
+    low = WEEKLY_Q_BOUNDS[zone][0]
+    return (low, "LOWER_BOUND") if q < low else (q, "OBSERVED")
 
 
 def context(profile, source, rows, today, adaptation=None, *, retained=None, physiology=None, periodization=None):
@@ -151,7 +153,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
     valid_units = history_matches(source, physiology)
     reliable = valid_units and not (quality.get("limited_activities") or quality.get("excluded_activities"))
     key = reference_key(profile, physiology)
-    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v5-cycle-q", "load-progression-v4-clamped-q", "load-progression-v3-stable-q"} else None
+    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v6-individual-reference", "load-progression-v5-cycle-q", "load-progression-v4-clamped-q", "load-progression-v3-stable-q"} else None
     if frozen and frozen["version"] != VERSION:
         # Re-select the reference without replacing saved measurements or dates.
         frozen = deepcopy(frozen)
@@ -213,7 +215,8 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
            "anchor": frozen, "anchor_reused": reused, "reference": frozen,
            "previous_cycle": previous, "completed_cycle": current, "components": components,
            "adaptation": adaptation, "recovery_is_learning_input": False, "requires_catchup": False,
-           "reference_is_clamped": False, "normative_role": "INITIAL_PRIOR_NOT_POTENTIAL_CEILING", "percentages_are_coaching_parameters": True,
+           "reference_is_clamped": any(c["reference_selection"] == "LOWER_BOUND" for c in components.values()),
+           "normative_role": "LOWER_PLANNING_REFERENCE_NOT_POTENTIAL_CEILING", "percentages_are_coaching_parameters": True,
            "history_usable": reliable, "equivalence_version": EQUIVALENCE_VERSION,
            "overall_basis": "DIRECT_Q_COMPONENT_TARGETS_EFFECTIVE_LOAD_CHECKED_SEPARATELY"}
     if periodization:
@@ -380,7 +383,7 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
         weight = development_weight(profile, state, z, period)
         component_shape = cycle_shape(profile, state, z)
         factor = factors.get(z, 1.)
-        # Use the SAME personal reference for the trend and weekly intent. The
+        # Use the SAME planning reference for the trend and weekly intent. The
         # current observed exposure, E/7-40 and Recovery govern execution.
         q = c["reference_q"]
         exposure = c.get("recent_observed_q", c["weekly_q"])
