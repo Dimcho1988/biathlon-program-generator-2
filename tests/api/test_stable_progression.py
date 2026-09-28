@@ -20,8 +20,8 @@ def phases(p):
     return engine.build_periodization(p['program_start'], p['program_end'], [], reentry_days_override=0, taper_days=0)
 
 
-@pytest.mark.parametrize('observed_q,expected,selection', [(58,58,'OBSERVED'),(20,20,'OBSERVED'),(150,150,'OBSERVED'),(30,30,'OBSERVED'),(120,120,'OBSERVED')])
-def test_coach_reference_preserves_history_instead_of_replacing_it_with_expert_position(observed_q, expected, selection):
+@pytest.mark.parametrize('observed_q,expected,selection', [(58,58,'OBSERVED'),(20,30,'LOWER_BOUND'),(150,150,'OBSERVED'),(30,30,'OBSERVED'),(120,120,'OBSERVED')])
+def test_coach_reference_uses_lower_floor_without_replacing_history_with_expert_position(observed_q, expected, selection):
     p=configured();_,source,rows=observed()
     p['load_progression']['component_reference_positions']={'Z3':.95}
     source['activities']=[{'date':(TODAY-timedelta(days=n)).isoformat(),'sport':'Run','duration_min':60,
@@ -92,7 +92,7 @@ def test_reset_and_hr_changes_invalidate_the_reference_but_weekly_time_cap_does_
     assert not reset['anchor_reused']
 
 
-def test_low_observed_z5_keeps_personal_reference_and_separate_daily_gates():
+def test_low_observed_z5_keeps_history_with_lower_planning_reference_and_separate_daily_gates():
     p=configured();_,source,rows=observed()
     p['planning_controls']['accents']=['Z5']
     p['load_progression']['component_reference_positions']={'Z5':.8}
@@ -101,9 +101,10 @@ def test_low_observed_z5_keeps_personal_reference_and_separate_daily_gates():
     ctx=policy.context(p,source,rows,TODAY,periodization=phases(p))
     c=ctx['components']['Z5']
     assert c['expert_reference_q']==25  # 5 + .8*(30-5), all in direct Q.
-    assert c['reference_q']==c['weekly_q'] < 2.01
+    assert c['weekly_q'] < 2.01
+    assert c['reference_q']==5  # Lower planning anchor, not the 25-minute expert position.
     assert c['target_q']>=c['reference_q'] and c['target_is_before_daily_gates']
-    assert c['limitation'] is None
+    assert c['limitation']=='BELOW_REFERENCE_BOUND'
     goals,_,_=engine._goals(p,TODAY,'GENERAL_PREPARATION',False,{},None,0,4,rows,TODAY,False,1,ctx)
     assert goals['Z5']['target_weekly_q'] == pytest.approx(c['reference_q']*ctx['trajectory'][TODAY.isoformat()]['Z5']*goals['Z5']['progression']['cycle_shape'])
     assert ctx['components']['STR']['expert_reference_q'] is None
