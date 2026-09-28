@@ -73,12 +73,20 @@ it("saves 16 sessions and double-threshold preferences directly from step two", 
   await choose(select("Вид прагова тренировка"),"INTERVALS");
   const double=[...container.querySelectorAll("details")].find(d=>d.querySelector("summary")?.textContent==="Двоен праг · по желание")!;
   await click(double.querySelector<HTMLInputElement>('input[type="checkbox"]')!);
+  await enter(input("Дял от Tmax за всяка прагова сесия"), "45");
+  await enter(input("Пауза между праговите сесии"), "7");
+  await enter(input("Лактатен горен ориентир"), "3.2");
+  await enter(input("Минимална готовност за допълващия компонент"), "75");
   await click(button("Запази промените"));
   expect(fetchMock).toHaveBeenCalledTimes(1);
   const saved=JSON.parse(fetchMock.mock.calls[0][1].body).profile;
   expect(saved.planning_controls.sessions_per_week).toBe(16);
   expect(saved.planning_controls.double_threshold_days).toEqual([0]);
   expect(saved.planning_controls.threshold_method).toBe("INTERVALS");
+  expect(saved.planning_controls.double_threshold_fraction).toBe(.45);
+  expect(saved.planning_controls.double_threshold_gap_hours).toBe(7);
+  expect(saved.planning_controls.double_threshold_lactate_ceiling).toBe(3.2);
+  expect(saved.planning_controls.mixed_min_readiness).toBe(75);
   expect(container.textContent).toContain("Профилът е запазен");
 });
 

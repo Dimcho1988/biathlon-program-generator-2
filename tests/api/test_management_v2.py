@@ -80,7 +80,7 @@ def test_strength_work_rests_and_transitions_are_not_aerobic_double_counts():
 
 def test_mixed_high_session_rejects_incomplete_minimum_even_with_available_minutes():
     repo = Repository()
-    method = next(m for m in resolved_methods(profile(interval_profiles=[interval()])) if m["structure"] == "THRESHOLD_HIGH")
+    method = next(m for m in resolved_methods(profile(age_years=30, training_experience_years=10, interval_profiles=[interval()])) if m["structure"] == "THRESHOLD_HIGH")
     evidence = {"target_hr_bpm": 155, "target_speed_kmh": None, "combination_high_work_cap": 7.5, "primary_requested_work": 12}
     # Three 3-min reps cannot fit a 7.5-min high block. It must not round up.
     assert engine._blocks(method, 12, evidence, repo.settings) == []

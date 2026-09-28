@@ -62,6 +62,8 @@ export interface CycleDirective {
 export interface PlanningControls {
   sessions_by_day?: number[] | null; threshold_days?: number[]; threshold_method?: "AUTO" | "CONTINUOUS" | "INTERVALS";
   double_threshold_days?: number[]; double_threshold_components?: ("Z3" | "Z4")[];
+  double_threshold_fraction?: number; double_threshold_gap_hours?: number; double_threshold_lactate_ceiling?: number;
+  mixed_sessions_enabled?: boolean; mixed_min_readiness?: number;
   history_gap_days?: number; automatic_intervals?: boolean;
   sessions_per_week: number; intensity_days: number[]; strength_days: number[]; long_session_day: number | null;
   capacity_policy?: "OBSERVED_ONLY" | "MODEL_WITH_PRIOR"; max_strength_sessions: number; training_sports: ManagementProfile["actual_sport"][]; weekly_target_hours: number | null;
@@ -77,7 +79,7 @@ export function trainingDays(profile: Pick<ManagementProfile, "availability_mode
   return profile.training_days ?? (availabilityMode(profile) === "AUTO_HISTORY" ? [0,1,2,3,4,5,6] : profile.available_minutes.flatMap((v,i) => v > 0 ? [i] : []));
 }
 export function defaultPlanningControls(sport: ManagementProfile["actual_sport"]): PlanningControls {
-  return { sessions_by_day: null, threshold_days: [], threshold_method: "AUTO", double_threshold_days: [], double_threshold_components: ["Z3"], history_gap_days: 10, automatic_intervals: true, sessions_per_week: 7, intensity_days: [], strength_days: [], long_session_day: null, max_strength_sessions: 2,
+  return { sessions_by_day: null, threshold_days: [], threshold_method: "AUTO", double_threshold_days: [], double_threshold_components: ["Z3"], double_threshold_fraction: .5, double_threshold_gap_hours: 6, double_threshold_lactate_ceiling: 3.5, mixed_sessions_enabled: true, mixed_min_readiness: 70, history_gap_days: 10, automatic_intervals: true, sessions_per_week: 7, intensity_days: [], strength_days: [], long_session_day: null, max_strength_sessions: 2,
     training_sports: [sport], weekly_target_hours: null, capacity_policy: "MODEL_WITH_PRIOR", mesocycle_anchor: null, wave: [.96, 1.04, 1.10, .78],
     accent_mode: "AUTO", automatic_focus_count: 3, ranked_indices: [1.6, 1.5, 1.2], shock_indices: [2, 1.8, 1.6], accent_limit: 2, accents: [], accent_index: 1.1, maintenance_index: 1, cycles: [] };
 }
@@ -96,6 +98,7 @@ export type Component = "Z1" | "Z2" | "Z3" | "Z4" | "Z5" | "STR";
 export const COMPONENTS: Component[] = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"];
 export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; lactate_reference?: LactateReference }
 export interface DoseEvidence {
+  planned_gap_hours?: number; mixed_component?: boolean;
   min_dose_fraction?: number | null; minimum_dose_scope?: string; applied_structure_fraction?: number; max_dose_fraction?: number; shared_day_structure_fraction?: number;
   capacity_source: string; capacity_minutes: number; target_hr_bpm: number | null; target_speed_kmh: number | null;
   fraction: number; requested_work_minutes: number; prescribed_work_minutes: number;
@@ -220,6 +223,9 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     const regular = c.ranked_indices ?? [1.6, 1.5, 1.2], shock = c.shock_indices ?? [2, 1.8, 1.6];
     const orderedIndices = (v: unknown): v is number[] => Array.isArray(v) && v.length === 3 && v.every((n,i) => range(n,1,2) && (i === 0 || v[i-1] >= n));
     if (!integer(c.automatic_focus_count ?? 3, 1, 3) || !orderedIndices(regular) || !orderedIndices(shock) || shock.some((v,i)=>v < regular[i])) throw new Error("Целите трябва да намаляват от водещия към третия компонент и да са между 1 и 2. Ударните цели трябва да са поне колкото обичайните.");
+    if (!range(c.double_threshold_fraction ?? .5, .25, .6) || !range(c.double_threshold_gap_hours ?? 6, 4, 10)
+      || !range(c.double_threshold_lactate_ceiling ?? 3.5, 2, 4) || !range(c.mixed_min_readiness ?? 70, 60, 90)
+      || (c.mixed_sessions_enabled !== undefined && typeof c.mixed_sessions_enabled !== "boolean")) throw new Error("Провери дозата, паузата и правилата за допълваща работа.");
     const doubleDays = (c.double_threshold_days ?? []) as number[];
     const doubleComponents = c.double_threshold_components ?? ["Z3"];
     if (!Array.isArray(doubleComponents) || !doubleComponents.length || doubleComponents.length > 2 || new Set(doubleComponents).size !== doubleComponents.length || !doubleComponents.every(z => z === "Z3" || z === "Z4")
@@ -255,8 +261,7 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
       || !range(p.total_capacity_ratio, .001, 3) || !integer(p.reserve_repetitions, 1, 4)
       || !optionalRange(p.target_speed_kmh, .001, 80) || (p.speed_basis !== undefined && !["ACTUAL", "FLAT_EQUIVALENT"].includes(String(p.speed_basis)))
       || p.work_seconds >= p.continuous_capacity_min * 60
-      || p.min_repetitions * p.work_seconds > p.continuous_capacity_min * 60 * p.total_capacity_ratio
-      || !range(value.age_years, 18, 100) || !range(value.training_experience_years, 1, 85)) throw new Error("Проверете целия интервален профил, възрастта и стажа. Минималната структура трябва да се побира в дозата.");
+      || p.min_repetitions * p.work_seconds > p.continuous_capacity_min * 60 * p.total_capacity_ratio) throw new Error("Проверете целия интервален профил. Минималната структура трябва да се побира в дозата.");
     seen.add(String(p.zone));
   }
   return { ...normalized, ...parseTrainingObservations(normalized) } as unknown as ManagementProfile;

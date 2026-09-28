@@ -92,7 +92,7 @@ def test_auto_week_has_no_template_or_history_wave_cap_and_keeps_canonical_gates
 
 def test_automatic_z4_dose_has_complete_reps_and_does_not_inherit_z5_capacity():
     repo=Repository(); settings=repo.settings
-    methods=resolved_methods(profile(planning_controls=controls()))
+    methods=resolved_methods(profile(age_years=30, training_experience_years=10, planning_controls=controls()))
     method=next(m for m in methods if m['id']=='ONFLOWS-CONTROLLED-Z4-V2')
     method['actual_sport']='NordicSki'
     cap=engine.capacity_for(method,settings,None,(None,[],['NO_INDIVIDUAL_SPEED_CURVE']),TODAY)

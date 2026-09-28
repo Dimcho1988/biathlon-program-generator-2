@@ -116,7 +116,7 @@ def test_day_and_session_preferences_change_the_generated_week(monkeypatch):
     assert all(sum(s["total_minutes"] for s in planning_schedule.day_sessions(d)) <= 30.001 for d in second["days"])
 
 
-def test_double_threshold_is_two_sessions_sharing_one_work_dose(monkeypatch):
+def test_double_threshold_has_independent_doses_and_long_short_structure(monkeypatch):
     p = body(sessions_per_week=12, double_threshold_days=[TODAY.weekday()], threshold_method="INTERVALS",
              accent_mode="MANUAL", accents=["Z3"], accent_index=1.5)
     plan = run(monkeypatch, p, Repository())
@@ -127,14 +127,21 @@ def test_double_threshold_is_two_sessions_sharing_one_work_dose(monkeypatch):
         assert s["zone"] == "Z3"
         assert any(b["kind"] == "WARMUP" for b in s["blocks"])
         assert any(b["kind"] == "COOLDOWN" for b in s["blocks"])
-        assert s["dose_evidence"]["shared_day_dose"]
+        assert not s["dose_evidence"]["shared_day_dose"]
+        assert s["dose_evidence"]["minimum_dose_scope"] == "EACH_THRESHOLD_SESSION"
+        assert .25 <= s["dose_evidence"]["applied_structure_fraction"] <= .5
+        assert s["dose_evidence"]["planned_gap_hours"] == 6
+        assert s["dose_evidence"]["readiness_policy"]["intraday_recheck"] is False
     total = sum(s["main_work_minutes"] for s in pair)
     cap = pair[0]["dose_evidence"]["capacity_minutes"]
-    assert total <= cap*p["building_fraction"] + .01
+    assert total > cap*p["building_fraction"]
+    assert total <= 2*cap*.5 + .01
+    assert all(6 <= b["duration_min"] <= 10 for b in pair[0]["blocks"] if b["kind"] == "WORK")
+    assert all(b["duration_min"] == 1 and b["target_hr_bpm"] is None for b in pair[1]["blocks"] if b["kind"] == "WORK")
     assert not any(s["zone"] in {"Z4", "Z5"} for s in pair)
     continuous = deepcopy(p); continuous["planning_controls"]["threshold_method"] = "CONTINUOUS"
     changed = run(monkeypatch, continuous, Repository())
-    assert changed["days"][0]["sessions"][0]["method_id"] != pair[0]["method_id"]
+    assert changed["days"][0]["sessions"][0]["method_id"] == pair[0]["method_id"]
 
 
 def test_double_threshold_validation_and_declining_readiness(monkeypatch):

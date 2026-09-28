@@ -76,6 +76,11 @@ class PlanningControls(BaseModel):
     threshold_method: Literal["AUTO", "CONTINUOUS", "INTERVALS"] = "AUTO"
     double_threshold_days: list[int] = Field(default_factory=list, max_length=3)
     double_threshold_components: list[Literal["Z3", "Z4"]] = Field(default_factory=lambda: ["Z3"], min_length=1, max_length=2)
+    double_threshold_fraction: float = Field(default=.5, ge=.25, le=.6)
+    double_threshold_gap_hours: float = Field(default=6, ge=4, le=10)
+    double_threshold_lactate_ceiling: float = Field(default=3.5, ge=2, le=4)
+    mixed_sessions_enabled: bool = True
+    mixed_min_readiness: float = Field(default=70, ge=60, le=90)
     intensity_days: list[int] = Field(default_factory=list, max_length=7)
     strength_days: list[int] = Field(default_factory=list, max_length=7)
     long_session_day: int | None = Field(default=None, ge=0, le=6)
@@ -255,9 +260,8 @@ class ManagementProfile(BaseModel):
             raise ValueError("Configure at most one complete interval profile per zone")
         if any(p.sport != self.actual_sport for p in self.interval_profiles):
             raise ValueError("Interval capacity must belong to the actual means")
-        if self.interval_profiles and (self.age_years is None or self.age_years < 18 or
-                                      self.training_experience_years is None or self.training_experience_years < 1):
-            raise ValueError("These interval profiles require an adult with at least one year of training; youth/novice profiles require separate rules")
+        # Youth/novice/unknown profiles resolve to short repeatable variants.
+        # The original effort anchor is retained; age is not a capacity ceiling.
         return self
 
 

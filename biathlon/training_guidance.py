@@ -77,6 +77,24 @@ def lactate_comparisons(samples):
     return results
 
 
+def annotate_double_threshold(blocks, profile):
+    """A method ceiling, never a predicted concentration or universal LT."""
+    if not profile.get("lactate_guidance_enabled", True):
+        return blocks
+    ceiling = (profile.get("planning_controls") or {}).get("double_threshold_lactate_ceiling", 3.5)
+    for b in blocks:
+        if b["kind"] != "WORK":
+            continue
+        ref = b.get("lactate_reference") or {}
+        if ref.get("source") not in {"INDIVIDUAL_TEST", "INDIVIDUAL_MANUAL", "TEST_INTERPOLATION"}:
+            b["lactate_reference"] = {"unit": "mmol/L", "zone": b["zone"], "low_mmol": None,
+                "high_mmol": ceiling, "source": "COACH_DOUBLE_THRESHOLD_METHOD", "measured": False,
+                "control_role": "METHOD_CEILING", "label": "Треньорски ориентир за двойния праг",
+                "note": "Горен ориентир за контрол на усилието, не цел за достигане или индивидуален лактатен праг. Пробите са сравними само при един и същ протокол и момент на вземане."}
+        b["instructions"] += " Лактатът е ориентир за намаляване на усилието, а не число, което трябва да достигнеш."
+    return blocks
+
+
 def neuromuscular_blocks(config, easy_hr):
     blocks = []
     sprint = config["mode"] == "SHORT_SPRINT"
