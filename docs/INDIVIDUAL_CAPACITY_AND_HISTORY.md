@@ -29,9 +29,9 @@ minimum and retain the existing 30-minute ceiling.
 | Accepted maximal tests | Mode |
 | --- | --- |
 | 0 | Estimated prior when paired speed evidence exists; otherwise no speed prediction |
-| 1 | Scale the entire preliminary curve (or normative shape) through the exact test |
+| 1 | Scale the canonical normative shape through the exact test; preliminary shape remains diagnostic only |
 | 2 | Versioned log-quadratic fit with independent outward correction, smooth 5% cap and no reversal |
-| More than 2 | Explicit existing C1 multipoint mode retaining every accepted test |
+| More than 2 | C1 interpolation through every accepted test; continue its terminal log-quadratic pieces with independent, smooth 5% caps and no reversal |
 
 Invalid or incompatible accepted tests remain visible with a diagnostic. They
 are not silently discarded in favor of a reference curve. Predictions outside

@@ -140,19 +140,21 @@ def test_saved_summary_rebuilds_identical_prior_without_promoting_estimates_to_t
     assert prior.curve_from_summary(prior.summary(prior.build(None, None, {}))) is None
 
 
-def test_one_real_test_scales_prior_exactly_and_diagnostics_do_not_average_anchors():
+def test_one_real_test_scales_normative_shape_and_diagnostics_keep_prior_disagreement():
     result = prior.build(BOUNDS, 180, paired_indices(ratios=dict(zip(TMAX_RANGES_S, [.67, .68, .70, .71]))),
                          total_weekly_minutes=720)
     test = {"duration_s": 600., "speed_kmh": 20.}
     calibrated_curve = calibrated([test], prior=result["curve"])
     factor = 20/(result["curve"].speed(600)*3.6)
+    normative_factor = 20/(REFERENCE.speed(600)*3.6)
     assert calibrated_curve.speed(600)*3.6 == pytest.approx(20, abs=1e-12)
     for t in [180, 600, 3000, 15000]:
-        assert calibrated_curve.speed(t) == pytest.approx(result["curve"].speed(t)*factor, rel=1e-12)
+        assert calibrated_curve.speed(t) == pytest.approx(REFERENCE.speed(t)*normative_factor, rel=1e-12)
     diagnostic = prior.calibration_diagnostics(result, [test])
     assert diagnostic["residuals"][0]["measured_vs_prior_percent"] == pytest.approx(100*(factor-1))
     assert diagnostic["real_test_anchors_take_precedence"]
-    assert diagnostic["prior_shape_used"]
+    assert not diagnostic["prior_shape_used"]
+    assert prior.calibration_diagnostics(result, [])["prior_shape_used"]
     assert diagnostic["blend_status"] == "NOT_APPLIED"
     assert not diagnostic["sampling_counts_are_confidence_weights"]
 
