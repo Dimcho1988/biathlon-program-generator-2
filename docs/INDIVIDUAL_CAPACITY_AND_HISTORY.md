@@ -84,7 +84,7 @@ the last equal to 100. No percentage preset or HRmax-from-age formula is invente
 When configured, new profiles can generate zones from known HRmax. Existing
 manual zones remain manual; automatic profiles retain the exact saved scheme.
 
-Apply `20260929211429_athlete_hr_zone_provenance.sql` before deploying the API.
+Apply `20260930045944_athlete_hr_zone_provenance.sql` before deploying the API.
 Without an expert scheme, manual setup remains available and automatic mode is
 not advertised as configured.
 
