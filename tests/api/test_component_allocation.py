@@ -144,7 +144,20 @@ def test_automatic_q_targets_match_outlook_and_no_micro_sessions(monkeypatch):
         assert objective["planned_q"] == pytest.approx(sum(s["direct_equivalent_minutes"][z] for d in plan["days"] for s in d["sessions"]), abs=.001)
     selected = [s for d in plan["days"] for s in d["sessions"]]
     assert selected
-    assert all(s["dose_evidence"]["applied_structure_fraction"] >= .25 for s in selected if s["zone"] != "STR")
+    regular = [s for s in selected if s["zone"] != "STR" and s["purpose"] != "RECOVERY" and not s.get("mixed_component")]
+    assert regular
+    assert all(s["dose_evidence"]["applied_structure_fraction"] >= .25 for s in regular)
+    # Recovery and supporting mixed blocks have their own existing minima;
+    # changed expert capacities may make those methods win an allocation slot.
+    for session in selected:
+        if session["purpose"] == "RECOVERY":
+            assert 10 <= session["main_work_minutes"] <= 30
+        if session.get("mixed_component"):
+            evidence = session["dose_evidence"]
+            primary = sum(b["duration_min"] for b in session["blocks"] if b["kind"] == "WORK" and b["zone"] == session["zone"])
+            assert primary >= evidence["minimum_primary_work_minutes"] - .001
+            assert primary <= evidence["capacity_minutes"]*evidence["mixed_primary_max_fraction"] + .001
+            assert evidence["applied_structure_fraction"] <= evidence["max_dose_fraction"] + .001
     assert all(s["total_minutes"] > 10 for s in selected if s["zone"] == "Z1")
     # Unavailable Z5 model and disabled strength remain visible, not silently covered by spill.
     assert plan["allocation"]["components"]["Z5"]["remaining"] > 0

@@ -86,7 +86,12 @@ def test_mixed_candidate_below_90_uses_residual_budget_and_own_readiness_rule(mo
             row["readiness_percent"] = ready if row["zone"] == "Z3" else 100.
         return result
     monkeypatch.setattr(engine.recovery_v2, "simulate", recovery)
-    plan = run(monkeypatch, p, Repository())
+    repo = Repository()
+    # Isolate the readiness/day rule from the separate exposure ceiling. The
+    # revised Z1 capacity makes the complete mixed structure longer than 60 min.
+    for activity in repo.envelope["snapshot_payload"]["load_history"]["activities"]:
+        activity["duration_min"] = 120
+    plan = run(monkeypatch, p, repo)
     sessions = [s for d in plan["days"] for s in d["sessions"]]
     assert bool(sessions) is allowed
     if allowed:
