@@ -8,6 +8,7 @@ import {HrSpeedZones} from "./hr-speed-zones";
 import {SpeedTestEditor} from "./speed-test-editor";
 import {clockTime,manualClockTime,manualTestPayload} from "../lib/speed-tests";
 import {ManualSpeedTestEditor} from "./manual-speed-test";
+import {DosingCurvePanel} from "./dosing-curve-panel";
 import {AthleteFunctionalProfile} from "./athlete-functional-profile";
 const n=(v:number)=>new Intl.NumberFormat("bg-BG",{maximumFractionDigits:2}).format(v);
 const time=clockTime;
@@ -78,7 +79,8 @@ export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minu
       {canPredict&&model.prediction&&["EXPERT_HISTORY","EXPERT_MINIMUM"].includes(model.prediction.hr_prediction_source??"")&&<p role="status">Връзката с пулса използва експертен времеви ориентир за зоната, защото няма подходящ измерен индекс.</p>}
       <p>Пулсът и скоростта са моделни ориентири от ТИ и допустимите продължителности по зони. {model.curve_metadata?"Историята определя мястото във времевия диапазон; при липса на данни се използва експертният минимум.":"При липсващ или неподходящ индекс се използва средата на експертния диапазон."} При кратки максимални усилия тази оценка не служи за дозиране. Дистанцията е еквивалент за равен терен.</p>
     </section>
-    {Boolean(model.calibration_diagnostics?.residuals?.length)&&<section className="history-section"><details><summary>Как реалните тестове се сравняват с предварителната оценка?</summary><p>Реалните максимални тестове имат предимство и остават точни опори. Разликата показва какво е било оценено преди калибрацията; не осредняваме автоматично резултатите с предварителния модел.</p><div className="activity-table-wrap"><table><thead><tr><th>Време</th><th>Реален тест</th><th>Предварителна оценка</th><th>Разлика</th></tr></thead><tbody>{model.calibration_diagnostics!.residuals!.map((row,index)=><tr key={`${row.duration_s}-${index}`}><th>{manualClockTime(row.duration_s)}</th><td>{n(row.measured_speed_kmh)} км/ч</td><td>{n(row.prior_speed_kmh)} км/ч</td><td>{row.measured_vs_prior_percent>0?"+":""}{n(row.measured_vs_prior_percent)}%</td></tr>)}</tbody></table></div></details></section>}
+    {Boolean(model.calibration_diagnostics?.residuals?.length)&&<section className="history-section"><details><summary>Как реалните тестове се сравняват с предварителната оценка?</summary><p>Реалните максимални тестове имат предимство и остават точни опори. Разликата показва какво е било оценено преди калибрацията. Общата крива за дозиране е отделна и запазва двете изходни криви.</p><div className="activity-table-wrap"><table><thead><tr><th>Време</th><th>Реален тест</th><th>Предварителна оценка</th><th>Разлика</th></tr></thead><tbody>{model.calibration_diagnostics!.residuals!.map((row,index)=><tr key={`${row.duration_s}-${index}`}><th>{manualClockTime(row.duration_s)}</th><td>{n(row.measured_speed_kmh)} км/ч</td><td>{n(row.prior_speed_kmh)} км/ч</td><td>{row.measured_vs_prior_percent>0?"+":""}{n(row.measured_vs_prior_percent)}%</td></tr>)}</tbody></table></div></details></section>}
+    {model.dosing_model && <DosingCurvePanel model={model.dosing_model}/>}
     {model.functional_profile && <AthleteFunctionalProfile profile={model.functional_profile}/>}
     {model.hr_model && <HrSpeedZones model={model.hr_model} admission={model.index_admission} indexWindow={model.index_window} zoneSource={model.hr_zone_source}/>}
     <section className="history-section" id="speed-tests"><h2>Максимални тестове и контролни стартове</h2>

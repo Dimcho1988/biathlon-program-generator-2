@@ -21,13 +21,13 @@ from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, equivalen
 from biathlon.periodization import build_periodization, reentry_dose_active
 from biathlon.physiology import _causal_tref, effective_from_direct_vector, linear_equivalence_coefficient
 from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VERSION, catalog, resolved_methods
-from biathlon import training_guidance, adaptive_methods, preliminary_capacity, planning_consistency, race_specific
+from biathlon import training_guidance, adaptive_methods, preliminary_capacity, planning_consistency, race_specific, dosing_curve
 from . import model_service, load_adaptation, race_duration, planning_history_estimate
 from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 
-VERSION = "training-management-v24"
-PARAMETER_VERSION = "management-parameters-v24"
+VERSION = "training-management-v25"
+PARAMETER_VERSION = "management-parameters-v25"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -208,9 +208,11 @@ def _capacity_context(speed, settings):
     prior = preliminary_capacity.curve_from_summary(prior_summary)
     if not tests and prior is None:
         return None, tests, ["NO_INDIVIDUAL_SPEED_CURVE"]
-    curve = speed_duration.calibrated(tests, prior=prior)
+    blend = dosing_curve.from_view(speed)
+    curve = blend or speed_duration.calibrated(tests, prior=prior)
     durations = {a["zone"]: a["duration_s"] for a in prior_summary.get("anchors", [])}
-    predictor = hr_speed.Predictor(curve, settings.zone_bounds_bpm, settings.hrmax_bpm, speed["index_summary"], expert_durations=durations or None)
+    predictor_type = dosing_curve.Predictor if blend else hr_speed.Predictor
+    predictor = predictor_type(curve, settings.zone_bounds_bpm, settings.hrmax_bpm, speed["index_summary"], expert_durations=durations or None)
     return predictor, tests, reasons
 
 
@@ -234,6 +236,9 @@ def capacity_for(method, settings, speed, context, today, allow_fallback=True, *
                     "target_hr_bpm":None,"target_speed_kmh":band["speed_kmh"],"model_version":speed["model_version"],
                     "fallback_reasons":[],"race_specific":deepcopy(band),
                     "capacity_confidence":"REAL_TEST_CALIBRATED_RACE_REFERENCE"}
+            if band.get("dosing_model_version") == dosing_curve.VERSION:
+                base.update(capacity_source="BLENDED_DOSING_CURVE", model_version=dosing_curve.VERSION,
+                            capacity_confidence="COACH_30_70_ESTIMATE")
         elif zone == "Z5":
             # HR-speed stops at the Z4/Z5 boundary. Never extrapolate a Z5
             # Tref from HR or silently inherit Z4's expert duration.
@@ -254,6 +259,10 @@ def capacity_for(method, settings, speed, context, today, allow_fallback=True, *
                     "capacity_confidence": "RECENT_MAXIMAL_TEST_ABOVE_SUPPORTED_Z4_BOUNDARY",
                     "test_anchor": deepcopy(anchor), "boundary_speed_kmh": boundary_speed,
                     "boundary_source":predictor.metadata(boundary_hr)["hr_prediction_source"]}
+            if isinstance(predictor, dosing_curve.Predictor):
+                base.update(capacity_source="BLENDED_DOSING_CURVE", model_version=dosing_curve.VERSION,
+                            target_speed_kmh=predictor.curve.speed(anchor["duration_s"])*3.6,
+                            capacity_confidence="COACH_30_70_ESTIMATE")
         else:
             base = capacity_for({**method, "structure": "CONTINUOUS"}, settings, speed, context, today, allow_fallback, use_model_prior=use_model_prior)
         if base is None:
@@ -275,10 +284,11 @@ def capacity_for(method, settings, speed, context, today, allow_fallback=True, *
             anchors = [e["payload"] for e in speed.get("tests", []) if e.get("entry_key") in keys]
             if len({t["duration_s"] for t in anchors}) >= 2 and all(t.get("maximal") and t.get("test_mode", "STRICT") == "STRICT" for t in anchors):
                 try:
-                    curve = speed_duration.calibrated(anchors, prior=preliminary_capacity.curve_from_summary(speed.get("preliminary_capacity")))
+                    blend = dosing_curve.from_view(speed)
+                    curve = blend or speed_duration.calibrated(anchors, prior=preliminary_capacity.curve_from_summary(speed.get("preliminary_capacity")))
                     seconds = curve.inverse(p["target_speed_kmh"] / 3.6)
                     if min(t["duration_s"] for t in anchors) <= seconds <= max(t["duration_s"] for t in anchors):
-                        capacity, source = seconds / 60, "SPEED_DURATION"
+                        capacity, source = seconds / 60, "BLENDED_DOSING_CURVE" if blend else "SPEED_DURATION"
                 except ValueError:
                     pass
         if source == "COACH_EFFORT_CAPACITY" and not 0 <= (today - date.fromisoformat(p["assessed_on"])).days <= 42:
@@ -287,7 +297,7 @@ def capacity_for(method, settings, speed, context, today, allow_fallback=True, *
             return None
         return {"capacity_source": source, "capacity_minutes": capacity,
                 "target_hr_bpm": None, "target_speed_kmh": p.get("target_speed_kmh"),
-                "model_version": speed["model_version"] if source == "SPEED_DURATION" else "individual-effort-profile-v2", "fallback_reasons": [],
+                "model_version": dosing_curve.VERSION if source == "BLENDED_DOSING_CURVE" else speed["model_version"] if source == "SPEED_DURATION" else "individual-effort-profile-v2", "fallback_reasons": [],
                 "effort_profile": deepcopy(p), "hr_role": "OBSERVATION_ONLY",
                 "speed_role": p.get("speed_basis", "ACTUAL"), "target_zone_working_bounds_bpm": None}
     if zone == "STR":
@@ -308,7 +318,7 @@ def capacity_for(method, settings, speed, context, today, allow_fallback=True, *
             reasons.append("INSUFFICIENT_COMPARABLE_INDEX_OBSERVATIONS")
         try:
             duration = predictor.duration(target_hr)
-            if predictor.metadata(target_hr)["hr_prediction_source"] != "INDEX":
+            if predictor.metadata(target_hr)["hr_prediction_source"] not in {"INDEX", "COACH_INDEX_TEST_BLEND"}:
                 reasons.append("HR_MAPPING_USES_EXPERT_ANCHOR")
             # The broad reference curve is not an athlete-supported domain.
             if not tests or not min(t["duration_s"] for t in tests) <= duration <= max(t["duration_s"] for t in tests):
@@ -318,10 +328,15 @@ def capacity_for(method, settings, speed, context, today, allow_fallback=True, *
             reasons.append("OUTSIDE_HR_SPEED_PREDICTION_RANGE")
     prior_reasons = {"INSUFFICIENT_INDEPENDENT_TEST_DURATIONS", "OUTSIDE_OBSERVED_TEST_DURATION_SUPPORT"}
     prior_allowed = use_model_prior and allow_fallback and reasons and set(reasons) <= prior_reasons
-    if (not reasons or prior_allowed) and duration is not None:
-        source = "SPEED_DURATION_PRIOR" if prior_allowed else "SPEED_DURATION"
+    # The separate 30/70 curve is an explicit coaching estimate, including its
+    # extrapolated part. Existing fallback settings still control whether such
+    # estimates may prescribe a dose; stale/invalid data remain disqualifying.
+    blend_allowed = isinstance(predictor, dosing_curve.Predictor) and (not reasons or allow_fallback
+        and set(reasons) <= prior_reasons | {"INSUFFICIENT_COMPARABLE_INDEX_OBSERVATIONS"})
+    if (not reasons or prior_allowed or blend_allowed) and duration is not None:
+        source = "BLENDED_DOSING_CURVE" if blend_allowed else "SPEED_DURATION_PRIOR" if prior_allowed else "SPEED_DURATION"
         minutes = duration / 60.
-        model_version = speed["model_version"]
+        model_version = dosing_curve.VERSION if blend_allowed else speed["model_version"]
         if prior_allowed:
             # The individually scaled expert shape is still an estimate. Bound
             # its duration by the existing expert upper envelope at this effort.
@@ -345,7 +360,7 @@ def capacity_for(method, settings, speed, context, today, allow_fallback=True, *
             "expert_capacity_position": prior_anchor.get("duration_position") if source == "EXPERT_CONTINUOUS_TREF" and prior_anchor else None,
             "target_hr_bpm": _round(target_hr), "target_speed_kmh": _round(velocity) if velocity else None,
             "model_version": model_version, "fallback_reasons": reasons,
-            "capacity_confidence": "INDIVIDUAL_TESTS_AND_RECENT_INDEX" if source == "SPEED_DURATION" else "INDIVIDUALLY_SCALED_EXPERT_SHAPE" if source == "SPEED_DURATION_PRIOR" else "EXPERT_REFERENCE",
+            "capacity_confidence": "COACH_30_70_ESTIMATE" if source == "BLENDED_DOSING_CURVE" else "INDIVIDUAL_TESTS_AND_RECENT_INDEX" if source == "SPEED_DURATION" else "INDIVIDUALLY_SCALED_EXPERT_SHAPE" if source == "SPEED_DURATION_PRIOR" else "EXPERT_REFERENCE",
             "target_zone_working_bounds_bpm": [low, high],
             "supported_test_duration_s": [min(t["duration_s"] for t in tests), max(t["duration_s"] for t in tests)] if tests else None,
             "speed_role": "FLAT_EQUIVALENT_REFERENCE_NOT_TERRAIN_PACE"}
@@ -1897,6 +1912,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                   "component_history_days": component_history_days,
                   "speed_model_version": speed_by_sport[primary_sport].get("model_version") if speed_by_sport[primary_sport] else None,
                   "speed_models_by_sport": {s: {"version": v.get("model_version"), "status": v.get("status"), "active_test_keys": v.get("active_test_keys", [])} if v else None for s,v in speed_by_sport.items()},
+                  "dosing_models_by_sport": {s: {k: (v.get("dosing_model") or {}).get(k) for k in ("model_version", "status", "weights")} if v else None for s,v in speed_by_sport.items()},
                   "recovery_model_version": recovery_v2.VERSION, "method_catalog_version": METHODS_VERSION,
                   "speed_active_test_keys": speed_by_sport[primary_sport].get("active_test_keys", []) if speed_by_sport[primary_sport] else [],
                   "readiness_known": all_sources_known, "known_history_only_forecast": not forecast_known,

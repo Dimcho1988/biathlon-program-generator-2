@@ -24,6 +24,7 @@ class ModelHealthResponse(HealthResponse):
     hrmod_source_commit: str
     recovery_model_version: str | None = None
     speed_model_version: str | None = None
+    dosing_model_version: str | None = None
 
 
 class SyncJobRequest(StrictModel):

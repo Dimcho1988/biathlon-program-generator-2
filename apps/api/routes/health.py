@@ -32,6 +32,7 @@ async def model_health() -> ModelHealthResponse:
         hrmod_source_commit=SOURCE_COMMIT,
         recovery_model_version=model_service.recovery_v2.VERSION if model_service.enabled() else "main-load-recovery-v1",
         speed_model_version=model_service.speed_duration.VERSION,
+        dosing_model_version=model_service.dosing_curve.VERSION,
     )
 
 

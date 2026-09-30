@@ -14,7 +14,7 @@ from urllib.parse import quote
 from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 
-from biathlon import recovery_v2, speed_duration, preliminary_capacity
+from biathlon import recovery_v2, speed_duration, preliminary_capacity, dosing_curve
 from biathlon.athlete_functional_profile import build_functional_profile
 from .trainability_history import HISTORY_DAYS, history_from_calendar, robust_mean, read_calendar, window_start
 from .model_schemas import RecoveryConfigInput, RecoveryHistoryV2, initial_settings
@@ -336,6 +336,8 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     if window:
         if any(p["capped"] and p["duration_s"]<window[0] for p in points):limited_tails.append("SHORT")
         if any(p["capped"] and p["duration_s"]>window[1] for p in points):limited_tails.append("LONG")
+    dosing = dosing_curve.describe(prior["curve"], tuned if not model_error else None, tests,
+        settings.zone_bounds_bpm, settings.hrmax_bpm, indices, prior["anchors"])
     return {"schema_version":"speed-model-v1","model_version":metadata.get("model_version",speed_duration.VERSION),"sport":sport,"sports":sports,
         "test_window":{"start":start.isoformat(),"end":today.isoformat()},
         "index_window":{"start":index_start.isoformat(),"end":today.isoformat(),"days":HISTORY_DAYS,
@@ -344,7 +346,7 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
         "status":"CONFLICTING_TESTS" if model_error else "CALIBRATED" if tests else "PRELIMINARY" if tuned else "UNAVAILABLE",
         "tests":entries,"active_test_count":len(tests),"exploratory_test_count":exploratory_count,
         "active_test_keys":[e["entry_key"] for e in entries if e["payload"] in tests],
-        "points":points,"curve_metadata":{"mode":metadata.get("calibration_mode","UNAVAILABLE"),
+        "points":points,"dosing_model":dosing,"curve_metadata":{"mode":metadata.get("calibration_mode","UNAVAILABLE"),
             "absolute_speed_available":tuned is not None,"measured_window_s":window,
             "cap_percent":5 if metadata.get("additional_corridor_fraction")==.05 else None,
             "limited_tails":limited_tails,"reasons":[model_error] if model_error else [],
