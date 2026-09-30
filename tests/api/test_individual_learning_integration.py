@@ -43,12 +43,14 @@ def test_old_profiles_default_to_shadow_and_validate_bounded_controls():
             IndividualLearning(**values)
 
 
-def test_control_volume_changes_direct_q_once_without_expanding_separate_e_gate():
+def test_control_volume_changes_q_once_and_reconciles_its_canonical_e_budget():
     profile, _, _, rows, context = setup_context()
     baseline_context = {k: v for k, v in context.items() if k != "individual_learning"}
     before, after = goals(profile, rows, baseline_context), goals(profile, rows, context)
     assert after["Z3"]["target_weekly_q"] == pytest.approx(before["Z3"]["target_weekly_q"]*1.05)
-    assert after["Z3"]["target"] == before["Z3"]["target"]
+    assert after["Z3"]["target"] >= before["Z3"]["target"]
+    assert after["Z3"]["consistency"]["projected_weekly_effective"] <= after["Z3"]["target"]
+    assert after["Z3"]["target_index"] <= 2
     assert after["Z2"]["target_weekly_q"] == before["Z2"]["target_weekly_q"]
     assert after["Z3"]["progression"]["individual_learning"]["applied_volume_factor"] == pytest.approx(1.05)
     assert goals(profile, rows, context) == after
@@ -70,7 +72,9 @@ def test_observed_athlete_and_control_trial_can_exceed_normative_envelope():
     baseline = goals(profile, rows, context)["Z3"]
     context["individual_learning"] = report
     trial = goals(profile, rows, context)["Z3"]
-    assert trial["target_weekly_q"] == pytest.approx(baseline["target_weekly_q"]*1.05)
+    assert trial["desired_weekly_q"] == pytest.approx(baseline["desired_weekly_q"]*1.05)
+    assert trial["target_weekly_q"] <= trial["desired_weekly_q"]
+    assert trial["target_index"] <= 2
     assert trial["progression"]["individual_learning"]["normative_reference_exceeded"]
     assert trial["target"] == baseline["target"]  # Actual E / 7–40 remains independent.
     report["expires_on"] = (TODAY-timedelta(days=1)).isoformat()

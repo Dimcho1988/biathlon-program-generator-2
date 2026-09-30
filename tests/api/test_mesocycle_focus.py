@@ -57,13 +57,23 @@ def test_rotation_changes_final_load_not_only_labels_and_maintenance_has_no_load
         goals,focus,_=engine._goals(p,TODAY+timedelta(days=offset),"GENERAL_PREPARATION",False,{},None,2,4,rows,TODAY,False,1,ctx)
         for z in engine.COMPONENTS:
             if z not in focus:
-                assert goals[z]["target_index"]<=1.1+1e-9
-                assert goals[z]["target"]<=7*(1.1*(base[z]["b50"]+base[z]["c40"])-base[z]["b50"])+1e-9
+                if growth and goals[z].get("consistency"):
+                    # The cascaded E needed by the Q intent is visible even in
+                    # a non-accented component; it remains inside the 7/40 cap.
+                    c = goals[z]["consistency"]
+                    assert goals[z]["target_index"] <= 2
+                    assert c["projected_weekly_effective"] <= goals[z]["target"]+1e-6
+                    assert goals[z]["target"] <= max(c["original_effective_target"],c["projected_weekly_effective"])+1e-6
+                else:
+                    assert goals[z]["target_index"]<=1.1+1e-9
+                    assert goals[z]["target"]<=7*(1.1*(base[z]["b50"]+base[z]["c40"])-base[z]["b50"])+1e-9
         values.append(goals)
     # Same zone, same week in the wave and same history: a real difference
     # must survive the growth regulator when its mesocycle role changes.
-    assert values[0]["Z1"]["target"] > 1.1*values[1]["Z1"]["target"]
-    assert values[1]["Z2"]["target"] > 1.1*values[0]["Z2"]["target"]
+    objective = "desired_weekly_q" if growth else "target"
+    factor = 1. if growth else 1.1
+    assert values[0]["Z1"][objective] > factor*values[1]["Z1"][objective]
+    assert values[1]["Z2"][objective] > factor*values[0]["Z2"][objective]
 
 
 def test_growth_ceiling_never_refills_a_deliberately_small_loading_wave():
@@ -201,4 +211,5 @@ def test_complementary_recovery_redistributes_instead_of_creating_extra_cycle_gr
     assert s['accents']
     for z in load_progression.WEEKLY_Q_BOUNDS:
         expected=ctx['components'][z]['reference_q']
-        assert sum(v[z]['target_weekly_q'] for v in values)/4==pytest.approx(expected)
+        assert sum(v[z]['desired_weekly_q'] for v in values)/4==pytest.approx(expected)
+        assert sum(v[z]['target_weekly_q'] for v in values)/4 <= expected+1e-6

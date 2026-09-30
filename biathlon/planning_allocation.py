@@ -34,10 +34,12 @@ def objectives(windows, actual, forecast, source, days):
         actual_q_known = z == 'STR' or all(v is not None for v in q_values)
         target_e = sum(g[z]['target'] for g in windows.values()) / 7
         target_q = sum(q_targets) / 7 if q_known else None
+        desired_q = [g[z].get('desired_weekly_q',g[z].get('target_weekly_q')) for g in windows.values()]
         target = target_q if q_known else target_e
         done, planned = (done_q, planned_q) if q_known else (done_e, max(0., total_e-done_e))
         remaining = max(0., target-done-planned)
         components[z] = dict(basis='DIRECT_Q' if q_known else 'CANONICAL_E', target=target,
+            desired_target_q=sum(desired_q)/7 if all(v is not None for v in desired_q) else target_q,
             actual=done if not q_known or actual_q_known else None, planned=planned,
             remaining=remaining if not q_known or actual_q_known else None,
             target_q=target_q, actual_q=done_q if actual_q_known else None, planned_q=planned_q,

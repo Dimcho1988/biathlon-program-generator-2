@@ -339,6 +339,7 @@ export const PHASE_LABELS: Record<string, string> = {
   COMPETITION: "Състезателен", TRANSITION: "Преходен", TAPER: "Тейпър",
 };
 export const CAPACITY_LABELS: Record<string, string> = {
+  RACE_SPEED_DURATION: "Индивидуално темпо около състезателната дисциплина",
   SPEED_DURATION_TEST_ANCHOR: "Скорошен максимален тест за конкретното усилие", SPEED_DURATION_PRIOR: "Скорост–време с индивидуална опора и експертна форма", SPEED_TIME: "Индивидуална скорост–време", SPEED_DURATION: "Индивидуална скорост–време",
   EXPERT_TREF: "Експертен Tref — резервна оценка", EXPERT_FALLBACK: "Експертен Tref — резервна оценка", EXPERT_CONTINUOUS_TREF: "Експертен Tref — резервна оценка",
   COACH_EFFORT_CAPACITY: "Индивидуална устойчивост при описаното усилие",

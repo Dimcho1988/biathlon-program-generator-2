@@ -121,6 +121,37 @@ def test_generates_real_blocks_and_all_loads_without_mutating_source():
         assert session["dose_evidence"]["technical_spill_reference_role"] == "CANONICAL_E_ONLY_NOT_DOSE_CAPACITY"
 
 
+def test_short_real_test_supports_z5_without_requiring_high_zone_hr_samples():
+    settings = Repository().settings
+    speed = supported_speed(settings)
+    speed["tests"][0]["payload"].update(duration_s=165,day=TODAY.isoformat())
+    speed["index_summary"] = {}
+    from biathlon.training_methods import resolved_methods
+    from tests.api.test_load_progression import configured
+    method = next(m for m in resolved_methods(configured()) if m["zone"] == "Z5" and m["structure"] == "MODEL_INTERVALS")
+    evidence = engine.capacity_for(method,settings,speed,engine._capacity_context(speed,settings),TODAY)
+    assert evidence["capacity_source"] == "SPEED_DURATION_TEST_ANCHOR"
+    assert evidence["test_anchor"]["duration_s"] == 165
+    speed["tests"][0]["payload"]["day"] = (TODAY-timedelta(days=43)).isoformat()
+    assert engine.capacity_for(method,settings,speed,engine._capacity_context(speed,settings),TODAY) is None
+
+
+def test_key_opportunities_move_past_exhausted_rolling_budgets(monkeypatch):
+    original = engine._budgets
+    release = TODAY+timedelta(days=4)
+    def delayed_budget(rows,day,*args,**kwargs):
+        result = original(rows,day,*args,**kwargs)
+        if day < release:
+            for z in ("Z3","Z4","Z5"):
+                result[z]["deficit_effective"] = 0.
+        return result
+    monkeypatch.setattr(engine,"_budgets",delayed_budget)
+    result = generate()
+    changes = result["parameters"]["key_schedule_changes"]
+    assert changes and all(d >= release.isoformat() for d in changes[0]["to"])
+    assert any(d["date"] >= release.isoformat() and any(s["zone"] in {"Z3","Z4","Z5"} for s in d["sessions"]) for d in result["days"])
+
+
 @pytest.mark.parametrize("days", [0, 1, 3, 27])
 def test_close_race_generates_only_available_days_with_manual_reentry(days):
     from apps.api.management_schemas import PlanningControls

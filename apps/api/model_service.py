@@ -321,6 +321,11 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
             except ValueError:
                 prediction_error="OUTSIDE_PREDICTION_RANGE"
     metadata=speed_duration.model_metadata(tuned) if tuned else {}
+    from biathlon import speed_zones
+    direct_cs = speed_duration.critical_speed(tests) if not model_error else {"status":"INCONSISTENT_TESTS","count":len(tests)}
+    standardized_cs = speed_duration.standardized_critical_speed(tests, tuned) if tuned else {"status":"UNAVAILABLE","points":[]}
+    zone_profile = speed_zones.build(tuned, predictor, tests,
+        standardized_cs if standardized_cs.get("speed_kmh") else direct_cs)
     points=[prediction(math.exp(tuned._x[0]+(tuned._x[-1]-tuned._x[0])*i/180)) for i in range(181)] if tuned else []
     # Include the exact real anchors in the chart as well as its plotting grid.
     by_duration={p["duration_s"]:p for p in points}
@@ -351,7 +356,7 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
         "preliminary_capacity":preliminary_capacity.summary(prior),
         "calibration_diagnostics":preliminary_capacity.calibration_diagnostics(prior,tests) if not model_error else {"model_error":model_error},
         "functional_profile":build_functional_profile(tuned,tests,zone_weekly_min=volumes,exposure_source=volume_evidence["basis"]),
-        "critical_speed":speed_duration.critical_speed(tests) if not model_error else {"status":"INCONSISTENT_TESTS","count":len(tests)},
+        "critical_speed":{**direct_cs, "standardized":standardized_cs}, "speed_zones":zone_profile,
         "prediction":output,"prediction_error":prediction_error,"warnings":list(dict.fromkeys(warnings)),"source_generation_id":calendar.get("generation_id"),
         "source_revision":calendar.get("revision"),"hr_speed_range_kmh":list(predictor.speed_range) if predictor else None,
         "hr_model":predictor.summary() if predictor else None,"index_summary":indices,"index_admission":admission,

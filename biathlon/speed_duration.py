@@ -237,3 +237,54 @@ def critical_speed(tests):
     return {"status":"PRELIMINARY_TWO_TESTS" if n==2 else "FITTED", "count":n,
         "speed_kmh":cs*3.6,"d_prime_m":d,"distance_rmse_m":rmse,
         "max_speed_residual_kmh":max(abs(s-cs*t-d)/t*3.6 for t,s in chosen)}
+
+
+def standardized_critical_speed(tests, curve=None):
+    """A derived 3/12-minute descriptor, never two new measured anchors.
+
+    The admitted real short/long tests establish support. Every accepted real
+    anchor remains in the calibrated curve, including intermediate tests.
+    The 5% continuation corridor is not a confidence interval for CS.
+    """
+    anchors = [t for t in tests if t.get("maximal")
+                and t.get("comparable", True) and t.get("enabled", True)
+                and t.get("test_mode", "STRICT") == "STRICT"
+                and str(t.get("source", "")).upper() not in {"MODEL", "MODEL_GENERATED", "GENERATED", "ESTIMATED", "REFERENCE"}
+                and not t.get("generated") and not t.get("is_estimated")
+                and t.get("is_maximal_test") is not False]
+    accepted = [t for t in anchors if t.get("use_for_cs")]
+    short = [t for t in accepted if 120 <= t["duration_s"] <= 300]
+    long = [t for t in accepted if 480 <= t["duration_s"] <= 1200]
+    result = {"status": "INSUFFICIENT_SHORT_LONG_TESTS", "version": "cs-standardized-3-12-v1",
+              "source": "DERIVED_FROM_INDIVIDUAL_CURVE", "measured": False,
+              "count": len(accepted), "points": [], "uncertainty": "NOT_QUANTIFIED"}
+    if not short or not long:
+        return result
+    try:
+        curve = curve or calibrated(anchors)
+        first, last = min(t["duration_s"] for t in anchors), max(t["duration_s"] for t in anchors)
+        points = []
+        for seconds in (180., 720.):
+            speed = curve.speed(seconds)*3.6
+            exact = any(math.isclose(t["duration_s"], seconds) for t in anchors)
+            meta = curve.point_metadata(seconds) if hasattr(curve, "point_metadata") else {}
+            points.append({"duration_s": seconds, "speed_kmh": speed,
+                           "distance_m": seconds*speed/3.6,
+                           "evidence": "MEASURED" if exact else "INTERPOLATED" if first <= seconds <= last else "EXTRAPOLATED",
+                           "capped": bool(meta.get("extrapolation_capped"))})
+        cs = (points[1]["distance_m"]-points[0]["distance_m"])/540
+        reserve = points[0]["distance_m"]-cs*180
+        if cs <= 0 or reserve <= 0 or cs*3.6 >= points[1]["speed_kmh"]:
+            raise ValueError("Inconsistent standardized points")
+    except (ValueError, OverflowError):
+        return {**result, "status": "INCONSISTENT_TESTS"}
+    direct = critical_speed(accepted)
+    original_cs = direct.get("speed_kmh")
+    return {**result, "status": "MODEL_ESTIMATE", "speed_kmh": cs*3.6,
+            "d_prime_m": reserve, "points": points,
+            "direct_test_speed_kmh": original_cs,
+            "difference_percent": 100*(cs*3.6/original_cs-1) if original_cs else None,
+            "real_test_window_s": [first, last],
+            "uses_extrapolation": any(p["evidence"] == "EXTRAPOLATED" for p in points),
+            "short_test_duration_s": min(short, key=lambda t: abs(t["duration_s"]-180))["duration_s"],
+            "long_test_duration_s": min(long, key=lambda t: abs(t["duration_s"]-720))["duration_s"]}

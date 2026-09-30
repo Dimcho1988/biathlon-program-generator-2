@@ -57,6 +57,12 @@ export async function getSpeedPreview(athleteAlias:string,query:Record<string,st
   return parseSpeedPreview(await fetchApiResource(`/api/v2/athlete/models/speed-preview?${new URLSearchParams(query)}`,token,athleteAlias));
 }
 
+export async function getSpeedExposure(athleteAlias:string,sport:string) {
+  const token=process.env.ONFLOWS_SERVICE_TOKEN;
+  if(!token)throw new Error("Server configuration is unavailable");
+  return fetchApiResource(`/api/v2/athlete/models/speed-history?${new URLSearchParams({sport})}`,token,athleteAlias);
+}
+
 export async function getResponseHistory(athleteAlias:string,start?:string,end?:string) {
   const {parseResponseHistory} = await import("./response-monitoring");
   const params = new URLSearchParams();

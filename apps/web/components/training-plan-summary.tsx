@@ -41,15 +41,15 @@ export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
       {shortfall.length>0&&<aside className="management-notice" role="status"><strong>Остава непланиран товар: {shortfall.join(", ")}.</strong> Целта за показаните дати не е покрита изцяло. Остатъкът остава видим за преглед на ограниченията и разпределението.</aside>}
       {allocationRows.length>0&&<div className="management-table-wrap"><table>
         <caption>Покритие на целите за периода · ч:мм:сс</caption>
-        <thead><tr><th>Компонент / величина</th><th>Цел</th><th>{estimatedHistory?"Изпълнено · с оценен товар":"Изпълнено"}</th><th>Планирано</th><th>Остатък</th><th>Покритие</th></tr></thead>
+        <thead><tr><th>Компонент / величина</th><th>Желана цел</th><th>Съгласувана цел</th><th>{estimatedHistory?"Изпълнено · с оценен товар":"Изпълнено"}</th><th>Планирано</th><th>Остатък</th><th>Покритие</th></tr></thead>
         <tbody>{allocationRows.map(r=>{
           const target=r.target??r.target_effective;
           const actual="actual" in r?r.actual:r.actual_effective;
           const planned=r.planned??r.planned_effective;
           const percent=typeof target==="number"&&target>0&&typeof actual==="number"&&typeof planned==="number"?Math.min(100,100*(actual+planned)/target):null;
-          return <tr key={r.zone}><th><span className="management-zone-legend"><i style={{background:componentColor(r.zone)}} aria-hidden="true"/>{componentLabel(r.zone)}</span><small>{r.basis==="DIRECT_Q"?"Приравнен обем":"Товар с разлив"}</small></th><td>{duration(target)}</td><td>{duration(actual)}</td><td>{duration(planned)}</td><td>{duration(remainder(r))}</td><td>{percent===null?"—":`${percent.toFixed(1)}%`}</td></tr>;
+          return <tr key={r.zone}><th><span className="management-zone-legend"><i style={{background:componentColor(r.zone)}} aria-hidden="true"/>{componentLabel(r.zone)}</span><small>{r.basis==="DIRECT_Q"?"Приравнен обем":"Товар с разлив"}</small></th><td>{duration(r.desired_target_q??target)}</td><td>{duration(target)}</td><td>{duration(actual)}</td><td>{duration(planned)}</td><td>{duration(remainder(r))}</td><td>{percent===null?"—":`${percent.toFixed(1)}%`}</td></tr>;
         })}</tbody>
-      </table><p className="management-muted">Изпълненото и планираното са за точните дати на проекта. Приравненият обем следва дългосрочната цел с текущата адаптация; разливът не го замества. Ръчните цели за товар се показват в собствената им величина.</p></div>}
+      </table><p className="management-muted">Изпълненото и планираното са за точните дати на проекта. Желаната цел следва дългосрочната динамика. Съгласуваната цел отчита нейния разлив и допустимия бюджет по 7/40; дневната готовност определя изпълнимите задачи. Разликата остава видима и не се наваксва автоматично. Ръчните цели за товар се показват в собствената им величина.</p></div>}
       <details><summary>Цел и планиран товар по компоненти</summary>
         <p>Приравнен обем от предложените сесии · ч:мм:сс. Отчита интензивността в зоната и се различава от продължителността на тренировките, показана по-горе.</p>
         <div className="management-zone-legend">{COMPONENTS.map(z => {
