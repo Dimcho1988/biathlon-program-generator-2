@@ -19,15 +19,19 @@ export async function POST(request: Request) {
     if (!baseUrl || !token) throw new Error("Server integration configuration is incomplete");
     stage = "form";
     const form = await request.formData();
+    const source = String(form.get("hr_zone_source") ?? "MANUAL");
     const bounds = fieldNames.map((name) => Number(form.get(name)));
     const timezone = String(form.get("timezone") ?? "").trim();
     const hrmax = Number(form.get("hrmax_bpm"));
     if (
-      bounds.some((value) => !Number.isInteger(value) || value < 30 || value > 240)
-      || bounds.some((value, index) => index > 0 && bounds[index - 1] >= value)
+      !["MANUAL", "AUTOMATIC_HRMAX"].includes(source)
+      || (source === "MANUAL" && (
+        bounds.some((value) => !Number.isInteger(value) || value < 30 || value > 240)
+        || bounds.some((value, index) => index > 0 && bounds[index - 1] >= value)
+        || bounds[5] > hrmax
+      ))
       || !timezone
       || !Number.isInteger(hrmax) || hrmax < 30 || hrmax > 240
-      || bounds[5] > hrmax
     ) return new NextResponse(null, { status: 303, headers: { Location: "/?settings=invalid" } });
     stage = "api";
     await waitForApi(baseUrl);
@@ -40,10 +44,12 @@ export async function POST(request: Request) {
         "Content-Type": "application/json",
         "X-OnFlows-Athlete-Alias": athleteAlias,
       },
-      body: JSON.stringify({ hr_zone_bounds_bpm: bounds, timezone, hrmax_bpm: hrmax }),
+      body: JSON.stringify({ hr_zone_bounds_bpm: source === "MANUAL" ? bounds : null, timezone, hrmax_bpm: hrmax, hr_zone_source: source }),
       signal: AbortSignal.timeout(75_000),
     });
     stage = `api-response-${response.status}`;
+    if (response.status === 422)
+      return new NextResponse(null, { status: 303, headers: { Location: "/?settings=invalid" } });
     if (!response.ok) throw new Error("Athlete settings update failed");
     return new NextResponse(null, { status: 303, headers: { Location: "/?settings=saved" } });
   } catch {

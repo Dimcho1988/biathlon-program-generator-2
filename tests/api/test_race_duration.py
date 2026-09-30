@@ -34,7 +34,7 @@ def test_interpolates_calibrated_curve_without_reapplying_correction_or_overwrit
     assert p == before
 
 
-@pytest.mark.parametrize("patch", [{"status":"REFERENCE_ONLY"},{"active_test_count":0},{"exploratory_test_count":1},
+@pytest.mark.parametrize("patch", [{"status":"REFERENCE_ONLY"},{"active_test_count":0},
     {"sport":"NordicSki"},{"points":[]},{"points":[{"distance_m":1000,"duration_s":float('nan')}]}])
 def test_unusable_curve_uses_explicit_manual_fallback(patch):
     p=profile(discipline="1500 m",race_duration_min=5)
@@ -46,6 +46,13 @@ def test_unusable_curve_uses_explicit_manual_fallback(patch):
 def test_no_extrapolation_beyond_curve():
     result=race_duration.resolve(profile(discipline="marathon",race_duration_min=150),calibrated(Repository(),"athlete","Run"))
     assert result["source"] == "MANUAL" and result["reason"] == "OUTSIDE_MODEL_RANGE"
+
+
+def test_separate_exploratory_observations_do_not_disable_a_maximal_test_curve():
+    p = profile(discipline="1500 m", race_duration_min=99)
+    view = calibrated(Repository(), "athlete", "Run")
+    original = race_duration.resolve(p, view)
+    assert race_duration.resolve(p, {**view, "exploratory_test_count": 3}) == original
 
 
 def test_draft_and_outlook_use_same_race_sport_estimate_without_mutating_profile(monkeypatch):

@@ -1,14 +1,15 @@
 """One invertible HR-duration map, composed with the calibrated Vflat curve.
 
 Bounds are expert Tmax limits at Z1-Z4 upper HR edges. Z5 shares Z4's
-edge; no independent Z5 time limit is invented. Midpoint fallbacks are
+edge; no independent Z5 time limit is invented. Expert fallback durations are
 chosen once at construction, never independently for each query direction.
+Callers without history retain the legacy midpoint fallback.
 """
 from bisect import bisect_right
 import math
 from .equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, Z5_EQUIVALENCE_SLOPE_PP_PER_BPM
 
-VERSION='hr-speed-bounded-paired-v2-z5'
+VERSION='hr-speed-expert-time-paired-v3'
 TMAX_RANGES_S={'Z1':(7200.,18000.),'Z2':(5400.,10800.),'Z3':(1800.,4800.),'Z4':(600.,1800.)}
 SLOPE=DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM/100
 Z5_SLOPE=Z5_EQUIVALENCE_SLOPE_PP_PER_BPM/100
@@ -23,10 +24,23 @@ def volume_duration_centers(bounds):
 
 
 class Predictor:
-    def __init__(self,curve,bounds,hrmax,indices):
+    def __init__(self,curve,bounds,hrmax,indices,*,expert_durations=None):
         self.curve=curve;self.bounds=tuple(float(x) for x in bounds);self.hrmax=float(hrmax)
         if len(self.bounds)!=6 or not all(math.isfinite(x) for x in self.bounds) or not math.isfinite(self.hrmax) or any(a>=b for a,b in zip(self.bounds,self.bounds[1:])) or self.hrmax<=0:
             raise ValueError('Invalid HR profile')
+        fallback={z:sum(limits)/2 for z,limits in TMAX_RANGES_S.items()}
+        self.expert_duration_conflicts=[]
+        if expert_durations is not None:
+            fallback={z:expert_durations.get(z,limits[0]) for z,limits in TMAX_RANGES_S.items()}
+            if any(isinstance(t,bool) or not isinstance(t,(int,float)) or not math.isfinite(t)
+                   or not TMAX_RANGES_S[z][0]<=t<=TMAX_RANGES_S[z][1] for z,t in fallback.items()):
+                raise ValueError('Expert durations must lie within the zone time bounds')
+            self.expert_duration_conflicts=[[a,b] for a,b in zip(fallback,list(fallback)[1:]) if fallback[a]<=fallback[b]]
+            if self.expert_duration_conflicts:
+                fallback={z:limits[0] for z,limits in TMAX_RANGES_S.items()}
+        def fallback_source(zone):
+            if expert_durations is None:return 'EXPERT_MIDPOINT'
+            return 'EXPERT_MINIMUM' if fallback[zone]==TMAX_RANGES_S[zone][0] else 'EXPERT_HISTORY'
         self.anchors=[]
         for i,(zone,limits) in enumerate(TMAX_RANGES_S.items()):
             estimate=indices.get(zone,{}).get('index');candidate=None;speed=None
@@ -41,20 +55,21 @@ class Predictor:
                 elif candidate>limits[1]:candidate_reason='DURATION_ABOVE_MAX'
                 else:candidate_reason='ACCEPTED'
             accepted=candidate is not None and limits[0]<=candidate<=limits[1]
-            duration=candidate if accepted else sum(limits)/2
+            duration=candidate if accepted else fallback[zone]
             self.anchors.append({'zone':zone,'hr_bpm':self.bounds[i+1],'duration_s':duration,
                                  'duration_min_s':limits[0],'duration_max_s':limits[1],
                                  'candidate_duration_s':candidate,'index':estimate,'count':indices.get(zone,{}).get('count',0),
                                  'candidate_speed_kmh':speed,'candidate_reason':candidate_reason,
-                                 'source':'INDEX' if accepted else 'EXPERT_MIDPOINT',
-                                 'reason':None if accepted else 'NO_VALID_INDEX' if estimate is None else 'INDEX_OUTSIDE_DURATION_BOUNDS'})
+                                 'source':'INDEX' if accepted else fallback_source(zone),
+                                 'reason':None if accepted else 'CONFLICTING_EXPERT_DURATION_ESTIMATES' if self.expert_duration_conflicts else 'NO_VALID_INDEX' if estimate is None else 'INDEX_OUTSIDE_DURATION_BOUNDS'})
         # Overlapping ranges cannot guarantee monotonic anchors independently.
-        # Fall back to the agreed ordered midpoints rather than clip/reorder HR.
+        # Retain the supplied ordered expert estimates, or the legacy midpoints.
+        # Neither path changes the calibrated speed curve or its real anchors.
         self.conflicting_zones=[[a['zone'],b['zone']] for a,b in zip(self.anchors,self.anchors[1:]) if a['duration_s']<=b['duration_s']]
         if self.conflicting_zones:
             for a in self.anchors:
-                a['duration_s']=(a['duration_min_s']+a['duration_max_s'])/2
-                a['source']='EXPERT_MIDPOINT';a['reason']='CONFLICTING_ZONE_ANCHORS'
+                a['duration_s']=fallback[a['zone']]
+                a['source']=fallback_source(a['zone']);a['reason']='CONFLICTING_ZONE_ANCHORS'
         for a in self.anchors:a['speed_kmh']=curve.speed(a['duration_s'])*3.6
         self.times=tuple(a['duration_s'] for a in self.anchors)
         # Match the existing equivalent-time coefficient within each zone.
@@ -104,13 +119,13 @@ class Predictor:
         i=self.zone_index(hr);anchor=self.anchors[min(3,i)]
         if 0<i<4 and hr<self.joins[i]:
             previous=self.anchors[i-1]
-            if hr==self.bounds[i] or previous['source']=='EXPERT_MIDPOINT':anchor=previous
+            if hr==self.bounds[i] or previous['source'].startswith('EXPERT_'):anchor=previous
         return {'hr_prediction_source':anchor['source'],'hr_prediction_reason':anchor['reason'],'zone':f'Z{i+1}'}
     def summary(self):
         return {'model_version':VERSION,'hr_range_bpm':[self.min_hr,self.max_hr],
                 'curve_duration_range_s':[self.curve.times[0],self.curve.times[-1]],
                 'curve_speed_range_kmh':[self.curve.speed(self.curve.times[-1])*3.6,self.curve.speed(self.curve.times[0])*3.6],
-                'conflicting_zones':self.conflicting_zones,
+                'conflicting_zones':self.conflicting_zones,'expert_duration_conflicts':self.expert_duration_conflicts,
                 'speed_range_kmh':list(self.speed_range),'equivalence_slope_percent_per_bpm':SLOPE*100,
                 'z5_equivalence_slope_percent_per_bpm':Z5_SLOPE*100,
                 'zones':self.anchors+[{'zone':'Z5','hr_bpm':self.bounds[4],'duration_s':self.times[3],

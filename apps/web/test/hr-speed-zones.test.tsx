@@ -9,6 +9,12 @@ const base:HrModel={model_version:"fixture",hr_range_bpm:[120,180],speed_range_k
     candidate_reason:"DURATION_ABOVE_MAX",duration_min_s:1800,duration_max_s:4800,
     duration_s:3300,speed_kmh:21.42,source:"EXPERT_MIDPOINT",reason:"INDEX_OUTSIDE_DURATION_BOUNDS"}]};
 describe("HR-speed diagnostics",()=>{
+  it("labels automatic HRmax zones and links to their settings without relabelling manual zones",()=>{
+    const automatic=renderToStaticMarkup(<HrSpeedZones model={base} zoneSource="AUTOMATIC_HRMAX"/>);
+    expect(automatic).toContain("Пулсовите граници са автоматични по максималния пулс");
+    expect(automatic).toContain('href="/?settings=edit"');
+    expect(renderToStaticMarkup(<HrSpeedZones model={base}/>)).not.toContain("Пулсовите граници са автоматични");
+  });
   it("shows the rejected estimate separately from the applied result with explicit units",()=>{
     const html=renderToStaticMarkup(<HrSpeedZones model={base}/>);
     for(const text of ["19,75 км/ч","1 ч 40 мин","55 мин","21,42 км/ч","Времето от ТИ е над 1 ч 20 мин.","8 тренировки"])

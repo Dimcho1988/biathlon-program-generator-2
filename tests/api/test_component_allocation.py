@@ -81,8 +81,13 @@ def test_lower_future_target_does_not_force_filling_available_sessions(monkeypat
     p["component_targets_weekly"] = {z:40. if z == "Z1" else 0. for z in COMPONENTS}
     p["max_key_sessions_per_week"] = 0
     plan = run(monkeypatch, p, Repository())
-    # A 40-minute E target is below the new complete relative minimum.
-    assert plan["summary"]["sessions"] == 0
+    # The target cannot fit a building dose. Recovery has its own absolute
+    # minimum and may use the remaining budget without filling all 21 slots.
+    selected = [s for d in plan["days"] for s in d["sessions"]]
+    assert selected and len(selected) < 21
+    assert all(s["purpose"] == "RECOVERY" and 10 <= s["main_work_minutes"] <= 30 for s in selected)
+    allocation = plan["allocation"]["components"]["Z1"]
+    assert allocation["planned_effective"] <= allocation["target_effective"] + .01
     assert any(r["code"] in {"COMPONENT_BUDGET_EXHAUSTED", "PERIOD_COMPONENT_REMAINDER", "INSUFFICIENT_DOSE_BUDGET"} for d in plan["days"] for r in d["rejected_alternatives"])
     # Available slots never force a subminimum dose, including across a wave change.
     for d in plan["days"]:

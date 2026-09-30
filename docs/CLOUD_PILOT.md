@@ -77,11 +77,26 @@ The browser starts OAuth through a same-origin Next.js route. Next.js calls the
 protected FastAPI authorization endpoint server-side and validates that the
 returned destination is exactly `https://intervals.icu/oauth/authorize`.
 
-New profiles must save six individually established HR boundaries, an explicit
-individual HRmax and an IANA timezone before their first refresh. These inputs are scoped to the signed
+New profiles must save six HR boundaries, an explicit individual HRmax and an
+IANA timezone before their first refresh. When expert percentages have been
+configured, missing boundaries can be estimated automatically from known HRmax.
+These inputs are scoped to the signed
 athlete session. A profile never inherits another athlete's physiological
 inputs. Tref, intra-zone and recovery model versions remain approved,
 service-wide configuration rather than duplicated per athlete.
+
+Automatic zones have **no built-in percentage preset**. Set
+`ONFLOWS_HRMAX_ZONE_PERCENTAGES` on the API to six comma-separated expert
+percentages (in percent units, not fractions), strictly increasing and ending
+at `100`: the starts of Z1–Z5 followed by HRmax. Apply the
+`athlete_hr_zone_provenance` migration before deploying the
+API. A missing or invalid scheme leaves manual setup available and hides the
+automatic option. This is an initial estimate, not measured physiological
+thresholds. Each automatic profile stores the exact percentages used; changing
+the environment does not silently alter existing profiles. A later HRmax update
+recalculates only automatic profiles from their saved scheme. Manual boundaries
+remain unchanged unless the user explicitly replaces them. Save alone does not
+rewrite analyzed history; the normal full refresh applies the new boundaries.
 
 Sync remains explicit. `POST /api/v2/real/sync-jobs` enqueues `FULL`,
 `WELLNESS` or `RECOVERY`; the legacy refresh routes delegate to the same

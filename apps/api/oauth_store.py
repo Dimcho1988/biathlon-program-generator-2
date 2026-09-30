@@ -472,7 +472,7 @@ class SupabasePilotRepository(SnapshotRepository):
         alias = quote(athlete_alias, safe="")
         response = self._request(
             "GET",
-            "/onflows_athlete_settings?select=hr_zone_bounds,timezone,hrmax_bpm"
+            "/onflows_athlete_settings?select=hr_zone_bounds,timezone,hrmax_bpm,hr_zone_source,hr_zone_percentages"
             f"&athlete_alias=eq.{alias}&limit=1",
         )
         payload = self._json(response)
@@ -482,19 +482,27 @@ class SupabasePilotRepository(SnapshotRepository):
         bounds = row.get("hr_zone_bounds") if isinstance(row, Mapping) else None
         athlete_timezone = row.get("timezone") if isinstance(row, Mapping) else None
         hrmax_bpm = row.get("hrmax_bpm") if isinstance(row, Mapping) else None
+        zone_source = row.get("hr_zone_source", "MANUAL") if isinstance(row, Mapping) else None
+        percentages = row.get("hr_zone_percentages") if isinstance(row, Mapping) else None
         if (
             not isinstance(bounds, list)
             or len(bounds) != 6
             or not all(isinstance(value, int) and not isinstance(value, bool) for value in bounds)
             or not isinstance(athlete_timezone, str)
+            or not isinstance(zone_source, str)
             or (hrmax_bpm is not None and (
                 not isinstance(hrmax_bpm, int) or isinstance(hrmax_bpm, bool)
+            ))
+            or (percentages is not None and (
+                not isinstance(percentages, list)
+                or not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in percentages)
             ))
         ):
             raise PersistentStoreFailure("Stored athlete settings are invalid")
         try:
             return AthleteModelSettings(
-                tuple(bounds), athlete_timezone, hrmax_bpm
+                tuple(bounds), athlete_timezone, hrmax_bpm, zone_source,
+                tuple(percentages) if percentages is not None else None,
             ).validate()
         except ValueError as exc:
             raise PersistentStoreFailure("Stored athlete settings are invalid") from exc
@@ -511,6 +519,8 @@ class SupabasePilotRepository(SnapshotRepository):
                 "hr_zone_bounds": list(validated.zone_bounds_bpm),
                 "timezone": validated.timezone,
                 "hrmax_bpm": validated.hrmax_bpm,
+                "hr_zone_source": validated.hr_zone_source,
+                "hr_zone_percentages": list(validated.hr_zone_percentages) if validated.hr_zone_percentages is not None else None,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
             headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
@@ -1303,6 +1313,34 @@ class SupabasePilotRepository(SnapshotRepository):
             return decode_shadow_payload(payload)
         except ValueError as exc:
             raise PersistentStoreFailure("Stored activity shadow encoding is invalid") from exc
+
+    def activity_speed_history_samples(
+        self, athlete_alias: str, run_keys: tuple[str, ...]
+    ) -> Mapping[str, Mapping[str, Any]]:
+        """Batch immutable speed/HR masks for planning; never follow latest runs."""
+        if any(not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key) for key in run_keys):
+            raise PersistentStoreFailure("Invalid speed history run key")
+        result = {}
+        keys = sorted(set(run_keys))
+        fields = ("configuration_fingerprint", "vflat_model_version", "vflat_config_version", "trainability_index",
+                  "speed_test_series", "timeseries")
+        selection = "run_key,activity_ref," + ",".join(f"{name}:result_payload->{name}" for name in fields)
+        for offset in range(0, len(keys), 10):
+            batch = keys[offset:offset+10]
+            rows = self._json(self._request("GET",
+                f"/onflows_activity_derived_runs?select={selection}"
+                f"&athlete_alias=eq.{quote(athlete_alias, safe='')}&run_key=in.({','.join(batch)})&limit=10"))
+            if not isinstance(rows, list):
+                raise PersistentStoreFailure("Stored speed history samples are invalid")
+            for row in rows:
+                if (not isinstance(row, Mapping) or row.get("run_key") not in batch
+                        or not isinstance(row.get("activity_ref"), str) or row["run_key"] in result):
+                    raise PersistentStoreFailure("Stored speed history identity is invalid")
+                result[row["run_key"]] = {"run_key": row["run_key"], "activity_ref": row["activity_ref"],
+                    "shadow_payload": self._decode_shadow({name: row.get(name) for name in fields})}
+        if set(result) != set(keys):
+            raise PersistentStoreFailure("Pinned speed history samples are unavailable")
+        return result
 
     def trainability_summaries(
         self, athlete_alias: str, run_keys: tuple[str, ...]

@@ -28,6 +28,8 @@ class AthleteModelSettings:
     zone_bounds_bpm: tuple[int, int, int, int, int, int]
     timezone: str
     hrmax_bpm: int | None = None
+    hr_zone_source: str = "MANUAL"
+    hr_zone_percentages: tuple[float, ...] | None = None
 
     def validate(self) -> "AthleteModelSettings":
         if len(self.zone_bounds_bpm) != 6 or any(
@@ -46,6 +48,16 @@ class AthleteModelSettings:
                 raise ValueError("explicit HRmax must be between 30 and 240 bpm")
             if self.zone_bounds_bpm[-1] > self.hrmax_bpm:
                 raise ValueError("HR zones cannot exceed explicit HRmax")
+        if self.hr_zone_source not in {"MANUAL", "AUTOMATIC_HRMAX"}:
+            raise ValueError("unsupported HR zone source")
+        if self.hr_zone_source == "AUTOMATIC_HRMAX":
+            from biathlon.hr_zones import bounds_from_hrmax
+            if self.hrmax_bpm is None or self.hr_zone_percentages is None:
+                raise ValueError("automatic zones require explicit HRmax and expert percentages")
+            if bounds_from_hrmax(self.hrmax_bpm, self.hr_zone_percentages) != self.zone_bounds_bpm:
+                raise ValueError("automatic zones must match their saved HRmax percentages")
+        elif self.hr_zone_percentages is not None:
+            raise ValueError("manual zones cannot carry automatic percentages")
         return self
 
 
@@ -912,6 +924,10 @@ class SnapshotRepository(Protocol):
         derived_payload: Mapping[str, Any],
     ) -> str: ...
     def trainability_summaries(
+        self, athlete_alias: str, run_keys: tuple[str, ...]
+    ) -> Mapping[str, Mapping[str, Any]]: ...
+
+    def activity_speed_history_samples(
         self, athlete_alias: str, run_keys: tuple[str, ...]
     ) -> Mapping[str, Mapping[str, Any]]: ...
 
@@ -2017,6 +2033,19 @@ class InMemorySnapshotRepository:
                     }
                 )
         return run_key
+
+    def activity_speed_history_samples(
+        self, athlete_alias: str, run_keys: tuple[str, ...]
+    ) -> Mapping[str, Mapping[str, Any]]:
+        from .shadow_storage import decode_shadow_payload
+        requested = set(run_keys)
+        fields = ("configuration_fingerprint", "vflat_model_version", "vflat_config_version", "trainability_index",
+                  "speed_test_series", "timeseries")
+        with self._lock:
+            return {run["run_key"]: {"run_key": run["run_key"], "activity_ref": activity_ref,
+                "shadow_payload": decode_shadow_payload({name: run["result_payload"].get(name) for name in fields})}
+                for (alias, activity_ref), runs in self._activity_runs.items()
+                if alias == athlete_alias for run in runs if run["run_key"] in requested}
 
     def trainability_summaries(
         self, athlete_alias: str, run_keys: tuple[str, ...]

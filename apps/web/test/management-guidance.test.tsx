@@ -4,6 +4,7 @@ import { managementGuidance, hasProgramDays } from "../lib/management-guidance";
 import { TrainingManagement } from "../components/training-management";
 import { ManagementProfileEditor } from "../components/management-profile-editor";
 import { TrainingPlanOverview } from "../components/training-plan-overview";
+import { PlanningEvidenceNotice } from "../components/planning-evidence-notice";
 import { defaultManagementProfile, type DraftRecord, type PlanningDraft } from "../lib/training-management";
 import type { SyncState } from "../lib/sync";
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
@@ -13,6 +14,25 @@ const draft = (codes: string[], eligible = false, stale: boolean | null = false)
 const sync = (generation: string, date: string): SyncState => ({ schema_version: "sync-state-v1", job_id: null, scope: "FULL", state: "SUCCEEDED", stage: null, progress_percent: 100, requested_at: null, started_at: null, finished_at: null, retry_at: null, failure_code: null, active_generation_id: generation, active_revision: 2, analysis_as_of: date, activated_at: null });
 
 describe("one next action without relaxing publication gates", () => {
+  it("distinguishes missing race from a preparation end date and provides the calendar action",()=>{
+    const plan={periodization:{warnings:[{code:"NO_MAIN_RACE_IN_ANNUAL_WINDOW"}]}};
+    const html=renderToStaticMarkup(<PlanningEvidenceNotice plan={plan}/>);
+    expect(html).toContain("Краят на програмата не задава автоматично състезание");
+    expect(html).toContain('href="/planning#planning-calendar"');
+    expect(html).toContain("периодите се подреждат назад от старта");
+    expect(renderToStaticMarkup(<PlanningEvidenceNotice plan={{periodization:{warnings:[]}}}/>)).toBe("");
+  });
+  it("labels estimated zone load and readiness while preserving measured total activity time",()=>{
+    const plan=draft([]).payload;
+    plan.source={planning_history:{estimated:true,estimated_minutes:90,supported:true},readiness_basis:"ESTIMATED_LOAD"};
+    const html=renderToStaticMarkup(<PlanningEvidenceNotice plan={plan}/>);
+    expect(html).toContain("Общото време е от записаните активности");
+    expect(html).toContain("Показаните 7/40 и готовност използват тази оценка");
+    expect(html).toContain("1:30:00");
+    expect(html).toContain("Това не е измерено разпределение по зони");
+    const outlook=renderToStaticMarkup(<PlanningEvidenceNotice plan={{long_term:{planning_history:{estimated:true}}}}/>);
+    expect(outlook).toContain("План с предварителна оценка по зони");
+  });
   it("directs stale history to import even if optional methods are unconfigured", () => {
     expect(managementGuidance({ ...base, draft: draft(["METHOD_PROFILE_Z4", "METHOD_PROFILE_STR", "STALE_LOAD_SNAPSHOT"]) }).step).toBe("SYNC");
     expect(managementGuidance({ ...base, draft: draft(["METHOD_PROFILE_Z4", "METHOD_PROFILE_STR"], true) }).step).toBe("REVIEW");

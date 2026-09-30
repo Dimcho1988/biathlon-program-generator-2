@@ -38,13 +38,18 @@ def test_one_hour_limit_consumed_by_actual_sessions_is_explicit_and_removable(mo
     assert repo.envelope == original
 
 
-@pytest.mark.parametrize("hours, fits", [(1., False), (1.5, True)])
+@pytest.mark.parametrize("hours, fits", [(.1, False), (1., True), (1.5, True)])
 def test_small_limit_preserves_only_complete_minimum_doses(monkeypatch, hours, fits):
     p = body(weekly_target_hours=hours, sessions_per_week=7, intensity_days=[], strength_days=[])
     p["max_key_sessions_per_week"] = 0
     plan = run(monkeypatch, p)
     assert (plan["summary"]["planned_minutes"] > 0) is fits
     assert plan["summary"]["planned_minutes"] <= hours * 60
+    if hours == 1.:
+        # Recovery retains its own whole 10–30 minute dose; the former
+        # capacity-relative minimum must not erase these light sessions.
+        selected = [s for d in plan["days"] for s in d["sessions"]]
+        assert all(s["purpose"] == "RECOVERY" and 10 <= s["main_work_minutes"] <= 30 for s in selected)
     if not fits:
         assert any(r["code"] == "INSUFFICIENT_TIME_BUDGET" for d in plan["days"] for r in d["rejected_alternatives"])
     budget = plan["parameters"]["time_budget"]

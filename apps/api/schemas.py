@@ -82,9 +82,10 @@ class SessionExchangeResponse(StrictModel):
 
 
 class AthleteSettingsInput(StrictModel):
-    hr_zone_bounds_bpm: tuple[int, int, int, int, int, int]
+    hr_zone_bounds_bpm: tuple[int, int, int, int, int, int] | None = None
     timezone: str
     hrmax_bpm: int | None = None
+    hr_zone_source: Literal["MANUAL", "AUTOMATIC_HRMAX"] | None = None
 
 
 class AthleteSettingsResponse(StrictModel):
@@ -92,6 +93,9 @@ class AthleteSettingsResponse(StrictModel):
     hr_zone_bounds_bpm: tuple[int, int, int, int, int, int] | None = None
     timezone: str | None = None
     hrmax_bpm: int | None = None
+    hr_zone_source: Literal["MANUAL", "AUTOMATIC_HRMAX"] | None = None
+    hr_zone_percentages: tuple[float, float, float, float, float, float] | None = None
+    automatic_hr_zone_percentages: tuple[float, float, float, float, float, float] | None = None
 
 
 class AthletePlanningProfileInput(StrictModel):

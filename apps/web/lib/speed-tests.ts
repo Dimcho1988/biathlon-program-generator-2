@@ -1,6 +1,6 @@
 import type {SpeedModel, SpeedTest} from "./models";
 export type SpeedTestMode = "STRICT"|"EXPLORATORY";
-export const testModeLabel = (mode:SpeedTestMode) => mode==="EXPLORATORY"?"Пробен · комплексна тренировка · праг 70%":"Стандартен · максимален тест · праг 98%";
+export const testModeLabel = (mode:SpeedTestMode) => mode==="EXPLORATORY"?"Наблюдение · комплексна тренировка · праг 70%":"Стандартен · максимален тест · праг 98%";
 
 export const speedNumber = (value:number) => new Intl.NumberFormat("bg-BG", {maximumFractionDigits:2}).format(value);
 export function clockTime(seconds:number) {
@@ -72,7 +72,7 @@ export function speedTestError(detail:unknown):string {
     "Test durations must be different":"Вече има тест със същата продължителност. Изключете стария, ако искате да го замените.",
     "Tests conflict: longer efforts require lower speed and greater distance":"Тестът противоречи на друг избран тест: по-дългото максимално усилие трябва да има по-ниска скорост и по-голяма дистанция. Проверете участъците и условията.",
     "A continuous segment with at least 98% eligible Vflat coverage is required; refresh older activity analyses first":"Участъкът няма необходимите 98% подходящи данни. Проверете покритието, паузите и спусканията в прегледа.",
-    "Exploratory calibration requires at least 70% eligible Vflat coverage":"За пробна калибрация са нужни поне 70% подходящи данни. Изберете участък с по-добро покритие.",
+    "Exploratory calibration requires at least 70% eligible Vflat coverage":"За запис като наблюдение са нужни поне 70% подходящи данни. Изберете участък с по-добро покритие.",
     "Outside the calibrated duration range":"Продължителността е извън обхвата на модела.",
     "Outside the activity range":"Краят на участъка е извън записа. Проверете началото и края.",
     "Resolve incompatible Vflat test versions first":"Има включени тестове от различни версии на Vflat. Първо изключете или преизчислете старите тестове.",

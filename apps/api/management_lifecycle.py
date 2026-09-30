@@ -40,7 +40,13 @@ def _require_revision(record, expected):
 
 
 def _eligible(plan):
-    return plan.get("activation_eligible") is True and plan.get("source", {}).get("readiness_known") is True
+    source = plan.get("source", {})
+    history = source.get("planning_history") or {}
+    supported_estimate = (source.get("planning_history_supported") is True
+        and source.get("readiness_basis") == "ESTIMATED_LOAD"
+        and history.get("supported") is True and history.get("estimated") is True
+        and history.get("policy") == "RECORDED_DURATION_EXPERT_Q_WITH_RECOVERY")
+    return plan.get("activation_eligible") is True and (source.get("readiness_known") is True or supported_estimate)
 
 
 def current(repository, alias, *, now=None):

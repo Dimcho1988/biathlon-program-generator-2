@@ -1,9 +1,12 @@
 """Settings HTTP routes."""
 
 from datetime import date
+import logging
+import os
 from typing import Annotated
 from fastapi import Header, HTTPException
 from biathlon.methodology import CANONICAL_METHODOLOGY_VERSION, canonical_methodology
+from biathlon.hr_zones import bounds_from_hrmax, validate_percentages
 from ..cloud import (
     MESOCYCLE_ACCENT_COMPONENTS,
     AthleteMesocycleAccentPreferences,
@@ -32,6 +35,57 @@ from fastapi import APIRouter
 from .. import dependencies
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def _automatic_hr_zone_percentages():
+    raw = os.environ.get("ONFLOWS_HRMAX_ZONE_PERCENTAGES", "").strip()
+    if not raw:
+        return None
+    try:
+        return validate_percentages(raw.split(","))
+    except (TypeError, ValueError):
+        logger.warning("Automatic HR zones disabled: invalid expert percentage configuration")
+        return None
+
+
+def _settings_response(settings):
+    return AthleteSettingsResponse(
+        configured=settings is not None,
+        hr_zone_bounds_bpm=settings.zone_bounds_bpm if settings else None,
+        timezone=settings.timezone if settings else None,
+        hrmax_bpm=settings.hrmax_bpm if settings else None,
+        hr_zone_source=settings.hr_zone_source if settings else None,
+        hr_zone_percentages=settings.hr_zone_percentages if settings else None,
+        automatic_hr_zone_percentages=_automatic_hr_zone_percentages(),
+    )
+
+
+def _resolve_settings(body, previous):
+    source = body.hr_zone_source
+    if source is None:
+        source = "MANUAL" if body.hr_zone_bounds_bpm is not None else (
+            previous.hr_zone_source if previous else "AUTOMATIC_HRMAX"
+        )
+    if source == "AUTOMATIC_HRMAX":
+        percentages = (
+            previous.hr_zone_percentages
+            if previous and previous.hr_zone_source == "AUTOMATIC_HRMAX"
+            else _automatic_hr_zone_percentages()
+        )
+        if percentages is None:
+            raise ValueError("An expert HRmax zone scheme has not been configured")
+        bounds = bounds_from_hrmax(body.hrmax_bpm, percentages)
+    else:
+        percentages = None
+        bounds = body.hr_zone_bounds_bpm
+        if bounds is None and previous:
+            bounds = previous.zone_bounds_bpm
+        if bounds is None:
+            raise ValueError("Manual HR zone boundaries are required")
+    return AthleteModelSettings(
+        tuple(bounds), body.timezone.strip(), body.hrmax_bpm, source, percentages
+    ).validate()
 
 
 def _model_snapshot(repository, alias):
@@ -52,14 +106,7 @@ def athlete_settings(
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
         ) from exc
-    if settings is None:
-        return AthleteSettingsResponse(configured=False)
-    return AthleteSettingsResponse(
-        configured=True,
-        hr_zone_bounds_bpm=settings.zone_bounds_bpm,
-        timezone=settings.timezone,
-        hrmax_bpm=settings.hrmax_bpm,
-    )
+    return _settings_response(settings)
 
 
 @router.put("/api/v2/athlete/settings", response_model=AthleteSettingsResponse)
@@ -73,30 +120,19 @@ def update_athlete_settings(
     dependencies.authorize(authorization)
     resolved_alias = dependencies.validated_alias(athlete_alias)
     try:
-        settings = AthleteModelSettings(
-            body.hr_zone_bounds_bpm, body.timezone.strip(), body.hrmax_bpm
-        ).validate()
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail="Six increasing HR boundaries and a valid timezone are required",
-        ) from exc
-    try:
         repository = dependencies.repository()
         connection = repository.connection(resolved_alias)
         if connection is None or connection.status != "CONNECTED":
             raise HTTPException(status_code=409, detail="Intervals profile is not connected")
+        settings = _resolve_settings(body, repository.athlete_settings(resolved_alias))
         repository.save_athlete_settings(resolved_alias, settings)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except PersistentStoreFailure as exc:
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
         ) from exc
-    return AthleteSettingsResponse(
-        configured=True,
-        hr_zone_bounds_bpm=settings.zone_bounds_bpm,
-        timezone=settings.timezone,
-        hrmax_bpm=settings.hrmax_bpm,
-    )
+    return _settings_response(settings)
 
 
 @router.get(

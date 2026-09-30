@@ -76,6 +76,8 @@ def observed_window(source, rows, start, end):
         for activity in activities:
             if activity.get("sport") == "WeightTraining":
                 continue
+            if activity.get("quality_status", "valid") != "valid" and not activity.get("planning_estimated"):
+                known = False
             zone = next((v for v in activity.get("zones", []) if v["zone"] == z), {})
             values = [zone.get("equivalent_time_min"), zone.get("raw_time_min")]
             if not all(_valid(v) for v in values):
@@ -106,6 +108,13 @@ def reference_key(profile, physiology=None):
     return sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
+def total_volume_position(weekly_minutes):
+    """Existing 4–20 h coaching placement, not measured zonal capacity."""
+    if not _valid(weekly_minutes):
+        raise ValueError("Weekly training time must be finite and nonnegative")
+    return min(1., max(0., (weekly_minutes / 60 - 4) / 16))
+
+
 def expert_positions(profile, source, rows, today):
     """Transparent coaching prior, not a fitness measurement or safety norm."""
     config = settings(profile)
@@ -117,7 +126,7 @@ def expert_positions(profile, source, rows, today):
     level_position = {"LOW": .15, "MEDIUM": .5, "HIGH": .85}.get(level)
     if level_position is None:
         level_position = 0. if experience is None else min(.85, max(0., experience / 10))
-    volume_position = min(1., max(0., (hours - 4) / 16))
+    volume_position = total_volume_position(volume["historical_training_weekly_minutes"])
     # Large low-intensity mileage alone cannot establish high-intensity capacity.
     position = min(level_position, .6*level_position + .4*volume_position)
     positions = {z: config["component_reference_positions"].get(z, position) for z in WEEKLY_Q_BOUNDS}
@@ -151,7 +160,10 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
     previous = observed_window(source, rows, cycle_start-timedelta(days=2*days), cycle_start-timedelta(days=days))
     quality = source.get("quality") or {}
     valid_units = history_matches(source, physiology)
-    reliable = valid_units and not (quality.get("limited_activities") or quality.get("excluded_activities"))
+    planning_evidence = source.get("planning_history") or {}
+    estimated_history = bool(planning_evidence.get("estimated"))
+    estimated_supported = valid_units and estimated_history and planning_evidence.get("supported") is True
+    reliable = valid_units and not estimated_history and not (quality.get("limited_activities") or quality.get("excluded_activities"))
     key = reference_key(profile, physiology)
     frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v6-individual-reference", "load-progression-v5-cycle-q", "load-progression-v4-clamped-q", "load-progression-v3-stable-q"} else None
     if frozen and frozen["version"] != VERSION:
@@ -209,7 +221,8 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
                          "governed_annual_rate_percent": rate*feedback_factor(adaptation, z, "growth_factor", today) if rate is not None else None,
                          "expert_q_bounds": WEEKLY_Q_BOUNDS.get(z), "observed_cycle_growth_percent": growth,
                          "current_observed_q": a["weekly_q"] if reliable and current["complete"] else None,
-                         "recent_observed_q": recent["components"][z]["weekly_q"] if reliable and recent["covered_days"] >= planning_history.MINIMUM_DAYS else None}
+                          "recent_observed_q": recent["components"][z]["weekly_q"] if reliable and recent["covered_days"] >= planning_history.MINIMUM_DAYS else None,
+                          "recent_estimated_q": recent["components"][z]["weekly_q"] if estimated_supported and recent["covered_days"] >= planning_history.MINIMUM_DAYS else None}
     ctx = {"version": VERSION, "config": config, "basis": "STABLE_PREPARATION_REFERENCE",
            "as_of": today.isoformat(), "cycle_start": cycle_start.isoformat(), "cycle_days": days,
            "anchor": frozen, "anchor_reused": reused, "reference": frozen,
@@ -217,7 +230,8 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
            "adaptation": adaptation, "recovery_is_learning_input": False, "requires_catchup": False,
            "reference_is_clamped": any(c["reference_selection"] == "LOWER_BOUND" for c in components.values()),
            "normative_role": "LOWER_PLANNING_REFERENCE_NOT_POTENTIAL_CEILING", "percentages_are_coaching_parameters": True,
-           "history_usable": reliable, "equivalence_version": EQUIVALENCE_VERSION,
+            "history_usable": reliable, "estimated_history_supported": estimated_supported,
+            "planning_history": planning_evidence, "equivalence_version": EQUIVALENCE_VERSION,
            "overall_basis": "DIRECT_Q_COMPONENT_TARGETS_EFFECTIVE_LOAD_CHECKED_SEPARATELY"}
     if periodization:
         ctx["trajectory"] = trajectory(ctx, profile, periodization)
@@ -387,6 +401,8 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
         # current observed exposure, E/7-40 and Recovery govern execution.
         q = c["reference_q"]
         exposure = c.get("recent_observed_q", c["weekly_q"])
+        if exposure is None and context.get("estimated_history_supported"):
+            exposure = c.get("recent_estimated_q")
         if exposure is None or exposure == 0:
             q = exposure
         if state["kind"] == "RE_ENTRY" and q is not None:
@@ -398,7 +414,7 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
         # every composed session. Never apply a Q percentage to an E baseline.
         if automatic and z != "STR" and not limited and period in {"RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"}:
             goal["target_weekly_q"] = requested_q*learning if requested_q is not None else None
-            goal["basis"] = "STABLE_Q_TARGET_WITH_7_40_GATE"
+            goal["basis"] = "EXPERT_Q_TARGET_WITH_ESTIMATED_7_40_GATE" if context.get("estimated_history_supported") else "STABLE_Q_TARGET_WITH_7_40_GATE"
         individual = individual_adjustment(context, profile, z, day, period, state, taper=taper, limited=limited)
         correction = individual["volume_factor"]
         if correction != 1.:

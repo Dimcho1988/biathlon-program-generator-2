@@ -55,7 +55,7 @@ class Repository:
     def test(self, days=0, **extra):
         self.rows.append({"kind": "SPEED_TEST", "entry_key": str(len(self.rows)), "revision": 1,
                           "payload": {"sport": "Run", "day": (NOW.date() + timedelta(days=days)).isoformat(),
-                                      "enabled": True, "duration_s": 600., "speed_kmh": 22.,
+                                      "enabled": True, "duration_s": 600., "speed_kmh": 22., "maximal": True, "comparable": True,
                                       "vflat_version": VF_VERSION, "vflat_config_version": VF_CONFIG, **extra}})
 
     def active_activity_calendar(self, alias, start, end):
@@ -126,16 +126,19 @@ def test_frozen_test_with_different_vflat_settings_cannot_use_current_index(chan
     assert result["status"] == "CALIBRATED" and result["active_test_count"] == 1
     assert result["index_summary"]["Z3"]["index"] is None
     assert result["index_admission"]["incompatible"] == 1
-    assert result["prediction"]["hr_prediction_source"] == "EXPERT_MIDPOINT"
+    assert result["prediction"]["hr_prediction_source"] == "EXPERT_MINIMUM"
     assert "INCOMPARABLE_INDEX_CONFIGURATION" in result["warnings"]
 
 
 def test_manual_flat_test_uses_current_index_and_both_directions_share_the_same_map():
     repo = Repository()
     repo.test(source="MANUAL", vflat_version=None, vflat_config_version=None)
-    curve = calibrated([repo.rows[0]["payload"]])
+    repo.test(duration_s=1200.,speed_kmh=20.,source="MANUAL",vflat_version=None,vflat_config_version=None)
+    curve = calibrated([r["payload"] for r in repo.rows])
     value = 100 * BOUNDS[3] / 190 / (curve.speed(3300) * 3.6)
     repo.add("current", -1, value=value)
+    for band in repo.summaries["current"]["trainability_index"]["zones"]:
+        band["valid"] = band["name"] == "Z3"
     result = service.speed_view(repo, "ath-test", "Run", hr_bpm=160)
     prediction = result["prediction"]
     assert prediction["hr_prediction_source"] == "INDEX"
@@ -153,7 +156,7 @@ def test_no_recent_index_uses_explicit_expert_fallback_without_reaching_further_
     assert result["index_window"]["last_activity_date"] is None
     assert result["index_admission"]["used"] == 0
     assert all(x["index"] is None and x["count"] == 0 for x in result["index_summary"].values())
-    assert result["prediction"]["hr_prediction_source"] == "EXPERT_MIDPOINT"
+    assert result["prediction"]["hr_prediction_source"] == "EXPERT_MINIMUM"
 
 
 def test_window_uses_athlete_local_day_in_both_prediction_directions(monkeypatch):

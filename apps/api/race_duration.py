@@ -32,7 +32,9 @@ def resolve(profile, view=None):
     sport = profile.get("sport")
     result = {"source": "UNAVAILABLE", "duration_min": None, "distance_m": distance,
               "sport": sport, "reason": "DISTANCE_REQUIRED" if distance is None else "CALIBRATED_MODEL_REQUIRED"}
-    if distance is not None and view and view.get("sport") == sport and view.get("status") == "CALIBRATED" and view.get("active_test_count", 0) > 0 and not view.get("exploratory_test_count", 0):
+    # speed_view admits only maximal comparable tests as active anchors.
+    # Separately retained exploratory observations do not invalidate that curve.
+    if distance is not None and view and view.get("sport") == sport and view.get("status") == "CALIBRATED" and view.get("active_test_count", 0) > 0:
         points = view.get("points") or []
         pairs = [(p.get("distance_m"), p.get("duration_s")) for p in points]
         valid = len(pairs) >= 2 and all(isinstance(v, (float, int)) and not isinstance(v, bool) and math.isfinite(v) and v > 0 for pair in pairs for v in pair)
