@@ -8,6 +8,7 @@ export function ManualSpeedTestEditor({model,test,onReset}:{model:SpeedModel;tes
   const router=useRouter(),p=test?.payload;
   const testId=useRef<string|null>(p?.test_id??null);
   const [name,setName]=useState(p?.name??"");
+  const [sport,setSport]=useState(p?.sport??model.sport);
   const [day,setDay]=useState(p?.day??model.test_window?.end??"");
   const [durationText,setDurationText]=useState(p?manualClockTime(p.duration_s):"");
   const [basis,setBasis]=useState<"DISTANCE"|"SPEED">(p?.measurement_input??"DISTANCE");
@@ -33,22 +34,25 @@ export function ManualSpeedTestEditor({model,test,onReset}:{model:SpeedModel;tes
     testId.current??=crypto.randomUUID();
     setSaving(true);setError("");
     try {
-      const result=await saveModel("speed-test-manual",{test_id:testId.current,name:name.trim(),day,sport:model.sport,duration_s:duration,
+      const result=await saveModel("speed-test-manual",{test_id:testId.current,name:name.trim(),day,sport,duration_s:duration,
         ...(basis==="DISTANCE"?{distance_m:value}:{speed_kmh:value}),conditions:conditions.trim(),
         maximal:true,comparable:true,flat_terrain:true,use_for_cs:useCS&&csEligible,enabled:true,
         expected_revision:saved?.revision??test?.revision??0});
       setSaved({key:result.entry_key??`manual_${testId.current.replaceAll("-","")}`,revision:result.revision});
+      if(sport!==model.sport)router.push(`/speed?sport=${encodeURIComponent(sport)}#speed-tests`);
       router.refresh();
     }catch(e){setError(e instanceof Error?e.message:"Записването не завърши.");}
     finally{setSaving(false);}
   }
 
   return <div className="speed-test-editor" aria-busy={busy}>
-    <h3>{test?"Редактирай ръчния тест":"Добави ръчен тест"} · {model.sport}</h3>
+    <h3>{test?"Редактирай ръчния тест":"Добави ръчен тест"} · {sport}</h3>
     <p>Въведи резултат от максимален тест на равен терен, без спирания, от последните 90 дни. Средната скорост се изчислява от дистанцията и времето или се въвежда директно.</p>
     <form className="model-test-form" onSubmit={save}>
       <fieldset disabled={busy}>
         <legend>Резултат от теста</legend>
+        <label>Спорт на теста<select value={sport} onChange={e=>setSport(e.target.value)}>{[...new Set([sport,model.sport,"Run","TrailRun","NordicSki",...model.sports])].map(s=><option key={s} value={s}>{s}</option>)}</select></label>
+        <p className="muted-copy">Избери спорта, в който е постигнат резултатът. Тестът се свързва само с индекса и кривата за този спорт.</p>
         <label>Име на теста<input value={name} onChange={e=>setName(e.target.value)} required maxLength={120} placeholder="Напр. 600 м контролно"/></label>
         <div className="model-controls">
           <label>Дата на теста<input type="date" value={day} min={model.test_window?.start} max={model.test_window?.end} onChange={e=>setDay(e.target.value)} required/></label>

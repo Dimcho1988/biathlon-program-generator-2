@@ -10,13 +10,13 @@ import math
 
 from biathlon.equivalence import EQUIVALENCE_VERSION, equivalence_slope
 from biathlon.physiology import linear_equivalence_coefficient
-from vflat_b65 import MODEL_VERSION as VFLAT_VERSION, CONFIG_VERSION as VFLAT_CONFIG
+from vflat_b65.sports import speed_model_versions
 from .activity_shadow_pipeline import activity_shadow_configuration_fingerprint
 from .oauth_store import PersistentStoreFailure
 from .speed_segments import sample_intervals
 from .trainability import LAG_SECONDS, MAX_GAP_SECONDS, MIN_SECONDS_BY_BAND
 
-VERSION = "speed-zone-planning-history-v1"
+VERSION = "speed-zone-planning-history-v2"
 ZONES = tuple(f"Z{i}" for i in range(1, 6))
 PROVENANCE = {"speed": "MEASURED_VFLAT", "hr": "PAIRED_INDEX_ESTIMATE",
               "load": "ESTIMATED_NOT_MEASURED_HR"}
@@ -64,7 +64,8 @@ def _mapping(view, settings, today, sport):
         return None, "NONMONOTONE_PAIRED_ZONE_BOUNDARIES"
     return {"bounds_bpm": bounds, "bounds_kmh": speeds,
             "last_activity_date": window["last_activity_date"],
-            "comparison_key": activity_shadow_configuration_fingerprint(bounds, settings.hrmax_bpm)}, None
+            "vflat_versions": speed_model_versions(sport),
+            "comparison_key": activity_shadow_configuration_fingerprint(bounds, settings.hrmax_bpm, sport=sport)}, None
 
 
 def _missing_spans(shadow, coverage, elapsed):
@@ -93,7 +94,7 @@ def _estimate(shadow, mapping, *, missing_minutes, coverage, elapsed):
         return None, "INDEPENDENT_SPEED_SERIES_REQUIRED"
     # Session fingerprint also includes duration/terrain. Use the profile-only
     # comparison key stored even on an insufficient-HR trainability summary.
-    if ((shadow.get("vflat_model_version"), shadow.get("vflat_config_version")) != (VFLAT_VERSION, VFLAT_CONFIG)
+    if ((shadow.get("vflat_model_version"), shadow.get("vflat_config_version")) != mapping["vflat_versions"]
             or (shadow.get("trainability_index") or {}).get("comparison_key") != mapping["comparison_key"]):
         return None, "INCOMPATIBLE_SPEED_CONFIGURATION"
     spans, reason = _missing_spans(shadow, coverage, elapsed)

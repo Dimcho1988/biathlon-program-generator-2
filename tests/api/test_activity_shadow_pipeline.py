@@ -60,6 +60,34 @@ def test_index_version_invalidates_cache_and_comparison_key(monkeypatch):
     assert activity_shadow_configuration_fingerprint(**kwargs) != current_comparison
 
 
+def test_running_configuration_changes_cache_and_comparison_without_changing_ski():
+    from vflat_b65.sports import speed_model_versions
+    kwargs=dict(zone_bounds_bpm=(124,144,164,182,190,205),explicit_hrmax_bpm=205)
+    legacy=activity_shadow_configuration_fingerprint(**kwargs)
+    assert legacy=="30100e84ef63bda169b5da6f2f07ffb137bd658d083f32e2a68b4dd5240fea52"
+    assert activity_shadow_configuration_fingerprint(**kwargs,sport="NordicSki")==legacy
+    run=activity_shadow_configuration_fingerprint(**kwargs,sport="Run")
+    assert run!=legacy
+    assert activity_shadow_configuration_fingerprint(**kwargs,sport="TrailRun")==run
+    source=normalize_stream_intervals(NormalizerInput(offsets=list(range(941)),metrics={
+        "heartrate":[158.]*470+[170.]*471,"velocity_smooth":[3.]*941,
+        "gradient":[4.]*941}))
+    detail={"start_date":"2026-09-01T10:00:00Z","moving_time":940,"type":"Run"}
+    immutable,derived=compute_activity_shadow(detail=detail,normalized=source,**kwargs)
+    assert immutable==build_immutable_activity_input(detail,source)
+    assert derived["vflat_model_version"]==speed_model_versions("Run")[0]
+    index=derived["trainability_index"]
+    assert index["comparison_key"]==run
+    assert index["source_versions"]["vflat"]==derived["vflat_model_version"]
+    assert index["lag_seconds"]==20 and index["minimum_grade_pct"]==-3
+    for zone in index["zones"][1:3]:
+        assert zone["valid"]
+        assert zone["mean_vflat_kmh"]==pytest.approx(3*3.6*1.12)
+    assert index["zones"][0]["valid"] is False
+    assert derived["configuration_fingerprint"]==activity_shadow_configuration_fingerprint(
+        **kwargs,activity_detail=detail,activity_duration_s=940.)
+
+
 def test_vflat_v4_version_invalidates_old_cached_results(monkeypatch):
     from apps.api import activity_shadow_pipeline as pipeline
 

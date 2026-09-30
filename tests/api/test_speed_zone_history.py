@@ -25,9 +25,9 @@ def inputs():
     calendar = [{**recorded, "local_date":day, "latest_shadow_run_key":KEY, "elapsed_time_s":120}]
     speeds = {"Run":{"sport":"Run", "index_window":{"last_activity_date":day,"days":40},
         "index_summary":{z:{"index":5.,"count":2,"seconds":900} for z in history.ZONES}}}
-    shadow = {"configuration_fingerprint":history.activity_shadow_configuration_fingerprint(SETTINGS.zone_bounds_bpm,200),
-        "trainability_index":{"comparison_key":history.activity_shadow_configuration_fingerprint(SETTINGS.zone_bounds_bpm,200)},
-        "vflat_model_version":history.VFLAT_VERSION,"vflat_config_version":history.VFLAT_CONFIG,
+    shadow = {"configuration_fingerprint":history.activity_shadow_configuration_fingerprint(SETTINGS.zone_bounds_bpm,200,sport="Run"),
+        "trainability_index":{"comparison_key":history.activity_shadow_configuration_fingerprint(SETTINGS.zone_bounds_bpm,200,sport="Run")},
+        "vflat_model_version":history.speed_model_versions("Run")[0],"vflat_config_version":history.speed_model_versions("Run")[1],
         "timeseries":[{"elapsed_s":t,"hr_raw_bpm":130 if t<=60 else None} for t in range(121)],
         "speed_test_series":[{"elapsed_s":t,"dt_s":1.,"vflat_b65_kmh":15 if 40<t<=100 else 20,
                               "grade_smoothed_pct":0.,"exclusion_reason":None} for t in range(1,121)]}

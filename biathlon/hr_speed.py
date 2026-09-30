@@ -9,7 +9,7 @@ from bisect import bisect_right
 import math
 from .equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, Z5_EQUIVALENCE_SLOPE_PP_PER_BPM
 
-VERSION='hr-speed-expert-time-paired-v3'
+VERSION='hr-speed-expert-time-paired-v4'
 TMAX_RANGES_S={'Z1':(7200.,18000.),'Z2':(5400.,10800.),'Z3':(1800.,4800.),'Z4':(600.,1800.)}
 SLOPE=DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM/100
 Z5_SLOPE=Z5_EQUIVALENCE_SLOPE_PP_PER_BPM/100
@@ -49,6 +49,14 @@ class Predictor:
                 speed=(100*self.bounds[i+1]/self.hrmax)/estimate
                 try:candidate=curve.inverse(speed/3.6)
                 except ValueError:pass
+                # The inverse is numerical: an exact boundary can return e.g.
+                # 7199.999999999996. Preserve paired evidence at the boundary;
+                # this tolerance is rounding only, not relaxed expert limits.
+                if candidate is not None:
+                    for edge in limits:
+                        if math.isclose(candidate,edge,rel_tol=1e-10,abs_tol=1e-8):
+                            candidate=edge
+                            break
                 if candidate is None:
                     candidate_reason='SPEED_BELOW_CURVE' if speed<curve.speed(curve.times[-1])*3.6 else 'SPEED_ABOVE_CURVE'
                 elif candidate<limits[0]:candidate_reason='DURATION_BELOW_MIN'

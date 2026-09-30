@@ -183,10 +183,28 @@ def save_manual_test(repository,alias,body,actor):
     return {**result,"entry_key":key}
 
 
+def _default_speed_sport(activities, entries, today):
+    """Use recent training exposure, never the alphabetic order of sport names."""
+    from .activity_catalog import calendar_item
+    recent=[a for a in activities if window_start(today).isoformat()<=a["local_date"]<=today.isoformat()]
+    totals={}
+    for activity in recent or activities:
+        sport=activity["sport"]
+        if sport=="WeightTraining":continue
+        minutes=calendar_item(activity).get("duration_min")
+        minutes=minutes if isinstance(minutes,(int,float)) and math.isfinite(minutes) and minutes>0 else 0.
+        total,count,last=totals.get(sport,(0.,0,""))
+        totals[sport]=(total+minutes,count,max(last,activity["local_date"]))
+    if totals:return max(sorted(totals),key=totals.get)
+    tests=[e["payload"] for e in entries if e["payload"].get("enabled") and
+           window_start(today,SPEED_TEST_DAYS).isoformat()<=e["payload"]["day"]<=today.isoformat()]
+    return max(tests,key=lambda p:(p["day"],p["sport"]))["sport"] if tests else "Run"
+
+
 def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,speed_kmh=None,hr_bpm=None):
     from biathlon import hr_speed
     from .activity_shadow_pipeline import activity_shadow_configuration_fingerprint
-    from vflat_b65 import MODEL_VERSION as VFLAT_VERSION, CONFIG_VERSION as VFLAT_CONFIG
+    from vflat_b65.sports import speed_model_versions
     settings=repository.athlete_settings(alias)
     if settings is None: raise HTTPException(409,"Athlete settings are required")
     today=datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
@@ -195,7 +213,8 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     activities=[a for a in (calendar.get("activities") or []) if start.isoformat()<=a["local_date"]<=today.isoformat()]
     entries=[e for e in ModelStore(repository).entries(alias) if e["kind"]=="SPEED_TEST"]
     sports=sorted({r["sport"] for r in activities}|{e["payload"]["sport"] for e in entries})
-    sport=sport or (sports[0] if sports else "Run")
+    sport=sport or _default_speed_sport(activities,entries,today)
+    vflat_version,vflat_config=speed_model_versions(sport)
     selected=[e["payload"] for e in entries if e["payload"].get("enabled") and e["payload"]["sport"]==sport
            and start.isoformat()<=e["payload"]["day"]<=today.isoformat()]
     tests=[t for t in selected if _maximal_test(t)]
@@ -210,12 +229,12 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     history=history_from_calendar(repository,alias,calendar)
     index_start=window_start(today)
     recent=[a for a in history if a["sport"]==sport and index_start.isoformat()<=a["local_date"]<=today.isoformat()]
-    comparison_key=activity_shadow_configuration_fingerprint(settings.zone_bounds_bpm,settings.hrmax_bpm)
+    comparison_key=activity_shadow_configuration_fingerprint(settings.zone_bounds_bpm,settings.hrmax_bpm,sport=sport)
     # Imported Vflat tests are frozen measurements. A config change can alter
     # speed even when its public model version stays the same. Manual flat tests
     # have no Vflat dependency and remain compatible with the current index.
     tests_match_index=all(t.get("source")=="MANUAL" or
-        (t.get("vflat_version"),t.get("vflat_config_version"))==(VFLAT_VERSION,VFLAT_CONFIG) for t in tests)
+        (t.get("vflat_version"),t.get("vflat_config_version"))==(vflat_version,vflat_config) for t in tests)
     compatible=[];incompatible=0
     for activity in recent:
         index=activity.get("index")
@@ -223,7 +242,7 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
         if (not tests_match_index or index.get("hrmax_bpm")!=settings.hrmax_bpm
             or list(index.get("zone_bounds_bpm",[]))!=list(settings.zone_bounds_bpm)
             or index.get("comparison_key")!=comparison_key
-            or index.get("source_versions",{}).get("vflat")!=VFLAT_VERSION):
+            or index.get("source_versions",{}).get("vflat")!=vflat_version):
             incompatible+=1;continue
         compatible.append(activity)
     if incompatible or not tests_match_index:warnings.append("INCOMPARABLE_INDEX_CONFIGURATION")

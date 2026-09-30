@@ -26,6 +26,21 @@ def test_in_range_index_is_retained_and_out_of_range_uses_exact_midpoint():
     assert p.anchors[1]['duration_s']==8100
     assert p.anchors[1]['reason']=='INDEX_OUTSIDE_DURATION_BOUNDS'
 
+
+@pytest.mark.parametrize("zone",list(TMAX_RANGES_S))
+@pytest.mark.parametrize("edge_index",[0,1])
+def test_numerical_inverse_keeps_paired_index_at_expert_time_boundaries(zone,edge_index):
+    curve=make().curve
+    i=list(TMAX_RANGES_S).index(zone)
+    edge=TMAX_RANGES_S[zone][edge_index]
+    indices={z:{"index":100*BOUNDS[j+1]/BOUNDS[-1]/(curve.speed(limits[edge_index])*3.6),"count":2}
+             for j,(z,limits) in enumerate(TMAX_RANGES_S.items())}
+    predictor=make(indices)
+    anchor=predictor.anchors[i]
+    assert anchor["source"]=="INDEX"
+    assert anchor["candidate_reason"]=="ACCEPTED"
+    assert anchor["duration_s"]==edge
+
 def test_conflicting_anchors_fall_back_together_to_preserve_order():
     c=make().curve
     indices={z:{'index':100*BOUNDS[i+1]/180/(c.speed(t)*3.6)} for i,(z,t) in enumerate([('Z1',7300),('Z2',10000),('Z3',3000),('Z4',1000)])}
