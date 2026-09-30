@@ -84,14 +84,16 @@ def test_physical_endpoint_order_does_not_hide_invalid_inner_shape():
 
 def test_reference_prior_and_one_anchor_preserve_shape_without_five_percent_warp():
     reference = model.calibrated([])
-    prior = model.Curve(model.REFERENCE_TIMES, tuple(v*.7 for v in model.REFERENCE_SPEEDS))
+    prior = model.Curve(model.REFERENCE_TIMES,
+        tuple(v*r for v, r in zip(model.REFERENCE_SPEEDS, [.75, .74, .73, .72, .70, .65])))
     assert model.calibrated([], prior=prior) is prior
     curve = model.calibrated(TESTS[:1], prior=prior)
-    ratio = (22/3.6)/prior.speed(180)
+    ratio = (22/3.6)/reference.speed(180)
     for seconds in (10.8, 60, 180, 1800, 7200, 43516):
         assert reference.speed(seconds) == pytest.approx(model.Curve(model.REFERENCE_TIMES, model.REFERENCE_SPEEDS).speed(seconds))
-        assert curve.speed(seconds) == pytest.approx(prior.speed(seconds)*ratio)
-        assert curve.log_slope(seconds) == prior.log_slope(seconds)
+        assert curve.speed(seconds) == pytest.approx(reference.speed(seconds)*ratio)
+        assert curve.log_slope(seconds) == reference.log_slope(seconds)
+        assert curve.speed(seconds) == model.calibrated(TESTS[:1]).speed(seconds)
     assert model.calibrated(TESTS, prior=prior) is model.calibrated(TESTS)
 
 
@@ -102,7 +104,7 @@ def test_two_anchor_curve_ignores_later_zone_warp_and_multi_keeps_every_test():
     assert changed is curve and factor == 0.
     extra = {"duration_s": 3600., "speed_kmh": 16.}
     multiple = model.calibrated([*TESTS, extra])
-    assert model.model_metadata(multiple)["calibration_mode"] == "MULTIPOINT_C1_LEGACY"
+    assert model.model_metadata(multiple)["calibration_mode"] == "MULTIPOINT_C1_5PCT"
     for item in [*TESTS, extra]:
         assert multiple.speed(item["duration_s"])*3.6 == pytest.approx(item["speed_kmh"], abs=1e-8)
 

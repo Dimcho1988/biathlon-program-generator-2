@@ -1,4 +1,4 @@
-"""Two measured anchors, fixed normative shape, bounded outward continuation.
+"""Exact measured windows and bounded outward continuation.
 
 This module never invents observations. The correction is monotone away from
 each real anchor; its five-percent bound is a modelling prior, not an error bar.
@@ -63,6 +63,8 @@ class _OutwardCorrection:
         self.max_u = max(0., max_u)
         derivative = orientation * (model.raw_log_slope(self.anchor) - model.reference.log_slope(self.anchor))
         self.sign = 0 if abs(derivative) <= 1e-10 else (1 if derivative > 0 else -1)
+        if not self.sign and hasattr(model, "neutral_outward_sign"):
+            self.sign = model.neutral_outward_sign(orientation)
         self.spline = None
         if max_u <= 1e-14 or not self.sign:
             return
@@ -73,8 +75,10 @@ class _OutwardCorrection:
                                       [x for x in breaks if 0 < x < max_u])))
         times = self.anchor*np.exp(orientation*u)
         base = np.array([model.reference.speed(float(t))*self.ratio for t in times])
-        x = np.log(times/model.t1)
-        raw = np.expm1(math.log(model.v1) + model.a*x + model.c*x*x - np.log(base))
+        log_ratio = model.continuation_log_speed(times, orientation) - np.log(base)
+        # The limiter saturates well before these bounds. Clipping only this
+        # intermediate exponent avoids overflow for tightly spaced tests.
+        raw = np.expm1(np.clip(log_ratio, -50., 50.))
         raw[0] = 0.
         maximum = np.maximum.accumulate(np.maximum(0., self.sign*raw))
         values = _soft_cap(maximum)
@@ -103,7 +107,7 @@ class _OutwardCorrection:
         minima[inside] = np.minimum(minima[inside], derivative[inside, 0]
             + derivative[inside, 1]*vertex[inside] + derivative[inside, 2]*vertex[inside]**2)
         if np.any(minima < -1e-13) or values.min() < 0 or values.max() > EPSILON + 1e-12:
-            raise ValueError("TWO_ANCHOR_CORRECTION_NOT_MONOTONE")
+            raise ValueError("BOUNDED_CORRECTION_NOT_MONOTONE")
         normative = np.array([reference.log_slope(float(t)) for t in times])
         denominator = self.sign*p
         denominator[:, 0] += 1.
@@ -117,7 +121,7 @@ class _OutwardCorrection:
         distance_numerator[:, :4] += denominator
         if not (_strict_polynomial_sign(numerator, positive=False)
                 and _strict_polynomial_sign(distance_numerator, positive=True)):
-            raise ValueError("TWO_ANCHOR_NONPHYSICAL_CONTINUATION")
+            raise ValueError("BOUNDED_NONPHYSICAL_CONTINUATION")
 
     def value(self, t):
         if self.spline is None:
@@ -134,7 +138,7 @@ class _OutwardCorrection:
 
 class TwoAnchorCurve:
     calibration_mode = "TWO_ANCHOR_5PCT"
-    model_version = "speed-duration-individual-5pct-v3"
+    model_version = "speed-duration-individual-5pct-v4"
 
     def __init__(self, reference, pairs, *, grid_size=GRID_SIZE):
         self.reference = reference
@@ -162,6 +166,10 @@ class TwoAnchorCurve:
 
     def raw_log_slope(self, t):
         return self.a+2*self.c*math.log(t/self.t1)
+
+    def continuation_log_speed(self, times, orientation):
+        x = np.log(times/self.t1)
+        return math.log(self.v1) + self.a*x + self.c*x*x
 
     def base_speed(self, t):
         w = max(0., min(1., math.log(t/self.t1)/self.L))
@@ -213,6 +221,108 @@ class TwoAnchorCurve:
 
     def inverse(self, value, *, distance=False):
         # Reuse canonical bracketed inversion and explicit domain behaviour.
+        from .speed_duration import Curve
+        return Curve.inverse(self, value, distance=distance)
+
+    def point_metadata(self, t):
+        correction = self.speed(t)/self.base_speed(t)-1
+        extrapolated = t < self.t1 or t > self.t2
+        return {"calibration_mode": self.calibration_mode, "extrapolated": extrapolated,
+            "within_test_window": not extrapolated, "additional_correction": correction,
+            "extrapolation_capped": extrapolated and abs(correction) >= EPSILON-1e-10}
+
+
+class MultipointCurve:
+    """C1 interpolation of every real test, continuing its terminal pieces.
+
+    The existing Curve interpolation is fitted only inside the measured
+    window. Its terminal log-quadratic pieces define the raw continuation;
+    synthetic normative knots never influence the fitted endpoint slopes.
+    Each side then uses the same no-reversal, smooth 5% limiter as two tests.
+    """
+    calibration_mode = "MULTIPOINT_C1_5PCT"
+    model_version = "speed-duration-individual-5pct-v4"
+
+    def __init__(self, reference, pairs, *, grid_size=GRID_SIZE):
+        from .speed_duration import Curve
+        if len(pairs) < 3:
+            raise ValueError("Multipoint mode requires at least three real tests")
+        self.reference = reference
+        self.window = Curve(tuple(t for t, _ in pairs), tuple(v for _, v in pairs))
+        self.anchors = dict(pairs)
+        self.t1, self.v1 = pairs[0]
+        self.t2, self.v2 = pairs[-1]
+        self.r1 = self.v1/reference.speed(self.t1)
+        self.r2 = self.v2/reference.speed(self.t2)
+        self._tails = {}
+        self._log_ratios = tuple(math.log(v/reference.speed(t)) for t, v in pairs)
+        for orientation, i, anchor, speed in [(-1, 0, self.t1, self.v1), (1, -1, self.t2, self.v2)]:
+            eta, plateau, left, right = self.window._pieces[i]
+            width = (self.window._x[1]-self.window._x[0] if orientation == -1
+                     else self.window._x[-1]-self.window._x[-2])
+            slope = left if orientation == -1 else right
+            curvature = (plateau-left if orientation == -1 else right-plateau)/(eta*width)
+            self._tails[orientation] = (anchor, speed, slope, curvature)
+        self.left = _OutwardCorrection(self, -1, grid_size=grid_size)
+        self.right = _OutwardCorrection(self, 1, grid_size=grid_size)
+        self.times = tuple(sorted(set((*reference.times, *self.window.times))))
+        self._x = tuple(math.log(t) for t in self.times)
+        self.speeds = tuple(self.speed(t) for t in self.times)
+
+    def continuation_log_speed(self, times, orientation):
+        anchor, speed, slope, curvature = self._tails[orientation]
+        x = np.log(times/anchor)
+        return math.log(speed) + slope*x + curvature*x*x/2
+
+    def raw_log_slope(self, t):
+        if self.t1 <= t <= self.t2:
+            return self.window.log_slope(t)
+        anchor, _, slope, curvature = self._tails[-1 if t < self.t1 else 1]
+        return slope + curvature*math.log(t/anchor)
+
+    def neutral_outward_sign(self, orientation):
+        # Equal tangents can still have a nonzero initial quadratic departure.
+        # The normative slope is affine up to its next break, so this quotient
+        # gives that piece's curvature without an arbitrary probing distance.
+        anchor, _, _, curvature = self._tails[orientation]
+        x = math.log(anchor)
+        outward = [orientation*(b-x) for b in _normative_breaks(self.reference)
+                   if orientation*(b-x) > 1e-12]
+        if not outward:
+            return 0
+        h = orientation*min(outward)/2
+        normative_curvature = (self.reference.log_slope(anchor*math.exp(h))
+                               - self.reference.log_slope(anchor))/h
+        delta = curvature-normative_curvature
+        return 0 if abs(delta) <= 1e-10 else (1 if delta > 0 else -1)
+
+    def base_speed(self, t):
+        # Inside the measured window, the comparison baseline interpolates
+        # anchor ratios; outside, each extreme's ratio is held fixed. Interior
+        # measurements are never constrained by an endpoint-only corridor.
+        log_ratio = np.interp(math.log(t), self.window._x, self._log_ratios)
+        return self.reference.speed(t)*math.exp(float(log_ratio))
+
+    def speed(self, t):
+        self.reference.speed(t)
+        t = min(self.reference.times[-1], max(self.reference.times[0], t))
+        if t in self.anchors:
+            return self.anchors[t]
+        if self.t1 <= t <= self.t2:
+            return self.window.speed(t)
+        side = self.left if t < self.t1 else self.right
+        return self.reference.speed(t)*side.ratio*(1+side.value(t))
+
+    def distance(self, t):
+        return t*self.speed(t)
+
+    def log_slope(self, t):
+        self.reference.speed(t)
+        if self.t1 <= t <= self.t2:
+            return self.window.log_slope(t)
+        return self.reference.log_slope(t)+(self.left if t < self.t1 else self.right).log_slope_delta(t)
+
+    def inverse(self, value, *, distance=False):
         from .speed_duration import Curve
         return Curve.inverse(self, value, distance=distance)
 

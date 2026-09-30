@@ -195,8 +195,8 @@ def calibration_diagnostics(result, tests):
 
     Paired seconds and counts describe sampling support, not a calibrated error
     variance comparable with maximal tests. They cannot justify an automatic
-    numeric blend. Zero/one-test modes already use the prior; two real anchors
-    retain the separately verified normative fit and exact test constraints.
+    numeric blend. Only the zero-test curve uses the prior's shape. One test
+    scales the normative shape; further tests define the measured window.
     """
     curve = result.get("curve")
     residuals = []
@@ -208,7 +208,7 @@ def calibration_diagnostics(result, tests):
                               "prior_speed_kmh": predicted,
                               "measured_vs_prior_percent": 100*(measured/predicted-1)})
     return {"residuals": residuals, "real_test_anchors_take_precedence": True,
-            "prior_shape_used": bool(curve) and len(tests) <= 1,
+            "prior_shape_used": bool(curve) and not tests,
             "blend_status": "NOT_APPLIED",
             "blend_reason": "NO_VALIDATED_RELIABILITY_WEIGHTS" if residuals else "NO_COMPARABLE_PRIOR_AND_TEST",
             "sampling_counts_are_confidence_weights": False}

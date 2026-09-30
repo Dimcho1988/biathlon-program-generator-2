@@ -51,13 +51,21 @@ describe("speed test selection and prediction",()=>{
     expect(html).toContain("Индивидуалните прогнози са спрени");
     expect(html).not.toContain("NaN");
   });
-  it("labels extrapolation and the cap without presenting 5% as prediction accuracy",()=>{
-    const calibrated:SpeedModel={...model,status:"CALIBRATED",curve_metadata:{mode:"TWO_TEST_5PCT",absolute_speed_available:true,measured_window_s:[180,720],cap_percent:5},prediction:{...model.points[1],evidence:"EXTRAPOLATED",capped:true}};
+  it.each(["TWO_ANCHOR_5PCT","MULTIPOINT_C1_5PCT"])("labels extrapolation and the cap without presenting 5%% as prediction accuracy: %s",mode=>{
+    const calibrated:SpeedModel={...model,status:"CALIBRATED",curve_metadata:{mode,absolute_speed_available:true,measured_window_s:[180,720],cap_percent:5},prediction:{...model.points[1],evidence:"EXTRAPOLATED",capped:true}};
     const html=renderToStaticMarkup(<SpeedModelPanel model={calibrated} canEdit/>);
     expect(html).toContain("Прогноза извън реалните тестове");
     expect(html).toContain("достигнато ограничение на допълнителното отклонение");
     expect(html).toContain("а не граница на възможностите или точност на прогнозата");
     expect(html).not.toContain("Заявена корекция на времето");
+    expect(html).toContain("през всички реални тестове");
+    expect(html).toContain("без обръщане на посоката на отклонението");
+  });
+  it("explains one-test normative scaling without claiming a five-percent correction",()=>{
+    const calibrated:SpeedModel={...model,status:"CALIBRATED",curve_metadata:{mode:"SINGLE_ANCHOR_SCALE",absolute_speed_available:true,cap_percent:null}};
+    const html=renderToStaticMarkup(<SpeedModelPanel model={calibrated} canEdit/>);
+    expect(html).toContain("При един максимален тест запазваме формата на нормативната крива");
+    expect(html).not.toContain("Как се ограничава прогнозата извън тестовете?");
   });
   it("preserves fractional manual test times without loosening activity window parsing",()=>{
     expect(parseManualClock("0:10,8")).toBe(10.8);
