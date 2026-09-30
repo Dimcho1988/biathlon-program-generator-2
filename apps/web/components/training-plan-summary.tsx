@@ -5,12 +5,14 @@ import { durationHms } from "../lib/duration-format";
 import { componentColor, componentLabel } from "../lib/training-visuals";
 import { daySessions, COMPONENTS, type PlanningDraft, type VolumeHistory } from "../lib/training-management";
 import { HistoryVolume } from "./planning-controls-editor";
+import { PlanningEvidenceNotice, planningHistoryEstimated } from "./planning-evidence-notice";
 export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
   const p=isRecord(plan.parameters)?plan.parameters:{};
   const summary=isRecord(plan.summary)?plan.summary:{};
   const v=isRecord(p.volume_evidence)?p.volume_evidence as unknown as VolumeHistory:null;
   const sports=Array.isArray(p.training_sports)?p.training_sports.map(String):[];
   const sessions=plan.days.flatMap(daySessions);
+  const estimatedHistory=planningHistoryEstimated(plan);
   const snapshot=isRecord(plan.input_snapshot)?plan.input_snapshot:{};
   const profile=isRecord(snapshot.management_profile)?snapshot.management_profile:{};
   const manual=isRecord(profile.component_targets_weekly)?Object.entries(profile.component_targets_weekly).filter(([,v])=>typeof v==="number"):[];
@@ -27,6 +29,7 @@ export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
   const reasons=new Map<string,number>();
   for(const d of plan.days.filter(d=>!d.session)) for(const r of d.rejected_alternatives) reasons.set(r.reason,(reasons.get(r.reason)??0)+1);
   return <section className="management-panel"><h2>Обем и основа на програмата</h2>
+    <PlanningEvidenceNotice plan={plan}/>
     {manual.length>0&&<aside className="management-notice" role="status"><strong>Програмата използва ръчни цели:</strong> {manual.map(([z,v])=>`${z}: ${v} приравнени мин / 7 дни`).join("; ")}.<p>Те заместват автоматичните цели от историята. Нисък бюджет за Z1 може да блокира и по-високите аеробни зони. Ако целта е въведена по погрешка, избери „Използвай автоматичните цели“ в профила и запази.</p><Link href="/planning">Провери ръчните цели →</Link></aside>}
     <div className="management-metrics">
     <div><small>Средна продължителност от историята</small><strong>{duration(p.historical_training_weekly_minutes??p.historical_selected_weekly_minutes??p.baseline_weekly_minutes)}</strong><span>време за тренировки за 7 дни</span></div>
@@ -38,7 +41,7 @@ export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
       {shortfall.length>0&&<aside className="management-notice" role="status"><strong>Остава непланиран товар: {shortfall.join(", ")}.</strong> Целта за показаните дати не е покрита изцяло. Остатъкът остава видим за преглед на ограниченията и разпределението.</aside>}
       {allocationRows.length>0&&<div className="management-table-wrap"><table>
         <caption>Покритие на целите за периода · ч:мм:сс</caption>
-        <thead><tr><th>Компонент / величина</th><th>Цел</th><th>Изпълнено</th><th>Планирано</th><th>Остатък</th><th>Покритие</th></tr></thead>
+        <thead><tr><th>Компонент / величина</th><th>Цел</th><th>{estimatedHistory?"Изпълнено · с оценен товар":"Изпълнено"}</th><th>Планирано</th><th>Остатък</th><th>Покритие</th></tr></thead>
         <tbody>{allocationRows.map(r=>{
           const target=r.target??r.target_effective;
           const actual="actual" in r?r.actual:r.actual_effective;

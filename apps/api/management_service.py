@@ -62,7 +62,13 @@ def outlook(repository, alias, *, now=None):
             event_duration.get("source_revision") != analysis.get("revision")):
         event_duration = {**race_duration.resolve(profile), "reason": "MODEL_UPDATED"}
     profile = race_duration.applied(profile, event_duration)
-    source = (analysis.get("snapshot_payload") or {}).get("load_history") or {}
+    measured_source = (analysis.get("snapshot_payload") or {}).get("load_history") or {}
+    calendar_reader = getattr(repository, "active_planning_calendar", None) or getattr(repository, "active_activity_calendar", None)
+    activity_calendar = calendar_reader(alias, today-timedelta(days=89), today) if calendar_reader else None
+    if activity_calendar and (activity_calendar.get("generation_id"), activity_calendar.get("revision")) != (analysis.get("generation_id"), analysis.get("revision")):
+        activity_calendar = None
+    planning_envelope = {**analysis, "activities": (activity_calendar or {}).get("activities", [])}
+    source, planning_evidence = engine.planning_source(repository, alias, profile, settings, planning_envelope, today)
     rows = engine._daily_rows(source, today)
     calendar = engine._read_optional(repository, "athlete_planning_calendar", alias) or {"events": []}
     profile, horizon = engine.planning_schedule.horizon(profile, calendar["events"])
@@ -78,7 +84,7 @@ def outlook(repository, alias, *, now=None):
     quality = source.get("quality") or {}
     history = engine.planning_controls.volume_history(source, today, 0, gap_days=(controls or {}).get("history_gap_days", engine.planning_history.DEFAULT_GAP_DAYS))
     limited = (not history["history_policy"]["usable"] or any(not v["known"] for v in engine.planning_controls.reference(rows, today).values())
-               or bool(quality.get("limited_activities") or quality.get("excluded_activities"))
+               or not planning_evidence["supported"]
                or source.get("period_end") != today.isoformat())
     limited = limited or not engine.load_progression.history_matches(source, {"bounds": list(settings.zone_bounds_bpm), "hrmax": settings.hrmax_bpm} if settings else None)
     volume = engine.planning_controls.volume_basis(profile, history)
@@ -87,16 +93,16 @@ def outlook(repository, alias, *, now=None):
                                        reentry_days_override=reentry_days,
                                        taper_days=profile["taper_days"], transition_days=profile["transition_days"])
     phases["entry_basis"] = {"days_override": reentry_days, "reason": reentry_reason}
-    progression = engine.progression_context(repository, alias, profile, source, rows, today, phases, envelope=analysis)
+    progression = engine.progression_context(repository, alias, profile, source, rows, today, phases, envelope=analysis, measured_source=measured_source)
     projection = engine._long_term_outlook(profile, phases, reference, accents, preferences, rows, today,
-                                         limited, volume=volume, events=calendar["events"], progression=progression)
+                                         limited, volume=volume, events=calendar["events"], progression=progression, planning_evidence=planning_evidence)
     return {"configured": True, "outlook": {
         "schema_version": "training-outlook-preview-v1", "profile_revision": stored["revision"],
         "race_duration": event_duration,
         "generated_at": now.isoformat(), "engine_version": engine.VERSION,
-        "source": {"generation_id": analysis.get("generation_id"), "revision": analysis.get("revision"), "as_of": source.get("period_end")},
+        "source": {"generation_id": analysis.get("generation_id"), "revision": analysis.get("revision"), "as_of": source.get("period_end"), "planning_history": planning_evidence},
         "periodization": phases, "long_term": projection, "history_comparison": history["weeks"],
-        "component_history": engine.load_progression.history(source, rows, today),
+        "component_history": engine.load_progression.history(measured_source, engine._daily_rows(measured_source, today), today),
         "individual_learning": public_learning((progression or {}).get("individual_learning")),
         "input_snapshot": {"calendar": calendar, "profile_revision": stored["revision"], "horizon": horizon,
                            "planning_controls": controls},
@@ -120,7 +126,7 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False)
     settings = repository.athlete_settings(alias)
     analysis = repository.active_analysis(alias) or {}
     entries = ModelStore(repository).entries(alias)
-    from . import learning_service
+    from . import learning_service, speed_zone_history
     responses = sorted([
         {"kind": e["kind"], "entry_key": e["entry_key"], "revision": e["revision"]}
         for e in training_plan_engine.ResponseStore(repository).entries(alias)
@@ -134,6 +140,11 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False)
             "methods": training_plan_engine.METHODS_VERSION,
             "periodization": PERIODIZATION_VERSION,
             "speed_duration": training_plan_engine.speed_duration.VERSION,
+            "preliminary_capacity": training_plan_engine.preliminary_capacity.VERSION,
+            "hr_speed": training_plan_engine.hr_speed.VERSION,
+            "planning_history_estimate": training_plan_engine.planning_history_estimate.VERSION,
+            "speed_zone_history": speed_zone_history.VERSION,
+            "load_progression": training_plan_engine.load_progression.VERSION,
             "recovery": training_plan_engine.recovery_v2.VERSION,
             "individual_learning": learning_service.VERSION,
         },

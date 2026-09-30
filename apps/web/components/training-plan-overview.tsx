@@ -8,6 +8,7 @@ import { RaceDurationSummary } from "./race-duration-estimate";
 import { MicrocycleVolumes } from "./microcycle-volumes";
 import { MesocyclePriorities } from "./mesocycle-priorities";
 import { LoadMeasureExplanation } from "./load-measure-explanation";
+import { PlanningEvidenceNotice } from "./planning-evidence-notice";
 import { durationHms } from "../lib/duration-format";
 import { COMPONENT_COLORS as COLORS, componentLabel } from "../lib/training-visuals";
 import { useState } from "react";
@@ -48,6 +49,7 @@ export function TrainingPlanOverview({ plan, outcomes, today, stale, currentProf
   const x = (index: number) => 90 + index * 740 / Math.max(1, weeks.length - 1);
   const y = (value: number) => 260 - value * 220 / maximum;
   return <section className="management-overview" aria-label="Дългосрочна подготовка">
+    <PlanningEvidenceNotice plan={plan}/>
     <LoadProgressionSummary plan={plan}/>
     {volumeContext && <section className="management-panel"><h2>Обем на подготовката</h2>
       <p className="management-muted">Актуални цели от записания профил · версия {currentProfileRevision}. Промените в профила се отразяват тук при отваряне; седмичните тренировки се подготвят отделно.</p>

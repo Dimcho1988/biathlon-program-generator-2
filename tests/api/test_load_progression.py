@@ -340,7 +340,7 @@ def test_illness_flag_needs_a_new_report_to_clear():
     assert not load_adaptation.assess(entries,TODAY)["hold_for_reported_illness_or_pain"]
 
 
-def test_interval_capacity_uses_volume_correction_between_preserved_test_anchors():
+def test_interval_capacity_does_not_warp_the_curve_again_after_test_calibration():
     from tests.api.test_training_plan_engine import supported_speed
     from tests.api.test_management_v2 import interval
     settings=Repository().settings
@@ -352,4 +352,7 @@ def test_interval_capacity_uses_volume_correction_between_preserved_test_anchors
     speed["zone_corrections"]={z:.1 for z in policy.WEEKLY_Q_BOUNDS}
     corrected=engine.capacity_for(method,settings,speed,(None,[],[]),TODAY)
     assert corrected["capacity_source"]=="SPEED_DURATION"
-    assert corrected["capacity_minutes"] != pytest.approx(uncorrected["capacity_minutes"])
+    assert corrected["capacity_minutes"] == pytest.approx(uncorrected["capacity_minutes"])
+    predictor, tests, _ = engine._capacity_context(speed, settings)
+    for test in tests:
+        assert predictor.curve.speed(test["duration_s"])*3.6 == pytest.approx(test["speed_kmh"], abs=1e-8)

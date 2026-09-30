@@ -206,11 +206,11 @@ def test_shared_zone_volume_keeps_tests_and_hr_mapping_sport_specific(monkeypatc
     for i,(sport,(z1,z2,speed)) in enumerate(sports.items()):
         day=(max(first,today-timedelta(days=39)) if i==0 else today-timedelta(days=1)).isoformat()
         activities.append({"activity_ref":sport,"sport":sport,"local_date":day,"latest_shadow_run_key":sport})
-        loads.append({"date":day,"sport":sport,"zones":[
+        loads.append({"activity_ref":sport,"date":day,"sport":sport,"zones":[
             {"zone":zone,"equivalent_time_min":q,"effective_load":99999}
-            for zone,q in (("Z1",z1),("Z2",z2),("STR",99999))]})
+            for zone,q in (("Z1",z1),("Z2",z2),("Z3",0),("Z4",0),("Z5",0),("STR",99999))]})
         repo.rows.append({"kind":"SPEED_TEST","entry_key":sport,"revision":1,"payload":{
-            "sport":sport,"day":day,"enabled":True,"duration_s":600,"speed_kmh":speed,
+            "sport":sport,"day":day,"enabled":True,"duration_s":600,"speed_kmh":speed,"maximal":True,"comparable":True,
             "vflat_version":VF_VERSION,"vflat_config_version":VF_CONFIG}})
     for day in (first-timedelta(days=1),today,today+timedelta(days=1)):
         loads.append({"date":day.isoformat(),"sport":"Run","zones":[{"zone":"Z1","equivalent_time_min":99999}]})
@@ -257,8 +257,8 @@ def test_shared_zone_volume_keeps_tests_and_hr_mapping_sport_specific(monkeypatc
 def test_saved_anchor_unlocks_all_three_prediction_directions_and_errors_stay_inline():
     repo=SpeedStore()
     empty=m.speed_view(repo,"ath-test","Run",duration_s=720)
-    assert empty["status"]=="REFERENCE_ONLY" and empty["prediction"] is None
-    assert empty["prediction_error"]=="MAXIMAL_TEST_REQUIRED"
+    assert empty["status"]=="UNAVAILABLE" and empty["prediction"] is None
+    assert empty["prediction_error"]=="ABSOLUTE_SPEED_EVIDENCE_REQUIRED"
     assert empty["volume_weekly_min"]==dict.fromkeys(("Z1","Z2","Z3","Z4","Z5"))
     assert set(empty["zone_corrections"].values())=={0}
     body=SpeedTestInput(activity_ref=REF,start_s=0,duration_s=720,maximal=True,comparable=True,conditions="same course")
@@ -274,7 +274,7 @@ def test_saved_anchor_unlocks_all_three_prediction_directions_and_errors_stay_in
     outside=m.speed_view(repo,"ath-test","Run",duration_s=2)
     assert outside["prediction"] is None and outside["prediction_error"]=="OUTSIDE_PREDICTION_RANGE"
     assert outside["points"] and outside["status"]=="CALIBRATED"
-    assert m.speed_view(repo,"ath-test","Ride")["status"]=="REFERENCE_ONLY"
+    assert m.speed_view(repo,"ath-test","Ride")["status"]=="UNAVAILABLE"
 
 
 class ComplexSpeedStore(SpeedStore):
@@ -318,11 +318,12 @@ def test_exploratory_walk_preview_save_and_prediction_share_coverage_and_elapsed
     assert payload["sport"]=="Walk" and payload["maximal"] is False and payload["use_for_cs"] is False
     repo.rows=[{"kind":"SPEED_TEST","entry_key":write["p_key"],"revision":1,"payload":payload}]
     result=m.speed_view(repo,"ath-test","Walk",duration_s=1000)
-    assert result["status"]=="CALIBRATED" and result["exploratory_test_count"]==1
-    assert "EXPLORATORY_CALIBRATION" in result["warnings"]
-    assert result["prediction"]["speed_kmh"]==pytest.approx(20)
+    assert result["status"]=="UNAVAILABLE" and result["exploratory_test_count"]==1
+    assert result["active_test_count"]==0 and result["points"]==[]
+    assert "EXPLORATORY_OBSERVATIONS_NOT_MAXIMAL_TESTS" in result["warnings"]
+    assert result["prediction"] is None
     assert result["critical_speed"]["count"]==0
-    assert m.speed_view(repo,"ath-test","NordicSki")["status"]=="REFERENCE_ONLY"
+    assert m.speed_view(repo,"ath-test","NordicSki")["status"]=="UNAVAILABLE"
 
 
 def test_exploratory_floor_and_attestations_do_not_relax_strict_tests():

@@ -176,9 +176,12 @@ def test_weekly_report_never_invents_daily_history_or_known_100_percent_recovery
     result = generate(repo, profile(recent_weekly_hours=[3, 3, 3, 3]))
     assert result["status"] == "LIMITED_DRAFT"
     assert result["source"]["history_days"] == 0
-    # The 30-minute limited-history cap cannot meet 25% of this expert capacity.
-    assert not sessions(result)
-    assert any(r["code"] == "MINIMUM_CAPACITY_DOSE" for d in result["days"] for r in d["rejected_alternatives"])
+    # Recovery uses the method's absolute minimum; no diary is invented and
+    # these limited suggestions still cannot activate an unknown-history plan.
+    assert sessions(result)
+    assert all(s["purpose"] == "RECOVERY" and s["main_work_minutes"] <= 30 for s in sessions(result))
+    assert not result["activation_eligible"]
+    assert all(s["dose_evidence"]["minimum_dose_scope"] == "METHOD_ABSOLUTE" for s in sessions(result))
     for day in result["days"]:
         assert all(value is None for value in day["readiness_before"].values())
         if day["session"]:

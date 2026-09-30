@@ -106,7 +106,7 @@ def test_edit_disable_and_reenable_use_same_identity_and_revision():
     assert service.speed_view(repo, "ath-test", "Run", duration_s=200)["prediction"]["speed_kmh"] == pytest.approx(21.6)
     service.save_manual_test(repo, "ath-test", body(enabled=False, expected_revision=2), ACTOR)
     assert repo.writes[-1]["p_payload"]["duration_s"] == 200  # disabling preserves the saved result
-    assert service.speed_view(repo, "ath-test", "Run")["status"] == "REFERENCE_ONLY"
+    assert service.speed_view(repo, "ath-test", "Run")["status"] == "UNAVAILABLE"
     service.save_manual_test(repo, "ath-test", body(expected_revision=3), ACTOR)
     assert service.speed_view(repo, "ath-test", "Run")["active_test_count"] == 1
     with pytest.raises(HTTPException) as error:

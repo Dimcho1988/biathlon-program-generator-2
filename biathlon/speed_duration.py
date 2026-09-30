@@ -1,15 +1,18 @@
-"""Smooth bounded speed-duration curve; reference shape is an expert prior.
+"""Individual speed-duration models over a fixed expert-reference domain.
 
-Log speed is integrated from a continuous, piecewise linear derivative in
-(-1, 0). Thus speed decreases, distance increases, and all accepted anchors
-are preserved exactly, including through transitions. Extrapolation is off.
+The canonical Curve and normative interpolation remain unchanged. Two real
+anchors select the bounded five-percent continuation; multiple anchors retain
+the explicitly identified exact C1 model. No mode extrapolates beyond the
+reference duration domain or turns model-generated points into observations.
 """
 from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass
+from functools import lru_cache
 import math
 
-VERSION = "speed-duration-c1-duration-volume-v2"
+VERSION = "speed-duration-individual-5pct-v3"
+NORMATIVE_VERSION = "speed-duration-c1-duration-volume-v2"
 REFERENCE_TIMES = (10.8, 60., 180., 1200., 7200., 43516.)
 REFERENCE_SPEEDS = (9.405516961260822, 8.543876534348628, 7.346875281685026,
                     6.271989154390681, 5.698632863726023, 3.7974582869384923)
@@ -96,23 +99,68 @@ class Curve:
         return math.exp((lo+hi)/2)
 
 
-def calibrated(tests):
+class ScaledCurve:
+    """Preserve an explicit preliminary shape and exactly one measured anchor."""
+    calibration_mode = "SINGLE_ANCHOR_SCALE"
+    model_version = VERSION
+
+    def __init__(self, prior, duration_s, speed_mps):
+        self.prior = prior
+        self.ratio = positive(speed_mps)/prior.speed(duration_s)
+        self.times, self._x = prior.times, prior._x
+        self.speeds = tuple(self.speed(t) for t in self.times)
+        self.anchor = duration_s
+
+    def speed(self, t): return self.prior.speed(t)*self.ratio
+    def distance(self, t): return t*self.speed(t)
+    def log_slope(self, t): return self.prior.log_slope(t)
+    def inverse(self, value, *, distance=False): return Curve.inverse(self, value, distance=distance)
+    def point_metadata(self, t):
+        self.speed(t)
+        return {"calibration_mode": self.calibration_mode, "extrapolated": t != self.anchor,
+            "within_test_window": t == self.anchor, "additional_correction": 0., "extrapolation_capped": False}
+
+
+@lru_cache(maxsize=16)
+def _two_anchor_curve(pairs):
+    from .speed_duration_5pct import TwoAnchorCurve
+    return TwoAnchorCurve(Curve(REFERENCE_TIMES, REFERENCE_SPEEDS), pairs)
+
+
+def model_metadata(curve):
+    mode = getattr(curve, "calibration_mode", "REFERENCE_ONLY")
+    return {"calibration_mode": mode,
+        "model_version": getattr(curve, "model_version", NORMATIVE_VERSION),
+        "normative_version": NORMATIVE_VERSION,
+        "additional_corridor_fraction": .05 if mode == "TWO_ANCHOR_5PCT" else None}
+
+
+def calibrated(tests, *, prior=None):
     reference=Curve(REFERENCE_TIMES,REFERENCE_SPEEDS)
-    pairs=sorted((positive(t["duration_s"]),positive(t["speed_kmh"])/3.6) for t in tests)
+    pairs=tuple(sorted((positive(t["duration_s"]),positive(t["speed_kmh"])/3.6) for t in tests))
     if not pairs:
-        return reference
+        return prior if prior is not None else reference
     if len(pairs)==1:
         t,v=pairs[0]
-        ratio=v/reference.speed(t)
-        return Curve(REFERENCE_TIMES,tuple(s*ratio for s in REFERENCE_SPEEDS))
+        return ScaledCurve(prior if prior is not None else reference, t, v)
     for t,v in pairs:
         reference.speed(t)  # domain check
+    if any(t1 >= t2 or not -1 < math.log(v2/v1)/math.log(t2/t1) < 0
+           for (t1,v1),(t2,v2) in zip(pairs,pairs[1:])):
+        raise ValueError("Tests conflict: longer efforts require lower speed and greater distance")
+    if len(pairs)==2:
+        # The checked two-anchor specification always uses canonical N, never
+        # a silently substituted HR-derived prior or model-generated test.
+        return _two_anchor_curve(pairs)
     # Only selected real tests determine the shape between their extremes.
     first,last=pairs[0],pairs[-1]
     knots=[(t,reference.speed(t)*first[1]/reference.speed(first[0])) for t in REFERENCE_TIMES if t<first[0]]
-    knots+=pairs
+    knots+=list(pairs)
     knots += [(t,reference.speed(t)*last[1]/reference.speed(last[0])) for t in REFERENCE_TIMES if t>last[0]]
-    return Curve(tuple(t for t,v in knots),tuple(v for t,v in knots))
+    curve=Curve(tuple(t for t,v in knots),tuple(v for t,v in knots))
+    object.__setattr__(curve,"calibration_mode","MULTIPOINT_C1_LEGACY")
+    object.__setattr__(curve,"model_version",NORMATIVE_VERSION)
+    return curve
 
 
 def volume_correction(zone, weekly_min):
@@ -144,6 +192,10 @@ def adjusted(curve, tests, hr_for_speed, centers, corrections, *, duration_cente
     This validates speed and distance monotonicity mathematically per segment,
     rather than trusting a chart grid to establish physical invertibility.
     """
+    if getattr(curve,"calibration_mode",None) == "TWO_ANCHOR_5PCT":
+        # Post-calibration time warping would alter the checked continuation
+        # and its relative corridor, even when the two anchor values survive.
+        return curve,0.
     if (not hr_for_speed and duration_centers is None) or not tests or not any(corrections):
         return curve,0.
     locations = [-math.log(c) for c in duration_centers] if duration_centers is not None else centers

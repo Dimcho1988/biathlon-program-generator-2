@@ -106,6 +106,9 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ v
       initialBounds={settings.hr_zone_bounds_bpm}
       initialTimezone={settings.timezone}
       initialHrmax={settings.hrmax_bpm}
+      initialSource={settings.hr_zone_source}
+      initialPercentages={settings.hr_zone_percentages}
+      automaticPercentages={settings.automatic_hr_zone_percentages}
     />;
   }
 
@@ -175,16 +178,18 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ v
 
   const settingsNotice = query.settings ? settingsNotices[query.settings] : undefined;
   let athleteSettingsRequired = false;
+  let automaticPercentages: number[] | null = null;
   if (!result.ok && multiProfile && athleteAlias && result.message !== API_RATE_LIMIT_MESSAGE && result.message !== "API услугата не се събуди навреме.") {
     try {
       const settings = await getAthleteSettings(athleteAlias);
       athleteSettingsRequired = !settings.configured;
+      automaticPercentages = settings.automatic_hr_zone_percentages;
     } catch {
       // Keep the normal API error visible when the settings service is unavailable.
     }
   }
   if (athleteSettingsRequired)
-    return <AthleteSettingsForm notice={settingsNotice} />;
+    return <AthleteSettingsForm notice={settingsNotice} automaticPercentages={automaticPercentages} />;
 
   if (!result.ok && syncState && syncInProgress(syncState) && syncState.active_generation_id === null)
     return <SyncPendingState state={syncState} />;

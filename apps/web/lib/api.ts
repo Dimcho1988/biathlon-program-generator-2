@@ -70,6 +70,9 @@ export interface AthleteSettings {
   hr_zone_bounds_bpm: [number, number, number, number, number, number] | null;
   timezone: string | null;
   hrmax_bpm: number | null;
+  hr_zone_source: "MANUAL" | "AUTOMATIC_HRMAX" | null;
+  hr_zone_percentages: number[] | null;
+  automatic_hr_zone_percentages: number[] | null;
 }
 export interface ActivityShadowIndexRow {
   activity_ref: string;
@@ -265,13 +268,25 @@ export async function getAthleteSettings(athleteAlias: string): Promise<AthleteS
   const bounds = "hr_zone_bounds_bpm" in payload ? payload.hr_zone_bounds_bpm : null;
   const timezone = "timezone" in payload ? payload.timezone : null;
   const hrmax = "hrmax_bpm" in payload ? payload.hrmax_bpm : null;
+  const source = "hr_zone_source" in payload ? payload.hr_zone_source : (payload.configured ? "MANUAL" : null);
+  const percentages = "hr_zone_percentages" in payload ? payload.hr_zone_percentages : null;
+  const automaticPercentages = "automatic_hr_zone_percentages" in payload ? payload.automatic_hr_zone_percentages : null;
   if (bounds !== null && (!Array.isArray(bounds) || bounds.length !== 6 || !bounds.every((value) => Number.isInteger(value))))
     throw new Error("API услугата върна невалидни HR граници.");
   if (timezone !== null && typeof timezone !== "string")
     throw new Error("API услугата върна невалидна часова зона.");
   if (hrmax !== null && (!Number.isInteger(hrmax) || Number(hrmax) < 30 || Number(hrmax) > 240))
     throw new Error("API услугата върна невалиден HRmax.");
-  return { configured: payload.configured, hr_zone_bounds_bpm: bounds as AthleteSettings["hr_zone_bounds_bpm"], timezone, hrmax_bpm: hrmax as number | null };
+  if (source !== null && source !== "MANUAL" && source !== "AUTOMATIC_HRMAX")
+    throw new Error("API услугата върна невалиден произход на HR зоните.");
+  const validPercentages = (values: unknown): values is number[] => Array.isArray(values) && values.length === 6
+    && values.every((value, index) => typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 100 && (index === 0 || value > values[index - 1])) && values[5] === 100;
+  if ((percentages !== null && !validPercentages(percentages))
+    || (automaticPercentages !== null && !validPercentages(automaticPercentages))
+    || (source === "AUTOMATIC_HRMAX" && (percentages === null || hrmax === null)))
+    throw new Error("API услугата върна невалидна схема за HR зоните.");
+  return { configured: payload.configured, hr_zone_bounds_bpm: bounds as AthleteSettings["hr_zone_bounds_bpm"], timezone, hrmax_bpm: hrmax as number | null,
+    hr_zone_source: source, hr_zone_percentages: percentages as number[] | null, automatic_hr_zone_percentages: automaticPercentages as number[] | null };
 }
 
 export async function getActivityShadowIndex(

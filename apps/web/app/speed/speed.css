@@ -12,6 +12,7 @@
 .speed-range-controls label,.speed-curve-readout label{display:grid;gap:8px}
 .speed-range-controls input,.speed-curve-readout input{width:100%;accent-color:var(--accent)}
 .speed-curve-readout{display:grid;gap:12px;margin:14px 0}
+.speed-model-status{font-size:1.1rem}.speed-method-note{margin:18px 0}.speed-functional-profile{border-top:1px solid #8884;padding-top:24px}.speed-profile-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:16px;margin:20px 0}.speed-profile-facts>div{display:grid;gap:10px;padding:20px;border:1px solid #8885;border-radius:12px}.speed-profile-facts strong{font-size:1.35rem;line-height:1.4}.speed-profile-facts small{opacity:.8}.speed-functional-profile details{margin:18px 0}.speed-functional-profile summary,.speed-method-note summary{cursor:pointer;font-weight:600}.speed-functional-profile th,.speed-functional-profile td{vertical-align:top}.speed-functional-profile p{max-width:80ch}.speed-prediction-evidence{font-weight:600}
 .speed-segment-chart{margin:16px 0}
 .speed-segment-chart svg{cursor:crosshair}
 .speed-selection-result{border-left:3px solid var(--accent);padding:0 20px;margin:24px 0}
