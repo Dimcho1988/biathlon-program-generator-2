@@ -11,7 +11,7 @@ from tests.api.test_training_plan_engine import Repository, TODAY, NOW, profile,
 
 
 def configured(**patch):
-    return profile(reentry_days=0, strength_enabled=True, race_duration_min=22,
+    return profile(reentry_days=0, strength_enabled=True, race_duration_min=30,
                    planning_controls=PlanningControls(mesocycle_anchor=TODAY).model_dump(mode="json"), **patch)
 
 
@@ -35,7 +35,7 @@ def test_loading_accents_are_stable_then_rotate_and_strength_is_not_truncated_fo
     assert len({state(p,i)["accents"][0] for i in (0,28,56)})>=2
 
 
-@pytest.mark.parametrize("minutes,expected",[(4,["Z5","Z4","STR"]),(22,["Z4","Z3","STR"]),(120,["Z3","Z2","STR"])])
+@pytest.mark.parametrize("minutes,expected",[(4,["Z5","Z4","STR"]),(22,["Z5","Z4","STR"]),(30,["Z4","Z3","STR"]),(120,["Z3","Z2","STR"])])
 def test_duration_guides_specific_blocks_even_without_growth_regulator(minutes,expected):
     p=configured();p["race_duration_min"]=minutes
     assert state(p,0,"SPECIAL_PREPARATION")["accents"]==expected

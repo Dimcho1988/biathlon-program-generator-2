@@ -66,8 +66,9 @@ def test_short_general_period_reports_missing_template_coverage_instead_of_claim
     assert state(p, 0, periodization=extended)["focus_coverage_missing"] == []
 
 
-@pytest.mark.parametrize("minutes,band", [(240, ["Z1", "Z2", "Z3"]), (120, ["Z3", "Z2", "Z4"]),
-                                         (22, ["Z4", "Z3", "Z5"]), (4, ["Z5", "Z4", "Z3"])])
+@pytest.mark.parametrize("minutes,band", [(300, ["Z1", "Z2", "Z3"]), (240, ["Z2", "Z1", "Z3"]),
+                                         (120, ["Z3", "Z2", "Z4"]), (30, ["Z4", "Z3", "Z5"]),
+                                         (22, ["Z5", "Z4", "Z3"]), (4, ["Z5", "Z4", "Z3"])])
 def test_final_special_and_precompetition_keep_race_priority_and_unique_neighbor_roles(minutes, band):
     p = profile()
     p["race_duration_min"] = minutes
@@ -226,7 +227,7 @@ def test_precompetition_neighbor_can_receive_real_session_without_bypassing_capa
     """
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
     results = {}
-    for period, duration in (("PRECOMPETITION", 22), ("COMPETITION", 22), ("PRECOMPETITION", None)):
+    for period, duration in (("PRECOMPETITION", 30), ("COMPETITION", 30), ("PRECOMPETITION", None)):
         p = profile(55)
         p.update(race_duration_min=duration, age_years=23, training_experience_years=10)
         p["planning_controls"]["sessions_per_week"] = 7
@@ -235,7 +236,7 @@ def test_precompetition_neighbor_can_receive_real_session_without_bypassing_capa
         monkeypatch.setattr(engine, "build_periodization", lambda *args, phase=period, **kwargs: calendar((phase, 0, 55)))
         results[(period, duration)] = engine.generate_plan(repo, "athlete", p, start_date=TODAY, now=NOW)
 
-    preparation = results[("PRECOMPETITION", 22)]
+    preparation = results[("PRECOMPETITION", 30)]
     neighboring_sessions = [(day, session) for day in preparation["days"] for session in day["sessions"]
                             if session["zone"] == "Z3" and session["purpose"] == "BUILDING"]
     assert neighboring_sessions
@@ -253,7 +254,7 @@ def test_precompetition_neighbor_can_receive_real_session_without_bypassing_capa
     assert any(item["method_id"] == "ONFLOWS-CONTROLLED-Z5-V2" and item["code"] == "CAPACITY_UNAVAILABLE" for item in rejected)
     assert not any(session["zone"] == "Z5" for day in preparation["days"] for session in day["sessions"])
 
-    for key in (("COMPETITION", 22), ("PRECOMPETITION", None)):
+    for key in (("COMPETITION", 30), ("PRECOMPETITION", None)):
         plan = results[key]
         rejected_ids = {item["method_id"] for day in plan["days"] for item in day["rejected_alternatives"]
                         if item["code"] == "RACE_COMPONENT_PRIORITY"}

@@ -135,7 +135,9 @@ def test_threshold_repetitions_fit_one_shared_dose_and_discretize_down():
 
 def test_integrated_week_respects_separate_strength_days_and_covers_complementary_work(monkeypatch):
     monkeypatch.setattr(engine.model_service,'speed_view',reference_speed)
-    p=profile(strength_enabled=True,reentry_days=0,available_minutes=[120]*7,planning_controls=controls(accent_mode='MANUAL',accents=['Z3','STR'],mesocycle_anchor=TODAY,intensity_days=[1,4],strength_days=[2,5],long_session_day=6))
+    # Full key sessions obey intensity days; optional supporting mixed blocks
+    # have a separate day/readiness policy covered in test_adaptive_methods.
+    p=profile(strength_enabled=True,reentry_days=0,available_minutes=[120]*7,planning_controls=controls(accent_mode='MANUAL',accents=['Z3','STR'],mesocycle_anchor=TODAY,intensity_days=[1,4],strength_days=[2,5],long_session_day=6,mixed_sessions_enabled=False))
     repo=Repository()
     # Isolate component coverage from the separate session-exposure ceiling;
     # the former 60-minute fixture cannot fit a complete 25% Z1 dose.

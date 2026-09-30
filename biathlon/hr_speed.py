@@ -9,8 +9,10 @@ from bisect import bisect_right
 import math
 from .equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, Z5_EQUIVALENCE_SLOPE_PP_PER_BPM
 
-VERSION='hr-speed-expert-time-paired-v4'
-TMAX_RANGES_S={'Z1':(7200.,18000.),'Z2':(5400.,10800.),'Z3':(1800.,4800.),'Z4':(600.,1800.)}
+VERSION='hr-speed-expert-time-paired-v5'
+# Expert continuous capacity at each upper HR edge, not weekly Q or session dose.
+# Revised coaching ranges, 2026-09-30: 210–300 / 150–180 / 45–60 / 20–30 min.
+TMAX_RANGES_S={'Z1':(12600.,18000.),'Z2':(9000.,10800.),'Z3':(2700.,3600.),'Z4':(1200.,1800.)}
 SLOPE=DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM/100
 Z5_SLOPE=Z5_EQUIVALENCE_SLOPE_PP_PER_BPM/100
 

@@ -11,7 +11,7 @@ from tests.api.test_training_plan_engine import TODAY
 from tests.api.test_load_progression import observed
 
 
-@pytest.mark.parametrize("minutes,zone", [(240,"Z1"),(210,"Z1"),(209,"Z2"),(135,"Z2"),(120,"Z3"),(55,"Z3"),(54,"Z4"),(22.2,"Z4"),(20,"Z4"),(19.9,"Z5"),(4,"Z5"),(None,None)])
+@pytest.mark.parametrize("minutes,zone", [(300,"Z1"),(255,"Z1"),(254.9,"Z2"),(240,"Z2"),(165,"Z2"),(164.9,"Z3"),(120,"Z3"),(52.5,"Z3"),(52.4,"Z4"),(30,"Z4"),(25,"Z4"),(24.9,"Z5"),(22.2,"Z5"),(4,"Z5"),(None,None)])
 def test_race_zone_uses_continuous_upper_edges(minutes, zone):
     assert focus.race_component({"race_duration_min":minutes}) == zone
 

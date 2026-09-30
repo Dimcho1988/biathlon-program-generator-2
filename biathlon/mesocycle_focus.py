@@ -9,7 +9,7 @@ from functools import lru_cache
 from .constants import COMPONENTS, fresh_parameters
 from .hr_speed import TMAX_RANGES_S
 
-VERSION = "mesocycle-focus-v3-race-band"
+VERSION = "mesocycle-focus-v4-expert-times"
 PREPARATION = {"GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"}
 RECOVERY_TOTAL_FACTOR = .78
 RECOVERY_LOADED_FACTOR = .65
