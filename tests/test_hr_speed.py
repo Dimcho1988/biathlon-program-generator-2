@@ -11,10 +11,10 @@ def make(indices=None,bounds=BOUNDS):
 
 def test_guard_midpoints_existing_zone_weight_and_shared_z5_boundary():
     p=make()
-    assert p.times==(12600,8100,3300,1200)
-    assert p.duration(155)==pytest.approx(3300/.85)
-    assert p.duration(170)==1200
-    assert p.duration(180)==pytest.approx(1200/1.5)
+    assert p.times==(15300,9900,3150,1500)
+    assert p.duration(155)==pytest.approx(3150/.85)
+    assert p.duration(170)==1500
+    assert p.duration(180)==pytest.approx(1500/1.5)
     assert p.summary()['zones'][-1]['source']=='Z4_SHARED_BOUNDARY'
 
 def test_in_range_index_is_retained_and_out_of_range_uses_exact_midpoint():
@@ -23,7 +23,7 @@ def test_in_range_index_is_retained_and_out_of_range_uses_exact_midpoint():
     p=make({'Z3':{'index':index,'count':9},'Z2':{'index':1000,'count':7}})
     assert p.times[2]==pytest.approx(2700)
     assert p.anchors[2]['source']=='INDEX'
-    assert p.anchors[1]['duration_s']==8100
+    assert p.anchors[1]['duration_s']==9900
     assert p.anchors[1]['reason']=='INDEX_OUTSIDE_DURATION_BOUNDS'
 
 
@@ -41,11 +41,13 @@ def test_numerical_inverse_keeps_paired_index_at_expert_time_boundaries(zone,edg
     assert anchor["candidate_reason"]=="ACCEPTED"
     assert anchor["duration_s"]==edge
 
-def test_conflicting_anchors_fall_back_together_to_preserve_order():
+def test_conflicting_anchors_fall_back_together_to_preserve_order(monkeypatch):
+    # Current expert ranges do not overlap. Retain the guard for future ranges.
+    monkeypatch.setitem(TMAX_RANGES_S,'Z1',(7200.,18000.))
     c=make().curve
-    indices={z:{'index':100*BOUNDS[i+1]/180/(c.speed(t)*3.6)} for i,(z,t) in enumerate([('Z1',7300),('Z2',10000),('Z3',3000),('Z4',1000)])}
+    indices={z:{'index':100*BOUNDS[i+1]/180/(c.speed(t)*3.6)} for i,(z,t) in enumerate([('Z1',7300),('Z2',10000),('Z3',3000),('Z4',1500)])}
     p=make(indices)
-    assert p.times==(12600,8100,3300,1200)
+    assert p.times==(12600,9900,3150,1500)
     assert all(a['reason']=='CONFLICTING_ZONE_ANCHORS' for a in p.anchors)
     assert p.summary()['conflicting_zones']==[['Z1','Z2']]
     assert p.anchors[0]['candidate_duration_s']==pytest.approx(7300)
@@ -62,7 +64,7 @@ def test_diagnostics_distinguish_curve_domain_from_zone_limits_without_extrapola
         assert a['candidate_speed_kmh']==pytest.approx(speed)
         assert a['candidate_reason']==reason
         assert a['candidate_duration_s']==(pytest.approx(t) if t else None)
-        assert a['duration_s']==pytest.approx(2700 if reason=='ACCEPTED' else 3300)
+        assert a['duration_s']==pytest.approx(2700 if reason=='ACCEPTED' else 3150)
     assert make().anchors[2]['candidate_reason']=='NO_VALID_INDEX'
 
 def test_randomized_profiles_are_continuous_monotone_and_bidirectionally_consistent():
@@ -83,7 +85,7 @@ def test_randomized_profiles_are_continuous_monotone_and_bidirectionally_consist
     with pytest.raises(ValueError):p.hr_for_speed(p.speed_range[1]*1.01)
 
 def test_volume_position_has_no_index_or_hr_prediction_dependency_and_preserves_test():
-    assert volume_duration_centers(BOUNDS)[:4]==[12600,8100,3300,1200]
+    assert volume_duration_centers(BOUNDS)[:4]==[15300,9900,3150,1500]
     tests=[{'duration_s':1200,'speed_kmh':22}];c=calibrated(tests)
     def forbidden(_):raise AssertionError('Volume must not use estimated HR')
     tuned,f=adjusted(c,tests,forbidden,[],[-.1,.1,.03,-.1,.1],duration_centers=volume_duration_centers(BOUNDS))

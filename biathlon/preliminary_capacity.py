@@ -15,7 +15,7 @@ from .hr_speed import TMAX_RANGES_S
 from .load_progression import WEEKLY_Q_BOUNDS, total_volume_position
 from .speed_duration import Curve, REFERENCE_TIMES, REFERENCE_SPEEDS, smoothstep
 
-VERSION = "preliminary-capacity-expert-time-paired-v1"
+VERSION = "preliminary-capacity-expert-time-paired-v2"
 
 
 def _number(value, *, positive=False):

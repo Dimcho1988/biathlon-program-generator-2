@@ -25,12 +25,13 @@ def test_weekly_q_only_positions_separate_expert_time_bounds():
     q = {z: sum(limits)/2 for z, limits in WEEKLY_Q_BOUNDS.items()}
     result = prior.build(BOUNDS, 180, {}, zone_weekly_q=q)
     assert result["curve"] is None
+    # Equal numerical midpoints (e.g. Z4) do not make Q a maximum duration.
+    assert any(a["duration_s"] != a["measured_weekly_q"]*60 for a in result["anchors"])
     for anchor in result["anchors"]:
         assert anchor["duration_position"] == .5
         assert anchor["duration_s"] == sum(TMAX_RANGES_S[anchor["zone"]])/2
         assert anchor["measured_weekly_q"] == q[anchor["zone"]]
         assert anchor["duration_source"] == "MEASURED_ZONE_Q_POSITION"
-        assert anchor["duration_s"] != anchor["measured_weekly_q"]*60
         assert anchor["kind"] == "ESTIMATE" and not anchor["is_maximal_test"]
     assert result["duration_is_training_dose"] is False
 
@@ -39,7 +40,7 @@ def test_total_volume_estimates_times_without_fabricating_zone_distribution_or_s
     result = prior.build(None, None, {}, total_weekly_minutes=12*60)
     assert total_volume_position(12*60) == .5
     assert result["status"] == "DURATION_ONLY" and result["curve"] is None
-    assert [a["duration_s"] for a in result["anchors"]] == [12600, 8100, 3300, 1200]
+    assert [a["duration_s"] for a in result["anchors"]] == [15300, 9900, 3150, 1500]
     assert all(a["measured_weekly_q"] is None and a["speed_kmh"] is None for a in result["anchors"])
     assert all(a["duration_source"] == "TOTAL_VOLUME_ESTIMATE" for a in result["anchors"])
     assert not result["is_measured_zone_distribution"]
@@ -48,7 +49,7 @@ def test_total_volume_estimates_times_without_fabricating_zone_distribution_or_s
 
 def test_missing_volume_selects_expert_minimum_and_zero_is_distinct_from_unknown():
     result = prior.build(BOUNDS, 180, {}, zone_weekly_q={"Z2": 0})
-    assert [a["duration_s"] for a in result["anchors"]] == [7200, 5400, 1800, 600]
+    assert [a["duration_s"] for a in result["anchors"]] == [12600, 9000, 2700, 1200]
     assert result["anchors"][0]["duration_source"] == "EXPERT_MINIMUM"
     assert result["anchors"][0]["measured_weekly_q"] is None
     assert result["anchors"][1]["duration_source"] == "MEASURED_ZONE_Q_POSITION"
@@ -92,7 +93,7 @@ def test_bad_or_model_derived_indices_cannot_create_absolute_capacity():
     assert prior.build(BOUNDS, 180, {"Z1": {"index": 5}})["curve"] is None
 
 
-def test_conflicting_estimates_remain_visible_without_reordering_or_moving_them():
+def test_conflicting_estimates_remain_visible_without_reordering_or_moving_them(monkeypatch):
     indices = paired_indices()
     indices["Z1"]["index"] /= 2
     original = copy.deepcopy(indices)
@@ -101,6 +102,8 @@ def test_conflicting_estimates_remain_visible_without_reordering_or_moving_them(
     assert "CONFLICTING_ESTIMATED_SPEED_DURATION_ANCHORS" in result["warnings"]
     assert result["anchors"][0]["speed_kmh"] > result["anchors"][1]["speed_kmh"]
     assert indices == original
+    # Keep defensive coverage if future expert ranges overlap again.
+    monkeypatch.setitem(TMAX_RANGES_S,"Z1",(7200.,18000.))
     result = prior.build(BOUNDS, 180, paired_indices(), zone_weekly_q={"Z1": 240, "Z2": 300})
     assert result["curve"] is None
     assert result["conflicting_zones"] == [["Z1", "Z2"]]
@@ -168,10 +171,12 @@ def test_hr_fallback_uses_same_positioned_duration_and_curve_in_both_directions(
     assert curve.speed(1200)*3.6 == pytest.approx(22)
 
 
-def test_hr_conflicting_positions_fall_back_to_minima_and_preserve_diagnostics():
+def test_hr_conflicting_positions_fall_back_to_minima_and_preserve_diagnostics(monkeypatch):
+    monkeypatch.setitem(TMAX_RANGES_S,"Z1",(7200.,18000.))
+    monkeypatch.setitem(TMAX_RANGES_S,"Z2",(5400.,10800.))
     curve = calibrated([{"duration_s": 1200, "speed_kmh": 22}])
     predictor = Predictor(curve, BOUNDS, 180, {}, expert_durations={"Z1": 7200, "Z2": 10800})
-    assert predictor.times == (7200, 5400, 1800, 600)
+    assert predictor.times == (7200, 5400, 2700, 1200)
     assert all(a["source"] == "EXPERT_MINIMUM" for a in predictor.anchors)
     assert predictor.summary()["expert_duration_conflicts"] == [["Z1", "Z2"]]
     assert all(a["reason"] == "CONFLICTING_EXPERT_DURATION_ESTIMATES" for a in predictor.anchors)

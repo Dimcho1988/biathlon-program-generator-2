@@ -143,19 +143,25 @@ already volume-adjusted personal curve to obtain candidate Tmax:
 
 | Zone upper boundary | Allowed Tmax | Fallback midpoint |
 | --- | --- | --- |
-| Z1 | 2–5 hours | 3 hours 30 minutes |
-| Z2 | 90–180 minutes | 135 minutes |
-| Z3 | 30–80 minutes | 55 minutes |
-| Z4 | 10–30 minutes | 20 minutes |
+| Z1 | 3 hours 30 minutes–5 hours | 4 hours 15 minutes |
+| Z2 | 2 hours 30 minutes–3 hours | 2 hours 45 minutes |
+| Z3 | 45–60 minutes | 52 minutes 30 seconds |
+| Z4 | 20–30 minutes | 25 minutes |
 
-Missing/out-of-range candidates use the midpoint, then Vflat from the curve.
+These coaching ranges were revised on 2026-09-30. History positions the preliminary
+capacity within these bounds; missing/low history selects the lower bound.
+The speed view uses that same positioned duration for missing/out-of-range index
+candidates, then Vflat from the curve. Legacy callers without positioned history
+use the midpoint. These are continuous maximum-time estimates, not weekly Q
+limits or prescribed workout durations. The change does not introduce averaging
+with maximal tests or change the normative speed-duration curve.
 If independently chosen anchors violate decreasing duration, all four revert to
 ordered expert midpoints and expose `CONFLICTING_ZONE_ANCHORS`. Z5 starts at the
 shared upper-Z4 boundary; no independent Z5 top-duration constraint is invented.
 
 Within a zone T(HR) = Tupper / (1 − .03 × (HRupper − HR)), using the existing
-3 percentage points/bpm equivalence. For example, a Z3 upper time of 55 minutes
-at 160 bpm gives 64.706 minutes at 155 bpm. Short log-linear joins at lower zone
+3 percentage points/bpm equivalence. For example, a Z3 upper time of 52.5 minutes
+at 160 bpm gives 61.765 minutes at 155 bpm. Short log-linear joins at lower zone
 boundaries ensure continuity between different anchor times; joins expand when
 needed for monotonicity. Z5 continues T4 / (1 + .03 × (HR − HR4)). The Z1 domain
 is truncated at the speed curve's maximum supported duration. Both directions
