@@ -121,6 +121,33 @@ def test_generates_real_blocks_and_all_loads_without_mutating_source():
         assert session["dose_evidence"]["technical_spill_reference_role"] == "CANONICAL_E_ONLY_NOT_DOSE_CAPACITY"
 
 
+@pytest.mark.parametrize("days", [0, 1, 3, 27])
+def test_close_race_generates_only_available_days_with_manual_reentry(days):
+    from apps.api.management_schemas import PlanningControls
+    repo = Repository()
+    race = TODAY + timedelta(days=days)
+    repo.events = [{"event_id": "close-race", "event_type": "MAIN_RACE", "name": "Основен старт",
+                    "start_date": race.isoformat(), "end_date": race.isoformat()}]
+    controls = PlanningControls(sessions_per_week=7, accent_mode="MANUAL", accents=["Z1"]).model_dump(mode="json")
+    body = profile(program_start=TODAY.isoformat(), program_end=race.isoformat(), horizon_mode="AUTO_CALENDAR",
+                   reentry_days=7, planning_controls=controls)
+    result = generate(repo, body, TODAY)
+    assert result["status"] != "BLOCKED"
+    assert len(result["days"]) == min(days + 1, 7)
+    if days:
+        assert result["days"][0]["period"] == ("SPECIAL_PREPARATION" if days == 27 else "PRECOMPETITION")
+        assert sessions(result)
+    else:
+        assert not sessions(result)
+    if days < 7:
+        assert result["days"][-1]["status"] == "RACE"
+        assert result["days"][-1]["session"] is None
+    for session in sessions(result):
+        evidence = session["dose_evidence"]
+        assert evidence["max_dose_fraction"] <= body["reentry_fraction"]
+        assert evidence["applied_structure_fraction"] <= body["reentry_fraction"] + .001
+
+
 def test_supported_speed_duration_wins_and_not_multiplied_by_expert_tref():
     settings = Repository().settings
     speed = supported_speed(settings)

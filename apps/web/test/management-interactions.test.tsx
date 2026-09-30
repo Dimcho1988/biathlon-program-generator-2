@@ -30,6 +30,27 @@ async function enter(element: HTMLInputElement, value: string) {
 async function choose(element: HTMLSelectElement, value: string) {
   await act(async () => {element.value=value; element.dispatchEvent(new Event("change",{bubbles:true}));});
 }
+
+it("defaults to today when the automatic race horizon ends today", async () => {
+  const today = "2026-09-21";
+  await mount(<TrainingManagement athleteName="Спортист" canEdit={true} today={today}
+    initialProfile={{ configured: true, revision: 1, profile: { ...defaultManagementProfile(today), discipline: "4000 m", horizon_mode: "AUTO_CALENDAR" } }}
+    initialDrafts={[]} initialOutlook={{ schema_version: "training-outlook-preview-v1", profile_revision: 1,
+      generated_at: today+"T09:00:00Z", volume_context: {}, long_term: { weeks: [] }, input_snapshot: { horizon: { effective_end: today } } }}/>
+  );
+  const start = container.querySelector<HTMLInputElement>('[aria-label="Начална дата на програмата"]')!;
+  expect(start.value).toBe(today); expect(start.min).toBe(today); expect(start.max).toBe(today);
+});
+
+it("preserves an existing past programme anchor while saving other settings", async () => {
+  const fetchMock = vi.fn(async (_url, init) => Response.json({ configured: true, revision: 2, profile: JSON.parse(init.body).profile }));
+  vi.stubGlobal("fetch", fetchMock);
+  const saved = { ...defaultManagementProfile("2026-09-19"), discipline: "4000 m" };
+  await mount(<ManagementProfileEditor today="2026-09-21" initialProfile={{ configured: true, revision: 1, profile: saved }}/>);
+  await enter(input("Дисциплина"), "5000 m"); await click(button("Запази промените"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).profile.program_start).toBe("2026-09-19");
+});
 const profile = {...defaultManagementProfile("2026-09-21"), discipline:"5000 m", age_years:30, training_experience_years:10};
 
 it("saves explicit learning controls without resetting the planning profile", async () => {

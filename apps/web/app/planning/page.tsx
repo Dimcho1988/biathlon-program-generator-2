@@ -65,6 +65,7 @@ export default async function PlanningPage({
     />;
   }
   return <PlanningProfileForm
+    key={athleteAlias}
     managementProfile={managementProfile}
     outlook={outlook}
     athleteAlias={athleteAlias}

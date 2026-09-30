@@ -8,6 +8,31 @@ from biathlon.periodization import build_periodization
 from tests.api.test_training_plan_engine import Repository, TODAY, profile, reference_speed
 
 
+def test_saved_race_recomputes_periods_without_rolling_the_existing_cycle(monkeypatch):
+    from types import SimpleNamespace
+    from apps.api import management_service as service
+    from tests.api.test_training_plan_engine import NOW
+    repo = Repository()
+    repo.active_analysis = lambda _: deepcopy(repo.envelope)
+    repo.events = []
+    anchor = TODAY-timedelta(days=2)
+    saved = {"configured": True, "revision": 1, "profile": profile(discipline="4000 m", reentry_days=0,
+             program_start=anchor.isoformat(), program_end=(TODAY+timedelta(days=24)).isoformat(), horizon_mode="AUTO_CALENDAR")}
+    original = deepcopy(saved)
+    monkeypatch.setattr(service, "ManagementStore", lambda _: SimpleNamespace(profile=lambda _: deepcopy(saved)))
+    monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
+    first = service.outlook(repo, "athlete", now=NOW)["outlook"]
+    assert first["periodization"]["phases"][0]["kind"] == "GENERAL_PREPARATION"
+    race = (TODAY+timedelta(days=27)).isoformat()
+    repo.events = [{"event_id": "close-race", "event_type": "MAIN_RACE", "name": "Основен старт", "start_date": race, "end_date": race}]
+    updated = service.outlook(repo, "athlete", now=NOW)["outlook"]
+    tomorrow = service.outlook(repo, "athlete", now=NOW+timedelta(days=1))["outlook"]
+    assert updated["periodization"]["phases"][0]["kind"] == "SPECIAL_PREPARATION"
+    assert updated["periodization"] == tomorrow["periodization"]
+    assert updated["periodization"]["parameters"]["start_date"] == anchor.isoformat()
+    assert saved == original
+
+
 def test_live_outlook_uses_saved_accents_and_wave_without_generating_or_writing(monkeypatch):
     from types import SimpleNamespace
     from apps.api import management_service as service

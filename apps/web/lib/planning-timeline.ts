@@ -25,6 +25,10 @@ export function timelineItems(events: PlanningCalendarEvent[], cycles: CycleDire
     if (!validPeriod(p.start_date, p.end_date)) continue;
     items.push({ id: `taper-${p.start_date}`, start: p.start_date, end: String(p.end_date), label: "Тейпър", detail: "Намаляване преди основен старт", tone: "recovery", lane: "Периоди" });
   }
+  for (const p of Array.isArray(periods.reentry_windows) ? periods.reentry_windows.filter(isRecord) : []) {
+    if (!validPeriod(p.start_date, p.end_date)) continue;
+    items.push({ id: `reentry-dose-${p.start_date}`, start: p.start_date, end: String(p.end_date), label: "Намалена доза за вработване", detail: "В рамките на календарния период; не измества близкия основен старт.", tone: "recovery", lane: "Периоди" });
+  }
   const longTerm = isRecord(plan?.long_term) ? plan.long_term : {};
   for (const w of Array.isArray(longTerm.weeks) ? longTerm.weeks.filter(isRecord) : []) {
     if (!validPeriod(w.start_date, w.end_date)) continue;

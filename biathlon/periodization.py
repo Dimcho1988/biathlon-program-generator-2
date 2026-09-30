@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 
-ENGINE_VERSION = "periodization-v2"
+ENGINE_VERSION = "periodization-v3"
 DAY = timedelta(days=1)
 PHASE_LABELS_BG = {
     "RE_ENTRY": "Вработващ",
@@ -64,12 +64,11 @@ def _allocate_preparation(total: int, reentry_override: int | None) -> list[int]
             return _clip_from_front(lengths, total)
         sequence = EXTENSION_SEQUENCE
     else:
-        # An explicit override reserves entry days first. The other phases
-        # retain their minima and 5:5:3 extension weights. Entry does not grow.
-        entry = min(total, reentry_override)
-        lengths = [entry, *BASE_DAYS[1:]]
+        # A close race always retains the final preparation phases. Explicit
+        # re-entry still limits dosing, through a separate, dated overlay.
+        lengths = [reentry_override, *BASE_DAYS[1:]]
         if total <= sum(lengths):
-            return [entry, *_clip_from_front(lengths[1:], total - entry)]
+            return _clip_from_front(lengths, total)
         sequence = tuple(index for index in EXTENSION_SEQUENCE if index != 0)
 
     remaining = total - sum(lengths)
@@ -82,6 +81,12 @@ def _allocate_preparation(total: int, reentry_override: int | None) -> list[int]
         lengths[index] += 1
         remaining -= 1
     return lengths
+
+
+def reentry_dose_active(periodization: dict | None, day: date) -> bool:
+    """Dose restrictions keep their original dates as the display rolls on."""
+    return any(window["start_date"] <= day.isoformat() <= window["end_date"]
+               for window in (periodization or {}).get("reentry_windows", []))
 
 
 def build_periodization(
@@ -142,6 +147,7 @@ def build_periodization(
     stop = end + DAY
     phases: list[dict[str, Any]] = []
     tapers: list[dict[str, Any]] = []
+    reentry_windows: list[dict[str, Any]] = []
     warnings: list[dict[str, str]] = []
 
     def warn(code: str, message: str) -> None:
@@ -207,8 +213,17 @@ def build_periodization(
                      "не доказва, че пропуснатата основа е изградена; проверете историята.")
             if override is not None and override > available_days:
                 warn("REENTRY_TRUNCATED_BY_RACE",
-                     "Заявеното вработване не се побира преди старта. Показана е наличната "
-                     "част; участието и тренировъчната задача изискват преглед.")
+                     "Заявеното вработване не се побира преди старта. Намалената доза важи "
+                     "за оставащите дни, без да измества предсъстезателния период.")
+            if override and not previous_race:
+                entry_stop = min(cursor + timedelta(days=override), race_start, stop)
+                if cursor < entry_stop:
+                    reentry_windows.append({
+                        "start_date": cursor.isoformat(), "end_date": (entry_stop-DAY).isoformat(),
+                        "days": (entry_stop-cursor).days, "requested_days": override,
+                        "main_race_event_id": race["event_id"],
+                        "reason": "Намалена доза за вработване в рамките на календарния период.",
+                    })
             phase_cursor = cursor
             for kind, length in zip(PREPARATION_KINDS, lengths):
                 phase_stop = phase_cursor + timedelta(days=length)
@@ -292,6 +307,7 @@ def build_periodization(
         "engine_version": ENGINE_VERSION,
         "phases": phases,
         "taper_windows": tapers,
+        "reentry_windows": reentry_windows,
         "calendar_context": calendar_context,
         "next_main_race": next_main,
         "warnings": warnings,
@@ -307,6 +323,7 @@ def build_periodization(
             "extension_order": [PREPARATION_KINDS[index] for index in EXTENSION_SEQUENCE],
             "caps_days": {"RE_ENTRY": 21, "PRECOMPETITION": 56},
             "reentry_days_override": reentry_days_override,
+            "reentry_policy": "DOSE_OVERLAY_WITH_REVERSE_CALENDAR_ALLOCATION",
             "override_extension_weights": {"GENERAL_PREPARATION": 5, "SPECIAL_PREPARATION": 5, "PRECOMPETITION": 3},
             "later_cycles_reentry_days": 0,
             "taper_days": taper_days,

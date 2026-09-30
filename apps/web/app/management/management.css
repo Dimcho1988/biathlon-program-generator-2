@@ -160,6 +160,11 @@
 .season-day[aria-current="date"] { font-weight:800; text-decoration:underline; }
 .season-day[aria-pressed="true"] { background:#d6f1f2; color:#074c57; border-color:#087e90; }
 .season-day:hover { box-shadow:inset 0 0 0 1px #078399; }
+.season-day[aria-disabled="true"] { cursor:default; }
+.calendar-save-status { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin:1rem 0; padding:1rem; border:1px solid var(--border); border-radius:10px; background:var(--surface-secondary); }
+.calendar-save-status p { margin:0; flex:1; }
+.calendar-save-status .action-button { flex-shrink:0; }
+@media(max-width:620px) { .calendar-save-status { align-items:stretch; flex-direction:column; } }
 .season-day:focus-visible,.season-bar:focus-visible { outline:3px solid #078399; outline-offset:2px; z-index:2; }
 .season-day-marks { display:flex; gap:2px; justify-content:center; min-height:4px; margin-top:3px; }
 .season-day-marks i { width:6px; height:4px; border-radius:2px; }

@@ -563,7 +563,8 @@
     },
     "race_duration_policy_status": "COACH_HEURISTIC_NOT_UNIVERSAL_RECIPE",
     "under_3_min_events": "EXPLICIT_PROFILE_REQUIRED_800M_NOT_IN_3_6_MIN_BAND",
-    "code_version": "periodization-v2",
+    "code_version": "periodization-v3",
+    "reentry_policy": "dose overlay; short preparation retains the final calendar phases",
     "base_preparation_days": [
       7,
       28,

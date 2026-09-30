@@ -241,6 +241,8 @@ def history(repository, alias, *, start_date=None):
     return {"current_input_fingerprint": fingerprint, "drafts": [{**row,
                         "stale": row["payload"].get("input_fingerprint") != fingerprint,
                         "stale_reason": (
-                            "Данните, моделът или денят на оценката са променени — създай нов проект."
+                            ("Календарът е променен. Обнови проекта, за да използва новите стартове и периоди."
+                             if (row["payload"].get("input_snapshot") or {}).get("calendar") != state.get("calendar")
+                             else "Данните, моделът или денят на оценката са променени — създай нов проект.")
                             if row["payload"].get("input_fingerprint") != fingerprint else None),
                         } for row in rows]}

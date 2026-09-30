@@ -3,7 +3,7 @@ import { RaceDurationEstimate } from "./race-duration-estimate";
 import Link from "next/link";
 import { PlanningCalendarPanel } from "./planning-calendar-panel";
 import type { PlanningCalendarResponse } from "../lib/planning-calendar";
-import type { PlanProjection } from "../lib/training-management";
+import type { PlanProjection, ManagementOutlook } from "../lib/training-management";
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import type { PlanningProfile, MesocycleAccentPreferencesResponse } from "../lib/planning-profile";
@@ -15,7 +15,7 @@ import { TrainingObservationSettings } from "./training-observation-settings";
 import { ManagementRules } from "./management-rules";
 import { PlanningControlsEditor } from "./planning-controls-editor";
 
-export function ManagementProfileEditor({ initialProfile, today, canEdit = true, legacy, legacyAccents, calendar, outlook }: { calendar?: PlanningCalendarResponse; outlook?: PlanProjection | null; initialProfile: ManagementProfileResponse; today: string; canEdit?: boolean; legacy?: PlanningProfile|null; legacyAccents?: MesocycleAccentPreferencesResponse }) {
+export function ManagementProfileEditor({ initialProfile, today, canEdit = true, legacy, legacyAccents, calendar, outlook, onOutlookChange, onPlanningPending }: { calendar?: PlanningCalendarResponse; outlook?: PlanProjection | null; onOutlookChange?: (plan: ManagementOutlook | null) => void; onPlanningPending?: (pending: boolean) => void; initialProfile: ManagementProfileResponse; today: string; canEdit?: boolean; legacy?: PlanningProfile|null; legacyAccents?: MesocycleAccentPreferencesResponse }) {
   const router = useRouter();
   const [saved, setSaved] = useState(initialProfile);
   const [profile, setProfile] = useState<ManagementProfile>(()=>{
@@ -36,15 +36,17 @@ export function ManagementProfileEditor({ initialProfile, today, canEdit = true,
   }
   const update=<K extends keyof ManagementProfile>(key:K,value:ManagementProfile[K])=>setProfile(p=>({...p,[key]:value}));
   const optional=(v:string)=>v===""?null:Number(v);
-  async function saveProfile(){
+  async function saveProfile(refresh=true){
     setError("");setNotice("");
     setBusy(true);
     try{
       const checked=parseManagementProfile({...profile,discipline:profile.discipline.trim()});
+      if(checked.program_start<today&&checked.program_start!==saved.profile?.program_start)throw new Error("Нов период на подготовка започва най-рано днес. Началото на вече започнатия цикъл се запазва.");
       const response=await fetch("/api/athlete/management/profile",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({profile:checked,expected_revision:saved.revision})});
       const data:unknown=await response.json();if(!response.ok)throw new Error(isRecord(data)&&typeof data.error==="string"?data.error:"Профилът не беше записан.");
       const result=parseManagementProfileResponse(data);setSaved({...saved,...result});if(result.profile)setProfile(result.profile);
-      setNotice("Профилът е запазен. Дългосрочният план вече използва новите настройки. Седмичната програма ще провери промените при отваряне; утвърдените задачи следват избрания режим на адаптация.");router.refresh(); return true;
+      onOutlookChange?.(null);
+      setNotice("Профилът е запазен. Обновяваме периодите; седмичната програма ще провери промените при отваряне.");if(refresh)router.refresh(); return true;
     }catch(caught){setError(caught instanceof Error?caught.message:"Профилът не беше записан."); return false;}finally{setBusy(false);}
   }
   function save(e: FormEvent<HTMLFormElement>) { e.preventDefault(); void saveProfile(); }
@@ -63,7 +65,7 @@ export function ManagementProfileEditor({ initialProfile, today, canEdit = true,
       <label>Продължителност на старта, мин · ако моделът няма оценка<input type="number" min=".1" max="1440" step=".1" value={profile.race_duration_min??""} onChange={e=>update("race_duration_min",optional(e.target.value))}/></label>
       <label>Възраст, години · по желание<input type="number" min="10" max="100" value={profile.age_years??""} onChange={e=>update("age_years",optional(e.target.value))}/></label>
       <label>Спортен стаж, години · по желание<input type="number" min="0" max="85" step=".5" value={profile.training_experience_years??""} onChange={e=>update("training_experience_years",optional(e.target.value))}/></label>
-      <label>Начало · задължително<input required type="date" value={profile.program_start} onChange={e=>update("program_start",e.target.value)}/></label><label>Край на подготовката<select value={profile.horizon_mode??"AUTO_CALENDAR"} onChange={e=>update("horizon_mode",e.target.value as ManagementProfile["horizon_mode"])}><option value="AUTO_CALENDAR">Автоматично до последния основен старт</option><option value="MANUAL">Задавам точен край</option></select></label><label>{profile.horizon_mode==="MANUAL"?"Край · задължително":"Край, ако няма основен старт"}<input required type="date" min={profile.program_start} value={profile.program_end} onChange={e=>update("program_end",e.target.value)}/></label>
+      <label>Начало · задължително<input required type="date" min={profile.program_start===saved.profile?.program_start&&profile.program_start<today?profile.program_start:today} value={profile.program_start} onChange={e=>update("program_start",e.target.value)}/></label><label>Край на подготовката<select value={profile.horizon_mode??"AUTO_CALENDAR"} onChange={e=>update("horizon_mode",e.target.value as ManagementProfile["horizon_mode"])}><option value="AUTO_CALENDAR">Автоматично до последния основен старт</option><option value="MANUAL">Задавам точен край</option></select></label><label>{profile.horizon_mode==="MANUAL"?"Край · задължително":"Край, ако няма основен старт"}<input required type="date" min={profile.program_start} value={profile.program_end} onChange={e=>update("program_end",e.target.value)}/></label>
       <label>Начало на подготовката<select value={profile.reentry_days===0?"continue":profile.reentry_days===null?"auto":"manual"} onChange={e=>update("reentry_days",e.target.value==="continue"?0:e.target.value==="auto"?null:7)}><option value="auto">Автоматично според историята и прекъсванията</option><option value="continue">Продължавам текуща подготовка · без ново вработване</option><option value="manual">Задавам дни за вработване</option></select></label>{profile.reentry_days!==null&&profile.reentry_days>0&&<label>Вработване, дни<input type="number" min="1" max="21" value={profile.reentry_days} onChange={e=>update("reentry_days",Number(e.target.value))}/></label>}
     </div><p className="management-muted">При автоматичен край преместването на основния старт пренарежда периодите до новата дата, до една година от началото. Началото на програмата не е непременно начало на спортната подготовка. Избери „Продължавам“, ако вече тренираш последователно. Реалната история и готовността се проверяват отделно.</p></>}
     {step===2&&<><PlanningControlsEditor profile={profile} onChange={setProfile} stage="days" today={today} history={initialProfile.history}/><details><summary>Нямам внесена история · въвеждане на обем</summary><label className="management-check"><input type="checkbox" checked={profile.recent_weekly_hours!==null} onChange={e=>update("recent_weekly_hours",e.target.checked?[0,0,0,0]:null)}/>Въвеждам четири завършени седмици за основното средство</label>{profile.recent_weekly_hours&&<div className="management-form-grid">{profile.recent_weekly_hours.map((v,i)=><label key={i}>Преди {4-i} седмици, часа<input type="number" min="0" max="80" step=".1" value={v} onChange={e=>update("recent_weekly_hours",profile.recent_weekly_hours!.map((x,j)=>j===i?Number(e.target.value):x))}/></label>)}</div>}<p>Тези стойности не създават измислени дневни товари или известна готовност.</p></details></>}
@@ -79,6 +81,6 @@ export function ManagementProfileEditor({ initialProfile, today, canEdit = true,
     <div className="management-actions">{step>1&&<button className="action-button secondary" type="button" onClick={()=>setStep(step-1)}>← Назад</button>}<button className="action-button" type="submit" disabled={!dirty}>{busy?"Запазване…":!dirty&&saved.configured?"Запазено":"Запази промените"}</button>{step<4&&<button className="action-button secondary" type="button" onClick={()=>setStep(step+1)}>Напред →</button>}</div>
     {error&&<p className="management-error" role="alert">{error}</p>}{notice&&!dirty&&<p className="management-notice" role="status">{notice}</p>}
     </fieldset></form><div className="management-actions"><a href="#planning-calendar">Стартове и лагери ↓</a><Link href="/management">Седмична програма →</Link><Link href="/management/outlook">Дългосрочен план →</Link></div>
-    {calendar && <section id="planning-calendar"><PlanningCalendarPanel response={calendar} today={today} profile={profile} onProfileChange={setProfile} onSaveProfile={saveProfile} profileDirty={dirty && (saved.configured || !!profile.discipline.trim() || !!profile.planning_controls?.cycles.length)} plan={outlook} disabled={!canEdit || busy}/></section>}
+    {calendar && <section id="planning-calendar"><PlanningCalendarPanel response={calendar} today={today} profile={profile} onProfileChange={setProfile} onSaveProfile={()=>saveProfile(false)} profileDirty={dirty && (saved.configured || !!profile.discipline.trim() || !!profile.planning_controls?.cycles.length)} plan={outlook} onOutlookChange={onOutlookChange} onPendingChange={onPlanningPending} disabled={!canEdit || busy}/></section>}
   </section>;
 }
