@@ -13,6 +13,21 @@ from .. import dependencies
 router = APIRouter()
 
 
+@router.get("/api/v2/athlete/models/speed-history")
+def speed_history(sport: str | None = None,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None):
+    from datetime import date
+    from ..speed_zone_history import exposure_history
+    alias = dependencies.model_alias(authorization,athlete_alias)
+    try:
+        repository = dependencies.repository()
+        view = model_service.speed_view(repository,alias,sport)
+        return exposure_history(repository,alias,view,date.fromisoformat(view["index_window"]["end"]))
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503,"Speed exposure sources are unavailable") from exc
+
+
 @router.get("/api/v2/athlete/models/recovery")
 def recovery_configuration(authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None):

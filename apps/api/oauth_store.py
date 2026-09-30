@@ -1318,12 +1318,19 @@ class SupabasePilotRepository(SnapshotRepository):
         self, athlete_alias: str, run_keys: tuple[str, ...]
     ) -> Mapping[str, Mapping[str, Any]]:
         """Batch immutable speed/HR masks for planning; never follow latest runs."""
+        return self._activity_speed_samples(athlete_alias,run_keys,hr_mask=True)
+
+    def activity_speed_exposure_samples(self, athlete_alias, run_keys):
+        """On-demand speed exposure does not download the full HR time series."""
+        return self._activity_speed_samples(athlete_alias,run_keys,hr_mask=False)
+
+    def _activity_speed_samples(self, athlete_alias, run_keys, *, hr_mask):
         if any(not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key) for key in run_keys):
             raise PersistentStoreFailure("Invalid speed history run key")
         result = {}
         keys = sorted(set(run_keys))
         fields = ("configuration_fingerprint", "vflat_model_version", "vflat_config_version", "trainability_index",
-                  "speed_test_series", "timeseries")
+                  "speed_test_series") + (("timeseries",) if hr_mask else ())
         selection = "run_key,activity_ref," + ",".join(f"{name}:result_payload->{name}" for name in fields)
         for offset in range(0, len(keys), 10):
             batch = keys[offset:offset+10]

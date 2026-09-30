@@ -128,3 +128,36 @@ def test_batch_reader_uses_exact_keys_alias_scope_and_decodes_without_n_plus_one
     assert set(rows)==set(keys) and len(calls)==3
     assert len(rows[keys[0]]["shadow_payload"]["speed_test_series"])==2400
     with pytest.raises(PersistentStoreFailure):repo.activity_speed_history_samples("athlete",("unsafe,query",))
+
+
+def test_independent_speed_exposure_counts_hr_present_and_missing_without_adding_q():
+    source,calendar,speeds,shadow = inputs()
+    view = {**speeds["Run"],"source_generation_id":"g1","source_revision":1,
+            "speed_zones":{"status":"AVAILABLE","zones":[{"zone":f"Z{i+1}","low_kmh":i*4.,
+                "high_kmh":(i+1)*4. if i<4 else None} for i in range(5)]}}
+    class ExposureRepository(Repository):
+        def active_trainability_calendar(self,alias,start,end):
+            return {"generation_id":"g1","revision":1,"activities":deepcopy(calendar)}
+        activity_speed_exposure_samples = Repository.activity_speed_history_samples
+    repo = ExposureRepository(shadow)
+    original = deepcopy((source,shadow))
+    result = history.exposure_history(repo,"athlete",view,TODAY)
+    assert result["classified_minutes"] == 2
+    assert result["load_role"] == "EXTERNAL_SPEED_EXPOSURE_NOT_ADDITIONAL_HR_LOAD"
+    assert "equivalent_time_min" not in str(result)
+    assert (source,shadow) == original
+    shadow["timeseries"] = []  # The speed ledger has no HR dependency.
+    assert history.exposure_history(repo,"athlete",view,TODAY)["zones"] == result["zones"]
+    view["source_revision"] = 2
+    assert history.exposure_history(repo,"athlete",view,TODAY)["status"] == "MODEL_UPDATED"
+
+
+def test_individual_curve_boundaries_allow_missing_hr_estimation_without_z5_index():
+    source,calendar,speeds,shadow = inputs()
+    speeds["Run"]["index_summary"] = {}
+    speeds["Run"]["speed_zones"] = {"status":"AVAILABLE","supported_low_kmh":10,
+        "supported_z5_high_kmh":None,"zones":[{"zone":f"Z{i+1}","high_kmh":v} for i,v in enumerate((12,14,16,18,None))]}
+    estimates,info = history.prepare_history(Repository(shadow),"athlete",source,calendar,speeds,SETTINGS,TODAY)
+    assert estimates["run"]["covered_missing_minutes"] == pytest.approx(59/60)
+    assert estimates["run"]["provenance"]["hr"] == "INDIVIDUAL_ZONE_ESTIMATE"
+    assert info["estimated_activity_count"] == 1

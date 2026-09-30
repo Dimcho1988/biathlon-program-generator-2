@@ -21,13 +21,13 @@ from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, equivalen
 from biathlon.periodization import build_periodization, reentry_dose_active
 from biathlon.physiology import _causal_tref, effective_from_direct_vector, linear_equivalence_coefficient
 from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VERSION, catalog, resolved_methods
-from biathlon import training_guidance, adaptive_methods, preliminary_capacity
+from biathlon import training_guidance, adaptive_methods, preliminary_capacity, planning_consistency, race_specific
 from . import model_service, load_adaptation, race_duration, planning_history_estimate
 from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 
-VERSION = "training-management-v23"
-PARAMETER_VERSION = "management-parameters-v23"
+VERSION = "training-management-v24"
+PARAMETER_VERSION = "management-parameters-v24"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -221,30 +221,39 @@ def capacity_for(method, settings, speed, context, today, allow_fallback=True, *
                              "position": method["position"]}, settings, speed, context, today, allow_fallback, use_model_prior=use_model_prior)
     zone = method["zone"]
     if method["structure"] == "MODEL_INTERVALS":
-        if zone == "Z5":
+        if method.get("race_specific"):
+            predictor, tests, reasons = context
+            if not speed or reasons or len(tests) < 2:
+                return None
+            band = method["race_specific"]
+            if zone == "Z5" and not any(120 <= t["duration_s"] <= 600
+                    and t.get("day") and 0 <= (today-date.fromisoformat(t["day"])).days <= 42
+                    and t["speed_kmh"] >= band["speed_kmh"] for t in tests):
+                return None
+            base = {"capacity_source":"RACE_SPEED_DURATION", "capacity_minutes":band["maximum_duration_s"]/60,
+                    "target_hr_bpm":None,"target_speed_kmh":band["speed_kmh"],"model_version":speed["model_version"],
+                    "fallback_reasons":[],"race_specific":deepcopy(band),
+                    "capacity_confidence":"REAL_TEST_CALIBRATED_RACE_REFERENCE"}
+        elif zone == "Z5":
             # HR-speed stops at the Z4/Z5 boundary. Never extrapolate a Z5
             # Tref from HR or silently inherit Z4's expert duration.
             predictor, tests, reasons = context
             if predictor is None or reasons or not speed:
                 return None
-            recent = (speed.get("index_window") or {}).get("last_activity_date")
-            if not recent or (today-date.fromisoformat(recent)).days > 14 or (speed.get("index_summary", {}).get("Z4") or {}).get("count", 0) < 3:
-                return None
             boundary_hr = settings.zone_bounds_bpm[4]
-            if predictor.metadata(boundary_hr)["hr_prediction_source"] != "INDEX":
-                return None
             boundary_speed = predictor.speed_for_hr(boundary_hr)
-            candidates = [t for t in tests if 180 <= t["duration_s"] <= 600
+            candidates = [t for t in tests if 120 <= t["duration_s"] <= 600
                           and t["speed_kmh"] > boundary_speed
                           and t.get("day") and 0 <= (today-date.fromisoformat(t["day"])).days <= 42]
             if not candidates:
                 return None
-            anchor = min(candidates, key=lambda t: abs(t["duration_s"]-300))
+            anchor = min(candidates, key=lambda t: abs(t["duration_s"]-180))
             base = {"capacity_source": "SPEED_DURATION_TEST_ANCHOR", "capacity_minutes": anchor["duration_s"]/60,
                     "target_hr_bpm": None, "target_speed_kmh": anchor["speed_kmh"],
                     "model_version": speed["model_version"], "fallback_reasons": [],
                     "capacity_confidence": "RECENT_MAXIMAL_TEST_ABOVE_SUPPORTED_Z4_BOUNDARY",
-                    "test_anchor": deepcopy(anchor), "boundary_speed_kmh": boundary_speed}
+                    "test_anchor": deepcopy(anchor), "boundary_speed_kmh": boundary_speed,
+                    "boundary_source":predictor.metadata(boundary_hr)["hr_prediction_source"]}
         else:
             base = capacity_for({**method, "structure": "CONTINUOUS"}, settings, speed, context, today, allow_fallback, use_model_prior=use_model_prior)
         if base is None:
@@ -437,6 +446,8 @@ def _blocks(method, work, evidence, settings):
                        None, method["instructions"], speed=p.get("target_speed_kmh"), repetition=rep+1)
             b.update(primary_control="EFFORT_AND_QUALITY", load_estimate="ZONE_UPPER_REFERENCE_NOT_MEASURED_HR",
                      reserve_repetitions=p["reserve_repetitions"], speed_basis=p.get("speed_basis", "ACTUAL"))
+            if method.get("race_specific"):
+                b.update(primary_control="RACE_SPEED_AND_QUALITY", race_specific=deepcopy(method["race_specific"]))
             blocks.append(b)
             if rep < reps - 1:
                 blocks.append(_block("RECOVERY", "Леко движение между отсечките", "Z1", p["recovery_seconds"] / 60,
@@ -598,6 +609,7 @@ def _goals(profile, day, period, taper, reference, accents, week, length, rows, 
     goals = load_progression.apply(goals, profile, state, progression, day, period, taper, limited,
                                    taper_factor, actual_reference)
     goals = mesocycle_focus.cap_recovery(goals, profile, state, actual_reference)
+    goals = planning_consistency.reconcile(goals, profile, state, actual_reference, limited=limited, taper=taper)
     return goals, focus, state
 
 
@@ -791,6 +803,7 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
         right = min(day + timedelta(days=6 - (day - anchor).days % 7), end)
         targets = {z: [] for z in COMPONENTS}
         q_targets = {z: [] for z in COMPONENTS}
+        desired_q_targets = {z: [] for z in COMPONENTS}
         phases, selected, meso_weeks = [], [], []
         while day <= right:
             period, taper = _phase(periodization, day)
@@ -801,6 +814,7 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
                 targets[z].append(goals[z]["target"])
                 # Strength has no aerobic cascade: its direct Q equals its E.
                 q_targets[z].append(goals[z]["target"] if z == "STR" else goals[z].get("target_weekly_q"))
+                desired_q_targets[z].append(goals[z].get("desired_weekly_q",goals[z].get("target_weekly_q")))
             phases.append(period)
             selected.extend(focus)
             meso_weeks.append(cycle["week"] if cycle else week + 1)
@@ -812,6 +826,7 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
             base = actual_base[z]
             q_known = all(v is not None for v in q_targets[z]) and (z != "STR" or known)
             components[z] = {"target_weekly_q": _round(sum(q_targets[z])/len(q_targets[z])) if q_known else None,
+                             "desired_weekly_q": _round(sum(desired_q_targets[z])/len(desired_q_targets[z])) if all(v is not None for v in desired_q_targets[z]) else None,
                              "target_period_q": _round(sum(q_targets[z])/7) if q_known else None,
                              "target_weekly_effective": _round(target) if known else None,
                              "target_period_effective": _round(sum(targets[z])/7) if known else None,
@@ -953,6 +968,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         blocked = True
         warnings.append(_warning("INPUT_GENERATION_CHANGED", "Моделът за състезателната продължителност се е обновил. Генерирайте отново."))
     profile = race_duration.applied(profile, event_duration)
+    event_reference = race_specific.reference(profile, race_speed, event_duration, today)
+    event_duration["specific_reference"] = event_reference
+    methods.extend(race_specific.methods(profile, event_reference, methods))
     # Resolve the same race component before constructing the growth calendar
     # in both the weekly generator and the read-only outlook.
     progression = progression_context(repository, alias, profile, source, rows, today, periodization, envelope=envelope, measured_source=measured_source)
@@ -1015,7 +1033,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         profile, periodization, events, available, weekly_minutes, start_date, end_date, preferences, limited)
     if controls and controls.get("weekly_target_hours") is not None:
         weekly_ceiling = min(weekly_ceiling, controls["weekly_target_hours"]*60*((end_date-start_date).days+1)/7)
-    estimated_initial_time = planning_evidence["estimated"] and (controls or {}).get("weekly_target_hours") is None
+    estimated_initial_time = (planning_evidence["estimated"] and not (progression or {}).get("history_usable")
+                              and (controls or {}).get("weekly_target_hours") is None)
     if estimated_initial_time:
         weekly_ceiling = min(weekly_ceiling, weekly_minutes*((end_date-start_date).days+1)/7)
         warnings.append(_warning("ESTIMATED_HISTORY_TIME_ENVELOPE", "Началният обем на проекта следва записаното средно седмично време. Това не е таван на възможностите; зададен от вас седмичен обем може да го замести при спазени Recovery и правила за дозата."))
@@ -1101,6 +1120,58 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             if z == "STR" and (not profile.get("strength_enabled") or preferences.get("strength_days") and d.weekday() not in preferences["strength_days"]):
                 continue
             opportunities[z].append((d, slot))
+    key_schedule_changes = []
+    def reserve_remaining_keys(after):
+        """Retry unmet key work on the next feasible date, keeping user days."""
+        if limited or blocked:
+            return
+        previous = last_key_day
+        retained_dates = [d for d in key_slots if d <= after]
+        future, reserved = [], 0
+        for offset in range(horizon):
+            d = start_date+timedelta(days=offset)
+            if d <= after:
+                continue
+            period, taper = _phase(periodization,d)
+            if period not in {"GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"} or taper:
+                continue
+            if (available[d.weekday()] < 40 or not slot_counts[d] or key_days and d.weekday() not in key_days
+                    or controls and preferences.get("long_session_day") == d.weekday()
+                    or previous and (d-previous).days < 2):
+                continue
+            if any(e["event_type"] in {"MAIN_RACE","CONTROL_RACE","TEST","UNAVAILABLE"}
+                   and str(e["start_date"]) <= d.isoformat() <= str(e["end_date"]) for e in events):
+                continue
+            if any(a["date"] == d.isoformat() for a in source.get("activities",[])):
+                continue
+            forecast = {r["zone"]:r["readiness_percent"] for r in recovery_v2.simulate(forecast_rows,configs["zones"],target=d)["current"]}
+            future_goals = goal_windows[d]
+            future_budget = _budgets(forecast_rows,d,actual_rows=rows,targets=future_goals)
+            future_q = load_progression.remaining_q(source,result_days,d,future_goals)
+            if forecast["Z1"] < 90 or future_budget["Z1"]["deficit_effective"] <= 0:
+                continue
+            if not any(forecast[z] >= 90 and future_budget[z]["deficit_effective"] > 0
+                       and future_q.get(z,1.) > 0 for z in ("Z3","Z4","Z5")):
+                continue
+            needed = 2 if d.weekday() in double_days and slot_counts[d] >= 2 else 1
+            if reserved+needed > max(0,key_limit-key_sessions):
+                continue
+            future.append(d)
+            reserved += needed
+            previous = d
+        old = [d for d in key_slots if d > after]
+        if future != old:
+            key_schedule_changes.append({"after":after.isoformat(),"from":[d.isoformat() for d in old],
+                "to":[d.isoformat() for d in future],"reason":"CURRENT_RECOVERY_AND_ROLLING_BUDGET"})
+        key_slots[:] = retained_dates+future
+        for z in ("Z3","Z4","Z5"):
+            opportunities[z] = [(d,s) for d,s,count in schedule if count
+                and (d in key_slots or progression and z == "Z3" and key_slots and d > key_slots[-1])
+                and s < (2 if d.weekday() in double_days and count >= 2 else 1)
+                and not any(e["event_type"] in {"MAIN_RACE","CONTROL_RACE","TEST","UNAVAILABLE"}
+                    and str(e["start_date"]) <= d.isoformat() <= str(e["end_date"]) for e in events)
+                and not any(a["date"] == d.isoformat() for a in source.get("activities",[]))]
+    reserve_remaining_keys(start_date-timedelta(days=1))
     for day, slot_index, slots_today in schedule:
         if slot_index < covered_slots.get(day, 0):
             continue
@@ -1311,7 +1382,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                                                      taper=taper, limited=limited)
                 evidence = capacity_for(method, settings, speed, context, today, profile.get("allow_expert_fallback", True), use_model_prior=(controls or {}).get("capacity_policy") == "MODEL_WITH_PRIOR")
                 if evidence is None:
-                    reason = "За автоматична Z5 е нужен скорошен максимален тест над подкрепената граница Z4/Z5 или индивидуален интервален профил. Пулсът не дава отделен Z5 Tref." if method["structure"] == "MODEL_INTERVALS" and z == "Z5" else "Няма допустима оценка на капацитета за този метод и средство."
+                    reason = "За автоматична Z5 е нужен скорошен максимален тест от 2–10 мин над индивидуалната граница Z4/Z5 или индивидуален интервален профил." if method["structure"] == "MODEL_INTERVALS" and z == "Z5" else "Няма допустима оценка на капацитета за този метод и средство."
                     item["rejected_alternatives"].append({"method_id": method["id"], "code": "CAPACITY_UNAVAILABLE", "reason": reason})
                     continue
                 evidence["readiness_policy"] = readiness_rule
@@ -1697,6 +1768,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     score += .1
                 if is_key and day in key_slots:
                     score += 3.
+                if method.get("race_specific") and period in race_specific.PERIODS and z in selected_accents:
+                    score += 1. if method["race_specific"]["role"] == "RACE" else .5
                 if method["structure"] in {"ALTERNATING", "CRUISE_ALTERNATING", "AEROBIC_STRENGTH", "THRESHOLD_HIGH"}:
                     score += .15
                 if any(d.get("session", {}).get("method_id") == method["id"] for d in result_days if d.get("session")):
@@ -1758,6 +1831,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         result_days.append(item)
         if item["session"] is None and item["status"] in {"REST", "UNAVAILABLE"} and not day_spent:
             forecast_rows = _with_forecast_day(forecast_rows, day, {})
+        if slot_index+1 >= slots_today and day in key_slots:
+            reserve_remaining_keys(day)
     grouped = {}
     for item in result_days:
         key = item["date"]
@@ -1810,6 +1885,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                   "automatic_volume_progression": not component_governed, "component_target_modulation": component_governed,
                   "progression_percent": profile.get("progression_percent", 5), "target_reference": target_reference,
                   "targets_version": training_targets.VERSION, "reserved_key_dates": [d.isoformat() for d in key_slots],
+                  "key_schedule_changes":key_schedule_changes,"consistency_version":planning_consistency.VERSION,
                   "taper_volume_factor": .5, "minimum_test_anchors": 2, "minimum_zone_index_activities": 3,
                   "max_index_age_days": 14, "history_days_for_unrestricted_draft": planning_history.MINIMUM_DAYS,
                   "z1_working_band_width_bpm": Z1_WORKING_BAND_WIDTH_BPM,

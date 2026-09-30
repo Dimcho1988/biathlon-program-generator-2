@@ -15,7 +15,10 @@ from .equivalence import EQUIVALENCE_VERSION
 from .constants import COMPONENTS
 from . import planning_controls, planning_history, mesocycle_focus
 
-VERSION = "load-progression-v7-lower-planning-reference"
+VERSION = "load-progression-v8-observed-coverage"
+# A reference may retain its measured portion with small, separately labelled
+# gaps. This is a coaching data-quality policy, not a physiological threshold.
+MIN_MEASURED_REFERENCE_COVERAGE = .90
 # Deliberately separate from speed-duration correction and canonical Tref.
 WEEKLY_Q_BOUNDS = {"Z1": (240., 840.), "Z2": (60., 300.), "Z3": (30., 120.),
                    "Z4": (10., 40.), "Z5": (5., 30.)}
@@ -68,10 +71,16 @@ def observed_window(source, rows, start, end):
     effective = {(r["date"], r["zone"]): r["effective_load"] for r in rows}
     complete = [d for d in keys if all((d, z) in effective for z in COMPONENTS)]
     activities = [a for a in source.get("activities", []) if a["date"] in complete]
+    duration = sum(float(a.get("duration_min") or 0.) for a in activities if a.get("sport") != "WeightTraining")
+    measured_duration = sum(float(a.get("duration_min") or 0.) * (
+        1. if a.get("quality_status", "valid") == "valid" else
+        max(0., min(1., float(a.get("hr_coverage_percent") or 0.)/100)))
+        for a in activities if a.get("sport") != "WeightTraining")
+    coverage = measured_duration/duration if duration else 1.
     strength = {r["date"]:r for r in source.get("strength", {}).get("daily", [])}
     components = {}
     for z in COMPONENTS:
-        q = t = 0.
+        q = t = measured_q = estimated_q = 0.
         known = z != "STR"
         for activity in activities:
             if activity.get("sport") == "WeightTraining":
@@ -85,13 +94,21 @@ def observed_window(source, rows, start, end):
             else:
                 q += values[0]
                 t += values[1]
+                estimated = float(zone.get("planning_estimated_q") or 0.)
+                estimated_q += estimated
+                measured_q += max(0., values[0]-estimated)
         if z == "STR":
             known = all(_valid(strength.get(d, {}).get(k)) for d in complete for k in ("real_time_min", "equivalent_time_min"))
             if known:
                 q = sum(strength[d]["equivalent_time_min"] for d in complete)
                 t = sum(strength[d]["real_time_min"] for d in complete)
+                measured_q = q
         n = len(complete)
         components[z] = {"weekly_q": q*7/n if n and known else None,
+                         "measured_weekly_q": measured_q*7/n if n and known else None,
+                         "estimated_weekly_q": estimated_q*7/n if n and known else None,
+                         "measured_coverage_percent": 100*coverage,
+                         "reference_supported": bool(n >= planning_history.MINIMUM_DAYS and known and coverage >= MIN_MEASURED_REFERENCE_COVERAGE),
                          "weekly_minutes": t*7/n if n and known else None,
                          "weekly_effective": sum(effective[(d,z)] for d in complete)*7/n if n else None}
     return {"start_date": start.isoformat(), "end_date": (end-timedelta(days=1)).isoformat(),
@@ -158,14 +175,14 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
     cycle_start = anchor + timedelta(days=((today-anchor).days//days)*days)
     current = observed_window(source, rows, cycle_start-timedelta(days=days), cycle_start)
     previous = observed_window(source, rows, cycle_start-timedelta(days=2*days), cycle_start-timedelta(days=days))
-    quality = source.get("quality") or {}
     valid_units = history_matches(source, physiology)
     planning_evidence = source.get("planning_history") or {}
     estimated_history = bool(planning_evidence.get("estimated"))
     estimated_supported = valid_units and estimated_history and planning_evidence.get("supported") is True
-    reliable = valid_units and not estimated_history and not (quality.get("limited_activities") or quality.get("excluded_activities"))
+    recent = observed_window(source, rows, today-timedelta(days=40), today)
+    reliable = valid_units and all(recent["components"][z]["reference_supported"] for z in WEEKLY_Q_BOUNDS)
     key = reference_key(profile, physiology)
-    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v6-individual-reference", "load-progression-v5-cycle-q", "load-progression-v4-clamped-q", "load-progression-v3-stable-q"} else None
+    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v7-lower-planning-reference", "load-progression-v6-individual-reference", "load-progression-v5-cycle-q", "load-progression-v4-clamped-q", "load-progression-v3-stable-q"} else None
     if frozen and frozen["version"] != VERSION:
         # Re-select the reference without replacing saved measurements or dates.
         frozen = deepcopy(frozen)
@@ -186,8 +203,8 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
         positions, expert_basis = expert_positions(profile, source, rows, today)
         frozen_components = {}
         for z in COMPONENTS:
-            samples = [w["components"][z] for w in complete if w["components"][z]["weekly_q"] is not None] if reliable else []
-            q = median(v["weekly_q"] for v in samples) if samples else None
+            samples = [w["components"][z] for w in complete if w["components"][z]["reference_supported"]] if valid_units else []
+            q = median(v["measured_weekly_q"] for v in samples) if samples else None
             effective = median(v["weekly_effective"] for v in samples) if samples else None
             low, high = WEEKLY_Q_BOUNDS.get(z, (None, None))
             prior = low + (high-low)*positions[z] if low is not None else None
@@ -197,6 +214,8 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
                 "expert_reference_q": prior, "reference_position": positions.get(z),
                 "reference_q": reference_q, "reference_selection": selection,
                 "source": "OBSERVED_CYCLES_AND_EXPERT" if samples else "EXPERT_ONLY" if prior is not None else "UNKNOWN",
+                "measured_coverage_percent": min(v["measured_coverage_percent"] for v in samples) if samples else None,
+                "estimated_q_excluded_from_reference": True,
                 "observed_windows": len(samples), "established_on": today.isoformat()}
         frozen = {"version": VERSION, "key": key, "created_on": today.isoformat(),
                   "equivalence_version": EQUIVALENCE_VERSION, "expert_basis": expert_basis,
@@ -208,7 +227,6 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
                 frozen["components"][z] = old
         frozen["created_on"] = retained_valid["created_on"]
         frozen["windows"] = list({w["start_date"]:w for w in [*retained_valid["windows"], *frozen["windows"]]}.values())
-    recent = observed_window(source, rows, today-timedelta(days=40), today)
     components = {}
     for z in COMPONENTS:
         b = frozen["components"][z]
@@ -220,8 +238,8 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
         components[z] = {**b, "annual_rate_percent": rate,
                          "governed_annual_rate_percent": rate*feedback_factor(adaptation, z, "growth_factor", today) if rate is not None else None,
                          "expert_q_bounds": WEEKLY_Q_BOUNDS.get(z), "observed_cycle_growth_percent": growth,
-                         "current_observed_q": a["weekly_q"] if reliable and current["complete"] else None,
-                          "recent_observed_q": recent["components"][z]["weekly_q"] if reliable and recent["covered_days"] >= planning_history.MINIMUM_DAYS else None,
+                         "current_observed_q": a["measured_weekly_q"] if valid_units and a["reference_supported"] and current["complete"] else None,
+                          "recent_observed_q": recent["components"][z]["measured_weekly_q"] if valid_units and recent["components"][z]["reference_supported"] else None,
                           "recent_estimated_q": recent["components"][z]["weekly_q"] if estimated_supported and recent["covered_days"] >= planning_history.MINIMUM_DAYS else None}
     ctx = {"version": VERSION, "config": config, "basis": "STABLE_PREPARATION_REFERENCE",
            "as_of": today.isoformat(), "cycle_start": cycle_start.isoformat(), "cycle_days": days,

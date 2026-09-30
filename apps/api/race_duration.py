@@ -58,9 +58,14 @@ def resolve(profile, view=None):
 
 def preview(repository, alias, profile):
     from . import model_service
+    from datetime import date
+    from biathlon import race_specific
     supported = distance_m(profile.get("discipline")) is not None and repository.athlete_settings(alias) is not None
     view = model_service.speed_view(repository, alias, profile["sport"]) if supported else None
-    return resolve(profile, view)
+    evidence = resolve(profile, view)
+    day = (view or {}).get("index_window", {}).get("end")
+    evidence["specific_reference"] = race_specific.reference(profile,view,evidence,date.fromisoformat(day) if day else date.today())
+    return evidence
 
 
 def applied(profile, evidence):

@@ -29,7 +29,7 @@ describe("one next action without relaxing publication gates", () => {
     expect(html).toContain("Общото време е от записаните активности");
     expect(html).toContain("Показаните 7/40 и готовност използват тази оценка");
     expect(html).toContain("1:30:00");
-    expect(html).toContain("Това не е измерено разпределение по зони");
+    expect(html).toContain("Допълнената част е оценка; измереното разпределение по зони остава запазено");
     const outlook=renderToStaticMarkup(<PlanningEvidenceNotice plan={{long_term:{planning_history:{estimated:true}}}}/>);
     expect(outlook).toContain("План с предварителна оценка по зони");
   });

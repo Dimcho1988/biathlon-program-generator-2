@@ -32,7 +32,7 @@ def goals(profile, rows, context, day=TODAY, period="GENERAL_PREPARATION", limit
                          rows, TODAY, limited, 1., context)[0]
 
 
-def test_all_aerobic_targets_use_lower_planning_reference_without_inflating_e_or_history():
+def test_lower_planning_reference_reconciles_e_without_changing_measured_history():
     profile, _, source, rows, _, context, measured = low_history()
     original_source = deepcopy(source)
     historical_only = deepcopy(context)
@@ -46,8 +46,9 @@ def test_all_aerobic_targets_use_lower_planning_reference_without_inflating_e_or
         assert component["reference_q"] == low
         assert component["limitation"] == "BELOW_REFERENCE_BOUND"
         assert after[z]["target_weekly_q"] == pytest.approx(before[z]["target_weekly_q"]*low/measured[z])
-        assert after[z]["target"] == before[z]["target"]  # E/7–40 never inherits the Q floor.
-        assert after[z]["target_index"] == before[z]["target_index"]
+        assert after[z]["target"] >= before[z]["target"]
+        assert after[z]["target_index"] <= 2.
+        assert after[z]["consistency"]["projected_weekly_effective"] <= after[z]["target"] + 1e-6
     assert source == original_source
     assert context["reference_is_clamped"]
 

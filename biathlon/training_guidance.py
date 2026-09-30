@@ -7,10 +7,38 @@ GENERAL_SOURCE = "https://olt-skala.nif.no/en"
 
 
 def _interpolate(stages, hr):
+    values = [s.get("hr_bpm") for s in stages]
+    if any(v is None for v in values) or not all(a < b for a,b in zip(values,values[1:])):
+        return None
     for a, b in zip(stages, stages[1:]):
-        if a["hr_bpm"] <= hr <= b["hr_bpm"]:
+        if a.get("hr_bpm") is not None and b.get("hr_bpm") is not None and a["hr_bpm"] <= hr <= b["hr_bpm"]:
             weight = (hr-a["hr_bpm"])/(b["hr_bpm"]-a["hr_bpm"])
             return round(a["lactate_mmol"] + weight*(b["lactate_mmol"]-a["lactate_mmol"]), 2)
+    return None
+
+
+def lactate_at_speed(profile, sport, speed_kmh, as_of):
+    """Interpolate a measured test protocol; never infer mmol/L from a race curve."""
+    if not profile.get("lactate_guidance_enabled", True) or speed_kmh is None:
+        return None
+    personal = next((p for p in profile.get("lactate_profiles", []) if p["sport"] == sport
+                     and p["source"] == "TEST" and p["assessed_on"] <= as_of.isoformat()), None)
+    if not personal:
+        return None
+    stages = personal["stages"]
+    speeds = [s.get("speed_kmh") for s in stages]
+    if any(v is None for v in speeds) or not all(a < b for a,b in zip(speeds,speeds[1:])):
+        return None
+    for a,b in zip(stages,stages[1:]):
+        if a["speed_kmh"] <= speed_kmh <= b["speed_kmh"]:
+            weight = (speed_kmh-a["speed_kmh"])/(b["speed_kmh"]-a["speed_kmh"])
+            value = round(a["lactate_mmol"]+weight*(b["lactate_mmol"]-a["lactate_mmol"]),2)
+            return {"unit":"mmol/L", "low_mmol":value, "high_mmol":value, "estimated_mmol":value,
+                    "source":"SPEED_TEST_INTERPOLATION", "label":"Ориентир от личния тест при тази скорост",
+                    "measured":False, "control_role":"TEST_PROTOCOL_REFERENCE", "speed_kmh":speed_kmh,
+                    "assessed_on":personal["assessed_on"], "protocol":personal["protocol"], "device":personal.get("device",""),
+                    "stage_duration_min":[a["duration_min"],b["duration_min"]],
+                    "note":"Отнася се за протокола на теста. Продължителността, повторенията и почивките променят отговора; не е прогнозен лактат след отсечката."}
     return None
 
 
@@ -58,6 +86,9 @@ def annotate_lactate(blocks, profile, sport, settings, day):
     for block in blocks:
         if block["kind"] == "WORK" and block["zone"] != "STR":
             ref = lactate_reference(profile, sport, block["zone"], bounds, day)
+            by_speed = lactate_at_speed(profile, sport, block.get("target_speed_kmh"), day)
+            if by_speed and (not ref or ref.get("source") not in {"INDIVIDUAL_MANUAL", "INDIVIDUAL_TEST"}):
+                ref = {**by_speed, "zone":block["zone"]}
             if ref is not None:
                 block["lactate_reference"] = ref
     return blocks
@@ -86,7 +117,7 @@ def annotate_double_threshold(blocks, profile):
         if b["kind"] != "WORK":
             continue
         ref = b.get("lactate_reference") or {}
-        if ref.get("source") not in {"INDIVIDUAL_TEST", "INDIVIDUAL_MANUAL", "TEST_INTERPOLATION"}:
+        if ref.get("source") not in {"INDIVIDUAL_TEST", "INDIVIDUAL_MANUAL", "TEST_INTERPOLATION", "SPEED_TEST_INTERPOLATION"}:
             b["lactate_reference"] = {"unit": "mmol/L", "zone": b["zone"], "low_mmol": None,
                 "high_mmol": ceiling, "source": "COACH_DOUBLE_THRESHOLD_METHOD", "measured": False,
                 "control_role": "METHOD_CEILING", "label": "Треньорски ориентир за двойния праг",

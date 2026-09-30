@@ -26,7 +26,7 @@ class LactateRange(ObservationModel):
 
 class LactateStage(ObservationModel):
     duration_min: float = Field(default=4, gt=0, le=60)
-    hr_bpm: float = Field(gt=0, le=250)
+    hr_bpm: float | None = Field(default=None, gt=0, le=250)
     speed_kmh: float | None = Field(default=None, gt=0, le=150)
     lactate_mmol: float = Field(gt=0, le=40)
 
@@ -48,8 +48,12 @@ class LactateProfile(ObservationModel):
         if self.source == "TEST":
             if len(self.stages) < 3 or not self.protocol.strip():
                 raise ValueError("A lactate test needs a protocol and at least three stages")
-            if any(a.hr_bpm >= b.hr_bpm for a, b in zip(self.stages, self.stages[1:])):
-                raise ValueError("Enter test stages in increasing heart-rate order")
+            hr = [s.hr_bpm for s in self.stages]
+            speed = [s.speed_kmh for s in self.stages]
+            hr_supported = all(v is not None for v in hr) and all(a < b for a,b in zip(hr,hr[1:]))
+            speed_supported = all(v is not None for v in speed) and all(a < b for a,b in zip(speed,speed[1:]))
+            if not hr_supported and not speed_supported:
+                raise ValueError("A lactate test needs increasing heart rate or speed across all stages")
         elif self.stages:
             raise ValueError("Test stages need the TEST source")
         return self

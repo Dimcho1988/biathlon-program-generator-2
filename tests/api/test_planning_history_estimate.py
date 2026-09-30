@@ -52,14 +52,16 @@ def test_dimitar_style_partial_history_produces_activatable_estimated_draft(monk
     assert result["long_term"]["basis"] == "ESTIMATED_PLANNING_REFERENCE_FROZEN"
     assert any(w["components"]["Z1"]["target_weekly_q"] for w in result["long_term"]["weeks"])
     components = result["parameters"]["load_progression"]["components"]
-    assert components["Z1"]["recent_observed_q"] is None
+    assert components["Z1"]["recent_observed_q"] > 0
+    assert components["Z1"]["recent_estimated_q"] >= components["Z1"]["recent_observed_q"]
+    assert result["parameters"]["load_progression"]["history_usable"] is True
     assert components["Z1"]["recent_estimated_q"] > 0
     assert repo.envelope == original
 
 
 def test_estimated_automatic_history_starts_with_recorded_time_not_expert_q_total(monkeypatch):
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
-    repo, _ = incomplete()
+    repo, _ = incomplete(30)
     body = configured(availability_mode="AUTO_HISTORY")
     result = engine.generate_plan(repo, "athlete", body, start_date=TODAY+timedelta(days=1), now=NOW)
     parameters = result["parameters"]
@@ -90,7 +92,7 @@ def test_explicit_weekly_target_replaces_estimated_history_time_envelope(monkeyp
 
 def test_initial_estimated_time_envelope_is_prorated_and_counts_actual_activity(monkeypatch):
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
-    repo, source = incomplete()
+    repo, source = incomplete(30)
     actual = {"activity_ref": "today", "date": TODAY.isoformat(), "sport": "Run", "duration_min": 45,
               "zones": [{"zone": "Z1", "raw_time_min": 45, "equivalent_time_min": 45}]}
     source["activities"].append(actual)
@@ -103,9 +105,10 @@ def test_initial_estimated_time_envelope_is_prorated_and_counts_actual_activity(
     assert budget["actual_minutes"] + budget["planned_minutes"] <= budget["period_limit_minutes"] + .002
 
 
-def test_measured_automatic_history_keeps_component_governance_without_time_envelope(monkeypatch):
+@pytest.mark.parametrize("partial_count", [0,5])
+def test_measured_automatic_history_keeps_component_governance_without_time_envelope(monkeypatch, partial_count):
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
-    repo, _ = incomplete(0)
+    repo, _ = incomplete(partial_count)
     result = engine.generate_plan(repo, "athlete", configured(availability_mode="AUTO_HISTORY"), start_date=TODAY+timedelta(days=1), now=NOW)
     assert result["parameters"]["time_budget"] is None
     assert result["parameters"]["weekly_minutes_ceiling"] is None

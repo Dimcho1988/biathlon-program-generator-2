@@ -1,4 +1,4 @@
-"""Planning-only Q estimates from independent Vflat and measured paired TI.
+"""Planning-only Q estimates and independent speed exposure.
 
 Only timestamp-identified missing HR is estimated. The measured HR ledger and
 trainability observations are never changed. Gaps in speed, mapping, versions,
@@ -10,7 +10,8 @@ import math
 
 from biathlon.equivalence import EQUIVALENCE_VERSION, equivalence_slope
 from biathlon.physiology import linear_equivalence_coefficient
-from vflat_b65.sports import speed_model_versions
+from vflat_b65.sports import speed_model_versions, is_running
+from biathlon import speed_zones
 from .activity_shadow_pipeline import activity_shadow_configuration_fingerprint
 from .oauth_store import PersistentStoreFailure
 from .speed_segments import sample_intervals
@@ -33,8 +34,8 @@ def _missing_hr(row):
 
 
 def _mapping(view, settings, today, sport):
-    """All six edges need paired support; expert midpoint speeds never qualify."""
-    if not isinstance(view, dict) or view.get("sport") != sport or settings is None:
+    """Use individual zone boundaries with explicit measured/estimated provenance."""
+    if not isinstance(view, dict) or not (view.get("sport") == sport or is_running(view.get("sport")) and is_running(sport)) or settings is None:
         return None, "NO_SPORT_SPECIFIC_INDEX"
     hrmax = _number(getattr(settings, "hrmax_bpm", None))
     bounds = tuple(getattr(settings, "zone_bounds_bpm", ()))
@@ -42,6 +43,21 @@ def _mapping(view, settings, today, sport):
         return None, "HR_PROFILE_REQUIRED"
     if not all(a < b for a, b in zip(bounds, bounds[1:])) or bounds[-1] > hrmax:
         return None, "INVALID_HR_BOUNDS"
+    profile = view.get("speed_zones") or {}
+    if profile.get("status") == "AVAILABLE":
+        upper = [z["high_kmh"] for z in profile["zones"][:4]]
+        low = profile.get("supported_low_kmh")
+        z5 = profile.get("supported_z5_high_kmh")
+        if low and low < upper[0] and all(a < b for a,b in zip(upper,upper[1:])):
+            speeds = [low,*upper]
+            effective_bounds = list(bounds[:5])
+            if z5 and z5 > upper[-1]:
+                speeds.append(z5)
+                effective_bounds.append(bounds[5])
+            return {"bounds_bpm":effective_bounds,"bounds_kmh":speeds,
+                "last_activity_date":(view.get("index_window") or {}).get("last_activity_date"),
+                "vflat_versions":speed_model_versions(sport),"boundary_basis":"INDIVIDUAL_SPEED_ZONES",
+                "comparison_key":activity_shadow_configuration_fingerprint(bounds,settings.hrmax_bpm,sport=sport)},None
     window = view.get("index_window") or {}
     try:
         age = (today-date.fromisoformat(window.get("last_activity_date", ""))).days
@@ -118,7 +134,7 @@ def _estimate(shadow, mapping, *, missing_minutes, coverage, elapsed):
             overlap += max(0., min(right, spans[i][1])-max(left, spans[i][0])); i += 1
         if overlap <= 0:
             continue
-        index = min(4, max(0, bisect_right(speeds, speed)-1))
+        index = min(len(speeds)-2, max(0, bisect_right(speeds, speed)-1))
         fraction = (speed-speeds[index])/(speeds[index+1]-speeds[index])
         estimated_hr = bounds[index]+fraction*(bounds[index+1]-bounds[index])
         zone = ZONES[index]
@@ -133,10 +149,11 @@ def _estimate(shadow, mapping, *, missing_minutes, coverage, elapsed):
     # or arbitrarily truncate measured speed to manufacture coverage.
     if covered > missing_minutes+1e-8:
         return None, "MISSING_HR_TIME_MASK_MISMATCH"
+    provenance = {**PROVENANCE,"hr":"INDIVIDUAL_ZONE_ESTIMATE"} if mapping.get("boundary_basis") else dict(PROVENANCE)
     return {"zones": list(totals.values()), "covered_missing_minutes": covered,
-            "model_version": VERSION, "provenance": dict(PROVENANCE),
+            "model_version": VERSION, "provenance": provenance,
             "equivalence_version": EQUIVALENCE_VERSION, "paired_lag_seconds": LAG_SECONDS,
-            "boundary_basis": "PAIRED_INDEX_ONLY", "boundary_speeds_kmh": list(speeds)}, None
+            "boundary_basis": mapping.get("boundary_basis","PAIRED_INDEX_ONLY"), "boundary_speeds_kmh": list(speeds)}, None
 
 
 def prepare_history(repository, alias, source, calendar, speed_by_sport, settings, today):
@@ -168,7 +185,10 @@ def prepare_history(repository, alias, source, calendar, speed_by_sport, setting
             continue
         sport = recorded.get("sport") or item.get("sport")
         if sport not in mappings:
-            mappings[sport] = _mapping((speed_by_sport or {}).get(sport), settings, today, sport)
+            view = (speed_by_sport or {}).get(sport)
+            if view is None and is_running(sport):
+                view = next((v for s,v in (speed_by_sport or {}).items() if is_running(s)),None)
+            mappings[sport] = _mapping(view, settings, today, sport)
         mapping, reason = mappings[sport]
         run_key = item.get("latest_shadow_run_key")
         if mapping is None or not run_key:
@@ -202,3 +222,52 @@ def prepare_history(repository, alias, source, calendar, speed_by_sport, setting
     diagnostics["estimated_activity_count"] = len(estimates)
     diagnostics["covered_missing_minutes"] = sum(row["covered_missing_minutes"] for row in estimates.values())
     return estimates, diagnostics
+
+
+def exposure_history(repository, alias, view, today):
+    """Read speed-zone time on demand, without replacing the canonical HR ledger."""
+    from .trainability_history import read_calendar
+    profile = view.get("speed_zones") or {}
+    start = today-timedelta(days=39)
+    result = {"version":"speed-zone-exposure-v1","status":"UNAVAILABLE","sport":view.get("sport"),
+        "start_date":start.isoformat(),"end_date":today.isoformat(),"activities":[],
+        "zones":[{"zone":z,"minutes":0.} for z in ZONES],"classified_minutes":0.,
+        "recorded_minutes":0.,"source_generation_id":view.get("source_generation_id"),
+        "source_revision":view.get("source_revision"),"load_role":"EXTERNAL_SPEED_EXPOSURE_NOT_ADDITIONAL_HR_LOAD"}
+    if profile.get("status") != "AVAILABLE":
+        return result
+    calendar = read_calendar(repository,alias,start,today) or {}
+    if (calendar.get("generation_id"),calendar.get("revision")) != (view.get("source_generation_id"),view.get("source_revision")):
+        return {**result,"status":"MODEL_UPDATED"}
+    selected = [a for a in calendar.get("activities",[]) if start.isoformat() <= a.get("local_date","") <= today.isoformat()
+                and (a.get("sport") == view["sport"] or is_running(a.get("sport")) and is_running(view["sport"]))]
+    reader = getattr(repository,"activity_speed_exposure_samples",None)
+    if reader is None:
+        return result
+    keys = tuple(sorted({a["latest_shadow_run_key"] for a in selected if a.get("latest_shadow_run_key")}))
+    samples = reader(alias,keys) if keys else {}
+    totals = {z:0. for z in ZONES}
+    records = []
+    for a in selected:
+        minutes = float(a.get("duration_min") or (a.get("elapsed_time_s") or 0.)/60)
+        result["recorded_minutes"] += minutes
+        row = samples.get(a.get("latest_shadow_run_key")) or {}
+        shadow = row.get("shadow_payload") or {}
+        by_zone = {z:0. for z in ZONES}
+        compatible = (row.get("activity_ref") == a.get("activity_ref")
+            and (shadow.get("vflat_model_version"),shadow.get("vflat_config_version")) == speed_model_versions(a.get("sport")))
+        if compatible and isinstance(shadow.get("speed_test_series"),list):
+            for left,right,speed,exclusion in sample_intervals(shadow):
+                zone = speed_zones.classify(profile,speed)
+                if not exclusion and right-left <= MAX_GAP_SECONDS and zone:
+                    by_zone[zone] += (right-left)/60
+        covered = sum(by_zone.values())
+        records.append({"activity_ref":a.get("activity_ref"),"date":a["local_date"],"sport":a.get("sport"),
+            "recorded_minutes":minutes,"classified_minutes":round(covered,3),
+            "status":"CLASSIFIED" if covered else "NO_SUPPORTED_SPEED_SAMPLES",
+            "zones":[{"zone":z,"minutes":round(v,3)} for z,v in by_zone.items()]})
+        for z,v in by_zone.items():
+            totals[z] += v
+    return {**result,"status":"AVAILABLE","activities":records,
+        "zones":[{"zone":z,"minutes":round(v,3)} for z,v in totals.items()],
+        "classified_minutes":round(sum(totals.values()),3),"recorded_minutes":round(result["recorded_minutes"],3)}
