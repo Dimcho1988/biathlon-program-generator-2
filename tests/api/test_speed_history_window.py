@@ -13,12 +13,13 @@ from apps.api.model_schemas import SpeedTestInput
 from apps.api.trainability import MODEL_VERSION, SCHEMA_VERSION
 from apps.api.trainability_history import admit_activities
 from biathlon.speed_duration import calibrated
-from vflat_b65 import MODEL_VERSION as VF_VERSION, CONFIG_VERSION as VF_CONFIG
+from vflat_b65.running import MODEL_VERSION as VF_VERSION, CONFIG_VERSION as VF_CONFIG
+from vflat_b65.sports import speed_model_versions
 
 
 NOW = datetime(2026, 9, 19, 12, tzinfo=timezone.utc)
 BOUNDS = (100, 125, 145, 160, 175, 190)
-KEY = activity_shadow_configuration_fingerprint(BOUNDS, 190)
+KEY = activity_shadow_configuration_fingerprint(BOUNDS, 190, sport="Run")
 REF = "act_" + "1" * 32
 ACTOR = UUID("11111111-1111-4111-8111-111111111111")
 
@@ -50,7 +51,9 @@ class Repository:
         self.activities.append({"activity_ref": name, "sport": sport, "local_date": day,
                                 "start_at_utc": day + "T09:00:00Z", "latest_shadow_run_key": name})
         self.summaries[name] = {"activity_ref": name, "trainability_index": {
-            **index(value, seconds), **(changes or {})}}
+            **index(value, seconds),
+            "comparison_key": activity_shadow_configuration_fingerprint(BOUNDS, 190, sport=sport),
+            "source_versions": {"vflat": speed_model_versions(sport)[0]}, **(changes or {})}}
 
     def test(self, days=0, **extra):
         self.rows.append({"kind": "SPEED_TEST", "entry_key": str(len(self.rows)), "revision": 1,
@@ -115,6 +118,34 @@ def test_only_current_compatible_accepted_sport_indices_enter_exact_40_day_windo
     assert result["index_admission"] == {"activities": 6, "used": 2, "excluded": 1, "refresh_required": 1, "incompatible": 2}
     assert all(a["day"] <= "2026-09-19" for a in result["activities"])
     assert repo.summaries == original and repo.saved == []
+
+
+def test_default_sport_follows_recent_training_and_explicit_choice_still_wins():
+    repo=Repository()
+    repo.add("run",-1,sport="Run")
+    repo.activities[-1]["moving_time_s"]=3600
+    repo.add("hike",-2,sport="Hike")
+    repo.activities[-1]["moving_time_s"]=600
+    repo.add("old-ski",-50,sport="NordicSki")
+    repo.activities[-1]["moving_time_s"]=20000
+    repo.test(sport="Hike",source="MANUAL")
+    default=service.speed_view(repo,"ath-test")
+    assert default["sports"][0]=="Hike"
+    assert default["sport"]=="Run" and default["active_test_count"]==0
+    assert default["index_admission"]["used"]==1
+    explicit=service.speed_view(repo,"ath-test","Hike")
+    assert explicit["sport"]=="Hike" and explicit["active_test_count"]==1
+
+
+def test_legacy_ski_corrected_running_requires_recomputation_not_relabelling():
+    from vflat_b65 import MODEL_VERSION as OLD_VFLAT
+    repo=Repository()
+    repo.add("run-old",-1,changes={"source_versions":{"vflat":OLD_VFLAT}})
+    repo.add("run-current",0)
+    model=service.speed_view(repo,"ath-test","Run")
+    assert model["index_admission"]["refresh_required"]==1
+    assert model["index_admission"]["used"]==1
+    assert model["index_summary"]["Z2"]["count"]==1
 
 
 @pytest.mark.parametrize("change", [{"vflat_version": "old-model"}, {"vflat_config_version": "old-config"}])

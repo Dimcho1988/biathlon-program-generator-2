@@ -181,6 +181,7 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
     return clean === null || modulated === null ? sum : sum + Math.abs(modulated - clean);
   }, 0) / 2;
   const hrmodLabel = shortModelLabel("HRmod", payload.hrmod_model_version);
+  const vflatLabel = String(payload.vflat_model_version??"").startsWith("vflat_run_")?"Vflat · бягане":"Vflat B65";
 
   return (
     <div className="shadow-lab">
@@ -192,7 +193,7 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
         </div>
         <fieldset className="shadow-toggles">
           <legend>Диагностични канали</legend>
-          <label><input type="checkbox" checked={vflatEnabled} onChange={(event) => setVflatEnabled(event.target.checked)} /> Vflat B65</label>
+          <label><input type="checkbox" checked={vflatEnabled} onChange={(event) => setVflatEnabled(event.target.checked)} /> {vflatLabel}</label>
           <label><input type="checkbox" checked={hrmodEnabled} onChange={(event) => setHrmodEnabled(event.target.checked)} /> {hrmodLabel}</label>
         </fieldset>
       </section>
@@ -209,9 +210,9 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
       <TrainabilitySummary index={parseTrainabilityIndex(payload.trainability_index)} />
 
       <div className="shadow-plots">
-        <MiniPlot title="Реална скорост ↔ Vflat B65" rows={rows} series={[
+        <MiniPlot title={`Реална скорост ↔ ${vflatLabel}`} rows={rows} series={[
           { key: "speed_raw_kmh", label: "Raw speed", color: "#64748b" },
-          { key: "vflat_b65_kmh", label: "Vflat B65", color: "#16a34a", enabled: vflatEnabled },
+          { key: "vflat_b65_kmh", label: vflatLabel, color: "#16a34a", enabled: vflatEnabled },
         ]} />
         <MiniPlot title="Raw / clean HR ↔ HRmod candidate / final" rows={rows} series={[
           { key: "hr_raw_bpm", label: "Raw HR", color: "#94a3b8" },

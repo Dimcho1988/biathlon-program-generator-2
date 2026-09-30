@@ -15,6 +15,7 @@ from apps.api.shadow_models.hrmod_v4 import SOURCE_COMMIT, run_hrmod_v4_shadow
 from apps.api.shadow_models.vflat_b65 import run_vflat_b65_shadow
 from apps.api.trainability import MODEL_VERSION as TRAINABILITY_MODEL_VERSION, compute_trainability
 from vflat_b65.terrain_correction import terrain_metadata
+from vflat_b65.sports import is_running, speed_model_versions
 from hrmod_lab.schemas import (
     CONFIG_VERSION as HRMOD_CONFIG_VERSION,
     MODEL_VERSION as HRMOD_MODEL_VERSION,
@@ -96,6 +97,7 @@ def activity_shadow_configuration_fingerprint(
     zone_bounds_bpm: Sequence[int], explicit_hrmax_bpm: int | None,
     *, activity_duration_s: float | None = None,
     activity_detail: Mapping[str, Any] | None = None,
+    sport: str | None = None,
 ) -> str:
     """Identify every setting that can change a derived shadow result.
 
@@ -103,14 +105,16 @@ def activity_shadow_configuration_fingerprint(
     This separate fingerprint invalidates derived runs when athlete physiology or
     a shadow model/configuration changes.
     """
+    sport = sport or (activity_detail or {}).get("type")
+    versions = speed_model_versions(sport) if is_running(sport) else (VFLAT_MODEL_VERSION, VFLAT_CONFIG_VERSION)
     payload = {
         "schema_version": SHADOW_CONFIGURATION_SCHEMA_VERSION,
         "trainability_model_version": TRAINABILITY_MODEL_VERSION,
         "activity_duration_s": activity_duration_s,
         "zone_bounds_bpm": [int(value) for value in zone_bounds_bpm],
         "explicit_hrmax_bpm": explicit_hrmax_bpm,
-        "vflat_model_version": VFLAT_MODEL_VERSION,
-        "vflat_config_version": VFLAT_CONFIG_VERSION,
+        "vflat_model_version": versions[0],
+        "vflat_config_version": versions[1],
         "sprint_str_model_version": SPRINT_STR_MODEL_VERSION,
         "sprint_str_config_version": SPRINT_STR_CONFIG_VERSION,
         "hrmod_model_version": HRMOD_MODEL_VERSION,
@@ -437,7 +441,7 @@ def compute_activity_shadow(
                         "grade_smoothed_pct", vf_row.get("grade_smoothed_pct")
                     )
                 ),
-                "vflat_model_version": VFLAT_MODEL_VERSION,
+                "vflat_model_version": vflat["model_version"],
                 "hrmod_model_version": hrmod.get("model_version"),
                 "terrain_model_version": hrmod.get("terrain_model_version"),
                 "quality_flags": combined_flags,
@@ -459,13 +463,14 @@ def compute_activity_shadow(
             activity_duration_s=_activity_duration_seconds(
                 detail, strength_activity=is_strength_activity(detail)
             ) or sum(float(row["dt_s"]) for row in vflat["timeseries"]),
-            comparison_key=activity_shadow_configuration_fingerprint(zone_bounds_bpm, explicit_hrmax_bpm),
+            comparison_key=activity_shadow_configuration_fingerprint(
+                zone_bounds_bpm, explicit_hrmax_bpm, sport=detail.get("type")),
             source_versions={
-                "vflat": VFLAT_MODEL_VERSION, "hrmod": HRMOD_MODEL_VERSION,
+                "vflat": vflat["model_version"], "hrmod": HRMOD_MODEL_VERSION,
             },
         ),
-        "vflat_model_version": VFLAT_MODEL_VERSION,
-        "vflat_config_version": VFLAT_CONFIG_VERSION,
+        "vflat_model_version": vflat["model_version"],
+        "vflat_config_version": vflat["config_version"],
         "sprint_str_model_version": vflat.get("sprint_str_model_version"),
         "sprint_str_config_version": vflat.get("sprint_str_config_version"),
         "hrmod_model_version": hrmod.get("model_version"),

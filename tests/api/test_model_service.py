@@ -194,7 +194,7 @@ class SpeedStore(Store):
 @pytest.mark.parametrize("history_days",[7,40])
 def test_shared_zone_volume_keeps_tests_and_hr_mapping_sport_specific(monkeypatch,history_days):
     from apps.api.activity_shadow_pipeline import activity_shadow_configuration_fingerprint
-    from vflat_b65 import MODEL_VERSION as VF_VERSION, CONFIG_VERSION as VF_CONFIG
+    from vflat_b65.sports import speed_model_versions
     class FixedDatetime(datetime):
         @classmethod
         def now(cls,tz=None): return NOW.astimezone(tz)
@@ -211,7 +211,7 @@ def test_shared_zone_volume_keeps_tests_and_hr_mapping_sport_specific(monkeypatc
             for zone,q in (("Z1",z1),("Z2",z2),("Z3",0),("Z4",0),("Z5",0),("STR",99999))]})
         repo.rows.append({"kind":"SPEED_TEST","entry_key":sport,"revision":1,"payload":{
             "sport":sport,"day":day,"enabled":True,"duration_s":600,"speed_kmh":speed,"maximal":True,"comparable":True,
-            "vflat_version":VF_VERSION,"vflat_config_version":VF_CONFIG}})
+            "vflat_version":speed_model_versions(sport)[0],"vflat_config_version":speed_model_versions(sport)[1]}})
     for day in (first-timedelta(days=1),today,today+timedelta(days=1)):
         loads.append({"date":day.isoformat(),"sport":"Run","zones":[{"zone":"Z1","equivalent_time_min":99999}]})
     calendar={"activities":activities,"snapshot_payload":{"load_history":{
@@ -225,10 +225,10 @@ def test_shared_zone_volume_keeps_tests_and_hr_mapping_sport_specific(monkeypatc
         from apps.api.trainability import MODEL_VERSION,SCHEMA_VERSION
         return {sport:{"activity_ref":sport,"trainability_index":{
             "schema_version":SCHEMA_VERSION,"model_version":MODEL_VERSION,
-            "comparison_key":activity_shadow_configuration_fingerprint([100,125,145,160,175,190],190),
+            "comparison_key":activity_shadow_configuration_fingerprint([100,125,145,160,175,190],190,sport=sport),
             "hrmax_bpm":190,"zone_bounds_bpm":[100,125,145,160,175,190],
             "signal_quality":{"status":"PASSED_SCREEN","reason":None},
-            "source_versions":{"vflat":VF_VERSION},"zones":[
+            "source_versions":{"vflat":speed_model_versions(sport)[0]},"zones":[
                 {"name":zone,"valid":True,"hr_seconds":600,"index":100*hr/190/v}
                 for zone,v,hr in (("Z1",sports[sport][2]*.6,115),("Z2",sports[sport][2],135),
                                   ("Z3",sports[sport][2]*1.2,152))],

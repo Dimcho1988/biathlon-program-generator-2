@@ -1,4 +1,4 @@
-"""Production adapter for the versioned Vflat B65 shadow model."""
+"""Production adapter for sport-specific Vflat shadow models."""
 
 from __future__ import annotations
 
@@ -7,8 +7,6 @@ from typing import Any, Mapping
 import pandas as pd
 
 from vflat_b65 import (
-    CONFIG_VERSION,
-    MODEL_VERSION,
     SPRINT_STR_CONFIG_VERSION,
     SPRINT_STR_MODEL_VERSION,
     SprintSTRConfig,
@@ -16,6 +14,8 @@ from vflat_b65 import (
     apply_vflat_b65,
     detect_sprint_str,
 )
+from vflat_b65.running import RunningGradeConfig, apply_running_grade
+from vflat_b65.sports import is_running, speed_model_versions
 
 
 def run_vflat_b65_shadow(
@@ -25,8 +25,14 @@ def run_vflat_b65_shadow(
     sprint_config: SprintSTRConfig | None = None,
     activity_detail: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    selected = config or VFlatB65Config()
-    result = apply_vflat_b65(prepared_timeseries, selected, activity_detail=activity_detail)
+    sport = (activity_detail or {}).get("type")
+    model_version, config_version = speed_model_versions(sport)
+    if is_running(sport):
+        selected = RunningGradeConfig()
+        result = apply_running_grade(prepared_timeseries, selected)
+    else:
+        selected = config or VFlatB65Config()
+        result = apply_vflat_b65(prepared_timeseries, selected, activity_detail=activity_detail)
     sprint_detection = detect_sprint_str(result, sprint_config)
     rows = []
     previous_timestamp = previous_block = None
@@ -72,16 +78,16 @@ def run_vflat_b65_shadow(
                 "sprint_str_rise_kmh": sprint_detection.speed_rise_kmh[position],
                 "quality_flags": list(row.get("quality_flags") or ()),
                 "exclusion_reason": None if row.get("valid") else "VFLAT_SAMPLE_EXCLUDED",
-                "vflat_model_version": MODEL_VERSION,
-                "vflat_config_version": CONFIG_VERSION,
+                "vflat_model_version": model_version,
+                "vflat_config_version": config_version,
             }
         )
     return {
         "status": "computed",
         "experimental": True,
         "affects_canonical_load": False,
-        "model_version": MODEL_VERSION,
-        "config_version": CONFIG_VERSION,
+        "model_version": model_version,
+        "config_version": config_version,
         "sprint_str_model_version": SPRINT_STR_MODEL_VERSION,
         "sprint_str_config_version": SPRINT_STR_CONFIG_VERSION,
         "config": selected.to_dict(),
