@@ -223,19 +223,25 @@ def test_generation_start_uses_athlete_local_day(api, monkeypatch):
     assert error.value.status_code == 422 and not store.saved
 
 
-def test_draft_history_marks_changed_inputs_without_rewriting_evidence(api, monkeypatch):
+@pytest.mark.parametrize("change", ["analysis", "calendar"])
+def test_draft_history_marks_changed_inputs_without_rewriting_evidence(api, monkeypatch, change):
     _, store, repository = api
-    state = {"generation_id": "generation-a", "analysis_revision": 1}
+    state = {"generation_id": "generation-a", "analysis_revision": 1, "calendar": {"events": []}}
     fingerprint = service._hash({**state, "management_profile": ManagementProfile.model_validate(PROFILE).model_dump(mode="json"), "profile_revision": 2})
-    rows = [{"revision": 1, "payload": {"input_fingerprint": fingerprint, "days": []}}]
+    rows = [{"revision": 1, "payload": {"input_fingerprint": fingerprint, "input_snapshot": deepcopy(state), "days": []}}]
     frozen = deepcopy(rows)
     monkeypatch.setattr(store, "drafts", lambda _: rows)
     monkeypatch.setattr(service, "input_state", lambda *_, **__: deepcopy(state))
     fresh = service.history(repository, "ath-test")["drafts"][0]
     assert fresh["stale"] is False and fresh["stale_reason"] is None
-    state["analysis_revision"] = 2
+    if change == "analysis":
+        state["analysis_revision"] = 2
+    else:
+        state["calendar"]["events"] = [{"event_type": "MAIN_RACE", "start_date": "2026-10-18", "end_date": "2026-10-18"}]
     stale = service.history(repository, "ath-test")["drafts"][0]
     assert stale["stale"] is True and stale["stale_reason"]
+    if change == "calendar":
+        assert "Календарът е променен" in stale["stale_reason"]
     assert rows == frozen
 
 

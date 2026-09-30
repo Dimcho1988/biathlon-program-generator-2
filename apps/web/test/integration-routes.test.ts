@@ -597,7 +597,7 @@ describe("integration route redirects behind a reverse proxy", () => {
     });
   });
 
-  it("saves a canonical planning calendar only for the signed athlete session", async () => {
+  it.each([false, true])("saves a canonical planning calendar for the signed athlete session (JSON: %s)", async (json) => {
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
     process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
     process.env.ONFLOWS_PROFILE_MODE = "multi";
@@ -623,10 +623,11 @@ describe("integration route redirects behind a reverse proxy", () => {
 
     const response = await savePlanningCalendar(new Request(
       "https://web.example.test/api/athlete/planning-calendar",
-      { method: "POST", body: form },
+      { method: "POST", body: form, ...(json ? { headers: { Accept: "application/json" } } : {}) },
     ));
 
-    expect(response.headers.get("location")).toBe("/planning?planning=calendar-saved");
+    if (json) { expect(response.status).toBe(200); expect(await response.json()).toEqual({ saved: true }); }
+    else expect(response.headers.get("location")).toBe("/planning?planning=calendar-saved");
     for (const path of ["/planning", "/management", "/management/outlook"]) expect(revalidatePath).toHaveBeenCalledWith(path);
     const [, init] = fetchMock.mock.calls[1];
     expect(init.headers["X-OnFlows-Athlete-Alias"]).toBe("ath-test-profile");

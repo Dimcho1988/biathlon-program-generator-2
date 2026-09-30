@@ -97,19 +97,33 @@ def test_long_precompetition_is_not_an_eight_week_taper():
     assert result["taper_windows"][0]["days"] == 7
 
 
-def test_explicit_entry_reserves_days_and_zero_suppresses_entry():
+def test_explicit_entry_limits_dose_without_displacing_final_preparation():
     assert lengths(plan(175, reentry_days_override=14)) == (14, 63, 63, 35)
     no_entry = plan(175, reentry_days_override=0)
     assert lengths(no_entry)[0] == 0
     assert abs(lengths(no_entry)[1] - lengths(no_entry)[2]) <= 1
     assert_contiguous(no_entry)
     returning = plan(28, reentry_days_override=7)
-    assert lengths(returning) == (7, 0, 7, 14)
+    assert lengths(returning) == (0, 0, 14, 14)
+    assert returning["reentry_windows"][0]["days"] == 7
     assert_contiguous(returning)
     too_short = plan(3, reentry_days_override=7)
-    assert lengths(too_short) == (3, 0, 0, 0)
-    assert too_short["taper_windows"] == []
+    assert lengths(too_short) == (0, 0, 0, 3)
+    assert too_short["taper_windows"][0]["days"] == 3
+    assert too_short["reentry_windows"][0]["days"] == 3
     assert any(row["code"] == "REENTRY_TRUNCATED_BY_RACE" for row in too_short["warnings"])
+
+
+@pytest.mark.parametrize("days,expected", [(0, (0, 0, 0, 0)), (1, (0, 0, 0, 1)),
+                                           (3, (0, 0, 0, 3)), (27, (0, 0, 13, 14))])
+def test_close_main_race_retains_last_phases_even_with_manual_entry(days, expected):
+    result = plan(days, reentry_days_override=7)
+    assert lengths(result) == expected
+    assert result["phases"][-1]["kind"] == "COMPETITION"
+    assert_contiguous(result)
+    from biathlon.periodization import reentry_dose_active
+    for offset in range(days + 1):
+        assert reentry_dose_active(result, START + timedelta(days=offset)) == (offset < min(days, 7))
 
 
 def test_control_race_uses_short_freshening_without_inventing_main_target():

@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { durationHms } from "../lib/duration-format";
 import { componentColor, sessionSummary } from "../lib/training-visuals";
 import { SessionAccent, WorkoutProfile } from "./workout-profile";
-import { isRecord } from "../lib/training-status";
+import { isCalendarDate, isRecord } from "../lib/training-status";
 import { ActiveTrainingPlan } from "./active-training-plan";
 import { TrainingPlanWeek } from "./training-plan-week";
 import { PlanComparison } from "./plan-comparison";
@@ -101,7 +101,13 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   const [active, setActive] = useState(initialActive);
   const saved = initialProfile;
   const [drafts, setDrafts] = useState(initialDrafts);
-  const [startDate, setStartDate] = useState(() => { const earliest = saved.profile && saved.profile.program_start > today ? saved.profile.program_start : today; const latest = saved.profile?.horizon_mode === "MANUAL" && saved.profile.program_end < datePlus(today, 7) ? saved.profile.program_end : datePlus(today, 7); const previous = initialDrafts[0]?.payload.start_date; return previous && previous >= earliest && previous <= latest && previous <= datePlus(today, 1) ? previous : earliest > datePlus(today, 1) ? earliest : latest < datePlus(today, 1) ? latest : datePlus(today, 1); });
+  const snapshot = isRecord(initialOutlook?.input_snapshot) ? initialOutlook.input_snapshot : {};
+  const horizon = isRecord(snapshot.horizon) ? snapshot.horizon : {};
+  const effectiveEnd = saved.profile?.horizon_mode === "MANUAL" ? saved.profile.program_end
+    : isCalendarDate(horizon.effective_end) ? horizon.effective_end : undefined;
+  const earliestStart = saved.profile && saved.profile.program_start > today ? saved.profile.program_start : today;
+  const latestStart = effectiveEnd && effectiveEnd < datePlus(today, 7) ? effectiveEnd : datePlus(today, 7);
+  const [startDate, setStartDate] = useState(() => { const earliest = earliestStart; const latest = latestStart; const previous = initialDrafts[0]?.payload.start_date; return previous && previous >= earliest && previous <= latest && previous <= datePlus(today, 1) ? previous : earliest > datePlus(today, 1) ? earliest : latest < datePlus(today, 1) ? latest : datePlus(today, 1); });
   const [busy, setBusy] = useState<"generate" | "activate" | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -114,7 +120,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   const endActiveChange = useCallback(() => { activeRequest.current = false; setBusy(null); }, []);
 
   const draft = drafts[0];
-  const guidance = saved.profile?.horizon_mode === "MANUAL" && saved.profile.program_end < today ? { step: "PROFILE", title: "Периодът на подготовката е приключил", description: "Задай следващия период в профила, за да подготвим нова програма." } : saved.profile && saved.profile.program_start > datePlus(today, 7) ? { step: "WAIT", title: "Подготовката започва по-късно", description: "Седмичната програма може да бъде подготвена до седем дни преди началото. При нужда промени датите в профила." } : managementGuidance({ configured: saved.configured, dirty: false, draft, sync: initialSyncState, today });
+  const guidance = effectiveEnd && effectiveEnd < today ? { step: "PROFILE", title: "Периодът на подготовката е приключил", description: "Задай следващия период в профила, за да подготвим нова програма." } : saved.profile && saved.profile.program_start > datePlus(today, 7) ? { step: "WAIT", title: "Подготовката започва по-късно", description: "Седмичната програма може да бъде подготвена до седем дни преди началото. При нужда промени датите в профила." } : managementGuidance({ configured: saved.configured, dirty: false, draft, sync: initialSyncState, today });
   const view = initialView;
   const [newDraft, setNewDraft] = useState(false);
   const showDraft = !active.active || newDraft;
@@ -202,7 +208,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     anchor.href = url; anchor.download = `onflows-plan-${draft.payload.start_date}-v${draft.revision}.json`; anchor.click(); URL.revokeObjectURL(url);
   }
 
-  const generateForm = <form className="management-generate" onSubmit={generate}><fieldset disabled={!canEdit || busy !== null || !saved.configured}><label>Начало на седмицата<input aria-label="Начална дата на програмата" required type="date" min={saved.profile && saved.profile.program_start > today ? saved.profile.program_start : today} max={saved.profile?.horizon_mode === "MANUAL" && saved.profile.program_end < datePlus(today, 7) ? saved.profile.program_end : datePlus(today, 7)} value={startDate} onChange={event => setStartDate(event.target.value)} /></label><button className="action-button" type="submit">{busy === "generate" ? "Подготвям програмата…" : "Подготви програма"}</button></fieldset></form>;
+  const generateForm = <form className="management-generate" onSubmit={generate}><fieldset disabled={!canEdit || busy !== null || !saved.configured}><label>Начало на седмицата<input aria-label="Начална дата на програмата" required type="date" min={earliestStart} max={latestStart} value={startDate} onChange={event => setStartDate(event.target.value)} /></label><button className="action-button" type="submit">{busy === "generate" ? "Подготвям програмата…" : "Подготви програма"}</button></fieldset></form>;
   return <main className="activities-page management-page">
     <header className="activities-hero"><div className="activities-title"><div><p className="eyebrow">{athleteName}</p><h1>{view === "week" ? "Седмична програма" : "Дългосрочен план"}</h1><p>Подготовката в перспектива. Конкретната задача за всеки ден.</p></div></div><Link className="text-action" href="/planning">Профил за планиране →</Link></header>
     {!canEdit && <p className="management-notice">Имате достъп за преглед. Промените изискват право за редакция на плана.</p>}
@@ -217,7 +223,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
       {active.active && !newDraft && <ActiveTrainingPlan value={active} onChange={receiveActive} externalBusy={busy !== null} onBegin={beginActiveChange} onEnd={endActiveChange} canEdit={canEdit} today={today} renderDay={day => <DayCard day={day} expanded />} />}
       {showDraft && <>
         <section className="management-panel management-next-step" aria-label="Следваща стъпка"><p className="eyebrow">{guidance.step === "REVIEW" ? "Преглед преди започване" : "Следваща стъпка"}</p><h2>{guidance.title}</h2><p>{guidance.description}</p>
-          {archivedDraft && <p className="management-notice">Показваният досега проект е остарял. Неговите часове и тренировки не отразяват текущите настройки. Новият проект се преизчислява с актуалните записани данни. Ако това не завърши, използвай „Подготви програма“.</p>}
+          {archivedDraft && <p className="management-notice">{draft?.stale_reason ?? "Показваният досега проект е остарял."} Неговите часове и тренировки не отразяват текущите настройки. Новият проект се преизчислява с актуалните записани данни. Ако това не завърши, използвай „Подготви програма“.</p>}
           {guidance.step === "PROFILE" && <Link className="action-button" href="/planning#basic-profile">Попълни профила →</Link>}
           {guidance.step === "SYNC" && canEdit && <SyncActionForm scope="FULL" returnTo="/management" label="Обнови тренировките" />}
           {["GENERATE", "START_DATE"].includes(guidance.step) && generateForm}

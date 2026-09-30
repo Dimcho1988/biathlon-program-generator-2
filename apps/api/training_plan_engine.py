@@ -18,7 +18,7 @@ import pandas as pd
 from biathlon import hr_speed, recovery_v2, speed_duration, training_targets, planning_controls, planning_history, planning_schedule, planning_allocation, load_progression, mesocycle_focus
 from biathlon.constants import COMPONENTS, fresh_parameters
 from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, equivalence_slope
-from biathlon.periodization import build_periodization
+from biathlon.periodization import build_periodization, reentry_dose_active
 from biathlon.physiology import _causal_tref, effective_from_direct_vector, linear_equivalence_coefficient
 from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VERSION, catalog, resolved_methods
 from biathlon import training_guidance, adaptive_methods, preliminary_capacity
@@ -737,7 +737,7 @@ def _volume_ceiling(profile, periodization, events, available, baseline, start, 
         if reserved or not phase:
             continue
         available_window += available[day.weekday()]
-        state = planning_controls.resolve(profile, day, phase, list(PRIORITIES.get(phase, ("Z1",))))
+        state = planning_controls.resolve(profile, day, phase, list(PRIORITIES.get(phase, ("Z1",))), periodization=periodization)
         week = max(0, (day-anchor).days//7) % length
         factor = state["volume_factor"] if state else training_targets.cycle_factor(
             week, length, profile.get("progression_percent", 5),
@@ -1460,6 +1460,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         limits.append({"code": "RESERVE_KEY_SESSION_TIME", "limit_minutes": max(0., remaining - 40 * future_keys - overhead)})
                 if purpose == "RECOVERY" or limited:
                     limits.append({"code": "LOW_ABSOLUTE_RECOVERY_CAP", "limit_minutes": profile.get("recovery_session_cap_min", 30.)})
+                if reentry_dose_active(periodization, day):
+                    limits.append({"code": "REENTRY_DOSE_CAP", "limit_minutes": evidence["capacity_minutes"] * profile.get("reentry_fraction", .4)})
                 if taper:
                     # Taper is an intentional reduction, never a 7/40 deficit
                     # to refill. Its volume cap applies even mid-draft.
@@ -1483,6 +1485,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 elif method.get("developmental_variant"):
                     max_usage = .25
                     evidence["dose_capacity_basis"] = "INDEPENDENT_CONTINUOUS_TMAX"
+                if reentry_dose_active(periodization, day):
+                    max_usage = min(max_usage, profile.get("reentry_fraction", .4))
                 while blocks and _dose_usage(blocks, evidence, z) > max_usage + 1e-6 and work >= method["min_work_min"]:
                     work -= .5
                     blocks = _blocks(method, work, evidence, settings) if work >= method["min_work_min"] else []

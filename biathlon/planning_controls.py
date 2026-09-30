@@ -7,6 +7,7 @@ from datetime import date, timedelta
 import math
 from .constants import COMPONENTS, fresh_parameters
 from . import planning_history, mesocycle_focus
+from .periodization import reentry_dose_active
 
 VERSION = "planning-controls-v6-race-band"
 
@@ -45,14 +46,16 @@ def resolve(profile, day, period, automatic_accents, *, periodization=None):
                          week=(day-right-timedelta(days=1)).days//7+1, length=math.ceil(cycle["recovery_days"]/7),
                          mesocycle_id=left.isoformat(), mesocycle_start=left.isoformat(), mesocycle_end=(right+timedelta(days=cycle["recovery_days"])).isoformat())
     # A calendar entry cannot override entry, transition or race taper rules.
-    if period in {"RE_ENTRY", "TRANSITION"}:
-        ceiling = .8 if period == "RE_ENTRY" else .6
+    reentry = period == "RE_ENTRY" or reentry_dose_active(periodization, day)
+    if reentry or period == "TRANSITION":
+        ceiling = .8 if reentry else .6
         state.update(target_index=min(1., state["target_index"]), wave_factor=min(ceiling, state["wave_factor"]),
-                     volume_factor=min(ceiling, state["volume_factor"]), kind=period)
+                     volume_factor=min(ceiling, state["volume_factor"]), kind="RE_ENTRY" if reentry else period,
+                     reentry_dose=reentry, automatic_shock=False)
     if mode == "AUTO" and not state["explicit"]:
         indices = controls.get("shock_indices", mesocycle_focus.SHOCK_INDICES) if state.get("automatic_shock") else controls.get("ranked_indices", mesocycle_focus.REGULAR_INDICES)
-        state["component_indices"] = {z: 1.2 if period == "RE_ENTRY" else indices[i] for i,z in enumerate(state["accents"])}
-        state["component_roles"] = {z: "INTRODUCTION" if period == "RE_ENTRY" else ("PRIMARY", "SECONDARY", "LIGHT_DEVELOPMENT")[i] for i,z in enumerate(state["accents"])}
+        state["component_indices"] = {z: 1.2 if reentry else indices[i] for i,z in enumerate(state["accents"])}
+        state["component_roles"] = {z: "INTRODUCTION" if reentry else ("PRIMARY", "SECONDARY", "LIGHT_DEVELOPMENT")[i] for i,z in enumerate(state["accents"])}
         state["background_development"] = period == "GENERAL_PREPARATION"
     state.update(mesocycle_accents=list(state["accents"]), focus_role="MESOCYCLE_DEVELOPMENT",
                  support_candidates=[z for z in dict.fromkeys([*automatic_accents, "Z1", "Z2", "STR", "Z3", "Z4", "Z5"])

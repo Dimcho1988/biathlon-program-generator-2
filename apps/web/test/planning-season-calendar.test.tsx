@@ -4,7 +4,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PlanningRangeCalendar } from "../components/planning-range-calendar";
 import { ManagementProfileEditor } from "../components/management-profile-editor";
+import { PlanningProfileForm } from "../components/planning-profile-form";
 import { timelineItems, timelineRows } from "../lib/planning-timeline";
+import { planningWindow } from "../lib/planning-window";
 import { defaultManagementProfile, defaultPlanningControls, type CycleDirective } from "../lib/training-management";
 import type { PlanningCalendarResponse } from "../lib/planning-calendar";
 
@@ -20,15 +22,87 @@ const select = (label: string) => [...box.querySelectorAll("label")].find(l => l
 const choose = async (label: string, value: string) => { await act(async () => { const s = select(label); s.value = value; s.dispatchEvent(new Event("change", { bubbles: true })); }); };
 const calendar: PlanningCalendarResponse = { configured: false, calendar: null, context: { schema_version: "planning-context-v1", as_of: "2026-09-23", ready_for_generation: false, generator_status: "NOT_ACTIVE", missing_inputs: [], next_main_race: null, methodology_version: "onflows-canonical-v1", recovery_basis: "LOAD_ONLY", wellness_integration: "DIAGNOSTIC_ONLY" } };
 const profile = { ...defaultManagementProfile("2026-09-23"), discipline: "1500 m", planning_controls: defaultPlanningControls("Run") };
+const outlookResponse = () => Response.json({ configured: true, outlook: {
+  schema_version: "training-outlook-preview-v1", profile_revision: 5, generated_at: "2026-09-23T09:00:00Z",
+  volume_context: {}, long_term: { weeks: [] }, periodization: { phases: [{ kind: "PRECOMPETITION", start_date: "2026-09-23", end_date: "2026-10-06" }] },
+} });
+const stubWrites = (write: ReturnType<typeof vi.fn>) => vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
+  url === "/api/athlete/management/outlook" ? Promise.resolve(outlookResponse()) : write(url, init));
 const editor = () => <ManagementProfileEditor initialProfile={{ configured: true, profile, revision: 4 }} today="2026-09-23" calendar={calendar}/>;
 
 it("selects across a year boundary with two clicks and keeps the full range", async () => {
   const onSelect = vi.fn();
   await mount(<PlanningRangeCalendar today="2026-09-23" events={[]} initialView="year" onSelect={onSelect}/>);
-  expect(box.querySelectorAll(".season-month")).toHaveLength(12);
-  await click(day("2026-12-29")); await click(box.querySelector('[aria-label="Следваща година"]')!); await click(day("2027-01-03"));
+  expect(box.querySelectorAll(".season-month")).toHaveLength(13);
+  await click(day("2026-12-29")); await click(day("2027-01-03"));
   await click(button("Добави събитие за периода"));
   expect(onSelect).toHaveBeenCalledWith("2026-12-29", "2027-01-03");
+});
+
+it("starts the calendar and timeline today, with past dates available only in read-only history", async () => {
+  const onSelect = vi.fn();
+  await mount(<PlanningRangeCalendar today="2026-09-30" events={[]} initialView="year" onSelect={onSelect}/>);
+  expect(day("2026-09-29")).toBeNull();
+  expect(day("2026-09-30")).toBeTruthy();
+  expect(day("2027-09-29")).toBeTruthy();
+  expect(day("2027-09-30")).toBeNull();
+  expect(box.querySelector('[aria-label="Предишен период"]')).toHaveProperty("disabled", true);
+  expect(box.querySelector('.season-timeline')?.textContent).toContain("30.09.2026 – 29.09.2027");
+  await click(button("История"));
+  expect(day("2026-09-29").getAttribute("aria-disabled")).toBe("true");
+  await click(day("2026-09-29")); await click(day("2026-09-29"));
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(button("Добави събитие за периода")).toBeUndefined();
+  await click(button("Днес"));
+  expect(day("2026-09-29")).toBeNull();
+});
+
+it("uses contiguous rolling windows over leap years and month-end boundaries", () => {
+  const first = planningWindow("2028-02-29", "year", 0);
+  const next = planningWindow("2028-02-29", "year", 1);
+  expect(first.start).toBe("2028-02-29");
+  expect(first.end).toBe("2029-02-28");
+  expect(next.start).toBe("2029-03-01");
+  expect(planningWindow("2026-09-30", "month", 0)).toMatchObject({ start: "2026-09-30", end: "2026-09-30" });
+  expect(planningWindow("2026-09-30", "month", 1)).toMatchObject({ start: "2026-10-01", end: "2026-10-31" });
+  expect(planningWindow("2026-09-30", "year", 0, true).end).toBe("2026-09-29");
+});
+
+it("retains saved events after a failed recalculation and retries the read without another write", async () => {
+  let failOutlook = true;
+  const fetchMock = vi.fn(async (url: string) => url.endsWith("/outlook")
+    ? failOutlook ? Response.json({}, { status: 503 }) : outlookResponse()
+    : Response.json({ saved: true }));
+  vi.stubGlobal("fetch", fetchMock);
+  await mount(editor());
+  await choose("Какво добавям?", "MAIN_RACE");
+  await click(day("2026-10-07")); await click(day("2026-10-07")); await click(button("Добави избрания период"));
+  expect(box.textContent).toContain("Незаписани промени");
+  await click(button("Запази и обнови периодите"));
+  expect(box.textContent).toContain("Промените са запазени, но периодите не успяха да се обновят");
+  expect(box.querySelector<HTMLInputElement>('input[name="events_json"]')?.value).toContain("2026-10-07");
+  expect(fetchMock.mock.calls.map(c => c[0])).toEqual(["/api/athlete/planning-calendar", "/api/athlete/management/outlook"]);
+  failOutlook = false;
+  await click(button("Обнови периодите"));
+  expect(fetchMock.mock.calls.map(c => c[0])).toEqual(["/api/athlete/planning-calendar", "/api/athlete/management/outlook", "/api/athlete/management/outlook"]);
+  expect(box.textContent).toContain("Периодите и акцентите са обновени");
+  expect(box.querySelector('.season-timeline')?.textContent).toContain("Предсъстезателен");
+});
+
+it("hides the obsolete overview while a new race is edited and replaces it after saving", async () => {
+  stubWrites(vi.fn(async () => Response.json({ saved: true })));
+  const old = (await outlookResponse().json()).outlook;
+  old.periodization.phases[0].kind = "GENERAL_PREPARATION";
+  await mount(<PlanningProfileForm athleteAlias="ath-test" profile={null}
+    managementProfile={{ configured: true, revision: 4, today: "2026-09-23", profile }}
+    planningCalendar={calendar} outlook={old}/>);
+  expect(box.textContent).toContain("Общо подготвителен");
+  await choose("Какво добавям?", "MAIN_RACE");
+  await click(day("2026-10-07")); await click(day("2026-10-07")); await click(button("Добави избрания период"));
+  expect(box.textContent).not.toContain("Общо подготвителен");
+  await click(button("Запази и обнови периодите"));
+  expect(box.textContent).toContain("Предсъстезателен");
+  expect(box.textContent).not.toContain("Общо подготвителен");
 });
 
 it("drags backward across months and releases outside a day without leaving selection active", async () => {
@@ -63,10 +137,10 @@ it("shows automatic periods and accents with no manual events, and reserves reco
 });
 
 it("saves a calendar-selected stress block in the existing profile with its expected revision", async () => {
-  const fetchMock = vi.fn(async (_url, init) => Response.json({ configured: true, revision: 5, profile: JSON.parse(init.body).profile })); vi.stubGlobal("fetch", fetchMock);
+  const fetchMock = vi.fn(async (_url, init) => Response.json({ configured: true, revision: 5, profile: JSON.parse(init.body).profile })); stubWrites(fetchMock);
   await mount(editor()); await choose("Какво добавям?", "STRESS"); await click(day("2026-10-01")); await click(day("2026-10-05")); await click(button("Добави избрания период"));
   expect(box.textContent).toContain("Разтоварване след стреса"); expect(fetchMock).not.toHaveBeenCalled();
-  await click(button("Запази календара"));
+  await click(button("Запази и обнови периодите"));
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(fetchMock.mock.calls[0][0]).toBe("/api/athlete/management/profile");
   const submitted = JSON.parse(fetchMock.mock.calls[0][1].body);
@@ -80,28 +154,28 @@ it("rejects an oversized stress range without silently changing its dates", asyn
 });
 
 it("keeps calendar edits visible after a failed write and reports when only the profile was saved", async () => {
-  const fetchMock = vi.fn(async (url, init) => url.endsWith("/profile") ? Response.json({ configured: true, revision: 5, profile: JSON.parse(init.body).profile }) : { ok: true, url: "https://web.test/planning?planning=calendar-error" }); vi.stubGlobal("fetch", fetchMock);
+  const fetchMock = vi.fn(async (url, init) => url.endsWith("/profile") ? Response.json({ configured: true, revision: 5, profile: JSON.parse(init.body).profile }) : Response.json({ saved: false }, { status: 503 })); stubWrites(fetchMock);
   await mount(editor()); await choose("Какво добавям?", "STRESS"); await click(day("2026-10-01")); await click(day("2026-10-05")); await click(button("Добави избрания период"));
   await choose("Какво добавям?", "CAMP"); await click(day("2026-11-01")); await click(day("2026-11-05")); await click(button("Добави избрания период"));
-  await click(button("Запази календара"));
+  await click(button("Запази и обнови периодите"));
   expect(fetchMock).toHaveBeenCalledTimes(2); expect(box.textContent).toContain("Профилът и блоковете са записани, но календарните събития не са");
   expect(box.querySelector<HTMLInputElement>('input[name="events_json"]')?.value).toContain("2026-11-01");
-  expect(button("Запази календара").disabled).toBe(false);
+  expect(button("Запази и обнови периодите").disabled).toBe(false);
 });
 
 it("retains newly saved events while waiting for refreshed server props", async () => {
-  const fetchMock = vi.fn(async (url: string) => ({ ok: url === "/api/athlete/planning-calendar", url: "https://web.test/planning?planning=calendar-saved" })); vi.stubGlobal("fetch", fetchMock);
-  await mount(editor()); await click(day("2026-11-01")); await click(day("2026-11-05")); await click(button("Добави избрания период")); await click(button("Запази календара"));
+  const fetchMock = vi.fn(async (url: string) => Response.json({ saved: url === "/api/athlete/planning-calendar" })); stubWrites(fetchMock);
+  await mount(editor()); await click(day("2026-11-01")); await click(day("2026-11-05")); await click(button("Добави избрания период")); await click(button("Запази и обнови периодите"));
   expect(fetchMock).toHaveBeenCalledTimes(1); expect(box.querySelector<HTMLInputElement>('input[name="events_json"]')?.value).toContain("2026-11-01");
-  expect(button("Запази календара").disabled).toBe(true);
+  expect(button("Запази и обнови периодите").disabled).toBe(true);
   await mount(editor()); expect(box.querySelector<HTMLInputElement>('input[name="events_json"]')?.value).toContain("2026-11-01");
 });
 
 
 it("saves standalone events before a new athlete has completed the planning profile", async () => {
-  const fetchMock = vi.fn(async (url: string) => ({ ok: url === "/api/athlete/planning-calendar", url: "https://web.test/planning?planning=calendar-saved" })); vi.stubGlobal("fetch", fetchMock);
+  const fetchMock = vi.fn(async (url: string) => Response.json({ saved: url === "/api/athlete/planning-calendar" })); stubWrites(fetchMock);
   await mount(<ManagementProfileEditor initialProfile={{ configured: false, profile: null, revision: 0 }} today="2026-09-23" calendar={calendar}/>);
-  await click(day("2026-11-01")); await click(day("2026-11-05")); await click(button("Добави избрания период")); await click(button("Запази календара"));
+  await click(day("2026-11-01")); await click(day("2026-11-05")); await click(button("Добави избрания период")); await click(button("Запази и обнови периодите"));
   expect(fetchMock).toHaveBeenCalledTimes(1); expect(fetchMock.mock.calls[0][0]).toBe("/api/athlete/planning-calendar");
 });
 

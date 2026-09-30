@@ -74,6 +74,8 @@ export async function POST(request: Request) {
     revalidatePath("/planning");
     revalidatePath("/management");
     revalidatePath("/management/outlook");
+    if (request.headers.get("accept")?.includes("application/json"))
+      return NextResponse.json({ saved: true }, { headers: { "Cache-Control": "no-store" } });
     return redirect("calendar-saved");
   } catch {
     console.error(`Planning calendar update failed [${stage}]`);
