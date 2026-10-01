@@ -187,6 +187,11 @@ class SupabasePilotRepository(SnapshotRepository):
         self._client = client or httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0))
         self._generation_reads = generation_reads
 
+    @property
+    def speed_load_cache_namespace(self) -> str | None:
+        # Only generation-backed catalogs provide immutable source run keys.
+        return self._base_url if self._generation_reads else None
+
     @classmethod
     def from_environment(
         cls,
