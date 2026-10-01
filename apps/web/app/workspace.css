@@ -83,13 +83,13 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-even
 .speed-load-activity > span:first-child { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
 .speed-load-activity small { color: var(--text-muted); }
 .speed-load-activity > span:last-child { text-align: right; }
-@media (max-width: 1180px) { .load-comparison-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 960px) { .load-comparison-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 1180px) { .workspace-content .load-summary.load-comparison-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 960px) { .workspace-content .load-summary.load-comparison-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 620px) {
   .load-source-switch { width: 100%; }
   .load-source-toolbar > div { width: 100%; }
   .load-source-switch button { flex: 1; padding: 11px 9px; font-size: 12px; }
-  .load-comparison-cards { grid-template-columns: 1fr; }
+  .workspace-content .load-summary.load-comparison-cards { grid-template-columns: 1fr; }
   .load-comparison-table { font-size: 13px; }
   .load-comparison-cards .load-summary-card { padding: 18px; }
   .speed-load-activity { grid-template-columns: 1fr auto; }
