@@ -3,7 +3,7 @@ import type { DataMode } from "../lib/api";
 import type { CompletedWork } from "../lib/completed-work";
 import type { LoadHistory } from "../lib/load-history";
 import { type TrainingStatus, type ZoneTrainingStatus } from "../lib/training-status";
-import { LoadHistorySection } from "./load-history-section";
+import { LoadDynamics } from "./load-dynamics";
 import { CompletedWorkSection } from "./completed-work-section";
 import type { RecoveryHistory } from "../lib/recovery-history";
 import { RecoveryHistorySection } from "./recovery-history-section";
@@ -131,7 +131,7 @@ export function Dashboard({
         </>}
 
         {view === "report" && <CompletedWorkSection report={completedWork} message={completedWorkMessage} selectable={mode === "api"} availablePeriodStart={loadHistory?.period_start} availablePeriodEnd={loadHistory?.period_end} />}
-        {view === "load" && <><LoadHistorySection history={loadHistory} message={loadHistoryMessage} /><VolumeHistorySection history={volumeHistory} message={volumeHistoryMessage} /></>}
+        {view === "load" && <><LoadDynamics athleteId={data.athlete_id} history={loadHistory} message={loadHistoryMessage} generation={generationId ?? null} revision={generationRevision ?? null} /><VolumeHistorySection history={volumeHistory} message={volumeHistoryMessage} /></>}
         {view === "recovery" && <RecoveryHistorySection history={recoveryHistory} message={recoveryHistoryMessage} refreshAvailable={integrationActions} syncBusy={syncBusy} fullRefreshRequired={loadHistory?.schema_version !== "load-history-v2"} canEdit={athleteCanEdit} />}
 
         {view === "details" && <details id="model-metadata" className="metadata">
