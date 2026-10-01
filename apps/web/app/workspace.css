@@ -53,6 +53,48 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-even
 .dashboard-tabs a:hover { background: var(--surface-secondary); }
 .dashboard-content { display: grid; gap: 24px; min-width: 0; }
 .dashboard-content > .history-section, .dashboard-content > .completed-work-section, .dashboard-content > .zones-section { margin-top: 0; }
+.load-dynamics { min-width: 0; }
+.load-dynamics .history-section { margin-top: 24px; }
+.load-source-toolbar { display: flex; align-items: end; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+.load-source-toolbar .section-kicker { margin: 0 0 9px; }
+.load-source-switch { display: flex; width: fit-content; max-width: 100%; gap: 4px; padding: 5px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
+.load-source-switch button { padding: 11px 18px; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary); font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
+.load-source-switch button[aria-pressed="true"] { background: var(--accent); color: var(--surface); }
+.load-source-switch button:hover:not([aria-pressed="true"]) { background: var(--surface-secondary); }
+.load-source-note { color: var(--text-muted); font-size: 12px; line-height: 1.65; margin: 12px 0 20px; }
+.load-source-note a { color: var(--accent); }
+.load-source-loading { border: 1px solid var(--border); padding: 26px; border-radius: 12px; background: var(--surface); color: var(--text-secondary); }
+.load-speed-coverage { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 18px; padding: 14px 18px; margin-bottom: 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.load-speed-coverage strong { color: var(--accent); font-size: 14px; }
+.load-speed-coverage span { font-size: 12px; color: var(--text-muted); line-height: 1.6; }
+.load-comparison-cards .load-summary-card { padding: 15px 12px; min-width: 0; }
+.load-comparison-cards h3 { margin: 0 0 10px; }
+.load-comparison-table { border-collapse: collapse; width: 100%; font-size: 11px; font-variant-numeric: tabular-nums; }
+.load-comparison-table th { text-align: left; font-weight: 500; color: var(--text-muted); line-height: 1.5; }
+.load-comparison-table td, .load-comparison-table thead th { text-align: right; padding: 9px 0 9px 5px; }
+.load-comparison-table tbody tr { border-top: 1px solid var(--border); }
+.load-comparison-table td { color: var(--text); font-weight: 650; }
+.load-comparison-table .load-ratio-row td { font-size: 22px; }
+.load-comparison-table .load-ratio-row th { font-weight: 700; }
+.load-source-legend { margin-top: 14px; }
+.load-source-legend i { width: 28px; height: 0; border-top: 2px solid var(--text-secondary); background: none; border-radius: 0; }
+.load-source-legend i.speed-line { border-top-style: dashed; }
+.speed-load-activity { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 14px; padding: 16px 18px; align-items: center; color: var(--text); text-decoration: none; font-size: 13px; }
+.speed-load-activity > span:first-child { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
+.speed-load-activity small { color: var(--text-muted); }
+.speed-load-activity > span:last-child { text-align: right; }
+@media (max-width: 1180px) { .workspace-content .load-summary.load-comparison-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 960px) { .workspace-content .load-summary.load-comparison-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 620px) {
+  .load-source-switch { width: 100%; }
+  .load-source-toolbar > div { width: 100%; }
+  .load-source-switch button { flex: 1; padding: 11px 9px; font-size: 12px; }
+  .workspace-content .load-summary.load-comparison-cards { grid-template-columns: 1fr; }
+  .load-comparison-table { font-size: 13px; }
+  .load-comparison-cards .load-summary-card { padding: 18px; }
+  .speed-load-activity { grid-template-columns: 1fr auto; }
+  .speed-load-activity > span:last-child { grid-column: 1 / -1; text-align: left; }
+}
 .status-overview { display: grid; gap: 22px; }
 .overview-readiness { background: var(--surface); padding: clamp(20px,2.4vw,32px); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 4px 22px rgba(20,35,50,.035); }
 .overview-readiness .section-heading { align-items: center; gap: 16px; margin-bottom: 12px; }

@@ -389,6 +389,14 @@ describe("dashboard", () => {
     expect(html).toContain("Това не е сбор на ефективен товар E");
     expect(html).toContain("STR компонент");
   });
+  it("offers speed switching only when real authenticated data is supported", () => {
+    const fixture = renderToStaticMarkup(<Dashboard view="load" data={trainingStatusFixture} mode="fixture" loadHistory={loadHistoryFixture} />);
+    expect(fixture).not.toContain("Основа на натоварването");
+    const real = renderToStaticMarkup(<Dashboard view="load" data={trainingStatusFixture} mode="api" loadHistory={loadHistoryFixture} generationId="g" generationRevision={1} />);
+    expect(real).toContain("Основа на натоварването");
+    expect(real).toContain("По скорост");
+    expect(real).toContain("Сравнение");
+  });
   it("renders the completed-work report without reclassifying provider sport labels", () => {
     const html = renderToStaticMarkup(<Dashboard view="report" data={trainingStatusFixture} mode="fixture" completedWork={completedWorkFixture} />);
     expect(html).toContain("Отчет за извършеното натоварване");
