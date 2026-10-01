@@ -27,8 +27,8 @@ def test_only_approved_source_and_title_match(source,name,expected):
     if expected != source:
         catalog = extract_activity_metadata("act_"+"a"*32,result)
         assert catalog["sport"] == "NordicSki"
-        assert catalog["sport_classification"]["provider_sport"] == "Walk"
-        assert catalog["sport_classification"]["rule_id"] == "approved-rule"
+        assert catalog["activity_type"] == "Walk"
+        assert "sport_classification" not in catalog
 
 
 def test_rule_read_is_scoped_and_never_fetches_other_athletes():

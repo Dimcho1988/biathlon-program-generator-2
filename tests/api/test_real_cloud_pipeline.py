@@ -144,7 +144,10 @@ def test_athlete_sport_rule_relabels_sync_and_catalog_without_changing_hr_load()
     assert after["activities"][0]["sport"] == "NordicSki"
     catalog = corrected.activity_calendar("pilot",date(2026,8,15),date(2026,8,15))
     assert catalog[0]["sport"] == "NordicSki"
-    assert catalog[0]["sport_classification"]["provider_sport"] == "Walk"
+    assert catalog[0]["activity_type"] == "Walk"
+    assert "sport_classification" not in catalog[0]  # No unbacked PostgREST column.
+    assert catalog[0]["canonical_summary"]["sport_classification"]["provider_sport"] == "Walk"
+    assert catalog[0]["canonical_summary"]["sport_classification"]["rule_id"] == "approved-rule"
 
 
 def test_ingests_activity_and_wellness_then_atomically_publishes_aggregate_snapshot():

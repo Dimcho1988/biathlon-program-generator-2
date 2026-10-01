@@ -1238,6 +1238,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             compute_activity_shadow,
         )
         catalog_metadata: dict[str, dict[str, Any]] = {}
+        catalog_sport_classifications: dict[str, dict[str, Any]] = {}
         catalog_provider_keys: dict[str, str] = {}
         shadow_runs: dict[str, str] = {}
         scientific_input_hashes: dict[str, str] = {}
@@ -1264,6 +1265,8 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             catalog_metadata[activity_ref] = extract_activity_metadata(
                 activity_ref, detail
             )
+            if isinstance(detail.get("onflows_sport_rule"), Mapping):
+                catalog_sport_classifications[activity_ref] = dict(detail["onflows_sport_rule"])
 
         def process_activity_shadow(
             activity_ref: str,
@@ -1400,6 +1403,8 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 ),
                 "strength_time_min": float(activity.strength_time_min or 0.0),
                 "zones": zones,
+                **({"sport_classification": catalog_sport_classifications[str(activity.activity_ref)]}
+                   if str(activity.activity_ref) in catalog_sport_classifications else {}),
             }
             source_scientific_input_hash = scientific_input_hashes.get(
                 str(activity.activity_ref)
