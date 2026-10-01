@@ -131,11 +131,19 @@ def calibrated_mapping(history, sport, day, settings):
     return indices, mapping, reason
 
 
-def history_view(repository, alias, sport=None, *, today=None):
+def history_view(repository, alias, sport=None, *, today=None, period_start=None, period_end=None):
     settings=repository.athlete_settings(alias)
     if settings is None:raise HTTPException(409,"Athlete settings are required")
     today=today or datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
-    start=today-timedelta(days=39);warmup=today-timedelta(days=89)
+    if (period_start is None) != (period_end is None):
+        raise HTTPException(422, "Both report dates are required")
+    custom_period = period_start is not None
+    if custom_period:
+        if period_start > period_end or (period_end-period_start).days >= 366 or period_end > today:
+            raise HTTPException(422, "Choose a past or current report period of 1 to 366 days")
+        today = period_end
+    start = period_start if custom_period else today-timedelta(days=39)
+    warmup = min(start-timedelta(days=39), today-timedelta(days=89))
     calendar=read_calendar(repository,alias,date.min,today) or {"activities":[]}
     admitted=history_from_calendar(repository,alias,calendar)
     available=sorted({a["sport"] for a in calendar.get("activities",[]) if supports_speed_load(a.get("sport"))})
@@ -183,6 +191,8 @@ def history_view(repository, alias, sport=None, *, today=None):
     # No-activity calendar days are zero. Unsupported activity minutes remain
     # disclosed; Q/E and ratios describe only the covered speed history.
     first=max(warmup,min((date.fromisoformat(a["local_date"]) for a in selected),default=start))
+    if custom_period:
+        first = min(first, start)
     activity_summaries.insert(0,{"date":pd.Timestamp(first),**{f"q_{z}":0. for z in COMPONENTS}})
     parameters=fresh_parameters()
     loads=compute_daily_load_history(pd.DataFrame(activity_summaries),parameters,today)

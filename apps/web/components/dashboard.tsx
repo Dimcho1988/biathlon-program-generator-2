@@ -31,6 +31,7 @@ export function Dashboard({
   view = "overview",
   reportStart,
   reportEnd,
+  reportSource,
   data,
   mode,
   completedWork = null,
@@ -56,6 +57,7 @@ export function Dashboard({
   view?: DashboardViewKey;
   reportStart?: string;
   reportEnd?: string;
+  reportSource?: "hr" | "speed";
   data: TrainingStatus;
   mode: DataMode;
   completedWork?: CompletedWork | null;
@@ -131,7 +133,7 @@ export function Dashboard({
           </section>
         </>}
 
-        {view === "report" && <CompletedWorkSection report={completedWork} message={completedWorkMessage} selectable={mode === "api"} availablePeriodStart={loadHistory?.period_start} availablePeriodEnd={loadHistory?.period_end} />}
+        {view === "report" && <CompletedWorkSection key={`${data.athlete_id}:${generationId}:${generationRevision}:${completedWork?.period_start}:${completedWork?.period_end}:${reportSource}`} generation={generationId ?? null} revision={generationRevision ?? null} initialSource={reportSource} report={completedWork} message={completedWorkMessage} selectable={mode === "api"} availablePeriodStart={loadHistory?.period_start} availablePeriodEnd={loadHistory?.period_end} />}
         {view === "load" && <>{mode === "api"
           ? <LoadDynamics athleteId={data.athlete_id} history={loadHistory} message={loadHistoryMessage} generation={generationId ?? null} revision={generationRevision ?? null} />
           : <LoadHistorySection history={loadHistory} message={loadHistoryMessage} />}
