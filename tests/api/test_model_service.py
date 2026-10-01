@@ -227,6 +227,7 @@ def test_shared_zone_volume_keeps_tests_and_hr_mapping_sport_specific(monkeypatc
             "schema_version":SCHEMA_VERSION,"model_version":MODEL_VERSION,
             "comparison_key":activity_shadow_configuration_fingerprint([100,125,145,160,175,190],190,sport=sport),
             "hrmax_bpm":190,"zone_bounds_bpm":[100,125,145,160,175,190],
+            "hr_reference_offset_bpm":7 if sport=="Ride" else 0,
             "signal_quality":{"status":"PASSED_SCREEN","reason":None},
             "source_versions":{"vflat":speed_model_versions(sport)[0]},"zones":[
                 {"name":zone,"valid":True,"hr_seconds":600,"index":100*hr/190/v}
@@ -244,6 +245,7 @@ def test_shared_zone_volume_keeps_tests_and_hr_mapping_sport_specific(monkeypatc
         assert model["active_test_keys"]==[sport]
         assert model["prediction"]["speed_kmh"]==pytest.approx(speed)
         assert model["index_summary"]["Z2"]["index"]==pytest.approx(100*135/190/speed)
+        assert model["sport_hr_policy"]["sport_zone_bounds_bpm"]==[b-(7 if sport=="Ride" else 0) for b in (100,125,145,160,175,190)]
         assert model["volume_position_basis"]=="EXPERT_DURATION"
         hr_model=m.speed_view(repo,"ath-test",sport,hr_bpm=155)
         inverse=m.speed_view(repo,"ath-test",sport,speed_kmh=hr_model["prediction"]["speed_kmh"])

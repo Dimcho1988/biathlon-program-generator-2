@@ -3,7 +3,8 @@ from copy import deepcopy
 from datetime import date,timedelta
 import numpy as np
 from .trainability import MODEL_VERSION,SCHEMA_VERSION
-from vflat_b65.sports import is_running, speed_model_versions
+from vflat_b65.sports import is_running, is_cycling, speed_model_versions
+from biathlon.sport_heart_rate import reference_offset
 
 HISTORY_DAYS=40
 MIN_REFERENCE_ACTIVITIES=7
@@ -78,7 +79,8 @@ def history_from_calendar(repository,alias,calendar):
         if index and (index.get('model_version')!=MODEL_VERSION or index.get('schema_version')!=SCHEMA_VERSION):index=None
         # Legacy RUN summaries used the ski model. They need a real recomputation
         # from observations, not a relabelled version or mixed history average.
-        if index and is_running(r.get('sport')) and index.get('source_versions',{}).get('vflat')!=speed_model_versions(r['sport'])[0]:index=None
+        if index and (is_running(r.get('sport')) or is_cycling(r.get('sport'))) and index.get('source_versions',{}).get('vflat')!=speed_model_versions(r['sport'])[0]:index=None
+        if index and index.get('hr_reference_offset_bpm',0)!=reference_offset(r.get('sport')):index=None
         rows.append({'activity_ref':r['activity_ref'],'name':r.get('name'),'sport':r.get('sport') or 'Unknown',
                      'start_at_utc':r.get('start_at_utc') or r['local_date']+'T00:00:00Z','local_date':r['local_date'],
                      'index':index,'unavailable_reason':None if index else 'REFRESH_REQUIRED' if key else 'NO_SHADOW'})

@@ -16,6 +16,7 @@ from fastapi import HTTPException
 
 from biathlon import recovery_v2, speed_duration, preliminary_capacity, dosing_curve
 from biathlon.athlete_functional_profile import build_functional_profile
+from biathlon.sport_heart_rate import local_settings, reference_offset, policy as sport_hr_policy, is_cycling
 from .trainability_history import HISTORY_DAYS, history_from_calendar, robust_mean, read_calendar, window_start
 from .model_schemas import RecoveryConfigInput, RecoveryHistoryV2, initial_settings
 from .oauth_store import PersistentStoreFailure
@@ -214,6 +215,8 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     entries=[e for e in ModelStore(repository).entries(alias) if e["kind"]=="SPEED_TEST"]
     sports=sorted({r["sport"] for r in activities}|{e["payload"]["sport"] for e in entries})
     sport=sport or _default_speed_sport(activities,entries,today)
+    sport_settings=local_settings(settings,sport)
+    offset=reference_offset(sport)
     vflat_version,vflat_config=speed_model_versions(sport)
     selected=[e["payload"] for e in entries if e["payload"].get("enabled") and e["payload"]["sport"]==sport
            and start.isoformat()<=e["payload"]["day"]<=today.isoformat()]
@@ -221,6 +224,8 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     imported=[t for t in tests if t.get("source")!="MANUAL"]
     warnings=["EXPERT_REFERENCE_NOT_POPULATION_VALIDATED", "HEART_RATE_ESTIMATE_FROM_PAIRED_INDEX"]
     incompatible_tests=len({(t.get("vflat_version"),t.get("vflat_config_version")) for t in imported})>1
+    if is_cycling(sport) and any((t.get("vflat_version"),t.get("vflat_config_version"))!=(vflat_version,vflat_config) for t in imported):
+        incompatible_tests=True
     if incompatible_tests: warnings.append("INCOMPARABLE_MODEL_VERSIONS")
     exploratory_count=sum(t.get("test_mode")=="EXPLORATORY" for t in selected)
     if exploratory_count:
@@ -286,8 +291,8 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     predictor=None
     if tuned and settings.hrmax_bpm:
         try:
-            predictor=hr_speed.Predictor(tuned,settings.zone_bounds_bpm,settings.hrmax_bpm,indices,
-                expert_durations={a["zone"]:a["duration_s"] for a in prior["anchors"]})
+            predictor=hr_speed.Predictor(tuned,sport_settings.zone_bounds_bpm,sport_settings.hrmax_bpm,indices,
+                expert_durations={a["zone"]:a["duration_s"] for a in prior["anchors"]},normalization_offset_bpm=offset)
         except ValueError:
             warnings.append("HR_SPEED_MAPPING_UNAVAILABLE")
     window=[min(t["duration_s"] for t in tests),max(t["duration_s"] for t in tests)] if tests else None
@@ -337,8 +342,10 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
         if any(p["capped"] and p["duration_s"]<window[0] for p in points):limited_tails.append("SHORT")
         if any(p["capped"] and p["duration_s"]>window[1] for p in points):limited_tails.append("LONG")
     dosing = dosing_curve.describe(prior["curve"], tuned if not model_error else None, tests,
-        settings.zone_bounds_bpm, settings.hrmax_bpm, indices, prior["anchors"])
+        sport_settings.zone_bounds_bpm, sport_settings.hrmax_bpm, indices, prior["anchors"],normalization_offset_bpm=offset)
     return {"schema_version":"speed-model-v1","model_version":metadata.get("model_version",speed_duration.VERSION),"sport":sport,"sports":sports,
+        "sport_hr_policy":sport_hr_policy(sport,settings.zone_bounds_bpm,settings.hrmax_bpm),
+        "speed_correction":{"model_version":vflat_version,"config_version":vflat_config},
         "test_window":{"start":start.isoformat(),"end":today.isoformat()},
         "index_window":{"start":index_start.isoformat(),"end":today.isoformat(),"days":HISTORY_DAYS,
                         "last_activity_date":max(used_dates) if used_dates else None},

@@ -539,6 +539,7 @@ def dataset_to_load_history(
         daily=strength_daily,
     )
 
+    from biathlon.sport_heart_rate import VERSION as SPORT_HR_VERSION
     return LoadHistoryResponse(
         schema_version="load-history-v2",
         athlete_id=context.public_alias,
@@ -546,6 +547,7 @@ def dataset_to_load_history(
         period_end=dataset.period_end,
         tref_bounds_profile_version=tref_profile_version,
         equivalence_version=dataset.equivalence_version,
+        sport_hr_policy_version=SPORT_HR_VERSION,
         zone_bounds_bpm=list(context.zone_bounds_bpm), hrmax_bpm=context.hrmax_bpm,
         quality=LoadHistoryQuality(
             processed_activities=int(dataset.processed_activities),

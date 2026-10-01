@@ -15,7 +15,8 @@ from apps.api.shadow_models.hrmod_v4 import SOURCE_COMMIT, run_hrmod_v4_shadow
 from apps.api.shadow_models.vflat_b65 import run_vflat_b65_shadow
 from apps.api.trainability import MODEL_VERSION as TRAINABILITY_MODEL_VERSION, compute_trainability
 from vflat_b65.terrain_correction import terrain_metadata
-from vflat_b65.sports import is_running, speed_model_versions
+from vflat_b65.sports import is_running, is_cycling, speed_model_versions
+from biathlon.sport_heart_rate import reference_offset, policy as sport_hr_policy
 from hrmod_lab.schemas import (
     CONFIG_VERSION as HRMOD_CONFIG_VERSION,
     MODEL_VERSION as HRMOD_MODEL_VERSION,
@@ -106,7 +107,7 @@ def activity_shadow_configuration_fingerprint(
     a shadow model/configuration changes.
     """
     sport = sport or (activity_detail or {}).get("type")
-    versions = speed_model_versions(sport) if is_running(sport) else (VFLAT_MODEL_VERSION, VFLAT_CONFIG_VERSION)
+    versions = speed_model_versions(sport) if is_running(sport) or is_cycling(sport) else (VFLAT_MODEL_VERSION, VFLAT_CONFIG_VERSION)
     payload = {
         "schema_version": SHADOW_CONFIGURATION_SCHEMA_VERSION,
         "trainability_model_version": TRAINABILITY_MODEL_VERSION,
@@ -127,6 +128,8 @@ def activity_shadow_configuration_fingerprint(
     # key: different routes remain comparable under the same model.
     if activity_detail is not None:
         payload["vflat_terrain_metadata"] = terrain_metadata(activity_detail)
+    if is_cycling(sport):
+        payload["sport_hr_policy"] = sport_hr_policy(sport, zone_bounds_bpm, explicit_hrmax_bpm)
     return _canonical_hash(payload)
 
 
@@ -162,6 +165,9 @@ def build_immutable_activity_input(
         "normalization_version": normalized.algorithm_version,
         "samples": rows,
     }
+    if is_cycling(detail.get("type")):
+        for row, point in zip(rows, normalized.points, strict=True):
+            row["cadence_rpm"]=_first(point,("cadence",))
     return {**payload, "input_hash": _canonical_hash(payload)}
 
 
@@ -271,6 +277,8 @@ def _model_inputs(detail: Mapping[str, Any], normalized: IntervalAwareResult):
             "quality_flags": flags,
         }
     )
+    if is_cycling(detail.get("type")):
+        vflat_frame["cadence_rpm"] = [np.nan if _first(p,("cadence",)) is None else _first(p,("cadence",)) for p in points]
     return samples, references, vflat_frame
 
 
@@ -346,9 +354,9 @@ def compute_activity_shadow(
     vflat = _validated_stage(
         "VFLAT", lambda: run_vflat_b65_shadow(vflat_frame, activity_detail=detail)
     )
-    profile = _validated_stage(
-        "PROFILE", lambda: _profile(zone_bounds_bpm, explicit_hrmax_bpm)
-    )
+    offset = reference_offset(detail.get("type"))
+    profile = _validated_stage("PROFILE", lambda: _profile(
+        [b-offset for b in zone_bounds_bpm], explicit_hrmax_bpm-offset if explicit_hrmax_bpm else None))
     configuration_fingerprint = activity_shadow_configuration_fingerprint(
         zone_bounds_bpm, explicit_hrmax_bpm,
         activity_duration_s=_activity_duration_seconds(detail, strength_activity=is_strength_activity(detail)),
@@ -460,6 +468,7 @@ def compute_activity_shadow(
             rows, vflat["timeseries"],
             zone_bounds_bpm=zone_bounds_bpm,
             hrmax_bpm=explicit_hrmax_bpm,
+            hr_reference_offset_bpm=offset,
             activity_duration_s=_activity_duration_seconds(
                 detail, strength_activity=is_strength_activity(detail)
             ) or sum(float(row["dt_s"]) for row in vflat["timeseries"]),
@@ -495,6 +504,7 @@ def compute_activity_shadow(
             "hrmod": hrmod.get("diagnostics", {}),
             "vflat": {
                 "status": vflat.get("status"),
+                **({"config":vflat.get("config"),"hr_policy":sport_hr_policy(detail.get("type"),zone_bounds_bpm,explicit_hrmax_bpm)} if offset else {}),
                 "terrain_correction": vflat.get("terrain_correction"),
                 "sprint_str": vflat.get("sprint_str_summary", {}),
             },

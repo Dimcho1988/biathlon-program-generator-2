@@ -15,7 +15,8 @@ from vflat_b65 import (
     detect_sprint_str,
 )
 from vflat_b65.running import RunningGradeConfig, apply_running_grade
-from vflat_b65.sports import is_running, speed_model_versions
+from vflat_b65.sports import is_running, is_cycling, speed_model_versions
+from vflat_b65.cycling import CyclingConfig, apply_cycling_grade
 
 
 def run_vflat_b65_shadow(
@@ -30,6 +31,9 @@ def run_vflat_b65_shadow(
     if is_running(sport):
         selected = RunningGradeConfig()
         result = apply_running_grade(prepared_timeseries, selected)
+    elif is_cycling(sport):
+        selected = CyclingConfig()
+        result = apply_cycling_grade(prepared_timeseries, selected)
     else:
         selected = config or VFlatB65Config()
         result = apply_vflat_b65(prepared_timeseries, selected, activity_detail=activity_detail)

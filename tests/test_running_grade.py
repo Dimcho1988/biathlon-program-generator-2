@@ -37,7 +37,7 @@ def test_running_sports_use_the_table_without_ski_dynamics(sport):
     pd.testing.assert_frame_equal(original,data)
 
 
-@pytest.mark.parametrize("sport",["NordicSki","RollerSki","Ride","Hike","Walk",None,"CrossCountrySkiing","Workout"])
+@pytest.mark.parametrize("sport",["NordicSki","RollerSki","Hike","Walk",None,"CrossCountrySkiing","Workout"])
 def test_other_sports_retain_identical_existing_b65_result(sport):
     data=frame(6.)
     detail={"type":sport,"name":"Morning run","distance":1000,"total_elevation_gain":20}
