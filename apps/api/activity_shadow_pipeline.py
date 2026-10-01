@@ -15,7 +15,7 @@ from apps.api.shadow_models.hrmod_v4 import SOURCE_COMMIT, run_hrmod_v4_shadow
 from apps.api.shadow_models.vflat_b65 import run_vflat_b65_shadow
 from apps.api.trainability import MODEL_VERSION as TRAINABILITY_MODEL_VERSION, compute_trainability
 from vflat_b65.terrain_correction import terrain_metadata
-from vflat_b65.sports import is_running, is_cycling, speed_model_versions
+from vflat_b65.sports import is_running, is_cycling, is_treadmill, speed_model_versions
 from biathlon.sport_heart_rate import reference_offset, policy as sport_hr_policy
 from hrmod_lab.schemas import (
     CONFIG_VERSION as HRMOD_CONFIG_VERSION,
@@ -255,7 +255,10 @@ def _model_inputs(detail: Mapping[str, Any], normalized: IntervalAwareResult):
             altitude[left:right], distance[left:right],
             smoothing_m=vflat_config.altitude_smoothing_m,
         )
-        grade[left:right] = np.where(np.isfinite(derived_grade), derived_grade, provider_grade[left:right])
+        # Indoor elevation changes cannot describe the belt's incline. The
+        # treadmill adapter handles missing recorded incline explicitly.
+        if not is_treadmill(detail.get("type")):
+            grade[left:right] = np.where(np.isfinite(derived_grade), derived_grade, provider_grade[left:right])
         # Keep the same block boundaries as terrain memory: recording gaps
         # must not contribute height, speed or acceleration to either side.
         local_speed = pd.Series(speed[left:right]).rolling(
@@ -494,6 +497,7 @@ def compute_activity_shadow(
             "dt_s": r["dt_s"], "vflat_b65_kmh": _plain_number(r.get("vflat_b65_kmh")),
             "grade_smoothed_pct": _plain_number(r.get("grade_raw_pct")),
             "exclusion_reason": r.get("exclusion_reason"),
+            **({"grade_assumed_flat": r["grade_assumed_flat"]} if "grade_assumed_flat" in r else {}),
         } for r in vflat["timeseries"]],
         "segments_15s": _segments_15s(rows),
         "sprint_str_summary": vflat.get("sprint_str_summary", {}),

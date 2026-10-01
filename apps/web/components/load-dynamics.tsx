@@ -87,6 +87,8 @@ function SpeedDynamics({ speed, history, comparison }: { speed: SpeedLoad; histo
       <strong>Скоростно покритие: {decimal(speed.coverage_percent)}%</strong>
       <span>{decimal(speed.classified_minutes)} от {decimal(speed.recorded_minutes)} записани минути за поддържаните спортове · {displayDate(speed.start_date)} – {displayDate(speed.end_date)}</span>
     </div>
+    {speed.warnings.includes("TREADMILL_GRADE_ASSUMED_FLAT") && <p>Пътека: при липсващ запис за наклона използваме скоростта с допускане за 0% наклон.</p>}
+    {speed.warnings.includes("TREADMILL_PRIOR_RUN_INDEX_FALLBACK") && <p>За пътека без предходен собствен индекс е използван предходният индекс от бягане на същия спортист.</p>}
     {speed.status === "UNAVAILABLE" ? <p className="history-unavailable">Още няма достатъчно данни за скоростен товар. Нужни са валидни индекси от предходни тренировки за същия спорт и преизчислени скорости. Липсващите стойности не означават нулево натоварване.</p> : aligned?.error ? <div className="history-unavailable"><p>{aligned.error}</p><p>По пулс: {history ? displayDate(history.period_end) : "няма данни"} · По скорост: {displayDate(speed.end_date)}</p></div> : <>
       <div className="history-explainer">
         <strong>{comparison ? "Как да сравняваш" : "Как се изчислява"}</strong>

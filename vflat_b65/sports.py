@@ -1,5 +1,5 @@
 """Select a correction from provider sport identifiers, never activity names."""
-from . import core, running, cycling
+from . import core, running, cycling, treadmill
 from biathlon.sport_heart_rate import is_cycling, sport_key
 
 RUNNING_SPORTS = frozenset({
@@ -13,8 +13,12 @@ def is_running(sport):
     return isinstance(sport, str) and "".join(c for c in sport.casefold() if c.isalnum()) in RUNNING_SPORTS
 
 
+def is_treadmill(sport):
+    return sport_key(sport) in {"virtualrun", "treadmillrun", "treadmillrunning"}
+
+
 def speed_model_versions(sport):
-    model = running if is_running(sport) else cycling if is_cycling(sport) else core
+    model = treadmill if is_treadmill(sport) else running if is_running(sport) else cycling if is_cycling(sport) else core
     return model.MODEL_VERSION, model.CONFIG_VERSION
 
 

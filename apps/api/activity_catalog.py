@@ -131,6 +131,8 @@ def extract_activity_metadata(activity_ref: str, detail: Mapping[str, Any]) -> d
         raise ValueError("invalid canonical activity reference")
     start_utc, start_local, timezone_name, offset_minutes = _local_start(detail)
     sport_type = _text(detail.get("type") or detail.get("sport"), 48) or "Activity"
+    classification = detail.get("onflows_sport_rule")
+    provider_type = classification.get("provider_sport") if isinstance(classification, Mapping) else detail.get("type")
     local_date = start_local[:10] if start_local else (start_utc[:10] if start_utc else None)
     return {
         "activity_ref": activity_ref,
@@ -140,7 +142,7 @@ def extract_activity_metadata(activity_ref: str, detail: Mapping[str, Any]) -> d
         "timezone": timezone_name,
         "utc_offset_minutes": offset_minutes,
         "sport": sport_type,
-        "activity_type": _text(detail.get("type"), 48),
+        "activity_type": _text(provider_type, 48),
         "activity_sub_type": _text(detail.get("sub_type"), 48),
         "name": _text(detail.get("name"), 160),
         "description": _text(detail.get("description"), 8000),

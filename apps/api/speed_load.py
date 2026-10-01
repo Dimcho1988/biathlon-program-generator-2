@@ -1,6 +1,7 @@
 """Independent speed-derived Q/E ledger; never added to the HR ledger.
 
-Every activity uses only earlier-date, same-sport paired indices from 40 days.
+Activities use only earlier-date paired indices from 40 days. Treadmills without
+a same-sport calibration can explicitly use this athlete's ordinary-run index.
 This prevents the activity's own HR (or future training) defining its speed load.
 Only measured Vflat is integrated; estimated HR is a conversion coordinate.
 """
@@ -14,7 +15,7 @@ from biathlon.constants import COMPONENTS, fresh_parameters
 from biathlon.equivalence import equivalence_slope, EQUIVALENCE_VERSION
 from biathlon.physiology import linear_equivalence_coefficient, compute_daily_load_history, compute_load_statistics
 from biathlon.sport_heart_rate import reference_offset, policy
-from vflat_b65.sports import speed_model_versions, supports_speed_load
+from vflat_b65.sports import speed_model_versions, supports_speed_load, is_treadmill
 from .activity_shadow_pipeline import activity_shadow_configuration_fingerprint
 from .speed_segments import sample_intervals
 from .trainability_history import history_from_calendar, read_calendar, robust_mean
@@ -116,6 +117,20 @@ def activity_samples(repository, alias, activities):
             yield activity,rows.get(activity.get("latest_shadow_run_key")) or {}
 
 
+def calibrated_mapping(history, sport, day, settings):
+    indices = prior_indices(history, sport, day, settings)
+    mapping, reason = zone_mapping(indices, settings.zone_bounds_bpm, settings.hrmax_bpm, sport)
+    if mapping is None and reason == "NO_PRIOR_SPORT_INDEX" and is_treadmill(sport):
+        # Explicit cold-start estimate from this athlete's prior ordinary runs.
+        # Both channels express flat-equivalent running speed. Never bootstrap
+        # the current treadmill activity from its own HR or future observations.
+        fallback = prior_indices(history, "Run", day, settings)
+        alternative, _ = zone_mapping(fallback, settings.zone_bounds_bpm, settings.hrmax_bpm, sport)
+        if alternative:
+            indices, mapping, reason = fallback, {**alternative, "index_sport": "Run"}, None
+    return indices, mapping, reason
+
+
 def history_view(repository, alias, sport=None, *, today=None):
     settings=repository.athlete_settings(alias)
     if settings is None:raise HTTPException(409,"Athlete settings are required")
@@ -132,8 +147,8 @@ def history_view(repository, alias, sport=None, *, today=None):
     for a,row in activity_samples(repository,alias,selected):
         day=date.fromisoformat(a["local_date"]);s=a["sport"];key=(s,day)
         if key not in mappings:
-            indices=prior_indices(admitted,s,day,settings)
-            mappings[key]=zone_mapping(indices,settings.zone_bounds_bpm,settings.hrmax_bpm,s)
+            _, mapping, reason = calibrated_mapping(admitted, s, day, settings)
+            mappings[key] = mapping, reason
         mapping,reason=mappings[key]
         shadow=row.get("shadow_payload") or {}
         compatible=(row.get("activity_ref")==a["activity_ref"] and
@@ -160,6 +175,8 @@ def history_view(repository, alias, sport=None, *, today=None):
                 "recorded_minutes":float(duration),"classified_minutes":covered,
                 "excluded_speed_minutes":excluded/60,"outside_mapping_minutes":outside/60,
                 "status":"CLASSIFIED" if covered else "UNAVAILABLE","reason":reason,
+                "assumes_flat_incline":bool(compatible and any(
+                    r.get("grade_assumed_flat") for r in shadow["speed_test_series"])),
                 "mapping":mapping,"zones":list(totals.values())}
         records.append(record)
         activity_summaries.append({"date":pd.Timestamp(day),**{f"q_{z}":totals.get(z,{}).get("equivalent_minutes",0.) for z in COMPONENTS}})
@@ -182,8 +199,7 @@ def history_view(repository, alias, sport=None, *, today=None):
                           "effective_load":float(row[f"e_{z}"]),"ratio_7_40":float(stats.loc[z,"index_7_40"]) if count else None})
     current_indices=[]
     for s in available if sport is None else [sport]:
-        indices=prior_indices(admitted,s,today+timedelta(days=1),settings)
-        mapping,reason=zone_mapping(indices,settings.zone_bounds_bpm,settings.hrmax_bpm,s)
+        indices,mapping,reason=calibrated_mapping(admitted,s,today+timedelta(days=1),settings)
         current_indices.append({"sport":s,"indices":indices,"mapping":mapping,"reason":reason,
                                 "reference_hr_bpm":settings.zone_bounds_bpm[2],
                                 "comparison_speed_kmh":speed_at_reference_hr(mapping,settings.zone_bounds_bpm[2]),
@@ -193,7 +209,7 @@ def history_view(repository, alias, sport=None, *, today=None):
             "status":"AVAILABLE" if count and covered>=total_recorded-1e-6 else "PARTIAL" if count else "UNAVAILABLE",
             "source_generation_id":calendar.get("generation_id"),"source_revision":calendar.get("revision"),
             "load_role":"PARALLEL_ESTIMATE_NOT_ADDED_TO_HR","equivalence_version":EQUIVALENCE_VERSION,
-            "mapping_policy":"SAME_SPORT_PRIOR_40_DAYS_EXCLUDING_CURRENT_DAY",
+            "mapping_policy":"PRIOR_40_DAYS_EXCLUDING_CURRENT_DAY_WITH_TREADMILL_RUN_FALLBACK",
             "recorded_minutes":total_recorded,"classified_minutes":covered,
             "coverage_percent":100*covered/total_recorded if total_recorded else 0.,
             "activities":visible,"sport_indices":current_indices,"daily":daily,
@@ -203,4 +219,7 @@ def history_view(repository, alias, sport=None, *, today=None):
                       "e7_daily":float(statistics.loc[z,"E7_daily"]),"e40_daily":float(statistics.loc[z,"E40_daily"]),
                       "ratio_7_40":float(statistics.loc[z,"index_7_40"]) if count else None} for i,z in enumerate(ZONES)],
             "warnings":["SPEED_LOAD_IS_ESTIMATED","RATIOS_DESCRIBE_COVERED_SPEED_HISTORY_ONLY",
-                        "GENERAL_INDEX_USED_WHEN_ZONE_INDEX_MISSING","CYCLING_PARAMETERS_ARE_REFERENCE_ASSUMPTIONS"]}
+                        "GENERAL_INDEX_USED_WHEN_ZONE_INDEX_MISSING","CYCLING_PARAMETERS_ARE_REFERENCE_ASSUMPTIONS"]
+                       + (["TREADMILL_GRADE_ASSUMED_FLAT"] if any(a["assumes_flat_incline"] for a in visible) else [])
+                       + (["TREADMILL_PRIOR_RUN_INDEX_FALLBACK"] if any(
+                           a["classified_minutes"] > 0 and (a["mapping"] or {}).get("index_sport") == "Run" for a in visible) else [])}

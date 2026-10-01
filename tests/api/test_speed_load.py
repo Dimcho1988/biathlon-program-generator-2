@@ -27,6 +27,26 @@ def test_sport_specific_speed_converts_to_equal_effort_with_transparent_fallback
     assert model.zone_mapping({"Z1":{"index":5,"count":1,"seconds":600},"Z2":{"index":50,"count":1,"seconds":600}},BOUNDS,200,"Run")[1]=="NONMONOTONE_INDEX_BOUNDARIES"
 
 
+def test_treadmill_can_use_prior_running_index_but_not_same_day_or_future_hr():
+    repo=Repository()
+    repo.add("treadmill","VirtualRun",TODAY,150,15)
+    repo.add("run-today","Run",TODAY,150,15)
+    empty=model.history_view(repo,"authorized-athlete",today=TODAY)
+    assert empty["classified_minutes"]==0
+    repo.add("run-earlier","Run",TODAY-timedelta(days=1),150,15)
+    for row in repo.shadows["treadmill"]["shadow_payload"]["speed_test_series"]:
+        row["grade_assumed_flat"]=True
+    ready=model.history_view(repo,"authorized-athlete",today=TODAY)
+    treadmill=next(a for a in ready["activities"] if a["activity_ref"]=="treadmill")
+    assert treadmill["classified_minutes"]==pytest.approx(10)
+    assert treadmill["mapping"]["index_sport"]=="Run"
+    assert "TREADMILL_PRIOR_RUN_INDEX_FALLBACK" in ready["warnings"]
+    assert "TREADMILL_GRADE_ASSUMED_FLAT" in ready["warnings"]
+    repo.add("treadmill-earlier","VirtualRun",TODAY-timedelta(days=2),150,15)
+    own=model.history_view(repo,"authorized-athlete",today=TODAY)
+    assert "index_sport" not in next(a for a in own["activities"] if a["activity_ref"]=="treadmill")["mapping"]
+
+
 class Repository:
     def __init__(self):
         self.activities=[];self.summaries={};self.shadows={}

@@ -468,6 +468,17 @@ class SupabasePilotRepository(SnapshotRepository):
             status=status,
         )
 
+    def activity_sport_rules(self, athlete_alias: str):
+        from .activity_sport_rules import validate_rules
+        rows = self._json(self._request(
+            "GET", "/onflows_activity_sport_rules?select=id,source_sport,name_contains,target_sport"
+            f"&athlete_alias=eq.{quote(athlete_alias, safe='')}&enabled=eq.true&order=id.asc&limit=101",
+        ))
+        try:
+            return validate_rules(rows)
+        except ValueError as exc:
+            raise PersistentStoreFailure("Stored activity sport rules are invalid") from exc
+
     def athlete_settings(self, athlete_alias: str) -> AthleteModelSettings | None:
         alias = quote(athlete_alias, safe="")
         response = self._request(
