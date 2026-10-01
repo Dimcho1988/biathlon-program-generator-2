@@ -154,20 +154,38 @@ export function lineSegments(activities: IndexActivity[], name: string): IndexAc
 }
 
 
-/** Trailing calendar window; only accepted, comparable observations up to this session. */
-export function indexTrend(activities: IndexActivity[], name: string, days: number) {
-  const ordered = [...activities].sort((a, b) => a.start_at_utc.localeCompare(b.start_at_utc));
-  return ordered.map((activity, position) => {
-    const current = bandFor(activity, name);
-    const first = Date.parse(`${activity.local_date}T00:00:00Z`) - (days - 1) * 86400000;
-    const usable = (row: IndexActivity) => row.index?.admission?.status !== "EXCLUDED"
-      && row.index?.signal_quality.status !== "EXCLUDED" && bandFor(row, name)?.valid
-      && Number.isFinite(bandFor(row, name)?.index);
-    const previous = ordered.slice(0, position + 1).filter(row => usable(row)
-      && row.sport === activity.sport && row.index?.comparison_key === activity.index?.comparison_key
-      && Date.parse(`${row.local_date}T00:00:00Z`) >= first);
-    const value = current?.valid && usable(activity) && previous.length >= 2
-      ? previous.reduce((total, row) => total + bandFor(row, name)!.index!, 0) / previous.length : null;
-    return { activity, value, count: previous.length };
+/** Retrospective Gaussian smoother of all visible valid points, equally weighted
+ * at the same timestamp. This display-only trend never feeds TI or load models.
+ * `days` is the kernel's standard deviation; gaps beyond it remain undrawn.
+ */
+export function combinedIndexTrend(activities: IndexActivity[], names: string[], days: number) {
+  const anchor = activities.find(a => a.index);
+  const observations = activities.flatMap(a => {
+    if (!a.index || a.sport !== anchor?.sport || a.index.comparison_key !== anchor.index?.comparison_key
+      || a.index.admission?.status === "EXCLUDED" || a.index.signal_quality.status === "EXCLUDED") return [];
+    return [...new Set(names)].flatMap(name => {
+      const band = bandFor(a, name);
+      return band?.valid && band.index !== null && Number.isFinite(band.index)
+        ? [{ timestamp: Date.parse(a.start_at_utc), value: band.index, ref: a.activity_ref }] : [];
+    });
+  }).sort((a, b) => a.timestamp - b.timestamp);
+  if (!(days > 0) || new Set(observations.map(p => p.ref)).size < 2) return [];
+  const first = observations[0].timestamp, last = observations.at(-1)!.timestamp;
+  const bandwidth = days * 86400000;
+  // Sample densely for a smooth SVG curve, also including exact cursor positions.
+  const times = [...new Set([
+    ...Array.from({ length: 257 }, (_, i) => first + (last - first) * i / 256),
+    ...activities.map(a => Date.parse(a.start_at_utc)).filter(t => t >= first && t <= last),
+  ])].sort((a, b) => a - b);
+  return times.map(timestamp => {
+    let weighted = 0, weights = 0, nearest = Infinity;
+    for (const point of observations) {
+      const distance = (point.timestamp - timestamp) / bandwidth;
+      const weight = Math.exp(-0.5 * distance * distance);
+      weighted += weight * point.value;
+      weights += weight;
+      nearest = Math.min(nearest, Math.abs(distance));
+    }
+    return { timestamp, value: nearest <= 1 && weights > 0 ? weighted / weights : null, count: observations.length };
   });
 }

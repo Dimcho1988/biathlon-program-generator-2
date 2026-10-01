@@ -11,6 +11,7 @@ const date = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "2-digit
 
 export function CompletedWorkSection({ report, message, selectable = false, availablePeriodStart, availablePeriodEnd, generation = null, revision = null, initialSource = "hr", allowSpeed = false }: { report: CompletedWork | null; message?: string; selectable?: boolean; availablePeriodStart?: string; availablePeriodEnd?: string; generation?: string | null; revision?: number | null; initialSource?: "hr" | "speed"; allowSpeed?: boolean }) {
   const [source, setSource] = useState<"hr" | "speed">(selectable && allowSpeed ? initialSource : "hr");
+  const [speedVisited, setSpeedVisited] = useState(selectable && allowSpeed && initialSource === "speed");
   if (!report) return message ? (
     <section className="completed-work-section" aria-labelledby="completed-work-title">
       <div className="section-heading"><div><p className="section-kicker">Извършено натоварване</p><h2 id="completed-work-title">Отчет за извършеното натоварване</h2></div></div>
@@ -27,7 +28,7 @@ export function CompletedWorkSection({ report, message, selectable = false, avai
 
       {selectable && allowSpeed && <div className="load-source-switch" role="group" aria-label="Основа на отчета">
         <button type="button" aria-pressed={source === "hr"} onClick={() => setSource("hr")}>По пулс</button>
-        <button type="button" aria-pressed={source === "speed"} onClick={() => setSource("speed")}>По скорост</button>
+        <button type="button" aria-pressed={source === "speed"} onClick={() => { setSpeedVisited(true); setSource("speed"); }}>По скорост</button>
       </div>}
       {selectable && <form className="report-period" method="get">
         <input type="hidden" name="view" value="report" />
@@ -37,7 +38,8 @@ export function CompletedWorkSection({ report, message, selectable = false, avai
         <button className="action-button secondary" type="submit">Покажи периода</button>
       </form>}
 
-      {source === "speed" ? <SpeedWorkReport key={`${report.athlete_id}:${generation}:${revision}:${report.period_start}:${report.period_end}`} start={report.period_start} end={report.period_end} generation={generation} revision={revision} totalDuration={report.totals.activity_duration_min}/> : <>
+      {selectable && allowSpeed && speedVisited && <div hidden={source !== "speed"}><SpeedWorkReport key={`${report.athlete_id}:${generation}:${revision}:${report.period_start}:${report.period_end}`} start={report.period_start} end={report.period_end} generation={generation} revision={revision} totalDuration={report.totals.activity_duration_min}/></div>}
+      {source === "hr" && <>
       <p className="report-note">Всички продължителности са във формат ч:мм:сс. Приравненото време е към горната пулсова граница на зоната; ефективният товар E е отделна моделна величина.</p>
       <div className="report-totals">
         <dl><div><dt>Продължителност на активностите</dt><dd>{durationHms(report.totals.activity_duration_min)}</dd></div><div><dt>HR-зонирано реално време</dt><dd>{durationHms(report.totals.zoned_hr_time_min)}</dd></div></dl>

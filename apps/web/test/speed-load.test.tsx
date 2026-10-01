@@ -81,6 +81,10 @@ it("switches the completed report to speed for the exact selected period and pre
   expect((container.querySelector('[name="report_source"]') as HTMLInputElement).value).toBe("speed");
   await act(async()=>[...container.querySelectorAll("button")].find(b=>b.textContent==="По пулс")!.click());
   expect(container.textContent).toContain("Натоварване по пулсови зони");
+  expect(container.querySelector('[aria-label="Отчет по скорост"]')!.parentElement!.hidden).toBe(true);
+  await act(async()=>[...container.querySelectorAll("button")].find(b=>b.textContent==="По скорост")!.click());
+  expect(container.querySelector('[aria-label="Отчет по скорост"]')!.parentElement!.hidden).toBe(false);
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });
 
 it.each(["date", "generation"])("rejects a speed report with a different %s",async(reason)=>{
@@ -97,4 +101,23 @@ it("does not offer a speed report to a shared profile without recovery access",a
   expect(container.textContent).not.toContain("По скорост");
   expect(container.textContent).toContain("Натоварване по пулсови зони");
   expect(fetcher).not.toHaveBeenCalled();
+});
+
+it("keeps an in-flight speed report when switching to HR and invalidates it for a new period", async()=>{
+  let resolve!:(value:unknown)=>void;
+  const fetcher=vi.fn().mockImplementation(()=>new Promise(done=>{resolve=done;}));
+  vi.stubGlobal("fetch",fetcher);
+  const report={...completedWorkFixture,period_start:"2026-09-01",period_end:"2026-10-01"};
+  const click=async(label:string)=>act(async()=>[...container.querySelectorAll("button")].find(b=>b.textContent===label)!.click());
+  await act(async()=>root.render(<CompletedWorkSection report={report} selectable allowSpeed generation="g" revision={1}/>));
+  await click("По скорост");
+  const signal=fetcher.mock.calls[0][1].signal as AbortSignal;
+  await click("По пулс"); await click("По скорост");
+  expect(signal.aborted).toBe(false); expect(fetcher).toHaveBeenCalledTimes(1);
+  await act(async()=>resolve({ok:true,json:async()=>fixture()}));
+  expect(container.textContent).toContain("Скоростно покритие: 50%");
+  await act(async()=>root.render(<CompletedWorkSection report={{...report,period_start:"2026-09-02"}} selectable allowSpeed generation="g" revision={1}/>));
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(signal.aborted).toBe(true);
+  expect(container.textContent).not.toContain("Скоростно покритие: 50%");
 });

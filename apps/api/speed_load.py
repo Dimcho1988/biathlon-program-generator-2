@@ -8,6 +8,8 @@ Only measured Vflat is integrated; estimated HR is a conversion coordinate.
 from bisect import bisect_right
 from datetime import date, datetime, timedelta, timezone
 import math
+import hashlib
+import json
 from zoneinfo import ZoneInfo
 import pandas as pd
 from fastapi import HTTPException
@@ -18,6 +20,7 @@ from biathlon.sport_heart_rate import reference_offset, policy
 from vflat_b65.sports import speed_model_versions, supports_speed_load, is_treadmill
 from .activity_shadow_pipeline import activity_shadow_configuration_fingerprint
 from .speed_segments import sample_intervals
+from .speed_load_cache import speed_load_cache
 from .trainability_history import history_from_calendar, read_calendar, robust_mean
 from .trainability import MIN_SECONDS_BY_BAND, MAX_GAP_SECONDS
 
@@ -146,6 +149,28 @@ def history_view(repository, alias, sport=None, *, today=None, period_start=None
     warmup = min(start-timedelta(days=39), today-timedelta(days=89))
     calendar=read_calendar(repository,alias,date.min,today) or {"activities":[]}
     admitted=history_from_calendar(repository,alias,calendar)
+    def compute():
+        return _compute_history(repository, alias, sport, settings, today, start, warmup,
+                                calendar, admitted, custom_period)
+    namespace = getattr(repository, "speed_load_cache_namespace", None)
+    if not namespace or not calendar.get("generation_id"):
+        return compute()
+    # Fresh authorization happens at the route, and these inputs are reread on
+    # every request. Immutable run keys, admitted summaries and source metadata
+    # invalidate reuse when syncs, corrections or calibration settings change.
+    identity = {
+        "namespace": namespace, "alias": alias, "sport": sport, "version": VERSION,
+        "generation": calendar.get("generation_id"), "revision": calendar.get("revision"),
+        "bounds": settings.zone_bounds_bpm, "hrmax": settings.hrmax_bpm, "timezone": settings.timezone,
+        "start": start.isoformat(), "end": today.isoformat(), "custom": custom_period,
+        "activities": calendar.get("activities", []), "admitted": admitted,
+    }
+    key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    return speed_load_cache.get_or_compute(key, compute)
+
+
+def _compute_history(repository, alias, sport, settings, today, start, warmup,
+                     calendar, admitted, custom_period):
     available=sorted({a["sport"] for a in calendar.get("activities",[]) if supports_speed_load(a.get("sport"))})
     if sport is not None and not supports_speed_load(sport):raise HTTPException(422,"Unsupported speed-load sport")
     selected=[a for a in calendar.get("activities",[]) if supports_speed_load(a.get("sport"))
@@ -230,6 +255,7 @@ def history_view(repository, alias, sport=None, *, today=None, period_start=None
                       "ratio_7_40":float(statistics.loc[z,"index_7_40"]) if count else None} for i,z in enumerate(ZONES)],
             "warnings":["SPEED_LOAD_IS_ESTIMATED","RATIOS_DESCRIBE_COVERED_SPEED_HISTORY_ONLY",
                         "GENERAL_INDEX_USED_WHEN_ZONE_INDEX_MISSING","CYCLING_PARAMETERS_ARE_REFERENCE_ASSUMPTIONS"]
+                       + (["SPEED_RECOMPUTATION_REQUIRED"] if any(a["reason"] == "SPEED_RECOMPUTATION_REQUIRED" for a in records) else [])
                        + (["TREADMILL_GRADE_ASSUMED_FLAT"] if any(a["assumes_flat_incline"] for a in visible) else [])
                        + (["TREADMILL_PRIOR_RUN_INDEX_FALLBACK"] if any(
                            a["classified_minutes"] > 0 and (a["mapping"] or {}).get("index_sport") == "Run" for a in visible) else [])}
