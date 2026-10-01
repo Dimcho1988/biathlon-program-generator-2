@@ -106,3 +106,17 @@ def test_route_requires_service_and_selected_athlete_before_reading(monkeypatch)
         response=client.get(url+"?sport=Ride&athlete_alias=wrong",headers={"Authorization":"Bearer test-service-secret","X-OnFlows-Athlete-Alias":"authorized-athlete"})
         assert response.status_code==200
         assert calls==[("repository","authorized-athlete","Ride")]
+
+
+def test_large_histories_are_read_in_bounded_batches_instead_of_loading_all_samples():
+    calls=[]
+    def reader(alias,keys):
+        assert alias=="athlete" and len(keys)<=10
+        calls.append(keys)
+        return {k:{"activity_ref":k} for k in keys}
+    activities=[{"activity_ref":str(i),"latest_shadow_run_key":str(i)} for i in range(25)]
+    iterator=model.activity_samples(SimpleNamespace(activity_speed_exposure_samples=reader),"athlete",activities)
+    assert not calls
+    first=next(iterator)
+    assert first[0]["activity_ref"]==first[1]["activity_ref"]=="0" and len(calls)==1
+    assert len(list(iterator))==24 and len(calls)==3

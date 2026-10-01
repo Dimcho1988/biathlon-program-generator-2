@@ -105,6 +105,17 @@ def prior_indices(history, sport, day, settings):
     return indices
 
 
+def activity_samples(repository, alias, activities):
+    """Bound live full-resolution data to ten activities, not an entire season."""
+    reader=getattr(repository,"activity_speed_exposure_samples",None)
+    for first in range(0,len(activities),10):
+        batch=activities[first:first+10]
+        keys=tuple(sorted({a["latest_shadow_run_key"] for a in batch if a.get("latest_shadow_run_key")}))
+        rows=reader(alias,keys) if keys and reader else {}
+        for activity in batch:
+            yield activity,rows.get(activity.get("latest_shadow_run_key")) or {}
+
+
 def history_view(repository, alias, sport=None, *, today=None):
     settings=repository.athlete_settings(alias)
     if settings is None:raise HTTPException(409,"Athlete settings are required")
@@ -116,17 +127,15 @@ def history_view(repository, alias, sport=None, *, today=None):
     if sport is not None and not supports_speed_load(sport):raise HTTPException(422,"Unsupported speed-load sport")
     selected=[a for a in calendar.get("activities",[]) if supports_speed_load(a.get("sport"))
               and (sport is None or a["sport"]==sport) and warmup.isoformat()<=a.get("local_date","")<=today.isoformat()]
-    keys=tuple(sorted({a["latest_shadow_run_key"] for a in selected if a.get("latest_shadow_run_key")}))
-    reader=getattr(repository,"activity_speed_exposure_samples",None)
-    samples=reader(alias,keys) if keys and reader else {}
+    selected.sort(key=lambda a:(a["local_date"],a["activity_ref"]))
     mappings={};records=[];activity_summaries=[]
-    for a in sorted(selected,key=lambda a:(a["local_date"],a["activity_ref"])):
+    for a,row in activity_samples(repository,alias,selected):
         day=date.fromisoformat(a["local_date"]);s=a["sport"];key=(s,day)
         if key not in mappings:
             indices=prior_indices(admitted,s,day,settings)
             mappings[key]=zone_mapping(indices,settings.zone_bounds_bpm,settings.hrmax_bpm,s)
         mapping,reason=mappings[key]
-        row=samples.get(a.get("latest_shadow_run_key")) or {};shadow=row.get("shadow_payload") or {}
+        shadow=row.get("shadow_payload") or {}
         compatible=(row.get("activity_ref")==a["activity_ref"] and
             (shadow.get("vflat_model_version"),shadow.get("vflat_config_version"))==speed_model_versions(s)
             and isinstance(shadow.get("speed_test_series"),list))

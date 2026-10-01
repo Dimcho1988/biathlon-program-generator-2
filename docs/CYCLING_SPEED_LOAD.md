@@ -35,7 +35,7 @@ Measured Vflat samples supply time and Q using the existing 3-percentage-point/b
 
 The view displays the latest 40 days, computed with up to 90 days of speed observations for initialization. Pre-window effective-load state is unknown; short or incomplete history limits interpretation. Coverage uses recorded elapsed duration (at least the integrated sample duration), includes activities without calibration, and explicitly distinguishes excluded and out-of-map minutes. Ratios describe covered speed only. Unsupported sports are outside this ledger's scope. Current comparison indices may include today; those display values are never used retroactively to classify earlier sessions.
 
-The UI shows all-sport or single-sport totals, the daily zone 7/40 curve, current same-HR comparison speeds and the 7-bpm cycling policy. Access follows the existing model permissions, requests carry the selected authorized athlete, and results disclose pinned generation/revision.
+The UI shows all-sport or single-sport totals, the daily zone 7/40 curve, current same-HR comparison speeds and the 7-bpm cycling policy. Computation is requested on demand; full-resolution observations are read in bounded batches of ten activities to avoid retaining a whole season in memory. Access follows the existing model permissions, requests carry the selected authorized athlete, and results disclose pinned generation/revision.
 
 ## Verification
 
