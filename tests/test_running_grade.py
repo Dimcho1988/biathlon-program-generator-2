@@ -7,6 +7,7 @@ import pytest
 from apps.api.shadow_models.vflat_b65 import run_vflat_b65_shadow
 from vflat_b65 import MODEL_VERSION as SKI_VERSION, apply_vflat_b65
 from vflat_b65.running import GRADE_TABLE, MODEL_VERSION, apply_running_grade, running_grade_multiplier
+from vflat_b65.treadmill import MODEL_VERSION as TREADMILL_VERSION
 from vflat_b65.sports import is_running
 
 
@@ -30,10 +31,11 @@ def test_running_sports_use_the_table_without_ski_dynamics(sport):
     data["accel_mps2"]=np.linspace(-2.,2.,len(data))
     original=deepcopy(data)
     result=run_vflat_b65_shadow(data,activity_detail={"type":sport,"distance":1000,"total_elevation_gain":20})
-    assert result["model_version"]==MODEL_VERSION
+    version=TREADMILL_VERSION if sport in {"VirtualRun","TreadmillRun"} else MODEL_VERSION
+    assert result["model_version"]==version
     assert result["terrain_correction"]["applied"] is False
     assert all(r["vflat_b65_kmh"]==pytest.approx(15.) for r in result["timeseries"])
-    assert all(r["vflat_model_version"]==MODEL_VERSION for r in result["timeseries"])
+    assert all(r["vflat_model_version"]==version for r in result["timeseries"])
     pd.testing.assert_frame_equal(original,data)
 
 
