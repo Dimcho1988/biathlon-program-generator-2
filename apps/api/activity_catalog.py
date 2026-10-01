@@ -142,6 +142,8 @@ def extract_activity_metadata(activity_ref: str, detail: Mapping[str, Any]) -> d
         "sport": sport_type,
         "activity_type": _text(detail.get("type"), 48),
         "activity_sub_type": _text(detail.get("sub_type"), 48),
+        **({"sport_classification": dict(detail["onflows_sport_rule"])}
+           if isinstance(detail.get("onflows_sport_rule"), Mapping) else {}),
         "name": _text(detail.get("name"), 160),
         "description": _text(detail.get("description"), 8000),
         "moving_time_s": _seconds(detail, "moving_time"),

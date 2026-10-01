@@ -395,6 +395,7 @@ def load_real_history(
     activity_ref_resolver: Callable[[str], str] | None = None,
     activity_metadata_collector: Callable[[str, Mapping[str, Any]], None]
     | None = None,
+    activity_detail_transformer: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
 ) -> RealHistoryDataset:
     """Load and process one bounded real history in chronological order."""
 
@@ -487,6 +488,13 @@ def load_real_history(
                     raise TypeError("activity detail is not a mapping")
                 if _activity_date(detail) != current_day:
                     raise ValueError("activity date does not match the history day")
+                if activity_detail_transformer is not None:
+                    try:
+                        detail = activity_detail_transformer(detail)
+                    except Exception as exc:
+                        raise _ExternalActivityCallbackFailure(
+                            "Activity sport correction failed"
+                        ) from exc
                 if activity_metadata_collector is not None:
                     try:
                         activity_metadata_collector(activity_ref, detail)

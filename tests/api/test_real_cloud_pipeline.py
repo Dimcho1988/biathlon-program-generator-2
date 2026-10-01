@@ -121,6 +121,32 @@ class WellnessOnlyClient(Client):
         raise AssertionError("wellness-only refresh must not request activities")
 
 
+def test_athlete_sport_rule_relabels_sync_and_catalog_without_changing_hr_load():
+    class BiathlonClient(Client):
+        def get_activity_result(self, activity_id, *, include_intervals=False):
+            original = super().get_activity_result(activity_id, include_intervals=include_intervals)
+            return IntervalsResponse(200,{**original.payload,"type":"Walk","name":"Якоруда Биатлон"})
+
+    baseline = InMemorySnapshotRepository()
+    corrected = InMemorySnapshotRepository()
+    calls = []
+    def rules(alias):
+        calls.append(alias)
+        return ({"id":"approved-rule","source_sport":"Walk","name_contains":"биатлон","target_sport":"NordicSki"},)
+    corrected.activity_sport_rules = rules
+    for repository in (baseline,corrected):
+        refresh(repository,environ=ENV,client=BiathlonClient(),period_end=date(2026,8,15))
+    assert calls == ["pilot"]
+    before = baseline.latest("pilot")["load_history"]
+    after = corrected.latest("pilot")["load_history"]
+    assert before["daily"] == after["daily"]
+    assert before["activities"][0]["sport"] == "Walk"
+    assert after["activities"][0]["sport"] == "NordicSki"
+    catalog = corrected.activity_calendar("pilot",date(2026,8,15),date(2026,8,15))
+    assert catalog[0]["sport"] == "NordicSki"
+    assert catalog[0]["sport_classification"]["provider_sport"] == "Walk"
+
+
 def test_ingests_activity_and_wellness_then_atomically_publishes_aggregate_snapshot():
     repo = InMemorySnapshotRepository()
     result = refresh(repo, environ=ENV, client=Client(), period_end=date(2026, 8, 15), now=datetime(2026, 8, 15, 12, tzinfo=timezone.utc))

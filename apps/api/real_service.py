@@ -1242,6 +1242,9 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         shadow_runs: dict[str, str] = {}
         scientific_input_hashes: dict[str, str] = {}
         identity_secret = env.get("ONFLOWS_ACTIVITY_ID_SECRET", "").strip() or salt
+        from .activity_sport_rules import apply_sport_rules
+        rules_reader = getattr(repository, "activity_sport_rules", None)
+        sport_rules = rules_reader(context.public_alias) if callable(rules_reader) else ()
 
         def resolve_activity_ref(provider_activity_id: str) -> str:
             key = provider_activity_key(
@@ -1337,7 +1340,10 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                                     configuration=configuration_with_hr_boundaries(context.zone_bounds_bpm, hrmax_bpm=context.hrmax_bpm),
                                     activity_shadow_processor=process_activity_shadow,
                                     activity_ref_resolver=resolve_activity_ref,
-                                    activity_metadata_collector=collect_activity_metadata)
+                                    activity_metadata_collector=collect_activity_metadata,
+                                    activity_detail_transformer=(
+                                        lambda detail: apply_sport_rules(detail, sport_rules)
+                                    ) if sport_rules else None)
         catalog_rows: list[Mapping[str, Any]] = []
         for activity in dataset.activities.itertuples(index=False):
             metadata = catalog_metadata.get(str(activity.activity_ref))

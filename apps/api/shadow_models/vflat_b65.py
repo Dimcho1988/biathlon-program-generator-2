@@ -15,8 +15,9 @@ from vflat_b65 import (
     detect_sprint_str,
 )
 from vflat_b65.running import RunningGradeConfig, apply_running_grade
-from vflat_b65.sports import is_running, is_cycling, speed_model_versions
+from vflat_b65.sports import is_running, is_cycling, is_treadmill, speed_model_versions
 from vflat_b65.cycling import CyclingConfig, apply_cycling_grade
+from vflat_b65.treadmill import TreadmillConfig, apply_treadmill_speed
 
 
 def run_vflat_b65_shadow(
@@ -28,7 +29,10 @@ def run_vflat_b65_shadow(
 ) -> dict[str, Any]:
     sport = (activity_detail or {}).get("type")
     model_version, config_version = speed_model_versions(sport)
-    if is_running(sport):
+    if is_treadmill(sport):
+        selected = TreadmillConfig()
+        result = apply_treadmill_speed(prepared_timeseries, selected)
+    elif is_running(sport):
         selected = RunningGradeConfig()
         result = apply_running_grade(prepared_timeseries, selected)
     elif is_cycling(sport):
@@ -75,6 +79,7 @@ def run_vflat_b65_shadow(
                 "grade_smoothed_pct": row.get("grade_pct"),
                 "grade_effective_pct": row.get("grade_effective_pct"),
                 "grade_stationary_pct": row.get("grade_stationary_pct"),
+                **({"grade_assumed_flat": bool(row["grade_assumed_flat"])} if "grade_assumed_flat" in row else {}),
                 "sprint_str_flag": sprint_detection.sample_mask[position],
                 "sprint_str_reference_kmh": (
                     sprint_detection.local_reference_kmh[position]
