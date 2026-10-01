@@ -1,5 +1,6 @@
 "use client";
 import {SpeedZonesSummary,StandardizedCriticalSpeed} from "./speed-zones-summary";
+import {SpeedLoadSummary} from "./speed-load-summary";
 import Link from "next/link";
 import {useState} from "react";
 import {useRouter} from "next/navigation";
@@ -50,8 +51,10 @@ export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minu
     catch(e){setMessage(e instanceof Error?e.message:"Неуспешен запис.");}finally{setBusy(false);}
   }
   return <>
+    <SpeedLoadSummary key={`load:${model.source_generation_id}:${model.source_revision}`} generation={model.source_generation_id} revision={model.source_revision}/>
     <section className="history-section"><form method="get" className="model-controls"><label>Спорт<select name="sport" defaultValue={model.sport}>{[...new Set([model.sport,...model.sports])].map(s=><option key={s}>{s}</option>)}</select></label><button className="action-button secondary">Покажи</button></form>
       <p className="speed-model-status"><strong>{curveLabel}</strong>{model.active_test_count>0?` · ${model.active_test_count} активни ${exploratory?"контролни точки":"максимални теста"}`:""}</p>
+      {!!model.sport_hr_policy?.offset_bpm&&<p>Зоните и целевият пулс за колело са със 7 уд./мин по-ниски. За индекса прибавяме 7 към измерения пулс, без да променяме записа. Използва се собствен модел за приравняване на скоростта към равен терен.</p>}
       {(model.status==="REFERENCE_ONLY"||model.status==="UNAVAILABLE")&&<div className="speed-onboarding"><strong>За {model.sport} още няма достатъчна основа за индивидуална скорост.</strong><p>{model.status==="REFERENCE_ONLY"?"Кривата показва експертен пример. Индивидуалното изчисление се отключва след максимален тест или достатъчно валидни данни за връзката пулс–скорост.":"Историята и експертните времеви граници могат да насочват тренировъчната доза. За скоростта е нужен максимален тест или валидна връзка между пулса и скоростта."}</p><a className="action-button" href="#speed-tests">Добави тест за индивидуална крива</a></div>}
       {model.status==="PRELIMINARY"&&<div className="speed-onboarding"><strong>Ориентир, който предстои да проверим с тест.</strong><p>Кривата съчетава историята, експертните времеви граници и наличната връзка пулс–скорост. Тези оценки не са измерени максимални възможности.</p><a href="#speed-tests">Добави максимален тест за по-надеждна оценка →</a></div>}
       {exploratory&&<div className="speed-onboarding"><strong>Пробна калибрация</strong><p>В кривата участват записи от комплексни тренировки с по-ниско покритие. Прогнозата е за тестване на модела. Критичната скорост използва само стандартните максимални тестове.</p></div>}

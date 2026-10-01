@@ -233,6 +233,17 @@ def configuration_with_hr_boundaries(
     return _build_configuration(zones)
 
 
+def configuration_for_sport(configuration, sport):
+    """Translate HR bounds, keeping all load and recovery coefficients fixed."""
+    from dataclasses import replace
+    from biathlon.sport_heart_rate import reference_offset
+    offset=reference_offset(sport)
+    if not offset:
+        return configuration
+    return _build_configuration(tuple(replace(z,hr_low=z.hr_low-offset,hr_high=z.hr_high-offset)
+                                      for z in configuration.zones),configuration.overrides)
+
+
 def validate_zone_settings(zones: Sequence[ZoneModelSettings]) -> None:
     if not zones:
         raise ValueError("at least one zone is required")

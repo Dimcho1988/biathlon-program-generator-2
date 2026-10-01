@@ -330,6 +330,7 @@ class LoadHistoryResponse(StrictModel):
     period_end: str
     tref_bounds_profile_version: str | None = None
     equivalence_version: str | None = None
+    sport_hr_policy_version: str | None = None
     zone_bounds_bpm: list[int] | None = None
     hrmax_bpm: int | None = None
     quality: LoadHistoryQuality

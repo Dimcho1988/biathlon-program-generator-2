@@ -13,6 +13,18 @@ from .. import dependencies
 router = APIRouter()
 
 
+@router.get("/api/v2/athlete/models/speed-load")
+def speed_load_history(sport: str | None = None,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None):
+    from ..speed_load import history_view
+    alias=dependencies.model_alias(authorization,athlete_alias)
+    try:
+        return history_view(dependencies.repository(),alias,sport)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503,"Speed load sources are unavailable") from exc
+
+
 @router.get("/api/v2/athlete/models/speed-history")
 def speed_history(sport: str | None = None,
     authorization: Annotated[str | None, Header()] = None,

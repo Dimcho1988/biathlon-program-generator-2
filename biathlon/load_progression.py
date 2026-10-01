@@ -516,6 +516,9 @@ def history_matches(source, physiology=None):
     # Internal tests/adapters may pass a raw history without a public schema.
     if "schema_version" not in source:
         return True
+    from .sport_heart_rate import is_cycling, VERSION as SPORT_HR_VERSION
+    if any(is_cycling(a.get("sport")) for a in source.get("activities",[])) and source.get("sport_hr_policy_version") != SPORT_HR_VERSION:
+        return False
     return (source.get("equivalence_version") == EQUIVALENCE_VERSION and
             (physiology is None or source.get("zone_bounds_bpm") == physiology["bounds"] and
              source.get("hrmax_bpm") == physiology["hrmax"]))

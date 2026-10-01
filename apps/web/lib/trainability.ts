@@ -4,6 +4,9 @@ export const TRAINABILITY_MODEL_VERSION = "trainability_paired_raw_lag20_v3";
 export const MINIMUM_SECONDS_BY_BAND: Record<string, number> = { Z1: 420, Z2: 420, Z3: 420, Z4: 420, Z5: 300, GENERAL: 420 };
 
 export interface IndexBand {
+  mean_hr_raw_bpm?:number|null;
+  lower_raw_bpm?:number|null;
+  upper_raw_bpm?:number|null;
   name: string;
   minimum_seconds: number;
   lower_bpm: number | null;
@@ -19,6 +22,7 @@ export interface IndexBand {
   invalid_reason: string | null;
 }
 export interface TrainabilityIndex {
+  hr_reference_offset_bpm?:number;
   schema_version: "trainability-index-v3";
   model_version: string;
   hr_source: "raw";
@@ -91,11 +95,13 @@ export function parseTrainabilityIndex(v: unknown): TrainabilityIndex | null {
     !["hr_seconds", "eligible_speed_seconds", "downhill_excluded_seconds", "unavailable_speed_seconds"].every(k => finite(v[k]) && v[k] >= 0) ||
     !Array.isArray(v.zones) || v.zones.length !== 5) throw bad();
   const zones = v.zones.map(parseIndexBand);
+  if(v.hr_reference_offset_bpm!==undefined&&v.hr_reference_offset_bpm!==0&&v.hr_reference_offset_bpm!==7)throw bad();
   const general = parseIndexBand(v.general);
   if ((v.signal_quality.status === "EXCLUDED" || (isRecord(v.admission) && v.admission.status === "EXCLUDED")) && [...zones, general].some(b => b.valid)) throw bad();
   if (zones.some((z, i) => z.name !== `Z${i + 1}`) || general.name !== "GENERAL" ||
     ((v.activity_duration_s === null || (v.activity_duration_s as number) < 420) && [...zones, general].some(b => b.valid))) throw bad();
   for (const band of [...zones, general]) {
+    if(v.hr_reference_offset_bpm===7&&band.mean_hr_bpm!==null&&(!finite(band.mean_hr_raw_bpm)||Math.abs(band.mean_hr_bpm-band.mean_hr_raw_bpm-7)>1e-8))throw bad();
     if (!band.valid) continue;
     if (!finite(v.hrmax_bpm) || !finite(band.mean_hr_bpm) || band.mean_hr_bpm <= 0 ||
       !finite(band.mean_hrmax_percent) || !finite(band.mean_vflat_kmh) || band.mean_vflat_kmh <= 0 ||

@@ -65,6 +65,12 @@ export interface FunctionalProfile {
   training_context:{source:string;unit?:"EQUIVALENT_MINUTES";zones:Array<{zone:string;weekly_minutes:number|null;share_percent:number|null}>;interpretation:"ASSOCIATION_ONLY";hypotheses:string[]};warnings:string[];
 }
 export interface SpeedModel {dosing_model?:DosingModel;speed_zones?:SpeedZoneProfile;hr_zone_source?:"MANUAL"|"AUTOMATIC_HRMAX";test_window?:{start:string;end:string};index_window?:{start:string;end:string;days:number;last_activity_date:string|null};hr_model?:HrModel|null;index_admission?:{activities:number;excluded:number;refresh_required:number;used?:number;incompatible?:number};volume_position_basis?:string;schema_version:"speed-model-v1";model_version:string;sport:string;sports:string[];activities:Array<{activity_ref:string;name:string;day:string;sport:string;elapsed_s?:number|null}>;status:"CALIBRATED"|"PRELIMINARY"|"UNAVAILABLE"|"REFERENCE_ONLY"|"CONFLICTING_TESTS";curve_metadata?:CurveMetadata;functional_profile?:FunctionalProfile;preliminary_capacity?:PreliminaryCapacity;volume_history_basis?:"HR_MEASURED"|"HR_PARTIAL"|"TOTAL_DURATION"|"UNAVAILABLE";total_weekly_minutes?:number|null;calibration_diagnostics?:{residuals?:Array<{duration_s:number;measured_speed_kmh:number;prior_speed_kmh:number;measured_vs_prior_percent:number}>;real_test_anchors_take_precedence?:boolean;prior_shape_used?:boolean;blend_status?:string;blend_reason?:string;model_error?:string};tests:SpeedTest[];active_test_count:number;exploratory_test_count?:number;active_test_keys:string[];points:Prediction[];volume_scope?:"ALL_SPORTS";volume_weekly_min:Record<string,number|null>;history_days:number;zone_corrections:Record<string,number>;correction_applied_fraction:number;critical_speed:{standardized?:StandardizedCS;status:string;count:number;speed_kmh?:number;d_prime_m?:number;distance_rmse_m?:number};prediction:Prediction|null;prediction_error?:string|null;warnings:string[];source_generation_id:string|null;source_revision:number|null;hr_speed_range_kmh:number[]|null}
+export interface SportHrPolicy {
+  version:string; offset_bpm:number; basis:string;
+  reference_zone_bounds_bpm:number[]; sport_zone_bounds_bpm:number[];
+  reference_hrmax_bpm:number|null; sport_hrmax_bpm:number|null; raw_hr_unchanged:true;
+}
+export interface SpeedModel {sport_hr_policy?:SportHrPolicy}
 export function parseSpeedModel(value:unknown):SpeedModel {
   const r=value as SpeedModel;
   if(!r||r.schema_version!=="speed-model-v1"||!Array.isArray(r.points)||!Array.isArray(r.tests))throw new Error("Невалиден скоростен модел.");

@@ -26,7 +26,9 @@ def volume_duration_centers(bounds):
 
 
 class Predictor:
-    def __init__(self,curve,bounds,hrmax,indices,*,expert_durations=None):
+    def __init__(self,curve,bounds,hrmax,indices,*,expert_durations=None,normalization_offset_bpm=0.):
+        from .sport_heart_rate import validate_offset
+        self.normalization_offset_bpm=validate_offset(normalization_offset_bpm)
         self.curve=curve;self.bounds=tuple(float(x) for x in bounds);self.hrmax=float(hrmax)
         if len(self.bounds)!=6 or not all(math.isfinite(x) for x in self.bounds) or not math.isfinite(self.hrmax) or any(a>=b for a,b in zip(self.bounds,self.bounds[1:])) or self.hrmax<=0:
             raise ValueError('Invalid HR profile')
@@ -48,7 +50,7 @@ class Predictor:
             estimate=indices.get(zone,{}).get('index');candidate=None;speed=None
             candidate_reason='NO_VALID_INDEX'
             if estimate is not None and math.isfinite(estimate) and estimate>0:
-                speed=(100*self.bounds[i+1]/self.hrmax)/estimate
+                speed=(100*(self.bounds[i+1]+self.normalization_offset_bpm)/(self.hrmax+self.normalization_offset_bpm))/estimate
                 try:candidate=curve.inverse(speed/3.6)
                 except ValueError:pass
                 # The inverse is numerical: an exact boundary can return e.g.
@@ -133,6 +135,7 @@ class Predictor:
         return {'hr_prediction_source':anchor['source'],'hr_prediction_reason':anchor['reason'],'zone':f'Z{i+1}'}
     def summary(self):
         return {'model_version':VERSION,'hr_range_bpm':[self.min_hr,self.max_hr],
+                'hr_reference_offset_bpm':self.normalization_offset_bpm,
                 'curve_duration_range_s':[self.curve.times[0],self.curve.times[-1]],
                 'curve_speed_range_kmh':[self.curve.speed(self.curve.times[-1])*3.6,self.curve.speed(self.curve.times[0])*3.6],
                 'conflicting_zones':self.conflicting_zones,'expert_duration_conflicts':self.expert_duration_conflicts,

@@ -207,6 +207,7 @@ def build_history_cache_key(
     parameter_fingerprint: str,
 ) -> str:
     """Build a cache key that accounts for profile and model versions safely."""
+    from biathlon.sport_heart_rate import VERSION as SPORT_HR_VERSION
 
     if not profile_identifier or not session_salt:
         raise ValueError("profile identifier and session salt are required")
@@ -218,6 +219,7 @@ def build_history_cache_key(
     profile = profile_from_configuration(configuration)
     payload = {
         "dataset_schema_version": REAL_HISTORY_SCHEMA_VERSION,
+        "sport_hr_policy_version": SPORT_HR_VERSION,
         "profile_digest": profile_digest,
         "period_start": period_start.isoformat(),
         "period_end": period_end.isoformat(),
@@ -522,12 +524,14 @@ def load_real_history(
                                 "Activity shadow callback failed"
                             ) from exc
 
+                    from intervals_inspector.shadow_model import configuration_for_sport
+                    activity_configuration=configuration_for_sport(selected_configuration,detail.get("type"))
                     summary = process_activity_payloads(
                         detail,
                         streams,
                         include_1hz_preview=False,
-                        profile=profile,
-                        experimental_configuration=selected_configuration,
+                        profile=profile_from_configuration(activity_configuration),
+                        experimental_configuration=activity_configuration,
                         prior_baseline_effective_load=(
                             prior_baseline_effective_load
                         ),

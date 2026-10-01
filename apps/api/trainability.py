@@ -4,6 +4,7 @@ from datetime import datetime
 import math
 from typing import Any, Mapping, Sequence
 import numpy as np
+from biathlon.sport_heart_rate import validate_offset
 
 SCHEMA_VERSION = "trainability-index-v3"
 MODEL_VERSION = "trainability_paired_raw_lag20_v3"
@@ -45,7 +46,8 @@ def signal_quality(hr_rows):
 
 def compute_trainability(hr_rows: Sequence[Mapping[str,Any]], speed_rows: Sequence[Mapping[str,Any]], *,
     zone_bounds_bpm: Sequence[int],hrmax_bpm:int|None,activity_duration_s:float|None,
-    comparison_key:str,source_versions:Mapping[str,str]) -> dict[str,Any]:
+    comparison_key:str,source_versions:Mapping[str,str],hr_reference_offset_bpm:float=0.) -> dict[str,Any]:
+    offset=validate_offset(hr_reference_offset_bpm)
     bounds=[float(x) for x in zone_bounds_bpm]
     if len(bounds)!=6 or any(not math.isfinite(x) for x in bounds) or any(a>=b for a,b in zip(bounds,bounds[1:])):
         raise ValueError("Trainability requires five ordered HR zones")
@@ -87,7 +89,7 @@ def compute_trainability(hr_rows: Sequence[Mapping[str,Any]], speed_rows: Sequen
         interpolated=hrs[a]+fraction*(hrs[b]-hrs[a])
         valid &= np.isfinite(interpolated)
         unavailable+=float(p[~valid,1].sum())
-        h=interpolated[valid];v=p[valid,2];weights=p[valid,1]
+        h=interpolated[valid]+offset;v=p[valid,2];weights=p[valid,1]
     elif pairs: unavailable+=sum(p[1] for p in pairs)
     total=float(weights.sum())
     def band(name,lo,hi,inclusive=False):
@@ -105,8 +107,12 @@ def compute_trainability(hr_rows: Sequence[Mapping[str,Any]], speed_rows: Sequen
         return {"name":name,"lower_bpm":lo,"upper_bpm":hi,"minimum_seconds":MIN_SECONDS_BY_BAND[name],
                 "hr_seconds":seconds,"speed_seconds":seconds,"hr_percent":100*seconds/total if total else 0.,
                 "mean_hr_bpm":hh,"mean_hrmax_percent":hp,"mean_vflat_kmh":vv,
+                **({"mean_hr_raw_bpm":hh-offset if hh is not None else None,
+                    "lower_raw_bpm":lo-offset if lo is not None else None,
+                    "upper_raw_bpm":hi-offset if hi is not None else None} if offset else {}),
                 "index":hp/vv if not reason else None,"valid":reason is None,"invalid_reason":reason}
     return {"schema_version":SCHEMA_VERSION,"model_version":MODEL_VERSION,"normalization":"percent_hrmax",
+            **({"hr_reference_offset_bpm":offset,"hr_reference_basis":"COACH_INITIAL_ASSUMPTION"} if offset else {}),
             "hr_source":"raw","lag_seconds":LAG_SECONDS,"signal_quality":quality,
             "comparison_key":comparison_key,"source_versions":dict(source_versions),"hrmax_bpm":hrmax_bpm,
             "zone_bounds_bpm":bounds,"activity_duration_s":activity_duration_s,"minimum_activity_seconds":MIN_ACTIVITY_SECONDS,

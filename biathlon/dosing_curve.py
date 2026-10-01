@@ -44,8 +44,9 @@ class Curve:
 
 
 class Predictor(hr_speed.Predictor):
-    def __init__(self, curve, bounds, hrmax, indices, *, expert_durations=None):
-        super().__init__(curve.index_curve, bounds, hrmax, indices, expert_durations=expert_durations)
+    def __init__(self, curve, bounds, hrmax, indices, *, expert_durations=None,normalization_offset_bpm=0.):
+        super().__init__(curve.index_curve, bounds, hrmax, indices, expert_durations=expert_durations,
+                         normalization_offset_bpm=normalization_offset_bpm)
         self.curve = curve
         for anchor in self.anchors:
             anchor["index_hr_source"] = anchor["source"]
@@ -74,7 +75,7 @@ def from_view(view):
     return Curve(prior, speed_duration.calibrated(tests))
 
 
-def describe(index_curve, test_curve, tests, bounds, hrmax, indices, anchors):
+def describe(index_curve, test_curve, tests, bounds, hrmax, indices, anchors, *, normalization_offset_bpm=0.):
     result = {"model_version": VERSION, "status": "UNAVAILABLE", "points": [], "hr_model": None,
               "speed_zones": None, "weights": {"index": INDEX_WEIGHT, "tests": TEST_WEIGHT},
               "weight_basis": "COACH_POLICY_NOT_VALIDATED_RELIABILITY", "is_maximal_test": False,
@@ -84,7 +85,8 @@ def describe(index_curve, test_curve, tests, bounds, hrmax, indices, anchors):
     try:
         curve = Curve(index_curve, test_curve)
         predictor = Predictor(curve, bounds, hrmax, indices,
-                              expert_durations={a["zone"]: a["duration_s"] for a in anchors})
+                              expert_durations={a["zone"]: a["duration_s"] for a in anchors},
+                              normalization_offset_bpm=normalization_offset_bpm)
     except ValueError:
         return {**result, "reason": "INCOMPATIBLE_DURATION_OR_HR_DOMAIN"}
     fixed = {curve.times[0], curve.times[-1]} | {a["duration_s"] for a in predictor.anchors} | {t["duration_s"] for t in tests}

@@ -26,8 +26,8 @@ from . import model_service, load_adaptation, race_duration, planning_history_es
 from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 
-VERSION = "training-management-v25"
-PARAMETER_VERSION = "management-parameters-v25"
+VERSION = "training-management-v26"
+PARAMETER_VERSION = "management-parameters-v26"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -191,6 +191,8 @@ def _session_parts(session, settings, rows, day, slot_index):
 
 
 def _capacity_context(speed, settings):
+    from biathlon.sport_heart_rate import local_settings, reference_offset
+    settings=local_settings(settings,(speed or {}).get("sport"))
     if not speed or speed.get("status") not in {"CALIBRATED", "PRELIMINARY"}:
         return None, [], ["NO_INDIVIDUAL_SPEED_CURVE"]
     keys = set(speed.get("active_test_keys", []))
@@ -212,12 +214,15 @@ def _capacity_context(speed, settings):
     curve = blend or speed_duration.calibrated(tests, prior=prior)
     durations = {a["zone"]: a["duration_s"] for a in prior_summary.get("anchors", [])}
     predictor_type = dosing_curve.Predictor if blend else hr_speed.Predictor
-    predictor = predictor_type(curve, settings.zone_bounds_bpm, settings.hrmax_bpm, speed["index_summary"], expert_durations=durations or None)
+    predictor = predictor_type(curve, settings.zone_bounds_bpm, settings.hrmax_bpm, speed["index_summary"], expert_durations=durations or None,
+                               normalization_offset_bpm=reference_offset(speed.get("sport")))
     return predictor, tests, reasons
 
 
 def capacity_for(method, settings, speed, context, today, allow_fallback=True, *, use_model_prior=False):
     """Select exactly one capacity source, without a second TI/volume factor."""
+    from biathlon.sport_heart_rate import local_settings
+    settings=local_settings(settings,method.get("actual_sport") or (speed or {}).get("sport"))
     if method.get("capacity_method"):
         return capacity_for({**method["capacity_method"], "actual_sport": method.get("actual_sport", method["sports"][0]),
                              "position": method["position"]}, settings, speed, context, today, allow_fallback, use_model_prior=use_model_prior)
@@ -375,6 +380,8 @@ def _block(kind, label, zone, minutes, hr, instructions, *, speed=None, repetiti
 
 
 def _blocks(method, work, evidence, settings):
+    from biathlon.sport_heart_rate import local_settings, reference_offset
+    settings=local_settings(settings,method.get("actual_sport"))
     if method.get("double_threshold"):
         single = {**method, "double_threshold": False, "min_work_min": method["min_work_min"] / 2}
         half = _blocks(single, work / 2, evidence, settings)
@@ -526,6 +533,10 @@ def _blocks(method, work, evidence, settings):
         preparation = _block("PREPARATION", "Подготвителни упражнения", "Z1", 3., easy,
                              "Мобилизация и няколко познати координационни упражнения. Подготви техниката за ускоренията.")
         blocks[1:1] = [preparation, *training_guidance.neuromuscular_blocks(method["neuromuscular_profile"], easy)]
+    offset=reference_offset(method.get("actual_sport"))
+    if offset:
+        for block in blocks:
+            block["sport_hr_offset_bpm"]=offset
     return blocks
 
 
@@ -543,8 +554,10 @@ def _canonical_load(blocks, settings, rows, day, *, technical_reference=None):
             continue
         idx = int(z[1:]) - 1
         low, high = settings.zone_bounds_bpm[idx:idx + 2]
+        offset=max(0.,block.get("sport_hr_offset_bpm",0.)-getattr(settings,"sport_hr_offset_bpm",0.))
+        low,high=low-offset,high-offset
         if z == "Z5":
-            high = settings.hrmax_bpm or high
+            high = settings.hrmax_bpm-offset if settings.hrmax_bpm else high
         # Effort-led intervals carry a planning estimate, never a fabricated
         # measured HR or an instruction to chase the HR target.
         load_hr = block["target_hr_bpm"] if block["target_hr_bpm"] is not None else (block.get("load_reference_hr_bpm") or high)
