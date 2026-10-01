@@ -9,8 +9,8 @@ const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
 const decimal = (value: number) => number.format(value);
 const date = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
 
-export function CompletedWorkSection({ report, message, selectable = false, availablePeriodStart, availablePeriodEnd, generation = null, revision = null, initialSource = "hr" }: { report: CompletedWork | null; message?: string; selectable?: boolean; availablePeriodStart?: string; availablePeriodEnd?: string; generation?: string | null; revision?: number | null; initialSource?: "hr" | "speed" }) {
-  const [source, setSource] = useState<"hr" | "speed">(selectable ? initialSource : "hr");
+export function CompletedWorkSection({ report, message, selectable = false, availablePeriodStart, availablePeriodEnd, generation = null, revision = null, initialSource = "hr", allowSpeed = false }: { report: CompletedWork | null; message?: string; selectable?: boolean; availablePeriodStart?: string; availablePeriodEnd?: string; generation?: string | null; revision?: number | null; initialSource?: "hr" | "speed"; allowSpeed?: boolean }) {
+  const [source, setSource] = useState<"hr" | "speed">(selectable && allowSpeed ? initialSource : "hr");
   if (!report) return message ? (
     <section className="completed-work-section" aria-labelledby="completed-work-title">
       <div className="section-heading"><div><p className="section-kicker">Извършено натоварване</p><h2 id="completed-work-title">Отчет за извършеното натоварване</h2></div></div>
@@ -25,7 +25,7 @@ export function CompletedWorkSection({ report, message, selectable = false, avai
         {source === "hr" && <p>{report.quality.modeled_activities} моделирани активности · {report.quality.limited_activities} с ограничено HR покритие</p>}
       </div>
 
-      {selectable && <div className="load-source-switch" role="group" aria-label="Основа на отчета">
+      {selectable && allowSpeed && <div className="load-source-switch" role="group" aria-label="Основа на отчета">
         <button type="button" aria-pressed={source === "hr"} onClick={() => setSource("hr")}>По пулс</button>
         <button type="button" aria-pressed={source === "speed"} onClick={() => setSource("speed")}>По скорост</button>
       </div>}

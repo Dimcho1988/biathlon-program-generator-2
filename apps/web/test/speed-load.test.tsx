@@ -71,7 +71,7 @@ it("forwards validated dates and never accepts an athlete from query parameters"
 it("switches the completed report to speed for the exact selected period and preserves the choice in its form",async()=>{
   const report={...completedWorkFixture,period_start:"2026-09-01",period_end:"2026-10-01"};
   const fetcher=vi.fn().mockResolvedValue({ok:true,json:async()=>fixture()});vi.stubGlobal("fetch",fetcher);
-  await act(async()=>root.render(<CompletedWorkSection report={report} selectable generation="g" revision={1}/>));
+  await act(async()=>root.render(<CompletedWorkSection report={report} selectable allowSpeed generation="g" revision={1}/>));
   expect(fetcher).not.toHaveBeenCalled();
   await act(async()=>[...container.querySelectorAll("button")].find(b=>b.textContent==="По скорост")!.click());
   expect(fetcher.mock.calls[0][0]).toBe("/api/athlete/models/speed-load?period_start=2026-09-01&period_end=2026-10-01");
@@ -88,4 +88,13 @@ it.each(["date", "generation"])("rejects a speed report with a different %s",asy
   await act(async()=>root.render(<SpeedWorkReport start="2026-09-01" end="2026-10-01" generation="g" revision={1} totalDuration={40}/>));
   expect(container.textContent).not.toContain("Натоварване по скоростни зони");
   expect(container.querySelector("[role=status]")!.textContent).toContain(reason==="date"?"не съответства":"Презаредете");
+});
+
+
+it("does not offer a speed report to a shared profile without recovery access",async()=>{
+  const fetcher=vi.fn();vi.stubGlobal("fetch",fetcher);
+  await act(async()=>root.render(<CompletedWorkSection report={completedWorkFixture} selectable initialSource="speed" allowSpeed={false}/>));
+  expect(container.textContent).not.toContain("По скорост");
+  expect(container.textContent).toContain("Натоварване по пулсови зони");
+  expect(fetcher).not.toHaveBeenCalled();
 });
