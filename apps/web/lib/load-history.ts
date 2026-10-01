@@ -76,6 +76,7 @@ export interface LoadHistory {
   period_end: string;
   tref_bounds_profile_version?: string | null;
   equivalence_version?: string | null;
+  sport_hr_policy_version?: string | null;
   zone_bounds_bpm?: number[] | null;
   hrmax_bpm?: number | null;
   quality: {
@@ -95,7 +96,7 @@ const legacyRootKeys = ["schema_version", "athlete_id", "period_start", "period_
 const rootKeys = [...legacyRootKeys, "strength"];
 const legacyRootKeysWithTrefProfile = [...legacyRootKeys, "tref_bounds_profile_version"];
 const rootKeysWithTrefProfile = [...rootKeys, "tref_bounds_profile_version"];
-const equivalenceKeys = ["equivalence_version", "zone_bounds_bpm", "hrmax_bpm"];
+const equivalenceKeys = ["equivalence_version", "zone_bounds_bpm", "hrmax_bpm", "sport_hr_policy_version"];
 const qualityKeys = ["processed_activities", "limited_activities", "excluded_activities", "no_activity_days", "warnings"];
 const summaryKeys = ["zone", "e7_daily", "e40_daily", "status_7_40", "tref_min", "history_reliability"];
 const dailyKeys = ["date", "zone", "effective_load", "e7_daily", "e40_daily", "status_7_40"];
@@ -135,6 +136,8 @@ export function parseLoadHistory(value: unknown): LoadHistory {
   const bounds = value.zone_bounds_bpm;
   if ((value.equivalence_version != null &&
       (typeof value.equivalence_version !== "string" || !value.equivalence_version.trim())) ||
+      (value.sport_hr_policy_version != null &&
+      (typeof value.sport_hr_policy_version !== "string" || !value.sport_hr_policy_version.trim())) ||
       (value.hrmax_bpm != null && !validBpm(value.hrmax_bpm)) ||
       (bounds != null && (!Array.isArray(bounds) || bounds.length !== 6 ||
         !bounds.every((bpm, index) => validBpm(bpm) && (index === 0 || bpm > bounds[index - 1])) ||
