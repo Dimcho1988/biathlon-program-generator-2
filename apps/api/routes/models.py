@@ -1,6 +1,7 @@
 """Models HTTP routes."""
 
 import re
+from datetime import date
 from typing import Annotated
 from uuid import UUID
 from fastapi import Header, HTTPException
@@ -15,12 +16,14 @@ router = APIRouter()
 
 @router.get("/api/v2/athlete/models/speed-load")
 def speed_load_history(sport: str | None = None,
+    period_start: date | None = None, period_end: date | None = None,
     authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None):
     from ..speed_load import history_view
     alias=dependencies.model_alias(authorization,athlete_alias)
     try:
-        return history_view(dependencies.repository(),alias,sport)
+        dates = {"period_start": period_start, "period_end": period_end} if period_start is not None or period_end is not None else {}
+        return history_view(dependencies.repository(),alias,sport,**dates)
     except PersistentStoreFailure as exc:
         raise HTTPException(503,"Speed load sources are unavailable") from exc
 

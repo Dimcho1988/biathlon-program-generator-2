@@ -152,3 +152,22 @@ export function lineSegments(activities: IndexActivity[], name: string): IndexAc
   if (segment.length) result.push(segment);
   return result;
 }
+
+
+/** Trailing calendar window; only accepted, comparable observations up to this session. */
+export function indexTrend(activities: IndexActivity[], name: string, days: number) {
+  const ordered = [...activities].sort((a, b) => a.start_at_utc.localeCompare(b.start_at_utc));
+  return ordered.map((activity, position) => {
+    const current = bandFor(activity, name);
+    const first = Date.parse(`${activity.local_date}T00:00:00Z`) - (days - 1) * 86400000;
+    const usable = (row: IndexActivity) => row.index?.admission?.status !== "EXCLUDED"
+      && row.index?.signal_quality.status !== "EXCLUDED" && bandFor(row, name)?.valid
+      && Number.isFinite(bandFor(row, name)?.index);
+    const previous = ordered.slice(0, position + 1).filter(row => usable(row)
+      && row.sport === activity.sport && row.index?.comparison_key === activity.index?.comparison_key
+      && Date.parse(`${row.local_date}T00:00:00Z`) >= first);
+    const value = current?.valid && usable(activity) && previous.length >= 2
+      ? previous.reduce((total, row) => total + bandFor(row, name)!.index!, 0) / previous.length : null;
+    return { activity, value, count: previous.length };
+  });
+}

@@ -57,7 +57,7 @@ const profileNotices: Record<string, string> = {
   selected: "Избраният профил на спортист е активен.",
 };
 
-export default async function Page({ searchParams }: { searchParams: Promise<{ view?: string; intervals?: string; settings?: string; sync?: string; profile?: string; wake?: string; report_start?: string; report_end?: string }> }) {
+export default async function Page({ searchParams }: { searchParams: Promise<{ view?: string; intervals?: string; settings?: string; sync?: string; profile?: string; wake?: string; report_start?: string; report_end?: string; report_source?: string }> }) {
   const query = await searchParams;
   const view = dashboardView(query.view);
   let result: PageResult;
@@ -201,7 +201,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ v
   const profileNotice = query.profile ? profileNotices[query.profile] : undefined;
   const notice = settingsNotice ?? syncNotice ?? profileNotice ?? integrationNotice ?? (syncStatusUnavailable && result.ok ? "Статусът на обновяването временно не е достъпен; показваме последната активна версия." : undefined);
   return result.ok
-    ? <Dashboard view={view} reportStart={query.report_start} reportEnd={query.report_end} {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} generationId={result.generationId} generationRevision={result.generationRevision} generationActivatedAt={result.generationActivatedAt} syncState={syncState} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} athleteCanEdit={athleteAccess?.canEditPlan ?? false} accountDisplayName={accountDisplayName} accountRoles={accountRoles} athleteDisplayName={athleteAccess?.displayName} notice={notice} />
+    ? <Dashboard canViewSpeed={athleteAccess?.canViewRecovery ?? false} reportSource={query.report_source === "speed" ? "speed" : "hr"} view={view} reportStart={query.report_start} reportEnd={query.report_end} {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} generationId={result.generationId} generationRevision={result.generationRevision} generationActivatedAt={result.generationActivatedAt} syncState={syncState} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} athleteCanEdit={athleteAccess?.canEditPlan ?? false} accountDisplayName={accountDisplayName} accountRoles={accountRoles} athleteDisplayName={athleteAccess?.displayName} notice={notice} />
     : <ErrorState
       message={result.message}
       integrationActions={integrationActions}

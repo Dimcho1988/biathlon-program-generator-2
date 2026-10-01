@@ -140,3 +140,29 @@ def test_large_histories_are_read_in_bounded_batches_instead_of_loading_all_samp
     first=next(iterator)
     assert first[0]["activity_ref"]==first[1]["activity_ref"]=="0" and len(calls)==1
     assert len(list(iterator))==24 and len(calls)==3
+
+
+def test_custom_report_dates_include_both_boundaries_and_prior_calibration():
+    repo=Repository()
+    start=TODAY-timedelta(days=65); end=start+timedelta(days=2)
+    repo.add("prior","Run",start-timedelta(days=1),150,15)
+    repo.add("first","Run",start,150,15)
+    repo.add("last","Run",end,150,15)
+    repo.add("after","Run",end+timedelta(days=1),150,15)
+    result=model.history_view(repo,"authorized-athlete",today=TODAY,period_start=start,period_end=end)
+    assert result["start_date"]==start.isoformat() and result["end_date"]==end.isoformat()
+    assert [a["activity_ref"] for a in result["activities"]]==["first","last"]
+    assert result["classified_minutes"]==pytest.approx(20)
+    assert result["zones"][2]["equivalent_minutes"]==pytest.approx(14)
+    assert len(result["daily"])==15
+    assert sum(d["effective_load"] for d in result["daily"] if d["zone"]=="Z3")==pytest.approx(result["zones"][2]["effective_load"])
+    one=model.history_view(repo,"authorized-athlete",today=TODAY,period_start=end,period_end=end)
+    assert one["classified_minutes"]==pytest.approx(10) and len(one["daily"])==5
+
+
+@pytest.mark.parametrize("start,end", [(TODAY,None),(None,TODAY),(TODAY,TODAY-timedelta(days=1)),(TODAY,TODAY+timedelta(days=1)),(TODAY-timedelta(days=366),TODAY)])
+def test_custom_report_rejects_incomplete_reversed_future_or_excessive_periods(start,end):
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as error:
+        model.history_view(Repository(),"authorized-athlete",today=TODAY,period_start=start,period_end=end)
+    assert error.value.status_code==422

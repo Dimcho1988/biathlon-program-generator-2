@@ -6,6 +6,9 @@ import {GET} from "../app/api/athlete/models/speed-load/route";
 import {currentAuthorizedAthlete} from "../lib/account-access";
 import {getSpeedLoad} from "../lib/api";
 import {parseSpeedLoad,type SpeedLoad} from "../lib/speed-load";
+import {SpeedWorkReport} from "../components/speed-work-report";
+import {CompletedWorkSection} from "../components/completed-work-section";
+import {completedWorkFixture} from "../lib/fixture";
 import {SpeedLoadSummary} from "../components/speed-load-summary";
 vi.mock("../lib/account-access",()=>({currentAuthorizedAthlete:vi.fn()}));
 vi.mock("../lib/api",()=>({getSpeedLoad:vi.fn()}));
@@ -31,7 +34,7 @@ it("enforces athlete access for the separate ledger, including all-sport request
   vi.mocked(getSpeedLoad).mockResolvedValue(fixture());
   const result=await GET(request);
   expect(result.status).toBe(200);expect(result.headers.get("Cache-Control")).toContain("no-store");
-  expect(getSpeedLoad).toHaveBeenCalledWith("selected-athlete",undefined);
+  expect(getSpeedLoad).toHaveBeenCalledWith("selected-athlete",undefined,undefined,undefined);
   expect((await GET(new Request("https://onflows.test/api/athlete/models/speed-load?sport=bad%26query"))).status).toBe(422);
 });
 
@@ -53,4 +56,45 @@ it("rejects impossible coverage and prevents mixing generations",async()=>{
   await act(async()=>container.querySelector("button")!.click());
   expect(container.querySelector("[role=status]")!.textContent).toContain("Презареди страницата");
   expect(container.textContent).not.toContain("Q, екв. мин");
+});
+
+it("forwards validated dates and never accepts an athlete from query parameters", async()=>{
+  vi.mocked(currentAuthorizedAthlete).mockResolvedValue({userId:"user",actorUserId:"coach",canViewRecovery:true,athleteAlias:"selected-athlete",displayName:"Athlete",isOwner:false,canEditPlan:true});
+  vi.mocked(getSpeedLoad).mockResolvedValue(fixture());
+  const base="https://onflows.test/api/athlete/models/speed-load?";
+  expect((await GET(new Request(base+"period_start=2026-09-01&period_end=2026-10-01&athlete_alias=wrong"))).status).toBe(200);
+  expect(getSpeedLoad).toHaveBeenCalledWith("selected-athlete",undefined,"2026-09-01","2026-10-01");
+  for(const query of ["period_start=2026-09-01","period_start=2026-02-30&period_end=2026-10-01","period_start=2026-10-01&period_end=2026-09-01"])
+    expect((await GET(new Request(base+query))).status).toBe(422);
+});
+
+it("switches the completed report to speed for the exact selected period and preserves the choice in its form",async()=>{
+  const report={...completedWorkFixture,period_start:"2026-09-01",period_end:"2026-10-01"};
+  const fetcher=vi.fn().mockResolvedValue({ok:true,json:async()=>fixture()});vi.stubGlobal("fetch",fetcher);
+  await act(async()=>root.render(<CompletedWorkSection report={report} selectable allowSpeed generation="g" revision={1}/>));
+  expect(fetcher).not.toHaveBeenCalled();
+  await act(async()=>[...container.querySelectorAll("button")].find(b=>b.textContent==="По скорост")!.click());
+  expect(fetcher.mock.calls[0][0]).toBe("/api/athlete/models/speed-load?period_start=2026-09-01&period_end=2026-10-01");
+  expect(container.textContent).toContain("Натоварване по скоростни зони");
+  expect(container.textContent).toContain("Скоростно покритие: 50%");
+  expect(container.textContent).not.toContain("Натоварване по пулсови зони");
+  expect((container.querySelector('[name="report_source"]') as HTMLInputElement).value).toBe("speed");
+  await act(async()=>[...container.querySelectorAll("button")].find(b=>b.textContent==="По пулс")!.click());
+  expect(container.textContent).toContain("Натоварване по пулсови зони");
+});
+
+it.each(["date", "generation"])("rejects a speed report with a different %s",async(reason)=>{
+  vi.stubGlobal("fetch",vi.fn().mockResolvedValue({ok:true,json:async()=>({...fixture(),...(reason==="date"?{start_date:"2026-09-02"}:{source_revision:2})})}));
+  await act(async()=>root.render(<SpeedWorkReport start="2026-09-01" end="2026-10-01" generation="g" revision={1} totalDuration={40}/>));
+  expect(container.textContent).not.toContain("Натоварване по скоростни зони");
+  expect(container.querySelector("[role=status]")!.textContent).toContain(reason==="date"?"не съответства":"Презаредете");
+});
+
+
+it("does not offer a speed report to a shared profile without recovery access",async()=>{
+  const fetcher=vi.fn();vi.stubGlobal("fetch",fetcher);
+  await act(async()=>root.render(<CompletedWorkSection report={completedWorkFixture} selectable initialSource="speed" allowSpeed={false}/>));
+  expect(container.textContent).not.toContain("По скорост");
+  expect(container.textContent).toContain("Натоварване по пулсови зони");
+  expect(fetcher).not.toHaveBeenCalled();
 });
