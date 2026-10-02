@@ -45,6 +45,13 @@ time until readiness ≥90 is solved against total_F≤10, assuming no new loads
 The per-dose amplitude ceiling therefore never discards previous fatigue.
 Changing configuration re-evaluates the historical projection deterministically.
 
+Planning candidate checks request `simulate(..., include_details=False)` because
+they consume only the current state. This skips diagnostic daily rows and plot
+samples; it retains every historical impulse, causal baseline, arithmetic order,
+current readiness, residual fatigue and exact practical-recovery deadline. The
+default full projection used by the API and recovery charts is unchanged. This
+is a computation optimization, without a model/version or parameter change.
+
 The recovery section is keyed by athlete identity, not configuration revision.
 Saving settings therefore preserves chart filters, the selected diagnostic zone
 and expanded details. The editor refreshes its inputs on a new server revision,

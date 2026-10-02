@@ -115,11 +115,13 @@ def days_to_ready(impulses, target):
     return (lo + hi) / 2
 
 
-def simulate(daily, configs=None, *, target=None):
+def simulate(daily, configs=None, *, target=None, include_details=True):
     """Daily rows: date, zone, effective_load. Missing days are unknown, not zero.
 
     Calendar-day granularity is retained from the canonical source. Multiple
     sessions on one day are one daily dose; no invented within-day timestamps.
+    Planning trials can omit diagnostic history/plot samples while retaining
+    the exact current state, including the absolute-90% recovery deadline.
     """
     configs = configs or defaults()
     grouped = {z: {} for z in ZONES}
@@ -137,25 +139,29 @@ def simulate(daily, configs=None, *, target=None):
     for z in ZONES:
         config = configs[z]
         doses = grouped[z]
+        ordered_doses = sorted(doses.items())
         impulses = []
         contributions = []
         last_baseline = baseline([], config["initial_daily_min"])
-        for day in sorted(d for d in doses if d <= target):
-            previous = [v for d,v in sorted(doses.items()) if day-timedelta(days=40) <= d < day]
+        for day, effective in ordered_doses:
+            if day > target:
+                break
+            previous = [v for d,v in ordered_doses if day-timedelta(days=40) <= d < day]
             used, raw, n, source = baseline(previous, config["initial_daily_min"])
-            before = residual(impulses, day)
-            added = impulse(day, doses[day], used, config)
+            before = residual(impulses, day) if include_details else None
+            added = impulse(day, effective, used, config)
             if added:
                 impulses.append(added)
-            after = residual(impulses, day)
-            rows.append({"date":day.isoformat(), "zone":z,
-                "readiness_before_percent":max(0., 100.-before),
-                "readiness_after_percent":max(0., 100.-after),
-                "residual_fatigue_after":after, "impulse":added.amplitude if added else 0.,
-                "effective_load":doses[day], "baseline_daily_min":used,
-                "baseline_raw_daily_min":raw, "history_days":n, "baseline_source":source,
-                "isolated_days_to_90":days_to_ready([added],day) if added else 0.})
-            contributions.append((rows[-1], added))
+            if include_details:
+                after = residual(impulses, day)
+                rows.append({"date":day.isoformat(), "zone":z,
+                    "readiness_before_percent":max(0., 100.-before),
+                    "readiness_after_percent":max(0., 100.-after),
+                    "residual_fatigue_after":after, "impulse":added.amplitude if added else 0.,
+                    "effective_load":effective, "baseline_daily_min":used,
+                    "baseline_raw_daily_min":raw, "history_days":n, "baseline_source":source,
+                    "isolated_days_to_90":days_to_ready([added],day) if added else 0.})
+                contributions.append((rows[-1], added))
             last_baseline = used, raw, n, source
         # Attribute today's fatigue to its original daily doses. This is a
         # diagnostic projection; the history, rates and readiness are unchanged.
@@ -167,11 +173,12 @@ def simulate(daily, configs=None, *, target=None):
             "residual_fatigue":f, "days_to_practical_recovery":horizon,
             "baseline_daily_min":last_baseline[0], "baseline_raw_daily_min":last_baseline[1],
             "history_days":last_baseline[2], "baseline_source":last_baseline[3]})
-        end = max(2., horizon * 1.2)
-        # All zones share a complete two-day view. Keep hourly samples even
-        # with long residual tails, plus the exact absolute-90% crossing.
-        times = sorted({end*i/60 for i in range(61)} | {i/24 for i in range(49)} | {horizon})
-        forecast.extend({"zone":z,"days":t,"readiness_percent":max(0.,100.-residual(impulses,target,t))} for t in times)
+        if include_details:
+            end = max(2., horizon * 1.2)
+            # All zones share a complete two-day view. Keep hourly samples even
+            # with long residual tails, plus the exact absolute-90% crossing.
+            times = sorted({end*i/60 for i in range(61)} | {i/24 for i in range(49)} | {horizon})
+            forecast.extend({"zone":z,"days":t,"readiness_percent":max(0.,100.-residual(impulses,target,t))} for t in times)
     return {"daily":sorted(rows,key=lambda r:(r["date"],r["zone"])),
             "current":current,"forecast":forecast,"as_of":target.isoformat(),
             "time_resolution":"calendar-day", "ready_threshold_percent":90.}

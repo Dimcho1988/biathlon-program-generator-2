@@ -1172,7 +1172,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 continue
             if any(a["date"] == d.isoformat() for a in source.get("activities",[])):
                 continue
-            forecast = {r["zone"]:r["readiness_percent"] for r in recovery_v2.simulate(forecast_rows,configs["zones"],target=d)["current"]}
+            forecast = {r["zone"]:r["readiness_percent"] for r in recovery_v2.simulate(forecast_rows,configs["zones"],target=d,include_details=False)["current"]}
             future_goals = goal_windows[d]
             future_budget = _budgets(forecast_rows,d,actual_rows=rows,targets=future_goals)
             future_q = load_progression.remaining_q(source,result_days,d,future_goals)
@@ -1218,7 +1218,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         technical_reference = _canonical_load([], settings, day_start_rows, day)[2]
         def candidate_load(blocks):
             return _candidate_load(blocks, settings, day_start_rows, day, technical_reference=technical_reference)
-        recovery_before = recovery_v2.simulate(day_start_rows, configs["zones"], target=day)
+        recovery_before = recovery_v2.simulate(day_start_rows, configs["zones"], target=day, include_details=False)
         ready = {r["zone"]: r["readiness_percent"] for r in recovery_before["current"]}
         day_meso_week, day_meso_factor = meso_at(day)
         goals, selected_accents, cycle_state = day_goals[day]
@@ -1298,7 +1298,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 activation_eligible = False
             else:
                 forecast_rows = _with_forecast_day(forecast_rows, day, effective)
-                after = recovery_v2.simulate(forecast_rows, configs["zones"], target=day)
+                after = recovery_v2.simulate(forecast_rows, configs["zones"], target=day, include_details=False)
                 item.update(session=preserved[0], sessions=preserved, status="TRAINING", locked=True,
                             readiness_after={r["zone"]: _round(r["readiness_percent"]) for r in after["current"]},
                             explanation="Днешните утвърдени задачи са запазени; адаптират се следващите дни.")
@@ -1681,11 +1681,11 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                               and key < str(e["start_date"]) <= (day + timedelta(days=7)).isoformat()]
                 def recovery_conflict(candidate_rows):
                     for race in near_races:
-                        forecast = recovery_v2.simulate(candidate_rows, configs["zones"], target=date.fromisoformat(str(race["start_date"])))
+                        forecast = recovery_v2.simulate(candidate_rows, configs["zones"], target=date.fromisoformat(str(race["start_date"])), include_details=False)
                         if any(r["readiness_percent"] < 90. for r in forecast["current"] if r["zone"] != "STR"):
                             return "RACE_RECOVERY_CONFLICT", "Прогнозното възстановяване след тази доза не достига 90% преди близък старт."
                     if not is_key and any(
-                        any(r["readiness_percent"] < 90 for r in recovery_v2.simulate(candidate_rows, configs["zones"], target=d)["current"] if r["zone"] in {"Z1", *selected_accents})
+                        any(r["readiness_percent"] < 90 for r in recovery_v2.simulate(candidate_rows, configs["zones"], target=d, include_details=False)["current"] if r["zone"] in {"Z1", *selected_accents})
                         for d in key_slots if day < d <= day + timedelta(days=2)
                     ):
                         return "RESERVE_KEY_SESSION_RECOVERY", "Леката добавка би затруднила готовността за предстоящата ключова сесия."
@@ -1715,7 +1715,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 if conflict:
                     item["rejected_alternatives"].append({"method_id": method["id"], "code": conflict[0], "reason": conflict[1]})
                     continue
-                after = recovery_v2.simulate(after_rows, configs["zones"], target=day)
+                after = recovery_v2.simulate(after_rows, configs["zones"], target=day, include_details=False)
                 total = sum(b["duration_min"] for b in blocks)
                 actual_work = sum(b["duration_min"] for b in blocks if b["kind"] == "WORK")
                 evidence.update(fraction=fraction, requested_work_minutes=_round(requested * (1+evidence["easy_to_primary_ratio"] if mixed else 1) + evidence.get("combination_high_work_cap", 0.)), prescribed_work_minutes=_round(actual_work),
@@ -1854,7 +1854,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         + " ограничава тренировките. Провери „Индивидуални цели по компоненти“ в профила. "
                         "Стойностите са приравнени минути за 7 дни; ниска цел за Z1 ограничава и по-високите аеробни зони.")
         if day_spent and item["session"] is None:
-            after_day = recovery_v2.simulate(forecast_rows, configs["zones"], target=day)
+            after_day = recovery_v2.simulate(forecast_rows, configs["zones"], target=day, include_details=False)
             item["readiness_after"] = {r["zone"]: _round(r["readiness_percent"]) if forecast_known else None for r in after_day["current"]}
         result_days.append(item)
         if item["session"] is None and item["status"] in {"REST", "UNAVAILABLE"} and not day_spent:
