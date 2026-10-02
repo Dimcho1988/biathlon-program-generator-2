@@ -15,6 +15,8 @@ inside the archive; raw model samples are compressed with XZ without rounding.
 The worker checks only when no sync job is claimed, at most once every 15 minutes,
 and processes at most five records per pass by default. `--once` does not perform
 archival. Failure defers maintenance and leaves sync processing available.
+Unsupported oversized fields remain inline. The worker resumes its scan between
+passes so a batch of oversized records cannot block later eligible history.
 
 Each immutable object is addressed by its SHA-256 hash. Before changing the
 database, the worker uploads, downloads, verifies compressed and JSON checksums,

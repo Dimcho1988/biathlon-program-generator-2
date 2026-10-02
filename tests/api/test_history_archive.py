@@ -227,3 +227,41 @@ def test_deployment_backup_verifies_repository_reader_without_database_write():
     backend._decode_shadow = lambda proposed, key: {"wrong": True}
     with pytest.raises(ValueError):
         verify_backup(backend, "shadow", KEY)
+
+
+@pytest.mark.parametrize("limit", ["MAX_JSON_BYTES", "MAX_OBJECT_BYTES"])
+def test_oversized_fields_stay_inline_and_worker_cursor_advances(monkeypatch, limit):
+    import apps.api.history_archive as archive
+    backend = Backend()
+    monkeypatch.setattr(archive, limit, 1)
+    cursors = {}
+    first = run(backend, apply=True, max_rows=1, cursors=cursors)
+    assert first["skipped_fields"] == 1 and first["fields"] == 0
+    assert backend.uploads == backend.writes == 0
+    assert cursors["shadow"] == KEY
+    assert run(backend, apply=True, max_rows=1, cursors=cursors)["scanned"] == 0
+    assert cursors["shadow"] == ""
+
+
+def test_worker_archives_later_row_after_oversized_batch(monkeypatch):
+    import apps.api.history_archive as archive
+    second_key = "c" * 64
+    second_payload = payload()
+    second_payload["timeseries"] = second_payload["timeseries"][:1000]
+    class Queue(Backend):
+        def _request(self, method, path, **kwargs):
+            if path.endswith("read_onflows_history_archive_batch"):
+                args = kwargs["json"]
+                if args["p_kind"] == "input" or args["p_after"] == second_key:
+                    return []
+                key, value = ((KEY, payload()) if not args["p_after"]
+                              else (second_key, second_payload))
+                return [{"entity_key": key, "payload": value, "storage_hash": "f" * 32,
+                         "archive_fields": ["timeseries"]}]
+            return super()._request(method, path, **kwargs)
+    backend = Queue()
+    monkeypatch.setattr(archive, "MAX_JSON_BYTES", len(canonical(payload()["timeseries"])) // 2)
+    cursors = {}
+    assert run(backend, apply=True, max_rows=1, cursors=cursors)["skipped_fields"] == 1
+    assert run(backend, apply=True, max_rows=1, cursors=cursors)["fields"] == 1
+    assert backend.writes == 1

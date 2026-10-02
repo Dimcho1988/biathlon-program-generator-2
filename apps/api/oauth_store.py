@@ -187,6 +187,7 @@ class SupabasePilotRepository(SnapshotRepository):
         self._client = client or httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0))
         from .history_archive import HistoryArchive
         self._history_archive = HistoryArchive(supabase_url, self._headers, self._client)
+        self._history_archive_cursors: dict[str, str] = {}
         self._generation_reads = generation_reads
 
     @property
@@ -1338,7 +1339,7 @@ class SupabasePilotRepository(SnapshotRepository):
             raise PersistentStoreFailure("History archive policy is unavailable")
         if policy[0].get("enabled") is not True:
             return {"scanned": 0, "mode": "disabled"}
-        return run(self, apply=True, max_rows=policy[0]["batch_rows"])
+        return run(self, apply=True, max_rows=policy[0]["batch_rows"], cursors=self._history_archive_cursors)
 
     def _decode_shadow(self, payload: Mapping[str, Any], run_key: str = "") -> dict[str, Any]:
         try:

@@ -20,6 +20,10 @@ TABLES = {"shadow": ("onflows_activity_derived_runs", "run_key", "result_payload
           "input": ("onflows_activity_model_inputs", "input_key", "input_payload")}
 
 
+class ArchiveSizeLimit(ValueError):
+    """A valid inline field exceeds the supported object envelope."""
+
+
 def fields_for(kind: str) -> tuple[str, ...]:
     if kind not in TABLES:
         raise ValueError("Invalid history kind")
@@ -44,10 +48,10 @@ def pack(kind: str, key: str, field: str, value: Any) -> tuple[dict[str, Any], b
         raise ValueError("Invalid history identity")
     raw = canonical(value)
     if not 0 < len(raw) <= MAX_JSON_BYTES:
-        raise ValueError("History field exceeds archive limit")
+        raise ArchiveSizeLimit("History field exceeds archive limit")
     content = lzma.compress(raw, preset=3)
     if len(content) > MAX_OBJECT_BYTES:
-        raise ValueError("History object exceeds archive limit")
+        raise ArchiveSizeLimit("History object exceeds archive limit")
     checksum = hashlib.sha256(content).hexdigest()
     return {"codec": CODEC, "bucket": BUCKET,
             "path": f"v1/{kind}/{key}/{field}/{checksum}.xz",
@@ -155,6 +159,7 @@ def archive_row(repository, row, kind, *, apply=False, backup=False, minimum_byt
     proposed = dict(original)
     archived_fields = 0
     archive_bytes = 0
+    skipped_fields = 0
     # PostgreSQL JSONB includes whitespace that canonical JSON omits. Honor the
     # database's selected fields so borderline candidates cannot stall a batch.
     selected = row.get("archive_fields")
@@ -167,7 +172,11 @@ def archive_row(repository, row, kind, *, apply=False, backup=False, minimum_byt
                 or (field not in selected if selected is not None
                     else len(canonical(value)) < minimum_bytes)):
             continue
-        reference, content = pack(kind, key, field, value)
+        try:
+            reference, content = pack(kind, key, field, value)
+        except ArchiveSizeLimit:
+            skipped_fields += 1
+            continue
         if apply or backup:
             reference = repository._history_archive.upload_verified(kind, key, field, value)
         proposed[field] = reference
@@ -185,18 +194,20 @@ def archive_row(repository, row, kind, *, apply=False, backup=False, minimum_byt
         stored = read_payload(repository, kind, key)
         if digest(logical_payload(repository._history_archive, stored, kind, key)) != before:
             raise ValueError("Archived history readback failed")
-    return {"fields": archived_fields, "archive_bytes": archive_bytes,
+    return {"fields": archived_fields, "archive_bytes": archive_bytes, "skipped_fields": skipped_fields,
             "before_json_bytes": len(canonical(original)),
             "after_json_bytes": len(canonical(proposed))}
 
 
-def run(repository, *, apply=False, max_rows=2, progress=lambda _: None):
+def run(repository, *, apply=False, max_rows=2, progress=lambda _: None, cursors=None):
     if type(max_rows) is not int or not 1 <= max_rows <= 20:
         raise ValueError("Invalid archive batch size")
     totals = {"scanned": 0, "fields": 0, "archive_bytes": 0,
-              "before_json_bytes": 0, "after_json_bytes": 0, "mode": "apply" if apply else "dry-run"}
+              "skipped_fields": 0, "before_json_bytes": 0, "after_json_bytes": 0,
+              "mode": "apply" if apply else "dry-run"}
+    cursors = {} if cursors is None else cursors
     for kind in TABLES:
-        after = ""
+        after = cursors.get(kind, "")
         while totals["scanned"] < max_rows:
             rows = repository._json(repository._request("POST", "/rpc/read_onflows_history_archive_batch",
                 json={"p_kind": kind, "p_after": after, "p_limit": 1},
@@ -204,6 +215,7 @@ def run(repository, *, apply=False, max_rows=2, progress=lambda _: None):
             if not isinstance(rows, list):
                 raise ValueError("Invalid history archive batch")
             if not rows:
+                cursors[kind] = ""
                 break
             row = rows[0]
             measured = archive_row(repository, row, kind, apply=apply)
@@ -211,6 +223,7 @@ def run(repository, *, apply=False, max_rows=2, progress=lambda _: None):
             for name, value in measured.items():
                 totals[name] += value
             after = row["entity_key"]
+            cursors[kind] = after
             progress(dict(totals))
     return totals
 
