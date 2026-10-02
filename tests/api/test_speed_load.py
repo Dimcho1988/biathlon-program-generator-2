@@ -166,3 +166,41 @@ def test_custom_report_rejects_incomplete_reversed_future_or_excessive_periods(s
     with pytest.raises(HTTPException) as error:
         model.history_view(Repository(),"authorized-athlete",today=TODAY,period_start=start,period_end=end)
     assert error.value.status_code==422
+
+
+def test_rolling_chart_ratios_match_original_daily_statistics_for_short_and_full_history():
+    import numpy as np
+    import pandas as pd
+    parameters = model.fresh_parameters()
+    rng = np.random.default_rng(121)
+    dates = pd.date_range(TODAY-timedelta(days=89), TODAY)
+    summaries = pd.DataFrame({"date": dates,
+        **{f"q_{z}": rng.uniform(0, 800, len(dates)) for z in model.COMPONENTS}})
+    # Include rest days and high loads to exercise both base-load regimes and
+    # causal spill, plus windows with fewer than 7/40/50 observed dates.
+    summaries.loc[::3, [f"q_{z}" for z in model.COMPONENTS]] = 0.
+    loads = model.compute_daily_load_history(summaries, parameters, TODAY)
+    rolling = model.rolling_load_statistics(loads, parameters).pivot(
+        index="date", columns="component", values="index_7_40")
+    for day in dates:
+        previous = model.compute_load_statistics(loads.loc[:day], parameters, day)
+        for zone in model.ZONES:
+            assert rolling.loc[day, zone] == pytest.approx(
+                previous.loc[zone, "index_7_40"], rel=1e-12, abs=1e-12)
+
+
+@pytest.mark.parametrize("sport,index", [("Run", 5.), ("Ride", 2.5), ("VirtualRun", 5.37)])
+def test_prepared_integration_converter_matches_reference_exactly_at_zone_edges_and_finite_speeds(sport, index):
+    import math
+    import numpy as np
+    mapping, _ = model.zone_mapping({"GENERAL": {"index": index, "count": 1, "seconds": 600}}, BOUNDS, 200, sport)
+    convert = model._integration_converter(mapping)
+    edges = mapping["bounds_kmh"]
+    speeds = [None, False, -1., 0., float("nan"), float("inf"), -float("inf")]
+    speeds += [candidate for edge in edges for candidate in
+               (math.nextafter(edge, -math.inf), edge, math.nextafter(edge, math.inf))]
+    speeds += list(np.random.default_rng(121).uniform(edges[0]*.9, edges[-1]*1.1, 1000))
+    for speed in speeds:
+        reference = model.convert_speed(mapping, speed)
+        actual = convert(speed)
+        assert actual == ((reference["zone"], reference["coefficient"]) if reference else None)
