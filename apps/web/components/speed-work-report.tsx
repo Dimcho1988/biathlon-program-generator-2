@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { parseSpeedLoad, type SpeedLoad } from "../lib/speed-load";
+import type { SpeedLoad } from "../lib/speed-load";
+import { readSpeedLoad } from "../lib/speed-load-client";
 import { durationHms } from "../lib/duration-format";
 import { componentColor } from "../lib/training-visuals";
 
 const decimal = (value: number) => value.toLocaleString("bg-BG", { maximumFractionDigits: 1 });
-type Props = { start: string; end: string; generation: string | null; revision: number | null; totalDuration: number };
-export function SpeedWorkReport({ start, end, generation, revision, totalDuration }: Props) {
+type Props = { start: string; end: string; generation: string | null; revision: number | null; totalDuration: number; cacheScope?: string };
+export function SpeedWorkReport({ start, end, generation, revision, totalDuration, cacheScope }: Props) {
   const [data, setData] = useState<SpeedLoad | null>(null);
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
@@ -15,14 +16,7 @@ export function SpeedWorkReport({ start, end, generation, revision, totalDuratio
     const controller = new AbortController();
     async function read() {
       try {
-        const query = new URLSearchParams({ period_start: start, period_end: end });
-        const response = await fetch(`/api/athlete/models/speed-load?${query}`, { signal: controller.signal, cache: "no-store" });
-        if (!response.ok) throw new Error("Отчетът по скорост временно не е достъпен. Опитайте отново.");
-        const result = parseSpeedLoad(await response.json());
-        if (result.source_generation_id !== generation || result.source_revision !== revision)
-          throw new Error("Данните са обновени. Презаредете страницата за съгласуван отчет.");
-        if (result.start_date !== start || result.end_date !== end)
-          throw new Error("Скоростният отчет не съответства на избрания период. Опитайте след обновяването на услугата.");
+        const result = await readSpeedLoad({ cacheScope, generation, revision, start, end, signal: controller.signal, force: attempt > 0 });
         if (!controller.signal.aborted) setData(result);
       } catch (e) {
         if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Неуспешно зареждане.");
@@ -30,7 +24,7 @@ export function SpeedWorkReport({ start, end, generation, revision, totalDuratio
     }
     void read();
     return () => controller.abort();
-  }, [start, end, generation, revision, attempt]);
+  }, [start, end, generation, revision, attempt, cacheScope]);
   const sports = [...new Set(data?.activities.map(a => a.sport) ?? [])].sort();
   return <div aria-label="Отчет по скорост" aria-busy={!data && !error}>
     <div role="status">{error ? <><p>{error}</p><button type="button" className="action-button secondary" onClick={() => { setError(""); setData(null); setAttempt(a => a + 1); }}>Опитай отново</button></> : !data && <p>Изчисляване на отчета по скорост за избрания период…</p>}</div>

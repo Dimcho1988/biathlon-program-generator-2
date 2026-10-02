@@ -9,7 +9,7 @@ const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
 const decimal = (value: number) => number.format(value);
 const date = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
 
-export function CompletedWorkSection({ report, message, selectable = false, availablePeriodStart, availablePeriodEnd, generation = null, revision = null, initialSource = "hr", allowSpeed = false }: { report: CompletedWork | null; message?: string; selectable?: boolean; availablePeriodStart?: string; availablePeriodEnd?: string; generation?: string | null; revision?: number | null; initialSource?: "hr" | "speed"; allowSpeed?: boolean }) {
+export function CompletedWorkSection({ report, message, selectable = false, availablePeriodStart, availablePeriodEnd, generation = null, revision = null, initialSource = "hr", allowSpeed = false, cacheScope }: { report: CompletedWork | null; message?: string; selectable?: boolean; availablePeriodStart?: string; availablePeriodEnd?: string; generation?: string | null; revision?: number | null; initialSource?: "hr" | "speed"; allowSpeed?: boolean; cacheScope?: string }) {
   const [source, setSource] = useState<"hr" | "speed">(selectable && allowSpeed ? initialSource : "hr");
   const [speedVisited, setSpeedVisited] = useState(selectable && allowSpeed && initialSource === "speed");
   if (!report) return message ? (
@@ -38,7 +38,7 @@ export function CompletedWorkSection({ report, message, selectable = false, avai
         <button className="action-button secondary" type="submit">Покажи периода</button>
       </form>}
 
-      {selectable && allowSpeed && speedVisited && <div hidden={source !== "speed"}><SpeedWorkReport key={`${report.athlete_id}:${generation}:${revision}:${report.period_start}:${report.period_end}`} start={report.period_start} end={report.period_end} generation={generation} revision={revision} totalDuration={report.totals.activity_duration_min}/></div>}
+      {selectable && allowSpeed && speedVisited && <div hidden={source !== "speed"}><SpeedWorkReport key={`${cacheScope}:${report.athlete_id}:${generation}:${revision}:${report.period_start}:${report.period_end}`} cacheScope={cacheScope} start={report.period_start} end={report.period_end} generation={generation} revision={revision} totalDuration={report.totals.activity_duration_min}/></div>}
       {source === "hr" && <>
       <p className="report-note">Всички продължителности са във формат ч:мм:сс. Приравненото време е към горната пулсова граница на зоната; ефективният товар E е отделна моделна величина.</p>
       <div className="report-totals">

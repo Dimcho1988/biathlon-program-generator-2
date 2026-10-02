@@ -10,22 +10,29 @@ from datetime import date, datetime, timedelta, timezone
 import math
 import hashlib
 import json
+import logging
+from time import perf_counter
 from zoneinfo import ZoneInfo
 import pandas as pd
 from fastapi import HTTPException
 from biathlon.constants import COMPONENTS, fresh_parameters
 from biathlon.equivalence import equivalence_slope, EQUIVALENCE_VERSION
-from biathlon.physiology import linear_equivalence_coefficient, compute_daily_load_history, compute_load_statistics
+from biathlon.physiology import linear_equivalence_coefficient, compute_daily_load_history, compute_load_statistics, rolling_load_statistics
 from biathlon.sport_heart_rate import reference_offset, policy
 from vflat_b65.sports import speed_model_versions, supports_speed_load, is_treadmill
 from .activity_shadow_pipeline import activity_shadow_configuration_fingerprint
 from .speed_segments import sample_intervals
-from .speed_load_cache import speed_load_cache
+from .speed_load_cache import speed_load_cache, speed_activity_cache
 from .trainability_history import history_from_calendar, read_calendar, robust_mean
 from .trainability import MIN_SECONDS_BY_BAND, MAX_GAP_SECONDS
 
 VERSION="independent-speed-load-causal-ti-v1"
 ZONES=tuple(f"Z{i}" for i in range(1,6))
+logger = logging.getLogger("uvicorn.error")
+
+
+def _elapsed_ms(started):
+    return (perf_counter()-started)*1000
 
 
 def finite_positive(value):
@@ -84,6 +91,38 @@ def convert_speed(mapping, speed):
             "coefficient":coefficient}
 
 
+def _integration_converter(mapping):
+    """Prepare the unchanged scalar conversion for the Q integration loop.
+
+    The public conversion above remains the reference including diagnostic HR.
+    Integration only needs a zone and coefficient. For finite scalar HR, Python
+    bounds give exactly the same clamp as NumPy clip without its per-sample
+    array dispatch. Interpolation, arithmetic order and sequential Q summation
+    are unchanged; nonfinite interpolation still uses the reference function.
+    """
+    speeds = mapping["bounds_kmh"]
+    bounds = mapping["reference_bounds_bpm"]
+    last = len(speeds)-2
+    prepared = [(ZONES[i], max(0., float(equivalence_slope(ZONES[i])))/100.,
+                 float(bounds[i]), float(bounds[i+1])) for i in range(len(speeds)-1)]
+    def convert(speed):
+        if not finite_positive(speed) or not speeds[0] <= speed <= speeds[-1]:
+            return None
+        i = min(last, bisect_right(speeds, speed)-1)
+        fraction = (speed-speeds[i])/(speeds[i+1]-speeds[i])
+        hr = bounds[i]+fraction*(bounds[i+1]-bounds[i])
+        zone, slope, low, high = prepared[i]
+        if not math.isfinite(hr):
+            coefficient = linear_equivalence_coefficient(hr, bounds[i], bounds[i+1],
+                equivalence_slope(zone), is_z5=zone == "Z5")
+        elif zone == "Z5":
+            coefficient = max(1., 1.+slope*(min(float(hr), high)-low))
+        else:
+            coefficient = min(1., max(0., 1.-slope*(high-float(hr))))
+        return zone, coefficient
+    return convert
+
+
 def speed_at_reference_hr(mapping, hr):
     if not mapping or not finite_positive(hr):return None
     bounds=mapping["reference_bounds_bpm"];speeds=mapping["bounds_kmh"]
@@ -109,13 +148,16 @@ def prior_indices(history, sport, day, settings):
     return indices
 
 
-def activity_samples(repository, alias, activities):
+def activity_samples(repository, alias, activities, *, metrics=None):
     """Bound live full-resolution data to ten activities, not an entire season."""
     reader=getattr(repository,"activity_speed_exposure_samples",None)
     for first in range(0,len(activities),10):
         batch=activities[first:first+10]
         keys=tuple(sorted({a["latest_shadow_run_key"] for a in batch if a.get("latest_shadow_run_key")}))
+        started = perf_counter()
         rows=reader(alias,keys) if keys and reader else {}
+        if metrics is not None:
+            metrics["samples_read_ms"] = metrics.get("samples_read_ms", 0.) + _elapsed_ms(started)
         for activity in batch:
             yield activity,rows.get(activity.get("latest_shadow_run_key")) or {}
 
@@ -134,8 +176,109 @@ def calibrated_mapping(history, sport, day, settings):
     return indices, mapping, reason
 
 
+def _activity_record(activity, row, mapping, reason):
+    """Integrate one immutable speed stream; preserve sample order and formulas."""
+    s = activity["sport"]
+    shadow = row.get("shadow_payload") or {}
+    compatible = (row.get("activity_ref") == activity["activity_ref"] and
+        (shadow.get("vflat_model_version"), shadow.get("vflat_config_version")) == speed_model_versions(s)
+        and isinstance(shadow.get("speed_test_series"), list))
+    if not compatible:
+        reason = "SPEED_RECOMPUTATION_REQUIRED"
+    totals = {z: {"zone": z, "minutes": 0., "equivalent_minutes": 0.} for z in ZONES}
+    excluded = outside = 0.
+    if mapping and compatible:
+        convert = _integration_converter(mapping)
+        for left, right, speed, exclusion in sample_intervals(shadow):
+            dt = right-left
+            if exclusion or dt > MAX_GAP_SECONDS:
+                excluded += dt
+                continue
+            estimate = convert(speed)
+            if estimate is None:
+                outside += dt
+                continue
+            zone, coefficient = estimate
+            total = totals[zone]
+            total["minutes"] += dt/60
+            total["equivalent_minutes"] += dt/60*coefficient
+    covered = sum(z["minutes"] for z in totals.values())
+    duration = max(activity.get("duration_min") or 0.,
+                   (activity.get("elapsed_time_s") or activity.get("moving_time_s") or 0.)/60,
+                   covered+(excluded+outside)/60)
+    return {"activity_ref": activity["activity_ref"], "date": activity["local_date"], "sport": s,
+            "recorded_minutes": float(duration), "classified_minutes": covered,
+            "excluded_speed_minutes": excluded/60, "outside_mapping_minutes": outside/60,
+            "status": "CLASSIFIED" if covered else "UNAVAILABLE", "reason": reason,
+            "assumes_flat_incline": bool(compatible and any(
+                r.get("grade_assumed_flat") for r in shadow["speed_test_series"])),
+            "mapping": mapping, "zones": list(totals.values())}
+
+
+def _activity_records(repository, alias, selected, admitted, settings, namespace, metrics=None):
+    mapping_started = perf_counter()
+    mappings, inputs = {}, []
+    for activity in selected:
+        day = date.fromisoformat(activity["local_date"])
+        key = (activity["sport"], day)
+        if key not in mappings:
+            _, mapping, reason = calibrated_mapping(admitted, activity["sport"], day, settings)
+            mappings[key] = mapping, reason
+        inputs.append((activity, *mappings[key]))
+    if metrics is not None:
+        metrics["mapping_ms"] = _elapsed_ms(mapping_started)
+    def integrate(activity, row, mapping, reason):
+        started = perf_counter()
+        result = _activity_record(activity, row, mapping, reason)
+        if metrics is not None:
+            metrics["integration_ms"] = metrics.get("integration_ms", 0.) + _elapsed_ms(started)
+        return result
+    if not namespace:
+        return [integrate(activity, row, mapping, reason)
+                for (activity, row), (_, mapping, reason) in zip(
+                    activity_samples(repository, alias, selected, metrics=metrics), inputs)]
+    keyed, record_keys, unpinned = {}, [], {}
+    for position, (activity, mapping, reason) in enumerate(inputs):
+        # An activity without a pinned stream is unavailable and may be
+        # repaired in place. Keep it out of the cache without discarding reuse
+        # for all the other, immutable activities in this partial report.
+        if not activity.get("latest_shadow_run_key"):
+            record_keys.append(None)
+            unpinned[position] = integrate(activity, {}, mapping, reason)
+            continue
+        # No generation/period in the key: an unchanged immutable stream with
+        # the identical prior-40-day mapping has the identical direct Q. Old
+        # corrections still recalculate admission and all causal mappings.
+        identity = {"namespace": namespace, "alias": alias, "version": VERSION,
+                    "equivalence": EQUIVALENCE_VERSION,
+                    "activity": {name: activity.get(name) for name in ("activity_ref", "sport", "local_date",
+                        "duration_min", "elapsed_time_s", "moving_time_s", "latest_shadow_run_key")},
+                    "mapping": mapping, "reason": reason,
+                    "speed_versions": speed_model_versions(activity["sport"]),
+                    "max_gap_seconds": MAX_GAP_SECONDS}
+        key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+        record_keys.append(key)
+        keyed[key] = activity, mapping, reason
+    def compute(missing):
+        activities = [keyed[key][0] for key in missing]
+        source_keys = {(keyed[key][0]["activity_ref"], keyed[key][0]["latest_shadow_run_key"]): key for key in missing}
+        results = {}
+        # Consume each ten-activity sample batch immediately. Only the small
+        # integrated results survive; full-season streams are never retained.
+        for activity, row in activity_samples(repository, alias, activities, metrics=metrics):
+            key = source_keys[activity["activity_ref"], activity["latest_shadow_run_key"]]
+            _, mapping, reason = keyed[key]
+            results[key] = integrate(activity, row, mapping, reason)
+        return results
+    cached = dict(zip(keyed, speed_activity_cache.get_or_compute_many(list(keyed), compute, stats=metrics)))
+    return [cached[key] if key is not None else unpinned[position] for position, key in enumerate(record_keys)]
+
+
 def history_view(repository, alias, sport=None, *, today=None, period_start=None, period_end=None):
+    started = phase_started = perf_counter()
+    metrics = {"report_cache": "disabled"}
     settings=repository.athlete_settings(alias)
+    metrics["settings_ms"] = _elapsed_ms(phase_started)
     if settings is None:raise HTTPException(409,"Athlete settings are required")
     today=today or datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
     if (period_start is None) != (period_end is None):
@@ -147,17 +290,33 @@ def history_view(repository, alias, sport=None, *, today=None, period_start=None
         today = period_end
     start = period_start if custom_period else today-timedelta(days=39)
     warmup = min(start-timedelta(days=39), today-timedelta(days=89))
+    phase_started = perf_counter()
     calendar=read_calendar(repository,alias,date.min,today) or {"activities":[]}
+    metrics["calendar_ms"] = _elapsed_ms(phase_started)
+    phase_started = perf_counter()
     admitted=history_from_calendar(repository,alias,calendar)
+    metrics["admission_ms"] = _elapsed_ms(phase_started)
     def compute():
         return _compute_history(repository, alias, sport, settings, today, start, warmup,
-                                calendar, admitted, custom_period)
+                                calendar, admitted, custom_period, metrics)
+    def finish(result):
+        # No athlete identifiers, settings, mappings or source keys are logged.
+        logger.info("onflows_speed_load elapsed_ms=%.1f report_cache=%s "
+                    "settings_ms=%.1f calendar_ms=%.1f admission_ms=%.1f key_ms=%.1f "
+                    "mapping_ms=%.1f samples_read_ms=%.1f integration_ms=%.1f daily_statistics_ms=%.1f "
+                    "activity_cache_hits=%d activity_cache_misses=%d activity_cache_waits=%d",
+                    _elapsed_ms(started), metrics["report_cache"],
+                    *(metrics.get(name, 0.) for name in ("settings_ms", "calendar_ms", "admission_ms", "key_ms",
+                        "mapping_ms", "samples_read_ms", "integration_ms", "daily_statistics_ms")),
+                    *(metrics.get(name, 0) for name in ("activity_cache_hits", "activity_cache_misses", "activity_cache_waits")))
+        return result
     namespace = getattr(repository, "speed_load_cache_namespace", None)
     if not namespace or not calendar.get("generation_id"):
-        return compute()
+        return finish(compute())
     # Fresh authorization happens at the route, and these inputs are reread on
     # every request. Immutable run keys, admitted summaries and source metadata
     # invalidate reuse when syncs, corrections or calibration settings change.
+    phase_started = perf_counter()
     identity = {
         "namespace": namespace, "alias": alias, "sport": sport, "version": VERSION,
         "generation": calendar.get("generation_id"), "revision": calendar.get("revision"),
@@ -166,53 +325,23 @@ def history_view(repository, alias, sport=None, *, today=None, period_start=None
         "activities": calendar.get("activities", []), "admitted": admitted,
     }
     key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
-    return speed_load_cache.get_or_compute(key, compute)
+    metrics["key_ms"] = _elapsed_ms(phase_started)
+    return finish(speed_load_cache.get_or_compute(key, compute, stats=metrics))
 
 
 def _compute_history(repository, alias, sport, settings, today, start, warmup,
-                     calendar, admitted, custom_period):
+                     calendar, admitted, custom_period, metrics=None):
     available=sorted({a["sport"] for a in calendar.get("activities",[]) if supports_speed_load(a.get("sport"))})
     if sport is not None and not supports_speed_load(sport):raise HTTPException(422,"Unsupported speed-load sport")
     selected=[a for a in calendar.get("activities",[]) if supports_speed_load(a.get("sport"))
               and (sport is None or a["sport"]==sport) and warmup.isoformat()<=a.get("local_date","")<=today.isoformat()]
     selected.sort(key=lambda a:(a["local_date"],a["activity_ref"]))
-    mappings={};records=[];activity_summaries=[]
-    for a,row in activity_samples(repository,alias,selected):
-        day=date.fromisoformat(a["local_date"]);s=a["sport"];key=(s,day)
-        if key not in mappings:
-            _, mapping, reason = calibrated_mapping(admitted, s, day, settings)
-            mappings[key] = mapping, reason
-        mapping,reason=mappings[key]
-        shadow=row.get("shadow_payload") or {}
-        compatible=(row.get("activity_ref")==a["activity_ref"] and
-            (shadow.get("vflat_model_version"),shadow.get("vflat_config_version"))==speed_model_versions(s)
-            and isinstance(shadow.get("speed_test_series"),list))
-        if not compatible:reason="SPEED_RECOMPUTATION_REQUIRED"
-        totals={z:{"zone":z,"minutes":0.,"equivalent_minutes":0.} for z in ZONES}
-        excluded=outside=0.
-        if mapping and compatible:
-            for left,right,speed,exclusion in sample_intervals(shadow):
-                dt=right-left
-                if exclusion or dt>MAX_GAP_SECONDS:
-                    excluded+=dt;continue
-                estimate=convert_speed(mapping,speed)
-                if estimate is None:
-                    outside+=dt;continue
-                total=totals[estimate["zone"]]
-                total["minutes"]+=dt/60
-                total["equivalent_minutes"]+=dt/60*estimate["coefficient"]
-        covered=sum(z["minutes"] for z in totals.values())
-        duration=max(a.get("duration_min") or 0.,(a.get("elapsed_time_s") or a.get("moving_time_s") or 0.)/60,
-                     covered+(excluded+outside)/60)
-        record={"activity_ref":a["activity_ref"],"date":a["local_date"],"sport":s,
-                "recorded_minutes":float(duration),"classified_minutes":covered,
-                "excluded_speed_minutes":excluded/60,"outside_mapping_minutes":outside/60,
-                "status":"CLASSIFIED" if covered else "UNAVAILABLE","reason":reason,
-                "assumes_flat_incline":bool(compatible and any(
-                    r.get("grade_assumed_flat") for r in shadow["speed_test_series"])),
-                "mapping":mapping,"zones":list(totals.values())}
-        records.append(record)
-        activity_summaries.append({"date":pd.Timestamp(day),**{f"q_{z}":totals.get(z,{}).get("equivalent_minutes",0.) for z in COMPONENTS}})
+    namespace = getattr(repository, "speed_load_cache_namespace", None) if calendar.get("generation_id") else None
+    records = _activity_records(repository, alias, selected, admitted, settings, namespace, metrics)
+    statistics_started = perf_counter()
+    activity_summaries = [{"date": pd.Timestamp(a["date"]),
+                          **{f"q_{z}": next((b["equivalent_minutes"] for b in a["zones"] if b["zone"] == z), 0.)
+                             for z in COMPONENTS}} for a in records]
     # No-activity calendar days are zero. Unsupported activity minutes remain
     # disclosed; Q/E and ratios describe only the covered speed history.
     first=max(warmup,min((date.fromisoformat(a["local_date"]) for a in selected),default=start))
@@ -225,13 +354,18 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
     visible=[a for a in records if a["date"]>=start.isoformat()]
     count=sum(a["classified_minutes"]>0 for a in visible)
     total_recorded=sum(a["recorded_minutes"] for a in visible);covered=sum(a["classified_minutes"] for a in visible)
+    # The load history is already one row per calendar day. Existing rolling
+    # statistics use the same inclusive windows and base formula without
+    # repeatedly filtering the growing history for every chart day.
+    ratios = rolling_load_statistics(loads, parameters).pivot(index="date", columns="component", values="index_7_40")
     daily=[]
     for day,row in loads.iterrows():
         if day.date()<start:continue
-        stats=compute_load_statistics(loads.loc[:day],parameters,day)
         for z in ZONES:
             daily.append({"date":day.date().isoformat(),"zone":z,"equivalent_minutes":float(row[f"q_{z}"]),
-                          "effective_load":float(row[f"e_{z}"]),"ratio_7_40":float(stats.loc[z,"index_7_40"]) if count else None})
+                          "effective_load":float(row[f"e_{z}"]),"ratio_7_40":float(ratios.loc[day,z]) if count else None})
+    if metrics is not None:
+        metrics["daily_statistics_ms"] = _elapsed_ms(statistics_started)
     current_indices=[]
     for s in available if sport is None else [sport]:
         indices,mapping,reason=calibrated_mapping(admitted,s,today+timedelta(days=1),settings)

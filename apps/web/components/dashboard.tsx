@@ -33,6 +33,7 @@ export function Dashboard({
   reportEnd,
   reportSource,
   canViewSpeed = false,
+  speedCacheScope,
   data,
   mode,
   completedWork = null,
@@ -60,6 +61,7 @@ export function Dashboard({
   reportEnd?: string;
   reportSource?: "hr" | "speed";
   canViewSpeed?: boolean;
+  speedCacheScope?: string;
   data: TrainingStatus;
   mode: DataMode;
   completedWork?: CompletedWork | null;
@@ -135,9 +137,9 @@ export function Dashboard({
           </section>
         </>}
 
-        {view === "report" && <CompletedWorkSection allowSpeed={canViewSpeed} key={`${data.athlete_id}:${generationId}:${generationRevision}:${completedWork?.period_start}:${completedWork?.period_end}:${reportSource}:${canViewSpeed}`} generation={generationId ?? null} revision={generationRevision ?? null} initialSource={reportSource} report={completedWork} message={completedWorkMessage} selectable={mode === "api"} availablePeriodStart={loadHistory?.period_start} availablePeriodEnd={loadHistory?.period_end} />}
+        {view === "report" && <CompletedWorkSection cacheScope={speedCacheScope} allowSpeed={canViewSpeed} key={`${data.athlete_id}:${generationId}:${generationRevision}:${completedWork?.period_start}:${completedWork?.period_end}:${reportSource}:${canViewSpeed}`} generation={generationId ?? null} revision={generationRevision ?? null} initialSource={reportSource} report={completedWork} message={completedWorkMessage} selectable={mode === "api"} availablePeriodStart={loadHistory?.period_start} availablePeriodEnd={loadHistory?.period_end} />}
         {view === "load" && <>{mode === "api"
-          ? <LoadDynamics athleteId={data.athlete_id} history={loadHistory} message={loadHistoryMessage} generation={generationId ?? null} revision={generationRevision ?? null} />
+          ? <LoadDynamics cacheScope={speedCacheScope} athleteId={data.athlete_id} history={loadHistory} message={loadHistoryMessage} generation={generationId ?? null} revision={generationRevision ?? null} />
           : <LoadHistorySection history={loadHistory} message={loadHistoryMessage} />}
           <VolumeHistorySection history={volumeHistory} message={volumeHistoryMessage} /></>}
         {view === "recovery" && <RecoveryHistorySection history={recoveryHistory} message={recoveryHistoryMessage} refreshAvailable={integrationActions} syncBusy={syncBusy} fullRefreshRequired={loadHistory?.schema_version !== "load-history-v2"} canEdit={athleteCanEdit} />}

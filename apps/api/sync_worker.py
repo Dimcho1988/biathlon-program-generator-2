@@ -1045,6 +1045,10 @@ def main(argv: list[str] | None = None) -> int:
         level=os.environ.get("ONFLOWS_LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    # httpx INFO messages contain full request URLs, including athlete query
+    # identifiers, and add one log line to every idle queue poll. onFlows emits
+    # its own sanitized lifecycle/failure logs; retain transport warnings/errors.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     stopping = Event()
 
     def request_shutdown(signum: int, frame: Any) -> None:

@@ -21,7 +21,7 @@ function evidenceLabel(point:Prediction,model:SpeedModel){
   return window?(point.duration_s<window[0]||point.duration_s>window[1]?evidenceLabels.EXTRAPOLATED:evidenceLabels.INTERPOLATED):null;
 }
 
-export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minutes",predictionValue="3"}:{model:SpeedModel;canEdit:boolean;activityRef?:string;predictionInput?:string;predictionValue?:string}){
+export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minutes",predictionValue="3",cacheScope}:{model:SpeedModel;cacheScope?:string;canEdit:boolean;activityRef?:string;predictionInput?:string;predictionValue?:string}){
   const router=useRouter();
   const exploratory=model.tests.some(t=>model.active_test_keys.includes(t.entry_key)&&t.payload.test_mode==="EXPLORATORY");
   const [testSource,setTestSource]=useState<"ACTIVITY"|"MANUAL">("ACTIVITY");
@@ -51,7 +51,7 @@ export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minu
     catch(e){setMessage(e instanceof Error?e.message:"Неуспешен запис.");}finally{setBusy(false);}
   }
   return <>
-    <SpeedLoadSummary key={`load:${model.source_generation_id}:${model.source_revision}`} generation={model.source_generation_id} revision={model.source_revision}/>
+    <SpeedLoadSummary cacheScope={cacheScope} key={`load:${model.source_generation_id}:${model.source_revision}`} generation={model.source_generation_id} revision={model.source_revision}/>
     <section className="history-section"><form method="get" className="model-controls"><label>Спорт<select name="sport" defaultValue={model.sport}>{[...new Set([model.sport,...model.sports])].map(s=><option key={s}>{s}</option>)}</select></label><button className="action-button secondary">Покажи</button></form>
       <p className="speed-model-status"><strong>{curveLabel}</strong>{model.active_test_count>0?` · ${model.active_test_count} активни ${exploratory?"контролни точки":"максимални теста"}`:""}</p>
       {!!model.sport_hr_policy?.offset_bpm&&<p>Зоните и целевият пулс за колело са със 7 уд./мин по-ниски. За индекса прибавяме 7 към измерения пулс, без да променяме записа. Използва се собствен модел за приравняване на скоростта към равен терен.</p>}
