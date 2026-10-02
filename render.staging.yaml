@@ -15,7 +15,7 @@ envVarGroups:
 services:
   - type: web
     name: onflows-api-staging
-    plan: free
+    plan: starter
     region: frankfurt
     autoDeployTrigger: "off"
     runtime: python
@@ -95,7 +95,7 @@ services:
 
   - type: web
     name: onflows-web-staging
-    plan: free
+    plan: starter
     region: frankfurt
     autoDeployTrigger: "off"
     runtime: node
