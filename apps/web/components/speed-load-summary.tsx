@@ -1,22 +1,30 @@
 "use client";
-import {useState} from "react";
-import {parseSpeedLoad,type SpeedLoad} from "../lib/speed-load";
+import {useEffect,useRef,useState} from "react";
+import type {SpeedLoad} from "../lib/speed-load";
+import {readSpeedLoad} from "../lib/speed-load-client";
 import {componentColor} from "../lib/training-visuals";
 
 const n=(v:number|null|undefined)=>v==null?"—":v.toLocaleString("bg-BG",{maximumFractionDigits:2});
-export function SpeedLoadSummary({generation,revision}:{generation:string|null;revision:number|null}) {
+type Props={generation:string|null;revision:number|null;cacheScope?:string};
+export function SpeedLoadSummary(props:Props) {
+  return <SpeedLoadSummaryView key={`${props.cacheScope}:${props.generation}:${props.revision}`} {...props}/>;
+}
+function SpeedLoadSummaryView({generation,revision,cacheScope}:Props) {
   const [data,setData]=useState<SpeedLoad|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState("");
   const [sport,setSport]=useState(""),[zone,setZone]=useState("Z1");
-  async function read(selected=sport) {
+  const request=useRef<AbortController|null>(null);
+  useEffect(()=>()=>request.current?.abort(),[]);
+  async function read(selected=sport,force=false) {
+    if(request.current)return;
+    const controller=new AbortController();request.current=controller;
     setBusy(true);setError("");
     try {
-      const response=await fetch(`/api/athlete/models/speed-load${selected?`?${new URLSearchParams({sport:selected})}`:""}`);
-      if(!response.ok)throw new Error("Отчетът временно не е достъпен. Опитай отново.");
-      const result=parseSpeedLoad(await response.json());
-      if(result.source_generation_id!==generation||result.source_revision!==revision)throw new Error("Данните са обновени. Презареди страницата за съгласуван отчет.");
-      setData(result);setSport(selected);
-    }catch(e){setError(e instanceof Error?e.message:"Неуспешно зареждане.");}
-    finally{setBusy(false);}
+      const result=await readSpeedLoad({cacheScope,generation,revision,sport:selected,force,signal:controller.signal,
+        errorMessage:"Отчетът временно не е достъпен. Опитай отново.",
+        generationError:"Данните са обновени. Презареди страницата за съгласуван отчет."});
+      if(!controller.signal.aborted){setData(result);setSport(selected);}
+    }catch(e){if(!controller.signal.aborted){setData(null);setError(e instanceof Error?e.message:"Неуспешно зареждане.");}}
+    finally{if(!controller.signal.aborted){request.current=null;setBusy(false);}}
   }
   const rows=data?.daily.filter(d=>d.zone===zone)??[];
   const ymax=Math.max(1.5,...rows.map(d=>d.ratio_7_40??0))*1.1;
@@ -24,7 +32,7 @@ export function SpeedLoadSummary({generation,revision}:{generation:string|null;r
   return <section className="history-section" aria-label="Натоварване по скорост">
     <h2>Натоварване по скорост · 40 дни</h2>
     <p>Приравнената скорост се превръща в зона чрез предходните индекси за същия спорт. Бягане, ролки/ски и колело се събират по общата интензивност. Това е самостоятелна оценка, която не се добавя към пулсовия товар.</p>
-    <button type="button" className="action-button secondary" disabled={busy} onClick={()=>read()}>{busy?"Изчисляване…":data?"Обнови отчета по скорост":"Изчисли товара по скорост"}</button>
+    <button type="button" className="action-button secondary" disabled={busy} onClick={()=>read(sport,Boolean(data))}>{busy?"Изчисляване…":data?"Обнови отчета по скорост":"Изчисли товара по скорост"}</button>
     <div role="status">{error&&<p>{error}</p>}</div>
     {data&&<>
       <label>Обхват <select value={sport} disabled={busy} onChange={e=>read(e.target.value)}><option value="">Всички поддържани спортове</option>{data.sports.map(s=><option key={s}>{s}</option>)}</select></label>

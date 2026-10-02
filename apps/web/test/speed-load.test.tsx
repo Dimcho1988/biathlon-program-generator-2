@@ -10,6 +10,7 @@ import {SpeedWorkReport} from "../components/speed-work-report";
 import {CompletedWorkSection} from "../components/completed-work-section";
 import {completedWorkFixture} from "../lib/fixture";
 import {SpeedLoadSummary} from "../components/speed-load-summary";
+import {speedLoadCacheScope} from "../lib/speed-load-scope";
 vi.mock("../lib/account-access",()=>({currentAuthorizedAthlete:vi.fn()}));
 vi.mock("../lib/api",()=>({getSpeedLoad:vi.fn()}));
 let root:Root,container:HTMLDivElement;
@@ -120,4 +121,39 @@ it("keeps an in-flight speed report when switching to HR and invalidates it for 
   expect(fetcher).toHaveBeenCalledTimes(2);
   expect(signal.aborted).toBe(true);
   expect(container.textContent).not.toContain("Скоростно покритие: 50%");
+});
+
+it("conditionally revalidates exact private results after fresh authorization, including same-generation settings changes",async()=>{
+  const access={userId:"user",actorUserId:"coach",canViewRecovery:true,athleteAlias:"selected-athlete",displayName:"Athlete",isOwner:false,canEditPlan:true};
+  vi.mocked(currentAuthorizedAthlete).mockResolvedValue(access);
+  vi.mocked(getSpeedLoad).mockResolvedValue(fixture());
+  const url=`https://onflows.test/api/athlete/models/speed-load?cache_scope=${speedLoadCacheScope(access)}`;
+  const first=await GET(new Request(url)),etag=first.headers.get("ETag")!;
+  expect(etag).toMatch(/^"[a-f0-9]{64}"$/);
+  const same=await GET(new Request(url,{headers:{"If-None-Match":etag}}));
+  expect(same.status).toBe(304);expect(await same.text()).toBe("");
+  expect(getSpeedLoad).toHaveBeenCalledTimes(2);
+  const changed={...fixture(),sport_indices:fixture().sport_indices.map(row=>({...row,reference_hr_bpm:155}))};
+  vi.mocked(getSpeedLoad).mockResolvedValue(changed);
+  const refreshed=await GET(new Request(url,{headers:{"If-None-Match":etag}}));
+  expect(refreshed.status).toBe(200);expect(refreshed.headers.get("ETag")).not.toBe(etag);
+  expect(await refreshed.json()).toEqual(changed);
+  vi.mocked(currentAuthorizedAthlete).mockResolvedValue({...access,canViewRecovery:false});
+  expect((await GET(new Request(url,{headers:{"If-None-Match":etag}}))).status).toBe(403);
+  expect(getSpeedLoad).toHaveBeenCalledTimes(3);
+});
+
+it("rejects an in-flight selected-athlete/account race and scopes validators to each authorized account",async()=>{
+  const first={userId:"user",actorUserId:"coach",canViewRecovery:true,athleteAlias:"selected-athlete",displayName:"Athlete",isOwner:false,canEditPlan:true};
+  const second={...first,actorUserId:"other-account"};
+  vi.mocked(currentAuthorizedAthlete).mockResolvedValue(second);
+  vi.mocked(getSpeedLoad).mockResolvedValue(fixture());
+  const stale=`https://onflows.test/api/athlete/models/speed-load?cache_scope=${speedLoadCacheScope(first)}`;
+  expect((await GET(new Request(stale))).status).toBe(409);
+  expect(getSpeedLoad).not.toHaveBeenCalled();
+  const current=await GET(new Request("https://onflows.test/api/athlete/models/speed-load"));
+  vi.mocked(currentAuthorizedAthlete).mockResolvedValue(first);
+  const other=await GET(new Request("https://onflows.test/api/athlete/models/speed-load",{headers:{"If-None-Match":current.headers.get("ETag")!}}));
+  expect(other.status).toBe(200);
+  expect(other.headers.get("ETag")).not.toBe(current.headers.get("ETag"));
 });

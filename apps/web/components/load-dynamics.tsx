@@ -4,22 +4,23 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { displayDate } from "../lib/dashboard-periods";
 import { heartRateChartRows, loadComparison, speedChartRows, speedEquivalentWindow, type LoadSource } from "../lib/load-dynamics";
 import type { LoadHistory } from "../lib/load-history";
-import { parseSpeedLoad, type SpeedLoad } from "../lib/speed-load";
+import type { SpeedLoad } from "../lib/speed-load";
+import { readSpeedLoad } from "../lib/speed-load-client";
 import { ZONES } from "../lib/training-status";
 import { LoadHistorySection } from "./load-history-section";
 import { LoadSourceChart, type LoadSeries } from "./load-source-chart";
 
-type Props = { athleteId: string; history: LoadHistory | null; message?: string; generation: string | null; revision: number | null };
+type Props = { athleteId: string; history: LoadHistory | null; message?: string; generation: string | null; revision: number | null; cacheScope?: string };
 const choices = [["hr", "По пулс"], ["speed", "По скорост"], ["compare", "Сравнение"]] as const;
 const decimal = (value: number | null | undefined) => value == null ? "—" : value.toLocaleString("bg-BG", { maximumFractionDigits: 1 });
 const minutes = (value: number | null | undefined) => value == null ? "—" : `${decimal(value)} мин`;
 
 export function LoadDynamics(props: Props) {
   // A profile switch or refreshed generation must never reuse another analysis.
-  return <LoadDynamicsView key={`${props.athleteId}:${props.generation}:${props.revision}`} {...props}/>;
+  return <LoadDynamicsView key={`${props.cacheScope}:${props.athleteId}:${props.generation}:${props.revision}`} {...props}/>;
 }
 
-function LoadDynamicsView({ history, message, generation, revision }: Props) {
+function LoadDynamicsView({ history, message, generation, revision, cacheScope }: Props) {
   const [source, setSource] = useState<LoadSource>("hr");
   const [speed, setSpeed] = useState<SpeedLoad | null>(null);
   const [busy, setBusy] = useState(false);
@@ -27,17 +28,15 @@ function LoadDynamicsView({ history, message, generation, revision }: Props) {
   const request = useRef<AbortController | null>(null);
   useEffect(() => () => request.current?.abort(), []);
 
-  async function readSpeed() {
+  async function readSpeed(force = false) {
     if (request.current) return;
     const controller = new AbortController();
     request.current = controller;
     setBusy(true); setError(""); setSpeed(null);
     try {
-      const response = await fetch("/api/athlete/models/speed-load", { signal: controller.signal, cache: "no-store" });
-      if (!response.ok) throw new Error("Скоростният отчет временно не е достъпен. Опитай отново.");
-      const result = parseSpeedLoad(await response.json());
-      if (result.source_generation_id !== generation || result.source_revision !== revision)
-        throw new Error("Данните са обновени. Презареди страницата, за да сравниш една и съща версия.");
+      const result = await readSpeedLoad({ cacheScope, generation, revision, signal: controller.signal, force,
+        errorMessage: "Скоростният отчет временно не е достъпен. Опитай отново.",
+        generationError: "Данните са обновени. Презареди страницата, за да сравниш една и съща версия." });
       if (!controller.signal.aborted) setSpeed(result);
     } catch (e) {
       if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Неуспешно зареждане на скоростния отчет.");
@@ -58,7 +57,7 @@ function LoadDynamicsView({ history, message, generation, revision }: Props) {
           {choices.map(([key, label]) => <button key={key} type="button" aria-pressed={source === key} onClick={() => selectSource(key)}>{label}</button>)}
         </div>
       </div>
-      {source !== "hr" && speed && <button className="action-button secondary" type="button" onClick={() => void readSpeed()}>Обнови скоростния отчет</button>}
+      {source !== "hr" && speed && <button className="action-button secondary" type="button" onClick={() => void readSpeed(true)}>Обнови скоростния отчет</button>}
     </div>
     <p className="load-source-note">Изборът променя показания отчет. Recovery и планирането използват пулсовия товар.</p>
     {source === "hr" ? <LoadHistorySection history={history} message={message}/> : <div aria-busy={busy}>
