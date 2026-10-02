@@ -12,6 +12,12 @@ class StoreMetrics:
     calls: int = 0
     seconds: float = 0.
     bytes: int = 0
+    json_seconds: float = 0.
+    shadow_decode_seconds: float = 0.
+    archive_calls: int = 0
+    archive_seconds: float = 0.
+    archive_bytes: int = 0
+    archive_decode_seconds: float = 0.
 
 
 current_metrics: ContextVar[StoreMetrics | None] = ContextVar("onflows_store_metrics", default=None)
@@ -42,7 +48,12 @@ class RequestMetricsMiddleware:
         finally:
             route = getattr(scope.get("route"), "path", "unmatched")
             logger.info("onflows_request method=%s route=%s status=%d elapsed_ms=%.0f "
-                        "store_calls=%d store_ms=%.0f store_bytes=%d response_bytes=%d",
+                        "store_calls=%d store_ms=%.0f store_bytes=%d response_bytes=%d "
+                        "store_json_ms=%.0f shadow_decode_ms=%.0f archive_calls=%d "
+                        "archive_ms=%.0f archive_bytes=%d archive_decode_ms=%.0f",
                         scope["method"], route, status, (perf_counter()-started)*1000,
-                        metrics.calls, metrics.seconds*1000, metrics.bytes, response_bytes)
+                        metrics.calls, metrics.seconds*1000, metrics.bytes, response_bytes,
+                        metrics.json_seconds*1000, metrics.shadow_decode_seconds*1000,
+                        metrics.archive_calls, metrics.archive_seconds*1000,
+                        metrics.archive_bytes, metrics.archive_decode_seconds*1000)
             current_metrics.reset(token)

@@ -266,12 +266,18 @@ class SupabasePilotRepository(SnapshotRepository):
 
     @staticmethod
     def _json(response: httpx.Response) -> Any:
+        from .request_metrics import current_metrics
+        started = perf_counter()
         try:
             return response.json()
         except Exception as exc:
             raise PersistentStoreFailure(
                 "Persistent store returned an invalid response"
             ) from exc
+        finally:
+            metrics = current_metrics.get()
+            if metrics is not None:
+                metrics.json_seconds += perf_counter() - started
 
     @staticmethod
     def _secret_hash(value: str) -> str:
@@ -1342,10 +1348,17 @@ class SupabasePilotRepository(SnapshotRepository):
         return run(self, apply=True, max_rows=policy[0]["batch_rows"], cursors=self._history_archive_cursors)
 
     def _decode_shadow(self, payload: Mapping[str, Any], run_key: str = "") -> dict[str, Any]:
+        from .request_metrics import current_metrics
+        hydrated = self._hydrate_history(payload, "shadow", run_key)
+        started = perf_counter()
         try:
-            return decode_shadow_payload(self._hydrate_history(payload, "shadow", run_key))
+            return decode_shadow_payload(hydrated)
         except ValueError as exc:
             raise PersistentStoreFailure("Stored activity shadow encoding is invalid") from exc
+        finally:
+            metrics = current_metrics.get()
+            if metrics is not None:
+                metrics.shadow_decode_seconds += perf_counter() - started
 
     def activity_speed_history_samples(
         self, athlete_alias: str, run_keys: tuple[str, ...]

@@ -97,6 +97,28 @@ def test_archive_restores_exact_values_and_keeps_scientific_metadata():
     assert digest(backend.payload) == original
 
 
+def test_archive_transport_decode_and_inline_decode_are_measured_separately():
+    from apps.api.request_metrics import StoreMetrics, current_metrics
+    backend = Backend(encode_shadow_payload(payload()))
+    archive_row(backend, {"entity_key": KEY, "payload": backend.payload,
+        "storage_hash": "f" * 32}, "shadow", apply=True, minimum_bytes=1)
+    repo = repository(backend._history_archive._client)
+    metrics = StoreMetrics()
+    token = current_metrics.set(metrics)
+    try:
+        restored = repo._decode_shadow(backend.payload, KEY)
+        assert digest(restored) == digest(payload())
+        repo._json(httpx.Response(200, json={"ok": True}))
+    finally:
+        current_metrics.reset(token)
+    assert metrics.archive_calls == 1
+    assert metrics.archive_bytes == backend.payload["timeseries"]["bytes"]
+    assert metrics.archive_seconds > 0
+    assert metrics.archive_decode_seconds > 0
+    assert metrics.shadow_decode_seconds > 0
+    assert metrics.json_seconds > 0
+
+
 def test_backup_only_is_idempotent_and_never_changes_database():
     backend = Backend()
     row = {"entity_key": KEY, "payload": backend.payload}

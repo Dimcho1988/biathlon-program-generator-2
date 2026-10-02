@@ -5,6 +5,7 @@ import hashlib
 import json
 import lzma
 import re
+from time import perf_counter
 from typing import Any, Mapping
 
 import httpx
@@ -93,22 +94,37 @@ class HistoryArchive:
         self._client = client
 
     def download(self, reference, kind, key, field):
+        from .request_metrics import current_metrics
         validate_reference(reference, kind, key, field)
         # The reference cannot name another host, bucket, entity or field.
         url = f"{self._url}/authenticated/{BUCKET}/{reference['path']}"
         chunks = []
         received = 0
         try:
-            with self._client.stream("GET", url, headers=self._headers,
-                                     timeout=httpx.Timeout(60., connect=5.)) as response:
-                if response.status_code != 200:
-                    raise ValueError("History archive is unavailable")
-                for chunk in response.iter_bytes():
-                    received += len(chunk)
-                    if received > reference["bytes"]:
-                        raise ValueError("History archive response exceeds limit")
-                    chunks.append(chunk)
-            return unpack(reference, b"".join(chunks), kind, key, field)
+            started = perf_counter()
+            try:
+                with self._client.stream("GET", url, headers=self._headers,
+                                         timeout=httpx.Timeout(60., connect=5.)) as response:
+                    if response.status_code != 200:
+                        raise ValueError("History archive is unavailable")
+                    for chunk in response.iter_bytes():
+                        received += len(chunk)
+                        if received > reference["bytes"]:
+                            raise ValueError("History archive response exceeds limit")
+                        chunks.append(chunk)
+            finally:
+                metrics = current_metrics.get()
+                if metrics is not None:
+                    metrics.archive_calls += 1
+                    metrics.archive_seconds += perf_counter() - started
+                    metrics.archive_bytes += received
+            started = perf_counter()
+            try:
+                return unpack(reference, b"".join(chunks), kind, key, field)
+            finally:
+                metrics = current_metrics.get()
+                if metrics is not None:
+                    metrics.archive_decode_seconds += perf_counter() - started
         except (httpx.HTTPError, lzma.LZMAError, UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError("History archive could not be restored") from exc
 
