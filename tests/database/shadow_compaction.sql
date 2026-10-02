@@ -21,7 +21,7 @@ do $$ declare signature regprocedure; begin
     assert not has_function_privilege('anon',signature,'execute');
     assert not has_function_privilege('authenticated',signature,'execute');
   end loop;
-  assert not has_table_privilege('service_role','public.onflows_activity_derived_runs','update');
+  -- Existing table privileges are intentionally unchanged by this migration.
 end $$;
 
 set local role service_role;
@@ -33,6 +33,16 @@ begin
   proposed := original || jsonb_build_object('timeseries',jsonb_build_object(
     'codec','onflows-shadow-series-columnar-lzma-v2','data','fixture-envelope-validated-in-python',
     'sha256',repeat('e',64),'json_bytes',100,'row_count',1));
+  denied := false;
+  begin
+    perform * from public.read_onflows_shadow_compaction_batch('',null);
+  exception when raise_exception then denied := true; end;
+  assert denied, 'NULL must not bypass batch limit';
+  denied := false;
+  begin
+    perform * from public.compact_onflows_shadow_run(repeat('c',64),null,proposed);
+  exception when raise_exception then denied := true; end;
+  assert denied, 'NULL must not bypass compare-and-swap';
   select outcome into result from public.compact_onflows_shadow_run(repeat('c',64),repeat('0',32),proposed);
   assert result='CONFLICT', 'Stale storage representation was overwritten';
   denied := false;

@@ -5,7 +5,8 @@ create function public.read_onflows_shadow_compaction_batch(
 ) returns table(run_key text, result_hash text, storage_hash text, result_payload jsonb)
 language plpgsql security definer set search_path = '' as $$
 begin
-  if p_limit not between 1 and 5 or p_after_run_key !~ '^([a-f0-9]{64})?$' then
+  if p_limit is null or p_after_run_key is null
+     or p_limit not between 1 and 5 or p_after_run_key !~ '^([a-f0-9]{64})?$' then
     raise exception 'invalid compaction cursor';
   end if;
   return query
@@ -27,7 +28,8 @@ declare
   replacement jsonb;
   fields constant text[] := array['timeseries','speed_test_series','segments_15s','hrmod_waves'];
 begin
-  if p_run_key !~ '^[a-f0-9]{64}$' or p_expected_storage_hash !~ '^[a-f0-9]{32}$'
+  if p_run_key is null or p_expected_storage_hash is null
+     or p_run_key !~ '^[a-f0-9]{64}$' or p_expected_storage_hash !~ '^[a-f0-9]{32}$'
      or jsonb_typeof(p_result_payload) is distinct from 'object' then
     raise exception 'invalid compaction request';
   end if;
