@@ -185,6 +185,8 @@ class SupabasePilotRepository(SnapshotRepository):
             self._headers["Authorization"] = f"Bearer {secret_key}"
         self._cipher = TokenCipher(encryption_key)
         self._client = client or httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0))
+        from .history_archive import HistoryArchive
+        self._history_archive = HistoryArchive(supabase_url, self._headers, self._client)
         self._generation_reads = generation_reads
 
     @property
@@ -862,8 +864,8 @@ class SupabasePilotRepository(SnapshotRepository):
         return {
             **dict(row),
             "catalog_payload": dict(catalog),
-            "series_payload": dict(series) if isinstance(series, Mapping) else None,
-            "shadow_payload": self._decode_shadow(shadow) if isinstance(shadow, Mapping) else None,
+            "series_payload": self._hydrate_history(series, "input", str(row.get("input_key") or "")) if isinstance(series, Mapping) else None,
+            "shadow_payload": self._decode_shadow(shadow, str(row.get("shadow_run_key") or "")) if isinstance(shadow, Mapping) else None,
         }
 
     def replace(self, athlete_alias: str, snapshot: Mapping[str, Any]) -> None:
@@ -1305,12 +1307,12 @@ class SupabasePilotRepository(SnapshotRepository):
                 raise PersistentStoreFailure(
                     "Pinned activity shadow result is invalid"
                 )
-            return self._decode_shadow(result)
+            return self._decode_shadow(result, str(pointer["shadow_run_key"]))
         alias = quote(athlete_alias, safe="")
         reference = quote(activity_ref, safe="")
         response = self._request(
             "GET",
-            "/onflows_activity_derived_runs?select=result_payload,created_at"
+            "/onflows_activity_derived_runs?select=run_key,result_payload,created_at"
             f"&athlete_alias=eq.{alias}&activity_ref=eq.{reference}"
             "&order=created_at.desc&limit=1",
         )
@@ -1321,12 +1323,26 @@ class SupabasePilotRepository(SnapshotRepository):
         result = row.get("result_payload") if isinstance(row, Mapping) else None
         if not isinstance(result, Mapping):
             raise PersistentStoreFailure("Stored activity shadow result is invalid")
-        return self._decode_shadow(result)
+        return self._decode_shadow(result, str(row.get("run_key") or ""))
 
-    @staticmethod
-    def _decode_shadow(payload: Mapping[str, Any]) -> dict[str, Any]:
+    def _hydrate_history(self, payload, kind, key):
         try:
-            return decode_shadow_payload(payload)
+            return self._history_archive.hydrate(payload, kind, key)
+        except ValueError as exc:
+            raise PersistentStoreFailure("Stored history archive is unavailable or invalid") from exc
+
+    def archive_due_history(self):
+        from .history_archive import run
+        policy = self._json(self._request("GET", "/onflows_history_archive_policy?select=enabled,batch_rows&id=eq.true&limit=1"))
+        if not isinstance(policy, list) or len(policy) != 1:
+            raise PersistentStoreFailure("History archive policy is unavailable")
+        if policy[0].get("enabled") is not True:
+            return {"scanned": 0, "mode": "disabled"}
+        return run(self, apply=True, max_rows=policy[0]["batch_rows"])
+
+    def _decode_shadow(self, payload: Mapping[str, Any], run_key: str = "") -> dict[str, Any]:
+        try:
+            return decode_shadow_payload(self._hydrate_history(payload, "shadow", run_key))
         except ValueError as exc:
             raise PersistentStoreFailure("Stored activity shadow encoding is invalid") from exc
 
@@ -1360,7 +1376,7 @@ class SupabasePilotRepository(SnapshotRepository):
                         or not isinstance(row.get("activity_ref"), str) or row["run_key"] in result):
                     raise PersistentStoreFailure("Stored speed history identity is invalid")
                 result[row["run_key"]] = {"run_key": row["run_key"], "activity_ref": row["activity_ref"],
-                    "shadow_payload": self._decode_shadow({name: row.get(name) for name in fields})}
+                    "shadow_payload": self._decode_shadow({name: row.get(name) for name in fields}, row["run_key"])}
         if set(result) != set(keys):
             raise PersistentStoreFailure("Pinned speed history samples are unavailable")
         return result
@@ -1659,12 +1675,12 @@ class SupabasePilotRepository(SnapshotRepository):
             )
             if not isinstance(source, Mapping):
                 raise PersistentStoreFailure("Pinned activity series is invalid")
-            return downsample_model_input(source)
+            return downsample_model_input(self._hydrate_history(source, "input", str(pointer["input_key"])))
         alias = quote(athlete_alias, safe="")
         reference = quote(activity_ref, safe="")
         response = self._request(
             "GET",
-            "/onflows_activity_model_inputs?select=input_payload,created_at"
+            "/onflows_activity_model_inputs?select=input_key,input_payload,created_at"
             f"&athlete_alias=eq.{alias}&activity_ref=eq.{reference}"
             "&order=created_at.desc&limit=1",
         )
@@ -1675,7 +1691,7 @@ class SupabasePilotRepository(SnapshotRepository):
         source = row.get("input_payload") if isinstance(row, Mapping) else None
         if not isinstance(source, Mapping):
             raise PersistentStoreFailure("Stored activity series is invalid")
-        return downsample_model_input(source)
+        return downsample_model_input(self._hydrate_history(source, "input", str(row.get("input_key") or "")))
 
     def latest_activity_input_hash(
         self, athlete_alias: str, activity_ref: str

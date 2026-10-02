@@ -24,6 +24,9 @@ def logical_digest(payload: Mapping[str, Any]) -> str:
 
 
 def compact_payload(original: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
+    from .history_archive import is_reference
+    if any(is_reference(original.get(field)) for field in SERIES_FIELDS):
+        return dict(original), logical_digest(original)
     logical = decode_shadow_payload(original)
     proposed = encode_shadow_payload(logical)
     # Keep any existing representation that is already smaller. This also

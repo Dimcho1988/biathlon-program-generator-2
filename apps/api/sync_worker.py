@@ -38,6 +38,7 @@ _SAFE_COMMIT = re.compile(r"^[0-9a-f]{7,64}$")
 _ACTIVATION_OUTCOMES = frozenset({"ACTIVATED", "STALE", "LEASE_LOST"})
 _STAGE_OUTCOMES = frozenset({"READY", "ALREADY_READY"})
 _MAINTENANCE_INTERVAL_SECONDS = 6 * 60 * 60
+_HISTORY_ARCHIVE_INTERVAL_SECONDS = 15 * 60
 
 
 class SyncRepository(Protocol):
@@ -858,6 +859,7 @@ def run_worker(
     idle_delay = poll_seconds
     maintenance_at_by_alias: dict[str, float] = {}
     next_management_check = 0.
+    next_history_check = 0.
     while not stopping.is_set():
         management_tick = getattr(repository, "refresh_due_training_plans", None)
         if callable(management_tick):
@@ -885,6 +887,16 @@ def run_worker(
         if claim is None:
             if once:
                 return 0
+            archive_tick = getattr(repository, "archive_due_history", None)
+            if callable(archive_tick) and not stopping.is_set():
+                history_now = monotonic_clock()
+                if history_now >= next_history_check:
+                    next_history_check = history_now + _HISTORY_ARCHIVE_INTERVAL_SECONDS
+                    try:
+                        archive_result = archive_tick()
+                        logger.info("history_archive_tick scanned=%s", archive_result.get("scanned", 0))
+                    except Exception as exc:
+                        logger.warning("history_archive_tick_deferred error_type=%s", type(exc).__name__)
             stopping.wait(idle_delay)
             idle_delay = min(max_idle_seconds, idle_delay * 2.0)
             continue
@@ -1043,6 +1055,16 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, request_shutdown)
     signal.signal(signal.SIGINT, request_shutdown)
     repository = _repository_from_environment()
+    verification = os.environ.get("ONFLOWS_HISTORY_ARCHIVE_VERIFY", "").strip()
+    if verification:
+        try:
+            from .history_archive import verify_backup
+            kind, key = verification.split(":", 1)
+            result = verify_backup(repository, kind, key)
+            logger.info("history_archive_backup_verified fields=%d archive_bytes=%d",
+                        result["fields"], result["archive_bytes"])
+        except Exception as exc:
+            logger.warning("history_archive_backup_verification_failed error_type=%s", type(exc).__name__)
     return run_worker(
         repository,
         worker_id=_worker_id(),
