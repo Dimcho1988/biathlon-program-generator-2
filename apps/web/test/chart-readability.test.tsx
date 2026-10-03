@@ -30,6 +30,15 @@ it("keeps nulls, long pauses, and composition changes as gaps on the true time s
 });
 
 const data = [{key:"HR",label:"Пулс",color:"#df4e5b",points:[{x:0,y:0},{x:30,y:null},{x:120,y:140}]}];
+it("explains an entirely missing signal and still draws an isolated valid observation in a long series",async()=>{
+  const points=Array.from({length:150},(_,x)=>({x,y:null as number|null}));
+  await act(async()=>root.render(<MetricChart title="Пулс" unit="bpm" series={[{...data[0],points}]}/>));
+  expect(container.querySelector('svg')).toBeNull(); expect(container.textContent).toContain("Липсващите стойности не се приемат за нула");
+  points[50].y=140;
+  await act(async()=>root.render(<MetricChart title="Пулс" unit="bpm" series={[{...data[0],points:[...points]}]}/>));
+  expect(container.querySelectorAll('circle')).toHaveLength(1);
+  expect(container.querySelector('circle title')?.textContent).toContain("Пулс: 140");
+});
 it("shows exact selected values and explicit missing observations using the keyboard-accessible cursor", async () => {
   await act(async () => root.render(<MetricChart title="Пулс" unit="bpm" xKind="duration" series={data}/>));
   const slider = container.querySelector('input[type="range"]') as HTMLInputElement;
@@ -41,7 +50,7 @@ it("shows exact selected values and explicit missing observations using the keyb
     });
     expect(container.querySelector('.metric-chart-readout')?.textContent).toContain(value);
   }
-  expect(slider.getAttribute('aria-valuetext')).toBe("0:00:00");
+  expect(slider.getAttribute('aria-valuetext')).toContain("0:00:00 · Пулс: 0");
 });
 
 it("measures a chart mounted after loading, keeps phone labels at the actual width, and disconnects observers", async () => {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useMemo, useState, type PointerEvent } from "react";
-import { chartDomain, chartPath, chartTicks, nearestChartPoint, type ChartPoint } from "../lib/chart-geometry";
+import { chartDomain, chartPath, chartTicks, nearestChartPoint, spacedChartTicks, type ChartPoint } from "../lib/chart-geometry";
 import { durationSeconds } from "../lib/duration-format";
 import { useChartLayout } from "./chart-layout";
 
@@ -51,8 +51,10 @@ export function MetricChart({ title, series, xKind = "date", unit, yKind = "numb
     change(nearestChartPoint(dates, value));
   };
   const tickCount = Math.min(dates.length, compact ? 3 : 5);
-  const xTicks = Array.from({ length: tickCount }, (_, i) => dates[Math.round(i * (dates.length - 1) / Math.max(1, tickCount - 1))]);
-  if (!dates.length) return <p className="detail-empty">Няма налични измервания за „{title}“.</p>;
+  const xTicks = xKind === "duration" && dates.length > 1
+    ? spacedChartTicks([...new Set([start,...chartTicks(start,end,compact ? 3 : 5,true),end])],x).map(x=>({x}))
+    : Array.from({ length: tickCount }, (_, i) => dates[Math.round(i * (dates.length - 1) / Math.max(1, tickCount - 1))]);
+  if (!dates.length || !series.some(item => item.points.some(point => point.y !== null && Number.isFinite(point.y)))) return <p className="detail-empty">Няма налични измервания за „{title}“. Липсващите стойности не се приемат за нула.</p>;
 
   return <div className="metric-chart">
     {controls && series.length > 1 && <div className="metric-chart-controls" role="group" aria-label={`Серии · ${title}`}>
@@ -67,7 +69,12 @@ export function MetricChart({ title, series, xKind = "date", unit, yKind = "numb
         {xTicks.map((tick, i) => <g key={tick.x}><line className="metric-tick" x1={x(tick.x)} x2={x(tick.x)} y1={bottom} y2={bottom + 5} /><text className="chart-label" x={x(tick.x)} y={bottom + 22} textAnchor={i === 0 ? "start" : i === xTicks.length - 1 ? "end" : "middle"}>{xFormat(tick.x)}</text></g>)}
         {active.map(item => item.kind === "bar" ? <g key={item.key}>{item.points.map(point => point.y === null ? null : <rect key={point.x} x={Math.max(left, Math.min(right - barWidth, x(point.x) + (barSeries.indexOf(item) - (barSeries.length - 1) / 2) * barWidth - barWidth / 2))} y={y(point.y)} width={barWidth * .9} height={Math.max(0, bottom - y(point.y))} rx="2" fill={item.color} opacity={point.x === selectedX ? 1 : .7}><title>{`${xFormat(point.x)} · ${item.label}: ${format(point.y)}`}</title></rect>)}</g> : <g key={item.key}>
           <path data-source={item.source} data-zone={item.zone} d={chartPath(item.points, x, y, maxGap)} fill="none" stroke={item.color} strokeWidth="2.4" strokeDasharray={item.dashed ? "7 5" : undefined} />
-          {item.points.length <= 100 && item.points.map(point => point.y === null ? null : <circle key={point.x} cx={x(point.x)} cy={y(point.y)} r="2.5" fill={point.partial ? "var(--surface)" : item.color} stroke={item.color}><title>{`${xFormat(point.x)} · ${item.label}: ${format(point.y)}`}</title></circle>)}
+          {item.points.map((point,i) => {
+            if (point.y === null || !Number.isFinite(point.y)) return null;
+            const previous=item.points[i-1], next=item.points[i+1];
+            const isolated=(!previous || previous.y===null || point.breakBefore || point.x-previous.x>(maxGap??Infinity)) && (!next || next.y===null || next.breakBefore || next.x-point.x>(maxGap??Infinity));
+            return item.points.length <= 100 || isolated ? <circle key={point.x} cx={x(point.x)} cy={y(point.y)} r="2.5" fill={point.partial ? "var(--surface)" : item.color} stroke={item.color}><title>{`${xFormat(point.x)} · ${item.label}: ${format(point.y)}`}</title></circle> : null;
+          })}
         </g>)}
         {selectedX !== undefined && <line className="metric-cursor" x1={x(selectedX)} x2={x(selectedX)} y1={top} y2={bottom} />}
         {readout.map(item => item.kind === "bar" || item.point?.y == null ? null : <circle key={item.key} cx={x(selectedX!)} cy={y(item.point.y)} r="4" fill="var(--surface)" stroke={item.color} strokeWidth="2.5" />)}
@@ -75,6 +82,6 @@ export function MetricChart({ title, series, xKind = "date", unit, yKind = "numb
     </div>
     {reference && <p className="metric-chart-reference">Пунктиран праг: {reference.label}</p>}
     <div className="metric-chart-readout"><strong>{xLabel ?? (xKind === "date" ? "Дата" : "Време")}: {xKind === "date" ? new Date(selectedX ?? start).toLocaleDateString("bg-BG", {timeZone:"UTC"}) : xFormat(selectedX ?? start)}</strong><dl>{readout.map(item => <div key={item.key}><dt><i style={{ background: item.color }} />{item.label}</dt><dd>{item.point?.y == null ? "Няма данни" : `${format(item.point.y)}${yKind === "number" && unit !== "Индекс 7/40" && unit !== "Ефективен товар E" ? ` ${unit}` : ""}`}</dd></div>)}</dl>{active.length === 0 && <p>Избери поне една серия.</p>}</div>
-    <label className="metric-chart-scrubber">{xKind === "date" ? "Разгледай по дати" : "Разгледай във времето"}<input type="range" min="0" max={Math.max(0, dates.length - 1)} step="1" value={current} disabled={dates.length < 2} aria-label={`Разгледай · ${title}`} aria-valuetext={xFormat(selectedX ?? start)} onChange={event => change(Number(event.target.value))} /></label>
+    <label className="metric-chart-scrubber">{xKind === "date" ? "Разгледай по дати" : "Разгледай във времето"}<input type="range" min="0" max={Math.max(0, dates.length - 1)} step="1" value={current} disabled={dates.length < 2} aria-label={`Разгледай · ${title}`} aria-valuetext={`${xFormat(selectedX ?? start)} · ${readout.map(item => `${item.label}: ${item.point?.y == null ? "Няма данни" : format(item.point.y)}`).join("; ")}`} onChange={event => change(Number(event.target.value))} /></label>
   </div>;
 }
