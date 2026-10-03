@@ -20,7 +20,18 @@ Email PKCE links must return to the browser/profile that requested them; the for
 - New tests cover password authentication failures/rate limits, same-origin checks, verified-user isolation, stale/revoked/unconfirmed sessions, recent-credential AMR, Unicode byte bounds, provider security errors, form interactions and clearing password fields after save.
 - PWA tests cover manifest scope/icons, generated PNG dimensions, install acceptance/dismissal/failure, no automatic prompt, duplicate click suppression, manual instructions, installed-mode hiding and listener cleanup. Maskable icon's full mark rectangle fits inside the central 40% radius safe circle.
 - Proxy regression proves request/response cookie propagation and no-store headers using a mocked SDK callback with real NextRequest/Response. It is not an end-to-end expired-JWT refresh test.
-- A new live staging browser tab retained the previous night's authenticated account without another email request. Desktop live page/manifest/icon verification follows the staging deployment. User password creation and real iOS/Android/desktop installation require the user's own device and were not performed on their behalf.
+- A new live staging browser tab retained the previous night's authenticated account without another email request; it also retained the account and selected athlete after deployment. User password creation and real iOS/Android/desktop installation require the user's own device and were not performed on their behalf.
+
+## Verified staging rollout
+
+PR #126 was merged after all checks passed. Staging web deployment `dep-db09ja2d0e5s73am73e0` is live on code commit `be03e29281f3e32034064d8313514bcb95f2965e`, at https://onflows-web-staging.onrender.com. API/worker code and configuration did not change in this feature rollout.
+
+- GitHub CI passed: 424 web tests, 1121 API tests and 749 canonical/scientific tests, plus lint, TypeScript and production build.
+- Live Chrome emitted the installation event and displayed “Инсталирай onFlows”; this confirms browser install promotion was available. The install confirmation itself was not accepted on the user's behalf.
+- Account → Вход и сигурност displayed the optional password form and “Изход от това устройство”. Fields stayed empty; no real credential was entered or changed.
+- Public manifest and all four generated PNG icons returned HTTP 200 with correct dimensions and no authentication cookies. Anonymous login returned both methods, correct username/current-password autocomplete and manifest/Apple icon metadata.
+- Live synthetic requests verified invalid login input → 400, no-session password update → 401 and cross-origin update → 403. All responses were private/no-store and no account data was changed.
+- No new application error logs were present between deployment becoming live and final verification.
 
 ## Primary references
 
