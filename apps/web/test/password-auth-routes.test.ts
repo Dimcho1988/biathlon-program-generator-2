@@ -36,6 +36,8 @@ describe("password input and recent authentication", () => {
     const seconds = now / 1000;
     const valid = { amr: [{ method: "otp", timestamp: seconds - 60 }] };
     expect(recentlyAuthenticated(valid, now)).toBe(true);
+    expect(recentlyAuthenticated({ amr: [{ method: "email/signup", timestamp: seconds - 60 }] }, now)).toBe(true);
+    expect(recentlyAuthenticated({ amr: [{ method: "email/signup", timestamp: seconds - 86_400 }] }, now)).toBe(false);
     expect(recentlyAuthenticated({ amr: [{ method: "password", timestamp: seconds - 86_400 }] }, now)).toBe(false);
     expect(recentlyAuthenticated({ iat: seconds, amr: [{ method: "password", timestamp: seconds - 90_000 }, { method: "token_refresh", timestamp: seconds }] }, now)).toBe(false);
     for (const method of ["anonymous", "token_refresh", "unknown", undefined]) {

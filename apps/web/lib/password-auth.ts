@@ -15,7 +15,7 @@ export function recentlyAuthenticated(claims: Record<string, unknown>, now = Dat
   return claims.amr.some((entry: unknown) => {
     if (!entry || typeof entry !== "object") return false;
     const { timestamp, method } = entry as { timestamp?: unknown; method?: unknown };
-    return (method === "password" || method === "otp" || method === "magiclink" || method === "recovery")
+    return (method === "password" || method === "otp" || method === "magiclink" || method === "recovery" || method === "email/signup")
       && typeof timestamp === "number" && Number.isFinite(timestamp)
       && timestamp <= seconds + 60 && timestamp > seconds - RECENT_LOGIN_SECONDS;
   });
