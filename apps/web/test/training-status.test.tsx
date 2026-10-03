@@ -339,7 +339,7 @@ describe("dashboard", () => {
     for (const label of ["Последен тренировъчен ден", "Приравнено · 7 дни", "Tref", "7/40", "Готовност за натоварване", "Дни до пълно възстановяване"]) expect(html).toContain(label);
     expect(html).toContain("Няма налична дата на тренировката"); expect(html).not.toContain("50,9 мин"); expect(html).toContain("97,8%"); expect(html).toContain("3,5 дни");
     expect(html).toContain("Технически параметри · Tref");
-    expect(html).toContain("граници 10–20 мин");
+    expect(html).toContain("граници 0:10:00–0:20:00");
   });
   it("separates the signed-in account name from the technical analysis profile", () => {
     const html = renderToStaticMarkup(<Dashboard view="details" data={{ ...trainingStatusFixture, athlete_id: "ath-private-alias" }} mode="api" sessionActions accountDisplayName="Dimcho Mitsov" />);

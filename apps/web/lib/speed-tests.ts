@@ -1,12 +1,10 @@
+import { durationSeconds } from "./duration-format";
 import type {SpeedModel, SpeedTest} from "./models";
 export type SpeedTestMode = "STRICT"|"EXPLORATORY";
 export const testModeLabel = (mode:SpeedTestMode) => mode==="EXPLORATORY"?"Наблюдение · комплексна тренировка · праг 70%":"Стандартен · максимален тест · праг 98%";
 
 export const speedNumber = (value:number) => new Intl.NumberFormat("bg-BG", {maximumFractionDigits:2}).format(value);
-export function clockTime(seconds:number) {
-  const s = Math.round(seconds);
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2,"0")}`;
-}
+export const clockTime = durationSeconds;
 export function parseClock(value:string):number|null {
   const parts = value.trim().split(":");
   if (parts.length < 2 || parts.length > 3 || parts.some(p => !/^\d+$/.test(p))) return null;
@@ -24,9 +22,10 @@ export function parseManualClock(value:string):number|null {
   return Number.isFinite(seconds)&&seconds>=10.8&&seconds<=43516?seconds:null;
 }
 export function manualClockTime(seconds:number):string {
-  const totalMs=Math.round(seconds*1000),minutes=Math.floor(totalMs/60000);
+  if (!Number.isFinite(seconds) || seconds < 0) return "—";
+  const totalMs=Math.round(seconds*1000),hours=Math.floor(totalMs/3600000),minutes=Math.floor(totalMs/60000)%60;
   const remainder=String((totalMs%60000)/1000).split(".");
-  return `${minutes}:${remainder[0].padStart(2,"0")}${remainder[1]?","+remainder[1]:""}`;
+  return `${hours}:${String(minutes).padStart(2,"0")}:${remainder[0].padStart(2,"0")}${remainder[1]?","+remainder[1]:""}`;
 }
 export function manualTestPayload(test:SpeedTest,enabled:boolean) {
   const p=test.payload;

@@ -1,3 +1,4 @@
+import { durationHms } from "../lib/duration-format";
 import type {FunctionalProfile} from "../lib/models";
 import {manualClockTime as clockTime} from "../lib/speed-tests";
 
@@ -27,7 +28,7 @@ export function AthleteFunctionalProfile({profile}:{profile:FunctionalProfile}){
       <p>Прогнозите извън тестовете и ограничението от 5% не служат като измерено доказателство за силна или слаба страна.</p>
     </details>}
     <details><summary>Връзка с тренировъчната история</summary>
-      {profile.training_context.zones.some(zone=>zone.weekly_minutes!==null)?<><p>{profile.training_context.source==="HR_MEASURED"?"Обем от измерени пулсови зони.":profile.training_context.source==="HR_PARTIAL"?"Измерените зонови данни са непълни. Липсващите стойности остават неизвестни.":"Зоновият обем включва оценки; те не са измерено разпределение по пулс."}</p><div className="activity-table-wrap"><table><thead><tr><th>Зона</th><th>Седмичен еквивалентен обем</th></tr></thead><tbody>{profile.training_context.zones.map(zone=><tr key={zone.zone}><th>{zone.zone}</th><td>{zone.weekly_minutes===null?"Няма данни":`${number(zone.weekly_minutes)} мин Q`}</td></tr>)}</tbody></table></div><p>По-малкият обем и по-слабият резултат са повод за проверка. Повторни съпоставими тестове след тренировъчен блок показват как се променя профилът.</p></>:<p>Все още няма надеждно измерено разпределение по зони за това сравнение.</p>}
+      {profile.training_context.zones.some(zone=>zone.weekly_minutes!==null)?<><p>{profile.training_context.source==="HR_MEASURED"?"Обем от измерени пулсови зони.":profile.training_context.source==="HR_PARTIAL"?"Измерените зонови данни са непълни. Липсващите стойности остават неизвестни.":"Зоновият обем включва оценки; те не са измерено разпределение по пулс."}</p><div className="activity-table-wrap"><table><thead><tr><th>Зона</th><th>Седмичен еквивалентен обем</th></tr></thead><tbody>{profile.training_context.zones.map(zone=><tr key={zone.zone}><th>{zone.zone}</th><td>{zone.weekly_minutes===null?"Няма данни":`${durationHms(zone.weekly_minutes)} Q`}</td></tr>)}</tbody></table></div><p>По-малкият обем и по-слабият резултат са повод за проверка. Повторни съпоставими тестове след тренировъчен блок показват как се променя профилът.</p></>:<p>Все още няма надеждно измерено разпределение по зони за това сравнение.</p>}
       <p>Историята сама по себе си не доказва причината за разликите. Профилът не определя генотип, мускулни влакна или предел на развитие.</p>
     </details>
   </section>;

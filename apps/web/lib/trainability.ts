@@ -1,3 +1,4 @@
+import { durationSeconds } from "./duration-format";
 import { isCalendarDate, isRecord } from "./training-status";
 
 export const TRAINABILITY_MODEL_VERSION = "trainability_paired_raw_lag20_v3";
@@ -126,7 +127,7 @@ export function parseTrainabilityHistory(v: unknown): TrainabilityHistory {
   return { ...v, activities } as unknown as TrainabilityHistory;
 }
 export const indexNumber = (value: number | null, digits = 2) => value === null ? "—" : value.toLocaleString("bg-BG", { maximumFractionDigits: digits, minimumFractionDigits: digits });
-export const indexTime = (seconds: number) => `${Math.floor(Math.round(seconds) / 60)}:${String(Math.round(seconds) % 60).padStart(2, "0")}`;
+export const indexTime = durationSeconds;
 export const invalidLabel = (reason: string | null, minimumSeconds: number) => ({
   HR_SIGNAL_SUSPECT: "Цялата тренировка е изключена: съмнителен пулс", INDEX_OUTLIER: "Цялата тренировка е изключена: отклонение на ТИ над 20%",
   PAIRED_TIME_BELOW_MINIMUM: `Под ${minimumSeconds / 60} мин съпоставени пулс и скорост`,

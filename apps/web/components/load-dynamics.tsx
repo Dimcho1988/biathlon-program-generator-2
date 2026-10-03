@@ -1,4 +1,5 @@
 "use client";
+import { durationHms } from "../lib/duration-format";
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { displayDate } from "../lib/dashboard-periods";
@@ -13,7 +14,7 @@ import { LoadSourceChart, type LoadSeries } from "./load-source-chart";
 type Props = { athleteId: string; history: LoadHistory | null; message?: string; generation: string | null; revision: number | null; cacheScope?: string };
 const choices = [["hr", "По пулс"], ["speed", "По скорост"], ["compare", "Сравнение"]] as const;
 const decimal = (value: number | null | undefined) => value == null ? "—" : value.toLocaleString("bg-BG", { maximumFractionDigits: 1 });
-const minutes = (value: number | null | undefined) => value == null ? "—" : `${decimal(value)} мин`;
+const minutes = (value: number | null | undefined) => value == null ? "—" : durationHms(value);
 
 export function LoadDynamics(props: Props) {
   // A profile switch or refreshed generation must never reuse another analysis.
@@ -113,15 +114,15 @@ function SpeedDynamics({ speed, history, comparison }: { speed: SpeedLoad; histo
           return <article key={key} className={`load-summary-card ${key.toLowerCase()}`} style={{ "--series": `var(--zone-${index + 1})` } as CSSProperties} role="listitem" aria-label={key}>
             {comparison ? <>
               <h3 className="summary-zone">{key}</h3>
-              <table className="load-comparison-table"><caption className="sr-only">{key} · Q в приравнени минути, E в ефективни минути</caption>
+              <table className="load-comparison-table"><caption className="sr-only">{key} · Q в ч:мм:сс, E като ефективен товар</caption>
                 <thead><tr><th scope="col"><span className="sr-only">Показател</span></th><th scope="col">Пулс</th><th scope="col">Скорост</th></tr></thead>
                 <tbody><tr className="load-ratio-row"><th scope="row">7/40</th><td>{decimal(hr?.status_7_40)}</td><td>{decimal(zone.ratio_7_40)}</td></tr>
-                  {metrics.map(([label, pulse, value]) => <tr key={label}><th scope="row">{label}</th><td>{decimal(pulse)}</td><td>{decimal(value)}</td></tr>)}
+                  {metrics.map(([label, pulse, value]) => <tr key={label}><th scope="row">{label}</th><td>{label.startsWith("Q") ? minutes(pulse) : decimal(pulse)}</td><td>{label.startsWith("Q") ? minutes(value) : decimal(value)}</td></tr>)}
                 </tbody>
               </table>
             </> : <>
               <div><span className="summary-zone">{key}</span><strong>{decimal(zone.ratio_7_40)}</strong><small>7/40</small></div>
-              <dl>{metrics.map(([label, , value]) => <div key={label}><dt>{label}</dt><dd>{minutes(value)}</dd></div>)}</dl>
+              <dl>{metrics.map(([label, , value]) => <div key={label}><dt>{label}</dt><dd>{label.startsWith("Q") ? minutes(value) : decimal(value)}</dd></div>)}</dl>
             </>}
           </article>;
         })}
@@ -134,7 +135,7 @@ function SpeedDynamics({ speed, history, comparison }: { speed: SpeedLoad; histo
         <div className="activities-heading"><div><p className="section-kicker">Последни сесии</p><h3>Скоростно покритие по активности</h3></div></div>
         <div className="activity-list">{[...speed.activities].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 12).map(activity => <a key={activity.activity_ref} className="activity-row speed-load-activity" href={`/activities/${encodeURIComponent(activity.activity_ref)}`}>
           <span><strong>{activity.sport}</strong><small>{displayDate(activity.date)}</small></span>
-          <span>{decimal(activity.classified_minutes)} от {decimal(activity.recorded_minutes)} мин</span>
+          <span>{durationHms(activity.classified_minutes)} от {durationHms(activity.recorded_minutes)}</span>
           <span className={activity.classified_minutes >= activity.recorded_minutes ? "quality-valid" : "quality-limited"}>{activity.classified_minutes > 0 ? `${decimal(activity.recorded_minutes ? 100 * activity.classified_minutes / activity.recorded_minutes : 0)}% по скорост` : "Няма скоростна оценка"}</span>
         </a>)}</div>
       </>}

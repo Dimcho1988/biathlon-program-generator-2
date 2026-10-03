@@ -1,12 +1,9 @@
+import { durationSeconds } from "../lib/duration-format";
 import Link from "next/link";
 import type {HrModel,SpeedModel} from "../lib/models";
 
 const n=(v:number)=>new Intl.NumberFormat("bg-BG",{maximumFractionDigits:2}).format(v);
-// Explicit units keep multi-hour Tmax values distinct from minutes:seconds.
-function duration(v:number){
-  const s=Math.round(v),h=Math.floor(s/3600),m=Math.floor(s%3600/60),sec=s%60;
-  return h?`${h} ч ${m} мин${sec?` ${sec} сек`:""}`:`${m} мин${sec?` ${sec} сек`:""}`;
-}
+const duration = durationSeconds;
 type Zone=HrModel["zones"][number];
 const sourceLabel=(source:string)=>source==="INDEX"?"Приет ТИ":source==="EXPERT_HISTORY"?"Експертен ориентир от историята":source==="EXPERT_MINIMUM"?"Експертен минимум":"Среда на експертния диапазон";
 function candidateExplanation(z:Zone){

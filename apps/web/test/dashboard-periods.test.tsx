@@ -41,9 +41,9 @@ describe("dated dashboard volume", () => {
     const h = history();
     const html = renderToStaticMarkup(<Dashboard view="details" mode="fixture" data={trainingStatusFixture} loadHistory={h} />);
     const day = html.slice(html.indexOf('<section class="history-section"'), html.indexOf('<section class="zones-section"'));
-    expect(day).toContain("Последен тренировъчен ден"); expect(day).toContain("180 мин"); expect(day).toContain("90 мин"); expect(day).not.toContain("Готовност за натоварване");
+    expect(day).toContain("Последен тренировъчен ден"); expect(day).toContain("3:00:00"); expect(day).toContain("1:30:00"); expect(day).not.toContain("Готовност за натоварване");
     const current = html.slice(html.indexOf('<section class="zones-section"'), html.indexOf('<details id="model-metadata"'));
-    expect(current).toContain("120 мин"); expect(current).toContain("26,3 мин"); expect(current).not.toContain("Tref"); expect(current).not.toContain("Реално време");
+    expect(current).toContain("2:00:00"); expect(current).toContain("0:26:15"); expect(current).not.toContain("Tref"); expect(current).not.toContain("Реално време");
     expect(html).toContain("Технически параметри · Tref");
   });
 });

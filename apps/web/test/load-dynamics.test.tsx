@@ -47,8 +47,8 @@ it("switches cards and both charts between real independent sources, fetching on
   expect(fetcher).toHaveBeenCalledTimes(1);
   expect(container.textContent).toContain("Скоростно покритие: 75%");
   const z1 = container.querySelector('[aria-label="Показатели по скоростни зони"] [aria-label="Z1"]')!;
-  expect(z1.textContent).toContain("Q · 7 дни7 мин");
-  expect(z1.textContent).toContain("E7 · на ден100 мин");
+  expect(z1.textContent).toContain("Q · 7 дни0:07:00");
+  expect(z1.textContent).toContain("E7 · на ден100");
   expect(container.querySelectorAll('path[data-source="speed"]')).toHaveLength(10);
   expect(container.textContent).not.toContain("Реално → приравнено → ефективно");
   await click("Сравнение");

@@ -150,7 +150,7 @@ it("explains the actual daily session limit and restores automatic goals only af
   const fetchMock=vi.fn(async (_url,init)=>Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile}));vi.stubGlobal("fetch",fetchMock);
   const p={...profile,component_targets_weekly:{Z1:5},planning_controls:{...defaultPlanningControls(profile.actual_sport),sessions_per_week:13,sessions_by_day:[2,2,1,1,2,1,0]}};
   await mount(<ManagementProfileEditor initialProfile={{configured:true,profile:p,revision:1}} today="2026-09-21"/>);
-  expect(container.textContent).toContain("Z1: 5 приравнени мин / 7 дни");
+  expect(container.textContent).toContain("Z1: 0:05:00 приравнено време / 7 дни");
   await click(button("2. Дни и обем"));
   expect(container.textContent).toContain("ограниченията по дни позволяват само 9");
   await click(button("Използвай автоматичните цели"));
@@ -172,7 +172,7 @@ const draft=parseDraftRecord({entry_key:"2026-09-22",revision:1,stale:true,paylo
 it("shows a restrictive manual goal outside the collapsed explanations, including frozen v5 plans",async()=>{
   await mount(<TrainingPlanSummary plan={{...draft.payload,input_snapshot:{management_profile:{component_targets_weekly:{Z1:5}}}}}/>);
   const warning=container.querySelector<HTMLElement>('aside[role="status"]')!;
-  expect(warning.textContent).toContain("Z1: 5 приравнени мин / 7 дни");
+  expect(warning.textContent).toContain("Z1: 0:05:00 приравнено време / 7 дни");
   expect(warning.closest("details")).toBeNull();
   expect(warning.querySelector("a")?.getAttribute("href")).toBe("/planning");
 });
@@ -194,10 +194,10 @@ it("previews race duration without saving and drops the preview when discipline 
   await mount(<ManagementProfileEditor initialProfile={{configured:true,profile,revision:1}} today="2026-09-21"/>);
   await click(button("Провери приблизителното време"));
   expect(fetchMock.mock.calls[0][0]).toBe("/api/athlete/management/race-duration");
-  expect(container.textContent).toContain("около 4,5 мин");
+  expect(container.textContent).toContain("около 0:04:30");
   expect(input("Продължителност на старта").value).toBe("");
   await enter(input("Дисциплина"),"10 km");
-  expect(container.textContent).not.toContain("около 4,5 мин");
+  expect(container.textContent).not.toContain("около 0:04:30");
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 

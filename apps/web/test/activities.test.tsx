@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ActivityCalendarView } from "../components/activity-calendar";
@@ -13,6 +14,24 @@ import {
 import { getActivityDetail, getActivityView } from "../lib/api";
 
 describe("completed activities calendar", () => {
+  it("shows newest weeks, mobile days and same-day sessions first regardless of source order", () => {
+    const calendar = structuredClone(activityCalendarFixture);
+    calendar.activities.reverse();
+    const original = structuredClone(calendar);
+    const container = document.createElement("div");
+    container.innerHTML = renderToStaticMarkup(<ActivityCalendarView calendar={calendar} />);
+    const summaries = [...container.querySelectorAll(".completed-week-summary")].map(node => node.getAttribute("aria-label"));
+    expect(summaries).toEqual([
+      "Обобщение за седмицата от 2026-06-22", "Обобщение за седмицата от 2026-06-15",
+      "Обобщение за седмицата от 2026-06-08", "Обобщение за седмицата от 2026-06-01",
+    ]);
+    const days = [...container.querySelectorAll(".completed-day header time")].map(node => node.getAttribute("datetime"));
+    expect(days.slice(0, 7)).toEqual(["2026-06-28", "2026-06-27", "2026-06-26", "2026-06-25", "2026-06-24", "2026-06-23", "2026-06-22"]);
+    const sameDay = container.querySelector('time[datetime="2026-06-05"]')!.closest(".completed-day")!;
+    expect([...sameDay.querySelectorAll(".activity-card-top time")].map(node => node.textContent)).toEqual(["16:10", "09:00"]);
+    expect(calendar).toEqual(original);
+  });
+
   it("shows names, local time, same-day activities, summaries and stable routes", () => {
     const html = renderToStaticMarkup(<ActivityCalendarView calendar={activityCalendarFixture} />);
     expect(html).toContain("Ролкови ски · основна тренировка");
@@ -20,7 +39,7 @@ describe("completed activities calendar", () => {
     expect(html).toContain("16:10");
     expect(html).toContain("09:00");
     expect(html).toContain("Обобщение за седмицата");
-    expect(html).toContain("Wellness: сън 8:00");
+    expect(html).toContain("Wellness: сън 8:00:00");
     expect(html).toContain("HRV 92");
     expect(html).toContain("HRmod final · experimental");
     expect(html).toContain("HRmod");
@@ -69,6 +88,22 @@ describe("completed activities calendar", () => {
 });
 
 describe("canonical activity detail", () => {
+  it("uses hours, minutes and seconds for all duration metrics, zones and intervals", () => {
+    const html = renderToStaticMarkup(<ActivityDetailView activity={{
+      ...activityDetailFixture, duration_min: 9.3, moving_time_min: 9.15,
+      elapsed_time_min: 9.3, recording_time_min: null,
+      zones: [{ ...activityDetailFixture.zones[0], raw_time_s: 61 }],
+      intervals: [{ name: "Работа", elapsed_time_s: 558 }, { name: "Пауза", elapsed_time_s: 0 }],
+    }} series={null} />);
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    expect(container.querySelector(".activity-summary-grid dd")!.textContent).toBe("0:09:18");
+    expect([...container.querySelectorAll(".activity-private-panel dd")].map(node => node.textContent)).toEqual(["0:09:09", "0:09:18", "—"]);
+    expect(container.querySelector(".detail-zone-list span")!.textContent).toBe("0:01:01");
+    expect([...container.querySelectorAll(".activity-intervals tbody tr")].map(node => node.children[1].textContent)).toEqual(["0:09:18", "0:00:00"]);
+    expect(html).not.toContain("9,3 мин");
+  });
+
   it("keeps canonical metrics, private note and experimental route visibly separate", () => {
     const html = renderToStaticMarkup(<ActivityDetailView activity={activityDetailFixture} series={activitySeriesFixture} />);
     expect(html).toContain("Canonical activity");

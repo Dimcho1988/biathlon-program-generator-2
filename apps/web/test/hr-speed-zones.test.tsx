@@ -17,19 +17,19 @@ describe("HR-speed diagnostics",()=>{
   });
   it("shows the rejected estimate separately from the applied result with explicit units",()=>{
     const html=renderToStaticMarkup(<HrSpeedZones model={base}/>);
-    for(const text of ["19,75 км/ч","1 ч 40 мин","52 мин 30 сек","21,42 км/ч","Времето от ТИ е над 1 ч 0 мин.","8 тренировки"])
+    for(const text of ["19,75 км/ч","1:40:00","0:52:30","21,42 км/ч","Времето от ТИ е над 1:00:00.","8 тренировки"])
       expect(html).toContain(text);
   });
   it("does not invent a duration for speeds outside the curve or disguise them as missing TI",()=>{
     const html=renderToStaticMarkup(<HrSpeedZones model={{...base,zones:[{...base.zones[0],candidate_duration_s:null,candidate_reason:"SPEED_BELOW_CURVE"}]}}/>);
     expect(html).toContain("под минималната скорост на кривата");
     expect(html).not.toContain("Няма валиден зонален ТИ");
-    expect(html).not.toContain("1 ч 40 мин");
+    expect(html).not.toContain("1:40:00");
   });
   it("preserves an in-range candidate while explaining global conflict fallback",()=>{
     const html=renderToStaticMarkup(<HrSpeedZones model={{...base,conflicting_zones:[["Z1","Z2"]],zones:[{...base.zones[0],candidate_duration_s:2700,candidate_reason:"ACCEPTED",reason:"CONFLICTING_ZONE_ANCHORS"}]}}/>);
     expect(html).toContain("Конфликт между зоните Z1–Z2");
-    expect(html).toContain("45 мин");expect(html).toContain("52 мин 30 сек");
+    expect(html).toContain("0:45:00");expect(html).toContain("0:52:30");
     expect(html).toContain("В допустимия диапазон.");
     expect(html).toContain("Обща замяна заради конфликт");
   });

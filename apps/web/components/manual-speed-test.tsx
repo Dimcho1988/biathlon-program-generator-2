@@ -56,9 +56,9 @@ export function ManualSpeedTestEditor({model,test,onReset}:{model:SpeedModel;tes
         <label>Име на теста<input value={name} onChange={e=>setName(e.target.value)} required maxLength={120} placeholder="Напр. 600 м контролно"/></label>
         <div className="model-controls">
           <label>Дата на теста<input type="date" value={day} min={model.test_window?.start} max={model.test_window?.end} onChange={e=>setDay(e.target.value)} required/></label>
-          <label>Продължителност, мин:сек<input value={durationText} onChange={e=>setDurationText(e.target.value)} placeholder="Напр. 2:15,5" required aria-describedby="manual-time-help"/></label>
+          <label>Продължителност, ч:мм:сс<input value={durationText} onChange={e=>setDurationText(e.target.value)} placeholder="Напр. 0:02:15,5" required aria-describedby="manual-time-help"/></label>
         </div>
-        <p id="manual-time-help" className="muted-copy">От 0:10,8 до 725:16. Допуска се и час:мин:сек, с до три знака след десетичната запетая.</p>
+        <p id="manual-time-help" className="muted-copy">От 0:00:10,8 до 12:05:16. Допуска се и мин:сек, с до три знака след десетичната запетая.</p>
         {durationText&&duration===null&&<p role="alert">Въведи валидна продължителност в този диапазон.</p>}
         <div className="model-controls">
           <label>Въвеждам<select value={basis} onChange={e=>{setBasis(e.target.value as "DISTANCE"|"SPEED");setMeasurement("");}}><option value="DISTANCE">Дистанция, метри</option><option value="SPEED">Средна скорост, км/ч</option></select></label>

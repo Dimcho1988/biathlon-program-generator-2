@@ -1,3 +1,4 @@
+import { durationHms } from "../lib/duration-format";
 import type { CSSProperties } from "react";
 import type { DailyZoneLoad, LoadHistory } from "../lib/load-history";
 import { ZONES, type Zone } from "../lib/training-status";
@@ -100,7 +101,7 @@ export function LoadHistorySection({ history, message }: { history: LoadHistory 
   ) : null;
 
   const short = equivalentWindow(history, 7), long = equivalentWindow(history, 40);
-  const volume = (value: number | undefined) => value === undefined ? "Няма данни" : `${decimal(value)} мин`;
+  const volume = (value: number | undefined) => value === undefined ? "Няма данни" : durationHms(value);
   return (
     <section className="history-section" aria-labelledby="history-title">
       <div className="section-heading">
@@ -135,8 +136,8 @@ export function LoadHistorySection({ history, message }: { history: LoadHistory 
           <article className="load-summary-card" style={strengthStyle} role="listitem">
             <div><span className="summary-zone">STR</span><strong>{decimal(history.strength.summary.status_7_40)}</strong><small>7/40</small></div>
             <dl>
-              <div><dt>Последни 7 дни</dt><dd>{decimal(history.strength.summary.real_time_7d_min)} мин</dd></div>
-              <div><dt>Последни 40 дни</dt><dd>{decimal(history.strength.summary.real_time_40d_min)} мин</dd></div>
+              <div><dt>Последни 7 дни</dt><dd>{durationHms(history.strength.summary.real_time_7d_min)}</dd></div>
+              <div><dt>Последни 40 дни</dt><dd>{durationHms(history.strength.summary.real_time_40d_min)}</dd></div>
               <div><dt>Тренировки · целият период</dt><dd>{history.strength.summary.recorded_activities}</dd></div>
             </dl>
           </article>
@@ -158,14 +159,14 @@ export function LoadHistorySection({ history, message }: { history: LoadHistory 
         {history.activities.slice(0, 12).map((activity) => <details key={activity.activity_ref} className="activity-row">
           <summary>
             <span><strong>{activity.sport}</strong><small>{date(activity.date)}</small></span>
-            <span>{activity.duration_min === null ? "—" : `${decimal(activity.duration_min)} мин`}</span>
+            <span>{activity.duration_min === null ? "—" : durationHms(activity.duration_min)}</span>
             <span className={activity.quality_status === "limited" ? "quality-limited" : "quality-valid"}>{activity.strength_time_min > 0 ? "STR · без двойно HR" : `${decimal(activity.hr_coverage_percent)}% HR`}</span>
             <span className="chevron" aria-hidden="true">⌄</span>
           </summary>
-          {activity.strength_time_min > 0 ? <div className="strength-activity-detail"><strong>STR</strong><span>{decimal(activity.strength_time_min)} реални мин</span><span>{decimal(activity.strength_time_min)} приравнени мин</span><small>Коефициент 1,0 · Z1–Z5 = 0</small></div> : <div className="activity-table-wrap"><table>
+          {activity.strength_time_min > 0 ? <div className="strength-activity-detail"><strong>STR</strong><span>{durationHms(activity.strength_time_min)} реално време</span><span>{durationHms(activity.strength_time_min)} приравнено време</span><small>Коефициент 1,0 · Z1–Z5 = 0</small></div> : <div className="activity-table-wrap"><table>
             <thead><tr><th>Зона</th><th>Реално</th><th>Приравнено</th><th>Ефективно E</th><th>Среден HR</th><th>Стойност/мин</th></tr></thead>
             <tbody>{activity.zones.map((zone) => <tr key={zone.zone}>
-              <th>{zone.zone}</th><td>{decimal(zone.raw_time_min)} мин</td><td>{decimal(zone.equivalent_time_min)} мин</td><td>{decimal(zone.effective_load)}</td><td>{zone.mean_effective_hr_bpm === null ? "—" : `${decimal(zone.mean_effective_hr_bpm)} bpm`}</td><td>{zone.average_minute_value_percent === null ? "—" : `${decimal(zone.average_minute_value_percent)}%`}</td>
+              <th>{zone.zone}</th><td>{durationHms(zone.raw_time_min)}</td><td>{durationHms(zone.equivalent_time_min)}</td><td>{decimal(zone.effective_load)}</td><td>{zone.mean_effective_hr_bpm === null ? "—" : `${decimal(zone.mean_effective_hr_bpm)} bpm`}</td><td>{zone.average_minute_value_percent === null ? "—" : `${decimal(zone.average_minute_value_percent)}%`}</td>
             </tr>)}</tbody>
           </table></div>}
         </details>)}
