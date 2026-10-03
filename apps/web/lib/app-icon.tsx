@@ -18,7 +18,7 @@ export async function appIcon(size: number, maskable = false) {
   const height = Math.round(size * (maskable ? .61 : .84));
   const width = Math.round(height * 922 / 1121);
   return new ImageResponse(
-    <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#07111d" }}>
+    <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#ffffff" }}>
       <img src={src} width={width} height={height} alt="" />
     </div>,
     { width: size, height: size, headers: { "Cache-Control": "public, max-age=86400" } },

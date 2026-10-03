@@ -7,6 +7,7 @@ import { AthleteNavigation } from "../components/athlete-navigation";
 import "./workspace.css";
 import "./auth.css";
 import "./install.css";
+import "./readability.css";
 
 export const metadata: Metadata = {
   title: "Тренировъчен статус · onFlows",
@@ -16,7 +17,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  width: "device-width", initialScale: 1, themeColor: "#07111d",
+  width: "device-width", initialScale: 1, viewportFit: "cover", themeColor: [{ media: "(prefers-color-scheme: light)", color: "#ffffff" }, { media: "(prefers-color-scheme: dark)", color: "#07111d" }],
 };
 
 const themeScript = `(function(){try{var k='onflows-theme',s=localStorage.getItem(k),t=s==='light'||s==='dark'?s:(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.dataset.theme=t;document.documentElement.style.colorScheme=t}catch(e){document.documentElement.dataset.theme=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}})()`;

@@ -3,6 +3,9 @@ import { appIcon } from "../../../lib/app-icon";
 export const dynamic = "force-static";
 export const dynamicParams = false;
 const icons = {
+  "onflows-white-192.png": { size: 192, maskable: false },
+  "onflows-white-512.png": { size: 512, maskable: false },
+  "onflows-white-maskable-512.png": { size: 512, maskable: true },
   "onflows-192.png": { size: 192, maskable: false },
   "onflows-512.png": { size: 512, maskable: false },
   "onflows-maskable-512.png": { size: 512, maskable: true },

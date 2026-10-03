@@ -1,6 +1,7 @@
 "use client";
 import { durationHms } from "../lib/duration-format";
 import {useEffect,useRef,useState} from "react";
+import { MetricChart } from "./metric-chart";
 import type {SpeedLoad} from "../lib/speed-load";
 import {readSpeedLoad} from "../lib/speed-load-client";
 import {componentColor} from "../lib/training-visuals";
@@ -29,7 +30,6 @@ function SpeedLoadSummaryView({generation,revision,cacheScope}:Props) {
   }
   const rows=data?.daily.filter(d=>d.zone===zone)??[];
   const ymax=Math.max(1.5,...rows.map(d=>d.ratio_7_40??0))*1.1;
-  const x=(i:number)=>45+815*i/Math.max(rows.length-1,1),y=(v:number)=>200-170*v/ymax;
   return <section className="history-section" aria-label="Натоварване по скорост">
     <h2>Натоварване по скорост · 40 дни</h2>
     <p>Приравнената скорост се превръща в зона чрез предходните индекси за същия спорт. Бягане, ролки/ски и колело се събират по общата интензивност. Това е самостоятелна оценка, която не се добавя към пулсовия товар.</p>
@@ -47,11 +47,7 @@ function SpeedLoadSummaryView({generation,revision,cacheScope}:Props) {
       <div className="activity-table-wrap"><table><thead><tr><th>Зона</th><th>Време · ч:мм:сс</th><th>Q · ч:мм:сс</th><th>E, ефективен товар</th><th>7/40</th></tr></thead><tbody>{data.zones.map(z=><tr key={z.zone}><th style={{color:componentColor(z.zone)}}>{z.zone}</th><td>{durationHms(z.minutes)}</td><td>{durationHms(z.equivalent_minutes)}</td><td>{n(z.effective_load)}</td><td>{n(z.ratio_7_40)}</td></tr>)}</tbody></table></div>
       <p>Q използва същите коефициенти като пулсовия отчет, а E — същата каскада между зоните. За всяка тренировка скалата се определя само от предходните 40 дни. 7/40 сравнява средния дневен E за 7 и 40 дни с базовата добавка.</p>
       {data.status!=="UNAVAILABLE"&&<><label>Зона за динамиката <select value={zone} onChange={e=>setZone(e.target.value)}>{data.zones.map(z=><option key={z.zone}>{z.zone}</option>)}</select></label>
-        <figure className="history-chart"><svg viewBox="0 0 900 235" role="img" aria-label={`Динамика 7/40 по скорост за ${zone}`}>
-          {[0,1,ymax].map(v=><g key={v}><line x1="45" x2="860" y1={y(v)} y2={y(v)} stroke="currentColor" opacity=".15"/><text x="38" y={y(v)+4} textAnchor="end" fontSize="12" fill="currentColor">{n(v)}</text></g>)}
-          {rows.slice(1).map((d,i)=>d.ratio_7_40!==null&&rows[i].ratio_7_40!==null&&<line key={d.date} x1={x(i)} x2={x(i+1)} y1={y(rows[i].ratio_7_40!)} y2={y(d.ratio_7_40)} stroke={componentColor(zone)} strokeWidth="3"><title>{d.date}: {n(d.ratio_7_40)}</title></line>)}
-          <text x="45" y="225" fontSize="12" fill="currentColor">{data.start_date}</text><text x="860" y="225" textAnchor="end" fontSize="12" fill="currentColor">{data.end_date}</text>
-        </svg></figure></>}
+        <figure className="history-chart"><MetricChart title={`Динамика 7/40 по скорост за ${zone}`} unit="Индекс 7/40" domain={[0,ymax]} maxGap={86400000} reference={{value:1,label:"7/40 = 1 · стабилен товар"}} series={[{ key: zone, label: zone, color: componentColor(zone), points: rows.map(row => ({x:Date.parse(row.date),y:row.ratio_7_40})) }]} /></figure></>}
     </>}
   </section>;
 }

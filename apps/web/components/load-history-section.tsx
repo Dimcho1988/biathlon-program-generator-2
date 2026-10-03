@@ -1,3 +1,4 @@
+"use client";
 import { durationHms } from "../lib/duration-format";
 import type { CSSProperties } from "react";
 import type { DailyZoneLoad, LoadHistory } from "../lib/load-history";
@@ -5,6 +6,7 @@ import { ZONES, type Zone } from "../lib/training-status";
 
 import { equivalentWindow, displayDate } from "../lib/dashboard-periods";
 import { VolumePeriodNote } from "./volume-period-note";
+import { MetricChart } from "./metric-chart";
 import { TrefDetails } from "./tref-details";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
@@ -14,82 +16,13 @@ const date = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "2-digit
 const zoneStyle = (zone: Zone): CSSProperties => ({ "--series": `var(--zone-${ZONES.indexOf(zone) + 1})` } as CSSProperties);
 const strengthStyle = { "--series": "var(--strength)" } as CSSProperties;
 
-function SevenFortyChart({ rows }: { rows: DailyZoneLoad[] }) {
-  const dates = [...new Set(rows.map((row) => row.date))];
-  if (dates.length < 2) return <p className="muted-copy">Няма достатъчно дни за графика.</p>;
-  const width = 920;
-  const height = 300;
-  const left = 48;
-  const right = 16;
-  const top = 22;
-  const bottom = 42;
-  const values = rows.map((row) => row.status_7_40);
-  const yMin = Math.min(0.6, Math.floor(Math.min(...values) * 10) / 10);
-  const yMax = Math.max(1.4, Math.ceil(Math.max(...values) * 10) / 10);
-  const x = (index: number) => left + index * (width - left - right) / (dates.length - 1);
-  const y = (value: number) => top + (yMax - value) * (height - top - bottom) / (yMax - yMin);
-
-  return (
-    <figure className="history-chart">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-labelledby="load-chart-title load-chart-description">
-        <title id="load-chart-title">Динамика на индекса 7/40 по зони</title>
-        <desc id="load-chart-description">Линии за Z1 до Z5 през наличния период. Пунктираната линия отбелязва индекс едно.</desc>
-        {[yMin, 1, yMax].map((tick) => <g key={tick}>
-          <line className={tick === 1 ? "chart-reference" : "chart-grid"} x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} />
-          <text className="chart-label" x={left - 8} y={y(tick) + 4} textAnchor="end">{decimal(tick)}</text>
-        </g>)}
-        {ZONES.map((zone) => {
-          const zoneRows = rows.filter((row) => row.zone === zone);
-          const points = zoneRows.map((row) => `${x(dates.indexOf(row.date))},${y(row.status_7_40)}`).join(" ");
-          return <polyline key={zone} className="chart-series" style={zoneStyle(zone)} points={points} />;
-        })}
-        <text className="chart-label" x={left} y={height - 12}>{date(dates[0])}</text>
-        <text className="chart-label" x={width - right} y={height - 12} textAnchor="end">{date(dates.at(-1)!)}</text>
-      </svg>
-      <figcaption className="chart-legend">{ZONES.map((zone) => <span key={zone} style={zoneStyle(zone)}><i />{zone}</span>)}</figcaption>
-    </figure>
-  );
-}
-
-function EffectiveLoadChart({ rows }: { rows: DailyZoneLoad[] }) {
-  const dates = [...new Set(rows.map((row) => row.date))];
-  if (dates.length < 2) return <p className="muted-copy">Няма достатъчно дни за графика.</p>;
-  const width = 920;
-  const height = 300;
-  const left = 48;
-  const right = 16;
-  const top = 22;
-  const bottom = 42;
-  const maximum = Math.max(...rows.map((row) => row.effective_load));
-  const yMax = Math.max(1, Math.ceil(maximum));
-  const ticks = [0, yMax / 2, yMax];
-  const x = (index: number) => left + index * (width - left - right) / (dates.length - 1);
-  const y = (value: number) => top + (yMax - value) * (height - top - bottom) / yMax;
-
-  return (
-    <figure className="history-chart">
-      <div className="history-chart-heading">
-        <div><p className="section-kicker">Канонични дневни стойности</p><h3>Дневен ефективен товар E по зони</h3></div>
-        <p>Показани са Z1–Z5 поотделно; линиите не се сумират до нов общ резултат.</p>
-      </div>
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-labelledby="effective-load-chart-title effective-load-chart-description">
-        <title id="effective-load-chart-title">Дневен ефективен товар E по зони</title>
-        <desc id="effective-load-chart-description">Директните дневни effective load стойности за Z1 до Z5 през наличния период, без изглаждане или сумиране.</desc>
-        {ticks.map((tick) => <g key={tick}>
-          <line className="chart-grid" x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} />
-          <text className="chart-label" x={left - 8} y={y(tick) + 4} textAnchor="end">{decimal(tick)}</text>
-        </g>)}
-        {ZONES.map((zone) => {
-          const zoneRows = rows.filter((row) => row.zone === zone);
-          const points = zoneRows.map((row) => `${x(dates.indexOf(row.date))},${y(row.effective_load)}`).join(" ");
-          return <polyline key={zone} className="chart-series" style={zoneStyle(zone)} points={points} />;
-        })}
-        <text className="chart-label" x={left} y={height - 12}>{date(dates[0])}</text>
-        <text className="chart-label" x={width - right} y={height - 12} textAnchor="end">{date(dates.at(-1)!)}</text>
-      </svg>
-      <figcaption className="chart-legend">{ZONES.map((zone) => <span key={zone} style={zoneStyle(zone)}><i />{zone}</span>)}</figcaption>
-    </figure>
-  );
+function ZoneHistoryChart({ rows, ratio }: { rows: DailyZoneLoad[]; ratio: boolean }) {
+  const title = ratio ? "Динамика на индекса 7/40 по зони" : "Дневен ефективен товар E по зони";
+  const values = rows.map(row => ratio ? row.status_7_40 : row.effective_load);
+  const low = ratio ? Math.min(.6, ...values) : 0, high = ratio ? Math.max(1.4, ...values) : Math.max(1, ...values) * 1.05;
+  return <figure className="history-chart"><div className="history-chart-heading"><h3>{title}</h3><p>Дневни стойности без изглаждане или сумиране; линиите не се сумират до нов общ резултат. Липсващите дни не се свързват.</p></div>
+    <MetricChart title={title} unit={ratio ? "Индекс 7/40" : "Ефективен товар E"} domain={[low, high]} maxGap={86400000} reference={ratio ? { value: 1, label: "7/40 = 1 · стабилен товар" } : undefined} series={ZONES.map((zone, i) => ({ key: zone, label: zone, color: `var(--zone-${i+1})`, points: rows.filter(row => row.zone === zone).sort((a,b) => a.date.localeCompare(b.date)).map(row => ({ x: Date.parse(row.date), y: ratio ? row.status_7_40 : row.effective_load })) }))} />
+  </figure>;
 }
 
 export function LoadHistorySection({ history, message }: { history: LoadHistory | null; message?: string }) {
@@ -150,9 +83,9 @@ export function LoadHistorySection({ history, message }: { history: LoadHistory 
       </div>}
 
       <TrefDetails zones={history.zones} strength={history.strength?.summary.tref_min} />
-      <SevenFortyChart rows={history.daily} />
+      <ZoneHistoryChart rows={history.daily} ratio />
 
-      <EffectiveLoadChart rows={history.daily} />
+      <ZoneHistoryChart rows={history.daily} ratio={false} />
 
       <div className="activities-heading"><div><p className="section-kicker">Последни сесии</p><h3>Реално → приравнено → ефективно</h3></div><p>{history.quality.limited_activities} с ограничено HR покритие · {history.quality.excluded_activities} изключени</p></div>
       <div className="activity-list">

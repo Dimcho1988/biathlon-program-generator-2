@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import manifest from "../app/manifest";
 import AppleIcon, { size as appleSize, contentType } from "../app/apple-icon";
 import { GET, generateStaticParams } from "../app/icons/[icon]/route";
+import { inflateSync } from "node:zlib";
 
 it("defines a stable public standalone app identity with 192/512 and separate maskable icons", () => {
   const value = manifest();
@@ -11,7 +12,9 @@ it("defines a stable public standalone app identity with 192/512 and separate ma
   expect(value.icons?.filter(icon => icon.purpose === "any").map(icon => icon.sizes)).toEqual(["192x192", "512x512"]);
   expect(value.icons?.find(icon => icon.purpose === "maskable")?.sizes).toBe("512x512");
   expect(value.icons?.every(icon => icon.src.startsWith("/icons/") && !icon.src.includes("?"))).toBe(true);
-  expect(generateStaticParams().map(params => `/icons/${params.icon}`)).toEqual(value.icons?.map(icon => icon.src));
+  expect(value.background_color).toBe("#ffffff");
+  expect(value.icons?.every(icon => icon.src.includes("white"))).toBe(true);
+  expect(generateStaticParams().map(params => `/icons/${params.icon}`)).toEqual(expect.arrayContaining(value.icons?.map(icon => icon.src) ?? []));
 });
 
 function dimensions(buffer: ArrayBuffer) {
@@ -25,7 +28,16 @@ it.each(generateStaticParams())("renders public $icon as a correctly sized PNG w
   const width = icon.includes("192") ? 192 : 512;
   expect(response.status).toBe(200); expect(response.headers.get("content-type")).toContain("image/png");
   expect(response.headers.get("cache-control")).toContain("public");
-  expect(dimensions(await response.arrayBuffer())).toEqual({ width, height: width });
+  const buffer = await response.arrayBuffer();
+  expect(dimensions(buffer)).toEqual({ width, height: width });
+  const data = Buffer.from(buffer), chunks: Buffer[] = [];
+  for (let offset = 8; offset < data.length;) {
+    const length = data.readUInt32BE(offset);
+    if (data.toString("ascii",offset+4,offset+8) === "IDAT") chunks.push(data.subarray(offset+8,offset+8+length));
+    offset += length + 12;
+  }
+  // First pixel has no left/above neighbours under any PNG scanline filter.
+  expect([...inflateSync(Buffer.concat(chunks)).subarray(1,4)]).toEqual([255,255,255]);
 });
 
 it("provides the Apple touch icon and refuses unlisted icon names", async () => {

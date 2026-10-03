@@ -1,4 +1,5 @@
 "use client";
+import { MetricChart } from "./metric-chart";
 import {useState} from "react";
 import {CHANNEL_LABELS, GROUPS, GROUP_LABELS, STATES, type ResponseHistory, type Group} from "../lib/response-monitoring";
 
@@ -13,11 +14,10 @@ export function StressOverview({history,selected,onSelect}:{history:ResponseHist
   const [indicator,setIndicator]=useState("");
   const day=history.days[selected];
   if(!day)return <section className="response-card"><h2>Все още няма наблюдения</h2></section>;
-  const x=(i:number)=>45+i*910/Math.max(1,history.days.length-1),y=(v:number)=>220-v*1.8;
   const series=["total","trend",...visible,...(indicator?[indicator]:[])];
   const value=(i:number,key:string)=>key==="total"?history.days[i].total:key==="trend"?history.days[i].trend_3d:GROUPS.includes(key as Group)?history.days[i].groups.find(g=>g.key===key)?.score??null:history.days[i].channels.find(c=>c.key===key)?.score??null;
   const color=(key:string)=>colors[key]||colors[day.channels.find(c=>c.key===key)?.group??"functional"];
-  function path(key:string){let open=false;return history.days.map((d,i)=>{const v=value(i,key);if(v===null){open=false;return "";}if(key==="total"&&d.mix_changed)open=false;const command=open?"L":"M";open=true;return `${command}${x(i)},${y(v)}`;}).join(" ");}
+
   return <>
     <section className="response-card stress-summary" aria-label="Обща оценка на стреса">
       <div className="response-heading"><div><p className="eyebrow">{dateLabel(day.day)} · {STATES[day.state]||day.state}</p><h2>Стрес и отзвучаване</h2></div><span className="response-badge">Пилотна оценка</span></div>
@@ -30,12 +30,7 @@ export function StressOverview({history,selected,onSelect}:{history:ResponseHist
       <div className="stress-channel-buttons">{day.groups.map(g=><button type="button" key={g.key} aria-pressed={visible.includes(g.key)} style={{"--channel-color":colors[g.key]} as React.CSSProperties} onClick={()=>setVisible(visible.includes(g.key)?visible.filter(v=>v!==g.key):[...visible,g.key])}><span>{GROUP_LABELS[g.key]}</span><strong>{fmt(g.score)}</strong><small>{g.weight*100}% базово тегло</small></button>)}</div>
       {history.trainability_unavailable&&<p className="stress-inline-note">ТИ временно не е достъпен. Оценката използва останалите налични показатели.</p>}
       <div className="response-legend"><span>● Обща оценка</span><span style={{color:colors.trend}}>┄ Средно за 3 дни</span>{visible.map(g=><span key={g} style={{color:colors[g]}}>● {GROUP_LABELS[g]}</span>)}{indicator&&<span style={{color:color(indicator)}}>● {CHANNEL_LABELS[indicator]}</span>}</div>
-      <svg className="response-chart" viewBox="0 0 1000 265" role="img" aria-label="Тренд на стреса по дни. Изберете ден от полето за подробности.">
-        {[0,25,50,75,100].map(v=><g key={v}><line x1="45" x2="955" y1={y(v)} y2={y(v)} stroke="var(--stress-grid,#d6e2e7)"/><text x="10" y={y(v)+4}>{v}</text></g>)}
-        <line x1={x(selected)} x2={x(selected)} y1="35" y2="225" stroke="#94a7b0" strokeDasharray="3 3"/>
-        {series.map(k=><path key={k} d={path(k)} fill="none" stroke={color(k)} strokeWidth={k==="total"?3:2} strokeDasharray={k==="trend"?"6 5":undefined}/>)}
-        {history.days.map((d,i)=><g key={d.day}>{series.filter(k=>k!=="trend").map(k=>{const v=value(i,k);return v===null?null:<circle key={k} cx={x(i)} cy={y(v)} r={selected===i?4:2.5} fill={k==="total"&&d.assessment_quality==="PARTIAL"?"var(--surface,#fff)":color(k)} stroke={color(k)}/>;})}<rect x={Math.max(35,x(i)-455/Math.max(1,history.days.length-1))} y="30" width={Math.min(920,910/Math.max(1,history.days.length-1))} height="195" fill="transparent" onClick={()=>onSelect(i)} style={{cursor:"pointer"}}><title>{`${d.day} · оценка ${fmt(d.total)} · покритие ${fmt(d.coverage,0)}%`}</title></rect>{(i===0||i===history.days.length-1||i%Math.max(1,Math.ceil(history.days.length/8))===0)&&<text x={x(i)} y="250" textAnchor="middle">{dateLabel(d.day)}</text>}</g>)}
-      </svg>
+      <MetricChart title="Тренд на стреса по дни. Изберете ден от полето за подробности." unit="Условни точки · 0–100" domain={[0,100]} controls={false} selectedIndex={selected} onSelect={onSelect} maxGap={86400000} series={series.map(key => ({ key, label: key === "total" ? "Обща оценка" : key === "trend" ? "Средно за 3 дни" : GROUP_LABELS[key as Group] ?? CHANNEL_LABELS[key], color: color(key), dashed: key === "trend", points: history.days.map((d,i) => ({ x: Date.parse(d.day), y: value(i,key), breakBefore: key === "total" && d.mix_changed, partial: key === "total" && d.assessment_quality === "PARTIAL" })) }))} />
       <p>Натиснете компонент за неговата динамика. Празните точки са частични оценки; прекъсванията показват липси или промяна в състава на общата оценка.</p>
       <details className="stress-breakdown"><summary>Показатели и принос · {dateLabel(day.day)}</summary>
         <label className="stress-indicator">Отделен показател в графиката<select value={indicator} onChange={e=>setIndicator(e.target.value)}><option value="">Без допълнителен показател</option>{GROUPS.map(g=><optgroup key={g} label={GROUP_LABELS[g]}>{day.channels.filter(c=>c.group===g).map(c=><option key={c.key} value={c.key}>{CHANNEL_LABELS[c.key]}</option>)}</optgroup>)}</select></label>

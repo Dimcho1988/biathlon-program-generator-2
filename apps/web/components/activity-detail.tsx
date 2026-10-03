@@ -1,6 +1,7 @@
 import { durationHms, durationSeconds } from "../lib/duration-format";
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { ActivityTimelineChart, type ActivityChannel } from "./activity-timeline-chart";
 import type { ActivityDetail, ActivitySeries, ActivitySeriesPoint } from "../lib/activities";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
@@ -12,21 +13,12 @@ const pace = (speed: number | null) => {
   const seconds = Math.round(1000 / speed); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")} /km`;
 };
 
-type Channel = { key: keyof ActivitySeriesPoint; label: string; color: string; unit: string };
+type Channel = ActivityChannel;
 
 function TimelineChart({ title, series, channels, emptyMessage = "Няма наличен канал." }: { title: string; series: ActivitySeriesPoint[]; channels: Channel[]; emptyMessage?: ReactNode }) {
   const visible = channels.map((channel) => ({ channel, points: series.map((row, index) => [index, row[channel.key]] as const).filter((point): point is readonly [number, number] => typeof point[1] === "number" && Number.isFinite(point[1])) })).filter((item) => item.points.length > 1);
   if (!visible.length) return <section className="canonical-chart"><h3>{title}</h3><p>{emptyMessage}</p></section>;
-  const width = 1000, height = 250, left = 42, top = 20, plotWidth = 930, plotHeight = 190;
-  const allValues = visible.flatMap((item) => item.points.map((point) => point[1]));
-  const min = Math.min(...allValues), max = Math.max(...allValues), span = Math.max(1, max - min);
-  const x = (index: number) => left + (index / Math.max(1, series.length - 1)) * plotWidth;
-  const y = (value: number) => top + plotHeight - ((value - min) / span) * plotHeight;
-  return <section className="canonical-chart"><h3>{title}</h3><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title}>
-    {[0, .25, .5, .75, 1].map((ratio) => <line key={ratio} x1={left} x2={left + plotWidth} y1={top + ratio * plotHeight} y2={top + ratio * plotHeight} />)}
-    {visible.map(({ channel, points }) => <polyline key={String(channel.key)} fill="none" stroke={channel.color} strokeWidth="2.5" points={points.map(([index, value]) => `${x(index)},${y(value)}`).join(" ")} />)}
-    <text x={left} y={height - 8}>{number.format(min)}</text><text x={left + plotWidth} y={height - 8} textAnchor="end">{number.format(max)}</text>
-  </svg><p className="chart-legend">{visible.map(({ channel }) => <span key={String(channel.key)} style={{ color: channel.color }}>● {channel.label} ({channel.unit})</span>)}</p></section>;
+  return <section className="canonical-chart"><h3>{title}</h3><ActivityTimelineChart title={title} series={series} channels={channels} /></section>;
 }
 
 export function ActivityDetailView({ activity, series, seriesUnavailable = false }: { activity: ActivityDetail; series: ActivitySeries | null; seriesUnavailable?: boolean }) {
