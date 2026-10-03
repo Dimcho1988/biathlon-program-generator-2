@@ -1,4 +1,5 @@
 "use client";
+import { durationHms } from "../lib/duration-format";
 
 import { useState, type CSSProperties, type PointerEvent } from "react";
 import { MODEL_ZONES, type ModelZone, type RecoveryV2 } from "../lib/models";
@@ -32,7 +33,7 @@ export function RecoveryTimeline({ history }: { history: RecoveryV2 }) {
   }
   const cursorLabel = cursor === 0 ? `Днес · ${shortDate(history.as_of)}`
     : cursor < 0 ? `${shortDate(dateAtOffset(history.as_of, cursor))} · отчетен товар`
-    : `${shortDate(dateAtOffset(history.as_of, cursor))} · прогноза +${number.format(cursor * 24)} ч`;
+    : `${shortDate(dateAtOffset(history.as_of, cursor))} · прогноза +${durationHms(cursor * 24 * 60)}`;
 
   return <figure className="history-chart recovery-timeline">
     <div className="history-chart-heading"><div><h3>Възстановяване · история и прогноза</h3><p>5 дни назад · днес · 2 дни напред</p></div></div>
@@ -51,7 +52,7 @@ export function RecoveryTimeline({ history }: { history: RecoveryV2 }) {
         {shown.map(row => <g key={row.zone} style={style(row.zone)} data-recovery-zone={row.zone}>
           {row.past.map((segment, index) => <g key={index}><polyline className="chart-series" points={segment.map(point => `${x(point.day)},${y(point.readiness)}`).join(" ")} />{segment.map(point => <circle key={point.day} cx={x(point.day)} cy={y(point.readiness)} r="3" fill={color(row.zone)}><title>{`${row.zone} · ${shortDate(dateAtOffset(history.as_of, point.day))} · ${number.format(point.readiness)}%`}</title></circle>)}</g>)}
           <polyline className="chart-series recovery-forecast-series" points={row.future.map(point => `${x(point.day)},${y(point.readiness)}`).join(" ")} />
-          {[0, 1, 2].map(day => { const value = forecastReadiness(row.future, day); return value === null ? null : <circle key={day} cx={x(day)} cy={y(value)} r="3.5" fill="var(--surface)" stroke={color(row.zone)} strokeWidth="2"><title>{`${row.zone} · ${day === 0 ? "днес" : `+${day * 24} ч`} · ${number.format(value)}%`}</title></circle>; })}
+          {[0, 1, 2].map(day => { const value = forecastReadiness(row.future, day); return value === null ? null : <circle key={day} cx={x(day)} cy={y(value)} r="3.5" fill="var(--surface)" stroke={color(row.zone)} strokeWidth="2"><title>{`${row.zone} · ${day === 0 ? "днес" : `+${durationHms(day * 24 * 60)}`} · ${number.format(value)}%`}</title></circle>; })}
         </g>)}
         {Array.from({ length: 8 }, (_, index) => index - 5).map(day => <g key={day}><line className="chart-grid" x1={x(day)} x2={x(day)} y1="264" y2="270" /><text className="chart-label" x={x(day)} y="289" textAnchor="middle">{day === 0 ? "Днес" : shortDate(dateAtOffset(history.as_of, day))}</text></g>)}
         <line className="recovery-cursor-line" x1={x(cursor)} x2={x(cursor)} y1="40" y2="264" />

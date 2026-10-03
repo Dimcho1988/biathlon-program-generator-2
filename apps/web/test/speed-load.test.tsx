@@ -45,7 +45,7 @@ it("shows coverage, sport HR conversion and distinct Q without double counting",
   await act(async()=>container.querySelector("button")!.click());
   expect(container.textContent).toContain("Покритие: 50%");
   expect(container.textContent).toContain("143");expect(container.textContent).toContain("150");
-  expect(container.textContent).toContain("Q, екв. мин");
+  expect(container.textContent).toContain("Q · ч:мм:сс");
   expect(container.textContent).toContain("не се добавя към пулсовия товар");
   expect(container.textContent).toContain("Използван е общият индекс");
 });
@@ -56,7 +56,7 @@ it("rejects impossible coverage and prevents mixing generations",async()=>{
   await act(async()=>root.render(<SpeedLoadSummary generation="g" revision={1}/>));
   await act(async()=>container.querySelector("button")!.click());
   expect(container.querySelector("[role=status]")!.textContent).toContain("Презареди страницата");
-  expect(container.textContent).not.toContain("Q, екв. мин");
+  expect(container.textContent).not.toContain("Q · ч:мм:сс");
 });
 
 it("forwards validated dates and never accepts an athlete from query parameters", async()=>{

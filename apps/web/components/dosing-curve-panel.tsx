@@ -28,7 +28,7 @@ export function DosingCurvePanel({model}:{model:DosingModel}){
       {series.map((s,i)=>visible[i]&&<polyline key={s.key} data-curve={s.key} points={points.map(p=>`${x(p.duration_s)},${y(p[s.key])}`).join(" ")} fill="none" stroke={s.color} strokeWidth={i===2?4:2} strokeDasharray={s.dash}/>)}
       <line x1={x(sample.duration_s)} x2={x(sample.duration_s)} y1="30" y2="276" stroke="currentColor" opacity=".3"/>
       {series.map((s,i)=>visible[i]&&<circle key={s.key} cx={x(sample.duration_s)} cy={y(sample[s.key])} r="4" fill={s.color}/>)}
-      {[60,180,720,3600,21600].filter(t=>Math.log(t)>=lo&&Math.log(t)<=hi).map(t=><text key={t} x={x(t)} y="300" textAnchor="middle" fill="currentColor" fontSize="12">{t/60} мин</text>)}
+      {[60,180,720,3600,21600].filter(t=>Math.log(t)>=lo&&Math.log(t)<=hi).map(t=><text key={t} x={x(t)} y="300" textAnchor="middle" fill="currentColor" fontSize="12">{clockTime(t)}</text>)}
       <text x="48" y="20" fill="currentColor" fontSize="12">км/ч · равен терен</text>
     </svg><figcaption>Трите криви са отделни. Общата крива е работна оценка за дозиране и не представлява нов максимален тест.</figcaption></figure>
     <div className="speed-curve-readout"><strong>{clockTime(sample.duration_s)} · Обща скорост {n(sample.speed_kmh)} км/ч</strong><span>Индекс {n(sample.index_speed_kmh)} · Тестове {n(sample.test_speed_kmh)} км/ч · {sample.estimated_hr_bpm===null?"Пулс: извън поддържания обхват":`Оценен пулс ${n(sample.estimated_hr_bpm)} уд./мин`}</span><label>Разгледай общата крива<input type="range" min="0" max={points.length-1} step="1" value={Math.min(cursor,points.length-1)} onChange={e=>setCursor(Number(e.target.value))}/></label></div>

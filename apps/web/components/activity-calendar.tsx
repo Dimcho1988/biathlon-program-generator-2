@@ -1,4 +1,6 @@
+import { durationHms, durationSeconds } from "../lib/duration-format";
 import Link from "next/link";
+import type { CSSProperties } from "react";
 import type { ActivityCalendar, ActivityCalendarItem, DailyWellnessSummary } from "../lib/activities";
 import { SyncActionForm } from "./sync-action-form";
 
@@ -20,10 +22,7 @@ const wellnessNumber = (wellness: DailyWellnessSummary, field: string): number |
   const value = wellness.metrics[field]?.value;
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 };
-const sleepDuration = (seconds: number) => {
-  const roundedMinutes = Math.round(seconds / 60);
-  return `${Math.floor(roundedMinutes / 60)}:${String(roundedMinutes % 60).padStart(2, "0")}`;
-};
+const sleepDuration = durationSeconds;
 
 const sportClass = (sport: string) => {
   const value = sport.toLowerCase();
@@ -89,7 +88,7 @@ function ActivityZoneStrip({ activity }: { activity: ActivityCalendarItem }) {
   const total = zones.reduce((sum, zone) => sum + zone.seconds, 0);
   if (source === "none" || total <= 0) return null;
   const sourceLabel = source === "hrmod_final" ? "HRmod final · experimental" : "Реален пулс";
-  const distribution = zones.map((zone) => `${zone.zone} ${number.format(zone.seconds / 60)} мин`).join(", ");
+  const distribution = zones.map((zone) => `${zone.zone} ${durationSeconds(zone.seconds)}`).join(", ");
   return <span className={`activity-zone-visual source-${source}`} aria-label={`${sourceLabel}: ${distribution}`} title={`${sourceLabel}: ${distribution}`}>
     <span className="activity-zone-strip">
       {zones.filter((zone) => zone.seconds > 0).map((zone) => <i key={zone.zone} className={zone.zone.toLowerCase()} style={{ flexGrow: zone.seconds / total }} />)}
@@ -104,7 +103,7 @@ function ActivityCard({ activity }: { activity: ActivityCalendarItem }) {
     <span className="activity-card-top"><time dateTime={activity.start_local}>{activity.local_time}</time><span>{activity.sport}</span></span>
     <strong>{activity.name || fallback}</strong>
     <span className="activity-card-metrics">
-      {activity.duration_min !== null && <span>{number.format(activity.duration_min)} мин</span>}
+      {activity.duration_min !== null && <span>{durationHms(activity.duration_min)}</span>}
       {activity.distance_m !== null && <span>{number.format(activity.distance_m / 1000)} km</span>}
       {activity.average_hr_bpm !== null && <span>{number.format(activity.average_hr_bpm)} HR</span>}
       {activity.canonical_training_load !== null && <span>{number.format(activity.canonical_training_load)} load</span>}
@@ -131,9 +130,9 @@ function WeekSummary({ calendar, weekStart }: { calendar: ActivityCalendar; week
   const totalZone = zones.reduce((sum, zone) => sum + zone.raw_time_s, 0);
   return <aside className="completed-week-summary" aria-label={`Обобщение за седмицата от ${weekStart}`}>
     <strong>{weekLabel.format(utcDate(weekStart))} — {weekLabel.format(utcDate(sunday(weekStart)))}</strong>
-    <span>{activities.length} активности</span><span>{number.format(duration / 60)} ч</span><span>{number.format(distance / 1000)} km</span><span>{number.format(load)} load</span>
+    <span>{activities.length} активности</span><span>{durationHms(duration)}</span><span>{number.format(distance / 1000)} km</span><span>{number.format(load)} load</span>
     <span className="week-zone-bar" aria-label="Реално HR време по зони">
-      {zones.map((zone) => <i key={zone.zone} className={zone.zone.toLowerCase()} style={{ flexGrow: totalZone ? zone.raw_time_s / totalZone : 0 }} title={`${zone.zone}: ${number.format(zone.raw_time_s / 60)} мин`} />)}
+      {zones.map((zone) => <i key={zone.zone} className={zone.zone.toLowerCase()} style={{ flexGrow: totalZone ? zone.raw_time_s / totalZone : 0 }} title={`${zone.zone}: ${durationSeconds(zone.raw_time_s)}`} />)}
     </span>
   </aside>;
 }
@@ -145,8 +144,8 @@ export function ActivityCalendarView({ calendar, syncBusy = false }: { calendar:
   for (let day = gridStart; day <= gridEnd; day = addDays(day, 1)) days.push(day);
   const byDate = new Map<string, ActivityCalendarItem[]>();
   const wellnessByDate = new Map(calendar.wellness_days.map((day) => [day.date, day]));
-  for (const activity of calendar.activities) byDate.set(activity.local_date, [...(byDate.get(activity.local_date) ?? []), activity]);
-  const weeks = Array.from({ length: Math.ceil(days.length / 7) }, (_, index) => days.slice(index * 7, index * 7 + 7));
+  for (const activity of [...calendar.activities].sort((a, b) => b.start_local.localeCompare(a.start_local) || b.activity_ref.localeCompare(a.activity_ref))) byDate.set(activity.local_date, [...(byDate.get(activity.local_date) ?? []), activity]);
+  const weeks = Array.from({ length: Math.ceil(days.length / 7) }, (_, index) => days.slice(index * 7, index * 7 + 7)).reverse();
   return <section className="completed-calendar" aria-label="Календар на завършените активности">
     <WellnessStatus calendar={calendar} syncBusy={syncBusy} />
     <div className="calendar-visual-key"><span><i className="z1" /><i className="z2" /><i className="z3" /><i className="z4" /><i className="z5" /> Z1–Z5 разпределение</span><small>HRmod final при наличен shadow резултат; иначе Raw HR. Wellness и HRmod са диагностични и не променят canonical load.</small></div>
@@ -154,7 +153,7 @@ export function ActivityCalendarView({ calendar, syncBusy = false }: { calendar:
     <div className="completed-calendar-grid">
       {weeks.map((week) => <section className="completed-week" key={week[0]}>
         <WeekSummary calendar={calendar} weekStart={week[0]} />
-        {week.map((day) => <div key={day} className={`completed-day ${day < calendar.period_start || day > calendar.period_end ? "outside-period" : ""}`}>
+        {[...week].reverse().map((day) => <div key={day} style={{ "--calendar-day-order": week.indexOf(day) + 1 } as CSSProperties} className={`completed-day ${day < calendar.period_start || day > calendar.period_end ? "outside-period" : ""} ${day === week[6] ? "week-end" : ""}`}>
           <header><span className="calendar-day-title"><time dateTime={day}>{dateLabel.format(utcDate(day))}</time><span>{byDate.get(day)?.length || ""}</span></span><WellnessDay wellness={wellnessByDate.get(day)} /></header>
           <div className="day-activities">{(byDate.get(day) ?? []).map((activity) => <ActivityCard key={activity.activity_ref} activity={activity} />)}</div>
         </div>)}

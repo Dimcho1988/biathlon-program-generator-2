@@ -21,7 +21,7 @@ it("loads separate speed exposure lazily and refuses another generation",async()
   expect(container.textContent).not.toContain("Класифицирани по надеждна скорост: 120");
   fetchMock.mockResolvedValueOnce(Response.json({status:"AVAILABLE",source_generation_id:"old",source_revision:1,zones:[{zone:"Z1",minutes:120}],classified_minutes:120}));
   await act(async()=>container.querySelector("button")!.click());
-  expect(container.textContent).toContain("120 мин");
+  expect(container.textContent).toContain("2:00:00");
   expect(container.textContent).toContain("не се добавя повторно");
 });
 

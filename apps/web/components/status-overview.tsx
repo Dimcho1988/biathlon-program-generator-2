@@ -1,3 +1,4 @@
+import { durationHms } from "../lib/duration-format";
 import Link from "next/link";
 import type { CSSProperties } from "react";
 import type { LoadHistory } from "../lib/load-history";
@@ -40,7 +41,7 @@ export function StatusOverview({ data, recovery, load }: { data: TrainingStatus;
       <p className="overview-date">{v2 ? `Готовност към ${date(v2.as_of)}` : `Анализ към ${date(data.as_of)}`} · Тренировъчни данни до {date(periodEnd)}.{v2?.source_stale && " Прогнозата допуска, че след това няма ново натоварване."}</p>
     </section>
     <div className="overview-shortcuts">
-      <Link href="/?view=load" className="overview-card" prefetch={false}><span>Реален обем · последни 7 календарни дни</span><strong>{duration === undefined ? "Няма данни" : `${number.format(duration / 60)} ч`}</strong><p>{recent ? `${recent.length} активности · ${date(periodStart)} – ${date(periodEnd)}` : "Историята още не е налична."}{missingDuration ? " · Непълен обем" : ""}</p><small>Натоварване и обем <span aria-hidden="true">↗</span></small></Link>
+      <Link href="/?view=load" className="overview-card" prefetch={false}><span>Реален обем · последни 7 календарни дни</span><strong>{duration === undefined ? "Няма данни" : durationHms(duration)}</strong><p>{recent ? `${recent.length} активности · ${date(periodStart)} – ${date(periodEnd)}` : "Историята още не е налична."}{missingDuration ? " · Непълен обем" : ""}</p><small>Натоварване и обем <span aria-hidden="true">↗</span></small></Link>
       <Link href="/trainability" className="overview-card" prefetch={false}><span>Индекс на тренираност</span><strong>Пулс и скорост</strong><p>Проследи тенденцията по спорт и зони.</p><small>Отвори индекса <span aria-hidden="true">↗</span></small></Link>
       <Link href="/response" className="overview-card" prefetch={false}><span>Самочувствие</span><strong>Самочувствие и стрес</strong><p>Лични оценки и реакция към натоварването.</p><small>Стрес и възстановяване <span aria-hidden="true">↗</span></small></Link>
     </div>

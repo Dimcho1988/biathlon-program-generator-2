@@ -1,4 +1,5 @@
 "use client";
+import { durationSeconds, durationDelta } from "../lib/duration-format";
 
 import { TrainabilitySummary } from "./trainability-summary";
 import { parseTrainabilityIndex } from "../lib/trainability";
@@ -29,17 +30,7 @@ const difference = (left: unknown, right: unknown): number | null => {
   const rightNumber = number(right);
   return leftNumber === null || rightNumber === null ? null : leftNumber - rightNumber;
 };
-const duration = (seconds: unknown): string => {
-  const value = number(seconds);
-  if (value === null) return "—";
-  const rounded = Math.max(0, Math.round(value));
-  const hours = Math.floor(rounded / 3600);
-  const minutes = Math.floor((rounded % 3600) / 60);
-  const remaining = rounded % 60;
-  return hours > 0
-    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}`
-    : `${minutes}:${String(remaining).padStart(2, "0")}`;
-};
+const duration = (seconds: unknown): string => durationSeconds(number(seconds));
 const dateTime = (value: unknown): string => {
   if (typeof value !== "string") return "—";
   const parsed = new Date(value);
@@ -238,7 +229,7 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
           <tbody>{zones.map((zone) => {
             const finalSeconds = zone.hrmod_final_seconds ?? zone.hrmod_seconds;
             const finalMinusClean = zone.final_minus_clean_seconds ?? zone.hrmod_minus_clean_seconds;
-            return <tr key={text(zone.zone_name)}><th>{text(zone.zone_name)}</th><td>{duration(zone.raw_seconds)}</td><td>{duration(zone.clean_seconds)}</td><td>{hrmodEnabled ? duration(zone.hrmod_candidate_seconds) : "off"}</td><td>{hrmodEnabled ? duration(finalSeconds) : "off"}</td><td>{hrmodEnabled && number(finalMinusClean) !== null ? `${signed(number(finalMinusClean)! / 60)} мин` : hrmodEnabled ? "—" : "off"}</td></tr>;
+            return <tr key={text(zone.zone_name)}><th>{text(zone.zone_name)}</th><td>{duration(zone.raw_seconds)}</td><td>{duration(zone.clean_seconds)}</td><td>{hrmodEnabled ? duration(zone.hrmod_candidate_seconds) : "off"}</td><td>{hrmodEnabled ? duration(finalSeconds) : "off"}</td><td>{hrmodEnabled && number(finalMinusClean) !== null ? durationDelta(number(finalMinusClean)) : hrmodEnabled ? "—" : "off"}</td></tr>;
           })}</tbody>
         </table></div>}
       </section>

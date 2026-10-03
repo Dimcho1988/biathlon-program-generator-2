@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { durationHms } from "../lib/duration-format";
+import { durationHms, durationSeconds, durationDelta } from "../lib/duration-format";
 import { CompletedWorkSection } from "../components/completed-work-section";
 import { completedWorkFixture } from "../lib/fixture";
 
@@ -10,6 +10,18 @@ describe("report durations", () => {
     expect(durationHms(59.999)).toBe("1:00:00");
     expect(durationHms(10696.2)).toBe("178:16:12");
     expect(durationHms(1 / 60)).toBe("0:00:01");
+    expect(durationHms(9.3)).toBe("0:09:18");
+    expect(durationSeconds(3599.6)).toBe("1:00:00");
+    expect(durationSeconds(90061)).toBe("25:01:01");
+  });
+  it("keeps unknown and invalid durations distinct from zero and preserves signed differences", () => {
+    for (const value of [null, undefined, NaN, Infinity, -1]) {
+      expect(durationSeconds(value)).toBe("—");
+      expect(durationHms(value)).toBe("—");
+    }
+    expect(durationDelta(-61)).toBe("−0:01:01");
+    expect(durationDelta(61)).toBe("+0:01:01");
+    expect(durationDelta(-0.1)).toBe("0:00:00");
   });
   it("formats all report time columns but retains the numeric effective load", () => {
     const r = structuredClone(completedWorkFixture);

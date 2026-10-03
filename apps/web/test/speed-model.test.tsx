@@ -71,8 +71,8 @@ describe("speed test selection and prediction",()=>{
     expect(parseManualClock("0:10,8")).toBe(10.8);
     expect(parseManualClock("2:15.125")).toBe(135.125);
     expect(parseManualClock("1:02:03")).toBe(3723);
-    expect(manualClockTime(135.125)).toBe("2:15,125");
-    expect(manualClockTime(10.8)).toBe("0:10,8");
+    expect(manualClockTime(135.125)).toBe("0:02:15,125");
+    expect(manualClockTime(10.8)).toBe("0:00:10,8");
     expect(parseClock("0:10,8")).toBeNull();
     for(const bad of ["10.8","0:10,7","1:60","725:17","1:60:00","-1:20","0:NaN"])
       expect(parseManualClock(bad)).toBeNull();
@@ -100,7 +100,7 @@ describe("speed test selection and prediction",()=>{
   it("uses unambiguous elapsed time and rejects invalid seconds",()=>{
     expect(parseClock("12:30")).toBe(750);
     expect(parseClock("1:02:03")).toBe(3723);
-    expect(clockTime(3723)).toBe("62:03");
+    expect(clockTime(3723)).toBe("1:02:03");
     for(const bad of ["720","12:60","1:60:00","-1:00","1.5:20",""])expect(parseClock(bad)).toBeNull();
   });
   it("filters by exact source sport, searches names/dates and puts recent records first",()=>{
@@ -174,7 +174,7 @@ describe("functional profile evidence",()=>{
   it("limits the orientation statement to the tested range and separates the cap from evidence",()=>{
     const html=renderToStaticMarkup(<AthleteFunctionalProfile profile={{...profile,status:"TEST_SUPPORTED",shape:{...profile.shape!,status:"TEST_SUPPORTED_WINDOW",orientation:"LONGER_DURATION_ADVANTAGE",test_duration_range_s:[180,720],accepted_test_count:2}}}/>);
     expect(html).toContain("Относително предимство при по-дългите усилия");
-    expect(html).toContain("3:00 – 12:00");
+    expect(html).toContain("0:03:00 – 0:12:00");
     expect(html).toContain("Само в диапазона между реалните тестове");
     expect(html).toContain("ограничението от 5% не служат като измерено доказателство");
   });

@@ -1,8 +1,7 @@
+import { durationHms } from "../lib/duration-format";
 import type { CSSProperties } from "react";
 import type { VolumeHistory, WeeklyVolume } from "../lib/volume-history";
 
-const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
-const decimal = (value: number) => number.format(value);
 const date = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "2-digit", month: "short", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
 const durationStyle = { "--series": "var(--accent)" } as CSSProperties;
 const zonedStyle = { "--series": "var(--zone-3)" } as CSSProperties;
@@ -11,7 +10,7 @@ function VolumeChart({ rows, periodStart, periodEnd }: { rows: WeeklyVolume[]; p
   if (rows.length < 2) return <p className="muted-copy">Няма достатъчно седмици за графика.</p>;
   const width = 920;
   const height = 300;
-  const left = 48;
+  const left = 72;
   const right = 16;
   const top = 22;
   const bottom = 42;
@@ -27,14 +26,14 @@ function VolumeChart({ rows, periodStart, periodEnd }: { rows: WeeklyVolume[]; p
     <figure className="history-chart volume-chart">
       <div className="history-chart-heading">
         <div><p className="section-kicker">Календарни седмици</p><h3>Реален седмичен обем</h3></div>
-        <p>Стойностите са измерени минути, показани в часове. Това не е сбор на ефективен товар E.</p>
+        <p>Продължителностите са във формат ч:мм:сс. Това не е сбор на ефективен товар E.</p>
       </div>
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-labelledby="volume-chart-title volume-chart-description">
         <title id="volume-chart-title">Обща динамика на реалния тренировъчен обем</title>
         <desc id="volume-chart-description">Седмична продължителност на активностите и отделно сумата на HR-зонираното време в Z1 до Z5.</desc>
         {ticks.map((tick) => <g key={tick}>
           <line className="chart-grid" x1={left} x2={width - right} y1={y(tick * 60)} y2={y(tick * 60)} />
-          <text className="chart-label" x={left - 8} y={y(tick * 60) + 4} textAnchor="end">{decimal(tick)} h</text>
+          <text className="chart-label" x={left - 8} y={y(tick * 60) + 4} textAnchor="end">{durationHms(tick * 60)}</text>
         </g>)}
         <polyline className="chart-series" style={durationStyle} points={points("activity_duration_min")} />
         <polyline className="chart-series" style={zonedStyle} points={points("zoned_hr_time_min")} />

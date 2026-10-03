@@ -1,3 +1,4 @@
+import { durationHms } from "../lib/duration-format";
 import Link from "next/link";
 import type { DataMode } from "../lib/api";
 import type { CompletedWork } from "../lib/completed-work";
@@ -121,8 +122,8 @@ export function Dashboard({
             <div className="section-heading"><div><p className="section-kicker">Извършено натоварване</p><h2 id="latest-day-title">Последен тренировъчен ден</h2></div><p>{latest ? `${displayDate(latest.day)} · ${latest.activities.length} ${latest.activities.length === 1 ? "активност" : "активности"}` : "Няма налична дата на тренировката"}</p></div>
             <p className="muted-copy">Всички обработени активности за посочената дата. Приравнените минути са към горната пулсова граница на зоната, без влияние от другите зони.</p>
             {latest ? <>
-              <div className="activity-table-wrap"><table><thead><tr><th>Зона</th><th>Реално време</th><th>Приравнено време</th></tr></thead><tbody>{latest.zones.map((z) => <tr key={z.zone}><th>{z.zone}</th><td>{decimal(z.raw)} мин</td><td>{decimal(z.equivalent)} мин</td></tr>)}</tbody></table></div>
-              {latest.strength > 0 && <p>Силова тренировка STR: {decimal(latest.strength)} мин; отделно от Z1–Z5.</p>}
+              <div className="activity-table-wrap"><table><thead><tr><th>Зона</th><th>Реално време</th><th>Приравнено време</th></tr></thead><tbody>{latest.zones.map((z) => <tr key={z.zone}><th>{z.zone}</th><td>{durationHms(z.raw)}</td><td>{durationHms(z.equivalent)}</td></tr>)}</tbody></table></div>
+              {latest.strength > 0 && <p>Силова тренировка STR: {durationHms(latest.strength)}; отделно от Z1–Z5.</p>}
               {latest.limited && <p className="muted-copy">Има активност с ограничено пулсово покритие; минутите по зони може да са непълни.</p>}
             </> : <p className="history-unavailable">Няма история за показване на тренировъчния ден. Не приписваме недатирани стойности на днешната дата.</p>}
           </section>
@@ -169,7 +170,7 @@ export function Dashboard({
 }
 
 function ZoneCard({ zone, recoveryV2 = false, volume7, volume40 }: { zone: ZoneTrainingStatus; recoveryV2?: boolean; volume7?: number; volume40?: number }) {
-  const volume = (v: number | undefined) => v === undefined ? "Няма данни" : `${decimal(v)} мин`;
+  const volume = (v: number | undefined) => v === undefined ? "Няма данни" : durationHms(v);
   return <article className={`zone-card current-zone-card ${zone.zone.toLowerCase()}`} aria-labelledby={`title-${zone.zone}`}>
     <div className="zone-id"><span className="zone-mark" aria-hidden="true" /><div><p>Зона</p><h3 id={`title-${zone.zone}`}>{zone.zone}</h3></div></div>
     <dl>
