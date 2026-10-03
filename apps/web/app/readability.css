@@ -1,4 +1,7 @@
 /* Shared analytical surfaces. The painting remains visible around the cards. */
+:root { --chart-zone-1: color-mix(in srgb,var(--zone-1) 72%,#075230); --chart-zone-3: color-mix(in srgb,var(--zone-3) 64%,#735000); --chart-zone-4: color-mix(in srgb,var(--zone-4) 75%,#803b00); }
+:root[data-theme="dark"] { --chart-zone-1: var(--zone-1); --chart-zone-3: var(--zone-3); --chart-zone-4: var(--zone-4); }
+.workspace-shell .chart-frame { --zone-1: var(--chart-zone-1); --zone-3: var(--chart-zone-3); --zone-4: var(--chart-zone-4); }
 .workspace-shell .chart-frame { width: 100%; min-width: 0; }
 .workspace-shell .chart-frame > svg { display: block; width: 100%; height: auto; min-height: 0; min-width: 0; background: var(--surface); overflow: hidden; border-radius: 0; touch-action: pan-y; }
 .workspace-shell .chart-frame text { font-family: inherit; font-size: 12px; fill: var(--text-secondary); font-variant-numeric: tabular-nums; }
@@ -25,6 +28,8 @@
 .workspace-shell input[type="range"] { width: 100%; min-width: 0; min-height: 36px; margin-inline: 0; accent-color: var(--accent); cursor: pointer; }
 .metric-chart-reference { margin: 0 0 8px; color: var(--text-secondary); font-size: 12px; }
 .workspace-shell :is(.history-chart,.canonical-chart,.shadow-chart,.index-chart-panel) { min-width: 0; margin-inline: 0; }
+.trainability-content { grid-template-columns: minmax(0,1fr); }
+.workspace-shell .index-channels { min-width: 0; }
 .workspace-shell :is(.activity-table-wrap,.shadow-table-wrap,.report-table-wrap,.response-table) { max-width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-inline: contain; }
 .workspace-shell :is(td,dd,strong) { font-variant-numeric: tabular-nums; }
 .mobile-navigation,.workspace-menu-backdrop { display: none; }
@@ -34,6 +39,12 @@
 .completed-activity-card > strong { font-size: 12px; line-height: 1.4; }
 .activity-card-metrics { font-size: 11px; }
 .calendar-empty-day { display: none; }
+.season-item-picker { display: grid; gap: 8px; margin: 16px 0; font-size: 13px; color: var(--text-secondary); }
+.season-item-picker select { width: 100%; min-height: 44px; padding: 10px; border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text); background: var(--surface); font: inherit; }
+.workspace-shell .season-timeline-row { height: 44px; }
+.workspace-shell .season-bar { height: 40px; font-size: 12px; }
+.season-bar[aria-pressed="true"] { outline: 2px solid var(--text); outline-offset: 1px; z-index: 1; }
+.workspace-shell .workout-profile-axis,.workspace-shell .workout-lane-label { font-size: 12px; }
 
 /* Switch to a chronological agenda when the content column cannot fit seven days. */
 @container (max-width: 1050px) {
@@ -91,7 +102,11 @@
   .metric-chart-scrubber { grid-template-columns: 1fr; gap: 2px; }
   .metric-chart-readout dl { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .metric-chart-controls { gap: 6px; }
-  .metric-chart-controls button { flex-grow: 1; padding-inline: 9px; }
+  .metric-chart-controls button { flex-grow: 1; gap: 5px; padding-inline: 7px; }
+  .metric-chart-controls button i { width: 12px; }
+  .workspace-content .load-summary-card > div { grid-template-columns: auto minmax(0,1fr); column-gap: 8px; }
+  .workspace-content .load-summary-card > div strong { font-size: 24px; }
+  .workspace-content .load-summary-card > div small { grid-column: 1 / -1; justify-self: start; min-width: 0; max-width: 100%; font-size: 12px; overflow-wrap: anywhere; }
   .workspace-content .response-card { margin: 16px 0; padding: 16px; border-color: var(--border); }
   .workspace-content .response-card p { color: var(--text-secondary); }
   .workspace-content :is(.model-controls,.index-period-controls,.report-period) { width: 100%; }
@@ -102,6 +117,11 @@
   .workspace-content .index-channels label { min-height: 44px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-secondary); }
   .workspace-content :is(.index-filters,.index-trend-controls) label { min-width: 0; max-width: 100%; }
   .workspace-content .index-filters select { width: 100%; }
+  .workspace-content .index-cursor-values { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .workspace-content .index-cursor-values > div { min-width: 0; }
+  .workspace-content .index-combined-value { grid-column: 1 / -1; }
+  .workspace-content .index-scrubber { padding: 12px; }
+  .workspace-content .index-scrubber > label { flex-direction: column; align-items: flex-start; gap: 6px; }
   .workspace-content [id] { scroll-margin-top: 82px; }
 }
 @media (max-width: 380px) {

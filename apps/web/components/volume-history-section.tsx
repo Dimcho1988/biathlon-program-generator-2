@@ -28,9 +28,9 @@ export function VolumeHistorySection({ history, message }: { history: VolumeHist
       </div>
       <div className="history-explainer">
         <strong>Две различни мерки</strong>
-        <p>Продължителността използва наличната стойност от активността. HR-зонираното време е точната сума на реалните минути T<sub>z</sub> в Z1–Z5. Линиите не се сумират; отделният STR компонент от пълния план все още не е интегриран.</p>
+        <p>Продължителността използва наличната стойност от активността. HR-зонираното време е точната сума на реалните минути T<sub>z</sub> в Z1–Z5. Двете мерки се разглеждат отделно; STR компонентът от пълния план все още не е интегриран.</p>
       </div>
-      {history.quality.missing_duration_activities > 0 && <p className="volume-quality-note">За {history.quality.missing_duration_activities} активности липсва обща продължителност; те остават в HR-зонирания обем и са изключени само от линията за продължителност.</p>}
+      {history.quality.missing_duration_activities > 0 && <p className="volume-quality-note">За {history.quality.missing_duration_activities} активности липсва обща продължителност; те остават в HR-зонирания обем и са изключени само от колоната за продължителност.</p>}
       <VolumeChart rows={history.weekly} periodStart={history.period_start} periodEnd={history.period_end} />
       <p className="report-note">Договор: {history.schema_version} · агрегация: {history.model.aggregation_version} · източник: {history.model.source_schema_version}</p>
     </section>
