@@ -29,6 +29,7 @@
 .metric-chart-reference { margin: 0 0 8px; color: var(--text-secondary); font-size: 12px; }
 .workspace-shell :is(.history-chart,.canonical-chart,.shadow-chart,.index-chart-panel) { min-width: 0; margin-inline: 0; }
 .trainability-content { grid-template-columns: minmax(0,1fr); }
+.workspace-shell :is(.shadow-lab,.shadow-plots) { grid-template-columns: minmax(0,1fr); }
 .workspace-shell .index-channels { min-width: 0; }
 .workspace-shell :is(.activity-table-wrap,.shadow-table-wrap,.report-table-wrap,.response-table) { max-width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-inline: contain; }
 .workspace-shell :is(td,dd,strong) { font-variant-numeric: tabular-nums; }
@@ -107,6 +108,9 @@
   .workspace-content .load-summary-card > div { grid-template-columns: auto minmax(0,1fr); column-gap: 8px; }
   .workspace-content .load-summary-card > div strong { font-size: 24px; }
   .workspace-content .load-summary-card > div small { grid-column: 1 / -1; justify-self: start; min-width: 0; max-width: 100%; font-size: 12px; overflow-wrap: anywhere; }
+  .workspace-content .management-metrics > div { min-width: 0; }
+  .workspace-content .management-metrics > div > * { min-width: 0; overflow-wrap: anywhere; }
+  .workspace-content .management-metrics strong { font-size: 20px; }
   .workspace-content .response-card { margin: 16px 0; padding: 16px; border-color: var(--border); }
   .workspace-content .response-card p { color: var(--text-secondary); }
   .workspace-content :is(.model-controls,.index-period-controls,.report-period) { width: 100%; }
