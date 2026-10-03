@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { AccountWorkspacePanel } from "../../components/account-workspace";
 import { loadAccountWorkspace } from "../../lib/account-access";
 import { currentAthleteAlias } from "../../lib/athlete-session";
+import { PasswordSettings } from "../../components/password-settings";
 
 const notices: Record<string, string> = {
   profile: "Името е запазено.",
@@ -43,6 +44,7 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
       activeAthleteAlias={activeAthleteAccessible ? activeAthleteAlias : null}
       unlinkedAthleteAlias={activeAthleteAlias && !activeAthleteAccessible ? activeAthleteAlias : null}
     />
-    <div className="account-actions"><Link href="/">Към приложението</Link><form method="post" action="/api/auth/logout"><button type="submit">Изход</button></form></div>
+    <PasswordSettings />
+    <div className="account-actions"><Link href="/">Към приложението</Link><form method="post" action="/api/auth/logout"><button type="submit">Изход от това устройство</button></form></div>
   </section></main>;
 }

@@ -207,6 +207,7 @@ describe("onFlows account foundation", () => {
     const response = await logout(request("/api/auth/logout"));
 
     expect(signOut).toHaveBeenCalledOnce();
+    expect(signOut).toHaveBeenCalledWith({ scope: "local" });
     expect(response.headers.get("location")).toBe("https://web.example.test/login");
     expect(response.headers.get("set-cookie")).toContain("onflows-athlete-session=;");
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0");

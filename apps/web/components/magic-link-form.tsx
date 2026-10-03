@@ -37,7 +37,7 @@ export function MagicLinkForm({ callbackError = false }: { callbackError?: boole
     <button className="action-button" type="submit" disabled={state === "sending" || state === "sent"}>
       {state === "sending" ? "Изпращане…" : state === "sent" ? "Линкът е изпратен" : "Изпрати защитен линк"}
     </button>
-    {state === "sent" && <p className="form-success" role="status">Провери email-а си и отвори линка от същото устройство.</p>}
+    {state === "sent" && <p className="form-success" role="status">Провери email-а си и отвори линка в същия браузър, от който го поиска. Ако email приложението отваря друг браузър, копирай линка в този браузър.</p>}
     {state === "rate-limited" && <p className="form-error" role="alert">Достигнат е временният лимит за email съобщения. Изчакай до един час и опитай отново.</p>}
     {state === "error" && <p className="form-error" role="alert">Линкът не беше изпратен. Провери връзката и опитай отново.</p>}
     {state === "idle" && callbackError && <p className="form-error" role="alert">Линкът е невалиден или е изтекъл. Изпрати си нов линк.</p>}
