@@ -11,7 +11,7 @@ import {SpeedTestEditor} from "./speed-test-editor";
 import {clockTime,manualClockTime,manualTestPayload} from "../lib/speed-tests";
 import {ManualSpeedTestEditor} from "./manual-speed-test";
 import { useChartLayout } from "./chart-layout";
-import { spacedChartTicks } from "../lib/chart-geometry";
+import { chartTicks, spacedChartTicks } from "../lib/chart-geometry";
 import {DosingCurvePanel} from "./dosing-curve-panel";
 import {AthleteFunctionalProfile} from "./athlete-functional-profile";
 const n=(v:number)=>new Intl.NumberFormat("bg-BG",{maximumFractionDigits:2}).format(v);
@@ -67,10 +67,10 @@ export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minu
       {model.warnings.includes("INCOMPARABLE_INDEX_CONFIGURATION")&&<p role="status">Има несъпоставими резултати след промяна на настройките. Обновете активностите и при нужда запишете тестовете отново. При липса на подходящ ТИ връзката пулс–скорост използва експертните ориентири.</p>}
       {Boolean(model.index_admission?.refresh_required)&&<p role="status">Има активности за преизчисляване с актуалния модел. Отвори <Link href="/">началния екран</Link> → „Обнови данните“ и обнови анализите, за да участват техните индекси във връзката пулс–скорост.</p>}
       {sample&&<figure className="history-chart"><div className="chart-frame" ref={ref}><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={exploratory?"Пробна скорост според продължителността":"Средна максимална скорост според продължителността"}>
-        {[0,.25,.5,.75,1].map(f=><g key={f}><line x1={left} x2={right} y1={y(vmax*f)} y2={y(vmax*f)} stroke="currentColor" opacity=".12"/><text x={left - 8} y={y(vmax*f)+4} textAnchor="end" fill="currentColor" fontSize="12">{n(vmax*f)}</text></g>)}
+        {chartTicks(0,vmax,5).map(v=><g key={v}><line x1={left} x2={right} y1={y(v)} y2={y(v)} stroke="currentColor" opacity=".12"/><text x={left - 8} y={y(v)+4} textAnchor="end" fill="currentColor" fontSize="12">{n(v)}</text></g>)}
         {points.slice(1).map((p,i)=>{const previous=points[i];const estimated=p.evidence==="EXTRAPOLATED"||p.evidence==="ESTIMATED"||model.status==="PRELIMINARY"||(measuredWindow&&(previous.duration_s<measuredWindow[0]||p.duration_s>measuredWindow[1]));return <line key={p.duration_s} x1={x(previous.duration_s)} y1={y(previous.speed_kmh)} x2={x(p.duration_s)} y2={y(p.speed_kmh)} stroke="var(--accent,#41b88c)" strokeWidth="3" strokeDasharray={estimated?"6 4":undefined}/>;})}
         {model.tests.filter(t=>model.active_test_keys.includes(t.entry_key)).map(t=><circle key={t.entry_key} cx={x(t.payload.duration_s)} cy={y(t.payload.speed_kmh)} r="5" fill="#ef9c45"><title>{`${t.payload.source==="MANUAL"?"Ръчен · ":t.payload.test_mode === "EXPLORATORY" ? "Пробен · " : ""}${t.payload.day} · ${manualClockTime(t.payload.duration_s)} · ${n(t.payload.speed_kmh)} км/ч`}</title></circle>)}
-        {spacedChartTicks([60,180,720,3600,21600].filter(t=>Math.log(t)>=lo&&Math.log(t)<=hi),x).map(t=><text key={t} x={x(t)} y={bottom+24} textAnchor="middle" fill="currentColor" fontSize="12">{time(t)}</text>)}
+        {spacedChartTicks([60,180,720,3600,21600].filter(t=>Math.log(t)>=lo&&Math.log(t)<=hi),x,60).map(t=><text key={t} x={x(t)} y={bottom+24} textAnchor="middle" fill="currentColor" fontSize="12">{time(t)}</text>)}
         <line x1={x(sample.duration_s)} x2={x(sample.duration_s)} y1={top} y2={bottom} className="metric-cursor" />
         <circle cx={x(sample.duration_s)} cy={y(sample.speed_kmh)} r="4" fill="var(--surface)" stroke="var(--accent)" strokeWidth="2.5" />
         <text x={left} y="18" fill="currentColor" fontSize="12">км/ч · Vflat</text>

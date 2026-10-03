@@ -1,6 +1,6 @@
 "use client";
 import { useChartLayout } from "./chart-layout";
-import { spacedChartTicks } from "../lib/chart-geometry";
+import { chartTicks, spacedChartTicks } from "../lib/chart-geometry";
 import {useState} from "react";
 import type {DosingModel} from "../lib/models";
 import {clockTime} from "../lib/speed-tests";
@@ -27,11 +27,11 @@ export function DosingCurvePanel({model}:{model:DosingModel}){
     <p>При еднаква продължителност взимаме 30% от скоростта по индексната крива и 70% от скоростта по реалните максимални тестове. Методите използват този общ ориентир за скорост и устойчивост. Съотношението 30/70 е избрано експертно правило; предстои проверка чрез реалното изпълнение.</p>
     <div className="model-controls" role="group" aria-label="Показани криви">{series.map((s,i)=><button key={s.key} type="button" className="action-button secondary" aria-pressed={visible[i]} onClick={()=>setVisible(v=>v.map((on,j)=>j===i?!on:on))}><span aria-hidden="true" style={{color:s.color}}>● </span>{s.label}</button>)}</div>
     <figure className="history-chart"><div className="chart-frame" ref={ref}><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Индексна, тестова и обща крива за дозиране">
-      {[0,.25,.5,.75,1].map(f=><g key={f}><line x1={left} x2={right} y1={y(vmax*f)} y2={y(vmax*f)} stroke="currentColor" opacity=".12"/><text x={left - 8} y={y(vmax*f)+4} textAnchor="end" fill="currentColor" fontSize="12">{n(vmax*f)}</text></g>)}
+      {chartTicks(0,vmax,5).map(v=><g key={v}><line x1={left} x2={right} y1={y(v)} y2={y(v)} stroke="currentColor" opacity=".12"/><text x={left - 8} y={y(v)+4} textAnchor="end" fill="currentColor" fontSize="12">{n(v)}</text></g>)}
       {series.map((s,i)=>visible[i]&&<polyline key={s.key} data-curve={s.key} points={points.map(p=>`${x(p.duration_s)},${y(p[s.key])}`).join(" ")} fill="none" stroke={s.color} strokeWidth={i===2?4:2} strokeDasharray={s.dash}/>)}
       <line x1={x(sample.duration_s)} x2={x(sample.duration_s)} y1={top} y2={bottom} stroke="currentColor" opacity=".3"/>
       {series.map((s,i)=>visible[i]&&<circle key={s.key} cx={x(sample.duration_s)} cy={y(sample[s.key])} r="4" fill={s.color}/>)}
-      {spacedChartTicks([60,180,720,3600,21600].filter(t=>Math.log(t)>=lo&&Math.log(t)<=hi),x).map(t=><text key={t} x={x(t)} y={bottom+24} textAnchor="middle" fill="currentColor" fontSize="12">{clockTime(t)}</text>)}
+      {spacedChartTicks([60,180,720,3600,21600].filter(t=>Math.log(t)>=lo&&Math.log(t)<=hi),x,60).map(t=><text key={t} x={x(t)} y={bottom+24} textAnchor="middle" fill="currentColor" fontSize="12">{clockTime(t)}</text>)}
       <text x={left} y="18" fill="currentColor" fontSize="12">км/ч · равен терен</text>
     </svg></div><figcaption>Трите криви са отделни. Общата крива е работна оценка за дозиране и не представлява нов максимален тест.</figcaption></figure>
     <div className="speed-curve-readout"><strong>{clockTime(sample.duration_s)} · Обща скорост {n(sample.speed_kmh)} км/ч</strong><span>Индекс {n(sample.index_speed_kmh)} · Тестове {n(sample.test_speed_kmh)} км/ч · {sample.estimated_hr_bpm===null?"Пулс: извън поддържания обхват":`Оценен пулс ${n(sample.estimated_hr_bpm)} уд./мин`}</span><label>Разгледай общата крива<input type="range" min="0" max={points.length-1} step="1" value={Math.min(cursor,points.length-1)} onChange={e=>setCursor(Number(e.target.value))}/></label></div>
