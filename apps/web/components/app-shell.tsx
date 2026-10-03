@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useRef, useState, useTransition, type ReactNode } from "react";
 import { ThemeToggle } from "./theme-toggle";
+import { InstallApp } from "./install-app";
 import { rememberedNavigationHref } from "../lib/dashboard-navigation";
 
 const sections = [
@@ -69,6 +70,7 @@ export function AppShell({ children, athlete }: { children: ReactNode; athlete: 
         </nav>
         <div className="workspace-athlete" onClick={(event) => { if ((event.target as HTMLElement).closest("a")) closeMenu(); }}>{athlete}</div>
         <div className="workspace-tools"><Link href="/account" prefetch={false} onClick={closeMenu} aria-current={pathname === "/account" ? "page" : undefined}>Акаунт и спортисти</Link><ThemeToggle /></div>
+        <InstallApp compact />
       </div>
     </aside>
     <div id="workspace-content" className="workspace-content" tabIndex={-1} aria-busy={pending}>

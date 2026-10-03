@@ -1,14 +1,22 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { WakeMarkerCleaner } from "../components/wake-marker-cleaner";
 import { Suspense } from "react";
 import { AppShell } from "../components/app-shell";
 import { AthleteNavigation } from "../components/athlete-navigation";
 import "./workspace.css";
+import "./auth.css";
+import "./install.css";
 
 export const metadata: Metadata = {
   title: "Тренировъчен статус · onFlows",
   description: "Зонален тренировъчен статус за биатлон и спортове за издръжливост",
+  applicationName: "onFlows",
+  appleWebApp: { capable: true, title: "onFlows", statusBarStyle: "default" },
+};
+
+export const viewport: Viewport = {
+  width: "device-width", initialScale: 1, themeColor: "#07111d",
 };
 
 const themeScript = `(function(){try{var k='onflows-theme',s=localStorage.getItem(k),t=s==='light'||s==='dark'?s:(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.dataset.theme=t;document.documentElement.style.colorScheme=t}catch(e){document.documentElement.dataset.theme=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}})()`;

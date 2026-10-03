@@ -5,7 +5,7 @@ import { createClient } from "../../../../lib/supabase/server";
 
 export async function POST(request: Request) {
   const supabase = await createClient();
-  await supabase.auth.signOut();
+  await supabase.auth.signOut({ scope: "local" });
   const response = NextResponse.redirect(new URL("/login", publicOrigin(request)), 303);
   response.cookies.set({
     name: ATHLETE_SESSION_COOKIE,
