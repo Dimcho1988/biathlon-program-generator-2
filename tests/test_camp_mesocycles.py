@@ -796,6 +796,45 @@ def test_distinct_camp_channels_fractional_weights_and_accent_limit() -> None:
     assert first_week.loc["Z4", "calendar_factor"] == pytest.approx(0.90)
 
 
+def test_hybrid_accents_keep_manual_priority_then_fill_automatically() -> None:
+    calendar = pd.DataFrame(
+        [
+            _event("camp", "CAMP", START, START + pd.Timedelta(days=6)),
+            _event("main", "MAIN_RACE", START + pd.Timedelta(days=70)),
+        ],
+        columns=CALENDAR_COLUMNS,
+    )
+    prescriptions = pd.DataFrame(
+        [
+            _prescription(
+                "camp",
+                mesocycle_type="BUILD",
+                accent_mode="HYBRID",
+                accent_limit=3,
+                accents={"Z5": 0.5},
+                volume_factor=1.20,
+                stress_factor=1.10,
+                maintenance_factor=0.90,
+            )
+        ],
+        columns=CAMP_PRESCRIPTION_COLUMNS,
+    )
+
+    first_week = _targets(
+        calendar,
+        camp_prescriptions=prescriptions,
+    ).loc[lambda frame: frame["week_no"] == 1].set_index("component")
+
+    accents = first_week["accent_components"].iloc[0].split(", ")
+    assert accents[0] == "Z5"
+    assert len(accents) == 3
+    assert len(set(accents)) == 3
+    assert first_week.loc["Z5", "calendar_factor"] == pytest.approx(1.05)
+    for component in accents[1:]:
+        expected = 1.20 if component in {"Z1", "Z2", "Z3"} else 1.10
+        assert first_week.loc[component, "calendar_factor"] == pytest.approx(expected)
+
+
 def test_multweek_camp_displaces_recovery_until_after_the_whole_block() -> None:
     calendar = pd.DataFrame(
         [

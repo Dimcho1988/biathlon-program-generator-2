@@ -1,18 +1,35 @@
-"""FastAPI entry point for the first onFlows read-only API."""
+"""Compose the onFlows HTTP API; endpoint behavior lives in routes/."""
 
 from fastapi import FastAPI
 
-from .schemas import HealthResponse, TrainingStatusResponse
-from .training_status import build_demo_training_status
+from .http_runtime import lifespan
+from .request_metrics import RequestMetricsMiddleware
+from .routes import (
+    management,
+    models,
+    settings,
+    response,
+    health,
+    integrations,
+    dashboard,
+    sync,
+    activities,
+)
 
-app = FastAPI(title="onFlows API", version="1.0.0")
+app = FastAPI(title="onFlows API", version="1.0.0", lifespan=lifespan)
+app.add_middleware(RequestMetricsMiddleware)
 
+ROUTE_MODULES = (
+    management,
+    models,
+    settings,
+    response,
+    health,
+    integrations,
+    dashboard,
+    sync,
+    activities,
+)
 
-@app.get("/health", response_model=HealthResponse)
-def health() -> HealthResponse:
-    return HealthResponse(status="ok")
-
-
-@app.get("/api/v1/demo/training-status", response_model=TrainingStatusResponse)
-def demo_training_status() -> TrainingStatusResponse:
-    return build_demo_training_status()
+for route_module in ROUTE_MODULES:
+    app.include_router(route_module.router)
