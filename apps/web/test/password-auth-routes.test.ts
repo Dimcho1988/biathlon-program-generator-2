@@ -124,7 +124,7 @@ describe("authenticated password setup/change", () => {
     const auth = authenticated();
     expect((await savePassword(settingRequest({ password, currentPassword: "" }))).status).toBe(200);
     expect(auth.updateUser).toHaveBeenCalledWith({ password });
-    for (const [code, status, reason] of [["weak_password",400,"weak"], ["same_password",400,"same"], ["reauthentication_needed",401,"reauthenticate"], ["current_password_required",400,"current-password"]] as const) {
+    for (const [code, status, reason] of [["weak_password",400,"weak"], ["same_password",400,"same"], ["reauthentication_needed",401,"reauthenticate"], ["current_password_required",400,"current-password"], ["current_password_mismatch",400,"current-password"]] as const) {
       auth.updateUser.mockResolvedValue({ error: { code } });
       const response = await savePassword(settingRequest());
       expect(response.status).toBe(status);

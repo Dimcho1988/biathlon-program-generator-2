@@ -35,7 +35,8 @@ export async function POST(request: Request) {
     if (error.code === "reauthentication_needed" || error.code === "session_not_found") return reply(401, "reauthenticate");
     if (error.code === "weak_password") return reply(400, "weak");
     if (error.code === "same_password") return reply(400, "same");
-    if (error.code === "current_password_required" || error.code === "invalid_credentials") return reply(400, "current-password");
+    if (error.code === "current_password_required" || error.code === "current_password_mismatch"
+      || error.code === "invalid_credentials") return reply(400, "current-password");
     return reply(502, "unavailable");
   } catch { return reply(502, "unavailable"); }
 }
