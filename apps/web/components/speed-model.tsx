@@ -10,6 +10,8 @@ import {HrSpeedZones} from "./hr-speed-zones";
 import {SpeedTestEditor} from "./speed-test-editor";
 import {clockTime,manualClockTime,manualTestPayload} from "../lib/speed-tests";
 import {ManualSpeedTestEditor} from "./manual-speed-test";
+import { useChartLayout } from "./chart-layout";
+import { spacedChartTicks } from "../lib/chart-geometry";
 import {DosingCurvePanel} from "./dosing-curve-panel";
 import {AthleteFunctionalProfile} from "./athlete-functional-profile";
 const n=(v:number)=>new Intl.NumberFormat("bg-BG",{maximumFractionDigits:2}).format(v);
@@ -27,6 +29,7 @@ export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minu
   const exploratory=model.tests.some(t=>model.active_test_keys.includes(t.entry_key)&&t.payload.test_mode==="EXPLORATORY");
   const [testSource,setTestSource]=useState<"ACTIVITY"|"MANUAL">("ACTIVITY");
   const [editing,setEditing]=useState<SpeedTest|undefined>();
+  const {ref,width,height,left,right,top,bottom,plotWidth,plotHeight} = useChartLayout(52);
   const [manualKey,setManualKey]=useState(0);
   const [busy,setBusy]=useState(false),[message,setMessage]=useState("");
   const [input,setInput]=useState(predictionInput),[value,setValue]=useState(predictionValue);
@@ -44,7 +47,7 @@ export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minu
   const curveLabel=exploratory?"Пробна крива":model.status==="CALIBRATED"?"Индивидуална крива":model.status==="PRELIMINARY"?"Предварителна индивидуална крива":model.status==="CONFLICTING_TESTS"?"Нужен е преглед на тестовете":model.status==="UNAVAILABLE"?"Все още няма индивидуална скоростна оценка":"Референтна крива";
   const lo=Math.log(model.points[0]?.duration_s||10.8),hi=Math.log(model.points.at(-1)?.duration_s||43516);
   const vmax=Math.ceil((model.points[0]?.speed_kmh||40)/5)*5;
-  const x=(t:number)=>48+852*(Math.log(t)-lo)/(hi-lo),y=(v:number)=>270-230*v/vmax;
+  const x=(t:number)=>left+plotWidth*(Math.log(t)-lo)/Math.max(.001,hi-lo),y=(v:number)=>bottom-plotHeight*v/vmax;
   async function toggle(t:SpeedTest){
     setBusy(true);setMessage("");setPending(null);
     const p=t.payload;
@@ -63,13 +66,15 @@ export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minu
       {model.warnings.includes("INCOMPARABLE_MODEL_VERSIONS")&&<p role="alert">Тестовете използват различни версии на Vflat. Изключете или преизчислете старите тестове, преди да ги сравнявате.</p>}
       {model.warnings.includes("INCOMPARABLE_INDEX_CONFIGURATION")&&<p role="status">Има несъпоставими резултати след промяна на настройките. Обновете активностите и при нужда запишете тестовете отново. При липса на подходящ ТИ връзката пулс–скорост използва експертните ориентири.</p>}
       {Boolean(model.index_admission?.refresh_required)&&<p role="status">Има активности за преизчисляване с актуалния модел. Отвори <Link href="/">началния екран</Link> → „Обнови данните“ и обнови анализите, за да участват техните индекси във връзката пулс–скорост.</p>}
-      {sample&&<figure className="history-chart"><svg viewBox="0 0 920 320" role="img" aria-label={exploratory?"Пробна скорост според продължителността":"Средна максимална скорост според продължителността"}>
-        {[0,.25,.5,.75,1].map(f=><g key={f}><line x1="48" x2="900" y1={y(vmax*f)} y2={y(vmax*f)} stroke="currentColor" opacity=".12"/><text x="40" y={y(vmax*f)+4} textAnchor="end" fill="currentColor" fontSize="12">{n(vmax*f)}</text></g>)}
+      {sample&&<figure className="history-chart"><div className="chart-frame" ref={ref}><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={exploratory?"Пробна скорост според продължителността":"Средна максимална скорост според продължителността"}>
+        {[0,.25,.5,.75,1].map(f=><g key={f}><line x1={left} x2={right} y1={y(vmax*f)} y2={y(vmax*f)} stroke="currentColor" opacity=".12"/><text x={left - 8} y={y(vmax*f)+4} textAnchor="end" fill="currentColor" fontSize="12">{n(vmax*f)}</text></g>)}
         {points.slice(1).map((p,i)=>{const previous=points[i];const estimated=p.evidence==="EXTRAPOLATED"||p.evidence==="ESTIMATED"||model.status==="PRELIMINARY"||(measuredWindow&&(previous.duration_s<measuredWindow[0]||p.duration_s>measuredWindow[1]));return <line key={p.duration_s} x1={x(previous.duration_s)} y1={y(previous.speed_kmh)} x2={x(p.duration_s)} y2={y(p.speed_kmh)} stroke="var(--accent,#41b88c)" strokeWidth="3" strokeDasharray={estimated?"6 4":undefined}/>;})}
         {model.tests.filter(t=>model.active_test_keys.includes(t.entry_key)).map(t=><circle key={t.entry_key} cx={x(t.payload.duration_s)} cy={y(t.payload.speed_kmh)} r="5" fill="#ef9c45"><title>{`${t.payload.source==="MANUAL"?"Ръчен · ":t.payload.test_mode === "EXPLORATORY" ? "Пробен · " : ""}${t.payload.day} · ${manualClockTime(t.payload.duration_s)} · ${n(t.payload.speed_kmh)} км/ч`}</title></circle>)}
-        {[60,180,720,3600,21600].filter(t=>Math.log(t)>=lo&&Math.log(t)<=hi).map(t=><text key={t} x={x(t)} y="297" textAnchor="middle" fill="currentColor" fontSize="12">{time(t)}</text>)}
-        <text x="48" y="20" fill="currentColor" fontSize="12">км/ч · Vflat</text>
-      </svg><div className="speed-curve-readout"><strong>{curveLabel}: {time(sample.duration_s)} · {n(sample.speed_kmh)} км/ч · {n(sample.distance_m/1000)} км</strong>{evidenceLabel(sample,model)&&<span>{evidenceLabel(sample,model)}{sample.capped?" · достигнато ограничение на допълнителното отклонение":""}</span>}<label>Разгледай кривата<input type="range" min="0" max={points.length-1} step="1" value={Math.min(cursor,points.length-1)} onChange={e=>setCursor(Number(e.target.value))}/></label></div><figcaption>Точките са записани тестови резултати. Прекъснатата линия показва предварителна оценка или прогноза извън тестовете. Времето е по логаритмична скала.</figcaption></figure>}
+        {spacedChartTicks([60,180,720,3600,21600].filter(t=>Math.log(t)>=lo&&Math.log(t)<=hi),x).map(t=><text key={t} x={x(t)} y={bottom+24} textAnchor="middle" fill="currentColor" fontSize="12">{time(t)}</text>)}
+        <line x1={x(sample.duration_s)} x2={x(sample.duration_s)} y1={top} y2={bottom} className="metric-cursor" />
+        <circle cx={x(sample.duration_s)} cy={y(sample.speed_kmh)} r="4" fill="var(--surface)" stroke="var(--accent)" strokeWidth="2.5" />
+        <text x={left} y="18" fill="currentColor" fontSize="12">км/ч · Vflat</text>
+      </svg></div><div className="speed-curve-readout"><strong>{curveLabel}: {time(sample.duration_s)} · {n(sample.speed_kmh)} км/ч · {n(sample.distance_m/1000)} км</strong>{evidenceLabel(sample,model)&&<span>{evidenceLabel(sample,model)}{sample.capped?" · достигнато ограничение на допълнителното отклонение":""}</span>}<label>Разгледай кривата<input type="range" min="0" max={points.length-1} step="1" value={Math.min(cursor,points.length-1)} onChange={e=>setCursor(Number(e.target.value))}/></label></div><figcaption>Точките са записани тестови резултати. Прекъснатата линия показва предварителна оценка или прогноза извън тестовете. Времето е по логаритмична скала.</figcaption></figure>}
       {measuredWindow&&<p>Проверен с тестове диапазон: {time(measuredWindow[0])}{measuredWindow[1]!==measuredWindow[0]?` – ${time(measuredWindow[1])}`:""}. Стойностите между тестовете също са моделни оценки.</p>}
       {model.curve_metadata?.mode==="SINGLE_ANCHOR_SCALE"&&<p>При един максимален тест запазваме формата на нормативната крива и мащабираме скоростта, за да премине точно през резултата.</p>}
       {model.curve_metadata?.cap_percent!=null&&<details className="speed-method-note"><summary>Как се ограничава прогнозата извън тестовете?</summary><p>Кривата преминава точно през всички реални тестове. Извън тях продължаваме формата на крайния измерен участък. Допълнителното отклонение от индивидуално мащабираната нормативна основа е до {n(model.curve_metadata.cap_percent)}%, с плавен преход и без обръщане на посоката на отклонението. Двата края се разглеждат независимо. Това е ограничение на модела, а не граница на възможностите или точност на прогнозата.</p></details>}

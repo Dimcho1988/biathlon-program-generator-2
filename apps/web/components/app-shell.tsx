@@ -73,9 +73,13 @@ export function AppShell({ children, athlete }: { children: ReactNode; athlete: 
         <InstallApp compact />
       </div>
     </aside>
+    {menuOpen && <button className="workspace-menu-backdrop" type="button" aria-label="Затвори навигацията" onClick={() => { closeMenu(); toggleRef.current?.focus(); }} />}
     <div id="workspace-content" className="workspace-content" tabIndex={-1} aria-busy={pending}>
       {pending && <div className="workspace-navigation-progress" role="status">Зареждаме „{destinationLabel}“…</div>}
       {children}
     </div>
+    <nav className="mobile-navigation" aria-label="Бърза навигация">
+      {[sections[0], sections[1], sections[2], sections[6]].map(({href,label,icon},i) => <Link key={href} href={href} prefetch={false} aria-current={pathname === href || (href !== "/" && pathname.startsWith(`${href}/`)) ? "page" : undefined} onNavigate={event => navigate(href,label,event)}><NavIcon name={icon} /><span>{["Статус","Активности","Индекс","Програма"][i]}</span></Link>)}
+    </nav>
   </div>;
 }

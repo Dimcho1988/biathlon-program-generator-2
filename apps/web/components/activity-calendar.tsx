@@ -153,9 +153,9 @@ export function ActivityCalendarView({ calendar, syncBusy = false }: { calendar:
     <div className="completed-calendar-grid">
       {weeks.map((week) => <section className="completed-week" key={week[0]}>
         <WeekSummary calendar={calendar} weekStart={week[0]} />
-        {[...week].reverse().map((day) => <div key={day} style={{ "--calendar-day-order": week.indexOf(day) + 1 } as CSSProperties} className={`completed-day ${day < calendar.period_start || day > calendar.period_end ? "outside-period" : ""} ${day === week[6] ? "week-end" : ""}`}>
+        {[...week].reverse().map((day) => <div key={day} style={{ "--calendar-day-order": week.indexOf(day) + 1 } as CSSProperties} className={`completed-day ${!byDate.has(day) ? "no-activities" : ""} ${day < calendar.period_start || day > calendar.period_end ? "outside-period" : ""} ${day === week[6] ? "week-end" : ""}`}>
           <header><span className="calendar-day-title"><time dateTime={day}>{dateLabel.format(utcDate(day))}</time><span>{byDate.get(day)?.length || ""}</span></span><WellnessDay wellness={wellnessByDate.get(day)} /></header>
-          <div className="day-activities">{(byDate.get(day) ?? []).map((activity) => <ActivityCard key={activity.activity_ref} activity={activity} />)}</div>
+          <div className="day-activities">{(byDate.get(day) ?? []).map((activity) => <ActivityCard key={activity.activity_ref} activity={activity} />)}{!byDate.has(day) && <span className="calendar-empty-day">Няма активност</span>}</div>
         </div>)}
       </section>)}
     </div>

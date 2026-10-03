@@ -1,4 +1,5 @@
 "use client";
+import { useChartLayout } from "./chart-layout";
 import Link from "next/link";
 import {useEffect, useState, type FormEvent, type MouseEvent} from "react";
 import {useRouter} from "next/navigation";
@@ -25,6 +26,7 @@ export function SpeedTestEditor({model, canEdit, activityRef}:{model:SpeedModel;
 }
 
 function SpeedSegmentEditor({activityRef,model,canEdit}:{activityRef:string;model:SpeedModel;canEdit:boolean}) {
+  const {ref,width,height,left,right,top,bottom,plotWidth,plotHeight,compact} = useChartLayout(52);
   const router=useRouter();
   const [preview,setPreview]=useState<SpeedPreview|null>(null);
   const [mode,setMode]=useState<SpeedTestMode>("STRICT");
@@ -86,12 +88,12 @@ function SpeedSegmentEditor({activityRef,model,canEdit}:{activityRef:string;mode
   }
 
   const vmax=Math.max(5,Math.ceil(Math.max(0,...(preview?.series.map(p=>p.speed_kmh||0)||[]))/5)*5);
-  const x=(t:number)=>48+824*t/(preview?.elapsed_s||1),y=(v:number)=>200-160*v/vmax;
+  const x=(t:number)=>left+plotWidth*t/(preview?.elapsed_s||1),y=(v:number)=>bottom-plotHeight*v/vmax;
   const curve=preview?.series.map((p,i)=>p.speed_kmh===null?"":`${i&&preview.series[i-1].speed_kmh!==null?"L":"M"}${x(p.elapsed_s)},${y(p.speed_kmh)}`).join(" ");
   function pick(event:MouseEvent<SVGSVGElement>){
     if(!preview||busy)return;
     const box=event.currentTarget.getBoundingClientRect();
-    const seconds=Math.round(Math.max(0,Math.min(1,((event.clientX-box.left)*920/box.width-48)/824))*preview.elapsed_s);
+    const seconds=Math.round(Math.max(0,Math.min(1,((event.clientX-box.left)*width/box.width-left)/plotWidth))*preview.elapsed_s);
     bounds(handle,clockTime(seconds));
   }
 
@@ -108,16 +110,16 @@ function SpeedSegmentEditor({activityRef,model,canEdit}:{activityRef:string;mode
       {preview.status==="READY"&&preview.uses_legacy_samples&&<p>За този запис е наличен по-стар анализ. Ако покритието не достига, обнови анализите от <Link href="/">началния екран</Link> и провери отново.</p>}
       {preview.status==="ANALYSIS_REQUIRED"?<p role="alert">Липсват подробни данни за скоростта. Отвори <Link href="/">началния екран</Link> → „Обнови данните“ и обнови анализите на активностите.</p>:preview.status==="OUTSIDE_TEST_WINDOW"?<p role="alert">Тази активност е извън последните 90 дни. Избери по-скорошен тест.</p>:<>
         <div className="model-controls" role="group" aria-label="Избор върху графиката"><button type="button" className="action-button secondary" aria-pressed={handle==="start"} disabled={busy} onClick={()=>setHandle("start")}>Постави начало</button><button type="button" className="action-button secondary" aria-pressed={handle==="end"} disabled={busy} onClick={()=>setHandle("end")}>Постави край</button><span>Натисни върху графиката или използвай полетата и плъзгачите.</span></div>
-        <figure className="history-chart speed-segment-chart"><svg viewBox="0 0 920 242" role="img" aria-label="Скорост на активността и избран тестов участък" onClick={pick}>
-          {[0,.5,1].map(f=><g key={f}><line x1="48" x2="872" y1={y(vmax*f)} y2={y(vmax*f)} stroke="currentColor" opacity=".12"/><text x="40" y={y(vmax*f)+4} textAnchor="end" fill="currentColor" fontSize="12">{n(vmax*f)}</text></g>)}
-          {preview.series.filter(p=>p.eligible_fraction<.98).map(p=><rect key={p.elapsed_s} x={Math.max(48,x(p.elapsed_s)-824/preview.series.length/2)} y="35" width={824/preview.series.length} height="170" fill="currentColor" opacity=".09"/>)}
-          {start!==null&&end!==null&&end>start&&<rect x={x(Math.min(start,preview.elapsed_s))} y="35" width={Math.max(0,x(Math.min(end,preview.elapsed_s))-x(Math.min(start,preview.elapsed_s)))} height="170" fill="var(--accent)" opacity=".16"/>}
+        <figure className="history-chart speed-segment-chart"><div className="chart-frame" ref={ref}><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Скорост на активността и избран тестов участък" onClick={pick}>
+          {[0,.5,1].map(f=><g key={f}><line x1={left} x2={right} y1={y(vmax*f)} y2={y(vmax*f)} stroke="currentColor" opacity=".12"/><text x={left-8} y={y(vmax*f)+4} textAnchor="end" fill="currentColor" fontSize="12">{n(vmax*f)}</text></g>)}
+          {preview.series.filter(p=>p.eligible_fraction<.98).map(p=><rect key={p.elapsed_s} x={Math.max(left,x(p.elapsed_s)-plotWidth/preview.series.length/2)} y={top} width={plotWidth/preview.series.length} height={plotHeight} fill="currentColor" opacity=".09"/>)}
+          {start!==null&&end!==null&&end>start&&<rect x={x(Math.min(start,preview.elapsed_s))} y={top} width={Math.max(0,x(Math.min(end,preview.elapsed_s))-x(Math.min(start,preview.elapsed_s)))} height={plotHeight} fill="var(--accent)" opacity=".16"/>}
           <path d={curve} fill="none" stroke="var(--accent)" strokeWidth="2"/>
-          {start!==null&&start<=preview.elapsed_s&&<line x1={x(start)} x2={x(start)} y1="35" y2="205" stroke="var(--accent)" strokeWidth="2"/>}
-          {end!==null&&end<=preview.elapsed_s&&<line x1={x(end)} x2={x(end)} y1="35" y2="205" stroke="var(--accent)" strokeWidth="2"/>}
-          {[0,.25,.5,.75,1].map(f=><text key={f} x={x(preview.elapsed_s*f)} y="228" textAnchor="middle" fill="currentColor" fontSize="12">{clockTime(preview.elapsed_s*f)}</text>)}
-          <text x="48" y="20" fill="currentColor" fontSize="12">Vflat · км/ч</text>
-        </svg><figcaption>Оцветеният участък е твоят избор. Сивите ивици показват непълно покритие или изключени данни. Изчислението използва подробния запис.</figcaption></figure>
+          {start!==null&&start<=preview.elapsed_s&&<line x1={x(start)} x2={x(start)} y1={top} y2={bottom} stroke="var(--accent)" strokeWidth="2"/>}
+          {end!==null&&end<=preview.elapsed_s&&<line x1={x(end)} x2={x(end)} y1={top} y2={bottom} stroke="var(--accent)" strokeWidth="2"/>}
+          {(compact ? [0,.5,1] : [0,.25,.5,.75,1]).map(f=><text key={f} x={x(preview.elapsed_s*f)} y={bottom+24} textAnchor={f===0?"start":f===1?"end":"middle"} fill="currentColor" fontSize="12">{clockTime(preview.elapsed_s*f)}</text>)}
+          <text x={left} y="18" fill="currentColor" fontSize="12">Vflat · км/ч</text>
+        </svg></div><figcaption>Оцветеният участък е твоят избор. Сивите ивици показват непълно покритие или изключени данни. Изчислението използва подробния запис.</figcaption></figure>
         <div className="model-controls"><label>Начало, ч:мм:сс<input value={startText} disabled={busy} onChange={e=>bounds("start",e.target.value)} placeholder="0:00:00" aria-describedby="speed-time-format"/></label><label>Край, ч:мм:сс<input value={endText} disabled={busy} onChange={e=>bounds("end",e.target.value)} placeholder="0:12:00" aria-describedby="speed-time-format"/></label><strong>Участък: {duration!==null&&duration>0?clockTime(duration):"—"}</strong></div>
         <p id="speed-time-format" className="muted-copy">Например 0:12:30 означава 12 минути и 30 секунди. Допуска се и мин:сек.</p>
         <div className="speed-range-controls"><label>Начало на участъка<input type="range" min="0" max={preview.elapsed_s} step="1" value={Math.min(start??0,preview.elapsed_s)} disabled={busy} onChange={e=>bounds("start",clockTime(Number(e.target.value)))}/></label><label>Край на участъка<input type="range" min="0" max={preview.elapsed_s} step="1" value={Math.min(end??0,preview.elapsed_s)} disabled={busy} onChange={e=>bounds("end",clockTime(Number(e.target.value)))}/></label></div>

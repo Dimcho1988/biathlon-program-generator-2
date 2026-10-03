@@ -1,3 +1,5 @@
+"use client";
+import { MetricChart } from "./metric-chart";
 import { durationHms } from "../lib/duration-format";
 import type { CSSProperties } from "react";
 import type { RecoveryHistory, LegacyRecoveryHistory, WellnessCoverageDiagnostics, WellnessCoverageField } from "../lib/recovery-history";
@@ -81,24 +83,15 @@ function RecoverySettingsHelp() {
 function RecoveryChart({ history }: { history: LegacyRecoveryHistory }) {
   const dates = [...new Set(history.daily.map((row) => row.date))];
   if (dates.length < 2) return <p className="muted-copy">Няма достатъчно дни за recovery графика.</p>;
-  const width = 920, height = 300, left = 48, right = 16, top = 22, bottom = 42;
-  const x = (index: number) => left + index * (width - left - right) / (dates.length - 1);
-  const y = (value: number) => top + (100 - value) * (height - top - bottom) / 100;
   const threshold = history.model.practical_full_recovery_percent;
-  return <figure className="history-chart recovery-chart">
-    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-labelledby="recovery-chart-title recovery-chart-description">
-      <title id="recovery-chart-title">Динамика на товарната готовност по компоненти</title>
-      <desc id="recovery-chart-description">Дневна готовност след натоварването за Z1 до Z5 и отделния силов компонент STR. Пунктираната линия е прагът за практическо пълно възстановяване.</desc>
-      {[0, 50, 100].map((tick) => <g key={tick}><line className="chart-grid" x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} /><text className="chart-label" x={left - 8} y={y(tick) + 4} textAnchor="end">{tick}%</text></g>)}
-      <line className="chart-reference" x1={left} x2={width - right} y1={y(threshold)} y2={y(threshold)} />
-      <text className="chart-label" x={width - right} y={y(threshold) - 7} textAnchor="end">практически възстановен · {decimal(threshold)}%</text>
-      {ZONES.map((zone) => <polyline key={zone} className="chart-series" style={zoneStyle(zone)} points={history.daily.filter((row) => row.zone === zone).map((row) => `${x(dates.indexOf(row.date))},${y(row.readiness_after_percent)}`).join(" ")} />)}
-      {history.strength && <polyline className="chart-series" style={strengthStyle} points={history.strength.daily.map((row) => `${x(dates.indexOf(row.date))},${y(row.readiness_after_percent)}`).join(" ")} />}
-      <text className="chart-label" x={left} y={height - 12}>{date(dates[0])}</text><text className="chart-label" x={width - right} y={height - 12} textAnchor="end">{date(dates.at(-1)!)}</text>
-    </svg>
-    <figcaption className="chart-legend">{ZONES.map((zone) => <span key={zone} style={zoneStyle(zone)}><i />{zone}</span>)}{history.strength && <span style={strengthStyle}><i />STR</span>}</figcaption>
+  return <figure className="history-chart recovery-chart"><h3>Динамика на товарната готовност по компоненти</h3>
+    <MetricChart title="Динамика на товарната готовност по компоненти" unit="Готовност · %" yKind="percent" domain={[0,100]} maxGap={86400000} reference={{ value: threshold, label: `Практическо възстановяване · ${decimal(threshold)}%` }} series={[
+      ...ZONES.map((zone, i) => ({ key: zone, label: zone, color: `var(--zone-${i+1})`, points: history.daily.filter(row => row.zone === zone).map(row => ({ x: Date.parse(row.date), y: row.readiness_after_percent })) })),
+      ...(history.strength ? [{ key: "STR", label: "STR", color: "var(--strength)", points: history.strength.daily.map(row => ({ x: Date.parse(row.date), y: row.readiness_after_percent })) }] : []),
+    ]} />
   </figure>;
 }
+
 
 export function RecoveryHistorySection({ history, message, refreshAvailable = false, syncBusy = false, fullRefreshRequired = false, canEdit = false }: { history: RecoveryHistory | null; message?: string; refreshAvailable?: boolean; syncBusy?: boolean; fullRefreshRequired?: boolean; canEdit?:boolean }) {
   if(history?.schema_version === "recovery-history-v2") return <><RecoveryV2Section key={history.athlete_id} history={history} canEdit={canEdit}/>{history.wellness_diagnostics&&<WellnessCoveragePanel diagnostics={history.wellness_diagnostics}/>}</>;

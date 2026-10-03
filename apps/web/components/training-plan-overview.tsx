@@ -1,5 +1,6 @@
 "use client";
 
+import { useChartLayout } from "./chart-layout";
 import Link from "next/link";
 import { TimeAvailability, TimeLimitNotice } from "./planning-time-limit";
 import { PlanComparison } from "./plan-comparison";
@@ -31,6 +32,7 @@ function outlookWeeks(plan?: PlanProjection): Week[] {
 }
 
 export function TrainingPlanOverview({ plan, outcomes, today, stale, currentProfileRevision, volumeContext, sessions, sessionStatus = "Няма актуални съставени сесии. Подготви или обнови седмичната програма." }: { plan?: PlanProjection; outcomes: PlanOutcome[]; today: string; stale?: boolean; currentProfileRevision?: number; volumeContext?: Record<string, unknown>; sessions?: PlanningDraft; sessionStatus?: string }) {
+  const {ref,width,height,left,right,top,bottom,plotWidth,plotHeight,compact} = useChartLayout(82);
   const [zones, setZones] = useState<Component[]>([...COMPONENTS]);
   const [selected, setSelected] = useState(0);
   const [metric, setMetric] = useState<"volume" | "index">("volume");
@@ -46,8 +48,8 @@ export function TrainingPlanOverview({ plan, outcomes, today, stale, currentProf
   const valueOf = (w: Week, z: Component) => (metric === "index" ? w.components[z]?.target_index_7_40 : w.components[z]?.target_period_q) ?? null;
   const format = (v: number | null) => metric === "index" ? v === null ? "—" : v.toLocaleString("bg-BG", {minimumFractionDigits:2, maximumFractionDigits:2}) : display(v);
   const maximum = Math.max(1, ...weeks.flatMap(w => zones.map(z => valueOf(w,z) ?? 0))) * 1.1;
-  const x = (index: number) => 90 + index * 740 / Math.max(1, weeks.length - 1);
-  const y = (value: number) => 260 - value * 220 / maximum;
+  const x = (index: number) => left + index * plotWidth / Math.max(1, weeks.length - 1);
+  const y = (value: number) => bottom - value * plotHeight / maximum;
   return <section className="management-overview" aria-label="Дългосрочна подготовка">
     <PlanningEvidenceNotice plan={plan}/>
     <LoadProgressionSummary plan={plan}/>
@@ -74,14 +76,14 @@ export function TrainingPlanOverview({ plan, outcomes, today, stale, currentProf
         </div>
         <div className="management-zone-legend" role="group" aria-label="Показани компоненти">{COMPONENTS.map(z => <button key={z} type="button" aria-pressed={zones.includes(z)} onClick={() => setZones(old => old.includes(z) ? old.filter(v => v !== z) : [...old, z])}><i style={{ background: COLORS[z] }} />{componentLabel(z)}</button>)}</div>
         <p className="management-muted">{metric === "index" ? "Планови цели 7/40 спрямо текущата историческа основа. Това не е прогноза за бъдещата готовност или индекс, изчислен от съставени сесии. Стойност 1,20 не означава 20% повече тренировъчни минути." : "Приравнен обем за точните дати на микроцикъла, в ч:мм:сс; това не е продължителност на тренировките. Графиката и таблицата използват едни и същи стойности. Непълният микроцикъл съдържа само показаните дни. Това са цели преди проверката на ежедневната готовност."}</p>
-        <div className="management-chart-wrap"><svg className="management-outlook-chart" viewBox="0 0 900 305" role="img" aria-label={metric === "index" ? "Цели 7/40 по микроцикли" : "Приравнен обем по микроцикли"}>
+        <div className="chart-frame" ref={ref}><svg className="management-outlook-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={metric === "index" ? "Цели 7/40 по микроцикли" : "Приравнен обем по микроцикли"}>
           <title>Дългосрочни цели по компоненти; точните стойности са в таблицата по микроцикли</title>
-          {[0, 1, 2, 3, 4].map(i => <g key={i}><line x1="90" x2="840" y1={y(maximum * i / 4)} y2={y(maximum * i / 4)} stroke="#dde7e9" /><text x="80" y={y(maximum * i / 4) + 4} textAnchor="end">{format(maximum * i / 4)}</text></g>)}
-          {metric === "index" && <line x1="90" x2="840" y1={y(1)} y2={y(1)} stroke="#71878c" strokeDasharray="5 5"><title>Индекс 1,00</title></line>}
-          {weeks.map((week, i) => { const e = events.filter(e => label(e.start_date) <= week.end_date && label(e.end_date) >= week.start_date); return e.length ? <g key={week.start_date}><rect x={x(i) - 5} y="30" width="10" height="230" fill="#e9d7a0" opacity=".4" /><text x={x(i)} y="20" textAnchor="middle">{e.some(e => e.event_type === "MAIN_RACE") ? "★" : e.some(e => e.event_type === "CAMP") ? "Л" : "●"}</text><title>{e.map(e => label(e.name)).join(", ")}</title></g> : null; })}
+          {[0, 1, 2, 3, 4].map(i => <g key={i}><line x1={left} x2={right} y1={y(maximum * i / 4)} y2={y(maximum * i / 4)} stroke="var(--border)" /><text x={left-8} y={y(maximum * i / 4) + 4} textAnchor="end">{format(maximum * i / 4)}</text></g>)}
+          {metric === "index" && <line x1={left} x2={right} y1={y(1)} y2={y(1)} stroke="var(--text-muted)" strokeDasharray="5 5"><title>Индекс 1,00</title></line>}
+          {weeks.map((week, i) => { const e = events.filter(e => label(e.start_date) <= week.end_date && label(e.end_date) >= week.start_date); return e.length ? <g key={week.start_date}><rect x={x(i) - 5} y={top} width="10" height={plotHeight} fill="#e9d7a0" opacity=".4" /><text x={x(i)} y="20" textAnchor="middle">{e.some(e => e.event_type === "MAIN_RACE") ? "★" : e.some(e => e.event_type === "CAMP") ? "Л" : "●"}</text><title>{e.map(e => label(e.name)).join(", ")}</title></g> : null; })}
           {zones.map(z => <g key={z}>{weeks.map((week, i) => { const value = valueOf(week,z); const previous = i > 0 ? valueOf(weeks[i-1],z) : null; return value === null ? null : <g key={week.start_date}>{previous !== null && <line x1={x(i - 1)} y1={y(previous)} x2={x(i)} y2={y(value)} stroke={COLORS[z]} strokeWidth="2.5" />}<circle cx={x(i)} cy={y(value)} r="3" fill={COLORS[z]}><title>{`${z} · ${shortDate(week.start_date)}: ${format(value)}`}</title></circle></g>; })}</g>)}
-          {weeks.filter((_, i) => i % Math.max(1, Math.ceil(weeks.length / 8)) === 0 || i === weeks.length - 1).map(w => <text key={w.start_date} x={x(weeks.indexOf(w))} y="287" textAnchor="middle">{shortDate(w.start_date)}</text>)}
-          <line x1={x(Math.min(selected, weeks.length - 1))} x2={x(Math.min(selected, weeks.length - 1))} y1="30" y2="260" stroke="#203f4c" strokeDasharray="4 4" />
+          {weeks.filter((_, i) => i % Math.max(1, Math.ceil(weeks.length / (compact?3:7))) === 0 || i === weeks.length - 1).map(w => <text key={w.start_date} x={x(weeks.indexOf(w))} y={bottom+24} textAnchor={w === weeks[0] ? "start" : w === weeks.at(-1) ? "end" : "middle"}>{shortDate(w.start_date)}</text>)}
+          <line x1={x(Math.min(selected, weeks.length - 1))} x2={x(Math.min(selected, weeks.length - 1))} y1={top} y2={bottom} stroke="var(--text-secondary)" strokeDasharray="4 4" />
         </svg></div>
         <p className="management-muted">★ Основен старт · Л Лагер · ● Контролен старт, тест или недостъпен период</p>
         <label>Разгледай седмица<select value={Math.min(selected, weeks.length - 1)} onChange={e => setSelected(Number(e.target.value))}>{weeks.map((w, i) => <option key={w.start_date} value={i}>{shortDate(w.start_date)} – {shortDate(w.end_date)} · {w.cycle?.kind === "RECOVERY" ? "Разтоварване" : w.accents.join(", ")}</option>)}</select></label>

@@ -146,5 +146,7 @@ it("uses true calendar spacing and breaks plotted lines across missing dates", a
   const path = container.querySelector('path[data-zone="Z1"]')!.getAttribute("d")!;
   expect(path.match(/M/g)).toHaveLength(2);
   expect(path.match(/L/g)).toHaveLength(1);
-  expect(path).toContain("M48,"); expect(path).toContain("L262,"); expect(path).toContain("M690,");
+  const coordinates = [...path.matchAll(/[ML]([\d.]+),/g)].map(match => Number(match[1]));
+  expect(coordinates[1] - coordinates[0]).toBeGreaterThan(0);
+  expect(coordinates[2] - coordinates[1]).toBeCloseTo(2 * (coordinates[1] - coordinates[0]));
 });

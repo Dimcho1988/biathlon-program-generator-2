@@ -5,6 +5,8 @@ import { TrainabilitySummary } from "./trainability-summary";
 import { parseTrainabilityIndex } from "../lib/trainability";
 
 import { useState } from "react";
+import { MetricChart } from "./metric-chart";
+import { useChartLayout } from "./chart-layout";
 import Link from "next/link";
 
 type Row = Record<string, unknown>;
@@ -53,52 +55,13 @@ function MiniPlot({ rows, series, title }: {
   const visible = series.filter((item) => item.enabled !== false);
   const values = visible.flatMap((item) => rows.map((row) => number(row[item.key])).filter((value): value is number => value !== null));
   if (!values.length) return <section className="shadow-chart"><h3>{title}</h3><p>Няма наличен канал.</p></section>;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = Math.max(max - min, 1e-9);
-  const elapsed = rows.map((row, index) => number(row.elapsed_s) ?? index);
-  const minElapsed = Math.min(...elapsed);
-  const maxElapsed = Math.max(...elapsed);
-  const elapsedSpan = Math.max(maxElapsed - minElapsed, 1);
-  const path = (key: string) => {
-    const commands: string[] = [];
-    let drawing = false;
-    let previousElapsed: number | null = null;
-    rows.forEach((row, index) => {
-      const value = number(row[key]);
-      const currentElapsed = elapsed[index];
-      if (value === null) {
-        drawing = false;
-        previousElapsed = null;
-        return;
-      }
-      const x = 42 + ((currentElapsed - minElapsed) / elapsedSpan) * 928;
-      const y = 178 - ((value - min) / span) * 154;
-      const gap = previousElapsed !== null && currentElapsed - previousElapsed > 10;
-      commands.push(`${!drawing || gap ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`);
-      drawing = true;
-      previousElapsed = currentElapsed;
-    });
-    return commands.join(" ");
-  };
-  const zeroY = min < 0 && max > 0 ? 178 - ((0 - min) / span) * 154 : null;
-  return (
-    <section className="shadow-chart">
-      <h3>{title}</h3>
-      <svg viewBox="0 0 1000 210" role="img" aria-label={title}>
-        {zeroY !== null && <line x1="42" x2="970" y1={zeroY} y2={zeroY} className="shadow-zero-line" />}
-        {visible.map((item) => <path key={item.key} d={path(item.key)} fill="none" stroke={item.color} strokeWidth="2.5" />)}
-        <text x="4" y="30">{max.toFixed(1)}</text>
-        <text x="4" y="181">{min.toFixed(1)}</text>
-        <text x="42" y="204">{duration(minElapsed)}</text>
-        <text x="970" y="204" textAnchor="end">{duration(maxElapsed)}</text>
-      </svg>
-      <p className="shadow-legend">{visible.map((item) => <span key={item.key} style={{ color: item.color }}>● {item.label}</span>)}</p>
-    </section>
-  );
+  const unit = series[0].key.includes("kmh") ? "km/h" : series[0].key.includes("pct") ? "%" : "bpm";
+  return <section className="shadow-chart"><h3>{title}</h3><MetricChart title={title} unit={unit} xKind="duration" maxGap={10} zero={unit === "km/h"} reference={unit === "%" ? { value: 0, label: "0% · равен терен" } : undefined} series={visible.map(item => ({ key: item.key, label: item.label, color: item.color, dashed: item.key.includes("raw"), points: rows.filter(row => number(row.elapsed_s) !== null).map(row => ({ x: number(row.elapsed_s)!, y: number(row[item.key]) })) }))} /></section>;
 }
 
 function IntervalBands({ rows }: { rows: Row[] }) {
+  const {ref, width, left, right, plotWidth, compact} = useChartLayout(92, 166);
+  const x = (seconds: number) => left + seconds / maxElapsed * plotWidth;
   const elapsed = rows.map((row, index) => number(row.elapsed_s) ?? index);
   const maxElapsed = Math.max(...elapsed, 1);
   const runs = (key: string) => {
@@ -120,13 +83,14 @@ function IntervalBands({ rows }: { rows: Row[] }) {
   return (
     <section className="shadow-chart shadow-intervals">
       <h3>Receiver, donor и SPRINT/STR интервали</h3>
-      <svg viewBox="0 0 1000 133" role="img" aria-label="Receiver, donor и SPRINT/STR интервали">
+      <div className="chart-frame" ref={ref}><svg viewBox={`0 0 ${width} 166`} role="img" aria-label="Receiver, donor и SPRINT/STR интервали">
         <text x="4" y="31">Receiver</text><text x="4" y="68">Donor</text><text x="4" y="105">SPRINT/STR</text>
-        <line x1="105" x2="970" y1="26" y2="26" /><line x1="105" x2="970" y1="63" y2="63" /><line x1="105" x2="970" y1="100" y2="100" />
-        {receiver.map(([start, end], index) => <rect key={`r-${index}`} x={105 + start / maxElapsed * 865} y="15" width={Math.max((end - start) / maxElapsed * 865, 2)} height="22" rx="3" fill="#16a34a" />)}
-        {donor.map(([start, end], index) => <rect key={`d-${index}`} x={105 + start / maxElapsed * 865} y="52" width={Math.max((end - start) / maxElapsed * 865, 2)} height="22" rx="3" fill="#dc2626" />)}
-        {sprint.map(([start, end], index) => <rect key={`s-${index}`} x={105 + start / maxElapsed * 865} y="89" width={Math.max((end - start) / maxElapsed * 865, 2)} height="22" rx="3" fill="#2563eb" />)}
-      </svg>
+        <line x1={left} x2={right} y1="26" y2="26" /><line x1={left} x2={right} y1="63" y2="63" /><line x1={left} x2={right} y1="100" y2="100" />
+        {receiver.map(([start, end], index) => <rect key={`r-${index}`} x={x(start)} y="15" width={Math.max((end - start) / maxElapsed * plotWidth, 2)} height="22" rx="3" fill="#16a34a" />)}
+        {donor.map(([start, end], index) => <rect key={`d-${index}`} x={x(start)} y="52" width={Math.max((end - start) / maxElapsed * plotWidth, 2)} height="22" rx="3" fill="#dc2626" />)}
+        {sprint.map(([start, end], index) => <rect key={`s-${index}`} x={x(start)} y="89" width={Math.max((end - start) / maxElapsed * plotWidth, 2)} height="22" rx="3" fill="#2563eb" />)}
+        {[0, ...(compact ? [] : [.5]), 1].map(f => <text key={f} x={x(maxElapsed*f)} y="148" textAnchor={f === 0 ? "start" : f === 1 ? "end" : "middle"}>{duration(maxElapsed*f)}</text>)}
+      </svg></div>
     </section>
   );
 }

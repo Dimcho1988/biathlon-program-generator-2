@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { bandFor, indexNumber, invalidLabel, lineSegments, combinedIndexTrend, type TrainabilityHistory } from "../lib/trainability";
+import { useChartLayout } from "./chart-layout";
 import { TrainabilitySummary } from "./trainability-summary";
 
 const channels = [
@@ -12,6 +13,8 @@ const channels = [
 const dateLabel = (value: string) => new Date(`${value}T12:00:00Z`).toLocaleDateString("bg-BG", { day: "numeric", month: "short", timeZone: "UTC" });
 
 export function TrainabilityHistoryView({ history }: { history: TrainabilityHistory }) {
+  const { ref, width, height, left, right, top, bottom, plotWidth, plotHeight, compact } = useChartLayout(58);
+  const tickCount = compact ? 2 : 4;
   const sports = [...new Set(history.activities.map(a => a.sport))].sort();
   const [sport, setSport] = useState(sports.find(s => history.activities.some(a => a.sport === s && a.index)) ?? sports[0] ?? "");
   const [group, setGroup] = useState("");
@@ -39,8 +42,8 @@ export function TrainabilityHistoryView({ history }: { history: TrainabilityHist
   const padding = Math.max((max - min) * 0.12, 0.25);
   const low = Math.max(0, min - padding), high = max + padding;
   const start = Date.parse(`${history.period_start}T00:00:00Z`), end = Date.parse(`${history.period_end}T23:59:59Z`);
-  const x = (date: string | number) => 65 + ((typeof date === "number" ? date : Date.parse(date)) - start) / Math.max(86400000, end - start) * 870;
-  const y = (value: number) => 260 - (value - low) / (high - low) * 220;
+  const x = (date: string | number) => left + ((typeof date === "number" ? date : Date.parse(date)) - start) / Math.max(86400000, end - start) * plotWidth;
+  const y = (value: number) => bottom - (value - low) / (high - low) * plotHeight;
   const trendPath = trend.map((point, i) => {
     if (point.value === null) return "";
     const command = i > 0 && trend[i - 1].value !== null ? "L" : "M";
@@ -60,16 +63,17 @@ export function TrainabilityHistoryView({ history }: { history: TrainabilityHist
         <label>Изглаждане <select value={trendDays} onChange={e => setTrendDays(Number(e.target.value))}>{[7, 14, 28].map(days => <option key={days} value={days}>{days} дни</option>)}</select></label>
         <span>Тънки линии: тренировки · плътна линия: общ среден тренд</span>
       </div>
-      {values.length ? <svg viewBox="0 0 1000 310" className="index-history-chart" role="group" aria-label="Индекси по активности. Изберете точка за подробности.">
-        {[0, 1, 2, 3, 4].map(tick => { const value = low + (high - low) * tick / 4; return <g key={tick}><line x1="65" x2="935" y1={y(value)} y2={y(value)} /><text x="53" y={y(value) + 4} textAnchor="end">{indexNumber(value, 1)}</text></g>; })}
-        {[0, 1, 2, 3, 4].map(tick => { const stamp = start + (end - start) * tick / 4; return <text key={tick} x={65 + tick * 870 / 4} y="288" textAnchor="middle">{dateLabel(new Date(stamp).toISOString().slice(0, 10))}</text>; })}
-        {selected && <line className="index-cursor-line" x1={x(selected.start_at_utc)} x2={x(selected.start_at_utc)} y1="35" y2="260" strokeDasharray="4 4" />}
+      {values.length ? <div className="chart-frame" ref={ref}><svg viewBox={`0 0 ${width} ${height}`} className="index-history-chart" role="group" aria-label="Индекси по активности. Изберете точка за подробности.">
+        {[0, 1, 2, 3, 4].map(tick => { const value = low + (high - low) * tick / 4; return <g key={tick}><line x1={left} x2={right} y1={y(value)} y2={y(value)} /><text x={left - 9} y={y(value) + 4} textAnchor="end">{indexNumber(value, 1)}</text></g>; })}
+        {Array.from({length:tickCount+1},(_,i)=>i).map(tick => { const stamp = start + (end - start) * tick / tickCount; return <text key={tick} x={left + tick * plotWidth / tickCount} y={bottom + 24} textAnchor={tick === 0 ? "start" : tick === tickCount ? "end" : "middle"}>{dateLabel(new Date(stamp).toISOString().slice(0, 10))}</text>; })}
+        {selected && <line className="index-cursor-line" x1={x(selected.start_at_utc)} x2={x(selected.start_at_utc)} y1={top} y2={bottom} strokeDasharray="4 4" />}
         {showTrend && trendPath.trim() && <path data-trend="combined" d={trendPath} fill="none" stroke="var(--text)" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />}
         {visible.map(c => <g key={c.name} style={{ color: c.color }}>
           {lineSegments(rows, c.name).filter(segment => segment.length > 1).map((segment, i) => <polyline key={i} fill="none" stroke="currentColor" opacity={showTrend ? 0.3 : 1} strokeWidth={showTrend ? 1.2 : c.name === "GENERAL" ? 3 : 1.6} points={segment.map(a => `${x(a.start_at_utc)},${y(bandFor(a, c.name)!.index!)}`).join(" ")} />)}
           {rows.map(a => { const band = bandFor(a, c.name); if (!band?.valid || band.index === null) return null; const label = `${dateLabel(a.local_date)} · ${a.name || a.sport} · ${c.label}: ${indexNumber(band.index)}`; return <circle key={a.activity_ref} cx={x(a.start_at_utc)} cy={y(band.index)} r={selected?.activity_ref === a.activity_ref ? 6 : 4} fill="currentColor" tabIndex={0} role="button" aria-label={label} onClick={() => setSelectedRef(a.activity_ref)} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedRef(a.activity_ref); } }}><title>{label}</title></circle>; })}
         </g>)}
-      </svg> : <p className="detail-empty">{enabled.length === 0 ? "Изберете поне една линия." : "Няма валидни индекси за избрания период и спорт. Нужни са активност от поне 7 минути и сумарно време на съпоставените пулс и скорост поне 7 минути за Z1–Z4 и общия диапазон, или 5 минути за Z5."}</p>}
+        <text className="metric-axis-unit" x={left} y="18">{compact ? "Индекс · пулс / Vflat" : "Индекс · по-ниско = по-малък пулс / Vflat"}</text>
+      </svg></div> : <p className="detail-empty">{enabled.length === 0 ? "Изберете поне една линия." : "Няма валидни индекси за избрания период и спорт. Нужни са активност от поне 7 минути и сумарно време на съпоставените пулс и скорост поне 7 минути за Z1–Z4 и общия диапазон, или 5 минути за Z5."}</p>}
       {rows.length > 0 && selected && <div className="index-scrubber">
         <label htmlFor="index-time-cursor">Проследи във времето <strong>{dateLabel(selected.local_date)} · {selected.name || selected.sport}</strong></label>
         <input id="index-time-cursor" type="range" min="0" max={Math.max(0, rows.length - 1)} step="1" value={selectedPosition} disabled={rows.length < 2} aria-valuetext={`${dateLabel(selected.local_date)} · ${selected.name || selected.sport}`} onChange={e => setSelectedRef(rows[Number(e.target.value)].activity_ref)} />
