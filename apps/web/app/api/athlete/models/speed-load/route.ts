@@ -18,6 +18,9 @@ export async function GET(request:Request) {
       return NextResponse.json({error:"Избраният профил е променен."},{status:409,headers:{"Cache-Control":"private, no-store"}});
     const sport=params.get("sport")||undefined;
     const start=params.get("period_start")||undefined, end=params.get("period_end")||undefined;
+    const asOf=params.get("as_of")||undefined;
+    if(params.has("as_of") && (!isCalendarDate(asOf) || start || end))
+      return NextResponse.json({error:"Изберете дата на анализа или отделен отчетен период."},{status:422});
     if((start || end) && (!isCalendarDate(start) || !isCalendarDate(end) || start! > end! || Date.parse(end!)-Date.parse(start!) >= 366*86400000))
       return NextResponse.json({error:"Изберете валиден период от 1 до 366 дни."},{status:422});
     if(sport&&!/^[A-Za-z]{2,40}$/.test(sport))return NextResponse.json({error:"Невалидно средство."},{status:422});
@@ -25,7 +28,8 @@ export async function GET(request:Request) {
     // analyses that can change under the same generation. Authorization and
     // fresh backend input reads happen before comparing this private ETag.
     const apiStarted = performance.now();
-    const result = await getSpeedLoad(access.athleteAlias,sport,start,end);
+    const result = asOf ? await getSpeedLoad(access.athleteAlias,sport,start,end,asOf)
+      : await getSpeedLoad(access.athleteAlias,sport,start,end);
     const apiFinished = performance.now();
     const body = JSON.stringify(result);
     const etag = `"${createHash("sha256").update(scope).update(body).digest("hex")}"`;

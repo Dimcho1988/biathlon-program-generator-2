@@ -63,7 +63,7 @@ export async function getSpeedExposure(athleteAlias:string,sport:string) {
   return fetchApiResource(`/api/v2/athlete/models/speed-history?${new URLSearchParams({sport})}`,token,athleteAlias);
 }
 
-export async function getSpeedLoad(athleteAlias:string,sport?:string,periodStart?:string,periodEnd?:string) {
+export async function getSpeedLoad(athleteAlias:string,sport?:string,periodStart?:string,periodEnd?:string,asOf?:string) {
   const token=process.env.ONFLOWS_SERVICE_TOKEN;
   if(!token)throw new Error("Server configuration is unavailable");
   const {parseSpeedLoad}=await import("./speed-load");
@@ -71,6 +71,7 @@ export async function getSpeedLoad(athleteAlias:string,sport?:string,periodStart
   if(sport) params.set("sport",sport);
   if(periodStart) params.set("period_start",periodStart);
   if(periodEnd) params.set("period_end",periodEnd);
+  if(asOf) params.set("as_of",asOf);
   const query = params.size ? `?${params}` : "";
   return parseSpeedLoad(await fetchApiResource(`/api/v2/athlete/models/speed-load${query}`,token,athleteAlias));
 }

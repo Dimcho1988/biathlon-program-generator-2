@@ -92,6 +92,38 @@ it("revalidates the implicit current period after local midnight without accepti
   expect(fetcher.mock.calls[1][1].headers).toEqual({"If-None-Match":etag});
 });
 
+it("keeps a snapshot date through reload and refresh without sharing the implicit current-day cache", async () => {
+  const nextDay = { ...fixture(), start_date: "2026-09-02", end_date: "2026-10-02" };
+  const fetcher = vi.fn().mockResolvedValueOnce(ok())
+    .mockResolvedValueOnce(ok(nextDay, `"${"b".repeat(64)}"`))
+    .mockResolvedValueOnce({ status: 304 }).mockResolvedValueOnce(ok());
+  vi.stubGlobal("fetch", fetcher);
+  const snapshot = { ...request, asOf: "2026-10-01" };
+  await read(snapshot);
+  expect(new URL(fetcher.mock.calls[0][0], "https://onflows.test").searchParams.get("as_of")).toBe("2026-10-01");
+  expect((await read(request)).end_date).toBe("2026-10-02");
+  expect(fetcher.mock.calls[1][1].headers).toBeUndefined();
+  vi.resetModules();
+  const reloaded = await import("../lib/speed-load-client");
+  expect((await reloaded.readSpeedLoad(snapshot)).end_date).toBe("2026-10-01");
+  expect(fetcher.mock.calls[2][1].headers).toEqual({ "If-None-Match": etag });
+  await reloaded.readSpeedLoad({ ...snapshot, force: true });
+  expect(fetcher.mock.calls[3][0]).toBe(fetcher.mock.calls[0][0]);
+  expect(fetcher.mock.calls[3][1].headers).toBeUndefined();
+  reloaded.clearSpeedLoadClientCache();
+});
+
+it("isolates two snapshot dates within the same generation and rejects an ignored analysis date", async () => {
+  const nextDay = { ...fixture(), start_date: "2026-09-02", end_date: "2026-10-02" };
+  const fetcher = vi.fn().mockResolvedValueOnce(ok()).mockResolvedValueOnce(ok(nextDay))
+    .mockResolvedValueOnce(ok(nextDay));
+  vi.stubGlobal("fetch", fetcher);
+  await read({ ...request, asOf: "2026-10-01" });
+  await read({ ...request, asOf: "2026-10-02" });
+  expect(fetcher.mock.calls[1][1].headers).toBeUndefined();
+  await expect(read({ ...request, asOf: "2026-10-01" })).rejects.toThrow("датата на пулсовия анализ");
+});
+
 it("never serves a previous result after revoked access or a selected profile race", async () => {
   const fetcher = vi.fn().mockResolvedValueOnce(ok()).mockResolvedValueOnce(new Response(null, { status: 403 }))
     .mockResolvedValueOnce(new Response(null, { status: 409 }));

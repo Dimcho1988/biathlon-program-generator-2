@@ -274,13 +274,23 @@ def _activity_records(repository, alias, selected, admitted, settings, namespace
     return [cached[key] if key is not None else unpinned[position] for position, key in enumerate(record_keys)]
 
 
-def history_view(repository, alias, sport=None, *, today=None, period_start=None, period_end=None):
+def history_view(repository, alias, sport=None, *, today=None, as_of=None, period_start=None, period_end=None):
     started = phase_started = perf_counter()
     metrics = {"report_cache": "disabled"}
     settings=repository.athlete_settings(alias)
     metrics["settings_ms"] = _elapsed_ms(phase_started)
     if settings is None:raise HTTPException(409,"Athlete settings are required")
     today=today or datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
+    if as_of is not None:
+        if period_start is not None or period_end is not None:
+            raise HTTPException(422, "Choose either an analysis date or a custom report period")
+        if as_of < date.min + timedelta(days=89):
+            raise HTTPException(422, "Analysis date is too early for the report history")
+        if as_of > today:
+            raise HTTPException(422, "Choose a past or current analysis date")
+        # Anchor the default report to the persisted HR analysis date without
+        # changing its first-observed-day, warmup or causal load semantics.
+        today = as_of
     if (period_start is None) != (period_end is None):
         raise HTTPException(422, "Both report dates are required")
     custom_period = period_start is not None

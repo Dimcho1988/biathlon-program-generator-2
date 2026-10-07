@@ -17,8 +17,8 @@ const decimal = (value: number | null | undefined) => value == null ? "—" : va
 const minutes = (value: number | null | undefined) => value == null ? "—" : durationHms(value);
 
 export function LoadDynamics(props: Props) {
-  // A profile switch or refreshed generation must never reuse another analysis.
-  return <LoadDynamicsView key={`${props.cacheScope}:${props.athleteId}:${props.generation}:${props.revision}`} {...props}/>;
+  // A profile, generation or snapshot-period change must never reuse another analysis.
+  return <LoadDynamicsView key={`${props.cacheScope}:${props.athleteId}:${props.generation}:${props.revision}:${props.history?.period_start}:${props.history?.period_end}`} {...props}/>;
 }
 
 function LoadDynamicsView({ history, message, generation, revision, cacheScope }: Props) {
@@ -35,7 +35,10 @@ function LoadDynamicsView({ history, message, generation, revision, cacheScope }
     request.current = controller;
     setBusy(true); setError(""); setSpeed(null);
     try {
+      // HR is a persisted analysis, which may end before today. Both models
+      // must use its calendar date, including on a forced speed refresh.
       const result = await readSpeedLoad({ cacheScope, generation, revision, signal: controller.signal, force,
+        asOf: history?.period_end,
         errorMessage: "Скоростният отчет временно не е достъпен. Опитай отново.",
         generationError: "Данните са обновени. Презареди страницата, за да сравниш една и съща версия." });
       if (!controller.signal.aborted) setSpeed(result);

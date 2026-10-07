@@ -1,5 +1,5 @@
 from copy import deepcopy
-from datetime import date,timedelta
+from datetime import date,datetime,timedelta,timezone
 from types import SimpleNamespace
 import pytest
 from apps.api import speed_load as model
@@ -166,6 +166,99 @@ def test_custom_report_rejects_incomplete_reversed_future_or_excessive_periods(s
     with pytest.raises(HTTPException) as error:
         model.history_view(Repository(),"authorized-athlete",today=TODAY,period_start=start,period_end=end)
     assert error.value.status_code==422
+
+
+@pytest.mark.parametrize("offsets", [(3, 1), (65, 3, 1)])
+def test_analysis_date_preserves_default_report_exactly_for_short_and_long_history(offsets):
+    repo=Repository()
+    for offset in offsets:
+        repo.add(f"run-{offset}","Run",TODAY-timedelta(days=offset),150,15)
+    original=model.history_view(repo,"authorized-athlete",today=TODAY)
+    anchored=model.history_view(repo,"authorized-athlete",today=TODAY,as_of=TODAY)
+    assert anchored==original
+    # An explicit analysis date retains the observed-history denominator; it
+    # must not turn a short history into a padded custom 40-day calendar.
+    assert len(anchored["daily"])==len(original["daily"])
+
+
+def test_analysis_date_matches_prior_day_default_and_excludes_later_activities():
+    repo=Repository()
+    end=TODAY-timedelta(days=1)
+    repo.add("prior","Run",end-timedelta(days=3),150,15)
+    repo.add("boundary","Run",end,150,15)
+    repo.add("after","Run",TODAY,150,15)
+    original=model.history_view(repo,"authorized-athlete",today=end)
+    anchored=model.history_view(repo,"authorized-athlete",today=TODAY,as_of=end)
+    assert anchored==original
+    assert anchored["start_date"]==(end-timedelta(days=39)).isoformat()
+    assert anchored["end_date"]==end.isoformat()
+    assert [a["activity_ref"] for a in anchored["activities"]]==["prior","boundary"]
+    assert anchored["classified_minutes"]==pytest.approx(10)
+    assert anchored["zones"][2]["equivalent_minutes"]==pytest.approx(7)
+
+
+@pytest.mark.parametrize("timezone_name,instant,local_day", [
+    ("Europe/Sofia", "2026-10-06T22:30:00+00:00", date(2026,10,7)),
+    ("America/Los_Angeles", "2026-10-07T00:30:00+00:00", date(2026,10,6)),
+])
+def test_analysis_date_validation_uses_athlete_local_day_at_utc_boundary(monkeypatch,timezone_name,instant,local_day):
+    from fastapi import HTTPException
+    fixed=datetime.fromisoformat(instant)
+    class FixedClock(datetime):
+        @classmethod
+        def now(cls,tz=None):
+            return fixed.astimezone(tz or timezone.utc)
+    monkeypatch.setattr(model,"datetime",FixedClock)
+    settings=deepcopy(SETTINGS);settings.timezone=timezone_name
+    repo=Repository()
+    monkeypatch.setattr(repo,"athlete_settings",lambda _:settings)
+    original=model.history_view(repo,"authorized-athlete")
+    assert original["end_date"]==local_day.isoformat()
+    assert model.history_view(repo,"authorized-athlete",as_of=local_day)==original
+    with pytest.raises(HTTPException) as error:
+        model.history_view(repo,"authorized-athlete",as_of=local_day+timedelta(days=1))
+    assert error.value.status_code==422
+
+
+@pytest.mark.parametrize("as_of,start,end", [
+    (date.min,None,None),
+    (TODAY+timedelta(days=1),None,None),
+    (TODAY,TODAY-timedelta(days=1),TODAY),
+    (TODAY,TODAY,None),
+    (TODAY,None,TODAY),
+])
+def test_analysis_date_rejects_future_or_mixed_custom_period(as_of,start,end):
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as error:
+        model.history_view(Repository(),"authorized-athlete",today=TODAY,
+            as_of=as_of,period_start=start,period_end=end)
+    assert error.value.status_code==422
+
+
+def test_route_passes_parsed_analysis_date_after_authorizing_selected_athlete(monkeypatch):
+    from fastapi.testclient import TestClient
+    from apps.api import main, dependencies
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN","test-service-secret")
+    calls=[]
+    monkeypatch.setattr(dependencies,"repository",lambda: "repository")
+    monkeypatch.setattr(model,"history_view",lambda repo,alias,sport,**dates:
+        calls.append((repo,alias,sport,dates)) or {"status":"UNAVAILABLE"})
+    with TestClient(main.app) as client:
+        url=f"/api/v2/athlete/models/speed-load?as_of={TODAY.isoformat()}"
+        assert client.get(url).status_code==401
+        assert client.get(url,headers={"Authorization":"Bearer wrong-token",
+            "X-OnFlows-Athlete-Alias":"authorized-athlete"}).status_code==401
+        assert client.get(url,headers={"Authorization":"Bearer test-service-secret"}).status_code==401
+        assert client.get(url,headers={"Authorization":"Bearer test-service-secret",
+            "X-OnFlows-Athlete-Alias":"invalid/alias"}).status_code==400
+        assert client.get("/api/v2/athlete/models/speed-load?as_of=not-a-date",
+            headers={"Authorization":"Bearer test-service-secret",
+                "X-OnFlows-Athlete-Alias":"authorized-athlete"}).status_code==422
+        assert not calls
+        response=client.get(url,headers={"Authorization":"Bearer test-service-secret",
+            "X-OnFlows-Athlete-Alias":"authorized-athlete"})
+        assert response.status_code==200
+        assert calls==[("repository","authorized-athlete",None,{"as_of":TODAY})]
 
 
 def test_rolling_chart_ratios_match_original_daily_statistics_for_short_and_full_history():
