@@ -16,6 +16,7 @@ export type SpeedLoadRequest = {
   revision: number | null;
   start?: string;
   end?: string;
+  asOf?: string;
   sport?: string;
   signal?: AbortSignal;
   errorMessage?: string;
@@ -65,6 +66,8 @@ function validate(result: SpeedLoad, request: SpeedLoadRequest) {
     throw new Error(request.generationError ?? "Данните са обновени. Презаредете страницата за съгласуван отчет.");
   if (request.start && (result.start_date !== request.start || result.end_date !== request.end))
     throw new Error("Скоростният отчет не съответства на избрания период. Опитайте след обновяването на услугата.");
+  if (request.asOf && result.end_date !== request.asOf)
+    throw new Error("Скоростният отчет не съответства на датата на пулсовия анализ. Презаредете страницата.");
   if (result.sport !== (request.sport || null))
     throw new Error("Скоростният отчет не съответства на избрания спорт.");
   return result;
@@ -75,6 +78,7 @@ async function fetchReport(request: SpeedLoadRequest, signal: AbortSignal, cache
   if (request.sport) query.set("sport", request.sport);
   if (request.start) query.set("period_start", request.start);
   if (request.end) query.set("period_end", request.end);
+  if (request.asOf) query.set("as_of", request.asOf);
   if (request.cacheScope) query.set("cache_scope", request.cacheScope);
   const response = await fetch(`/api/athlete/models/speed-load${query.size ? `?${query}` : ""}`, {
     signal, cache: "no-store", ...(cached ? { headers: { "If-None-Match": cached.etag } } : {}),
@@ -114,7 +118,7 @@ export function readSpeedLoad(request: SpeedLoadRequest): Promise<SpeedLoad> {
     return fetchReport(request, request.signal ?? new AbortController().signal).then(result => result.data);
   }
   restore();
-  const key = JSON.stringify([request.cacheScope, request.generation, request.revision, request.start ?? null, request.end ?? null, request.sport || null]);
+  const key = JSON.stringify([request.cacheScope, request.generation, request.revision, request.start ?? null, request.end ?? null, request.sport || null, request.asOf ?? null]);
   const shared = pending.get(key);
   if (shared && !shared.controller.signal.aborted) return consume(shared, request.signal);
   const entry = entries.get(key);

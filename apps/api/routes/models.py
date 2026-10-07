@@ -16,6 +16,7 @@ router = APIRouter()
 
 @router.get("/api/v2/athlete/models/speed-load")
 def speed_load_history(sport: str | None = None,
+    as_of: date | None = None,
     period_start: date | None = None, period_end: date | None = None,
     authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None):
@@ -23,6 +24,8 @@ def speed_load_history(sport: str | None = None,
     alias=dependencies.model_alias(authorization,athlete_alias)
     try:
         dates = {"period_start": period_start, "period_end": period_end} if period_start is not None or period_end is not None else {}
+        if as_of is not None:
+            dates["as_of"] = as_of
         return history_view(dependencies.repository(),alias,sport,**dates)
     except PersistentStoreFailure as exc:
         raise HTTPException(503,"Speed load sources are unavailable") from exc

@@ -69,6 +69,17 @@ it("forwards validated dates and never accepts an athlete from query parameters"
     expect((await GET(new Request(base+query))).status).toBe(422);
 });
 
+it("forwards a snapshot analysis date independently of a custom report period", async () => {
+  vi.mocked(currentAuthorizedAthlete).mockResolvedValue({userId:"user",actorUserId:"coach",canViewRecovery:true,athleteAlias:"selected-athlete",displayName:"Athlete",isOwner:false,canEditPlan:true});
+  vi.mocked(getSpeedLoad).mockResolvedValue(fixture());
+  const base = "https://onflows.test/api/athlete/models/speed-load?";
+  expect((await GET(new Request(base + "as_of=2026-10-01&athlete_alias=wrong"))).status).toBe(200);
+  expect(getSpeedLoad).toHaveBeenCalledWith("selected-athlete", undefined, undefined, undefined, "2026-10-01");
+  for (const query of ["as_of=", "as_of=2026-02-30", "as_of=2026-10-01&period_start=2026-09-01", "as_of=2026-10-01&period_end=2026-10-01"])
+    expect((await GET(new Request(base + query))).status).toBe(422);
+  expect(getSpeedLoad).toHaveBeenCalledTimes(1);
+});
+
 it("switches the completed report to speed for the exact selected period and preserves the choice in its form",async()=>{
   const report={...completedWorkFixture,period_start:"2026-09-01",period_end:"2026-10-01"};
   const fetcher=vi.fn().mockResolvedValue({ok:true,json:async()=>fixture()});vi.stubGlobal("fetch",fetcher);
