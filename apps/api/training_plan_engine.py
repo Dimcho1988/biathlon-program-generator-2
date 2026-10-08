@@ -27,8 +27,8 @@ from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 
-VERSION = "training-management-v30-long-term-curve-doses"
-PARAMETER_VERSION = "management-parameters-v30"
+VERSION = "training-management-v31-long-term-quality-balance"
+PARAMETER_VERSION = "management-parameters-v31"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -520,8 +520,12 @@ def _blocks(method, work, evidence, settings):
     if method.get("mixed_component"):
         primary_work = sum(b["duration_min"] for b in blocks if b["kind"] == "WORK")
         secondary = evidence["secondary_capacity"]
-        blocks.append(_block("WORK", "Довършване на леката аеробна работа", "Z1", primary_work*evidence["easy_to_primary_ratio"],
-                             secondary["target_hr_bpm"], "Продължи спокойно в Z1 според планираното време. Не наваксвай пропуснати отсечки.", speed=secondary.get("target_speed_kmh")))
+        easy_work = primary_work*evidence["easy_to_primary_ratio"]
+        if evidence.get("easy_work_cap_minutes") is not None:
+            easy_work = min(easy_work, max(0., evidence["easy_work_cap_minutes"]))
+        if easy_work > 0:
+            blocks.append(_block("WORK", "Довършване на леката аеробна работа", "Z1", easy_work,
+                                 secondary["target_hr_bpm"], "Продължи спокойно в Z1 според планираното време. Не наваксвай пропуснати отсечки.", speed=secondary.get("target_speed_kmh")))
     if method["cooldown_min"]:
         blocks.append(_block("COOLDOWN", "Разпускане", "Z1", method["cooldown_min"], easy, "Постепенно намали усилието."))
     if method.get("neuromuscular_profile"):
@@ -1465,15 +1469,15 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             future_strength_dates = sorted({
                 d for d, _, count in schedule if d > day and count
                 and profile.get("strength_enabled") and strength_sessions < (controls or {}).get("max_strength_sessions", 2)
-                and d.weekday() in preferences.get("strength_days", [])
                 and (d not in key_slots or count >= 2)
                 and (not last_strength_day or (d-last_strength_day).days >= 2)})
             future_tasks = sorted([(d, "KEY") for d in key_slots if d > day] +
-                [(d, "STRENGTH") for d in future_strength_dates[:max(0, (controls or {}).get("max_strength_sessions", 2)-strength_sessions)]])
+                [(d, "STRENGTH") for d in future_strength_dates])
             for future_day, future_kind in future_tasks:
                 future_period, future_taper = _phase(periodization, future_day)
-                if future_taper or any(e["event_type"] in {"MAIN_RACE", "CONTROL_RACE", "TEST", "UNAVAILABLE"}
-                    and str(e["start_date"]) <= future_day.isoformat() <= str(e["end_date"]) for e in events):
+                if (future_taper or any(a.get("date") == future_day.isoformat() for a in existing_in_draft)
+                    or any(e["event_type"] in {"MAIN_RACE", "CONTROL_RACE", "TEST", "UNAVAILABLE"}
+                    and str(e["start_date"]) <= future_day.isoformat() <= str(e["end_date"]) for e in events)):
                     continue
                 forecast_ready = {r["zone"]: r["readiness_percent"] for r in recovery_v2.simulate(
                     forecast_rows, configs["zones"], target=future_day, include_details=False)["current"]}
@@ -1489,6 +1493,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     for _, future_method in future_candidates:
                         fz = future_method["zone"]
                         if (fz not in ({"Z3", "Z4", "Z5"} if future_kind == "KEY" else {"STR"})
+                            or fz == "STR" and future_sport != primary_sport
                             or future_method["purpose"] in {"RECOVERY", "SUPPORTING"}
                             or future_sport not in future_method["sports"] or future_period not in future_method["periods"]
                             or future_method["structure"] not in {"CONTINUOUS", "TWO_REPETITIONS", "THRESHOLD_REPETITIONS", "THRESHOLD_LONG", "THRESHOLD_SHORT", "MODEL_INTERVALS", "METABOLIC_INTERVALS", "STRENGTH_CIRCUIT"}):
@@ -1550,10 +1555,12 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             continue
                         fq, fe, _ = _candidate_load(future_blocks, settings, forecast_rows, future_day)
                         options.append({"q": fq, "e": fe, "zone": fz, "double": bool(fm.get("double_threshold")),
+                            "method_id": fm["id"], "sport": future_sport,
                             "minutes": sum(b["duration_min"] for b in future_blocks),
                             "work": minimum, "nominal_work": cap["capacity_minutes"]*nominal,
                             "dose_usage": _dose_usage(future_blocks, cap, fz), "dose_ceiling": ceiling,
-                            "required_components": list(future_readiness["required_components"])})
+                            "required_components": list(future_readiness["required_components"]),
+                            "method":fm, "capacity":cap, "blocks":future_blocks, "purpose":future_purpose})
                 if options:
                     # Reserve an executable preferred pair as one bundle. If
                     # its real budgets cannot fit, single sessions stay valid.
@@ -1566,7 +1573,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     future_options.append((future_day, future_kind, sorted(options,
                         key=lambda option: (not (option in pairs), option["e"]["Z1"], sum(option["e"].values())))))
 
-            def reserved_future_work(candidate_q=None, candidate_e=None, required_dates=None, candidate_primary=None, candidate_count=1, candidate_minutes=0.):
+            def reserved_future_work(candidate_q=None, candidate_e=None, required_dates=None, candidate_primary=None, candidate_count=1, candidate_minutes=0., *, return_key_sessions=False):
                 reserved_rows = forecast_rows
                 reserved_days = list(result_days)
                 objective_spent = {z: 0. for z in COMPONENTS}
@@ -1585,6 +1592,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 date_minutes = {}
                 minutes_left = float("inf") if automatic_time else max(0., remaining-candidate_minutes)
                 selected = set()
+                selected_key_sessions = []
                 for future_day, future_kind, options in future_options:
                     task = (future_day, future_kind)
                     if required_dates is not None and task not in required_dates:
@@ -1626,6 +1634,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         continue
                     selected.add(task)
                     cost = 2 if chosen["double"] else 1
+                    if future_kind == "KEY":
+                        selected_key_sessions.append({**chosen, "date":future_day,
+                            "slots":list(range(date_slots.get(future_day, 0), date_slots.get(future_day, 0)+cost))})
                     sessions_left -= cost
                     date_slots[future_day] = date_slots.get(future_day, 0)+cost
                     date_minutes[future_day] = date_minutes.get(future_day, 0.)+chosen["minutes"]
@@ -1641,10 +1652,14 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         "sessions": [{"direct_equivalent_minutes": chosen["q"]}]})
                     for z, value in objective_load(chosen["q"], chosen["e"]).items():
                         objective_spent[z] += value
-                return selected
+                return selected_key_sessions if return_key_sessions else selected
 
             reservable_dates = reserved_future_work() if not limited else set()
+            reserved_keys = reserved_future_work(return_key_sessions=True) if not limited else []
+            reserved_key_slots = {(r["date"], s) for r in reserved_keys for s in r["slots"]}
             choices = []
+            choice_methods = {}
+            choice_checks = {}
             candidates = [(m_sport, m) for m_sport in training_sports for m in methods
                           if m_sport in m["sports"] and (m["zone"] != "STR" or m_sport == primary_sport)]
             if (day.weekday() in double_days and slot_index == 0 and slots_today >= 2 and not limited and not taper
@@ -1764,6 +1779,11 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         evidence["mixed_component"] = True
                         evidence["easy_to_primary_ratio"] = max(2., secondary["capacity_minutes"]*.25 / max(1., evidence["capacity_minutes"]*.15))
                         evidence["mixed_primary_max_fraction"] = .15*readiness_rule["dose_factor"]
+                        if period_objectives is not None:
+                            # Compare executable quality cores first. The easy
+                            # finish is optional and receives only surplus after
+                            # other complete qualities have preparation space.
+                            evidence["easy_work_cap_minutes"] = 0.
                 purpose = method["purpose"]
                 # Easy endurance can need a full building-method dose to carry
                 # the weekly load, even while another quality is the accent.
@@ -1813,6 +1833,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     item["rejected_alternatives"].append({"method_id": method["id"], "code": "MINIMUM_CAPACITY_DOSE",
                         "reason": f"Методният максимум не допуска минималните {method.get('minimum_fraction', MIN_AEROBIC_DOSE_FRACTION)*readiness_rule['dose_factor']*100:g}% от капацитета за този вариант."})
                     continue
+                method["absolute_min_work_min"] = method["min_work_min"]
                 method["min_work_min"] = minimum_work
                 evidence.update(min_dose_fraction=method.get("minimum_fraction", MIN_AEROBIC_DOSE_FRACTION)*readiness_rule["dose_factor"] if z != "STR" and purpose != "RECOVERY" else None,
                                 minimum_primary_work_minutes=minimum_work,
@@ -1982,14 +2003,16 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 after_rows = _add_forecast_session(forecast_rows, day, effective)
                 near_races = [e for e in events if e["event_type"] in {"MAIN_RACE", "CONTROL_RACE"}
                               and key < str(e["start_date"]) <= (day + timedelta(days=7)).isoformat()]
-                def recovery_conflict(candidate_rows, candidate_q, candidate_e, candidate_minutes, *, protect_future=True):
+                def recovery_conflict(candidate_rows, candidate_q, candidate_e, candidate_minutes, *, protect_future=True,
+                                      candidate_primary=z if is_key or is_strength else None,
+                                      candidate_count=2 if method.get("double_threshold") else 1):
                     for race in near_races:
                         forecast = recovery_v2.simulate(candidate_rows, configs["zones"], target=date.fromisoformat(str(race["start_date"])), include_details=False)
                         if any(r["readiness_percent"] < 90. for r in forecast["current"] if r["zone"] != "STR"):
                             return "RACE_RECOVERY_CONFLICT", "Прогнозното възстановяване след тази доза не достига 90% преди близък старт."
                     if protect_future and reservable_dates and reserved_future_work(candidate_q, candidate_e, reservable_dates,
-                        candidate_primary=z if is_key or is_strength else None,
-                        candidate_count=2 if method.get("double_threshold") else 1, candidate_minutes=candidate_minutes) is None:
+                        candidate_primary=candidate_primary,
+                        candidate_count=candidate_count, candidate_minutes=candidate_minutes) is None:
                         return "RESERVE_FUTURE_QUALITY_BUDGET", "Дозата използва необходимия Q/7–40 бюджет за минимална цяла бъдеща ключова или силова задача, включително загрявката и каскадния товар."
                     return None
                 conflict = recovery_conflict(after_rows, direct, effective, sum(b["duration_min"] for b in blocks))
@@ -2075,7 +2098,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 evidence["explanation"] += f" Начален дял {base_fraction*100:g}%, множител от готовността {readiness_rule['dose_factor']:.3f}, намален дял {fraction*100:g}%. Целите повторения и подготовката се запазват."
                 normalized_deficit = budgets[z]["deficit_effective"] / max(1., budgets[z]["target_weekly_effective"])
                 priority_weight = mesocycle_focus.growth_weight(cycle_state, z) if cycle_state and cycle_state.get("component_indices") else float(z in selected_accents)
-                score = (2. * planning_allocation.coverage(objective_load(direct, effective), allocation, selected_accents)
+                ranking_targets = {c: r["target"] for c, r in period_objectives.items()} if period_objectives else None
+                score = (2. * planning_allocation.coverage(objective_load(direct, effective), allocation, selected_accents, targets=ranking_targets)
                          if allocation is not None else normalized_deficit) + priority_weight - 20. * stranded_fraction
                 if period in {"PRECOMPETITION", "COMPETITION"} and sport == profile.get("actual_sport"):
                     score += .25
@@ -2098,7 +2122,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                                          "maintenance_priority": maintenance_need, "stranded_fraction": stranded_fraction}
                 if allocation is not None:
                     evidence["selection"].update(component_allocation={k: _round(v) for k, v in allocation.items()},
-                                                   coverage_score=_round(planning_allocation.coverage(objective_load(direct, effective), allocation, selected_accents)),
+                                                   coverage_score=_round(planning_allocation.coverage(objective_load(direct, effective), allocation, selected_accents, targets=ranking_targets)),
                                                    endurance_dose_from_weekly_need=endurance_allocation)
                     if endurance_allocation and purpose == "BUILDING" and z not in selected_accents:
                         evidence["explanation"] += " За необходимия седмичен аеробен обем е използвана изграждащата доза на метода, въпреки че компонентът не е основен акцент. Дозата остава в зададения треньорски процент и споделя общия бюджет."
@@ -2141,6 +2165,18 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 blocks = training_guidance.annotate_lactate(blocks, profile, sport, settings, day)
                 if method.get("double_threshold"):
                     training_guidance.annotate_double_threshold(blocks, profile)
+                choice_methods[(sport, method["id"])] = deepcopy(method)
+                def choice_check(parts, *, capacity=deepcopy(evidence), zone=z, ceiling=max_usage,
+                                 time_ceiling=session_ceiling, conflict_check=recovery_conflict):
+                    if (not parts or _dose_usage(parts, capacity, zone) > ceiling + 1e-6
+                        or sum(b["duration_min"] for b in parts) > min(day_available, remaining) + .001
+                        or any(sum(b["duration_min"] for b in parts if b.get("session_index", 1) == part) > time_ceiling + .001
+                               for part in {b.get("session_index", 1) for b in parts})):
+                        return False
+                    q, e, _ = candidate_load(parts)
+                    return (fits_component_budget(e, q) and not conflict_check(
+                        _add_forecast_session(forecast_rows, day, e), q, e, sum(b["duration_min"] for b in parts)))
+                choice_checks[(sport, method["id"])] = choice_check
                 choices.append((score, method["id"], {"method_id": method["id"], "title": method["title"],
                                 "sport": sport, "zone": z, "purpose": purpose, "method_family": family, "blocks": blocks, "is_key_session": is_key,
                                 "neuromuscular_exposure": training_guidance.nms_exposure(blocks),
@@ -2151,8 +2187,324 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                                 "direct_equivalent_minutes": {z: _round(v) for z, v in direct.items()},
                                 "dose_evidence": evidence}, after_rows, after))
             if choices:
-                choices.sort(key=lambda c: (not c[2]["is_key_session"] if day in key_slots and slot_index == 0 else False, -c[0], c[1]))
-                _, _, session, forecast_rows, after = choices[0]
+                minimum_cores = {}
+                if period_objectives is not None:
+                    for candidate in choices:
+                        proposed = candidate[2]
+                        identity = (proposed["sport"], proposed["method_id"])
+                        # Pairs retain their selected complete dose during
+                        # balancing; rank the bundle against that same dose.
+                        minimum_parts = (proposed["blocks"] if proposed.get("double_threshold") else
+                            _blocks(choice_methods[identity], proposed["dose_evidence"]["minimum_primary_work_minutes"],
+                                    proposed["dose_evidence"], settings))
+                        minimum_q, minimum_e, _ = candidate_load(minimum_parts)
+                        minimum_cores[identity] = (minimum_parts, minimum_q, minimum_e)
+                placement_readiness_cache, placement_core_cache = {}, {}
+                def reservation_check(parts, protected_cores):
+                    """Check one causal, dated bundle without executing it."""
+                    current_q, current_e, _ = candidate_load(parts)
+                    total_q, total_e = dict(current_q), dict(current_e)
+                    total_minutes = sum(b["duration_min"] for b in parts)
+                    daily_minutes = {day:total_minutes}
+                    shadow = _add_forecast_session(forecast_rows, day, current_e)
+                    shadow_days = list(result_days)+[{"date":day.isoformat(), "status":"TRAINING",
+                        "sessions":[{"direct_equivalent_minutes":current_q}]}]
+                    records = []
+                    ledger = sorted(reserved_keys + protected_cores,
+                        key=lambda r:(r["date"], min(r.get("slots", [r.get("slot", 0)]))))
+                    for record in ledger:
+                        placed_day = record["date"]
+                        method, cap, core = deepcopy(record["method"]), deepcopy(record["capacity"]), record["blocks"]
+                        protected = record in protected_cores
+                        if protected:
+                            method["min_work_min"] = method.get("absolute_min_work_min", method["min_work_min"])
+                        # All sessions on one day share causal day-start
+                        # readiness; only earlier dates are intervening load.
+                        before = [r for r in shadow if r["date"] != placed_day.isoformat()] + [
+                            r for r in rows if r["date"] == placed_day.isoformat()]
+                        readiness_key = (placed_day, tuple((r["date"],r["zone"],r["effective_load"])
+                            for r in before if r["date"] <= placed_day.isoformat()))
+                        if readiness_key not in placement_readiness_cache:
+                            placement_readiness_cache[readiness_key] = {r["zone"]:r["readiness_percent"]
+                                for r in recovery_v2.simulate(before, configs["zones"],
+                                    target=placed_day, include_details=False)["current"]}
+                        future_ready = placement_readiness_cache[readiness_key]
+                        factor = adaptive_methods.readiness_policy(method, profile, future_ready)["dose_factor"]
+                        cap["readiness_dose_factor"] = factor
+                        future_period, future_taper = _phase(periodization, placed_day)
+                        future_state = day_goals[placed_day][2]
+                        purpose = record["purpose"]
+                        slot = min(record.get("slots", [record.get("slot", 0)]))
+                        if purpose == "BUILDING" and not method.get("double_threshold") and (
+                            method["zone"] not in day_goals[placed_day][1] or slot > 0 or future_taper
+                            or future_state and future_state["kind"] == "RECOVERY"):
+                            purpose = "MAINTENANCE"
+                        nominal = _nominal_fraction(method, purpose, profile, future_period, cap, controls)
+                        if protected:
+                            # Rebuild a whole minimum at placement-day R.
+                            # Better recovery may require a larger minimum;
+                            # lower recovery may make a smaller core legal.
+                            cap["easy_work_cap_minutes"] = 0.
+                            core_key = (method.get("actual_sport"), method["id"], cap["capacity_minutes"],
+                                method["min_work_min"], factor)
+                            if core_key not in placement_core_cache:
+                                minimum = _minimum_work(method, cap, settings)
+                                placement_core_cache[core_key] = (minimum,
+                                    _blocks(method, minimum, cap, settings) if minimum is not None else [])
+                            minimum, core = placement_core_cache[core_key]
+                            if minimum is None:
+                                return None
+                        ceiling = cap.get("base_max_dose_fraction", record.get("dose_ceiling", .8))
+                        if future_state and future_state["kind"] == "RECOVERY":
+                            ceiling = min(ceiling, profile.get("maintenance_fraction", .3))
+                        if method.get("mixed_component"):
+                            ceiling = .5
+                        if reentry_dose_active(periodization, placed_day):
+                            ceiling = min(ceiling, profile.get("reentry_fraction", .4))
+                        primary = sum(b["duration_min"] for b in core if b["kind"] == "WORK" and b["zone"] == method["zone"])
+                        work = minimum if protected else record.get("work", primary)
+                        if (factor <= 0 or work > cap["capacity_minutes"]*nominal*factor+.001
+                            or _dose_usage(core, cap, method["zone"]) > ceiling*factor+.001
+                            or method["zone"] != "STR" and method["purpose"] != "RECOVERY" and
+                                _minimum_dose_usage(core, cap, method["zone"], primary_only=bool(
+                                    method.get("mixed_component") or method.get("developmental_variant")))+.001
+                                < method.get("minimum_fraction", MIN_AEROBIC_DOSE_FRACTION)*factor):
+                            return None
+                        minutes = sum(b["duration_min"] for b in core)
+                        daily_minutes[placed_day] = daily_minutes.get(placed_day, 0.)+minutes
+                        daily_ceiling = day_available if placed_day == day else available[placed_day.weekday()]
+                        if daily_minutes[placed_day] > daily_ceiling+.001:
+                            return None
+                        total_minutes += minutes
+                        cq, ce, _ = _candidate_load(core, settings, before, placed_day)
+                        future_budget, future_q, future_segment = component_budgets(shadow, shadow_days, placed_day)
+                        if (any(ce[c] > future_budget[c]["deficit_effective"]+.001 for c in COMPONENTS)
+                            or any(cq[c] > v+.001 for c,v in future_q.items())
+                            or future_segment is not None and any(v > (future_segment["components"][c]["remaining"] or 0.)+.005
+                                for c,v in planning_allocation.objective_load(cq, ce, future_segment["components"]).items())):
+                            return None
+                        shadow = _add_forecast_session(shadow, placed_day, ce)
+                        shadow_days.append({"date":placed_day.isoformat(), "status":"TRAINING",
+                            "sessions":[{"direct_equivalent_minutes":cq}]})
+                        if segment_keys[placed_day] == segment_keys[day]:
+                            for c in COMPONENTS:
+                                total_q[c] += cq[c]
+                                total_e[c] += ce[c]
+                        if protected:
+                            records.append({"component":method["zone"], "method_id":method["id"],
+                                "date":placed_day.isoformat(), "slot":slot+1, "minutes":_round(minutes),
+                                "readiness_dose_factor":factor})
+                    if (not automatic_time and total_minutes > remaining+.001
+                        or any(total_q[c] > v+.001 for c,v in q_remaining.items())
+                        or any(total_e[c] > budgets[c]["deficit_effective"]+.001 for c in COMPONENTS)
+                        or any(v > (period_objectives[c]["remaining"] or 0.)+.005 for c,v in objective_load(total_q, total_e).items())):
+                        return None
+                    return {"q":{c:total_q[c]-current_q[c] for c in COMPONENTS},
+                            "e":{c:total_e[c]-current_e[c] for c in COMPONENTS}, "records":records}
+                def preparation_bundle(candidate):
+                    session = candidate[2]
+                    selected_method = choice_methods[(session["sport"], session["method_id"])]
+                    selected_evidence = session["dose_evidence"]
+                    selected_work = selected_evidence["primary_work_budget_minutes"]
+                    selected_minimum = selected_evidence["minimum_primary_work_minutes"]
+                    minimum_parts, minimum_q, minimum_e = minimum_cores[(session["sport"], session["method_id"])]
+                    protected_q = {c: 0. for c in COMPONENTS}
+                    protected_e = {c: 0. for c in COMPONENTS}
+                    protected_components = []
+                    current_cost = 2 if session.get("double_threshold") else 1
+                    future_slots = [(d, s) for d, s, count in schedule
+                        if count > 0 and segment_keys[d] == segment_keys[day] and (d > day or d == day and s >= slot_index + current_cost)
+                        and (d, s) not in reserved_key_slots
+                        and not any(a.get("date") == d.isoformat() for a in existing_in_draft)
+                        and not any(ev["event_type"] in {"MAIN_RACE", "CONTROL_RACE", "TEST", "UNAVAILABLE"}
+                                    and str(ev["start_date"]) <= d.isoformat() <= str(ev["end_date"]) for ev in events)]
+                    slots_left = min(len(future_slots), max(0, session_limit-sessions-current_cost-len(reserved_key_slots)))
+                    minimum_options = {}
+                    # Strength can become executable after today's spacing
+                    # restriction. Keep that future core visible before an
+                    # optional easy finish consumes its preparation allowance.
+                    if session["zone"] != "STR" and planning_allocation.quality_priority("STR", period_objectives):
+                        for future_day, future_kind, options in future_options:
+                            if future_kind != "STRENGTH" or segment_keys[future_day] != segment_keys[day]:
+                                continue
+                            compatible = [(d,s) for d,s in future_slots if d == future_day]
+                            future_ready = {r["zone"]:r["readiness_percent"] for r in recovery_v2.simulate(
+                                _add_forecast_session(forecast_rows, day, minimum_e), configs["zones"],
+                                target=future_day, include_details=False)["current"]}
+                            for option in options:
+                                factor = min(future_ready.get(c, 0.) for c in option["required_components"])/100
+                                if (not compatible or option["double"] or factor <= 0
+                                    or option["work"] > option["nominal_work"]*factor+.001
+                                    or option["dose_usage"] > option["dose_ceiling"]*factor+.001):
+                                    continue
+                                candidate_core = (option["q"]["Z1"], sum(option["e"].values()), 1,
+                                    option["q"], option["e"], compatible, option["minutes"], option["method_id"],
+                                    {"method":option["method"], "capacity":option["capacity"], "blocks":option["blocks"],
+                                     "purpose":option["purpose"], "work":option["work"], "dose_ceiling":option["dose_ceiling"]})
+                                if "STR" not in minimum_options or candidate_core[:2] < minimum_options["STR"][:2]:
+                                    minimum_options["STR"] = candidate_core
+                    for candidate in choices:
+                        alternative = candidate[2]
+                        component = alternative["zone"]
+                        if (component in {"Z1", session["zone"]}
+                            or not planning_allocation.quality_priority(component, period_objectives)):
+                            continue
+                        # The existing chronological reservation already owns
+                        # key dates, spacing and paired-session allowances.
+                        # This pass protects additional complete supplements
+                        # and strength, without reserving those keys twice.
+                        if alternative["is_key_session"]:
+                            continue
+                        cost = 2 if alternative.get("double_threshold") else 1
+                        if component == "STR":
+                            previous = day if session["zone"] == "STR" else last_strength_day
+                            if (strength_sessions + int(session["zone"] == "STR") >= (controls or {}).get("max_strength_sessions", 2)
+                                or not any(not previous or (d-previous).days >= 2 for d, _ in future_slots)):
+                                continue
+                        alternative_method = choice_methods[(alternative["sport"], alternative["method_id"])]
+                        alternative_evidence = alternative["dose_evidence"]
+                        core, cq, ce = minimum_cores[(alternative["sport"], alternative["method_id"])]
+                        core_minutes = sum(b["duration_min"] for b in core)
+                        compatible = [(d,s) for d,s in future_slots if _phase(periodization, d)[0] in alternative_method["periods"]
+                            and not (_phase(periodization, d)[1] and alternative_method["purpose"] == "SUPPORTING")
+                            and core_minutes <= (available[d.weekday()] if d > day else
+                                                 day_available-sum(b["duration_min"] for b in minimum_parts))+.001
+                            and (component != "STR" or not previous or (d-previous).days >= 2)
+                            ]
+                        if not compatible:
+                            continue
+                        option = (cq["Z1"], sum(ce.values()), cost, cq, ce, compatible, core_minutes, alternative["method_id"],
+                            {"method":alternative_method, "capacity":alternative_evidence, "blocks":core,
+                             "purpose":alternative["purpose"]})
+                        if core and (component not in minimum_options or option[:2] < minimum_options[component][:2]):
+                            minimum_options[component] = option
+                    used_future_slots = set()
+                    used_future_minutes = {}
+                    for record in reserved_keys:
+                        used_future_minutes[record["date"]] = used_future_minutes.get(record["date"], 0.)+record["minutes"]
+                    protected_methods = []
+                    protected_cores = []
+                    for component, (_, _, cost, cq, ce, compatible, core_minutes, method_id, specification) in sorted(minimum_options.items(), key=lambda item: item[1][:2]):
+                        if cost > slots_left:
+                            continue
+                        placement, checked = None, None
+                        for d,s in compatible:
+                            if ((d,s) in used_future_slots or used_future_minutes.get(d, 0.)+core_minutes >
+                                (available[d.weekday()] if d > day else day_available-sum(b["duration_min"] for b in minimum_parts))+.001):
+                                continue
+                            trial = {**specification, "date":d, "slot":s}
+                            checked = reservation_check(minimum_parts, protected_cores+[trial])
+                            if checked is not None:
+                                placement = (d,s)
+                                break
+                        if placement is None:
+                            continue
+                        protected_cores.append(trial)
+                        protected_q, protected_e = checked["q"], checked["e"]
+                        protected_components.append(component)
+                        protected_methods = checked["records"]
+                        used_future_slots.add(placement)
+                        used_future_minutes[placement[0]] = used_future_minutes.get(placement[0], 0.)+next(
+                            r["minutes"] for r in checked["records"] if r["date"] == placement[0].isoformat() and r["slot"] == placement[1]+1)
+                        slots_left -= cost
+                    return dict(method=selected_method, evidence=selected_evidence, work=selected_work,
+                        minimum=selected_minimum, parts=minimum_parts, minimum_q=minimum_q, minimum_e=minimum_e,
+                        protected_q=protected_q, protected_e=protected_e, components=protected_components,
+                        methods=protected_methods, cores=protected_cores)
+                bundles = {(c[2]["sport"], c[2]["method_id"]):preparation_bundle(c) for c in choices} if period_objectives else {}
+                choices.sort(key=lambda c: (not c[2]["is_key_session"] if day in key_slots and slot_index == 0 else False,
+                    -planning_allocation.quality_priority(c[2]["zone"], period_objectives) if period_objectives else 0,
+                    -len(bundles[(c[2]["sport"], c[2]["method_id"])]["components"]) if bundles else 0, -c[0], c[1]))
+                _, _, session, selected_rows, selected_after = choices[0]
+                if period_objectives is not None:
+                    bundle = bundles[(session["sport"], session["method_id"])]
+                    selected_method, selected_evidence = bundle["method"], bundle["evidence"]
+                    selected_work, selected_minimum = bundle["work"], bundle["minimum"]
+                    minimum_parts = bundle["parts"]
+                    protected_q, protected_e = bundle["protected_q"], bundle["protected_e"]
+                    protected_components = bundle["components"]
+                    def balanced_fit(parts):
+                        if not choice_checks[(session["sport"], session["method_id"])](parts):
+                            return False
+                        if protected_components:
+                            return reservation_check(parts, bundle["cores"]) is not None
+                        cq, ce, _ = candidate_load(parts)
+                        return (all(cq[c]+protected_q[c] <= available_q+.001 for c, available_q in q_remaining.items())
+                            and all(ce[c]+protected_e[c] <= budgets[c]["deficit_effective"]+.001 for c in COMPONENTS)
+                            and all(value <= (period_objectives[c]["remaining"] or 0.)+.005 for c, value in
+                                objective_load({c:cq[c]+protected_q[c] for c in COMPONENTS},
+                                               {c:ce[c]+protected_e[c] for c in COMPONENTS}).items()))
+                    parts = session["blocks"]
+                    if protected_components and not balanced_fit(parts):
+                        if not session.get("double_threshold") and balanced_fit(minimum_parts):
+                            lo, hi = selected_minimum, selected_work
+                            for _ in range(16):
+                                midpoint = (lo+hi)/2
+                                trial = _blocks(selected_method, midpoint, selected_evidence, settings)
+                                if balanced_fit(trial):
+                                    lo = midpoint
+                                else:
+                                    hi = midpoint
+                            selected_work = max(selected_minimum, math.floor(lo*2)/2)
+                            parts = _blocks(selected_method, selected_work, selected_evidence, settings)
+                            if not balanced_fit(parts):
+                                selected_work, parts = selected_minimum, minimum_parts
+                        else:
+                            # A reservation is optional. It cannot remove the
+                            # complete, executable current quality.
+                            protected_components = []
+                            protected_q = {c:0. for c in COMPONENTS}
+                            protected_e = {c:0. for c in COMPONENTS}
+                    if session.get("mixed_component"):
+                        core_parts = parts
+                        primary_minutes = sum(b["duration_min"] for b in parts if b["kind"] == "WORK" and b["zone"] == session["zone"])
+                        lo, hi = 0., primary_minutes*selected_evidence["easy_to_primary_ratio"]
+                        # Enrich only the optional finish; the primary effort,
+                        # whole repetitions and full rests stay unchanged.
+                        for _ in range(16):
+                            midpoint = (lo+hi)/2
+                            trial_evidence = {**selected_evidence, "easy_work_cap_minutes":midpoint}
+                            trial = _blocks(selected_method, selected_work, trial_evidence, settings)
+                            if balanced_fit(trial):
+                                lo = midpoint
+                            else:
+                                hi = midpoint
+                        selected_evidence["easy_work_cap_minutes"] = math.floor(lo*60)/60
+                        parts = _blocks(selected_method, selected_work, selected_evidence, settings)
+                        if not balanced_fit(parts):
+                            selected_evidence["easy_work_cap_minutes"] = 0.
+                            parts = core_parts
+                    if parts != session["blocks"]:
+                        q, e, technical = candidate_load(parts)
+                        actual_work = sum(b["duration_min"] for b in parts if b["kind"] == "WORK")
+                        total = sum(b["duration_min"] for b in parts)
+                        session.update(blocks=training_guidance.annotate_lactate(parts, profile, session["sport"], settings, day),
+                            main_work_minutes=_round(actual_work), total_minutes=_round(total),
+                            direct_equivalent_minutes={c:_round(v) for c,v in q.items()},
+                            canonical_effective_load={c:_round(v) for c,v in e.items()})
+                        selected_evidence.update(prescribed_work_minutes=_round(actual_work),
+                            primary_work_budget_minutes=_round(selected_work), applied_fraction=_round(selected_work/selected_evidence["capacity_minutes"]),
+                            applied_structure_fraction=_round(_dose_usage(parts, selected_evidence, session["zone"])),
+                            applied_minimum_capacity_fraction=_round(_minimum_dose_usage(parts, selected_evidence, session["zone"],
+                                primary_only=bool(session.get("mixed_component") or selected_method.get("developmental_variant")))),
+                            technical_spill_reference={c:_round(v) for c,v in technical.items()},
+                            dose_reduced=selected_work+.01 < selected_evidence["requested_primary_work_minutes"])
+                        selected_evidence["selection"]["coverage_score"] = _round(planning_allocation.coverage(
+                            objective_load(q, e), selected_evidence["selection"]["component_allocation"], selected_accents,
+                            targets={c:r["target"] for c,r in period_objectives.items()}))
+                        selected_rows = _add_forecast_session(forecast_rows, day, e)
+                        selected_after = recovery_v2.simulate(selected_rows, configs["zones"], target=day, include_details=False)
+                    if protected_components:
+                        final_reservation = reservation_check(parts, bundle["cores"])
+                        protected_q, protected_e = final_reservation["q"], final_reservation["e"]
+                        selected_evidence["limits"].append({"code":"LONG_TERM_QUALITY_PREPARATION",
+                            "limit_minutes":_round(selected_work), "protected_components":protected_components,
+                            "protected_methods":final_reservation["records"],
+                            "reserved_direct_q":{c:_round(v) for c,v in protected_q.items()},
+                            "reserved_effective":{c:_round(v) for c,v in protected_e.items()}})
+                    selected_evidence["selection"]["long_term_uncovered_quality"] = bool(
+                        planning_allocation.quality_priority(session["zone"], period_objectives))
+                forecast_rows, after = selected_rows, selected_after
                 if session.get("mixed_component") and session["dose_evidence"].get("selection", {}).get("component_allocation"):
                     item["load_budget"]["component_allocation"] = session["dose_evidence"]["selection"]["component_allocation"]
                 after_ready = {r["zone"]: _round(r["readiness_percent"]) for r in after["current"]}
