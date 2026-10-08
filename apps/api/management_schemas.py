@@ -80,7 +80,8 @@ class PlanningControls(BaseModel):
     double_threshold_gap_hours: float = Field(default=6, ge=4, le=10)
     double_threshold_lactate_ceiling: float = Field(default=3.5, ge=2, le=4)
     mixed_sessions_enabled: bool = True
-    mixed_min_readiness: float = Field(default=70, ge=60, le=90)
+    mixed_min_readiness: float = Field(default=70, ge=60, le=90,
+                                      description="Legacy setting retained for profile compatibility; readiness now scales the dose.")
     intensity_days: list[int] = Field(default_factory=list, max_length=7)
     strength_days: list[int] = Field(default_factory=list, max_length=7)
     long_session_day: int | None = Field(default=None, ge=0, le=6)
@@ -192,7 +193,7 @@ class ManagementProfile(BaseModel):
     reentry_days: int | None = Field(default=None, ge=0, le=21)
     taper_days: int = Field(default=7, ge=0, le=21)
     max_key_sessions_per_week: int = Field(default=2, ge=0, le=8)
-    building_fraction: float = Field(default=.5, ge=.5, le=.6)
+    building_fraction: float = Field(default=.5, ge=.5, le=.8)
     maintenance_fraction: float = Field(default=.3, ge=.3, le=.4)
     reentry_fraction: float = Field(default=.4, ge=.4, le=.5)
     recovery_session_cap_min: float = Field(default=30, ge=5, le=45)

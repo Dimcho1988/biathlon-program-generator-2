@@ -11,6 +11,7 @@ from biathlon.training_methods import resolved_methods
 from tests.api.test_management_schedule import body, run
 from tests.api.test_management_v2 import interval
 from tests.api.test_training_plan_engine import Repository, TODAY
+from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose
 
 
 @pytest.mark.parametrize("age,experience", [(16, 3), (30, .5), (None, None)])
@@ -74,7 +75,7 @@ def test_lactate_method_ceiling_never_overwrites_personal_reference():
     assert blocks[1]["lactate_reference"]["high_mmol"] == 2.8
 
 
-@pytest.mark.parametrize("ready,allowed", [(85., True), (69., False)])
+@pytest.mark.parametrize("ready,allowed", [(85., True), (69., True), (50., True), (0., False)])
 def test_mixed_candidate_below_90_uses_residual_budget_and_own_readiness_rule(monkeypatch, ready, allowed):
     p = body(sessions_per_week=7, intensity_days=[(TODAY.weekday()+6)%7], accent_mode="MANUAL", accents=["Z3"], accent_index=1.5)
     methods = [m for m in resolved_methods(p) if m.get("mixed_component") and m["zone"] == "Z3"]
@@ -97,15 +98,17 @@ def test_mixed_candidate_below_90_uses_residual_budget_and_own_readiness_rule(mo
     if allowed:
         s = sessions[0]
         assert s["mixed_component"] and not s["is_key_session"]
-        assert s["dose_evidence"]["readiness_policy"]["observed_percent"] == 85
-        assert s["dose_evidence"]["readiness_policy"]["dose_factor"] < 1
+        assert s["dose_evidence"]["readiness_policy"]["observed_percent"] == ready
+        assert s["dose_evidence"]["readiness_policy"]["dose_factor"] == ready/100
+        assert_readiness_dose(s)
+        assert s["dose_evidence"]["requested_primary_work_minutes"]/s["dose_evidence"]["capacity_minutes"] == pytest.approx(.15*ready/100, abs=.0001)
         work = sum(b["duration_min"] for b in s["blocks"] if b["kind"] == "WORK" and b["zone"] == "Z3")
         assert work <= s["dose_evidence"]["capacity_minutes"]*.15*s["dose_evidence"]["readiness_policy"]["dose_factor"]+.001
         d = next(d for d in plan["days"] if d["sessions"])
         assert d["date"] == TODAY.isoformat()  # Easy day, outside the reserved key slot.
         assert all(v <= d["load_budget"]["components"][z]["deficit_effective"]+.001 for z, v in s["canonical_effective_load"].items())
     else:
-        assert any(r["code"] == "MIXED_RECOVERY_BELOW_FLOOR" for d in plan["days"] for r in d["rejected_alternatives"])
+        assert any(r["code"] == "READINESS_DOSE_UNAVAILABLE" for d in plan["days"] for r in d["rejected_alternatives"])
 
 
 def test_disabled_mixed_policy_has_no_candidates():

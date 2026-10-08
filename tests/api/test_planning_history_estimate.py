@@ -8,6 +8,7 @@ from apps.api.management_lifecycle import _eligible
 from biathlon import load_progression
 from tests.api.test_load_progression import configured, observed
 from tests.api.test_training_plan_engine import TODAY, NOW, reference_speed, profile
+from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose
 
 
 def incomplete(count=5):
@@ -73,7 +74,9 @@ def test_estimated_automatic_history_starts_with_recorded_time_not_expert_q_tota
     # Time is a scheduling envelope. Expert references and Recovery remain
     # authoritative within it; no Q or capacity is rescaled to fit the clock.
     assert parameters["load_progression"]["components"]["Z1"]["reference_q"] >= load_progression.WEEKLY_Q_BOUNDS["Z1"][0]
-    assert all(d["readiness_before"]["Z1"] >= 90 for d in result["days"] if d["sessions"])
+    for day in result["days"]:
+        for session in day["sessions"]:
+            assert_readiness_dose(session)
 
 
 @pytest.mark.parametrize("hours", [1., 10.])

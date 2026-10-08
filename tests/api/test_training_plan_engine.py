@@ -356,19 +356,25 @@ def test_single_canonical_cascade_and_separate_strength():
     assert all(effective[z] == 0 for z in ZONES if z != "STR")
 
 
-def test_readiness_90_is_permission_not_capacity_fraction_and_low_zone_blocks():
+def test_readiness_scales_capacity_fraction_and_low_zone_limits_complete_dose():
     result = generate()
     for day in result["days"]:
         if day["session"]:
             z = day["session"]["zone"]
-            assert day["readiness_before"][z] >= 90
-            assert day["session"]["dose_evidence"]["fraction"] in {.3, .4, .5}
+            evidence = day["session"]["dose_evidence"]
+            assert evidence["readiness_dose_factor"] <= day["readiness_before"][z] / 100 + .00001
+            assert evidence["fraction"] == pytest.approx(evidence["base_fraction"] * evidence["readiness_dose_factor"])
+            assert evidence["applied_structure_fraction"] <= evidence["max_dose_fraction"] + .001
     repo = Repository()
     for row in repo.envelope["snapshot_payload"]["load_history"]["daily"]:
         if row["date"] == TODAY.isoformat() and row["zone"] == "Z1":
             row["effective_load"] = 1000.
     fatigued = generate(repo)
-    assert any(r["code"] in {"RECOVERY_BELOW_90", "WARMUP_NOT_READY"} for day in fatigued["days"] for r in day["rejected_alternatives"])
+    assert all(r["code"] not in {"RECOVERY_BELOW_90", "WARMUP_NOT_READY"}
+               for day in fatigued["days"] for r in day["rejected_alternatives"])
+    for day in fatigued["days"]:
+        for z in ZONES:
+            assert sum(s["canonical_effective_load"][z] for s in day["sessions"]) <= day["load_budget"]["components"][z]["deficit_effective"] + .005
 
 
 def test_taper_is_explicit_cap_not_extra_load_to_refill():

@@ -7,6 +7,7 @@ from apps.api import training_plan_engine as engine
 from biathlon import mesocycle_focus
 from tests.api.test_mesocycle_focus import configured, state
 from tests.api.test_training_plan_engine import NOW, TODAY, Repository, reference_speed
+from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose
 
 
 def at(offset):
@@ -243,9 +244,9 @@ def test_precompetition_neighbor_can_receive_real_session_without_bypassing_capa
     for day, session in neighboring_sessions:
         assert day["cycle"]["race_component"] == "Z4"
         assert "Z3" in day["cycle"]["mesocycle_accents"]
+        assert_readiness_dose(session)
         for zone, effective in session["canonical_effective_load"].items():
             if effective > 0:
-                assert day["readiness_before"][zone] >= 90
                 assert effective <= day["load_budget"]["components"][zone]["deficit_effective"] + .002
 
     neighbor_ids = {"END-THR-TIME-01-FLEX", "ONFLOWS-CONTROLLED-Z5-V2"}

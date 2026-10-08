@@ -76,6 +76,16 @@ def test_management_requires_explicit_athlete_and_actor(api):
     assert client.put("/api/v2/athlete/management/profile", json={"profile": PROFILE, "expected_revision": 2}, headers=HEADERS).status_code == 200
 
 
+@pytest.mark.parametrize("fraction", [.6, .7, .8])
+def test_profile_saves_coach_building_doses_through_eighty_percent(api, fraction):
+    client, store, _ = api
+    response = client.put("/api/v2/athlete/management/profile",
+                          json={"profile": {**PROFILE, "building_fraction": fraction}, "expected_revision": 2},
+                          headers=HEADERS)
+    assert response.status_code == 200
+    assert store.saved[-1]["building_fraction"] == fraction
+
+
 def test_outlook_read_is_scoped_and_needs_neither_actor_nor_existing_draft(api):
     client, store, repository = api
     repository.active_analysis = lambda _: {}
@@ -155,7 +165,7 @@ def test_stale_daily_data_does_not_clip_coach_outlook_or_blend_microcycle_peaks(
 
 
 @pytest.mark.parametrize("patch", [
-    {"building_fraction": .7}, {"maintenance_fraction": .5}, {"reentry_fraction": .6},
+    {"building_fraction": .85}, {"maintenance_fraction": .5}, {"reentry_fraction": .6},
     {"available_minutes": [0, 0, 0, -1, 0, 0, 0]},
     {"available_minutes": [0, 0]}, {"recent_weekly_hours": [4, 4, 4]},
     {"actual_sport": "NordicSki"}, {"program_end": "2028-01-01"},

@@ -56,7 +56,7 @@ const profile = {...defaultManagementProfile("2026-09-21"), discipline:"5000 m",
 it("saves explicit learning controls without resetting the planning profile", async () => {
   const fetchMock = vi.fn(async (_url, init) => Response.json({ configured: true, revision: 2, profile: JSON.parse(init.body).profile }));
   vi.stubGlobal("fetch", fetchMock);
-  const savedProfile = { ...profile, available_minutes: [75, 90, 0, 60, 100, 120, 80], building_fraction: .6 };
+  const savedProfile = { ...profile, available_minutes: [75, 90, 0, 60, 100, 120, 80], building_fraction: .7 };
   await mount(<ManagementProfileEditor initialProfile={{ configured: true, profile: savedProfile, revision: 1 }} today="2026-09-21"/>);
   await click(button("3. Мезоцикли и акценти"));
   expect(select("Режим на самообучение").value).toBe("SHADOW");
@@ -70,7 +70,7 @@ it("saves explicit learning controls without resetting the planning profile", as
   const result = JSON.parse(fetchMock.mock.calls[0][1].body).profile;
   expect(result.individual_learning).toEqual({ mode: "CONTROL", exploration_enabled: false, max_volume_step_percent: 4, max_intensity_step: .015 });
   expect(result.available_minutes).toEqual(savedProfile.available_minutes);
-  expect(result.building_fraction).toBe(.6);
+  expect(result.building_fraction).toBe(.7);
   expect(result.load_progression).toEqual(savedProfile.load_progression);
 });
 
@@ -87,7 +87,8 @@ it("shows component shortfalls separately from session counts and elapsed durati
 
 it("saves 16 sessions and double-threshold preferences directly from step two", async () => {
   const fetchMock = vi.fn(async (_url, init) => Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile})); vi.stubGlobal("fetch",fetchMock);
-  await mount(<ManagementProfileEditor initialProfile={{configured:true,profile,revision:1}} today="2026-09-21"/>);
+  const legacyProfile = {...profile, planning_controls:{...defaultPlanningControls(profile.actual_sport),mixed_min_readiness:75}};
+  await mount(<ManagementProfileEditor initialProfile={{configured:true,profile:legacyProfile,revision:1}} today="2026-09-21"/>);
   await click(button("2. Дни и обем"));
   const count=input("Максимум сесии за 7 дни"); expect(count.max).toBe("21");
   await enter(count,"16");
@@ -97,7 +98,8 @@ it("saves 16 sessions and double-threshold preferences directly from step two", 
   await enter(input("Дял от Tmax за всяка прагова сесия"), "45");
   await enter(input("Пауза между праговите сесии"), "7");
   await enter(input("Лактатен горен ориентир"), "3.2");
-  await enter(input("Минимална готовност за допълващия компонент"), "75");
+  expect(container.textContent).not.toContain("Минимална готовност за допълващия компонент");
+  expect(container.textContent).toContain("готовност 50% дава 30–35%");
   await click(button("Запази промените"));
   expect(fetchMock).toHaveBeenCalledTimes(1);
   const saved=JSON.parse(fetchMock.mock.calls[0][1].body).profile;

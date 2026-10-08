@@ -8,6 +8,7 @@ from apps.api import training_plan_engine as engine, management_service
 from apps.api.management_schemas import PlanningControls
 from biathlon import mesocycle_focus, planning_controls, load_progression
 from tests.api.test_training_plan_engine import Repository, TODAY, NOW, profile, reference_speed
+from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose
 
 
 def configured(**patch):
@@ -171,7 +172,7 @@ def test_weekly_planner_and_outlook_use_same_focus_and_recovery_stays_maintenanc
         for session in d["sessions"]:
             assert session["purpose"]!="BUILDING"
             assert "DOUBLE" not in session["method_id"]
-            assert d["readiness_before"][session["zone"]]>=90
+            assert_readiness_dose(session)
             effective=session["canonical_effective_load"]
             assert all(effective[z]<=d["load_budget"]["components"][z]["deficit_effective"]+.002 for z in engine.COMPONENTS)
 

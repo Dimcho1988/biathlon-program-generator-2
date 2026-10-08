@@ -8,6 +8,7 @@ from biathlon import planning_allocation, planning_schedule
 from biathlon.constants import COMPONENTS
 from tests.api.test_management_schedule import body, run
 from tests.api.test_training_plan_engine import Repository, TODAY
+from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose
 
 
 def test_quota_reallocates_canonical_load_and_drops_expired_actuals():
@@ -106,7 +107,10 @@ def test_feasible_volume_is_realized_in_complete_sessions(monkeypatch, target):
     assert row["planned"] <= row["target"] + .005
     selected = [s for d in plan["days"] for s in d["sessions"]]
     assert 1 < len(selected) < 7
-    assert all(s["dose_evidence"]["applied_structure_fraction"] >= .25 for s in selected)
+    for session in selected:
+        assert_readiness_dose(session)
+        if session["purpose"] != "RECOVERY":
+            assert session["dose_evidence"]["applied_structure_fraction"] >= session["dose_evidence"]["min_dose_fraction"] - .001
 
 
 def test_period_objective_integrates_wave_and_counts_q_without_cascade():
@@ -146,7 +150,10 @@ def test_automatic_q_targets_match_outlook_and_no_micro_sessions(monkeypatch):
     assert selected
     regular = [s for s in selected if s["zone"] != "STR" and s["purpose"] != "RECOVERY" and not s.get("mixed_component")]
     assert regular
-    assert all(s["dose_evidence"]["applied_structure_fraction"] >= .25 for s in regular)
+    for session in regular:
+        evidence = session["dose_evidence"]
+        assert_readiness_dose(session)
+        assert evidence["applied_structure_fraction"] >= evidence["min_dose_fraction"] - .001
     # Recovery and supporting mixed blocks have their own existing minima;
     # changed expert capacities may make those methods win an allocation slot.
     for session in selected:

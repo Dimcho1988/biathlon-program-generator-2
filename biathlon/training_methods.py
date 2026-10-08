@@ -1,4 +1,4 @@
-"""Explicit starter subset of the current v0.7 methodological specification.
+"""Executable coach profiles alongside the v0.8 methodological specification.
 
 Parent-card constraints were reviewed against v0.7 (Library revision 8).
 Concrete pilot choices below are marked as implementation defaults, not as
@@ -12,7 +12,8 @@ import json
 from pathlib import Path
 from . import adaptive_methods
 
-VERSION = "training-methods-v8"
+VERSION = "training-methods-v10"
+VARIETY_VERSION = "onflows-bounded-method-variety-v1"
 COMMON = ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "COMPETITION")
 METHODS = (
     {"id": "RUN-REC-EASY-01", "title": "Леко възстановително бягане", "zone": "Z1",
@@ -63,6 +64,95 @@ EXERCISES = (
     "Планк", "Страничен планк — смени страната по средата", "Редуване ръка–крак от тилен лег",
     "Лицеви опори на стена", "Лопатъчни лицеви опори на стена", "Повдигане на ръце в Y от лицев лег",
 )
+
+
+def _bounded_variants(methods):
+    """Add actual structures, without activating unresolved source examples.
+
+    The parent supplies the supported effort/capacity, not new physiological
+    evidence. These are transparent coach choices; all session budgets remain
+    the engine's responsibility. Append-only keeps the established defaults.
+    """
+    result = []
+    by_id = {m["id"]: m for m in methods}
+    aerobic = by_id["END-CROSS-TRAIN-01-Z2"]
+    result.append({**deepcopy(aerobic), "id": "ONFLOWS-Z2-TWO-PARTS-V1",
+        "title": "Две равномерни аеробни части в Z2", "purpose": "BUILDING",
+        "structure": "TWO_REPETITIONS", "min_work_min": 20., "repetitions": 2,
+        "recovery_min": 2., "variation_parent_id": aerobic["id"],
+        "implementation_profile": VARIETY_VERSION,
+        "instructions": "Две равни части в Z2, разделени с 2 минути леко движение в Z1. Запази еднакво усилие и технически резерв в двете части.",
+        "adaptation": "Треньорски вариант v1 на разрешената равномерна Z2: същата интензивност и максимум 90 мин обща работа, разделена в две части. Почивката се отчита отделно; не увеличава процентната доза."})
+    easy = by_id["END-LONG-Z1-01-BUILD"]
+    result.append({**deepcopy(easy), "id": "ONFLOWS-Z1-TWO-PARTS-V1",
+        "title": "Лека аеробна работа в две части", "structure": "TWO_REPETITIONS",
+        "min_work_min": 20., "max_work_min": 90., "repetitions": 2, "recovery_min": 2.,
+        "variation_parent_id": easy["id"], "implementation_profile": VARIETY_VERSION,
+        "instructions": "Две равни леки части в Z1 с 2 минути много леко движение между тях. Използвай прехода за проверка на стойката и техниката; не повишавай усилието след него.",
+        "adaptation": "Треньорски вариант v1 на продължителната Z1: две части със същия целеви пулс, до 90 мин обща работа. Преходът е в общото време и товара; няма втори независим дозов бюджет."})
+    threshold = by_id["END-THR-TIME-01-FLEX"]
+    for structure, suffix, title, minimum, maximum, rest, instructions in (
+        ("THRESHOLD_LONG", "LONG", "Прагови части по 6–10 минути", 12., 60., 1.,
+         "Равномерни части по 6–10 минути в Z3 с 1 минута леко движение между тях. Запази контролирано усилие и резерв; почивката не е разрешение за по-висока скорост."),
+        ("THRESHOLD_SHORT", "SHORT", "Кратко прагово редуване: 1 мин / 30 сек", 6., 20., .5,
+         "Една минута контролирано прагово усилие, 30 секунди леко движение в Z1. Поддържай зададеното усилие и повторяема техника. Не гони моментен пулс и не превръщай отсечките в спринтове."),
+    ):
+        result.append({**deepcopy(threshold), "id": f"ONFLOWS-Z3-{suffix}-REPETITIONS-V1",
+            "title": title, "structure": structure, "min_work_min": minimum,
+            "max_work_min": maximum, "recovery_min": rest,
+            "variation_parent_id": threshold["id"], "capacity_method": deepcopy(threshold),
+            "implementation_profile": VARIETY_VERSION, "instructions": instructions,
+            "adaptation": "Самостоятелен треньорски вариант v1 от вече разрешения прагов профил и изпълнимата структура за двоен праг. Капацитетът е от същото индивидуално усилие; общата Z3 работа остава процент от непрекъснатия Tmax, без интервален множител и без изискване за второ занимание."})
+    for parent in methods:
+        if parent["structure"] not in {"MODEL_INTERVALS", "METABOLIC_INTERVALS"}:
+            continue
+        key = "interval_template" if parent["structure"] == "MODEL_INTERVALS" else "interval_profile"
+        p = parent[key]
+        # Subdivision changes structure at the same supported effort. It never
+        # raises the parent's cumulative work or shortens its recovery.
+        if p["work_seconds"] < 30 or p["min_repetitions"] * 2 > 24:
+            continue
+        child = deepcopy(parent)
+        cp = child[key]
+        cp.update(work_seconds=p["work_seconds"] / 2,
+                  min_repetitions=p["min_repetitions"] * 2,
+                  max_repetitions=min(24, p["max_repetitions"] * 2))
+        child.update(id=parent["id"] + "-SPLIT-V1",
+            title=f"По-кратки повторения в {parent['zone']} с пълна активна почивка",
+            min_work_min=cp["min_repetitions"] * cp["work_seconds"] / 60,
+            max_work_min=cp["max_repetitions"] * cp["work_seconds"] / 60,
+            variation_parent_id=parent["id"], variation_policy={
+                "version": VARIETY_VERSION, "work_duration_ratio": .5,
+                "recovery_duration_ratio": 1., "max_total_work_ratio": 1.,
+                "effort_anchor": "UNCHANGED_PARENT_CAPACITY",
+                "validation": "COACH_STRUCTURE_NOT_EQUIVALENT_PHYSIOLOGICAL_RESPONSE"},
+            instructions="По-кратки, повторяеми отсечки при същото зададено усилие. Използвай цялата предписана активна почивка. Запази поне две качествени повторения в резерв; не ускорявай заради по-кратката отсечка или за да достигнеш пулсово число.",
+            adaptation="Треньорски вариант v1: работната отсечка е разделена на две, броят е удвоен до максимум 24, а всяка почивка запазва продължителността от родителския профил. Общата работа и множителят за капацитета не нарастват. Това не твърди еднакъв физиологичен отговор; всички сесийни и компонентни бюджети се проверяват отново.")
+        result.append(child)
+    return result
+
+
+def method_family(method):
+    """Group actual execution patterns so renamed methods cannot fake variety."""
+    structure = method["structure"]
+    family = {
+        "CONTINUOUS": "STEADY", "THREE_PROGRESSIVE_BLOCKS": "PROGRESSIVE",
+        "TWO_REPETITIONS": "TWO_PARTS", "THRESHOLD_REPETITIONS": "LONG_REPETITIONS",
+        "THRESHOLD_LONG": "LONG_REPETITIONS", "THRESHOLD_SHORT": "SHORT_REPETITIONS",
+        "ALTERNATING": "AEROBIC_ALTERNATING", "CRUISE_ALTERNATING": "AEROBIC_CRUISE",
+        "AEROBIC_SUPPORT": "EASY_THRESHOLD", "THRESHOLD_HIGH": "THRESHOLD_HIGH",
+        "STRENGTH_CIRCUIT": "STRENGTH_CIRCUIT", "AEROBIC_STRENGTH": "AEROBIC_STRENGTH",
+        "MIXED_AEROBIC": "STEADY" if method.get("mixed_variant") == "STEADY" else "SHORT_REPETITIONS",
+    }.get(structure, structure)
+    if structure in {"MODEL_INTERVALS", "METABOLIC_INTERVALS"}:
+        p = method.get("interval_template") or method["interval_profile"]
+        family = ("MICRO_INTERVALS" if p["work_seconds"] <= 30 else
+                  "SHORT_INTERVALS" if p["work_seconds"] <= 120 else "LONG_INTERVALS")
+        if p["recovery_seconds"] >= 1.5 * p["work_seconds"]:
+            family += "_FULL_REST"
+    prefix = "MIXED_" if method.get("mixed_component") else ""
+    suffix = "_NMS" if method.get("neuromuscular_profile") else ""
+    return f"{method['zone']}_{prefix}{family}{suffix}"
 
 
 def resolved_methods(profile):
@@ -120,10 +210,10 @@ def resolved_methods(profile):
         strength = {"id": "STR-CIRCUIT-RUN-01", "title": "Обща сила и стабилност", "zone": "STR",
             "sports": ("Run", "NordicSki", "RollerSki"), "purpose": "BUILDING", "position": 0.,
             "structure": "STRENGTH_CIRCUIT", "periods": ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"),
-            "min_work_min": 6., "max_work_min": profile.get("strength_circuits", 2) * 3.,
+            "min_work_min": 3., "max_work_min": profile.get("strength_circuits", 2) * 3.,
             "warmup_min": 10., "cooldown_min": 5., "source_id": "STR-CIRCUIT-RUN-01", "source_version": "0.1",
             "instructions": "20 секунди контролирана работа, 30 секунди преход. Съпротивление с поне 3 качествени повторения в резерв. Спри при болка или загуба на техника.",
-            "adaptation": "Общ силов профил: 9 упражнения, 2–3 кръга, 2 минути между кръговете. При ски е обща, а не специфична силова подготовка.",
+            "adaptation": "Общ силов профил: 9 упражнения; 1–3 цели кръга според дозата и зададения треньорски максимум, 2 минути между кръговете. Един цял кръг е намаленият изпълним вариант. При ски е обща, а не специфична силова подготовка.",
             "circuits": profile.get("strength_circuits", 2)}
         methods.append(strength)
         methods.append({**strength, "id": "END-AER-STR-COMBINATION-V2", "title": "Леко аеробно движение и обща сила",
@@ -162,6 +252,7 @@ def resolved_methods(profile):
                                       "dose_status": "VERSIONED_COACH_DEFAULT_NOT_VALIDATED_NORM"},
                 "instructions": "Силно, но повторяемо усилие; без спринт или финал до отказ. Остави резерв за още две качествени отсечки. Запази ритъма и техниката; прекрати при разпадането им. Не ускорявай, за да достигнеш пулсово число.",
                 "adaptation": "Отделни onFlows профили v2: Z4 — 3–6 × 3 min / 3 min, общ работен бюджет до 1,2 от непрекъснатия капацитет; Z5 — 6–20 × 30 s / 30 s, до 1,5. Това са конкретни начални треньорски настройки, не универсални множители или научно валидирани норми. Поддържането използва минималния цял вариант. Цели повторения, почивки, резерв и всички бюджети се проверяват съвместно. Индивидуалният профил замества тези настройки."})
+    methods.extend(_bounded_variants(methods))
     if adaptive_methods.developmental(profile):
         methods = [adaptive_methods.short_variant(m) if m["structure"] in {"MODEL_INTERVALS", "METABOLIC_INTERVALS"}
                    else m for m in methods if m["structure"] != "THRESHOLD_HIGH"]
@@ -176,6 +267,9 @@ def resolved_methods(profile):
                     "periods": tuple(p for p in base["periods"] if p not in {"RE_ENTRY", "TRANSITION"}),
                     "warmup_min": 15., "neuromuscular_profile": deepcopy(nms),
                     "adaptation": "Индивидуално включена NMS добавка: повторения, пълни почивки и дни от треньорския профил. Времето участва в общата сесия; пулсовият модел не оценява пълния механичен товар."})
+    for method in methods:
+        method["method_family"] = method_family(method)
+        method["method_family_version"] = VARIETY_VERSION
     return methods
 
 

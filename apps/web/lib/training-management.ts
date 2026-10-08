@@ -99,6 +99,7 @@ export const COMPONENTS: Component[] = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"];
 export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; lactate_reference?: LactateReference }
 export interface DoseEvidence {
   planned_gap_hours?: number; mixed_component?: boolean;
+  base_fraction?: number; readiness_dose_factor?: number;
   min_dose_fraction?: number | null; minimum_dose_scope?: string; applied_structure_fraction?: number; max_dose_fraction?: number; shared_day_structure_fraction?: number;
   capacity_source: string; capacity_minutes: number; target_hr_bpm: number | null; target_speed_kmh: number | null;
   fraction: number; requested_work_minutes: number; prescribed_work_minutes: number;
@@ -175,7 +176,7 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     || (value.recent_weekly_hours !== null && (!Array.isArray(value.recent_weekly_hours) || value.recent_weekly_hours.length !== 4 || !value.recent_weekly_hours.every(v => range(v, 0, 80))))
     || !(value.reentry_days === null || integer(value.reentry_days, 0, 21))
     || !integer(value.taper_days, 0, 21) || !integer(value.max_key_sessions_per_week, 0, 8)
-    || !range(value.building_fraction, .5, .6) || !range(value.maintenance_fraction, .3, .4) || !range(value.reentry_fraction, .4, .5)
+    || !range(value.building_fraction, .5, .8) || !range(value.maintenance_fraction, .3, .4) || !range(value.reentry_fraction, .4, .5)
     || !range(value.recovery_session_cap_min, 5, 45) || typeof value.allow_expert_fallback !== "boolean") {
     throw new Error("Проверете датите, наличното време и параметрите на профила.");
   }

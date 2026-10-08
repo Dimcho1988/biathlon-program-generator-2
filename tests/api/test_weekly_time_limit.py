@@ -7,6 +7,7 @@ import pytest
 from apps.api import training_plan_engine as engine
 from tests.api.test_management_schedule import body, high_capacity_history, run
 from tests.api.test_training_plan_engine import TODAY, NOW, reference_speed
+from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose
 
 
 def test_one_hour_limit_consumed_by_actual_sessions_is_explicit_and_removable(monkeypatch):
@@ -46,10 +47,20 @@ def test_small_limit_preserves_only_complete_minimum_doses(monkeypatch, hours, f
     assert (plan["summary"]["planned_minutes"] > 0) is fits
     assert plan["summary"]["planned_minutes"] <= hours * 60
     if hours == 1.:
-        # Recovery retains its own whole 10–30 minute dose; the former
-        # capacity-relative minimum must not erase these light sessions.
+        # Both light recovery and a readiness-scaled complete maintenance
+        # structure can fit the hour; neither may become a partial template.
         selected = [s for d in plan["days"] for s in d["sessions"]]
-        assert all(s["purpose"] == "RECOVERY" and 10 <= s["main_work_minutes"] <= 30 for s in selected)
+        for session in selected:
+            assert_readiness_dose(session)
+            evidence = session["dose_evidence"]
+            if session["purpose"] == "RECOVERY":
+                assert 10 <= session["main_work_minutes"] <= 30
+            else:
+                assert session["main_work_minutes"] >= evidence["minimum_primary_work_minutes"] - .001
+                assert evidence["applied_structure_fraction"] >= evidence["min_dose_fraction"] - .001
+        for day in plan["days"]:
+            for z in engine.COMPONENTS:
+                assert sum(s["canonical_effective_load"][z] for s in day["sessions"]) <= day["load_budget"]["components"][z]["deficit_effective"] + .005
     if not fits:
         assert any(r["code"] == "INSUFFICIENT_TIME_BUDGET" for d in plan["days"] for r in d["rejected_alternatives"])
     budget = plan["parameters"]["time_budget"]

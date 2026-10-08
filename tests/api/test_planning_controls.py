@@ -7,6 +7,7 @@ from apps.api.management_schemas import PlanningControls, CycleDirective
 from biathlon import planning_controls
 from biathlon.training_methods import resolved_methods
 from tests.api.test_training_plan_engine import Repository, TODAY, NOW, profile, reference_speed, supported_speed
+from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose
 
 
 def controls(**patch):
@@ -135,8 +136,8 @@ def test_threshold_repetitions_fit_one_shared_dose_and_discretize_down():
 
 def test_integrated_week_respects_separate_strength_days_and_covers_complementary_work(monkeypatch):
     monkeypatch.setattr(engine.model_service,'speed_view',reference_speed)
-    # Full key sessions obey intensity days; optional supporting mixed blocks
-    # have a separate day/readiness policy covered in test_adaptive_methods.
+    # Preferred key and strength days are kept when complete doses fit; missed
+    # days can be retried, and readiness scales each supported method's dose.
     p=profile(strength_enabled=True,reentry_days=0,available_minutes=[120]*7,planning_controls=controls(accent_mode='MANUAL',accents=['Z3','STR'],mesocycle_anchor=TODAY,intensity_days=[1,4],strength_days=[2,5],long_session_day=6,mixed_sessions_enabled=False))
     repo=Repository()
     # Isolate component coverage from the separate session-exposure ceiling;
@@ -149,7 +150,7 @@ def test_integrated_week_respects_separate_strength_days_and_covers_complementar
         z=d['session']['zone'];weekday=engine.date.fromisoformat(d['date']).weekday()
         if z=='STR': assert weekday in [2,5]
         if z in {'Z3','Z4','Z5'}: assert weekday in [1,4]
-        assert d['readiness_before'][z]>=90
+        assert_readiness_dose(d['session'])
     assert max(w['components']['Z3']['target_index_7_40'] for w in r['long_term']['weeks'])>1.1
     # Allocation can legitimately choose progressive or continuous work;
     # covering the qualities does not require one fixed catalogue winner.
@@ -174,7 +175,8 @@ def test_combined_aerobic_method_remains_available_with_one_shared_dose(monkeypa
     for s in mixed:
         e=s['dose_evidence']
         assert {b['zone'] for b in s['blocks'] if b['kind']=='WORK'}=={'Z1','Z2'}
-        assert .25 <= e['applied_structure_fraction'] <= e['max_dose_fraction']+.001
+        assert e['min_dose_fraction'] <= e['applied_structure_fraction'] <= e['max_dose_fraction']+.001
+        assert_readiness_dose(s)
         assert sum(b['duration_min']/ (e['capacity_minutes'] if b['zone']=='Z2' else e['secondary_capacity']['capacity_minutes']) for b in s['blocks'] if b['kind']=='WORK') == pytest.approx(e['applied_structure_fraction'], abs=.001)
         assert s['total_minutes']==pytest.approx(sum(b['duration_min'] for b in s['blocks']),abs=.002)
         assert e['combination_allocation']=='ONE_SHARED_SESSION_BUDGET_REDUCED_COMPONENT_DOSES'
@@ -186,7 +188,10 @@ def test_high_target_cannot_override_recovery_and_incomplete_history_is_unknown(
     for row in source['daily']:
         if row['date']==TODAY.isoformat() and row['zone']=='Z1':row['effective_load']=1000.
     r=engine.generate_plan(repo,'athlete',profile(planning_controls=controls(accent_mode='MANUAL',accents=['Z3'],accent_index=1.5)),start_date=TODAY+timedelta(days=1),now=NOW)
-    assert any(a['code'] in {'RECOVERY_BELOW_90','WARMUP_NOT_READY'} for d in r['days'] for a in d['rejected_alternatives'])
+    assert any(a['code'] in {'READINESS_DOSE_UNAVAILABLE','INSUFFICIENT_DOSE_BUDGET'} for d in r['days'] for a in d['rejected_alternatives'])
+    for day in r['days']:
+        for session in day['sessions']:
+            assert_readiness_dose(session)
     source['strength']['daily']=[]
     evidence=planning_controls.volume_history(source,TODAY,28)
     assert all(w['actual_minutes'] is None for w in evidence['weeks'])

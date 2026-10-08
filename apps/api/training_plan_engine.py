@@ -20,14 +20,14 @@ from biathlon.constants import COMPONENTS, fresh_parameters
 from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, equivalence_slope
 from biathlon.periodization import build_periodization, reentry_dose_active
 from biathlon.physiology import _causal_tref, effective_from_direct_vector, linear_equivalence_coefficient
-from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VERSION, catalog, resolved_methods
+from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VERSION, catalog, resolved_methods, method_family
 from biathlon import training_guidance, adaptive_methods, preliminary_capacity, planning_consistency, race_specific, dosing_curve
 from . import model_service, load_adaptation, race_duration, planning_history_estimate
 from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 
-VERSION = "training-management-v27-completed-day-coverage"
-PARAMETER_VERSION = "management-parameters-v26"
+VERSION = "training-management-v28-proportional-readiness"
+PARAMETER_VERSION = "management-parameters-v28"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -179,7 +179,9 @@ def _session_parts(session, settings, rows, day, slot_index):
             evidence = {**evidence, **evidence["paired_capacity"]}
         work = _round(sum(b["duration_min"] for b in blocks if b["kind"] == "WORK"))
         evidence.update(shared_day_work_minutes=session["main_work_minutes"], shared_day_dose=False,
+                        base_fraction=evidence.get("base_fraction", 1.)/2,
                         prescribed_work_minutes=work, requested_work_minutes=_round(part_requested),
+                        requested_primary_work_minutes=_round(part_requested),
                         fraction=part_requested/evidence["capacity_minutes"], applied_fraction=work/evidence["capacity_minutes"],
                         shared_day_structure_fraction=shared_fraction,
                         applied_structure_fraction=_round(_dose_usage(blocks, evidence, metadata.get("zone", session["zone"]))))
@@ -740,6 +742,39 @@ def _part_capacity(evidence, slot):
     return {**evidence, **(evidence.get("paired_capacity", {}) if slot == 2 else {})}
 
 
+def _nominal_fraction(method, purpose, profile, period, evidence, controls):
+    """Coach dose before Recovery, respecting approved interval work budgets."""
+    fraction = (profile.get("maintenance_fraction", .3) if purpose in {"MAINTENANCE", "RECOVERY", "SUPPORTING"}
+                else profile.get("reentry_fraction", .4) if period == "RE_ENTRY" else profile.get("building_fraction", .5))
+    if method["structure"] in {"MODEL_INTERVALS", "METABOLIC_INTERVALS"}:
+        p = method["interval_template"] if method["structure"] == "MODEL_INTERVALS" else method["interval_profile"]
+        fraction = p["total_capacity_ratio"] if purpose == "BUILDING" else min(
+            p["total_capacity_ratio"], (p["min_repetitions"]+1)*p["work_seconds"]/(60*evidence["capacity_minutes"]))
+        if purpose != "BUILDING":
+            evidence["maintenance_policy"] = "MINIMUM_PLUS_ONE_REPETITION_BEFORE_READINESS_SCALE"
+    elif method["zone"] == "STR":
+        fraction = min(1., (method["min_work_min"]+3.)/method["max_work_min"]) if purpose == "MAINTENANCE" else 1.
+    if method.get("double_threshold"):
+        fraction = 2*(controls or {}).get("double_threshold_fraction", .5)
+    elif method.get("mixed_component"):
+        fraction = .15
+    elif method.get("developmental_variant"):
+        fraction = .25
+    return fraction
+
+
+def _locked_dose_fits(session, profile, readiness):
+    policy = adaptive_methods.readiness_policy(session, profile, readiness)
+    factor = policy["dose_factor"]
+    evidence = session["dose_evidence"]
+    if factor <= 0 or "base_fraction" not in evidence:
+        return False
+    primary = sum(b["duration_min"] for b in session["blocks"] if b["kind"] == "WORK" and b["zone"] == session["zone"])
+    base_max = evidence.get("base_max_dose_fraction", .8)
+    return (primary <= evidence["capacity_minutes"]*evidence["base_fraction"]*factor + .005
+            and _dose_usage(session["blocks"], evidence, session["zone"]) <= base_max*factor + .005)
+
+
 def _minimum_work(method, evidence, settings):
     """Smallest complete structure meeting the relative minimum on a .5-min grid.
 
@@ -753,7 +788,7 @@ def _minimum_work(method, evidence, settings):
     for half_minutes in range(math.ceil(method['min_work_min']*2), math.floor(method['max_work_min']*2)+1):
         work = half_minutes / 2
         blocks = _blocks(method, work, evidence, settings)
-        minimum = method.get("minimum_fraction", MIN_AEROBIC_DOSE_FRACTION)
+        minimum = method.get("minimum_fraction", MIN_AEROBIC_DOSE_FRACTION) * evidence.get("readiness_dose_factor", 1.)
         if method.get("mixed_component") or method.get("developmental_variant"):
             usage = sum(b["duration_min"] for b in blocks if b["kind"] == "WORK" and b["zone"] == method["zone"])/evidence["capacity_minutes"]
             if blocks and usage + 1e-9 >= minimum:
@@ -1145,12 +1180,19 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 continue
             if z in {"Z3", "Z4", "Z5"} and slot >= (2 if d.weekday() in double_days and count >= 2 else 1):
                 continue
-            if z == "STR" and (not profile.get("strength_enabled") or preferences.get("strength_days") and d.weekday() not in preferences["strength_days"]):
+            if z == "STR" and not profile.get("strength_enabled"):
                 continue
             opportunities[z].append((d, slot))
     key_schedule_changes = []
+    def key_day_due(d, previous):
+        if not key_days:
+            return True
+        first = max(start_date, previous + timedelta(days=1)) if previous else start_date
+        return any((first + timedelta(days=i)).weekday() in key_days
+                   for i in range(max(0, (d-first).days+1)))
+
     def reserve_remaining_keys(after):
-        """Retry unmet key work on the next feasible date, keeping user days."""
+        """Preferred days establish a rhythm; missed work moves forward."""
         if limited or blocked:
             return
         previous = last_key_day
@@ -1163,8 +1205,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             period, taper = _phase(periodization,d)
             if period not in {"GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"} or taper:
                 continue
-            if (available[d.weekday()] < 40 or not slot_counts[d] or key_days and d.weekday() not in key_days
-                    or controls and preferences.get("long_session_day") == d.weekday()
+            if (available[d.weekday()] < 25 or not slot_counts[d] or not key_day_due(d, previous)
                     or previous and (d-previous).days < 2):
                 continue
             if any(e["event_type"] in {"MAIN_RACE","CONTROL_RACE","TEST","UNAVAILABLE"}
@@ -1176,13 +1217,14 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             future_goals = goal_windows[d]
             future_budget = _budgets(forecast_rows,d,actual_rows=rows,targets=future_goals)
             future_q = load_progression.remaining_q(source,result_days,d,future_goals)
-            if forecast["Z1"] < 90 or future_budget["Z1"]["deficit_effective"] <= 0:
+            if forecast["Z1"] <= 0 or future_budget["Z1"]["deficit_effective"] <= 0:
                 continue
-            if not any(forecast[z] >= 90 and future_budget[z]["deficit_effective"] > 0
+            if not any(forecast[z] > 0 and future_budget[z]["deficit_effective"] > 0
                        and future_q.get(z,1.) > 0 for z in ("Z3","Z4","Z5")):
                 continue
             needed = 2 if d.weekday() in double_days and slot_counts[d] >= 2 else 1
-            if reserved+needed > max(0,key_limit-key_sessions):
+            needed = min(needed, max(0, key_limit-key_sessions-reserved))
+            if not needed:
                 continue
             future.append(d)
             reserved += needed
@@ -1190,7 +1232,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         old = [d for d in key_slots if d > after]
         if future != old:
             key_schedule_changes.append({"after":after.isoformat(),"from":[d.isoformat() for d in old],
-                "to":[d.isoformat() for d in future],"reason":"CURRENT_RECOVERY_AND_ROLLING_BUDGET"})
+                "to":[d.isoformat() for d in future],"reason":"PREFERRED_RHYTHM_WITH_ADAPTIVE_CATCHUP"})
         key_slots[:] = retained_dates+future
         for z in ("Z3","Z4","Z5"):
             opportunities[z] = [(d,s) for d,s,count in schedule if count
@@ -1285,15 +1327,14 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     effective[z] += load[z]
             total = sum(v["total_minutes"] for v in preserved)
             below_minimum = any(s["zone"] != "STR" and
-                _dose_usage(s["blocks"], s["dose_evidence"], s["zone"]) + 1e-9 < s["dose_evidence"].get("min_dose_fraction", MIN_AEROBIC_DOSE_FRACTION)
+                _dose_usage(s["blocks"], s["dose_evidence"], s["zone"]) + 1e-9 < (s["dose_evidence"].get("min_dose_fraction", MIN_AEROBIC_DOSE_FRACTION) or 0.)
                 for s in preserved)
             if below_minimum:
                 item.update(status="REVIEW_REQUIRED", explanation="Днешната утвърдена задача е под минималната относителна доза. Нужен е преглед; не се запазва автоматично кратката сесия.")
                 item["rejected_alternatives"].append({"method_id": "LOCKED_SESSION", "code": "MINIMUM_CAPACITY_DOSE", "reason": item["explanation"]})
                 activation_eligible = False
             elif len(preserved) > slots_today or sessions + len(preserved) > session_limit or any(
-                ready[s["zone"]] < adaptive_methods.readiness_policy(s, profile, ready)["minimum_percent"]
-                or ready["Z1"] < 90 for s in preserved) or any(effective[z] > budgets[z]["deficit_effective"] + .001 for z in COMPONENTS) or total > min(remaining, day_available) + .001:
+                not _locked_dose_fits(s, profile, ready) for s in preserved) or any(effective[z] > budgets[z]["deficit_effective"] + .001 for z in COMPONENTS) or total > min(remaining, day_available) + .001:
                 item.update(status="REVIEW_REQUIRED", explanation="Новите данни изискват преглед на днешните утвърдени задачи.")
                 activation_eligible = False
             else:
@@ -1316,6 +1357,156 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         elif sessions >= session_limit:
             item["explanation"] = "Достигнат е предпочитаният брой сесии за седемдневния проект."
         else:
+            # Protect complete future quality doses before optional work uses
+            # their preparation/cascade budget. These are local reservations,
+            # never fictitious executed history or additional component goals.
+            future_options = []
+            future_strength_dates = sorted({
+                d for d, _, count in schedule if d > day and count
+                and profile.get("strength_enabled") and strength_sessions < (controls or {}).get("max_strength_sessions", 2)
+                and d.weekday() in preferences.get("strength_days", [])
+                and (d not in key_slots or count >= 2)
+                and (not last_strength_day or (d-last_strength_day).days >= 2)})
+            future_tasks = sorted([(d, "KEY") for d in key_slots if d > day] +
+                [(d, "STRENGTH") for d in future_strength_dates[:max(0, (controls or {}).get("max_strength_sessions", 2)-strength_sessions)]])
+            reserved_double_dates = set()
+            for future_day, future_kind in future_tasks:
+                if future_kind == "STRENGTH" and future_day in reserved_double_dates and slot_counts[future_day] < 3:
+                    continue
+                future_period, future_taper = _phase(periodization, future_day)
+                if future_taper or any(e["event_type"] in {"MAIN_RACE", "CONTROL_RACE", "TEST", "UNAVAILABLE"}
+                    and str(e["start_date"]) <= future_day.isoformat() <= str(e["end_date"]) for e in events):
+                    continue
+                forecast_ready = {r["zone"]: r["readiness_percent"] for r in recovery_v2.simulate(
+                    forecast_rows, configs["zones"], target=future_day, include_details=False)["current"]}
+                options = []
+                for future_sport in training_sports:
+                    future_candidates = [(future_sport, m) for m in methods if future_sport in m["sports"]]
+                    future_state = day_goals[future_day][2]
+                    if (future_kind == "KEY" and future_day.weekday() in double_days and slot_counts[future_day] >= 2
+                        and (not future_state or future_state["kind"] != "RECOVERY")
+                        and key_limit-key_sessions >= 2
+                        and (profile.get("age_years") or 0) >= 18 and (profile.get("training_experience_years") or 0) >= 1):
+                        future_candidates = adaptive_methods.threshold_pairs(future_candidates, (controls or {}).get("double_threshold_components", ["Z3"])) + future_candidates
+                    for _, future_method in future_candidates:
+                        fz = future_method["zone"]
+                        if (fz not in ({"Z3", "Z4", "Z5"} if future_kind == "KEY" else {"STR"})
+                            or future_method["purpose"] in {"RECOVERY", "SUPPORTING"}
+                            or future_sport not in future_method["sports"] or future_period not in future_method["periods"]
+                            or future_method["structure"] not in {"CONTINUOUS", "TWO_REPETITIONS", "THRESHOLD_REPETITIONS", "THRESHOLD_LONG", "THRESHOLD_SHORT", "MODEL_INTERVALS", "METABOLIC_INTERVALS", "STRENGTH_CIRCUIT"}):
+                            continue
+                        fm = deepcopy(future_method)
+                        if fm["structure"] == "MODEL_INTERVALS" and not fm.get("developmental_variant"):
+                            exposures = {a["date"] for a in measured_source.get("activities", []) if a.get("sport") == future_sport
+                                and a.get("quality_status", "valid") == "valid" and a["date"] in history_policy["complete_dates"]
+                                and any(r["zone"] == fz and r.get("raw_time_min", 0) >= 1 for r in a.get("zones", []))}
+                            if len(exposures) < 2:
+                                fm = adaptive_methods.short_variant(fm)
+                        fm["actual_sport"] = future_sport
+                        threshold_choice = (controls or {}).get("threshold_method", "AUTO")
+                        if fz == "Z3" and not fm.get("double_threshold") and threshold_choice != "AUTO" and ((threshold_choice == "CONTINUOUS") != (fm["structure"] == "CONTINUOUS")):
+                            continue
+                        if controls and fz != "STR" and not by_sport_minutes.get(future_sport, 0.):
+                            continue
+                        cap = capacity_for(fm, settings, speed_by_sport[future_sport], context_by_sport[future_sport], today,
+                            profile.get("allow_expert_fallback", True), use_model_prior=(controls or {}).get("capacity_policy") == "MODEL_WITH_PRIOR")
+                        if cap is None:
+                            continue
+                        if fm.get("developmental_variant"):
+                            cap["dose_capacity_basis"] = "INDEPENDENT_CONTINUOUS_TMAX"
+                        if fm.get("paired_method"):
+                            other = fm["paired_method"]
+                            paired = capacity_for(other, settings, speed_by_sport[future_sport], context_by_sport[future_sport], today,
+                                profile.get("allow_expert_fallback", True), use_model_prior=(controls or {}).get("capacity_policy") == "MODEL_WITH_PRIOR")
+                            if paired is None or future_period not in other["periods"]:
+                                continue
+                            cap["dose_capacity_basis"] = "INDEPENDENT_CONTINUOUS_TMAX"
+                            cap["paired_capacity"] = {**paired, "zone": other["zone"], "dose_capacity_basis": "INDEPENDENT_CONTINUOUS_TMAX"}
+                            fm["min_work_min"] = math.ceil(4*max(fm["single_min_work_min"], other["min_work_min"]*cap["capacity_minutes"]/paired["capacity_minutes"]))/2
+                        cap["readiness_dose_factor"] = adaptive_methods.readiness_policy(fm, profile, forecast_ready)["dose_factor"]
+                        minimum = _minimum_work(fm, cap, settings)
+                        if minimum is None or cap["readiness_dose_factor"] <= 0:
+                            continue
+                        future_state = day_goals[future_day][2]
+                        future_purpose = fm["purpose"]
+                        if future_purpose == "BUILDING" and (fz not in day_goals[future_day][1]
+                            or future_state and future_state["kind"] == "RECOVERY"):
+                            future_purpose = "MAINTENANCE"
+                        if fm.get("double_threshold"):
+                            future_purpose = "BUILDING"
+                        nominal = _nominal_fraction(fm, future_purpose, profile, future_period, cap, controls)
+                        if minimum > cap["capacity_minutes"]*nominal*cap["readiness_dose_factor"] + .001:
+                            continue
+                        future_blocks = _blocks(fm, minimum, cap, settings)
+                        ceiling = (progression or {}).get("config", {}).get("max_dose_fraction", .8)
+                        if future_state and future_state["kind"] == "RECOVERY":
+                            ceiling = min(ceiling, profile.get("maintenance_fraction", .3))
+                        if fm.get("double_threshold"):
+                            ceiling = (controls or {}).get("double_threshold_fraction", .5)
+                        if fm.get("developmental_variant"):
+                            ceiling = min(ceiling, .25)
+                        if _dose_usage(future_blocks, cap, fz) > ceiling*cap["readiness_dose_factor"] + .001:
+                            continue
+                        if not future_blocks or sum(b["duration_min"] for b in future_blocks) > available[future_day.weekday()]:
+                            continue
+                        fq, fe, _ = _candidate_load(future_blocks, settings, forecast_rows, future_day)
+                        options.append({"q": fq, "e": fe, "zone": fz, "double": bool(fm.get("double_threshold"))})
+                if options:
+                    # Reserve an executable preferred pair as one bundle. If
+                    # its real budgets cannot fit, single sessions stay valid.
+                    baseline_budget = _budgets(forecast_rows, future_day, actual_rows=rows, targets=goal_windows[future_day])
+                    baseline_q = load_progression.remaining_q(source, result_days, future_day, goal_windows[future_day])
+                    pairs = [option for option in options if option["double"]
+                        and all(option["e"][z] <= baseline_budget[z]["deficit_effective"] + .001 for z in COMPONENTS)
+                        and all(option["q"][z] <= value + .001 for z, value in baseline_q.items())
+                        and (period_objectives is None or all(value <= (period_objectives[z]["remaining"] or 0.) + .005
+                            for z, value in objective_load(option["q"], option["e"]).items()))]
+                    if pairs:
+                        options = pairs
+                        reserved_double_dates.add(future_day)
+                    future_options.append((future_day, future_kind, sorted(options, key=lambda option: (option["e"]["Z1"], sum(option["e"].values())))))
+
+            def reserved_future_work(candidate_q=None, candidate_e=None, required_dates=None, candidate_primary=None):
+                reserved_rows = forecast_rows
+                reserved_days = list(result_days)
+                objective_spent = {z: 0. for z in COMPONENTS}
+                if candidate_e is not None:
+                    reserved_rows = _add_forecast_session(reserved_rows, day, candidate_e)
+                    reserved_days.append({"date": key, "status": "TRAINING", "sessions": [{"direct_equivalent_minutes": candidate_q}]})
+                    objective_spent.update(objective_load(candidate_q, candidate_e))
+                selected = set()
+                for future_day, future_kind, options in future_options:
+                    task = (future_day, future_kind)
+                    if required_dates is not None and task not in required_dates:
+                        continue
+                    # Slots are opportunities, not a requirement to add another
+                    # dose after the current quality has covered that objective.
+                    primary_options = [option for option in options if option["zone"] == candidate_primary]
+                    if primary_options:
+                        residual = ((period_objectives[candidate_primary]["remaining"] or 0.) - objective_spent[candidate_primary]
+                            if period_objectives else budgets[candidate_primary]["deficit_effective"] - objective_spent[candidate_primary])
+                        if residual < min(objective_load(option["q"], option["e"])[candidate_primary] for option in primary_options) - .005:
+                            continue
+                    future_budget = _budgets(reserved_rows, future_day, actual_rows=rows, targets=goal_windows[future_day])
+                    future_q = load_progression.remaining_q(source, reserved_days, future_day, goal_windows[future_day])
+                    chosen = next((option for option in options
+                        if all(option["e"][z] <= future_budget[z]["deficit_effective"] + .001 for z in COMPONENTS)
+                        and all(option["q"][z] <= v + .001 for z, v in future_q.items())
+                        and (period_objectives is None or all(value + objective_spent[z] <= (period_objectives[z]["remaining"] or 0.) + .005
+                            for z, value in objective_load(option["q"], option["e"]).items()))), None)
+                    if chosen is None:
+                        if required_dates is not None:
+                            return None
+                        continue
+                    selected.add(task)
+                    reserved_rows = _add_forecast_session(reserved_rows, future_day, chosen["e"])
+                    reserved_days.append({"date": future_day.isoformat(), "status": "TRAINING",
+                        "sessions": [{"direct_equivalent_minutes": chosen["q"]}]})
+                    for z, value in objective_load(chosen["q"], chosen["e"]).items():
+                        objective_spent[z] += value
+                return selected
+
+            reservable_dates = reserved_future_work() if not limited else set()
             choices = []
             candidates = [(m_sport, m) for m_sport in training_sports for m in methods
                           if m_sport in m["sports"] and (m["zone"] != "STR" or m_sport == primary_sport)]
@@ -1365,8 +1556,6 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     rejection = ("NMS_DAY_PREFERENCE", "Кратките ускорения са включени само в избраните дни и в първата подходяща сесия.")
                 elif cycle_state and controls["accent_mode"] == "AUTO" and not cycle_state["explicit"] and period in {"PRECOMPETITION", "COMPETITION"} and method["purpose"] == "BUILDING" and not is_strength and z not in race_development_zones:
                     rejection = ("RACE_COMPONENT_PRIORITY", "Развиващата специална работа следва състезателните акценти за периода; останалите компоненти получават поддържане.")
-                elif cycle_state and cycle_state["kind"] == "RECOVERY" and z in {"Z3", "Z4", "Z5", "STR"} and z not in selected_accents:
-                    rejection = ("RECOVERY_COMPONENT_DELOAD", "Компонентът се разтоварва; допълваща работа е допустима само за избрания по-слабо натоварен компонент.")
                 elif supporting and (taper or slot_index > 0 or (not mixed and (not progression or not key_slots or day <= key_slots[-1]))):
                     rejection = ("SUPPORT_AFTER_KEY_WORK", "Поддържащият остатък се разпределя след основните задачи и само при свободен бюджет и готовност.")
                 elif limited and method["purpose"] != "RECOVERY":
@@ -1375,34 +1564,20 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     rejection = ("NO_ACTUAL_MODE_EXPOSURE", "За това средство няма скорошна история. Допуска се само ограничено леко въвеждане, независимо от опита в други спортове.")
                 elif is_threshold and not method.get("double_threshold") and threshold_choice != "AUTO" and ((threshold_choice == "CONTINUOUS") != (method["structure"] == "CONTINUOUS")):
                     rejection = ("THRESHOLD_METHOD_PREFERENCE", "Избран е друг вид прагова тренировка в профила.")
-                elif is_key and day.weekday() in set(threshold_days + double_days) and not is_threshold:
-                    rejection = ("THRESHOLD_DAY_RESERVED", "Този ден е избран за прагова работа; метод за аеробна мощност не я замества.")
-                elif is_threshold and threshold_days and day.weekday() not in set(threshold_days + double_days):
-                    rejection = ("THRESHOLD_DAY_PREFERENCE", "Денят не е избран за прагова работа.")
                 elif is_strength and (strength_sessions >= (controls or {}).get("max_strength_sessions", 2) or (last_strength_day and (day-last_strength_day).days < 2)):
                     rejection = ("STRENGTH_SESSION_LIMIT", "Достигнат е силовият лимит или липсва достатъчно разстояние между силовите сесии.")
-                elif is_strength and preferences.get("strength_days") and day.weekday() not in preferences["strength_days"]:
-                    rejection = ("STRENGTH_DAY_PREFERENCE", "Денят не е избран за силова работа.")
                 elif is_key and (key_sessions >= key_limit or (last_key_day and (day - last_key_day).days < 2)):
                     rejection = ("KEY_SESSION_LIMIT", "Достигнат е лимитът или липсва достатъчно разстояние между ключови сесии.")
-                elif is_key and key_days and day.weekday() not in key_days:
-                    rejection = ("INTENSITY_DAY_PREFERENCE", "Денят не е избран за интензивна работа.")
                 elif is_key and day not in key_slots:
                     rejection = ("KEY_SLOT_RESERVED", "Ключовите сесии са разположени първи в подходящите дни; този ден остава за лека работа или почивка.")
                 elif method["structure"] == "THRESHOLD_HIGH" and not 0 <= (today - date.fromisoformat(method["interval_profile"]["assessed_on"])).days <= 42:
                     rejection = ("STALE_EFFORT_CAPACITY", "Индивидуалната опора за високото усилие трябва да се обнови.")
-                elif method["structure"] == "THRESHOLD_HIGH" and ready[method["interval_profile"]["zone"]] < 90.:
-                    rejection = ("HIGH_BLOCK_NOT_READY", "Високият компонент на комбинацията не е възстановен.")
-                elif method.get("paired_method") and ready[method["paired_method"]["zone"]] < 90.:
-                    rejection = ("PAIRED_THRESHOLD_NOT_READY", "Вторият компонент на двойния праг не е възстановен.")
-                elif ready[z] < readiness_rule["minimum_percent"]:
-                    rejection = ("MIXED_RECOVERY_BELOW_FLOOR" if mixed else "RECOVERY_BELOW_90", f"Готовността за {z} е {_round(ready[z])}%, под зададените {readiness_rule['minimum_percent']:g}% за този метод.")
+                elif readiness_rule["dose_factor"] <= 0:
+                    rejection = ("READINESS_DOSE_UNAVAILABLE", "Няма положителна известна готовност за всички компоненти на метода.")
                 elif not limited and budgets[z]["target_weekly_effective"] <= 0:
                     rejection = ("NO_COMPONENT_TARGET", "Липсва установена компонентна база. Въвеждането на нов развиващ товар изисква отделна треньорска цел.")
                 elif allocation is not None and allocation[z] <= .001:
                     rejection = ("WEEKLY_NEED_COVERED", "Не остава разпределен товар за този компонент в седмицата. Свободната сесия не се запълва задължително.")
-                elif z != "Z1" and ready["Z1"] < 90.:
-                    rejection = ("WARMUP_NOT_READY", "Не е възстановен компонентът за загрявката и разпускането.")
                 if rejection:
                     item["rejected_alternatives"].append({"method_id": method["id"], "code": rejection[0], "reason": rejection[1]})
                     continue
@@ -1414,6 +1589,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     item["rejected_alternatives"].append({"method_id": method["id"], "code": "CAPACITY_UNAVAILABLE", "reason": reason})
                     continue
                 evidence["readiness_policy"] = readiness_rule
+                evidence["readiness_dose_factor"] = readiness_rule["dose_factor"]
                 if method.get("developmental_variant") or mixed:
                     evidence["dose_capacity_basis"] = "INDEPENDENT_CONTINUOUS_TMAX"
                 if learned_intensity:
@@ -1462,24 +1638,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 background_development = bool(cycle_state and cycle_state.get("background_development") and mesocycle_focus.growth_weight(cycle_state, z) > 0)
                 if purpose == "BUILDING" and (z not in selected_accents and not endurance_allocation and not background_development or taper or slot_index > 0 or cycle_state and cycle_state["kind"] == "RECOVERY"):
                     purpose = "MAINTENANCE"
-                fraction = profile.get("maintenance_fraction", .3) if purpose in {"MAINTENANCE", "RECOVERY", "SUPPORTING"} else profile.get("reentry_fraction", .4) if period == "RE_ENTRY" else profile.get("building_fraction", .5)
-                if method["structure"] == "MODEL_INTERVALS":
-                    p = method["interval_template"]
-                    fraction = p["total_capacity_ratio"] if purpose == "BUILDING" else p["min_repetitions"] * p["work_seconds"] / (60 * evidence["capacity_minutes"])
-                elif method["structure"] == "METABOLIC_INTERVALS":
-                    p = method["interval_profile"]
-                    # Maintenance selects the minimum complete variant from
-                    # the same approved profile; no second role multiplier.
-                    fraction = p["total_capacity_ratio"] if purpose == "BUILDING" else p["min_repetitions"] * p["work_seconds"] / (60 * evidence["capacity_minutes"])
-                elif z == "STR":
-                    fraction = method["min_work_min"] / method["max_work_min"] if purpose == "MAINTENANCE" else 1.
                 if method.get("double_threshold"):
                     purpose = "BUILDING"
-                    fraction = 2*(controls or {}).get("double_threshold_fraction", .5)
-                elif mixed:
-                    fraction = .15*readiness_rule["dose_factor"]
-                elif method.get("developmental_variant"):
-                    fraction = .25
+                fraction = _nominal_fraction(method, purpose, profile, period, evidence, controls)
                 requested = evidence["capacity_minutes"] * fraction
                 dose_ceiling = (progression or {}).get("config", {}).get("max_dose_fraction", .8)
                 if (progression and allocation and not limited and not taper and session_limit <= 3 and purpose == "BUILDING"
@@ -1507,14 +1668,20 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                                     combination_high_work_cap=high_capacity["capacity_minutes"] * p["total_capacity_ratio"] * .5,
                                     secondary_capacity={**high_capacity,
                                                         "zone": p["zone"], "fraction": p["total_capacity_ratio"] * .5})
+                base_fraction = fraction
+                fraction *= readiness_rule["dose_factor"]
+                requested *= readiness_rule["dose_factor"]
+                if method["structure"] == "THRESHOLD_HIGH":
+                    evidence["combination_high_work_cap"] *= readiness_rule["dose_factor"]
+                    evidence["secondary_capacity"]["fraction"] *= readiness_rule["dose_factor"]
+                    evidence["primary_requested_work"] = requested
                 minimum_work = _minimum_work(method, evidence, settings)
                 if minimum_work is None:
                     item["rejected_alternatives"].append({"method_id": method["id"], "code": "MINIMUM_CAPACITY_DOSE",
-                        "reason": f"Методният максимум не допуска минималните {method.get('minimum_fraction', MIN_AEROBIC_DOSE_FRACTION)*100:g}% от капацитета за този вариант."})
+                        "reason": f"Методният максимум не допуска минималните {method.get('minimum_fraction', MIN_AEROBIC_DOSE_FRACTION)*readiness_rule['dose_factor']*100:g}% от капацитета за този вариант."})
                     continue
                 method["min_work_min"] = minimum_work
-                requested = max(requested, minimum_work)
-                evidence.update(min_dose_fraction=method.get("minimum_fraction", MIN_AEROBIC_DOSE_FRACTION) if z != "STR" and purpose != "RECOVERY" else None,
+                evidence.update(min_dose_fraction=method.get("minimum_fraction", MIN_AEROBIC_DOSE_FRACTION)*readiness_rule["dose_factor"] if z != "STR" and purpose != "RECOVERY" else None,
                                 minimum_primary_work_minutes=minimum_work,
                                 minimum_dose_scope="METHOD_ABSOLUTE" if purpose == "RECOVERY" else "EACH_THRESHOLD_SESSION" if method.get("double_threshold") else "SUPPLEMENTARY_COMPONENT" if mixed else "SESSION")
                 event_specificity = training_targets.specificity(method, profile.get("race_duration_min"), period)
@@ -1586,6 +1753,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     evidence["dose_capacity_basis"] = "INDEPENDENT_CONTINUOUS_TMAX"
                 if reentry_dose_active(periodization, day):
                     max_usage = min(max_usage, profile.get("reentry_fraction", .4))
+                evidence["base_max_dose_fraction"] = max_usage
+                max_usage *= readiness_rule["dose_factor"]
+                evidence["maximum_dose_fraction"] = max_usage
                 while blocks and _dose_usage(blocks, evidence, z) > max_usage + 1e-6 and work >= method["min_work_min"]:
                     work -= .5
                     blocks = _blocks(method, work, evidence, settings) if work >= method["min_work_min"] else []
@@ -1679,30 +1849,28 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 after_rows = _add_forecast_session(forecast_rows, day, effective)
                 near_races = [e for e in events if e["event_type"] in {"MAIN_RACE", "CONTROL_RACE"}
                               and key < str(e["start_date"]) <= (day + timedelta(days=7)).isoformat()]
-                def recovery_conflict(candidate_rows):
+                def recovery_conflict(candidate_rows, candidate_q, candidate_e):
                     for race in near_races:
                         forecast = recovery_v2.simulate(candidate_rows, configs["zones"], target=date.fromisoformat(str(race["start_date"])), include_details=False)
                         if any(r["readiness_percent"] < 90. for r in forecast["current"] if r["zone"] != "STR"):
                             return "RACE_RECOVERY_CONFLICT", "Прогнозното възстановяване след тази доза не достига 90% преди близък старт."
-                    if not is_key and any(
-                        any(r["readiness_percent"] < 90 for r in recovery_v2.simulate(candidate_rows, configs["zones"], target=d, include_details=False)["current"] if r["zone"] in {"Z1", *selected_accents})
-                        for d in key_slots if day < d <= day + timedelta(days=2)
-                    ):
-                        return "RESERVE_KEY_SESSION_RECOVERY", "Леката добавка би затруднила готовността за предстоящата ключова сесия."
+                    if reservable_dates and reserved_future_work(candidate_q, candidate_e, reservable_dates,
+                        candidate_primary=z if is_key or is_strength else None) is None:
+                        return "RESERVE_FUTURE_QUALITY_BUDGET", "Дозата използва необходимия Q/7–40 бюджет за минимална цяла бъдеща ключова или силова задача, включително загрявката и каскадния товар."
                     return None
-                conflict = recovery_conflict(after_rows)
-                if conflict and allocation is not None:
+                conflict = recovery_conflict(after_rows, direct, effective)
+                if conflict:
                     # A large optional dose failing a future readiness check
                     # does not mean its minimum complete variant must fail.
                     minimum_blocks = _blocks(method, method["min_work_min"], evidence, settings)
-                    _, minimum_load, _ = candidate_load(minimum_blocks)
-                    if minimum_blocks and not recovery_conflict(_add_forecast_session(forecast_rows, day, minimum_load)):
+                    minimum_q, minimum_load, _ = candidate_load(minimum_blocks)
+                    if minimum_blocks and not recovery_conflict(_add_forecast_session(forecast_rows, day, minimum_load), minimum_q, minimum_load):
                         lo, hi = method["min_work_min"], work
                         while hi-lo > .25:
                             midpoint = (lo+hi)/2
                             trial = _blocks(method, midpoint, evidence, settings)
-                            _, trial_load, _ = candidate_load(trial)
-                            if trial and not recovery_conflict(_add_forecast_session(forecast_rows, day, trial_load)):
+                            trial_q, trial_load, _ = candidate_load(trial)
+                            if trial and not recovery_conflict(_add_forecast_session(forecast_rows, day, trial_load), trial_q, trial_load):
                                 lo = midpoint
                             else:
                                 hi = midpoint
@@ -1710,24 +1878,24 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         blocks = _blocks(method, work, evidence, settings)
                         direct, effective, technical = candidate_load(blocks)
                         after_rows = _add_forecast_session(forecast_rows, day, effective)
-                        conflict = recovery_conflict(after_rows)
-                        limits.append({"code": "RECOVERY_RESERVATION_WORK_CAP", "limit_minutes": _round(work)})
+                        conflict = recovery_conflict(after_rows, direct, effective)
+                        limits.append({"code": "FUTURE_QUALITY_RESERVATION_WORK_CAP", "limit_minutes": _round(work)})
                 if conflict:
                     item["rejected_alternatives"].append({"method_id": method["id"], "code": conflict[0], "reason": conflict[1]})
                     continue
                 after = recovery_v2.simulate(after_rows, configs["zones"], target=day, include_details=False)
                 total = sum(b["duration_min"] for b in blocks)
                 actual_work = sum(b["duration_min"] for b in blocks if b["kind"] == "WORK")
-                evidence.update(fraction=fraction, requested_work_minutes=_round(requested * (1+evidence["easy_to_primary_ratio"] if mixed else 1) + evidence.get("combination_high_work_cap", 0.)), prescribed_work_minutes=_round(actual_work),
+                evidence.update(base_fraction=base_fraction, fraction=fraction, requested_work_minutes=_round(requested * (1+evidence["easy_to_primary_ratio"] if mixed else 1) + evidence.get("combination_high_work_cap", 0.)), prescribed_work_minutes=_round(actual_work),
                                 applied_structure_fraction=_round(_dose_usage(blocks, evidence, z)),
                                 requested_primary_work_minutes=_round(requested),
                                 primary_work_budget_minutes=_round(work), applied_fraction=_round(work / evidence["capacity_minutes"]), dose_reduced=work + .01 < requested,
                                 limits=limits, technical_spill_reference={z: _round(v) for z, v in technical.items()},
                                 technical_spill_reference_role="CANONICAL_E_ONLY_NOT_DOSE_CAPACITY",
                                 source_method_id=method["source_id"], source_method_version=method["source_version"],
-                                explanation="Капацитетът е от индивидуалната крива, когато целта е подкрепена от тестове и ТИ; иначе от видимата експертна референция. Делът на метода и дневният/седмичният бюджет ограничават работата. Recovery е отделна проверка, а не множител 0,90.")
+                                explanation="Капацитетът е от индивидуалната крива, когато целта е подкрепена от тестове и ТИ; иначе от видимата експертна референция. Делът на метода и дневният/седмичният бюджет ограничават работата. Делът на дозата се умножава веднъж по най-ниската готовност на участващите компоненти; зададеното усилие се запазва.")
                 if method["structure"] == "MODEL_INTERVALS":
-                    evidence["explanation"] = "Метаболитният профил задава общия работен бюджет, повторенията, паузите и резерв от две отсечки. Процентите за Z1–Z3 не се прилагат втори път. Сумарната работа може да надхвърли непрекъснатата устойчивост само в границите на този профил. Поддържането използва минималния цял вариант. Числата са видими начални треньорски настройки; 7/40 и Recovery могат да намалят дозата или да отложат сесията."
+                    evidence["explanation"] = "Метаболитният профил задава общия работен бюджет, повторенията, паузите и резерв от две отсечки. Процентите за Z1–Z3 не се прилагат втори път. Сумарната работа може да надхвърли непрекъснатата устойчивост само в границите на този профил. Поддържащата базова доза допуска едно повторение над минималния цял вариант преди намаляване според готовността. Числата са видими начални треньорски настройки; 7/40 и Recovery могат да намалят дозата или да отложат сесията."
                 elif method["structure"] == "METABOLIC_INTERVALS":
                     evidence["explanation"] = "Устойчивостта е индивидуално зададена за описаното усилие и средство. Цели повторения и активни паузи използват общия методен бюджет. Пулсът е наблюдение; не определя усилието или дозата. Прогнозният приравнен товар използва горната зонова референция и ще бъде заменен с реалното изпълнение."
                 elif z == "STR":
@@ -1745,7 +1913,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         "Общите Q/7–40 и времеви бюджети могат да намалят двете дози. Втората сесия се изпълнява само при запазени техника, поносимост и контрол на усилието.")
                 if mixed:
                     evidence["explanation"] = (f"Допълваща работа в {z} след 15 мин загрявка и упражнения, следвана от леката част. "
-                        f"Готовност {ready[z]:.1f}%, треньорски минимум {readiness_rule['minimum_percent']:g}%; дозата намалява под 90%. "
+                        f"Готовност {ready[z]:.1f}%, общ множител на дозата {readiness_rule['dose_factor']:.3f}. "
                         "Краткият блок използва само остатъка по Q/7–40. Z1, общата доза и готовността за следващите ключови задачи се проверяват отделно.")
                 elif method.get("developmental_variant"):
                     evidence["explanation"] += " Приложен е кратък въвеждащ вариант според възрастта, опита или експозицията, с по-дълги почивки и до 25% от непрекъснатия капацитет."
@@ -1754,11 +1922,12 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 elif purpose == "RECOVERY":
                     evidence["explanation"] += " Възстановителната задача използва абсолютния минимум на метода и ограниченията на Recovery; минимумът 25% за развиваща/поддържаща работа не се прилага."
                 elif z != "STR":
-                    evidence["explanation"] += f" Дозовият дял е от {method.get('minimum_fraction', MIN_AEROBIC_DOSE_FRACTION)*100:g}% до {max_usage*100:g}% от съответния капацитет."
+                    evidence["explanation"] += f" Дозовият дял е от {method.get('minimum_fraction', MIN_AEROBIC_DOSE_FRACTION)*readiness_rule['dose_factor']*100:g}% до {max_usage*100:g}% от съответния капацитет."
+                evidence["explanation"] += f" Начален дял {base_fraction*100:g}%, множител от готовността {readiness_rule['dose_factor']:.3f}, намален дял {fraction*100:g}%. Целите повторения и подготовката се запазват."
                 normalized_deficit = budgets[z]["deficit_effective"] / max(1., budgets[z]["target_weekly_effective"])
                 priority_weight = mesocycle_focus.growth_weight(cycle_state, z) if cycle_state and cycle_state.get("component_indices") else float(z in selected_accents)
                 score = (2. * planning_allocation.coverage(objective_load(direct, effective), allocation, selected_accents)
-                         if allocation is not None else normalized_deficit) + priority_weight - 4. * stranded_fraction
+                         if allocation is not None else normalized_deficit) + priority_weight - 20. * stranded_fraction
                 if period in {"PRECOMPETITION", "COMPETITION"} and sport == profile.get("actual_sport"):
                     score += .25
                 # Cover qualities over actual execution plus this proposed
@@ -1777,7 +1946,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     score += 1.5
                 evidence["selection"] = {"accent": z in selected_accents, "role": purpose,
                                          "days_since_component_work": since, "proposed_component_days": len(proposed_dates),
-                                         "maintenance_priority": maintenance_need}
+                                         "maintenance_priority": maintenance_need, "stranded_fraction": stranded_fraction}
                 if allocation is not None:
                     evidence["selection"].update(component_allocation={k: _round(v) for k, v in allocation.items()},
                                                    coverage_score=_round(planning_allocation.coverage(objective_load(direct, effective), allocation, selected_accents)),
@@ -1800,8 +1969,16 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     score += 1. if method["race_specific"]["role"] == "RACE" else .5
                 if method["structure"] in {"ALTERNATING", "CRUISE_ALTERNATING", "AEROBIC_STRENGTH", "THRESHOLD_HIGH"}:
                     score += .15
-                if any(d.get("session", {}).get("method_id") == method["id"] for d in result_days if d.get("session")):
-                    score -= .02 if allocation is not None else .35
+                family = method_family(method)
+                repeats = sum(s.get("method_family", s.get("dose_evidence", {}).get("method_family")) == family
+                              for d in result_days for s in planning_schedule.day_sessions(d))
+                diversity_penalty = min(1.5, .45 * repeats)
+                score -= diversity_penalty
+                if is_threshold and day.weekday() in set(threshold_days + double_days):
+                    score += .4
+                evidence["method_family"] = family
+                evidence["selection"].update(method_family=family, family_repeats=repeats,
+                                               diversity_penalty=diversity_penalty)
                 if method.get("double_threshold"):
                     score += 10.
                 if method.get("neuromuscular_profile"):
@@ -1816,7 +1993,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 if method.get("double_threshold"):
                     training_guidance.annotate_double_threshold(blocks, profile)
                 choices.append((score, method["id"], {"method_id": method["id"], "title": method["title"],
-                                "sport": sport, "zone": z, "purpose": purpose, "blocks": blocks, "is_key_session": is_key,
+                                "sport": sport, "zone": z, "purpose": purpose, "method_family": family, "blocks": blocks, "is_key_session": is_key,
                                 "neuromuscular_exposure": training_guidance.nms_exposure(blocks),
                                 "double_threshold": method.get("double_threshold", False), "mixed_component": mixed,
                                 "paired_session": {"zone":method["paired_method"]["zone"], "method_id":method["paired_method"]["id"]} if method.get("paired_method") else None,
@@ -1882,7 +2059,11 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         sum(slot_counts.values()), session_limit, weekly_minutes, source=source) if component_governed and forecast_known and not blocked else None
     parameters = {"version": PARAMETER_VERSION, "race_duration": event_duration, "status": "COACH_HEURISTICS_FOR_REVIEW",
                   "individual_learning": (progression or {}).get("individual_learning"),
-                  "recovery_mode": "LOAD_ONLY", "ready_threshold_percent": 90, "minimum_aerobic_dose_fraction": MIN_AEROBIC_DOSE_FRACTION, "adaptive_methods_version": adaptive_methods.VERSION,
+                  "recovery_mode": "LOAD_ONLY", "ready_threshold_percent": 0,
+                  "readiness_dose_policy": "PROPORTIONAL_DURATION_AT_SUPPORTED_EFFORT", "diagnostic_reference_percent": 90,
+                  "minimum_aerobic_dose_fraction": MIN_AEROBIC_DOSE_FRACTION,
+                  "minimum_dose_policy": "NOMINAL_FRACTION_SCALED_BY_READINESS_WITH_COMPLETE_STRUCTURE",
+                  "adaptive_methods_version": adaptive_methods.VERSION,
                   "load_progression": public_management(load_progression.public_context(progression)),
                   "building_fraction": profile.get("building_fraction", .5), "maintenance_fraction": profile.get("maintenance_fraction", .3),
                   "reentry_fraction": profile.get("reentry_fraction", .4), "recovery_session_cap_min": profile.get("recovery_session_cap_min", 30),

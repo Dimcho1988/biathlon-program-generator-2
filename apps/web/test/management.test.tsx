@@ -79,7 +79,8 @@ describe("management data and review interface", () => {
   });
   it("accepts a valid profile, keeps unknown history null and rejects contradictory input", () => {
     expect(parseManagementProfile(profile).recent_weekly_hours).toBeNull();
-    for (const bad of [{ available_minutes: [60] }, { actual_sport: "RollerSki" }, { recent_weekly_hours: [1, 2, 3] }, { age_years: 20, training_experience_years: 25 }, { building_fraction: .7 }]) expect(() => parseManagementProfile({ ...profile, ...bad })).toThrow();
+    for (const fraction of [.6, .7, .8]) expect(parseManagementProfile({ ...profile, building_fraction: fraction }).building_fraction).toBe(fraction);
+    for (const bad of [{ available_minutes: [60] }, { actual_sport: "RollerSki" }, { recent_weekly_hours: [1, 2, 3] }, { age_years: 20, training_experience_years: 25 }, { building_fraction: .85 }]) expect(() => parseManagementProfile({ ...profile, ...bad })).toThrow();
     expect(() => parseManagementProfileResponse({ configured: false, profile, revision: 0 })).toThrow();
   });
   it("rejects malformed dates, readiness and incoherent work durations", () => {
@@ -92,8 +93,10 @@ describe("management data and review interface", () => {
     expect(() => parseDraftRecord(wrongDuration)).toThrow();
   });
   it("explains capacity, fallback and projected readiness in Bulgarian with exact durations", () => {
-    const html = renderToStaticMarkup(<TrainingManagement athleteName="Тестов спортист" canEdit initialProfile={{ configured: true, profile, revision: 1 }} initialDrafts={[record]} today="2026-09-21" />);
-    for (const expected of ["Равномерна аеробна работа", "0:45:00", "0:30:00", "Защо тази задача и доза?", "Експертен Tref", "Избраната продължителност е извън диапазона", "Специално подготвителен", "90% готовност не означава 90%", "Изтегли пълния отчет"]) expect(html).toContain(expected);
+    const scaled = structuredClone(record);
+    Object.assign(scaled.payload.days[0].session!.dose_evidence, {base_fraction:.6,readiness_dose_factor:.5});
+    const html = renderToStaticMarkup(<TrainingManagement athleteName="Тестов спортист" canEdit initialProfile={{ configured: true, profile, revision: 1 }} initialDrafts={[scaled]} today="2026-09-21" />);
+    for (const expected of ["Равномерна аеробна работа", "0:45:00", "0:30:00", "Защо тази задача и доза?", "Експертен Tref", "Избраната продължителност е извън диапазона", "Специално подготвителен", "60% доза × 50% готовност = 30%", "Начален дял за метода", "Множител от готовността", "Изтегли пълния отчет"]) expect(html).toContain(expected);
     expect(html).not.toContain("NaN");
     expect(html).not.toContain("Активирай");
   });
