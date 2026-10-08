@@ -251,14 +251,14 @@ def test_precompetition_neighbor_can_receive_real_session_without_bypassing_capa
 
     neighbor_ids = {"END-THR-TIME-01-FLEX", "ONFLOWS-CONTROLLED-Z5-V2"}
     rejected = [item for day in preparation["days"] for item in day["rejected_alternatives"]]
-    assert not any(item["code"] == "RACE_COMPONENT_PRIORITY" and item["method_id"] in neighbor_ids for item in rejected)
-    assert any(item["method_id"] == "ONFLOWS-CONTROLLED-Z5-V2" and item["code"] == "CAPACITY_UNAVAILABLE" for item in rejected)
+    assert not any(item["code"] == "RACE_COMPONENT_PRIORITY" and neighbor_ids.intersection(item.get("method_ids", [item["method_id"]])) for item in rejected)
+    assert any("ONFLOWS-CONTROLLED-Z5-V2" in item.get("method_ids", [item["method_id"]]) and item["code"] == "CAPACITY_UNAVAILABLE" for item in rejected)
     assert not any(session["zone"] == "Z5" for day in preparation["days"] for session in day["sessions"])
 
     for key in (("COMPETITION", 30), ("PRECOMPETITION", None)):
         plan = results[key]
-        rejected_ids = {item["method_id"] for day in plan["days"] for item in day["rejected_alternatives"]
-                        if item["code"] == "RACE_COMPONENT_PRIORITY"}
+        rejected_ids = {method_id for day in plan["days"] for item in day["rejected_alternatives"]
+                        if item["code"] == "RACE_COMPONENT_PRIORITY" for method_id in item.get("method_ids", [item["method_id"]])}
         assert neighbor_ids <= rejected_ids
         assert not any(session["zone"] in {"Z3", "Z5"} and session["purpose"] == "BUILDING"
                        for day in plan["days"] for session in day["sessions"])

@@ -55,6 +55,29 @@ describe("management data and review interface", () => {
     expect(html).not.toContain("Свободното време в профила е под историческия обем");
     expect(html).toContain("Кои качества тренираме тази седмица?");
   });
+  it("shows all methods covered by a shared diagnostic and accepts legacy single-method records", () => {
+    const grouped = structuredClone(record);
+    grouped.payload.days[0].rejected_alternatives = [
+      {method_id:"METHOD-A",method_ids:["METHOD-A","METHOD-B","METHOD-A"],code:"CAPACITY_UNAVAILABLE",reason:"Няма актуален индивидуален капацитет."},
+      {method_id:"METHOD-C",code:"INSUFFICIENT_DOSE_BUDGET",reason:"Недостатъчен остатъчен бюджет."},
+    ];
+    expect(parseDraftRecord(grouped)).toEqual(grouped);
+    const html=renderToStaticMarkup(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:1}} initialDrafts={[grouped]} today="2026-09-21"/>);
+    expect(html).toContain("METHOD-A, METHOD-B");
+    expect(html).toContain("METHOD-C");
+    expect(html.match(/Няма актуален индивидуален капацитет\./g)).toHaveLength(1);
+    const malformed=structuredClone(grouped);
+    malformed.payload.days[0].rejected_alternatives[0].method_ids=[];
+    expect(()=>parseDraftRecord(malformed)).toThrow("Невалидна причина за неизбран метод.");
+  });
+  it("explains reserved future work without displaying the internal limit code", () => {
+    const reserved = structuredClone(record);
+    reserved.payload.days[0].session!.dose_evidence.limits.push({code:"FUTURE_QUALITY_RESERVATION_WORK_CAP",limit_minutes:20});
+    reserved.payload.allocation={components:{},constraints:[],dose_limits:["FUTURE_QUALITY_RESERVATION_WORK_CAP"]};
+    const html=renderToStaticMarkup(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:1}} initialDrafts={[reserved]} today="2026-09-21"/>);
+    expect(html.match(/Резерв за бъдеща основна или силова тренировка/g)).toHaveLength(2);
+    expect(html).not.toContain("FUTURE_QUALITY_RESERVATION_WORK_CAP");
+  });
   it("shows the current saved outlook without borrowing a stale weekly draft", () => {
     const outlook = parseManagementOutlook({ configured: true, outlook: {
       schema_version: "training-outlook-preview-v1", profile_revision: 8, generated_at: "2026-09-21T10:00:00Z",

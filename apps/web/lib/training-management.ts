@@ -112,6 +112,7 @@ export interface DraftSession {
   main_work_minutes: number; total_minutes: number; canonical_effective_load: Record<Component, number>;
   direct_equivalent_minutes: Record<Component, number>; dose_evidence: DoseEvidence;
 }
+export interface RejectedAlternative { method_id: string; method_ids?: string[]; reason: string; code: string }
 export interface DraftDay {
   cycle?: Record<string,unknown> | null;
   time_limit_exhausted?: boolean;
@@ -119,9 +120,10 @@ export interface DraftDay {
   date: string; status: string; period: string; taper: boolean; session: DraftSession | null;
   readiness_before: Record<Component, number | null>; readiness_after: Record<Component, number | null>;
   load_budget: { remaining_weekly_minutes: number | null; components: Record<Component, { e7_daily: number; e40_daily: number; index_7_40: number | null; target_weekly_effective: number; rolling_7d_effective: number; deficit_effective: number }> };
-  explanation: string; rejected_alternatives: Array<{ method_id: string; reason: string; code: string }>;
+  explanation: string; rejected_alternatives: RejectedAlternative[];
 }
 export function daySessions(day: DraftDay): DraftSession[] { return day.sessions ?? (day.session ? [day.session] : []); }
+export function rejectedMethodIds(alternative: RejectedAlternative): string[] { return alternative.method_ids ?? [alternative.method_id]; }
 
 export interface PlanProjection {
   race_duration?: unknown; parameters?: Record<string, unknown>; individual_learning?: unknown; long_term?: unknown; periodization?: unknown; input_snapshot?: unknown; history_comparison?: unknown; component_history?: unknown;
@@ -294,6 +296,11 @@ export function parseDraftRecord(value: unknown): DraftRecord {
       || typeof day.explanation !== "string" || typeof day.period !== "string" || typeof day.status !== "string" || typeof day.taper !== "boolean"
       || !isRecord(day.readiness_before) || !isRecord(day.readiness_after) || !isRecord(day.load_budget) || !isRecord(day.load_budget.components)
       || !Array.isArray(day.rejected_alternatives)) throw new Error("Невалидна дневна задача.");
+    for (const alternative of day.rejected_alternatives) {
+      if (!isRecord(alternative) || typeof alternative.method_id !== "string" || typeof alternative.reason !== "string" || typeof alternative.code !== "string"
+        || (alternative.method_ids !== undefined && (!Array.isArray(alternative.method_ids) || !alternative.method_ids.length
+          || !alternative.method_ids.every(id => typeof id === "string") || alternative.method_ids[0] !== alternative.method_id))) throw new Error("Невалидна причина за неизбран метод.");
+    }
     for (const component of COMPONENTS) {
       if (!optionalRange(day.readiness_before[component], 0, 100) || !optionalRange(day.readiness_after[component], 0, 100)) throw new Error("Невалидна оценка на готовността.");
     }

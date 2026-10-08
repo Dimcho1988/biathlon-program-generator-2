@@ -292,7 +292,10 @@ def test_only_control_lab_review_blocks_activation(monkeypatch):
 
 def test_full_year_plan_has_one_bounded_replay_archive_and_stays_below_one_mebibyte(monkeypatch):
     import json
+    from collections import Counter
     from apps.api import learning_service, learning_methods
+    from apps.api.planning_diagnostics import compact_rejections
+    from tests.api.test_planning_diagnostics import expanded_records
     from tests.api.test_learning_evidence import fixture, episode
     from tests.api.test_learning_methods import observation, A, B
 
@@ -325,9 +328,19 @@ def test_full_year_plan_has_one_bounded_replay_archive_and_stays_below_one_mebib
     report.update(current={"stress_score": 55, "lab_review": False}, source={"context_key": "private"},
                   exclusions=[{"id": "excluded", "reason": "private"}], model_summary={"private": True})
     original_report = deepcopy(report)
+    original_diagnostics = []
+    def capture_diagnostics(rejections):
+        original_diagnostics.extend(deepcopy(rejections))
+        return compact_rejections(rejections)
+    monkeypatch.setattr(engine, "compact_rejections", capture_diagnostics)
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
     monkeypatch.setattr(learning_service, "context", lambda *args, **kwargs: report)
     result = engine.generate_plan(repo, "athlete", profile, start_date=TODAY, now=NOW)
+    grouped_diagnostics = [item for day in result["days"] for item in day["rejected_alternatives"]]
+    assert any("method_ids" in item for item in grouped_diagnostics)
+    assert expanded_records(grouped_diagnostics) == expanded_records(original_diagnostics)
+    constraint_counts = Counter(item["code"] for item in original_diagnostics if item["code"] != "LOWER_CURRENT_PRIORITY")
+    assert {item["code"]: item["evaluated_alternatives"] for item in result["allocation"]["constraints"]} == dict(constraint_counts)
     assert report == original_report  # Runtime evidence is not stripped in place.
     assert result["parameters"]["individual_learning"]["memory"] == report["memory"]
     copies = [result["parameters"]["load_progression"]["individual_learning"],

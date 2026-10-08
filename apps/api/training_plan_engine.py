@@ -25,6 +25,7 @@ from biathlon import training_guidance, adaptive_methods, preliminary_capacity, 
 from . import model_service, load_adaptation, race_duration, planning_history_estimate
 from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
+from .planning_diagnostics import compact_rejections
 
 VERSION = "training-management-v28-proportional-readiness"
 PARAMETER_VERSION = "management-parameters-v28"
@@ -2054,6 +2055,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             combined["status"] = "TRAINING"
             combined["explanation"] = f"{len(combined['sessions'])} сесии · {sum(v['total_minutes'] for v in combined['sessions']):g} минути общо. Общ бюджет по компоненти; готовността е оценена за началото на деня."
     result_days = list(grouped.values())
+    for item in result_days:
+        item["rejected_alternatives"] = compact_rejections(item["rejected_alternatives"])
     planned_sessions = [s for d in result_days for s in planning_schedule.day_sessions(d)]
     allocation_report = planning_allocation.report(goal_windows, rows, forecast_rows, result_days,
         sum(slot_counts.values()), session_limit, weekly_minutes, source=source) if component_governed and forecast_known and not blocked else None

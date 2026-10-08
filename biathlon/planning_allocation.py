@@ -110,7 +110,9 @@ def report(windows, actual, forecast, days, scheduled_slots, weekly_limit, histo
     for d in days:
         for r in d["rejected_alternatives"]:
             if r["code"] != "LOWER_CURRENT_PRIORITY":
-                reasons.setdefault(r["code"], {"code": r["code"], "reason": r["reason"], "days": set()})["days"].add(d["date"])
+                reason = reasons.setdefault(r["code"], {"code": r["code"], "reason": r["reason"], "days": set(), "evaluated_alternatives": 0})
+                reason["days"].add(d["date"])
+                reason["evaluated_alternatives"] += len(r.get("method_ids") or [r["method_id"]])
     constraints = [{**r, "days": sorted(r["days"])} for r in reasons.values()]
     limits = {}
     for s in sessions:
