@@ -7,6 +7,7 @@ from apps.api import training_plan_engine as engine, load_adaptation
 from apps.api.management_schemas import LoadProgression, PlanningControls
 from biathlon import load_progression as policy, planning_controls
 from tests.api.test_training_plan_engine import Repository, TODAY, NOW, profile, reference_speed
+from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose
 
 
 def configured(**patch):
@@ -268,7 +269,7 @@ def test_residual_z3_uses_supporting_work_without_extra_key_sessions(monkeypatch
     assert any(r["code"] == "DIRECT_Q_PROGRESSION_BUDGET" for d in result["days"] for r in d["rejected_alternatives"])
     for d,s in support:
         assert d["date"]>max(keys)
-        assert d["readiness_before"]["Z3"]>=90
+        assert_readiness_dose(s)
         assert sum(b["duration_min"] for b in s["blocks"] if b["kind"]=="WORK" and b["zone"]=="Z3")<=20
         assert s["dose_evidence"]["applied_structure_fraction"]<=p["maintenance_fraction"]+.001
     assert result["summary"]["key_sessions"]==len(keys)

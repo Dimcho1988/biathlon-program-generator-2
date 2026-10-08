@@ -5,7 +5,7 @@ accounting. Recovery remains a daily model; no intraday exponent is inferred.
 """
 from copy import deepcopy
 
-VERSION = "adaptive-methods-v1"
+VERSION = "adaptive-methods-v2-proportional-readiness"
 
 
 def developmental(profile):
@@ -92,11 +92,26 @@ def threshold_pairs(candidates, zones):
 
 
 def readiness_policy(method, profile, readiness):
-    controls = profile.get("planning_controls") or {}
-    floor = controls.get("mixed_min_readiness", 70.) if method.get("mixed_component") else 90.
     z = method["zone"]
-    return {"version": VERSION, "component": z, "minimum_percent": floor,
-            "observed_percent": readiness[z], "mixed_component": bool(method.get("mixed_component")),
-            "dose_factor": min(1., max(.5, .5+.5*(readiness[z]-floor)/max(1., 90.-floor))) if floor < 90 else 1.,
+    required = {z}
+    required.update((method.get("dose_evidence", {}).get("readiness_policy", {}).get("required_components") or {}).keys())
+    if "Z1" in readiness:
+        required.add("Z1")
+    if method.get("paired_method"):
+        required.add(method["paired_method"]["zone"])
+    if method.get("structure") == "THRESHOLD_HIGH":
+        required.add(method["interval_profile"]["zone"])
+    if method.get("structure") == "AEROBIC_STRENGTH":
+        required.add("STR")
+    observed = {component: readiness.get(component) for component in sorted(required)}
+    # One common scale preserves the approved combination. Unknown Recovery is
+    # never replaced with full readiness, and percentages are not compounded.
+    factor = (min(min(100., max(0., value)) for value in observed.values()) / 100
+              if all(value is not None for value in observed.values()) else 0.)
+    return {"version": VERSION, "component": z, "minimum_percent": 0.,
+            "observed_percent": readiness.get(z), "required_components": observed,
+            "mixed_component": bool(method.get("mixed_component")),
+            "dose_factor": factor, "diagnostic_reference_percent": 90.,
+            "policy": "PROPORTIONAL_DURATION_AT_SUPPORTED_EFFORT",
             "intraday_recheck": False if method.get("double_threshold") else None,
             "basis": "COACH_POLICY_NOT_PHYSIOLOGICAL_THRESHOLD"}

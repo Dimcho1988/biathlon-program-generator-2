@@ -8,6 +8,7 @@ from biathlon import load_progression as policy
 from apps.api import training_plan_engine as engine
 from tests.api.test_load_progression import configured, observed
 from tests.api.test_training_plan_engine import TODAY, NOW, reference_speed
+from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose
 
 
 def low_history():
@@ -125,5 +126,5 @@ def test_composed_sessions_keep_actual_budgets_readiness_and_session_limits(monk
             assert sum(s["canonical_effective_load"][z] for s in day["sessions"]) <= day["load_budget"]["components"][z]["deficit_effective"]+.01
         for session in day["sessions"]:
             assert session["total_minutes"] <= 80
-            assert day["readiness_before"][session["zone"]] >= 90
+            assert_readiness_dose(session)
             assert session["dose_evidence"]["applied_structure_fraction"] <= .8005

@@ -3,7 +3,7 @@ import { TimeAvailability, TimeLimitNotice } from "./planning-time-limit";
 import { isRecord } from "../lib/training-status";
 import { durationHms } from "../lib/duration-format";
 import { componentColor, componentLabel } from "../lib/training-visuals";
-import { daySessions, COMPONENTS, type PlanningDraft, type VolumeHistory } from "../lib/training-management";
+import { daySessions, rejectedMethodIds, COMPONENTS, type PlanningDraft, type VolumeHistory } from "../lib/training-management";
 import { HistoryVolume } from "./planning-controls-editor";
 import { PlanningEvidenceNotice, planningHistoryEstimated } from "./planning-evidence-notice";
 export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
@@ -24,10 +24,10 @@ export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
   const shortfall=allocationRows.filter(r=>remainder(r)===null||typeof remainder(r)==="number"&&Number(remainder(r))>1).map(r=>r.zone);
   const constraints=allocation&&Array.isArray(allocation.constraints)?allocation.constraints.filter(isRecord):[];
   const limits=allocation&&Array.isArray(allocation.dose_limits)?allocation.dose_limits.map(String):[];
-  const limitLabels:Record<string,string>={COMPLETE_DOSE_ALLOCATION:"Разпределение в цели сесии над минималната доза",ROLLING_Q_AND_7_40_BUDGET:"Приравненият обем и ограничението по 7/40",RECOVERY_RESERVATION_WORK_CAP:"Готовността за предстоящата ключова тренировка или старт",METHOD_CAPACITY_FRACTION:"Делът от индивидуалния капацитет за метода",METHOD_WORK_CAP:"Максималната работа в методния профил",ACTUAL_SPORT_SESSION_EXPOSURE:"Досегашната продължителност на сесиите с конкретното средство",COMPONENT_SLOT_ALLOCATION:"Разпределението на товара между оставащите сесии",ROLLING_7_40_COMPONENT_BUDGET:"Оставащият товар по 7/40",DAILY_AVAILABLE_WORK:"Свободното време за деня",TECHNICAL_SESSION_CEILING:"Максималната продължителност за деня",TAPER_DAILY_WORK_CAP:"Разтоварването преди старт",LOW_ABSOLUTE_RECOVERY_CAP:"Лимитът за възстановителна работа",REMAINING_WEEKLY_WORK:"Седмичният лимит за време",RACE_DURATION_WORK_CAP:"Спецификата на състезателната дисциплина"};
+  const limitLabels:Record<string,string>={COMPLETE_DOSE_ALLOCATION:"Разпределение в цели сесии над минималната доза",ROLLING_Q_AND_7_40_BUDGET:"Приравненият обем и ограничението по 7/40",FUTURE_QUALITY_RESERVATION_WORK_CAP: "Резерв за бъдеща основна или силова тренировка", RECOVERY_RESERVATION_WORK_CAP:"Готовността за предстоящата ключова тренировка или старт",METHOD_CAPACITY_FRACTION:"Делът от индивидуалния капацитет за метода",METHOD_WORK_CAP:"Максималната работа в методния профил",ACTUAL_SPORT_SESSION_EXPOSURE:"Досегашната продължителност на сесиите с конкретното средство",COMPONENT_SLOT_ALLOCATION:"Разпределението на товара между оставащите сесии",ROLLING_7_40_COMPONENT_BUDGET:"Оставащият товар по 7/40",DAILY_AVAILABLE_WORK:"Свободното време за деня",TECHNICAL_SESSION_CEILING:"Максималната продължителност за деня",TAPER_DAILY_WORK_CAP:"Разтоварването преди старт",LOW_ABSOLUTE_RECOVERY_CAP:"Лимитът за възстановителна работа",REMAINING_WEEKLY_WORK:"Седмичният лимит за време",RACE_DURATION_WORK_CAP:"Спецификата на състезателната дисциплина"};
   const duration=(v:unknown)=>typeof v==="number"?durationHms(v):"—";
   const reasons=new Map<string,number>();
-  for(const d of plan.days.filter(d=>!d.session)) for(const r of d.rejected_alternatives) reasons.set(r.reason,(reasons.get(r.reason)??0)+1);
+  for(const d of plan.days.filter(d=>!d.session)) for(const r of d.rejected_alternatives) reasons.set(r.reason,(reasons.get(r.reason)??0)+rejectedMethodIds(r).length);
   return <section className="management-panel"><h2>Обем и основа на програмата</h2>
     <PlanningEvidenceNotice plan={plan}/>
     {manual.length>0&&<aside className="management-notice" role="status"><strong>Програмата използва ръчни цели:</strong> {manual.map(([z,v])=>`${z}: ${duration(v)} приравнено време / 7 дни`).join("; ")}.<p>Те заместват автоматичните цели от историята. Нисък бюджет за Z1 може да блокира и по-високите аеробни зони. Ако целта е въведена по погрешка, избери „Използвай автоматичните цели“ в профила и запази.</p><Link href="/planning">Провери ръчните цели →</Link></aside>}

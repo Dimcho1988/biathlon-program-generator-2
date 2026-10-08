@@ -11,6 +11,7 @@ from biathlon import planning_schedule
 from biathlon.constants import COMPONENTS
 from biathlon.training_methods import resolved_methods
 from tests.api.test_training_plan_engine import Repository, TODAY, NOW, profile, reference_speed
+from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose
 
 
 def body(**changes):
@@ -144,7 +145,7 @@ def test_double_threshold_has_independent_doses_and_long_short_structure(monkeyp
     assert changed["days"][0]["sessions"][0]["method_id"] == pair[0]["method_id"]
 
 
-def test_double_threshold_validation_and_declining_readiness(monkeypatch):
+def test_double_threshold_validation_and_declining_readiness_reduces_doses(monkeypatch):
     p = body(sessions_per_week=12, double_threshold_days=[0])
     with pytest.raises(ValidationError): ManagementProfile.model_validate({**p, "age_years": None})
     with pytest.raises(ValidationError): ManagementProfile.model_validate({**p, "max_key_sessions_per_week": 1})
@@ -152,7 +153,13 @@ def test_double_threshold_validation_and_declining_readiness(monkeypatch):
     with pytest.raises(ValidationError): PlanningControls(sessions_by_day=[4,1,1,1,1,1,1])
     unready = run(monkeypatch, p)
     assert unready["days"][0]["readiness_before"]["Z3"] < 90
-    assert not any(s.get("double_threshold") for s in planning_schedule.day_sessions(unready["days"][0]))
+    pair = planning_schedule.day_sessions(unready["days"][0])
+    assert len(pair) == 2 and all(s.get("double_threshold") for s in pair)
+    for session in pair:
+        assert_readiness_dose(session)
+        assert session["dose_evidence"]["fraction"] < session["dose_evidence"]["base_fraction"]
+    for z in engine.COMPONENTS:
+        assert sum(s["canonical_effective_load"][z] for s in pair) <= unready["days"][0]["load_budget"]["components"][z]["deficit_effective"] + .005
     p["reentry_days"] = 7; p["program_start"] = TODAY.isoformat()
     assert not any(s.get("double_threshold") for d in run(monkeypatch, p)["days"] for s in planning_schedule.day_sessions(d))
 

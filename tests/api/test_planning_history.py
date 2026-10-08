@@ -8,6 +8,7 @@ from biathlon import planning_history, planning_controls
 from biathlon.training_methods import resolved_methods
 from tests.api.test_training_plan_engine import Repository, TODAY, NOW, profile, reference_speed, supported_speed
 from tests.api.test_planning_controls import controls
+from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose
 
 
 def history(days=28, pauses=(), missing=()):
@@ -83,7 +84,7 @@ def test_auto_week_has_no_template_or_history_wave_cap_and_keeps_canonical_gates
         if day['session']:
             for zone,load in day['session']['canonical_effective_load'].items():
                 assert load <= day['load_budget']['components'][zone]['deficit_effective']+.002
-            assert day['readiness_before'][day['session']['zone']]>=90
+            assert_readiness_dose(day['session'])
     manual=engine.generate_plan(repo,'athlete',{**p,'availability_mode':'MANUAL'},start_date=TODAY+timedelta(days=1),now=NOW)
     assert manual['parameters']['available_weekly_minutes']==390
     assert manual['summary']['planned_minutes']<=390

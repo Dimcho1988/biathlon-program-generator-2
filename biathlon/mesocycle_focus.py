@@ -274,7 +274,7 @@ def recovery_support(state, profile, rows, today, *, limited=False, taper=False,
     state.update(accents=[z for _, z in candidates[:1]], recovering_components=list(loaded),
                  focus_role="RECOVERY_SUPPORT", support_basis="OBSERVED_7_40_BELOW_MAINTENANCE",
                  support_as_of=today.isoformat(), support_requires_daily_readiness=True,
-                 reason="Разтоварване на водещите компоненти; най-много един по-слабо натоварен компонент с поддържаща доза. Общият товар остава намален.")
+                 reason="Намалени общи и компонентни цели; по-слабо натоварен компонент има поддържащ приоритет. Останалите компоненти могат да получат намалена цяла доза според готовността и оставащия Q/7–40 бюджет.")
     return state
 
 
