@@ -18,16 +18,16 @@ def test_continuous_method_gets_the_blended_speed_and_estimated_time():
     view = example()
     context = engine._capacity_context(view, SETTINGS)
     method = {'zone': 'Z2', 'structure': 'CONTINUOUS', 'position': .6}
-    dose = engine.capacity_for(method, SETTINGS, view, context, TODAY)
+    dose = engine.capacity_for(method, SETTINGS, view, context, TODAY, use_model_prior=True)
     assert dose['capacity_source'] == 'BLENDED_DOSING_CURVE'
     assert dose['model_version'] == dosing_curve.VERSION
     assert dose['capacity_confidence'] == 'COACH_30_70_ESTIMATE'
     predictor = context[0]
     assert dose['target_speed_kmh'] == pytest.approx(predictor.speed_for_hr(dose['target_hr_bpm']), abs=.001)
     assert dose['capacity_minutes'] == pytest.approx(predictor.duration(dose['target_hr_bpm'])/60, abs=.001)
-    assert engine.capacity_for(method, SETTINGS, view, context, TODAY, False) is None
+    assert engine.capacity_for(method, SETTINGS, view, context, TODAY, False, use_model_prior=True) is None
     view['index_window']['last_activity_date'] = '2026-08-31'
-    stale = engine.capacity_for(method, SETTINGS, view, context, TODAY)
+    stale = engine.capacity_for(method, SETTINGS, view, context, TODAY, use_model_prior=True)
     assert stale['capacity_source'] == 'EXPERT_CONTINUOUS_TREF'
     assert stale['target_speed_kmh'] is None
 

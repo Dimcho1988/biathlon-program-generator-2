@@ -175,7 +175,8 @@ def test_combined_aerobic_method_remains_available_with_one_shared_dose(monkeypa
     for s in mixed:
         e=s['dose_evidence']
         assert {b['zone'] for b in s['blocks'] if b['kind']=='WORK'}=={'Z1','Z2'}
-        assert e['min_dose_fraction'] <= e['applied_structure_fraction'] <= e['max_dose_fraction']+.001
+        assert e['min_dose_fraction'] <= e.get('applied_minimum_capacity_fraction', e['applied_structure_fraction']) + .001
+        assert e['applied_structure_fraction'] <= e['max_dose_fraction']+.001
         assert_readiness_dose(s)
         assert sum(b['duration_min']/ (e['capacity_minutes'] if b['zone']=='Z2' else e['secondary_capacity']['capacity_minutes']) for b in s['blocks'] if b['kind']=='WORK') == pytest.approx(e['applied_structure_fraction'], abs=.001)
         assert s['total_minutes']==pytest.approx(sum(b['duration_min'] for b in s['blocks']),abs=.002)

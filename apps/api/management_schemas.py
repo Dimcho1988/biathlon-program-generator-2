@@ -8,6 +8,24 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .training_observation_schemas import LactateProfile, NeuromuscularProfile
 
 
+def normalize_building_profile(value):
+    """Apply the current 60–70% base dose to legacy profiles without mutation.
+
+    The former 50% default becomes the new 65% default. Other formerly valid
+    choices retain their value inside the band, or its nearest boundary.
+    Values outside the old valid domain remain invalid for schema validation.
+    Maintenance and re-entry prescriptions are independent of this migration.
+    """
+    if not isinstance(value, dict):
+        return value
+    result = dict(value)
+    fraction = result.get("building_fraction", .65)
+    if isinstance(fraction, (int, float)) and not isinstance(fraction, bool) and .5 <= fraction <= .8:
+        fraction = .65 if fraction == .5 else min(.7, max(.6, fraction))
+    result["building_fraction"] = fraction
+    return result
+
+
 class IntervalDoseProfile(BaseModel):
     """A coach-resolved effort anchor, never inferred from peak HR."""
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -193,7 +211,7 @@ class ManagementProfile(BaseModel):
     reentry_days: int | None = Field(default=None, ge=0, le=21)
     taper_days: int = Field(default=7, ge=0, le=21)
     max_key_sessions_per_week: int = Field(default=2, ge=0, le=8)
-    building_fraction: float = Field(default=.5, ge=.5, le=.8)
+    building_fraction: float = Field(default=.65, ge=.6, le=.7)
     maintenance_fraction: float = Field(default=.3, ge=.3, le=.4)
     reentry_fraction: float = Field(default=.4, ge=.4, le=.5)
     recovery_session_cap_min: float = Field(default=30, ge=5, le=45)
@@ -214,6 +232,11 @@ class ManagementProfile(BaseModel):
     lactate_guidance_enabled: bool = True
     lactate_profiles: list[LactateProfile] = Field(default_factory=list, max_length=3)
     neuromuscular: NeuromuscularProfile = Field(default_factory=NeuromuscularProfile)
+
+    @model_validator(mode="before")
+    @classmethod
+    def current_building_dose(cls, value):
+        return normalize_building_profile(value)
 
     @model_validator(mode="after")
     def coherent(self):

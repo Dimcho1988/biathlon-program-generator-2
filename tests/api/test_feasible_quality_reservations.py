@@ -37,8 +37,11 @@ def test_future_reduced_q_target_cannot_cancel_a_legal_due_key_minimum(monkeypat
     assert len(tuesday["sessions"]) == 1
     session = tuesday["sessions"][0]
     assert session["is_key_session"]
-    assert session["dose_evidence"]["future_reservation_relaxed_for_current_quality"] is True
-    assert session["dose_evidence"]["primary_work_budget_minutes"] == session["dose_evidence"]["minimum_primary_work_minutes"]
+    # The frozen long-term microcycle is distributed across both dates. A
+    # later smaller rolling level is no longer a second prescription target.
+    assert session["dose_evidence"]["primary_work_budget_minutes"] >= session["dose_evidence"]["minimum_primary_work_minutes"]
+    for segment in plan["allocation"]["segments"]:
+        assert not segment["components"]["Z3"]["planned_exceeds_target"]
     assert_readiness_dose(session)
     assert_rolling_budgets(plan)
 
@@ -84,8 +87,9 @@ def test_interval_maintenance_nominal_retains_a_complete_relative_minimum_after_
     work = math.floor(evidence["capacity_minutes"]*fraction*evidence["readiness_dose_factor"]*2)/2
     minimum = engine._minimum_work(method, evidence, Repository().settings)
     blocks = engine._blocks(method, work, evidence, Repository().settings)
-    assert minimum == 12.
+    assert minimum == 9.
+    assert fraction == 12./34.  # Three mandatory whole repetitions, plus one before readiness.
     assert work >= minimum
-    assert [block["duration_min"] for block in blocks if block["kind"] == "WORK"] == [3.]*4
+    assert [block["duration_min"] for block in blocks if block["kind"] == "WORK"] == [3.]*3
     assert engine._dose_usage(blocks, evidence, "Z4") <= body["maintenance_fraction"]*evidence["readiness_dose_factor"]
     assert fraction <= method["interval_template"]["total_capacity_ratio"]

@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 from biathlon.periodization import ENGINE_VERSION as PERIODIZATION_VERSION
 
-from .management_schemas import ManagementProfile
+from .management_schemas import ManagementProfile, normalize_building_profile
 from .management_store import ManagementStore
 from .model_service import ModelStore
 from .oauth_store import PersistentStoreFailure
@@ -24,6 +24,8 @@ from .management_projection import public_learning
 def profile_view(repository, alias, *, now=None):
     """Saved profile and its historical volume basis, without generating a plan."""
     profile = ManagementStore(repository).profile(alias)
+    if profile.get("profile") is not None:
+        profile = {**profile, "profile": normalize_building_profile(profile["profile"])}
     settings = repository.athlete_settings(alias)
     athlete_timezone = settings.timezone if settings else "UTC"
     today = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(athlete_timezone)).date()

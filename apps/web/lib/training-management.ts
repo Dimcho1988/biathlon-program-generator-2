@@ -99,6 +99,8 @@ export const COMPONENTS: Component[] = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"];
 export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; lactate_reference?: LactateReference }
 export interface DoseEvidence {
   planned_gap_hours?: number; mixed_component?: boolean;
+  capacity_is_estimate?: boolean; within_observed_test_window?: boolean;
+  supported_test_duration_s?: number[] | null; capacity_confidence?: string; capacity_reference?: string;
   base_fraction?: number; readiness_dose_factor?: number;
   min_dose_fraction?: number | null; minimum_dose_scope?: string; applied_structure_fraction?: number; max_dose_fraction?: number; shared_day_structure_fraction?: number;
   capacity_source: string; capacity_minutes: number; target_hr_bpm: number | null; target_speed_kmh: number | null;
@@ -113,13 +115,37 @@ export interface DraftSession {
   direct_equivalent_minutes: Record<Component, number>; dose_evidence: DoseEvidence;
 }
 export interface RejectedAlternative { method_id: string; method_ids?: string[]; reason: string; code: string }
+export interface ComponentLoadBudget {
+  e7_daily: number; e40_daily: number; index_7_40: number | null;
+  target_weekly_effective: number; rolling_7d_effective: number; deficit_effective: number;
+  prescription_basis?: string; long_term_window_start?: string; long_term_window_end?: string;
+  target_period_effective?: number; target_weekly_q?: number | null; remaining_q?: number | null;
+}
+export interface ComponentAllocation {
+  basis?: "DIRECT_Q" | "CANONICAL_E"; target?: number; actual?: number | null; planned?: number; remaining?: number | null;
+  desired_target_q?: number | null; target_q?: number | null; actual_q?: number | null; planned_q?: number;
+  target_effective?: number; actual_effective?: number; planned_effective?: number; unallocated_effective?: number; remaining_effective?: number;
+  actual_exceeds_target?: boolean; planned_exceeds_target?: boolean;
+  actual_effective_exceeds_target?: boolean; planned_effective_exceeds_target?: boolean;
+}
+export interface AllocationSegment {
+  window_start: string; window_end: string; days: number; components: Partial<Record<Component, ComponentAllocation>>;
+}
+export interface AllocationReport {
+  version?: string; status?: string; window_start?: string; window_end?: string;
+  components: Partial<Record<Component, ComponentAllocation>>; segments?: AllocationSegment[];
+  scheduled_slots?: number; weekly_session_limit?: number; planned_sessions?: number; planned_minutes?: number;
+  has_unallocated_load?: boolean; requires_catchup?: boolean;
+  constraints: Array<{ code: string; reason: string; days?: string[]; evaluated_alternatives?: number }>;
+  dose_limits: string[];
+}
 export interface DraftDay {
   cycle?: Record<string,unknown> | null;
   time_limit_exhausted?: boolean;
   sessions?: DraftSession[];
   date: string; status: string; period: string; taper: boolean; session: DraftSession | null;
   readiness_before: Record<Component, number | null>; readiness_after: Record<Component, number | null>;
-  load_budget: { remaining_weekly_minutes: number | null; components: Record<Component, { e7_daily: number; e40_daily: number; index_7_40: number | null; target_weekly_effective: number; rolling_7d_effective: number; deficit_effective: number }> };
+  load_budget: { remaining_weekly_minutes: number | null; components: Record<Component, ComponentLoadBudget> };
   explanation: string; rejected_alternatives: RejectedAlternative[];
 }
 export function daySessions(day: DraftDay): DraftSession[] { return day.sessions ?? (day.session ? [day.session] : []); }
@@ -143,6 +169,7 @@ export function parseManagementOutlook(value: unknown): ManagementOutlook | null
   return p as unknown as ManagementOutlook;
 }
 export interface PlanningDraft extends PlanProjection {
+  allocation?: AllocationReport;
   schema_version: "planning-draft-v1";
   status: "DRAFT" | "LIMITED_DRAFT" | "BLOCKED";
   start_date: string;
@@ -160,7 +187,14 @@ const range = (value: unknown, low: number, high: number): value is number => fi
 const integer = (value: unknown, low: number, high: number): value is number => range(value, low, high) && Number.isInteger(value);
 const optionalRange = (value: unknown, low: number, high: number) => value === null || range(value, low, high);
 
+function normalizeBuildingFraction(value: unknown): unknown {
+  if (value === undefined) return .65;
+  if (!range(value, .5, .8)) return value;
+  return value === .5 ? .65 : Math.min(.7, Math.max(.6, value));
+}
+
 export function parseManagementProfile(value: unknown): ManagementProfile {
+  const buildingFraction = isRecord(value) ? normalizeBuildingFraction(value.building_fraction) : undefined;
   if (!isRecord(value) || value.schema_version !== "management-profile-v1"
     || !["Run", "NordicSki"].includes(String(value.sport))
     || !["Run", "NordicSki", "RollerSki"].includes(String(value.actual_sport)) || (value.sport === "Run" && value.actual_sport !== "Run")
@@ -178,12 +212,12 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     || (value.recent_weekly_hours !== null && (!Array.isArray(value.recent_weekly_hours) || value.recent_weekly_hours.length !== 4 || !value.recent_weekly_hours.every(v => range(v, 0, 80))))
     || !(value.reentry_days === null || integer(value.reentry_days, 0, 21))
     || !integer(value.taper_days, 0, 21) || !integer(value.max_key_sessions_per_week, 0, 8)
-    || !range(value.building_fraction, .5, .8) || !range(value.maintenance_fraction, .3, .4) || !range(value.reentry_fraction, .4, .5)
+    || !range(buildingFraction, .6, .7) || !range(value.maintenance_fraction, .3, .4) || !range(value.reentry_fraction, .4, .5)
     || !range(value.recovery_session_cap_min, 5, 45) || typeof value.allow_expert_fallback !== "boolean") {
     throw new Error("Проверете датите, наличното време и параметрите на профила.");
   }
   const normalized: Record<string, unknown> = { adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, component_targets_weekly: {},
-    horizon_mode: "AUTO_CALENDAR", interval_profiles: [], strength_enabled: false, strength_circuits: 2, transition_days: 0, ...value };
+    horizon_mode: "AUTO_CALENDAR", interval_profiles: [], strength_enabled: false, strength_circuits: 2, transition_days: 0, ...value, building_fraction: buildingFraction };
   normalized.individual_learning = parseIndividualLearningConfig(value.individual_learning);
   if (typeof normalized.auto_import_enabled !== "boolean" || !["AUTO", "REVIEW"].includes(String(normalized.adaptation_mode)) || !range(normalized.progression_percent, 0, 10)
     || typeof normalized.strength_enabled !== "boolean" || !integer(normalized.strength_circuits, 2, 3)
@@ -332,7 +366,7 @@ export function defaultManagementProfile(today: string): ManagementProfile {
     age_years: null, training_experience_years: null, race_duration_min: null,
     horizon_mode: "AUTO_CALENDAR", program_start: today, program_end: end.toISOString().slice(0, 10), available_minutes: [60, 60, 60, 60, 60, 90, 0], availability_mode: "AUTO_HISTORY", training_days: [0,1,2,3,4,5,6],
     recent_weekly_hours: null, reentry_days: null, taper_days: 7, max_key_sessions_per_week: 2,
-    building_fraction: .5, maintenance_fraction: .3, reentry_fraction: .4,
+    building_fraction: .65, maintenance_fraction: .3, reentry_fraction: .4,
     recovery_session_cap_min: 30, allow_expert_fallback: true,
     adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, load_progression: defaultLoadProgression(), individual_learning: defaultIndividualLearning(), component_targets_weekly: {}, interval_profiles: [],
     strength_enabled: false, strength_circuits: 2, transition_days: 0,
@@ -349,7 +383,7 @@ export const PHASE_LABELS: Record<string, string> = {
 export const CAPACITY_LABELS: Record<string, string> = {
   BLENDED_DOSING_CURVE: "Обща крива за дозиране · 30% индекс / 70% тестове",
   RACE_SPEED_DURATION: "Индивидуално темпо около състезателната дисциплина",
-  SPEED_DURATION_TEST_ANCHOR: "Скорошен максимален тест за конкретното усилие", SPEED_DURATION_PRIOR: "Скорост–време с индивидуална опора и експертна форма", SPEED_TIME: "Индивидуална скорост–време", SPEED_DURATION: "Индивидуална скорост–време",
+  SPEED_DURATION_TEST_ANCHOR: "Крива с максимален тест при съпоставимо усилие", SPEED_DURATION_MODEL_CURVE: "Моделна оценка от индивидуалната крива скорост–време", SPEED_DURATION_PRIOR: "Скорост–време с индивидуална опора и експертна форма", SPEED_TIME: "Индивидуална скорост–време", SPEED_DURATION: "Индивидуална скорост–време",
   EXPERT_TREF: "Експертен Tref — резервна оценка", EXPERT_FALLBACK: "Експертен Tref — резервна оценка", EXPERT_CONTINUOUS_TREF: "Експертен Tref — резервна оценка",
   COACH_EFFORT_CAPACITY: "Индивидуална устойчивост при описаното усилие",
   STRENGTH_METHOD_PROFILE: "Отделен силов профил с упражнения и резерв",
