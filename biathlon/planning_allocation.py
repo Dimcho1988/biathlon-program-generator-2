@@ -1,14 +1,16 @@
-"""Allocate rolling component intent before selecting concrete training methods.
+"""Distribute long-term component intent into complete training methods.
 
 Quotas are a scheduling heuristic, not permission to exceed a dose or a target.
-Each future window keeps its own calendar target; later load is never borrowed
-into a taper day. Direct Q objectives and canonical E limits are distinct.
+Each long-term microcycle segment keeps its own target; unused load is never
+borrowed across its boundaries. Direct Q objectives and canonical E limits
+are distinct.
 """
 from datetime import timedelta
 
 from .constants import COMPONENTS
 
-VERSION = "component-allocation-v2-period-objectives"
+VERSION = "component-allocation-v3-long-term-segments"
+SEGMENT_VERSION = "component-allocation-v3-long-term-segments"
 
 
 def objectives(windows, actual, forecast, source, days):
@@ -46,6 +48,71 @@ def objectives(windows, actual, forecast, source, days):
             target_effective=target_e, actual_effective=done_e, planned_effective=max(0., total_e-done_e),
             unallocated_effective=max(0., target_e-total_e))
     return components
+
+
+def _segments(windows, segment_keys):
+    """Keep adjacent dates with the same authoritative long-term identity.
+
+    The engine supplies the identity used by the long-term outlook, so this
+    module does not recreate periodization. A repeated identity after a date
+    gap or another segment cannot join two separate allocation windows.
+    """
+    groups = []
+    previous = None
+    for day in sorted(windows):
+        key = segment_keys[day]
+        if (not groups or key != groups[-1]["key"]
+                or previous is None or day != previous + timedelta(days=1)):
+            groups.append({"key": key, "windows": {}})
+        groups[-1]["windows"][day] = windows[day]
+        previous = day
+    return groups
+
+
+def segment_objectives(windows, actual, forecast, source, days, *, segment_keys):
+    """Exact long-term ceilings for the portions covered by this draft.
+
+    A displayed weekly level contributes one seventh per calendar day. The
+    first/last partial microcycles are therefore prorated exactly like the
+    long-term outlook, rather than receiving a whole week's quota. Actual
+    load outside the segment affects physiological forecasts but cannot fill
+    or consume another segment's coverage objective.
+    """
+    result = []
+    for group in _segments(windows, segment_keys):
+        current = group["windows"]
+        components = objectives(current, actual, forecast, source, days)
+        for row in components.values():
+            row["remaining_effective"] = max(0., row["target_effective"]
+                                               - row["actual_effective"]
+                                               - row["planned_effective"])
+            row["actual_exceeds_target"] = (row["actual"] is not None
+                                             and row["actual"] > row["target"] + .005)
+            row["planned_exceeds_target"] = (row["actual"] is not None
+                                              and row["planned"] > max(0., row["target"] - row["actual"]) + .005)
+            row["actual_effective_exceeds_target"] = row["actual_effective"] > row["target_effective"] + .005
+            row["planned_effective_exceeds_target"] = row["planned_effective"] > max(0., row["target_effective"] - row["actual_effective"]) + .005
+        result.append({"window_start": min(current).isoformat(),
+                       "window_end": max(current).isoformat(),
+                       "days": len(current), "components": components})
+    return result
+
+
+def segment_headroom(windows, actual, forecast, source, days, day, *, segment_keys):
+    """Return the active long-term segment's separate Q and E headroom.
+
+    ``components[z]['remaining']`` is the governing coverage headroom, in
+    DIRECT_Q or CANONICAL_E according to ``basis``. Unknown actual Q remains
+    None and cannot authorize a dose. ``remaining_effective`` is the separate
+    canonical-E ceiling, including actual preparation and cascade already
+    present in the supplied forecast. Callers must still calculate complete
+    candidate loads and Recovery from their real blocks.
+    """
+    for segment in segment_objectives(windows, actual, forecast, source, days,
+                                      segment_keys=segment_keys):
+        if segment["window_start"] <= day.isoformat() <= segment["window_end"]:
+            return segment
+    raise ValueError("Allocation day is outside the long-term draft windows")
 
 
 def objective_load(direct, effective, objectives):
@@ -100,7 +167,7 @@ def coverage(effective, allocation, accents):
                for z in COMPONENTS if allocation[z] > 0)
 
 
-def report(windows, actual, forecast, days, scheduled_slots, weekly_limit, history_minutes, *, source=None):
+def report(windows, actual, forecast, days, scheduled_slots, weekly_limit, history_minutes, *, source=None, segment_keys=None):
     end = max(windows)
     lower = min(windows).isoformat()
     components = {z: {k: round(v, 3) if isinstance(v, (float, int)) else v for k, v in row.items()}
@@ -123,10 +190,24 @@ def report(windows, actual, forecast, days, scheduled_slots, weekly_limit, histo
         for limit in e.get("limits", []):
             if work + .51 >= limit["limit_minutes"]:
                 limits[limit["code"]] = limit["code"]
-    return {"version": VERSION, "window_start": lower, "window_end": end.isoformat(),
+    result = {"version": VERSION, "window_start": lower, "window_end": end.isoformat(),
             "components": components, "scheduled_slots": scheduled_slots, "weekly_session_limit": weekly_limit,
             "planned_sessions": len(sessions), "history_minutes_for_period": round(history_minutes*len(days)/7, 3),
             "planned_minutes": round(sum(s["total_minutes"] for s in sessions), 3),
             "has_unallocated_load": any(v['remaining'] is None or v['remaining'] > 1. for v in components.values()),
             "constraints": constraints, "dose_limits": sorted(limits),
             "status": "PERIOD_OBJECTIVES_WITH_SEPARATE_ROLLING_GATES", "requires_catchup": False}
+    if segment_keys is not None:
+        segment_reports = segment_objectives(windows, actual, forecast, source or {}, days,
+                                            segment_keys=segment_keys)
+        result.update(version=SEGMENT_VERSION,
+                      status="LONG_TERM_SEGMENT_OBJECTIVES_WITH_PHYSIOLOGICAL_GATES",
+                      segments=[{**segment, "components": {
+                          z: {k: round(v, 3) if isinstance(v, (float, int)) and not isinstance(v, bool) else v
+                              for k, v in row.items()}
+                          for z, row in segment["components"].items()}}
+                          for segment in segment_reports],
+                      has_unallocated_load=any(row["remaining"] is None or row["remaining"] > 1.
+                                               for segment in segment_reports
+                                               for row in segment["components"].values()))
+    return result

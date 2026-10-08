@@ -54,7 +54,10 @@ def reference(profile, view, event, today):
 
 
 def methods(profile, reference, base_methods):
-    if reference.get("status") != "AVAILABLE" or reference.get("accepted_test_count",0) < 2:
+    # One accepted anchor already defines the available scaled individual
+    # curve. Its estimated continuation can select a method; capacity and
+    # whole-dose checks remain separate from the number of measured tests.
+    if reference.get("status") != "AVAILABLE" or reference.get("accepted_test_count",0) < 1:
         return []
     if not (profile.get("planning_controls") or {}).get("automatic_intervals",True):
         return []

@@ -108,15 +108,32 @@ def test_automatic_z4_dose_has_complete_reps_and_does_not_inherit_z5_capacity():
     assert engine.capacity_for(z5,settings,None,(None,[],[]),TODAY) is None
 
 
-def test_z5_requires_recent_test_above_individually_supported_z4_boundary():
-    from types import SimpleNamespace
-    method=next(m for m in resolved_methods(profile(planning_controls=controls())) if m['zone']=='Z5')
-    test=dict(duration_s=300.,speed_kmh=24.,day=TODAY.isoformat(),maximal=True,test_mode='STRICT')
-    predictor=SimpleNamespace(metadata=lambda hr:{'hr_prediction_source':'INDEX'},speed_for_hr=lambda hr:20.)
-    speed=dict(index_window={'last_activity_date':TODAY.isoformat()},index_summary={'Z4':{'count':4}},model_version='test')
-    cap=engine.capacity_for(method,Repository().settings,speed,(predictor,[test],[]),TODAY)
+def test_z5_uses_available_individual_curve_without_a_recent_short_test_gate():
+    from biathlon import speed_duration
+    settings = Repository().settings
+    method = next(m for m in resolved_methods(profile(age_years=30, training_experience_years=10,
+                  planning_controls=controls())) if m['zone']=='Z5' and not m.get('mixed_component'))
+    test = dict(duration_s=300., speed_kmh=24., day=TODAY.isoformat(), maximal=True, test_mode='STRICT')
+    speed = dict(status='CALIBRATED', model_version=speed_duration.VERSION,
+                 active_test_keys=['measured'], tests=[{'entry_key':'measured', 'payload':test}],
+                 index_window={'last_activity_date':TODAY.isoformat()}, index_summary={})
+    context = engine._capacity_context(speed, settings)
+    cap = engine.capacity_for(method, settings, speed, context, TODAY)
     assert cap['capacity_source']=='SPEED_DURATION_TEST_ANCHOR' and cap['capacity_minutes']==5
-    assert cap['target_hr_bpm'] is None and cap['target_speed_kmh']==24
-    stale={**test,'day':(TODAY-timedelta(days=43)).isoformat()}
-    assert engine.capacity_for(method,Repository().settings,speed,(predictor,[stale],[]),TODAY) is None
-    assert engine.capacity_for(method,Repository().settings,speed,(predictor,[{**test,'speed_kmh':19}],[]),TODAY) is None
+    assert cap['target_hr_bpm'] is None and cap['target_speed_kmh']==pytest.approx(24.)
+    assert cap['target_speed_kmh'] > cap['boundary_speed_kmh']
+    speed['tests'][0]['payload'] = {**test, 'day':(TODAY-timedelta(days=43)).isoformat()}
+    retained = engine.capacity_for(method, settings, speed, engine._capacity_context(speed, settings), TODAY)
+    assert retained['capacity_source']=='SPEED_DURATION_TEST_ANCHOR'
+    assert retained['capacity_minutes']==5
+    # A sole long anchor supplies an explicit estimate on the same available
+    # curve, without inventing another measured short test.
+    speed['tests'][0]['payload'] = {**test, 'duration_s':1050., 'speed_kmh':20.571428571428573}
+    context = engine._capacity_context(speed, settings)
+    estimated = engine.capacity_for(method, settings, speed, context, TODAY)
+    assert estimated['capacity_source']=='SPEED_DURATION_MODEL_CURVE'
+    assert estimated['capacity_reference']=='BOUNDARY_HALF_TMAX_MAX600'
+    assert estimated['target_speed_kmh']==pytest.approx(context[0].curve.speed(estimated['capacity_minutes']*60)*3.6)
+    assert estimated['target_speed_kmh'] > estimated['boundary_speed_kmh']
+    assert 'test_anchor' not in estimated and estimated['capacity_is_estimate']
+    assert engine.capacity_for(method, settings, None, (None, [], ['NO_INDIVIDUAL_SPEED_CURVE']), TODAY) is None

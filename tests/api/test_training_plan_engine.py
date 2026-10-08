@@ -121,7 +121,7 @@ def test_generates_real_blocks_and_all_loads_without_mutating_source():
         assert session["dose_evidence"]["technical_spill_reference_role"] == "CANONICAL_E_ONLY_NOT_DOSE_CAPACITY"
 
 
-def test_short_real_test_supports_z5_without_requiring_high_zone_hr_samples():
+def test_short_real_test_supports_z5_without_high_zone_hr_samples_or_recency_gate():
     settings = Repository().settings
     speed = supported_speed(settings)
     speed["tests"][0]["payload"].update(duration_s=165,day=TODAY.isoformat())
@@ -133,7 +133,9 @@ def test_short_real_test_supports_z5_without_requiring_high_zone_hr_samples():
     assert evidence["capacity_source"] == "SPEED_DURATION_TEST_ANCHOR"
     assert evidence["test_anchor"]["duration_s"] == 165
     speed["tests"][0]["payload"]["day"] = (TODAY-timedelta(days=43)).isoformat()
-    assert engine.capacity_for(method,settings,speed,engine._capacity_context(speed,settings),TODAY) is None
+    updated = engine.capacity_for(method,settings,speed,engine._capacity_context(speed,settings),TODAY)
+    assert updated["capacity_source"] == "SPEED_DURATION_TEST_ANCHOR"
+    assert updated["test_anchor"]["duration_s"] == 165
 
 
 def test_key_opportunities_move_past_exhausted_rolling_budgets(monkeypatch):

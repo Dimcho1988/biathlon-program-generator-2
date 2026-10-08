@@ -64,6 +64,8 @@ def assert_readiness_dose(session):
         abs=.0005 / evidence["capacity_minutes"],
     )
     assert evidence["applied_structure_fraction"] <= evidence["max_dose_fraction"] + .001
+    if evidence.get("min_dose_fraction") is not None:
+        assert evidence.get("applied_minimum_capacity_fraction", evidence["applied_structure_fraction"]) >= evidence["min_dose_fraction"] - .001
 
 
 @pytest.mark.parametrize("readiness", [0., 30., 50., 70., 89.9, 90., 100.])

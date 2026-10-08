@@ -33,12 +33,21 @@ def plan(repo=None, **changes):
 def test_effort_profile_whole_repetitions_respect_eighty_percent_structure_cap():
     repo = Repository()
     repo.accents.update(accent_mode="MANUAL", manual_components=["Z4"])
-    result = plan(repo, interval_profiles=[interval()])
+    # The new nominal is 65% of continuous Tmax. Twelve minutes of Tmax
+    # cannot support the mandatory 3×3min structure at that fraction; a
+    # genuine assessed Tmax of 20 permits 4 whole repeats without inflating it.
+    result = plan(repo, building_fraction=.65, interval_profiles=[interval(continuous_capacity_min=20.)])
     high = next(d["session"] for d in result["days"] if d["session"] and d["session"]["zone"] == "Z4")
     work = [b for b in high["blocks"] if b["kind"] == "WORK"]
     rests = [b for b in high["blocks"] if b["kind"] == "RECOVERY"]
     assert len(work) == 4 and len(rests) == 3
     assert high["main_work_minutes"] == 12
+    evidence = high["dose_evidence"]
+    assert evidence["capacity_minutes"] == 20.
+    assert evidence["base_fraction"] == .65
+    assert evidence["requested_primary_work_minutes"] == pytest.approx(13.*evidence["readiness_dose_factor"],abs=.0005)
+    assert evidence["approved_interval_work_capacity_ratio"] == 1.25
+    assert high["main_work_minutes"] <= 20.*.65*evidence["readiness_dose_factor"] + .001
     assert high["main_work_minutes"] <= .8*high["dose_evidence"]["capacity_minutes"]*1.25
     assert high["total_minutes"] == 12 + 9 + 15 + 10
     assert all(b["target_hr_bpm"] is None and b["duration_min"] == 3 for b in work)

@@ -78,6 +78,26 @@ describe("management data and review interface", () => {
     expect(html.match(/Резерв за бъдеща основна или силова тренировка/g)).toHaveLength(2);
     expect(html).not.toContain("FUTURE_QUALITY_RESERVATION_WORK_CAP");
   });
+  it("distinguishes current microcycle remainder from rolling history and labels estimated curve capacity", () => {
+    const current = structuredClone(record);
+    for (const zone of COMPONENTS) Object.assign(current.payload.days[0].load_budget.components[zone], {
+      prescription_basis:"LONG_TERM_MICROCYCLE_REMAINDER",long_term_window_start:"2026-09-22",long_term_window_end:"2026-09-25",
+      target_period_effective:180,rolling_7d_effective:215,deficit_effective:40,remaining_q:15,
+    });
+    Object.assign(current.payload.days[0].session!.dose_evidence, {
+      capacity_source:"SPEED_DURATION_MODEL_CURVE",capacity_is_estimate:true,within_observed_test_window:false,fallback_reasons:[],
+    });
+    const html=renderToStaticMarkup(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:1}} initialDrafts={[current]} today="2026-09-21"/>);
+    expect(html).toContain("Натрупано за 7 дни*");
+    expect(html).toContain("Цел за отрязъка*");
+    expect(html).toContain("Оставащ пряк обем**");
+    expect(html).toContain("<td>215</td><td>180</td><td>40</td><td>15</td>");
+    expect(html).toContain("Tmax е моделна оценка при избраното усилие");
+    expect(html).toContain("Продължителността е извън диапазона на наличните максимални тестове");
+    expect(html).not.toContain("SPEED_DURATION_MODEL_CURVE");
+    expect(html).not.toContain("LONG_TERM_MICROCYCLE_REMAINDER");
+    expect(parseDraftRecord(current)).toEqual(current);
+  });
   it("shows the current saved outlook without borrowing a stale weekly draft", () => {
     const outlook = parseManagementOutlook({ configured: true, outlook: {
       schema_version: "training-outlook-preview-v1", profile_revision: 8, generated_at: "2026-09-21T10:00:00Z",
@@ -102,9 +122,23 @@ describe("management data and review interface", () => {
   });
   it("accepts a valid profile, keeps unknown history null and rejects contradictory input", () => {
     expect(parseManagementProfile(profile).recent_weekly_hours).toBeNull();
-    for (const fraction of [.6, .7, .8]) expect(parseManagementProfile({ ...profile, building_fraction: fraction }).building_fraction).toBe(fraction);
+    for (const fraction of [.6, .65, .7]) expect(parseManagementProfile({ ...profile, building_fraction: fraction }).building_fraction).toBe(fraction);
     for (const bad of [{ available_minutes: [60] }, { actual_sport: "RollerSki" }, { recent_weekly_hours: [1, 2, 3] }, { age_years: 20, training_experience_years: 25 }, { building_fraction: .85 }]) expect(() => parseManagementProfile({ ...profile, ...bad })).toThrow();
     expect(() => parseManagementProfileResponse({ configured: false, profile, revision: 0 })).toThrow();
+  });
+  it("uses a 65 percent default and migrates legacy building doses without changing other prescriptions", () => {
+    expect(defaultManagementProfile("2026-10-08").building_fraction).toBe(.65);
+    for (const [legacy, expected] of [[.5, .65], [.55, .6], [.75, .7], [.8, .7]]) {
+      const original = { ...profile, building_fraction: legacy, maintenance_fraction: .4, reentry_fraction: .5 };
+      const parsed = parseManagementProfile(original);
+      expect(parsed.building_fraction).toBe(expected);
+      expect(parsed.maintenance_fraction).toBe(.4);
+      expect(parsed.reentry_fraction).toBe(.5);
+      expect(original.building_fraction).toBe(legacy);
+    }
+    const missing = { ...profile } as Partial<typeof profile>;
+    delete missing.building_fraction;
+    expect(parseManagementProfile(missing).building_fraction).toBe(.65);
   });
   it("rejects malformed dates, readiness and incoherent work durations", () => {
     expect(parseDrafts({ drafts: [record] })).toHaveLength(1);

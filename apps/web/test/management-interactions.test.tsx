@@ -10,7 +10,7 @@ import { TimeAvailability, TimeLimitNotice } from "../components/planning-time-l
 import { changeActivePlan, newerActivePlan } from "../lib/active-plan-request";
 import type { ActivePlanResponse } from "../lib/training-management";
 import type { PlanningCalendarResponse } from "../lib/planning-calendar";
-import { defaultManagementProfile, defaultPlanningControls, parseDraftRecord, COMPONENTS } from "../lib/training-management";
+import { defaultManagementProfile, defaultPlanningControls, parseManagementProfile, parseDraftRecord, COMPONENTS } from "../lib/training-management";
 
 vi.mock("next/navigation", () => ({useRouter: () => ({refresh: vi.fn()})}));
 let root: Root, container: HTMLDivElement;
@@ -52,6 +52,24 @@ it("preserves an existing past programme anchor while saving other settings", as
   expect(JSON.parse(fetchMock.mock.calls[0][1].body).profile.program_start).toBe("2026-09-19");
 });
 const profile = {...defaultManagementProfile("2026-09-21"), discipline:"5000 m", age_years:30, training_experience_years:10};
+
+it("shows the 60–70 percent building band and exact linear readiness examples", async () => {
+  const migrated = parseManagementProfile({ ...profile, building_fraction: .5 });
+  await mount(<ManagementProfileEditor initialProfile={{ configured: true, profile: migrated, revision: 1 }} today="2026-09-21"/>);
+  await click(button("4. Методи и дозиране"));
+  const dose = input("Изграждаща доза Z1–Z5");
+  expect(dose.value).toBe("65");
+  expect(dose.min).toBe("60");
+  expect(dose.max).toBe("70");
+  expect(container.textContent).toContain("при 90% готовност дозата е 54–63%");
+  expect(container.textContent).toContain("при 50% — 30–35% от Tmax");
+  expect(container.textContent).toContain("За Z1–Z5 изграждащата работа започва от 60–70%");
+  expect(container.textContent).toContain("Готовността намалява този дял веднъж");
+  expect(container.textContent).toContain("общият дял на профила е горна граница, а не начална доза");
+  expect(container.textContent).toContain("без да е задължително условие");
+  expect(container.textContent).not.toContain("Z5 изисква отделна скорошна максимална опора");
+  expect(container.textContent).not.toContain("Процентите за Z1–Z3 не се прилагат");
+});
 
 it("saves explicit learning controls without resetting the planning profile", async () => {
   const fetchMock = vi.fn(async (_url, init) => Response.json({ configured: true, revision: 2, profile: JSON.parse(init.body).profile }));
@@ -274,4 +292,30 @@ it("compares direct period volume with actual plus planned without counting casc
   expect(table.textContent).toContain("2:00:00");
   expect(table.textContent).toContain("0:30:00");
   expect(table.textContent).toContain("75.0%");
+});
+
+it("keeps separate microcycle shortfalls visible when the whole-period totals cancel", async () => {
+  const draft=parseDraftRecord({entry_key:"segments",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v30",status:"DRAFT",start_date:"2026-09-23",end_date:"2026-09-29",days:[],source:{},parameters:{volume_governor:"COMPONENT_7_40"},warnings:[],summary:{planned_minutes:0}}});
+  await mount(<TrainingPlanSummary plan={{...draft.payload,allocation:{
+    status:"LONG_TERM_SEGMENT_OBJECTIVES_WITH_PHYSIOLOGICAL_GATES",scheduled_slots:7,weekly_session_limit:7,
+    components:{Z1:{basis:"DIRECT_Q",target:120,actual:100,planned:20,remaining:0,target_effective:600,actual_effective:500,planned_effective:100,unallocated_effective:0}},
+    segments:[
+      {window_start:"2026-09-23",window_end:"2026-09-25",days:3,components:{Z1:{basis:"DIRECT_Q",target:60,actual:0,planned:20,remaining:40,target_effective:300,actual_effective:0,planned_effective:100,remaining_effective:200}}},
+      {window_start:"2026-09-26",window_end:"2026-09-29",days:4,components:{Z1:{basis:"DIRECT_Q",target:60,actual:100,planned:0,remaining:0,target_effective:300,actual_effective:500,planned_effective:0,remaining_effective:0,actual_exceeds_target:true,actual_effective_exceeds_target:true}}},
+    ],constraints:[],dose_limits:["ROLLING_Q_AND_7_40_BUDGET"],
+  }}}/>);
+  expect(container.textContent).toContain("Цели на дългосрочната програма");
+  expect(container.textContent).toContain("Остава непланиран товар: Z1");
+  const tables=[...container.querySelectorAll("table")];
+  expect(tables).toHaveLength(2);
+  expect(tables[0].querySelector("caption")?.textContent).toContain("23.09.2026 г. – 25.09.2026 г.");
+  expect(tables[1].querySelector("caption")?.textContent).toContain("26.09.2026 г. – 29.09.2026 г.");
+  const firstCells=[...tables[0].querySelectorAll("tbody td")].map(cell=>cell.textContent);
+  expect(firstCells[4]).toBe("0:40:00");
+  expect(firstCells[6]).toBe("3:20:00");
+  expect(tables[1].textContent).toContain("Изпълненото е над целта");
+  expect(container.textContent).toContain("Остатъкът не се прехвърля между микроцикли");
+  expect(container.textContent).not.toContain("LONG_TERM_SEGMENT_OBJECTIVES_WITH_PHYSIOLOGICAL_GATES");
+  expect(container.textContent).not.toContain("ROLLING_Q_AND_7_40_BUDGET");
+  expect(container.textContent).not.toContain("ограничението по 7/40");
 });

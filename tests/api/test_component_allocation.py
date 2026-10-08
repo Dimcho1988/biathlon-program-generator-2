@@ -41,6 +41,7 @@ def test_nonaccent_endurance_uses_weekly_need_without_raising_coach_fraction(mon
             row["effective_load"] = 140.
     p = body(sessions_per_week=9, sessions_by_day=[2,1,1,2,1,2,0],
              accent_mode="MANUAL", accents=["Z4","Z5"], wave=[1.,1.,1.,.78], mixed_sessions_enabled=False)
+    p["building_fraction"] = .65
     # Isolate the full endurance method; mixed candidates now legitimately
     # compete for the same slots and have their own allocation integration tests.
     p["max_key_sessions_per_week"] = 0
@@ -50,7 +51,7 @@ def test_nonaccent_endurance_uses_weekly_need_without_raising_coach_fraction(mon
     building = [s for s in selected if s["dose_evidence"]["selection"].get("endurance_dose_from_weekly_need")]
     assert building
     assert any(s["purpose"] == "BUILDING" and s["main_work_minutes"] > s["dose_evidence"]["capacity_minutes"]*.3 for s in building)
-    assert all(s["dose_evidence"]["applied_fraction"] <= .501 for s in selected if s["zone"] in {"Z1","Z2"})
+    assert all(s["dose_evidence"]["applied_fraction"] <= p["building_fraction"] + .001 for s in selected if s["zone"] in {"Z1","Z2"})
     assert p == original
     assert plan["allocation"]["scheduled_slots"] == 9
     assert plan["allocation"]["requires_catchup"] is False
@@ -110,7 +111,8 @@ def test_feasible_volume_is_realized_in_complete_sessions(monkeypatch, target):
     for session in selected:
         assert_readiness_dose(session)
         if session["purpose"] != "RECOVERY":
-            assert session["dose_evidence"]["applied_structure_fraction"] >= session["dose_evidence"]["min_dose_fraction"] - .001
+            evidence = session["dose_evidence"]
+            assert evidence.get("applied_minimum_capacity_fraction", evidence["applied_structure_fraction"]) >= evidence["min_dose_fraction"] - .001
 
 
 def test_period_objective_integrates_wave_and_counts_q_without_cascade():
@@ -153,7 +155,7 @@ def test_automatic_q_targets_match_outlook_and_no_micro_sessions(monkeypatch):
     for session in regular:
         evidence = session["dose_evidence"]
         assert_readiness_dose(session)
-        assert evidence["applied_structure_fraction"] >= evidence["min_dose_fraction"] - .001
+        assert evidence.get("applied_minimum_capacity_fraction", evidence["applied_structure_fraction"]) >= evidence["min_dose_fraction"] - .001
     # Recovery and supporting mixed blocks have their own existing minima;
     # changed expert capacities may make those methods win an allocation slot.
     for session in selected:

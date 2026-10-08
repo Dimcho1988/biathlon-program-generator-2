@@ -76,14 +76,38 @@ def test_management_requires_explicit_athlete_and_actor(api):
     assert client.put("/api/v2/athlete/management/profile", json={"profile": PROFILE, "expected_revision": 2}, headers=HEADERS).status_code == 200
 
 
-@pytest.mark.parametrize("fraction", [.6, .7, .8])
-def test_profile_saves_coach_building_doses_through_eighty_percent(api, fraction):
+@pytest.mark.parametrize("fraction,expected", [(.5, .65), (.55, .6), (.6, .6), (.65, .65), (.7, .7), (.8, .7)])
+def test_profile_saves_current_building_band_and_normalizes_legacy_choices(api, fraction, expected):
     client, store, _ = api
     response = client.put("/api/v2/athlete/management/profile",
                           json={"profile": {**PROFILE, "building_fraction": fraction}, "expected_revision": 2},
                           headers=HEADERS)
     assert response.status_code == 200
-    assert store.saved[-1]["building_fraction"] == fraction
+    assert store.saved[-1]["building_fraction"] == expected
+    assert response.json()["profile"]["building_fraction"] == expected
+
+
+def test_legacy_profile_read_uses_sixty_five_percent_without_writing_or_changing_other_doses(api):
+    client, store, _ = api
+    legacy = {**PROFILE, "building_fraction": .5, "maintenance_fraction": .4, "reentry_fraction": .5}
+    store.current["profile"] = deepcopy(legacy)
+    response = client.get("/api/v2/athlete/management/profile", headers=HEADERS)
+    assert response.status_code == 200
+    saved = response.json()["profile"]
+    assert saved["building_fraction"] == .65
+    assert saved["maintenance_fraction"] == .4 and saved["reentry_fraction"] == .5
+    assert store.current["profile"] == legacy and not store.saved
+    assert response.json()["revision"] == 2
+
+
+def test_building_default_and_legacy_schema_normalization_preserve_input_and_other_doses():
+    legacy = {**PROFILE, "building_fraction": .8, "maintenance_fraction": .4, "reentry_fraction": .5}
+    before = deepcopy(legacy)
+    parsed = ManagementProfile.model_validate(legacy)
+    assert parsed.building_fraction == .7
+    assert parsed.maintenance_fraction == .4 and parsed.reentry_fraction == .5
+    assert legacy == before
+    assert ManagementProfile.model_validate(PROFILE).building_fraction == .65
 
 
 def test_outlook_read_is_scoped_and_needs_neither_actor_nor_existing_draft(api):
@@ -214,7 +238,7 @@ def test_saved_draft_freezes_profile_source_and_checks_generation(api, monkeypat
     assert saved["check_generation"] is True and saved["expected_generation_id"] == "generation-a"
     assert saved["expected_revision"] == 3
     payload = result["payload"]
-    assert payload["input_snapshot"]["management_profile"]["building_fraction"] == .5
+    assert payload["input_snapshot"]["management_profile"]["building_fraction"] == .65
     assert len(payload["input_fingerprint"]) == 64
     assert payload["review_required"] and not payload["automatically_published"]
 
