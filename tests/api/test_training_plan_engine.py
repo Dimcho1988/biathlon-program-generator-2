@@ -255,6 +255,51 @@ def test_stale_snapshot_blocks_instead_of_projecting_unknown_days_as_rest():
     assert not sessions(result)
 
 
+@pytest.mark.parametrize("pause_days", [3, 7])
+def test_yesterday_coverage_keeps_adaptive_plan_after_confirmed_rest(pause_days):
+    repo = Repository()
+    source = repo.envelope["snapshot_payload"]["load_history"]
+    # Synthetic complete ledger, with a three- or seven-day confirmed pause.
+    for row in [*source["daily"], *source["strength"]["daily"]]:
+        if row["date"] < (TODAY-timedelta(days=pause_days)).isoformat() and row["effective_load"] == 0:
+            row["effective_load"] = 10.
+    for n in range(pause_days+1, 8):
+        day = (TODAY-timedelta(days=n)).isoformat()
+        activity = {**deepcopy(source["activities"][-1]), "activity_ref": f"resumed_{n}", "date": day}
+        source["activities"].append(activity)
+        repo.envelope["activities"].append({**activity, "local_date": day})
+    current = generate(repo, start=TODAY)
+    source["period_end"] = (TODAY-timedelta(days=1)).isoformat()
+    source["daily"] = [r for r in source["daily"] if r["date"] < TODAY.isoformat()]
+    source["strength"]["daily"] = [r for r in source["strength"]["daily"] if r["date"] < TODAY.isoformat()]
+    original = deepcopy(repo.envelope)
+    result = generate(repo, start=TODAY)
+    assert result["status"] == "DRAFT"
+    assert result["activation_eligible"] is True
+    assert sessions(result)
+    # Day-start readiness/dose uses the same completed inputs. Later rolling
+    # denominators can differ because today's measured zero was removed; never
+    # fabricate that measured row merely to force a forecast comparison.
+    assert result["days"][0] == current["days"][0]
+    assert generate(repo, start=TODAY) == result
+    for day in result["days"]:
+        if day["session"]:
+            for zone, load in day["session"]["canonical_effective_load"].items():
+                assert load <= day["load_budget"]["components"][zone]["deficit_effective"]+.002
+    assert repo.envelope == original
+
+
+def test_missing_last_completed_day_does_not_grant_readiness():
+    repo = Repository()
+    source = repo.envelope["snapshot_payload"]["load_history"]
+    source["period_end"] = (TODAY-timedelta(days=1)).isoformat()
+    source["daily"] = [r for r in source["daily"] if not (r["date"] == source["period_end"] and r["zone"] == "Z3")]
+    result = generate(repo)
+    assert not result["activation_eligible"]
+    assert source["period_end"] in result["source"]["planning_history"]["missing_calendar_days"]
+    assert all(d["readiness_before"]["Z3"] is None for d in result["days"])
+
+
 def test_no_fallback_means_no_guessed_training():
     result = generate(body=profile(allow_expert_fallback=False))
     assert not sessions(result)

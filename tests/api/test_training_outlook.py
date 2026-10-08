@@ -8,6 +8,30 @@ from biathlon.periodization import build_periodization
 from tests.api.test_training_plan_engine import Repository, TODAY, profile, reference_speed
 
 
+def test_yesterday_snapshot_preserves_live_targets_with_partial_hr_and_rest(monkeypatch):
+    from types import SimpleNamespace
+    from apps.api import management_service as service
+    from tests.api.test_planning_history_estimate import incomplete
+    from tests.api.test_load_progression import configured
+    from tests.api.test_training_plan_engine import NOW
+    repo, source = incomplete()
+    repo.active_analysis = lambda _: deepcopy(repo.envelope)
+    saved = {"configured": True, "revision": 1, "profile": configured(discipline="5000 m")}
+    monkeypatch.setattr(service, "ManagementStore", lambda _: SimpleNamespace(profile=lambda _: deepcopy(saved)))
+    monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
+    current = service.outlook(repo, "athlete", now=NOW)["outlook"]
+    source["period_end"] = (TODAY-timedelta(days=1)).isoformat()
+    source["daily"] = [r for r in source["daily"] if r["date"] < TODAY.isoformat()]
+    source["strength"]["daily"] = [r for r in source["strength"]["daily"] if r["date"] < TODAY.isoformat()]
+    original = deepcopy(repo.envelope)
+    result = service.outlook(repo, "athlete", now=NOW)["outlook"]
+    assert result["long_term"]["limited"] is False
+    assert result["long_term"] == current["long_term"]
+    assert any(w["components"]["Z3"]["target_period_q"] > 0 for w in result["long_term"]["weeks"])
+    assert result["source"]["as_of"] == source["period_end"]
+    assert repo.envelope == original
+
+
 def test_saved_race_recomputes_periods_without_rolling_the_existing_cycle(monkeypatch):
     from types import SimpleNamespace
     from apps.api import management_service as service

@@ -14,7 +14,7 @@ from biathlon import load_progression
 from biathlon.constants import COMPONENTS, fresh_parameters
 from biathlon.physiology import _causal_tref, effective_from_direct_vector
 
-VERSION = "planning-history-estimate-v1"
+VERSION = "planning-history-estimate-v2-completed-day-coverage"
 POLICY = "RECORDED_DURATION_EXPERT_Q_WITH_RECOVERY"
 ZONES = tuple(z for z in COMPONENTS if z != "STR")
 
@@ -95,7 +95,9 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None):
     covered = {(r["date"], r["zone"]) for r in source.get("daily", [])}
     covered.update((r["date"], "STR") for r in source.get("strength", {}).get("daily", []))
     begin = max(date.fromisoformat(source.get("period_start", today.isoformat())), today-timedelta(days=40))
-    end = min(date.fromisoformat(source.get("period_end", today.isoformat())), today)
+    # Snapshot period_end is inclusive; inspect its final completed day too.
+    # Today's open day is excluded from the historical readiness check.
+    end = min(date.fromisoformat(source.get("period_end", today.isoformat()))+timedelta(days=1), today)
     missing_days = [(begin+timedelta(days=i)).isoformat() for i in range(max(0, (end-begin).days))
                     if any(((begin+timedelta(days=i)).isoformat(), z) not in covered for z in COMPONENTS)]
     diagnostics = {"version": VERSION, "policy": POLICY, "estimated": bool(candidates),

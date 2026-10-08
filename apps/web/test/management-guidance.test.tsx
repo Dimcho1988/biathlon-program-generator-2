@@ -44,6 +44,13 @@ describe("one next action without relaxing publication gates", () => {
     expect(managementGuidance({ ...base, draft: draft([], true, null) }).step).toBe("GENERATE");
     expect(managementGuidance({ ...base, draft: draft(["WEEKLY_VOLUME_REQUIRED"], false, true) }).step).toBe("GENERATE");
   });
+  it("regenerates yesterday's draft instead of blocking on confirmed rest or old warnings", () => {
+    expect(managementGuidance({ ...base, draft: draft([], true, true), sync: sync("old", "2026-09-20") }).step).toBe("GENERATE");
+    expect(managementGuidance({ ...base, draft: draft(["STALE_LOAD_SNAPSHOT"], false, true), sync: sync("old", "2026-09-20") }).step).toBe("GENERATE");
+    expect(managementGuidance({ ...base, sync: sync("old", "2026-09-20") }).step).toBe("GENERATE");
+    expect(managementGuidance({ ...base, draft: draft([], true), sync: sync("old", "2026-09-20") }).step).toBe("REVIEW");
+    expect(managementGuidance({ ...base, draft: draft([], true, true), sync: sync("old", "2026-09-19") }).step).toBe("SYNC");
+  });
   it("keeps profile work on its own page and hides blocked empty weeks", () => {
     const blocked = draft(["STALE_LOAD_SNAPSHOT", "METHOD_PROFILE_Z4"]);
     expect(hasProgramDays(blocked.payload)).toBe(false);
