@@ -33,7 +33,7 @@ def single_anchor_context(*, blended=False):
 def test_single_long_anchor_supplies_z5_curve_effort_without_fake_short_test(blended):
     speed, context = single_anchor_context(blended=blended)
     original = deepcopy(context[1])
-    evidence = model_interval_curve_capacity(method(), SETTINGS, speed, context)
+    evidence = model_interval_curve_capacity(method(), SETTINGS, speed, context, use_model_prior=True)
     reference = min(600., context[0].duration(SETTINGS.zone_bounds_bpm[4])*.5)
     assert evidence["capacity_minutes"] == reference/60
     assert evidence["target_speed_kmh"] == pytest.approx(context[0].curve.speed(reference)*3.6)
@@ -52,7 +52,7 @@ def test_active_short_anchor_is_preserved_without_recency_cutoff():
               "test_mode": "STRICT", "day": "2025-01-01"}]
     curve = speed_duration.calibrated(tests)
     predictor = hr_speed.Predictor(curve, SETTINGS.zone_bounds_bpm, SETTINGS.hrmax_bpm, {})
-    evidence = model_interval_curve_capacity(method(), SETTINGS, speed, (predictor, tests, []))
+    evidence = model_interval_curve_capacity(method(), SETTINGS, speed, (predictor, tests, []), use_model_prior=True)
     assert evidence["capacity_source"] == "SPEED_DURATION_TEST_ANCHOR"
     assert evidence["capacity_minutes"] == 165/60
     assert evidence["test_anchor"] == tests[0]
@@ -62,7 +62,7 @@ def test_active_short_anchor_is_preserved_without_recency_cutoff():
 def test_z5_reference_scales_with_actual_boundary_before_ten_minute_cap():
     speed, (predictor, tests, _) = single_anchor_context()
     predictor.duration = lambda _: 800.
-    evidence = model_interval_curve_capacity(method(), SETTINGS, speed, (predictor, tests, []))
+    evidence = model_interval_curve_capacity(method(), SETTINGS, speed, (predictor, tests, []), use_model_prior=True)
     assert evidence["boundary_capacity_seconds"] == 800.
     assert evidence["capacity_minutes"] == pytest.approx(400/60)
     assert evidence["target_speed_kmh"] == pytest.approx(predictor.curve.speed(400)*3.6)
@@ -73,7 +73,7 @@ def test_available_preliminary_curve_is_visible_estimate_without_measured_anchor
     speed, (predictor, _, _) = single_anchor_context()
     speed["status"] = "PRELIMINARY"
     evidence = model_interval_curve_capacity(method(), SETTINGS, speed,
-        (predictor, [], ["INSUFFICIENT_INDEPENDENT_TEST_DURATIONS"]))
+        (predictor, [], ["INSUFFICIENT_INDEPENDENT_TEST_DURATIONS"]), use_model_prior=True)
     assert evidence["capacity_is_estimate"]
     assert evidence["supported_test_duration_s"] is None
     assert "test_anchor" not in evidence
@@ -84,7 +84,7 @@ def test_race_specific_single_anchor_uses_actual_curve_inverse_at_prescribed_spe
     speed, context = single_anchor_context(blended=blended)
     target = context[0].curve.speed(900)*3.6
     band = {"speed_kmh": target, "maximum_duration_s": 1200., "zone": "Z5"}
-    evidence = model_interval_curve_capacity(method(race_specific=band), SETTINGS, speed, context)
+    evidence = model_interval_curve_capacity(method(race_specific=band), SETTINGS, speed, context, use_model_prior=True)
     assert evidence["capacity_minutes"] == pytest.approx(15.)
     assert evidence["target_speed_kmh"] == target
     assert evidence["race_specific"] == band
@@ -97,16 +97,16 @@ def test_race_specific_single_anchor_uses_actual_curve_inverse_at_prescribed_spe
     ({"status": "CONFLICTING_TESTS"}, (None, [], ["NO_INDIVIDUAL_SPEED_CURVE"])),
 ])
 def test_no_available_individual_curve_cannot_invent_z5_capacity(speed, context):
-    assert model_interval_curve_capacity(method(), SETTINGS, speed, context) is None
+    assert model_interval_curve_capacity(method(), SETTINGS, speed, context, use_model_prior=True) is None
 
 
 def test_invalid_context_and_interval_longer_than_capacity_still_fail():
     speed, (predictor, tests, _) = single_anchor_context()
     assert model_interval_curve_capacity(method(), SETTINGS, speed,
-        (predictor, tests, ["EXPLORATORY_OR_NONMAXIMAL_TESTS"])) is None
+        (predictor, tests, ["EXPLORATORY_OR_NONMAXIMAL_TESTS"]), use_model_prior=True) is None
     reference = min(600., predictor.duration(SETTINGS.zone_bounds_bpm[4])*.5)
     assert model_interval_curve_capacity(method(interval_template={"work_seconds": reference}),
-        SETTINGS, speed, (predictor, tests, [])) is None
+        SETTINGS, speed, (predictor, tests, []), use_model_prior=True) is None
 
 
 def test_z5_model_reference_must_remain_above_actual_z4_boundary():
@@ -114,7 +114,7 @@ def test_z5_model_reference_must_remain_above_actual_z4_boundary():
     # The declared Z4 boundary cannot silently become generic Z5 effort.
     reference = min(600., context[0].duration(SETTINGS.zone_bounds_bpm[4])*.5)
     context[0].speed_for_hr = lambda _: context[0].curve.speed(reference)*3.6 + .01
-    assert model_interval_curve_capacity(method(), SETTINGS, speed, context) is None
+    assert model_interval_curve_capacity(method(), SETTINGS, speed, context, use_model_prior=True) is None
 
 
 def metabolic_method(target, *, basis="FLAT_EQUIVALENT", assessed_on="2026-01-01"):
@@ -138,7 +138,7 @@ def test_individual_flat_speed_profile_uses_single_anchor_curve_inverse_outside_
     target = context[0].curve.speed(600)*3.6
     original = deepcopy(speed)
     profile = metabolic_method(target)
-    evidence = engine.capacity_for(profile, SETTINGS, speed, context, date(2026, 10, 8))
+    evidence = engine.capacity_for(profile, SETTINGS, speed, context, date(2026, 10, 8), use_model_prior=True)
     assert evidence["capacity_source"] == "SPEED_DURATION"
     assert evidence["capacity_minutes"] == pytest.approx(10.)
     assert evidence["target_speed_kmh"] == target
@@ -158,7 +158,7 @@ def test_individual_flat_speed_profile_uses_actual_blended_curve_inverse(monkeyp
     blend = dosing_curve.Curve(index, plain)
     monkeypatch.setattr(dosing_curve, "from_view", lambda _: blend)
     target = blend.speed(600)*3.6
-    evidence = engine.capacity_for(metabolic_method(target), SETTINGS, speed, context, date(2026, 10, 8))
+    evidence = engine.capacity_for(metabolic_method(target), SETTINGS, speed, context, date(2026, 10, 8), use_model_prior=True)
     assert evidence["capacity_source"] == "BLENDED_DOSING_CURVE"
     assert evidence["capacity_minutes"] == pytest.approx(10.)
     assert evidence["model_version"] == dosing_curve.VERSION
@@ -170,7 +170,7 @@ def test_curve_capacity_changes_denominator_without_creating_canonical_zone_work
     target = context[0].curve.speed(600)*3.6
     method = metabolic_method(target)
     today = date(2026, 10, 8)
-    evidence = engine.capacity_for(method, SETTINGS, speed, context, today)
+    evidence = engine.capacity_for(method, SETTINGS, speed, context, today, use_model_prior=True)
     blocks = engine._blocks(method, 3., evidence, SETTINGS)
     direct, effective, _ = engine._canonical_load(blocks, SETTINGS, [], today)
     assert evidence["capacity_minutes"] == pytest.approx(10.)
@@ -227,7 +227,7 @@ def test_single_anchor_race_methods_use_available_dosing_curve_and_actual_capaci
     settings = SimpleNamespace(zone_bounds_bpm=BOUNDS, hrmax_bpm=205)
     context = engine._capacity_context(view, settings)
     for m in methods:
-        capacity = engine.capacity_for(m, settings, view, context, today)
+        capacity = engine.capacity_for(m, settings, view, context, today, use_model_prior=True)
         assert capacity["capacity_source"] == "BLENDED_DOSING_CURVE"
         assert capacity["target_speed_kmh"] == m["race_specific"]["speed_kmh"]
         assert capacity["capacity_minutes"] == pytest.approx(m["race_specific"]["maximum_duration_s"]/60)

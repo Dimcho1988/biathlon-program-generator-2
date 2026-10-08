@@ -234,7 +234,7 @@ def capacity_for(method, settings, speed, context, today, allow_fallback=True, *
     if method["structure"] == "MODEL_INTERVALS":
         if method.get("race_specific") or zone == "Z5":
             from .method_capacity import model_interval_curve_capacity
-            base = model_interval_curve_capacity(method, settings, speed, context)
+            base = model_interval_curve_capacity(method, settings, speed, context, use_model_prior=use_model_prior)
         else:
             base = capacity_for({**method, "structure": "CONTINUOUS"}, settings, speed, context, today, allow_fallback, use_model_prior=use_model_prior)
         if base is None:
@@ -272,9 +272,15 @@ def capacity_for(method, settings, speed, context, today, allow_fallback=True, *
                         seconds = curve.inverse(p["target_speed_kmh"] / 3.6)
                         observed = [t["duration_s"] for t in anchors]
                         within_window = bool(observed) and min(observed) <= seconds <= max(observed)
-                        capacity, source = seconds / 60, ("BLENDED_DOSING_CURVE" if blend else
-                            "SPEED_DURATION" if anchors else "SPEED_DURATION_PRIOR")
-                        capacity_model_version = dosing_curve.VERSION if blend else getattr(curve, "model_version", speed["model_version"])
+                        from .method_capacity import observed_curve_support
+                        if use_model_prior or observed_curve_support(anchors, seconds):
+                            capacity, source = seconds / 60, ("BLENDED_DOSING_CURVE" if blend else
+                                "SPEED_DURATION" if anchors else "SPEED_DURATION_PRIOR")
+                            capacity_model_version = dosing_curve.VERSION if blend else getattr(curve, "model_version", speed["model_version"])
+                        else:
+                            # A permitted coach assessment retains its own
+                            # provenance, not the rejected curve's support.
+                            observed, within_window = [], False
                 except ValueError:
                     pass
         if source == "COACH_EFFORT_CAPACITY" and not 0 <= (today - date.fromisoformat(p["assessed_on"])).days <= 42:
@@ -322,8 +328,11 @@ def capacity_for(method, settings, speed, context, today, allow_fallback=True, *
     # The separate 30/70 curve is an explicit coaching estimate, including its
     # extrapolated part. Existing fallback settings still control whether such
     # estimates may prescribe a dose; stale/invalid data remain disqualifying.
-    blend_allowed = isinstance(predictor, dosing_curve.Predictor) and (not reasons or allow_fallback
-        and set(reasons) <= prior_reasons | {"INSUFFICIENT_COMPARABLE_INDEX_OBSERVATIONS"})
+    from .method_capacity import observed_curve_support
+    blend_allowed = (isinstance(predictor, dosing_curve.Predictor)
+        and (use_model_prior or observed_curve_support(tests, duration))
+        and (not reasons or allow_fallback
+             and set(reasons) <= prior_reasons | {"INSUFFICIENT_COMPARABLE_INDEX_OBSERVATIONS"}))
     if (not reasons or prior_allowed or blend_allowed) and duration is not None:
         source = "BLENDED_DOSING_CURVE" if blend_allowed else "SPEED_DURATION_PRIOR" if prior_allowed else "SPEED_DURATION"
         minutes = duration / 60.

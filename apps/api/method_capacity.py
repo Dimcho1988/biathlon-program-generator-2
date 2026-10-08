@@ -20,13 +20,26 @@ def _positive(value):
             and math.isfinite(value) and value > 0)
 
 
-def model_interval_curve_capacity(method, settings, speed, context):
+def observed_curve_support(tests, duration_seconds):
+    """Two accepted independent durations bound an observed-only dose."""
+    if not _positive(duration_seconds):
+        return False
+    durations = {t["duration_s"] for t in tests if t.get("maximal")
+                 and t.get("test_mode", "STRICT") == "STRICT"
+                 and not t.get("generated") and not t.get("is_estimated")
+                 and _positive(t.get("duration_s")) and _positive(t.get("speed_kmh"))}
+    return (len(durations) >= 2 and min(durations)-1e-7 <= duration_seconds <= max(durations)+1e-7)
+
+
+def model_interval_curve_capacity(method, settings, speed, context, *, use_model_prior=False):
     """Continuous Tmax at the method effort from the available curve.
 
     The caller retains whole repetitions, method ceilings and Q/E checks.
     Only race-specific methods and generic Z5 are handled here; other zones
     use their existing HR-to-time mapping. A curve estimate is never emitted
-    as a measured maximal test.
+    as a measured maximal test. Model estimates are an explicit policy;
+    observed-only dosing requires two independent accepted test durations
+    surrounding the requested continuous capacity.
     """
     predictor, tests, reasons = context
     if (method.get("structure") != "MODEL_INTERVALS"
@@ -90,6 +103,8 @@ def model_interval_curve_capacity(method, settings, speed, context):
     else:
         return None
     if not _positive(duration) or not _positive(target):
+        return None
+    if not use_model_prior and not observed_curve_support(tests, duration):
         return None
     if method.get("interval_template", {}).get("work_seconds", 0) >= duration:
         return None
