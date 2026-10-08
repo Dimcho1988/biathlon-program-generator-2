@@ -114,14 +114,19 @@ def test_stale_daily_data_does_not_clip_coach_outlook_or_blend_microcycle_peaks(
     from tests.api.test_planning_controls import controls
     _, store, repository = api
     source = deepcopy(Repository().envelope)
+    ledger = source['snapshot_payload']['load_history']
+    ledger['period_end'] = (TODAY-timedelta(days=1)).isoformat()
+    ledger['daily'] = [r for r in ledger['daily'] if r['date'] < TODAY.isoformat()]
+    ledger['strength']['daily'] = [r for r in ledger['strength']['daily'] if r['date'] < TODAY.isoformat()]
     repository.active_analysis = lambda _: source
     store.current['profile'].update(
         program_start=TODAY.isoformat(), reentry_days=0,
         available_minutes=[60, 60, 60, 60, 60, 90, 0],
         planning_controls=controls(accent_mode='MANUAL', accents=['Z3'],
                                    wave=[.96, 1.4, 1.5, .78], accent_index=1.1))
-    # Replay the actual report: the latest analysis is yesterday and the coach
-    # has a legacy 6.5-hour template plus a 1.5 wave, with no explicit time cap.
+    # One completed day is genuinely uncovered at evaluation time. Yesterday's
+    # complete history is current; a two-day-old snapshot still stays limited.
+    # Keep the legacy template and 1.5 wave, with no explicit time cap.
     result = service.outlook(repository, 'ath-test', now=NOW+timedelta(days=1))['outlook']
     assert result['long_term']['limited'] is True
     assert result['volume_context']['availability_mode'] == 'AUTO_HISTORY'

@@ -85,7 +85,7 @@ def outlook(repository, alias, *, now=None):
     history = engine.planning_controls.volume_history(source, today, 0, gap_days=(controls or {}).get("history_gap_days", engine.planning_history.DEFAULT_GAP_DAYS))
     limited = (not history["history_policy"]["usable"] or any(not v["known"] for v in engine.planning_controls.reference(rows, today).values())
                or not planning_evidence["supported"]
-               or source.get("period_end") != today.isoformat())
+               or engine.planning_history.completed_day_lag(source, today) != 0)
     limited = limited or not engine.load_progression.history_matches(source, {"bounds": list(settings.zone_bounds_bpm), "hrmax": settings.hrmax_bpm} if settings else None)
     volume = engine.planning_controls.volume_basis(profile, history)
     reentry_days, reentry_reason = engine.planning_history.reentry(profile, history)

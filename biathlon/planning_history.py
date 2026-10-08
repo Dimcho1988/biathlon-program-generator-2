@@ -8,6 +8,16 @@ DEFAULT_GAP_DAYS = 10  # Visible coaching rule, configurable in planning control
 LEGACY_AVAILABILITY = [60, 60, 60, 60, 60, 90, 0]
 
 
+def completed_day_lag(source, today):
+    """Missing completed days; today's open calendar day is not a data gap.
+
+    This checks the snapshot cutoff only. Per-component ledger coverage and
+    activity quality still independently decide whether readiness is known.
+    """
+    end = source.get("period_end")
+    return max(0, (today-timedelta(days=1)-date.fromisoformat(end)).days) if end else None
+
+
 def assess(source, today, *, gap_days=DEFAULT_GAP_DAYS):
     cutoff = today-timedelta(days=28)
     sets = [{r["date"] for r in source.get("daily", []) if r["zone"] == z} for z in COMPONENTS if z != "STR"]

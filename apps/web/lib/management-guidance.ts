@@ -12,13 +12,21 @@ export function managementGuidance({ configured, dirty, draft, sync, today }: {
   if (!configured || dirty) return { step: "PROFILE", title: configured ? "Запази промените в профила" : "За какво се подготвяш?", description: configured ? "Новата програма ще използва запазените настройки." : "Посочи спорта, целта и времето за тренировки. Началните настройки са попълнени." };
   if (sync && syncInProgress(sync)) return { step: "WAIT", title: "Обновяваме тренировките", description: "Остани тук. Екранът ще се обнови автоматично, когато данните са готови." };
   const freshGeneration = !!sync?.active_generation_id && !!draft?.payload.source.generation_id && sync.active_generation_id !== draft.payload.source.generation_id;
-  const staleAnalysis = !!sync?.analysis_as_of && sync.analysis_as_of < today;
+  // Readiness is assessed at day start from completed calendar days. A fresh
+  // snapshot through yesterday must not prevent the new day's adaptation.
+  const previousDay = new Date(`${today}T12:00:00Z`);
+  previousDay.setUTCDate(previousDay.getUTCDate() - 1);
+  const staleAnalysis = !!sync?.analysis_as_of && sync.analysis_as_of < previousDay.toISOString().slice(0, 10);
   if (freshGeneration && !staleAnalysis) return { step: "GENERATE", title: "Данните са обновени", description: "Подготви програмата с последните тренировки и текущите настройки." };
   const codes = new Set(draft?.payload.warnings.map(w => w.code));
-  if (codes.has("STALE_LOAD_SNAPSHOT") || codes.has("ACTUAL_LOAD_WITHOUT_SESSION_METADATA") || staleAnalysis) return {
+  if (staleAnalysis) return { step: "SYNC", title: "Първо обнови тренировките", description: "Има дни без потвърдени данни. Обновяването от Intervals ще позволи да оценим днешната готовност." };
+  // A previous draft's warnings describe its frozen inputs, not the current
+  // snapshot. Regenerate it before deciding which current inputs are missing.
+  if (draft && draft.stale !== false) return { step: "GENERATE", title: "Подготви актуална програма", description: "Ще видиш конкретните тренировки за следващите дни и ще ги прегледаш преди започване." };
+  if (codes.has("STALE_LOAD_SNAPSHOT") || codes.has("ACTUAL_LOAD_WITHOUT_SESSION_METADATA")) return {
     step: "SYNC", title: "Първо обнови тренировките", description: "Има дни без потвърдени данни. Обновяването от Intervals ще позволи да оценим днешната готовност.",
   };
-  if (!draft || draft.stale !== false || codes.has("INPUT_GENERATION_CHANGED") || draft.payload.start_date < today) return { step: "GENERATE", title: draft ? "Подготви актуална програма" : "Готови сме да подготвим програмата", description: "Ще видиш конкретните тренировки за следващите дни и ще ги прегледаш преди започване." };
+  if (!draft || codes.has("INPUT_GENERATION_CHANGED") || draft.payload.start_date < today) return { step: "GENERATE", title: draft ? "Подготви актуална програма" : "Готови сме да подготвим програмата", description: "Ще видиш конкретните тренировки за следващите дни и ще ги прегледаш преди започване." };
   if (codes.has("WEEKLY_VOLUME_REQUIRED")) return { step: "PROFILE", title: "Липсва досегашният тренировъчен обем", description: "В профила въведи обема за последните четири седмици. За готовността са нужни и актуални записи на тренировките." };
   if (codes.has("UNKNOWN_INTERVENING_LOAD")) return { step: "START_DATE", title: "Избери начало днес или утре", description: "За по-далечно начало още не знаем междинните тренировки. Програмата се уточнява според реалното изпълнение." };
   if (draft.payload.activation_eligible === true) return { step: "REVIEW", title: "Програмата е готова за преглед", description: "Избери ден, за да видиш тренировката. Натисни „Започни програмата“, когато си готов." };

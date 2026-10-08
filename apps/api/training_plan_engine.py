@@ -26,7 +26,7 @@ from . import model_service, load_adaptation, race_duration, planning_history_es
 from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 
-VERSION = "training-management-v26"
+VERSION = "training-management-v27-completed-day-coverage"
 PARAMETER_VERSION = "management-parameters-v26"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
@@ -942,7 +942,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     component_history_days = {z: len({r["date"] for r in rows if r["zone"] == z and
                                   (today - timedelta(days=40)).isoformat() <= r["date"] < today.isoformat()}) for z in COMPONENTS}
     as_of = source.get("period_end")
-    missing_days = max(0, (today - date.fromisoformat(as_of)).days) if as_of else None
+    missing_days = planning_history.completed_day_lag(source, today)
     limited = not history_policy["usable"] or min(component_history_days.values()) < planning_history.MINIMUM_DAYS or not planning_evidence["supported"]
     equivalence_changed = not load_progression.history_matches(source, {"bounds": list(settings.zone_bounds_bpm), "hrmax": settings.hrmax_bpm})
     if equivalence_changed:
@@ -959,7 +959,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         warnings.append(_warning("DOUBLE_THRESHOLD_PROFILE_REQUIRED", "За прагова част в Z4 е нужен индивидуален прагoв интервален профил. Профил за аеробна мощност не го замества."))
     for missing in catalog(profile)["disabled"]:
         warnings.append(_warning("METHOD_PROFILE_" + missing["component"], missing["reason"]))
-    blocked = equivalence_changed or (missing_days is not None and missing_days > 1)
+    blocked = equivalence_changed or (missing_days is not None and missing_days > 0)
     if missing_days:
         limited = True
         warnings.append(_warning("STALE_LOAD_SNAPSHOT", "Има непокрити дни след последния анализ. Обновете активностите; липсата на запис не доказва почивка."))
