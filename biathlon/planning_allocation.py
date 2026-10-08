@@ -161,10 +161,36 @@ def quota(windows, opportunities, rows, day, slot, *, objectives=None):
     return result
 
 
-def coverage(effective, allocation, accents):
-    """Reward needed canonical load; cascade is accounted once per component."""
-    return sum((2. if z in accents else 1.) * min(effective[z], allocation[z]) / max(1., allocation[z])
+def coverage(effective, allocation, accents, *, targets=None):
+    """Credit needed load against a fixed target when one is supplied.
+
+    The caller supplies load in the objective's units. Remaining allocation
+    still caps credit, but a nearly exhausted objective must not turn a small
+    residual into the reward for a complete long-term target.
+    """
+    denominator = allocation if targets is None else targets
+    return sum((2. if z in accents else 1.) * min(effective[z], allocation[z]) / max(1., denominator[z])
                for z in COMPONENTS if allocation[z] > 0)
+
+
+def quality_priority(zone, objectives):
+    """Prefer a feasible primary whose known direct objective is uncovered.
+
+    Direct preparation counts toward Z1; canonical cascade from another zone
+    does not establish direct coverage. Unknown actual Q cannot authorize a
+    priority, including for legacy objectives governed by canonical E.
+    """
+    row = objectives[zone]
+    remaining = row.get("remaining")
+    if remaining is None or remaining <= 0:
+        return 0
+    if "actual_q" in row or "planned_q" in row:
+        actual, planned = row.get("actual_q"), row.get("planned_q")
+    elif row.get("basis") == "DIRECT_Q":
+        actual, planned = row.get("actual"), row.get("planned")
+    else:
+        return 0
+    return int(actual is not None and planned is not None and actual + planned < .005)
 
 
 def report(windows, actual, forecast, days, scheduled_slots, weekly_limit, history_minutes, *, source=None, segment_keys=None):

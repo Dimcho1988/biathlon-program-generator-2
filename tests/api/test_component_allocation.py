@@ -31,6 +31,61 @@ def test_future_build_target_cannot_fill_today_taper_budget():
     assert planning_allocation.coverage({z:200. for z in COMPONENTS}, {z:10. for z in COMPONENTS}, []) == 6.
 
 
+def test_coverage_fixed_target_does_not_magnify_small_remaining_allocation():
+    load = {z: 0. for z in COMPONENTS}
+    allocation = {z: 0. for z in COMPONENTS}
+    targets = {z: 100. for z in COMPONENTS}
+    load["Z1"], allocation["Z1"], targets["Z1"] = 12.81, 12.863, 81.364
+    assert planning_allocation.coverage(load, allocation, []) == pytest.approx(12.81 / 12.863)
+    assert planning_allocation.coverage(load, allocation, [], targets=targets) == pytest.approx(12.81 / 81.364)
+
+
+def test_coverage_fixed_target_caps_credit_at_remaining_and_preserves_accents():
+    load = {z: 200. for z in COMPONENTS}
+    allocation = {z: 0. for z in COMPONENTS}
+    targets = {z: 100. for z in COMPONENTS}
+    allocation["Z2"], allocation["Z4"] = 5., 10.
+    assert planning_allocation.coverage(load, allocation, ["Z4"], targets=targets) == pytest.approx(.25)
+
+
+@pytest.mark.parametrize("actual,planned,remaining,expected", [
+    (0., 0., 20., 1),
+    (.002, .002, 20., 1),
+    (.002, .003, 20., 0),
+    (0., 5., 20., 0),
+    (5., 0., 20., 0),
+    (0., 0., 0., 0),
+    (None, 0., 20., 0),
+    (0., None, 20., 0),
+    (0., 0., None, 0),
+])
+def test_quality_priority_requires_known_uncovered_direct_load(actual, planned, remaining, expected):
+    objective = {"basis": "DIRECT_Q", "actual_q": actual, "planned_q": planned,
+                 "remaining": remaining, "actual_effective": 30., "planned_effective": 40.}
+    assert planning_allocation.quality_priority("Z4", {"Z4": objective}) == expected
+
+
+def test_quality_priority_uses_direct_q_for_legacy_e_and_counts_z1_preparation():
+    objectives = {
+        "Z1": {"basis": "DIRECT_Q", "remaining": 50., "actual_q": 0., "planned_q": 7.9},
+        "Z2": {"basis": "CANONICAL_E", "remaining": 50., "actual_q": 0., "planned_q": 0.,
+               "actual": 10., "planned": 15.},
+        "Z3": {"basis": "CANONICAL_E", "remaining": 50., "actual_q": None, "planned_q": 0.,
+               "actual": 10., "planned": 15.},
+    }
+    assert planning_allocation.quality_priority("Z1", objectives) == 0
+    assert planning_allocation.quality_priority("Z2", objectives) == 1
+    assert planning_allocation.quality_priority("Z3", objectives) == 0
+
+
+def test_quality_priority_direct_basis_fallback_does_not_treat_cascade_as_coverage():
+    direct = {"basis": "DIRECT_Q", "remaining": 20., "actual": 0., "planned": 0.,
+              "actual_effective": 10., "planned_effective": 15.}
+    legacy = {"basis": "CANONICAL_E", "remaining": 20., "actual": 0., "planned": 0.}
+    assert planning_allocation.quality_priority("Z5", {"Z5": direct}) == 1
+    assert planning_allocation.quality_priority("Z5", {"Z5": legacy}) == 0
+
+
 def test_nonaccent_endurance_uses_weekly_need_without_raising_coach_fraction(monkeypatch):
     repo = Repository()
     source = repo.envelope["snapshot_payload"]["load_history"]
