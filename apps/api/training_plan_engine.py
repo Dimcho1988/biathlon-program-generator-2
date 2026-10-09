@@ -1161,6 +1161,12 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             and any(r["date"] == d.isoformat() and r["effective_load"] > 0 for r in rows)
             and (not locked_day or locked_day["date"] != d.isoformat()
                 or set(locked_day.get("activity_refs", [])) == {a["activity_ref"] for a in actual}))
+    def first_plannable_slot(d):
+        return (len(actual_by_day[d]) if actual_slots_known(d) else slot_counts[d]) if actual_by_day[d] else 0
+
+    def unexecuted_slot_count(d):
+        return max(0, slot_counts[d]-first_plannable_slot(d))
+
     sessions = len(existing_in_draft)
     key_sessions = sum(any(z.get("raw_time_min", 0) >= 5 and z["zone"] in {"Z3", "Z4", "Z5"}
                            for z in a.get("zones", [])) for a in existing_in_draft)
@@ -1192,12 +1198,12 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         if any(e["event_type"] in {"MAIN_RACE", "CONTROL_RACE", "TEST", "UNAVAILABLE"} and
                str(e["start_date"]) <= d.isoformat() <= str(e["end_date"]) for e in events):
             continue
-        if actual_by_day[d]:
+        if not unexecuted_slot_count(d):
             continue
         previous_key = key_slots[-1] if key_slots else last_key_day
         if previous_key and (d - previous_key).days < 2:
             continue
-        needed = 2 if d.weekday() in double_days and slot_counts[d] >= 2 else 1
+        needed = 2 if d.weekday() in double_days and unexecuted_slot_count(d) >= 2 else 1
         if reserved_key_count + needed <= max(0, key_limit - key_sessions):
             key_slots.append(d)
             reserved_key_count += needed
@@ -1225,7 +1231,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         for z in COMPONENTS:
             if z in {"Z3", "Z4", "Z5"} and d not in key_slots and not (progression and z == "Z3" and key_slots and d > key_slots[-1]):
                 continue
-            if z in {"Z3", "Z4", "Z5"} and slot >= (2 if d.weekday() in double_days and count >= 2 else 1):
+            if z in {"Z3", "Z4", "Z5"} and slot >= first_plannable_slot(d)+(2 if d.weekday() in double_days and unexecuted_slot_count(d) >= 2 else 1):
                 continue
             if z == "STR" and not profile.get("strength_enabled"):
                 continue
@@ -1300,7 +1306,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     ceiling = min(ceiling, profile.get("maintenance_fraction", .3))
                 if not blocks or _dose_usage(blocks, cap, fm["zone"]) > ceiling*factor + .001:
                     continue
-                if sum(b["duration_min"] for b in blocks) > available[d.weekday()] + .001:
+                if sum(b["duration_min"] for b in blocks) > available[d.weekday()]-sum(a.get("duration_min") or 0. for a in actual_by_day[d]) + .001:
                     continue
                 fq, fe, _ = _candidate_load(blocks, settings, forecast_rows, d)
                 if (all(fe[z] <= future_budget[z]["deficit_effective"] + .001 for z in COMPONENTS)
@@ -1336,7 +1342,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 and available[later.weekday()] >= 25
                 and not any(e['event_type'] in {'MAIN_RACE','CONTROL_RACE','TEST','UNAVAILABLE'}
                     and str(e['start_date']) <= later.isoformat() <= str(e['end_date']) for e in events)
-                and not any(a['date'] == later.isoformat() for a in source.get('activities', []))
+                and unexecuted_slot_count(later)
                 for later in goal_windows)
         return False
 
@@ -1360,7 +1366,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             if any(e["event_type"] in {"MAIN_RACE","CONTROL_RACE","TEST","UNAVAILABLE"}
                    and str(e["start_date"]) <= d.isoformat() <= str(e["end_date"]) for e in events):
                 continue
-            if any(a["date"] == d.isoformat() for a in source.get("activities",[])):
+            if not unexecuted_slot_count(d):
                 continue
             forecast = {r["zone"]:r["readiness_percent"] for r in recovery_v2.simulate(forecast_rows,configs["zones"],target=d,include_details=False)["current"]}
             future_budget, future_q, _ = component_budgets(forecast_rows, result_days, d)
@@ -1368,7 +1374,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 continue
             if not executable_key(d, forecast, future_budget, future_q):
                 continue
-            needed = 2 if d.weekday() in double_days and slot_counts[d] >= 2 else 1
+            needed = 2 if d.weekday() in double_days and unexecuted_slot_count(d) >= 2 else 1
             needed = min(needed, max(0, key_limit-key_sessions-reserved))
             if not needed:
                 continue
@@ -1383,10 +1389,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         for z in ("Z3","Z4","Z5"):
             opportunities[z] = [(d,s) for d,s,count in schedule if count
                 and (d in key_slots or progression and z == "Z3" and key_slots and d > key_slots[-1])
-                and s < (2 if d.weekday() in double_days and count >= 2 else 1)
+                and first_plannable_slot(d) <= s < first_plannable_slot(d)+(2 if d.weekday() in double_days and unexecuted_slot_count(d) >= 2 else 1)
                 and not any(e["event_type"] in {"MAIN_RACE","CONTROL_RACE","TEST","UNAVAILABLE"}
                     and str(e["start_date"]) <= d.isoformat() <= str(e["end_date"]) for e in events)
-                and not any(a["date"] == d.isoformat() for a in source.get("activities",[]))]
+                and unexecuted_slot_count(d)]
     reserve_remaining_keys(start_date-timedelta(days=1))
     for day, slot_index, slots_today in schedule:
         if slot_index < covered_slots.get(day, 0):
@@ -1710,7 +1716,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             choice_checks = {}
             candidates = [(m_sport, m) for m_sport in training_sports for m in methods
                           if m_sport in m["sports"] and (m["zone"] != "STR" or m_sport == primary_sport)]
-            if (day.weekday() in double_days and slot_index == 0 and slots_today >= 2 and not limited and not taper
+            if (day.weekday() in double_days and slot_index == first_plannable_slot(day) and unexecuted_slot_count(day) >= 2 and not limited and not taper
                     and (not cycle_state or cycle_state["kind"] != "RECOVERY")
                     and sessions + 2 <= session_limit and key_sessions + 2 <= key_limit
                     and (profile.get("age_years") or 0) >= 18 and (profile.get("training_experience_years") or 0) >= 1):
@@ -2460,7 +2466,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         protected_q=protected_q, protected_e=protected_e, components=protected_components,
                         methods=protected_methods, cores=protected_cores)
                 bundles = {(c[2]["sport"], c[2]["method_id"]):preparation_bundle(c) for c in choices} if period_objectives else {}
-                choices.sort(key=lambda c: (not c[2]["is_key_session"] if day in key_slots and slot_index == 0 else False,
+                choices.sort(key=lambda c: (not c[2]["is_key_session"] if day in key_slots and slot_index == first_plannable_slot(day) else False,
                     -planning_allocation.quality_priority(c[2]["zone"], period_objectives) if period_objectives else 0,
                     -len(bundles[(c[2]["sport"], c[2]["method_id"])]["components"]) if bundles else 0, -c[0], c[1]))
                 _, _, session, selected_rows, selected_after = choices[0]

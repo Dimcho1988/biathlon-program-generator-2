@@ -186,6 +186,35 @@ def test_actual_sessions_and_time_still_close_a_full_or_unknown_day(monkeypatch,
     assert plan["summary"]["actual_sessions"] == (2 if condition == "two_completed" else 1)
 
 
+@pytest.mark.parametrize("slots", [2,3])
+def test_imported_easy_morning_keeps_the_remaining_threshold_slot_eligible(monkeypatch, slots):
+    repo = high_capacity_history()
+    completed_activity(repo, "morning")
+    p = body(sessions_per_week=13, sessions_by_day=[slots,2,2,2,2,1,1],
+        threshold_days=[TODAY.weekday()], double_threshold_days=[TODAY.weekday()],
+        threshold_method="INTERVALS", accent_mode="MANUAL", accents=["Z3"])
+    plan = run(monkeypatch, p, repo)
+    sessions = plan["days"][0]["sessions"]
+    assert len(sessions) == slots-1
+    assert all(s["is_key_session"] and s["zone"] == "Z3" for s in sessions)
+    assert all(s["double_threshold"] == (slots == 3) for s in sessions)
+    assert sum(s["total_minutes"] for s in sessions)+40 <= 360.001
+    assert plan["summary"]["actual_sessions"] == 1
+    for session in sessions:
+        assert_readiness_dose(session)
+
+
+def test_imported_key_morning_still_enforces_key_spacing_in_the_remaining_slot(monkeypatch):
+    repo = high_capacity_history()
+    completed_activity(repo, "morning")
+    for activities in (repo.envelope["activities"], repo.envelope["snapshot_payload"]["load_history"]["activities"]):
+        next(a for a in activities if a["activity_ref"] == "morning")["zones"].append(
+            {"zone":"Z3", "raw_time_min":10., "equivalent_time_min":5.})
+    p = body(sessions_per_week=13, sessions_by_day=[2,2,2,2,2,2,1], threshold_days=[TODAY.weekday()])
+    plan = run(monkeypatch, p, repo)
+    assert not any(s["is_key_session"] for s in plan["days"][0]["sessions"])
+
+
 def test_double_threshold_has_independent_doses_and_long_short_structure(monkeypatch):
     p = body(sessions_per_week=12, double_threshold_days=[TODAY.weekday()], threshold_method="INTERVALS",
              accent_mode="MANUAL", accents=["Z3"], accent_index=1.5)
