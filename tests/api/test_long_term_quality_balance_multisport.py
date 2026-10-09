@@ -115,8 +115,12 @@ def test_quality_balance_keeps_first_sport_method_and_curve_when_catalog_ids_rep
                 sum(b["duration_min"] for b in parts if b["kind"] == "WORK"), abs=.001)
             if session["zone"] != "STR":
                 assert engine._dose_usage(parts, evidence, session["zone"]) <= evidence["max_dose_fraction"] + .001
-                assert engine._minimum_dose_usage(parts, evidence, session["zone"],
-                    primary_only=bool(session.get("mixed_component") or method.get("developmental_variant"))) >= evidence["min_dose_fraction"] - .001
+                if evidence["min_dose_fraction"] is not None:
+                    assert engine._minimum_dose_usage(parts, evidence, session["zone"],
+                        primary_only=bool(session.get("mixed_component") or method.get("developmental_variant"))) >= evidence["min_dose_fraction"] - .001
+                else:
+                    assert session["purpose"] == "RECOVERY"
+                    assert work >= evidence["minimum_primary_work_minutes"]
             if method["structure"] in {"MODEL_INTERVALS", "METABOLIC_INTERVALS"}:
                 profile = evidence["effort_profile"]
                 repetitions = [b for b in parts if b["kind"] == "WORK" and b["zone"] == session["zone"]]

@@ -62,6 +62,24 @@ def test_reserved_quality_slot_is_used_for_executable_quality_before_optional_mi
     assert_rolling_budgets(plan)
 
 
+def test_last_microcycle_day_does_not_wait_for_next_microcycle_preferred_threshold(monkeypatch):
+    fixed_readiness(monkeypatch, 100.)
+    body = configured(age_years=25, training_experience_years=5, available_minutes=[180]*7)
+    body["planning_controls"].update(mesocycle_anchor=(TODAY-timedelta(days=6)).isoformat(),
+        sessions_per_week=2, sessions_by_day=[1,1,0,0,0,0,0], threshold_days=[1], threshold_method="INTERVALS")
+    selected_methods(monkeypatch, body, {"END-THR-TIME-01"})
+    q_calendar(monkeypatch, lambda _:210.)
+    repo, _, _ = observed()
+    plan = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)
+    assert [segment["days"] for segment in plan["allocation"]["segments"]] == [1,6]
+    session = plan["days"][0]["sessions"][0]
+    assert session["is_key_session"]
+    assert session["method_id"] == "END-THR-TIME-01"
+    assert not plan["days"][1]["sessions"], "The two-day key spacing still applies."
+    assert_readiness_dose(session)
+    assert_rolling_budgets(plan)
+
+
 def test_second_slot_can_use_a_reduced_mixed_dose_after_strength(monkeypatch):
     fixed_readiness(monkeypatch, 100.)
     body = configured(age_years=25, training_experience_years=5, strength_enabled=True, available_minutes=[180]*7)

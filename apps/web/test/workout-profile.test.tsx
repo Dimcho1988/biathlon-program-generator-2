@@ -79,4 +79,11 @@ describe("saved workout visualization", () => {
     expect(html).toContain("Почивка");
     expect(html.match(/class="management-workout-session"/g)).toHaveLength(2);
   });
+  it("keeps the imported morning visible beside the remaining proposed session", () => {
+    const next = session([block("WORK", "Z1", 30)], "Z1");
+    const day = {date:"2026-09-26",status:"TRAINING",session:next,sessions:[next],actual_sessions:1,actual_minutes:90} as DraftDay;
+    const html = renderToStaticMarkup(<TrainingPlanWeek days={[day]} today={day.date} renderDay={()=><p>Подробности</p>}/>);
+    expect(html).toContain("Вече изпълнени: 1 · 1:30:00; предложени още: 1");
+    expect(html).toContain("0:30:00");
+  });
 });

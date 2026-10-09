@@ -37,6 +37,7 @@ function AllocationCoverage({ components, caption, estimatedHistory, segment = f
 export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
   const p=isRecord(plan.parameters)?plan.parameters:{};
   const summary=isRecord(plan.summary)?plan.summary:{};
+  const volumes=Array.isArray(summary.volume_by_microcycle)?summary.volume_by_microcycle.filter(isRecord):[];
   const v=isRecord(p.volume_evidence)?p.volume_evidence as unknown as VolumeHistory:null;
   const sports=Array.isArray(p.training_sports)?p.training_sports.map(String):[];
   const sessions=plan.days.flatMap(daySessions);
@@ -61,7 +62,8 @@ export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
     <div><small>Средна продължителност от историята</small><strong>{duration(p.historical_training_weekly_minutes??p.historical_selected_weekly_minutes??p.baseline_weekly_minutes)}</strong><span>време за тренировки за 7 дни</span></div>
     <TimeAvailability context={p}/>
     <div><small>Управление на товара</small><strong>{p.volume_governor==="COMPONENT_7_40"?(segments.length?"Цели на дългосрочната програма":"7/40 по компоненти"):duration(p.weekly_minutes_ceiling)}</strong><span>{p.volume_governor==="COMPONENT_7_40"?"метод + дневна готовност":"ограничение при кратка история"}</span></div>
-    <div><small>Продължителност на предложените тренировки</small><strong>{duration(summary.planned_minutes)}</strong><span>{sessions.length} сесии</span></div>
+    <div><small>Продължителност на предложените тренировки</small><strong>{duration(summary.planned_minutes)}</strong><span>{sessions.length} сесии · {dateLabel(plan.start_date)} – {dateLabel(plan.end_date)}</span></div>
+    {volumes.map(volume=><div key={String(volume.start_date)}><small>Изпълнено + предложено · {dateLabel(volume.start_date)} – {dateLabel(volume.end_date)}</small><strong>{duration(volume.total_minutes)}</strong><span>{duration(volume.actual_minutes)} изпълнено + {duration(volume.planned_minutes)} предложено{volume.complete_microcycle!==true&&` · до ${dateLabel(volume.through_date)}, непълен микроцикъл`}</span></div>)}
     </div><TimeLimitNotice context={p}/>{typeof p.available_weekly_minutes === "number" && typeof p.historical_training_weekly_minutes === "number" && Number(p.available_weekly_minutes) < p.historical_training_weekly_minutes && <p className="management-notice">Свободното време в профила е под историческия обем и ограничава седмицата. <Link href="/planning">Провери дните и минутите →</Link></p>}<p className="management-muted">{sources.includes("BLENDED_DOSING_CURVE")?"Дозировката използва общата крива: 30% от индекса и 70% от максималните тестове. ":""}{sources.includes("SPEED_DURATION")?"Използвана е индивидуалната крива скорост–време. ":""}{sources.includes("SPEED_DURATION_PRIOR")?"Използвана е индивидуално мащабирана крива с експертна форма. ":""}{sources.includes("EXPERT_CONTINUOUS_TREF")?"За част от дозите се използва експертен Tref — виж причината в конкретната тренировка. ":""}Наличието на модел не означава, че всяка негова оценка е достатъчно подкрепена за дозиране.</p>
     {allocation&&<>
       {shortfall.length>0&&<aside className="management-notice" role="status"><strong>Остава непланиран товар: {shortfall.join(", ")}.</strong> Целта за показаните дати не е покрита изцяло. Остатъкът остава видим за преглед на ограниченията и разпределението.</aside>}

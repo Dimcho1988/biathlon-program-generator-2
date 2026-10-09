@@ -27,8 +27,8 @@ from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 
-VERSION = "training-management-v31-long-term-quality-balance"
-PARAMETER_VERSION = "management-parameters-v31"
+VERSION = "training-management-v32-multi-session-volume"
+PARAMETER_VERSION = "management-parameters-v32"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -1145,6 +1145,22 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     forecast_known = planning_history_supported
     result_days = []
     existing_in_draft = [a for a in source.get("activities", []) if start_date.isoformat() <= a["date"] <= end_date.isoformat()]
+    actual_by_day = {d: [a for a in existing_in_draft if a["date"] == d.isoformat()] for d in slot_counts}
+    def actual_slots_known(d):
+        # An imported session consumes its own slot, not the entire day.
+        # Ambiguous metadata and old locked bundles retain the old guard.
+        # A reviewed remaining bundle records the imports already present;
+        # new imports close it rather than guessing their workout identity.
+        actual = actual_by_day[d]
+        catalog = [a for a in actual_activities if a.get("local_date") == d.isoformat()]
+        return bool(component_governed and actual and len(actual) == len(catalog)
+            and {a.get("activity_ref") for a in actual} == {a.get("activity_ref") for a in catalog}
+            and len({a.get("activity_ref") for a in actual}) == len(actual)
+            and all(a.get("activity_ref") and (a.get("duration_min") or 0) > 0
+                and a.get("quality_status", "valid") == "valid" for a in actual)
+            and any(r["date"] == d.isoformat() and r["effective_load"] > 0 for r in rows)
+            and (not locked_day or locked_day["date"] != d.isoformat()
+                or set(locked_day.get("activity_refs", [])) == {a["activity_ref"] for a in actual}))
     sessions = len(existing_in_draft)
     key_sessions = sum(any(z.get("raw_time_min", 0) >= 5 and z["zone"] in {"Z3", "Z4", "Z5"}
                            for z in a.get("zones", [])) for a in existing_in_draft)
@@ -1176,7 +1192,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         if any(e["event_type"] in {"MAIN_RACE", "CONTROL_RACE", "TEST", "UNAVAILABLE"} and
                str(e["start_date"]) <= d.isoformat() <= str(e["end_date"]) for e in events):
             continue
-        if any(a.get("date") == d.isoformat() for a in source.get("activities", [])):
+        if actual_by_day[d]:
             continue
         previous_key = key_slots[-1] if key_slots else last_key_day
         if previous_key and (d - previous_key).days < 2:
@@ -1204,7 +1220,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         if not count or any(e["event_type"] in {"MAIN_RACE", "CONTROL_RACE", "TEST", "UNAVAILABLE"}
                             and str(e["start_date"]) <= d.isoformat() <= str(e["end_date"]) for e in events):
             continue
-        if any(a.get("date") == d.isoformat() for a in source.get("activities", [])):
+        if actual_by_day[d] and (not actual_slots_known(d) or slot < len(actual_by_day[d])):
             continue
         for z in COMPONENTS:
             if z in {"Z3", "Z4", "Z5"} and d not in key_slots and not (progression and z == "Z3" and key_slots and d > key_slots[-1]):
@@ -1297,8 +1313,32 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         if not key_days:
             return True
         first = max(start_date, previous + timedelta(days=1)) if previous else start_date
-        return any((first + timedelta(days=i)).weekday() in key_days
-                   for i in range(max(0, (d-first).days+1)))
+        if any((first + timedelta(days=i)).weekday() in key_days
+               for i in range(max(0, (d-first).days+1))):
+            return True
+        # A preferred weekday in the next microcycle cannot postpone this
+        # segment's executable remaining work. Capacity, whole-dose Q/E,
+        # readiness and spacing are still checked before reserving the day.
+        if component_governed:
+            # This is catch-up for an unserved segment, not another key after
+            # the segment's planned preferred task has already been reserved.
+            if (previous in segment_keys and segment_keys[previous] == segment_keys[d]
+                and not actual_by_day[previous]) or any(
+                    segment_keys[date.fromisoformat(item["date"])] == segment_keys[d]
+                    and any(s.get("is_key_session") for s in planning_schedule.day_sessions(item))
+                    for item in result_days):
+                return False
+            segment_end = min(program_end, meso_anchor + timedelta(days=7*segment_keys[d]+6))
+            if segment_end > end_date:
+                return False
+            return not any(later >= d and segment_keys[later] == segment_keys[d]
+                and later.weekday() in key_days and slot_counts[later]
+                and available[later.weekday()] >= 25
+                and not any(e['event_type'] in {'MAIN_RACE','CONTROL_RACE','TEST','UNAVAILABLE'}
+                    and str(e['start_date']) <= later.isoformat() <= str(e['end_date']) for e in events)
+                and not any(a['date'] == later.isoformat() for a in source.get('activities', []))
+                for later in goal_windows)
+        return False
 
     def reserve_remaining_keys(after):
         """Preferred days establish a rhythm; missed work moves forward."""
@@ -1352,10 +1392,12 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         if slot_index < covered_slots.get(day, 0):
             continue
         prior_today = [d for d in result_days if d["date"] == day.isoformat()]
-        if prior_today and any(d["status"] not in {"TRAINING", "REST"} or d.get("locked") for d in prior_today):
+        if prior_today and any(d["status"] not in {"TRAINING", "REST", "EXISTING_ACTIVITY"} or d.get("locked")
+            or d["status"] == "EXISTING_ACTIVITY" and not actual_slots_known(day) for d in prior_today):
             continue
         day_spent = sum(v["total_minutes"] for d in prior_today for v in planning_schedule.day_sessions(d))
-        day_available = max(0., available[day.weekday()] - day_spent)
+        actual_day_minutes = sum(a.get("duration_min") or 0. for a in actual_by_day[day])
+        day_available = max(0., available[day.weekday()] - day_spent - actual_day_minutes)
         key = day.isoformat()
         period, taper = _phase(periodization, day)
         # Calendar-day Recovery cannot infer intraday recovery. Forecast the
@@ -1384,6 +1426,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 "load_budget": {"remaining_weekly_minutes": None if automatic_time else _round(max(0., remaining)), "components": budgets,
                                 "mesocycle_week_index": day_meso_week, "mesocycle_factor": day_meso_factor},
                 "rejected_alternatives": [], "explanation": "Почивка; не е необходимо да се запълва всяка свободна минута."}
+        if actual_day_minutes:
+            item["actual_minutes"] = _round(actual_day_minutes)
+            item["actual_sessions"] = len(actual_by_day[day])
         if allocation is not None:
             item["load_budget"]["component_allocation"] = {z: _round(v) for z, v in allocation.items()}
         events_today = [e for e in events if str(e["start_date"]) <= key <= str(e["end_date"])]
@@ -1391,10 +1436,12 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         if not existing:
             existing = [a for a in source.get("activities", []) if a["date"] == key]
         known_actual_load = any(r["date"] == key and r["effective_load"] > 0 for r in rows)
-        if existing:
+        if existing and (not actual_slots_known(day) or slot_index < len(actual_by_day[day])):
             item.update(status="EXISTING_ACTIVITY", explanation="Има реално изпълнена активност. Не се добавя втора планирана доза за същия ден.",
                         activity_refs=[a.get("activity_ref") for a in existing])
-        elif known_actual_load:
+            if actual_slots_known(day) and len(actual_by_day[day]) < slots_today:
+                item["explanation"] = "Изпълнените активности заемат собствените си сесии. Останалите разрешени места се проверяват с вече отчетения реален товар."
+        elif known_actual_load and not existing:
             item.update(status="EXISTING_ACTIVITY", explanation="За деня има реален приравнен товар, но липсва пълно описание на сесията. Не се добавя и не се заменя тренировъчна доза.", activity_refs=[])
             blocked = True
             activation_eligible = False
@@ -1438,12 +1485,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 item.update(status="REVIEW_REQUIRED", explanation="Днешната утвърдена задача е под минималната относителна доза. Нужен е преглед; не се запазва автоматично кратката сесия.")
                 item["rejected_alternatives"].append({"method_id": "LOCKED_SESSION", "code": "MINIMUM_CAPACITY_DOSE", "reason": item["explanation"]})
                 activation_eligible = False
-            elif len(preserved) > slots_today or sessions + len(preserved) > session_limit or any(
+            elif len(preserved)+len(actual_by_day[day]) > slots_today or sessions + len(preserved) > session_limit or any(
                 not _locked_dose_fits(s, profile, ready) for s in preserved) or any(effective[z] > budgets[z]["deficit_effective"] + .001 for z in COMPONENTS) or any(preserved_q[z] > value + .001 for z, value in q_remaining.items()) or total > min(remaining, day_available) + .001:
                 item.update(status="REVIEW_REQUIRED", explanation="Новите данни изискват преглед на днешните утвърдени задачи.")
                 activation_eligible = False
             else:
-                forecast_rows = _with_forecast_day(forecast_rows, day, effective)
+                forecast_rows = (_add_forecast_session(forecast_rows, day, effective) if actual_by_day[day]
+                                 else _with_forecast_day(forecast_rows, day, effective))
                 after = recovery_v2.simulate(forecast_rows, configs["zones"], target=day, include_details=False)
                 item.update(session=preserved[0], sessions=preserved, status="TRAINING", locked=True,
                             readiness_after={r["zone"]: _round(r["readiness_percent"]) for r in after["current"]},
@@ -1789,14 +1837,14 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 # the weekly load, even while another quality is the accent.
                 # This uses the existing coach fraction, never a new multiplier.
                 endurance_allocation = False
-                if allocation and z in {"Z1", "Z2"} and purpose == "BUILDING" and not taper and slot_index == 0:
+                if allocation and z in {"Z1", "Z2"} and purpose == "BUILDING" and not taper:
                     maintenance_work = min(evidence["capacity_minutes"] * profile.get("maintenance_fraction", .3), method["max_work_min"])
                     maintenance_blocks = _blocks(method, maintenance_work, evidence, settings)
                     if maintenance_blocks:
                         maintenance_q, maintenance_load, _ = candidate_load(maintenance_blocks)
                         endurance_allocation = allocation[z] > objective_load(maintenance_q, maintenance_load)[z] + .5
                 background_development = bool(cycle_state and cycle_state.get("background_development") and mesocycle_focus.growth_weight(cycle_state, z) > 0)
-                if purpose == "BUILDING" and (z not in selected_accents and not endurance_allocation and not background_development or taper or slot_index > 0 or cycle_state and cycle_state["kind"] == "RECOVERY"):
+                if purpose == "BUILDING" and (z not in selected_accents and not endurance_allocation and not background_development or taper or cycle_state and cycle_state["kind"] == "RECOVERY"):
                     purpose = "MAINTENANCE"
                 if method.get("double_threshold"):
                     purpose = "BUILDING"
@@ -2236,7 +2284,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         purpose = record["purpose"]
                         slot = min(record.get("slots", [record.get("slot", 0)]))
                         if purpose == "BUILDING" and not method.get("double_threshold") and (
-                            method["zone"] not in day_goals[placed_day][1] or slot > 0 or future_taper
+                            method["zone"] not in day_goals[placed_day][1] or future_taper
                             or future_state and future_state["kind"] == "RECOVERY"):
                             purpose = "MAINTENANCE"
                         nominal = _nominal_fraction(method, purpose, profile, future_period, cap, controls)
@@ -2535,7 +2583,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             after_day = recovery_v2.simulate(forecast_rows, configs["zones"], target=day, include_details=False)
             item["readiness_after"] = {r["zone"]: _round(r["readiness_percent"]) if forecast_known else None for r in after_day["current"]}
         result_days.append(item)
-        if item["session"] is None and item["status"] in {"REST", "UNAVAILABLE"} and not day_spent:
+        if item["session"] is None and item["status"] in {"REST", "UNAVAILABLE"} and not day_spent and not known_actual_load:
             forecast_rows = _with_forecast_day(forecast_rows, day, {})
         if slot_index+1 >= slots_today and day in key_slots:
             reserve_remaining_keys(day)
@@ -2550,6 +2598,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             combined["readiness_after"] = item["readiness_after"]
             combined["rejected_alternatives"].extend(item["rejected_alternatives"])
         combined = grouped[key]
+        if item.get("locked"):
+            combined["locked"] = True
         if combined["sessions"]:
             combined["session"] = combined["sessions"][0]
             combined["status"] = "TRAINING"
@@ -2632,6 +2682,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             "history_comparison": volume_evidence["weeks"],
             "component_history": load_progression.history(measured_source, _daily_rows(measured_source, today), today),
             "summary": {"sessions": len(planned_sessions),
+                        "volume_by_microcycle": planning_schedule.microcycle_volume(source, result_days, meso_anchor,
+                            program_start, program_end) if component_governed else [],
                         "key_sessions": sum(s.get("is_key_session", s["zone"] in {"Z3", "Z4", "Z5"}) for s in planned_sessions),
                         "actual_sessions": len(existing_in_draft),
                         "planned_minutes": _round(sum(s["total_minutes"] for s in planned_sessions)),
