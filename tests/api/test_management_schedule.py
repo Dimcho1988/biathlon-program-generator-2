@@ -85,7 +85,7 @@ def test_manual_low_z1_target_explains_blocked_training_without_overriding_the_c
     assert restored["days"][0]["readiness_before"] == constrained["days"][0]["readiness_before"]
 
 
-@pytest.mark.parametrize("count", [12, 16, 21])
+@pytest.mark.parametrize("count", [12, 13, 16, 21])
 def test_more_than_seven_sessions_are_real_and_all_loads_are_counted(monkeypatch, count):
     p = body(sessions_per_week=count)
     p["max_key_sessions_per_week"] = 0
@@ -115,6 +115,104 @@ def test_day_and_session_preferences_change_the_generated_week(monkeypatch):
     second = run(monkeypatch, limited)
     assert first["summary"]["planned_minutes"] > second["summary"]["planned_minutes"]
     assert all(sum(s["total_minutes"] for s in planning_schedule.day_sessions(d)) <= 30.001 for d in second["days"])
+
+
+def test_second_session_can_use_building_dose_when_long_term_endurance_is_unfilled(monkeypatch):
+    p = body(sessions_per_week=13, accent_mode="MANUAL", accents=["Z1"], accent_index=1.5)
+    p["building_fraction"] = .65
+    p["max_key_sessions_per_week"] = 0
+    plan = run(monkeypatch, p)
+    pairs = [d["sessions"] for d in plan["days"] if len(d["sessions"]) > 1]
+    assert pairs
+    second = next(sessions[1] for sessions in pairs if sessions[1]["purpose"] == "BUILDING")
+    assert second["zone"] in {"Z1", "Z2"}
+    assert second["dose_evidence"]["base_fraction"] == p["building_fraction"]
+    assert_readiness_dose(second)
+
+
+def completed_activity(repo, reference, minutes=40.):
+    activity = {"activity_ref": reference, "date": TODAY.isoformat(), "local_date": TODAY.isoformat(),
+        "sport": "Run", "duration_min": minutes, "zones": [{"zone":"Z1", "raw_time_min":minutes,
+        "equivalent_time_min":minutes*.5}]}
+    source = repo.envelope["snapshot_payload"]["load_history"]
+    source["activities"].append(deepcopy(activity))
+    repo.envelope["activities"].append(deepcopy(activity))
+    for row in source["daily"]:
+        if row["date"] == TODAY.isoformat() and row["zone"] == "Z1":
+            row["effective_load"] += minutes*.5
+
+
+def test_imported_first_session_leaves_a_second_slot_with_actual_load_counted_once(monkeypatch):
+    repo = high_capacity_history()
+    completed_activity(repo, "morning")
+    original = deepcopy(repo.envelope)
+    p = body(sessions_per_week=13, sessions_by_day=[2,2,2,2,2,2,1])
+    p["max_key_sessions_per_week"] = 0
+    plan = run(monkeypatch, p, repo)
+    today = plan["days"][0]
+    assert len(today["sessions"]) == 1
+    assert today["activity_refs"] == ["morning"]
+    assert plan["summary"]["actual_sessions"] == 1
+    assert plan["summary"]["sessions"]+1 <= 13
+    session = today["sessions"][0]
+    assert session["total_minutes"]+40 <= 360.001
+    actual_rows = engine._daily_rows(original["snapshot_payload"]["load_history"], TODAY)
+    before = engine.recovery_v2.simulate(actual_rows, plan["parameters"]["recovery_settings"], target=TODAY, include_details=False)
+    assert today["readiness_before"]["Z1"] == pytest.approx(before["current"][0]["readiness_percent"], abs=.002)
+    assert_readiness_dose(session)
+    assert repo.envelope == original
+    preserved = engine.generate_plan(repo, "athlete", p, start_date=TODAY, now=NOW, locked_day=today)
+    assert preserved["days"][0]["locked"]
+    assert preserved["days"][0]["sessions"] == today["sessions"]
+    assert preserved["days"][0]["readiness_after"] == today["readiness_after"]
+    completed_activity(repo, "afternoon")
+    completed = engine.generate_plan(repo, "athlete", p, start_date=TODAY, now=NOW, locked_day=today)
+    assert not completed["days"][0]["sessions"]
+    assert completed["summary"]["actual_sessions"] == 2
+
+
+@pytest.mark.parametrize("condition", ["two_completed", "incomplete_catalog", "day_time_used"])
+def test_actual_sessions_and_time_still_close_a_full_or_unknown_day(monkeypatch, condition):
+    repo = high_capacity_history()
+    completed_activity(repo, "morning", minutes=360. if condition == "day_time_used" else 40.)
+    if condition == "two_completed":
+        completed_activity(repo, "afternoon")
+    elif condition == "incomplete_catalog":
+        repo.envelope["activities"] = [a for a in repo.envelope["activities"] if a.get("activity_ref") != "morning"]
+    p = body(sessions_per_week=13, sessions_by_day=[2,2,2,2,2,2,1])
+    p["max_key_sessions_per_week"] = 0
+    plan = run(monkeypatch, p, repo)
+    assert not plan["days"][0]["sessions"]
+    assert plan["summary"]["actual_sessions"] == (2 if condition == "two_completed" else 1)
+
+
+@pytest.mark.parametrize("slots", [2,3])
+def test_imported_easy_morning_keeps_the_remaining_threshold_slot_eligible(monkeypatch, slots):
+    repo = high_capacity_history()
+    completed_activity(repo, "morning")
+    p = body(sessions_per_week=13, sessions_by_day=[slots,2,2,2,2,1,1],
+        threshold_days=[TODAY.weekday()], double_threshold_days=[TODAY.weekday()],
+        threshold_method="INTERVALS", accent_mode="MANUAL", accents=["Z3"])
+    plan = run(monkeypatch, p, repo)
+    sessions = plan["days"][0]["sessions"]
+    assert len(sessions) == slots-1
+    assert all(s["is_key_session"] and s["zone"] == "Z3" for s in sessions)
+    assert all(s["double_threshold"] == (slots == 3) for s in sessions)
+    assert sum(s["total_minutes"] for s in sessions)+40 <= 360.001
+    assert plan["summary"]["actual_sessions"] == 1
+    for session in sessions:
+        assert_readiness_dose(session)
+
+
+def test_imported_key_morning_still_enforces_key_spacing_in_the_remaining_slot(monkeypatch):
+    repo = high_capacity_history()
+    completed_activity(repo, "morning")
+    for activities in (repo.envelope["activities"], repo.envelope["snapshot_payload"]["load_history"]["activities"]):
+        next(a for a in activities if a["activity_ref"] == "morning")["zones"].append(
+            {"zone":"Z3", "raw_time_min":10., "equivalent_time_min":5.})
+    p = body(sessions_per_week=13, sessions_by_day=[2,2,2,2,2,2,1], threshold_days=[TODAY.weekday()])
+    plan = run(monkeypatch, p, repo)
+    assert not any(s["is_key_session"] for s in plan["days"][0]["sessions"])
 
 
 def test_double_threshold_has_independent_doses_and_long_short_structure(monkeypatch):
@@ -206,6 +304,26 @@ def test_scarce_slots_reserve_the_selected_weekdays_before_optional_easy_days():
     p = body(sessions_per_week=2, intensity_days=[4], strength_days=[1])
     schedule = planning_schedule.slots(p, [360]*7, TODAY, TODAY+timedelta(days=6))
     assert {d.weekday() for d, _, count in schedule if count} == {1,4}
+
+
+def test_volume_report_includes_completed_microcycle_days_before_the_rolling_draft():
+    anchor = TODAY-timedelta(days=3)
+    source = {"activities":[
+        {"date":(TODAY-timedelta(days=9)).isoformat(), "duration_min":999},
+        {"date":(TODAY-timedelta(days=2)).isoformat(), "duration_min":120},
+        {"date":TODAY.isoformat(), "duration_min":40}]}
+    days = [{"date":(TODAY+timedelta(days=n)).isoformat(),
+             "sessions":[{"total_minutes":60}] if n in {0,2,4} else []} for n in range(7)]
+    volumes = planning_schedule.microcycle_volume(source, days, anchor, anchor, TODAY+timedelta(days=90))
+    first, partial = volumes
+    assert first["actual_minutes"] == 160
+    assert first["planned_minutes"] == 120
+    assert first["total_minutes"] == 280
+    assert first["complete_microcycle"] is True
+    assert partial["planned_minutes"] == partial["total_minutes"] == 60
+    assert partial["complete_microcycle"] is False
+    assert partial["through_date"] == days[-1]["date"]
+    assert partial["end_date"] > partial["through_date"]
 
 
 def test_legacy_unknown_planned_load_is_not_replaced_with_zero():

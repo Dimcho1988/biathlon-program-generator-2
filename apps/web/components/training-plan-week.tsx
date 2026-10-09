@@ -24,6 +24,7 @@ export function TrainingPlanWeek({ days, today, renderDay }: { days: DraftDay[];
           <span className="management-workout-meta"><span>{SPORT_LABELS[session.sport] ?? session.sport}{sessions.length > 1 ? ` · ${index + 1}` : ""}</span><strong>{durationHms(session.total_minutes)}</strong><SessionAccent zone={session.zone}/></span>
           <span className="management-workout-shape"><strong>{session.title}</strong><span className="workout-summary">{sessionSummary(session)}</span><WorkoutProfile session={session} compact/></span>
         </span>) : <span className="management-workout-rest">{(day.time_limit_exhausted ? "Изчерпан лимит за време" : REST_LABELS[day.status]) ?? "Ден от програмата"}</span>}</span>
+        {!!day.actual_sessions && <small>Вече изпълнени: {day.actual_sessions} · {durationHms(day.actual_minutes ?? 0)}{sessions.length > 0 && `; предложени още: ${sessions.length}`}</small>}
         <span className="management-workout-open">{day.date === current.date ? "Избран ден · подробности по-долу" : "Покажи подробности"}</span>
       </button>;
     })}</div>

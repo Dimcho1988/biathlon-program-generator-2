@@ -44,6 +44,32 @@ def slots(profile, available, start, end):
 def day_sessions(day):
     return day["sessions"] if "sessions" in day else [day["session"]] if day.get("session") else []
 
+
+def microcycle_volume(source, days, anchor, program_start, program_end):
+    """Display recorded duration plus proposals on the anchored weekly dates.
+
+    A rolling draft may start after several completed training days and end
+    partway through the next microcycle. Never label that remainder a full week
+    or extrapolate the unplanned days. This report does not authorize load.
+    """
+    groups = {}
+    for day in days:
+        index = (date.fromisoformat(day["date"])-anchor).days//7
+        groups.setdefault(index, []).append(day)
+    result = []
+    for index, current in sorted(groups.items()):
+        first = max(program_start, anchor+timedelta(days=7*index))
+        last = min(program_end, anchor+timedelta(days=7*index+6))
+        through = max(day["date"] for day in current)
+        actual = sum(float(a.get("duration_min") or 0.) for a in source.get("activities", [])
+                     if first.isoformat() <= a["date"] <= through)
+        planned = sum(s["total_minutes"] for day in current for s in day_sessions(day))
+        result.append({"start_date":first.isoformat(), "end_date":last.isoformat(),
+            "through_date":through, "complete_microcycle":through == last.isoformat(),
+            "actual_minutes":round(actual, 3), "planned_minutes":round(planned, 3),
+            "total_minutes":round(actual+planned, 3)})
+    return result
+
 def day_totals(day):
     sessions = day_sessions(day)
     return {"title": " + ".join(s["title"] for s in sessions) or None,

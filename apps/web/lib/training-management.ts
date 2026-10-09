@@ -141,6 +141,7 @@ export interface AllocationReport {
 }
 export interface DraftDay {
   cycle?: Record<string,unknown> | null;
+  actual_minutes?: number; actual_sessions?: number;
   time_limit_exhausted?: boolean;
   sessions?: DraftSession[];
   date: string; status: string; period: string; taper: boolean; session: DraftSession | null;

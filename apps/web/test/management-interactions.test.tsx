@@ -103,6 +103,16 @@ it("shows component shortfalls separately from session counts and elapsed durati
   expect(container.textContent).toContain("0:00:00");
 });
 
+it("shows the full current microcycle including past completed days and labels the next partial one", async () => {
+  const draft=parseDraftRecord({entry_key:"test",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v32",status:"DRAFT",start_date:"2026-10-09",end_date:"2026-10-15",days:[],source:{},parameters:{},warnings:[],summary:{planned_minutes:463,volume_by_microcycle:[
+    {start_date:"2026-10-06",end_date:"2026-10-12",through_date:"2026-10-12",complete_microcycle:true,actual_minutes:545,planned_minutes:302,total_minutes:847},
+    {start_date:"2026-10-13",end_date:"2026-10-19",through_date:"2026-10-15",complete_microcycle:false,actual_minutes:0,planned_minutes:161,total_minutes:161}]}}});
+  await mount(<TrainingPlanSummary plan={draft.payload}/>);
+  expect(container.textContent).toContain("14:07:00");
+  expect(container.textContent).toContain("9:05:00 изпълнено + 5:02:00 предложено");
+  expect(container.textContent).toContain("непълен микроцикъл");
+});
+
 it("saves 16 sessions and double-threshold preferences directly from step two", async () => {
   const fetchMock = vi.fn(async (_url, init) => Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile})); vi.stubGlobal("fetch",fetchMock);
   const legacyProfile = {...profile, planning_controls:{...defaultPlanningControls(profile.actual_sport),mixed_min_readiness:75}};
