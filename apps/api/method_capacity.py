@@ -142,14 +142,26 @@ def expert_interval_curve_capacity(method, speed, context, *, use_model_prior=Fa
     if predictor is None or not getattr(predictor, "curve", None):
         return None
     duration = profile["work_seconds"] * coefficient
+    # Finite, independently valid profile values can still overflow when
+    # combined. An unsupported effort point rejects this candidate, rather
+    # than aborting the whole plan or switching to a different capacity.
+    if not _positive(duration):
+        return None
     if duration <= profile["work_seconds"]:
         raise ValueError("Interval effort capacity must exceed one repetition")
+    # The curve can resolve a longer Tmax than the validated coach fallback.
+    # Keep the resulting total work representable in seconds as well.
+    if not _positive(duration * profile["total_capacity_ratio"]):
+        return None
     if not use_model_prior and not observed_curve_support(context[1], duration):
         return None
     curve = predictor.curve
-    target = curve.speed(duration) * 3.6
+    try:
+        target = curve.speed(duration) * 3.6
+    except ValueError:
+        return None
     if not _positive(target):
-        raise ValueError("The interval effort lies outside the individual curve")
+        return None
     resolved = {**deepcopy(profile), "continuous_capacity_min": duration / 60,
                 "target_speed_kmh": target, "speed_basis": "FLAT_EQUIVALENT"}
     return {"capacity_source": "BLENDED_DOSING_CURVE" if isinstance(predictor, dosing_curve.Predictor) else "SPEED_DURATION",
