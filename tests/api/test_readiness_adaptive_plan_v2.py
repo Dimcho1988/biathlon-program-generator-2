@@ -213,7 +213,7 @@ def test_reduced_cycle_can_keep_a_controlled_nonaccent_component_within_its_q_an
     work = [s for d in plan["days"] for s in d["sessions"] if s["zone"] == "Z3"]
     assert work, "A recovery cycle reduces component targets without banning every nonaccent quality."
     assert all(s["purpose"] == "MAINTENANCE" for s in work)
-    assert all(s["dose_evidence"]["fraction"] <= body["maintenance_fraction"] for s in work)
+    assert all(s["dose_evidence"]["fraction"] <= plan["parameters"]["building_fraction"] / 2 for s in work)
     component = plan["allocation"]["components"]["Z3"]
     assert component["planned_q"] <= component["target_q"] + .005
     assert component["planned_effective"] <= component["target_effective"] + .005
