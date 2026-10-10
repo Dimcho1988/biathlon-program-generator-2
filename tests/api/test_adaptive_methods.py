@@ -101,9 +101,10 @@ def test_mixed_candidate_below_90_uses_residual_budget_and_own_readiness_rule(mo
         assert s["dose_evidence"]["readiness_policy"]["observed_percent"] == ready
         assert s["dose_evidence"]["readiness_policy"]["dose_factor"] == ready/100
         assert_readiness_dose(s)
-        assert s["dose_evidence"]["requested_primary_work_minutes"]/s["dose_evidence"]["capacity_minutes"] == pytest.approx(p["maintenance_fraction"]*ready/100, abs=.0001)
+        maintenance = plan["parameters"]["building_fraction"] / 2
+        assert s["dose_evidence"]["requested_primary_work_minutes"]/s["dose_evidence"]["capacity_minutes"] == pytest.approx(maintenance*ready/100, abs=.0001)
         work = sum(b["duration_min"] for b in s["blocks"] if b["kind"] == "WORK" and b["zone"] == "Z3")
-        assert work <= s["dose_evidence"]["capacity_minutes"]*p["maintenance_fraction"]*s["dose_evidence"]["readiness_policy"]["dose_factor"]+.001
+        assert work <= s["dose_evidence"]["capacity_minutes"]*maintenance*s["dose_evidence"]["readiness_policy"]["dose_factor"]+.001
         d = next(d for d in plan["days"] if d["sessions"])
         assert d["date"] == TODAY.isoformat()  # Easy day, outside the reserved key slot.
         assert all(v <= d["load_budget"]["components"][z]["deficit_effective"]+.001 for z, v in s["canonical_effective_load"].items())

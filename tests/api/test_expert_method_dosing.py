@@ -45,6 +45,51 @@ def test_continuous_65_percent_at_80_recovery_is_52_minutes():
     assert evidence['capacity_minutes'] * nominal * recovery == 52.
 
 
+@pytest.mark.parametrize("building,maintenance_minutes", [(.6, 30.), (.65, 32.5), (.7, 35.)])
+@pytest.mark.parametrize("purpose,period", [("MAINTENANCE", "GENERAL_PREPARATION"),
+    ("SUPPORTING", "GENERAL_PREPARATION"), ("RECOVERY", "GENERAL_PREPARATION"),
+    ("BUILDING", "RE_ENTRY")])
+def test_continuous_roles_use_half_building_budget_despite_stale_saved_settings(building, maintenance_minutes, purpose, period):
+    profile = {"building_fraction": building, "maintenance_fraction": .4, "reentry_fraction": .5}
+    before = deepcopy(profile)
+    method = {"zone": "Z2", "structure": "CONTINUOUS"}
+    evidence = {"capacity_minutes": 100.}
+    nominal = engine._nominal_fraction(method, purpose, profile, period, evidence, None)
+    assert nominal * evidence["capacity_minutes"] == pytest.approx(maintenance_minutes)
+    assert evidence["method_budget_role_fraction"] == .5
+    assert evidence["maintenance_policy"] == "HALF_DEVELOPING_CONTINUOUS_BUDGET_BEFORE_READINESS_SCALE"
+    ceiling = engine._dose_ceiling(method, purpose, profile, period, evidence, None)
+    assert ceiling == nominal
+    recovery = adaptive_methods.readiness_policy(method, profile, {"Z1": 100., "Z2": 80.})["dose_factor"]
+    work = maintenance_minutes * recovery
+    assert engine._dose_fits([{"kind": "WORK", "zone": "Z2", "duration_min": work}], evidence, "Z2", ceiling * recovery)
+    assert not engine._dose_fits([{"kind": "WORK", "zone": "Z2", "duration_min": work + .2}], evidence, "Z2", ceiling * recovery)
+    assert profile == before
+
+
+def test_continuous_catalogue_reports_the_same_derived_roles_as_engine():
+    from biathlon.training_methods import resolved_methods
+
+    profile = {"building_fraction": .65, "maintenance_fraction": .4, "reentry_fraction": .5}
+    for method in resolved_methods(profile):
+        policy = method["dosing_policy"]
+        if policy["version"] == "continuous-role-budget-v2":
+            assert policy["maintenance_fraction"] == .325
+            assert policy["maintenance_fraction"] == policy["building_fraction"] / 2
+            assert policy["recovery_adjustment"] == "MULTIPLY_VOLUME_ONCE"
+
+
+def test_half_continuous_rule_does_not_replace_double_threshold_or_strength_budgets():
+    profile = {"building_fraction": .65, "maintenance_fraction": .4}
+    double = {"zone": "Z3", "structure": "THRESHOLD_LONG", "double_threshold": True}
+    controls = {"double_threshold_fraction": .6}
+    assert engine._nominal_fraction(double, "BUILDING", profile, "GENERAL_PREPARATION", {}, controls) == 1.2
+    assert engine._dose_ceiling(double, "BUILDING", profile, "GENERAL_PREPARATION", {}, controls) == .6
+    strength = {"zone": "STR", "structure": "CIRCUIT", "min_work_min": 12., "max_work_min": 30.}
+    assert engine._nominal_fraction(strength, "BUILDING", profile, "GENERAL_PREPARATION", {}, None) == 1.
+    assert engine._nominal_fraction(strength, "MAINTENANCE", profile, "GENERAL_PREPARATION", {}, None) == .5
+
+
 def test_interval_recovery_scales_total_work_once_with_whole_repetitions():
     method = interval_method()
     evidence = {'capacity_minutes': 80/60, 'effort_profile': method['interval_profile'],
@@ -76,6 +121,8 @@ def test_explicit_expert_schema_accepts_450_percent_and_does_not_infer_speed_coe
     validated = IntervalDoseProfile.model_validate(data)
     assert validated.total_capacity_ratio == 4.5
     assert validated.speed_time_duration_ratio == 2.
+    with pytest.raises(ValueError, match="derived total capacity budget must be finite"):
+        IntervalDoseProfile.model_validate({**data, 'continuous_capacity_min': 4., 'total_capacity_ratio': 1e308})
     data.pop('speed_time_duration_ratio')
     assert IntervalDoseProfile.model_validate(data).speed_time_duration_ratio is None
     with pytest.raises(ValidationError):
@@ -86,7 +133,7 @@ def test_explicit_expert_schema_accepts_450_percent_and_does_not_infer_speed_coe
 def test_reentry_uses_the_maintenance_role_not_a_separate_legacy_fraction(purpose):
     profile = {"building_fraction": .65, "maintenance_fraction": .35, "reentry_fraction": .5}
     continuous = {"zone": "Z2", "structure": "CONTINUOUS"}
-    assert engine._nominal_fraction(continuous, purpose, profile, "RE_ENTRY", {}, None) == .35
+    assert engine._nominal_fraction(continuous, purpose, profile, "RE_ENTRY", {}, None) == .325
     interval = interval_method()
     evidence = {}
     assert engine._nominal_fraction(interval, purpose, profile, "RE_ENTRY", evidence, None) == 1.5
@@ -128,6 +175,19 @@ def test_mixed_session_received_load_reduces_a_combination_that_fits_direct_budg
 def test_mixed_session_received_load_budget_does_not_apply_recovery_twice():
     evidence = joint_evidence(.8)
     assert engine._dose_fits(joint_blocks(47., 40.), evidence, 'Z3', .65*.8)
+
+
+def test_mixed_continuous_support_uses_derived_half_budget_and_single_recovery():
+    evidence = joint_evidence(.8)
+    evidence["secondary_capacity"]["capacity_minutes"] = 100.
+    profile = {"building_fraction": .65, "maintenance_fraction": .4, "reentry_fraction": .5}
+    method = {"zone": "Z3", "structure": "THRESHOLD_LONG"}
+    ceiling = engine._dose_ceiling(method, "BUILDING", profile, "GENERAL_PREPARATION", evidence, None)
+    assert evidence["secondary_max_fraction"] == .325
+    # Z3 crosses the spill gate: Z2 receives 20.8 own Q + 5.2 from Z3,
+    # exactly 100 × .325 × .8 = 26. The direct work by itself is below 26.
+    assert engine._dose_fits(joint_blocks(52., 20.8), evidence, "Z3", ceiling * .8)
+    assert not engine._dose_fits(joint_blocks(52., 21.8), evidence, "Z3", ceiling * .8)
 
 
 def test_expert_effort_coefficient_prescribes_curve_speed_and_separate_total_budget():

@@ -196,7 +196,7 @@ def test_close_race_generates_only_available_days_with_manual_reentry(days):
         assert result["days"][-1]["session"] is None
     for session in sessions(result):
         evidence = session["dose_evidence"]
-        ceiling = .5 if evidence.get("effort_profile") else body["maintenance_fraction"]
+        ceiling = .5 if evidence.get("effort_profile") else result["parameters"]["building_fraction"] / 2
         assert evidence["max_dose_fraction"] <= ceiling
         assert evidence["applied_structure_fraction"] <= ceiling + .001
         if session["purpose"] != "RECOVERY" and not session.get("double_threshold"):

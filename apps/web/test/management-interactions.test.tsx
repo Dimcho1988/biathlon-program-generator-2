@@ -61,7 +61,7 @@ it("distinguishes continuous doses from expert interval budgets and applies read
   expect(dose.value).toBe("65");
   expect(dose.min).toBe("60");
   expect(dose.max).toBe("70");
-  expect(container.textContent).toContain("поддържащата е 30–40%");
+  expect(container.textContent).toContain("поддържащата е точно 50% от изграждащата");
   expect(container.textContent).toContain("Recovery 80% получаваме 52 минути");
   expect(container.textContent).toContain("Изграждащата доза е 100% от този бюджет, поддържащата — 50%");
   expect(container.textContent).toContain("Готовността намалява получения обем веднъж");
@@ -71,6 +71,57 @@ it("distinguishes continuous doses from expert interval budgets and applies read
   expect(container.textContent).toContain("без да е задължително условие");
   expect(container.textContent).not.toContain("Z5 изисква отделна скорошна максимална опора");
   expect(container.textContent).not.toContain("Процентите за Z1–Z3 не се прилагат");
+});
+
+it("derives maintenance and reentry immediately when the building dose changes and saves both halves", async () => {
+  const fetchMock=vi.fn(async (_url,init)=>Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile}));vi.stubGlobal("fetch",fetchMock);
+  await mount(<ManagementProfileEditor initialProfile={{configured:true,profile:{...profile,maintenance_fraction:.4,reentry_fraction:.5},revision:1}} today="2026-09-21"/>);
+  await click(button("4. Методи и дозиране"));
+  expect(input("Непрекъснат метод · поддържаща и вработваща доза").value).toBe("32.5");
+  expect(input("Непрекъснат метод · поддържаща и вработваща доза").readOnly).toBe(true);
+  await enter(input("Непрекъснат метод · изграждаща доза"),"68");
+  expect(input("Непрекъснат метод · поддържаща и вработваща доза").value).toBe("34");
+  await click(button("Запази промените"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).profile).toMatchObject({building_fraction:.68,maintenance_fraction:.34,reentry_fraction:.34});
+});
+
+const intervalProfile={zone:"Z4" as const,sport:"Run" as const,continuous_capacity_min:4,assessed_on:"2026-09-21",effort:"Повторяемо индивидуално усилие",work_seconds:30,recovery_seconds:30,min_repetitions:3,max_repetitions:12,total_capacity_ratio:4.25,reserve_repetitions:2,target_speed_kmh:null};
+
+it("edits a work budget above 300 percent while preserving the separate curve coefficient and fallback", async () => {
+  const fetchMock=vi.fn(async (_url,init)=>Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile}));vi.stubGlobal("fetch",fetchMock);
+  await mount(<ManagementProfileEditor initialProfile={{configured:true,profile:{...profile,interval_profiles:[{...intervalProfile,speed_time_duration_ratio:2}]},revision:1}} today="2026-09-21"/>);
+  await click(button("4. Методи и дозиране"));
+  const budget=input("Изграждащ работен бюджет на метода");
+  expect(budget.max).toBe("");expect(budget.value).toBe("425");
+  expect(input("Коефициент за избор на скорост по кривата").value).toBe("2");
+  expect(container.textContent).toContain("30 × 2 = 60 секунди");
+  expect(input("Експертен Tmax при липса на използваема крива").value).toBe("4");
+  await enter(budget,"425.5");
+  await click(button("Запази промените"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).profile.interval_profiles).toEqual([{...intervalProfile,total_capacity_ratio:4.255,speed_time_duration_ratio:2}]);
+  expect(input("Коефициент за избор на скорост по кривата").value).toBe("2");
+});
+
+it("keeps legacy coefficients empty, validates a supplied coefficient and allows clearing it", async () => {
+  const fetchMock=vi.fn(async (_url,init)=>Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile}));vi.stubGlobal("fetch",fetchMock);
+  await mount(<ManagementProfileEditor initialProfile={{configured:true,profile:{...profile,interval_profiles:[intervalProfile]},revision:1}} today="2026-09-21"/>);
+  await click(button("4. Методи и дозиране"));
+  const coefficient=input("Коефициент за избор на скорост по кривата");
+  expect(coefficient.value).toBe("");
+  await click(button("Запази промените"));
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).profile.interval_profiles[0]).not.toHaveProperty("speed_time_duration_ratio");
+  await enter(coefficient,"1");
+  await click(button("Запази промените"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(container.textContent).toContain("Коефициентът за избор на скорост трябва да е число, по-голямо от 1");
+  await enter(coefficient,"2.5");
+  await click(button("Запази промените"));
+  expect(JSON.parse(fetchMock.mock.calls[1][1].body).profile.interval_profiles[0].speed_time_duration_ratio).toBe(2.5);
+  await enter(coefficient,"");
+  await click(button("Запази промените"));
+  expect(JSON.parse(fetchMock.mock.calls[2][1].body).profile.interval_profiles[0].speed_time_duration_ratio).toBeNull();
 });
 
 it("saves explicit learning controls without resetting the planning profile", async () => {

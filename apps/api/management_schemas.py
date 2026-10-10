@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from math import isfinite
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from biathlon.method_dosing import continuous_building_fraction
 from .training_observation_schemas import LactateProfile, NeuromuscularProfile
 
 
@@ -14,15 +16,24 @@ def normalize_building_profile(value):
     The former 50% default becomes the new 65% default. Other formerly valid
     choices retain their value inside the band, or its nearest boundary.
     Values outside the old valid domain remain invalid for schema validation.
-    Maintenance and re-entry prescriptions are independent of this migration.
+    Maintenance and re-entry are derived as half the current developing budget.
+    Their former valid values remain readable but no longer override that rule.
     """
     if not isinstance(value, dict):
         return value
     result = dict(value)
-    fraction = result.get("building_fraction", .65)
-    if isinstance(fraction, (int, float)) and not isinstance(fraction, bool) and .5 <= fraction <= .8:
-        fraction = .65 if fraction == .5 else min(.7, max(.6, fraction))
+    fraction = continuous_building_fraction(result)
     result["building_fraction"] = fraction
+    if isinstance(fraction, (int, float)) and not isinstance(fraction, bool) and .6 <= fraction <= .7:
+        for name, legacy_maximum in (("maintenance_fraction", .4), ("reentry_fraction", .5)):
+            previous = result.get(name, fraction / 2)
+            if isinstance(previous, str):
+                try:
+                    previous = float(previous)
+                except ValueError:
+                    continue
+            if isinstance(previous, (int, float)) and not isinstance(previous, bool) and .3 <= previous <= legacy_maximum:
+                result[name] = fraction / 2
     return result
 
 
@@ -56,6 +67,8 @@ class IntervalDoseProfile(BaseModel):
         # coefficient selects the individual curve when it is available.
         if self.work_seconds >= self.continuous_capacity_min * 60:
             raise ValueError("One repetition must stay below continuous capacity")
+        if not isfinite(self.continuous_capacity_min * 60 * self.total_capacity_ratio):
+            raise ValueError("The derived total capacity budget must be finite")
         if self.min_repetitions * self.work_seconds > self.continuous_capacity_min * 60 * self.total_capacity_ratio:
             raise ValueError("The minimum method dose exceeds the total capacity budget")
         if not self.effort.strip():
@@ -216,8 +229,10 @@ class ManagementProfile(BaseModel):
     taper_days: int = Field(default=7, ge=0, le=21)
     max_key_sessions_per_week: int = Field(default=2, ge=0, le=8)
     building_fraction: float = Field(default=.65, ge=.6, le=.7)
-    maintenance_fraction: float = Field(default=.3, ge=.3, le=.4)
-    reentry_fraction: float = Field(default=.4, ge=.4, le=.5)
+    maintenance_fraction: float = Field(default=.325, ge=.3, le=.35,
+        description="Derived as half of building_fraction before the single Recovery adjustment.")
+    reentry_fraction: float = Field(default=.325, ge=.3, le=.35,
+        description="Derived as half of building_fraction, identical to the maintenance role.")
     recovery_session_cap_min: float = Field(default=30, ge=5, le=45)
     allow_expert_fallback: bool = True
     # New optional fields preserve stored v1 profiles. The activation freezes
@@ -246,6 +261,9 @@ class ManagementProfile(BaseModel):
     def coherent(self):
         if len({p.sport for p in self.lactate_profiles}) != len(self.lactate_profiles):
             raise ValueError("Keep one current lactate profile per sport")
+        # Also derive after float coercion: accepted API number strings must
+        # not retain an independent role dose.
+        self.maintenance_fraction = self.reentry_fraction = self.building_fraction / 2
         if not 0 <= (self.program_end - self.program_start).days <= 365:
             raise ValueError("Choose a planning period of 1 to 366 days")
         if any(not 0 <= value <= 360 for value in self.available_minutes):

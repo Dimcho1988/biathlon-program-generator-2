@@ -11,6 +11,7 @@ vi.mock("next/cache", () => ({revalidatePath: vi.fn()}));
 vi.mock("../lib/api-readiness", () => ({ waitForApi: vi.fn() }));
 
 const profile = { ...defaultManagementProfile("2026-09-21"), discipline: "5000 m" };
+const intervalProfile = { zone: "Z4" as const, sport: "Run" as const, continuous_capacity_min: 4, assessed_on: "2026-09-21", effort: "Повторяемо индивидуално усилие", work_seconds: 30, recovery_seconds: 30, min_repetitions: 3, max_repetitions: 12, total_capacity_ratio: 4.25, reserve_repetitions: 2, target_speed_kmh: null };
 const vector = { Z1: 95, Z2: 95, Z3: 95, Z4: 95, Z5: 95, STR: 95 };
 const record = parseDraftRecord({
   entry_key: "2026-09-22", revision: 1, stale: false, recorded_at: "2026-09-21T09:00:00Z",
@@ -126,19 +127,40 @@ describe("management data and review interface", () => {
     for (const bad of [{ available_minutes: [60] }, { actual_sport: "RollerSki" }, { recent_weekly_hours: [1, 2, 3] }, { age_years: 20, training_experience_years: 25 }, { building_fraction: .85 }]) expect(() => parseManagementProfile({ ...profile, ...bad })).toThrow();
     expect(() => parseManagementProfileResponse({ configured: false, profile, revision: 0 })).toThrow();
   });
-  it("uses a 65 percent default and migrates legacy building doses without changing other prescriptions", () => {
+  it("migrates legacy doses to exact half budgets for maintenance and reentry without mutating stored input", () => {
     expect(defaultManagementProfile("2026-10-08").building_fraction).toBe(.65);
+    expect(defaultManagementProfile("2026-10-08").maintenance_fraction).toBe(.325);
+    expect(defaultManagementProfile("2026-10-08").reentry_fraction).toBe(.325);
     for (const [legacy, expected] of [[.5, .65], [.55, .6], [.75, .7], [.8, .7]]) {
       const original = { ...profile, building_fraction: legacy, maintenance_fraction: .4, reentry_fraction: .5 };
       const parsed = parseManagementProfile(original);
       expect(parsed.building_fraction).toBe(expected);
-      expect(parsed.maintenance_fraction).toBe(.4);
-      expect(parsed.reentry_fraction).toBe(.5);
+      expect(parsed.maintenance_fraction).toBe(expected / 2);
+      expect(parsed.reentry_fraction).toBe(expected / 2);
       expect(original.building_fraction).toBe(legacy);
+      expect(original.maintenance_fraction).toBe(.4);
+      expect(original.reentry_fraction).toBe(.5);
     }
     const missing = { ...profile } as Partial<typeof profile>;
     delete missing.building_fraction;
-    expect(parseManagementProfile(missing).building_fraction).toBe(.65);
+    delete missing.maintenance_fraction;
+    delete missing.reentry_fraction;
+    expect(parseManagementProfile(missing)).toMatchObject({building_fraction:.65,maintenance_fraction:.325,reentry_fraction:.325});
+    for (const bad of [{maintenance_fraction:.1},{reentry_fraction:.6},{maintenance_fraction:".325"},{reentry_fraction:null}])
+      expect(()=>parseManagementProfile({...profile,...bad})).toThrow();
+  });
+  it("roundtrips independent interval criteria above 300 percent and preserves absent coefficients", () => {
+    for (const coefficient of [undefined, null, 2.5]) {
+      const interval = coefficient === undefined ? intervalProfile : {...intervalProfile,speed_time_duration_ratio:coefficient};
+      const parsed = parseManagementProfileResponse(JSON.parse(JSON.stringify({configured:true,revision:2,profile:{...profile,interval_profiles:[interval]}})));
+      expect(parsed.profile!.interval_profiles).toEqual([interval]);
+      expect(parseManagementProfile(JSON.parse(JSON.stringify(parsed.profile))).interval_profiles).toEqual([interval]);
+    }
+    for (const coefficient of [0,1,-1,Infinity,NaN,"2"])
+      expect(()=>parseManagementProfile({...profile,interval_profiles:[{...intervalProfile,speed_time_duration_ratio:coefficient}]})).toThrow("по-голямо от 1");
+    expect(parseManagementProfile({...profile,interval_profiles:[{...intervalProfile,total_capacity_ratio:4.5}]}).interval_profiles[0].total_capacity_ratio).toBe(4.5);
+    for (const ratio of [0,-1,Infinity,NaN,1e308])
+      expect(()=>parseManagementProfile({...profile,interval_profiles:[{...intervalProfile,total_capacity_ratio:ratio}]})).toThrow();
   });
   it("rejects malformed dates, readiness and incoherent work durations", () => {
     expect(parseDrafts({ drafts: [record] })).toHaveLength(1);
@@ -190,6 +212,15 @@ describe("management API access and optimistic revision", () => {
     expect(fetch).toHaveBeenCalledWith(new URL("https://api.example.test/api/v2/athlete/management/profile"), expect.objectContaining({ headers: expect.objectContaining({ "X-OnFlows-Athlete-Alias": "ath-test", "X-OnFlows-Actor-Id": "coach", Authorization: "Bearer private-test-token" }), body: expect.any(String) }));
     expect(JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string)).toEqual({ profile, expected_revision: 3 });
     expect(await result.text()).not.toContain("private-test-token");
+  });
+  it("forwards interval criteria above 300 percent and derived half doses to the API", async () => {
+    const interval={...intervalProfile,speed_time_duration_ratio:2.5};
+    const saved={...profile,building_fraction:.7,maintenance_fraction:.4,reentry_fraction:.5,interval_profiles:[interval]};
+    expect((await PUT(request("PUT",{profile:saved,expected_revision:3}),context("profile"))).status).toBe(200);
+    const forwarded=JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string).profile;
+    expect(forwarded).toMatchObject({building_fraction:.7,maintenance_fraction:.35,reentry_fraction:.35,interval_profiles:[interval]});
+    expect((await PUT(request("PUT",{profile:{...saved,interval_profiles:[{...interval,speed_time_duration_ratio:1}]},expected_revision:3}),context("profile"))).status).toBe(422);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
   it("permits an authorized reader but prevents generation and cross-origin changes", async () => {
     vi.mocked(currentAuthorizedAthlete).mockResolvedValue({ ...access, canEditPlan: false });
