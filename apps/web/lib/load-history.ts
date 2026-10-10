@@ -69,7 +69,22 @@ export interface StrengthLoadHistory {
   }>;
 }
 
+export interface ComponentLoadContext {
+  minutes: Record<Zone, number>;
+  sources: Record<Zone, string>;
+  references: Record<string, unknown>;
+  [key: string]: unknown;
+}
+export interface ComponentLoadModel {
+  version: string;
+  contexts_by_sport: Record<string, ComponentLoadContext>;
+  scope?: string;
+  fingerprint?: string;
+  [key: string]: unknown;
+}
+
 export interface LoadHistory {
+  component_load_model?: ComponentLoadModel | null;
   schema_version: "load-history-v1" | "load-history-v2";
   athlete_id: string;
   period_start: string;
@@ -126,12 +141,26 @@ export function parseLoadHistory(value: unknown): LoadHistory {
   if (!isRecord(value)) throw new Error("Невалидна структура на историята.");
   if (value.schema_version !== "load-history-v1" && value.schema_version !== "load-history-v2") throw new Error("Неподдържана версия на историята.");
   const version2 = value.schema_version === "load-history-v2";
-  const core = Object.fromEntries(Object.entries(value).filter(([key]) => !equivalenceKeys.includes(key)));
+  const core = Object.fromEntries(Object.entries(value).filter(([key]) => !equivalenceKeys.includes(key) && key !== "component_load_model"));
   const validRoot = version2
     ? exactKeys(core, rootKeysWithTrefProfile)
     : exactKeys(core, rootKeys) || exactKeys(core, legacyRootKeys) ||
       exactKeys(core, rootKeysWithTrefProfile) || exactKeys(core, legacyRootKeysWithTrefProfile);
   if (!validRoot) throw new Error("Невалидна структура на историята.");
+  if (value.component_load_model != null) {
+    const model = value.component_load_model;
+    if (!isRecord(model) || typeof model.version !== "string" || !model.version.trim() ||
+        !isRecord(model.contexts_by_sport)) throw new Error("Невалиден модел за влияние между зоните.");
+    for (const context of Object.values(model.contexts_by_sport)) {
+      if (!isRecord(context) || !isRecord(context.minutes) || !isRecord(context.sources) ||
+          !isRecord(context.references)) throw new Error("Невалиден произход на Tmax.");
+      const minutes = context.minutes, sources = context.sources;
+      if (!ZONES.every(zone => finite(minutes[zone]) && Number(minutes[zone]) > 0 &&
+          typeof sources[zone] === "string" && String(sources[zone]).trim())) {
+        throw new Error("Невалиден произход на Tmax.");
+      }
+    }
+  }
   const validBpm = (bpm: unknown) => finite(bpm) && Number.isInteger(bpm) && bpm >= 30 && bpm <= 240;
   const bounds = value.zone_bounds_bpm;
   if ((value.equivalence_version != null &&

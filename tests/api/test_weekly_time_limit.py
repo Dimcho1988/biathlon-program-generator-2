@@ -5,7 +5,7 @@ from datetime import timedelta
 import pytest
 
 from apps.api import training_plan_engine as engine
-from tests.api.test_management_schedule import body, high_capacity_history, run
+from tests.api.test_management_schedule import body, completed_activity, high_capacity_history, run
 from tests.api.test_training_plan_engine import TODAY, NOW, reference_speed
 from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose
 
@@ -14,9 +14,7 @@ def test_one_hour_limit_consumed_by_actual_sessions_is_explicit_and_removable(mo
     repo = high_capacity_history()
     source = repo.envelope["snapshot_payload"]["load_history"]
     for i, duration in enumerate((45, 30)):
-        actual = {"activity_ref": f"today-{i}", "date": TODAY.isoformat(), "sport": "Run", "duration_min": duration, "zones": []}
-        source["activities"].append(actual)
-        repo.envelope["activities"].append({**actual, "local_date": actual["date"]})
+        completed_activity(repo, f"today-{i}", duration)
     original = deepcopy(repo.envelope)
     p = body(weekly_target_hours=1)
     p["max_key_sessions_per_week"] = 0

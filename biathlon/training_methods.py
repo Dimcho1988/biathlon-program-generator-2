@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from . import adaptive_methods
 
-VERSION = "training-methods-v10"
+VERSION = "training-methods-v11-expert-role-budget"
 VARIETY_VERSION = "onflows-bounded-method-variety-v1"
 COMMON = ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "COMPETITION")
 METHODS = (
@@ -117,6 +117,8 @@ def _bounded_variants(methods):
         cp.update(work_seconds=p["work_seconds"] / 2,
                   min_repetitions=p["min_repetitions"] * 2,
                   max_repetitions=min(24, p["max_repetitions"] * 2))
+        if p.get("speed_time_duration_ratio") is not None:
+            cp["speed_time_duration_ratio"] = p["speed_time_duration_ratio"] * 2
         child.update(id=parent["id"] + "-SPLIT-V1",
             title=f"По-кратки повторения в {parent['zone']} с пълна активна почивка",
             min_work_min=cp["min_repetitions"] * cp["work_seconds"] / 60,
@@ -168,7 +170,7 @@ def resolved_methods(profile):
             "min_work_min": 6., "max_work_min": 20., "warmup_min": 8., "cooldown_min": 5.,
             "source_id": "ONFLOWS-Z3-SUPPORT-01", "source_version": "1",
             "instructions": "Лека аеробна част и кратка контролирана част в Z3. Запази резерв; без финално ускоряване.",
-            "adaptation": "Начална треньорска настройка: Z1 е два пъти времето в Z3; сумата от относителните дози е в поддържащия лимит. Използва само оставащия бюджет след ключовите задачи."})
+            "adaptation": "Начална треньорска настройка: Z1 е два пъти времето в Z3; всеки компонент остава в собствения си поддържащ бюджет, с обща проверка на товара и преливането. Използва само оставащия бюджет след ключовите задачи."})
     methods.extend([
         {"id": "END-CROSS-TRAIN-01-Z2", "title": "Равномерна аеробна работа в Z2", "zone": "Z2",
          "sports": ("Run", "NordicSki", "RollerSki"), "purpose": "MAINTENANCE", "position": .5,
@@ -189,7 +191,7 @@ def resolved_methods(profile):
          "structure": "CRUISE_ALTERNATING", "periods": ("GENERAL_PREPARATION", "SPECIAL_PREPARATION"),
          "min_work_min": 45., "max_work_min": 150., "warmup_min": 10., "cooldown_min": 5.,
          "source_id": "END-ALT-10-05-01", "source_version": "0.2",
-         "adaptation": "3–10 цели цикъла. Дозата е споделена между компонентите; леките части не са допълнителна пълна доза.",
+         "adaptation": "3–10 цели цикъла. Компонентите имат отделни методни бюджети; общият товар с преливането се проверява съвместно.",
          "instructions": "10 минути устойчиво усилие в Z2, последвани от 5 минути осезаемо по-леко движение в Z1. Не съкращавай леката част."},
     ])
     methods.append({"id": "END-THR-LONG-01", "title": "Продължителна контролирана прагова работа", "zone": "Z3",
@@ -251,7 +253,7 @@ def resolved_methods(profile):
                                       "total_capacity_ratio": ratio, "rest_type": "ACTIVE_Z1",
                                       "dose_status": "VERSIONED_COACH_DEFAULT_NOT_VALIDATED_NORM"},
                 "instructions": "Силно, но повторяемо усилие; без спринт или финал до отказ. Остави резерв за още две качествени отсечки. Запази ритъма и техниката; прекрати при разпадането им. Не ускорявай, за да достигнеш пулсово число.",
-                "adaptation": "Отделни onFlows профили v2: Z4 — 3–6 × 3 min / 3 min, общ работен бюджет до 1,2 от непрекъснатия капацитет; Z5 — 6–20 × 30 s / 30 s, до 1,5. Това са конкретни начални треньорски настройки, не универсални множители или научно валидирани норми. Поддържането използва минималния цял вариант. Цели повторения, почивки, резерв и всички бюджети се проверяват съвместно. Индивидуалният профил замества тези настройки."})
+                "adaptation": "Отделни onFlows профили v2: Z4 — 3–6 × 3 min / 3 min, общ работен бюджет до 1,2 от непрекъснатия капацитет; Z5 — 6–20 × 30 s / 30 s, до 1,5. Това са конкретни начални треньорски настройки, не универсални множители или научно валидирани норми. Изграждането използва 100% от този бюджет, поддържането — 50%, след което Recovery намалява обема веднъж. Цели повторения, почивки, резерв и всички бюджети се проверяват съвместно. Индивидуалният профил замества тези настройки."})
     methods.extend(_bounded_variants(methods))
     if adaptive_methods.developmental(profile):
         methods = [adaptive_methods.short_variant(m) if m["structure"] in {"MODEL_INTERVALS", "METABOLIC_INTERVALS"}
@@ -268,6 +270,21 @@ def resolved_methods(profile):
                     "warmup_min": 15., "neuromuscular_profile": deepcopy(nms),
                     "adaptation": "Индивидуално включена NMS добавка: повторения, пълни почивки и дни от треньорския профил. Времето участва в общата сесия; пулсовият модел не оценява пълния механичен товар."})
     for method in methods:
+        interval = (method.get("interval_template") if method["structure"] == "MODEL_INTERVALS"
+                    else method.get("interval_profile") if method["structure"] == "METABOLIC_INTERVALS" else None)
+        method["dosing_policy"] = ({"version": "expert-method-role-budget-v1",
+            "capacity_basis": "CONTINUOUS_TMAX_AT_PRESCRIBED_EFFORT",
+            "total_capacity_ratio": interval["total_capacity_ratio"],
+            "speed_time_duration_ratio": interval.get("speed_time_duration_ratio"),
+            "building_budget_fraction": 1., "maintenance_budget_fraction": .5,
+            "recovery_adjustment": "MULTIPLY_VOLUME_ONCE",
+            "profile_source": "EXPLICIT_COACH_PROFILE" if method["structure"] == "METABOLIC_INTERVALS" else "EXISTING_VERSIONED_COACH_DEFAULT"}
+            if interval else {"version": "continuous-role-budget-v1",
+                "capacity_basis": "CONTINUOUS_TMAX_AT_PRESCRIBED_EFFORT",
+                "building_fraction": profile.get("building_fraction", .65),
+                "maintenance_fraction": profile.get("maintenance_fraction", .3),
+                "recovery_adjustment": "MULTIPLY_VOLUME_ONCE"}
+            if method["zone"] != "STR" else {"version": "strength-method-profile-v1", "capacity_basis": "STRENGTH_PROFILE"})
         method["method_family"] = method_family(method)
         method["method_family_version"] = VARIETY_VERSION
     return methods

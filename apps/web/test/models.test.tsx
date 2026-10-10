@@ -20,7 +20,7 @@ describe("Recovery v2 interface",()=>{
   });
   it("renders configurable curve and causal baseline, and disables view-only edits",()=>{
     const html=renderToStaticMarkup(<RecoveryV2Section history={fixture} canEdit/>);
-    for(const text of ["праг 90%","Стръмност","Среднодневна база","STR","Запази и преизчисли"])expect(html).toContain(text);
+    for(const text of ["ориентир 90%","Стръмност","Среднодневна база","STR","Запази и преизчисли"])expect(html).toContain(text);
     expect(html).not.toContain("NaN");
     for(const zone of MODEL_ZONES) expect(html).toContain(`data-recovery-zone="${zone}"`);
     expect(html).toContain("5 дни назад · днес · 2 дни напред");

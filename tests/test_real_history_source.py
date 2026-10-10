@@ -159,6 +159,102 @@ def _parameters() -> dict[str, Any]:
     return generate_demo_bundle()["parameters"]
 
 
+def test_capacity_context_is_resolved_once_per_corrected_sport_and_frozen():
+    from biathlon.component_load import calculate_component_load
+
+    end = date(2026, 10, 10)
+    specs = {
+        "run-a": {"date": end-timedelta(days=3)},
+        "ski": {"date": end-timedelta(days=2), "type": "Walk"},
+        "run-b": {"date": end-timedelta(days=1)},
+    }
+    original = {"minutes": {"Z2": 1.5}, "sources": {"Z2": "TEST_CURVE"}, "fingerprint": "run-context"}
+    calls = []
+    def resolve(sport):
+        calls.append(sport)
+        if sport == "Run":
+            return original
+        original["minutes"]["Z2"] = 1000.
+        original["sources"]["Z2"] = "MUTATED_AFTER_RETURN"
+        return {"minutes": {"Z2": 10.}, "sources": {"Z2": "SKI_CURVE"}}
+
+    dataset = load_real_history(SyntheticHistoryClient(specs),
+        profile_identifier="capacity-athlete", session_salt="test-session", parameters=_parameters(),
+        period_end=end, days=41, load_capacity_resolver=resolve,
+        activity_detail_transformer=lambda detail: {**detail, "type": "NordicSki" if detail["type"] == "Walk" else detail["type"]})
+    assert calls == ["Run", "NordicSki"]
+    assert dataset.component_load_contexts["Run"]["minutes"]["Z2"] == 1.5
+    assert dataset.component_load_contexts["Run"]["sources"]["Z2"] == "TEST_CURVE"
+    assert dataset.excluded_activities == 0
+    for (day, zone), rows in dataset.activity_zones.groupby(["date", "zone"]):
+        daily = dataset.daily_zones.loc[(dataset.daily_zones["date"] == day) & (dataset.daily_zones["zone"] == zone)].iloc[0]
+        assert daily["direct_ratio"] == pytest.approx(rows["direct_ratio"].sum())
+    sports = dataset.activities.set_index("activity_ref")["sport"].to_dict()
+    for ref, rows in dataset.activity_zones.groupby("activity_ref"):
+        capacity = dataset.component_load_contexts[sports[ref]]
+        direct = rows.set_index("zone")["T_eq_z"].to_dict()
+        expected = calculate_component_load(direct, capacity["minutes"], capacity_sources=capacity["sources"])
+        for _, row in rows.iterrows():
+            assert row["E_z"] == pytest.approx(expected["effective"][row["zone"]])
+            assert row["tmax_minutes"] == pytest.approx(expected["capacity_minutes"][row["zone"]])
+            assert row["tmax_source"] == expected["capacity_sources"][row["zone"]]
+
+
+def test_capacity_changes_invalidate_history_cache_but_provenance_only_does_not():
+    end = date(2026, 10, 10)
+    def build(capacity, generation):
+        return load_real_history(SyntheticHistoryClient({"run": {"date": end}}),
+            profile_identifier="capacity-athlete", session_salt="test-session", parameters=_parameters(),
+            period_end=end, days=41, load_capacity_resolver=lambda sport: {
+                "minutes": {"Z2": capacity}, "sources": {"Z2": "TEST_CURVE"},
+                "source_generation_id": generation, "source_revision": generation})
+    first, changed, provenance = build(1.5, "g1"), build(10., "g2"), build(1.5, "g3")
+    assert first.cache_key != changed.cache_key
+    assert first.cache_key == provenance.cache_key
+    assert first.daily_loads["e_Z3"].sum() > changed.daily_loads["e_Z3"].sum()
+    with pytest.raises(ValueError, match="stale"):
+        resolve_real_dataset(first, expected_cache_key=changed.cache_key)
+
+
+def test_capacity_resolver_failure_aborts_refresh_instead_of_excluding_activity():
+    end = date(2026, 10, 10)
+    def unavailable(sport):
+        raise ValueError("unavailable individual curve")
+    with pytest.raises(RuntimeError, match="Continuous capacity resolution failed"):
+        load_real_history(SyntheticHistoryClient({"run": {"date": end}}),
+            profile_identifier="capacity-athlete", session_salt="test-session", parameters=_parameters(),
+            period_end=end, days=41, load_capacity_resolver=unavailable)
+
+
+def test_invalid_explicit_resolved_capacity_aborts_refresh_instead_of_excluding_activity():
+    end = date(2026, 10, 10)
+    with pytest.raises(RuntimeError, match="Continuous capacity resolution failed"):
+        load_real_history(SyntheticHistoryClient({"run": {"date": end}}),
+            profile_identifier="capacity-athlete", session_salt="test-session", parameters=_parameters(),
+            period_end=end, days=41, load_capacity_resolver=lambda sport: {"minutes": {"Z2": 0.}})
+
+
+def test_pipeline_propagates_custom_capacity_and_source_to_both_comparison_paths():
+    from biathlon.component_load import calculate_component_load
+    from intervals_inspector.pipeline import process_activity_payloads
+
+    end = date(2026, 10, 10)
+    client = SyntheticHistoryClient({"run": {"date": end}})
+    capacities = {"Z2": 1.5}
+    sources = {"Z2": "TEST_CURVE"}
+    result = process_activity_payloads(_activity_detail("run", end), client.get_streams_result("run").payload,
+                                      zone_tmax_minutes=capacities, capacity_sources=sources)
+    assert result["model_status"]["status"] == "valid"
+    comparison = result["shadow_model_comparison"]
+    for key in ("baseline", "experimental"):
+        rows = comparison[key]["rows"]
+        direct = {row["zone"]: row["T_eq_z"] for row in rows}
+        expected = calculate_component_load(direct, capacities, capacity_sources=sources)
+        assert {row["zone"]: row["E_z"] for row in rows} == pytest.approx(
+            {zone: expected["effective"][zone] for zone in direct})
+        assert comparison[key]["zone_tmax_sources"]["Z2"] == "TEST_CURVE"
+
+
 def test_systemic_activity_provider_failure_aborts_the_whole_history() -> None:
     end = date(2026, 8, 8)
     start = end - timedelta(days=40)
@@ -437,7 +533,7 @@ def test_ninety_day_history_builds_one_shared_load_and_recovery_dataset() -> Non
     assert {"Q_z", "Qref_z"}.isdisjoint(dataset.daily_zones.columns)
     assert float(dataset.activity_zones["T_z"].sum()) > 0.0
     assert float(dataset.activity_zones["T_eq_z"].sum()) > 0.0
-    assert float(dataset.activity_zones["cascade"].sum()) > 0.0
+    assert float(dataset.activity_zones["cascade"].sum()) == 0.0
     assert float(dataset.activity_zones["spillover"].sum()) >= 0.0
     assert float(dataset.activity_zones["E_z"].sum()) > 0.0
     assert dataset.activity_zones.loc[

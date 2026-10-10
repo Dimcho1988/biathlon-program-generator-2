@@ -135,9 +135,6 @@ def test_registry_exposes_fixed_tref_bounds_and_no_legacy_tref_value() -> None:
     (
         ("parameter.Z1.equivalence_slope_pp_per_bpm", -0.01),
         ("parameter.Z1.equivalence_slope_pp_per_bpm", 100.01),
-        ("parameter.Z2.spill_threshold_fraction", -0.01),
-        ("parameter.Z2.spill_down_fraction", 1.01),
-        ("parameter.Z2.spill_up_fraction", -1.0),
     ),
 )
 def test_experimental_values_outside_allowed_ranges_are_rejected(
@@ -158,6 +155,9 @@ def test_experimental_values_outside_allowed_ranges_are_rejected(
         "parameter.Z2.equivalence_version",
         "parameter.Z2.tref_profile_version",
         "parameter.Z2.power",
+        "parameter.Z2.spill_threshold_fraction",
+        "parameter.Z2.spill_down_fraction",
+        "parameter.Z2.spill_up_fraction",
     ),
 )
 def test_fixed_version_and_legacy_parameters_cannot_be_overridden(
@@ -172,7 +172,7 @@ def test_safe_round_trip_preserves_versions_and_reset_restores_initial() -> None
     changed = configuration_with_overrides(
         {
             "parameter.Z1.equivalence_slope_pp_per_bpm": 1.9,
-            "parameter.Z5.spill_up_fraction": 0.0,
+            "parameter.Z5.equivalence_slope_pp_per_bpm": 4.5,
         }
     )
     payload = configuration_to_safe_dict(changed)
@@ -221,23 +221,27 @@ def test_slope_override_recalculates_only_the_single_equivalent_time_dose() -> N
     assert comparison["intrazone_calculation_count"] == 2
 
 
-def test_equivalent_time_drives_cascade_bidirectional_spill_and_effect() -> None:
+def test_whole_equivalent_time_drives_adjacent_spill_without_full_cascade() -> None:
     result = calculate_shadow_result(
         _analysis_with_equivalent_minutes({"Z2": 100.0}),
         default_shadow_configuration(),
     )
     rows = {row["zone"]: row for row in result["rows"]}
 
-    # With no history Z2 uses its upper bound 180: excess = 100 - 0.5 x 180.
+    # Historical Tref remains 180; continuous expert Tmax is separately 165.
+    # At 100/165 capacity, add 10% down and 20% up of the entire direct dose.
     assert rows["Z2"]["T_eq_z"] == pytest.approx(100.0)
     assert rows["Z2"]["tref_effective"] == pytest.approx(180.0)
-    assert rows["Z2"]["direct_ratio"] == pytest.approx(100.0 / 180.0)
-    assert rows["Z2"]["spillover_excess"] == pytest.approx(10.0)
-    assert rows["Z1"]["spillover_received"] == pytest.approx(2.0)
-    assert rows["Z3"]["spillover_received"] == pytest.approx(1.0)
-    assert rows["Z1"]["cascade"] == pytest.approx(100.0)
-    assert rows["Z1"]["E_z"] == pytest.approx(102.0)
-    assert rows["Z3"]["E_z"] == pytest.approx(1.0)
+    assert rows["Z2"]["tmax_minutes"] == pytest.approx(165.0)
+    assert rows["Z2"]["tmax_source"] == "EXPERT_CONTINUOUS_TMAX"
+    assert rows["Z2"]["direct_ratio"] == pytest.approx(100.0 / 165.0)
+    assert rows["Z2"]["spillover_excess"] == pytest.approx(17.5)
+    assert rows["Z1"]["spillover_received"] == pytest.approx(10.0)
+    assert rows["Z3"]["spillover_received"] == pytest.approx(20.0)
+    assert rows["Z1"]["cascade"] == pytest.approx(0.0)
+    assert rows["Z1"]["E_z"] == pytest.approx(10.0)
+    assert rows["Z3"]["E_z"] == pytest.approx(20.0)
+    assert rows["Z4"]["E_z"] == rows["Z5"]["E_z"] == 0.0
     for row in rows.values():
         assert {
             "T_z",

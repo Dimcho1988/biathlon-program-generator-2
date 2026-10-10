@@ -16,6 +16,7 @@ from typing import Any, Mapping
 import pandas as pd
 
 from biathlon.constants import fresh_parameters
+from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION
 from biathlon.effective_hr import EFFECTIVE_HR_SOURCE
 from biathlon.physiology import compute_readiness_history, current_readiness
 
@@ -541,6 +542,9 @@ def dataset_to_load_history(
 
     from biathlon.sport_heart_rate import VERSION as SPORT_HR_VERSION
     return LoadHistoryResponse(
+        component_load_model={"version": COMPONENT_LOAD_VERSION,
+                              "contexts_by_sport": getattr(dataset, "component_load_contexts", None) or {},
+                              "scope": "ACTIVITY"},
         schema_version="load-history-v2",
         athlete_id=context.public_alias,
         period_start=dataset.period_start,
@@ -1337,10 +1341,24 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 "affects_canonical_load": False,
             }
 
+        from .component_load_context import context_from_speed_view, read_contexts
+        load_capacity_contexts = {}
+        def load_capacity_for_sport(sport):
+            if sport not in load_capacity_contexts:
+                if callable(getattr(repository, "athlete_settings", None)):
+                    load_capacity_contexts.update(read_contexts(repository, context.public_alias, [sport]))
+                else:
+                    # The standalone in-memory pilot has no individual model
+                    # store. This is an explicit expert mode, not a catch for
+                    # errors reading an existing model from persistence.
+                    load_capacity_contexts[sport] = context_from_speed_view({"sport": sport})
+            return load_capacity_contexts[sport]
+
         dataset = load_real_history(provider, profile_identifier=context.provider_athlete_id,
                                     session_salt=salt, parameters=parameters,
                                     period_end=end, days=days, loaded_at_utc=now,
                                     configuration=configuration_with_hr_boundaries(context.zone_bounds_bpm, hrmax_bpm=context.hrmax_bpm),
+                                    load_capacity_resolver=load_capacity_for_sport,
                                     activity_shadow_processor=process_activity_shadow,
                                     activity_ref_resolver=resolve_activity_ref,
                                     activity_metadata_collector=collect_activity_metadata,

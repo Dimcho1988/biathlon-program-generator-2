@@ -34,6 +34,9 @@ def test_partial_hr_preserves_measured_data_and_adds_only_missing_minutes():
         measured = next(a for a in source["activities"] if a["activity_ref"] == evidence["activity_ref"])
         for new, old in zip(estimated["zones"], measured["zones"]):
             assert new["equivalent_time_min"] == pytest.approx(old["equivalent_time_min"] + new["planning_estimated_q"])
+            assert new["effective_load"] == estimated["component_load"]["effective"][new["zone"]]
+            assert new["effective_load"] == pytest.approx(
+                new["planning_measured_effective_load"] + new["planning_estimated_effective_load"])
     assert source == original
     assert ledger["quality"] == source["quality"]
     assert any(r.get("planning_estimated_effective_load", 0) > 0 for r in ledger["daily"])
@@ -97,8 +100,11 @@ def test_initial_estimated_time_envelope_is_prorated_and_counts_actual_activity(
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
     repo, source = incomplete(30)
     actual = {"activity_ref": "today", "date": TODAY.isoformat(), "sport": "Run", "duration_min": 45,
-              "zones": [{"zone": "Z1", "raw_time_min": 45, "equivalent_time_min": 45}]}
+              "zones": [{"zone": z, "raw_time_min": 45. if z == "Z1" else 0.,
+                         "equivalent_time_min": 45. if z == "Z1" else 0.,
+                         "effective_load": 45. if z == "Z1" else 0.} for z in estimate.ZONES]}
     source["activities"].append(actual)
+    next(row for row in source["daily"] if row["date"] == actual["date"] and row["zone"] == "Z1")["effective_load"] += 45.
     repo.envelope["activities"].append({**actual, "local_date": actual["date"]})
     body = configured(availability_mode="AUTO_HISTORY", horizon_mode="MANUAL", program_end=(TODAY+timedelta(days=2)).isoformat())
     result = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)
@@ -202,3 +208,83 @@ def test_recovery_method_absolute_minimum_keeps_recovery_cap():
     assert method["max_work_min"] == 30
     unsupported = {"activation_eligible": True, "source": {"readiness_known": False}}
     assert not _eligible(unsupported)
+
+
+def test_partial_activity_spill_does_not_merge_with_other_sessions_on_same_day(monkeypatch):
+    day = (TODAY - timedelta(days=1)).isoformat()
+    # Two separate 30-minute Z3 activities stay below a 50-minute threshold.
+    # One activity initially has 15 measured + 15 missing minutes.
+    source = {"period_start": day, "period_end": day,
+              "quality": {"limited_activities": 1},
+              "activities": [
+                  {"activity_ref": "partial", "date": day, "sport": "Run", "duration_min": 30.,
+                   "quality_status": "limited", "hr_coverage_percent": 50.,
+                   "zones": [{"zone": "Z3", "raw_time_min": 15., "equivalent_time_min": 15.}]},
+                  {"activity_ref": "other", "date": day, "sport": "Run", "duration_min": 30.,
+                   "quality_status": "valid", "hr_coverage_percent": 100.,
+                   "zones": [{"zone": "Z3", "raw_time_min": 30., "equivalent_time_min": 30.}]}],
+              "daily": [{"date": day, "zone": z, "effective_load": 45. if z == "Z3" else 0.}
+                        for z in estimate.ZONES],
+              "strength": {"daily": [{"date": day, "effective_load": 0.}]}}
+    speed = {"partial": {"covered_missing_minutes": 15.,
+                         "zones": [{"zone": "Z3", "raw_time_min": 15., "equivalent_time_min": 15.}],
+                         "provenance": {"load": "ESTIMATED_NOT_MEASURED_HR"}}}
+    result, info = estimate.prepare(source, [], configured(), TODAY, speed_estimates=speed,
+                                    zone_tmax_minutes={z: 100. for z in estimate.ZONES})
+    assert info["supported"]
+    values = {row["zone"]: row["effective_load"] for row in result["daily"]}
+    assert values["Z3"] == 60.
+    assert values["Z2"] == values["Z4"] == 0.
+
+
+@pytest.mark.parametrize("sport,expected_down,expected_up", [("Run", 6., 12.), ("NordicSki", 0., 0.)])
+def test_partial_activity_crossing_threshold_spills_its_entire_completed_q(sport, expected_down, expected_up):
+    day = (TODAY - timedelta(days=1)).isoformat()
+    source = {"period_start": day, "period_end": day,
+              "quality": {"limited_activities": 1},
+              "activities": [{"activity_ref": "partial", "date": day, "sport": sport, "duration_min": 60.,
+                              "quality_status": "limited", "hr_coverage_percent": 50.,
+                              "zones": [{"zone": "Z3", "raw_time_min": 30., "equivalent_time_min": 30.}]}],
+              "daily": [{"date": day, "zone": z, "effective_load": 30. if z == "Z3" else 0.}
+                        for z in estimate.ZONES],
+              "strength": {"daily": [{"date": day, "effective_load": 0.}]}}
+    speed = {"partial": {"covered_missing_minutes": 30.,
+                         "zones": [{"zone": "Z3", "raw_time_min": 30., "equivalent_time_min": 30.}],
+                         "provenance": {"load": "ESTIMATED_NOT_MEASURED_HR"}}}
+    result, _ = estimate.prepare(source, [], configured(), TODAY, speed_estimates=speed,
+                                 capacity_contexts_by_sport={
+                                     "Run": {"minutes": {z: 100. for z in estimate.ZONES}},
+                                     "NordicSki": {"minutes": {z: 200. for z in estimate.ZONES}}})
+    values = {row["zone"]: row["effective_load"] for row in result["daily"]}
+    assert values["Z3"] == 60.
+    assert values["Z2"] == expected_down
+    assert values["Z4"] == expected_up
+    assert values["Z1"] == values["Z5"] == 0.
+
+
+def test_estimated_activity_and_daily_ledger_reconcile_and_invalidate_measured_fingerprint():
+    from apps.api.component_load_projection import project_history
+    from tests.api.test_component_load_projection import context, source as canonical_source
+
+    day = (TODAY - timedelta(days=1)).isoformat()
+    contexts = context()
+    source = canonical_source(work=(30.,), days=(day,))
+    source["quality"] = {"limited_activities": 1}
+    source["activities"][0].update(duration_min=60., quality_status="limited", hr_coverage_percent=50.)
+    measured = project_history(source, contexts)
+    fingerprint = measured["component_load_model"]["fingerprint"]
+    speed = {"0": {"covered_missing_minutes": 30.,
+                   "zones": [{"zone": "Z2", "raw_time_min": 30., "equivalent_time_min": 30.}],
+                   "provenance": {"load": "ESTIMATED_NOT_MEASURED_HR"}}}
+    result, info = estimate.prepare(measured, [], configured(), TODAY, speed_estimates=speed,
+                                    capacity_contexts_by_sport=contexts)
+    assert info["supported"]
+    assert "fingerprint" not in result["component_load_model"]
+    assert result["component_load_model"]["measured_source_fingerprint"] == fingerprint
+    assert measured["component_load_model"]["fingerprint"] == fingerprint
+    activity_values = {row["zone"]: row["effective_load"] for row in result["activities"][0]["zones"]}
+    daily_values = {row["zone"]: row["effective_load"] for row in result["daily"]}
+    assert activity_values == daily_values == {"Z1": 6., "Z2": 60., "Z3": 12., "Z4": 0., "Z5": 0.}
+    projected = project_history(result, contexts)
+    assert projected["component_load_model"]["fingerprint"] != fingerprint
+    assert {row["zone"]: row["effective_load"] for row in projected["daily"]} == daily_values

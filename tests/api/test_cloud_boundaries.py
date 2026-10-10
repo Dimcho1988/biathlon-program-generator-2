@@ -707,6 +707,10 @@ def test_planning_calendar_is_scoped_and_reports_generation_readiness(monkeypatc
             return {"training_status": {"athlete_id": athlete_alias}}
 
     repository = Repository()
+    from apps.api import model_service
+    def no_recovery_projection(*args, **kwargs):
+        raise AssertionError("Calendar metadata must not project Recovery")
+    monkeypatch.setattr(model_service, "project_recovery", no_recovery_projection)
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "secret-value")
     monkeypatch.setattr(dependencies, "repository", lambda: repository)
     client = TestClient(app)

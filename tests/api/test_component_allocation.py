@@ -6,7 +6,7 @@ import pytest
 
 from biathlon import planning_allocation, planning_schedule
 from biathlon.constants import COMPONENTS
-from tests.api.test_management_schedule import body, run
+from tests.api.test_management_schedule import body, run, stored_activity_load
 from tests.api.test_training_plan_engine import Repository, TODAY
 from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose
 
@@ -89,11 +89,15 @@ def test_quality_priority_direct_basis_fallback_does_not_treat_cascade_as_covera
 def test_nonaccent_endurance_uses_weekly_need_without_raising_coach_fraction(monkeypatch):
     repo = Repository()
     source = repo.envelope["snapshot_payload"]["load_history"]
+    by_day = {}
     for a in source["activities"]:
         a["duration_min"] = 180.
+        next(row for row in a["zones"] if row["zone"] == "Z1").update(
+            equivalent_time_min=140., raw_time_min=140.)
+        by_day[a["date"]] = stored_activity_load(a)
     for row in source["daily"]:
-        if row["effective_load"] and row["zone"] == "Z1":
-            row["effective_load"] = 140.
+        row["effective_load"] = by_day.get(row["date"], {}).get(row["zone"], 0.)
+    repo.envelope["activities"] = [{**deepcopy(a), "local_date": a["date"]} for a in source["activities"]]
     p = body(sessions_per_week=9, sessions_by_day=[2,1,1,2,1,2,0],
              accent_mode="MANUAL", accents=["Z4","Z5"], wave=[1.,1.,1.,.78], mixed_sessions_enabled=False)
     p["building_fraction"] = .65
@@ -237,7 +241,14 @@ def test_feasible_automatic_q_target_is_realized_without_filling_e_headroom(monk
         if row.get("zone", "STR") != "Z1":
             row["effective_load"] = 0.
     for a in source["activities"]:
-        a["zones"] = [{"zone": "Z1", "raw_time_min": 60., "equivalent_time_min": 50.}]
+        a["zones"] = [{"zone": z, "raw_time_min": 60. if z == "Z1" else 0.,
+                       "equivalent_time_min": 50. if z == "Z1" else 0.}
+                      for z in COMPONENTS if z != "STR"]
+        stored_activity_load(a)
+    for row in source["daily"]:
+        row["effective_load"] = sum(z["effective_load"] for a in source["activities"]
+            if a["date"] == row["date"] for z in a["zones"] if z["zone"] == row["zone"])
+    repo.envelope["activities"] = [{**deepcopy(a), "local_date": a["date"]} for a in source["activities"]]
     p = body(sessions_per_week=7, accent_mode="MANUAL", accents=["Z1"], mesocycle_anchor=TODAY)
     p["load_progression"] = LoadProgression().model_dump()
     p["max_key_sessions_per_week"] = 0
@@ -246,7 +257,9 @@ def test_feasible_automatic_q_target_is_realized_without_filling_e_headroom(monk
     assert row["basis"] == "DIRECT_Q"
     assert 0 <= row["remaining"] < .5
     assert row["target_q"] == plan["long_term"]["weeks"][0]["components"]["Z1"]["target_period_q"]
-    assert row["unallocated_effective"] > 1000  # a separate ceiling, not missing direct volume
+    # The 50-Q activity ledger leaves a substantial separate E ceiling after
+    # the direct objective is met; it must not be filled automatically.
+    assert row["unallocated_effective"] > 40
     assert not plan["allocation"]["has_unallocated_load"]
 
 

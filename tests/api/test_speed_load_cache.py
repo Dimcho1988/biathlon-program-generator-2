@@ -8,7 +8,7 @@ import pytest
 from apps.api import speed_load as model
 from apps.api import speed_load_cache as cache_module
 from apps.api.speed_load_cache import SpeedLoadCache
-from tests.api.test_speed_load import Repository, TODAY, SETTINGS
+from tests.api.test_speed_load import Repository, TODAY, SETTINGS, expert_capacity_contexts
 
 
 def test_repeated_speed_reports_reuse_work_and_invalidate_current_sources(monkeypatch):
@@ -63,6 +63,30 @@ def test_repeated_speed_reports_reuse_work_and_invalidate_current_sources(monkey
     repo.speed_load_cache_namespace += "-other-database"
     model.history_view(repo, "authorized-athlete", today=TODAY)
     assert len(calls) > count
+
+
+def test_changed_capacity_invalidates_effective_report_but_reuses_direct_activity_q(monkeypatch):
+    repo = Repository()
+    repo.speed_load_cache_namespace = str(uuid4())
+    repo.add("prior", "Run", TODAY-timedelta(days=1), 150, 15)
+    repo.add("current", "Run", TODAY, 150, 15)
+    reads = []
+    original = repo.activity_speed_exposure_samples
+    monkeypatch.setattr(repo, "activity_speed_exposure_samples", lambda *args:
+                        reads.append(args) or original(*args))
+    capacities = {z: 20. for z in model.ZONES}
+    monkeypatch.setattr(model, "read_contexts", lambda *args:
+                        {"Run": {"minutes": capacities,
+                                 "sources": {z: "SPEED_TIME_CURVE" for z in model.ZONES},
+                                 "fingerprint": str(capacities)}})
+    before = model.history_view(repo, "authorized-athlete", today=TODAY)
+    count = len(reads)
+    capacities["Z3"] = 10.
+    after = model.history_view(repo, "authorized-athlete", today=TODAY)
+    assert len(reads) == count
+    assert after["zones"][2]["equivalent_minutes"] == before["zones"][2]["equivalent_minutes"]
+    assert before["zones"][1]["effective_load"] == 0.
+    assert after["zones"][1]["effective_load"] == pytest.approx(.7)
 
 
 def test_activity_cache_reuses_only_unchanged_causal_inputs_and_recomputes_downstream_load(monkeypatch):

@@ -338,6 +338,7 @@ class LoadHistoryResponse(StrictModel):
     daily: list[DailyZoneLoad]
     activities: list[LoadHistoryActivity]
     strength: StrengthLoadHistory | None = None
+    component_load_model: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_v2_tref_provenance(self) -> "LoadHistoryResponse":

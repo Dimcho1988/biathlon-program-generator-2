@@ -66,11 +66,13 @@ def test_curve_policy_requires_two_observed_durations_unless_model_estimates_sel
 
 
 @pytest.mark.parametrize("durations", [[1050.], [1200., 7200.]])
-def test_observed_only_retains_recent_explicit_effort_assessment_with_honest_source(durations):
+def test_expert_effort_assessment_is_used_only_without_an_individual_curve(durations):
     speed, settings, context = view_at(durations)
     target = context[0].curve.speed(600)*3.6
     method = metabolic_method(target, assessed_on=TODAY.isoformat())
     evidence = engine.capacity_for(method, settings, speed, context, TODAY, use_model_prior=False)
+    assert evidence is None  # Existing curve is outside the selected evidence policy.
+    evidence = engine.capacity_for(method, settings, None, (None, [], []), TODAY, use_model_prior=False)
     assert evidence["capacity_source"] == "COACH_EFFORT_CAPACITY"
     assert evidence["capacity_reference"] == "INDIVIDUAL_COACH_ASSESSMENT"
     assert evidence["capacity_minutes"] == 20.
@@ -88,12 +90,11 @@ def test_continuous_blend_honors_same_observed_only_policy(durations, use_model_
     speed, settings, context = view_at(durations, blended=True)
     method = {"zone": "Z3", "structure": "CONTINUOUS", "position": .75, "actual_sport": "Run"}
     evidence = engine.capacity_for(method, settings, speed, context, TODAY, use_model_prior=use_model_prior)
-    assert evidence is not None  # Explicit expert fallback remains available.
     if allowed:
+        assert evidence is not None
         assert evidence["capacity_source"] == "BLENDED_DOSING_CURVE"
         assert evidence["target_speed_kmh"] is not None
     else:
-        assert evidence["capacity_source"] == "EXPERT_CONTINUOUS_TREF"
-        assert evidence["target_speed_kmh"] is None
+        assert evidence is None
         assert engine.capacity_for(method, settings, speed, context, TODAY, False,
             use_model_prior=use_model_prior) is None

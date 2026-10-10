@@ -158,6 +158,8 @@ def run_physiological_models(
     *,
     profile: OnFlowsZoneProfile,
     experimental_configuration: ShadowModelConfiguration,
+    zone_tmax_minutes: Mapping[str, float] | None = None,
+    capacity_sources: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, str]]:
     """Run the unchanged bridge models against exactly one canonical input."""
 
@@ -188,6 +190,8 @@ def run_physiological_models(
             canonical_input.prior_experimental_effective_load
         ),
         activity_date=canonical_input.activity_date,
+        zone_tmax_minutes=zone_tmax_minutes,
+        capacity_sources=capacity_sources,
     )
     if coverage < LOW_HR_COVERAGE_PERCENT:
         status = {
@@ -218,6 +222,8 @@ def process_activity_payloads(
         [Mapping[str, Any], IntervalAwareResult], Mapping[str, Any]
     ] | None = None,
     propagate_shadow_processor_errors: bool = False,
+    zone_tmax_minutes: Mapping[str, float] | None = None,
+    capacity_sources: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Validate, normalize, adapt, and model one already-loaded activity."""
 
@@ -242,6 +248,8 @@ def process_activity_payloads(
         canonical_input,
         profile=selected_profile,
         experimental_configuration=configuration,
+        zone_tmax_minutes=zone_tmax_minutes,
+        capacity_sources=capacity_sources,
     )
 
     summary["activity_metadata"] = _safe_activity_metadata(detail_payload)

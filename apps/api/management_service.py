@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from biathlon.periodization import ENGINE_VERSION as PERIODIZATION_VERSION
+from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION
+from .component_load_context import VERSION as COMPONENT_CAPACITY_VERSION
 
 from .management_schemas import ManagementProfile, normalize_building_profile
 from .management_store import ManagementStore
@@ -53,8 +55,11 @@ def outlook(repository, alias, *, now=None):
     if not stored["configured"]:
         return {"configured": False, "outlook": None}
     profile = ManagementProfile.model_validate(stored["profile"]).model_dump(mode="json")
-    event_duration = race_duration.preview(repository, alias, profile)
     settings = repository.athlete_settings(alias)
+    from . import model_service
+    # Race duration and component capacity must share the same model read.
+    speed_by_sport = {profile["sport"]: model_service.speed_view(repository, alias, profile["sport"]) if settings else None}
+    event_duration = race_duration.preview(repository, alias, profile, speed_view=speed_by_sport[profile["sport"]])
     now = now or datetime.now(timezone.utc)
     today = now.astimezone(ZoneInfo(settings.timezone) if settings else timezone.utc).date()
     engine = training_plan_engine
@@ -70,7 +75,12 @@ def outlook(repository, alias, *, now=None):
     if activity_calendar and (activity_calendar.get("generation_id"), activity_calendar.get("revision")) != (analysis.get("generation_id"), analysis.get("revision")):
         activity_calendar = None
     planning_envelope = {**analysis, "activities": (activity_calendar or {}).get("activities", [])}
-    source, planning_evidence = engine.planning_source(repository, alias, profile, settings, planning_envelope, today)
+    source, planning_evidence = engine.planning_source(repository, alias, profile, settings, planning_envelope, today, speed_by_sport=speed_by_sport)
+    contexts = (source.get("component_load_model") or {}).get("contexts_by_sport") or {}
+    measured_source = engine.project_history(measured_source, contexts)
+    planning_envelope = {**planning_envelope, "snapshot_payload": {
+        **(planning_envelope.get("snapshot_payload") or {}), "load_history": measured_source}}
+    profile = {**profile, "_component_load_context": contexts.get(profile.get("actual_sport") or profile.get("sport")) or engine.context_from_speed_view(None)}
     rows = engine._daily_rows(source, today)
     calendar = engine._read_optional(repository, "athlete_planning_calendar", alias) or {"events": []}
     profile, horizon = engine.planning_schedule.horizon(profile, calendar["events"])
@@ -95,7 +105,7 @@ def outlook(repository, alias, *, now=None):
                                        reentry_days_override=reentry_days,
                                        taper_days=profile["taper_days"], transition_days=profile["transition_days"])
     phases["entry_basis"] = {"days_override": reentry_days, "reason": reentry_reason}
-    progression = engine.progression_context(repository, alias, profile, source, rows, today, phases, envelope=analysis, measured_source=measured_source)
+    progression = engine.progression_context(repository, alias, profile, source, rows, today, phases, envelope=planning_envelope, measured_source=measured_source)
     projection = engine._long_term_outlook(profile, phases, reference, accents, preferences, rows, today,
                                          limited, volume=volume, events=calendar["events"], progression=progression, planning_evidence=planning_evidence)
     return {"configured": True, "outlook": {
@@ -137,11 +147,14 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False)
     return {
         "evaluation_date": evaluated_at.astimezone(ZoneInfo(settings.timezone) if settings else timezone.utc).date().isoformat(),
         "rule_versions": {
+            "component_load": COMPONENT_LOAD_VERSION,
+            "component_load_context": COMPONENT_CAPACITY_VERSION,
             "engine": training_plan_engine.VERSION,
             "parameters": training_plan_engine.PARAMETER_VERSION,
             "methods": training_plan_engine.METHODS_VERSION,
             "periodization": PERIODIZATION_VERSION,
             "speed_duration": training_plan_engine.speed_duration.VERSION,
+            "dosing_curve": training_plan_engine.dosing_curve.VERSION,
             "preliminary_capacity": training_plan_engine.preliminary_capacity.VERSION,
             "hr_speed": training_plan_engine.hr_speed.VERSION,
             "planning_history_estimate": training_plan_engine.planning_history_estimate.VERSION,

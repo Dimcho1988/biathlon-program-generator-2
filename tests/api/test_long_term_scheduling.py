@@ -25,14 +25,16 @@ def prescribed_q(monkeypatch, targets):
 def actual_today(repo, zones):
     source = repo.envelope["snapshot_payload"]["load_history"]
     # A genuine canonical actual vector: upper HR for Z1–Z4 and lower HR
-    # for Z5 each yield one equivalent minute per raw minute. Include the
-    # technical cascade from the causal history, as the real import does.
+    # for Z5 each yield one equivalent minute per raw minute. Persist both
+    # activity Q/E and its matching daily contribution, as real import does.
     blocks = [engine._block("WORK", "Actual work", zone, 2.,
                             repo.settings.zone_bounds_bpm[4 if zone == "Z5" else int(zone[1:])], "")
               for zone in zones]
     direct, effective, _ = engine._canonical_load(blocks, repo.settings, engine._daily_rows(source, TODAY), TODAY)
     activity = {"activity_ref":"actual-today", "date":TODAY.isoformat(), "sport":"Run", "duration_min":2.*len(zones),
-                "zones":[{"zone":zone,"raw_time_min":2. if zone in zones else 0.,"equivalent_time_min":direct[zone]} for zone in COMPONENTS if zone != "STR"]}
+                "zones":[{"zone":zone,"raw_time_min":2. if zone in zones else 0.,
+                          "equivalent_time_min":direct[zone], "effective_load":effective[zone]}
+                         for zone in COMPONENTS if zone != "STR"]}
     source["activities"].append(activity)
     repo.envelope["activities"].append({**deepcopy(activity),"local_date":TODAY.isoformat()})
     for row in source["daily"]:

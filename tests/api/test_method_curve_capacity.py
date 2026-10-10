@@ -129,7 +129,7 @@ def single_anchor_view():
     speed, context = single_anchor_context()
     test = context[1][0]
     speed.update(sport="NordicSki", active_test_keys=["race"],
-                 tests=[{"entry_key": "race", "payload": test}])
+                 tests=[{"entry_key": "race", "payload": test}], hr_model=context[0].summary())
     return speed, context
 
 
@@ -157,6 +157,7 @@ def test_individual_flat_speed_profile_uses_actual_blended_curve_inverse(monkeyp
     index = speed_duration.calibrated([{**context[1][0], "speed_kmh": 22.}])
     blend = dosing_curve.Curve(index, plain)
     monkeypatch.setattr(dosing_curve, "from_view", lambda _: blend)
+    speed["dosing_model"] = {"hr_model": dosing_curve.Predictor(blend, SETTINGS.zone_bounds_bpm, SETTINGS.hrmax_bpm, {}).summary()}
     target = blend.speed(600)*3.6
     evidence = engine.capacity_for(metabolic_method(target), SETTINGS, speed, context, date(2026, 10, 8), use_model_prior=True)
     assert evidence["capacity_source"] == "BLENDED_DOSING_CURVE"
@@ -197,7 +198,7 @@ def test_actual_terrain_speed_profile_preserves_coach_capacity_and_assessment_re
 
 def test_missing_curve_flat_profile_does_not_invent_normative_capacity():
     today = date(2026, 10, 8)
-    speed = {"status": "PRELIMINARY", "model_version": speed_duration.VERSION,
+    speed = {"status": "REFERENCE_ONLY", "model_version": speed_duration.VERSION,
              "active_test_keys": [], "tests": []}
     current = metabolic_method(22., assessed_on=today.isoformat())
     evidence = engine.capacity_for(current, SETTINGS, speed, (None, [], []), today)
@@ -286,8 +287,8 @@ def test_full_planner_generates_whole_z5_dose_from_single_long_anchor_with_long_
     assert evidence["capacity_reference"] == "BOUNDARY_HALF_TMAX_MAX600"
     assert evidence["supported_test_duration_s"] == [1050., 1050.]
     assert "test_anchor" not in evidence
-    assert evidence["base_fraction"] == .65 and evidence["readiness_dose_factor"] == .9
-    assert evidence["requested_primary_work_minutes"] / evidence["capacity_minutes"] == pytest.approx(.65*.9, abs=.0001)
+    assert evidence["base_fraction"] == 1.5 and evidence["readiness_dose_factor"] == .9
+    assert evidence["requested_primary_work_minutes"] / evidence["capacity_minutes"] == pytest.approx(1.5*.9, abs=.0001)
     assert evidence["target_speed_kmh"] > evidence["boundary_speed_kmh"]
     work = [b for b in session["blocks"] if b["kind"] == "WORK"]
     template = evidence["effort_profile"]

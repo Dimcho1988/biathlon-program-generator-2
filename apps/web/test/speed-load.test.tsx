@@ -24,6 +24,13 @@ const fixture=():SpeedLoad=>({schema_version:"speed-load-history-v1",model_versi
     hr_policy:{version:"sport-hr-reference-cycling-plus7-v1",offset_bpm:7,basis:"COACH_INITIAL_ASSUMPTION",reference_zone_bounds_bpm:[100,120,140,160,180,200],sport_zone_bounds_bpm:[93,113,133,153,173,193],reference_hrmax_bpm:200,sport_hrmax_bpm:193,raw_hr_unchanged:true},
     indices:{GENERAL:{index:2.5,count:1,seconds:600}},mapping:{uses_general_index:true}}],activities:[],warnings:[]});
 
+it("accepts the adjacent Tmax speed-load version while retaining old reports",()=>{
+  expect(parseSpeedLoad(fixture()).model_version).toBe("independent-speed-load-causal-ti-v1");
+  const updated={...fixture(),model_version:"independent-speed-load-causal-ti-v2-adjacent-tmax",component_load_version:"component-load-adjacent-tmax-v1"};
+  expect(parseSpeedLoad(updated).component_load_version).toBe("component-load-adjacent-tmax-v1");
+  expect(()=>parseSpeedLoad({...updated,model_version:"unknown-load-model"})).toThrow();
+});
+
 it("enforces athlete access for the separate ledger, including all-sport requests",async()=>{
   const request=new Request("https://onflows.test/api/athlete/models/speed-load?athlete_alias=someone-else");
   vi.mocked(currentAuthorizedAthlete).mockResolvedValue(null);

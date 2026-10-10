@@ -136,18 +136,11 @@ DEFAULT_RECOVERY = {
     "STR": {"sensitivity": 0.95, "tau_days": 1.70, "fmax": 150.0},
 }
 
-# Редът е приемащ компонент, колоната е източник на директен товар.
+# Compatibility matrix: only direct load remains on its own component.
+# Neighbor interaction is applied once by component_load, never recursively.
 DEFAULT_CASCADE = {
     receiver: {
-        source: (
-            1.0
-            if receiver == source
-            else 1.0
-            if receiver in AEROBIC_COMPONENTS
-            and source in AEROBIC_COMPONENTS
-            and AEROBIC_COMPONENTS.index(source) > AEROBIC_COMPONENTS.index(receiver)
-            else 0.0
-        )
+        source: 1.0 if receiver == source else 0.0
         for source in COMPONENTS
     }
     for receiver in COMPONENTS

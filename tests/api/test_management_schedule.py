@@ -9,6 +9,7 @@ from apps.api import training_plan_engine as engine, management_service, managem
 from apps.api.management_schemas import ManagementProfile, PlanningControls
 from biathlon import planning_schedule
 from biathlon.constants import COMPONENTS
+from biathlon.component_load import calculate_component_load
 from biathlon.training_methods import resolved_methods
 from tests.api.test_training_plan_engine import Repository, TODAY, NOW, profile, reference_speed
 from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose
@@ -20,15 +21,34 @@ def body(**changes):
                    planning_controls=PlanningControls(**changes).model_dump(mode="json"))
 
 
+def stored_activity_load(activity):
+    effective = calculate_component_load({row["zone"]: row["equivalent_time_min"] for row in activity["zones"]})["effective"]
+    for row in activity["zones"]:
+        row["effective_load"] = effective[row["zone"]]
+    return effective
+
+
 def high_capacity_history():
-    """Synthetic generous history isolates scheduling from exposure scarcity."""
+    """Synthetic generous direct-Q history isolates scheduling headroom.
+
+    Both Q and E are explicit: inflating daily E alone is discarded by the
+    canonical projection and no longer describes a high-load fixture.
+    """
     repo = Repository()
     source = repo.envelope["snapshot_payload"]["load_history"]
-    for r in source["daily"] + source["strength"]["daily"]:
-        if r["effective_load"]:
-            r["effective_load"] = 1000.
+    by_day = {}
     for a in source["activities"]:
         a["duration_min"] = 180
+        for row in a["zones"]:
+            row["equivalent_time_min"] = 1000.
+        effective = stored_activity_load(a)
+        by_day[a["date"]] = effective
+    for row in source["daily"]:
+        row["effective_load"] = by_day.get(row["date"], {}).get(row["zone"], 0.)
+    for row in source["strength"]["daily"]:
+        if row["effective_load"]:
+            row["effective_load"] = 1000.
+    repo.envelope["activities"] = [{**deepcopy(a), "local_date": a["date"]} for a in source["activities"]]
     return repo
 
 
@@ -126,20 +146,24 @@ def test_second_session_can_use_building_dose_when_long_term_endurance_is_unfill
     assert pairs
     second = next(sessions[1] for sessions in pairs if sessions[1]["purpose"] == "BUILDING")
     assert second["zone"] in {"Z1", "Z2"}
-    assert second["dose_evidence"]["base_fraction"] == p["building_fraction"]
+    # A combined method divides its building dose between its components;
+    # base_fraction alone is only the primary component's share.
+    assert second["dose_evidence"]["structure_base_fraction"] == p["building_fraction"]
     assert_readiness_dose(second)
 
 
 def completed_activity(repo, reference, minutes=40.):
     activity = {"activity_ref": reference, "date": TODAY.isoformat(), "local_date": TODAY.isoformat(),
-        "sport": "Run", "duration_min": minutes, "zones": [{"zone":"Z1", "raw_time_min":minutes,
-        "equivalent_time_min":minutes*.5}]}
+        "sport": "Run", "duration_min": minutes, "zones": [{"zone": zone,
+        "raw_time_min": minutes if zone == "Z1" else 0.,
+        "equivalent_time_min": minutes*.5 if zone == "Z1" else 0.} for zone in COMPONENTS if zone != "STR"]}
     source = repo.envelope["snapshot_payload"]["load_history"]
+    effective = stored_activity_load(activity)
     source["activities"].append(deepcopy(activity))
     repo.envelope["activities"].append(deepcopy(activity))
     for row in source["daily"]:
-        if row["date"] == TODAY.isoformat() and row["zone"] == "Z1":
-            row["effective_load"] += minutes*.5
+        if row["date"] == TODAY.isoformat():
+            row["effective_load"] += effective[row["zone"]]
 
 
 def test_imported_first_session_leaves_a_second_slot_with_actual_load_counted_once(monkeypatch):
@@ -208,8 +232,15 @@ def test_imported_key_morning_still_enforces_key_spacing_in_the_remaining_slot(m
     repo = high_capacity_history()
     completed_activity(repo, "morning")
     for activities in (repo.envelope["activities"], repo.envelope["snapshot_payload"]["load_history"]["activities"]):
-        next(a for a in activities if a["activity_ref"] == "morning")["zones"].append(
-            {"zone":"Z3", "raw_time_min":10., "equivalent_time_min":5.})
+        activity = next(a for a in activities if a["activity_ref"] == "morning")
+        zones = activity["zones"]
+        next(row for row in zones if row["zone"] == "Z3").update(raw_time_min=10., equivalent_time_min=5.)
+        stored_activity_load(activity)
+    source = repo.envelope["snapshot_payload"]["load_history"]
+    for row in source["daily"]:
+        if row["date"] == TODAY.isoformat():
+            row["effective_load"] = sum(zone["effective_load"] for activity in source["activities"]
+                if activity["date"] == row["date"] for zone in activity["zones"] if zone["zone"] == row["zone"])
     p = body(sessions_per_week=13, sessions_by_day=[2,2,2,2,2,2,1], threshold_days=[TODAY.weekday()])
     plan = run(monkeypatch, p, repo)
     assert not any(s["is_key_session"] for s in plan["days"][0]["sessions"])

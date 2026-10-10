@@ -10,6 +10,16 @@ BOUNDS=(100,120,140,160,180,200)
 SETTINGS=SimpleNamespace(zone_bounds_bpm=BOUNDS,hrmax_bpm=200,timezone="UTC")
 
 
+@pytest.fixture(autouse=True)
+def expert_capacity_contexts(monkeypatch):
+    # Speed-integration fixtures intentionally have no persisted curve store.
+    # Exercise its explicit unavailable-curve result, not an implicit RPC fallback.
+    from apps.api.component_load_context import context_from_speed_view
+    monkeypatch.setattr(model, "read_contexts", lambda repository, alias, sports:
+                        {sport: context_from_speed_view({"status": "UNAVAILABLE", "sport": sport})
+                         for sport in sports})
+
+
 def test_sport_specific_speed_converts_to_equal_effort_with_transparent_fallback():
     def mapping(sport,index):
         return model.zone_mapping({"GENERAL":{"index":index,"count":1,"seconds":600}},BOUNDS,200,sport)[0]
@@ -297,3 +307,26 @@ def test_prepared_integration_converter_matches_reference_exactly_at_zone_edges_
         reference = model.convert_speed(mapping, speed)
         actual = convert(speed)
         assert actual == ((reference["zone"], reference["coefficient"]) if reference else None)
+
+
+def test_speed_spill_is_per_activity_and_uses_current_individual_capacity(monkeypatch):
+    repo = Repository()
+    repo.add("prior", "Run", TODAY-timedelta(days=1), 150, 15)
+    repo.add("morning", "Run", TODAY, 150, 15)
+    repo.add("evening", "Run", TODAY, 150, 15)
+    capacities = {z: 20. for z in model.ZONES}
+    monkeypatch.setattr(model, "read_contexts", lambda *args:
+                        {"Run": {"minutes": capacities,
+                                 "sources": {z: "SPEED_TIME_CURVE" for z in model.ZONES},
+                                 "fingerprint": str(capacities)}})
+    result = model.history_view(repo, "authorized-athlete", today=TODAY)
+    today = {row["zone"]: row["effective_load"] for row in result["daily"] if row["date"] == TODAY.isoformat()}
+    assert today["Z3"] == pytest.approx(14.)
+    # Each Q=7 is below 50% of Tmax=20, although the daily sum is above 50%.
+    assert today["Z2"] == today["Z4"] == 0.
+    capacities["Z3"] = 10.
+    changed = model.history_view(repo, "authorized-athlete", today=TODAY)
+    today = {row["zone"]: row["effective_load"] for row in changed["daily"] if row["date"] == TODAY.isoformat()}
+    assert today["Z2"] == pytest.approx(1.4)
+    assert today["Z4"] == pytest.approx(2.8)
+    assert today["Z1"] == today["Z5"] == 0.

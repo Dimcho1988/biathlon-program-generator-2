@@ -119,3 +119,46 @@ def model_interval_curve_capacity(method, settings, speed, context, *, use_model
             "supported_test_duration_s": [min(observed), max(observed)] if observed else None,
             "within_observed_test_window": within_window,
             "speed_role": "FLAT_EQUIVALENT_REFERENCE_NOT_TERRAIN_PACE"}
+
+
+def expert_interval_curve_capacity(method, speed, context, *, use_model_prior=False):
+    """Two independent expert criteria: effort point and total work budget.
+
+    The effort coefficient multiplies the repetition duration, not velocity.
+    The total_capacity_ratio is consumed later by the dose allocator. Without
+    an individual curve the existing explicit coach capacity remains the
+    fallback; no absolute speed is manufactured from a duration alone.
+    """
+    structure = method.get("structure")
+    if structure not in {"MODEL_INTERVALS", "METABOLIC_INTERVALS"}:
+        return None
+    profile = method.get("interval_template" if structure == "MODEL_INTERVALS" else "interval_profile") or {}
+    coefficient = profile.get("speed_time_duration_ratio")
+    if coefficient is None:
+        return None
+    if not _positive(coefficient) or not _positive(profile.get("work_seconds")):
+        raise ValueError("Invalid expert interval effort coefficient")
+    predictor = context[0]
+    if predictor is None or not getattr(predictor, "curve", None):
+        return None
+    duration = profile["work_seconds"] * coefficient
+    if duration <= profile["work_seconds"]:
+        raise ValueError("Interval effort capacity must exceed one repetition")
+    if not use_model_prior and not observed_curve_support(context[1], duration):
+        return None
+    curve = predictor.curve
+    target = curve.speed(duration) * 3.6
+    if not _positive(target):
+        raise ValueError("The interval effort lies outside the individual curve")
+    resolved = {**deepcopy(profile), "continuous_capacity_min": duration / 60,
+                "target_speed_kmh": target, "speed_basis": "FLAT_EQUIVALENT"}
+    return {"capacity_source": "BLENDED_DOSING_CURVE" if isinstance(predictor, dosing_curve.Predictor) else "SPEED_DURATION",
+            "capacity_minutes": duration / 60, "target_hr_bpm": None,
+            "target_speed_kmh": target, "effort_profile": resolved,
+            "model_version": getattr(curve, "model_version", (speed or {}).get("model_version")),
+            "capacity_reference": "EXPERT_REPETITION_DURATION_COEFFICIENT_ON_CURVE",
+            "capacity_confidence": "EXPERT_METHOD_ON_INDIVIDUAL_CURVE",
+            "capacity_is_estimate": True, "fallback_reasons": [],
+            "speed_time_duration_ratio": coefficient, "hr_role": "OBSERVATION_ONLY",
+            "speed_role": "FLAT_EQUIVALENT_REFERENCE_NOT_TERRAIN_PACE",
+            "implementation_profile": method.get("implementation_profile")}

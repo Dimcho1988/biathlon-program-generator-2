@@ -53,19 +53,21 @@ it("preserves an existing past programme anchor while saving other settings", as
 });
 const profile = {...defaultManagementProfile("2026-09-21"), discipline:"5000 m", age_years:30, training_experience_years:10};
 
-it("shows the 60–70 percent building band and exact linear readiness examples", async () => {
+it("distinguishes continuous doses from expert interval budgets and applies readiness once", async () => {
   const migrated = parseManagementProfile({ ...profile, building_fraction: .5 });
   await mount(<ManagementProfileEditor initialProfile={{ configured: true, profile: migrated, revision: 1 }} today="2026-09-21"/>);
   await click(button("4. Методи и дозиране"));
-  const dose = input("Изграждаща доза Z1–Z5");
+  const dose = input("Непрекъснат метод · изграждаща доза");
   expect(dose.value).toBe("65");
   expect(dose.min).toBe("60");
   expect(dose.max).toBe("70");
-  expect(container.textContent).toContain("при 90% готовност дозата е 54–63%");
-  expect(container.textContent).toContain("при 50% — 30–35% от Tmax");
-  expect(container.textContent).toContain("За Z1–Z5 изграждащата работа започва от 60–70%");
-  expect(container.textContent).toContain("Готовността намалява този дял веднъж");
-  expect(container.textContent).toContain("общият дял на профила е горна граница, а не начална доза");
+  expect(container.textContent).toContain("поддържащата е 30–40%");
+  expect(container.textContent).toContain("Recovery 80% получаваме 52 минути");
+  expect(container.textContent).toContain("Изграждащата доза е 100% от този бюджет, поддържащата — 50%");
+  expect(container.textContent).toContain("Готовността намалява получения обем веднъж");
+  expect(container.textContent).toContain("Вработващата доза използва поддържащия бюджет");
+  expect(container.textContent).not.toContain("Доза при вработване, %");
+  expect(container.textContent).not.toContain("общият дял на профила е горна граница, а не начална доза");
   expect(container.textContent).toContain("без да е задължително условие");
   expect(container.textContent).not.toContain("Z5 изисква отделна скорошна максимална опора");
   expect(container.textContent).not.toContain("Процентите за Z1–Z3 не се прилагат");

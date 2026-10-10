@@ -39,7 +39,9 @@ class IntervalDoseProfile(BaseModel):
     recovery_seconds: int = Field(ge=15, le=600)
     min_repetitions: int = Field(ge=2, le=20)
     max_repetitions: int = Field(ge=2, le=20)
-    total_capacity_ratio: float = Field(gt=0, le=3)
+    total_capacity_ratio: float = Field(gt=0, description="Expert total work budget divided by continuous Tmax at the prescribed speed; 3 means 300%.")
+    speed_time_duration_ratio: float | None = Field(default=None, gt=1,
+        description="Expert coefficient: work_seconds × ratio selects the duration on the speed–time curve; 2 means 200%. No coefficient is inferred.")
     reserve_repetitions: int = Field(ge=1, le=4)
     target_speed_kmh: float | None = Field(default=None, gt=0, le=80)
     speed_basis: Literal["ACTUAL", "FLAT_EQUIVALENT"] = "ACTUAL"
@@ -50,6 +52,8 @@ class IntervalDoseProfile(BaseModel):
             raise ValueError("A threshold profile must use Z4, never Z5")
         if self.min_repetitions > self.max_repetitions:
             raise ValueError("Invalid repetition range")
+        # The explicit expert capacity is the no-curve fallback. A duration
+        # coefficient selects the individual curve when it is available.
         if self.work_seconds >= self.continuous_capacity_min * 60:
             raise ValueError("One repetition must stay below continuous capacity")
         if self.min_repetitions * self.work_seconds > self.continuous_capacity_min * 60 * self.total_capacity_ratio:

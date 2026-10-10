@@ -59,16 +59,13 @@ def test_demo_stream_uses_canonical_effective_hr_and_caps_z5_dose_at_hrmax():
     assert z5["mean_effective_hr_bpm"] == pytest.approx(200.0)
 
 
-def test_effective_cascade_and_nonnegative_inverse():
+def test_effective_adjacent_load_and_nonnegative_inverse():
     params = fresh_parameters()
     tref = {c: 100.0 for c in COMPONENTS}
     q = {c: 0.0 for c in COMPONENTS}
     q["Z4"] = 20.0
     effective = effective_from_direct_vector(q, tref, params)
-    assert effective[0] >= 20.0
-    assert effective[1] >= 20.0
-    assert effective[2] >= 20.0
-    assert effective[3] >= 20.0
+    assert effective == pytest.approx([0., 0., 2., 20., 4., 0.])
     target = pd.Series(effective, index=COMPONENTS)
     solved, error = solve_direct_load(target, pd.Series(tref), params)
     assert (solved >= 0).all()

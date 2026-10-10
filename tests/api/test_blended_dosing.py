@@ -28,8 +28,7 @@ def test_continuous_method_gets_the_blended_speed_and_estimated_time():
     assert engine.capacity_for(method, SETTINGS, view, context, TODAY, False, use_model_prior=True) is None
     view['index_window']['last_activity_date'] = '2026-08-31'
     stale = engine.capacity_for(method, SETTINGS, view, context, TODAY, use_model_prior=True)
-    assert stale['capacity_source'] == 'EXPERT_CONTINUOUS_TREF'
-    assert stale['target_speed_kmh'] is None
+    assert stale is None  # Stale mapping cannot replace an available curve with expert Tmax.
 
 
 def test_short_intervals_use_blend_but_retain_the_measured_test_as_evidence():

@@ -72,7 +72,10 @@ class ModelStore:
 
 
 def project_recovery(repository,alias,snapshot,*,now=None,config=None):
-    if not enabled() or snapshot is None: return snapshot
+    if snapshot is None: return snapshot
+    from .component_load_projection import project_snapshot, project_legacy_recovery
+    snapshot = project_snapshot(repository, alias, snapshot)
+    if not enabled(): return project_legacy_recovery(snapshot)
     cfg=config or ModelStore(repository).config(alias)
     settings=repository.athlete_settings(alias)
     if settings is None: raise ValueError("Athlete settings are required")

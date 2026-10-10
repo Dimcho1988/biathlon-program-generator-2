@@ -199,7 +199,15 @@ def test_reduced_cycle_can_keep_a_controlled_nonaccent_component_within_its_q_an
         accents=["Z1"], mixed_sessions_enabled=False,
     )
     threshold_only(monkeypatch, body)
-    repo, _, _ = observed()
+    repo, source, _ = observed()
+    # Preserve the genuine prior component exposure used by this scheduling
+    # case. Daily E placeholders must not supply a budget without matching Q.
+    recorded = {(row["date"], row["zone"]): row["effective_load"] for row in source["daily"]}
+    for activities in (source["activities"], repo.envelope["activities"]):
+        for activity in activities:
+            for row in activity["zones"]:
+                row["equivalent_time_min"] = row["raw_time_min"] = recorded[activity["date"], row["zone"]]
+            activity["duration_min"] = sum(row["raw_time_min"] for row in activity["zones"])
     plan = generate(body, repo, start=TODAY)
     assert all(d["cycle"]["kind"] == "RECOVERY" for d in plan["days"])
     work = [s for d in plan["days"] for s in d["sessions"] if s["zone"] == "Z3"]
@@ -238,7 +246,7 @@ def test_z4_maintenance_can_fit_whole_profile_at_less_than_full_readiness(monkey
     from tests.api.test_management_v2 import interval
 
     fixed_readiness(monkeypatch, 80.)
-    body = threshold_profile(interval_profiles=[interval()])
+    body = threshold_profile(interval_profiles=[interval(min_repetitions=2)])
     method = next(m for m in engine.resolved_methods(body) if m["id"] == "END-VO2-TREF-01-Z4")
     monkeypatch.setattr(engine, "resolved_methods", lambda _: [deepcopy(method)])
     plan = generate(body)
@@ -248,14 +256,14 @@ def test_z4_maintenance_can_fit_whole_profile_at_less_than_full_readiness(monkey
     assert session["purpose"] == "MAINTENANCE"
     evidence = session["dose_evidence"]
     assert evidence["maintenance_policy"]
-    assert evidence["base_fraction"] == 1.
-    assert evidence["fraction"] == .8
+    assert evidence["base_fraction"] == .625
+    assert evidence["fraction"] == .5
     assert evidence["readiness_dose_factor"] == .8
-    assert evidence["requested_primary_work_minutes"] == pytest.approx(9.6)
-    assert session["main_work_minutes"] == 9.
-    assert [b["duration_min"] for b in session["blocks"] if b["kind"] == "WORK"] == [3., 3., 3.]
-    assert [b["duration_min"] for b in session["blocks"] if b["kind"] == "RECOVERY"] == [3., 3.]
-    assert evidence["applied_structure_fraction"] == .6
+    assert evidence["requested_primary_work_minutes"] == pytest.approx(6.)
+    assert session["main_work_minutes"] == 6.
+    assert [b["duration_min"] for b in session["blocks"] if b["kind"] == "WORK"] == [3., 3.]
+    assert [b["duration_min"] for b in session["blocks"] if b["kind"] == "RECOVERY"] == [3.]
+    assert evidence["applied_structure_fraction"] == .4
     assert evidence["applied_structure_fraction"] <= evidence["max_dose_fraction"] + .001
     assert_rolling_budgets(plan)
 

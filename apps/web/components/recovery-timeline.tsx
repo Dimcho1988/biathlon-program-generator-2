@@ -46,7 +46,7 @@ export function RecoveryTimeline({ history }: { history: RecoveryV2 }) {
     <div className="chart-frame" ref={ref}>
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Възстановяване по зони: пет дни история и два дни прогноза" onPointerDown={move} onPointerMove={event => { if(event.pointerType !== "touch" || event.buttons) move(event); }}>
         <title>Възстановяване по зони — обща времева ос</title>
-        <desc>Плътните линии показват дневната готовност след отчетения товар. Пунктираните линии са прогноза без нови тренировки. Хоризонталният праг е 90%. Липсващите исторически дни са прекъсвания.</desc>
+        <desc>Плътните линии показват дневната готовност след отчетения товар. Пунктираните линии са прогноза без нови тренировки. Хоризонталният ориентир е 90%. Липсващите исторически дни са прекъсвания.</desc>
         <rect className="recovery-forecast-area" x={x(0)} y={top} width={x(2) - x(0)} height={plotHeight} />
         {[0, 25, 50, 75, 90, 100].map(value => <g key={value}><line className={value === 90 ? "recovery-ready-line" : "chart-grid"} x1={x(-5)} x2={x(2)} y1={y(value)} y2={y(value)} /><text className="chart-label" x={left-8} y={y(value) + 4} textAnchor="end">{value}%</text></g>)}
         <text className="chart-label" x={x(-5)} y="24">История</text><text className="chart-label" x={right} y="20" textAnchor="end">Прогноза</text>
@@ -70,7 +70,7 @@ export function RecoveryTimeline({ history }: { history: RecoveryV2 }) {
         setCursor(day => stepRecoveryCursor(day, event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 : 1));
       }
     }} aria-valuetext={cursorLabel} /></label>
-    <figcaption><span><i className="recovery-line-key" />История след дневния товар</span><span><i className="recovery-line-key forecast" />Прогноза без нови тренировки</span><span>Праг за готовност: 90%</span></figcaption>
+    <figcaption><span><i className="recovery-line-key" />История след дневния товар</span><span><i className="recovery-line-key forecast" />Прогноза без нови тренировки</span><span>Ориентир за готовност: 90%</span></figcaption>
     <p className="recovery-timeline-note">Всички зони използват една и съща времева ос. При срок над 2 дни достигането на 90% е извън показаната прогноза. Историята е по календарни дни; липсващите данни не се приемат за почивка.</p>
   </figure>;
 }

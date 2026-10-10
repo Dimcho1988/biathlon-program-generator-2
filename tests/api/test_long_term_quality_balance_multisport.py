@@ -5,8 +5,9 @@ from datetime import date
 import pytest
 
 from apps.api import training_plan_engine as engine
-from biathlon import speed_duration
+from biathlon import hr_speed, speed_duration
 from biathlon.constants import COMPONENTS
+from biathlon.sport_heart_rate import local_settings, reference_offset
 from tests.api.test_long_term_quality_balance import balanced_fixture
 from tests.api.test_long_term_scheduling import assert_segment_contract
 from tests.api.test_readiness_adaptive_plan_v2 import assert_rolling_budgets
@@ -21,12 +22,17 @@ def sport_curve(repo, sport, today):
     curve = speed_duration.calibrated(tests)
     durations = ((18000., 10800., 3600., 1800.) if sport == "NordicSki"
                  else (12600., 9000., 2700., 1200.))
+    settings = local_settings(repo.settings, sport)
+    offset = reference_offset(sport)
     indices = {f"Z{i + 1}": {
-        "index": (100 * repo.settings.zone_bounds_bpm[i + 1] / repo.settings.hrmax_bpm)
+        "index": (100 * (settings.zone_bounds_bpm[i + 1] + offset) / (settings.hrmax_bpm + offset))
                  / (curve.speed(duration) * 3.6), "count": 3}
         for i, duration in enumerate(durations)}
+    predictor = hr_speed.Predictor(curve, settings.zone_bounds_bpm, settings.hrmax_bpm,
+                                   indices, normalization_offset_bpm=offset)
     return {"status": "CALIBRATED", "sport": sport,
             "model_version": speed_duration.VERSION,
+            "hr_model": predictor.summary(),
             "source_generation_id": repo.envelope["generation_id"],
             "source_revision": repo.envelope["revision"],
             "active_test_keys": ["short", "long"],
@@ -43,6 +49,10 @@ def test_quality_balance_keeps_first_sport_method_and_curve_when_catalog_ids_rep
         activities.extend({**deepcopy(activity), "sport": "NordicSki",
                            "activity_ref": "ski-" + activity["activity_ref"]}
                           for activity in list(activities))
+    # Both sports are real persisted activities in this fixture, so the
+    # pre-projection daily ledger includes both recorded E contributions.
+    for row in source["daily"]:
+        row["effective_load"] *= 2
     body.update(sport="NordicSki", actual_sport="NordicSki")
     # Each shared catalogue ID is considered for skiing first, then running.
     # The later Run candidate must not overwrite the selected ski closure.
@@ -109,10 +119,14 @@ def test_quality_balance_keeps_first_sport_method_and_curve_when_catalog_ids_rep
             method, minutes, _, work, parts = matching[-1]
             assert method["actual_sport"] == session["sport"]
             assert minutes == evidence["capacity_minutes"]
-            assert evidence["primary_work_budget_minutes"] == pytest.approx(work, abs=.001)
+            assert evidence["structure_work_budget_minutes"] == pytest.approx(work, abs=.001)
+            assert evidence["primary_work_budget_minutes"] <= work + .001
             assert session["total_minutes"] == pytest.approx(sum(b["duration_min"] for b in parts), abs=.001)
             assert session["main_work_minutes"] == pytest.approx(
                 sum(b["duration_min"] for b in parts if b["kind"] == "WORK"), abs=.001)
+            primary = sum(b["duration_min"] for b in parts
+                          if b["kind"] == "WORK" and b["zone"] == session["zone"])
+            assert evidence["applied_fraction"] == pytest.approx(primary / minutes, abs=.001)
             if session["zone"] != "STR":
                 assert engine._dose_usage(parts, evidence, session["zone"]) <= evidence["max_dose_fraction"] + .001
                 if evidence["min_dose_fraction"] is not None:
@@ -129,7 +143,8 @@ def test_quality_balance_keeps_first_sport_method_and_curve_when_catalog_ids_rep
                 assert all(b["duration_s"] == profile["work_seconds"] for b in repetitions)
                 assert len(rests) == len(repetitions) - 1
                 assert all(b["duration_s"] == profile["recovery_seconds"] for b in rests)
-            direct, effective, _ = engine._canonical_load(parts, repo.settings, rows, when)
+            direct, effective, _ = engine._canonical_load(parts, repo.settings, rows, when,
+                zone_tmax_minutes=evidence["zone_tmax_minutes"])
             for zone in COMPONENTS:
                 assert session["direct_equivalent_minutes"][zone] == pytest.approx(direct[zone], abs=.001)
                 assert session["canonical_effective_load"][zone] == pytest.approx(effective[zone], abs=.001)
