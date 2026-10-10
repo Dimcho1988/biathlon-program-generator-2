@@ -294,7 +294,7 @@ def test_residual_z3_uses_supporting_work_without_extra_key_sessions(monkeypatch
         assert d["date"]>max(keys)
         assert_readiness_dose(s)
         assert sum(b["duration_min"] for b in s["blocks"] if b["kind"]=="WORK" and b["zone"]=="Z3")<=20
-        assert s["dose_evidence"]["applied_structure_fraction"]<=p["maintenance_fraction"]+.001
+        assert s["dose_evidence"]["applied_structure_fraction"]<=result["parameters"]["building_fraction"]/2+.001
     assert result["summary"]["key_sessions"]==len(keys)
     assert result["allocation"]["components"]["Z3"]["planned_effective"] <= result["allocation"]["components"]["Z3"]["target_effective"]+.001
 
