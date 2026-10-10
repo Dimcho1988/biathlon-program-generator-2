@@ -21,6 +21,13 @@ def body(**changes):
                    planning_controls=PlanningControls(**changes).model_dump(mode="json"))
 
 
+def stored_activity_load(activity):
+    effective = calculate_component_load({row["zone"]: row["equivalent_time_min"] for row in activity["zones"]})["effective"]
+    for row in activity["zones"]:
+        row["effective_load"] = effective[row["zone"]]
+    return effective
+
+
 def high_capacity_history():
     """Synthetic generous direct-Q history isolates scheduling headroom.
 
@@ -34,7 +41,7 @@ def high_capacity_history():
         a["duration_min"] = 180
         for row in a["zones"]:
             row["equivalent_time_min"] = 1000.
-        effective = calculate_component_load({row["zone"]: row["equivalent_time_min"] for row in a["zones"]})["effective"]
+        effective = stored_activity_load(a)
         by_day[a["date"]] = effective
     for row in source["daily"]:
         row["effective_load"] = by_day.get(row["date"], {}).get(row["zone"], 0.)
@@ -151,9 +158,9 @@ def completed_activity(repo, reference, minutes=40.):
         "raw_time_min": minutes if zone == "Z1" else 0.,
         "equivalent_time_min": minutes*.5 if zone == "Z1" else 0.} for zone in COMPONENTS if zone != "STR"]}
     source = repo.envelope["snapshot_payload"]["load_history"]
+    effective = stored_activity_load(activity)
     source["activities"].append(deepcopy(activity))
     repo.envelope["activities"].append(deepcopy(activity))
-    effective = calculate_component_load({row["zone"]: row["equivalent_time_min"] for row in activity["zones"]})["effective"]
     for row in source["daily"]:
         if row["date"] == TODAY.isoformat():
             row["effective_load"] += effective[row["zone"]]
@@ -225,8 +232,15 @@ def test_imported_key_morning_still_enforces_key_spacing_in_the_remaining_slot(m
     repo = high_capacity_history()
     completed_activity(repo, "morning")
     for activities in (repo.envelope["activities"], repo.envelope["snapshot_payload"]["load_history"]["activities"]):
-        zones = next(a for a in activities if a["activity_ref"] == "morning")["zones"]
+        activity = next(a for a in activities if a["activity_ref"] == "morning")
+        zones = activity["zones"]
         next(row for row in zones if row["zone"] == "Z3").update(raw_time_min=10., equivalent_time_min=5.)
+        stored_activity_load(activity)
+    source = repo.envelope["snapshot_payload"]["load_history"]
+    for row in source["daily"]:
+        if row["date"] == TODAY.isoformat():
+            row["effective_load"] = sum(zone["effective_load"] for activity in source["activities"]
+                if activity["date"] == row["date"] for zone in activity["zones"] if zone["zone"] == row["zone"])
     p = body(sessions_per_week=13, sessions_by_day=[2,2,2,2,2,2,1], threshold_days=[TODAY.weekday()])
     plan = run(monkeypatch, p, repo)
     assert not any(s["is_key_session"] for s in plan["days"][0]["sessions"])

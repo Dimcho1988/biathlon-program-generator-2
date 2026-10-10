@@ -36,7 +36,7 @@ def source():
     rows=[{"date":(NOW.date()-timedelta(days=i)).isoformat(),"zone":z,"effective_load":20 if i else 60}
           for i in range(41) for z in ("Z1","Z2","Z3","Z4","Z5")]
     activities=[{"activity_ref":str(i), "date":(NOW.date()-timedelta(days=i)).isoformat(), "sport":"Run",
-                 "zones":[{"zone":z, "equivalent_time_min":20 if i else 60} for z in ("Z1","Z2","Z3","Z4","Z5")]}
+                 "zones":[{"zone":z, "equivalent_time_min":20 if i else 60, "effective_load":20 if i else 60} for z in ("Z1","Z2","Z3","Z4","Z5")]}
                 for i in range(41)]
     return {"load_history":{"period_start":rows[-1]["date"],"period_end":NOW.date().isoformat(),"daily":rows,"activities":activities},
         "training_status":{"zones":[{"zone":z} for z in ("Z1","Z2","Z3","Z4","Z5")]}}

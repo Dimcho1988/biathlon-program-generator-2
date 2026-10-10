@@ -149,7 +149,7 @@ def projected_response_source(rows):
               "daily":[dict(r) for r in rows if r["zone"] != "STR"],
               "strength":{"daily":[dict(r) for r in rows if r["zone"] == "STR"]},
               "activities":[{"date":day, "sport":"Run", "activity_ref":day,
-                             "zones":[{"zone":r["zone"], "equivalent_time_min":r["effective_load"]}
+                             "zones":[{"zone":r["zone"], "equivalent_time_min":r["effective_load"], "effective_load":r["effective_load"]}
                                       for r in rows if r["date"]==day and r["zone"]!="STR"]} for day in days]}
     return project_history(source,{"Run":context_from_speed_view({"status":"UNAVAILABLE","sport":"Run"})})
 

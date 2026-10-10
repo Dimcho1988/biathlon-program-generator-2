@@ -116,7 +116,13 @@ def real_completed_work(
             status_code=503, detail="No valid real-data snapshot is available"
         )
     try:
+        from ..component_load_projection import project_snapshot
+        snapshot = project_snapshot(dependencies.repository(), dependencies.validated_alias(athlete_alias), snapshot)
         history = load_history_from_persisted(snapshot)
+    except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
+        raise HTTPException(409, exc.user_message) from exc
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Model settings are unavailable") from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=503,

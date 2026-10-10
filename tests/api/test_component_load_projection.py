@@ -16,12 +16,12 @@ def context():
 
 def source(work=(60.,), days=("2026-10-08", "2026-10-09")):
     return {"period_start": days[0], "period_end": days[-1],
-        "daily": [{"date": day, "zone": z, "effective_load": sum(work) if day == days[-1] and z == "Z2" else 0.,
+        "daily": [{"date": day, "zone": z, "effective_load": sum(work) if day == days[-1] and z in {"Z1", "Z2"} else 0.,
                    "e7_daily": 999., "e40_daily": 999., "status_7_40": 9., "tref_used_min": 999.}
                   for day in days for z in ZONES],
         "activities": [{"activity_ref": str(i), "date": days[-1], "sport": "Run", "duration_min": q,
                         "zones": [{"zone": z, "equivalent_time_min": q if z == "Z2" else 0.,
-                                   "raw_time_min": q if z == "Z2" else 0., "effective_load": 999.} for z in ZONES]}
+                                   "raw_time_min": q if z == "Z2" else 0., "effective_load": q if z in {"Z1", "Z2"} else 0.} for z in ZONES]}
                        for i, q in enumerate(work)],
         "zones": [{"zone": z, "e7_daily": 999., "e40_daily": 999., "status_7_40": 9., "tref_min": 999.,
                    "history_reliability": .05} for z in ZONES],
@@ -57,6 +57,39 @@ def test_two_short_sessions_do_not_trigger_a_fictitious_daily_continuous_thresho
     assert value(result, "Z2") == 60
     assert value(result, "Z3") == 0
     assert value(result, "Z1") == 0
+
+
+@pytest.mark.parametrize("damage", ["missing_activity", "duplicate_activity", "missing_activity_e", "wrong_zone_ledger"])
+def test_partial_activity_history_cannot_silently_replace_the_daily_ledger(damage):
+    broken = source((30., 30.))
+    if damage == "missing_activity":
+        broken["activities"].pop()
+    elif damage == "duplicate_activity":
+        broken["activities"].append(deepcopy(broken["activities"][0]))
+    elif damage == "missing_activity_e":
+        broken["activities"][0]["zones"][0].pop("effective_load")
+    else:
+        # Matching overall totals cannot hide a mismatch in one component.
+        for row in broken["daily"]:
+            if row["date"] == "2026-10-09" and row["zone"] in {"Z1", "Z2"}:
+                row["effective_load"] += 1 if row["zone"] == "Z1" else -1
+    unchanged = deepcopy(broken)
+    with pytest.raises(ComponentLoadRefreshRequired):
+        project_history(broken, context())
+    assert broken == unchanged
+
+
+def test_ledger_is_validated_before_idempotent_projection_can_be_reused():
+    projected = project_history(source(), context())
+    next(row for row in projected["daily"] if row["date"] == "2026-10-09" and row["zone"] == "Z2")["effective_load"] += 1
+    with pytest.raises(ComponentLoadRefreshRequired, match="daily ledger"):
+        project_history(projected, context())
+
+
+def test_tiny_float_aggregation_error_does_not_reject_complete_activity_history():
+    complete = source((30., 30.))
+    next(row for row in complete["daily"] if row["date"] == "2026-10-09" and row["zone"] == "Z2")["effective_load"] += 1e-8
+    assert value(project_history(complete, context()), "Z2") == 60
 
 
 def test_projection_is_idempotent_and_capacity_change_recomputes():

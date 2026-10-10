@@ -22,9 +22,9 @@ class ComponentLoadRefreshRequired(ValueError):
     )
 
 
-def _number(value):
+def _number(value, field="activity Q"):
     if isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value) or value < 0:
-        raise ComponentLoadRefreshRequired("Stored activity Q is incomplete; refresh real data")
+        raise ComponentLoadRefreshRequired(f"Stored {field} is incomplete; refresh real data")
     return float(value)
 
 
@@ -63,6 +63,7 @@ def project_history(source, contexts_by_sport):
     activity_inputs = []
     per_activity = []
     observed_q_days = set()
+    persisted_activity_e = {day: {zone: [] for zone in ZONES} for day in covered}
     for activity in activities:
         day = activity.get("date")
         if day not in covered:
@@ -71,6 +72,8 @@ def project_history(source, contexts_by_sport):
         if len(zones) != len(ZONES) or {row.get("zone") for row in zones} != set(ZONES):
             raise ComponentLoadRefreshRequired("Stored activity Q is incomplete; refresh real data")
         q = {row["zone"]: _number(row.get("equivalent_time_min")) for row in zones}
+        for row in zones:
+            persisted_activity_e[day][row["zone"]].append(_number(row.get("effective_load"), "activity effective load"))
         sport = activity.get("sport")
         context = contexts_by_sport.get(sport)
         if context is None:
@@ -81,7 +84,14 @@ def project_history(source, contexts_by_sport):
         per_activity.append(result["effective"])
         activity_inputs.append({"ref": activity.get("activity_ref"), "date": day, "sport": sport, "q": q})
     for day, row in original.iterrows():
-        if any(row[f"e_{z}"] > 0 for z in ZONES) and day.date().isoformat() not in observed_q_days:
+        key = day.date().isoformat()
+        # Compare like with like: both sides still use the persisted load rule.
+        # New E cannot verify completeness because this projection changes E.
+        # A surviving activity must not certify a day with another activity lost.
+        if any(not math.isclose(math.fsum(persisted_activity_e[key][zone]), row[f"e_{zone}"],
+                                rel_tol=1e-9, abs_tol=1e-6) for zone in ZONES):
+            raise ComponentLoadRefreshRequired("Stored activity effective loads do not match the daily ledger; refresh real data")
+        if any(row[f"e_{z}"] > 0 for z in ZONES) and key not in observed_q_days:
             raise ComponentLoadRefreshRequired("Nonzero historical load has no reconstructible activity Q; refresh real data")
     fingerprint = _fingerprint({"version": VERSION, "scope": "ACTIVITY", "days": sorted(covered),
         "activities": activity_inputs, "contexts": {sport: context["fingerprint"] for sport, context in contexts_by_sport.items()}})

@@ -101,8 +101,10 @@ def test_initial_estimated_time_envelope_is_prorated_and_counts_actual_activity(
     repo, source = incomplete(30)
     actual = {"activity_ref": "today", "date": TODAY.isoformat(), "sport": "Run", "duration_min": 45,
               "zones": [{"zone": z, "raw_time_min": 45. if z == "Z1" else 0.,
-                         "equivalent_time_min": 45. if z == "Z1" else 0.} for z in estimate.ZONES]}
+                         "equivalent_time_min": 45. if z == "Z1" else 0.,
+                         "effective_load": 45. if z == "Z1" else 0.} for z in estimate.ZONES]}
     source["activities"].append(actual)
+    next(row for row in source["daily"] if row["date"] == actual["date"] and row["zone"] == "Z1")["effective_load"] += 45.
     repo.envelope["activities"].append({**actual, "local_date": actual["date"]})
     body = configured(availability_mode="AUTO_HISTORY", horizon_mode="MANUAL", program_end=(TODAY+timedelta(days=2)).isoformat())
     result = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)

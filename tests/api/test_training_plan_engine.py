@@ -31,7 +31,7 @@ class Repository:
                  for d in days for z in ZONES if z != "STR"]
         strength = [{"date": d.isoformat(), "effective_load": values["STR"] if (TODAY-d).days > 7 else 0.} for d in days]
         activities = [{"activity_ref": f"act_{i}", "date": d.isoformat(), "sport": "Run", "duration_min": 60,
-                       "zones": [{"zone": z, "raw_time_min": 10, "equivalent_time_min": values[z]} for z in ZONES if z != "STR"]}
+                       "zones": [{"zone": z, "raw_time_min": 10, "equivalent_time_min": values[z], "effective_load": values[z]} for z in ZONES if z != "STR"]}
                       for i, d in enumerate(days) if (TODAY-d).days > 7]
         self.envelope = {"generation_id": "generation-one", "revision": 1,
                          "activities": [{**a, "local_date": a["date"]} for a in activities],
