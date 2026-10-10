@@ -85,9 +85,12 @@ def test_profile_saves_current_building_band_and_normalizes_legacy_choices(api, 
     assert response.status_code == 200
     assert store.saved[-1]["building_fraction"] == expected
     assert response.json()["profile"]["building_fraction"] == expected
+    for name in ("maintenance_fraction", "reentry_fraction"):
+        assert store.saved[-1][name] == expected / 2
+        assert response.json()["profile"][name] == expected / 2
 
 
-def test_legacy_profile_read_uses_sixty_five_percent_without_writing_or_changing_other_doses(api):
+def test_legacy_profile_read_derives_half_budget_without_writing(api):
     client, store, _ = api
     legacy = {**PROFILE, "building_fraction": .5, "maintenance_fraction": .4, "reentry_fraction": .5}
     store.current["profile"] = deepcopy(legacy)
@@ -95,19 +98,31 @@ def test_legacy_profile_read_uses_sixty_five_percent_without_writing_or_changing
     assert response.status_code == 200
     saved = response.json()["profile"]
     assert saved["building_fraction"] == .65
-    assert saved["maintenance_fraction"] == .4 and saved["reentry_fraction"] == .5
+    assert saved["maintenance_fraction"] == saved["reentry_fraction"] == .325
     assert store.current["profile"] == legacy and not store.saved
     assert response.json()["revision"] == 2
 
 
-def test_building_default_and_legacy_schema_normalization_preserve_input_and_other_doses():
+def test_building_default_and_legacy_schema_normalization_preserve_input_and_derive_roles():
     legacy = {**PROFILE, "building_fraction": .8, "maintenance_fraction": .4, "reentry_fraction": .5}
     before = deepcopy(legacy)
     parsed = ManagementProfile.model_validate(legacy)
     assert parsed.building_fraction == .7
-    assert parsed.maintenance_fraction == .4 and parsed.reentry_fraction == .5
+    assert parsed.maintenance_fraction == parsed.reentry_fraction == .35
     assert legacy == before
-    assert ManagementProfile.model_validate(PROFILE).building_fraction == .65
+    default = ManagementProfile.model_validate(PROFILE)
+    assert default.building_fraction == .65
+    assert default.maintenance_fraction == default.reentry_fraction == .325
+
+
+@pytest.mark.parametrize("fraction", [.6, .65, .7, "0.7"])
+def test_role_budget_is_derived_for_missing_legacy_and_coerced_fields(fraction):
+    for roles in ({}, {"maintenance_fraction": .4, "reentry_fraction": .5},
+                  {"maintenance_fraction": "0.3", "reentry_fraction": "0.3"},
+                  {"maintenance_fraction": "0.4", "reentry_fraction": "0.5"}):
+        parsed = ManagementProfile.model_validate({**PROFILE, "building_fraction": fraction, **roles})
+        assert parsed.maintenance_fraction == parsed.reentry_fraction == float(fraction) / 2
+        assert ManagementProfile.model_validate(parsed.model_dump()).model_dump() == parsed.model_dump()
 
 
 def test_outlook_read_is_scoped_and_needs_neither_actor_nor_existing_draft(api):
