@@ -15,6 +15,12 @@ import math
 from numbers import Real
 from typing import Any, Mapping, Sequence
 
+from biathlon.constants import (
+    AEROBIC_TREF_BOUNDS_MINUTES,
+    AEROBIC_TREF_INITIAL_MINUTES,
+    TREF_HISTORY_WINDOW_DAYS,
+)
+from biathlon.component_load import calculate_component_load
 from intervals_inspector.model_registry import (
     RESULT_DEFINITIONS,
     WARNING_DEFINITIONS,
@@ -32,41 +38,38 @@ from intervals_inspector.onflows_zone_profile import (
 )
 
 
-SHADOW_MODEL_VERSION = "real-data-shadow-physiology-v3-equivalent-time"
-TREF_PROFILE_VERSION = "tref-fixed-expert-v1"
-# Deprecated compatibility alias. There are no Tref bounds in this model.
+SHADOW_MODEL_VERSION = "real-data-shadow-physiology-v5-adjacent-tmax"
+TREF_PROFILE_VERSION = "tref-bounded-40d-expert-v1"
+# Compatibility name retained for aggregate-cache and persistence metadata.
 TREF_BOUNDS_PROFILE_VERSION = TREF_PROFILE_VERSION
-CONFIG_SCHEMA_VERSION = "shadow-model-config-v3-equivalent-time"
-RESULT_SCHEMA_VERSION = "shadow-model-comparison-v3-equivalent-time"
-HISTORY_WINDOW_DAYS = 40
+CONFIG_SCHEMA_VERSION = "shadow-model-config-v5-adjacent-tmax"
+RESULT_SCHEMA_VERSION = "shadow-model-comparison-v5-adjacent-tmax"
+HISTORY_WINDOW_DAYS = TREF_HISTORY_WINDOW_DAYS
 LOW_HR_COVERAGE_PERCENT = 80.0
-PROFILE_LEVELS = ("fixed",)
-INITIAL_TREF_MINUTES = {
-    "Z1": 300.0,
-    "Z2": 180.0,
-    "Z3": 70.0,
-    "Z4": 20.0,
-    "Z5": 20.0,
-}
+PROFILE_LEVELS = ("bounded-40d",)
+INITIAL_TREF_MINUTES = dict(AEROBIC_TREF_INITIAL_MINUTES)
+TREF_BOUNDS_MINUTES = dict(AEROBIC_TREF_BOUNDS_MINUTES)
 
 EDITABLE_FIELDS = (
     "equivalence_slope_pp_per_bpm",
+)
+READ_ONLY_FIELDS = (
     "spill_threshold_fraction",
     "spill_down_fraction",
     "spill_up_fraction",
-)
-READ_ONLY_FIELDS = (
-    "tref_minutes",
+    "tref_min",
+    "tref_max",
     "profile_version",
     "equivalence_version",
     "tref_profile_version",
 )
 FIELD_UNITS = {
     "equivalence_slope_pp_per_bpm": "процентни пункта/удар/мин",
-    "spill_threshold_fraction": "% от Tref",
-    "spill_down_fraction": "% от превишението",
-    "spill_up_fraction": "% от превишението",
-    "tref_minutes": "приравнени минути",
+    "spill_threshold_fraction": "% от непрекъснатия Tmax",
+    "spill_down_fraction": "% от целия пряк товар при 50–80% от Tmax",
+    "spill_up_fraction": "% от целия пряк товар при 50–80% от Tmax",
+    "tref_min": "приравнени минути",
+    "tref_max": "приравнени минути",
     "profile_version": "версия",
     "equivalence_version": "версия",
     "tref_profile_version": "версия",
@@ -88,7 +91,8 @@ class ZoneModelSettings:
     spill_threshold_fraction: float
     spill_down_fraction: float
     spill_up_fraction: float
-    tref_minutes: float
+    tref_min: float
+    tref_max: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,9 +117,9 @@ class ShadowModelConfiguration:
 
     @property
     def profile_level(self) -> str:
-        """Deprecated compatibility value; fixed Tref has no level."""
+        """Deprecated compatibility value; bounds have no athlete level."""
 
-        return "fixed"
+        return "bounded-40d"
 
 
 def _finite(value: Any, field: str) -> float:
@@ -173,11 +177,12 @@ def _build_configuration(
 
 
 def default_shadow_configuration() -> ShadowModelConfiguration:
-    """Build the explicit baseline with fixed expert Tref values."""
+    """Approved adjacent-zone load model; historical Tref stays separate."""
 
     zones = []
     for row in DEFAULT_PROFILE_ROWS:
         zone = str(row["zone"])
+        tref_min, tref_max = TREF_BOUNDS_MINUTES[zone]
         zones.append(
             ZoneModelSettings(
                 zone=zone,
@@ -187,12 +192,57 @@ def default_shadow_configuration() -> ShadowModelConfiguration:
                     row["equivalence_slope_pp_per_bpm"]
                 ),
                 spill_threshold_fraction=0.50,
-                spill_down_fraction=0.20,
-                spill_up_fraction=0.10,
-                tref_minutes=INITIAL_TREF_MINUTES[zone],
+                spill_down_fraction=0.10,
+                spill_up_fraction=0.20,
+                tref_min=tref_min,
+                tref_max=tref_max,
             )
         )
     return _build_configuration(zones)
+
+
+def configuration_with_hr_boundaries(
+    boundaries: Sequence[int | float], *, hrmax_bpm: float | None = None,
+) -> ShadowModelConfiguration:
+    """Build the approved model with athlete-specific integer zone membership.
+
+    Only zone membership changes. Tref, intra-zone slope and spillover values
+    are copied unchanged from the approved baseline.
+    """
+    if len(boundaries) != 6:
+        raise ValueError("six HR boundaries are required")
+    rendered = tuple(_finite(value, "HR boundary") for value in boundaries)
+    if any(value != round(value) for value in rendered) or any(
+        left >= right for left, right in zip(rendered, rendered[1:])
+    ):
+        raise ValueError("HR boundaries must be strictly increasing integers")
+    baseline = default_shadow_configuration()
+    zones = [
+        ZoneModelSettings(
+            zone=zone.zone,
+            hr_low=rendered[index],
+            hr_high=(float(hrmax_bpm or rendered[-1]) if zone.zone == "Z5" else rendered[index + 1] - 1.0),
+            equivalence_slope_pp_per_bpm=zone.equivalence_slope_pp_per_bpm,
+            spill_threshold_fraction=zone.spill_threshold_fraction,
+            spill_down_fraction=zone.spill_down_fraction,
+            spill_up_fraction=zone.spill_up_fraction,
+            tref_min=zone.tref_min,
+            tref_max=zone.tref_max,
+        )
+        for index, zone in enumerate(baseline.zones)
+    ]
+    return _build_configuration(zones)
+
+
+def configuration_for_sport(configuration, sport):
+    """Translate HR bounds, keeping all load and recovery coefficients fixed."""
+    from dataclasses import replace
+    from biathlon.sport_heart_rate import reference_offset
+    offset=reference_offset(sport)
+    if not offset:
+        return configuration
+    return _build_configuration(tuple(replace(z,hr_low=z.hr_low-offset,hr_high=z.hr_high-offset)
+                                      for z in configuration.zones),configuration.overrides)
 
 
 def validate_zone_settings(zones: Sequence[ZoneModelSettings]) -> None:
@@ -215,14 +265,23 @@ def validate_zone_settings(zones: Sequence[ZoneModelSettings]) -> None:
                 raise ValueError(
                     f"{zone.zone}.{field} must be between {minimum} and {maximum}"
                 )
-        expected_tref = INITIAL_TREF_MINUTES.get(zone.zone)
-        if expected_tref is None or not math.isclose(
-            zone.tref_minutes,
-            expected_tref,
-            rel_tol=0.0,
-            abs_tol=1e-12,
+        for field, expected in (("spill_threshold_fraction", 0.50),
+                                ("spill_down_fraction", 0.10),
+                                ("spill_up_fraction", 0.20)):
+            if not math.isclose(getattr(zone, field), expected, rel_tol=0.0, abs_tol=1e-12):
+                raise ValueError(f"{zone.zone}.{field} is fixed by the canonical component-load rule")
+        tref_min = _finite(zone.tref_min, "tref_min")
+        tref_max = _finite(zone.tref_max, "tref_max")
+        if tref_min <= 0.0 or tref_min > tref_max:
+            raise ValueError(f"{zone.zone}: invalid Tref bounds")
+        expected_bounds = TREF_BOUNDS_MINUTES.get(zone.zone)
+        if expected_bounds is None or not all(
+            math.isclose(current, expected, rel_tol=0.0, abs_tol=1e-12)
+            for current, expected in zip(
+                (tref_min, tref_max), expected_bounds
+            )
         ):
-            raise ValueError(f"{zone.zone}.tref_minutes is a fixed expert value")
+            raise ValueError(f"{zone.zone} Tref bounds are fixed expert values")
 
 
 def configuration_with_overrides(
@@ -267,7 +326,7 @@ def configuration_with_profile_level(
 ) -> ShadowModelConfiguration:
     """Deprecated no-op retained while old session state is discarded."""
 
-    if profile_level not in {"fixed", "low", "medium", "high"}:
+    if profile_level not in {"bounded-40d", "fixed", "low", "medium", "high"}:
         raise ValueError("profile_level is unsupported")
     return baseline or default_shadow_configuration()
 
@@ -305,10 +364,11 @@ def configuration_from_safe_dict(value: Any) -> ShadowModelConfiguration:
                 zone=str(row.get("zone") or ""),
                 hr_low=_finite(row.get("hr_low"), "hr_low"),
                 hr_high=_finite(row.get("hr_high"), "hr_high"),
-                tref_minutes=_finite(row.get("tref_minutes"), "tref_minutes"),
+                tref_min=_finite(row.get("tref_min"), "tref_min"),
+                tref_max=_finite(row.get("tref_max"), "tref_max"),
                 **{
                     field: _finite(row.get(field), field)
-                    for field in EDITABLE_FIELDS
+                    for field in FIELD_RANGES
                 },
             )
         )
@@ -399,12 +459,16 @@ def build_model_registry(
                     "индивидуален override"
                     if item_id in configuration.overrides
                     else "профилна"
-                    if field in {"equivalence_slope_pp_per_bpm", "tref_minutes"}
+                    if field in {
+                        "equivalence_slope_pp_per_bpm",
+                        "tref_min",
+                        "tref_max",
+                    }
                     else "системна"
                 )
                 version = (
                     configuration.tref_profile_version
-                    if field == "tref_minutes"
+                    if field in {"tref_min", "tref_max"}
                     else configuration.equivalence_version
                     if field == "equivalence_slope_pp_per_bpm"
                     else configuration.physiology_profile_version
@@ -460,9 +524,18 @@ def _tref_values(
     else:
         usable = candidates[-HISTORY_WINDOW_DAYS:]
     history_days = len(usable)
-    source = "initial expert setting"
-    fallback_used = False
-    values = {zone.zone: zone.tref_minutes for zone in zones}
+    source = (
+        "expert upper-bound fallback"
+        if history_days == 0
+        else "40-day history"
+        if history_days == HISTORY_WINDOW_DAYS
+        else "provisional history"
+    )
+    fallback_used = history_days == 0
+    values = {
+        zone.zone: AEROBIC_TREF_INITIAL_MINUTES[zone.zone]
+        for zone in zones
+    }
     historical_values: dict[str, float | None] = {}
     for zone in zones:
         if not usable:
@@ -506,8 +579,10 @@ def calculate_shadow_result(
     prior_daily_equivalent_time: Sequence[Mapping[str, Any]] | None = None,
     prior_daily_qref: Sequence[Mapping[str, Any]] | None = None,
     activity_date: date | None = None,
+    zone_tmax_minutes: Mapping[str, float] | None = None,
+    capacity_sources: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Calculate T_eq-driven cascade, spillover, effect, H40, and Tref."""
+    """Canonical adjacent spillover from direct Q/Tmax; keep H40/Tref separate."""
 
     # Deprecated keyword compatibility. Historical direct-dose names are
     # accepted only as aliases for the one E history used by H40/7-40.
@@ -567,36 +642,21 @@ def calculate_shadow_result(
         prior_daily_effective_load,
         activity_date=activity_date,
     )
-    tref_effective = {
-        zone: config.tref_minutes for zone, config in settings.items()
-    }
+    tref_effective: dict[str, float] = {}
+    bound_applied: dict[str, str] = {}
+    for zone, config in settings.items():
+        raw = tref_raw[zone]
+        tref_effective[zone] = min(max(raw, config.tref_min), config.tref_max)
+        bound_applied[zone] = (
+            "lower" if raw < config.tref_min
+            else "upper" if raw > config.tref_max
+            else "none"
+        )
 
     zone_order = list(settings)
-    cascade = {
-        receiver: math.fsum(
-            equivalent_time[source] for source in zone_order[index + 1 :]
-        )
-        for index, receiver in enumerate(zone_order)
-    }
-    spill_down_out = {zone: 0.0 for zone in zone_order}
-    spill_up_out = {zone: 0.0 for zone in zone_order}
-    spill_received = {zone: 0.0 for zone in zone_order}
-    excess = {zone: 0.0 for zone in zone_order}
-    for index, zone in enumerate(zone_order):
-        config = settings[zone]
-        excess[zone] = max(
-            0.0,
-            equivalent_time[zone]
-            - config.spill_threshold_fraction * tref_effective[zone],
-        )
-        if index > 0:
-            amount = config.spill_down_fraction * excess[zone]
-            spill_down_out[zone] = amount
-            spill_received[zone_order[index - 1]] += amount
-        if index < len(zone_order) - 1:
-            amount = config.spill_up_fraction * excess[zone]
-            spill_up_out[zone] = amount
-            spill_received[zone_order[index + 1]] += amount
+    component_load = calculate_component_load(
+        equivalent_time, zone_tmax_minutes, capacity_sources=capacity_sources,
+    )
 
     coverage = float(intrazone_analysis.get("hr_coverage_percent") or 0.0)
     rows = []
@@ -608,22 +668,28 @@ def calculate_shadow_result(
                 "T_eq_z": equivalent_time[zone],
                 "mean_effective_hr_bpm": mean_effective_hr[zone],
                 "average_minute_value_percent": average_minute_value[zone],
-                "direct_ratio": equivalent_time[zone]
-                / max(tref_effective[zone], 1e-12),
-                "cascade": cascade[zone],
-                "spillover_excess": excess[zone],
-                "spillover_down_out": spill_down_out[zone],
-                "spillover_up_out": spill_up_out[zone],
-                "spillover_received": spill_received[zone],
-                "E_z": equivalent_time[zone]
-                + cascade[zone]
-                + spill_received[zone],
+                "direct_ratio": component_load["direct_ratio"][zone],
+                "tmax_minutes": component_load["capacity_minutes"][zone],
+                "tmax_source": component_load["capacity_sources"][zone],
+                # Legacy fields retained for readers; neither drives the rule.
+                "cascade": 0.0,
+                "spillover_excess": max(0.0, equivalent_time[zone] - 0.5 * component_load["capacity_minutes"][zone]),
+                "spillover_base": equivalent_time[zone],
+                "spillover_down_fraction": component_load["spill_down_fraction"][zone],
+                "spillover_up_fraction": component_load["spill_up_fraction"][zone],
+                "spillover_down_out": component_load["spill_down_out"][zone],
+                "spillover_up_out": component_load["spill_up_out"][zone],
+                "spillover_received": component_load["spill_received"][zone],
+                "E_z": component_load["effective"][zone],
                 "tref_raw": tref_raw[zone],
                 "tref_effective": tref_effective[zone],
                 "tref_history_value": tref_history_value[zone],
                 "h40_equivalent_minutes": tref_history_value[zone],
                 "tref_source": tref_source,
                 "tref_history_days": history_days,
+                "tref_min_effective": settings[zone].tref_min,
+                "tref_max_effective": settings[zone].tref_max,
+                "tref_bound_applied": bound_applied[zone],
                 # Deprecated aliases. Both point to the one T_eq dose.
                 "Q_z": equivalent_time[zone],
                 "Qref_z": equivalent_time[zone],
@@ -635,9 +701,9 @@ def calculate_shadow_result(
             {
                 "id": "warning.incomplete_history",
                 "message": (
-                    "Налични предходни дни за диагностичния H40: "
-                    f"{history_days}/{HISTORY_WINDOW_DAYS}. Фиксираният Tref "
-                    "не се променя."
+                    "Налични предходни дни за Tref: "
+                    f"{history_days}/{HISTORY_WINDOW_DAYS}. Използва се "
+                    "ограничена временна стойност до пълен 40-дневен прозорец."
                 ),
             }
         )
@@ -657,6 +723,11 @@ def calculate_shadow_result(
         )
     return {
         "model_version": configuration.physiology_profile_version,
+        "component_load_version": component_load["version"],
+        "spillover_basis": component_load["spill_basis"],
+        "capacity_basis": component_load["capacity_basis"],
+        "zone_tmax_minutes": component_load["capacity_minutes"],
+        "zone_tmax_sources": component_load["capacity_sources"],
         "equivalence_version": configuration.equivalence_version,
         "tref_profile_version": configuration.tref_profile_version,
         "tref_bounds_profile_version": configuration.tref_bounds_profile_version,
@@ -686,6 +757,8 @@ def calculate_shadow_comparison(
     prior_baseline_qref: Sequence[Mapping[str, Any]] | None = None,
     prior_experimental_qref: Sequence[Mapping[str, Any]] | None = None,
     activity_date: date | None = None,
+    zone_tmax_minutes: Mapping[str, float] | None = None,
+    capacity_sources: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     if prior_baseline_qref is not None:
         if prior_baseline_effective_load:
@@ -733,12 +806,16 @@ def calculate_shadow_comparison(
         baseline_configuration,
         prior_daily_effective_load=prior_baseline_effective_load,
         activity_date=activity_date,
+        zone_tmax_minutes=zone_tmax_minutes,
+        capacity_sources=capacity_sources,
     )
     experimental_result = calculate_shadow_result(
         experimental_analysis,
         experimental,
         prior_daily_effective_load=prior_experimental_effective_load,
         activity_date=activity_date,
+        zone_tmax_minutes=zone_tmax_minutes,
+        capacity_sources=capacity_sources,
     )
     baseline_rows = {row["zone"]: row for row in baseline_result["rows"]}
     comparison_rows = []

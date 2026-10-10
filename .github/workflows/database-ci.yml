@@ -1,0 +1,46 @@
+name: Database CI
+
+on:
+  pull_request:
+    branches:
+      - codex/build-end-to-end-cloud-integration
+    paths:
+      - "supabase/**"
+      - "tests/database/**"
+      - "tests/api/test_account_access_migration.py"
+      - ".github/workflows/database-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.116.0
+      - name: Start local Supabase
+        run: supabase start
+      - name: Rebuild database from migrations
+        run: supabase db reset --local
+      - name: Verify local migration history
+        run: supabase migration list --local
+      - name: Verify response-aware plan publication
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/management_response_checkpoint.sql
+      - name: Verify lossless storage maintenance boundaries
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/shadow_compaction.sql
+      - name: Verify private history archival and restoration
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/history_archive.sql

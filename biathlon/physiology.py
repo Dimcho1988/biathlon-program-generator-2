@@ -10,16 +10,46 @@ import pandas as pd
 from scipy.optimize import least_squares
 
 from .constants import (
+    AEROBIC_TREF_BOUNDS_MINUTES,
+    AEROBIC_TREF_INITIAL_MINUTES,
     AEROBIC_COMPONENTS,
     COMPONENTS,
     DEFAULT_STRENGTH_TYPE,
-    FIXED_AEROBIC_TREF_MINUTES,
+    FIXED_STRENGTH_TREF_MINUTES,
     STRENGTH_COEFFICIENTS,
     STRENGTH_TYPES,
+    TREF_HISTORY_WINDOW_DAYS,
 )
 from .effective_hr import effective_hr as canonical_effective_hr
+from .component_load import calculate_component_load
 
 EPS = 1e-9
+
+
+def bounded_aerobic_tref(component: str, raw_tref: float) -> float:
+    """Clamp one history-derived aerobic Tref to its expert limits."""
+
+    lower, upper = AEROBIC_TREF_BOUNDS_MINUTES[component]
+    return float(np.clip(float(raw_tref), lower, upper))
+
+
+def _causal_tref(
+    component: str,
+    history: pd.Series,
+    base_loads: dict[str, float],
+) -> float:
+    """Tref for a day, based only on already completed calendar days."""
+
+    if component in AEROBIC_TREF_BOUNDS_MINUTES:
+        raw = (
+            7.0 * float(history.mean())
+            if not history.empty
+            else AEROBIC_TREF_INITIAL_MINUTES[component]
+        )
+        return bounded_aerobic_tref(component, raw)
+    if component == "STR":
+        return FIXED_STRENGTH_TREF_MINUTES
+    return 7.0 * float(base_loads[component])
 
 
 def _empty_daily_load_history() -> pd.DataFrame:
@@ -271,36 +301,32 @@ def activities_to_activity_summaries(
     return result
 
 
-def _cascade_matrix(parameters: dict[str, Any]) -> np.ndarray:
-    cascade = parameters["cascade"]
-    return np.array([[float(cascade[receiver][source]) for source in COMPONENTS] for receiver in COMPONENTS], dtype=float)
-
-
 def effective_from_direct_vector(
     direct_q: Iterable[float] | dict[str, float] | pd.Series,
     tref: Iterable[float] | dict[str, float] | pd.Series,
     parameters: dict[str, Any],
+    *,
+    zone_tmax_minutes: dict[str, float] | None = None,
 ) -> np.ndarray:
-    """Изчислява E от Q чрез каскада и разлив към съседната по-висока зона."""
+    """Canonical E from direct Q and continuous Tmax, never historical Tref.
+
+    ``tref`` is retained for callers using the old positional interface only.
+    Explicit zone capacities (or parameters['zone_tmax_minutes']) take priority;
+    without them, the shared expert continuous-capacity fallback is used.
+    """
 
     if isinstance(direct_q, (dict, pd.Series)):
         q = np.array([float(direct_q.get(c, 0.0)) for c in COMPONENTS], dtype=float)
     else:
         q = np.asarray(list(direct_q), dtype=float)
-    if isinstance(tref, (dict, pd.Series)):
-        tref_values = np.array([float(tref.get(c, 0.0)) for c in COMPONENTS], dtype=float)
-    else:
-        tref_values = np.asarray(list(tref), dtype=float)
-
-    q = np.clip(q, 0.0, None)
-    tref_values = np.clip(tref_values, EPS, None)
-    effective = _cascade_matrix(parameters) @ q
-    theta = float(parameters["spill_threshold_fraction"])
-    beta = float(parameters["spill_fraction"])
-    for idx in range(len(AEROBIC_COMPONENTS) - 1):
-        spill = beta * max(0.0, q[idx] - theta * tref_values[idx])
-        effective[idx + 1] += spill
-    return np.clip(effective, 0.0, None)
+    if len(q) != len(COMPONENTS):
+        raise ValueError("direct load must contain six components")
+    result = calculate_component_load(
+        dict(zip(COMPONENTS, q)),
+        zone_tmax_minutes if zone_tmax_minutes is not None else parameters.get("zone_tmax_minutes"),
+        capacity_sources=parameters.get("zone_tmax_sources"),
+    )
+    return np.array([result["effective"][component] for component in COMPONENTS], dtype=float)
 
 
 def compute_daily_load_history(
@@ -310,15 +336,26 @@ def compute_daily_load_history(
 ) -> pd.DataFrame:
     """Създава пълна дневна времева редица на Q и E.
 
-    Разливът за даден ден използва Tref от предходните дни, което премахва
-    едновременната зависимост между текущия E и текущия Tref.
+    Преливането използва непрекъснатия Tmax; историческият Tref се пази
+    отделно за нормализиране на възстановяването.
     """
 
     if activity_summaries.empty:
         return _empty_daily_load_history()
 
     q_columns = [f"q_{component}" for component in COMPONENTS]
-    grouped = activity_summaries.groupby("date", as_index=True)[q_columns].sum().sort_index()
+    e_columns = [f"e_{component}" for component in COMPONENTS]
+    summaries = activity_summaries.copy()
+    # A session has one direct vector. Two sessions do not become a fictitious
+    # single continuous effort when their daily histories are added together.
+    # Explicit canonical E also preserves the per-sport curve used by callers.
+    if not all(column in summaries for column in e_columns):
+        effective_rows = [effective_from_direct_vector(
+            {component: row.get(f"q_{component}", 0.0) for component in COMPONENTS},
+            {}, parameters,
+        ) for _, row in summaries.iterrows()]
+        summaries[e_columns] = np.array(effective_rows)
+    grouped = summaries.groupby("date", as_index=True)[q_columns + e_columns].sum().sort_index()
     start = pd.Timestamp(grouped.index.min()).normalize()
     end = pd.Timestamp(end_date if end_date is not None else grouped.index.max()).normalize()
     if end < start:
@@ -327,23 +364,32 @@ def compute_daily_load_history(
     direct = grouped.reindex(all_dates, fill_value=0.0)
     direct.index.name = "date"
 
-    base_loads = parameters["base_loads"]
-    long_window = int(parameters["long_window_days"])
     effective_rows: list[np.ndarray] = []
     output_rows: list[dict[str, float | pd.Timestamp]] = []
 
     for current_date, row in direct.iterrows():
-        if effective_rows:
-            history = np.vstack(effective_rows[-long_window:])
-            chronic = history.mean(axis=0)
-            tref = np.where(chronic > EPS, 7.0 * chronic, np.array([7.0 * base_loads[c] for c in COMPONENTS]))
-        else:
-            tref = np.array([7.0 * base_loads[c] for c in COMPONENTS], dtype=float)
-        for component, fixed_tref in FIXED_AEROBIC_TREF_MINUTES.items():
-            tref[COMPONENTS.index(component)] = fixed_tref
+        history_frame = (
+            pd.DataFrame(
+                effective_rows[-TREF_HISTORY_WINDOW_DAYS:],
+                columns=COMPONENTS,
+            )
+            if effective_rows
+            else pd.DataFrame(columns=COMPONENTS, dtype=float)
+        )
+        tref = np.array(
+            [
+                _causal_tref(
+                    component,
+                    history_frame[component],
+                    parameters["base_loads"],
+                )
+                for component in COMPONENTS
+            ],
+            dtype=float,
+        )
 
         q = np.array([float(row[f"q_{c}"]) for c in COMPONENTS], dtype=float)
-        effective = effective_from_direct_vector(q, tref, parameters)
+        effective = np.array([float(row[f"e_{c}"]) for c in COMPONENTS], dtype=float)
         effective_rows.append(effective)
 
         record: dict[str, float | pd.Timestamp] = {"date": current_date}
@@ -395,13 +441,24 @@ def compute_load_statistics(
         e50 = _window_mean(series, as_of_ts, base_window) if not series.empty else 0.0
         base = max(float(base_loads[component]), 0.5 * e50)
         index = (base + e7) / max(base + e40, EPS)
-        tref = (
-            FIXED_AEROBIC_TREF_MINUTES[component]
-            if component in FIXED_AEROBIC_TREF_MINUTES
-            else 7.0 * e40
-            if e40 > EPS
-            else 7.0 * base
-        )
+        if component in AEROBIC_TREF_BOUNDS_MINUTES:
+            tref_e40 = (
+                _window_mean(
+                    series,
+                    as_of_ts,
+                    TREF_HISTORY_WINDOW_DAYS,
+                )
+                if not series.empty
+                else 0.0
+            )
+            raw_tref = (
+                7.0 * tref_e40
+                if history_days > 0
+                else AEROBIC_TREF_INITIAL_MINUTES[component]
+            )
+            tref = bounded_aerobic_tref(component, raw_tref)
+        else:
+            tref = FIXED_STRENGTH_TREF_MINUTES
         reliability = min(1.0, history_days / float(long_window))
         rows.append(
             {
@@ -439,6 +496,20 @@ def rolling_load_statistics(daily_loads: pd.DataFrame, parameters: dict[str, Any
         e50 = series.rolling(base_window, min_periods=1).mean()
         base = np.maximum(float(parameters["base_loads"][component]), 0.5 * e50)
         index = (base + e7) / np.maximum(base + e40, EPS)
+        if component in AEROBIC_TREF_BOUNDS_MINUTES:
+            causal_e40 = series.shift(1).rolling(
+                TREF_HISTORY_WINDOW_DAYS, min_periods=1
+            ).mean()
+            lower, upper = AEROBIC_TREF_BOUNDS_MINUTES[component]
+            derived_tref = np.where(
+                causal_e40.notna(),
+                np.clip(7.0 * causal_e40.to_numpy(dtype=float), lower, upper),
+                AEROBIC_TREF_INITIAL_MINUTES[component],
+            )
+        else:
+            derived_tref = np.full(
+                len(full), FIXED_STRENGTH_TREF_MINUTES
+            )
         rows.append(
             pd.DataFrame(
                 {
@@ -450,9 +521,11 @@ def rolling_load_statistics(daily_loads: pd.DataFrame, parameters: dict[str, Any
                     "base_load": base,
                     "index_7_40": index,
                     "Tref": (
-                        np.full(len(full), FIXED_AEROBIC_TREF_MINUTES[component])
-                        if component in FIXED_AEROBIC_TREF_MINUTES
-                        else 7.0 * np.where(e40.values > EPS, e40.values, base)
+                        pd.to_numeric(
+                            full[f"tref_used_{component}"], errors="coerce"
+                        ).to_numpy(dtype=float)
+                        if f"tref_used_{component}" in full
+                        else derived_tref
                     ),
                 }
             )
@@ -472,7 +545,6 @@ def compute_readiness_history(
         return pd.DataFrame(columns=["date", "component", "fatigue_before", "fatigue_after", "readiness_before", "readiness_after", "impulse", "Tref"])
 
     full = daily_loads.sort_index()
-    long_window = int(parameters["long_window_days"])
     base_loads = parameters["base_loads"]
     fatigue = {component: 0.0 for component in COMPONENTS}
     rows: list[dict[str, float | str | pd.Timestamp]] = []
@@ -485,12 +557,11 @@ def compute_readiness_history(
             supplied_column = f"tref_used_{component}"
             if use_supplied_tref and supplied_column in full:
                 tref = max(float(row[supplied_column]), EPS)
-            elif component in FIXED_AEROBIC_TREF_MINUTES:
-                tref = FIXED_AEROBIC_TREF_MINUTES[component]
             else:
-                history = full.iloc[max(0, day_index - long_window) : day_index][f"e_{component}"]
-                chronic = float(history.mean()) if not history.empty else 0.0
-                tref = 7.0 * chronic if chronic > EPS else 7.0 * float(base_loads[component])
+                history = full.iloc[
+                    max(0, day_index - TREF_HISTORY_WINDOW_DAYS) : day_index
+                ][f"e_{component}"]
+                tref = _causal_tref(component, history, base_loads)
             effective = float(row[f"e_{component}"])
             impulse = 100.0 * float(rec["sensitivity"]) * effective / max(tref, EPS)
             fatigue[component] = min(float(rec["fmax"]), fatigue[component] + impulse)
@@ -594,14 +665,19 @@ def solve_direct_load(
 
     target = np.clip(target, 0.0, None)
     scale = np.maximum(tref_vec, 1.0)
-    matrix = _cascade_matrix(parameters)
-    try:
-        initial = np.clip(np.linalg.lstsq(matrix, target, rcond=None)[0], 0.0, None)
-    except np.linalg.LinAlgError:
-        initial = np.clip(target / np.maximum(np.diag(matrix), 1.0), 0.0, None)
+    initial = target.copy()
 
     def residual(q: np.ndarray) -> np.ndarray:
         return (effective_from_direct_vector(q, tref_vec, parameters) - target) / scale
+
+    # Remove the incoming adjacent contribution before numerical fitting. This
+    # also preserves exact solutions at the inclusive 50%/80% tier boundaries,
+    # where finite-difference perturbations can jump to a different rule.
+    for _ in range(20):
+        if float(np.max(np.abs(residual(initial)))) < 1e-10:
+            return pd.Series(initial, index=COMPONENTS, name="target_direct_q"), float(np.sqrt(np.mean(residual(initial) ** 2)))
+        projected = effective_from_direct_vector(initial, tref_vec, parameters)
+        initial = np.clip(initial + target - projected, 0.0, None)
 
     solution = least_squares(residual, initial, bounds=(0.0, np.inf), max_nfev=400, xtol=1e-9, ftol=1e-9, gtol=1e-9)
     q = np.clip(solution.x, 0.0, None)
