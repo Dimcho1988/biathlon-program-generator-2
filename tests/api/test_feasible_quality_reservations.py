@@ -69,7 +69,7 @@ def test_last_microcycle_day_does_not_wait_for_next_microcycle_preferred_thresho
         sessions_per_week=2, sessions_by_day=[1,1,0,0,0,0,0], threshold_days=[1], threshold_method="INTERVALS")
     selected_methods(monkeypatch, body, {"END-THR-TIME-01"})
     q_calendar(monkeypatch, lambda _:210.)
-    repo, _, _ = observed()
+    repo = Repository()
     plan = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)
     assert [segment["days"] for segment in plan["allocation"]["segments"]] == [1,6]
     session = plan["days"][0]["sessions"][0]
@@ -106,8 +106,8 @@ def test_interval_maintenance_nominal_retains_a_complete_relative_minimum_after_
     minimum = engine._minimum_work(method, evidence, Repository().settings)
     blocks = engine._blocks(method, work, evidence, Repository().settings)
     assert minimum == 9.
-    assert fraction == 12./34.  # Three mandatory whole repetitions, plus one before readiness.
+    assert fraction == .6  # Half of the expert 1.2 × Tmax work budget.
     assert work >= minimum
-    assert [block["duration_min"] for block in blocks if block["kind"] == "WORK"] == [3.]*3
-    assert engine._dose_usage(blocks, evidence, "Z4") <= body["maintenance_fraction"]*evidence["readiness_dose_factor"]
+    assert [block["duration_min"] for block in blocks if block["kind"] == "WORK"] == [3.]*6
+    assert engine._dose_usage(blocks, evidence, "Z4") <= .5*evidence["readiness_dose_factor"]
     assert fraction <= method["interval_template"]["total_capacity_ratio"]

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from apps.api import training_plan_engine as engine
-from biathlon import recovery_v2, speed_duration
+from biathlon import hr_speed, recovery_v2, speed_duration
 from biathlon.training_methods import METHODS
 
 NOW = datetime(2026, 9, 21, 9, tzinfo=timezone.utc)
@@ -31,7 +31,7 @@ class Repository:
                  for d in days for z in ZONES if z != "STR"]
         strength = [{"date": d.isoformat(), "effective_load": values["STR"] if (TODAY-d).days > 7 else 0.} for d in days]
         activities = [{"activity_ref": f"act_{i}", "date": d.isoformat(), "sport": "Run", "duration_min": 60,
-                       "zones": [{"zone": z, "raw_time_min": 10} for z in ZONES if z != "STR"]}
+                       "zones": [{"zone": z, "raw_time_min": 10, "equivalent_time_min": values[z]} for z in ZONES if z != "STR"]}
                       for i, d in enumerate(days) if (TODAY-d).days > 7]
         self.envelope = {"generation_id": "generation-one", "revision": 1,
                          "activities": [{**a, "local_date": a["date"]} for a in activities],
@@ -99,10 +99,13 @@ def supported_speed(settings):
              {"duration_s": 7200., "speed_kmh": 15., "maximal": True, "test_mode": "STRICT"}]
     curve = speed_duration.calibrated(tests)
     index = (100*settings.zone_bounds_bpm[3]/settings.hrmax_bpm)/(curve.speed(3000)*3.6)
+    indices = {"Z3": {"index": index, "count": 3}}
+    predictor = hr_speed.Predictor(curve, settings.zone_bounds_bpm, settings.hrmax_bpm, indices)
     return {"status": "CALIBRATED", "model_version": speed_duration.VERSION,
+            "hr_model": predictor.summary(),
             "active_test_keys": ["a", "b"], "tests": [{"entry_key": key, "payload": t} for key, t in zip(("a", "b"), tests)],
             "index_window": {"last_activity_date": TODAY.isoformat()},
-            "index_summary": {"Z3": {"index": index, "count": 3}}, "zone_corrections": {}}
+            "index_summary": indices, "zone_corrections": {}}
 
 
 def test_generates_real_blocks_and_all_loads_without_mutating_source():
@@ -118,7 +121,7 @@ def test_generates_real_blocks_and_all_loads_without_mutating_source():
         assert session["main_work_minutes"] == pytest.approx(sum(b["duration_min"] for b in session["blocks"] if b["kind"] == "WORK"), abs=.002)
         assert session["dose_evidence"]["capacity_source"] == "EXPERT_CONTINUOUS_TREF"
         assert session["canonical_effective_load"]["STR"] == 0
-        assert session["dose_evidence"]["technical_spill_reference_role"] == "CANONICAL_E_ONLY_NOT_DOSE_CAPACITY"
+        assert session["dose_evidence"]["technical_spill_reference_role"] == "LEGACY_HISTORICAL_TREF_DIAGNOSTIC_NOT_SPILL_CAPACITY"
 
 
 def test_short_real_test_supports_z5_without_high_zone_hr_samples_or_recency_gate():
@@ -177,8 +180,11 @@ def test_close_race_generates_only_available_days_with_manual_reentry(days):
         assert result["days"][-1]["session"] is None
     for session in sessions(result):
         evidence = session["dose_evidence"]
-        assert evidence["max_dose_fraction"] <= body["reentry_fraction"]
-        assert evidence["applied_structure_fraction"] <= body["reentry_fraction"] + .001
+        ceiling = .5 if evidence.get("effort_profile") else body["maintenance_fraction"]
+        assert evidence["max_dose_fraction"] <= ceiling
+        assert evidence["applied_structure_fraction"] <= ceiling + .001
+        if session["purpose"] != "RECOVERY" and not session.get("double_threshold"):
+            assert session["purpose"] in {"MAINTENANCE", "SUPPORTING"}
 
 
 def test_supported_speed_duration_wins_and_not_multiplied_by_expert_tref():
@@ -199,29 +205,35 @@ def test_one_short_test_cannot_authorize_long_duration_or_sport_transfer():
     speed["tests"] = speed["tests"][:1]
     method = next(m for m in METHODS if m["zone"] == "Z3")
     capacity = engine.capacity_for(method, settings, speed, engine._capacity_context(speed, settings), TODAY)
-    assert capacity["capacity_source"] == "EXPERT_CONTINUOUS_TREF"
-    assert "INSUFFICIENT_INDEPENDENT_TEST_DURATIONS" in capacity["fallback_reasons"]
+    assert capacity is None
     assert engine.capacity_for(method, settings, speed, engine._capacity_context(speed, settings), TODAY, False) is None
 
 
-def test_outside_observed_support_and_stale_index_fall_back():
+def test_outside_observed_support_and_stale_index_never_switch_to_expert_tmax():
     settings = Repository().settings
     speed = supported_speed(settings)
     speed["index_window"]["last_activity_date"] = (TODAY-timedelta(days=15)).isoformat()
     method = next(m for m in METHODS if m["zone"] == "Z3")
-    capacity = engine.capacity_for(method, settings, speed, engine._capacity_context(speed, settings), TODAY)
-    assert capacity["capacity_source"] == "EXPERT_CONTINUOUS_TREF"
-    assert "STALE_HR_SPEED_INDEX" in capacity["fallback_reasons"]
+    assert engine.capacity_for(method, settings, speed, engine._capacity_context(speed, settings), TODAY) is None
     speed["index_window"]["last_activity_date"] = TODAY.isoformat()
-    method = next(m for m in METHODS if m["zone"] == "Z1")
-    capacity = engine.capacity_for(method, settings, speed, engine._capacity_context(speed, settings), TODAY)
-    assert "OUTSIDE_OBSERVED_TEST_DURATION_SUPPORT" in capacity["fallback_reasons"]
+    speed["tests"][1]["payload"].update(duration_s=1200., speed_kmh=20.)
+    curve = speed_duration.calibrated([entry["payload"] for entry in speed["tests"]])
+    method = {**method, "position": .1}
+    speed["index_summary"]["Z3"]["index"] = (100*settings.zone_bounds_bpm[3]/settings.hrmax_bpm)/(curve.speed(3500)*3.6)
+    context = engine._capacity_context(speed, settings)
+    assert engine.capacity_for(method, settings, speed, context, TODAY) is None
+    capacity = engine.capacity_for(method, settings, speed, context, TODAY, use_model_prior=True)
+    assert capacity["capacity_source"] == "SPEED_DURATION_PRIOR"
+    assert capacity["capacity_minutes"] == pytest.approx(context[0].duration(capacity["target_hr_bpm"])/60, abs=.002)
+    assert capacity["capacity_minutes"] > max(hr_speed.TMAX_RANGES_S["Z3"])/60
 
 
 def test_existing_today_is_not_added_twice_and_counts_in_weekly_budget():
     repo = Repository()
     activity = {"activity_ref": "done", "date": TODAY.isoformat(), "local_date": TODAY.isoformat(),
-                "sport": "Run", "duration_min": 80, "zones": []}
+                "sport": "Run", "duration_min": 80,
+                "zones": [{"zone": z, "raw_time_min": 80. if z == "Z1" else 0.,
+                           "equivalent_time_min": 80. if z == "Z1" else 0.} for z in ZONES if z != "STR"]}
     repo.envelope["activities"].append(activity)
     repo.envelope["snapshot_payload"]["load_history"]["activities"].append(activity)
     result = generate(repo, start=TODAY)
@@ -296,10 +308,9 @@ def test_missing_last_completed_day_does_not_grant_readiness():
     source = repo.envelope["snapshot_payload"]["load_history"]
     source["period_end"] = (TODAY-timedelta(days=1)).isoformat()
     source["daily"] = [r for r in source["daily"] if not (r["date"] == source["period_end"] and r["zone"] == "Z3")]
-    result = generate(repo)
-    assert not result["activation_eligible"]
-    assert source["period_end"] in result["source"]["planning_history"]["missing_calendar_days"]
-    assert all(d["readiness_before"]["Z3"] is None for d in result["days"])
+    from apps.api.component_load_projection import ComponentLoadRefreshRequired
+    with pytest.raises(ComponentLoadRefreshRequired, match="Incomplete covered daily"):
+        generate(repo)
 
 
 def test_no_fallback_means_no_guessed_training():
@@ -346,12 +357,12 @@ def test_every_prescription_respects_component_budget_after_cascade():
                 assert day["session"]["canonical_effective_load"][z] <= day["load_budget"]["components"][z]["deficit_effective"] + .002
 
 
-def test_single_canonical_cascade_and_separate_strength():
+def test_single_canonical_adjacent_load_and_separate_strength():
     settings = Repository().settings
     blocks = [engine._block("WORK", "Work", "Z3", 10, 160, "Controlled")]
     direct, effective, _ = engine._canonical_load(blocks, settings, [], TODAY)
     assert direct["Z3"] == 10
-    assert effective["Z1"] == 10 and effective["Z2"] == 10 and effective["Z3"] == 10
+    assert effective["Z1"] == 0 and effective["Z2"] == 0 and effective["Z3"] == 10
     assert effective["Z4"] == 0 and effective["STR"] == 0
     direct, effective, _ = engine._canonical_load([engine._block("WORK", "Strength", "STR", 10, None, "")], settings, [], TODAY)
     assert effective["STR"] == 10
@@ -371,6 +382,12 @@ def test_readiness_scales_capacity_fraction_and_low_zone_limits_complete_dose():
     for row in repo.envelope["snapshot_payload"]["load_history"]["daily"]:
         if row["date"] == TODAY.isoformat() and row["zone"] == "Z1":
             row["effective_load"] = 1000.
+    activity = {"activity_ref": "fatigue-load", "date": TODAY.isoformat(), "local_date": TODAY.isoformat(),
+                "sport": "Run", "duration_min": 1000., "zones": [
+                    {"zone": z, "raw_time_min": 1000. if z == "Z1" else 0.,
+                     "equivalent_time_min": 1000. if z == "Z1" else 0.} for z in ZONES if z != "STR"]}
+    repo.envelope["activities"].append(activity)
+    repo.envelope["snapshot_payload"]["load_history"]["activities"].append(activity)
     fatigued = generate(repo)
     assert all(r["code"] not in {"RECOVERY_BELOW_90", "WARMUP_NOT_READY"}
                for day in fatigued["days"] for r in day["rejected_alternatives"])
@@ -435,7 +452,8 @@ def test_actual_key_session_preserves_minimum_spacing():
     repo = Repository()
     repo.envelope["snapshot_payload"]["load_history"]["activities"].append(
         {"activity_ref": "key-today", "date": TODAY.isoformat(), "sport": "Run", "duration_min": 30,
-         "zones": [{"zone": "Z3", "raw_time_min": 10}]})
+         "zones": [{"zone": z, "raw_time_min": 10. if z == "Z3" else 0.,
+                    "equivalent_time_min": 10. if z == "Z3" else 0.} for z in ZONES if z != "STR"]})
     result = generate(repo)
     first = result["days"][0]
     assert first["session"] is None or first["session"]["zone"] != "Z3"
@@ -447,11 +465,9 @@ def test_positive_actual_load_cannot_be_erased_when_calendar_metadata_is_missing
     for row in repo.envelope["snapshot_payload"]["load_history"]["daily"]:
         if row["date"] == TODAY.isoformat() and row["zone"] == "Z1":
             row["effective_load"] = 30.
-    result = generate(repo, start=TODAY)
-    assert result["days"][0]["status"] == "EXISTING_ACTIVITY"
-    assert result["days"][0]["session"] is None
-    assert all(d["status"] == "REVIEW_REQUIRED" for d in result["days"][1:])
-    assert any(w["code"] == "ACTUAL_LOAD_WITHOUT_SESSION_METADATA" for w in result["warnings"])
+    from apps.api.component_load_projection import ComponentLoadRefreshRequired
+    with pytest.raises(ComponentLoadRefreshRequired):
+        generate(repo, start=TODAY)
 
 
 def test_planner_uses_pinned_metadata_reader_and_retains_actual_session_guard():

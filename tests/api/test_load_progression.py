@@ -141,20 +141,35 @@ def test_learned_response_survives_the_rolling_import_window():
     assert after["components"]["Z3"]["load_factor"]==1  # Temporary relief has expired.
 
 
-def test_saving_outcome_preserves_actual_load_in_the_same_revision():
+def projected_response_source(rows):
+    from apps.api.component_load_context import context_from_speed_view
+    from apps.api.component_load_projection import project_history
+    days = sorted({r["date"] for r in rows})
+    source = {"period_start":days[0], "period_end":days[-1],
+              "daily":[dict(r) for r in rows if r["zone"] != "STR"],
+              "strength":{"daily":[dict(r) for r in rows if r["zone"] == "STR"]},
+              "activities":[{"date":day, "sport":"Run", "activity_ref":day,
+                             "zones":[{"zone":r["zone"], "equivalent_time_min":r["effective_load"]}
+                                      for r in rows if r["date"]==day and r["zone"]!="STR"]} for day in days]}
+    return project_history(source,{"Run":context_from_speed_view({"status":"UNAVAILABLE","sport":"Run"})})
+
+
+def test_saving_outcome_preserves_actual_load_in_the_same_revision(monkeypatch):
     from tests.api.test_response_monitoring import Repository as ReportRepository, ACTOR
     from apps.api.response_monitoring import OptionalTest
-    from apps.api import response_service
+    from apps.api import response_service, model_service
+    from apps.api.learning_service import component_load_context_key
     entries,rows=response_fixture()
     repo=ReportRepository(entries[:-1])
-    source={"daily":[r for r in rows if r["zone"] != "STR"],
-            "strength":{"daily":[r for r in rows if r["zone"] == "STR"]}}
+    source=projected_response_source(rows)
+    monkeypatch.setattr(model_service,"speed_view",lambda *args,**kwargs:{"status":"UNAVAILABLE","sport":"Run"})
     repo.active_activity_calendar=lambda *args:{"generation_id":"observed-generation","revision":3,"snapshot_payload":{"load_history":source}}
     response_service.save_report(repo,"ath-test","TEST",OptionalTest(**entries[-1]["payload"]),ACTOR,now=NOW)
     saved=repo.saved["p_payload"]
     assert saved["observed_load_windows"][0]["current"]["Z3"]==14*12
     assert saved["observed_load_windows"][0]["previous"]["Z3"]==14*10
-    assert saved["load_source"]=={"generation_id":"observed-generation","revision":3}
+    assert saved["load_source"]=={"generation_id":"observed-generation","revision":3,
+                                  "component_load_context_key":component_load_context_key(source)}
     assert saved["automatic_weight"]==0  # Daily stress score remains independent.
 
 
@@ -163,20 +178,23 @@ def test_editing_old_outcome_retains_observed_windows_and_original_source(qualit
     from tests.api.test_response_monitoring import Repository as ReportRepository, ACTOR
     from apps.api.response_monitoring import OptionalTest
     from apps.api import response_service
+    from apps.api.learning_service import component_load_context_key
     entries,rows=response_fixture()
+    source=projected_response_source(rows)
+    context_key=component_load_context_key(source)
     body=OptionalTest(**entries[-1]["payload"],expected_revision=1)
     frozen=load_adaptation.load_observations(entries,rows,TODAY)
     entries[-1]["payload"].update(observed_load_windows=frozen,
-        load_source={"generation_id":"original-generation","revision":3})
+        load_source={"generation_id":"original-generation","revision":3,"component_load_context_key":context_key})
     repo=ReportRepository(entries)
     repo.active_activity_calendar=lambda *args:{"generation_id":"new-generation","revision":5,
-        "snapshot_payload":{"load_history":{"daily":[],"quality":quality}}}
+        "snapshot_payload":{"load_history":{"daily":[],"quality":quality,"component_load_model":source["component_load_model"]}}}
     response_service.save_report(repo,"ath-test","TEST",body,ACTOR,now=NOW+timedelta(days=50))
     saved=repo.saved["p_payload"]
     window=saved["observed_load_windows"][0]
     assert window["current"]==frozen[0]["current"]
     assert window["previous"]==frozen[0]["previous"]
-    assert window["source"]=={"generation_id":"original-generation","revision":3}
+    assert window["source"]=={"generation_id":"original-generation","revision":3,"component_load_context_key":context_key}
     assert window["retained_from"]=={"entry_key":entries[-1]["entry_key"],"revision":1}
     assert saved["load_observation_status"]=="ARCHIVED"
     entries[-1]["payload"]=saved
@@ -204,22 +222,27 @@ def test_editing_earlier_outcome_prefers_its_own_frozen_evidence():
     from tests.api.test_response_monitoring import Repository as ReportRepository, ACTOR
     from apps.api.response_monitoring import OptionalTest
     from apps.api import response_service
+    from apps.api.learning_service import component_load_context_key
     entries,rows=response_fixture()
+    source=projected_response_source(rows)
+    context_key=component_load_context_key(source)
     body=OptionalTest(**entries[-1]["payload"],expected_revision=1)
     key=sha256(f"{body.day}:{body.protocol}:{body.protocol_version}".encode()).hexdigest()[:32]
     entries[-1]["entry_key"]=key
     entries[-1]["payload"].update(observed_load_windows=load_adaptation.load_observations(entries,rows,TODAY),
-        load_source={"generation_id":"original","revision":1})
+        load_source={"generation_id":"original","revision":1,"component_load_context_key":context_key})
     later=deepcopy(entries[-1])
     later["entry_key"]="later-outcome"
     later["payload"]["day"]=(TODAY+timedelta(days=1)).isoformat()
-    later["payload"]["load_source"]={"generation_id":"later-correction","revision":2}
+    later["payload"]["load_source"]={"generation_id":"later-correction","revision":2,"component_load_context_key":context_key}
     later["payload"]["observed_load_windows"][0]["current"]["Z3"]=200
     repo=ReportRepository([*entries,later])
+    repo.active_activity_calendar=lambda *args:{"snapshot_payload":{"load_history":{
+        "daily":[], "component_load_model":source["component_load_model"]}}}
     response_service.save_report(repo,"ath-test","TEST",body,ACTOR,now=NOW+timedelta(days=50))
     window=repo.saved["p_payload"]["observed_load_windows"][0]
     assert window["current"]["Z3"]==168
-    assert window["source"]=={"generation_id":"original","revision":1}
+    assert window["source"]=={"generation_id":"original","revision":1,"component_load_context_key":context_key}
     assert window["retained_from"]["entry_key"]==key
 
 

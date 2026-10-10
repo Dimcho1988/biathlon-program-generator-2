@@ -14,6 +14,8 @@ from math import isfinite
 from biathlon import individual_learning, load_progression, planning_controls
 from biathlon.constants import COMPONENTS
 from biathlon.equivalence import EQUIVALENCE_VERSION, equivalence_slope
+from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION
+from .component_load_context import VERSION as COMPONENT_CAPACITY_VERSION
 
 from . import learning_evidence
 from .management_store import ManagementStore
@@ -38,6 +40,37 @@ def enabled(profile):
 
 def _digest(value):
     return sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str, allow_nan=False).encode()).hexdigest()
+
+
+def component_load_context_key(source):
+    """Load semantics only: a new activity must not erase compatible memory."""
+    model = source.get("component_load_model") or {}
+    if model.get("version") != COMPONENT_LOAD_VERSION or model.get("scope") != "ACTIVITY":
+        return None
+    contexts = model.get("contexts_by_sport") or {}
+    used_sports = {activity.get("sport") for activity in source.get("activities", [])}
+    if used_sports:
+        contexts = {sport: context for sport, context in contexts.items() if sport in used_sports}
+    return _digest({"version": COMPONENT_LOAD_VERSION, "capacity_version": COMPONENT_CAPACITY_VERSION,
+                    "scope": model["scope"], "contexts": {
+                        sport: {"fingerprint": context.get("fingerprint"), "minutes": context.get("minutes"),
+                                "sources": context.get("sources")}
+                        for sport, context in contexts.items()}})
+
+
+def compatible_load_observations(entries, source):
+    """Discard only obsolete derived E windows, never original athlete reports."""
+    key = component_load_context_key(source)
+    result = []
+    for entry in entries:
+        payload = entry.get("payload") or {}
+        windows = payload.get("observed_load_windows") or []
+        compatible = [window for window in windows if key is not None and
+            (window.get("source") or payload.get("load_source") or {}).get("component_load_context_key") == key]
+        if len(compatible) != len(windows):
+            entry = {**entry, "payload": {**payload, "observed_load_windows": compatible}}
+        result.append(entry)
+    return result
 
 
 def bounded_episodes(episodes, budget=EPISODE_MEMORY_BYTES):
@@ -132,7 +165,9 @@ def context(repository, alias, profile, source, rows, today, *, periodization=No
     physiology = {"bounds": list(settings.zone_bounds_bpm), "hrmax": settings.hrmax_bpm} if settings else None
     context_key = _digest({"version": VERSION, "sport": profile["sport"], "physiology": physiology,
                            "equivalence": EQUIVALENCE_VERSION, "ti": TI_VERSION, "stress": STRESS_VERSION,
-                           "channels": CHANNELS})
+                           "channels": CHANNELS, "component_load_version": COMPONENT_LOAD_VERSION,
+                           "component_capacity_version": COMPONENT_CAPACITY_VERSION,
+                           "component_load_context_key": component_load_context_key(source)})
     memory = ManagementStore(repository).learning_memory(alias) or {}
     if memory.get("context_key") != context_key or memory.get("version") != VERSION:
         memory = {}
@@ -226,7 +261,7 @@ def context(repository, alias, profile, source, rows, today, *, periodization=No
     report["out_of_support_count"] = len(evidence["episodes"])-len(supported)
     report["source"] = {"generation_id": envelope.get("generation_id"), "revision": envelope.get("revision"),
                         "response_revision_fingerprint": _digest(sorted((e["kind"], e["entry_key"], e["revision"]) for e in entries)),
-                        "context_key": context_key}
+                        "context_key": context_key, "component_load_context_key": component_load_context_key(source)}
     report["model_summary"] = {k: {"observations": v["posterior"]["count"], "validation": v["validation"]} for k, v in models.items()}
     report["memory"] = {"version": VERSION, "context_key": context_key, "as_of": today.isoformat(),
                         "episodes": deepcopy(evidence["episodes"]), "decision": deepcopy(report.get("decision")),

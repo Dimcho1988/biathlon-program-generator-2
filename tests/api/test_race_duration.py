@@ -10,8 +10,15 @@ from tests.api.test_training_plan_engine import Repository, TODAY, NOW, profile,
 
 
 def calibrated(repo, alias, sport):
+    from biathlon import hr_speed, speed_duration
+    tests = [{"duration_s":180., "speed_kmh":20., "maximal":True, "test_mode":"STRICT"},
+             {"duration_s":420., "speed_kmh":2000/420*3.6, "maximal":True, "test_mode":"STRICT"}]
+    curve = speed_duration.calibrated(tests)
+    predictor = hr_speed.Predictor(curve, repo.settings.zone_bounds_bpm, repo.settings.hrmax_bpm, {})
     return {**reference_speed(repo, alias, sport), "status": "CALIBRATED", "active_test_count": 2,
             "active_test_keys": ["test-a", "test-b"], "exploratory_test_count": 0,
+            "tests":[{"entry_key":key,"payload":test} for key,test in zip(("test-a","test-b"),tests)],
+            "hr_model":predictor.summary(),
             "points": [{"distance_m": 1000, "duration_s": 180}, {"distance_m": 2000, "duration_s": 420},
                        {"distance_m": 10000, "duration_s": 2400}]}
 

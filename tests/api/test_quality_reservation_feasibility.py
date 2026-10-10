@@ -127,7 +127,7 @@ def test_future_mixed_core_is_not_protected_when_key_load_reduces_readiness_belo
         key_load = {row["zone"]:row["effective_load"] for row in rows if row["date"] == tuesday.isoformat()}
         after_key = key_load.get("Z3", 0.) > key_load.get("Z4", 0.)
         for row in result["current"]:
-            row["readiness_percent"] = 20. if kwargs.get("target") == wednesday and after_key and row["zone"] == "Z4" else 100.
+            row["readiness_percent"] = 5. if kwargs.get("target") == wednesday and after_key and row["zone"] == "Z4" else 100.
         return result
     monkeypatch.setattr(engine.recovery_v2, "simulate", simulated)
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
@@ -137,7 +137,7 @@ def test_future_mixed_core_is_not_protected_when_key_load_reduces_readiness_belo
     repo, _, _ = observed()
     mixed = methods["END-VO2-TREF-01-Z4-MIX-REPETITIONS-SHORT"]
     assert mixed["min_work_min"] == 1.
-    assert mixed["min_work_min"] > 20.*.15*.2  # Absolute repeats cannot fit the future 20% nominal.
+    assert mixed["min_work_min"] > 20.*1.2*.5*.05  # Two whole repetitions exceed the half-budget at 5% Recovery.
     plan = engine.generate_plan(repo, "athlete", body, start_date=tuesday, now=NOW)
     key_day = plan["days"][0]
     assert key_day["sessions"] and key_day["sessions"][0]["is_key_session"]
@@ -146,7 +146,7 @@ def test_future_mixed_core_is_not_protected_when_key_load_reduces_readiness_belo
             assert not any(protected["component"] == "Z4" and protected["date"] == wednesday.isoformat()
                            for protected in limit["protected_methods"])
     next_day = next(day for day in plan["days"] if day["date"] == wednesday.isoformat())
-    assert next_day["readiness_before"]["Z4"] == 20.
+    assert next_day["readiness_before"]["Z4"] == 5.
     assert not next_day["sessions"]
     assert any(rejection["code"] == "INSUFFICIENT_DOSE_BUDGET" for rejection in next_day["rejected_alternatives"])
     assert_segment_contract(plan)

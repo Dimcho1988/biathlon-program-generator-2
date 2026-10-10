@@ -17,6 +17,15 @@ def balanced_fixture(monkeypatch):
     # Move the synthetic observed calendar to Thursday. The Friday draft is
     # tomorrow, so no unknown intervening load is silently bypassed.
     repo, source, _ = observed()
+    # This scheduling fixture needs the original component E exposure. Under
+    # the adjacent-zone model these subthreshold direct vectors reproduce it
+    # exactly; the old fixture kept high daily E but replaced every Q with 8.
+    recorded = {(row["date"], row["zone"]): row["effective_load"] for row in source["daily"]}
+    for activities in (source["activities"], repo.envelope["activities"]):
+        for activity in activities:
+            for row in activity["zones"]:
+                row["equivalent_time_min"] = row["raw_time_min"] = recorded[activity["date"], row["zone"]]
+            activity["duration_min"] = sum(row["raw_time_min"] for row in activity["zones"])
     for rows in (source["daily"], source["activities"], source["strength"]["daily"]):
         for row in rows:
             row["date"] = (date.fromisoformat(row["date"]) + timedelta(days=3)).isoformat()
@@ -102,9 +111,11 @@ def assert_complete_counterfactual_fits(repo, body, plan, now):
             if method["zone"] != "STR":
                 lower = method.get("minimum_fraction", .25)*.8
                 assert engine._minimum_dose_usage(blocks, capacity, method["zone"], primary_only=bool(method.get("mixed_component"))) >= lower-1e-9
-            ceiling = .5 if method.get("mixed_component") else .3 if segment["days"] == 3 else .8
-            assert engine._dose_usage(blocks, capacity, method["zone"]) <= ceiling*.8+.001
-            direct, effective, _ = engine._canonical_load(blocks, repo.settings, rows, day)
+            ceiling = engine._dose_ceiling(method, purpose, body, "GENERAL_PREPARATION",
+                capacity, body["planning_controls"])
+            assert engine._dose_fits(blocks, capacity, method["zone"], ceiling*.8)
+            direct, effective, _ = engine._canonical_load(blocks, repo.settings, rows, day,
+                zone_tmax_minutes=capacity["zone_tmax_minutes"])
             rows = engine._add_forecast_session(rows, day, effective)
             for zone in COMPONENTS:
                 direct_total[zone] += direct[zone]

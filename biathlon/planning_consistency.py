@@ -1,29 +1,34 @@
-"""Reconcile direct-Q intent with its own cascaded E and the 7/40 envelope.
+"""Reconcile direct-Q intent with adjacent-zone E and the 7/40 envelope.
 
     The curve's expert duration is not a weekly budget. These are weekly Q
     objectives. Actual composed sessions still use canonical dose-dependent
     spill and daily Recovery; a uniform-week projection cannot authorize them.
 """
-from .constants import COMPONENTS, fresh_parameters
-from .physiology import effective_from_direct_vector
+from .constants import COMPONENTS
+from .component_load import calculate_component_load
 
-VERSION = "coherent-q-e-objectives-v1"
+VERSION = "coherent-q-e-objectives-v2-adjacent-tmax"
 
 
-def reconcile(goals, profile, state, reference, *, limited=False, taper=False):
+def reconcile(goals, profile, state, reference, *, limited=False, taper=False,
+              zone_tmax_minutes=None, capacity_sources=None):
     if limited or not state or not (profile.get("load_progression") or {}).get("enabled", False):
         return goals
     automatic = [z for z in COMPONENTS if z != "STR" and goals[z].get("target_weekly_q") is not None
                  and not goals[z].get("progression", {}).get("manual_override")]
     if not automatic:
         return goals
-    params = fresh_parameters()
+    context = profile.get("_component_load_context") or {}
+    if zone_tmax_minutes is None:
+        zone_tmax_minutes = context.get("minutes")
+    if capacity_sources is None:
+        capacity_sources = context.get("sources")
     requested = {z: goals[z].get("target_weekly_q", 0.) or 0. for z in COMPONENTS}
     requested["STR"] = 0.
-    tref = {z: max(params["base_loads"][z], 7*reference[z]["c40"]) for z in COMPONENTS}
     def projection(scale):
         q = {z: requested[z]*(scale if z in automatic else 1.)/7 for z in COMPONENTS}
-        return dict(zip(COMPONENTS, map(lambda v:float(v)*7, effective_from_direct_vector(q,tref,params))))
+        load = calculate_component_load(q, zone_tmax_minutes, capacity_sources=capacity_sources)
+        return {z: load["effective"][z]*7 for z in COMPONENTS}
     demand = projection(1.)
     budgets = {}
     manual = profile.get("component_targets_weekly", {})
@@ -58,6 +63,6 @@ def reconcile(goals, profile, state, reference, *, limited=False, taper=False):
         g["consistency"] = {"version":VERSION,"desired_weekly_q":desired_q,
             "feasible_weekly_q":g.get("target_weekly_q"),"original_effective_target":original_e,
             "projected_weekly_effective":coherent[z],"effective_budget":budgets[z],
-            "q_scale":scale,"binding":scale < 1.,"projection":"UNIFORM_WEEK_WITH_CANONICAL_CASCADE_AND_SPILL",
+            "q_scale":scale,"binding":scale < 1.,"projection":"UNIFORM_WEEK_ONE_SESSION_DAILY_WITH_ADJACENT_TMAX_SPILL",
             "daily_dose_check_required":True}
     return goals

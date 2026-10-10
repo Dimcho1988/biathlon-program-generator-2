@@ -7,6 +7,8 @@ This is an estimate of moving time, not a course/weather/shooting prediction.
 import math
 import re
 
+_UNSET = object()
+
 
 def distance_m(discipline):
     text = str(discipline or "").strip().lower()
@@ -56,12 +58,12 @@ def resolve(profile, view=None):
     return result
 
 
-def preview(repository, alias, profile):
+def preview(repository, alias, profile, *, speed_view=_UNSET):
     from . import model_service
     from datetime import date
     from biathlon import race_specific
     supported = distance_m(profile.get("discipline")) is not None and repository.athlete_settings(alias) is not None
-    view = model_service.speed_view(repository, alias, profile["sport"]) if supported else None
+    view = (model_service.speed_view(repository, alias, profile["sport"]) if supported else None) if speed_view is _UNSET else speed_view
     evidence = resolve(profile, view)
     day = (view or {}).get("index_window", {}).get("end")
     evidence["specific_reference"] = race_specific.reference(profile,view,evidence,date.fromisoformat(day) if day else date.today())

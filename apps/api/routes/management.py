@@ -6,6 +6,8 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 from fastapi import Header, HTTPException
 from ..oauth_store import PersistentStoreFailure
+from ..component_load_context import ComponentCapacityUnavailable
+from ..component_load_projection import ComponentLoadRefreshRequired
 from .. import race_duration
 from ..management_schemas import (
     ManagementProfileWrite,
@@ -71,6 +73,8 @@ def management_view(
         except (PersistentStoreFailure, ValueError):
             sync = None
         return public_management({"profile": profile, "active": active, "drafts": drafts, "outlook": outlook, "sync": sync})
+    except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
+        raise HTTPException(409, exc.user_message) from exc
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "Management view is unavailable") from exc
 
@@ -108,6 +112,8 @@ def management_outlook(
     alias = dependencies.model_alias(authorization, athlete_alias)
     try:
         return public_management(management_service.outlook(dependencies.repository(), alias))
+    except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
+        raise HTTPException(409, exc.user_message) from exc
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "Training outlook is unavailable") from exc
 
@@ -137,6 +143,8 @@ def generate_management_draft(
         raise HTTPException(401, "Actor session is required")
     try:
         return public_management(management_service.generate(dependencies.repository(), alias, body, actor))
+    except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
+        raise HTTPException(409, exc.user_message) from exc
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "A management draft could not be saved") from exc
 
@@ -149,6 +157,8 @@ def management_active(
     alias = dependencies.model_alias(authorization, athlete_alias)
     try:
         return public_management(management_lifecycle.current(dependencies.repository(), alias))
+    except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
+        raise HTTPException(409, exc.user_message) from exc
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "Active planning is temporarily unavailable") from exc
 
@@ -167,6 +177,8 @@ def _management_action(operation, body, authorization, athlete_alias, actor):
         else:
             management_lifecycle.action(repository, alias, body, actor)
         return public_management(management_lifecycle.current(repository, alias))
+    except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
+        raise HTTPException(409, exc.user_message) from exc
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "The active plan could not be updated") from exc
 

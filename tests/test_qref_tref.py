@@ -231,22 +231,23 @@ def test_05_current_and_future_data_are_excluded_from_h40() -> None:
     assert compared["current_day_excluded"] is True
 
 
-def test_06_one_equivalent_time_drives_ratio_cascade_spillover_and_effect() -> None:
+def test_06_equivalent_time_drives_ratio_and_whole_dose_adjacent_effect() -> None:
     result = calculate_shadow_result(
         _empty_analysis(equivalent_time={"Z2": 100.0}),
         default_shadow_configuration(),
+        zone_tmax_minutes={"Z2": 180.0},
     )
     rows = _rows(result)
 
     assert rows["Z2"]["T_eq_z"] == pytest.approx(100.0)
     assert rows["Z2"]["direct_ratio"] == pytest.approx(100.0 / 180.0)
     assert rows["Z2"]["spillover_excess"] == pytest.approx(10.0)
-    assert rows["Z1"]["cascade"] == pytest.approx(100.0)
-    assert rows["Z1"]["spillover_received"] == pytest.approx(2.0)
-    assert rows["Z3"]["spillover_received"] == pytest.approx(1.0)
-    assert rows["Z1"]["E_z"] == pytest.approx(102.0)
+    assert rows["Z1"]["cascade"] == pytest.approx(0.0)
+    assert rows["Z1"]["spillover_received"] == pytest.approx(10.0)
+    assert rows["Z3"]["spillover_received"] == pytest.approx(20.0)
+    assert rows["Z1"]["E_z"] == pytest.approx(10.0)
     assert rows["Z2"]["E_z"] == pytest.approx(100.0)
-    assert rows["Z3"]["E_z"] == pytest.approx(1.0)
+    assert rows["Z3"]["E_z"] == pytest.approx(20.0)
 
 
 def test_07_explicit_equivalent_time_is_authoritative_over_legacy_alias() -> None:
@@ -264,23 +265,25 @@ def test_07_explicit_equivalent_time_is_authoritative_over_legacy_alias() -> Non
     assert row["spillover_excess"] == pytest.approx(0.0)
 
 
-def test_08_direct_spillover_threshold_uses_half_the_effective_tref() -> None:
+def test_08_adjacent_influence_starts_at_half_continuous_tmax() -> None:
     configuration = default_shadow_configuration()
     at_threshold = calculate_shadow_result(
         _empty_analysis(equivalent_time={"Z2": 90.0}),
         configuration,
+        zone_tmax_minutes={"Z2": 180.0},
     )
     above_threshold = calculate_shadow_result(
         _empty_analysis(equivalent_time={"Z2": 91.0}),
         configuration,
+        zone_tmax_minutes={"Z2": 180.0},
     )
     at_rows = _rows(at_threshold)
     above_rows = _rows(above_threshold)
 
     assert SECONDARY_DIRECT_RATIO_THRESHOLD == pytest.approx(0.50)
     assert direct_ratio(90.0, 180.0) == pytest.approx(0.50)
-    assert at_rows["Z1"]["spillover_received"] == pytest.approx(0.0)
-    assert above_rows["Z1"]["spillover_received"] == pytest.approx(0.2)
+    assert at_rows["Z1"]["spillover_received"] == pytest.approx(9.0)
+    assert above_rows["Z1"]["spillover_received"] == pytest.approx(9.1)
     assert limiting_secondary_zones(
         {"Z1": 0.0, "Z2": 90.0},
         {"Z1": 300.0, "Z2": 180.0},

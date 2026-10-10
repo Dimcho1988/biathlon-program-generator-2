@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import hashlib
@@ -23,6 +24,7 @@ from typing import Any
 import pandas as pd
 
 from biathlon import __version__ as MAIN_MODEL_VERSION
+from biathlon.component_load import resolve_zone_tmax
 from biathlon.constants import (
     AEROBIC_COMPONENTS,
     COMPONENTS,
@@ -60,7 +62,7 @@ from intervals_inspector.stream_normalizer import (
 REAL_DATA_SOURCE = "intervals"
 DEMO_DATA_SOURCE = "demo"
 DATA_SOURCE_VALUES = (DEMO_DATA_SOURCE, REAL_DATA_SOURCE)
-REAL_HISTORY_SCHEMA_VERSION = "onflows-real-history-dataset-v5-bounded-tref"
+REAL_HISTORY_SCHEMA_VERSION = "onflows-real-history-dataset-v6-adjacent-tmax"
 RECOVERY_MODEL_VERSION = (
     f"main-load-recovery-v{MAIN_MODEL_VERSION}-equivalent-time-bounded-40d-tref"
 )
@@ -145,6 +147,7 @@ class RealHistoryDataset:
     readiness_history: pd.DataFrame
     load_readiness: pd.DataFrame
     warnings: tuple[str, ...]
+    component_load_contexts: dict[str, Any] | None = None
 
     @property
     def modeled_activity_count(self) -> int:
@@ -356,6 +359,7 @@ def _zone_columns(*, daily: bool = False) -> list[str]:
         "mean_effective_hr_bpm",
         "average_minute_value_percent",
         "direct_ratio",
+        *([] if daily else ["tmax_minutes", "tmax_source"]),
         "cascade",
         "spillover",
         "E_z",
@@ -396,10 +400,12 @@ def load_real_history(
     activity_metadata_collector: Callable[[str, Mapping[str, Any]], None]
     | None = None,
     activity_detail_transformer: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+    load_capacity_resolver: Callable[[str], Mapping[str, Any]] | None = None,
 ) -> RealHistoryDataset:
     """Load and process one bounded real history in chronological order."""
 
     selected_configuration = configuration or default_shadow_configuration()
+    component_load_contexts = {}
     profile = profile_from_configuration(selected_configuration)
     end = period_end or date.today()
     start, end = _validated_period(days, end)
@@ -460,6 +466,7 @@ def load_real_history(
                 "T_z": 0.0,
                 "T_eq_z": 0.0,
                 "effective_hr_bpm_minutes": 0.0,
+                "direct_ratio": 0.0,
                 "cascade": 0.0,
                 "spillover": 0.0,
                 "E_z": 0.0,
@@ -534,12 +541,27 @@ def load_real_history(
 
                     from intervals_inspector.shadow_model import configuration_for_sport
                     activity_configuration=configuration_for_sport(selected_configuration,detail.get("type"))
+                    capacity_sport = str(detail.get("type") or "Unknown")
+                    if capacity_sport not in component_load_contexts:
+                        try:
+                            # Freeze nested maps too: later processing or other
+                            # sports cannot change a prior session's capacity.
+                            component_load_contexts[capacity_sport] = deepcopy(dict(load_capacity_resolver(capacity_sport))) if load_capacity_resolver else {}
+                            capacity_context = component_load_contexts[capacity_sport]
+                            resolve_zone_tmax(capacity_context.get("minutes"), capacity_context.get("sources"))
+                        except Exception as exc:
+                            raise _ExternalActivityCallbackFailure(
+                                "Continuous capacity resolution failed"
+                            ) from exc
+                    load_capacity = component_load_contexts[capacity_sport]
                     summary = process_activity_payloads(
                         detail,
                         streams,
                         include_1hz_preview=False,
                         profile=profile_from_configuration(activity_configuration),
                         experimental_configuration=activity_configuration,
+                        zone_tmax_minutes=load_capacity.get("minutes"),
+                        capacity_sources=load_capacity.get("sources"),
                         prior_baseline_effective_load=(
                             prior_baseline_effective_load
                         ),
@@ -785,6 +807,8 @@ def load_real_history(
                     "direct_ratio": _finite_non_negative(
                         row.get("direct_ratio")
                     ),
+                    "tmax_minutes": _finite_non_negative(row.get("tmax_minutes")),
+                    "tmax_source": str(row.get("tmax_source") or "EXPERT_CONTINUOUS_TMAX"),
                     "cascade": _finite_non_negative(row.get("cascade")),
                     "spillover": _finite_non_negative(row.get("spillover_received")),
                     "E_z": _finite_non_negative(row.get("E_z")),
@@ -819,6 +843,7 @@ def load_real_history(
                 for field in (
                     "T_z",
                     "T_eq_z",
+                    "direct_ratio",
                     "cascade",
                     "spillover",
                     "E_z",
@@ -898,10 +923,9 @@ def load_real_history(
                     "cascade": totals["cascade"],
                     "spillover": totals["spillover"],
                     "E_z": totals["E_z"],
-                    "direct_ratio": (
-                        totals["T_eq_z"]
-                        / max(_finite_non_negative(reference.get("tref_effective")), 1e-12)
-                    ),
+                    # Descriptive sum of each session's Q/Tmax, never a new
+                    # donor or a threshold applied to an entire mixed day.
+                    "direct_ratio": totals["direct_ratio"],
                     "tref_raw": _finite_non_negative(reference.get("tref_raw")),
                     "tref_effective": _finite_non_negative(
                         reference.get("tref_effective")
@@ -1008,7 +1032,11 @@ def load_real_history(
         loaded_at = loaded_at.replace(tzinfo=timezone.utc)
     return RealHistoryDataset(
         schema_version=REAL_HISTORY_SCHEMA_VERSION,
-        cache_key=cache_key,
+        cache_key=hashlib.sha256((cache_key + json.dumps({
+            sport: {key: value for key, value in capacity.items()
+                    if key not in {"source_generation_id", "source_revision"}}
+            for sport, capacity in component_load_contexts.items()
+        }, sort_keys=True, allow_nan=False)).encode()).hexdigest() if load_capacity_resolver else cache_key,
         source=REAL_DATA_SOURCE,
         period_start=start.isoformat(),
         period_end=end.isoformat(),
@@ -1043,6 +1071,7 @@ def load_real_history(
         readiness_history=readiness_history,
         load_readiness=load_readiness,
         warnings=tuple(warnings),
+        component_load_contexts=component_load_contexts,
     )
 
 

@@ -159,11 +159,22 @@ def save_report(repository, alias, kind, body, actor, now=None):
         # Reuse frozen evidence when editing old outcomes; this read does not
         # reconstruct history that was never retained.
         data = sources(repository,alias,today-timedelta(days=89),today)
-        source = data["load_history"]
-        rows = [*source.get("daily", []), *[{**r,"zone":"STR"} for r in source.get("strength", {}).get("daily", [])]]
+        from .component_load_projection import project_snapshot, ComponentLoadRefreshRequired
+        from .component_load_context import ComponentCapacityUnavailable
+        from .learning_service import component_load_context_key, compatible_load_observations
+        try:
+            projected = project_snapshot(repository, alias, {"load_history": data["load_history"]})
+            source = projected["load_history"]
+            load_supported = bool(component_load_context_key(source))
+        except (ComponentLoadRefreshRequired, ComponentCapacityUnavailable):
+            # Missing legacy Q or an unresolved curve reference must not
+            # prevent saving the athlete's test result, nor verify old E.
+            source = data["load_history"]
+            load_supported = False
+        rows = [*source.get("daily", []), *[{**r,"zone":"STR"} for r in (source.get("strength") or {}).get("daily", [])]]
         quality = source.get("quality") or {}
-        entries = store.entries(alias)
-        if quality.get("limited_activities") or quality.get("excluded_activities"):
+        entries = compatible_load_observations(store.entries(alias), source if load_supported else {})
+        if not load_supported or quality.get("limited_activities") or quality.get("excluded_activities"):
             rows = []
         payload["observed_load_windows"] = load_observations(entries, rows, body.day, test_key=key)
         related = [key for (entry_kind,key),entry in latest_entries(entries).items()
@@ -173,7 +184,8 @@ def save_report(repository, alias, kind, body, actor, now=None):
         payload["load_observation_status"] = ("NOT_APPLICABLE" if not related else
             "UNAVAILABLE" if any(key not in observed for key in related) else
             "ARCHIVED" if any(o.get("retained_from") for o in payload["observed_load_windows"]) else "COMPLETE")
-        payload["load_source"] = {"generation_id":data["generation_id"],"revision":data["revision"]}
+        payload["load_source"] = {"generation_id":data["generation_id"],"revision":data["revision"],
+                                  "component_load_context_key": component_load_context_key(source) if load_supported else None}
     else:
         raise HTTPException(422,"Unknown observation kind")
     return store.save(alias,kind,key,day,payload,body.expected_revision,str(actor))

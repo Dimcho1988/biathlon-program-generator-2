@@ -42,6 +42,21 @@ describe("training-status-v1 contract", () => {
 
 describe("load-history-v1/v2 contract", () => {
   it("accepts the aggregate fixture", () => expect(parseLoadHistory(loadHistoryFixture)).toEqual(loadHistoryFixture));
+  it("accepts optional adjacent-load provenance and rejects unusable Tmax without breaking legacy history", () => {
+    const zones = ["Z1", "Z2", "Z3", "Z4", "Z5"];
+    const context = {
+      minutes: Object.fromEntries(zones.map(zone => [zone, 100])),
+      sources: Object.fromEntries(zones.map(zone => [zone, "EXPERT_CONTINUOUS_TMAX"])),
+      references: {}, fingerprint: "capacity-version", status: "EXPERT",
+    };
+    const component_load_model = {version: "adjacent-load-v1", contexts_by_sport: {Run: context}, scope: "ACTIVITY", fingerprint: "load-version"};
+    const result = parseLoadHistory({...loadHistoryFixture, component_load_model});
+    expect(result.component_load_model).toEqual(component_load_model);
+    expect(parseLoadHistory({...loadHistoryFixture, component_load_model: null}).component_load_model).toBeNull();
+    expect(() => parseLoadHistory({...loadHistoryFixture, component_load_model: {...component_load_model,
+      contexts_by_sport: {Run: {...context, minutes: {...context.minutes, Z3: 0}}}}})).toThrow(/Tmax/);
+    expect(() => parseLoadHistory({...loadHistoryFixture, component_load_model: {version: "adjacent-load-v1"}})).toThrow(/модел/);
+  });
   it("normalizes harmless floating-point drift at the percentage boundary", () => {
     const activities = loadHistoryFixture.activities.map((activity, index) =>
       index === 0 ? { ...activity, hr_coverage_percent: 100.00000000000001 } : activity,

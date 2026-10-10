@@ -25,7 +25,7 @@ export function LoadProgressionEditor({profile, onChange}: {profile: ManagementP
       <div className="management-form-grid">
         <label>Начален годишен темп при нисък обем, %<input type="number" min="0" max="30" step=".5" value={value.low_volume_annual_percent} onChange={e=>update({low_volume_annual_percent:Number(e.target.value)})}/></label>
         <label>При горната експертна граница, %<input type="number" min="0" max={value.low_volume_annual_percent} step=".5" value={value.upper_volume_annual_percent} onChange={e=>update({upper_volume_annual_percent:Number(e.target.value)})}/></label>
-        <label>Максимална обичайна доза, %<input type="number" min="50" max="80" value={value.max_dose_fraction*100} onChange={e=>update({max_dose_fraction:Number(e.target.value)/100})}/></label>
+        <label>Допълнителен таван за непрекъснати методи, % от Tmax<input type="number" min="50" max="80" value={value.max_dose_fraction*100} onChange={e=>update({max_dose_fraction:Number(e.target.value)/100})}/></label>
       </div>
       <label className="management-check"><input type="checkbox" checked={value.feedback_enabled} onChange={e=>update({feedback_enabled:e.target.checked})}/>Адаптиране от завършени блокове и съпоставими тестове</label>
       <p className="management-muted">Очакваната временна умора не е отрицателен резултат. Нужни са изпълнено натоварване, наблюдение през разтоварването и съпоставим тест. При болка или заболяване новите задачи изискват преглед.</p>
@@ -35,7 +35,7 @@ export function LoadProgressionEditor({profile, onChange}: {profile: ManagementP
         <p>При {Math.round((value.ceiling_ratio-1)*100)}% над горния ориентир общата календарна прогноза спира да добавя прираст. Това не е предел на спортиста: активното самообучение може да предложи отделна проследима проба над ориентира, когато личните наблюдения го допускат. За сила няма зададен автоматичен годишен прираст.</p>
         <p>Положителна оценена реакция добавя 5% от началния темп, до 1,5 пъти него; отрицателната намалява темпа с 25%, най-малко до една четвърт от началния. Промените действат след оценката, а не със задна дата. Това са начални треньорски правила.</p>
         <div className="management-form-grid"><label>Дял от прираста предсъстезателно, %<input type="number" min="0" max="100" value={value.precompetition_factor*100} onChange={e=>update({precompetition_factor:Number(e.target.value)/100})}/></label><label>Дял от прираста състезателно, %<input type="number" min="0" max={value.precompetition_factor*100} value={value.competition_factor*100} onChange={e=>update({competition_factor:Number(e.target.value)/100})}/></label></div>
-        <p>При три или по-малко сесии дозата може да нарасне до избрания таван само когато остава товар по 7/40. Загрявките, паузите и разпускането остават в наличното време. Неизпълнимият остатък се показва отделно.</p>
+        <p>Допълнителният таван може да намали дозата на непрекъснат метод; не увеличава избраните 60–70% и не ограничава експертния интервален бюджет. Загрявките, паузите и разпускането остават в наличното време. Неизпълнимият остатък се показва отделно.</p>
       </details>
     </>}
   </section>;

@@ -30,7 +30,6 @@ from ..schemas import (
     PlanningGenerationContext,
     PlanningMethodologyMetadata,
 )
-from .. import model_service
 from fastapi import APIRouter
 from .. import dependencies
 
@@ -86,10 +85,6 @@ def _resolve_settings(body, previous):
     return AthleteModelSettings(
         tuple(bounds), body.timezone.strip(), body.hrmax_bpm, source, percentages
     ).validate()
-
-
-def _model_snapshot(repository, alias):
-    return model_service.project_recovery(repository,alias,repository.latest(alias))
 
 
 @router.get("/api/v2/athlete/settings", response_model=AthleteSettingsResponse)
@@ -329,7 +324,8 @@ def _planning_calendar_response(
         accent_preferences=repository.athlete_mesocycle_accent_preferences(
             athlete_alias
         ),
-        training_snapshot=_model_snapshot(repository,athlete_alias),
+        # Calendar readiness needs presence only, not a Recovery recomputation.
+        training_snapshot=repository.latest(athlete_alias),
         as_of=date.today(),
     )
     return PlanningCalendarResponse(

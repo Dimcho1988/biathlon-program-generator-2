@@ -21,6 +21,7 @@ from .constants import (
     TREF_HISTORY_WINDOW_DAYS,
 )
 from .effective_hr import effective_hr as canonical_effective_hr
+from .component_load import calculate_component_load
 
 EPS = 1e-9
 
@@ -300,36 +301,32 @@ def activities_to_activity_summaries(
     return result
 
 
-def _cascade_matrix(parameters: dict[str, Any]) -> np.ndarray:
-    cascade = parameters["cascade"]
-    return np.array([[float(cascade[receiver][source]) for source in COMPONENTS] for receiver in COMPONENTS], dtype=float)
-
-
 def effective_from_direct_vector(
     direct_q: Iterable[float] | dict[str, float] | pd.Series,
     tref: Iterable[float] | dict[str, float] | pd.Series,
     parameters: dict[str, Any],
+    *,
+    zone_tmax_minutes: dict[str, float] | None = None,
 ) -> np.ndarray:
-    """Изчислява E от Q чрез каскада и разлив към съседната по-висока зона."""
+    """Canonical E from direct Q and continuous Tmax, never historical Tref.
+
+    ``tref`` is retained for callers using the old positional interface only.
+    Explicit zone capacities (or parameters['zone_tmax_minutes']) take priority;
+    without them, the shared expert continuous-capacity fallback is used.
+    """
 
     if isinstance(direct_q, (dict, pd.Series)):
         q = np.array([float(direct_q.get(c, 0.0)) for c in COMPONENTS], dtype=float)
     else:
         q = np.asarray(list(direct_q), dtype=float)
-    if isinstance(tref, (dict, pd.Series)):
-        tref_values = np.array([float(tref.get(c, 0.0)) for c in COMPONENTS], dtype=float)
-    else:
-        tref_values = np.asarray(list(tref), dtype=float)
-
-    q = np.clip(q, 0.0, None)
-    tref_values = np.clip(tref_values, EPS, None)
-    effective = _cascade_matrix(parameters) @ q
-    theta = float(parameters["spill_threshold_fraction"])
-    beta = float(parameters["spill_fraction"])
-    for idx in range(len(AEROBIC_COMPONENTS) - 1):
-        spill = beta * max(0.0, q[idx] - theta * tref_values[idx])
-        effective[idx + 1] += spill
-    return np.clip(effective, 0.0, None)
+    if len(q) != len(COMPONENTS):
+        raise ValueError("direct load must contain six components")
+    result = calculate_component_load(
+        dict(zip(COMPONENTS, q)),
+        zone_tmax_minutes if zone_tmax_minutes is not None else parameters.get("zone_tmax_minutes"),
+        capacity_sources=parameters.get("zone_tmax_sources"),
+    )
+    return np.array([result["effective"][component] for component in COMPONENTS], dtype=float)
 
 
 def compute_daily_load_history(
@@ -339,15 +336,26 @@ def compute_daily_load_history(
 ) -> pd.DataFrame:
     """Създава пълна дневна времева редица на Q и E.
 
-    Разливът за даден ден използва Tref от предходните дни, което премахва
-    едновременната зависимост между текущия E и текущия Tref.
+    Преливането използва непрекъснатия Tmax; историческият Tref се пази
+    отделно за нормализиране на възстановяването.
     """
 
     if activity_summaries.empty:
         return _empty_daily_load_history()
 
     q_columns = [f"q_{component}" for component in COMPONENTS]
-    grouped = activity_summaries.groupby("date", as_index=True)[q_columns].sum().sort_index()
+    e_columns = [f"e_{component}" for component in COMPONENTS]
+    summaries = activity_summaries.copy()
+    # A session has one direct vector. Two sessions do not become a fictitious
+    # single continuous effort when their daily histories are added together.
+    # Explicit canonical E also preserves the per-sport curve used by callers.
+    if not all(column in summaries for column in e_columns):
+        effective_rows = [effective_from_direct_vector(
+            {component: row.get(f"q_{component}", 0.0) for component in COMPONENTS},
+            {}, parameters,
+        ) for _, row in summaries.iterrows()]
+        summaries[e_columns] = np.array(effective_rows)
+    grouped = summaries.groupby("date", as_index=True)[q_columns + e_columns].sum().sort_index()
     start = pd.Timestamp(grouped.index.min()).normalize()
     end = pd.Timestamp(end_date if end_date is not None else grouped.index.max()).normalize()
     if end < start:
@@ -381,7 +389,7 @@ def compute_daily_load_history(
         )
 
         q = np.array([float(row[f"q_{c}"]) for c in COMPONENTS], dtype=float)
-        effective = effective_from_direct_vector(q, tref, parameters)
+        effective = np.array([float(row[f"e_{c}"]) for c in COMPONENTS], dtype=float)
         effective_rows.append(effective)
 
         record: dict[str, float | pd.Timestamp] = {"date": current_date}
@@ -657,14 +665,19 @@ def solve_direct_load(
 
     target = np.clip(target, 0.0, None)
     scale = np.maximum(tref_vec, 1.0)
-    matrix = _cascade_matrix(parameters)
-    try:
-        initial = np.clip(np.linalg.lstsq(matrix, target, rcond=None)[0], 0.0, None)
-    except np.linalg.LinAlgError:
-        initial = np.clip(target / np.maximum(np.diag(matrix), 1.0), 0.0, None)
+    initial = target.copy()
 
     def residual(q: np.ndarray) -> np.ndarray:
         return (effective_from_direct_vector(q, tref_vec, parameters) - target) / scale
+
+    # Remove the incoming adjacent contribution before numerical fitting. This
+    # also preserves exact solutions at the inclusive 50%/80% tier boundaries,
+    # where finite-difference perturbations can jump to a different rule.
+    for _ in range(20):
+        if float(np.max(np.abs(residual(initial)))) < 1e-10:
+            return pd.Series(initial, index=COMPONENTS, name="target_direct_q"), float(np.sqrt(np.mean(residual(initial) ** 2)))
+        projected = effective_from_direct_vector(initial, tref_vec, parameters)
+        initial = np.clip(initial + target - projected, 0.0, None)
 
     solution = least_squares(residual, initial, bounds=(0.0, np.inf), max_nfev=400, xtol=1e-9, ftol=1e-9, gtol=1e-9)
     q = np.clip(solution.x, 0.0, None)

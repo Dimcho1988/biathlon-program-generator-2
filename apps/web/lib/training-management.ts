@@ -99,6 +99,7 @@ export const COMPONENTS: Component[] = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"];
 export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; lactate_reference?: LactateReference }
 export interface DoseEvidence {
   planned_gap_hours?: number; mixed_component?: boolean;
+  zone_tmax_minutes?: Partial<Record<Component, number>>; zone_tmax_sources?: Partial<Record<Component, string>>;
   capacity_is_estimate?: boolean; within_observed_test_window?: boolean;
   supported_test_duration_s?: number[] | null; capacity_confidence?: string; capacity_reference?: string;
   base_fraction?: number; readiness_dose_factor?: number;
@@ -237,7 +238,7 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
       || !range(p.low_volume_annual_percent, 0, 30) || !range(p.upper_volume_annual_percent, 0, p.low_volume_annual_percent)
       || !range(p.ceiling_ratio, 1.001, 1.3) || !range(p.precompetition_factor, 0, 1)
       || !range(p.competition_factor, 0, p.precompetition_factor) || !range(p.max_dose_fraction, .5, .8))
-      throw new Error("Провери годишния прираст и тавана на дозата (до 80%).");
+      throw new Error("Провери годишния прираст и допълнителния таван за непрекъснати методи (до 80%).");
   }
   if (normalized.planning_controls != null) {
     const c = normalized.planning_controls;
@@ -385,7 +386,8 @@ export const CAPACITY_LABELS: Record<string, string> = {
   BLENDED_DOSING_CURVE: "Обща крива за дозиране · 30% индекс / 70% тестове",
   RACE_SPEED_DURATION: "Индивидуално темпо около състезателната дисциплина",
   SPEED_DURATION_TEST_ANCHOR: "Крива с максимален тест при съпоставимо усилие", SPEED_DURATION_MODEL_CURVE: "Моделна оценка от индивидуалната крива скорост–време", SPEED_DURATION_PRIOR: "Скорост–време с индивидуална опора и експертна форма", SPEED_TIME: "Индивидуална скорост–време", SPEED_DURATION: "Индивидуална скорост–време",
-  EXPERT_TREF: "Експертен Tref — резервна оценка", EXPERT_FALLBACK: "Експертен Tref — резервна оценка", EXPERT_CONTINUOUS_TREF: "Експертен Tref — резервна оценка",
+  EXPERT_TMAX: "Експертен Tmax — резервна оценка", EXPERT_CONTINUOUS_TMAX: "Експертен Tmax — резервна оценка",
+  EXPERT_TREF: "Експертен Tmax — резервна оценка", EXPERT_FALLBACK: "Експертен Tmax — резервна оценка", EXPERT_CONTINUOUS_TREF: "Експертен Tmax — резервна оценка",
   COACH_EFFORT_CAPACITY: "Индивидуална устойчивост при описаното усилие",
   STRENGTH_METHOD_PROFILE: "Отделен силов профил с упражнения и резерв",
 };

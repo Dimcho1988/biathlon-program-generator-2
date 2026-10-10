@@ -237,7 +237,9 @@ def test_feasible_automatic_q_target_is_realized_without_filling_e_headroom(monk
         if row.get("zone", "STR") != "Z1":
             row["effective_load"] = 0.
     for a in source["activities"]:
-        a["zones"] = [{"zone": "Z1", "raw_time_min": 60., "equivalent_time_min": 50.}]
+        a["zones"] = [{"zone": z, "raw_time_min": 60. if z == "Z1" else 0.,
+                       "equivalent_time_min": 50. if z == "Z1" else 0.}
+                      for z in COMPONENTS if z != "STR"]
     p = body(sessions_per_week=7, accent_mode="MANUAL", accents=["Z1"], mesocycle_anchor=TODAY)
     p["load_progression"] = LoadProgression().model_dump()
     p["max_key_sessions_per_week"] = 0
@@ -246,7 +248,10 @@ def test_feasible_automatic_q_target_is_realized_without_filling_e_headroom(monk
     assert row["basis"] == "DIRECT_Q"
     assert 0 <= row["remaining"] < .5
     assert row["target_q"] == plan["long_term"]["weeks"][0]["components"]["Z1"]["target_period_q"]
-    assert row["unallocated_effective"] > 1000  # a separate ceiling, not missing direct volume
+    # Recomputed E uses the real 50-Q activity ledger, not the old synthetic
+    # 1000-E daily placeholders. A substantial separate ceiling still remains
+    # after the direct objective is met and must not be filled automatically.
+    assert row["unallocated_effective"] > 40
     assert not plan["allocation"]["has_unallocated_load"]
 
 

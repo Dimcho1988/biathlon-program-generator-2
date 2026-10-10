@@ -153,7 +153,7 @@ describe("management data and review interface", () => {
     const scaled = structuredClone(record);
     Object.assign(scaled.payload.days[0].session!.dose_evidence, {base_fraction:.6,readiness_dose_factor:.5});
     const html = renderToStaticMarkup(<TrainingManagement athleteName="Тестов спортист" canEdit initialProfile={{ configured: true, profile, revision: 1 }} initialDrafts={[scaled]} today="2026-09-21" />);
-    for (const expected of ["Равномерна аеробна работа", "0:45:00", "0:30:00", "Защо тази задача и доза?", "Експертен Tref", "Избраната продължителност е извън диапазона", "Специално подготвителен", "60% доза × 50% готовност = 30%", "Начален дял за метода", "Множител от готовността", "Изтегли пълния отчет"]) expect(html).toContain(expected);
+    for (const expected of ["Равномерна аеробна работа", "0:45:00", "0:30:00", "Защо тази задача и доза?", "Експертен Tmax", "Избраната продължителност е извън диапазона", "Специално подготвителен", "65 минути × 80% готовност = 52 минути", "Начален дял за метода", "Множител от готовността", "Изтегли пълния отчет"]) expect(html).toContain(expected);
     expect(html).not.toContain("NaN");
     expect(html).not.toContain("Активирай");
   });

@@ -5,7 +5,7 @@ accounting. Recovery remains a daily model; no intraday exponent is inferred.
 """
 from copy import deepcopy
 
-VERSION = "adaptive-methods-v2-proportional-readiness"
+VERSION = "adaptive-methods-v3-method-role-readiness"
 
 
 def developmental(profile):
@@ -20,14 +20,16 @@ def short_variant(method):
     key = "interval_template" if method["structure"] == "MODEL_INTERVALS" else "interval_profile"
     p = result[key]
     work = min(p["work_seconds"], 30 if p["zone"] == "Z4" else 15)
+    if p.get("speed_time_duration_ratio") is not None:
+        p["speed_time_duration_ratio"] *= p["work_seconds"] / work
     p.update(work_seconds=work, recovery_seconds=max(p["recovery_seconds"], 3*work),
              min_repetitions=4, max_repetitions=12, reserve_repetitions=max(2, p["reserve_repetitions"]))
     result.update(id=method["id"]+"-SHORT", title=method["title"]+" · кратък въвеждащ вариант",
                   min_work_min=4*work/60, max_work_min=12*work/60,
                   developmental_variant=True, minimum_fraction=.05)
-    result["instructions"] = ("Кратко, контролирано и повторяемо усилие, без работа до отказ. "
-        "Пълна предписана почивка и поне две повторения в резерв. Спри при болка или загуба на техника. "
-        "Не преследвай пулсова стойност. Кратките отсечки не гарантират нисък лактат.")
+    result["instructions"] = ("Контролирани кратки повторения, без отказ; поне 2 в резерв. Пълна почивка. "
+        "Спри при болка или загуба на техника. Не гони пулса. "
+        "Кратките отсечки не гарантират нисък лактат.")
     result["adaptation"] = "Възрастта, опитът или малката експозиция променят продължителността и почивката; капацитетът и бюджетите се проверяват отделно. Начално треньорско правило."
     return result
 

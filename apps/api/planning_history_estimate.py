@@ -8,13 +8,11 @@ from copy import deepcopy
 from datetime import date, timedelta
 import math
 
-import pandas as pd
-
 from biathlon import load_progression
-from biathlon.constants import COMPONENTS, fresh_parameters
-from biathlon.physiology import _causal_tref, effective_from_direct_vector
+from biathlon.constants import COMPONENTS
+from biathlon.component_load import calculate_component_load
 
-VERSION = "planning-history-estimate-v2-completed-day-coverage"
+VERSION = "planning-history-estimate-v3-activity-adjacent-tmax"
 POLICY = "RECORDED_DURATION_EXPERT_Q_WITH_RECOVERY"
 ZONES = tuple(z for z in COMPONENTS if z != "STR")
 
@@ -41,7 +39,8 @@ def normalized_calendar(calendar):
     return result
 
 
-def prepare(source, calendar, profile, today, *, speed_estimates=None):
+def prepare(source, calendar, profile, today, *, speed_estimates=None,
+            zone_tmax_minutes=None, capacity_sources=None, capacity_contexts_by_sport=None):
     """Return an isolated planning ledger and explicit coverage/provenance.
 
     Expert Q proportions use existing bounds/level settings. For an unmeasured
@@ -139,40 +138,45 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None):
         day = activity["date"]
         target = additions.setdefault(day, {z: 0. for z in COMPONENTS})
         measured = {v["zone"]: v for v in activity.get("zones", [])}
+        measured_q = {z: _number(measured.get(z, {}).get("equivalent_time_min")) or 0.
+                      for z in COMPONENTS}
+        context = (capacity_contexts_by_sport or {}).get(activity["sport"], {})
+        capacities = context.get("minutes", zone_tmax_minutes)
+        sources = context.get("sources", capacity_sources)
+        # A partial activity is one training session. Its missing contribution
+        # can move that session across a dose threshold, but cannot combine
+        # with another session on the same day to manufacture spillover.
+        before = calculate_component_load(measured_q, capacities, capacity_sources=sources)
+        after = calculate_component_load(
+            {z: measured_q[z] + estimate.get(z, 0.) for z in COMPONENTS},
+            capacities, capacity_sources=sources)
+        for z in COMPONENTS:
+            target[z] += after["effective"][z] - before["effective"][z]
         activity["zones"] = []
         for z in ZONES:
             previous = measured.get(z, {})
-            target[z] += estimate[z]
             activity["zones"].append({**previous, "zone": z,
                 "raw_time_min": (_number(previous.get("raw_time_min")) or 0.) + estimated_time[z],
                 "equivalent_time_min": (_number(previous.get("equivalent_time_min")) or 0.) + estimate[z],
+                "effective_load": after["effective"][z],
+                "planning_estimated_effective_load": after["effective"][z] - before["effective"][z],
+                "planning_measured_effective_load": before["effective"][z],
                 "planning_estimated_q": estimate[z], "planning_measured_q": previous.get("equivalent_time_min")})
         activity["planning_estimated"] = True
+        activity["component_load"] = after
         diagnostics["activities"].append({"activity_ref": activity["activity_ref"], "date": day,
                                          "missing_minutes": missing, "estimated_q": estimate,
                                          "speed_covered_minutes": speed_minutes,
                                          "expert_covered_minutes": remainder,
                                          "speed_provenance": speed.get("provenance") if valid_speed else None})
-    parameters = fresh_parameters()
     rows = [{"date": r["date"], "zone": r["zone"], "effective_load": r["effective_load"]}
             for r in result.get("daily", [])]
     rows += [{"date": r["date"], "zone": "STR", "effective_load": r["effective_load"]}
              for r in result.get("strength", {}).get("daily", [])]
-    for day, added_q in sorted(additions.items()):
-        when = date.fromisoformat(day)
-        lower = (when-timedelta(days=40)).isoformat()
-        tref = {z: _causal_tref(z, pd.Series([r["effective_load"] for r in rows
-                  if r["zone"] == z and lower <= r["date"] < day], dtype=float), parameters["base_loads"])
-                for z in COMPONENTS}
-        # Compute only the marginal effective contribution. This preserves
-        # observed E and counts the nonlinear spill/cascade exactly once.
-        observed_q = {z: sum(_number(v.get("planning_measured_q", v.get("equivalent_time_min"))) or 0.
-                          for a in result["activities"] if a["date"] == day
-                          for v in a.get("zones", []) if v["zone"] == z) for z in COMPONENTS}
-        before = effective_from_direct_vector(observed_q, tref, parameters)
-        after = effective_from_direct_vector({z: observed_q[z]+added_q[z] for z in COMPONENTS}, tref, parameters)
-        for z, old, new in zip(COMPONENTS, before, after):
-            delta = max(0., float(new-old))
+    for day, added_e in sorted(additions.items()):
+        # Preserve measured E and add only each activity's marginal estimate.
+        for z in COMPONENTS:
+            delta = max(0., float(added_e[z]))
             match = next((r for r in rows if r["date"] == day and r["zone"] == z), None)
             # Calendar holes stay holes; duration alone does not certify all
             # activities on an otherwise unobserved date.
@@ -185,5 +189,14 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None):
                 if r["date"] == day and (z == "STR" or r["zone"] == z):
                     r["effective_load"] += delta
                     r["planning_estimated_effective_load"] = delta
+    if result.get("component_load_model"):
+        # The canonical fingerprint describes measured activity Q. Completing
+        # that Q invalidates the derived ledger's identity; preserve its source
+        # provenance without presenting the old fingerprint as current.
+        model = result["component_load_model"]
+        measured_fingerprint = model.pop("fingerprint", None)
+        if measured_fingerprint is not None:
+            model["measured_source_fingerprint"] = measured_fingerprint
+        model["planning_estimate_version"] = VERSION
     result["planning_history"] = diagnostics
     return result, diagnostics

@@ -35,11 +35,15 @@ class Store:
 def source():
     rows=[{"date":(NOW.date()-timedelta(days=i)).isoformat(),"zone":z,"effective_load":20 if i else 60}
           for i in range(41) for z in ("Z1","Z2","Z3","Z4","Z5")]
-    return {"load_history":{"period_start":rows[-1]["date"],"period_end":NOW.date().isoformat(),"daily":rows},
+    activities=[{"activity_ref":str(i), "date":(NOW.date()-timedelta(days=i)).isoformat(), "sport":"Run",
+                 "zones":[{"zone":z, "equivalent_time_min":20 if i else 60} for z in ("Z1","Z2","Z3","Z4","Z5")]}
+                for i in range(41)]
+    return {"load_history":{"period_start":rows[-1]["date"],"period_end":NOW.date().isoformat(),"daily":rows,"activities":activities},
         "training_status":{"zones":[{"zone":z} for z in ("Z1","Z2","Z3","Z4","Z5")]}}
 
 def test_projection_is_causal_uses_e_and_does_not_mutate_source(monkeypatch):
     monkeypatch.setenv("ONFLOWS_RECOVERY_V2_ENABLED","true")
+    monkeypatch.setattr(m,"speed_view",lambda *args,**kwargs:{"status":"UNAVAILABLE","sport":"Run"})
     original=source();copy=deepcopy(original)
     projected=m.project_recovery(Store(),"ath-test",original,now=NOW)
     h=projected["recovery_history"]
@@ -61,10 +65,13 @@ def test_projection_is_causal_uses_e_and_does_not_mutate_source(monkeypatch):
     assert with_base["recovery_history"]["current"][1]["baseline_daily_min"]==60
     assert with_base["recovery_history"]["current"][1]["days_to_practical_recovery"]<h["current"][1]["days_to_practical_recovery"]
     assert with_base["recovery_history"]["model"]["parameter_fingerprint"]!=h["model"]["parameter_fingerprint"]
-    assert with_base["load_history"]==copy["load_history"]
+    assert with_base["load_history"]==projected["load_history"]
+    assert [[z["equivalent_time_min"] for z in a["zones"]] for a in with_base["load_history"]["activities"]]==[
+        [z["equivalent_time_min"] for z in a["zones"]] for a in copy["load_history"]["activities"]]
 
 def test_stale_source_is_explicit(monkeypatch):
     monkeypatch.setenv("ONFLOWS_RECOVERY_V2_ENABLED","true")
+    monkeypatch.setattr(m,"speed_view",lambda *args,**kwargs:{"status":"UNAVAILABLE","sport":"Run"})
     projected=m.project_recovery(Store(),"ath-test",source(),now=NOW+timedelta(days=2))
     assert projected["recovery_history"]["source_stale"]
     assert "SOURCE_STALE_NO_NEW_LOAD_ASSUMPTION" in projected["recovery_history"]["warnings"]

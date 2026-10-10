@@ -118,7 +118,7 @@ def test_model_prior_is_explicit_and_does_not_bypass_stale_or_exploratory_data()
     assert cap['target_speed_kmh']>0
     speed['index_window']['last_activity_date']=(TODAY-timedelta(days=20)).isoformat()
     cap=engine.capacity_for(method,settings,speed,engine._capacity_context(speed,settings),TODAY,use_model_prior=True)
-    assert cap['capacity_source']=='EXPERT_CONTINUOUS_TREF'
+    assert cap is None  # Reject stale mapping; never replace an available curve with expert Tmax.
     speed['tests'][0]['payload']['maximal']=False
     assert engine._capacity_context(speed,settings)[0] is None
 
@@ -178,9 +178,11 @@ def test_combined_aerobic_method_remains_available_with_one_shared_dose(monkeypa
         assert e['min_dose_fraction'] <= e.get('applied_minimum_capacity_fraction', e['applied_structure_fraction']) + .001
         assert e['applied_structure_fraction'] <= e['max_dose_fraction']+.001
         assert_readiness_dose(s)
-        assert sum(b['duration_min']/ (e['capacity_minutes'] if b['zone']=='Z2' else e['secondary_capacity']['capacity_minutes']) for b in s['blocks'] if b['kind']=='WORK') == pytest.approx(e['applied_structure_fraction'], abs=.001)
+        fractions = [sum(b['duration_min'] for b in s['blocks'] if b['kind']=='WORK' and b['zone']==z) / capacity
+                     for z, capacity in [('Z2', e['capacity_minutes']), ('Z1', e['secondary_capacity']['capacity_minutes'])]]
+        assert max(fractions) == pytest.approx(e['applied_structure_fraction'], abs=.001)
         assert s['total_minutes']==pytest.approx(sum(b['duration_min'] for b in s['blocks']),abs=.002)
-        assert e['combination_allocation']=='ONE_SHARED_SESSION_BUDGET_REDUCED_COMPONENT_DOSES'
+        assert e['combination_allocation']=='COMPONENT_METHOD_BUDGETS_WITH_SHARED_CANONICAL_Q_E'
 
 
 def test_high_target_cannot_override_recovery_and_incomplete_history_is_unknown(monkeypatch):
@@ -188,6 +190,11 @@ def test_high_target_cannot_override_recovery_and_incomplete_history_is_unknown(
     repo=Repository();source=repo.envelope['snapshot_payload']['load_history']
     for row in source['daily']:
         if row['date']==TODAY.isoformat() and row['zone']=='Z1':row['effective_load']=1000.
+    activity = {'activity_ref':'high-load-today', 'date':TODAY.isoformat(), 'sport':'Run', 'duration_min':1000.,
+                'zones':[{'zone':z, 'raw_time_min':1000. if z=='Z1' else 0.,
+                          'equivalent_time_min':1000. if z=='Z1' else 0.} for z in engine.COMPONENTS if z!='STR']}
+    source['activities'].append(activity)
+    repo.envelope['activities'].append({**activity, 'local_date':TODAY.isoformat()})
     r=engine.generate_plan(repo,'athlete',profile(planning_controls=controls(accent_mode='MANUAL',accents=['Z3'],accent_index=1.5)),start_date=TODAY+timedelta(days=1),now=NOW)
     assert any(a['code'] in {'READINESS_DOSE_UNAVAILABLE','INSUFFICIENT_DOSE_BUDGET'} for d in r['days'] for a in d['rejected_alternatives'])
     for day in r['days']:

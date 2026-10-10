@@ -17,6 +17,15 @@ it("compares the same complete historical period without converting future volum
   expect(renderToStaticMarkup(<LoadMeasureExplanation plan={incomplete}/>)).not.toContain("Пример от твоята история");
 });
 
+it("explains adjacent whole-Q spill and separates curve capacity from historical Tref",()=>{
+  const html=renderToStaticMarkup(<LoadMeasureExplanation/>);
+  expect(html).toContain("От 50% до 80% включително");
+  expect(html).toContain("върху целия неин пряк Q");
+  expect(html).toContain("добавят 12 минути товар към Z4 и 6 към Z2");
+  expect(html).toContain("не се преливат отново към Z5 или Z1");
+  expect(html).toContain("Историческият 40-дневен Tref е отделен параметър");
+});
+
 it("switches the chart and single microcycle table together to dimensionless 7/40 goals",async()=>{
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);
   const box=document.createElement("div"),root=createRoot(box);

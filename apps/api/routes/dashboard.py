@@ -4,6 +4,8 @@ from datetime import date
 from typing import Annotated, Mapping
 from fastapi import Header, HTTPException
 from ..oauth_store import PersistentStoreFailure
+from ..component_load_context import ComponentCapacityUnavailable
+from ..component_load_projection import ComponentLoadRefreshRequired
 from ..real_service import (
     completed_work_from_load_history,
     load_history_from_persisted,
@@ -50,6 +52,8 @@ def real_training_status(
     try:
         snapshot = model_service.project_recovery(dependencies.repository(),dependencies.validated_alias(athlete_alias),snapshot)
         return training_status_from_persisted(snapshot)
+    except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
+        raise HTTPException(409, exc.user_message) from exc
     except PersistentStoreFailure as exc:
         raise HTTPException(503,"Model settings are unavailable") from exc
     except ValueError as exc:
@@ -77,7 +81,13 @@ def real_load_history(
             status_code=503, detail="No valid real-data snapshot is available"
         )
     try:
+        from ..component_load_projection import project_snapshot
+        snapshot = project_snapshot(dependencies.repository(), dependencies.validated_alias(athlete_alias), snapshot)
         return load_history_from_persisted(snapshot)
+    except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
+        raise HTTPException(409, exc.user_message) from exc
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Model settings are unavailable") from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=503,
@@ -170,6 +180,8 @@ def real_recovery_history(
     try:
         snapshot = model_service.project_recovery(dependencies.repository(),dependencies.validated_alias(athlete_alias),snapshot)
         return recovery_history_from_persisted(snapshot)
+    except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
+        raise HTTPException(409, exc.user_message) from exc
     except PersistentStoreFailure as exc:
         raise HTTPException(503,"Model settings are unavailable") from exc
     except ValueError as exc:
@@ -235,6 +247,8 @@ def real_dashboard_view(
             recovery_history=snapshot.recovery_history,
             volume_history=volume_history,
         )
+    except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
+        raise HTTPException(409, exc.user_message) from exc
     except PersistentStoreFailure as exc:
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"

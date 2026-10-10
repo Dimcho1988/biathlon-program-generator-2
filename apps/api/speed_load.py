@@ -17,6 +17,7 @@ import pandas as pd
 from fastapi import HTTPException
 from biathlon.constants import COMPONENTS, fresh_parameters
 from biathlon.equivalence import equivalence_slope, EQUIVALENCE_VERSION
+from biathlon.component_load import calculate_component_load, VERSION as COMPONENT_LOAD_VERSION
 from biathlon.physiology import linear_equivalence_coefficient, compute_daily_load_history, compute_load_statistics, rolling_load_statistics
 from biathlon.sport_heart_rate import reference_offset, policy
 from vflat_b65.sports import speed_model_versions, supports_speed_load, is_treadmill
@@ -25,8 +26,9 @@ from .speed_segments import sample_intervals
 from .speed_load_cache import speed_load_cache, speed_activity_cache
 from .trainability_history import history_from_calendar, read_calendar, robust_mean
 from .trainability import MIN_SECONDS_BY_BAND, MAX_GAP_SECONDS
+from .component_load_context import read_contexts
 
-VERSION="independent-speed-load-causal-ti-v1"
+VERSION="independent-speed-load-causal-ti-v2-adjacent-tmax"
 ZONES=tuple(f"Z{i}" for i in range(1,6))
 logger = logging.getLogger("uvicorn.error")
 
@@ -306,9 +308,13 @@ def history_view(repository, alias, sport=None, *, today=None, as_of=None, perio
     phase_started = perf_counter()
     admitted=history_from_calendar(repository,alias,calendar)
     metrics["admission_ms"] = _elapsed_ms(phase_started)
+    capacity_sports = sorted({a["sport"] for a in calendar.get("activities", [])
+                             if supports_speed_load(a.get("sport"))
+                             and (sport is None or a["sport"] == sport)})
+    contexts = read_contexts(repository, alias, capacity_sports)
     def compute():
         return _compute_history(repository, alias, sport, settings, today, start, warmup,
-                                calendar, admitted, custom_period, metrics)
+                                calendar, admitted, custom_period, metrics, contexts)
     def finish(result):
         # No athlete identifiers, settings, mappings or source keys are logged.
         logger.info("onflows_speed_load elapsed_ms=%.1f report_cache=%s "
@@ -333,6 +339,8 @@ def history_view(repository, alias, sport=None, *, today=None, as_of=None, perio
         "bounds": settings.zone_bounds_bpm, "hrmax": settings.hrmax_bpm, "timezone": settings.timezone,
         "start": start.isoformat(), "end": today.isoformat(), "custom": custom_period,
         "activities": calendar.get("activities", []), "admitted": admitted,
+        "component_load_version": COMPONENT_LOAD_VERSION,
+        "capacities": {s: c["fingerprint"] for s, c in contexts.items()},
     }
     key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
     metrics["key_ms"] = _elapsed_ms(phase_started)
@@ -340,7 +348,7 @@ def history_view(repository, alias, sport=None, *, today=None, as_of=None, perio
 
 
 def _compute_history(repository, alias, sport, settings, today, start, warmup,
-                     calendar, admitted, custom_period, metrics=None):
+                     calendar, admitted, custom_period, metrics=None, contexts=None):
     available=sorted({a["sport"] for a in calendar.get("activities",[]) if supports_speed_load(a.get("sport"))})
     if sport is not None and not supports_speed_load(sport):raise HTTPException(422,"Unsupported speed-load sport")
     selected=[a for a in calendar.get("activities",[]) if supports_speed_load(a.get("sport"))
@@ -349,15 +357,30 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
     namespace = getattr(repository, "speed_load_cache_namespace", None) if calendar.get("generation_id") else None
     records = _activity_records(repository, alias, selected, admitted, settings, namespace, metrics)
     statistics_started = perf_counter()
-    activity_summaries = [{"date": pd.Timestamp(a["date"]),
-                          **{f"q_{z}": next((b["equivalent_minutes"] for b in a["zones"] if b["zone"] == z), 0.)
-                             for z in COMPONENTS}} for a in records]
+    # Cache only direct Q above. Capacity changes can alter E without requiring
+    # another full-resolution speed-stream read. Thresholds apply independently
+    # to each activity, before the daily ledger combines the resulting E.
+    activity_summaries = []
+    resolved_records = []
+    for activity in records:
+        direct = {z: next((b["equivalent_minutes"] for b in activity["zones"] if b["zone"] == z), 0.)
+                  for z in COMPONENTS}
+        context = (contexts or {}).get(activity["sport"], {})
+        load = calculate_component_load(direct, context.get("minutes"),
+                                        capacity_sources=context.get("sources"))
+        resolved_records.append({**activity, "component_load": load})
+        activity_summaries.append({"date": pd.Timestamp(activity["date"]),
+                                  **{f"q_{z}": direct[z] for z in COMPONENTS},
+                                  **{f"e_{z}": load["effective"][z] for z in COMPONENTS}})
+    records = resolved_records
     # No-activity calendar days are zero. Unsupported activity minutes remain
     # disclosed; Q/E and ratios describe only the covered speed history.
     first=max(warmup,min((date.fromisoformat(a["local_date"]) for a in selected),default=start))
     if custom_period:
         first = min(first, start)
-    activity_summaries.insert(0,{"date":pd.Timestamp(first),**{f"q_{z}":0. for z in COMPONENTS}})
+    activity_summaries.insert(0,{"date":pd.Timestamp(first),
+                                **{f"q_{z}":0. for z in COMPONENTS},
+                                **{f"e_{z}":0. for z in COMPONENTS}})
     parameters=fresh_parameters()
     loads=compute_daily_load_history(pd.DataFrame(activity_summaries),parameters,today)
     statistics=compute_load_statistics(loads,parameters,today)
@@ -388,6 +411,7 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
             "status":"AVAILABLE" if count and covered>=total_recorded-1e-6 else "PARTIAL" if count else "UNAVAILABLE",
             "source_generation_id":calendar.get("generation_id"),"source_revision":calendar.get("revision"),
             "load_role":"PARALLEL_ESTIMATE_NOT_ADDED_TO_HR","equivalence_version":EQUIVALENCE_VERSION,
+            "component_load_version":COMPONENT_LOAD_VERSION,
             "mapping_policy":"PRIOR_40_DAYS_EXCLUDING_CURRENT_DAY_WITH_TREADMILL_RUN_FALLBACK",
             "recorded_minutes":total_recorded,"classified_minutes":covered,
             "coverage_percent":100*covered/total_recorded if total_recorded else 0.,
