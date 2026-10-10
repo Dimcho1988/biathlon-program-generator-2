@@ -89,7 +89,8 @@ export interface IntervalDoseProfile {
   zone: "Z4" | "Z5"; sport: "Run" | "NordicSki" | "RollerSki";
   continuous_capacity_min: number; assessed_on: string; effort: string;
   work_seconds: number; recovery_seconds: number; min_repetitions: number; max_repetitions: number;
-  total_capacity_ratio: number; reserve_repetitions: number; target_speed_kmh: number | null; speed_basis?: "ACTUAL" | "FLAT_EQUIVALENT";
+  total_capacity_ratio: number; speed_time_duration_ratio?: number | null;
+  reserve_repetitions: number; target_speed_kmh: number | null; speed_basis?: "ACTUAL" | "FLAT_EQUIVALENT";
 }
 
 export interface ManagementProfileResponse { configured: boolean; profile: ManagementProfile | null; revision: number; today?: string; timezone?: string; history?: VolumeHistory | null }
@@ -195,6 +196,12 @@ function normalizeBuildingFraction(value: unknown): unknown {
   return value === .5 ? .65 : Math.min(.7, Math.max(.6, value));
 }
 
+export function withContinuousDoseFractions(profile: ManagementProfile): ManagementProfile {
+  const building = normalizeBuildingFraction(profile.building_fraction);
+  if (!finite(building)) return profile;
+  return { ...profile, building_fraction: building, maintenance_fraction: building / 2, reentry_fraction: building / 2 };
+}
+
 export function parseManagementProfile(value: unknown): ManagementProfile {
   const buildingFraction = isRecord(value) ? normalizeBuildingFraction(value.building_fraction) : undefined;
   if (!isRecord(value) || value.schema_version !== "management-profile-v1"
@@ -214,12 +221,15 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     || (value.recent_weekly_hours !== null && (!Array.isArray(value.recent_weekly_hours) || value.recent_weekly_hours.length !== 4 || !value.recent_weekly_hours.every(v => range(v, 0, 80))))
     || !(value.reentry_days === null || integer(value.reentry_days, 0, 21))
     || !integer(value.taper_days, 0, 21) || !integer(value.max_key_sessions_per_week, 0, 8)
-    || !range(buildingFraction, .6, .7) || !range(value.maintenance_fraction, .3, .4) || !range(value.reentry_fraction, .4, .5)
+    || !range(buildingFraction, .6, .7)
+    || (value.maintenance_fraction !== undefined && !range(value.maintenance_fraction, .3, .4))
+    || (value.reentry_fraction !== undefined && !range(value.reentry_fraction, .3, .5))
     || !range(value.recovery_session_cap_min, 5, 45) || typeof value.allow_expert_fallback !== "boolean") {
     throw new Error("Проверете датите, наличното време и параметрите на профила.");
   }
   const normalized: Record<string, unknown> = { adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, component_targets_weekly: {},
-    horizon_mode: "AUTO_CALENDAR", interval_profiles: [], strength_enabled: false, strength_circuits: 2, transition_days: 0, ...value, building_fraction: buildingFraction };
+    horizon_mode: "AUTO_CALENDAR", interval_profiles: [], strength_enabled: false, strength_circuits: 2, transition_days: 0, ...value,
+    building_fraction: buildingFraction, maintenance_fraction: buildingFraction / 2, reentry_fraction: buildingFraction / 2 };
   normalized.individual_learning = parseIndividualLearningConfig(value.individual_learning);
   if (typeof normalized.auto_import_enabled !== "boolean" || !["AUTO", "REVIEW"].includes(String(normalized.adaptation_mode)) || !range(normalized.progression_percent, 0, 10)
     || typeof normalized.strength_enabled !== "boolean" || !integer(normalized.strength_circuits, 2, 3)
@@ -292,14 +302,17 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     }
   }
   for (const p of normalized.interval_profiles) {
+    if (isRecord(p) && p.speed_time_duration_ratio != null && (!finite(p.speed_time_duration_ratio) || p.speed_time_duration_ratio <= 1))
+      throw new Error("Коефициентът за избор на скорост трябва да е число, по-голямо от 1, или полето да е празно.");
     if (!isRecord(p) || (p.goal !== undefined && !["AEROBIC_POWER", "THRESHOLD"].includes(String(p.goal))) || (p.goal === "THRESHOLD" && p.zone !== "Z4") || !["Z4", "Z5"].includes(String(p.zone)) || seen.has(String(p.zone)) || p.sport !== value.actual_sport
       || !range(p.continuous_capacity_min, .001, 60) || !isCalendarDate(p.assessed_on)
       || typeof p.effort !== "string" || p.effort.trim().length < 8 || p.effort.length > 250
       || !integer(p.work_seconds, 15, 360) || !integer(p.recovery_seconds, 15, 600)
       || !integer(p.min_repetitions, 2, 20) || !integer(p.max_repetitions, p.min_repetitions, 20)
-      || !range(p.total_capacity_ratio, .001, 3) || !integer(p.reserve_repetitions, 1, 4)
+      || !finite(p.total_capacity_ratio) || p.total_capacity_ratio <= 0 || !integer(p.reserve_repetitions, 1, 4)
       || !optionalRange(p.target_speed_kmh, .001, 80) || (p.speed_basis !== undefined && !["ACTUAL", "FLAT_EQUIVALENT"].includes(String(p.speed_basis)))
       || p.work_seconds >= p.continuous_capacity_min * 60
+      || !finite(p.continuous_capacity_min * 60 * p.total_capacity_ratio)
       || p.min_repetitions * p.work_seconds > p.continuous_capacity_min * 60 * p.total_capacity_ratio) throw new Error("Проверете целия интервален профил. Минималната структура трябва да се побира в дозата.");
     seen.add(String(p.zone));
   }
@@ -368,7 +381,7 @@ export function defaultManagementProfile(today: string): ManagementProfile {
     age_years: null, training_experience_years: null, race_duration_min: null,
     horizon_mode: "AUTO_CALENDAR", program_start: today, program_end: end.toISOString().slice(0, 10), available_minutes: [60, 60, 60, 60, 60, 90, 0], availability_mode: "AUTO_HISTORY", training_days: [0,1,2,3,4,5,6],
     recent_weekly_hours: null, reentry_days: null, taper_days: 7, max_key_sessions_per_week: 2,
-    building_fraction: .65, maintenance_fraction: .3, reentry_fraction: .4,
+    building_fraction: .65, maintenance_fraction: .325, reentry_fraction: .325,
     recovery_session_cap_min: 30, allow_expert_fallback: true,
     adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, load_progression: defaultLoadProgression(), individual_learning: defaultIndividualLearning(), component_targets_weekly: {}, interval_profiles: [],
     strength_enabled: false, strength_circuits: 2, transition_days: 0,
