@@ -11,8 +11,9 @@ from hashlib import sha256
 import json
 from pathlib import Path
 from . import adaptive_methods
+from .method_dosing import continuous_building_fraction, continuous_maintenance_fraction
 
-VERSION = "training-methods-v11-expert-role-budget"
+VERSION = "training-methods-v12-derived-maintenance-budget"
 VARIETY_VERSION = "onflows-bounded-method-variety-v1"
 COMMON = ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "COMPETITION")
 METHODS = (
@@ -279,10 +280,10 @@ def resolved_methods(profile):
             "building_budget_fraction": 1., "maintenance_budget_fraction": .5,
             "recovery_adjustment": "MULTIPLY_VOLUME_ONCE",
             "profile_source": "EXPLICIT_COACH_PROFILE" if method["structure"] == "METABOLIC_INTERVALS" else "EXISTING_VERSIONED_COACH_DEFAULT"}
-            if interval else {"version": "continuous-role-budget-v1",
+            if interval else {"version": "continuous-role-budget-v2",
                 "capacity_basis": "CONTINUOUS_TMAX_AT_PRESCRIBED_EFFORT",
-                "building_fraction": profile.get("building_fraction", .65),
-                "maintenance_fraction": profile.get("maintenance_fraction", .3),
+                "building_fraction": continuous_building_fraction(profile),
+                "maintenance_fraction": continuous_maintenance_fraction(profile),
                 "recovery_adjustment": "MULTIPLY_VOLUME_ONCE"}
             if method["zone"] != "STR" else {"version": "strength-method-profile-v1", "capacity_basis": "STRENGTH_PROFILE"})
         method["method_family"] = method_family(method)
