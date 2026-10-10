@@ -14,6 +14,16 @@ def controls(**patch):
     return PlanningControls(**patch).model_dump(mode="json")
 
 
+def append_recorded_activities(source, activities):
+    daily = {(row['date'], row['zone']): row for row in source['daily']}
+    for activity in activities:
+        source['activities'].append(activity)
+        # The persisted ledger must include every activity's persisted E,
+        # before the current load model reprojects those activities from Q.
+        for row in activity['zones']:
+            daily[activity['date'], row['zone']]['effective_load'] += row['effective_load']
+
+
 def test_7_40_is_an_explicit_target_not_a_hidden_105_percent_c40_ceiling():
     repo=Repository();rows=engine._daily_rows(repo.envelope['snapshot_payload']['load_history'],TODAY)
     p=profile(planning_controls=controls(accent_mode='MANUAL', accents=['Z3'],accent_index=1.2,mesocycle_anchor=TODAY))
@@ -43,7 +53,7 @@ def test_stress_microcycle_is_followed_by_unloading_and_cannot_override_taper():
 
 def test_selected_sports_add_their_own_history_and_keep_distinct_capacity_sources(monkeypatch):
     repo=Repository();source=repo.envelope['snapshot_payload']['load_history']
-    source['activities'] += [{**a,'activity_ref':'ski-'+a['activity_ref'],'sport':'NordicSki','duration_min':30} for a in list(source['activities'])]
+    append_recorded_activities(source, [{**a,'activity_ref':'ski-'+a['activity_ref'],'sport':'NordicSki','duration_min':30} for a in list(source['activities'])])
     seen=[]
     def speed(r,a,s): seen.append(s);return reference_speed(r,a,s)
     monkeypatch.setattr(engine.model_service,'speed_view',speed)
@@ -64,7 +74,7 @@ def test_selected_sports_add_their_own_history_and_keep_distinct_capacity_source
 
 def test_whole_training_budget_retains_means_specific_dosing_and_availability(monkeypatch):
     repo=Repository();s=repo.envelope['snapshot_payload']['load_history']
-    s['activities'] += [{**a,'sport':'Ride','duration_min':600} for a in list(s['activities'])]
+    append_recorded_activities(s, [{**a,'activity_ref':'ride-'+a['activity_ref'],'sport':'Ride','duration_min':600} for a in list(s['activities'])])
     monkeypatch.setattr(engine.model_service,'speed_view',reference_speed)
     result=engine.generate_plan(repo,'athlete',profile(planning_controls=controls(training_sports=['Run'])),start_date=TODAY+timedelta(days=1),now=NOW)
     v=result['parameters']['volume_evidence']
@@ -188,12 +198,11 @@ def test_combined_aerobic_method_remains_available_with_one_shared_dose(monkeypa
 def test_high_target_cannot_override_recovery_and_incomplete_history_is_unknown(monkeypatch):
     monkeypatch.setattr(engine.model_service,'speed_view',reference_speed)
     repo=Repository();source=repo.envelope['snapshot_payload']['load_history']
-    for row in source['daily']:
-        if row['date']==TODAY.isoformat() and row['zone']=='Z1':row['effective_load']=1000.
     activity = {'activity_ref':'high-load-today', 'date':TODAY.isoformat(), 'sport':'Run', 'duration_min':1000.,
                 'zones':[{'zone':z, 'raw_time_min':1000. if z=='Z1' else 0.,
-                          'equivalent_time_min':1000. if z=='Z1' else 0.} for z in engine.COMPONENTS if z!='STR']}
-    source['activities'].append(activity)
+                          'equivalent_time_min':1000. if z=='Z1' else 0.,
+                          'effective_load':1000. if z=='Z1' else 0.} for z in engine.COMPONENTS if z!='STR']}
+    append_recorded_activities(source, [activity])
     repo.envelope['activities'].append({**activity, 'local_date':TODAY.isoformat()})
     r=engine.generate_plan(repo,'athlete',profile(planning_controls=controls(accent_mode='MANUAL',accents=['Z3'],accent_index=1.5)),start_date=TODAY+timedelta(days=1),now=NOW)
     assert any(a['code'] in {'READINESS_DOSE_UNAVAILABLE','INSUFFICIENT_DOSE_BUDGET'} for d in r['days'] for a in d['rejected_alternatives'])

@@ -7,6 +7,7 @@ import pytest
 
 from apps.api import training_plan_engine as engine
 from biathlon import hr_speed, recovery_v2, speed_duration
+from biathlon.component_load import calculate_component_load
 from biathlon.training_methods import METHODS
 
 NOW = datetime(2026, 9, 21, 9, tzinfo=timezone.utc)
@@ -92,6 +93,21 @@ def generate(repo=None, body=None, start=None):
 
 def sessions(result):
     return [day["session"] for day in result["days"] if day["session"]]
+
+
+def append_complete_activity(source, activity):
+    """Keep synthetic persisted session and daily effective-load ledgers aligned."""
+    effective = calculate_component_load({row["zone"]: row["equivalent_time_min"] for row in activity["zones"]})["effective"]
+    for row in activity["zones"]:
+        row["effective_load"] = effective[row["zone"]]
+    source["activities"].append(activity)
+    for row in source["daily"]:
+        if row["date"] == activity["date"]:
+            row["effective_load"] = sum(
+                zone["effective_load"]
+                for stored in source["activities"] if stored["date"] == row["date"]
+                for zone in stored["zones"] if zone["zone"] == row["zone"]
+            )
 
 
 def supported_speed(settings):
@@ -235,7 +251,7 @@ def test_existing_today_is_not_added_twice_and_counts_in_weekly_budget():
                 "zones": [{"zone": z, "raw_time_min": 80. if z == "Z1" else 0.,
                            "equivalent_time_min": 80. if z == "Z1" else 0.} for z in ZONES if z != "STR"]}
     repo.envelope["activities"].append(activity)
-    repo.envelope["snapshot_payload"]["load_history"]["activities"].append(activity)
+    append_complete_activity(repo.envelope["snapshot_payload"]["load_history"], activity)
     result = generate(repo, start=TODAY)
     assert result["days"][0]["status"] == "EXISTING_ACTIVITY"
     assert result["days"][0]["session"] is None
@@ -280,7 +296,9 @@ def test_yesterday_coverage_keeps_adaptive_plan_after_confirmed_rest(pause_days)
     for n in range(pause_days+1, 8):
         day = (TODAY-timedelta(days=n)).isoformat()
         activity = {**deepcopy(source["activities"][-1]), "activity_ref": f"resumed_{n}", "date": day}
-        source["activities"].append(activity)
+        for row in activity["zones"]:
+            row.update(raw_time_min=10., equivalent_time_min=10.)
+        append_complete_activity(source, activity)
         repo.envelope["activities"].append({**activity, "local_date": day})
     current = generate(repo, start=TODAY)
     source["period_end"] = (TODAY-timedelta(days=1)).isoformat()
@@ -379,15 +397,12 @@ def test_readiness_scales_capacity_fraction_and_low_zone_limits_complete_dose():
             assert evidence["fraction"] == pytest.approx(evidence["base_fraction"] * evidence["readiness_dose_factor"])
             assert evidence["applied_structure_fraction"] <= evidence["max_dose_fraction"] + .001
     repo = Repository()
-    for row in repo.envelope["snapshot_payload"]["load_history"]["daily"]:
-        if row["date"] == TODAY.isoformat() and row["zone"] == "Z1":
-            row["effective_load"] = 1000.
     activity = {"activity_ref": "fatigue-load", "date": TODAY.isoformat(), "local_date": TODAY.isoformat(),
                 "sport": "Run", "duration_min": 1000., "zones": [
                     {"zone": z, "raw_time_min": 1000. if z == "Z1" else 0.,
                      "equivalent_time_min": 1000. if z == "Z1" else 0.} for z in ZONES if z != "STR"]}
     repo.envelope["activities"].append(activity)
-    repo.envelope["snapshot_payload"]["load_history"]["activities"].append(activity)
+    append_complete_activity(repo.envelope["snapshot_payload"]["load_history"], activity)
     fatigued = generate(repo)
     assert all(r["code"] not in {"RECOVERY_BELOW_90", "WARMUP_NOT_READY"}
                for day in fatigued["days"] for r in day["rejected_alternatives"])
@@ -450,7 +465,7 @@ def test_three_week_mesocycle_unloads_in_third_week():
 
 def test_actual_key_session_preserves_minimum_spacing():
     repo = Repository()
-    repo.envelope["snapshot_payload"]["load_history"]["activities"].append(
+    append_complete_activity(repo.envelope["snapshot_payload"]["load_history"],
         {"activity_ref": "key-today", "date": TODAY.isoformat(), "sport": "Run", "duration_min": 30,
          "zones": [{"zone": z, "raw_time_min": 10. if z == "Z3" else 0.,
                     "equivalent_time_min": 10. if z == "Z3" else 0.} for z in ZONES if z != "STR"]})

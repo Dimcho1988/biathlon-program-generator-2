@@ -49,6 +49,10 @@ def test_quality_balance_keeps_first_sport_method_and_curve_when_catalog_ids_rep
         activities.extend({**deepcopy(activity), "sport": "NordicSki",
                            "activity_ref": "ski-" + activity["activity_ref"]}
                           for activity in list(activities))
+    # Both sports are real persisted activities in this fixture, so the
+    # pre-projection daily ledger includes both recorded E contributions.
+    for row in source["daily"]:
+        row["effective_load"] *= 2
     body.update(sport="NordicSki", actual_sport="NordicSki")
     # Each shared catalogue ID is considered for skiing first, then running.
     # The later Run candidate must not overwrite the selected ski closure.
