@@ -166,8 +166,8 @@ def test_saving_outcome_preserves_actual_load_in_the_same_revision(monkeypatch):
     repo.active_activity_calendar=lambda *args:{"generation_id":"observed-generation","revision":3,"snapshot_payload":{"load_history":source}}
     response_service.save_report(repo,"ath-test","TEST",OptionalTest(**entries[-1]["payload"]),ACTOR,now=NOW)
     saved=repo.saved["p_payload"]
-    assert saved["observed_load_windows"][0]["current"]["Z3"]==14*12
-    assert saved["observed_load_windows"][0]["previous"]["Z3"]==14*10
+    assert saved["observed_load_windows"][0]["current"]["Z3"] == pytest.approx(14*12*(1+2.3+2.3))
+    assert saved["observed_load_windows"][0]["previous"]["Z3"] == pytest.approx(14*10*(1+2.3+2.3))
     assert saved["load_source"]=={"generation_id":"observed-generation","revision":3,
                                   "component_load_context_key":component_load_context_key(source)}
     assert saved["automatic_weight"]==0  # Daily stress score remains independent.

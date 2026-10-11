@@ -24,22 +24,22 @@ from intervals_inspector.shadow_model import (
 def test_whole_direct_dose_at_both_exact_tier_boundaries(dose, up, down):
     result = calculate_component_load({"Z3": dose}, {"Z3": 100.})
     assert result["effective"] == pytest.approx({
-        "Z1": 0., "Z2": down, "Z3": dose, "Z4": up, "Z5": 0., "STR": 0.,
+        "Z1": 1.8*dose, "Z2": 1.8*dose+down, "Z3": dose, "Z4": up, "Z5": 0., "STR": 0.,
     })
 
 
 def test_received_load_cannot_spill_again_and_strength_stays_independent():
     result = calculate_component_load({"Z2": 1000., "STR": 10000.}, {"Z2": 100., "Z3": 1.})
     assert result["effective"] == pytest.approx({
-        "Z1": 200., "Z2": 1000., "Z3": 300., "Z4": 0., "Z5": 0., "STR": 10000.,
+        "Z1": 1600., "Z2": 1000., "Z3": 300., "Z4": 0., "Z5": 0., "STR": 10000.,
     })
     assert result["direct_ratio"]["Z3"] == 0.
 
 
-def test_only_existing_neighbors_receive_influence():
+def test_all_lower_zones_receive_direct_influence_but_only_neighbors_receive_extras():
     result = calculate_component_load({"Z1": 60., "Z5": 90.}, {"Z1": 100., "Z5": 100.})
     assert result["effective"] == pytest.approx({
-        "Z1": 60., "Z2": 12., "Z3": 0., "Z4": 18., "Z5": 90., "STR": 0.,
+        "Z1": 267., "Z2": 219., "Z3": 207., "Z4": 225., "Z5": 90., "STR": 0.,
     })
 
 
@@ -84,7 +84,7 @@ def test_plan_and_recorded_load_match_and_tref_cannot_change_spill():
             activity_date=today)
         values = [row["E_z"] for row in recorded["rows"]] + [0.]
         assert plan == pytest.approx(values)
-        assert all(row["cascade"] == 0. for row in recorded["rows"])
+        assert all(row["cascade"] == row["downward_received"] for row in recorded["rows"])
         outputs.append(values)
     assert outputs[0] == outputs[1]
 
@@ -97,7 +97,8 @@ def test_two_sessions_preserve_separate_thresholds_in_daily_history():
     params["zone_tmax_minutes"] = {"Z3": 100.}
     row = compute_daily_load_history(summaries, params).iloc[0]
     assert row["q_Z3"] == row["e_Z3"] == 60.
-    assert row["e_Z2"] == row["e_Z4"] == 0.
+    assert row["e_Z1"] == row["e_Z2"] == 108.
+    assert row["e_Z4"] == 0.
     assert calculate_component_load({"Z3": 60.}, {"Z3": 100.})["effective"]["Z4"] == 12.
 
 
@@ -109,7 +110,8 @@ def test_supplied_per_sport_canonical_effect_is_preserved_in_daily_sum():
                               for cap in (100., 200.)])
     row = compute_daily_load_history(summaries, fresh_parameters()).iloc[0]
     assert row["e_Z3"] == 120.
-    assert row["e_Z2"] == 6.
+    assert row["e_Z1"] == 216.
+    assert row["e_Z2"] == 222.
     assert row["e_Z4"] == 12.
 
 
@@ -118,3 +120,28 @@ def test_configuration_roundtrip_and_fixed_tier_coefficients():
     assert configuration_from_safe_dict(configuration_to_safe_dict(configuration)) == configuration
     with pytest.raises(ValueError, match="read-only"):
         configuration_with_overrides({"parameter.Z3.spill_down_fraction": .9})
+
+
+@pytest.mark.parametrize("zone,factor", [("Z2", 1.4), ("Z3", 1.8), ("Z4", 2.3), ("Z5", 2.3)])
+def test_approved_total_multiplier_reaches_each_lower_zone_even_below_neighbor_threshold(zone, factor):
+    result = calculate_component_load({zone: 10.}, {z: 100. for z in COMPONENTS[:5]})
+    for target in COMPONENTS[:5]:
+        expected = 10.*factor if target < zone else 10. if target == zone else 0.
+        assert result["effective"][target] == pytest.approx(expected)
+    assert not any(result["spill_received"].values())
+    assert result["effective"]["STR"] == 0.
+
+
+def test_coach_example_30_minutes_z3_with_neighbor_additions_from_original_q():
+    result = calculate_component_load({"Z3": 30.}, {"Z3": 60.})
+    assert result["effective"] == {"Z1": 54., "Z2": 57., "Z3": 30., "Z4": 6., "Z5": 0., "STR": 0.}
+    assert result["direct"]["Z3"] == 30.
+    assert result["downward_received"]["Z1"] == result["downward_received"]["Z2"] == 54.
+
+
+def test_mixed_direct_zones_add_independently_without_compounding_received_load():
+    direct = {"Z1": 10., "Z2": 20., "Z3": 30., "Z4": 40., "Z5": 50., "STR": 60.}
+    result = calculate_component_load(direct, {z: 1000. for z in COMPONENTS[:5]})
+    assert result["effective"] == pytest.approx({
+        "Z1": 299., "Z2": 281., "Z3": 237., "Z4": 155., "Z5": 50., "STR": 60.})
+    assert result["direct"] == direct

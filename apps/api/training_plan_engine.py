@@ -18,7 +18,7 @@ import pandas as pd
 from biathlon import hr_speed, recovery_v2, speed_duration, training_targets, planning_controls, planning_history, planning_schedule, planning_allocation, load_progression, mesocycle_focus
 from biathlon.constants import COMPONENTS, fresh_parameters
 from biathlon.method_dosing import continuous_building_fraction, continuous_maintenance_fraction
-from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION
+from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION, DOWNWARD_FACTORS
 from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, equivalence_slope
 from biathlon.periodization import build_periodization, reentry_dose_active
 from biathlon.physiology import _causal_tref, effective_from_direct_vector, linear_equivalence_coefficient
@@ -31,8 +31,8 @@ from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 
-VERSION = "training-management-v34-derived-maintenance-budget"
-PARAMETER_VERSION = "management-parameters-v34"
+VERSION = "training-management-v35-weighted-downward-load"
+PARAMETER_VERSION = "management-parameters-v35"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -2205,7 +2205,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     if protect_future and reservable_dates and reserved_future_work(candidate_q, candidate_e, reservable_dates,
                         candidate_primary=candidate_primary,
                         candidate_count=candidate_count, candidate_minutes=candidate_minutes) is None:
-                        return "RESERVE_FUTURE_QUALITY_BUDGET", "Дозата използва необходимия Q/7–40 бюджет за минимална цяла бъдеща ключова или силова задача, включително загрявката и товара от съседните зони."
+                        return "RESERVE_FUTURE_QUALITY_BUDGET", "Дозата използва необходимия Q/7–40 бюджет за минимална цяла бъдеща ключова или силова задача, включително загрявката и товара от по-високите и съседните зони."
                     return None
                 conflict = recovery_conflict(after_rows, direct, effective, sum(b["duration_min"] for b in blocks))
                 if conflict:
@@ -2272,7 +2272,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     evidence["explanation"] = "Дозата е от отделния силов профил, без аеробен Tmax. Работата, преходите и почивките се отчитат веднъж в силовата експозиция; загрявката и разпускането имат собствен аеробен товар. Остават поне 3 качествени повторения в резерв."
                 if method["structure"] in {"ALTERNATING", "CRUISE_ALTERNATING", "AEROBIC_STRENGTH", "THRESHOLD_HIGH"}:
                     evidence["combination_allocation"] = "COMPONENT_METHOD_BUDGETS_WITH_SHARED_CANONICAL_Q_E"
-                    evidence["explanation"] += " Компонентите имат отделни методни дози; общият товар с влиянието между съседни зони и общото време се проверяват съвместно."
+                    evidence["explanation"] += " Компонентите имат отделни методни дози; общият товар с низходящото влияние и съседните добавки и общото време се проверяват съвместно."
                 if method.get("double_threshold"):
                     evidence["combination_allocation"] = "TWO_INDEPENDENT_TMAX_DOSES_SHARED_Q_E_BUDGET"
                     evidence["double_threshold_fraction"] = (controls or {}).get("double_threshold_fraction", .5)
@@ -2808,7 +2808,11 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                   "canonical_effective_load": {
                       "version": COMPONENT_LOAD_VERSION, "scope": "ACTIVITY",
                       "basis": "ENTIRE_DIRECT_EQUIVALENT_LOAD", "recursive": False,
-                      "neighbors": "IMMEDIATE_ONLY", "capacity": "CONTINUOUS_TMAX_AT_ZONE_REFERENCE",
+                      "neighbors": "IMMEDIATE_ONLY",
+                      "downward_targets": "ALL_LOWER_AEROBIC_ZONES",
+                      "downward_factors": dict(DOWNWARD_FACTORS),
+                      "downward_threshold": None,
+                      "coefficient_status": "COACH_EXPERT_STARTING_VALUES", "capacity": "CONTINUOUS_TMAX_AT_ZONE_REFERENCE",
                       "tiers": [{"minimum_ratio": .5, "maximum_ratio_inclusive": .8, "up": .2, "down": .1},
                                 {"minimum_ratio_exclusive": .8, "up": .3, "down": .2}],
                       "contexts_by_sport": component_contexts}}

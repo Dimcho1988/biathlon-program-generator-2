@@ -1,4 +1,4 @@
-"""Reconcile direct-Q intent with adjacent-zone E and the 7/40 envelope.
+"""Reconcile direct-Q intent with weighted downward E and the 7/40 envelope.
 
     The curve's expert duration is not a weekly budget. These are weekly Q
     objectives. Actual composed sessions still use canonical dose-dependent
@@ -7,7 +7,7 @@
 from .constants import COMPONENTS
 from .component_load import calculate_component_load
 
-VERSION = "coherent-q-e-objectives-v2-adjacent-tmax"
+VERSION = "coherent-q-e-objectives-v3-weighted-downward-tmax"
 
 
 def reconcile(goals, profile, state, reference, *, limited=False, taper=False,
@@ -63,6 +63,6 @@ def reconcile(goals, profile, state, reference, *, limited=False, taper=False,
         g["consistency"] = {"version":VERSION,"desired_weekly_q":desired_q,
             "feasible_weekly_q":g.get("target_weekly_q"),"original_effective_target":original_e,
             "projected_weekly_effective":coherent[z],"effective_budget":budgets[z],
-            "q_scale":scale,"binding":scale < 1.,"projection":"UNIFORM_WEEK_ONE_SESSION_DAILY_WITH_ADJACENT_TMAX_SPILL",
+            "q_scale":scale,"binding":scale < 1.,"projection":"UNIFORM_WEEK_ONE_SESSION_DAILY_WITH_WEIGHTED_DOWNWARD_AND_ADJACENT_TMAX_SPILL",
             "daily_dose_check_required":True}
     return goals

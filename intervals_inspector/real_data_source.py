@@ -62,7 +62,7 @@ from intervals_inspector.stream_normalizer import (
 REAL_DATA_SOURCE = "intervals"
 DEMO_DATA_SOURCE = "demo"
 DATA_SOURCE_VALUES = (DEMO_DATA_SOURCE, REAL_DATA_SOURCE)
-REAL_HISTORY_SCHEMA_VERSION = "onflows-real-history-dataset-v6-adjacent-tmax"
+REAL_HISTORY_SCHEMA_VERSION = "onflows-real-history-dataset-v7-weighted-downward-tmax"
 RECOVERY_MODEL_VERSION = (
     f"main-load-recovery-v{MAIN_MODEL_VERSION}-equivalent-time-bounded-40d-tref"
 )

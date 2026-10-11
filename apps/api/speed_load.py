@@ -28,7 +28,7 @@ from .trainability_history import history_from_calendar, read_calendar, robust_m
 from .trainability import MIN_SECONDS_BY_BAND, MAX_GAP_SECONDS
 from .component_load_context import read_contexts
 
-VERSION="independent-speed-load-causal-ti-v2-adjacent-tmax"
+VERSION="independent-speed-load-causal-ti-v3-weighted-downward-tmax"
 ZONES=tuple(f"Z{i}" for i in range(1,6))
 logger = logging.getLogger("uvicorn.error")
 

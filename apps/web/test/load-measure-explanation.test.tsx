@@ -17,12 +17,12 @@ it("compares the same complete historical period without converting future volum
   expect(renderToStaticMarkup(<LoadMeasureExplanation plan={incomplete}/>)).not.toContain("Пример от твоята история");
 });
 
-it("explains adjacent whole-Q spill and separates curve capacity from historical Tref",()=>{
+it("explains weighted downward participation and adjacent whole-Q spill and separates curve capacity from historical Tref",()=>{
   const html=renderToStaticMarkup(<LoadMeasureExplanation/>);
   expect(html).toContain("От 50% до 80% включително");
-  expect(html).toContain("върху целия неин пряк Q");
-  expect(html).toContain("добавят 12 минути товар към Z4 и 6 към Z2");
-  expect(html).toContain("не се преливат отново към Z5 или Z1");
+  expect(html).toContain("върху оригиналния Q");
+  expect(html).toContain("Z2 — 57 (54 + 3)");
+  expect(html).toContain("полученият товар не се прелива повторно");
   expect(html).toContain("Историческият 40-дневен Tref е отделен параметър");
 });
 

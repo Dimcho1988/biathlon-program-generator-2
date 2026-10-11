@@ -2,7 +2,7 @@ import type {SportHrPolicy} from "./models";
 import {isCalendarDate} from "./training-status";
 
 export interface SpeedLoad {
-  schema_version:"speed-load-history-v1"; model_version:"independent-speed-load-causal-ti-v1"|"independent-speed-load-causal-ti-v2-adjacent-tmax";
+  schema_version:"speed-load-history-v1"; model_version:"independent-speed-load-causal-ti-v1"|"independent-speed-load-causal-ti-v2-adjacent-tmax"|"independent-speed-load-causal-ti-v3-weighted-downward-tmax";
   component_load_version?: string;
   status:"AVAILABLE"|"PARTIAL"|"UNAVAILABLE"; sport:string|null; sports:string[];
   source_generation_id:string|null; source_revision:number|null; start_date:string; end_date:string;
@@ -20,7 +20,7 @@ const nonnegative=(v:unknown):v is number=>typeof v==="number"&&Number.isFinite(
 export function parseSpeedLoad(value:unknown):SpeedLoad {
   const r=value as SpeedLoad;
   const bad=()=>new Error("Невалиден отчет по скорост.");
-  if(!r||r.schema_version!=="speed-load-history-v1"||!["independent-speed-load-causal-ti-v1","independent-speed-load-causal-ti-v2-adjacent-tmax"].includes(r.model_version)
+  if(!r||r.schema_version!=="speed-load-history-v1"||!["independent-speed-load-causal-ti-v1","independent-speed-load-causal-ti-v2-adjacent-tmax","independent-speed-load-causal-ti-v3-weighted-downward-tmax"].includes(r.model_version)
     ||r.load_role!=="PARALLEL_ESTIMATE_NOT_ADDED_TO_HR"||!["AVAILABLE","PARTIAL","UNAVAILABLE"].includes(r.status)
     ||!isCalendarDate(r.start_date)||!isCalendarDate(r.end_date)||!Array.isArray(r.zones)||r.zones.length!==5
     ||!Array.isArray(r.daily)||!Array.isArray(r.sport_indices)||!Array.isArray(r.activities)||!Array.isArray(r.sports)

@@ -679,7 +679,7 @@ def solve_direct_load(
         projected = effective_from_direct_vector(initial, tref_vec, parameters)
         initial = np.clip(initial + target - projected, 0.0, None)
 
-    solution = least_squares(residual, initial, bounds=(0.0, np.inf), max_nfev=400, xtol=1e-9, ftol=1e-9, gtol=1e-9)
+    solution = least_squares(residual, initial, bounds=(0.0, np.inf), max_nfev=400, xtol=1e-11, ftol=1e-11, gtol=1e-12)
     q = np.clip(solution.x, 0.0, None)
     error = float(np.sqrt(np.mean(residual(q) ** 2)))
     return pd.Series(q, index=COMPONENTS, name="target_direct_q"), error

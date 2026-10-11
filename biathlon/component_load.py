@@ -14,7 +14,10 @@ from typing import Any, Mapping
 from .constants import AEROBIC_COMPONENTS, COMPONENTS
 from .hr_speed import TMAX_RANGES_S
 
-VERSION = "component-load-adjacent-tmax-v1"
+VERSION = "component-load-weighted-downward-tmax-v2"
+# Total multiplier to EACH lower aerobic zone, not an addition to 100%.
+# Coach-approved starting coefficients; not universal physiological constants.
+DOWNWARD_FACTORS = {"Z2": 1.4, "Z3": 1.8, "Z4": 2.3, "Z5": 2.3}
 EXPERT_CAPACITY_SOURCE = "EXPERT_CONTINUOUS_TMAX"
 CURVE_CAPACITY_SOURCE = "SPEED_TIME_CURVE"
 
@@ -64,11 +67,13 @@ def calculate_component_load(
     *,
     capacity_sources: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Apply approved neighboring-zone percentages to the entire direct Q.
+    """Project direct Q to every lower zone, plus threshold neighbor additions.
 
-    Below 50% of capacity: none; 50–80% inclusive: up 20%, down 10%;
-    above 80%: up 30%, down 20%. All donors are evaluated from the original
-    direct vector. STR neither donates nor receives aerobic spillover.
+    Downward participation is unconditional: 1.4/1.8/2.3/2.3 times donor Q.
+    Additional neighbor percentages: below 50% of capacity none; 50–80%
+    inclusive up 20%, down 10%; above 80% up 30%, down 20%.
+    Every term uses original direct Q; received load never propagates again.
+    STR neither donates nor receives aerobic influence.
     """
     capacities, sources = resolve_zone_tmax(zone_tmax_minutes, capacity_sources)
     direct: dict[str, float] = {}
@@ -81,9 +86,15 @@ def calculate_component_load(
     up_out = {component: 0.0 for component in COMPONENTS}
     down_out = dict(up_out)
     received = dict(up_out)
+    downward_received = dict(up_out)
+    downward_per_zone_out = dict(up_out)
     up_fraction = dict(up_out)
     down_fraction = dict(up_out)
     for index, zone in enumerate(AEROBIC_COMPONENTS):
+        downward = DOWNWARD_FACTORS.get(zone, 0.) * direct[zone]
+        downward_per_zone_out[zone] = downward
+        for lower in AEROBIC_COMPONENTS[:index]:
+            downward_received[lower] += downward
         ratio = ratios[zone]
         if ratio < 0.50:
             continue
@@ -98,7 +109,11 @@ def calculate_component_load(
     return {
         "version": VERSION,
         "direct": direct,
-        "effective": {component: direct[component] + received[component] for component in COMPONENTS},
+        "effective": {component: direct[component] + downward_received[component] + received[component]
+                      for component in COMPONENTS},
+        "downward_factors": dict(DOWNWARD_FACTORS),
+        "downward_per_zone_out": downward_per_zone_out,
+        "downward_received": downward_received,
         "capacity_minutes": capacities,
         "capacity_sources": sources,
         "direct_ratio": ratios,
