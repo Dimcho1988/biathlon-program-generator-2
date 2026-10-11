@@ -162,32 +162,65 @@ def joint_blocks(primary, secondary):
             {'kind': 'WORK', 'zone': 'Z2', 'duration_min': secondary, 'target_hr_bpm': 148.}]
 
 
-def test_mixed_session_received_load_reduces_a_combination_that_fits_direct_budgets():
+def test_received_load_does_not_reduce_independent_method_budgets():
     evidence = joint_evidence()
-    blocks = joint_blocks(60., 60.)
-    assert engine._dose_usage(blocks, evidence, 'Z3') == .6
-    # Z2 donates 20% of its whole 60 Q: Z3 receives 72, above its 65 Q budget.
-    assert not engine._dose_fits(blocks, evidence, 'Z3', .65)
-    # Both components still reach 50%; Z3 E=60 and Z2 E=50+90+5=145 fit.
-    assert engine._dose_fits(joint_blocks(50., 50.), evidence, 'Z3', .65)
+    # Z3 E is 72, above its 65-minute method budget, but direct work fits.
+    # E belongs to the plan's common constraints, not this local dose check.
+    assert engine._dose_fits(joint_blocks(60., 60.), evidence, 'Z3', .65)
+    assert not engine._dose_fits(joint_blocks(66., 60.), evidence, 'Z3', .65)
 
 
-def test_mixed_session_received_load_budget_does_not_apply_recovery_twice():
+def test_mixed_method_recovery_applies_once_to_direct_work():
     evidence = joint_evidence(.8)
-    assert engine._dose_fits(joint_blocks(47., 40.), evidence, 'Z3', .65*.8)
+    assert engine._dose_fits(joint_blocks(52., 144.), evidence, 'Z3', .65*.8)
+    assert not engine._dose_fits(joint_blocks(52.2, 144.), evidence, 'Z3', .65*.8)
+    assert not engine._dose_fits(joint_blocks(52., 144.1), evidence, 'Z3', .65*.8)
 
 
-def test_mixed_continuous_support_uses_derived_half_budget_and_single_recovery():
+def test_mixed_continuous_support_keeps_half_budget_and_single_recovery():
     evidence = joint_evidence(.8)
     evidence["secondary_capacity"]["capacity_minutes"] = 400.
     profile = {"building_fraction": .65, "maintenance_fraction": .4, "reentry_fraction": .5}
     method = {"zone": "Z3", "structure": "THRESHOLD_LONG"}
     ceiling = engine._dose_ceiling(method, "BUILDING", profile, "GENERAL_PREPARATION", evidence, None)
     assert evidence["secondary_max_fraction"] == .325
-    # Z3 crosses the spill gate: Z2 receives 5.2 own Q + 93.6 downward + 5.2 adjacent,
-    # exactly 400 × .325 × .8 = 104. Recovery is applied to the budget once.
-    assert engine._dose_fits(joint_blocks(52., 5.2), evidence, "Z3", ceiling * .8)
-    assert not engine._dose_fits(joint_blocks(52., 6.2), evidence, "Z3", ceiling * .8)
+    assert evidence["session_dose_policy"] == "DIRECT_WORK_WITHIN_METHOD_ROLE_BUDGETS_E_FOR_PLAN_CONSTRAINTS"
+    assert engine._dose_fits(joint_blocks(52., 104.), evidence, "Z3", ceiling * .8)
+    assert not engine._dose_fits(joint_blocks(52., 104.1), evidence, "Z3", ceiling * .8)
+
+
+def test_threshold_high_keeps_12_plus_8_while_reporting_full_received_load(monkeypatch):
+    method = interval_method()
+    method.update(structure='THRESHOLD_HIGH', zone='Z3')
+    method['interval_profile'].update(zone='Z4', total_capacity_ratio=1.,
+        continuous_capacity_min=20., work_seconds=120, recovery_seconds=120)
+    secondary = {'capacity_minutes': 20., 'effort_profile': method['interval_profile']}
+    monkeypatch.setattr(engine, 'capacity_for', lambda *args, **kwargs: deepcopy(secondary))
+    settings = Repository().settings
+    capacities = {'Z1': 240., 'Z2': 120., 'Z3': 50., 'Z4': 20., 'Z5': 20.}
+    evidence = {'capacity_minutes': 50., 'target_hr_bpm': 160., 'target_speed_kmh': None,
+                'readiness_dose_factor': .8, 'zone_tmax_minutes': capacities,
+                'dose_settings': {'zone_bounds_bpm': list(settings.zone_bounds_bpm), 'hrmax_bpm': settings.hrmax_bpm}}
+    profile = {'building_fraction': .6}
+    nominal = engine._nominal_fraction(method, 'BUILDING', profile, 'SPECIAL_PREPARATION', evidence, None)
+    assert engine._prepare_threshold_high_budget(method, evidence, profile, Repository().settings,
+        None, (None, [], []), TODAY, primary_fraction=nominal*.5, readiness_factor=.8)
+    requested = evidence['primary_requested_work']
+    assert requested == 12.
+    assert evidence['combination_high_work_cap'] == 8.
+    blocks = engine._blocks(method, requested, evidence, Repository().settings)
+    ceiling = engine._dose_ceiling(method, 'BUILDING', profile, 'SPECIAL_PREPARATION', evidence, None)
+    assert engine._dose_fits(blocks, evidence, 'Z3', ceiling*.8)
+    work = [b for b in blocks if b['kind'] == 'WORK']
+    assert [b['duration_min'] for b in work if b['zone'] == 'Z4'] == [2.]*4
+    assert sum(b['duration_min'] for b in work if b['zone'] == 'Z3') == 12.
+    # At zone-reference effort, this legal method dose still records E3=30.4.
+    direct, effective, _ = engine._canonical_load(blocks, settings, [], TODAY, zone_tmax_minutes=capacities)
+    assert direct['Z3'] == 12. and direct['Z4'] == 8.
+    assert effective['Z3'] == pytest.approx(30.4)
+    assert effective['Z3'] > 50.*ceiling*.8
+    assert effective['Z2'] == 40.
+    assert effective['Z1'] == pytest.approx(direct['Z1'] + 40.)
 
 
 def test_expert_effort_coefficient_prescribes_curve_speed_and_separate_total_budget():
