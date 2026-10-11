@@ -31,8 +31,8 @@ from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 
-VERSION = "training-management-v35-weighted-downward-load"
-PARAMETER_VERSION = "management-parameters-v35"
+VERSION = "training-management-v36-independent-method-dose"
+PARAMETER_VERSION = "management-parameters-v36"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -752,7 +752,7 @@ def _learned_preference(method, sport, profile, progression, day, period, state,
 
 
 def _dose_usage(blocks, evidence, zone):
-    """Largest component fraction; canonical Q/E checks combine adjacent effects.
+    """Largest direct-work fraction; plan Q/E checks combine received effects.
 
     Different components do not share an arbitrary sum-of-fractions ceiling.
     Efforts within the same component still accumulate into its one budget.
@@ -794,37 +794,8 @@ def _dose_fits(blocks, evidence, zone, maximum, *, tolerance=.001):
         capacity = secondary["capacity_minutes"] * secondary.get("effort_profile", {}).get("total_capacity_ratio", 1.)
         if work > capacity * limit * evidence.get("readiness_dose_factor", 1.) + tolerance:
             return False
-    work_parts = [b for b in blocks if b["kind"] == "WORK" and b["zone"] in {"Z1", "Z2", "Z3", "Z4", "Z5"}]
-    work_zones = {b["zone"] for b in work_parts}
-    if (secondary and len(work_zones) > 1 and not any(b.get("session_index") for b in blocks)
-            and evidence.get("dose_settings") and evidence.get("zone_tmax_minutes")):
-        from types import SimpleNamespace
-        settings = SimpleNamespace(**evidence["dose_settings"])
-        # Both planned doses and history use this same non-recursive load
-        # calculator. Preparation/rest count once in received session load.
-        _, effective, _ = _canonical_load(blocks, settings, [], date(2000, 1, 1),
-            zone_tmax_minutes=evidence["zone_tmax_minutes"])
-        work_q, _, _ = _canonical_load(work_parts, settings, [], date(2000, 1, 1),
-            zone_tmax_minutes=evidence["zone_tmax_minutes"])
-        primary_ratio = (evidence.get("effort_profile", {}).get("total_capacity_ratio", 1.)
-                         if evidence.get("dose_capacity_basis") != "INDEPENDENT_CONTINUOUS_TMAX" else 1.)
-        minutes_caps = {zone: evidence["capacity_minutes"] * primary_ratio * maximum}
-        if secondary and limit is not None:
-            secondary_zone = secondary.get("zone", "Z1")
-            minutes_caps[secondary_zone] = (secondary["capacity_minutes"]
-                * secondary.get("effort_profile", {}).get("total_capacity_ratio", 1.)
-                * limit * evidence.get("readiness_dose_factor", 1.))
-        for component in work_zones:
-            if component not in minutes_caps:
-                continue
-            minutes = sum(b["duration_min"] for b in work_parts if b["zone"] == component)
-            if minutes <= 0:
-                continue
-            # Convert the role budget to the same Q-minute units as E using
-            # the actual component effort mix; never compare raw minutes to E.
-            budget_q = minutes_caps[component] * work_q[component] / minutes
-            if effective[component] > budget_q + tolerance:
-                return False
+    # Method budgets constrain direct work only. Received E is accounted for
+    # once by the plan's shared rolling-load and forecast Recovery checks.
     return True
 
 
@@ -913,7 +884,7 @@ def _dose_ceiling(method, purpose, profile, period, evidence, controls, generic_
         evidence["secondary_max_fraction"] = (.5 if evidence["secondary_capacity"].get("effort_profile")
                                                else continuous_maintenance_fraction(profile))
         evidence["combination_allocation"] = "COMPONENT_METHOD_BUDGETS_WITH_SHARED_CANONICAL_Q_E"
-        evidence["session_dose_policy"] = "RECEIVED_CANONICAL_LOAD_WITHIN_EACH_WORK_COMPONENT_ROLE_BUDGET"
+        evidence["session_dose_policy"] = "DIRECT_WORK_WITHIN_METHOD_ROLE_BUDGETS_E_FOR_PLAN_CONSTRAINTS"
     return maximum
 
 
