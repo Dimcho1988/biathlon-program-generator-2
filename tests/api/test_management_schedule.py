@@ -12,7 +12,7 @@ from biathlon.constants import COMPONENTS
 from biathlon.component_load import calculate_component_load
 from biathlon.training_methods import resolved_methods
 from tests.api.test_training_plan_engine import Repository, TODAY, NOW, profile, reference_speed
-from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose
+from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose, fixed_readiness
 
 
 def body(**changes):
@@ -212,6 +212,8 @@ def test_actual_sessions_and_time_still_close_a_full_or_unknown_day(monkeypatch,
 
 @pytest.mark.parametrize("slots", [2,3])
 def test_imported_easy_morning_keeps_the_remaining_threshold_slot_eligible(monkeypatch, slots):
+    # Isolate slot eligibility from fatigue in the synthetic high-Q history.
+    fixed_readiness(monkeypatch, 100.)
     repo = high_capacity_history()
     completed_activity(repo, "morning")
     p = body(sessions_per_week=13, sessions_by_day=[slots,2,2,2,2,1,1],
@@ -275,6 +277,7 @@ def test_double_threshold_has_independent_doses_and_long_short_structure(monkeyp
 
 
 def test_double_threshold_validation_and_declining_readiness_reduces_doses(monkeypatch):
+    fixed_readiness(monkeypatch, 80.)
     p = body(sessions_per_week=12, double_threshold_days=[0])
     with pytest.raises(ValidationError): ManagementProfile.model_validate({**p, "age_years": None})
     with pytest.raises(ValidationError): ManagementProfile.model_validate({**p, "max_key_sessions_per_week": 1})

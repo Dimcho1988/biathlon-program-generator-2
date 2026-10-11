@@ -62,7 +62,7 @@ def reconcile(goals, profile, state, reference, *, limited=False, taper=False,
         g["factor"] = budgets[z]/max(1e-9,g["reference"])
         g["consistency"] = {"version":VERSION,"desired_weekly_q":desired_q,
             "feasible_weekly_q":g.get("target_weekly_q"),"original_effective_target":original_e,
-            "projected_weekly_effective":coherent[z],"effective_budget":budgets[z],
+            "requested_weekly_effective":demand[z],"projected_weekly_effective":coherent[z],"effective_budget":budgets[z],
             "q_scale":scale,"binding":scale < 1.,"projection":"UNIFORM_WEEK_ONE_SESSION_DAILY_WITH_WEIGHTED_DOWNWARD_AND_ADJACENT_TMAX_SPILL",
             "daily_dose_check_required":True}
     return goals

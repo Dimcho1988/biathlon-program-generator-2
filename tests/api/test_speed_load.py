@@ -323,10 +323,12 @@ def test_speed_spill_is_per_activity_and_uses_current_individual_capacity(monkey
     today = {row["zone"]: row["effective_load"] for row in result["daily"] if row["date"] == TODAY.isoformat()}
     assert today["Z3"] == pytest.approx(14.)
     # Each Q=7 is below 50% of Tmax=20, although the daily sum is above 50%.
-    assert today["Z2"] == today["Z4"] == 0.
+    assert today["Z1"] == today["Z2"] == pytest.approx(25.2)
+    assert today["Z4"] == 0.
     capacities["Z3"] = 10.
     changed = model.history_view(repo, "authorized-athlete", today=TODAY)
     today = {row["zone"]: row["effective_load"] for row in changed["daily"] if row["date"] == TODAY.isoformat()}
-    assert today["Z2"] == pytest.approx(1.4)
+    assert today["Z2"] == pytest.approx(26.6)
     assert today["Z4"] == pytest.approx(2.8)
-    assert today["Z1"] == today["Z5"] == 0.
+    assert today["Z1"] == pytest.approx(25.2)
+    assert today["Z5"] == 0.

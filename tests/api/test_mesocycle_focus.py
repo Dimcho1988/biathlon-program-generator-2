@@ -64,7 +64,7 @@ def test_rotation_changes_final_load_not_only_labels_and_maintenance_has_no_load
                     c = goals[z]["consistency"]
                     assert goals[z]["target_index"] <= 2
                     assert c["projected_weekly_effective"] <= goals[z]["target"]+1e-6
-                    assert goals[z]["target"] <= max(c["original_effective_target"],c["projected_weekly_effective"])+1e-6
+                    assert goals[z]["target"] <= max(c["original_effective_target"],c["requested_weekly_effective"])+1e-6
                 else:
                     assert goals[z]["target_index"]<=1.1+1e-9
                     assert goals[z]["target"]<=7*(1.1*(base[z]["b50"]+base[z]["c40"])-base[z]["b50"])+1e-9
