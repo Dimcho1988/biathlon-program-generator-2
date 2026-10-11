@@ -172,7 +172,8 @@ def test_adaptive_dose_does_not_invent_a_missing_capacity(monkeypatch):
 def test_z1_is_reserved_for_later_key_structures_without_bypassing_rolling_limit(monkeypatch):
     fixed_readiness(monkeypatch, 100.)
     body = threshold_profile(building_fraction=.6,
-                             component_targets_weekly={"Z1": 140., "Z3": 120.})
+                             # Include weighted Z3 participation while leaving a bounded easy-work budget.
+                             component_targets_weekly={"Z1": 200., "Z3": 120.})
     methods = [m for m in engine.resolved_methods(body)
                if m["id"] in {"END-LONG-Z1-01-MAINTAIN", "END-THR-LONG-01"}]
     monkeypatch.setattr(engine, "resolved_methods", lambda _: deepcopy(methods))
@@ -185,7 +186,7 @@ def test_z1_is_reserved_for_later_key_structures_without_bypassing_rolling_limit
     assert plan["days"][0]["session"]["zone"] == "Z1"
     assert all(any(b["kind"] == "WARMUP" for b in s["blocks"])
                for d in keys for s in d["sessions"])
-    assert sum(s["canonical_effective_load"]["Z1"] for d in plan["days"] for s in d["sessions"]) <= 140.005
+    assert sum(s["canonical_effective_load"]["Z1"] for d in plan["days"] for s in d["sessions"]) <= 200.005
     assert_rolling_budgets(plan)
 
 

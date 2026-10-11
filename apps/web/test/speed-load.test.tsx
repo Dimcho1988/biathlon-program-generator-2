@@ -175,3 +175,9 @@ it("rejects an in-flight selected-athlete/account race and scopes validators to 
   expect(other.status).toBe(200);
   expect(other.headers.get("ETag")).not.toBe(current.headers.get("ETag"));
 });
+
+
+it("accepts weighted downward load reports",()=>{
+  const updated={...fixture(),model_version:"independent-speed-load-causal-ti-v3-weighted-downward-tmax",component_load_version:"component-load-weighted-downward-tmax-v2"};
+  expect(parseSpeedLoad(updated).component_load_version).toBe("component-load-weighted-downward-tmax-v2");
+});

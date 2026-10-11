@@ -11,7 +11,7 @@ from copy import deepcopy
 from typing import Any, Iterable, Mapping
 
 
-REGISTRY_VERSION = "shadow-model-registry-v5-adjacent-tmax"
+REGISTRY_VERSION = "shadow-model-registry-v6-weighted-downward-tmax"
 VISIBLE_ROLES = ("athlete", "coach", "tester", "administrator")
 EDITOR_ROLES = ("tester", "administrator")
 
@@ -194,7 +194,7 @@ RESULT_DEFINITIONS: dict[str, dict[str, Any]] = {
         limitations=("Липсващ или некачествен HR намалява покритието и T_z.",),
     ),
     "result.equivalent_time": _definition(
-        "result.equivalent_time", "T_eq,z", "Приравнено време", "Единствената пряка зонална доза преди влиянието от съседните зони.",
+        "result.equivalent_time", "T_eq,z", "Приравнено време", "Единствената пряка зонална доза преди низходящото влияние и съседните добавки.",
         "T_eq,z = Σ Δt_i × c_z(effective_hr_i)", "приравнени минути",
         interpretation="За Z1–Z4 референтна е горната граница; за Z5 — долната, с clamp до HRmax.",
         inputs=("effective_hr", "линеен pp/bpm параметър"), dependencies=("Tmax comparison", "spillover", "E_z"),
@@ -216,11 +216,11 @@ RESULT_DEFINITIONS: dict[str, dict[str, Any]] = {
         limitations=("Източникът се показва отделно за всяка зона.",),
     ),
     "result.cascade": _definition(
-        "result.cascade", "cascade", "Премахнат каскаден принос", "Полето се пази за съвместимост и винаги е нула.",
-        "Cascade_z = 0", "приравнени минути",
-        interpretation="Влияние има само към непосредствените съседни зони по правилото за Tmax.",
+        "result.cascade", "cascade", "Получен низходящ принос", "Сбор от оригиналния Q на всички по-високи зони с експертни множители.",
+        "Downward_z = Σ(j>z) k_j × Q_j", "приравнени минути",
+        interpretation="Z2 × 1,4; Z3 × 1,8; Z4/Z5 × 2,3 към всяка по-ниска зона, независимо от прага за съседните добавки.",
         dependencies=("E_z",),
-        limitations=("Няма пълна каскада към всички по-ниски зони.",),
+        limitations=("Полученият товар не се прелива повторно; това са експертни начални множители.",),
     ),
     "result.spillover": _definition(
         "result.spillover", "spillover", "Двупосочно съседно влияние", "Еднократен входящ принос от целия пряк товар на непосредствените съседи, достигнали прага.",
@@ -230,8 +230,8 @@ RESULT_DEFINITIONS: dict[str, dict[str, Any]] = {
         limitations=("Не намалява T_eq и не поражда рекурсивен spillover.",),
     ),
     "result.e": _definition(
-        "result.e", "E_z", "Краен компонентен ефект", "Сборът от прякото приравнено време и входящото съседно влияние.",
-        "E_z = T_eq,z + Spill_received,z", "приравнени минути",
+        "result.e", "E_z", "Краен компонентен ефект", "Сборът от прякото приравнено време, низходящото влияние и съседните добавки.",
+        "E_z = T_eq,z + Downward_received,z + Spill_received,z", "приравнени минути",
         interpretation="По-висок E означава по-голям моделиран компонентен стимул, а не медицинска оценка.",
         inputs=("T_eq,z", "spillover"), dependencies=("7/40", "recovery"),
         limitations=("Не включва readiness, wellness или recovery модификатори в shadow пилота.",),

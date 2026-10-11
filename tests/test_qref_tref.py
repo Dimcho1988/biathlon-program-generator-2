@@ -242,10 +242,10 @@ def test_06_equivalent_time_drives_ratio_and_whole_dose_adjacent_effect() -> Non
     assert rows["Z2"]["T_eq_z"] == pytest.approx(100.0)
     assert rows["Z2"]["direct_ratio"] == pytest.approx(100.0 / 180.0)
     assert rows["Z2"]["spillover_excess"] == pytest.approx(10.0)
-    assert rows["Z1"]["cascade"] == pytest.approx(0.0)
+    assert rows["Z1"]["cascade"] == pytest.approx(140.0)
     assert rows["Z1"]["spillover_received"] == pytest.approx(10.0)
     assert rows["Z3"]["spillover_received"] == pytest.approx(20.0)
-    assert rows["Z1"]["E_z"] == pytest.approx(10.0)
+    assert rows["Z1"]["E_z"] == pytest.approx(150.0)
     assert rows["Z2"]["E_z"] == pytest.approx(100.0)
     assert rows["Z3"]["E_z"] == pytest.approx(20.0)
 

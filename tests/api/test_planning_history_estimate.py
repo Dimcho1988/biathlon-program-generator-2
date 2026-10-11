@@ -229,12 +229,23 @@ def test_partial_activity_spill_does_not_merge_with_other_sessions_on_same_day(m
     speed = {"partial": {"covered_missing_minutes": 15.,
                          "zones": [{"zone": "Z3", "raw_time_min": 15., "equivalent_time_min": 15.}],
                          "provenance": {"load": "ESTIMATED_NOT_MEASURED_HR"}}}
+    from apps.api.component_load_projection import project_history
+    capacities = {z: 100. for z in estimate.ZONES}
+    for activity in source["activities"]:
+        activity["zones"].extend({"zone": z, "raw_time_min": 0., "equivalent_time_min": 0.}
+                                 for z in estimate.ZONES if z != "Z3")
+    for activity in source["activities"]:
+        for row in activity["zones"]:
+            row["effective_load"] = row["equivalent_time_min"]
+    source = project_history(source, {"Run": {"minutes": capacities, "sources": {}, "fingerprint": "uniform-100"}})
     result, info = estimate.prepare(source, [], configured(), TODAY, speed_estimates=speed,
-                                    zone_tmax_minutes={z: 100. for z in estimate.ZONES})
+                                    zone_tmax_minutes=capacities)
     assert info["supported"]
     values = {row["zone"]: row["effective_load"] for row in result["daily"]}
     assert values["Z3"] == 60.
-    assert values["Z2"] == values["Z4"] == 0.
+    # Both sessions contribute downward E, but neither triggers adjacent extras.
+    assert values["Z1"] == values["Z2"] == 108.
+    assert values["Z4"] == 0.
 
 
 @pytest.mark.parametrize("sport,expected_down,expected_up", [("Run", 6., 12.), ("NordicSki", 0., 0.)])
@@ -251,15 +262,23 @@ def test_partial_activity_crossing_threshold_spills_its_entire_completed_q(sport
     speed = {"partial": {"covered_missing_minutes": 30.,
                          "zones": [{"zone": "Z3", "raw_time_min": 30., "equivalent_time_min": 30.}],
                          "provenance": {"load": "ESTIMATED_NOT_MEASURED_HR"}}}
+    from apps.api.component_load_projection import project_history
+    contexts = {"Run": {"minutes": {z: 100. for z in estimate.ZONES}, "sources": {}, "fingerprint": "uniform-100"},
+                "NordicSki": {"minutes": {z: 200. for z in estimate.ZONES}, "sources": {}, "fingerprint": "uniform-200"}}
+    source["activities"][0]["zones"].extend(
+        {"zone": z, "raw_time_min": 0., "equivalent_time_min": 0.}
+        for z in estimate.ZONES if z != "Z3")
+    for row in source["activities"][0]["zones"]:
+        row["effective_load"] = row["equivalent_time_min"]
+    source = project_history(source, contexts)
     result, _ = estimate.prepare(source, [], configured(), TODAY, speed_estimates=speed,
-                                 capacity_contexts_by_sport={
-                                     "Run": {"minutes": {z: 100. for z in estimate.ZONES}},
-                                     "NordicSki": {"minutes": {z: 200. for z in estimate.ZONES}}})
+                                 capacity_contexts_by_sport=contexts)
     values = {row["zone"]: row["effective_load"] for row in result["daily"]}
     assert values["Z3"] == 60.
-    assert values["Z2"] == expected_down
+    assert values["Z2"] == 108. + expected_down
     assert values["Z4"] == expected_up
-    assert values["Z1"] == values["Z5"] == 0.
+    assert values["Z1"] == 108.
+    assert values["Z5"] == 0.
 
 
 def test_estimated_activity_and_daily_ledger_reconcile_and_invalidate_measured_fingerprint():
@@ -284,7 +303,7 @@ def test_estimated_activity_and_daily_ledger_reconcile_and_invalidate_measured_f
     assert measured["component_load_model"]["fingerprint"] == fingerprint
     activity_values = {row["zone"]: row["effective_load"] for row in result["activities"][0]["zones"]}
     daily_values = {row["zone"]: row["effective_load"] for row in result["daily"]}
-    assert activity_values == daily_values == {"Z1": 6., "Z2": 60., "Z3": 12., "Z4": 0., "Z5": 0.}
+    assert activity_values == daily_values == {"Z1": 90., "Z2": 60., "Z3": 12., "Z4": 0., "Z5": 0.}
     projected = project_history(result, contexts)
     assert projected["component_load_model"]["fingerprint"] != fingerprint
     assert {row["zone"]: row["effective_load"] for row in projected["daily"]} == daily_values

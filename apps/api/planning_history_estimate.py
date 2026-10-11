@@ -12,7 +12,7 @@ from biathlon import load_progression
 from biathlon.constants import COMPONENTS
 from biathlon.component_load import calculate_component_load
 
-VERSION = "planning-history-estimate-v3-activity-adjacent-tmax"
+VERSION = "planning-history-estimate-v4-activity-weighted-downward-tmax"
 POLICY = "RECORDED_DURATION_EXPERT_Q_WITH_RECOVERY"
 ZONES = tuple(z for z in COMPONENTS if z != "STR")
 

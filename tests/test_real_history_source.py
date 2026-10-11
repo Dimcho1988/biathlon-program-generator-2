@@ -533,7 +533,9 @@ def test_ninety_day_history_builds_one_shared_load_and_recovery_dataset() -> Non
     assert {"Q_z", "Qref_z"}.isdisjoint(dataset.daily_zones.columns)
     assert float(dataset.activity_zones["T_z"].sum()) > 0.0
     assert float(dataset.activity_zones["T_eq_z"].sum()) > 0.0
-    assert float(dataset.activity_zones["cascade"].sum()) == 0.0
+    assert float(dataset.activity_zones["cascade"].sum()) > 0.0
+    assert (dataset.activity_zones["E_z"] == dataset.activity_zones["T_eq_z"]
+            + dataset.activity_zones["cascade"] + dataset.activity_zones["spillover"]).all()
     assert float(dataset.activity_zones["spillover"].sum()) >= 0.0
     assert float(dataset.activity_zones["E_z"].sum()) > 0.0
     assert dataset.activity_zones.loc[

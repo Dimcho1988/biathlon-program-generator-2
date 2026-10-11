@@ -38,7 +38,7 @@ def test_old_cascade_rebases_from_direct_q_and_preserves_source_and_strength():
     unchanged = deepcopy(original)
     result = project_history(original, context())
     assert original == unchanged
-    assert value(result, "Z1") == 6
+    assert value(result, "Z1") == 90
     assert value(result, "Z2") == 60
     assert value(result, "Z3") == 12
     assert value(result, "Z4") == 0
@@ -56,7 +56,7 @@ def test_two_short_sessions_do_not_trigger_a_fictitious_daily_continuous_thresho
     result = project_history(source((30., 30.)), context())
     assert value(result, "Z2") == 60
     assert value(result, "Z3") == 0
-    assert value(result, "Z1") == 0
+    assert value(result, "Z1") == 84
 
 
 @pytest.mark.parametrize("damage", ["missing_activity", "duplicate_activity", "missing_activity_e", "wrong_zone_ledger"])
@@ -133,3 +133,33 @@ def test_legacy_recovery_without_load_history_explicitly_requires_refresh(snapsh
     from apps.api.component_load_projection import project_legacy_recovery
     with pytest.raises(ComponentLoadRefreshRequired, match="complete load history"):
         project_legacy_recovery(snapshot)
+
+
+def test_rebased_history_feeds_both_7_40_and_causal_recovery_without_changing_priors():
+    from datetime import date, timedelta
+    from biathlon.recovery_v2 import defaults, simulate
+
+    days = tuple((date(2026, 9, 1) + timedelta(days=i)).isoformat() for i in range(41))
+    original = source((30.,), days=days)
+    # Store a legacy direct-only Z3 activity and its matching daily ledger.
+    for row in original["daily"]:
+        row["effective_load"] = 30. if row["date"] == days[-1] and row["zone"] == "Z3" else 0.
+    for row in original["activities"][0]["zones"]:
+        row.update(equivalent_time_min=30. if row["zone"] == "Z3" else 0.,
+                   raw_time_min=30. if row["zone"] == "Z3" else 0.,
+                   effective_load=30. if row["zone"] == "Z3" else 0.)
+    contexts = context()
+    contexts["Run"]["minutes"]["Z3"] = 60.
+    result = project_history(original, contexts)
+    expected = {"Z1": 54., "Z2": 57., "Z3": 30., "Z4": 6., "Z5": 0.}
+    for z, e in expected.items():
+        assert value(result, z, days[-1]) == e
+    z1 = next(row for row in result["zones"] if row["zone"] == "Z1")
+    assert z1["status_7_40"] == pytest.approx((40.+54./7)/(40.+54./40))
+    cfg = defaults()
+    recovery = simulate(result["daily"], cfg, target=date.fromisoformat(days[-1]))
+    z1_recovery = next(row for row in recovery["current"] if row["zone"] == "Z1")
+    assert z1_recovery["baseline_daily_min"] == 40.
+    assert z1_recovery["readiness_percent"] == pytest.approx(25.75)
+    assert cfg["Z1"]["initial_daily_min"] == 40.
+    assert project_history(result, contexts) is result

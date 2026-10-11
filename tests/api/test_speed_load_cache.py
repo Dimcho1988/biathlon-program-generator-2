@@ -85,8 +85,8 @@ def test_changed_capacity_invalidates_effective_report_but_reuses_direct_activit
     after = model.history_view(repo, "authorized-athlete", today=TODAY)
     assert len(reads) == count
     assert after["zones"][2]["equivalent_minutes"] == before["zones"][2]["equivalent_minutes"]
-    assert before["zones"][1]["effective_load"] == 0.
-    assert after["zones"][1]["effective_load"] == pytest.approx(.7)
+    assert before["zones"][1]["effective_load"] == pytest.approx(12.6)
+    assert after["zones"][1]["effective_load"] == pytest.approx(13.3)
 
 
 def test_activity_cache_reuses_only_unchanged_causal_inputs_and_recomputes_downstream_load(monkeypatch):

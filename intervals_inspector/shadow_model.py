@@ -38,12 +38,12 @@ from intervals_inspector.onflows_zone_profile import (
 )
 
 
-SHADOW_MODEL_VERSION = "real-data-shadow-physiology-v5-adjacent-tmax"
+SHADOW_MODEL_VERSION = "real-data-shadow-physiology-v6-weighted-downward-tmax"
 TREF_PROFILE_VERSION = "tref-bounded-40d-expert-v1"
 # Compatibility name retained for aggregate-cache and persistence metadata.
 TREF_BOUNDS_PROFILE_VERSION = TREF_PROFILE_VERSION
-CONFIG_SCHEMA_VERSION = "shadow-model-config-v5-adjacent-tmax"
-RESULT_SCHEMA_VERSION = "shadow-model-comparison-v5-adjacent-tmax"
+CONFIG_SCHEMA_VERSION = "shadow-model-config-v6-weighted-downward-tmax"
+RESULT_SCHEMA_VERSION = "shadow-model-comparison-v6-weighted-downward-tmax"
 HISTORY_WINDOW_DAYS = TREF_HISTORY_WINDOW_DAYS
 LOW_HR_COVERAGE_PERCENT = 80.0
 PROFILE_LEVELS = ("bounded-40d",)
@@ -582,7 +582,7 @@ def calculate_shadow_result(
     zone_tmax_minutes: Mapping[str, float] | None = None,
     capacity_sources: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Canonical adjacent spillover from direct Q/Tmax; keep H40/Tref separate."""
+    """Canonical downward participation and adjacent additions from direct Q/Tmax; keep H40/Tref separate."""
 
     # Deprecated keyword compatibility. Historical direct-dose names are
     # accepted only as aliases for the one E history used by H40/7-40.
@@ -672,7 +672,9 @@ def calculate_shadow_result(
                 "tmax_minutes": component_load["capacity_minutes"][zone],
                 "tmax_source": component_load["capacity_sources"][zone],
                 # Legacy fields retained for readers; neither drives the rule.
-                "cascade": 0.0,
+                "cascade": component_load["downward_received"][zone],
+                "downward_received": component_load["downward_received"][zone],
+                "downward_per_zone_out": component_load["downward_per_zone_out"][zone],
                 "spillover_excess": max(0.0, equivalent_time[zone] - 0.5 * component_load["capacity_minutes"][zone]),
                 "spillover_base": equivalent_time[zone],
                 "spillover_down_fraction": component_load["spill_down_fraction"][zone],
@@ -724,6 +726,7 @@ def calculate_shadow_result(
     return {
         "model_version": configuration.physiology_profile_version,
         "component_load_version": component_load["version"],
+        "downward_factors": component_load["downward_factors"],
         "spillover_basis": component_load["spill_basis"],
         "capacity_basis": component_load["capacity_basis"],
         "zone_tmax_minutes": component_load["capacity_minutes"],

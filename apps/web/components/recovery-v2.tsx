@@ -12,7 +12,7 @@ export function RecoveryV2Section({history,canEdit}:{history:RecoveryV2;canEdit:
   const contributors=history.daily.filter(row=>row.zone===zone&&(row.residual_fatigue_now??0)>=.01).sort((a,b)=>(b.residual_fatigue_now??0)-(a.residual_fatigue_now??0));
   return <section className="history-section recovery-section" aria-labelledby="recovery-title">
     <div className="section-heading"><div><p className="section-kicker">Индивидуално възстановяване</p><h2 id="recovery-title">Готовност по зони · ориентир 90%</h2></div><p>Към {history.as_of}</p></div>
-    <p>Товарът E включва прекия товар и влиянието между съседни зони. Новите натоварвания се добавят към остатъчната умора. Изчислението е по календарни дни; тренировките в един ден се сумират. 90% е ориентир за готовност; дозата в плана може да бъде намалена и под него.</p>
+    <p>Товарът E включва прекия товар и преноса от всички по-високи зони и добавките между съседи. Новите натоварвания се добавят към остатъчната умора. Изчислението е по календарни дни; тренировките в един ден се сумират. 90% е ориентир за готовност; дозата в плана може да бъде намалена и под него.</p>
     {history.source_stale&&<p role="status" className="integration-notice">Последният товар е до {history.source_as_of}. Прогнозата допуска, че след това няма ново натоварване. Обновете активностите.</p>}
     {permanentBase&&<p>Базата за Recovery е постоянната добавка за зоната + личният среднодневен товар за предходните до 40 дни. Добавката участва винаги и сама по себе си не създава умора.</p>}
     <div className="load-summary recovery-summary">{history.current.map(c=><article key={c.zone} className="load-summary-card" style={{"--series":c.zone==="STR"?"var(--strength)":`var(--zone-${c.zone.slice(1)})`} as CSSProperties}>

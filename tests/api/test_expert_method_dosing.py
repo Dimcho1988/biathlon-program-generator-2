@@ -151,7 +151,7 @@ def test_short_variant_preserves_the_prescribed_curve_duration():
 
 def joint_evidence(recovery=1.):
     return {'capacity_minutes': 100., 'target_hr_bpm': 160.,
-            'secondary_capacity': {'capacity_minutes': 200., 'zone': 'Z2', 'target_hr_bpm': 148.},
+            'secondary_capacity': {'capacity_minutes': 600., 'zone': 'Z2', 'target_hr_bpm': 148.},
             'secondary_max_fraction': .3, 'readiness_dose_factor': recovery,
             'zone_tmax_minutes': {z: 100. for z in ('Z1', 'Z2', 'Z3', 'Z4', 'Z5')},
             'dose_settings': {'zone_bounds_bpm': [80, 137, 148, 160, 170, 180], 'hrmax_bpm': 180.}}
@@ -168,7 +168,7 @@ def test_mixed_session_received_load_reduces_a_combination_that_fits_direct_budg
     assert engine._dose_usage(blocks, evidence, 'Z3') == .6
     # Z2 donates 20% of its whole 60 Q: Z3 receives 72, above its 65 Q budget.
     assert not engine._dose_fits(blocks, evidence, 'Z3', .65)
-    # Both components still reach 50%, but received Z3=60 and Z2=55 now fit.
+    # Both components still reach 50%; Z3 E=60 and Z2 E=50+90+5=145 fit.
     assert engine._dose_fits(joint_blocks(50., 50.), evidence, 'Z3', .65)
 
 
@@ -179,15 +179,15 @@ def test_mixed_session_received_load_budget_does_not_apply_recovery_twice():
 
 def test_mixed_continuous_support_uses_derived_half_budget_and_single_recovery():
     evidence = joint_evidence(.8)
-    evidence["secondary_capacity"]["capacity_minutes"] = 100.
+    evidence["secondary_capacity"]["capacity_minutes"] = 400.
     profile = {"building_fraction": .65, "maintenance_fraction": .4, "reentry_fraction": .5}
     method = {"zone": "Z3", "structure": "THRESHOLD_LONG"}
     ceiling = engine._dose_ceiling(method, "BUILDING", profile, "GENERAL_PREPARATION", evidence, None)
     assert evidence["secondary_max_fraction"] == .325
-    # Z3 crosses the spill gate: Z2 receives 20.8 own Q + 5.2 from Z3,
-    # exactly 100 × .325 × .8 = 26. The direct work by itself is below 26.
-    assert engine._dose_fits(joint_blocks(52., 20.8), evidence, "Z3", ceiling * .8)
-    assert not engine._dose_fits(joint_blocks(52., 21.8), evidence, "Z3", ceiling * .8)
+    # Z3 crosses the spill gate: Z2 receives 5.2 own Q + 93.6 downward + 5.2 adjacent,
+    # exactly 400 × .325 × .8 = 104. Recovery is applied to the budget once.
+    assert engine._dose_fits(joint_blocks(52., 5.2), evidence, "Z3", ceiling * .8)
+    assert not engine._dose_fits(joint_blocks(52., 6.2), evidence, "Z3", ceiling * .8)
 
 
 def test_expert_effort_coefficient_prescribes_curve_speed_and_separate_total_budget():

@@ -17,7 +17,7 @@ def inputs():
 def test_reconciled_q_fits_adjacent_budget_without_exceeding_7_40_ceiling():
     goals,p,ref = inputs()
     result = policy.reconcile(goals,p,{"kind":"BUILD"},ref)
-    assert result["Z1"]["target"] == 240  # No automatic cascade from upper zones.
+    assert result["Z1"]["target"] == 350  # Weighted received E reaches the existing 7/40 ceiling.
     assert result["Z1"]["desired_weekly_q"] == 240
     assert 0 < result["Z1"]["target_weekly_q"] <= 240
     for g in result.values():
@@ -43,13 +43,16 @@ def test_limited_history_does_not_inherit_an_enlarged_automatic_budget():
 
 def test_projection_uses_individual_continuous_capacity_not_historical_load():
     goals, profile, reference = inputs()
-    reference["Z3"]["c40"] = 30.  # Leave enough 7/40 budget for all 420 direct minutes.
+    # Leave room for direct Q and all downward participation, so only Tmax
+    # determines the adjacent extras in this test.
+    for zone in reference:
+        reference[zone]["c40"] = 100.
     for zone, goal in goals.items():
         goal["target_weekly_q"] = 420. if zone == "Z3" else 0.
     capacity = {f"Z{i}": 100. for i in range(1, 6)}
     result = policy.reconcile(goals, profile, {"kind": "BUILD"}, reference,
                               zone_tmax_minutes=capacity)
-    assert result["Z2"]["consistency"]["projected_weekly_effective"] == 42.
+    assert result["Z2"]["consistency"]["projected_weekly_effective"] == 798.
     assert result["Z3"]["consistency"]["projected_weekly_effective"] == 420.
     assert result["Z4"]["consistency"]["projected_weekly_effective"] == 84.
-    assert result["Z1"]["consistency"]["projected_weekly_effective"] == 0.
+    assert result["Z1"]["consistency"]["projected_weekly_effective"] == 756.

@@ -221,7 +221,7 @@ def test_slope_override_recalculates_only_the_single_equivalent_time_dose() -> N
     assert comparison["intrazone_calculation_count"] == 2
 
 
-def test_whole_equivalent_time_drives_adjacent_spill_without_full_cascade() -> None:
+def test_whole_equivalent_time_drives_downward_participation_and_adjacent_spill() -> None:
     result = calculate_shadow_result(
         _analysis_with_equivalent_minutes({"Z2": 100.0}),
         default_shadow_configuration(),
@@ -238,8 +238,8 @@ def test_whole_equivalent_time_drives_adjacent_spill_without_full_cascade() -> N
     assert rows["Z2"]["spillover_excess"] == pytest.approx(17.5)
     assert rows["Z1"]["spillover_received"] == pytest.approx(10.0)
     assert rows["Z3"]["spillover_received"] == pytest.approx(20.0)
-    assert rows["Z1"]["cascade"] == pytest.approx(0.0)
-    assert rows["Z1"]["E_z"] == pytest.approx(10.0)
+    assert rows["Z1"]["cascade"] == pytest.approx(140.0)
+    assert rows["Z1"]["E_z"] == pytest.approx(150.0)
     assert rows["Z3"]["E_z"] == pytest.approx(20.0)
     assert rows["Z4"]["E_z"] == rows["Z5"]["E_z"] == 0.0
     for row in rows.values():

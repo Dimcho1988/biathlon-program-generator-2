@@ -380,7 +380,7 @@ def test_single_canonical_adjacent_load_and_separate_strength():
     blocks = [engine._block("WORK", "Work", "Z3", 10, 160, "Controlled")]
     direct, effective, _ = engine._canonical_load(blocks, settings, [], TODAY)
     assert direct["Z3"] == 10
-    assert effective["Z1"] == 0 and effective["Z2"] == 0 and effective["Z3"] == 10
+    assert effective["Z1"] == 18 and effective["Z2"] == 18 and effective["Z3"] == 10
     assert effective["Z4"] == 0 and effective["STR"] == 0
     direct, effective, _ = engine._canonical_load([engine._block("WORK", "Strength", "STR", 10, None, "")], settings, [], TODAY)
     assert effective["STR"] == 10
