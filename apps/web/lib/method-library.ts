@@ -6,9 +6,11 @@ export interface MethodOverride { enabled?: boolean; speed_multiplier?: MethodRa
 export interface MethodPreferences { enabled: boolean; overrides: Record<string, MethodOverride> }
 export interface MethodGuidance { purpose?: string; execution?: string; recovery?: string; success?: string; errors?: string; progression?: string; adjustment?: string }
 export interface MethodPrescription {
-  anchor: { type: string; distance_m?: number };
+  anchor: { type: string; distance_m?: number; duration_seconds?: number };
   speed_multiplier?: MethodRange;
-  work?: { unit: "seconds" | "meters"; range: MethodRange };
+  work?: { unit: "seconds" | "meters" | "capacity_fraction"; range: MethodRange };
+  structure?: string;
+  pace_offset?: { distance_m: number; seconds: MethodRange };
   repetitions?: MethodRange;
   recovery?: { seconds?: MethodRange; type?: string };
   sets?: { count: number; recovery_seconds?: MethodRange | number };
@@ -20,7 +22,8 @@ export interface MethodResolution {
   status: string; reason?: string; message?: string; reasons?: string[];
   anchor?: { type: string; speed_kmh?: number; distance_m?: number; duration_seconds?: number; evidence?: Record<string, unknown> };
   target_speed_kmh?: number; target_speed_range_kmh?: MethodRange;
-  speed_multiplier_range?: MethodRange; work_range?: MethodRange; work_unit?: "seconds" | "meters";
+  speed_multiplier_range?: MethodRange; work_range?: MethodRange; work_unit?: "seconds" | "meters" | "capacity_fraction";
+  hr_reference_range_bpm?: MethodRange | null; hr_reference_basis?: string; hr_role?: string;
   work_duration_seconds?: number; work_duration_range_seconds?: MethodRange;
   work_distance_m?: number; work_distance_range_m?: MethodRange;
   phase?: string; curve_source?: string; zone?: string; components?: string[];
@@ -33,6 +36,7 @@ export interface LibraryMethod {
   adaptation?: string | Record<string, unknown>; guidance: MethodGuidance;
   prescription?: MethodPrescription | null; resolution?: MethodResolution;
   automatic_selection?: boolean;
+  related_method_ids?: string[]; derived_from?: string[];
   [key: string]: unknown;
 }
 export interface SessionMethod {
@@ -79,11 +83,13 @@ export function parseMethodLibrary(value: unknown): MethodLibraryResponse {
     throw new Error("Базата от методи временно не е достъпна. Опитай отново.");
   return { ...value, preferences: parseMethodPreferences(value.preferences) } as unknown as MethodLibraryResponse;
 }
-export function methodAnchorLabel(anchor?: { type: string; distance_m?: number }): string {
+export function methodAnchorLabel(anchor?: { type: string; distance_m?: number; duration_seconds?: number }): string {
   if (!anchor) return "Индивидуален работен профил";
   if (anchor.type === "CV") return "КС · критична скорост";
+  if (anchor.type === "INDIVIDUAL_ZONE") return "Индивидуален профил на компонента";
   if (anchor.type === "V5") return "V5 · оценка на МАС от максимални 5 мин";
   if (anchor.type === "V6") return "V6 · максимална скорост за 6 мин";
+  if (anchor.type === "V_DURATION") return `V(t) · скорост за ${durationSeconds(anchor.duration_seconds)}`;
   if (["RACE_DISTANCE", "PRIMARY_RACE"].includes(anchor.type)) return anchor.distance_m ? `V${anchor.distance_m} · скорост за ${anchor.distance_m} m` : "Скорост за основната дисциплина";
   if (anchor.type === "RACE_DURATION") return "Скорост за продължителността на старта";
   return anchor.type;
@@ -93,7 +99,12 @@ export function rangeText(value: MethodRange | undefined, format: (n: number) =>
   return value[0] === value[1] ? format(value[0]) : `${format(value[0])}–${format(value[1])}`;
 }
 export function methodWorkText(work?: MethodPrescription["work"]): string {
-  return !work ? "По структурата на метода" : work.unit === "meters" ? `${rangeText(work.range)} m` : rangeText(work.range, durationSeconds);
+  return !work ? "По структурата на метода" : work.unit === "meters" ? `${rangeText(work.range)} m` : work.unit === "capacity_fraction" ? `${rangeText(work.range, n => String(Math.round(n * 100)))}% от лично Tmax` : rangeText(work.range, durationSeconds);
+}
+export function methodHrText(resolution?: Pick<MethodResolution, "hr_reference_range_bpm" | "hr_reference_basis" | "hr_role">): string {
+  if (!resolution?.hr_reference_range_bpm) return "Нужен е индивидуален пулсов профил.";
+  const basis = resolution.hr_reference_basis === "INDIVIDUAL_ZONE_OBSERVATION_NOT_SPEED_PREDICTION" ? "пулсов диапазон на зоната за наблюдение; извън точната скорост–пулс връзка" : "индивидуална моделна оценка";
+  return `${rangeText(resolution.hr_reference_range_bpm)} уд./мин · ${basis}.${resolution.hr_role === "SECONDARY_OBSERVATION_WITH_LAG" ? " Пулсът изостава при кратките части; не ускорявай, за да го достигнеш." : " Вторичен ориентир при устойчиво усилие."}`;
 }
 export function methodPaceText(speed?: MethodRange): string {
   if (!isMethodRange(speed)) return "—";
@@ -115,11 +126,14 @@ export function methodReasonText(reason?: string): string {
     CONFIRMED_EXECUTION_REQUIRED: "Първо изпълни успешно предходната стъпка и потвърди реалната активност.",
     SPORT_OR_PERIOD_NOT_SUPPORTED: "Методът е за друго средство или период.",
     DISABLED_BY_PROFILE: "Изключен в индивидуалните настройки.",
+    SOURCE_FAMILY_DISABLED_BY_PROFILE: "Изключен чрез настройката на оригиналния метод. Можеш да включиш тази адаптация отделно.",
+    SHORT_SPEED_TEST_REQUIRED: "Нужен е приет кратък максимален тест за същото средство. Само петминутната опора не описва надеждно тази скорост.",
     SPORT_NOT_SUPPORTED: "Методът е за друго тренировъчно средство.",
     PRIMARY_DISCIPLINE_NOT_SUPPORTED: "Методът е за друга основна дисциплина.",
     PERIOD_NOT_SUPPORTED: "Методът е за друг период на подготовката.",
     SPEED_SPORT_MISMATCH: "Нужна е крива за същото тренировъчно средство.",
     NO_INDIVIDUAL_SPEED_CURVE: "Няма използваема индивидуална крива скорост–време.",
+    INDIVIDUAL_METHOD_CAPACITY_REQUIRED: "Нужна е индивидуална оценка на устойчивостта за този метод. Провери тестовете и работния профил в Управление.",
     EXPLORATORY_OR_NONMAXIMAL_TESTS: "Наличните тестове са ориентировъчни или не са максимални.",
     CV_REQUIRES_ACCEPTED_SHORT_AND_LONG_TESTS: "За КС са необходими приети максимални тестове с различна кратка и дълга продължителност.",
     PRIMARY_RACE_DISTANCE_OR_DURATION_REQUIRED: "Задай разпознаваема дистанция или продължителност на основната дисциплина в профила.",
@@ -135,7 +149,10 @@ export function methodReasonText(reason?: string): string {
   };
   return labels[reason] ?? (/^[A-Z0-9_]+$/.test(reason) ? "Нужно е методическо уточняване преди автоматичен избор." : reason);
 }
-export function methodStatusLabel(status?: string): string {
+export function methodStatusLabel(status?: string, reason?: string): string {
+  if (status === "INCOMPATIBLE") return reason === "SPORT_NOT_SUPPORTED" ? "За друго тренировъчно средство" : reason === "PRIMARY_DISCIPLINE_NOT_SUPPORTED" ? "За друга дисциплина" : "За друг период";
+  if (reason === "SHORT_SPEED_TEST_REQUIRED") return "Добави кратък максимален тест";
+  if (["NO_INDIVIDUAL_SPEED_CURVE", "SPEED_SPORT_MISMATCH"].includes(reason ?? "")) return "Нужна е лична скоростна крива";
   if (status === "PROGRESSION_LOCKED") return "Изисква предходна стъпка";
   if (status === "READY") return "Готов за индивидуално дозиране";
   if (status?.includes("DISABLED")) return "Изключен за този спортист";

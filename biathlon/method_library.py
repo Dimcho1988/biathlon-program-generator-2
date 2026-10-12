@@ -7,13 +7,14 @@ resolver. Power/qualitative references do not acquire speed prescriptions.
 from copy import deepcopy
 import json
 from hashlib import sha256
+from functools import lru_cache
 import math
 from pathlib import Path
 import re
 
-from . import dosing_curve, preliminary_capacity, speed_duration, speed_zones, method_progression
+from . import dosing_curve, preliminary_capacity, speed_duration, speed_zones, method_progression, hr_speed
 
-VERSION = "training-method-library-v2-execution-progression"
+VERSION = "training-method-library-v3-complete-recipes"
 CATALOG_PATH = Path(__file__).parent / "data" / "training_method_library.json"
 PHASE_POSITION = {"RE_ENTRY": 0., "GENERAL_PREPARATION": 0., "SPECIAL_PREPARATION": .5,
                   "PRECOMPETITION": 1., "COMPETITION": 1., "TRANSITION": 0.}
@@ -89,6 +90,49 @@ def selected_curve(view):
     return speed_duration.calibrated(tests, prior=prior), tests, "INDIVIDUAL_TEST_CURVE" if tests else "INDIVIDUAL_PRIOR_CURVE"
 
 
+class _CachedCurve:
+    """Request-local memoization: no athlete data survives into another request."""
+    def __init__(self, curve):
+        self._curve = curve
+        self.speed = lru_cache(maxsize=2048)(curve.speed)
+        self.inverse = lru_cache(maxsize=2048)(curve.inverse)
+
+    def __getattr__(self, key):
+        return getattr(self._curve, key)
+
+
+def _prepare(view):
+    curve, tests, source = selected_curve(view)
+    policy = (view or {}).get("sport_hr_policy") or {}
+    predictor = None
+    try:
+        predictor_type = dosing_curve.Predictor if source == "BLENDED_DOSING_CURVE" else hr_speed.Predictor
+        durations = {a["zone"]: a["duration_s"] for a in (view.get("preliminary_capacity") or {}).get("anchors", [])}
+        predictor = predictor_type(curve, policy["sport_zone_bounds_bpm"], policy["sport_hrmax_bpm"], view.get("index_summary", {}),
+            expert_durations=durations or None, normalization_offset_bpm=policy.get("offset_bpm", 0))
+        predictor.hr_for_speed = lru_cache(maxsize=2048)(predictor.hr_for_speed)
+    except (ValueError, KeyError, TypeError):
+        pass
+    return (_CachedCurve(curve), tests, source), predictor
+
+
+def _hr_reference(segment, predictor):
+    """Secondary reference only: never synthesize measured HR or %CS = %HRmax."""
+    if predictor is None:
+        return {"hr_reference_range_bpm": None, "hr_reference_basis": "INDIVIDUAL_HR_PROFILE_REQUIRED"}
+    try:
+        values = [predictor.hr_for_speed(v) for v in segment["target_speed_range_kmh"]]
+        basis = "INDIVIDUAL_SPEED_HR_MODEL_ESTIMATE"
+    except ValueError:
+        index = int(segment["zone"][1:])-1
+        values = list(predictor.bounds[index:index+2])
+        values[1] = min(values[1], predictor.hrmax)
+        basis = "INDIVIDUAL_ZONE_OBSERVATION_NOT_SPEED_PREDICTION"
+    return {"hr_reference_range_bpm": [math.floor(values[0]), math.ceil(values[1])],
+            "hr_reference_basis": basis, "hr_role": "SECONDARY_OBSERVATION_WITH_LAG" if segment["work_duration_seconds"] < 180 else "SECONDARY_OBSERVATION",
+            "hr_is_measured": False}
+
+
 def primary_distance(profile):
     text = str(profile.get("discipline") or "").strip().lower()
     if text in {"marathon", "маратон"}:
@@ -115,7 +159,7 @@ def _anchor(spec, profile, view, curve, tests):
             allow_model_estimate=(profile.get("planning_controls") or {}).get("capacity_policy", "MODEL_WITH_PRIOR") == "MODEL_WITH_PRIOR")
         velocity = descriptor["speed_kmh"]
         result["evidence"] = descriptor
-    elif kind in {"V5", "V6", "RACE_DURATION"}:
+    elif kind in {"V5", "V6", "V_DURATION", "RACE_DURATION"}:
         seconds = {"V5": 300., "V6": 360.}.get(kind, spec.get("duration_seconds"))
         if not _positive(seconds):
             raise ValueError("RACE_DURATION_REQUIRED")
@@ -155,6 +199,23 @@ def _segment(spec, base, profile, view, curve, tests, position, zone_profile):
     amount = works[0] + position * (works[1] - works[0])
     velocity = anchor["speed_kmh"] * multiplier
     velocities = [anchor["speed_kmh"] * v for v in multipliers]
+    offset = spec.get("pace_offset", base.get("pace_offset"))
+    if offset:
+        reference = offset.get("distance_m")
+        values = offset.get("seconds")
+        if (not _positive(reference) or not isinstance(values, list) or len(values) != 2
+            or any(not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) for v in values)
+            or values[0] > values[1]):
+            raise ValueError("INVALID_PACE_OFFSET")
+        def shifted(v, delta):
+            seconds = reference / (v / 3.6) + delta
+            if seconds <= 0:
+                raise ValueError("INVALID_PACE_OFFSET")
+            return reference / seconds * 3.6
+        velocities = sorted(shifted(v, d) for v in velocities for d in values)
+        velocities = [velocities[0], velocities[-1]]
+        velocity = shifted(velocity, sum(values)/2)
+        anchor["pace_offset"] = deepcopy(offset)
     if work.get("unit") == "seconds":
         seconds, seconds_range = amount, works
         distance, distance_range = velocity / 3.6 * seconds, None
@@ -162,11 +223,16 @@ def _segment(spec, base, profile, view, curve, tests, position, zone_profile):
         distance, distance_range = amount, works
         seconds = amount / (velocity / 3.6)
         seconds_range = [works[0] / (velocities[1] / 3.6), works[1] / (velocities[0] / 3.6)]
+    elif work.get("unit") == "capacity_fraction":
+        capacity = curve.inverse(velocity / 3.6)
+        seconds = amount * capacity
+        seconds_range = [works[0] * capacity, works[1] * capacity]
+        distance, distance_range = velocity / 3.6 * seconds, None
     else:
         raise ValueError("UNKNOWN_WORK_UNIT")
     recovery_segment = spec.get("kind") == "RECOVERY"
     duration = None if recovery_segment else curve.inverse(velocity / 3.6)
-    continuous = base.get("structure") == "CONTINUOUS"
+    continuous = base.get("structure") in {"CONTINUOUS", "PROGRESSIVE_CONTINUOUS"}
     if not continuous and not recovery_segment and seconds >= duration:
         raise ValueError("REPETITION_REACHES_CONTINUOUS_MAXIMUM")
     zone = speed_zones.classify(zone_profile, velocity)
@@ -180,10 +246,11 @@ def _segment(spec, base, profile, view, curve, tests, position, zone_profile):
             "work_unit": work["unit"], "work_range": works, "continuous_capacity_seconds": duration,
             "zone": zone, "recovery_after_seconds": sum(rest) / 2,
             "recovery_after_type": spec.get("recovery_after_type", (base.get("recovery") or {}).get("type", "UNSPECIFIED")),
-            "recovery_after_instructions": spec.get("recovery_after_instructions")}
+            "recovery_after_instructions": spec.get("recovery_after_instructions"),
+            "execution_control": spec.get("execution_control", base.get("execution_control", "SPEED_AND_QUALITY"))}
 
 
-def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None):
+def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr_predictor=None):
     phase = phase or "GENERAL_PREPARATION"
     config = profile.get("method_library") or {}
     override = (config.get("overrides") or {}).get(record["id"], {})
@@ -192,6 +259,9 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None):
               "selection_basis": "EXPLICIT_METHOD_RANGES_CURRENT_CURVE", "curve_improvement_assumed": False}
     if config.get("enabled", True) is False or override.get("enabled", True) is False:
         return {**result, "status": "DISABLED", "reason": "DISABLED_BY_PROFILE"}
+    if "enabled" not in override and any((config.get("overrides", {}).get(parent) or {}).get("enabled") is False
+                                         for parent in record.get("derived_from", [])):
+        return {**result, "status": "DISABLED", "reason": "SOURCE_FAMILY_DISABLED_BY_PROFILE"}
     p = deepcopy(record.get("prescription"))
     if not p:
         return {**result, "status": "REFERENCE_ONLY", "reason": record.get("non_executable_reason") or "NO_COMPLETE_SPEED_PRESCRIPTION"}
@@ -222,7 +292,12 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None):
             if p.get("pattern"):
                 raise ValueError("COMPOUND_WORK_OVERRIDE_REQUIRES_SEGMENT_PRESCRIPTION")
             p["work"]["range"] = deepcopy(override["work_range"])
-        curve, tests, curve_source = _prepared or selected_curve(speed_view)
+        if _prepared is None:
+            _prepared, _hr_predictor = _prepare(speed_view)
+        curve, tests, curve_source = _prepared
+        short_test = (record.get("requirements") or {}).get("short_test_max_seconds")
+        if short_test and not any(0 < t.get("duration_s", math.inf) <= short_test for t in tests):
+            return {**result, "reason": "SHORT_SPEED_TEST_REQUIRED", "required_test_max_seconds": short_test}
         zones = (speed_view.get("dosing_model") or {}).get("speed_zones") if curve_source == "BLENDED_DOSING_CURVE" else speed_view.get("speed_zones")
         position = progression["position"] if progression else 0.
         # Calendar selects permitted methods, never successful execution.
@@ -231,6 +306,9 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None):
         if p.get("structure") == "COMPOUND" and not p.get("pattern"):
             raise ValueError("COMPOUND_PATTERN_REQUIRED")
         segments = [_segment(s, p, profile, speed_view, curve, tests, position, zones) for s in pattern]
+        tail = _segment(p["tail"], p, profile, speed_view, curve, tests, position, zones) if p.get("tail") else None
+        for segment in segments + ([tail] if tail else []):
+            segment.update(_hr_reference(segment, _hr_predictor))
         if (profile.get("planning_controls") or {}).get("capacity_policy", "MODEL_WITH_PRIOR") != "MODEL_WITH_PRIOR":
             observed = sorted({t["duration_s"] for t in tests})
             if len(observed) < 2 or any(not observed[0] <= s["continuous_capacity_seconds"] <= observed[-1] for s in segments if s["kind"] == "WORK"):
@@ -248,6 +326,9 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None):
         set_rest = _range(sets.get("recovery_seconds", 0), "set_recovery", zero=True)
         work_segments = [s for s in segments if s["kind"] == "WORK"]
         cycle = sum(s["work_duration_seconds"] for s in work_segments)
+        if recovery.get("work_ratio") is not None:
+            ratio = _range(recovery["work_ratio"], "recovery_work_ratio", zero=True)
+            rests = [cycle * v for v in ratio]
         dominant = max(work_segments, key=lambda s: int(s["zone"][1:]))
         if p.get("race_duration_fraction_max"):
             for segment in work_segments:
@@ -260,6 +341,20 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None):
         if p.get("allow_fewer_repetitions") and override.get("repetitions") is None and repetitions[0] == repetitions[1] and repetitions[0] > 1:
             repetitions[0] = 1
         minimum, maximum = cycle * repetitions[0] * count, cycle * repetitions[1] * count
+        work_options = None
+        if p.get("structure") == "SEQUENCE":
+            if count != 1 or repetitions != [1., 1.] or not tail:
+                raise ValueError("INVALID_SEQUENCE")
+            limits = _range(p.get("tail_repetitions", [0, 0]), "tail_repetitions", zero=True)
+            if any(v != int(v) or v > 100 for v in limits):
+                raise ValueError("INVALID_SEQUENCE")
+            work_options = [cycle + n * tail["work_duration_seconds"] for n in range(int(limits[0]), int(limits[1])+1)]
+            minimum, maximum = work_options[0], work_options[-1]
+        if p.get("structure") in {"SCALED_SEQUENCE", "PROGRESSIVE_CONTINUOUS"}:
+            scale = p.get("minimum_scale", .5)
+            if not _positive(scale) or scale > 1 or count != 1 or repetitions != [1., 1.]:
+                raise ValueError("INVALID_SEQUENCE_SCALE")
+            minimum, maximum = cycle * scale, cycle
         if p.get("repetitions_from_budget"):
             continuous_capacity = min(s["continuous_capacity_seconds"] for s in work_segments)
             maximum = min(maximum, continuous_capacity)
@@ -275,12 +370,14 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None):
                 "speed_multiplier": recovery.get("speed_multiplier", [1, 1]),
                 "work": {"unit": "seconds", "range": rests}, "kind": "RECOVERY"},
                 p, profile, speed_view, curve, tests, .5, zones)
+            recovery_resolution.update(_hr_reference(recovery_resolution, _hr_predictor))
         return {**result, **deepcopy(dominant), "status": "READY", "curve_source": curve_source,
                 "actual_sport": actual_sport, "source_repetitions": original_repetitions,
                 "source_count_policy": "INDEPENDENT_TMAX_COACH_CEILING_NOT_SOURCE_COUNT" if p.get("repetitions_from_budget") else "EXPLICIT_COACH_REPEAT_RANGE" if override.get("repetitions") is not None else "CEILING_ALLOW_COMPLETE_REPEAT_REDUCTION",
                 "automatic_selection_enabled": override.get("enabled", record.get("automatic_selection", True)),
                 "requires_coach_activation": not override.get("enabled", record.get("automatic_selection", True)),
                 "recovery_resolution": recovery_resolution,
+                "tail_segment": tail, "work_options_seconds": work_options,
                 "curve_model_version": getattr(curve, "model_version", speed_view.get("model_version")),
                 "segments": segments, "components": sorted({s["zone"] for s in segments} | ({recovery_resolution["zone"]} if recovery_resolution else set())),
                 "repetitions": [int(v) for v in repetitions], "sets": count,
@@ -296,31 +393,31 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None):
 
 def catalog(profile, speed_view=None, *, phase=None, today=None):
     try:
-        prepared = selected_curve(speed_view)
+        prepared, predictor = _prepare(speed_view)
     except (ValueError, KeyError, TypeError):
-        prepared = None
-    return {"version": VERSION, "methods": [{**m, "resolution": resolve(m, profile, speed_view, phase=phase, _prepared=prepared)} for m in entries()]}
+        prepared, predictor = None, None
+    return {"version": VERSION, "methods": [{**m, "resolution": resolve(m, profile, speed_view, phase=phase, _prepared=prepared, _hr_predictor=predictor)} for m in entries()]}
 
 
 def metadata(record, resolution):
-    return {k: deepcopy(record.get(k)) for k in ("id", "title", "source", "original", "adaptation", "guidance", "prescription", "progression")} | {"resolution": deepcopy(resolution)}
+    return {k: deepcopy(record.get(k)) for k in ("id", "title", "source", "original", "adaptation", "guidance", "prescription", "progression", "derived_from", "requirements")} | {"resolution": deepcopy(resolution)}
 
 
 def executable_methods(profile, speed_view, *, phase=None):
     result = []
     automatic_intervals = (profile.get("planning_controls") or {}).get("automatic_intervals", True)
     try:
-        prepared = selected_curve(speed_view)
+        prepared, predictor = _prepare(speed_view)
     except (ValueError, KeyError, TypeError):
         return result
     for record in entries():
-        if not automatic_intervals and (record.get("prescription") or {}).get("structure") != "CONTINUOUS":
+        if not automatic_intervals and (record.get("prescription") or {}).get("structure") not in {"CONTINUOUS", "PROGRESSIVE_CONTINUOUS"}:
             continue
         override = ((profile.get("method_library") or {}).get("overrides") or {}).get(record["id"], {})
         if not override.get("enabled", record.get("automatic_selection", True)):
             continue
         for actual_phase in ([phase] if phase else record.get("periods", [])):
-            r = resolve(record, profile, speed_view, phase=actual_phase, _prepared=prepared)
+            r = resolve(record, profile, speed_view, phase=actual_phase, _prepared=prepared, _hr_predictor=predictor)
             if r["status"] != "READY":
                 continue
             guidance = record.get("guidance") or {}
@@ -331,7 +428,8 @@ def executable_methods(profile, speed_view, *, phase=None):
                 "sports": (r["actual_sport"],), "periods": (actual_phase,), "purpose": "BUILDING", "position": .5,
                 "structure": "LIBRARY_INTERVALS" if interval else "LIBRARY_CONTINUOUS",
                 "min_work_min": r["minimum_work_seconds"]/60, "max_work_min": r["maximum_work_seconds"]/60,
-                "warmup_min": 15., "cooldown_min": 10.,
+                "warmup_min": 0. if (record.get("prescription") or {}).get("includes_preparation") else 15.,
+                "cooldown_min": 0. if (record.get("prescription") or {}).get("includes_preparation") else 10.,
                 "source_id": record["id"], "source_version": VERSION, "implementation_profile": VERSION,
                 "instructions": guidance.get("execution") or record.get("adaptation") or record["title"],
                 "adaptation": record.get("adaptation"), "method_library": metadata(record, r),

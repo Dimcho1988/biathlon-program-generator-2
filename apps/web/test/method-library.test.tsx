@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MethodCard, TrainingMethodLibrary } from "../components/training-method-library";
 import { SessionMethodGuidance, sessionMethods } from "../components/session-method-guidance";
-import { methodPaceText, parseMethodLibrary, parseMethodPreferences, type MethodLibraryResponse, type LibraryMethod } from "../lib/method-library";
+import { methodPaceText, methodStatusLabel, methodHrText, parseMethodLibrary, parseMethodPreferences, type MethodLibraryResponse, type LibraryMethod } from "../lib/method-library";
 import { defaultManagementProfile, parseManagementProfile, type DraftSession } from "../lib/training-management";
 
 export const testMethod: LibraryMethod = {
@@ -18,6 +18,31 @@ export const testMethod: LibraryMethod = {
 export const testLibrary: MethodLibraryResponse = { version: "training-method-library-v1", methods: [testMethod], configured: true, revision: 7, preferences: { enabled: true, overrides: {} }, profile: { sport: "NordicSki", actual_sport: "NordicSki", discipline: "10 km" }, phase: "SPECIAL_PREPARATION" };
 
 describe("source-preserving method library", () => {
+  it("links original power protocols to working adaptations and shows the real source anchor", () => {
+    const method = {...testMethod,id:"S06",prescription:null,original:{anchor:"MAP"},related_method_ids:["OF-S06"],resolution:{status:"REFERENCE_ONLY"}};
+    const html=renderToStaticMarkup(<MethodCard method={method} canEdit={false} selected onChange={() => {}} onReset={() => {}}/>);
+    expect(html).toContain('href="/methods?method=OF-S06"');
+    expect(html).toContain("MAP");
+    expect(html).not.toContain("Индивидуален работен профил");
+  });
+  it("distinguishes incompatible sport from a missing test and labels HR as secondary", () => {
+    expect(methodStatusLabel("INCOMPATIBLE","SPORT_NOT_SUPPORTED")).toBe("За друго тренировъчно средство");
+    expect(methodStatusLabel("UNAVAILABLE","SHORT_SPEED_TEST_REQUIRED")).toContain("кратък максимален тест");
+    const text=methodHrText({hr_reference_range_bpm:[170,182],hr_reference_basis:"INDIVIDUAL_ZONE_OBSERVATION_NOT_SPEED_PREDICTION",hr_role:"SECONDARY_OBSERVATION_WITH_LAG"});
+    expect(text).toContain("170–182");expect(text).toContain("не ускорявай");expect(text).toContain("за наблюдение");
+  });
+  it("does not ask for pulse or speed targets on a strength card", () => {
+    const method={...testMethod,prescription:null,registry_kind:"COACH_PROFILE",resolution:{status:"READY",zone:"STR"}};
+    const html=renderToStaticMarkup(<MethodCard method={method} canEdit={false} selected onChange={() => {}} onReset={() => {}}/>);
+    expect(html).toContain("Време и качество на упражненията");
+    expect(html).not.toContain("Нужен е индивидуален пулсов профил");
+  });
+  it("renders at most 24 cards initially while preserving the complete catalog", () => {
+    const methods=Array.from({length:60},(_,i)=>({...testMethod,id:`TEST-${i}`}));
+    const html=renderToStaticMarkup(<TrainingMethodLibrary initial={{...testLibrary,methods}} athleteName="Дими" canEdit={false}/>);
+    expect((html.match(/class="method-card/g)??[])).toHaveLength(24);
+    expect(html).toContain("Покажи още 24 метода");expect(html).toContain("60 метода");
+  });
   it("accepts the real catalog, including numeric disciplines and structured series", () => {
     const catalog = JSON.parse(readFileSync(new URL("../../../biathlon/data/training_method_library.json", import.meta.url), "utf8"));
     const parsed = parseMethodLibrary({ ...testLibrary, methods: catalog.methods });
