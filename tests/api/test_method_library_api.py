@@ -1,6 +1,6 @@
 """Method preferences retain athlete scope, immutable sources and profile CAS."""
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from apps.api import dependencies, main, method_library_service as service
+from apps.api.cloud import AthletePlanningCalendar, AthletePlanningCalendarEvent
 from apps.api.management_schemas import ManagementProfile, MethodLibraryPreferences
 from apps.api.oauth_store import PersistentStoreFailure
 from apps.api.routes import management
@@ -29,6 +30,10 @@ CATALOG = [
                       "work": {"unit": "seconds", "range": [30, 60]}, "repetitions": [4, 8]}},
     {"id": "TEST-REFERENCE", "title": "Power-only reference", "prescription": None},
 ]
+RACE_CALENDAR = AthletePlanningCalendar(events=(AthletePlanningCalendarEvent(
+    event_id="race-2026-10-12", event_type="MAIN_RACE", name="10 km",
+    start_date=date(2026, 10, 12), end_date=date(2026, 10, 12),
+),))
 
 
 class Store:
@@ -119,13 +124,40 @@ def test_catalog_missing_settings_preserves_references_and_reason(api):
 
 def test_phase_preview_uses_calendar_without_refreshing_plan(api):
     _, store, repository, _ = api
-    repository.athlete_planning_calendar = lambda alias: {"events": [{
-        "event_id": "race", "event_type": "MAIN_RACE", "name": "10 km",
-        "start_date": "2026-10-12", "end_date": "2026-10-12",
-    }]}
+    repository.athlete_planning_calendar = lambda alias: RACE_CALENDAR
     result = service.view(repository, "ath-test", now=datetime(2026, 10, 12, 9, tzinfo=timezone.utc))
     assert result["phase"] == "COMPETITION" and result["phase_source"] == "CALENDAR_PREVIEW"
     assert not store.saved
+
+
+@pytest.mark.parametrize("calendar", [None, AthletePlanningCalendar(events=()), RACE_CALENDAR])
+def test_default_catalog_endpoint_accepts_repository_calendar_contract(api, calendar):
+    client, store, repository, _ = api
+    reads = []
+
+    def read_calendar(alias):
+        reads.append(alias)
+        return calendar
+
+    repository.athlete_planning_calendar = read_calendar
+    before = deepcopy(store.current)
+    response = client.get("/api/v2/athlete/management/methods", headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json()["phase_source"] in {"CALENDAR_PREVIEW", "OUTSIDE_PROGRAMME_PREVIEW"}
+    assert len(response.json()["methods"]) == len(CATALOG)
+    assert reads == ["ath-test"] and store.current == before and not store.saved
+
+
+def test_explicit_phase_preview_does_not_read_calendar(api):
+    client, _, repository, _ = api
+
+    def unexpected_calendar_read(alias):
+        raise AssertionError("Explicit phase preview must not read the calendar")
+
+    repository.athlete_planning_calendar = unexpected_calendar_read
+    response = client.get("/api/v2/athlete/management/methods?phase=COMPETITION", headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json()["phase_source"] == "SELECTED_PREVIEW"
 
 
 def test_save_preferences_requires_actor_and_scopes_write_to_current_athlete(api):

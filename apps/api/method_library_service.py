@@ -49,6 +49,9 @@ def _current_phase(repository, alias, profile, today):
         return "GENERAL_PREPARATION", "DEFAULT_PREVIEW"
     reader = getattr(repository, "athlete_planning_calendar", None)
     calendar = (reader(alias) if reader else None) or {"events": []}
+    # The repository returns a typed calendar, including typed/date events.
+    # Periodization consumes the same JSON payload used by the weekly planner.
+    calendar = calendar.to_payload() if hasattr(calendar, "to_payload") else dict(calendar)
     scheduled, _ = planning_schedule.horizon(profile, calendar["events"])
     periods = build_periodization(
         scheduled["program_start"], scheduled["program_end"], calendar["events"],
