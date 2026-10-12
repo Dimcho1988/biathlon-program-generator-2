@@ -1,6 +1,7 @@
 import { parseTrainingObservations, defaultNeuromuscular, type LactateProfile, type NeuromuscularProfile, type LactateReference, type NeuromuscularExposure } from "./training-observations";
 import { isCalendarDate, isRecord } from "./training-status";
 import { defaultIndividualLearning, parseIndividualLearningConfig, type IndividualLearningConfig } from "./individual-learning";
+import { parseMethodPreferences, type MethodPreferences, type SessionMethod } from "./method-library";
 
 export interface ManagementProfile {
   schema_version: "management-profile-v1";
@@ -39,6 +40,7 @@ export interface ManagementProfile {
   lactate_guidance_enabled?: boolean;
   lactate_profiles?: LactateProfile[];
   neuromuscular?: NeuromuscularProfile;
+  method_library?: MethodPreferences;
 }
 
 export interface LoadProgression {
@@ -97,7 +99,7 @@ export interface ManagementProfileResponse { configured: boolean; profile: Manag
 export interface DraftRecord { entry_key: string; revision: number; recorded_at?: string; stale?: boolean | null; stale_reason?: string | null; payload: PlanningDraft }
 export type Component = "Z1" | "Z2" | "Z3" | "Z4" | "Z5" | "STR";
 export const COMPONENTS: Component[] = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"];
-export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; lactate_reference?: LactateReference }
+export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; lactate_reference?: LactateReference; method_library?: SessionMethod }
 export interface DoseEvidence {
   planned_gap_hours?: number; mixed_component?: boolean;
   zone_tmax_minutes?: Partial<Record<Component, number>>; zone_tmax_sources?: Partial<Record<Component, string>>;
@@ -113,6 +115,7 @@ export interface DoseEvidence {
 export interface DraftSession {
   method_id: string; title: string; sport: string; zone: string; purpose: string; blocks: SessionBlock[];
   neuromuscular_exposure?: NeuromuscularExposure | null;
+  method_library?: SessionMethod;
   main_work_minutes: number; total_minutes: number; canonical_effective_load: Record<Component, number>;
   direct_equivalent_minutes: Record<Component, number>; dose_evidence: DoseEvidence;
 }
@@ -231,6 +234,7 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     horizon_mode: "AUTO_CALENDAR", interval_profiles: [], strength_enabled: false, strength_circuits: 2, transition_days: 0, ...value,
     building_fraction: buildingFraction, maintenance_fraction: buildingFraction / 2, reentry_fraction: buildingFraction / 2 };
   normalized.individual_learning = parseIndividualLearningConfig(value.individual_learning);
+  if (value.method_library !== undefined) normalized.method_library = parseMethodPreferences(value.method_library);
   if (typeof normalized.auto_import_enabled !== "boolean" || !["AUTO", "REVIEW"].includes(String(normalized.adaptation_mode)) || !range(normalized.progression_percent, 0, 10)
     || typeof normalized.strength_enabled !== "boolean" || !integer(normalized.strength_circuits, 2, 3)
     || !integer(normalized.transition_days, 0, 28) || !isRecord(normalized.component_targets_weekly)

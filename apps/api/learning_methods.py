@@ -36,22 +36,60 @@ def method_descriptor(method, sport):
     """Freeze a server-resolved catalog definition, including personal profiles.
 
     Call before the planner mutates capacity/position/minimum dose. The full
-    definition hash intentionally invalidates evidence after profile changes.
+    definition hash intentionally invalidates evidence after recipe changes.
+    For sourced recipes, current absolute speed/capacity is observation context,
+    not a new method: speed and duration comparators constrain later reuse.
     """
+    definition = method
+    if method.get("method_library"):
+        library = method["method_library"]
+        resolution = library.get("resolution") or {}
+        definition = {key: method.get(key) for key in (
+            "id", "zone", "sports", "structure", "purpose", "position", "periods",
+            "warmup_min", "cooldown_min", "minimum_fraction", "source_id", "source_version", "implementation_profile",
+        )}
+        definition["method_library"] = {key: value for key, value in library.items() if key != "resolution"}
+        definition["phase"] = resolution.get("phase")
+        definition["expert_override"] = resolution.get("expert_override") or {}
     return {"id": method["id"], "zone": method["zone"], "sport": sport,
             "structure": method["structure"], "purpose": method["purpose"],
-            "version": f"{CATALOG_VERSION}:{_hash(method)[:20]}",
+            "version": f"{CATALOG_VERSION}:{_hash(definition)[:20]}",
             "catalog_version": CATALOG_VERSION, "position": method.get("position")}
 
 
-def _methods(repository, alias):
+def _methods(repository, alias, *, include_library=True, library_sport=None, library_method_id=None):
     from .management_store import ManagementStore
-    profile = ManagementStore(repository).profile(alias)
-    return resolved_methods(profile.get("profile") or {})
+    from . import model_service
+    from biathlon import method_library
+    profile = ManagementStore(repository).profile(alias).get("profile") or {}
+    methods = resolved_methods(profile)
+    controls, preferences = profile.get("planning_controls") or {}, profile.get("method_library") or {}
+    if not include_library or not profile or preferences.get("enabled", True) is False:
+        return methods
+    primary = profile.get("actual_sport") or profile.get("sport")
+    sports = list(dict.fromkeys(controls.get("training_sports") or [primary]))
+    if library_sport is not None:
+        sports = [library_sport] if library_sport in sports else []
+    records = method_library.entries()
+    overrides = preferences.get("overrides") or {}
+    eligible = [record for record in records if record.get("prescription")
+                and overrides.get(record["id"], {}).get("enabled", record.get("automatic_selection", True))
+                and (controls.get("automatic_intervals", True) or record["prescription"].get("structure") == "CONTINUOUS")
+                and (library_method_id is None or library_method_id in
+                     {f"LIB-{record['id']}-{phase}" for phase in record.get("periods", [])})]
+    sports = [sport for sport in sports if any(sport in record.get("sports", []) for record in eligible)]
+    if not sports or repository.athlete_settings(alias) is None:
+        return methods
+    for sport in sports:
+        view = model_service.speed_view(repository, alias, sport)
+        methods.extend(method_library.executable_methods({**profile, "actual_sport": sport}, view))
+    return methods
 
 
 def execution_catalog(repository, alias):
-    return [{"id": m["id"], "title": m["title"], "zone": m["zone"],
+    from biathlon.periodization import PHASE_LABELS_BG
+    return [{"id": m["id"], "title": m["title"] + (" · " + PHASE_LABELS_BG.get(m["periods"][0], m["periods"][0])
+             if m.get("method_library_id") and m.get("periods") else ""), "zone": m["zone"],
              "sports": list(m["sports"]) + (["WeightTraining"] if m["zone"] == "STR" else [])}
             for m in _methods(repository, alias)]
 
@@ -60,9 +98,12 @@ def confirmed_descriptor(repository, alias, report, activity):
     """Never accept a descriptor or an inferred plan/activity link from clients."""
     if not report.method_confirmed:
         return None
-    method = next((m for m in _methods(repository, alias) if m["id"] == report.executed_method_id), None)
     sport = activity.get("sport")
-    if method is None or (sport not in method["sports"] and not (sport == "WeightTraining" and method["zone"] == "STR")):
+    methods = _methods(repository, alias, include_library=report.executed_method_id.startswith("LIB-"),
+                       library_sport=sport, library_method_id=report.executed_method_id)
+    method = next((m for m in methods if m["id"] == report.executed_method_id
+                   and (sport in m["sports"] or (sport == "WeightTraining" and m["zone"] == "STR"))), None)
+    if method is None:
         raise HTTPException(422, "Choose an available method for the actual activity sport")
     return method_descriptor(method, sport)
 
@@ -230,7 +271,8 @@ def assess_methods(*, entries, source, today, history=None, retained=None):
         for row in retained.get("observations", [])[-MAX_OBSERVATIONS:]:
             try:
                 day = date.fromisoformat(row["day"])
-                valid = (type(row["success"]) is bool and row["method"]["catalog_version"] == CATALOG_VERSION
+                valid = (type(row["success"]) is bool and isinstance(row["method"]["catalog_version"], str)
+                         and bool(row["method"]["catalog_version"])
                          and row["id"] not in activities and row["day"] not in excluded
                          and today-timedelta(days=RETENTION_DAYS) <= day < today-timedelta(days=89)
                          and row["planned_minutes"] > 0 and row["actual_minutes"] > 0)

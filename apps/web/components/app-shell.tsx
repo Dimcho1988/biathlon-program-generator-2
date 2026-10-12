@@ -17,6 +17,7 @@ const sections = [
   { href: "/planning", label: "Профил за планиране", icon: "overview" },
   { href: "/management", label: "Седмична програма", icon: "calendar" },
   { href: "/management/outlook", label: "Дългосрочен план", icon: "trend" },
+  { href: "/methods", label: "База от тренировъчни методи", icon: "methods" },
 ] as const;
 
 function NavIcon({ name }: { name: string }) {
@@ -26,6 +27,7 @@ function NavIcon({ name }: { name: string }) {
     trend: <><path d="M3 4v16h18M6 15l5-5 4 3 6-8m-5 0h5v5" /></>,
     speed: <><path d="M5 19a9 9 0 1 1 14 0M12 12l4-4M7 17h10" /><circle cx="12" cy="12" r="1" /></>,
     response: <><path d="M3 12h4l3-7 4 14 3-7h4" /></>,
+    methods: <><path d="M12 5v16M3 4h5a4 4 0 0 1 4 2 4 4 0 0 1 4-2h5v15h-5a4 4 0 0 0-4 2 4 4 0 0 0-4-2H3z" /></>,
   };
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }

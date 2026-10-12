@@ -48,3 +48,13 @@ it("keeps method metadata optional for older histories and validates new catalog
   expect(parseResponseHistory(history()).execution_methods).toHaveLength(2);
   expect(() => parseResponseHistory({ ...history(), execution_methods: [{ id: "bad", title: 5 }] })).toThrow();
 });
+
+it("offers only execution methods for the actual activity sport", async () => {
+  const data = history();
+  data.sessions[0] = { ...data.sessions[0], sport: "NordicSki" };
+  data.execution_methods!.push({ id: "method-z1", title: "Бягане със същия идентификатор", zone: "Z2", sports: ["Run"] });
+  await act(async () => root.render(<ResponseMonitoring history={data} canReport canEditPlan={false}/>));
+  const options = [...container.querySelectorAll('[name="executed_method_id"] option')];
+  expect(options.filter(option => (option as HTMLOptionElement).value === "method-z1")).toHaveLength(1);
+  expect(options.some(option => option.textContent?.includes("Бягане със същия"))).toBe(false);
+});

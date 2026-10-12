@@ -174,3 +174,30 @@ def expert_interval_curve_capacity(method, speed, context, *, use_model_prior=Fa
             "speed_time_duration_ratio": coefficient, "hr_role": "OBSERVATION_ONLY",
             "speed_role": "FLAT_EQUIVALENT_REFERENCE_NOT_TERRAIN_PACE",
             "implementation_profile": method.get("implementation_profile")}
+
+
+def library_curve_capacity(method, speed, context, *, use_model_prior=False):
+    """Source-recipe ceiling with capacity on the same preview/scheduler curve."""
+    library = method.get("method_library") or {}
+    resolved = library.get("resolution") or {}
+    predictor, tests, reasons = context
+    if resolved.get("status") != "READY" or predictor is None:
+        return None
+    if any(reason != "INSUFFICIENT_INDEPENDENT_TEST_DURATIONS" for reason in reasons):
+        return None
+    segments = [s for s in resolved["segments"] if s["kind"] == "WORK"]
+    if not use_model_prior and any(not observed_curve_support(tests, s["continuous_capacity_seconds"]) for s in segments):
+        return None
+    duration = min(s["continuous_capacity_seconds"] for s in segments)
+    if not _positive(duration):
+        return None
+    return {"capacity_source": resolved["curve_source"], "capacity_minutes": duration / 60,
+            "target_hr_bpm": None, "target_speed_kmh": resolved["target_speed_kmh"],
+            "capacity_reference": "CURRENT_CURVE_AT_EXPLICIT_SOURCE_RECIPE_SPEED",
+            "capacity_confidence": "SOURCE_RECIPE_ON_INDIVIDUAL_CURVE_ESTIMATE", "capacity_is_estimate": True,
+            "model_version": resolved["curve_model_version"], "fallback_reasons": list(reasons),
+            "hr_role": "OBSERVATION_ONLY", "speed_role": resolved["speed_role"],
+            "method_library": deepcopy(library), "library_work_ceiling_minutes": resolved["maximum_work_seconds"] / 60,
+            "effort_profile": {**deepcopy(method["interval_template"]),
+                               "continuous_capacity_min": duration / 60,
+                               "target_speed_kmh": resolved["target_speed_kmh"], "speed_basis": "FLAT_EQUIVALENT"}}

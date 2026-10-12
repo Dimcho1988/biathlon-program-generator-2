@@ -152,6 +152,7 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False)
             "engine": training_plan_engine.VERSION,
             "parameters": training_plan_engine.PARAMETER_VERSION,
             "methods": training_plan_engine.METHODS_VERSION,
+            "method_library": training_plan_engine.method_library.provenance(),
             "periodization": PERIODIZATION_VERSION,
             "speed_duration": training_plan_engine.speed_duration.VERSION,
             "dosing_curve": training_plan_engine.dosing_curve.VERSION,

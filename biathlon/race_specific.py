@@ -2,7 +2,7 @@
 from copy import deepcopy
 from . import speed_duration, speed_zones, training_guidance, adaptive_methods, preliminary_capacity, dosing_curve
 
-VERSION = "race-specific-speed-methods-v2"
+VERSION = "race-specific-speed-methods-v3"
 PERIODS = ("SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION")
 
 
@@ -19,6 +19,7 @@ def reference(profile, view, event, today):
         curve = speed_duration.calibrated(tests, prior=preliminary_capacity.curve_from_summary(view.get("preliminary_capacity")))
         seconds = curve.inverse(event["distance_m"],distance=True)
         blend = dosing_curve.from_view(view)
+        dosing_seconds = blend.inverse(event["distance_m"], distance=True) if blend else seconds
         bands = []
         dosing_bands = []
         # Versioned coaching references around the event. These durations
@@ -36,9 +37,10 @@ def reference(profile, view, event, today):
                 "evidence":"INTERPOLATED" if min(t["duration_s"] for t in tests) <= duration <= max(t["duration_s"] for t in tests) else "EXTRAPOLATED",
                 "lactate_reference":training_guidance.lactate_at_speed(profile,profile["sport"],velocity,today)})
             if blend:
-                working_speed = blend.speed(duration)*3.6
+                dosing_duration = dosing_seconds*factor
+                working_speed = blend.speed(dosing_duration)*3.6
                 dosing_bands.append({**bands[-1], "speed_kmh": working_speed,
-                    "pace_seconds_km": 3600/working_speed,
+                    "pace_seconds_km": 3600/working_speed, "maximum_duration_s": dosing_duration,
                     "label": {"BELOW":"Под състезателния ориентир", "RACE":"Състезателен ориентир", "ABOVE":"Над състезателния ориентир"}[name]+" · 30/70",
                     "zone": speed_zones.classify(view["dosing_model"]["speed_zones"], working_speed),
                     "evidence": "COACH_BLEND_ESTIMATE", "test_curve_speed_kmh": velocity,
@@ -73,7 +75,8 @@ def methods(profile, reference, base_methods):
         if any(p["zone"] == zone for p in profile.get("interval_profiles",[])):
             continue
         m = deepcopy(template)
-        work = min(180.,max(20.,band["maximum_duration_s"]*.1))
+        # Explicit versioned recipe durations, independent of continuous Tmax.
+        work = {"BELOW": 180., "RACE": 90., "ABOVE": 45.}[band["role"]]
         if adaptive_methods.developmental(profile):
             work = min(work,30.)
         work = max(10.,round(work/5)*5)

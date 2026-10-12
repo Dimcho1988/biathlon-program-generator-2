@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from math import isfinite
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 from biathlon.method_dosing import continuous_building_fraction
 from .training_observation_schemas import LactateProfile, NeuromuscularProfile
 
@@ -208,6 +208,47 @@ class IndividualLearning(BaseModel):
     max_intensity_step: float = Field(default=.02, ge=0, le=.05)
 
 
+MethodMultiplier = Annotated[float, Field(strict=True, ge=.1, le=3)]
+MethodWorkLength = Annotated[float, Field(strict=True, ge=1, le=100000)]
+MethodRepetitions = Annotated[int, Field(strict=True, ge=1, le=100)]
+MethodIdentifier = Annotated[str, Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")]
+
+
+class MethodLibraryOverride(BaseModel):
+    """Coach controls; units, sources and speed anchors stay in the catalog."""
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    enabled: bool | None = Field(default=None, strict=True)
+    speed_multiplier: tuple[MethodMultiplier, MethodMultiplier] | None = None
+    work_range: tuple[MethodWorkLength, MethodWorkLength] | None = None
+    repetitions: tuple[MethodRepetitions, MethodRepetitions] | None = None
+
+    @model_serializer(mode="wrap")
+    def explicit_controls(self, handler):
+        # The planner consumes JSON dictionaries. Unspecified controls must
+        # remain absent rather than overwriting catalog ranges with null.
+        return {key: value for key, value in handler(self).items() if value is not None}
+
+    @model_validator(mode="after")
+    def coherent(self):
+        for name in ("speed_multiplier", "work_range", "repetitions"):
+            value = getattr(self, name)
+            if value is not None and value[0] > value[1]:
+                raise ValueError(f"{name}: minimum must not exceed maximum")
+        return self
+
+
+class MethodLibraryPreferences(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    enabled: bool = Field(default=True, strict=True)
+    overrides: dict[MethodIdentifier, MethodLibraryOverride] = Field(default_factory=dict, max_length=500)
+
+
+class MethodLibraryPreferencesWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    expected_revision: int = Field(ge=1, strict=True)
+    preferences: MethodLibraryPreferences
+
+
 class ManagementProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -242,6 +283,7 @@ class ManagementProfile(BaseModel):
     progression_percent: float = Field(default=5, ge=0, le=10)
     load_progression: LoadProgression | None = None
     individual_learning: IndividualLearning = Field(default_factory=IndividualLearning)
+    method_library: MethodLibraryPreferences = Field(default_factory=MethodLibraryPreferences)
     component_targets_weekly: dict[Literal["Z1", "Z2", "Z3", "Z4", "Z5", "STR"], float] = Field(default_factory=dict)
     interval_profiles: list[IntervalDoseProfile] = Field(default_factory=list, max_length=2)
     strength_enabled: bool = False

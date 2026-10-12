@@ -268,6 +268,9 @@ def test_full_planner_generates_whole_z5_dose_from_single_long_anchor_with_long_
     body = configured(age_years=25, training_experience_years=5, building_fraction=.65,
                       available_minutes=[180]*7, horizon_mode="MANUAL",
                       program_end=(TODAY+timedelta(days=6)).isoformat(),
+                      # Isolate the generic boundary-based method under test;
+                      # source recipes have separate anchors and integration gates.
+                      method_library={"enabled": False, "overrides": {}},
                       # This fixture's 15-bpm-wide Z5 has 1.75 upper-edge
                       # equivalence: six 30-s reps require 5.25 canonical min.
                       component_targets_weekly={"Z1": 100., "Z5": 6.})

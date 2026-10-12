@@ -16,10 +16,12 @@ from ..management_schemas import (
     ManagementPlanAction,
     ManagementDayAction,
     RaceDurationRequest,
+    MethodLibraryPreferencesWrite,
 )
 from ..management_store import ManagementStore
 from .. import management_service
 from .. import management_lifecycle
+from .. import method_library_service
 from ..read_session import ReadSession
 from fastapi import APIRouter
 from .. import dependencies
@@ -27,6 +29,35 @@ from ..sync_service import public_sync_state
 from ..management_projection import public_management
 
 router = APIRouter()
+
+
+@router.get("/api/v2/athlete/management/methods")
+def management_methods(
+    phase: Literal["GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION", "RE_ENTRY", "TRANSITION"] | None = None,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+):
+    alias = dependencies.model_alias(authorization, athlete_alias)
+    try:
+        return method_library_service.view(ReadSession(dependencies.repository()), alias, phase=phase)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Training methods are temporarily unavailable") from exc
+
+
+@router.put("/api/v2/athlete/management/methods/preferences")
+def save_management_method_preferences(
+    body: MethodLibraryPreferencesWrite,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None,
+):
+    alias = dependencies.model_alias(authorization, athlete_alias)
+    if actor is None:
+        raise HTTPException(401, "Actor session is required")
+    try:
+        return method_library_service.save_preferences(dependencies.repository(), alias, body, actor)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Training method preferences could not be saved") from exc
 
 
 @router.post("/api/v2/athlete/management/race-duration")
@@ -90,15 +121,25 @@ def save_management_profile(
     if actor is None:
         raise HTTPException(401, "Actor session is required")
     try:
+        repository = dependencies.repository()
+        store = ManagementStore(repository)
+        payload = body.profile.model_dump(mode="json")
+        if "method_library" in body.profile.model_fields_set:
+            payload["method_library"] = method_library_service.validate_preferences(payload["method_library"])
+        else:
+            # Older profile editors do not know the new section. Their writes
+            # must not reset settings saved on the method-library page.
+            current = store.profile(alias)
+            payload["method_library"] = (current.get("profile") or {}).get("method_library", payload["method_library"])
         if body.profile.lactate_profiles:
-            settings = dependencies.repository().athlete_settings(alias)
+            settings = repository.athlete_settings(alias)
             today = datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone if settings else "UTC")).date()
             if any(p.assessed_on > today for p in body.profile.lactate_profiles):
                 raise HTTPException(422, "A lactate observation cannot be in the future")
-        result = ManagementStore(dependencies.repository()).save_profile(
-            alias, body.profile.model_dump(mode="json"), body.expected_revision, actor,
+        result = store.save_profile(
+            alias, payload, body.expected_revision, actor,
         )
-        return {"configured": True, "profile": body.profile.model_dump(mode="json"),
+        return {"configured": True, "profile": payload,
                 "revision": result["revision"]}
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "Management profile could not be saved") from exc
