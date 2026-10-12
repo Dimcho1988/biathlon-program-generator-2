@@ -13,7 +13,7 @@ from pathlib import Path
 from . import adaptive_methods
 from .method_dosing import continuous_building_fraction, continuous_maintenance_fraction
 
-VERSION = "training-methods-v12-derived-maintenance-budget"
+VERSION = "training-methods-v13-sourced-library"
 VARIETY_VERSION = "onflows-bounded-method-variety-v1"
 COMMON = ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "COMPETITION")
 METHODS = (
@@ -138,6 +138,11 @@ def _bounded_variants(methods):
 def method_family(method):
     """Group actual execution patterns so renamed methods cannot fake variety."""
     structure = method["structure"]
+    if method.get("method_library"):
+        r = method["method_library"]["resolution"]
+        family = ("COMPOUND" if len(r["segments"]) > 1 else "CONTINUOUS" if structure == "LIBRARY_CONTINUOUS"
+                  else "SHORT_INTERVALS" if r["cycle_work_seconds"] <= 120 else "LONG_INTERVALS")
+        return f"{method['zone']}_LIBRARY_{family}"
     family = {
         "CONTINUOUS": "STEADY", "THREE_PROGRESSIVE_BLOCKS": "PROGRESSIVE",
         "TWO_REPETITIONS": "TWO_PARTS", "THRESHOLD_REPETITIONS": "LONG_REPETITIONS",

@@ -11,7 +11,7 @@ describe("navigation between analysis pages", () => {
     for (const route of ["/trainability", "/activities/activity-1", "/response", "/speed", "/"]) {
       pathname = route;
       const html = renderToStaticMarkup(<AppShell athlete={<p>Избран спортист</p>}><main>Зареждаме данните…</main></AppShell>);
-      for (const href of ["/", "/activities", "/trainability", "/response", "/speed", "/account"]) expect(html).toContain(`href="${href}"`);
+      for (const href of ["/", "/activities", "/trainability", "/response", "/speed", "/account", "/methods"]) expect(html).toContain(`href="${href}"`);
       expect(html).toContain("Избран спортист");
       expect(html).toContain('aria-controls="workspace-navigation"');
       expect(html).toContain('aria-label="Превключи светла или тъмна тема"');

@@ -1,4 +1,9 @@
 .management-page { max-width: 1160px; margin-inline: auto; }
+.management-method-guidance { display: grid; gap: 1rem; padding: 1rem 1.1rem; margin-block: 1rem; border-left: 3px solid var(--accent); border-radius: 0 10px 10px 0; background: var(--surface-secondary); }
+.management-method-guidance h4 { margin: 0 0 .65rem; font-size: .95rem; }
+.management-method-guidance h4 a { color: var(--accent); text-decoration: none; }
+.management-method-guidance p { line-height: 1.65; margin-block: .65rem; }
+.management-method-guidance details { font-size: .9rem; }
 .management-intro { max-width: 78ch; line-height: 1.7; }
 .management-panel,.management-day { padding: 1.3rem; margin-block: 1rem; border: 1px solid var(--border,#dbe4e3); border-radius: 16px; background: var(--surface,#fff); }
 .management-page summary { cursor: pointer; font-weight: 650; padding-block: .35rem; }

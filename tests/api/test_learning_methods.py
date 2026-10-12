@@ -242,3 +242,191 @@ def test_execution_metadata_roundtrips_for_ui_and_old_reports_remain_valid():
     assert rows[0]["execution"]["method_confirmed"] is True
     assert rows[0]["execution"]["executed_method"]["id"] == A
     assert SessionReport(activity_ref=entry["entry_key"], duration_minutes=40).method_confirmed is False
+
+
+@pytest.fixture
+def library_feedback(monkeypatch):
+    from apps.api import management_store, model_service
+    from biathlon import method_library
+    from tests.api.test_sourced_method_library import recipe, view
+    profile = {"sport": "NordicSki", "actual_sport": "RollerSki", "discipline": "5000 m",
+               "planning_controls": {"training_sports": ["NordicSki", "RollerSki"]}}
+    record = recipe()
+    calls = []
+    monkeypatch.setattr(management_store.ManagementStore, "profile", lambda self, alias: {
+        "configured": True, "profile": deepcopy(profile), "revision": 1,
+    })
+    monkeypatch.setattr(method_library, "entries", lambda: [deepcopy(record)])
+    def speed_view(repository, alias, sport):
+        calls.append((alias, sport))
+        return view(sport)
+    monkeypatch.setattr(model_service, "speed_view", speed_view)
+    repo = Repository()
+    repo.activity_detail = lambda alias, activity_ref: {
+        "activity_ref": activity_ref, "local_date": "2026-09-26", "sport": "RollerSki", "duration_min": 40,
+    }
+    return repo, profile, record, calls
+
+
+def test_execution_catalog_includes_library_phase_ids_for_each_actual_means(library_feedback):
+    from apps.api.learning_methods import execution_catalog
+    repo, _, _, calls = library_feedback
+    catalog = execution_catalog(repo, "ath-test")
+    library = [item for item in catalog if item["id"].startswith("LIB-")]
+    assert len(library) == 6
+    assert {item["id"] for item in library} == {
+        "LIB-TEST-GENERAL_PREPARATION", "LIB-TEST-SPECIAL_PREPARATION", "LIB-TEST-PRECOMPETITION",
+    }
+    assert {tuple(item["sports"]) for item in library} == {("NordicSki",), ("RollerSki",)}
+    assert any("Специално подготвителен" in item["title"] for item in library)
+    assert calls == [("ath-test", "NordicSki"), ("ath-test", "RollerSki")]
+
+
+def test_library_report_freezes_matching_sport_phase_descriptor_and_teaches(library_feedback):
+    from biathlon import method_library
+    from tests.api.test_sourced_method_library import view
+    repo, profile, _, calls = library_feedback
+    identifier = "LIB-TEST-SPECIAL_PREPARATION"
+    body = SessionReport(activity_ref=f"act_{19:032x}", duration_minutes=40,
+                         planned_duration_minutes=40, rpe=7, timing="DELAYED", execution_reason="AS_PLANNED",
+                         execution_comparable=True, executed_method_id=identifier, method_confirmed=True)
+    save_report(repo, "ath-test", "SESSION", body, "actor", datetime(2026, 9, 27, tzinfo=timezone.utc))
+    method = method_library.executable_methods(profile, view("RollerSki"), phase="SPECIAL_PREPARATION")[0]
+    assert repo.saved["executed_method"] == method_descriptor(method, "RollerSki")
+    assert repo.saved["executed_method"]["id"] == identifier
+    assert calls == [("ath-test", "RollerSki")]
+    entry = {"kind": "SESSION", "entry_key": body.activity_ref, "revision": 1,
+             "payload": deepcopy(repo.saved), "recorded_at": "2026-09-27T00:00:00Z"}
+    result = assess_methods(entries=[entry], source={"activities": [repo.activity_detail("ath-test", body.activity_ref)]}, today=TODAY)
+    assert result["summary"]["observations"] == 1
+    assert result["memory"]["observations"][0]["method"] == repo.saved["executed_method"]
+    assert result["preferences"][0]["method_id"] == identifier
+
+
+def test_library_descriptor_survives_curve_updates_but_not_recipe_or_coach_changes(library_feedback):
+    from biathlon import method_library
+    from tests.api.test_sourced_method_library import view
+    _, profile, _, _ = library_feedback
+    method = method_library.executable_methods(profile, view("RollerSki"), phase="SPECIAL_PREPARATION")[0]
+    original = method_descriptor(method, "RollerSki")
+    updated = deepcopy(method)
+    updated["min_work_min"] *= .99
+    updated["max_work_min"] *= .99
+    updated["interval_template"]["work_seconds"] *= .99
+    updated["interval_template"]["total_capacity_ratio"] *= 1.01
+    updated["method_library"]["resolution"]["target_speed_kmh"] *= 1.01
+    updated["method_library"]["resolution"]["active_test_count"] += 1
+    assert method_descriptor(updated, "RollerSki") == original
+    for enabled in (True, False):
+        updated["method_library"]["resolution"]["expert_override"] = {"enabled": enabled}
+        assert method_descriptor(updated, "RollerSki") == original
+    edited = deepcopy(method)
+    edited["method_library"]["resolution"]["expert_override"] = {"speed_multiplier": [1.02, 1.04]}
+    assert method_descriptor(edited, "RollerSki")["version"] != original["version"]
+    edited = deepcopy(method)
+    edited["method_library"]["prescription"]["recovery"]["seconds"] = [120, 120]
+    assert method_descriptor(edited, "RollerSki")["version"] != original["version"]
+
+
+def test_legacy_confirmation_does_not_read_library_curves(library_feedback):
+    from apps.api.learning_methods import confirmed_descriptor
+    repo, _, _, calls = library_feedback
+    report = SessionReport(activity_ref=f"act_{20:032x}", duration_minutes=40,
+                           executed_method_id=A, method_confirmed=True)
+    descriptor = confirmed_descriptor(repo, "ath-test", report, {"sport": "Run"})
+    assert descriptor["id"] == A and not calls
+
+
+@pytest.mark.parametrize("blocked", ["global", "method", "intervals", "source_selection"])
+def test_future_selection_switches_do_not_remove_execution_catalog_or_confirmation(library_feedback, blocked):
+    from apps.api.learning_methods import execution_catalog, confirmed_descriptor
+    from biathlon import method_library
+    from tests.api.test_sourced_method_library import view
+    repo, profile, record, calls = library_feedback
+    identifier = "LIB-TEST-SPECIAL_PREPARATION"
+    report = SessionReport(activity_ref=f"act_{22:032x}", duration_minutes=40,
+                           executed_method_id=identifier, method_confirmed=True)
+    expected = confirmed_descriptor(repo, "ath-test", report, {"sport": "RollerSki"})
+    if blocked == "global":
+        profile["method_library"] = {"enabled": False}
+    elif blocked == "method":
+        profile["method_library"] = {"overrides": {"TEST": {"enabled": False}}}
+    elif blocked == "intervals":
+        profile["planning_controls"]["automatic_intervals"] = False
+    else:
+        record["automatic_selection"] = False
+    before = deepcopy(profile)
+    calls.clear()
+    choices = execution_catalog(repo, "ath-test")
+    assert any(item["id"] == identifier and item["sports"] == ["RollerSki"] for item in choices)
+    assert confirmed_descriptor(repo, "ath-test", report, {"sport": "RollerSki"}) == expected
+    assert profile == before
+    assert method_library.executable_methods(profile, view("RollerSki"), phase="SPECIAL_PREPARATION") == []
+    assert calls == [("ath-test", "NordicSki"), ("ath-test", "RollerSki"), ("ath-test", "RollerSki")]
+
+
+def test_reference_only_recipe_stays_unavailable_for_execution_without_curve_reads(library_feedback):
+    from apps.api.learning_methods import execution_catalog, confirmed_descriptor
+    repo, _, record, calls = library_feedback
+    record["prescription"] = None
+    assert not any(item["id"].startswith("LIB-") for item in execution_catalog(repo, "ath-test"))
+    report = SessionReport(activity_ref=f"act_{23:032x}", duration_minutes=40,
+                           executed_method_id="LIB-TEST-SPECIAL_PREPARATION", method_confirmed=True)
+    with pytest.raises(HTTPException) as exc:
+        confirmed_descriptor(repo, "ath-test", report, {"sport": "RollerSki"})
+    assert exc.value.status_code == 422
+    assert not calls
+
+
+def test_disabled_selection_keeps_numeric_recipe_version_and_actual_sport_guards(library_feedback):
+    from apps.api.learning_methods import confirmed_descriptor
+    repo, profile, _, calls = library_feedback
+    report = SessionReport(activity_ref=f"act_{24:032x}", duration_minutes=40,
+                           executed_method_id="LIB-TEST-SPECIAL_PREPARATION", method_confirmed=True)
+    baseline = confirmed_descriptor(repo, "ath-test", report, {"sport": "RollerSki"})
+    profile["method_library"] = {"enabled": False, "overrides": {"TEST": {
+        "enabled": False, "speed_multiplier": [1.01, 1.03],
+    }}}
+    changed = confirmed_descriptor(repo, "ath-test", report, {"sport": "RollerSki"})
+    assert changed["id"] == baseline["id"] and changed["sport"] == "RollerSki"
+    assert changed["version"] != baseline["version"]
+    calls.clear()
+    with pytest.raises(HTTPException) as exc:
+        confirmed_descriptor(repo, "ath-test", report, {"sport": "Ride"})
+    assert exc.value.status_code == 422 and not calls
+
+
+def test_continuous_library_feedback_remains_available_when_automatic_intervals_disabled(library_feedback):
+    from apps.api.learning_methods import execution_catalog
+    repo, profile, record, calls = library_feedback
+    profile["planning_controls"]["automatic_intervals"] = False
+    record["prescription"].update(structure="CONTINUOUS", work={"unit": "seconds", "range": [300, 600]},
+                                  speed_multiplier=[.85, .85], repetitions=[1, 1])
+    assert any(item["id"].startswith("LIB-") for item in execution_catalog(repo, "ath-test"))
+    assert calls == [("ath-test", "NordicSki"), ("ath-test", "RollerSki")]
+
+
+def test_unknown_library_id_never_fetches_curve_or_accepts_descriptor(library_feedback):
+    from apps.api.learning_methods import confirmed_descriptor
+    repo, _, _, calls = library_feedback
+    report = SessionReport(activity_ref=f"act_{21:032x}", duration_minutes=40,
+                           executed_method_id="LIB-UNKNOWN-SPECIAL_PREPARATION", method_confirmed=True)
+    with pytest.raises(HTTPException) as exc:
+        confirmed_descriptor(repo, "ath-test", report, {"sport": "RollerSki"})
+    assert exc.value.status_code == 422 and not calls
+
+
+def test_historical_catalog_archive_survives_new_catalog_without_cross_version_learning():
+    pair = observation(1, age=120)
+    pair[0]["payload"]["executed_method"]["catalog_version"] = "training-methods-v12"
+    pair[0]["payload"]["executed_method"]["version"] = "training-methods-v12:historical-recipe"
+    original = assess([pair])["memory"]
+    result = assess_methods(entries=[pair[0]], source={}, today=TODAY, retained=original)
+    assert result["memory"] == original
+    assert result["preferences"][0]["version"] == "training-methods-v12:historical-recipe"
+    newer = [observation(index, age=index, method=B, success=False) for index in range(2, 18)]
+    combined = assess_methods(entries=[pair[0], *[entry for entry, _ in newer]],
+                             source={"activities": [activity for _, activity in newer]}, today=TODAY, retained=original)
+    historical = next(item for item in combined["preferences"] if item["method_id"] == A)
+    assert historical["observations"] == 1 and historical["comparison_observations"] == 0
+    assert historical["score_delta"] == 0
