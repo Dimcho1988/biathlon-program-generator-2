@@ -86,6 +86,16 @@ def test_quality_priority_direct_basis_fallback_does_not_treat_cascade_as_covera
     assert planning_allocation.quality_priority("Z5", {"Z5": legacy}) == 0
 
 
+def test_remaining_priority_keeps_partially_filled_direct_objectives_visible():
+    objective = {"basis": "DIRECT_Q", "target_q": 100., "actual_q": 0.,
+                 "planned_q": 16., "remaining": 84.}
+    assert planning_allocation.quality_priority("Z2", {"Z2": objective}) == 0
+    assert planning_allocation.remaining_priority("Z2", {"Z2": objective}) == pytest.approx(.84)
+    for changes in ({"actual_q": None}, {"planned_q": None}, {"remaining": None},
+                    {"basis": "CANONICAL_E"}, {"remaining": .1}):
+        assert planning_allocation.remaining_priority("Z2", {"Z2": {**objective, **changes}}) == 0
+
+
 def test_nonaccent_endurance_uses_weekly_need_without_raising_coach_fraction(monkeypatch):
     repo = Repository()
     source = repo.envelope["snapshot_payload"]["load_history"]

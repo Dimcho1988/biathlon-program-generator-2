@@ -33,7 +33,7 @@ from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 
-VERSION = "training-management-v40-relative-recovery"
+VERSION = "training-management-v41-balanced-recovery"
 PARAMETER_VERSION = "management-parameters-v38"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
@@ -444,8 +444,11 @@ def _blocks(method, work, evidence, settings):
                 return []
             if index:
                 result.append(_block("RECOVERY", "Преход между двата метода", "Z1", 3., low+.35*(high-low), "Три минути спокойно движение; започни втората част със запазена техника."))
-            card = part.get("method_library") or part.get("method_card")
-            result.extend({**b, "combination_part": index+1, "parent_method_id": part["id"], "parent_method_card": deepcopy(card)} for b in blocks if b["kind"] not in {"WARMUP", "COOLDOWN"})
+            # Each part owns one independent card, shared by its repetitions.
+            # Copying its entire source/resolution for every block dominates
+            # candidate trials without changing their load or instructions.
+            card = deepcopy(part.get("method_library") or part.get("method_card"))
+            result.extend({**b, "combination_part": index+1, "parent_method_id": part["id"], "parent_method_card": card} for b in blocks if b["kind"] not in {"WARMUP", "COOLDOWN"})
         if method["cooldown_min"]:
             result.append(_block("COOLDOWN", "Общо разпускане", "Z1", method["cooldown_min"], easy,
                                  "Плавно намали усилието след двете основни части."))
@@ -1727,7 +1730,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 continue
             if not unexecuted_slot_count(d):
                 continue
-            forecast = {r["zone"]:r["readiness_percent"] for r in recovery_v2.simulate(forecast_rows,configs["zones"],target=d,include_details=False, calculation_cache=recovery_calculation_cache)["current"]}
+            forecast = {r["zone"]:r["readiness_percent"] for r in recovery_v2.simulate(forecast_rows,configs["zones"],target=d,include_details=False, include_deadlines=False, calculation_cache=recovery_calculation_cache)["current"]}
             future_budget, future_q, _ = component_budgets(forecast_rows, result_days, d)
             if forecast["Z1"] <= 0 or future_budget["Z1"]["deficit_effective"] <= 0:
                 continue
@@ -1778,7 +1781,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 zone_tmax_minutes=capacity["zone_tmax_minutes"])
         recovery_policy_rows = ([r for r in day_start_rows if r["date"] != key]
                                 if locked_day and locked_day.get("double_threshold_continuation") and locked_day["date"] == key else day_start_rows)
-        recovery_before = recovery_v2.simulate(recovery_policy_rows, configs["zones"], target=day, include_details=False, calculation_cache=recovery_calculation_cache)
+        recovery_before = recovery_v2.simulate(recovery_policy_rows, configs["zones"], target=day, include_details=False, include_deadlines=False, calculation_cache=recovery_calculation_cache)
         ready = {r["zone"]: r["readiness_percent"] for r in recovery_before["current"]}
         day_meso_week, day_meso_factor = meso_at(day)
         goals, selected_accents, cycle_state = day_goals[day]
@@ -1862,7 +1865,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             else:
                 forecast_rows = (_add_forecast_session(forecast_rows, day, effective) if actual_by_day[day]
                                  else _with_forecast_day(forecast_rows, day, effective))
-                after = recovery_v2.simulate(forecast_rows, configs["zones"], target=day, include_details=False, calculation_cache=recovery_calculation_cache)
+                after = recovery_v2.simulate(forecast_rows, configs["zones"], target=day, include_details=False, include_deadlines=False, calculation_cache=recovery_calculation_cache)
                 item.update(session=preserved[0], sessions=preserved, status="TRAINING", locked=True,
                             readiness_after={r["zone"]: _round(r["readiness_percent"]) for r in after["current"]},
                             explanation="Втората част от утвърдения двоен праг е проверена след потвърдената сутрешна сесия. Реалният и оставащият товар се отчитат отделно." if locked_day.get("double_threshold_continuation") else "Днешните утвърдени задачи са запазени; адаптират се следващите дни.")
@@ -1900,7 +1903,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     and str(e["start_date"]) <= future_day.isoformat() <= str(e["end_date"]) for e in events)):
                     continue
                 forecast_ready = {r["zone"]: r["readiness_percent"] for r in recovery_v2.simulate(
-                    forecast_rows, configs["zones"], target=future_day, include_details=False, calculation_cache=recovery_calculation_cache)["current"]}
+                    forecast_rows, configs["zones"], target=future_day, include_details=False, include_deadlines=False, calculation_cache=recovery_calculation_cache)["current"]}
                 options = []
                 for future_sport in training_sports:
                     future_candidates = [(future_sport, m) for m in methods if future_sport in m["sports"]]
@@ -2051,7 +2054,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             continue
                     future_budget, future_q, future_segment = component_budgets(reserved_rows, reserved_days, future_day)
                     future_ready = {r["zone"]:r["readiness_percent"] for r in recovery_v2.simulate(
-                        reserved_rows, configs["zones"], target=future_day, include_details=False, calculation_cache=recovery_calculation_cache)["current"]}
+                        reserved_rows, configs["zones"], target=future_day, include_details=False, include_deadlines=False, calculation_cache=recovery_calculation_cache)["current"]}
                     chosen = next((option for option in options
                         if (2 if option["double"] else 1) <= min(remaining_slots, kind_left)
                         and option["minutes"] <= min(minutes_left, available[future_day.weekday()]-date_minutes.get(future_day, 0.)) + .001
@@ -2475,7 +2478,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                                       candidate_primary=z if is_key or is_strength else None,
                                       candidate_count=2 if method.get("double_threshold") else 1):
                     for race in near_races:
-                        forecast = recovery_v2.simulate(candidate_rows, configs["zones"], target=date.fromisoformat(str(race["start_date"])), include_details=False, calculation_cache=recovery_calculation_cache)
+                        forecast = recovery_v2.simulate(candidate_rows, configs["zones"], target=date.fromisoformat(str(race["start_date"])), include_details=False, include_deadlines=False, calculation_cache=recovery_calculation_cache)
                         if any(r["readiness_percent"] < 90. for r in forecast["current"] if r["zone"] != "STR"):
                             return "RACE_RECOVERY_CONFLICT", "Прогнозното възстановяване след тази доза не достига 90% преди близък старт."
                     if protect_future and reservable_dates and reserved_future_work(candidate_q, candidate_e, reservable_dates,
@@ -2522,7 +2525,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 if conflict:
                     item["rejected_alternatives"].append({"method_id": method["id"], "code": conflict[0], "reason": conflict[1]})
                     continue
-                after = recovery_v2.simulate(after_rows, configs["zones"], target=day, include_details=False, calculation_cache=recovery_calculation_cache)
+                after = recovery_v2.simulate(after_rows, configs["zones"], target=day, include_details=False, include_deadlines=False, calculation_cache=recovery_calculation_cache)
                 total = sum(b["duration_min"] for b in blocks)
                 actual_work = sum(b["duration_min"] for b in blocks if b["kind"] == "WORK")
                 primary_share = _primary_work_share(method)
@@ -2714,7 +2717,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         if readiness_key not in placement_readiness_cache:
                             placement_readiness_cache[readiness_key] = {r["zone"]:r["readiness_percent"]
                                 for r in recovery_v2.simulate(before, configs["zones"],
-                                    target=placed_day, include_details=False, calculation_cache=recovery_calculation_cache)["current"]}
+                                    target=placed_day, include_details=False, include_deadlines=False, calculation_cache=recovery_calculation_cache)["current"]}
                         future_ready = placement_readiness_cache[readiness_key]
                         cap["readiness_policy"] = adaptive_methods.readiness_policy(method, profile, future_ready)
                         factor = cap["readiness_policy"]["dose_factor"]
@@ -2785,6 +2788,11 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         return None
                     return {"q":{c:total_q[c]-current_q[c] for c in COMPONENTS},
                             "e":{c:total_e[c]-current_e[c] for c in COMPONENTS}, "records":records}
+                relative_recovery = bool(cycle_state and cycle_state["kind"] == "RECOVERY"
+                    and any(g.get("recovery_reference") for g in goals.values()))
+                def needs_preparation(component):
+                    return (planning_allocation.quality_priority(component, period_objectives)
+                        or relative_recovery and planning_allocation.remaining_priority(component, period_objectives))
                 def preparation_bundle(candidate):
                     session = candidate[2]
                     selected_method = choice_methods[(session["sport"], session["method_id"])]
@@ -2807,14 +2815,14 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     # Strength can become executable after today's spacing
                     # restriction. Keep that future core visible before an
                     # optional easy finish consumes its preparation allowance.
-                    if session["zone"] != "STR" and planning_allocation.quality_priority("STR", period_objectives):
+                    if session["zone"] != "STR" and needs_preparation("STR"):
                         for future_day, future_kind, options in future_options:
                             if future_kind != "STRENGTH" or segment_keys[future_day] != segment_keys[day]:
                                 continue
                             compatible = [(d,s) for d,s in future_slots if d == future_day]
                             future_ready = {r["zone"]:r["readiness_percent"] for r in recovery_v2.simulate(
                                 _add_forecast_session(forecast_rows, day, minimum_e), configs["zones"],
-                                target=future_day, include_details=False, calculation_cache=recovery_calculation_cache)["current"]}
+                                target=future_day, include_details=False, include_deadlines=False, calculation_cache=recovery_calculation_cache)["current"]}
                             for option in options:
                                 if not compatible or option["double"] or not executable_reservation(option, future_ready):
                                     continue
@@ -2828,7 +2836,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         alternative = candidate[2]
                         component = alternative["zone"]
                         if (component in {"Z1", session["zone"]}
-                            or not planning_allocation.quality_priority(component, period_objectives)):
+                            or not needs_preparation(component)):
                             continue
                         # The existing chronological reservation already owns
                         # key dates, spacing and paired-session allowances.
@@ -2892,15 +2900,26 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         minimum=selected_minimum, parts=minimum_parts, minimum_q=minimum_q, minimum_e=minimum_e,
                         protected_q=protected_q, protected_e=protected_e, components=protected_components,
                         methods=protected_methods, cores=protected_cores)
-                bundles = {(c[2]["sport"], c[2]["method_id"]):preparation_bundle(c) for c in choices} if period_objectives else {}
+                def choice_priority(c):
+                    return (not c[2]["is_key_session"] if day in key_slots and slot_index == first_plannable_slot(day) else False,
+                        not (c[2]["zone"] == "Z1" and c[2]["purpose"] != "RECOVERY"
+                             and choice_methods[(c[2]["sport"], c[2]["method_id"])]["structure"] in {"CONTINUOUS", "TWO_REPETITIONS"})
+                            if relative_recovery and day.weekday() == preferences.get("long_session_day") else False,
+                        -planning_allocation.quality_priority(c[2]["zone"], period_objectives) if period_objectives else 0,
+                        -planning_allocation.remaining_priority(c[2]["zone"], period_objectives) if period_objectives and relative_recovery else 0)
+                # A lower leading priority cannot win a lexicographic sort.
+                # Keep all alternatives available as future cores, but only
+                # compute the expensive bundle tie-breaker for possible winners.
+                best_priority = min(choice_priority(c) for c in choices)
+                bundles = {(c[2]["sport"], c[2]["method_id"]):preparation_bundle(c) for c in choices
+                    if choice_priority(c) == best_priority} if period_objectives else {}
                 def closes_easy_objective(candidate):
                     session = candidate[2]
                     remaining_q = q_remaining.get("Z1")
                     return (session["zone"] == "Z1" and remaining_q is not None
                             and 0 <= remaining_q-session["direct_equivalent_minutes"]["Z1"] < .5)
-                choices.sort(key=lambda c: (not c[2]["is_key_session"] if day in key_slots and slot_index == first_plannable_slot(day) else False,
-                    -planning_allocation.quality_priority(c[2]["zone"], period_objectives) if period_objectives else 0,
-                    -len(bundles[(c[2]["sport"], c[2]["method_id"])]["components"]) if bundles else 0,
+                choices.sort(key=lambda c: (*choice_priority(c),
+                    -len(bundles.get((c[2]["sport"], c[2]["method_id"]), {}).get("components", [])),
                     not closes_easy_objective(c), -c[0], c[1]))
                 _, _, session, selected_rows, selected_after = choices[0]
                 if period_objectives is not None:
@@ -2983,7 +3002,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             objective_load(q, e), selected_evidence["selection"]["component_allocation"], selected_accents,
                             targets={c:r["target"] for c,r in period_objectives.items()}))
                         selected_rows = _add_forecast_session(forecast_rows, day, e)
-                        selected_after = recovery_v2.simulate(selected_rows, configs["zones"], target=day, include_details=False, calculation_cache=recovery_calculation_cache)
+                        selected_after = recovery_v2.simulate(selected_rows, configs["zones"], target=day, include_details=False, include_deadlines=False, calculation_cache=recovery_calculation_cache)
                     if protected_components:
                         final_reservation = reservation_check(parts, bundle["cores"], capacity=selected_evidence)
                         protected_q, protected_e = final_reservation["q"], final_reservation["e"]
@@ -3022,7 +3041,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         + " ограничава тренировките. Провери „Индивидуални цели по компоненти“ в профила. "
                         "Стойностите са приравнени минути за 7 дни; ниска цел за Z1 ограничава и по-високите аеробни зони.")
         if day_spent and item["session"] is None:
-            after_day = recovery_v2.simulate(forecast_rows, configs["zones"], target=day, include_details=False, calculation_cache=recovery_calculation_cache)
+            after_day = recovery_v2.simulate(forecast_rows, configs["zones"], target=day, include_details=False, include_deadlines=False, calculation_cache=recovery_calculation_cache)
             item["readiness_after"] = {r["zone"]: _round(r["readiness_percent"]) if forecast_known else None for r in after_day["current"]}
         result_days.append(item)
         if item["session"] is None and item["status"] in {"REST", "UNAVAILABLE"} and not day_spent and not known_actual_load:
