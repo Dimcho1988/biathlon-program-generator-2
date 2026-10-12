@@ -20,5 +20,5 @@ export default async function MethodsPage({ searchParams }: { searchParams: Prom
     return <ErrorState message={caught instanceof Error ? caught.message : "Базата от методи временно не е достъпна."} retryAvailable retryHref="/methods"/>;
   }
   const query = await searchParams;
-  return <TrainingMethodLibrary key={access.athleteAlias} initial={data} athleteName={access.displayName} canEdit={access.canEditPlan} selectedId={query.method ?? ""}/>;
+  return <TrainingMethodLibrary key={`${access.athleteAlias}:${query.method ?? ""}`} initial={data} athleteName={access.displayName} canEdit={access.canEditPlan} selectedId={query.method ?? ""}/>;
 }
