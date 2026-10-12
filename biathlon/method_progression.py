@@ -52,12 +52,19 @@ def state(record, profile, *, phase=None):
     sport = profile.get('actual_sport') or profile.get('sport')
     observations = (profile.get('_method_progression') or {}).get('observations', [])
     rows = sorted([child for row in observations for child in ([row] + [{**row, 'method': part} for part in row['method'].get('parts', [])])], key=lambda r: (r['day'], r['id']))
-    stage, successes, last_day = 0, [], None
+    stage, successes, last_day, initialized = 0, [], None, False
     for row in rows:
         m = row['method']
         p = m.get('progression') or {}
         if m.get('sport') != sport or p.get('key') != spec['key'] or p.get('version') != VERSION:
             continue
+        if not initialized:
+            # The beginning of the rolling activity window is not the
+            # beginning of the athlete's progression. A server-frozen
+            # previously unlocked stage carries its qualification forward.
+            if p.get('qualified_at_prescription') is True:
+                stage = max(0, min(spec['steps']-1, int(p.get('step', 0))))
+            initialized = True
         if not row['success']:
             stage, successes = max(0, min(stage, p.get('step', stage))-1), []
             last_day = row['day']
@@ -87,4 +94,5 @@ def state(record, profile, *, phase=None):
 def descriptor(method):
     r = (method.get('method_library') or {}).get('resolution') or {}
     p = r.get('progression')
-    return {k: p[k] for k in ('version', 'key', 'group', 'step')} if p else None
+    return {**{k: p[k] for k in ('version', 'key', 'group', 'step')},
+            'qualified_at_prescription': bool(p.get('eligible'))} if p else None

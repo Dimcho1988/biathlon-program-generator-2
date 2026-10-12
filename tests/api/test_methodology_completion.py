@@ -272,3 +272,17 @@ def test_approved_combination_feedback_preserves_source_steps_and_rejects_other_
     with pytest.raises(HTTPException) as exc:
         confirmed_descriptor(object(), 'athlete', report, {**activities[0], 'local_date':TODAY.isoformat()})
     assert exc.value.status_code == 422
+
+
+def test_rolling_window_retains_server_qualified_stage_without_accepting_unqualified_skip():
+    long = next(m for m in method_library.entries() if m['id']=='OF-RUN-5000-LONG')
+    p = athlete()
+    row = progression_row(long, p, '2026-09-03', step=2)
+    p['_method_progression'] = {'observations':[row]}
+    assert not method_progression.state(long, p, phase='SPECIAL_PREPARATION')['eligible']
+    # This flag is frozen server-side only when the stage was already unlocked.
+    row['method']['progression']['qualified_at_prescription'] = True
+    assert method_progression.state(long, p, phase='SPECIAL_PREPARATION')['eligible']
+    failed = deepcopy(row); failed.update(day='2026-09-05', id='fatigue', success=False)
+    p['_method_progression']['observations'].append(failed)
+    assert not method_progression.state(long, p, phase='SPECIAL_PREPARATION')['eligible']
