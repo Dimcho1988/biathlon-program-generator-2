@@ -8,6 +8,7 @@ This is an expert model, not a validated physiological recovery measurement.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import deque
 from datetime import date, timedelta
 import math
 
@@ -115,7 +116,7 @@ def days_to_ready(impulses, target):
     return (lo + hi) / 2
 
 
-def simulate(daily, configs=None, *, target=None, include_details=True):
+def simulate(daily, configs=None, *, target=None, include_details=True, calculation_cache=None):
     """Daily rows: date, zone, effective_load. Missing days are unknown, not zero.
 
     Calendar-day granularity is retained from the canonical source. Multiple
@@ -124,6 +125,15 @@ def simulate(daily, configs=None, *, target=None, include_details=True):
     the exact current state, including the absolute-90% recovery deadline.
     """
     configs = configs or defaults()
+    def reuse(kind, key, calculate):
+        if calculation_cache is None:
+            return calculate()
+        cache = calculation_cache.setdefault(kind, {})
+        if key not in cache:
+            if len(cache) >= 4096:
+                cache.pop(next(iter(cache)))
+            cache[key] = calculate()
+        return cache[key]
     grouped = {z: {} for z in ZONES}
     for row in daily:
         z = row["zone"]
@@ -142,14 +152,21 @@ def simulate(daily, configs=None, *, target=None, include_details=True):
         ordered_doses = sorted(doses.items())
         impulses = []
         contributions = []
+        previous_window = deque()
         last_baseline = baseline([], config["initial_daily_min"])
         for day, effective in ordered_doses:
             if day > target:
                 break
-            previous = [v for d,v in ordered_doses if day-timedelta(days=40) <= d < day]
-            used, raw, n, source = baseline(previous, config["initial_daily_min"])
+            cutoff = day-timedelta(days=40)
+            while previous_window and previous_window[0][0] < cutoff:
+                previous_window.popleft()
+            previous = tuple(v for _, v in previous_window)
+            used, raw, n, source = reuse("baseline", (previous, type(config["initial_daily_min"]), config["initial_daily_min"]),
+                lambda: baseline(previous, config["initial_daily_min"]))
             before = residual(impulses, day) if include_details else None
-            added = impulse(day, effective, used, config)
+            impulse_key = (day, effective, used, tuple((type(config[k]), config[k]) for k in ("duration_coefficient", "shape", "sensitivity")))
+            added = reuse("impulse", impulse_key, lambda: impulse(day, effective, used, config))
+            previous_window.append((day, effective))
             if added:
                 impulses.append(added)
             if include_details:
@@ -168,7 +185,7 @@ def simulate(daily, configs=None, *, target=None, include_details=True):
         for row, added in contributions:
             row["residual_fatigue_now"] = added.residual((target-added.day).days) if added else 0.
         f = residual(impulses, target)
-        horizon = days_to_ready(impulses, target)
+        horizon = reuse("horizon", (tuple(impulses), target), lambda: days_to_ready(impulses, target))
         current.append({"zone":z, "readiness_percent":max(0.,100.-f),
             "residual_fatigue":f, "days_to_practical_recovery":horizon,
             "baseline_daily_min":last_baseline[0], "baseline_raw_daily_min":last_baseline[1],

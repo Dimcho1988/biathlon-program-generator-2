@@ -20,6 +20,8 @@ const enter = async (element: HTMLInputElement, value: string) => { await act(as
 
 it("filters by sport and search without touching stored preferences", async () => {
   const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock); await mount();
+  const references = [...container.querySelectorAll("label")].find(l => l.textContent?.includes("Покажи и научните оригинали"))!.querySelector("input")!;
+  await click(references);
   const sport = [...container.querySelectorAll("label")].find(l => l.textContent?.startsWith("Спорт"))!.querySelector("select")!;
   await act(async () => { sport.value = "NordicSki"; sport.dispatchEvent(new Event("change", { bubbles: true })); });
   expect(container.querySelectorAll(".method-card")).toHaveLength(1); expect(container.querySelector(".method-card")?.textContent).toContain("Ски интервали");

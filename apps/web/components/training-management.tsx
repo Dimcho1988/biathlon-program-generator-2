@@ -16,6 +16,7 @@ import { TrainingPlanOverview } from "./training-plan-overview";
 import { IndividualLearningPanel } from "./individual-learning-panel";
 import { MesocyclePriorities } from "./mesocycle-priorities";
 import { SessionMethodGuidance } from "./session-method-guidance";
+import { methodHrText, rangeText } from "../lib/method-library";
 import { managementGuidance, hasProgramDays } from "../lib/management-guidance";
 import { SyncActionForm } from "./sync-action-form";
 import { SyncStatusPanel } from "./sync-status-panel";
@@ -66,6 +67,8 @@ function SingleSessionCard({ day, expanded = false }: { day: DraftDay; expanded?
     {session && <details className="management-execution" open={expanded}><summary>Как да изпълня тренировката</summary><ol className="management-blocks">{session.blocks.map((block, index) => <li key={`${block.kind}-${index}`} style={{ borderLeft: `3px solid ${componentColor(block.zone)}` }}><div><strong>{block.label}</strong><span>{durationHms(block.duration_min)} · {block.zone}</span></div><p>{block.instructions}</p>
       {(block.target_hr_bpm !== null || block.target_speed_kmh !== null) && <small>{block.target_hr_bpm !== null ? `${number(block.target_hr_bpm, 0)} уд./мин` : ""}{block.target_hr_bpm !== null && block.target_speed_kmh !== null ? " · " : ""}{block.target_speed_kmh !== null ? `${number(block.target_speed_kmh)} km/h${block.primary_control === "EFFORT_AND_QUALITY" && block.speed_basis !== "FLAT_EQUIVALENT" ? " · зададена скорост" : " · равнинна референция, не темпо по наклон"}` : ""}</small>}
       {block.lactate_reference && <p className="management-muted">Лактат: {lactateRangeText(block.lactate_reference)} · {block.lactate_reference.label}{block.lactate_reference.assessed_on ? ` · ${block.lactate_reference.assessed_on}` : ""}{block.lactate_reference.note ? `. ${block.lactate_reference.note}` : ""}</p>}
+      {block.target_speed_range_kmh && <small>Работен диапазон: {rangeText(block.target_speed_range_kmh)} km/h{block.primary_control === "EFFORT_ON_TERRAIN" ? " · по терена водещи са усилието и техниката" : ""}.</small>}
+      {block.hr_reference_range_bpm && <small>{methodHrText(block)}</small>}
     </li>)}</ol></details>}
     <details className="management-detail"><summary>Защо тази задача и доза?</summary>
       {evidence && <><p><strong>Основа: {CAPACITY_LABELS[evidence.capacity_source] ?? evidence.capacity_source}.</strong></p><p>{evidence.explanation}</p>

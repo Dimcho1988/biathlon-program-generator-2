@@ -45,6 +45,8 @@ def validate_preferences(preferences, profile=None):
             raise HTTPException(422, f"Method {key} requires separate work lengths for its component segments")
         if "repetitions" in numeric and not prescription.get("repetitions"):
             raise HTTPException(422, f"Method {key} has no repetition range")
+        if "repetitions" in numeric and prescription.get("structure") in {"SEQUENCE", "SCALED_SEQUENCE", "PROGRESSIVE_CONTINUOUS"} and override["repetitions"] != [1, 1]:
+            raise HTTPException(422, f"Method {key} is one complete sequence; its dose varies without repeating the whole structure")
     return payload
 
 
@@ -67,6 +69,47 @@ def _current_phase(repository, alias, profile, today):
     return (phase, "CALENDAR_PREVIEW") if phase else ("GENERAL_PREPARATION", "OUTSIDE_PROGRAMME_PREVIEW")
 
 
+def _coach_previews(catalog, profile, speed, settings, today, phase):
+    """Reuse the weekly engine's capacity calculation, once per compatible card."""
+    if not speed or not getattr(settings, "hrmax_bpm", None) or not getattr(settings, "zone_bounds_bpm", None):
+        return
+    from . import training_plan_engine as engine
+    from biathlon.training_methods import resolved_methods
+    methods = {m["id"]: m for m in resolved_methods(profile)}
+    context = engine._capacity_context(speed, settings)
+    for card in catalog["methods"]:
+        method = methods.get(card["id"])
+        r = card.get("resolution") or {}
+        if not method or r.get("status") != "READY":
+            continue
+        method = {**method, "actual_sport": speed["sport"]}
+        cap = engine.capacity_for(method, settings, speed, context, today,
+            allow_fallback=profile.get("allow_expert_fallback", True),
+            use_model_prior=(profile.get("planning_controls") or {}).get("capacity_policy", "MODEL_WITH_PRIOR") == "MODEL_WITH_PRIOR")
+        if cap is None:
+            r.update(status="UNAVAILABLE", reason="INDIVIDUAL_METHOD_CAPACITY_REQUIRED")
+            continue
+        fraction = engine._nominal_fraction(method, method["purpose"], profile, phase, cap, profile.get("planning_controls") or {})
+        maximum = min(method["max_work_min"], cap["capacity_minutes"] * fraction) * 60
+        minimum = method["min_work_min"] * 60
+        effort = cap.get("effort_profile") or {}
+        seconds = effort.get("work_seconds")
+        time_range = [seconds, seconds] if seconds else [minimum, max(minimum, maximum)]
+        r.update(work_unit="seconds", work_range=time_range, work_duration_range_seconds=time_range,
+                 minimum_work_seconds=minimum, maximum_work_seconds=maximum,
+                 anchor={"type":"INDIVIDUAL_ZONE", "speed_kmh":cap.get("target_speed_kmh")},
+                 message="Лична работна опора от същия изчислител като седмичния план. Крайната доза зависи и от Recovery, наличното време и общия бюджет.")
+        velocity = cap.get("target_speed_kmh")
+        if velocity:
+            r.update(target_speed_kmh=velocity, target_speed_range_kmh=[velocity,velocity])
+            r.update(method_library._hr_reference({"target_speed_range_kmh":[velocity,velocity],
+                "zone":method["zone"], "work_duration_seconds":time_range[0]}, context[0]))
+        elif method["zone"] != "STR" and context[0]:
+            i=int(method["zone"][1:])-1
+            r.update(hr_reference_range_bpm=list(context[0].bounds[i:i+2]),
+                     hr_reference_basis="INDIVIDUAL_ZONE_OBSERVATION_NOT_SPEED_PREDICTION", hr_role="SECONDARY_OBSERVATION")
+
+
 def view(repository, alias, *, phase=None, now=None):
     stored = ManagementStore(repository).profile(alias)
     profile = deepcopy(stored.get("profile") or {})
@@ -87,6 +130,7 @@ def view(repository, alias, *, phase=None, now=None):
             profile["_method_progression"] = method_progression_service.context(repository, alias, source, today)
     # A GET must never create a profile or silently save normalized preferences.
     catalog = method_registry.catalog(profile, speed, phase=selected_phase, today=today)
+    _coach_previews(catalog, profile, speed, settings, today, selected_phase)
     curve = {key: speed.get(key) for key in (
         "status", "sport", "model_version", "source_generation_id", "source_revision", "active_test_count",
     )} if speed else {"status": "UNAVAILABLE", "sport": sport,
