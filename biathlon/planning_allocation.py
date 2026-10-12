@@ -193,6 +193,21 @@ def quality_priority(zone, objectives):
     return int(actual is not None and planned is not None and actual + planned < .005)
 
 
+def remaining_priority(zone, objectives):
+    """Known direct-Q shortfall after the first complete exposure.
+
+    A small first dose does not finish a recovery week's component objective.
+    This is only a ranking/reservation hint; full dose, Q/E and readiness
+    checks still decide whether another session can be prescribed.
+    """
+    row = objectives[zone]
+    if (row.get("basis") != "DIRECT_Q" or row.get("actual_q") is None
+        or row.get("planned_q") is None or row.get("remaining") is None):
+        return 0.
+    target = row.get("target_q") or row.get("target") or 0.
+    return min(1., max(0., row["remaining"] / target)) if target > 0 and row["remaining"] >= .5 else 0.
+
+
 def report(windows, actual, forecast, days, scheduled_slots, weekly_limit, history_minutes, *, source=None, segment_keys=None):
     end = max(windows)
     lower = min(windows).isoformat()

@@ -116,15 +116,18 @@ def days_to_ready(impulses, target):
     return (lo + hi) / 2
 
 
-def simulate(daily, configs=None, *, target=None, include_details=True, calculation_cache=None):
+def simulate(daily, configs=None, *, target=None, include_details=True, include_deadlines=True, calculation_cache=None):
     """Daily rows: date, zone, effective_load. Missing days are unknown, not zero.
 
     Calendar-day granularity is retained from the canonical source. Multiple
     sessions on one day are one daily dose; no invented within-day timestamps.
     Planning trials can omit diagnostic history/plot samples while retaining
     the exact current state, including the absolute-90% recovery deadline.
+    Trials needing only readiness can separately omit recovery deadlines.
+    Detailed views always calculate them; an omitted deadline is None, not zero.
     """
     configs = configs or defaults()
+    include_deadlines = include_deadlines or include_details
     def reuse(kind, key, calculate):
         if calculation_cache is None:
             return calculate()
@@ -154,7 +157,7 @@ def simulate(daily, configs=None, *, target=None, include_details=True, calculat
         # zone/day changes. Cache its complete scalar result, after validating
         # all input rows. The caller owns this bounded, request-local cache.
         current_cache = calculation_cache.setdefault("current", {}) if calculation_cache is not None and not include_details else None
-        current_key = (target, tuple((d, v) for d, v in ordered_doses if d <= target),
+        current_key = (target, include_deadlines, tuple((d, v) for d, v in ordered_doses if d <= target),
                        tuple(sorted((k, type(v), v) for k, v in config.items())))
         if current_cache is not None and current_key in current_cache:
             current.append({**current_cache[current_key], "zone": z})
@@ -194,7 +197,8 @@ def simulate(daily, configs=None, *, target=None, include_details=True, calculat
         for row, added in contributions:
             row["residual_fatigue_now"] = added.residual((target-added.day).days) if added else 0.
         f = residual(impulses, target)
-        horizon = reuse("horizon", (tuple(impulses), target), lambda: days_to_ready(impulses, target))
+        horizon = (reuse("horizon", (tuple(impulses), target), lambda: days_to_ready(impulses, target))
+                   if include_deadlines else None)
         current.append({"zone":z, "readiness_percent":max(0.,100.-f),
             "residual_fatigue":f, "days_to_practical_recovery":horizon,
             "baseline_daily_min":last_baseline[0], "baseline_raw_daily_min":last_baseline[1],

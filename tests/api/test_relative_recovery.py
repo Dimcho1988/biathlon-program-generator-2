@@ -6,7 +6,7 @@ import pytest
 from biathlon import load_progression, planning_controls, mesocycle_focus, planning_consistency
 from biathlon.constants import COMPONENTS
 from tests.api.test_load_progression import configured, observed
-from tests.api.test_training_plan_engine import TODAY
+from tests.api.test_training_plan_engine import TODAY, NOW, reference_speed
 
 
 def test_recovery_reduces_observed_q_and_e_once_and_preserves_stable_anchor():
@@ -63,3 +63,33 @@ def test_manual_targets_keep_their_explicit_recovery_gate():
     result = load_progression.apply(goals, p, state, ctx, day, "GENERAL_PREPARATION", False, False, 1., base)
     assert result["Z3"]["target"] == expected
     assert "recovery_reference" not in result["Z3"]
+
+
+def test_partial_recovery_dose_does_not_spend_other_components_preparation(monkeypatch):
+    from apps.api import training_plan_engine as engine
+    from tests.api.test_long_term_scheduling import assert_segment_contract
+    repo, _, _ = observed()
+    body = configured(age_years=30, training_experience_years=10,
+                      available_minutes=[300]*6+[0], building_fraction=.65)
+    body["planning_controls"].update(mesocycle_anchor=(TODAY-timedelta(days=21)).isoformat(),
+        sessions_per_week=11, sessions_by_day=[2,2,2,2,2,1,0], long_session_day=5,
+        mixed_sessions_enabled=True)
+    # Synthetic coach objectives isolate allocation from the progression
+    # policy above. Keep real capacities, readiness, whole doses and Q/E gates.
+    targets = {"Z1":300., "Z2":100., "Z3":80., "Z4":20., "Z5":0., "STR":0.}
+    ceilings = {"Z1":1500., "Z2":800., "Z3":350., "Z4":120., "Z5":20., "STR":0.}
+    original = engine._goals
+    def goals(*args, **kwargs):
+        values, accents, cycle = original(*args, **kwargs)
+        for zone in targets:
+            values[zone].update(target_weekly_q=targets[zone], desired_weekly_q=targets[zone], target=ceilings[zone])
+        return values, accents, cycle
+    monkeypatch.setattr(engine, "_goals", goals)
+    monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
+    plan = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)
+    assert all(day["status"] == "TRAINING" for day in plan["days"][:6])
+    assert plan["days"][6]["status"] == "UNAVAILABLE" and not plan["days"][6]["sessions"]
+    assert plan["allocation"]["components"]["Z2"]["planned_q"] >= 90.
+    long_day = plan["days"][5]["sessions"]
+    assert len(long_day) == 1 and long_day[0]["zone"] == "Z1" and long_day[0]["total_minutes"] >= 60.
+    assert_segment_contract(plan)

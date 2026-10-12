@@ -48,6 +48,20 @@ def test_current_only_retains_scientific_input_validation(rows):
     assert str(original.value) == str(compact.value)
 
 
+def test_readiness_only_retains_math_and_cannot_poison_cached_deadlines():
+    rows = [{"date": (TODAY-timedelta(days=n)).isoformat(), "zone": z, "effective_load": 300.}
+            for n in range(5) for z in recovery_v2.ZONES]
+    cache = {}
+    compact = recovery_v2.simulate(rows, target=TODAY, include_details=False,
+                                  include_deadlines=False, calculation_cache=cache)
+    full = recovery_v2.simulate(rows, target=TODAY, include_details=False, calculation_cache=cache)
+    assert all(row["days_to_practical_recovery"] is None for row in compact["current"])
+    assert all(row["days_to_practical_recovery"] > 0 for row in full["current"])
+    assert compact == {**full, "current": [{**r, "days_to_practical_recovery": None} for r in full["current"]]}
+    assert recovery_v2.simulate(rows, target=TODAY, include_details=False,
+                               include_deadlines=False, calculation_cache=cache) == compact
+
+
 def _planning_inputs(mode):
     if mode == "legacy":
         return Repository(), profile(), None
