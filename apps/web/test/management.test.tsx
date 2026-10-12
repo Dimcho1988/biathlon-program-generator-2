@@ -71,13 +71,13 @@ describe("management data and review interface", () => {
     malformed.payload.days[0].rejected_alternatives[0].method_ids=[];
     expect(()=>parseDraftRecord(malformed)).toThrow("Невалидна причина за неизбран метод.");
   });
-  it("explains reserved future work without displaying the internal limit code", () => {
+  it.each([["FUTURE_QUALITY_RESERVATION_WORK_CAP", "Резерв за бъдеща основна или силова тренировка"], ["LONG_TERM_QUALITY_PREPARATION", "Запазен товар за следващите основни задачи"]])("explains %s without displaying the internal limit code", (code, label) => {
     const reserved = structuredClone(record);
-    reserved.payload.days[0].session!.dose_evidence.limits.push({code:"FUTURE_QUALITY_RESERVATION_WORK_CAP",limit_minutes:20});
-    reserved.payload.allocation={components:{},constraints:[],dose_limits:["FUTURE_QUALITY_RESERVATION_WORK_CAP"]};
+    reserved.payload.days[0].session!.dose_evidence.limits.push({code,limit_minutes:20});
+    reserved.payload.allocation={components:{},constraints:[],dose_limits:[code]};
     const html=renderToStaticMarkup(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:1}} initialDrafts={[reserved]} today="2026-09-21"/>);
-    expect(html.match(/Резерв за бъдеща основна или силова тренировка/g)).toHaveLength(2);
-    expect(html).not.toContain("FUTURE_QUALITY_RESERVATION_WORK_CAP");
+    expect(html.split(label)).toHaveLength(3);
+    expect(html).not.toContain(code);
   });
   it("distinguishes current microcycle remainder from rolling history and labels estimated curve capacity", () => {
     const current = structuredClone(record);
@@ -175,7 +175,7 @@ describe("management data and review interface", () => {
     const scaled = structuredClone(record);
     Object.assign(scaled.payload.days[0].session!.dose_evidence, {base_fraction:.6,readiness_dose_factor:.5});
     const html = renderToStaticMarkup(<TrainingManagement athleteName="Тестов спортист" canEdit initialProfile={{ configured: true, profile, revision: 1 }} initialDrafts={[scaled]} today="2026-09-21" />);
-    for (const expected of ["Равномерна аеробна работа", "0:45:00", "0:30:00", "Защо тази задача и доза?", "Експертен Tmax", "Избраната продължителност е извън диапазона", "Специално подготвителен", "65 минути × 80% готовност = 52 минути", "Начален дял за метода", "Множител от готовността", "Изтегли пълния отчет"]) expect(html).toContain(expected);
+    for (const expected of ["Равномерна аеробна работа", "0:45:00", "0:30:00", "Защо тази задача и доза?", "Експертен Tmax", "Избраната продължителност е извън диапазона", "Специално подготвителен", "32,5 × 0,8 = 26 минути", "Начален дял за метода", "Множител от готовността", "Изтегли пълния отчет"]) expect(html).toContain(expected);
     expect(html).not.toContain("NaN");
     expect(html).not.toContain("Активирай");
   });
