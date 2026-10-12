@@ -317,6 +317,9 @@ def test_library_descriptor_survives_curve_updates_but_not_recipe_or_coach_chang
     updated["method_library"]["resolution"]["target_speed_kmh"] *= 1.01
     updated["method_library"]["resolution"]["active_test_count"] += 1
     assert method_descriptor(updated, "RollerSki") == original
+    for enabled in (True, False):
+        updated["method_library"]["resolution"]["expert_override"] = {"enabled": enabled}
+        assert method_descriptor(updated, "RollerSki") == original
     edited = deepcopy(method)
     edited["method_library"]["resolution"]["expert_override"] = {"speed_multiplier": [1.02, 1.04]}
     assert method_descriptor(edited, "RollerSki")["version"] != original["version"]
@@ -334,10 +337,16 @@ def test_legacy_confirmation_does_not_read_library_curves(library_feedback):
     assert descriptor["id"] == A and not calls
 
 
-@pytest.mark.parametrize("blocked", ["global", "method", "intervals", "reference"])
-def test_unavailable_library_choices_do_not_fetch_curves(library_feedback, blocked):
-    from apps.api.learning_methods import execution_catalog
+@pytest.mark.parametrize("blocked", ["global", "method", "intervals", "source_selection"])
+def test_future_selection_switches_do_not_remove_execution_catalog_or_confirmation(library_feedback, blocked):
+    from apps.api.learning_methods import execution_catalog, confirmed_descriptor
+    from biathlon import method_library
+    from tests.api.test_sourced_method_library import view
     repo, profile, record, calls = library_feedback
+    identifier = "LIB-TEST-SPECIAL_PREPARATION"
+    report = SessionReport(activity_ref=f"act_{22:032x}", duration_minutes=40,
+                           executed_method_id=identifier, method_confirmed=True)
+    expected = confirmed_descriptor(repo, "ath-test", report, {"sport": "RollerSki"})
     if blocked == "global":
         profile["method_library"] = {"enabled": False}
     elif blocked == "method":
@@ -345,9 +354,46 @@ def test_unavailable_library_choices_do_not_fetch_curves(library_feedback, block
     elif blocked == "intervals":
         profile["planning_controls"]["automatic_intervals"] = False
     else:
-        record["prescription"] = None
+        record["automatic_selection"] = False
+    before = deepcopy(profile)
+    calls.clear()
+    choices = execution_catalog(repo, "ath-test")
+    assert any(item["id"] == identifier and item["sports"] == ["RollerSki"] for item in choices)
+    assert confirmed_descriptor(repo, "ath-test", report, {"sport": "RollerSki"}) == expected
+    assert profile == before
+    assert method_library.executable_methods(profile, view("RollerSki"), phase="SPECIAL_PREPARATION") == []
+    assert calls == [("ath-test", "NordicSki"), ("ath-test", "RollerSki"), ("ath-test", "RollerSki")]
+
+
+def test_reference_only_recipe_stays_unavailable_for_execution_without_curve_reads(library_feedback):
+    from apps.api.learning_methods import execution_catalog, confirmed_descriptor
+    repo, _, record, calls = library_feedback
+    record["prescription"] = None
     assert not any(item["id"].startswith("LIB-") for item in execution_catalog(repo, "ath-test"))
+    report = SessionReport(activity_ref=f"act_{23:032x}", duration_minutes=40,
+                           executed_method_id="LIB-TEST-SPECIAL_PREPARATION", method_confirmed=True)
+    with pytest.raises(HTTPException) as exc:
+        confirmed_descriptor(repo, "ath-test", report, {"sport": "RollerSki"})
+    assert exc.value.status_code == 422
     assert not calls
+
+
+def test_disabled_selection_keeps_numeric_recipe_version_and_actual_sport_guards(library_feedback):
+    from apps.api.learning_methods import confirmed_descriptor
+    repo, profile, _, calls = library_feedback
+    report = SessionReport(activity_ref=f"act_{24:032x}", duration_minutes=40,
+                           executed_method_id="LIB-TEST-SPECIAL_PREPARATION", method_confirmed=True)
+    baseline = confirmed_descriptor(repo, "ath-test", report, {"sport": "RollerSki"})
+    profile["method_library"] = {"enabled": False, "overrides": {"TEST": {
+        "enabled": False, "speed_multiplier": [1.01, 1.03],
+    }}}
+    changed = confirmed_descriptor(repo, "ath-test", report, {"sport": "RollerSki"})
+    assert changed["id"] == baseline["id"] and changed["sport"] == "RollerSki"
+    assert changed["version"] != baseline["version"]
+    calls.clear()
+    with pytest.raises(HTTPException) as exc:
+        confirmed_descriptor(repo, "ath-test", report, {"sport": "Ride"})
+    assert exc.value.status_code == 422 and not calls
 
 
 def test_continuous_library_feedback_remains_available_when_automatic_intervals_disabled(library_feedback):

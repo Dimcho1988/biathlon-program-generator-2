@@ -50,7 +50,9 @@ def method_descriptor(method, sport):
         )}
         definition["method_library"] = {key: value for key, value in library.items() if key != "resolution"}
         definition["phase"] = resolution.get("phase")
-        definition["expert_override"] = resolution.get("expert_override") or {}
+        # Eligibility for a future plan is not part of the executed recipe.
+        definition["expert_override"] = {key: value for key, value in (resolution.get("expert_override") or {}).items()
+                                         if key != "enabled"}
     return {"id": method["id"], "zone": method["zone"], "sport": sport,
             "structure": method["structure"], "purpose": method["purpose"],
             "version": f"{CATALOG_VERSION}:{_hash(definition)[:20]}",
@@ -64,7 +66,7 @@ def _methods(repository, alias, *, include_library=True, library_sport=None, lib
     profile = ManagementStore(repository).profile(alias).get("profile") or {}
     methods = resolved_methods(profile)
     controls, preferences = profile.get("planning_controls") or {}, profile.get("method_library") or {}
-    if not include_library or not profile or preferences.get("enabled", True) is False:
+    if not include_library or not profile:
         return methods
     primary = profile.get("actual_sport") or profile.get("sport")
     sports = list(dict.fromkeys(controls.get("training_sports") or [primary]))
@@ -73,16 +75,22 @@ def _methods(repository, alias, *, include_library=True, library_sport=None, lib
     records = method_library.entries()
     overrides = preferences.get("overrides") or {}
     eligible = [record for record in records if record.get("prescription")
-                and overrides.get(record["id"], {}).get("enabled", record.get("automatic_selection", True))
-                and (controls.get("automatic_intervals", True) or record["prescription"].get("structure") == "CONTINUOUS")
                 and (library_method_id is None or library_method_id in
                      {f"LIB-{record['id']}-{phase}" for phase in record.get("periods", [])})]
     sports = [sport for sport in sports if any(sport in record.get("sports", []) for record in eligible)]
     if not sports or repository.athlete_settings(alias) is None:
         return methods
+    # Feedback describes completed work. Turning off future plan selection
+    # must not prevent confirming a session that has already been executed.
+    # Only the transient resolver inputs change; numeric coach overrides,
+    # source completeness, phase, curve and actual-sport checks remain active.
+    feedback_profile = {**profile, "planning_controls": {**controls, "automatic_intervals": True},
+                        "method_library": {**preferences, "enabled": True, "overrides": {
+                            record["id"]: {**overrides.get(record["id"], {}), "enabled": True}
+                            for record in eligible}}}
     for sport in sports:
         view = model_service.speed_view(repository, alias, sport)
-        methods.extend(method_library.executable_methods({**profile, "actual_sport": sport}, view))
+        methods.extend(method_library.executable_methods({**feedback_profile, "actual_sport": sport}, view))
     return methods
 
 
