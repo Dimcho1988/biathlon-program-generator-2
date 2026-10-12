@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
-from biathlon import method_library, planning_schedule
+from biathlon import method_library, method_registry, planning_schedule
 from biathlon.periodization import build_periodization
 
 from . import model_service
@@ -18,13 +18,17 @@ from .management_schemas import MethodLibraryPreferences
 from .management_store import ManagementStore
 
 
-def validate_preferences(preferences):
+def validate_preferences(preferences, profile=None):
     """Validate immutable catalog membership as well as numeric schema bounds."""
     parsed = MethodLibraryPreferences.model_validate(preferences)
     payload = parsed.model_dump(mode="json", exclude_none=True)
     entries = {entry["id"]: entry for entry in method_library.entries()}
+    from biathlon.training_methods import resolved_methods
+    entries.update({m["id"]: method_registry.coach_card(m) for m in resolved_methods(profile or {})})
     for key, override in payload["overrides"].items():
         entry = entries.get(key)
+        if entry is None and key in {f"ONFLOWS-RACE-{role}-{zone}-V1" for role in ("BELOW", "RACE", "ABOVE") for zone in ("Z2", "Z3", "Z4", "Z5")}:
+            entry = {"id": key, "prescription": None}
         if entry is None:
             raise HTTPException(422, f"Unknown training method: {key}")
         prescription = entry.get("prescription")
@@ -73,8 +77,16 @@ def view(repository, alias, *, phase=None, now=None):
     sport = profile.get("actual_sport") or profile.get("sport")
     speed = model_service.speed_view(repository, alias, sport) if settings and sport else None
     preferences = MethodLibraryPreferences.model_validate(profile.get("method_library") or {}).model_dump(mode="json", exclude_none=True)
+    if profile:
+        from datetime import timedelta
+        from . import method_progression_service
+        reader = getattr(repository, "active_planning_calendar", None) or getattr(repository, "active_activity_calendar", None)
+        if reader:
+            envelope = reader(alias, today-timedelta(days=89), today) or {}
+            source = (envelope.get("snapshot_payload") or {}).get("load_history") or {}
+            profile["_method_progression"] = method_progression_service.context(repository, alias, source, today)
     # A GET must never create a profile or silently save normalized preferences.
-    catalog = method_library.catalog(profile, speed, phase=selected_phase, today=today)
+    catalog = method_registry.catalog(profile, speed, phase=selected_phase, today=today)
     curve = {key: speed.get(key) for key in (
         "status", "sport", "model_version", "source_generation_id", "source_revision", "active_test_count",
     )} if speed else {"status": "UNAVAILABLE", "sport": sport,
@@ -93,7 +105,7 @@ def save_preferences(repository, alias, body, actor):
         raise HTTPException(409, "Create a planning profile before saving method preferences")
     if stored["revision"] != body.expected_revision:
         raise HTTPException(409, "Planning input changed; reload before saving")
-    preferences = validate_preferences(body.preferences.model_dump(mode="json", exclude_none=True))
+    preferences = validate_preferences(body.preferences.model_dump(mode="json", exclude_none=True), stored["profile"])
     profile = deepcopy(stored["profile"])
     profile["method_library"] = preferences
     saved = store.save_profile(alias, profile, body.expected_revision, actor)

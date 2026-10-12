@@ -81,6 +81,8 @@ def test_last_microcycle_day_does_not_wait_for_next_microcycle_preferred_thresho
 
 
 def test_second_slot_can_use_a_reduced_mixed_dose_after_strength(monkeypatch):
+    from tests.api.test_methodology_completion import proven_shortage
+    proven_shortage(monkeypatch)
     fixed_readiness(monkeypatch, 100.)
     body = configured(age_years=25, training_experience_years=5, strength_enabled=True, available_minutes=[180]*7)
     body["planning_controls"].update(sessions_per_week=2, sessions_by_day=[2,0,0,0,0,0,0], strength_days=[0], threshold_days=[4], mixed_sessions_enabled=True)

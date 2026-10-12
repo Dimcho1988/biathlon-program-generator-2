@@ -26,9 +26,11 @@ def fixed_readiness(monkeypatch, value, *, overrides=None):
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
 
 
-def threshold_only(monkeypatch, body):
+def threshold_only(monkeypatch, body, minimum=None):
     """Use an actual executable method, retaining capacity and Q/E accounting."""
     method = next(m for m in engine.resolved_methods(body) if m["id"] == "END-THR-LONG-01")
+    if minimum is not None:
+        method["min_work_min"] = minimum
     monkeypatch.setattr(engine, "resolved_methods", lambda _: [deepcopy(method)])
 
 
@@ -69,11 +71,12 @@ def assert_readiness_dose(session):
 
 
 @pytest.mark.parametrize("readiness", [0., 30., 50., 70., 89.9, 90., 100.])
-def test_readiness_multiplier_is_linear_without_a_90_percent_discontinuity(readiness):
+def test_readiness_has_50_90_role_gates_and_one_linear_scale_within_role(readiness):
     method = {"zone": "Z3", "structure": "CONTINUOUS"}
     policy = adaptive_methods.readiness_policy(method, threshold_profile(), {"Z3": readiness})
-    assert policy["dose_factor"] == pytest.approx(readiness / 100)
-    assert policy["minimum_percent"] == 0
+    assert policy["dose_factor"] == pytest.approx(readiness / 100 if readiness >= 50 else 0)
+    assert policy["minimum_percent"] == 50
+    assert policy["maximum_role"] == ("NONE" if readiness < 50 else "MAINTENANCE" if readiness <= 90 else "BUILDING")
 
 
 def test_combination_uses_the_least_ready_required_component_once():
@@ -92,16 +95,16 @@ def test_unknown_required_readiness_never_becomes_full_capacity(readiness):
     assert policy["dose_factor"] == 0
 
 
-@pytest.mark.parametrize("base_fraction, readiness, expected", [(.6, 50., .3), (.7, 50., .35), (.7, 35., .245)])
+@pytest.mark.parametrize("base_fraction, readiness, expected", [(.6, 50., .15), (.7, 50., .175), (.7, 90., .315), (.7, 100., .7)])
 def test_readiness_prescribes_selected_fraction_times_ready_capacity(monkeypatch, base_fraction, readiness, expected):
     fixed_readiness(monkeypatch, readiness)
     body = threshold_profile(building_fraction=base_fraction)
-    threshold_only(monkeypatch, body)
+    threshold_only(monkeypatch, body, minimum=3.)
     plan = generate(body)
     work = [s for d in plan["days"] for s in d["sessions"] if s["zone"] == "Z3"]
     assert work, "A reduced complete key session should survive when its whole structure fits."
     dose = work[0]["dose_evidence"]
-    assert dose["base_fraction"] == base_fraction
+    assert dose["base_fraction"] == base_fraction * (.5 if readiness <= 90 else 1.)
     assert dose["fraction"] == pytest.approx(expected)
     assert dose["readiness_dose_factor"] == readiness / 100
     assert dose["requested_primary_work_minutes"] / dose["capacity_minutes"] == pytest.approx(expected, abs=.0001)
@@ -111,7 +114,7 @@ def test_readiness_prescribes_selected_fraction_times_ready_capacity(monkeypatch
 
 def test_lower_readiness_preserves_supported_effort_and_complete_blocks(monkeypatch):
     body = threshold_profile(building_fraction=.6)
-    threshold_only(monkeypatch, body)
+    threshold_only(monkeypatch, body, minimum=3.)
     original = engine.recovery_v2.simulate
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
 
@@ -224,7 +227,7 @@ def test_reduced_cycle_can_keep_a_controlled_nonaccent_component_within_its_q_an
 def test_double_threshold_split_reports_each_session_base_fraction_and_one_readiness_scale(monkeypatch):
     from tests.api.test_management_schedule import body
 
-    fixed_readiness(monkeypatch, 80.)
+    fixed_readiness(monkeypatch, 95.)
     configured = body(sessions_per_week=12, double_threshold_days=[TODAY.weekday()],
                       threshold_method="INTERVALS", accent_mode="MANUAL", accents=["Z3"],
                       accent_index=1.5)
@@ -234,10 +237,10 @@ def test_double_threshold_split_reports_each_session_base_fraction_and_one_readi
     for session in pair:
         evidence = session["dose_evidence"]
         assert evidence["base_fraction"] == configured["planning_controls"]["double_threshold_fraction"]
-        assert evidence["readiness_dose_factor"] == .8
-        assert evidence["fraction"] == pytest.approx(evidence["base_fraction"] * .8)
-        assert evidence["requested_work_minutes"] / evidence["capacity_minutes"] == pytest.approx(.4, abs=.0001)
-        assert evidence["applied_structure_fraction"] <= .4 + .001
+        assert evidence["readiness_dose_factor"] == .95
+        assert evidence["fraction"] == pytest.approx(evidence["base_fraction"] * .95, abs=.0001)
+        assert evidence["requested_work_minutes"] / evidence["capacity_minutes"] == pytest.approx(.475, abs=.0001)
+        assert evidence["applied_structure_fraction"] <= .475 + .001
         assert any(b["kind"] == "WARMUP" for b in session["blocks"])
         assert any(b["kind"] == "COOLDOWN" for b in session["blocks"])
     assert_rolling_budgets(plan)

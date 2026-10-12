@@ -239,6 +239,40 @@ def critical_speed(tests):
         "max_speed_residual_kmh":max(abs(s-cs*t-d)/t*3.6 for t,s in chosen)}
 
 
+def prescription_critical_speed(tests, curve, *, allow_model_estimate=True):
+    """Prefer eligible real-test CS; otherwise label the current V3/V12 estimate.
+
+    Model points never enter the test registry or acquire measured status.
+    The observed-only policy can explicitly forbid the fallback.
+    """
+    accepted = [t for t in tests if t.get("maximal") and t.get("use_for_cs")
+                and t.get("comparable", True) and t.get("enabled", True)
+                and t.get("test_mode", "STRICT") == "STRICT"
+                and not t.get("generated") and not t.get("is_estimated")
+                and t.get("is_maximal_test") is not False
+                and str(t.get("source", "")).upper() not in
+                {"MODEL", "MODEL_GENERATED", "GENERATED", "ESTIMATED", "REFERENCE"}]
+    supported = (any(120 <= t["duration_s"] <= 300 for t in accepted)
+                 and any(480 <= t["duration_s"] <= 1200 for t in accepted))
+    direct = critical_speed(accepted) if supported else {}
+    if direct.get("speed_kmh"):
+        return {**direct, "source": "DIRECT_ACCEPTED_TEST_CS", "measured": False,
+                "basis": "FIT_TO_MEASURED_MAXIMAL_TESTS", "is_estimate": True}
+    if not allow_model_estimate:
+        raise ValueError("CV_REQUIRES_ACCEPTED_SHORT_AND_LONG_TESTS")
+    points = [{"duration_s": seconds, "speed_kmh": curve.speed(seconds)*3.6,
+               "distance_m": curve.speed(seconds)*seconds, "evidence": "MODEL_ESTIMATE"}
+              for seconds in (180., 720.)]
+    cs = (points[1]["distance_m"] - points[0]["distance_m"]) / 540.
+    reserve = points[0]["distance_m"] - cs*180.
+    if cs <= 0 or reserve <= 0 or cs*3.6 >= points[1]["speed_kmh"]:
+        raise ValueError("INCONSISTENT_MODEL_CS")
+    return {"status": "MODEL_ESTIMATE", "source": "CURRENT_CURVE_V3_V12",
+            "version": "cs-prescription-v2", "speed_kmh": cs*3.6, "d_prime_m": reserve,
+            "points": points, "measured": False, "is_estimate": True,
+            "uncertainty": "NOT_QUANTIFIED", "count": len(accepted)}
+
+
 def standardized_critical_speed(tests, curve=None):
     """A derived 3/12-minute descriptor, never two new measured anchors.
 

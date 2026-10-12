@@ -262,6 +262,8 @@ def library_feedback(monkeypatch):
         return view(sport)
     monkeypatch.setattr(model_service, "speed_view", speed_view)
     repo = Repository()
+    from apps.api.management_plan_store import PlanStore
+    monkeypatch.setattr(PlanStore, "current", lambda self, alias: None)
     repo.activity_detail = lambda alias, activity_ref: {
         "activity_ref": activity_ref, "local_date": "2026-09-26", "sport": "RollerSki", "duration_min": 40,
     }

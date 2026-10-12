@@ -158,6 +158,9 @@ def test_lower_future_target_does_not_force_filling_available_sessions(monkeypat
 
 @pytest.mark.parametrize("target", [180., 250., 400.])
 def test_feasible_volume_is_realized_in_complete_sessions(monkeypatch, target):
+    # Isolate volume allocation from the separately tested Recovery role gate.
+    from tests.api.test_readiness_adaptive_plan_v2 import fixed_readiness
+    fixed_readiness(monkeypatch, 100.)
     p = body(sessions_per_week=7, accent_mode="MANUAL", accents=["Z1"], mesocycle_anchor=TODAY)
     p["component_targets_weekly"] = {z: target if z == "Z1" else 0. for z in COMPONENTS}
     p["max_key_sessions_per_week"] = 0
@@ -233,6 +236,9 @@ def test_automatic_q_targets_match_outlook_and_no_micro_sessions(monkeypatch):
 
 
 def test_feasible_automatic_q_target_is_realized_without_filling_e_headroom(monkeypatch):
+    # Isolate volume allocation from the separately tested Recovery role gate.
+    from tests.api.test_readiness_adaptive_plan_v2 import fixed_readiness
+    fixed_readiness(monkeypatch, 100.)
     from tests.api.test_management_schedule import high_capacity_history
     from apps.api.management_schemas import LoadProgression
     repo = high_capacity_history()

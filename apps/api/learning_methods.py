@@ -53,18 +53,24 @@ def method_descriptor(method, sport):
         # Eligibility for a future plan is not part of the executed recipe.
         definition["expert_override"] = {key: value for key, value in (resolution.get("expert_override") or {}).items()
                                          if key != "enabled"}
-    return {"id": method["id"], "zone": method["zone"], "sport": sport,
+    from biathlon.method_progression import descriptor as progression_descriptor
+    return {"id": method["id"], "zone": method["zone"], "sport": sport, "progression": progression_descriptor(method),
             "structure": method["structure"], "purpose": method["purpose"],
             "version": f"{CATALOG_VERSION}:{_hash(definition)[:20]}",
-            "catalog_version": CATALOG_VERSION, "position": method.get("position")}
+            "catalog_version": CATALOG_VERSION, "position": method.get("position"),
+            "parts": [method_descriptor(part, sport) for part in method.get("combined_methods", [])]}
 
 
-def _methods(repository, alias, *, include_library=True, library_sport=None, library_method_id=None):
+def _methods(repository, alias, *, include_library=True, library_sport=None, library_method_id=None, execution_date=None, exclude_activity_ref=None):
     from .management_store import ManagementStore
     from . import model_service
     from biathlon import method_library
     profile = ManagementStore(repository).profile(alias).get("profile") or {}
     methods = resolved_methods(profile)
+    from biathlon import adaptive_methods
+    for sport, pair in adaptive_methods.threshold_pairs([(sport, m) for m in methods for sport in m["sports"]], (profile.get("planning_controls") or {}).get("double_threshold_components", ["Z3"])):
+        methods.extend([{**pair, "id": pair["id"].split("-DOUBLE-")[0], "double_threshold": False}, pair["paired_method"]])
+    methods = list({(m["id"], tuple(m["sports"])): m for m in methods}.values())
     controls, preferences = profile.get("planning_controls") or {}, profile.get("method_library") or {}
     if not include_library or not profile:
         return methods
@@ -80,11 +86,20 @@ def _methods(repository, alias, *, include_library=True, library_sport=None, lib
     sports = [sport for sport in sports if any(sport in record.get("sports", []) for record in eligible)]
     if not sports or repository.athlete_settings(alias) is None:
         return methods
+    reader = getattr(repository, "active_planning_calendar", None) or getattr(repository, "active_activity_calendar", None)
+    if reader:
+        from . import method_progression_service
+        cutoff = date.fromisoformat(str(execution_date)) if execution_date else date.today()
+        envelope = reader(alias, cutoff-timedelta(days=89), cutoff) or {}
+        source = (envelope.get("snapshot_payload") or {}).get("load_history") or {}
+        progression = method_progression_service.context(repository, alias, source, cutoff)
+        progression["observations"] = [r for r in progression["observations"] if r["id"] != exclude_activity_ref]
+        profile = {**profile, "_method_progression": progression}
     # Feedback describes completed work. Turning off future plan selection
     # must not prevent confirming a session that has already been executed.
     # Only the transient resolver inputs change; numeric coach overrides,
     # source completeness, phase, curve and actual-sport checks remain active.
-    feedback_profile = {**profile, "planning_controls": {**controls, "automatic_intervals": True},
+    feedback_profile = {**profile, "_confirming_execution": True, "planning_controls": {**controls, "automatic_intervals": True},
                         "method_library": {**preferences, "enabled": True, "overrides": {
                             record["id"]: {**overrides.get(record["id"], {}), "enabled": True}
                             for record in eligible}}}
@@ -94,12 +109,29 @@ def _methods(repository, alias, *, include_library=True, library_sport=None, lib
     return methods
 
 
+def planned_execution_methods(repository, alias, *, day=None):
+    """Only server-frozen approved combinations enter the execution picker."""
+    from .management_plan_store import PlanStore
+    from biathlon.planning_schedule import day_sessions
+    current = PlanStore(repository).current(alias)
+    result = []
+    for item in ((current or {}).get("payload", {}).get("plan") or {}).get("days", []):
+        if day and item.get("date") != day:
+            continue
+        for session in day_sessions(item):
+            if session["method_id"].startswith("COMBO-") and session.get("execution_descriptor"):
+                result.append(session)
+    return result
+
+
 def execution_catalog(repository, alias):
     from biathlon.periodization import PHASE_LABELS_BG
-    return [{"id": m["id"], "title": m["title"] + (" · " + PHASE_LABELS_BG.get(m["periods"][0], m["periods"][0])
+    rows = [{"id": m["id"], "title": m["title"] + (" · " + PHASE_LABELS_BG.get(m["periods"][0], m["periods"][0])
              if m.get("method_library_id") and m.get("periods") else ""), "zone": m["zone"],
              "sports": list(m["sports"]) + (["WeightTraining"] if m["zone"] == "STR" else [])}
             for m in _methods(repository, alias)]
+    rows.extend({"id": s["method_id"], "title": s["title"], "zone": s["zone"], "sports": [s["sport"]]} for s in planned_execution_methods(repository, alias))
+    return list({(m["id"], tuple(m["sports"])): m for m in rows}.values())
 
 
 def confirmed_descriptor(repository, alias, report, activity):
@@ -107,8 +139,16 @@ def confirmed_descriptor(repository, alias, report, activity):
     if not report.method_confirmed:
         return None
     sport = activity.get("sport")
+    if report.executed_method_id.startswith("COMBO-"):
+        day = activity.get("local_date") or activity.get("date")
+        match = next((s for s in planned_execution_methods(repository, alias, day=day)
+                      if s["method_id"] == report.executed_method_id and s["sport"] == sport), None)
+        if match is None:
+            raise HTTPException(422, "Confirm the approved combined method for this activity day and sport")
+        return dict(match["execution_descriptor"])
     methods = _methods(repository, alias, include_library=report.executed_method_id.startswith("LIB-"),
-                       library_sport=sport, library_method_id=report.executed_method_id)
+                       library_sport=sport, library_method_id=report.executed_method_id,
+                       execution_date=activity.get("local_date") or activity.get("date"), exclude_activity_ref=activity.get("activity_ref"))
     method = next((m for m in methods if m["id"] == report.executed_method_id
                    and (sport in m["sports"] or (sport == "WeightTraining" and m["zone"] == "STR"))), None)
     if method is None:

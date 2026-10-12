@@ -25,7 +25,7 @@ def _context(repository, alias, now):
     profile = ManagementProfile.model_validate(stored["profile"]).model_dump(mode="json")
     progression = management_service.training_plan_engine.load_progression.settings(profile)
     state = management_service.input_state(repository, alias, evaluated_at=now,
-        include_response=bool(progression and progression["feedback_enabled"]))
+        include_response=True)
     frozen = {**state, "management_profile": profile, "profile_revision": stored["revision"]}
     # Calendar/preferences edits and new speed observations are ordinary input
     # changes. New dosing rules, physiology or Recovery settings need approval.

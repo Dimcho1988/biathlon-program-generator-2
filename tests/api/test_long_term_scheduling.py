@@ -61,6 +61,9 @@ def assert_segment_contract(plan, *, constant_q=None):
 
 
 def test_positive_long_term_z2_to_z5_targets_receive_direct_work_with_actual_and_planned_bounded(monkeypatch):
+    # Isolate the original Q coverage contract for approved supplement recipes.
+    from tests.api.test_methodology_completion import proven_shortage
+    proven_shortage(monkeypatch)
     fixed_readiness(monkeypatch, 100.)
     body = configured(age_years=30, training_experience_years=10, available_minutes=[360]*7, building_fraction=.65,
                       interval_profiles=[interval("Z4",continuous_capacity_min=30.,work_seconds=30,recovery_seconds=60,min_repetitions=4,max_repetitions=20),

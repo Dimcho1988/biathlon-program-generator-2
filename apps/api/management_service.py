@@ -205,7 +205,7 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
     resolved, _ = training_plan_engine.planning_schedule.horizon(profile.model_dump(mode="json"), calendar["events"])
     if start_date < profile.program_start or start_date > date.fromisoformat(resolved["program_end"]):
         raise HTTPException(422, "The draft must start within the planning period")
-    include_response = bool(profile.load_progression and profile.load_progression.enabled and profile.load_progression.feedback_enabled)
+    include_response = True
     before = input_state(repository, alias, evaluated_at=now, include_response=include_response)
     payload = training_plan_engine.generate_plan(
         repository, alias, profile.model_dump(mode="json"), start_date=start_date, now=now,
@@ -247,7 +247,7 @@ def history(repository, alias, *, start_date=None):
         profile = store.profile(alias)
         normalized = ManagementProfile.model_validate(profile["profile"]).model_dump(mode="json") if profile["profile"] else None
         progression = training_plan_engine.load_progression.settings(normalized or {})
-        state = input_state(repository, alias, include_response=bool(progression and progression["feedback_enabled"]))
+        state = input_state(repository, alias, include_response=True)
         fingerprint = _hash({**state, "management_profile": normalized,
                              "profile_revision": profile["revision"]})
     except PersistentStoreFailure:

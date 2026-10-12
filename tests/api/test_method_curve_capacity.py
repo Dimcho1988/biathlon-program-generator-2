@@ -276,7 +276,10 @@ def test_full_planner_generates_whole_z5_dose_from_single_long_anchor_with_long_
                       component_targets_weekly={"Z1": 100., "Z5": 6.})
     body["planning_controls"].update(accents=["Z5"], sessions_per_week=1,
         sessions_by_day=[0, 1, 0, 0, 0, 0, 0], threshold_days=[1])
-    fixed_readiness(monkeypatch, 90.)
+    fixed_readiness(monkeypatch, 95.)
+    from biathlon import method_library
+    body["method_library"]["enabled"] = True
+    monkeypatch.setattr(method_library, "executable_methods", lambda *args, **kwargs: [])
     monkeypatch.setattr(engine.model_service, "speed_view", lambda *args, **kwargs: deepcopy(view))
     plan = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)
     sessions = [s for day in plan["days"] for s in day["sessions"]]
@@ -290,8 +293,8 @@ def test_full_planner_generates_whole_z5_dose_from_single_long_anchor_with_long_
     assert evidence["capacity_reference"] == "BOUNDARY_HALF_TMAX_MAX600"
     assert evidence["supported_test_duration_s"] == [1050., 1050.]
     assert "test_anchor" not in evidence
-    assert evidence["base_fraction"] == 1.5 and evidence["readiness_dose_factor"] == .9
-    assert evidence["requested_primary_work_minutes"] / evidence["capacity_minutes"] == pytest.approx(1.5*.9, abs=.0001)
+    assert evidence["base_fraction"] == 1.5 and evidence["readiness_dose_factor"] == .95
+    assert evidence["requested_primary_work_minutes"] / evidence["capacity_minutes"] == pytest.approx(1.5*.95, abs=.0001)
     assert evidence["target_speed_kmh"] > evidence["boundary_speed_kmh"]
     work = [b for b in session["blocks"] if b["kind"] == "WORK"]
     template = evidence["effort_profile"]

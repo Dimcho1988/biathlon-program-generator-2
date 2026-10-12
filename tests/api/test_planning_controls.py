@@ -171,6 +171,8 @@ def test_integrated_week_respects_separate_strength_days_and_covers_complementar
 
 
 def test_combined_aerobic_method_remains_available_with_one_shared_dose(monkeypatch):
+    from tests.api.test_methodology_completion import proven_shortage
+    proven_shortage(monkeypatch)
     monkeypatch.setattr(engine.model_service,'speed_view',reference_speed)
     method=next(m for m in resolved_methods({}) if m['id']=='END-ALT-10-05-01')
     # Isolate the mixed method's eligibility and dosing from competition with

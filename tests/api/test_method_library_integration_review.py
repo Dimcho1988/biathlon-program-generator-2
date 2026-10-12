@@ -66,8 +66,8 @@ def test_ski_discipline_uses_rollerski_curve_and_never_calendar_fitness_uplift()
     assert early["anchor"]["distance_m"] == 10000
     assert early["actual_sport"] == "RollerSki"
     assert early["anchor"]["speed_kmh"] == special["anchor"]["speed_kmh"]
-    assert early["work_duration_seconds"] < special["work_duration_seconds"]
-    assert early["target_speed_kmh"] > special["target_speed_kmh"]
+    assert early["work_duration_seconds"] == special["work_duration_seconds"]
+    assert early["target_speed_kmh"] == special["target_speed_kmh"]
     assert not early["curve_improvement_assumed"] and not special["curve_improvement_assumed"]
     assert method_library.resolve(row, profile, {**view, "sport": "NordicSki"},
                                   phase="GENERAL_PREPARATION")["status"] == "UNAVAILABLE"
@@ -92,7 +92,7 @@ def test_continuous_source_uses_tmax_denominator_not_its_own_recipe_ceiling(monk
     blocks = engine._blocks(method, 15, evidence, SETTINGS)
     assert blocks
     assert engine._dose_usage(blocks, evidence, method["zone"]) == pytest.approx(
-        15 / evidence["capacity_minutes"])
+        sum(b["duration_min"] for b in blocks if b["kind"] == "WORK") / evidence["capacity_minutes"])
     assert engine._dose_fits(blocks, evidence, method["zone"], .65)
 
 

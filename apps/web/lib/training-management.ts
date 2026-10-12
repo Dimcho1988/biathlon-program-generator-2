@@ -99,7 +99,7 @@ export interface ManagementProfileResponse { configured: boolean; profile: Manag
 export interface DraftRecord { entry_key: string; revision: number; recorded_at?: string; stale?: boolean | null; stale_reason?: string | null; payload: PlanningDraft }
 export type Component = "Z1" | "Z2" | "Z3" | "Z4" | "Z5" | "STR";
 export const COMPONENTS: Component[] = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"];
-export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; lactate_reference?: LactateReference; method_library?: SessionMethod }
+export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; lactate_reference?: LactateReference; method_library?: SessionMethod; parent_method_card?: SessionMethod }
 export interface DoseEvidence {
   planned_gap_hours?: number; mixed_component?: boolean;
   zone_tmax_minutes?: Partial<Record<Component, number>>; zone_tmax_sources?: Partial<Record<Component, string>>;
@@ -233,6 +233,9 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
   const normalized: Record<string, unknown> = { adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, component_targets_weekly: {},
     horizon_mode: "AUTO_CALENDAR", interval_profiles: [], strength_enabled: false, strength_circuits: 2, transition_days: 0, ...value,
     building_fraction: buildingFraction, maintenance_fraction: buildingFraction / 2, reentry_fraction: buildingFraction / 2 };
+  if (isRecord(value.planning_controls) && typeof value.planning_controls.double_threshold_fraction === "number" && value.planning_controls.double_threshold_fraction >= .25 && value.planning_controls.double_threshold_fraction < .5) {
+    normalized.planning_controls = {...value.planning_controls, double_threshold_fraction: .5};
+  }
   normalized.individual_learning = parseIndividualLearningConfig(value.individual_learning);
   if (value.method_library !== undefined) normalized.method_library = parseMethodPreferences(value.method_library);
   if (typeof normalized.auto_import_enabled !== "boolean" || !["AUTO", "REVIEW"].includes(String(normalized.adaptation_mode)) || !range(normalized.progression_percent, 0, 10)
@@ -276,7 +279,7 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     const regular = c.ranked_indices ?? [1.6, 1.5, 1.2], shock = c.shock_indices ?? [2, 1.8, 1.6];
     const orderedIndices = (v: unknown): v is number[] => Array.isArray(v) && v.length === 3 && v.every((n,i) => range(n,1,2) && (i === 0 || v[i-1] >= n));
     if (!integer(c.automatic_focus_count ?? 3, 1, 3) || !orderedIndices(regular) || !orderedIndices(shock) || shock.some((v,i)=>v < regular[i])) throw new Error("Целите трябва да намаляват от водещия към третия компонент и да са между 1 и 2. Ударните цели трябва да са поне колкото обичайните.");
-    if (!range(c.double_threshold_fraction ?? .5, .25, .6) || !range(c.double_threshold_gap_hours ?? 6, 4, 10)
+    if (!range(c.double_threshold_fraction ?? .5, .5, .6) || !range(c.double_threshold_gap_hours ?? 6, 4, 10)
       || !range(c.double_threshold_lactate_ceiling ?? 3.5, 2, 4) || !range(c.mixed_min_readiness ?? 70, 60, 90)
       || (c.mixed_sessions_enabled !== undefined && typeof c.mixed_sessions_enabled !== "boolean")) throw new Error("Провери дозата, паузата и правилата за допълваща работа.");
     const doubleDays = (c.double_threshold_days ?? []) as number[];

@@ -18,7 +18,7 @@ export interface MethodPrescription {
 }
 export interface MethodResolution {
   status: string; reason?: string; message?: string; reasons?: string[];
-  anchor?: { type: string; speed_kmh?: number; distance_m?: number; duration_seconds?: number };
+  anchor?: { type: string; speed_kmh?: number; distance_m?: number; duration_seconds?: number; evidence?: Record<string, unknown> };
   target_speed_kmh?: number; target_speed_range_kmh?: MethodRange;
   speed_multiplier_range?: MethodRange; work_range?: MethodRange; work_unit?: "seconds" | "meters";
   work_duration_seconds?: number; work_duration_range_seconds?: MethodRange;
@@ -38,7 +38,7 @@ export interface LibraryMethod {
 export interface SessionMethod {
   id: string; title?: string; source?: LibraryMethod["source"]; original?: LibraryMethod["original"];
   adaptation?: LibraryMethod["adaptation"]; guidance?: MethodGuidance; prescription?: MethodPrescription | null;
-  resolution?: MethodResolution;
+  resolution?: MethodResolution; components?: SessionMethod[];
 }
 export interface MethodLibraryResponse {
   version: string; methods: LibraryMethod[]; configured: boolean; revision: number; preferences: MethodPreferences;
@@ -80,9 +80,9 @@ export function parseMethodLibrary(value: unknown): MethodLibraryResponse {
   return { ...value, preferences: parseMethodPreferences(value.preferences) } as unknown as MethodLibraryResponse;
 }
 export function methodAnchorLabel(anchor?: { type: string; distance_m?: number }): string {
-  if (!anchor) return "Без скоростна котва";
+  if (!anchor) return "Индивидуален работен профил";
   if (anchor.type === "CV") return "КС · критична скорост";
-  if (anchor.type === "V5") return "V5 · максимална скорост за 5 мин";
+  if (anchor.type === "V5") return "V5 · оценка на МАС от максимални 5 мин";
   if (anchor.type === "V6") return "V6 · максимална скорост за 6 мин";
   if (["RACE_DISTANCE", "PRIMARY_RACE"].includes(anchor.type)) return anchor.distance_m ? `V${anchor.distance_m} · скорост за ${anchor.distance_m} m` : "Скорост за основната дисциплина";
   if (anchor.type === "RACE_DURATION") return "Скорост за продължителността на старта";
@@ -112,6 +112,8 @@ export function methodSourceGroup(value: LibraryMethod["source"]): string {
 export function methodReasonText(reason?: string): string {
   if (!reason) return "";
   const labels: Record<string, string> = {
+    CONFIRMED_EXECUTION_REQUIRED: "Първо изпълни успешно предходната стъпка и потвърди реалната активност.",
+    SPORT_OR_PERIOD_NOT_SUPPORTED: "Методът е за друго средство или период.",
     DISABLED_BY_PROFILE: "Изключен в индивидуалните настройки.",
     SPORT_NOT_SUPPORTED: "Методът е за друго тренировъчно средство.",
     PRIMARY_DISCIPLINE_NOT_SUPPORTED: "Методът е за друга основна дисциплина.",
@@ -134,6 +136,7 @@ export function methodReasonText(reason?: string): string {
   return labels[reason] ?? (/^[A-Z0-9_]+$/.test(reason) ? "Нужно е методическо уточняване преди автоматичен избор." : reason);
 }
 export function methodStatusLabel(status?: string): string {
+  if (status === "PROGRESSION_LOCKED") return "Изисква предходна стъпка";
   if (status === "READY") return "Готов за индивидуално дозиране";
   if (status?.includes("DISABLED")) return "Изключен за този спортист";
   if (status?.includes("REFERENCE")) return "Справочен метод";

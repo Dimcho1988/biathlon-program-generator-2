@@ -69,8 +69,8 @@ def test_ski_primary_discipline_uses_actual_rollers_curve_and_explicit_ranges():
     assert first["actual_sport"] == "RollerSki"
     assert first["anchor"]["distance_m"] == 10000
     assert first["anchor"]["speed_kmh"] == final["anchor"]["speed_kmh"]
-    assert first["work_duration_seconds"] == 30 and final["work_duration_seconds"] == 90
-    assert first["speed_multiplier"] == 1.05 and final["speed_multiplier"] == 1.01
+    assert first["work_duration_seconds"] == final["work_duration_seconds"] == 30
+    assert first["speed_multiplier"] == final["speed_multiplier"] == 1.05
     assert not final["curve_improvement_assumed"]
 
 
@@ -118,7 +118,10 @@ def test_power_reference_and_missing_cs_never_silently_become_speed():
     r=recipe();r["prescription"]["anchor"]={"type":"CV"}
     v=view()
     for t in v["tests"]:t["payload"]["use_for_cs"]=False
-    assert lib.resolve(r,athlete(),v)["reason"]=="CV_REQUIRES_ACCEPTED_SHORT_AND_LONG_TESTS"
+    result = lib.resolve(r,athlete(),v)
+    assert result["status"] == "READY"
+    assert result["anchor"]["evidence"]["source"] == "CURRENT_CURVE_V3_V12"
+    assert result["anchor"]["evidence"]["measured"] is False
 
 
 def test_continuous_recipe_uses_continuous_tmax_denominator(monkeypatch):

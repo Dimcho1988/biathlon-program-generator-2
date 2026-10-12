@@ -75,7 +75,7 @@ class Repository:
                         | {k: self.record['payload'][k] for k in ('status', 'changes', 'reason')}]
             else:
                 rows = [self.record]
-        elif path.startswith('/onflows_model_entries?'):
+        elif path.startswith(('/onflows_model_entries?', '/onflows_response_entries?')):
             rows = []
         else:
             raise AssertionError(path)

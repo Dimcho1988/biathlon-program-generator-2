@@ -75,8 +75,10 @@ def test_lactate_method_ceiling_never_overwrites_personal_reference():
     assert blocks[1]["lactate_reference"]["high_mmol"] == 2.8
 
 
-@pytest.mark.parametrize("ready,allowed", [(85., True), (69., True), (50., True), (0., False)])
+@pytest.mark.parametrize("ready,allowed", [(85., True), (69., True), (50., True), (49., False), (0., False)])
 def test_mixed_candidate_below_90_uses_residual_budget_and_own_readiness_rule(monkeypatch, ready, allowed):
+    from tests.api.test_methodology_completion import proven_shortage
+    proven_shortage(monkeypatch)
     p = body(sessions_per_week=7, intensity_days=[(TODAY.weekday()+6)%7], accent_mode="MANUAL", accents=["Z3"], accent_index=1.5)
     methods = [m for m in resolved_methods(p) if m.get("mixed_component") and m["zone"] == "Z3"]
     monkeypatch.setattr(engine, "resolved_methods", lambda _: deepcopy(methods))
@@ -109,7 +111,7 @@ def test_mixed_candidate_below_90_uses_residual_budget_and_own_readiness_rule(mo
         assert d["date"] == TODAY.isoformat()  # Easy day, outside the reserved key slot.
         assert all(v <= d["load_budget"]["components"][z]["deficit_effective"]+.001 for z, v in s["canonical_effective_load"].items())
     else:
-        assert any(r["code"] == "READINESS_DOSE_UNAVAILABLE" for d in plan["days"] for r in d["rejected_alternatives"])
+        assert any(r["code"] in {"RECOVERY_BELOW_50", "UNKNOWN_OR_ZERO_RECOVERY"} for d in plan["days"] for r in d["rejected_alternatives"])
 
 
 def test_disabled_mixed_policy_has_no_candidates():

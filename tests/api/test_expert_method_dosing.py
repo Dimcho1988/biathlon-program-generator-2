@@ -37,12 +37,12 @@ def test_expert_interval_budget_uses_full_or_half_capacity_before_recovery(purpo
     assert engine._dose_fits(blocks, evidence, 'Z5', ceiling)
 
 
-def test_continuous_65_percent_at_80_recovery_is_52_minutes():
+def test_continuous_65_percent_at_80_recovery_uses_half_role_then_single_scale():
     method = {'zone': 'Z2', 'structure': 'CONTINUOUS'}
-    evidence = {'capacity_minutes': 100.}
+    evidence = {'capacity_minutes': 100., 'readiness_policy': adaptive_methods.readiness_policy(method, {}, {'Z1': 90., 'Z2': 80.})}
     nominal = engine._nominal_fraction(method, 'BUILDING', {'building_fraction': .65}, 'GENERAL_PREPARATION', evidence, None)
     recovery = adaptive_methods.readiness_policy(method, {}, {'Z1': 90., 'Z2': 80.})['dose_factor']
-    assert evidence['capacity_minutes'] * nominal * recovery == 52.
+    assert evidence['capacity_minutes'] * nominal * recovery == 26.
 
 
 @pytest.mark.parametrize("building,maintenance_minutes", [(.6, 30.), (.65, 32.5), (.7, 35.)])
@@ -269,6 +269,8 @@ def test_threshold_high_uses_resolved_secondary_curve_speed():
 
 @pytest.mark.parametrize('method_id,primary_share', [('END-ALT-Z1Z2-01', .5), ('END-ALT-10-05-01', 2/3)])
 def test_alternating_evidence_reports_actual_primary_share_separately(monkeypatch, method_id, primary_share):
+    from tests.api.test_methodology_completion import proven_shortage
+    proven_shortage(monkeypatch)
     from tests.api.test_training_plan_engine import NOW, profile
     from tests.api.test_readiness_adaptive_plan_v2 import fixed_readiness
 
