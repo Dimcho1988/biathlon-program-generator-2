@@ -31,6 +31,12 @@ describe("source-preserving method library", () => {
     const text=methodHrText({hr_reference_range_bpm:[170,182],hr_reference_basis:"INDIVIDUAL_ZONE_OBSERVATION_NOT_SPEED_PREDICTION",hr_role:"SECONDARY_OBSERVATION_WITH_LAG"});
     expect(text).toContain("170–182");expect(text).toContain("не ускорявай");expect(text).toContain("за наблюдение");
   });
+  it("does not ask for pulse or speed targets on a strength card", () => {
+    const method={...testMethod,prescription:null,registry_kind:"COACH_PROFILE",resolution:{status:"READY",zone:"STR"}};
+    const html=renderToStaticMarkup(<MethodCard method={method} canEdit={false} selected onChange={() => {}} onReset={() => {}}/>);
+    expect(html).toContain("Време и качество на упражненията");
+    expect(html).not.toContain("Нужен е индивидуален пулсов профил");
+  });
   it("renders at most 24 cards initially while preserving the complete catalog", () => {
     const methods=Array.from({length:60},(_,i)=>({...testMethod,id:`TEST-${i}`}));
     const html=renderToStaticMarkup(<TrainingMethodLibrary initial={{...testLibrary,methods}} athleteName="Дими" canEdit={false}/>);

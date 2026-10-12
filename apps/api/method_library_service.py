@@ -92,6 +92,9 @@ def _coach_previews(catalog, profile, speed, settings, today, phase):
         fraction = engine._nominal_fraction(method, method["purpose"], profile, phase, cap, profile.get("planning_controls") or {})
         maximum = min(method["max_work_min"], cap["capacity_minutes"] * fraction) * 60
         minimum = method["min_work_min"] * 60
+        if maximum + 1e-6 < minimum:
+            r.update(status="UNAVAILABLE", reason="NO_COMPLETE_REPEAT_WITHIN_METHOD_BUDGET")
+            continue
         effort = cap.get("effort_profile") or {}
         seconds = effort.get("work_seconds")
         time_range = [seconds, seconds] if seconds else [minimum, max(minimum, maximum)]

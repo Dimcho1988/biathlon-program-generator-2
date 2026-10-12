@@ -190,6 +190,7 @@ def test_coach_cards_use_the_engine_for_personal_speed_hr_and_time():
     aerobic=[m for m in ready if m["resolution"]["zone"]!="STR"]
     assert aerobic and all(m["resolution"].get("hr_reference_range_bpm") for m in aerobic)
     assert all(m["resolution"].get("work_duration_range_seconds") for m in ready)
+    assert all(m["resolution"]["minimum_work_seconds"]<=m["resolution"]["maximum_work_seconds"]+1e-6 for m in ready)
 
 
 def test_completed_ski_method_enters_the_actual_weekly_generator(monkeypatch):
