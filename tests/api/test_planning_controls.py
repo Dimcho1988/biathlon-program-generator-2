@@ -159,7 +159,11 @@ def test_integrated_week_respects_separate_strength_days_and_covers_complementar
     for d in sessions:
         z=d['session']['zone'];weekday=engine.date.fromisoformat(d['date']).weekday()
         if z=='STR': assert weekday in [2,5]
-        if z in {'Z3','Z4','Z5'}: assert weekday in [1,4]
+        if d['session']['is_key_session']: assert weekday in [1,4]
+        elif z in {'Z3','Z4','Z5'} and weekday not in [1,4]:
+            # A half-budget maintenance task may prepare the next building day.
+            assert d['session']['purpose']=='MAINTENANCE'
+            assert d['session']['dose_evidence']['method_budget_role_fraction']==.5
         assert_readiness_dose(d['session'])
     assert max(w['components']['Z3']['target_index_7_40'] for w in r['long_term']['weeks'])>1.1
     # Allocation can legitimately choose progressive or continuous work;

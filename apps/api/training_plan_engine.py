@@ -2487,7 +2487,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                                 limits=limits, technical_spill_reference={z: _round(v) for z, v in technical.items()},
                                 technical_spill_reference_role="LEGACY_HISTORICAL_TREF_DIAGNOSTIC_NOT_SPILL_CAPACITY",
                                 source_method_id=method["source_id"], source_method_version=method["source_version"],
-                                explanation="Капацитетът е от индивидуалната крива, когато целта е подкрепена от тестове и ТИ; иначе от видимата експертна референция. Делът на метода и дневният/седмичният бюджет ограничават работата. Делът на дозата се умножава веднъж по най-ниската готовност на участващите компоненти; зададеното усилие се запазва.")
+                                explanation="Капацитетът е от индивидуалната крива или обозначената експертна опора. Recovery намалява обема веднъж; усилието се запазва.")
                 if method.get("method_library"):
                     evidence["explanation"] = "Скоростта и диапазонът на работната отсечка са от избрания метод, разрешени върху актуалната индивидуална крива. Източникът и треньорската адаптация са показани отделно. Пълните повторения се побират в методния таван и седмичния бюджет; Recovery намалява обема веднъж. Минималната доза се проверява спрямо непрекъснатия Tmax. Пулсът е контролен ориентир, а промяна на формата с датата не се предполага."
                 elif method["structure"] == "MODEL_INTERVALS":
@@ -2521,7 +2521,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     evidence["explanation"] += " Възстановителната задача използва абсолютния минимум на метода и ограниченията на Recovery; минимумът 25% за развиваща/поддържаща работа не се прилага."
                 elif z != "STR":
                     evidence["explanation"] += f" Дозовият дял е от {method.get('minimum_fraction', MIN_AEROBIC_DOSE_FRACTION)*readiness_rule['dose_factor']*100:g}% до {max_usage*100:g}% от съответния капацитет."
-                evidence["explanation"] += f" Начален дял за основния компонент {base_fraction*primary_share*100:g}%, множител от готовността {readiness_rule['dose_factor']:.3f}, намален дял {fraction*primary_share*100:g}%. Целите повторения и подготовката се запазват."
+                evidence["explanation"] += f" Основна доза: {base_fraction*primary_share*100:g}% × Recovery {readiness_rule['dose_factor']:.3f} = {fraction*primary_share*100:.1f}%. Запазват се цели повторения и подготовката."
                 if primary_share != 1:
                     evidence["explanation"] += " При този метод общият работен бюджет включва редуването на двата компонента; показаната основна доза е само делът на основния компонент."
                 normalized_deficit = budgets[z]["deficit_effective"] / max(1., budgets[z]["target_weekly_effective"])
@@ -3073,7 +3073,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             "activation_eligible": activation_eligible,
             "source": provenance, "periodization": periodization, "days": result_days,
             "long_term": _long_term_outlook(profile, periodization, target_reference, accents, preferences, rows, today, limited, volume=volume, events=events, progression=progression, planning_evidence=planning_evidence),
-            "parameters": parameters, "warnings": warnings, "catalog": catalog(profile),
+            "parameters": parameters, "warnings": warnings, "catalog": method_registry.plan_catalog(profile),
             "allocation": allocation_report,
             "history_comparison": volume_evidence["weeks"],
             "component_history": load_progression.history(measured_source, _daily_rows(measured_source, today), today),

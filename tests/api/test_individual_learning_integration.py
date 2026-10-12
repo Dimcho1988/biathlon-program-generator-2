@@ -350,4 +350,13 @@ def test_full_year_plan_has_one_bounded_replay_archive_and_stays_below_one_mebib
     assert encoded.count(b'"episodes":') == 1
     assert encoded.count(b'"observations": [') == 1
     assert len(result["long_term"]["weeks"]) == 48
+    assert result["catalog"]["status"] == "PINNED_REGISTRY_PROVENANCE"
+    assert len(result["catalog"]["resolved_profiles_sha256"]) == 64
+    assert "methods" not in result["catalog"]["source_catalog"]
+    # Bound the payload without discarding the instructions for selected work.
+    for day in result["days"]:
+        for session in day["sessions"]:
+            assert all(session["method_library"]["guidance"].get(key) for key in
+                       ("purpose", "execution", "recovery", "success", "errors", "adjustment", "progression"))
+            assert session["execution_descriptor"]["id"] == session["method_id"]
     assert len(encoded) < 1024*1024

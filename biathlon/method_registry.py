@@ -4,6 +4,8 @@ Stable IDs keep execution history valid. Numerical source recipes retain their
 resolver; personal coach profiles retain their own capacity calculation.
 """
 from copy import deepcopy
+from hashlib import sha256
+import json
 from . import method_library, training_methods, race_specific
 
 VERSION = 'method-registry-v1'
@@ -83,3 +85,21 @@ def catalog(profile, speed_view=None, *, phase=None, today=None):
             'message': 'Личната доза се изчислява в седмичния план. Числовият профил се настройва в „Управление“.'}
         sourced['methods'].append(card)
     return {**sourced, 'registry_version': VERSION}
+
+
+def plan_catalog(profile):
+    """Pin catalogue provenance without copying unused recipes into every plan.
+
+    Selected sessions retain their full guidance and frozen execution descriptor.
+    The complete, current catalogue is served by the methods endpoint. The hash
+    also pins the personal numerical profiles that produced this draft.
+    """
+    legacy = training_methods.catalog(profile)
+    methods = legacy.pop('methods')
+    source = legacy['source_catalog']
+    legacy['source_catalog'] = {key: value for key, value in source.items() if key != 'methods'}
+    return {**legacy, 'status': 'PINNED_REGISTRY_PROVENANCE', 'registry_version': VERSION,
+            'source_method_library': method_library.provenance(),
+            'resolved_profile_count': len(methods), 'method_ids': [m['id'] for m in methods],
+            'resolved_profiles_sha256': sha256(json.dumps(methods, sort_keys=True,
+                ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()}
