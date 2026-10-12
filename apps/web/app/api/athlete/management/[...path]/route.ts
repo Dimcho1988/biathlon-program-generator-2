@@ -28,6 +28,7 @@ async function proxy(request: Request, context: Context) {
     if (!access.canViewPlan) return error("Този спортист не е споделил тренировъчния си план с вас.", 403);
     if (write && !access.canEditPlan) return error("Този профил е достъпен само за преглед.", 403);
     let body: string | undefined;
+    let plansWeek = endpoint === "generate" || endpoint === "day";
     if (write) {
       if (Number(request.headers.get("content-length") ?? 0) > 20_000) return error("Твърде голяма заявка.", 413);
       const raw = await request.text();
@@ -54,6 +55,7 @@ async function proxy(request: Request, context: Context) {
         body = JSON.stringify({ start_date: input.start_date, draft_revision: input.draft_revision, expected_revision: input.expected_revision });
       } else if (endpoint === "action") {
         if (!["PAUSE", "RESUME", "REFRESH", "APPROVE"].includes(String(input.action)) || !revision(input.expected_revision) || Number(input.expected_revision) < 1) return error("Невалидно действие за програмата.", 422);
+        plansWeek = input.action === "REFRESH" || input.action === "RESUME";
         body = JSON.stringify({ action: input.action, expected_revision: input.expected_revision });
       } else if (endpoint === "day") {
         if (!isCalendarDate(input.date) || !["SKIP", "REST", "CLEAR"].includes(String(input.action)) || !revision(input.expected_revision) || Number(input.expected_revision) < 1 || typeof input.note !== "string" || input.note.length > 250) return error("Проверете деня и избраното действие.", 422);
@@ -72,7 +74,10 @@ async function proxy(request: Request, context: Context) {
     if (phase !== null) url.searchParams.set("phase", phase);
     const response = await fetch(url, {
       method: request.method, cache: "no-store", signal: request.method === "GET"
-        ? AbortSignal.any([request.signal, AbortSignal.timeout(75_000)]) : AbortSignal.timeout(75_000),
+        ? AbortSignal.any([request.signal, AbortSignal.timeout(75_000)])
+        // Planning can finish after the ordinary read/write deadline on staging.
+        // Keep one bounded mutation; never retry a potentially committed write.
+        : AbortSignal.timeout(plansWeek ? 180_000 : 75_000),
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-OnFlows-Athlete-Alias": access.athleteAlias, "X-OnFlows-Actor-Id": access.actorUserId },
       ...(body ? { body } : {}),
     });
