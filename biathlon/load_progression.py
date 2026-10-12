@@ -15,7 +15,8 @@ from .equivalence import EQUIVALENCE_VERSION
 from .constants import COMPONENTS
 from . import planning_controls, planning_history, mesocycle_focus
 
-VERSION = "load-progression-v8-observed-coverage"
+VERSION = "load-progression-v9-relative-recovery"
+RECOVERY_RETAINED_FRACTION = .70
 # A reference may retain its measured portion with small, separately labelled
 # gaps. This is a coaching data-quality policy, not a physiological threshold.
 MIN_MEASURED_REFERENCE_COVERAGE = .90
@@ -182,7 +183,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
     recent = observed_window(source, rows, today-timedelta(days=40), today)
     reliable = valid_units and all(recent["components"][z]["reference_supported"] for z in WEEKLY_Q_BOUNDS)
     key = reference_key(profile, physiology)
-    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v7-lower-planning-reference", "load-progression-v6-individual-reference", "load-progression-v5-cycle-q", "load-progression-v4-clamped-q", "load-progression-v3-stable-q"} else None
+    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v8-observed-coverage", "load-progression-v7-lower-planning-reference", "load-progression-v6-individual-reference", "load-progression-v5-cycle-q", "load-progression-v4-clamped-q", "load-progression-v3-stable-q"} else None
     if frozen and frozen["version"] != VERSION:
         # Re-select the reference without replacing saved measurements or dates.
         frozen = deepcopy(frozen)
@@ -251,6 +252,30 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
             "history_usable": reliable, "estimated_history_supported": estimated_supported,
             "planning_history": planning_evidence, "equivalence_version": EQUIVALENCE_VERSION,
            "overall_basis": "DIRECT_Q_COMPONENT_TARGETS_EFFECTIVE_LOAD_CHECKED_SEPARATELY"}
+    recovery_start = cycle_start + timedelta(days=days-7)
+    cutoff = min(today, recovery_start)
+    recovery_reference = observed_window(source, rows, cutoff-timedelta(days=7), cutoff)
+    # A confirmed week without any training is not a loading baseline from
+    # which to prescribe another zero week. Look back only within this cycle;
+    # incomplete observations never qualify and no forecast is used.
+    if recovery_reference["complete"] and all((c["weekly_q"] or 0.) == 0 for c in recovery_reference["components"].values()):
+        for weeks_back in range(1, len(controls["wave"])-1):
+            prior_end = cutoff-timedelta(days=7*weeks_back)
+            if prior_end-timedelta(days=7) < cycle_start:
+                break
+            candidate = observed_window(source, rows, prior_end-timedelta(days=7), prior_end)
+            if candidate["complete"] and any((c["weekly_q"] or 0.) > 0 for c in candidate["components"].values()):
+                recovery_reference = candidate
+                break
+    # Only completed observations can set the near-term recovery baseline.
+    # This does not replace/compound the preparation's stable growth anchor.
+    recovery_reference.update(recovery_start=recovery_start.isoformat(),
+                              retained_fraction=RECOVERY_RETAINED_FRACTION,
+                              usable=valid_units and recovery_reference["complete"] and
+                              (recovery_start-cutoff).days <= 7 and
+                              all(c["weekly_q"] is not None and c["measured_coverage_percent"] >= 90
+                                  for z,c in recovery_reference["components"].items() if z != "STR"))
+    ctx["recovery_reference"] = recovery_reference
     if periodization:
         ctx["trajectory"] = trajectory(ctx, profile, periodization)
         deadline = next((p["end_date"] for p in periodization["phases"] if p["kind"] == "SPECIAL_PREPARATION" and p["end_date"] >= frozen["created_on"]), profile["program_end"])
@@ -338,10 +363,10 @@ def trajectory(ctx, profile, periodization):
 
 
 def cycle_shape(profile, state, zone):
-    """A whole-cycle mean of one, with the recovery dose reserved first.
+    """A mean-one planned wave; recovery retains 70% of the last loading week.
 
     Deliberately reduced waves and explicit calendar overrides are not refilled.
-    Recovery support is conditional and is re-evaluated by the daily planner.
+    Near-term observed recovery references are applied separately, once.
     """
     wave = profile["planning_controls"]["wave"]
     mean = sum(wave)/len(wave)
@@ -352,9 +377,11 @@ def cycle_shape(profile, state, zone):
         result = (1+(shape-1)*weight if state.get("component_indices") and weight > 0
                   else shape if focus else min(.9, value*.9))
         return min(result, shape) if value < 1 else result
-    recovery = .9 if zone in state.get("recovery_support_components", state["accents"] if state["kind"] == "RECOVERY" else []) else .65
+    loading = sum(raw(v) for v in wave[:-1])
+    recovery = RECOVERY_RETAINED_FRACTION*raw(wave[-2])
+    normalizer = len(wave)/(loading+recovery) if loading+recovery > 0 else 0.
     if state["kind"] == "RECOVERY":
-        return recovery
+        return recovery*normalizer if not state["explicit"] and max(wave[:-1]) >= 1 else min(recovery, state["wave_factor"])
     shape = raw(state["wave_factor"])
     if state["kind"] == "RE_ENTRY":
         return min(.8, state["wave_factor"], shape)
@@ -362,8 +389,7 @@ def cycle_shape(profile, state, zone):
         return min(state["wave_factor"], shape)
     if state["explicit"]:
         return shape
-    loading = sum(raw(v) for v in wave[:-1])
-    return shape*(len(wave)-recovery)/loading if loading > 0 else 0.
+    return shape*normalizer
 
 
 def individual_adjustment(context, profile, zone, day, period, state, *, taper=False, limited=False):
@@ -426,13 +452,36 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
         if state["kind"] == "RE_ENTRY" and q is not None:
             q = min(q, exposure)
         requested_q = q*factor*component_shape*taper_factor if q is not None else None
+        recovery = context.get("recovery_reference") or {}
+        recovery_day = date.fromisoformat(state.get("mesocycle_start", context["cycle_start"])) + timedelta(days=7*(state["week"]-1))
+        relative_recovery = (automatic and state["kind"] == "RECOVERY" and not limited
+                             and not taper and period in {"GENERAL_PREPARATION", "SPECIAL_PREPARATION"})
+        if relative_recovery:
+            observed = recovery.get("components", {}).get(z) or {}
+            supported = recovery.get("usable") and recovery.get("recovery_start") == recovery_day.isoformat()
+            if supported and observed.get("weekly_q") is not None:
+                requested_q = observed["weekly_q"]*RECOVERY_RETAINED_FRACTION
+            # E stays a separate, observed workload unit. Do not reduce a
+            # 7/40 index and then apply another recovery percentage to Q.
+            effective = observed.get("weekly_effective") if supported else None
+            if effective is None:
+                effective = actual_base[z]["c40"]*7*component_shape/RECOVERY_RETAINED_FRACTION
+            goal["target"] = effective*RECOVERY_RETAINED_FRACTION
+            goal["recovery_reference"] = {"basis": "COMPLETED_OBSERVED_WEEK" if supported else "PRECEDING_PLANNED_LOADING_WEEK",
+                "retained_fraction": RECOVERY_RETAINED_FRACTION,
+                "start_date": recovery.get("start_date") if supported else None,
+                "end_date": recovery.get("end_date") if supported else None,
+                "reference_weekly_q": observed.get("weekly_q") if supported else (requested_q/RECOVERY_RETAINED_FRACTION if requested_q is not None else None),
+                "reference_weekly_effective": effective,
+                "daily_gates_can_reduce_further": True}
         learning = feedback_factor(feedback, z, "load_factor", day)
         goal["target"] *= learning
         # Q controls progression; existing E/7–40 and Recovery gates still govern
         # every composed session. Never apply a Q percentage to an E baseline.
         if automatic and z != "STR" and not limited and period in {"RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"}:
             goal["target_weekly_q"] = requested_q*learning if requested_q is not None else None
-            goal["basis"] = "EXPERT_Q_TARGET_WITH_ESTIMATED_7_40_GATE" if context.get("estimated_history_supported") else "STABLE_Q_TARGET_WITH_7_40_GATE"
+            goal["basis"] = ("RELATIVE_RECOVERY_Q_WITH_7_40_GATE" if goal.get("recovery_reference") else
+                             "EXPERT_Q_TARGET_WITH_ESTIMATED_7_40_GATE" if context.get("estimated_history_supported") else "STABLE_Q_TARGET_WITH_7_40_GATE")
         individual = individual_adjustment(context, profile, z, day, period, state, taper=taper, limited=limited)
         correction = individual["volume_factor"]
         if correction != 1.:

@@ -153,6 +153,8 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
         if (document.visibilityState !== "visible" || activeRequest.current) return;
         request = new AbortController();
         const signal = AbortSignal.any([request.signal, AbortSignal.timeout(75_000)]);
+        const state = await requestJson("state", "GET", undefined, signal);
+        if (isRecord(state) && state.revision === (active.active?.revision ?? 0) && state.stale === (active.active?.stale ?? false)) return;
         const latest = parseActivePlanResponse(await requestJson("active", "GET", undefined, signal));
         if (!cancelled && !activeRequest.current) receiveActive(latest);
       } catch { /* Keep the last known state; writes still enforce current revisions. */ }
@@ -160,7 +162,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     };
     timer = setTimeout(refresh, 60_000);
     return () => { cancelled = true; clearTimeout(timer); request?.abort(); };
-  }, [initialView, receiveActive]);
+  }, [initialView, receiveActive, active.active?.revision, active.active?.stale]);
 
   async function activateDraft() {
     if (!draft) return;
@@ -223,7 +225,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     {!canEdit && <p className="management-notice">Имате достъп за преглед. Промените изискват право за редакция на плана.</p>}
     {error && <p className="management-error" role="alert">{error}</p>}{notice && <p className="management-notice" role="status">{notice}</p>}
     {syncError && <p className="management-error" role="alert">Обновяването не започна. Опитай отново или провери връзката с Intervals в настройките.</p>}
-    {initialSyncState && <SyncStatusPanel initialState={initialSyncState} renderedGenerationId={initialSyncState.active_generation_id} returnTo="/management" compact />}
+    {initialSyncState && <SyncStatusPanel initialState={initialSyncState} renderedGenerationId={initialSyncState.active_generation_id} returnTo="/management" compact timezone={saved.timezone} />}
     <nav className="management-view-switch" aria-label="Изглед на плана"><Link href="/management" aria-current={view === "week" ? "page" : undefined}>Седмична програма</Link><Link href="/management/outlook" aria-current={view === "overview" ? "page" : undefined}>Дългосрочен план</Link></nav>
     {view === "week" && overviewPlan && !archivedDraft && (showDraft || active.active?.stale === false) && <TrainingPlanSummary plan={overviewPlan} />}
     {(view === "overview" || (!archivedDraft && (showDraft || active.active?.stale === false))) && <IndividualLearningPanel plan={view === "overview" ? initialOutlook : overviewPlan} />}

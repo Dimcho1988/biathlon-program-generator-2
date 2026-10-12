@@ -8,6 +8,7 @@ import {
   syncPollDelay,
   syncRequiresViewRefresh,
   syncScopeLabel,
+  syncRetryDescription,
   type SyncState,
 } from "../lib/sync";
 import { SyncActionForm } from "./sync-action-form";
@@ -17,14 +18,21 @@ export function SyncStatusPanel({
   renderedGenerationId,
   returnTo,
   compact = false,
+  timezone = "UTC",
 }: {
   initialState: SyncState;
   renderedGenerationId: string | null;
   returnTo?: string;
   compact?: boolean;
+  timezone?: string;
 }) {
   const router = useRouter();
   const [state, setState] = useState(initialState);
+  const [received, setReceived] = useState(initialState);
+  if (received !== initialState) {
+    setReceived(initialState);
+    setState(initialState);
+  }
   const [statusUnavailable, setStatusUnavailable] = useState(false);
   const initialJobId = initialState.job_id;
   const initialStateName = initialState.state;
@@ -39,10 +47,11 @@ export function SyncStatusPanel({
     let timer: number | undefined;
     let request: AbortController | undefined;
     let attempt = 0;
+    let latest = initialState;
 
     const schedule = () => {
       if (stopped) return;
-      timer = window.setTimeout(poll, syncPollDelay(attempt));
+      timer = window.setTimeout(poll, syncPollDelay(attempt, latest));
       attempt += 1;
     };
     const poll = async () => {
@@ -67,6 +76,7 @@ export function SyncStatusPanel({
         const next = parseSyncState(await response.json());
         if (stopped) return;
         setState(next);
+        latest = next;
         setStatusUnavailable(false);
         if (syncRequiresViewRefresh(next, renderedGenerationId)) {
           router.refresh();
@@ -120,10 +130,15 @@ export function SyncStatusPanel({
   </section>;
 
   const retry = state.state === "RETRY_WAIT";
-  if (compact) return <section className="sync-status running" role="status"><div><strong>{retry ? "Обновяването ще опита отново" : "Обновяваме тренировките"}</strong><span>Когато приключи, екранът ще се обнови автоматично.</span>{statusUnavailable && <small>Проверката на напредъка ще продължи автоматично.</small>}</div><progress max={100} value={state.progress_percent} aria-label="Напредък на обновяването" /></section>;
+  if (retry) return <section className="sync-status" role="status" aria-live="polite">
+    <div><strong>Синхронизацията изчаква</strong><span>{syncRetryDescription(state, timezone)}</span>
+      {statusUnavailable && <small>Проверката на статуса ще продължи автоматично.</small>}
+    </div>
+  </section>;
+  if (compact) return <section className="sync-status running" role="status"><div><strong>Обновяваме тренировките</strong><span>Когато приключи, екранът ще се обнови автоматично.</span>{statusUnavailable && <small>Проверката на напредъка ще продължи автоматично.</small>}</div><progress max={100} value={state.progress_percent} aria-label="Напредък на обновяването" /></section>;
   return <section className="sync-status running" role="status" aria-live="polite">
     <div>
-      <strong>{retry ? "Изчакваме безопасен повторен опит" : `Обновяваме ${scope}`}</strong>
+      <strong>Обновяваме {scope}</strong>
       <span>
         {state.active_generation_id
           ? `Показана остава последната валидна версия ${state.active_revision}.`

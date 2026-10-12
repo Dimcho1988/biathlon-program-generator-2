@@ -142,8 +142,12 @@ def test_recovery_caps_survive_growth_manual_targets_and_extreme_wave(growth,man
     frozen=deepcopy(rows)
     goals,focus,s=engine._goals(p,TODAY+timedelta(days=21),"GENERAL_PREPARATION",False,{},None,3,4,rows,TODAY,False,1,context)
     aerobic=[z for z in engine.COMPONENTS if z!="STR"]
-    assert sum(goals[z]["target"] for z in aerobic)<=.78*sum(base[z]["c40"]*7 for z in aerobic)+1e-6
-    for z in s["mesocycle_accents"]:assert goals[z]["target"]<=.65*base[z]["c40"]*7+1e-6
+    if growth and not manual:
+        for z in aerobic:
+            assert goals[z]["target"] <= .7*goals[z]["recovery_reference"]["reference_weekly_effective"]+1e-6
+    else:
+        assert sum(goals[z]["target"] for z in aerobic)<=.78*sum(base[z]["c40"]*7 for z in aerobic)+1e-6
+        for z in s["mesocycle_accents"]:assert goals[z]["target"]<=.65*base[z]["c40"]*7+1e-6
     for z in engine.COMPONENTS:
         assert not goals[z]["development"]
         assert goals[z]["target_index"]<=1

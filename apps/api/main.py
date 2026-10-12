@@ -1,6 +1,7 @@
 """Compose the onFlows HTTP API; endpoint behavior lives in routes/."""
 
 from fastapi import FastAPI
+from starlette.middleware.gzip import GZipMiddleware
 
 from .http_runtime import lifespan
 from .request_metrics import RequestMetricsMiddleware
@@ -17,6 +18,7 @@ from .routes import (
 )
 
 app = FastAPI(title="onFlows API", version="1.0.0", lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=3)
 app.add_middleware(RequestMetricsMiddleware)
 
 ROUTE_MODULES = (
