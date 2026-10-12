@@ -71,7 +71,14 @@ describe("sync contracts", () => {
   });
 
   it("uses a bounded polling cadence", () => {
-    expect([0, 1, 2, 3, 4, 100].map(syncPollDelay)).toEqual([2_000, 3_000, 5_000, 8_000, 10_000, 10_000]);
+    expect([0, 1, 2, 3, 4, 100].map(n => syncPollDelay(n))).toEqual([2_000, 3_000, 5_000, 8_000, 10_000, 10_000]);
+  });
+
+  it("backs off during a provider cooldown and resumes at its deadline", () => {
+    const waiting = {...runningState, state: "RETRY_WAIT" as const, retry_at: "2026-08-28T00:00:00Z"};
+    expect(syncPollDelay(10, waiting, Date.parse("2026-08-27T22:00:00Z"))).toBe(60_000);
+    expect(syncPollDelay(10, waiting, Date.parse("2026-08-27T23:59:45Z"))).toBe(15_000);
+    expect(syncPollDelay(10, waiting, Date.parse("2026-08-28T00:00:01Z"))).toBe(10_000);
   });
 
   it("refreshes a stale view even when the job was already terminal at first render", () => {
@@ -138,6 +145,16 @@ describe("coherent dashboard generation", () => {
 });
 
 describe("sync UI primitives", () => {
+  it("explains a rate limit and local retry time without a misleading progress bar", () => {
+    const state = {...runningState, state: "RETRY_WAIT" as const, failure_code: "PROVIDER_RATE_LIMITED", retry_at: "2026-08-28T00:00:00Z"};
+    for (const compact of [true, false]) {
+      const html = renderToStaticMarkup(<SyncStatusPanel initialState={state} renderedGenerationId="gen-41" timezone="Europe/Sofia" compact={compact}/>);
+      expect(html).toContain("Intervals временно ограничи заявките");
+      expect(html).toContain("3:00");
+      expect(html).toContain("Последните заредени данни остават достъпни");
+      expect(html).not.toContain("<progress");
+    }
+  });
   it("shows the last active revision while a background job runs", () => {
     const html = renderToStaticMarkup(<SyncStatusPanel initialState={runningState} renderedGenerationId="gen-41" />);
     expect(html).toContain("Обновяваме тренировъчните данни");

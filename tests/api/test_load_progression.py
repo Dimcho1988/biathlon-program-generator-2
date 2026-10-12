@@ -57,7 +57,8 @@ def test_complete_wave_including_recovery_has_bounded_growth_not_mean_ratio_grow
     # Recovery has a final independent ceiling; it may reduce the full-cycle
     # mean but cannot be refilled to force the nominal annual growth.
     assert sum(v["target_weekly_q"] for v in values)/4 <= reference*(1+rate/100)**(28/365.25)
-    assert values[-1]["target"] <= .65*base["Z3"]["c40"]*7
+    assert values[-1]["recovery_reference"]["retained_fraction"] == .7
+    assert values[-1]["target"] == pytest.approx(.7*values[-1]["recovery_reference"]["reference_weekly_effective"])
     assert values[-1]["target_weekly_q"] < reference < values[2]["target_weekly_q"]
     for v in values:
         assert v["target_index"] == pytest.approx((base["Z3"]["b50"]+v["target"]/7)/(base["Z3"]["b50"]+base["Z3"]["c40"]))

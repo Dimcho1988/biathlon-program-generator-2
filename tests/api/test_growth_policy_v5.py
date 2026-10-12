@@ -40,7 +40,10 @@ def test_approved_reference_is_the_actual_weekly_intent_not_just_a_display_value
         original_target=goals["Z3"]["target"]
         goals=policy.apply(goals,p,state,ctx,day,"GENERAL_PREPARATION",False,False,1,base)
         intents.append(goals["Z3"]["target_weekly_q"])
-        assert goals["Z3"]["target"]==original_target  # 7/40 is not inflated to fit Q.
+        if week != 3:
+            assert goals["Z3"]["target"]==original_target  # Loading 7/40 is not inflated to fit Q.
+        else:
+            assert goals["Z3"]["target"] == pytest.approx(.7*goals["Z3"]["recovery_reference"]["reference_weekly_effective"])
     assert sum(intents)/4==pytest.approx(reference)
     assert intents[-1]<reference<max(intents)
     assert c["weekly_q"]==measured
@@ -57,7 +60,7 @@ def test_whole_regular_cycle_preserves_component_means_including_recovery(suppor
             if week==3: state["accents"]=support
             shapes.append(policy.cycle_shape(p,state,z))
         assert sum(shapes)==pytest.approx(4)
-        assert shapes[-1]==(.9 if z in support else .65)
+        assert shapes[-1] == pytest.approx(.7*shapes[-2])
 
 
 def test_all_general_components_receive_calendar_growth_and_shortening_does_not_compress_it():

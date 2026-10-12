@@ -14,16 +14,17 @@ from . import management_service
 from .management_schemas import ManagementProfile
 from .management_store import ManagementStore
 from .management_plan_store import PlanStore
+from .read_session import ReadSession
 
 _hash = management_service._hash
 
 
 def _context(repository, alias, now):
+    repository = ReadSession(repository)
     stored = ManagementStore(repository).profile(alias)
     if not stored["configured"]:
         raise HTTPException(409, "Configure a planning profile first")
     profile = ManagementProfile.model_validate(stored["profile"]).model_dump(mode="json")
-    progression = management_service.training_plan_engine.load_progression.settings(profile)
     state = management_service.input_state(repository, alias, evaluated_at=now,
         include_response=True)
     frozen = {**state, "management_profile": profile, "profile_revision": stored["revision"]}
@@ -61,6 +62,15 @@ def current(repository, alias, *, now=None):
                        "actionable": record["payload"]["status"] == "ACTIVE" and not stale,
                        "stale_reason": "Нови данни очакват преизчисление. Изчакайте обновяването или изберете „Обнови сега“." if stale else None},
             "history": store.history(alias)}
+
+
+def state(repository, alias, *, now=None):
+    """Poll identity/freshness without transferring either full plan payload."""
+    record = PlanStore(repository).current(alias, metadata_only=True)
+    if record is None:
+        return {"revision": 0, "stale": False}
+    _, _, _, fingerprint, _ = _context(repository, alias, now or datetime.now(timezone.utc))
+    return {"revision": record["revision"], "stale": record["fingerprint"] != fingerprint}
 
 
 def activate(repository, alias, body, actor, *, now=None):

@@ -21,6 +21,7 @@ from .model_service import ModelStore
 from .oauth_store import PersistentStoreFailure
 from . import training_plan_engine, race_duration
 from .management_projection import public_learning
+from .read_session import ReadSession
 
 
 def profile_view(repository, alias, *, now=None):
@@ -187,6 +188,10 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False)
 
 
 def build_draft(repository, alias, start_date, expected_profile_revision, *, now=None, decisions=None, locked_day=None):
+    # Reuse inputs only during calculation. The final check below must observe
+    # edits/syncs made while the (potentially long) calculation was running.
+    live_repository = repository
+    repository = ReadSession(repository)
     store = ManagementStore(repository)
     stored = store.profile(alias)
     if not stored["configured"]:
@@ -211,7 +216,7 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
         repository, alias, profile.model_dump(mode="json"), start_date=start_date, now=now,
         decisions=decisions, locked_day=locked_day,
     )
-    after = input_state(repository, alias, evaluated_at=now, include_response=include_response)
+    after = input_state(live_repository, alias, evaluated_at=now, include_response=include_response)
     if _hash(before) != _hash(after):
         raise HTTPException(409, "Analysis or planning inputs changed; generate a new draft")
     source_generation = (payload.get("source") or {}).get("generation_id")

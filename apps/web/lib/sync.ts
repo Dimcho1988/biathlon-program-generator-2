@@ -133,8 +133,22 @@ export const syncRequiresViewRefresh = (state: SyncState, renderedGenerationId: 
 
 const POLL_DELAYS_MS = [2_000, 3_000, 5_000, 8_000, 10_000] as const;
 
-export const syncPollDelay = (attempt: number) =>
-  POLL_DELAYS_MS[Math.min(Math.max(0, attempt), POLL_DELAYS_MS.length - 1)];
+export const syncPollDelay = (attempt: number, state?: SyncState, now = Date.now()) => {
+  const ordinary = POLL_DELAYS_MS[Math.min(Math.max(0, attempt), POLL_DELAYS_MS.length - 1)];
+  const remaining = state?.state === "RETRY_WAIT" && state.retry_at ? Date.parse(state.retry_at) - now : 0;
+  // A provider cooldown can last hours. Keep detecting a newer job without
+  // querying every ten seconds, then resume normal polling at the retry time.
+  return remaining > ordinary ? Math.min(60_000, remaining) : ordinary;
+};
+
+export function syncRetryDescription(state: SyncState, timezone = "UTC") {
+  const reason = state.failure_code === "PROVIDER_RATE_LIMITED"
+    ? "Intervals временно ограничи заявките."
+    : "Изчакваме следващия опит за синхронизация.";
+  if (!state.retry_at) return `${reason} Повторният опит е автоматичен; последните заредени данни остават достъпни.`;
+  const when = new Intl.DateTimeFormat("bg-BG", { dateStyle: "short", timeStyle: "short", timeZone: timezone }).format(new Date(state.retry_at));
+  return `${reason} Следващ опит: ${when} (${timezone}). Последните заредени данни остават достъпни; не е нужно да обновявате отново.`;
+}
 
 export const syncScopeLabel = (scope: SyncScope | null) => scope === "WELLNESS"
   ? "wellness данните"

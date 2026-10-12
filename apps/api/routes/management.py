@@ -197,11 +197,23 @@ def management_active(
 ):
     alias = dependencies.model_alias(authorization, athlete_alias)
     try:
-        return public_management(management_lifecycle.current(dependencies.repository(), alias))
+        return public_management(management_lifecycle.current(ReadSession(dependencies.repository()), alias))
     except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
         raise HTTPException(409, exc.user_message) from exc
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "Active planning is temporarily unavailable") from exc
+
+
+@router.get("/api/v2/athlete/management/state")
+def management_state(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+):
+    alias = dependencies.model_alias(authorization, athlete_alias)
+    try:
+        return management_lifecycle.state(ReadSession(dependencies.repository()), alias)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Planning status is temporarily unavailable") from exc
 
 
 def _management_action(operation, body, authorization, athlete_alias, actor):

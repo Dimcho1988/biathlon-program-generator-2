@@ -288,6 +288,12 @@ def cap_recovery(goals, profile, state, actual_base):
         return goals
     total_factor = min(RECOVERY_TOTAL_FACTOR, state["volume_factor"])
     for z, goal in goals.items():
+        if goal.get("recovery_reference"):
+            # The current policy already made one 30% reduction against the
+            # preceding load. Preserve that E ceiling; daily gates still apply.
+            goal.update(recovery_ceiling_effective=goal["target"], development=False,
+                        recovery_total_factor=.7, recovery_policy="RELATIVE_PRECEDING_LOAD")
+            continue
         factor = (RECOVERY_SUPPORT_FACTOR if z in state["accents"] else
                   RECOVERY_LOADED_FACTOR if z in state["mesocycle_accents"] else total_factor)
         factor = min(factor, total_factor) if z not in state["accents"] or total_factor < RECOVERY_TOTAL_FACTOR else factor
@@ -296,11 +302,15 @@ def cap_recovery(goals, profile, state, actual_base):
         goal["target"] = min(goal["target"], ceiling)
         goal["recovery_ceiling_effective"] = ceiling
         goal["development"] = False
-    aerobic = [z for z in COMPONENTS if z != "STR"]
+    aerobic = [z for z in COMPONENTS if z != "STR" and not goals[z].get("recovery_reference")]
+    if not aerobic:
+        return goals
     ceiling = total_factor * sum(7*actual_base[z]["c40"] for z in aerobic)
     total = sum(goals[z]["target"] for z in aerobic)
     scale = min(1., ceiling/total) if total > 0 else 1.
     for z, goal in goals.items():
+        if goal.get("recovery_reference"):
+            continue
         if z != "STR":
             goal["target"] *= scale
         base = actual_base[z]

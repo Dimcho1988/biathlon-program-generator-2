@@ -15,7 +15,7 @@ async function proxy(request: Request, context: Context) {
   try {
     const { path } = await context.params;
     const endpoint = path.length === 1 ? path[0] : path.length === 2 && path[0] === "methods" && path[1] === "preferences" ? "methods/preferences" : "";
-    const permitted = request.method === "GET" ? ["profile", "drafts", "active", "outlook", "methods"] : request.method === "PUT" ? ["profile", "methods/preferences"] : ["generate", "activate", "action", "day", "race-duration"];
+    const permitted = request.method === "GET" ? ["profile", "drafts", "active", "state", "outlook", "methods"] : request.method === "PUT" ? ["profile", "methods/preferences"] : ["generate", "activate", "action", "day", "race-duration"];
     if (!permitted.includes(endpoint)) return error("Адресът не е намерен.", 404);
     const startDate = request.method === "GET" && endpoint === "drafts" ? new URL(request.url).searchParams.get("start_date") : null;
     if (startDate !== null && !isCalendarDate(startDate)) return error("Невалидна начална дата на програмата.", 422);

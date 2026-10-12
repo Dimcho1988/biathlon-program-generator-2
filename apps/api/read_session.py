@@ -1,7 +1,8 @@
 """Deduplicate reads while assembling one management page.
 
-This object lives for one read request only. It must never be used for writes:
-write services intentionally reread inputs to detect concurrent changes. Keys
+This object lives for one read phase only. It must never be used for writes or
+the final concurrency check: write services reread inputs through the original
+repository after computing a draft. Keys
 include all arguments (including the athlete). No user data is cached globally.
 """
 from copy import deepcopy
@@ -12,7 +13,7 @@ class ReadSession:
     _READS = frozenset({
         "athlete_settings", "active_analysis", "athlete_planning_calendar",
         "athlete_planning_profile", "athlete_mesocycle_accent_preferences",
-        "active_trainability_calendar", "active_planning_calendar",
+        "active_trainability_calendar", "active_planning_calendar", "active_activity_calendar",
         "trainability_summaries", "sync_state",
     })
 

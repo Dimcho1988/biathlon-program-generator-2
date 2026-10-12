@@ -63,7 +63,10 @@ def test_outlook_uses_five_minute_z5_basis_and_keeps_recovery_and_partial_weeks(
     loading = [w for w in full if w["cycle"]["kind"] == "BUILD"]
     recovery = [w for w in full if w["cycle"]["kind"] == "RECOVERY"]
     assert loading and recovery
-    assert loading[0]["components"]["Z5"]["target_period_q"] >= 5
+    # Five minutes is the unmodulated cycle reference, not a floor for every
+    # loading week in the mean-one wave.
+    assert context["components"]["Z5"]["reference_q"] == 5
+    assert max(w["components"]["Z5"]["target_period_q"] for w in loading) >= 5
     assert recovery[0]["components"]["Z5"]["target_period_q"] < 5
     short = engine._long_term_outlook(profile, phases, reference, None, preferences, rows, TODAY+timedelta(days=6), False, progression=context)["weeks"][0]
     assert short["days"] == 1

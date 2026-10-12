@@ -150,4 +150,22 @@ begin
   assert result->>'conflict'='true', 'Block overlap protection was lost';
 end $$;
 
+-- Automatic imports leave quota for manual requests and never shorten retry waits.
+do $$
+declare result jsonb; athlete text := 'checkpoint-test-athlete';
+begin
+ update public.onflows_management_plan_state set status='ACTIVE' where athlete_alias=athlete;
+ update public.onflows_intervals_connections set status='CONNECTED' where athlete_alias=athlete;
+ insert into public.onflows_sync_jobs(athlete_alias,job_kind,idempotency_key,request_sequence,status,requested_at,available_at)
+ values(athlete,'FULL_SYNC',repeat('a',64),1,'RETRY_WAIT',clock_timestamp()-interval '1 hour',clock_timestamp()+interval '2 hours');
+ result := public.queue_onflows_management_import(athlete);
+ assert result->>'reason'='AUTOMATIC_IMPORT_COOLDOWN', 'Hourly automatic import spent provider quota';
+ assert (select count(*) from public.onflows_sync_jobs where athlete_alias=athlete)=1, 'Cooldown queued another job';
+ assert (select available_at>clock_timestamp()+interval '1 hour' from public.onflows_sync_jobs where athlete_alias=athlete), 'Cooldown shortened provider retry';
+ update public.onflows_sync_jobs set requested_at=clock_timestamp()-interval '7 hours',status='SUCCEEDED' where athlete_alias=athlete;
+ result := public.queue_onflows_management_import(athlete);
+ assert result->>'queued'='true', 'Import did not resume after cooldown';
+ assert (select count(*) from public.onflows_sync_jobs where athlete_alias=athlete)=2, 'Due automatic import missing';
+end $$;
+
 rollback;

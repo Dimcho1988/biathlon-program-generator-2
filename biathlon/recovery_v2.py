@@ -150,6 +150,15 @@ def simulate(daily, configs=None, *, target=None, include_details=True, calculat
         config = configs[z]
         doses = grouped[z]
         ordered_doses = sorted(doses.items())
+        # Candidate plans repeatedly ask for an unchanged zone while another
+        # zone/day changes. Cache its complete scalar result, after validating
+        # all input rows. The caller owns this bounded, request-local cache.
+        current_cache = calculation_cache.setdefault("current", {}) if calculation_cache is not None and not include_details else None
+        current_key = (target, tuple((d, v) for d, v in ordered_doses if d <= target),
+                       tuple(sorted((k, type(v), v) for k, v in config.items())))
+        if current_cache is not None and current_key in current_cache:
+            current.append({**current_cache[current_key], "zone": z})
+            continue
         impulses = []
         contributions = []
         previous_window = deque()
@@ -190,6 +199,10 @@ def simulate(daily, configs=None, *, target=None, include_details=True, calculat
             "residual_fatigue":f, "days_to_practical_recovery":horizon,
             "baseline_daily_min":last_baseline[0], "baseline_raw_daily_min":last_baseline[1],
             "history_days":last_baseline[2], "baseline_source":last_baseline[3]})
+        if current_cache is not None:
+            if len(current_cache) >= 2048:
+                current_cache.pop(next(iter(current_cache)))
+            current_cache[current_key] = dict(current[-1])
         if include_details:
             end = max(2., horizon * 1.2)
             # All zones share a complete two-day view. Keep hourly samples even

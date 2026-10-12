@@ -77,6 +77,8 @@ def profile(**changes):
 
 
 def reference_speed(repo, alias, sport):
+    while hasattr(repo, "_repository"):
+        repo = repo._repository
     return {"status": "REFERENCE_ONLY", "sport": sport, "model_version": speed_duration.VERSION,
             "source_generation_id": repo.envelope.get("generation_id"), "source_revision": repo.envelope.get("revision"),
             "active_test_keys": [], "tests": [], "index_summary": {}}
