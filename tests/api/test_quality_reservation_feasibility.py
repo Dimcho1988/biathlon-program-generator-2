@@ -31,6 +31,8 @@ def constrained_profile(minutes, slots):
 
 
 def selected_methods(monkeypatch, body, identifiers):
+    from tests.api.test_methodology_completion import proven_shortage
+    proven_shortage(monkeypatch)
     methods = [method for method in engine.resolved_methods(body) if method["id"] in identifiers]
     assert len(methods) == len(identifiers)
     monkeypatch.setattr(engine, "resolved_methods", lambda _: deepcopy(methods))
@@ -148,7 +150,7 @@ def test_future_mixed_core_is_not_protected_when_key_load_reduces_readiness_belo
     next_day = next(day for day in plan["days"] if day["date"] == wednesday.isoformat())
     assert next_day["readiness_before"]["Z4"] == 5.
     assert not next_day["sessions"]
-    assert any(rejection["code"] == "INSUFFICIENT_DOSE_BUDGET" for rejection in next_day["rejected_alternatives"])
+    assert any(rejection["code"] == "RECOVERY_BELOW_50" for rejection in next_day["rejected_alternatives"])
     assert_segment_contract(plan)
 
 
@@ -160,27 +162,27 @@ def test_future_mixed_core_rebuilds_its_complete_minimum_when_recovery_improves(
         key_load = {row["zone"]:row["effective_load"] for row in rows if row["date"] == tuesday.isoformat()}
         after_key = key_load.get("Z3", 0.) > key_load.get("Z4", 0.)
         for row in result["current"]:
-            row["readiness_percent"] = 100. if kwargs.get("target") == wednesday and after_key else 80.
+            row["readiness_percent"] = 100. if kwargs.get("target") == wednesday and after_key else 95.
         return result
     monkeypatch.setattr(engine.recovery_v2, "simulate", simulated)
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
     prescribed_intent(monkeypatch)
     body = constrained_profile([0,80,80,0,0,0,0], [0,1,1,0,0,0,0])
-    body["interval_profiles"] = [interval("Z4", continuous_capacity_min=50.)]
+    body["interval_profiles"] = [interval("Z4", continuous_capacity_min=52.)]
     methods = selected_methods(monkeypatch, body, {"END-THR-TIME-01-FLEX", "END-VO2-TREF-01-Z4-MIX-REPETITIONS-SHORT"})
     repo, _, _ = observed()
     mixed = methods["END-VO2-TREF-01-Z4-MIX-REPETITIONS-SHORT"]
-    current_minimum = core_minutes(repo, body, mixed, factor=.8)
+    current_minimum = core_minutes(repo, body, mixed, factor=.95)
     future_minimum = core_minutes(repo, body, mixed, factor=1.)
     assert current_minimum < future_minimum <= 80.
     plan = engine.generate_plan(repo, "athlete", body, start_date=tuesday, now=NOW)
     key = next(session for session in plan["days"][0]["sessions"] if session["is_key_session"])
-    assert key["dose_evidence"]["readiness_dose_factor"] == .8
+    assert key["dose_evidence"]["readiness_dose_factor"] == .95
     protected = [item for limit in protection_limits(key) for item in limit["protected_methods"]
                  if item["component"] == "Z4" and item["date"] == wednesday.isoformat()]
     assert protected, "A legal future core must remain reservable when Recovery improves."
     for item in protected:
-        assert item.get("readiness_dose_factor", .8) == 1.
+        assert item.get("readiness_dose_factor", .95) == 1.
         assert abs(item.get("minutes", current_minimum)-future_minimum) <= .001
     next_day = next(day for day in plan["days"] if day["date"] == wednesday.isoformat())
     assert next_day["readiness_before"]["Z4"] == 100.
@@ -188,5 +190,5 @@ def test_future_mixed_core_rebuilds_its_complete_minimum_when_recovery_improves(
     assert actual["dose_evidence"]["readiness_dose_factor"] == 1.
     primary = sum(block["duration_min"] for block in actual["blocks"]
                   if block["zone"] == "Z4" and block["kind"] == "WORK")
-    assert primary >= 50.*.05-.001
+    assert primary >= 52.*.05-.001
     assert_segment_contract(plan)

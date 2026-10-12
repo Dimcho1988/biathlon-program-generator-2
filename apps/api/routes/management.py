@@ -125,7 +125,7 @@ def save_management_profile(
         store = ManagementStore(repository)
         payload = body.profile.model_dump(mode="json")
         if "method_library" in body.profile.model_fields_set:
-            payload["method_library"] = method_library_service.validate_preferences(payload["method_library"])
+            payload["method_library"] = method_library_service.validate_preferences(payload["method_library"], payload)
         else:
             # Older profile editors do not know the new section. Their writes
             # must not reset settings saved on the method-library page.

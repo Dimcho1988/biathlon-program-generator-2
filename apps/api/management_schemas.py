@@ -34,6 +34,11 @@ def normalize_building_profile(value):
                     continue
             if isinstance(previous, (int, float)) and not isinstance(previous, bool) and .3 <= previous <= legacy_maximum:
                 result[name] = fraction / 2
+    controls = result.get("planning_controls")
+    if isinstance(controls, dict):
+        old = controls.get("double_threshold_fraction", .5)
+        if isinstance(old, (int, float)) and not isinstance(old, bool) and .25 <= old < .5:
+            result["planning_controls"] = {**controls, "double_threshold_fraction": .5}
     return result
 
 
@@ -111,7 +116,7 @@ class PlanningControls(BaseModel):
     threshold_method: Literal["AUTO", "CONTINUOUS", "INTERVALS"] = "AUTO"
     double_threshold_days: list[int] = Field(default_factory=list, max_length=3)
     double_threshold_components: list[Literal["Z3", "Z4"]] = Field(default_factory=lambda: ["Z3"], min_length=1, max_length=2)
-    double_threshold_fraction: float = Field(default=.5, ge=.25, le=.6)
+    double_threshold_fraction: float = Field(default=.5, ge=.5, le=.6)
     double_threshold_gap_hours: float = Field(default=6, ge=4, le=10)
     double_threshold_lactate_ceiling: float = Field(default=3.5, ge=2, le=4)
     mixed_sessions_enabled: bool = True

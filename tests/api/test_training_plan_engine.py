@@ -416,7 +416,7 @@ def test_taper_is_explicit_cap_not_extra_load_to_refill():
     race_day = TODAY+timedelta(days=7)
     repo.events = [{"event_type": "MAIN_RACE", "event_id": "race", "name": "Race", "start_date": race_day.isoformat(), "end_date": race_day.isoformat()}]
     result = generate(repo)
-    assert result["parameters"]["weekly_minutes_ceiling"] <= result["parameters"]["baseline_weekly_minutes"]*.5
+    assert result["parameters"]["weekly_minutes_ceiling"] <= result["parameters"]["baseline_weekly_minutes"]*.7
     for day in result["days"]:
         if day["session"]:
             assert day["session"]["purpose"] != "BUILDING"

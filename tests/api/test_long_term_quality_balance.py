@@ -35,7 +35,9 @@ def balanced_fixture(monkeypatch):
     for key in ("period_start", "period_end"):
         source[key] = (date.fromisoformat(source[key]) + timedelta(days=3)).isoformat()
 
-    fixed_readiness(monkeypatch, 80.)
+    fixed_readiness(monkeypatch, 100.)  # Allocation scenario with a legal building dose.
+    from tests.api.test_methodology_completion import proven_shortage
+    proven_shortage(monkeypatch)  # Isolate legacy supplement coverage and reservation arithmetic.
     body = configured(age_years=30, training_experience_years=10, strength_enabled=True,
         race_duration_min=4, available_minutes=[360]*6+[0], building_fraction=.65,
         interval_profiles=[interval("Z4", continuous_capacity_min=20.),
@@ -87,8 +89,9 @@ def assert_complete_counterfactual_fits(repo, body, plan, now):
             method = deepcopy(methods[identifier])
             capacity = engine.capacity_for(method, repo.settings, speed, context, now.date())
             assert capacity is not None
-            readiness = adaptive_methods.readiness_policy(method, body, dict.fromkeys(COMPONENTS, 80.))
+            readiness = adaptive_methods.readiness_policy(method, body, dict.fromkeys(COMPONENTS, 100.))
             capacity["readiness_dose_factor"] = readiness["dose_factor"]
+            capacity["readiness_policy"] = readiness
             if method.get("mixed_component"):
                 secondary = engine.capacity_for({**method,"zone":"Z1","position":.35,"structure":"CONTINUOUS"},
                     repo.settings, speed, context, now.date())
@@ -101,7 +104,7 @@ def assert_complete_counterfactual_fits(repo, body, plan, now):
                 purpose = "MAINTENANCE"
             nominal = engine._nominal_fraction(method, purpose, body, "GENERAL_PREPARATION", capacity, body["planning_controls"])
             minimum = engine._minimum_work(method, capacity, repo.settings)
-            assert minimum is not None and minimum <= capacity["capacity_minutes"]*nominal*.8+.001
+            assert minimum is not None and minimum <= capacity["capacity_minutes"]*nominal+.001
             blocks = engine._blocks(method, minimum, capacity, repo.settings)
             # This counterfactual can also be checked against the old engine,
             # whose block builder always appended the optional easy tail.
@@ -109,11 +112,11 @@ def assert_complete_counterfactual_fits(repo, body, plan, now):
             blocks = [block for block in blocks if block["label"] != "Довършване на леката аеробна работа"]
             assert blocks and sum(block["duration_min"] for block in blocks) <= body["available_minutes"][day.weekday()]
             if method["zone"] != "STR":
-                lower = method.get("minimum_fraction", .25)*.8
+                lower = method.get("minimum_fraction", .25)
                 assert engine._minimum_dose_usage(blocks, capacity, method["zone"], primary_only=bool(method.get("mixed_component"))) >= lower-1e-9
             ceiling = engine._dose_ceiling(method, purpose, body, "GENERAL_PREPARATION",
                 capacity, body["planning_controls"])
-            assert engine._dose_fits(blocks, capacity, method["zone"], ceiling*.8)
+            assert engine._dose_fits(blocks, capacity, method["zone"], ceiling)
             direct, effective, _ = engine._canonical_load(blocks, repo.settings, rows, day,
                 zone_tmax_minutes=capacity["zone_tmax_minutes"])
             rows = engine._add_forecast_session(rows, day, effective)
@@ -140,7 +143,7 @@ def test_long_mixed_tails_and_easy_work_cannot_starve_executable_long_term_quali
             assert work > 0, f"{zone} has executable whole-dose headroom in {segment['window_start']}; optional Z1 must leave its preparation."
         for day in days:
             for session in day["sessions"]:
-                assert session["dose_evidence"]["readiness_dose_factor"] == .8
+                assert session["dose_evidence"]["readiness_dose_factor"] == 1.
                 for limit in session["dose_evidence"]["limits"]:
                     if limit["code"] != "LONG_TERM_QUALITY_PREPARATION":
                         continue

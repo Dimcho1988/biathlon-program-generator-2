@@ -119,12 +119,14 @@ def test_mixed_method_retains_independent_primary_capacity_with_interval_coeffic
 
 @pytest.mark.parametrize("policy,readiness,expected_sessions", [
     ("MODEL_WITH_PRIOR", 100., 1),
-    ("MODEL_WITH_PRIOR", 80., 1),
+    ("MODEL_WITH_PRIOR", 80., 0),
     ("OBSERVED_ONLY", 100., 0),
     ("MODEL_WITH_PRIOR", 0., 0),
 ])
 def test_mixed_reservation_and_prescription_share_curve_policy_and_single_recovery(
         monkeypatch, policy, readiness, expected_sessions):
+    from tests.api.test_methodology_completion import proven_shortage
+    proven_shortage(monkeypatch)
     from biathlon import hr_speed, speed_duration
     from tests.api.test_load_progression import configured
     from tests.api.test_readiness_adaptive_plan_v2 import fixed_readiness
@@ -158,7 +160,7 @@ def test_mixed_reservation_and_prescription_share_curve_policy_and_single_recove
     if not sessions:
         return
     evidence = sessions[0]["dose_evidence"]
-    factor = readiness / 100
+    factor = readiness / 100 * (.5 if readiness <= 90 else 1.)
     assert evidence["capacity_minutes"] == pytest.approx(tmax_seconds / 60)
     assert evidence["primary_requested_work"] == pytest.approx(tmax_seconds / 60 * .65 * .5 * factor)
     assert evidence["combination_high_work_cap"] == pytest.approx(80 / 60 * 3 * .5 * factor)

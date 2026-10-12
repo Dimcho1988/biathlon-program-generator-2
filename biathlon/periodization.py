@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 
-ENGINE_VERSION = "periodization-v3"
+ENGINE_VERSION = "periodization-v4-taper-30-percent"
 DAY = timedelta(days=1)
 PHASE_LABELS_BG = {
     "RE_ENTRY": "Вработващ",
@@ -252,7 +252,7 @@ def build_periodization(
                             "reason": "Част от предсъстезателния период. Намаленият товар е "
                                       "планиран и не се запълва автоматично поради дефицит в 7/40.",
                             "prevent_deficit_refill": True,
-                            "volume_factor": .5,
+                            "volume_factor": .7,
                         })
                     if length < taper_days:
                         warn("TAPER_TRUNCATED_BY_AVAILABLE_PREPARATION",

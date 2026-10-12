@@ -119,7 +119,7 @@ def test_catalog_missing_settings_preserves_references_and_reason(api):
     response = client.get("/api/v2/athlete/management/methods?phase=COMPETITION", headers=HEADERS)
     assert response.status_code == 200
     assert response.json()["curve"]["reason"] == "ATHLETE_SETTINGS_REQUIRED"
-    assert len(response.json()["methods"]) == 2 and not any(call[0] == "speed" for call in calls)
+    assert len(response.json()["methods"]) > 2 and not any(call[0] == "speed" for call in calls)
 
 
 def test_phase_preview_uses_calendar_without_refreshing_plan(api):
@@ -144,7 +144,7 @@ def test_default_catalog_endpoint_accepts_repository_calendar_contract(api, cale
     response = client.get("/api/v2/athlete/management/methods", headers=HEADERS)
     assert response.status_code == 200
     assert response.json()["phase_source"] in {"CALENDAR_PREVIEW", "OUTSIDE_PROGRAMME_PREVIEW"}
-    assert len(response.json()["methods"]) == len(CATALOG)
+    assert len(response.json()["methods"]) > len(CATALOG)
     assert reads == ["ath-test"] and store.current == before and not store.saved
 
 

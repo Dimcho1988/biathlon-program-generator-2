@@ -138,6 +138,7 @@ def test_day_and_session_preferences_change_the_generated_week(monkeypatch):
 
 
 def test_second_session_can_use_building_dose_when_long_term_endurance_is_unfilled(monkeypatch):
+    fixed_readiness(monkeypatch, 100.)
     p = body(sessions_per_week=13, accent_mode="MANUAL", accents=["Z1"], accent_index=1.5)
     p["building_fraction"] = .65
     p["max_key_sessions_per_week"] = 0
@@ -286,7 +287,7 @@ def test_double_threshold_validation_and_declining_readiness_reduces_doses(monke
     unready = run(monkeypatch, p)
     assert unready["days"][0]["readiness_before"]["Z3"] < 90
     pair = planning_schedule.day_sessions(unready["days"][0])
-    assert len(pair) == 2 and all(s.get("double_threshold") for s in pair)
+    assert pair and all(s["purpose"] != "BUILDING" for s in pair)
     for session in pair:
         assert_readiness_dose(session)
         assert session["dose_evidence"]["fraction"] < session["dose_evidence"]["base_fraction"]

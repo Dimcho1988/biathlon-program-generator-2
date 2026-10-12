@@ -1,5 +1,5 @@
 {
-  "version": "2026-10-12.1",
+  "version": "2026-10-12.1-execution-progression-v1",
   "schema_version": 1,
   "updated_at": "2026-10-12",
   "language": "bg",
@@ -7576,7 +7576,10 @@
         "Run"
       ],
       "periods": [
-        "GENERAL_PREPARATION"
+        "GENERAL_PREPARATION",
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
       ],
       "period_label": "Подготвителен",
       "disciplines": [],
@@ -7614,7 +7617,7 @@
         "success": "Зададените скорости се запазват и в края; движението остава контролирано. Оценява се и възстановяването след сесията.",
         "errors": "Прекалено бързо начало и едновременно увеличаване на скоростта, обема и плътността.",
         "adjustment": "При загуба на зададения ритъм или техника съкрати серията и запиши причината. Следващата стъпка изисква успешно повторение на текущата.",
-        "progression": "Авторска последователност: 30/30 → 60/60 → 5 × 3 мин (стр. 332–333). Около 4 седмици на първите стъпки са пример, не автоматичен календар."
+        "progression": "Авторска последователност: 30/30 → 60/60 → 5 × 3 мин (стр. 332–333). Около 4 седмици на първите стъпки са пример, не автоматичен календар. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
       },
       "family": "race",
       "prescription": {
@@ -7656,7 +7659,13 @@
       "activation_status": "COACH_ADAPTATION",
       "non_executable_reason": null,
       "automatic_selection": true,
-      "default_enabled": true
+      "default_enabled": true,
+      "progression": {
+        "group": "ANDERSON-V5",
+        "stage": 0,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
     },
     {
       "id": "AO02",
@@ -7665,7 +7674,9 @@
         "Run"
       ],
       "periods": [
-        "SPECIAL_PREPARATION"
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
       ],
       "period_label": "Подготвителен → специален",
       "disciplines": [],
@@ -7703,7 +7714,7 @@
         "success": "Зададените скорости се запазват и в края; движението остава контролирано. Оценява се и възстановяването след сесията.",
         "errors": "Прекалено бързо начало и едновременно увеличаване на скоростта, обема и плътността.",
         "adjustment": "При загуба на зададения ритъм или техника съкрати серията и запиши причината. Следващата стъпка изисква успешно повторение на текущата.",
-        "progression": "След успешно усвояване на 30/30; по-късно 5 × 3 мин. Запазването на общото време при прехода е наше правило."
+        "progression": "След успешно усвояване на 30/30; по-късно 5 × 3 мин. Запазването на общото време при прехода е наше правило. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
       },
       "family": "race",
       "prescription": {
@@ -7738,7 +7749,13 @@
       "activation_status": "COACH_ADAPTATION",
       "non_executable_reason": null,
       "automatic_selection": true,
-      "default_enabled": true
+      "default_enabled": true,
+      "progression": {
+        "group": "ANDERSON-V5",
+        "stage": 1,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
     },
     {
       "id": "AO03",
@@ -7826,7 +7843,13 @@
       "activation_status": "COACH_ADAPTATION",
       "non_executable_reason": null,
       "automatic_selection": true,
-      "default_enabled": true
+      "default_enabled": true,
+      "progression": {
+        "group": "ANDERSON-V5",
+        "stage": 2,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
     },
     {
       "id": "AO04",
@@ -10776,7 +10799,9 @@
       ],
       "periods": [
         "GENERAL_PREPARATION",
-        "SPECIAL_PREPARATION"
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
       ],
       "period_label": "GENERAL_PREPARATION → SPECIAL_PREPARATION",
       "disciplines": [],
@@ -10808,7 +10833,7 @@
         "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
         "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
         "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
-        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата."
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
       },
       "family": "ski_race_specific",
       "conditions": {
@@ -10872,7 +10897,13 @@
       "activation_status": "COACH_ADAPTATION",
       "automatic_selection": true,
       "non_executable_reason": null,
-      "default_enabled": true
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-XC-RACE",
+        "stage": 0,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
     },
     {
       "id": "OF-XC-MEDIUM",
@@ -10882,7 +10913,9 @@
         "RollerSki"
       ],
       "periods": [
-        "SPECIAL_PREPARATION"
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
       ],
       "period_label": "SPECIAL_PREPARATION",
       "disciplines": [],
@@ -10914,7 +10947,7 @@
         "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
         "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
         "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
-        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата."
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
       },
       "family": "ski_race_specific",
       "conditions": {
@@ -10968,7 +11001,13 @@
       "activation_status": "COACH_ADAPTATION",
       "automatic_selection": true,
       "non_executable_reason": null,
-      "default_enabled": true
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-XC-RACE",
+        "stage": 1,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
     },
     {
       "id": "OF-XC-LONG",
@@ -11086,7 +11125,13 @@
       "activation_status": "COACH_ADAPTATION",
       "automatic_selection": true,
       "non_executable_reason": null,
-      "default_enabled": true
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-XC-RACE",
+        "stage": 2,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
     },
     {
       "id": "MR01",
@@ -13650,7 +13695,13 @@
       "related_method_ids": [
         "MR17"
       ],
-      "default_enabled": true
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-MR-MAS",
+        "stage": 0,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
     },
     {
       "id": "OF-MR-30",
@@ -13802,7 +13853,13 @@
       "related_method_ids": [
         "MR17"
       ],
-      "default_enabled": true
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-MR-MAS",
+        "stage": 1,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
     },
     {
       "id": "OF-MR-45",
@@ -13954,7 +14011,1742 @@
       "related_method_ids": [
         "MR17"
       ],
-      "default_enabled": true
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-MR-MAS",
+        "stage": 2,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-800-SHORT",
+      "title": "Къси специфични отсечки · 0.8 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "GENERAL_PREPARATION",
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "GENERAL_PREPARATION → SPECIAL_PREPARATION",
+      "disciplines": [
+        800
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P01",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 800
+        },
+        "speed_multiplier": [
+          1.03,
+          1.07
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            100,
+            200
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            60,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.7,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-800",
+        "stage": 0,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-800-MEDIUM",
+      "title": "Средни специфични отсечки · 0.8 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "SPECIAL_PREPARATION",
+      "disciplines": [
+        800
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P01",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 800
+        },
+        "speed_multiplier": [
+          1.01,
+          1.04
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            200,
+            300
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            90,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.7,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-800",
+        "stage": 1,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-800-LONG",
+      "title": "Дълги специфични отсечки · 0.8 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "SPECIAL_PREPARATION → PRECOMPETITION → COMPETITION",
+      "disciplines": [
+        800
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P01",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 800
+        },
+        "speed_multiplier": [
+          0.98,
+          1.02
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            300,
+            500
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            90,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.7,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-800",
+        "stage": 2,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-1500-SHORT",
+      "title": "Къси специфични отсечки · 1.5 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "GENERAL_PREPARATION",
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "GENERAL_PREPARATION → SPECIAL_PREPARATION",
+      "disciplines": [
+        1500
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P02",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 1500
+        },
+        "speed_multiplier": [
+          1.03,
+          1.07
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            150,
+            200
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            60,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-1500",
+        "stage": 0,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-1500-MEDIUM",
+      "title": "Средни специфични отсечки · 1.5 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "SPECIAL_PREPARATION",
+      "disciplines": [
+        1500
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P02",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 1500
+        },
+        "speed_multiplier": [
+          1.01,
+          1.04
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            300,
+            400
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            90,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-1500",
+        "stage": 1,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-1500-LONG",
+      "title": "Дълги специфични отсечки · 1.5 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "SPECIAL_PREPARATION → PRECOMPETITION → COMPETITION",
+      "disciplines": [
+        1500
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P02",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 1500
+        },
+        "speed_multiplier": [
+          0.98,
+          1.02
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            500,
+            600
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            90,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-1500",
+        "stage": 2,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-3000-SHORT",
+      "title": "Къси специфични отсечки · 3 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "GENERAL_PREPARATION",
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "GENERAL_PREPARATION → SPECIAL_PREPARATION",
+      "disciplines": [
+        3000
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P03",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 3000
+        },
+        "speed_multiplier": [
+          1.03,
+          1.07
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            200,
+            300
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            60,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-3000",
+        "stage": 0,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-3000-MEDIUM",
+      "title": "Средни специфични отсечки · 3 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "SPECIAL_PREPARATION",
+      "disciplines": [
+        3000
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P03",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 3000
+        },
+        "speed_multiplier": [
+          1.01,
+          1.04
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            400,
+            600
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            90,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-3000",
+        "stage": 1,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-3000-LONG",
+      "title": "Дълги специфични отсечки · 3 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "SPECIAL_PREPARATION → PRECOMPETITION → COMPETITION",
+      "disciplines": [
+        3000
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P03",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 3000
+        },
+        "speed_multiplier": [
+          0.98,
+          1.02
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            800,
+            1200
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            90,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-3000",
+        "stage": 2,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-5000-SHORT",
+      "title": "Къси специфични отсечки · 5 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "GENERAL_PREPARATION",
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "GENERAL_PREPARATION → SPECIAL_PREPARATION",
+      "disciplines": [
+        5000
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P04",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 5000
+        },
+        "speed_multiplier": [
+          1.03,
+          1.07
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            200,
+            400
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            60,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-5000",
+        "stage": 0,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-5000-MEDIUM",
+      "title": "Средни специфични отсечки · 5 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "SPECIAL_PREPARATION",
+      "disciplines": [
+        5000
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P04",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 5000
+        },
+        "speed_multiplier": [
+          1.01,
+          1.04
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            600,
+            1000
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            90,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-5000",
+        "stage": 1,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-5000-LONG",
+      "title": "Дълги специфични отсечки · 5 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "SPECIAL_PREPARATION → PRECOMPETITION → COMPETITION",
+      "disciplines": [
+        5000
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P04",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 5000
+        },
+        "speed_multiplier": [
+          0.98,
+          1.02
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            1000,
+            1600
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            90,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-5000",
+        "stage": 2,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-10000-SHORT",
+      "title": "Къси специфични отсечки · 10 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "GENERAL_PREPARATION",
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "GENERAL_PREPARATION → SPECIAL_PREPARATION",
+      "disciplines": [
+        10000
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P05",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 10000
+        },
+        "speed_multiplier": [
+          1.03,
+          1.07
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            200,
+            400
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            60,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-10000",
+        "stage": 0,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-10000-MEDIUM",
+      "title": "Средни специфични отсечки · 10 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "SPECIAL_PREPARATION",
+      "disciplines": [
+        10000
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P05",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 10000
+        },
+        "speed_multiplier": [
+          1.01,
+          1.04
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            800,
+            1200
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            90,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-10000",
+        "stage": 1,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-10000-LONG",
+      "title": "Дълги специфични отсечки · 10 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "SPECIAL_PREPARATION → PRECOMPETITION → COMPETITION",
+      "disciplines": [
+        10000
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P05",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 10000
+        },
+        "speed_multiplier": [
+          0.98,
+          1.02
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            1600,
+            2000
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            90,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-10000",
+        "stage": 2,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-21097-SHORT",
+      "title": "Къси специфични отсечки · 21.0975 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "GENERAL_PREPARATION",
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "GENERAL_PREPARATION → SPECIAL_PREPARATION",
+      "disciplines": [
+        21097.5
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P06",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 21097.5
+        },
+        "speed_multiplier": [
+          1.03,
+          1.07
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            200,
+            400
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            60,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-21097",
+        "stage": 0,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-21097-MEDIUM",
+      "title": "Средни специфични отсечки · 21.0975 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "SPECIAL_PREPARATION",
+      "disciplines": [
+        21097.5
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P06",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 21097.5
+        },
+        "speed_multiplier": [
+          1.01,
+          1.04
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            1000,
+            2000
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            90,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-21097",
+        "stage": 1,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-21097-LONG",
+      "title": "Дълги специфични отсечки · 21.0975 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "SPECIAL_PREPARATION → PRECOMPETITION → COMPETITION",
+      "disciplines": [
+        21097.5
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P06",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 21097.5
+        },
+        "speed_multiplier": [
+          0.98,
+          1.02
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            2000,
+            4000
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            90,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-21097",
+        "stage": 2,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-42195-SHORT",
+      "title": "Къси специфични отсечки · 42.195 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "GENERAL_PREPARATION",
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "GENERAL_PREPARATION → SPECIAL_PREPARATION",
+      "disciplines": [
+        42195
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P07",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 42195
+        },
+        "speed_multiplier": [
+          1.03,
+          1.07
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            200,
+            400
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            60,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-42195",
+        "stage": 0,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-42195-MEDIUM",
+      "title": "Средни специфични отсечки · 42.195 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "SPECIAL_PREPARATION",
+      "disciplines": [
+        42195
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P07",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата. Краткият вариант остава допустим в по-късен период, докато не е премината прогресията."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 42195
+        },
+        "speed_multiplier": [
+          1.01,
+          1.04
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            1000,
+            1600
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            90,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-42195",
+        "stage": 1,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
+    },
+    {
+      "id": "OF-RUN-42195-LONG",
+      "title": "Дълги специфични отсечки · 42.195 km",
+      "sports": [
+        "Run"
+      ],
+      "periods": [
+        "SPECIAL_PREPARATION",
+        "PRECOMPETITION",
+        "COMPETITION"
+      ],
+      "period_label": "SPECIAL_PREPARATION → PRECOMPETITION → COMPETITION",
+      "disciplines": [
+        42195
+      ],
+      "source": {
+        "authors": "onFlows",
+        "reference": "Синтез на договорената прогресия P07",
+        "locator": "Треньорски диапазони; не са дословни авторски рецепти."
+      },
+      "original": {
+        "notes": "Общата стълбица е onFlows синтез на разгледаните източници."
+      },
+      "adaptation": "Изрично треньорско предписание: актуалната скорост за дистанцията от V(t), свързани диапазони за отсечка и скорост. Общият обем се проверява отделно и не нараства автоматично при удължаване.",
+      "guidance": {
+        "purpose": "Усвояване и постепенно по-дълго задържане на актуалния състезателен ритъм за избраната дистанция.",
+        "execution": "Равномерни отсечки на подходящ терен със запазена техника; изпълни целите почивки и остави резерв от две качествени повторения.",
+        "recovery": "Леко придвижване, за да повториш зададената скорост със същото качество на движението.",
+        "success": "Повторенията са равномерни и завършват със запазено оттласкване и ритъм.",
+        "errors": "Удължаване, ускоряване и добавяне на повторения в една и съща стъпка; сравняване на несъпоставими наклони и снегови условия.",
+        "adjustment": "Първо намали повторенията при ограничен бюджет. Ако скоростта или техниката не могат да се запазят, прекрати серията и запиши причината.",
+        "progression": "Къси → средни → дълги отсечки при постепенно приближаване към 100% от текущата състезателна котва. Преминаването зависи от качеството и възстановяването, а не само от датата."
+      },
+      "family": "ski_race_specific",
+      "conditions": {
+        "require_primary_discipline": true,
+        "require_comparable_sport_technique_terrain": true,
+        "speed_kind": "CURRENT_SPORT_CURVE",
+        "hr_role": "INDIVIDUAL_SECONDARY_FEEDBACK"
+      },
+      "prescription": {
+        "anchor": {
+          "type": "RACE_DISTANCE",
+          "distance_m": 42195
+        },
+        "speed_multiplier": [
+          0.98,
+          1.02
+        ],
+        "work": {
+          "unit": "meters",
+          "range": [
+            2000,
+            4000
+          ]
+        },
+        "repetitions": null,
+        "recovery": {
+          "seconds": [
+            90,
+            180
+          ],
+          "type": "ACTIVE_Z1"
+        },
+        "repetitions_from_budget": true,
+        "zone_dynamic": true,
+        "race_duration_fraction_max": 0.5,
+        "allow_fewer_repetitions": true,
+        "minimum_repetitions": 1,
+        "require_work_budget": true
+      },
+      "activation_status": "COACH_ADAPTATION",
+      "automatic_selection": true,
+      "non_executable_reason": null,
+      "default_enabled": true,
+      "progression": {
+        "group": "OF-RUN-42195",
+        "stage": 2,
+        "steps": 3,
+        "kind": "METHOD_LADDER"
+      }
     }
   ],
   "article_review": {

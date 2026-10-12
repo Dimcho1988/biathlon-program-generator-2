@@ -5,7 +5,7 @@ accounting. Recovery remains a daily model; no intraday exponent is inferred.
 """
 from copy import deepcopy
 
-VERSION = "adaptive-methods-v3-method-role-readiness"
+VERSION = "adaptive-methods-v4-recovery-role-gates"
 
 
 def developmental(profile):
@@ -46,7 +46,7 @@ def mixed_variants(methods):
             continue
         for variant in ("STEADY", "REPETITIONS") if m["zone"] in {"Z2", "Z3"} else ("REPETITIONS",):
             child = deepcopy(m)
-            child.update(id=m["id"]+"-MIX-"+variant, title=f"Лека аеробна работа + {m['zone']} · "+("равномерна част" if variant == "STEADY" else "отсечки"),
+            child.update(id=m["id"]+"-MIX-"+variant, variation_parent_id=m["id"], title=f"Лека аеробна работа + {m['zone']} · "+("равномерна част" if variant == "STEADY" else "отсечки"),
                          purpose="SUPPORTING", mixed_component=True, mixed_variant=variant,
                          warmup_min=15., cooldown_min=5., minimum_fraction=.05,
                          periods=tuple(p for p in m["periods"] if p not in {"RE_ENTRY", "TRANSITION"}))
@@ -105,15 +105,31 @@ def readiness_policy(method, profile, readiness):
         required.add(method["interval_profile"]["zone"])
     if method.get("structure") == "AEROBIC_STRENGTH":
         required.add("STR")
+    for part in method.get("combined_methods", []):
+        required.add(part["zone"])
+        required.update((part.get("dose_evidence", {}).get("readiness_policy", {}).get("required_components") or {}).keys())
     observed = {component: readiness.get(component) for component in sorted(required)}
     # One common scale preserves the approved combination. Unknown Recovery is
     # never replaced with full readiness, and percentages are not compounded.
     factor = (min(min(100., max(0., value)) for value in observed.values()) / 100
               if all(value is not None for value in observed.values()) else 0.)
-    return {"version": VERSION, "component": z, "minimum_percent": 0.,
+    work_components = required - {"Z1"}
+    blocked = bool(work_components) and factor < .5
+    allowed = factor > 0 and not blocked
+    return {"version": VERSION, "component": z, "minimum_percent": 50. if work_components else 0.,
             "observed_percent": readiness.get(z), "required_components": observed,
             "mixed_component": bool(method.get("mixed_component")),
-            "dose_factor": factor, "diagnostic_reference_percent": 90.,
-            "policy": "PROPORTIONAL_DURATION_AT_SUPPORTED_EFFORT",
+            "dose_factor": factor if allowed else 0., "observed_dose_factor": factor,
+            "allowed": allowed, "maximum_role": "BUILDING" if allowed and factor > .90 else "MAINTENANCE" if allowed else "NONE",
+            "reason": "RECOVERY_BELOW_50" if blocked else "UNKNOWN_OR_ZERO_RECOVERY" if not allowed else "RECOVERY_MAINTENANCE_ONLY" if factor <= .90 else "RECOVERY_BUILDING_ALLOWED",
+            "diagnostic_reference_percent": 90.,
+            "policy": "UNDER_50_Z1_ONLY_50_TO_90_MAINTENANCE_ABOVE_90_BUILDING",
             "intraday_recheck": False if method.get("double_threshold") else None,
             "basis": "COACH_POLICY_NOT_PHYSIOLOGICAL_THRESHOLD"}
+
+
+def purpose_for(purpose, policy):
+    """Apply the same inclusive 50/90 role boundaries in every planning path."""
+    if purpose == "BUILDING" and policy.get("maximum_role") == "MAINTENANCE":
+        return "MAINTENANCE"
+    return purpose

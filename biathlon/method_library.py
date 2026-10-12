@@ -11,9 +11,9 @@ import math
 from pathlib import Path
 import re
 
-from . import dosing_curve, preliminary_capacity, speed_duration, speed_zones
+from . import dosing_curve, preliminary_capacity, speed_duration, speed_zones, method_progression
 
-VERSION = "training-method-library-v1"
+VERSION = "training-method-library-v2-execution-progression"
 CATALOG_PATH = Path(__file__).parent / "data" / "training_method_library.json"
 PHASE_POSITION = {"RE_ENTRY": 0., "GENERAL_PREPARATION": 0., "SPECIAL_PREPARATION": .5,
                   "PRECOMPETITION": 1., "COMPETITION": 1., "TRANSITION": 0.}
@@ -111,14 +111,8 @@ def _anchor(spec, profile, view, curve, tests):
     kind = spec.get("type")
     result = deepcopy(spec)
     if kind == "CV":
-        # Same established 3/12-minute descriptor on the selected dosing
-        # curve; it remains an estimate and never becomes a new test.
-        descriptor = speed_duration.standardized_critical_speed(tests, curve)
-        if not _positive(descriptor.get("speed_kmh")):
-            direct = (view.get("critical_speed") or {})
-            if not _positive(direct.get("speed_kmh")):
-                raise ValueError("CV_REQUIRES_ACCEPTED_SHORT_AND_LONG_TESTS")
-            descriptor = {**deepcopy(direct), "source": "DIRECT_ACCEPTED_TEST_CS", "curve_source": "MEASURED_TEST_FIT"}
+        descriptor = speed_duration.prescription_critical_speed(tests, curve,
+            allow_model_estimate=(profile.get("planning_controls") or {}).get("capacity_policy", "MODEL_WITH_PRIOR") == "MODEL_WITH_PRIOR")
         velocity = descriptor["speed_kmh"]
         result["evidence"] = descriptor
     elif kind in {"V5", "V6", "RACE_DURATION"}:
@@ -212,6 +206,10 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None):
         return {**result, "status": "INCOMPATIBLE", "reason": "PERIOD_NOT_SUPPORTED"}
     if speed_view and speed_view.get("sport") != actual_sport:
         return {**result, "reason": "SPEED_SPORT_MISMATCH"}
+    progression = method_progression.state(record, profile, phase=phase)
+    result["progression"] = progression
+    if progression and not progression["eligible"] and not profile.get("_confirming_execution"):
+        return {**result, "status": "PROGRESSION_LOCKED", "reason": "CONFIRMED_EXECUTION_REQUIRED"}
     try:
         chosen = p.get("phase_ranges", {}).get(phase, {})
         p.update({k: deepcopy(v) for k, v in chosen.items() if k != "work_range"})
@@ -226,7 +224,9 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None):
             p["work"]["range"] = deepcopy(override["work_range"])
         curve, tests, curve_source = _prepared or selected_curve(speed_view)
         zones = (speed_view.get("dosing_model") or {}).get("speed_zones") if curve_source == "BLENDED_DOSING_CURVE" else speed_view.get("speed_zones")
-        position = PHASE_POSITION.get(phase, .5)
+        position = progression["position"] if progression else 0.
+        # Calendar selects permitted methods, never successful execution.
+        # Fixed prescriptions remain fixed; variable ranges start at the short end.
         pattern = p.get("pattern") or [{}]
         if p.get("structure") == "COMPOUND" and not p.get("pattern"):
             raise ValueError("COMPOUND_PATTERN_REQUIRED")
@@ -303,7 +303,7 @@ def catalog(profile, speed_view=None, *, phase=None, today=None):
 
 
 def metadata(record, resolution):
-    return {k: deepcopy(record.get(k)) for k in ("id", "title", "source", "original", "adaptation", "guidance", "prescription")} | {"resolution": deepcopy(resolution)}
+    return {k: deepcopy(record.get(k)) for k in ("id", "title", "source", "original", "adaptation", "guidance", "prescription", "progression")} | {"resolution": deepcopy(resolution)}
 
 
 def executable_methods(profile, speed_view, *, phase=None):
