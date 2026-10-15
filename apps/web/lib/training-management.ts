@@ -30,6 +30,7 @@ export interface ManagementProfile {
   auto_import_enabled: boolean;
   progression_percent: number;
   load_progression?: LoadProgression | null;
+  training_return?: TrainingReturn | null;
   individual_learning?: IndividualLearningConfig | null;
   component_targets_weekly: Partial<Record<Component, number>>;
   interval_profiles: IntervalDoseProfile[];
@@ -43,6 +44,12 @@ export interface ManagementProfile {
   method_library?: MethodPreferences;
 }
 
+export interface TrainingReturn {
+  mode: "CONFIRMED_BREAK" | "CONTINUED";
+  pause_start?: string | null; resume_date?: string | null;
+  historical_weekly_q: Partial<Record<Exclude<Component, "STR">, number>>;
+}
+
 export interface LoadProgression {
   enabled: boolean; low_volume_annual_percent: number; upper_volume_annual_percent: number;
   ceiling_ratio: number; precompetition_factor: number; competition_factor: number;
@@ -52,8 +59,8 @@ export interface LoadProgression {
   reference_revision?: number;
 }
 export function defaultLoadProgression(): LoadProgression {
-  return { enabled: true, low_volume_annual_percent: 30, upper_volume_annual_percent: 10,
-    ceiling_ratio: 1.3, precompetition_factor: .15, competition_factor: .05,
+  return { enabled: true, low_volume_annual_percent: 30, upper_volume_annual_percent: 0,
+    ceiling_ratio: 1, precompetition_factor: .15, competition_factor: .05,
     max_dose_fraction: .8, feedback_enabled: true, training_level: "AUTO", component_reference_positions: {}, reference_revision: 0 };
 }
 
@@ -244,6 +251,19 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     || !Object.entries(normalized.component_targets_weekly).every(([k, v]) => COMPONENTS.includes(k as Component) && range(v, 0, 3000))
     || !Array.isArray(normalized.interval_profiles) || normalized.interval_profiles.length > 2) throw new Error("Невалидни правила за адаптация или компонентни цели.");
   const seen = new Set<string>();
+  if (normalized.training_return != null) {
+    const r = normalized.training_return;
+    if (!isRecord(r) || !["CONFIRMED_BREAK", "CONTINUED"].includes(String(r.mode))
+      || (r.pause_start != null && !isCalendarDate(r.pause_start)) || (r.resume_date != null && !isCalendarDate(r.resume_date))
+      || (r.mode === "CONFIRMED_BREAK" && (!isCalendarDate(r.pause_start) || !isCalendarDate(r.resume_date) || r.resume_date <= r.pause_start)))
+      throw new Error("Въведи първия ден без тренировки и по-късна дата за подновяването им.");
+    const q = r.historical_weekly_q ?? {};
+    if (!isRecord(q) || (Object.keys(q).length > 0 && (Object.keys(q).length !== 5 || !["Z1","Z2","Z3","Z4","Z5"].every(z => range(q[z],0,10080)))))
+      throw new Error("Историческият Q трябва да съдържа валидно приравнено време за всяка от петте зони; използвай 0:00 за липсващ компонент.");
+    normalized.training_return = {...r, historical_weekly_q:q};
+    if (r.mode === "CONFIRMED_BREAK" && (!isRecord(normalized.planning_controls) || !isRecord(normalized.load_progression) || normalized.load_progression.enabled !== true))
+      throw new Error("За потвърдено връщане включи управлението на прираста.");
+  }
   if (normalized.load_progression != null) {
     const p = normalized.load_progression;
     if (!isRecord(p)) throw new Error("Невалидна настройка за прираста.");
@@ -253,9 +273,10 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
       throw new Error("Провери нивото и позициите на експертната опора (0–100%).");
     if (!isRecord(p) || typeof p.enabled !== "boolean" || typeof p.feedback_enabled !== "boolean"
       || !range(p.low_volume_annual_percent, 0, 30) || !range(p.upper_volume_annual_percent, 0, p.low_volume_annual_percent)
-      || !range(p.ceiling_ratio, 1.001, 1.3) || !range(p.precompetition_factor, 0, 1)
+      || !range(p.ceiling_ratio, 1, 1.3) || !range(p.precompetition_factor, 0, 1)
       || !range(p.competition_factor, 0, p.precompetition_factor) || !range(p.max_dose_fraction, .5, .8))
       throw new Error("Провери годишния прираст и допълнителния таван за непрекъснати методи (до 80%).");
+    normalized.load_progression = {...p, upper_volume_annual_percent:0, ceiling_ratio:1};
   }
   if (normalized.planning_controls != null) {
     const c = normalized.planning_controls;

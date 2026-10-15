@@ -176,8 +176,8 @@ class LoadProgression(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     enabled: bool = True
     low_volume_annual_percent: float = Field(default=30., ge=0, le=30)
-    upper_volume_annual_percent: float = Field(default=10., ge=0, le=30)
-    ceiling_ratio: float = Field(default=1.3, gt=1, le=1.3)
+    upper_volume_annual_percent: float = Field(default=0., ge=0, le=30)
+    ceiling_ratio: float = Field(default=1., ge=1, le=1.3)
     precompetition_factor: float = Field(default=.15, ge=0, le=1)
     competition_factor: float = Field(default=.05, ge=0, le=1)
     max_dose_fraction: float = Field(default=.8, ge=.5, le=.8)
@@ -194,6 +194,27 @@ class LoadProgression(BaseModel):
             raise ValueError("The growth rate must decrease with volume")
         if self.competition_factor > self.precompetition_factor:
             raise ValueError("Competition growth cannot exceed precompetition growth")
+        # Retain old JSON fields for archived profiles; the current policy has
+        # only two knots, 30->0, with no extra 130% envelope.
+        self.upper_volume_annual_percent = 0.
+        self.ceiling_ratio = 1.
+        return self
+
+
+class TrainingReturn(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    mode: Literal["CONFIRMED_BREAK", "CONTINUED"]
+    pause_start: date | None = None
+    resume_date: date | None = None
+    historical_weekly_q: dict[Literal["Z1", "Z2", "Z3", "Z4", "Z5"], float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def coherent(self):
+        if self.mode == "CONFIRMED_BREAK" and (self.pause_start is None or self.resume_date is None or self.pause_start >= self.resume_date):
+            raise ValueError("Provide the first inactive day and the later first training day")
+        if self.historical_weekly_q and (set(self.historical_weekly_q) != {"Z1", "Z2", "Z3", "Z4", "Z5"}
+                or any(v < 0 or v > 10080 for v in self.historical_weekly_q.values())):
+            raise ValueError("Declared historical Q requires all five components in equivalent minutes")
         return self
 
 
@@ -287,6 +308,7 @@ class ManagementProfile(BaseModel):
     auto_import_enabled: bool = True
     progression_percent: float = Field(default=5, ge=0, le=10)
     load_progression: LoadProgression | None = None
+    training_return: TrainingReturn | None = None
     individual_learning: IndividualLearning = Field(default_factory=IndividualLearning)
     method_library: MethodLibraryPreferences = Field(default_factory=MethodLibraryPreferences)
     component_targets_weekly: dict[Literal["Z1", "Z2", "Z3", "Z4", "Z5", "STR"], float] = Field(default_factory=dict)
@@ -308,6 +330,9 @@ class ManagementProfile(BaseModel):
     def coherent(self):
         if len({p.sport for p in self.lactate_profiles}) != len(self.lactate_profiles):
             raise ValueError("Keep one current lactate profile per sport")
+        if self.training_return and self.training_return.mode == "CONFIRMED_BREAK" and (
+                not self.planning_controls or not self.load_progression or not self.load_progression.enabled):
+            raise ValueError("Confirmed return requires planning controls and enabled load progression")
         # Also derive after float coercion: accepted API number strings must
         # not retain an independent role dose.
         self.maintenance_fraction = self.reentry_fraction = self.building_fraction / 2

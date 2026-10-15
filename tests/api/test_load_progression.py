@@ -30,7 +30,7 @@ def test_curve_uses_separate_q_bounds_and_preserves_observed_outliers():
         values=[policy.annual_rate(q,z,c) for q in [0,.7*low,low,(low+high)/2,high,1.15*high,1.3*high,2*high]]
         assert values == sorted(values,reverse=True)
         assert values[:3] == [30]*3
-        assert values[4] == 10 and values[-2:] == [0,0]
+        assert values[4] == 0 and values[-2:] == [0,0]
     assert policy.annual_rate(56,"STR",c) is None
     with pytest.raises(ValidationError): LoadProgression(max_dose_fraction=.81)
     with pytest.raises(ValidationError): LoadProgression(low_volume_annual_percent=5,upper_volume_annual_percent=10)

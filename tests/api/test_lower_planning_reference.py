@@ -54,7 +54,7 @@ def test_lower_planning_reference_reconciles_e_without_changing_measured_history
     assert context["reference_is_clamped"]
 
 
-def test_outlook_uses_five_minute_z5_basis_and_keeps_recovery_and_partial_weeks():
+def test_outlook_uses_ten_minute_z5_basis_and_keeps_recovery_and_partial_weeks():
     profile, _, _, rows, phases, context, _ = low_history()
     reference = {"cutoff": TODAY.isoformat()}
     preferences = {"mesocycle_anchor_date": TODAY.isoformat()}
@@ -63,15 +63,15 @@ def test_outlook_uses_five_minute_z5_basis_and_keeps_recovery_and_partial_weeks(
     loading = [w for w in full if w["cycle"]["kind"] == "BUILD"]
     recovery = [w for w in full if w["cycle"]["kind"] == "RECOVERY"]
     assert loading and recovery
-    # Five minutes is the unmodulated cycle reference, not a floor for every
+    # Ten minutes is the unmodulated cycle reference, not a floor for every
     # loading week in the mean-one wave.
-    assert context["components"]["Z5"]["reference_q"] == 5
-    assert max(w["components"]["Z5"]["target_period_q"] for w in loading) >= 5
-    assert recovery[0]["components"]["Z5"]["target_period_q"] < 5
+    assert context["components"]["Z5"]["reference_q"] == 10
+    assert max(w["components"]["Z5"]["target_period_q"] for w in loading) >= 10
+    assert recovery[0]["components"]["Z5"]["target_period_q"] < 10
     short = engine._long_term_outlook(profile, phases, reference, None, preferences, rows, TODAY+timedelta(days=6), False, progression=context)["weeks"][0]
     assert short["days"] == 1
     assert short["components"]["Z5"]["target_period_q"] == pytest.approx(short["components"]["Z5"]["target_weekly_q"]/7, abs=.001)
-    assert context["components"]["Z5"]["target_q"] > 5
+    assert context["components"]["Z5"]["target_q"] > 10
     assert context["components"]["Z5"]["weekly_q"] == pytest.approx(110/60)
 
 
@@ -89,7 +89,7 @@ def test_saved_anchors_migrate_once_without_resetting_dates_or_capping_high_pers
     assert migrated["anchor_reused"]
     assert migrated["anchor"]["created_on"] == anchor["created_on"]
     assert migrated["anchor"]["windows"] == anchor["windows"]
-    assert migrated["components"]["Z5"]["reference_q"] == 5
+    assert migrated["components"]["Z5"]["reference_q"] == 10
     assert migrated["components"]["Z5"]["weekly_q"] == pytest.approx(110/60)
     assert migrated["components"]["Z3"]["reference_q"] == 210
     assert policy.context(profile, {}, [], later, retained=migrated["anchor"]) == migrated
@@ -121,7 +121,7 @@ def test_composed_sessions_keep_actual_budgets_readiness_and_session_limits(monk
     profile["planning_controls"].update(sessions_per_week=3, sessions_by_day=[0,1,0,1,0,1,0], mixed_sessions_enabled=False)
     profile["available_minutes"] = [0,80,0,80,0,80,0]
     plan = engine.generate_plan(repo, "athlete", profile, start_date=TODAY+timedelta(days=1), now=NOW)
-    assert plan["parameters"]["load_progression"]["components"]["Z5"]["reference_q"] == 5
+    assert plan["parameters"]["load_progression"]["components"]["Z5"]["reference_q"] == 10
     sessions = [s for d in plan["days"] for s in d["sessions"]]
     assert sessions and len(sessions) <= 3
     for day in plan["days"]:

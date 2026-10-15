@@ -13,18 +13,18 @@ import json
 from .equivalence import EQUIVALENCE_VERSION
 
 from .constants import COMPONENTS
-from . import planning_controls, planning_history, mesocycle_focus
+from . import planning_controls, planning_history, mesocycle_focus, training_return
 
-VERSION = "load-progression-v9-relative-recovery"
+VERSION = "load-progression-v10-linear-return"
 RECOVERY_RETAINED_FRACTION = .70
 # A reference may retain its measured portion with small, separately labelled
 # gaps. This is a coaching data-quality policy, not a physiological threshold.
 MIN_MEASURED_REFERENCE_COVERAGE = .90
 # Deliberately separate from speed-duration correction and canonical Tref.
-WEEKLY_Q_BOUNDS = {"Z1": (240., 840.), "Z2": (60., 300.), "Z3": (30., 120.),
-                   "Z4": (10., 40.), "Z5": (5., 30.)}
+WEEKLY_Q_BOUNDS = {"Z1": (240., 900.), "Z2": (60., 300.), "Z3": (30., 120.),
+                   "Z4": (10., 50.), "Z5": (10., 50.)}
 DEFAULTS = {"enabled": True, "low_volume_annual_percent": 30.,
-            "upper_volume_annual_percent": 10., "ceiling_ratio": 1.3,
+            "upper_volume_annual_percent": 0., "ceiling_ratio": 1.,
             "precompetition_factor": .15, "competition_factor": .05,
             "max_dose_fraction": .8, "feedback_enabled": True, "training_level": "AUTO",
             "component_reference_positions": {}, "reference_revision": 0}
@@ -32,7 +32,7 @@ DEFAULTS = {"enabled": True, "low_volume_annual_percent": 30.,
 
 def settings(profile):
     value = profile.get("load_progression")
-    return {**DEFAULTS, **value} if value and value.get("enabled", True) else None
+    return {**DEFAULTS, **value, "upper_volume_annual_percent": 0., "ceiling_ratio": 1.} if value and value.get("enabled", True) else None
 
 
 def annual_rate(q, zone, config):
@@ -40,13 +40,12 @@ def annual_rate(q, zone, config):
     if q is None or zone not in WEEKLY_Q_BOUNDS:
         return None
     low, high = WEEKLY_Q_BOUNDS[zone]
-    maximum, upper = config["low_volume_annual_percent"], config["upper_volume_annual_percent"]
-    ceiling = high * config["ceiling_ratio"]
+    maximum = config["low_volume_annual_percent"]
     if q <= low:
         return maximum
     if q <= high:
-        return maximum + (upper-maximum)*(q-low)/(high-low)
-    return max(0., upper*(ceiling-q)/(ceiling-high))
+        return maximum*(high-q)/(high-low)
+    return 0.
 
 
 def accents(profile, period, fallback):
@@ -183,7 +182,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
     recent = observed_window(source, rows, today-timedelta(days=40), today)
     reliable = valid_units and all(recent["components"][z]["reference_supported"] for z in WEEKLY_Q_BOUNDS)
     key = reference_key(profile, physiology)
-    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v8-observed-coverage", "load-progression-v7-lower-planning-reference", "load-progression-v6-individual-reference", "load-progression-v5-cycle-q", "load-progression-v4-clamped-q", "load-progression-v3-stable-q"} else None
+    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v9-relative-recovery", "load-progression-v8-observed-coverage", "load-progression-v7-lower-planning-reference", "load-progression-v6-individual-reference", "load-progression-v5-cycle-q", "load-progression-v4-clamped-q", "load-progression-v3-stable-q"} else None
     if frozen and frozen["version"] != VERSION:
         # Re-select the reference without replacing saved measurements or dates.
         frozen = deepcopy(frozen)
@@ -276,6 +275,11 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
                               all(c["weekly_q"] is not None and c["measured_coverage_percent"] >= 90
                                   for z,c in recovery_reference["components"].items() if z != "STR"))
     ctx["recovery_reference"] = recovery_reference
+    if valid_units:
+        training_return.attach(ctx, profile, source, today, WEEKLY_Q_BOUNDS, historical_anchor=retained_valid)
+        for z,c in components.items():
+            c["annual_rate_percent"] = annual_rate(c["reference_q"],z,config)
+            c["governed_annual_rate_percent"] = c["annual_rate_percent"]*feedback_factor(adaptation,z,"growth_factor",today) if c["annual_rate_percent"] is not None else None
     if periodization:
         ctx["trajectory"] = trajectory(ctx, profile, periodization)
         deadline = next((p["end_date"] for p in periodization["phases"] if p["kind"] == "SPECIAL_PREPARATION" and p["end_date"] >= frozen["created_on"]), profile["program_end"])
@@ -283,6 +287,9 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
         point = ctx["trajectory"].get(deadline, {z:1. for z in COMPONENTS})
         for z,c in components.items():
             c["target_q"] = c["reference_q"]*point[z] if c["reference_q"] is not None else None
+            return_point = training_return.point(ctx,z,date.fromisoformat(deadline))
+            if return_point and return_point["returning"]:
+                c["target_q"] = return_point["weekly_q"]
             c["planned_growth_percent"] = 100*(point[z]-1) if c["reference_q"] is not None and c["annual_rate_percent"] is not None else None
             c["target_is_before_daily_gates"] = True
             c["limitation"] = ("NO_RELIABLE_COMPONENT_HISTORY" if c["recent_observed_q"] is None else
@@ -350,6 +357,9 @@ def trajectory(ctx, profile, periodization):
             learned = feedback_factor(feedback, z, "growth_factor", day)
             selected = (state and state["kind"] in {"BUILD", "STRESS", "RECOVERY"} and day.isoformat() >= c.get("established_on", ctx["anchor"]["created_on"])
                         and not (day.isoformat() >= ctx["as_of"] and feedback.get("hold_for_reported_illness_or_pain")))
+            returning = training_return.point(ctx,z,day)
+            if returning and day.isoformat() < returning["development_start"]:
+                selected = False
             weight = development_weight(profile, state, z, period) if state else 0.
             factors[z] *= (1+(rate or 0.)*phase_factor(period, taper, ctx["config"])*learned*bool(selected)*weight/100)**(1/365.25)
             if z in WEEKLY_Q_BOUNDS and c["reference_q"]:
@@ -452,10 +462,17 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
         if state["kind"] == "RE_ENTRY" and q is not None:
             q = min(q, exposure)
         requested_q = q*factor*component_shape*taper_factor if q is not None else None
+        return_point = training_return.point(context,z,day)
+        return_active = return_point is not None and return_point["returning"]
+        if return_point and automatic and training_return.supported(context):
+            requested_q = (return_point["weekly_q"] if return_active else c["reference_q"]*factor*component_shape)*taper_factor
+            if return_active:
+                component_shape = 1.
+            goal["training_return"] = return_point
         recovery = context.get("recovery_reference") or {}
         recovery_day = date.fromisoformat(state.get("mesocycle_start", context["cycle_start"])) + timedelta(days=7*(state["week"]-1))
         relative_recovery = (automatic and state["kind"] == "RECOVERY" and not limited
-                             and not taper and period in {"GENERAL_PREPARATION", "SPECIAL_PREPARATION"})
+                             and not return_active and not taper and period in {"GENERAL_PREPARATION", "SPECIAL_PREPARATION"})
         if relative_recovery:
             observed = recovery.get("components", {}).get(z) or {}
             supported = recovery.get("usable") and recovery.get("recovery_start") == recovery_day.isoformat()
@@ -519,6 +536,8 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
                         "target_date": context.get("target_date"), "index_ceiling": 2.,
                         "individual_learning": individual,
                         "outlook_is_conditional": True, "q_and_e_are_separate": True})
+        if return_active:
+            goal["progression"]["effective_annual_percent"] = 0.
     return goals
 
 

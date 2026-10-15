@@ -100,9 +100,9 @@ def test_low_observed_z5_keeps_history_with_lower_planning_reference_and_separat
         next(z for z in a['zones'] if z['zone']=='Z5')['equivalent_time_min']=2/7
     ctx=policy.context(p,source,rows,TODAY,periodization=phases(p))
     c=ctx['components']['Z5']
-    assert c['expert_reference_q']==25  # 5 + .8*(30-5), all in direct Q.
+    assert c['expert_reference_q']==42  # 10 + .8*(50-10), direct Q.
     assert c['weekly_q'] < 2.01
-    assert c['reference_q']==5  # Lower planning anchor, not the 25-minute expert position.
+    assert c['reference_q']==10  # Lower planning anchor, not the expert position.
     assert c['target_q']>=c['reference_q'] and c['target_is_before_daily_gates']
     assert c['limitation']=='BELOW_REFERENCE_BOUND'
     goals,_,_=engine._goals(p,TODAY,'GENERAL_PREPARATION',False,{},None,0,4,rows,TODAY,False,1,ctx)
