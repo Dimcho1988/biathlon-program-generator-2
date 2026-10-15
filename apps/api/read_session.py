@@ -26,6 +26,10 @@ class ReadSession:
             self._values[key] = reader()
         return deepcopy(self._values[key])
 
+    def memoize(self, key, calculate):
+        """Reuse derived values only inside this immutable read phase."""
+        return self._read(("derived", key), calculate)
+
     def _request(self, method, path, **kwargs):
         if method != "GET" or kwargs:
             raise ValueError("ReadSession only accepts simple GET store reads")
@@ -38,6 +42,9 @@ class ReadSession:
         return self._read(("json", id(value)), lambda: self._repository._json(value))
 
     def __getattr__(self, name):
+        if name in {"speed_load_cache_namespace", "activity_speed_exposure_samples"}:
+            # Raw streams must never accumulate in the request snapshot.
+            return getattr(self._repository, name)
         if name not in self._READS:
             raise AttributeError(name)
         reader = getattr(self._repository, name)

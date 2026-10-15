@@ -6,6 +6,9 @@ This prevents the activity's own HR (or future training) defining its speed load
 Only measured Vflat is integrated; estimated HR is a conversion coordinate.
 """
 from bisect import bisect_right
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from datetime import date, datetime, timedelta, timezone
 import math
 import hashlib
@@ -31,6 +34,7 @@ from .component_load_context import read_contexts
 VERSION="independent-speed-load-causal-ti-v3-weighted-downward-tmax"
 ZONES=tuple(f"Z{i}" for i in range(1,6))
 logger = logging.getLogger("uvicorn.error")
+_sample_reads = ThreadPoolExecutor(max_workers=2, thread_name_prefix="speed-samples")
 
 
 def _elapsed_ms(started):
@@ -151,17 +155,37 @@ def prior_indices(history, sport, day, settings):
 
 
 def activity_samples(repository, alias, activities, *, metrics=None):
-    """Bound live full-resolution data to ten activities, not an entire season."""
+    """Prefetch one ten-activity batch while integrating the preceding batch.
+
+    At most twenty streams are live per report; a shared two-thread lane bounds
+    concurrent database reads. Results remain in the original activity order.
+    """
     reader=getattr(repository,"activity_speed_exposure_samples",None)
-    for first in range(0,len(activities),10):
-        batch=activities[first:first+10]
+    batches = [activities[first:first+10] for first in range(0, len(activities), 10)]
+    if not batches:
+        return
+    def read(batch):
         keys=tuple(sorted({a["latest_shadow_run_key"] for a in batch if a.get("latest_shadow_run_key")}))
-        started = perf_counter()
-        rows=reader(alias,keys) if keys and reader else {}
-        if metrics is not None:
-            metrics["samples_read_ms"] = metrics.get("samples_read_ms", 0.) + _elapsed_ms(started)
-        for activity in batch:
-            yield activity,rows.get(activity.get("latest_shadow_run_key")) or {}
+        return reader(alias,keys) if keys and reader else {}
+    def submit(batch):
+        return _sample_reads.submit(copy_context().run, read, batch)
+    pending = deque(submit(batch) for batch in batches[:2])
+    try:
+        for i, batch in enumerate(batches):
+            started = perf_counter()
+            future = pending.popleft()
+            rows = future.result()
+            del future
+            if metrics is not None:
+                metrics["samples_read_ms"] = metrics.get("samples_read_ms", 0.) + _elapsed_ms(started)
+            for activity in batch:
+                yield activity,rows.get(activity.get("latest_shadow_run_key")) or {}
+            del rows
+            if i+2 < len(batches):
+                pending.append(submit(batches[i+2]))
+    finally:
+        for future in pending:
+            future.cancel()
 
 
 def calibrated_mapping(history, sport, day, settings):
@@ -277,6 +301,9 @@ def _activity_records(repository, alias, selected, admitted, settings, namespace
 
 
 def history_view(repository, alias, sport=None, *, today=None, as_of=None, period_start=None, period_end=None):
+    from .read_session import ReadSession
+    if hasattr(repository, "_request") and not isinstance(repository, ReadSession):
+        repository = ReadSession(repository)
     started = phase_started = perf_counter()
     metrics = {"report_cache": "disabled"}
     settings=repository.athlete_settings(alias)
@@ -311,18 +338,20 @@ def history_view(repository, alias, sport=None, *, today=None, as_of=None, perio
     capacity_sports = sorted({a["sport"] for a in calendar.get("activities", [])
                              if supports_speed_load(a.get("sport"))
                              and (sport is None or a["sport"] == sport)})
+    phase_started = perf_counter()
     contexts = read_contexts(repository, alias, capacity_sports)
+    metrics["capacity_ms"] = _elapsed_ms(phase_started)
     def compute():
         return _compute_history(repository, alias, sport, settings, today, start, warmup,
                                 calendar, admitted, custom_period, metrics, contexts)
     def finish(result):
         # No athlete identifiers, settings, mappings or source keys are logged.
         logger.info("onflows_speed_load elapsed_ms=%.1f report_cache=%s "
-                    "settings_ms=%.1f calendar_ms=%.1f admission_ms=%.1f key_ms=%.1f "
+                    "settings_ms=%.1f calendar_ms=%.1f admission_ms=%.1f capacity_ms=%.1f key_ms=%.1f "
                     "mapping_ms=%.1f samples_read_ms=%.1f integration_ms=%.1f daily_statistics_ms=%.1f "
                     "activity_cache_hits=%d activity_cache_misses=%d activity_cache_waits=%d",
                     _elapsed_ms(started), metrics["report_cache"],
-                    *(metrics.get(name, 0.) for name in ("settings_ms", "calendar_ms", "admission_ms", "key_ms",
+                    *(metrics.get(name, 0.) for name in ("settings_ms", "calendar_ms", "admission_ms", "capacity_ms", "key_ms",
                         "mapping_ms", "samples_read_ms", "integration_ms", "daily_statistics_ms")),
                     *(metrics.get(name, 0) for name in ("activity_cache_hits", "activity_cache_misses", "activity_cache_waits")))
         return result
