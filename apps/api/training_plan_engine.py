@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from biathlon import hr_speed, recovery_v2, speed_duration, training_targets, planning_controls, planning_history, planning_schedule, planning_allocation, load_progression, mesocycle_focus
+from biathlon import hr_speed, recovery_v2, speed_duration, training_targets, planning_controls, planning_history, planning_schedule, planning_allocation, load_progression, mesocycle_focus, training_return
 from biathlon.constants import COMPONENTS, DEFAULT_PARAMETERS, fresh_parameters
 from biathlon.method_dosing import continuous_building_fraction, continuous_maintenance_fraction
 from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION, DOWNWARD_FACTORS
@@ -33,7 +33,7 @@ from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 
-VERSION = "training-management-v41-balanced-recovery"
+VERSION = "training-management-v42-linear-return"
 PARAMETER_VERSION = "management-parameters-v38"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
@@ -121,6 +121,7 @@ def planning_source(repository, alias, profile, settings, envelope, today, *, sp
     contexts = read_contexts(repository, alias, sports, speed_by_sport=speed_by_sport)
     if measured:
         measured = project_history(measured, contexts)
+    measured = training_return.confirmed_source(measured, profile, today, calendar)
     quality = measured.get("quality") or {}
     estimates, speed_diagnostics = {}, None
     if quality.get("limited_activities") or quality.get("excluded_activities"):
@@ -783,6 +784,10 @@ def _accents(period, preferences):
 def _goals(profile, day, period, taper, reference, accents, week, length, rows, today, limited, taper_factor, progression=None, *, periodization=None, support_limited=None, actual_reference=None, support_readiness=None):
     automatic = load_progression.accents(profile, period, list(PRIORITIES.get(period, ("Z1",))))
     state = planning_controls.resolve(profile, day, period, automatic, periodization=periodization)
+    return_points = [training_return.point(progression,z,day) for z in COMPONENTS[:5]]
+    if state and not state["explicit"] and any(p and p["returning"] for p in return_points) and training_return.supported(progression):
+        state.update(kind="RE_ENTRY", name="Линейно връщане след пауза", wave_factor=1., volume_factor=1.,
+                     automatic_shock=False, training_return=True)
     if state is not None:
         support = mesocycle_focus.recovery_support({**state, "kind": "RECOVERY"}, profile, rows, today,
                    limited=limited if support_limited is None else support_limited,
@@ -1412,6 +1417,19 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     # Resolve the same race component before constructing the growth calendar
     # in both the weekly generator and the read-only outlook.
     progression = progression_context(repository, alias, profile, source, rows, today, periodization, envelope=envelope, measured_source=measured_source)
+    return_supported = (training_return.supported(progression) and not equivalence_changed
+        and missing_days == 0 and planning_evidence["supported"]
+        and min(component_history_days.values()) >= planning_history.MINIMUM_DAYS)
+    if (progression or {}).get("training_return", {}).get("status") == "CONFLICT":
+        blocked = True
+        warnings.append(_warning("TRAINING_RETURN_CONFLICT", "Посочената пълна пауза съдържа записано натоварване. Коригирайте датите или отбележете, че подготовката е продължила."))
+    if (progression or {}).get("training_return", {}).get("status") == "PAUSED":
+        blocked = True
+        warnings.append(_warning("TRAINING_RETURN_NOT_STARTED", "Потвърдената пауза още не е приключила. Генерирайте актуална програма при подновяване на подготовката."))
+    if return_supported and start_date <= today+timedelta(days=1):
+        limited = False
+        warnings = [w for w in warnings if w["code"] != "LIMITED_LOAD_HISTORY"]
+        warnings.append(_warning("LINEAR_TRAINING_RETURN", "Линейното връщане използва потвърдената пауза и запазеното Q. Срокът е условен; непокритите и неизпълнените седмици не натрупват прираст."))
     adaptation = (progression or {}).get("adaptation") or {}
     if adaptation.get("hold_for_reported_illness_or_pain"):
         blocked = True
@@ -1424,6 +1442,19 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         warnings.append(_warning("RACE_DURATION_MISSING", "Няма индивидуална оценка за тази дистанция. Въведете приблизителната продължителност на основната дисциплина в профила."))
     by_sport_minutes = volume_evidence["reference_by_sport_weekly_minutes"]
     volume = planning_controls.volume_basis(profile, volume_evidence)
+    if return_supported:
+        episode = progression["training_return"]
+        by_sport_minutes = {**episode["by_sport_weekly_minutes"], **by_sport_minutes}
+        return_sports = set(episode["known_sports"])
+        # Explicit restart without retained Q uses only the selected sport's
+        # expert start; capacity and per-method checks are still mandatory.
+        if all(c["source"] == "EXPERT_START" for c in episode["components"].values()):
+            return_sports.add(primary_sport)
+        volume = {**volume, "missing_history": False, "reported_history_only": False,
+                  "weekly_volume_source": "CONFIRMED_RETURN_COMPONENT_Q",
+                  "return_exposure_sports": sorted(return_sports)}
+    else:
+        return_sports = set()
     weekly_minutes = volume["baseline_weekly_minutes"]
     volume_source = volume["weekly_volume_source"]
     historical_weekly_minutes = volume["historical_selected_weekly_minutes"]
@@ -1433,7 +1464,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     if volume["missing_history"]:
         blocked = True
         warnings.append(_warning("WEEKLY_VOLUME_REQUIRED", "Нужна е достатъчна реална история или обемите от последните четири седмици."))
-    if not any(by_sport_minutes.get(s, 0.) for s in training_sports):
+    if not any(by_sport_minutes.get(s, 0.) or s in return_sports for s in training_sports):
         limited = True
         warnings.append(_warning("NO_ACTUAL_MODE_EXPOSURE", "Няма скорошен обем за избраните средства. Общият бюджет не замества опита и капацитета за конкретното средство; предложенията са ограничени."))
     available = planning_history.availability(profile)
@@ -2199,7 +2230,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     rejection = ("SUPPORT_DURING_TAPER", "Тейпърът не се запълва с допълваща работа; поддържащата доза се избира от основния метод.")
                 elif limited and method["purpose"] != "RECOVERY":
                     rejection = ("INSUFFICIENT_HISTORY", "При ограничена история са разрешени само леки ограничени предложения.")
-                elif controls and not is_strength and not by_sport_minutes.get(sport, 0.) and method["purpose"] != "RECOVERY":
+                elif controls and not is_strength and not by_sport_minutes.get(sport, 0.) and sport not in return_sports and method["purpose"] != "RECOVERY":
                     rejection = ("NO_ACTUAL_MODE_EXPOSURE", "За това средство няма скорошна история. Допуска се само ограничено леко въвеждане, независимо от опита в други спортове.")
                 elif is_threshold and not method.get("double_threshold") and threshold_choice != "AUTO" and ((threshold_choice == "CONTINUOUS") != (method["structure"] == "CONTINUOUS")):
                     rejection = ("THRESHOLD_METHOD_PREFERENCE", "Избран е друг вид прагова тренировка в профила.")
@@ -2361,7 +2392,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     limits.append({"code": "LOW_ABSOLUTE_RECOVERY_CAP", "limit_minutes": profile.get("recovery_session_cap_min", 30.)})
                 if reentry_dose_active(periodization, day) and not _interval_budget_profile(method):
                     limits.append({"code": "REENTRY_DOSE_CAP", "limit_minutes": evidence["capacity_minutes"] * continuous_maintenance_fraction(profile) * readiness_rule["dose_factor"]})
-                if taper:
+                if taper and (weekly_minutes > 0 or not return_supported):
                     # Taper is an intentional reduction, never a 7/40 deficit
                     # to refill. Its volume cap applies even mid-draft.
                     limits.append({"code": "TAPER_DAILY_WORK_CAP", "limit_minutes": max(0., weekly_minutes / max(1, sum(v > 0 for v in available)) * _taper_factor(periodization, day) - overhead)})

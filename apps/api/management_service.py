@@ -107,6 +107,13 @@ def outlook(repository, alias, *, now=None):
                                        taper_days=profile["taper_days"], transition_days=profile["transition_days"])
     phases["entry_basis"] = {"days_override": reentry_days, "reason": reentry_reason}
     progression = engine.progression_context(repository, alias, profile, source, rows, today, phases, envelope=planning_envelope, measured_source=measured_source)
+    if (engine.training_return.supported(progression) and planning_evidence["supported"]
+            and engine.planning_history.completed_day_lag(source,today) == 0
+            and all(v["known"] for v in engine.planning_controls.reference(rows,today).values())
+            and engine.load_progression.history_matches(source,{"bounds":list(settings.zone_bounds_bpm),"hrmax":settings.hrmax_bpm} if settings else None)):
+        limited = False
+        volume = {**volume, "missing_history": False, "reported_history_only": False,
+                  "weekly_volume_source": "CONFIRMED_RETURN_COMPONENT_Q"}
     projection = engine._long_term_outlook(profile, phases, reference, accents, preferences, rows, today,
                                          limited, volume=volume, events=calendar["events"], progression=progression, planning_evidence=planning_evidence)
     return {"configured": True, "outlook": {

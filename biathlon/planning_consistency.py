@@ -37,7 +37,9 @@ def reconcile(goals, profile, state, reference, *, limited=False, taper=False,
         base = reference[z]
         # Existing coach ceiling; preserve explicit goals and unloading.
         ceiling = max(0.,7*(2*(base["c40"]+base["b50"])-base["b50"]))
-        budgets[z] = g["target"] if z in manual or unloading or z == "STR" else min(ceiling,max(g["target"],demand[z]))
+        returning = bool((g.get("training_return") or {}).get("returning"))
+        budgets[z] = (min(ceiling,max(g["target"],demand[z])) if returning and z not in manual and z != "STR"
+                      else g["target"] if z in manual or unloading or z == "STR" else min(ceiling,max(g["target"],demand[z])))
     lo,hi = (1.,1.) if all(demand[z] <= budgets[z]+1e-9 for z in COMPONENTS) else (0.,1.)
     for _ in range(0 if lo == hi else 28):
         mid = (lo+hi)/2

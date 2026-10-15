@@ -79,6 +79,10 @@ def availability(profile):
 
 
 def reentry(profile, evidence):
+    if (profile.get("training_return") or {}).get("mode") == "CONFIRMED_BREAK":
+        return 0, "EXPLICIT_LINEAR_RETURN_OVERLAY"
+    if (profile.get("training_return") or {}).get("mode") == "CONTINUED":
+        return 0, "DECLARED_CONTINUING_TRAINING_REQUIRES_LOAD_DATA"
     if profile.get("reentry_days") is not None:
         return profile["reentry_days"], "EXPLICIT_COACH_CHOICE"
     if evidence.get("history_policy", {}).get("usable"):

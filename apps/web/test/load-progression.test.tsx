@@ -5,9 +5,31 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
 import { PlanningRangeCalendar } from "../components/planning-range-calendar";
 import { LoadProgressionSummary } from "../components/load-progression-summary";
-import { defaultManagementProfile, parseManagementProfile } from "../lib/training-management";
+import { TrainingReturnEditor } from "../components/training-return-editor";
+import { defaultManagementProfile, defaultPlanningControls, parseManagementProfile } from "../lib/training-management";
 
 afterEach(()=>vi.unstubAllGlobals());
+it("migrates the old growth ceiling and validates a dated, complete return declaration",()=>{
+  const p={...defaultManagementProfile("2026-09-23"),discipline:"1500 m",planning_controls:defaultPlanningControls("Run")};
+  const r={mode:"CONFIRMED_BREAK",pause_start:"2026-06-01",resume_date:"2026-09-23",historical_weekly_q:{Z1:600,Z2:180,Z3:75,Z4:30,Z5:0}};
+  const parsed=parseManagementProfile({...p,training_return:r,load_progression:{...p.load_progression,upper_volume_annual_percent:10,ceiling_ratio:1.3}});
+  expect(parsed.training_return).toEqual(r);
+  expect(parsed.load_progression).toMatchObject({upper_volume_annual_percent:0,ceiling_ratio:1});
+  for (const patch of [{resume_date:r.pause_start},{pause_start:null},{historical_weekly_q:{Z1:600}},{historical_weekly_q:{...r.historical_weekly_q,Z5:NaN}}])
+    expect(()=>parseManagementProfile({...p,training_return:{...r,...patch}})).toThrow();
+  expect(()=>parseManagementProfile({...p,training_return:r,load_progression:{...p.load_progression,enabled:false}})).toThrow();
+});
+it("distinguishes a confirmed break from missing records and explains the return rule",()=>{
+  const p={...defaultManagementProfile("2026-09-23"),training_return:{mode:"CONFIRMED_BREAK" as const,pause_start:"2026-06-01",resume_date:"2026-09-23",historical_weekly_q:{Z1:600,Z2:180,Z3:75,Z4:30,Z5:0}}};
+  const html=renderToStaticMarkup(<TrainingReturnEditor profile={p} onChange={()=>{}} today="2026-09-23"/>);
+  expect(html).toContain("1,3 ×"); expect(html).toContain("50%"); expect(html).toContain("90%");expect(html).toContain('value="10:00:00"');
+  const continued=renderToStaticMarkup(<TrainingReturnEditor profile={{...p,training_return:{...p.training_return,mode:"CONTINUED"}}} onChange={()=>{}} today="2026-09-23"/>);
+  expect(continued).toContain("Липсващите записи не се броят за почивка");expect(continued).not.toContain("Началната база");
+});
+it("shows separate history, initial dose and long-break target",()=>{
+  const html=renderToStaticMarkup(<LoadProgressionSummary plan={{long_term:{progression:{basis:"STABLE_PREPARATION_REFERENCE",training_return:{status:"RETURNING",pause_start:"2026-06-01",resume_date:"2026-09-23",pause_days:114,nominal_days:78,weeks:12,target_fraction:.9,components:{Z1:{historical_q:600,initial_q:300,target_q:540,completed_weeks:0,source:"DECLARED_HISTORY"}}}}}}}/>);
+  for(const text of ["10:00:00","5:00:00","9:00:00","заявена","12 седмици","Следващото стъпало","Обичайният годишен прираст започва след връщането"]) expect(html).toContain(text);
+});
 it("validates the annual curve and rejects a dose ceiling above eighty percent",()=>{
   const p={...defaultManagementProfile("2026-09-23"),discipline:"1500 m"};
   expect(parseManagementProfile(p).load_progression?.low_volume_annual_percent).toBe(30);
