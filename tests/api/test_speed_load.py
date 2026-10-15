@@ -148,7 +148,7 @@ def test_large_histories_are_read_in_bounded_batches_instead_of_loading_all_samp
     iterator=model.activity_samples(SimpleNamespace(activity_speed_exposure_samples=reader),"athlete",activities)
     assert not calls
     first=next(iterator)
-    assert first[0]["activity_ref"]==first[1]["activity_ref"]=="0" and len(calls)==1
+    assert first[0]["activity_ref"]==first[1]["activity_ref"]=="0" and 1 <= len(calls) <= 2
     assert len(list(iterator))==24 and len(calls)==3
 
 

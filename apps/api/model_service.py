@@ -209,17 +209,38 @@ def _default_speed_sport(activities, entries, today):
     return max(tests,key=lambda p:(p["day"],p["sport"]))["sport"] if tests else "Run"
 
 
-def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,speed_kmh=None,hr_bpm=None):
+def speed_view_inputs(repository, alias):
+    """One fresh, athlete-scoped snapshot shared by all sport models in a read."""
+    from .read_session import ReadSession
+    if isinstance(repository, ReadSession):
+        return repository.memoize(("speed_inputs", alias), lambda: _speed_view_inputs(repository, alias))
+    return _speed_view_inputs(repository, alias)
+
+
+def _speed_view_inputs(repository, alias):
+    settings = repository.athlete_settings(alias)
+    if settings is None:
+        raise HTTPException(409, "Athlete settings are required")
+    today = datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
+    calendar = read_calendar(repository, alias, date.min, today) or {"activities": []}
+    entries = [e for e in ModelStore(repository).entries(alias) if e["kind"] == "SPEED_TEST"]
+    return {"alias": alias, "settings": settings, "today": today, "calendar": calendar,
+            "entries": entries, "history": history_from_calendar(repository, alias, calendar)}
+
+
+def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,speed_kmh=None,hr_bpm=None,
+               _inputs=None, _capacity_only=False):
     from biathlon import hr_speed
     from .activity_shadow_pipeline import activity_shadow_configuration_fingerprint
     from vflat_b65.sports import speed_model_versions
-    settings=repository.athlete_settings(alias)
-    if settings is None: raise HTTPException(409,"Athlete settings are required")
-    today=datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
+    inputs = _inputs if _inputs is not None else speed_view_inputs(repository, alias)
+    if inputs["alias"] != alias:
+        raise ValueError("Speed model inputs belong to another athlete")
+    settings, today = inputs["settings"], inputs["today"]
     start=window_start(today,SPEED_TEST_DAYS)
-    calendar=read_calendar(repository,alias,date.min,today) or {"activities":[]}
+    calendar=inputs["calendar"]
     activities=[a for a in (calendar.get("activities") or []) if start.isoformat()<=a["local_date"]<=today.isoformat()]
-    entries=[e for e in ModelStore(repository).entries(alias) if e["kind"]=="SPEED_TEST"]
+    entries=inputs["entries"]
     sports=sorted({r["sport"] for r in activities}|{e["payload"]["sport"] for e in entries})
     sport=sport or _default_speed_sport(activities,entries,today)
     sport_settings=local_settings(settings,sport)
@@ -238,7 +259,7 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     if exploratory_count:
         warnings.append("EXPLORATORY_OBSERVATIONS_NOT_MAXIMAL_TESTS")
     if len(selected)>len(tests): warnings.append("NONMAXIMAL_OBSERVATIONS_NOT_USED_AS_ANCHORS")
-    history=history_from_calendar(repository,alias,calendar)
+    history=inputs["history"]
     index_start=window_start(today)
     recent=[a for a in history if a["sport"]==sport and index_start.isoformat()<=a["local_date"]<=today.isoformat()]
     comparison_key=activity_shadow_configuration_fingerprint(settings.zone_bounds_bpm,settings.hrmax_bpm,sport=sport)
@@ -302,6 +323,18 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
                 expert_durations={a["zone"]:a["duration_s"] for a in prior["anchors"]},normalization_offset_bpm=offset)
         except ValueError:
             warnings.append("HR_SPEED_MAPPING_UNAVAILABLE")
+    if _capacity_only:
+        # Capacity conversion does not consume chart points, test lists for the
+        # editor, functional profiles or critical-speed diagnostics.
+        return {"sport": sport,
+                "status": "CONFLICTING_TESTS" if model_error else "CALIBRATED" if tests else "PRELIMINARY" if tuned else "UNAVAILABLE",
+                "tests": entries, "active_test_keys": [e["entry_key"] for e in entries if e["payload"] in tests],
+                "preliminary_capacity": preliminary_capacity.summary(prior),
+                "hr_model": predictor.summary() if predictor else None,
+                "dosing_model": dosing_curve.describe(prior["curve"], tuned if not model_error else None, tests,
+                    sport_settings.zone_bounds_bpm, sport_settings.hrmax_bpm, indices, prior["anchors"],
+                    normalization_offset_bpm=offset, include_points=False),
+                "source_generation_id": calendar.get("generation_id"), "source_revision": calendar.get("revision")}
     window=[min(t["duration_s"] for t in tests),max(t["duration_s"] for t in tests)] if tests else None
     def prediction(t):
         v=tuned.speed(t)*3.6

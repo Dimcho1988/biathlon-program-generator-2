@@ -11,10 +11,12 @@ import json
 import math
 
 from biathlon import dosing_curve, hr_speed, preliminary_capacity, speed_duration
+from .speed_load_cache import SpeedLoadCache
 
 
 VERSION = "component-load-capacity-curve-first-v1"
 ZONES = ("Z1", "Z2", "Z3", "Z4", "Z5")
+_context_cache = SpeedLoadCache(max_entries=32, ttl_seconds=300)
 
 
 class ComponentCapacityUnavailable(ValueError):
@@ -149,6 +151,23 @@ def read_contexts(repository, alias, sports, *, speed_by_sport=None):
     from . import model_service
 
     known = speed_by_sport or {}
-    return {sport: context_from_speed_view(known[sport] if sport in known else
-            model_service.speed_view(repository, alias, sport))
-            for sport in dict.fromkeys(sports)}
+    sports = list(dict.fromkeys(sports))
+    missing = [s for s in sports if s not in known]
+    # Only persisted repositories can provide the complete fresh model inputs.
+    # Pure callers and supplied views retain the existing uncached contract.
+    namespace = getattr(repository, "speed_load_cache_namespace", None)
+    if not missing or not namespace or not hasattr(repository, "_request"):
+        return {sport: context_from_speed_view(known[sport] if sport in known else
+                model_service.speed_view(repository, alias, sport)) for sport in sports}
+    inputs = model_service.speed_view_inputs(repository, alias)
+    settings = inputs["settings"]
+    identity = {"namespace": namespace, "alias": alias, "version": VERSION,
+                "day": inputs["today"].isoformat(), "sports": missing,
+                "bounds": settings.zone_bounds_bpm, "hrmax": settings.hrmax_bpm,
+                "timezone": settings.timezone, "calendar": inputs["calendar"],
+                "entries": inputs["entries"], "history": inputs["history"]}
+    key = sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    calculated = _context_cache.get_or_compute(key, lambda: {
+        s: context_from_speed_view(model_service.speed_view(repository, alias, s,
+            _inputs=inputs, _capacity_only=True)) for s in missing})
+    return {s: context_from_speed_view(known[s]) if s in known else calculated[s] for s in sports}

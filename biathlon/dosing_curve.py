@@ -75,7 +75,7 @@ def from_view(view):
     return Curve(prior, speed_duration.calibrated(tests))
 
 
-def describe(index_curve, test_curve, tests, bounds, hrmax, indices, anchors, *, normalization_offset_bpm=0.):
+def describe(index_curve, test_curve, tests, bounds, hrmax, indices, anchors, *, normalization_offset_bpm=0., include_points=True):
     result = {"model_version": VERSION, "status": "UNAVAILABLE", "points": [], "hr_model": None,
               "speed_zones": None, "weights": {"index": INDEX_WEIGHT, "tests": TEST_WEIGHT},
               "weight_basis": "COACH_POLICY_NOT_VALIDATED_RELIABILITY", "is_maximal_test": False,
@@ -93,7 +93,7 @@ def describe(index_curve, test_curve, tests, bounds, hrmax, indices, anchors, *,
     grid = [math.exp(curve._x[0]+(curve._x[-1]-curve._x[0])*i/180) for i in range(1, 180)]
     times = sorted(fixed | {t for t in grid if all(abs(math.log(t/f)) > 1e-10 for f in fixed)})
     points = []
-    for t in times:
+    for t in times if include_points else ():
         try:
             hr = predictor.hr_for_duration(t)
         except ValueError:
