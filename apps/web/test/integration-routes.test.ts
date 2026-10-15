@@ -623,7 +623,7 @@ describe("integration route redirects behind a reverse proxy", () => {
 
     const response = await savePlanningCalendar(new Request(
       "https://web.example.test/api/athlete/planning-calendar",
-      { method: "POST", body: form, ...(json ? { headers: { Accept: "application/json" } } : {}) },
+      { method: "POST", body: form, headers: { "X-Onflows-Athlete": "ath-test-profile", "X-Onflows-Actor": "auth-user-1", ...(json ? { Accept: "application/json" } : {}) } },
     ));
 
     if (json) { expect(response.status).toBe(200); expect(await response.json()).toEqual({ saved: true }); }

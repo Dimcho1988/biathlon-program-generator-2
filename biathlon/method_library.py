@@ -14,7 +14,7 @@ import re
 
 from . import dosing_curve, preliminary_capacity, speed_duration, speed_zones, method_progression, hr_speed
 
-VERSION = "training-method-library-v3-complete-recipes"
+VERSION = "training-method-library-v4-admissible-start"
 CATALOG_PATH = Path(__file__).parent / "data" / "training_method_library.json"
 PHASE_POSITION = {"RE_ENTRY": 0., "GENERAL_PREPARATION": 0., "SPECIAL_PREPARATION": .5,
                   "PRECOMPETITION": 1., "COMPETITION": 1., "TRANSITION": 0.}
@@ -362,8 +362,21 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
                 raise ValueError("NO_COMPLETE_REPEAT_WITHIN_METHOD_BUDGET")
             repetitions[1] = min(repetitions[1], math.floor((maximum+1e-7)/(cycle*count)))
         if p.get("structure") == "CONTINUOUS":
-            minimum, maximum = segments[0]["work_duration_range_seconds"]
-            maximum = min(maximum, segments[0]["work_duration_seconds"])
+            source_minimum, source_maximum = segments[0]["work_duration_range_seconds"]
+            # Start progression at a complete admissible dose inside the source
+            # range. A shorter introductory point must not deadlock advancement.
+            minimum = max(source_minimum, .25 * segments[0]["continuous_capacity_seconds"])
+            if minimum > source_maximum + 1e-7:
+                raise ValueError("SOURCE_RANGE_BELOW_MINIMUM_TMAX_DOSE")
+            maximum = minimum + position * (source_maximum-minimum)
+            result["continuous_start_adjustment"] = {
+                "policy": "FIRST_ADMISSIBLE_POINT_WITHIN_SOURCE_RANGE",
+                "source_minimum_seconds": source_minimum,
+                "minimum_seconds": minimum,
+                "adapted": minimum > source_minimum + 1e-7}
+            segments[0]["work_duration_seconds"] = maximum
+            segments[0]["work_distance_m"] = maximum * segments[0]["target_speed_kmh"] / 3.6
+            cycle = maximum
         recovery_resolution = None
         if recovery.get("anchor") or recovery.get("speed_multiplier"):
             recovery_resolution = _segment({"anchor": recovery.get("anchor", p.get("anchor")),

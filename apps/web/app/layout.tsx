@@ -1,3 +1,4 @@
+import { ScopeChangeNotifier } from "../components/scope-change-notifier";
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { WakeMarkerCleaner } from "../components/wake-marker-cleaner";
@@ -23,5 +24,5 @@ export const viewport: Viewport = {
 const themeScript = `(function(){try{var k='onflows-theme',s=localStorage.getItem(k),t=s==='light'||s==='dark'?s:(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.dataset.theme=t;document.documentElement.style.colorScheme=t}catch(e){document.documentElement.dataset.theme=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}})()`;
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="bg" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: themeScript }} /></head><body><WakeMarkerCleaner /><AppShell athlete={<Suspense fallback={<p className="workspace-profile-name">Зареждане на профила…</p>}><AthleteNavigation /></Suspense>}>{children}</AppShell></body></html>;
+  return <html lang="bg" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: themeScript }} /></head><body><ScopeChangeNotifier /><WakeMarkerCleaner /><AppShell athlete={<Suspense fallback={<p className="workspace-profile-name">Зареждане на профила…</p>}><AthleteNavigation /></Suspense>}>{children}</AppShell></body></html>;
 }

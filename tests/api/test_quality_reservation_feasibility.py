@@ -177,7 +177,7 @@ def test_future_mixed_core_rebuilds_its_complete_minimum_when_recovery_improves(
     assert current_minimum < future_minimum <= 80.
     plan = engine.generate_plan(repo, "athlete", body, start_date=tuesday, now=NOW)
     key = next(session for session in plan["days"][0]["sessions"] if session["is_key_session"])
-    assert key["dose_evidence"]["readiness_dose_factor"] == .95
+    assert key["dose_evidence"]["readiness_dose_factor"] == .975
     protected = [item for limit in protection_limits(key) for item in limit["protected_methods"]
                  if item["component"] == "Z4" and item["date"] == wednesday.isoformat()]
     assert protected, "A legal future core must remain reservable when Recovery improves."

@@ -135,6 +135,7 @@ class RecoveryHistoryV2(Strict):
     forecast: list[RecoveryForecastV2]
     source_as_of: str
     source_stale: bool
+    data_quality: dict | None = None
     warnings: list[str]
     wellness_diagnostics: dict | None = None
 

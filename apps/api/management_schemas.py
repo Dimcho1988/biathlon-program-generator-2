@@ -16,7 +16,7 @@ def normalize_building_profile(value):
     The former 50% default becomes the new 65% default. Other formerly valid
     choices retain their value inside the band, or its nearest boundary.
     Values outside the old valid domain remain invalid for schema validation.
-    Maintenance and re-entry are derived as half the current developing budget.
+    Maintenance and re-entry are derived as 60% of the current developing budget.
     Their former valid values remain readable but no longer override that rule.
     """
     if not isinstance(value, dict):
@@ -25,15 +25,15 @@ def normalize_building_profile(value):
     fraction = continuous_building_fraction(result)
     result["building_fraction"] = fraction
     if isinstance(fraction, (int, float)) and not isinstance(fraction, bool) and .6 <= fraction <= .7:
-        for name, legacy_maximum in (("maintenance_fraction", .4), ("reentry_fraction", .5)):
-            previous = result.get(name, fraction / 2)
+        for name, legacy_maximum in (("maintenance_fraction", .42), ("reentry_fraction", .5)):
+            previous = result.get(name, fraction * .6)
             if isinstance(previous, str):
                 try:
                     previous = float(previous)
                 except ValueError:
                     continue
             if isinstance(previous, (int, float)) and not isinstance(previous, bool) and .3 <= previous <= legacy_maximum:
-                result[name] = fraction / 2
+                result[name] = fraction * .6
     controls = result.get("planning_controls")
     if isinstance(controls, dict):
         old = controls.get("double_threshold_fraction", .5)
@@ -296,9 +296,9 @@ class ManagementProfile(BaseModel):
     taper_days: int = Field(default=7, ge=0, le=21)
     max_key_sessions_per_week: int = Field(default=2, ge=0, le=8)
     building_fraction: float = Field(default=.65, ge=.6, le=.7)
-    maintenance_fraction: float = Field(default=.325, ge=.3, le=.35,
+    maintenance_fraction: float = Field(default=.39, ge=.3, le=.42,
         description="Derived as half of building_fraction before the single Recovery adjustment.")
-    reentry_fraction: float = Field(default=.325, ge=.3, le=.35,
+    reentry_fraction: float = Field(default=.39, ge=.3, le=.42,
         description="Derived as half of building_fraction, identical to the maintenance role.")
     recovery_session_cap_min: float = Field(default=30, ge=5, le=45)
     allow_expert_fallback: bool = True
@@ -335,7 +335,7 @@ class ManagementProfile(BaseModel):
             raise ValueError("Confirmed return requires planning controls and enabled load progression")
         # Also derive after float coercion: accepted API number strings must
         # not retain an independent role dose.
-        self.maintenance_fraction = self.reentry_fraction = self.building_fraction / 2
+        self.maintenance_fraction = self.reentry_fraction = self.building_fraction * .6
         if not 0 <= (self.program_end - self.program_start).days <= 365:
             raise ValueError("Choose a planning period of 1 to 366 days")
         if any(not 0 <= value <= 360 for value in self.available_minutes):

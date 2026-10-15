@@ -402,7 +402,7 @@ def test_continuous_library_feedback_remains_available_when_automatic_intervals_
     from apps.api.learning_methods import execution_catalog
     repo, profile, record, calls = library_feedback
     profile["planning_controls"]["automatic_intervals"] = False
-    record["prescription"].update(structure="CONTINUOUS", work={"unit": "seconds", "range": [300, 600]},
+    record["prescription"].update(structure="CONTINUOUS", work={"unit": "seconds", "range": [1200, 4800]},
                                   speed_multiplier=[.85, .85], repetitions=[1, 1])
     assert any(item["id"].startswith("LIB-") for item in execution_catalog(repo, "ath-test"))
     assert calls == [("ath-test", "NordicSki"), ("ath-test", "RollerSki")]

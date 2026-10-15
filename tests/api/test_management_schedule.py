@@ -287,7 +287,7 @@ def test_double_threshold_validation_and_declining_readiness_reduces_doses(monke
     unready = run(monkeypatch, p)
     assert unready["days"][0]["readiness_before"]["Z3"] < 90
     pair = planning_schedule.day_sessions(unready["days"][0])
-    assert pair and all(s["purpose"] != "BUILDING" for s in pair)
+    assert pair and all(s["purpose"] == "BUILDING" for s in pair)
     for session in pair:
         assert_readiness_dose(session)
         assert session["dose_evidence"]["fraction"] < session["dose_evidence"]["base_fraction"]

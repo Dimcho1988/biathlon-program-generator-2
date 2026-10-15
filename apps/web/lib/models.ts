@@ -13,6 +13,7 @@ export interface RecoveryV2 {
   daily:Array<Baseline & {date:string;zone:ModelZone;readiness_before_percent:number;readiness_after_percent:number;residual_fatigue_after:number;impulse:number;effective_load:number;isolated_days_to_90:number;residual_fatigue_now?:number|null}>;
   forecast:Array<{zone:ModelZone;days:number;readiness_percent:number}>;
   source_as_of:string;source_stale:boolean;warnings:string[];
+  data_quality?:{complete:boolean;missing_days:number;partial_activities:number;expected_days:number;covered_days:number}|null;
   wellness_diagnostics?:WellnessCoverageDiagnostics|null;
 }
 const finite=(v:unknown):v is number=>typeof v==="number"&&Number.isFinite(v);

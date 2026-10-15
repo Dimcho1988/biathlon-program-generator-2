@@ -65,7 +65,7 @@ class PlanStore:
     def due(self, now):
         rows = self.request("GET", "/onflows_management_plan_state?select=athlete_alias,revision,approved_by"
                             f"&status=in.(ACTIVE,REVIEW_REQUIRED)&next_check_at=lte.{quote(now.isoformat(), safe='')}"
-                            "&order=next_check_at.asc&limit=10")
+                            "&order=next_check_at.asc&limit=1")
         if not isinstance(rows, list):
             raise PersistentStoreFailure("Invalid due plan queue")
         return rows

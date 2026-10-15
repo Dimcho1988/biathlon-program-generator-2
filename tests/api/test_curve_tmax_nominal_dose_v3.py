@@ -141,7 +141,7 @@ def test_large_component_remainder_cannot_expand_selected_building_fraction(monk
 
 
 @pytest.mark.parametrize("selected_fraction, readiness, expected_fraction", [
-    (.6, 50., .3), (.7, 50., .3), (.6, 90., .54), (.7, 90., .54), (.65, 90., .54),
+    (.6, 50., .9), (.7, 50., .9), (.6, 90., 1.14), (.7, 90., 1.14), (.65, 90., 1.14),
 ])
 def test_curve_supported_interval_building_scales_selected_fraction_once(
         monkeypatch, selected_fraction, readiness, expected_fraction):
@@ -173,9 +173,9 @@ def test_curve_supported_interval_building_scales_selected_fraction_once(
     assert len(sessions) == 1
     session = sessions[0]
     evidence = session["dose_evidence"]
-    assert session["purpose"] == "MAINTENANCE"
+    assert session["purpose"] == "BUILDING"
     assert evidence["capacity_source"] in {"SPEED_DURATION", "BLENDED_DOSING_CURVE"}
-    assert evidence["base_fraction"] == .6
+    assert evidence["base_fraction"] == 1.2
     assert evidence["fraction"] == pytest.approx(expected_fraction)
     assert evidence["requested_primary_work_minutes"] / evidence["capacity_minutes"] == pytest.approx(expected_fraction, abs=.0001)
     assert session["main_work_minutes"] <= evidence["requested_primary_work_minutes"] + .001

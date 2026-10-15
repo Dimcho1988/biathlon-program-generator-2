@@ -1,4 +1,5 @@
 "use client";
+import { useManagementFetch } from "./management-scope";
 
 import { SymptomNotice } from "./symptom-notice";
 import { TrainingPlanWeek } from "./training-plan-week";
@@ -18,6 +19,7 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
   externalBusy?: boolean; onBegin?: () => boolean; onEnd?: () => void;
   renderDay: (day: DraftDay) => ReactNode;
 }) {
+  const scopedFetch = useManagementFetch();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ revision: number; message: string } | null>(null);
   const [notice, setNotice] = useState("");
@@ -34,7 +36,7 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
     inFlight.current = true;
     setBusy(true); setError(null); setNotice("");
     try {
-      const result = await changeActivePlan(endpoint, { ...body, expected_revision: record!.revision });
+      const result = await changeActivePlan(endpoint, { ...body, expected_revision: record!.revision }, scopedFetch);
       onChange(result.value);
       if (result.conflict) setNotice(PLAN_CHANGED_NOTICE);
     } catch (caught) { setError({ revision: record!.revision, message: caught instanceof Error ? caught.message : "Програмата не беше променена." }); }

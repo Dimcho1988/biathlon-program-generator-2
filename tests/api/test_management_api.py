@@ -86,8 +86,8 @@ def test_profile_saves_current_building_band_and_normalizes_legacy_choices(api, 
     assert store.saved[-1]["building_fraction"] == expected
     assert response.json()["profile"]["building_fraction"] == expected
     for name in ("maintenance_fraction", "reentry_fraction"):
-        assert store.saved[-1][name] == expected / 2
-        assert response.json()["profile"][name] == expected / 2
+        assert store.saved[-1][name] == expected * .6
+        assert response.json()["profile"][name] == expected * .6
 
 
 def test_legacy_profile_read_derives_half_budget_without_writing(api):
@@ -98,7 +98,7 @@ def test_legacy_profile_read_derives_half_budget_without_writing(api):
     assert response.status_code == 200
     saved = response.json()["profile"]
     assert saved["building_fraction"] == .65
-    assert saved["maintenance_fraction"] == saved["reentry_fraction"] == .325
+    assert saved["maintenance_fraction"] == saved["reentry_fraction"] == .39
     assert store.current["profile"] == legacy and not store.saved
     assert response.json()["revision"] == 2
 
@@ -108,11 +108,11 @@ def test_building_default_and_legacy_schema_normalization_preserve_input_and_der
     before = deepcopy(legacy)
     parsed = ManagementProfile.model_validate(legacy)
     assert parsed.building_fraction == .7
-    assert parsed.maintenance_fraction == parsed.reentry_fraction == .35
+    assert parsed.maintenance_fraction == parsed.reentry_fraction == .42
     assert legacy == before
     default = ManagementProfile.model_validate(PROFILE)
     assert default.building_fraction == .65
-    assert default.maintenance_fraction == default.reentry_fraction == .325
+    assert default.maintenance_fraction == default.reentry_fraction == .39
 
 
 @pytest.mark.parametrize("fraction", [.6, .65, .7, "0.7"])
@@ -121,7 +121,7 @@ def test_role_budget_is_derived_for_missing_legacy_and_coerced_fields(fraction):
                   {"maintenance_fraction": "0.3", "reentry_fraction": "0.3"},
                   {"maintenance_fraction": "0.4", "reentry_fraction": "0.5"}):
         parsed = ManagementProfile.model_validate({**PROFILE, "building_fraction": fraction, **roles})
-        assert parsed.maintenance_fraction == parsed.reentry_fraction == float(fraction) / 2
+        assert parsed.maintenance_fraction == parsed.reentry_fraction == float(fraction) * .6
         assert ManagementProfile.model_validate(parsed.model_dump()).model_dump() == parsed.model_dump()
 
 

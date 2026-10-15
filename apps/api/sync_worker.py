@@ -859,17 +859,26 @@ def run_worker(
     idle_delay = poll_seconds
     maintenance_at_by_alias: dict[str, float] = {}
     next_management_check = 0.
+    management_thread = None
     next_history_check = 0.
     while not stopping.is_set():
         management_tick = getattr(repository, "refresh_due_training_plans", None)
         if callable(management_tick):
             management_now = monotonic_clock()
-            if management_now >= next_management_check:
+            if management_now >= next_management_check and (management_thread is None or not management_thread.is_alive()):
                 next_management_check = management_now + 60.
-                try:
-                    management_tick()
-                except Exception as exc:
-                    logger.warning("management_tick_deferred error_type=%s", type(exc).__name__)
+                def check_plans():
+                    try:
+                        management_tick()
+                    except Exception as exc:
+                        logger.warning("management_tick_deferred error_type=%s", type(exc).__name__)
+                if once:
+                    check_plans()
+                else:
+                    from threading import Thread
+                    # One bounded planning lane; imports keep claiming independently.
+                    management_thread = Thread(target=check_plans, daemon=True, name="planning-worker")
+                    management_thread.start()
         try:
             claim = repository.claim_sync_job(
                 worker_id=worker_id,

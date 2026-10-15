@@ -58,7 +58,10 @@ def assert_readiness_dose(session):
     evidence = session["dose_evidence"]
     required = evidence["readiness_policy"]["required_components"]
     assert required and all(value is not None for value in required.values())
-    assert evidence["readiness_dose_factor"] == pytest.approx(min(required.values()) / 100)
+    observed = min(required.values()) / 100
+    role = evidence.get("resolved_role", session["purpose"])
+    factor = 1. if role in {"MAINTENANCE", "SUPPORTING"} else observed if role == "RECOVERY" else .5 + .5*observed
+    assert evidence["readiness_dose_factor"] == pytest.approx(factor)
     # Split sessions derive the displayed fraction from a milliminute-rounded
     # requested budget; the tolerance follows that reporting precision.
     assert evidence["fraction"] == pytest.approx(
@@ -71,12 +74,12 @@ def assert_readiness_dose(session):
 
 
 @pytest.mark.parametrize("readiness", [0., 30., 50., 70., 89.9, 90., 100.])
-def test_readiness_has_50_90_role_gates_and_one_linear_scale_within_role(readiness):
+def test_readiness_keeps_50_guard_and_uses_half_deficit_without_role_switch(readiness):
     method = {"zone": "Z3", "structure": "CONTINUOUS"}
     policy = adaptive_methods.readiness_policy(method, threshold_profile(), {"Z3": readiness})
-    assert policy["dose_factor"] == pytest.approx(readiness / 100 if readiness >= 50 else 0)
+    assert policy["dose_factor"] == pytest.approx((.5 + readiness / 200) if readiness >= 50 else 0)
     assert policy["minimum_percent"] == 50
-    assert policy["maximum_role"] == ("NONE" if readiness < 50 else "MAINTENANCE" if readiness <= 90 else "BUILDING")
+    assert policy["maximum_role"] == ("NONE" if readiness < 50 else "BUILDING")
 
 
 def test_combination_uses_the_least_ready_required_component_once():
@@ -84,7 +87,7 @@ def test_combination_uses_the_least_ready_required_component_once():
               "paired_method": {"zone": "Z4", "structure": "THRESHOLD_SHORT"}}
     policy = adaptive_methods.readiness_policy(method, threshold_profile(),
                                                {"Z1": 80., "Z3": 70., "Z4": 50.})
-    assert policy["dose_factor"] == .5
+    assert policy["dose_factor"] == .75
     # The readiness of the three required components is not multiplied together.
     assert policy["dose_factor"] != pytest.approx(.8 * .7 * .5)
 
@@ -95,7 +98,7 @@ def test_unknown_required_readiness_never_becomes_full_capacity(readiness):
     assert policy["dose_factor"] == 0
 
 
-@pytest.mark.parametrize("base_fraction, readiness, expected", [(.6, 50., .15), (.7, 50., .175), (.7, 90., .315), (.7, 100., .7)])
+@pytest.mark.parametrize("base_fraction, readiness, expected", [(.6, 50., .45), (.7, 50., .525), (.7, 90., .665), (.7, 100., .7)])
 def test_readiness_prescribes_selected_fraction_times_ready_capacity(monkeypatch, base_fraction, readiness, expected):
     fixed_readiness(monkeypatch, readiness)
     body = threshold_profile(building_fraction=base_fraction)
@@ -104,9 +107,9 @@ def test_readiness_prescribes_selected_fraction_times_ready_capacity(monkeypatch
     work = [s for d in plan["days"] for s in d["sessions"] if s["zone"] == "Z3"]
     assert work, "A reduced complete key session should survive when its whole structure fits."
     dose = work[0]["dose_evidence"]
-    assert dose["base_fraction"] == base_fraction * (.5 if readiness <= 90 else 1.)
+    assert dose["base_fraction"] == base_fraction
     assert dose["fraction"] == pytest.approx(expected)
-    assert dose["readiness_dose_factor"] == readiness / 100
+    assert dose["readiness_dose_factor"] == .5 + readiness / 200
     assert dose["requested_primary_work_minutes"] / dose["capacity_minutes"] == pytest.approx(expected, abs=.0001)
     assert dose["applied_structure_fraction"] <= expected + .001
     assert_rolling_budgets(plan)
@@ -217,7 +220,7 @@ def test_reduced_cycle_can_keep_a_controlled_nonaccent_component_within_its_q_an
     work = [s for d in plan["days"] for s in d["sessions"] if s["zone"] == "Z3"]
     assert work, "A recovery cycle reduces component targets without banning every nonaccent quality."
     assert all(s["purpose"] == "MAINTENANCE" for s in work)
-    assert all(s["dose_evidence"]["fraction"] <= plan["parameters"]["building_fraction"] / 2 for s in work)
+    assert all(s["dose_evidence"]["fraction"] <= plan["parameters"]["building_fraction"] * .6 for s in work)
     component = plan["allocation"]["components"]["Z3"]
     assert component["planned_q"] <= component["target_q"] + .005
     assert component["planned_effective"] <= component["target_effective"] + .005
@@ -237,10 +240,10 @@ def test_double_threshold_split_reports_each_session_base_fraction_and_one_readi
     for session in pair:
         evidence = session["dose_evidence"]
         assert evidence["base_fraction"] == configured["planning_controls"]["double_threshold_fraction"]
-        assert evidence["readiness_dose_factor"] == .95
-        assert evidence["fraction"] == pytest.approx(evidence["base_fraction"] * .95, abs=.0001)
-        assert evidence["requested_work_minutes"] / evidence["capacity_minutes"] == pytest.approx(.475, abs=.0001)
-        assert evidence["applied_structure_fraction"] <= .475 + .001
+        assert evidence["readiness_dose_factor"] == .975
+        assert evidence["fraction"] == pytest.approx(evidence["base_fraction"] * .975, abs=.0001)
+        assert evidence["requested_work_minutes"] / evidence["capacity_minutes"] == pytest.approx(.4875, abs=.0001)
+        assert evidence["applied_structure_fraction"] <= .4875 + .001
         assert any(b["kind"] == "WARMUP" for b in session["blocks"])
         assert any(b["kind"] == "COOLDOWN" for b in session["blocks"])
     assert_rolling_budgets(plan)
@@ -260,14 +263,14 @@ def test_z4_maintenance_can_fit_whole_profile_at_less_than_full_readiness(monkey
     assert session["purpose"] == "MAINTENANCE"
     evidence = session["dose_evidence"]
     assert evidence["maintenance_policy"]
-    assert evidence["base_fraction"] == .625
-    assert evidence["fraction"] == .5
-    assert evidence["readiness_dose_factor"] == .8
-    assert evidence["requested_primary_work_minutes"] == pytest.approx(6.)
-    assert session["main_work_minutes"] == 6.
-    assert [b["duration_min"] for b in session["blocks"] if b["kind"] == "WORK"] == [3., 3.]
-    assert [b["duration_min"] for b in session["blocks"] if b["kind"] == "RECOVERY"] == [3.]
-    assert evidence["applied_structure_fraction"] == .4
+    assert evidence["base_fraction"] == .75
+    assert evidence["fraction"] == .75
+    assert evidence["readiness_dose_factor"] == 1.
+    assert evidence["requested_primary_work_minutes"] == pytest.approx(9.)
+    assert session["main_work_minutes"] == 9.
+    assert [b["duration_min"] for b in session["blocks"] if b["kind"] == "WORK"] == [3., 3., 3.]
+    assert [b["duration_min"] for b in session["blocks"] if b["kind"] == "RECOVERY"] == [3., 3.]
+    assert evidence["applied_structure_fraction"] == .6
     assert evidence["applied_structure_fraction"] <= evidence["max_dose_fraction"] + .001
     assert_rolling_budgets(plan)
 

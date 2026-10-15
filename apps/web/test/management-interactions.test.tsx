@@ -61,10 +61,10 @@ it("distinguishes continuous doses from expert interval budgets and applies read
   expect(dose.value).toBe("65");
   expect(dose.min).toBe("60");
   expect(dose.max).toBe("70");
-  expect(container.textContent).toContain("поддържащата е точно 50% от изграждащата");
-  expect(container.textContent).toContain("Recovery 80% използваме поддържащите 32,5% × 0,80 = 26 минути");
-  expect(container.textContent).toContain("Изграждащата доза е 100% от този бюджет, поддържащата — 50%");
-  expect(container.textContent).toContain("Recovery намалява получения ролеви обем веднъж");
+  expect(container.textContent).toContain("поддържащата работа е 65 × 60% = 39 минути");
+  expect(container.textContent).toContain("Recovery 80% тя е 65 × 90% = 58,5 минути");
+  expect(container.textContent).toContain("Изграждащата доза е 100% от този бюджет, поддържащата — 60%");
+  expect(container.textContent).toContain("Развиващата доза намалява с половината от дефицита на Recovery");
   expect(container.textContent).toContain("Вработващата доза използва поддържащия бюджет");
   expect(container.textContent).not.toContain("Доза при вработване, %");
   expect(container.textContent).not.toContain("общият дял на профила е горна граница, а не начална доза");
@@ -77,13 +77,13 @@ it("derives maintenance and reentry immediately when the building dose changes a
   const fetchMock=vi.fn(async (_url,init)=>Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile}));vi.stubGlobal("fetch",fetchMock);
   await mount(<ManagementProfileEditor initialProfile={{configured:true,profile:{...profile,maintenance_fraction:.4,reentry_fraction:.5},revision:1}} today="2026-09-21"/>);
   await click(button("4. Методи и дозиране"));
-  expect(input("Непрекъснат метод · поддържаща и вработваща доза").value).toBe("32.5");
+  expect(input("Непрекъснат метод · поддържаща и вработваща доза").value).toBe("39");
   expect(input("Непрекъснат метод · поддържаща и вработваща доза").readOnly).toBe(true);
   await enter(input("Непрекъснат метод · изграждаща доза"),"68");
-  expect(input("Непрекъснат метод · поддържаща и вработваща доза").value).toBe("34");
+  expect(input("Непрекъснат метод · поддържаща и вработваща доза").value).toBe("40.8");
   await click(button("Запази промените"));
   expect(fetchMock).toHaveBeenCalledTimes(1);
-  expect(JSON.parse(fetchMock.mock.calls[0][1].body).profile).toMatchObject({building_fraction:.68,maintenance_fraction:.34,reentry_fraction:.34});
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).profile).toMatchObject({building_fraction:.68,maintenance_fraction:.68*.6,reentry_fraction:.68*.6});
 });
 
 const intervalProfile={zone:"Z4" as const,sport:"Run" as const,continuous_capacity_min:4,assessed_on:"2026-09-21",effort:"Повторяемо индивидуално усилие",work_seconds:30,recovery_seconds:30,min_repetitions:3,max_repetitions:12,total_capacity_ratio:4.25,reserve_repetitions:2,target_speed_kmh:null};

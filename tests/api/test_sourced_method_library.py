@@ -125,7 +125,7 @@ def test_power_reference_and_missing_cs_never_silently_become_speed():
 
 
 def test_continuous_recipe_uses_continuous_tmax_denominator(monkeypatch):
-    r=recipe();r["prescription"].update(anchor={"type":"CV"},speed_multiplier=[.95,.95],structure="CONTINUOUS",work={"unit":"seconds","range":[300,600]},repetitions=[1,1])
+    r=recipe();r["prescription"].update(anchor={"type":"CV"},speed_multiplier=[.95,.95],structure="CONTINUOUS",work={"unit":"seconds","range":[1200,2400]},repetitions=[1,1])
     m,e,settings=adapter(monkeypatch,r)
     blocks=engine._blocks(m,m["min_work_min"],e,settings)
     assert blocks
@@ -149,7 +149,7 @@ def test_library_minimum_uses_independent_continuous_tmax(monkeypatch):
 
 
 def test_disabling_automatic_intervals_keeps_library_continuous(monkeypatch):
-    r=recipe();r["prescription"].update(anchor={"type":"CV"},speed_multiplier=[.95,.95],structure="CONTINUOUS",work={"unit":"seconds","range":[300,600]},repetitions=[1,1])
+    r=recipe();r["prescription"].update(anchor={"type":"CV"},speed_multiplier=[.95,.95],structure="CONTINUOUS",work={"unit":"seconds","range":[1200,2400]},repetitions=[1,1])
     monkeypatch.setattr(lib,"entries",lambda:[r,recipe(id="INTERVAL")])
     p=athlete(planning_controls={"capacity_policy":"MODEL_WITH_PRIOR","automatic_intervals":False})
     methods=lib.executable_methods(p,view(),phase="SPECIAL_PREPARATION")

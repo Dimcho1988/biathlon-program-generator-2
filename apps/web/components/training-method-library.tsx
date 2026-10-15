@@ -1,4 +1,5 @@
 "use client";
+import { useManagementFetch } from "./management-scope";
 
 import Link from "next/link";
 import { useRef, useState, type FormEvent } from "react";
@@ -82,6 +83,7 @@ export function MethodCard({ method, override, canEdit, selected, onChange, onRe
 }
 
 export function TrainingMethodLibrary({ initial, athleteName, canEdit, selectedId = "" }: { initial: MethodLibraryResponse; athleteName: string; canEdit: boolean; selectedId?: string }) {
+  const scopedFetch = useManagementFetch();
   const [data, setData] = useState(initial);
   const [preferences, setPreferences] = useState<MethodPreferences>(initial.preferences);
   const [query, setQuery] = useState("");
@@ -102,7 +104,7 @@ export function TrainingMethodLibrary({ initial, athleteName, canEdit, selectedI
   const dirty = JSON.stringify(preferences) !== JSON.stringify(data.preferences);
 
   async function load(nextPhase = phase) {
-    const response = await fetch(`/api/athlete/management/methods${nextPhase ? `?phase=${encodeURIComponent(nextPhase)}` : ""}`, { cache: "no-store" });
+    const response = await scopedFetch(`/api/athlete/management/methods${nextPhase ? `?phase=${encodeURIComponent(nextPhase)}` : ""}`, { cache: "no-store" });
     const value: unknown = await response.json();
     if (!response.ok) throw new Error(isRecord(value) && typeof value.error === "string" ? value.error : "Методите не можаха да се обновят.");
     return parseMethodLibrary(value);
@@ -119,7 +121,7 @@ export function TrainingMethodLibrary({ initial, athleteName, canEdit, selectedI
     requestActive.current = true; setBusy(true); setError(""); setNotice(""); setConflict(false);
     try {
       const checked = parseMethodPreferences(preferences);
-      const response = await fetch("/api/athlete/management/methods/preferences", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: data.revision, preferences: checked }) });
+      const response = await scopedFetch("/api/athlete/management/methods/preferences", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: data.revision, preferences: checked }) });
       const value: unknown = await response.json();
       if (!response.ok) { setConflict(response.status === 409); throw new Error(isRecord(value) && typeof value.error === "string" ? value.error : "Настройките не бяха записани."); }
       if (!isRecord(value) || !Number.isSafeInteger(value.revision)) throw new Error("Записът е изпратен, но потвърждението липсва. Зареди последната версия преди нов запис.");

@@ -1,3 +1,4 @@
+import { ManagementScope } from "../../components/management-scope";
 import { currentAuthorizedAthlete } from "../../lib/account-access";
 import { fetchApiResource } from "../../lib/api";
 import { parseMethodLibrary, type MethodLibraryResponse } from "../../lib/method-library";
@@ -20,5 +21,5 @@ export default async function MethodsPage({ searchParams }: { searchParams: Prom
     return <ErrorState message={caught instanceof Error ? caught.message : "Базата от методи временно не е достъпна."} retryAvailable retryHref="/methods"/>;
   }
   const query = await searchParams;
-  return <TrainingMethodLibrary key={`${access.athleteAlias}:${query.method ?? ""}`} initial={data} athleteName={access.displayName} canEdit={access.canEditPlan} selectedId={query.method ?? ""}/>;
+  return <ManagementScope key={`${access.actorUserId}:${access.athleteAlias}`} athleteAlias={access.athleteAlias} actorUserId={access.actorUserId}><TrainingMethodLibrary key={`${access.athleteAlias}:${query.method ?? ""}`} initial={data} athleteName={access.displayName} canEdit={access.canEditPlan} selectedId={query.method ?? ""}/></ManagementScope>;
 }

@@ -3,7 +3,7 @@
 The daily worker and post-sync hook share this idempotent service. A paused plan
 cannot be restarted by a worker. Missing load coverage never means a rest day.
 """
-from biathlon.planning_schedule import day_sessions, day_totals
+from biathlon.planning_schedule import day_sessions, day_totals, horizon
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -32,7 +32,8 @@ def _context(repository, alias, now):
     # changes. New dosing rules, physiology or Recovery settings need approval.
     critical = {k: frozen[k] for k in ("physiology", "rule_versions", "management_profile", "profile_revision")}
     critical["recovery"] = [e for e in frozen["model_entries"] if e["kind"] == "RECOVERY"]
-    return stored["revision"], profile, frozen, _hash(frozen), _hash(critical)
+    resolved, _ = horizon(profile, (state.get("calendar") or {}).get("events", []))
+    return stored["revision"], resolved, frozen, _hash(frozen), _hash(critical)
 
 
 def _require_revision(record, expected):
@@ -56,11 +57,13 @@ def current(repository, alias, *, now=None):
     if record is None:
         return {"active": None, "history": []}
     now = now or datetime.now(timezone.utc)
-    _, _, _, fingerprint, _ = _context(repository, alias, now)
+    _, profile, _, fingerprint, _ = _context(repository, alias, now)
     stale = record["payload"].get("processed_input_fingerprint") != fingerprint
+    extended_completed = (record["payload"]["status"] == "COMPLETED"
+        and date.fromisoformat(profile["program_end"]) > date.fromisoformat(record["payload"].get("evaluated_on", profile["program_end"])))
     return {"active": {**record, "stale": stale,
                        "actionable": record["payload"]["status"] == "ACTIVE" and not stale,
-                       "stale_reason": "Нови данни очакват преизчисление. Изчакайте обновяването или изберете „Обнови сега“." if stale else None},
+                       "stale_reason": "Календарът продължава след приключения план. Прегледайте и създайте нов проект; планът не се активира автоматично." if extended_completed else "Нови данни очакват преизчисление. Изчакайте обновяването или изберете „Обнови сега“." if stale else None},
             "history": store.history(alias)}
 
 
@@ -268,7 +271,7 @@ def run_due(repository, *, now=None):
     import logging
     now = now or datetime.now(timezone.utc)
     store = PlanStore(repository)
-    rows = store.due(now)
+    rows = store.due(now)[:1]  # Yield to the import queue after one planning task.
     for row in rows:
         try:
             store.queue_import(row["athlete_alias"])
