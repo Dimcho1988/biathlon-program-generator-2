@@ -297,9 +297,9 @@ class ManagementProfile(BaseModel):
     max_key_sessions_per_week: int = Field(default=2, ge=0, le=8)
     building_fraction: float = Field(default=.65, ge=.6, le=.7)
     maintenance_fraction: float = Field(default=.39, ge=.3, le=.42,
-        description="Derived as half of building_fraction before the single Recovery adjustment.")
+        description="Derived as 60% of building_fraction, without another Recovery multiplier.")
     reentry_fraction: float = Field(default=.39, ge=.3, le=.42,
-        description="Derived as half of building_fraction, identical to the maintenance role.")
+        description="Derived as 60% of building_fraction, identical to the maintenance role.")
     recovery_session_cap_min: float = Field(default=30, ge=5, le=45)
     allow_expert_fallback: bool = True
     # New optional fields preserve stored v1 profiles. The activation freezes
