@@ -34,7 +34,7 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 
 VERSION = "training-management-v43-final-audit"
-PARAMETER_VERSION = "management-parameters-v39"
+PARAMETER_VERSION = "management-parameters-v40"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {

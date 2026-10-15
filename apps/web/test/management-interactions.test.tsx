@@ -180,7 +180,7 @@ it("saves 16 sessions and double-threshold preferences directly from step two", 
   await enter(input("Пауза между праговите сесии"), "7");
   await enter(input("Лактатен горен ориентир"), "3.2");
   expect(container.textContent).not.toContain("Минимална готовност за допълващия компонент");
-  expect(container.textContent).toContain("дава 15–17,5%");
+  expect(container.textContent).toContain("65% × 60% = 39% от Tmax");
   await click(button("Запази промените"));
   expect(fetchMock).toHaveBeenCalledTimes(1);
   const saved=JSON.parse(fetchMock.mock.calls[0][1].body).profile;

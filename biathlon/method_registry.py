@@ -8,7 +8,7 @@ from hashlib import sha256
 import json
 from . import method_library, training_methods, race_specific
 
-VERSION = 'method-registry-v1'
+VERSION = 'method-registry-v2-role-guidance'
 COMBINED_STRUCTURES = {'ALTERNATING', 'CRUISE_ALTERNATING', 'THRESHOLD_HIGH', 'AEROBIC_STRENGTH', 'AEROBIC_SUPPORT', 'MIXED_AEROBIC'}
 
 
@@ -25,8 +25,8 @@ def coach_card(method):
             'recovery': ('Запази предписаните паузи и резерв от качествени повторения. Почивката не увеличава автоматично дозовия бюджет.' if interval else 'Работата е контролирана; загрявката, разпускането и преходите се отчитат в общия товар.'),
             'success': 'Изпълни предписаното усилие с равномерен ритъм и запазена техника. Потвърди реалното изпълнение към активността.',
             'errors': 'Не ускорявай, за да достигнеш пулсово число, и не добавяй работа само за да запълниш свободното време.',
-            'adjustment': 'Под 50% Recovery целевата работа над Z1 отпада. От 50% до 90% включително се използва половината развиващ бюджет; след това Recovery го намалява веднъж.',
-            'progression': 'Поддържащата работа може да подготви следваща развиваща сесия. Увеличение е допустимо след успешно изпълнение и Recovery над 90%; календарът сам не доказва готовност.'},
+            'adjustment': 'Под 50% Recovery целевата работа над Z1 отпада. Ролята следва тренировъчната цел. Поддържащата работа е 60% от методния бюджет без допълнителен Recovery множител. Развиващата доза намалява с половината от дефицита на Recovery.',
+            'progression': 'Поддържащата работа може да подготви следваща развиваща сесия. Увеличението изисква успешно изпълнение и допустими доза, общ товар и възстановяване. 90% Recovery не е задължителен праг; календарът сам не доказва готовност.'},
         'coach_profile': {'zone': method['zone'], 'structure': method['structure'],
             'purpose': method['purpose'], 'dose_policy': deepcopy(method.get('dose_policy')),
             'interval': deepcopy(interval), 'work_minutes': [method['min_work_min'], method['max_work_min']]}}
