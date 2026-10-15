@@ -153,9 +153,17 @@ class TokenCipher:
 class SupabasePilotRepository(SnapshotRepository):
     """Minimal PostgREST client using a server-only Supabase secret key."""
 
+    def planning_computation(self, alias, key, token, operation, result=None):
+        value = self._json(self._request("POST", "/rpc/onflows_planning_computation", json={
+            "p_alias": alias, "p_key": key, "p_token": token,
+            "p_operation": operation, "p_result": result}))
+        if not isinstance(value, dict):
+            raise PersistentStoreFailure("Invalid computation response")
+        return value
+
     def adapt_training_plan(self, athlete_alias):
-        from .management_lifecycle import refresh
-        return refresh(self, athlete_alias, automatic=True)
+        # Publication succeeded. Planning has its own bounded worker lane.
+        self._request("POST", "/rpc/request_onflows_management_check", json={"p_alias": athlete_alias})
 
     def refresh_due_training_plans(self):
         from .management_lifecycle import run_due

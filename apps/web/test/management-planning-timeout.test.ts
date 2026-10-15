@@ -7,7 +7,7 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("../lib/api-readiness", () => ({ waitForApi: vi.fn() }));
 
 function send(path: string, body: Record<string, unknown>) {
-  return POST(new Request(`https://web.test/api/athlete/management/${path}`, {
+  return POST(scopedRequest(`https://web.test/api/athlete/management/${path}`, {
     method: "POST", headers: { Origin: "https://web.test", "Content-Type": "application/json" },
     body: JSON.stringify(body),
   }), { params: Promise.resolve({ path: [path] }) });
@@ -70,3 +70,9 @@ it("retains the ordinary deadline for an action that does not calculate a plan",
   expect((await pending).status).toBe(503);
   expect(fetch).toHaveBeenCalledTimes(1);
 });
+
+function scopedRequest(input: string | URL | Request, init?: RequestInit) {
+  const headers = new Headers(init?.headers);
+  headers.set("X-Onflows-Athlete", "test-athlete"); headers.set("X-Onflows-Actor", "test-actor");
+  return new Request(input, { ...init, headers });
+}

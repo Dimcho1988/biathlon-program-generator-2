@@ -293,8 +293,8 @@ def test_full_planner_generates_whole_z5_dose_from_single_long_anchor_with_long_
     assert evidence["capacity_reference"] == "BOUNDARY_HALF_TMAX_MAX600"
     assert evidence["supported_test_duration_s"] == [1050., 1050.]
     assert "test_anchor" not in evidence
-    assert evidence["base_fraction"] == 1.5 and evidence["readiness_dose_factor"] == .95
-    assert evidence["requested_primary_work_minutes"] / evidence["capacity_minutes"] == pytest.approx(1.5*.95, abs=.0001)
+    assert evidence["base_fraction"] == 1.5 and evidence["readiness_dose_factor"] == .975
+    assert evidence["requested_primary_work_minutes"] / evidence["capacity_minutes"] == pytest.approx(1.5*.975, abs=.0001)
     assert evidence["target_speed_kmh"] > evidence["boundary_speed_kmh"]
     work = [b for b in session["blocks"] if b["kind"] == "WORK"]
     template = evidence["effort_profile"]

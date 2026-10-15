@@ -1,4 +1,5 @@
 "use client";
+import { useManagementFetch } from "./management-scope";
 import { durationHms } from "../lib/duration-format";
 import { useState } from "react";
 import { isRecord } from "../lib/training-status";
@@ -12,11 +13,12 @@ export function RaceDurationSummary({value}: {value: unknown}) {
     {bands.length>0&&<details><summary>Темпо и лактат около състезателната дисциплина</summary><div className="management-table-wrap"><table><thead><tr><th>Работен ориентир</th><th>Скорост</th><th>Темпо / км</th><th>Лактат по личния тест</th></tr></thead><tbody>{bands.map(b=>{const la=isRecord(b.lactate_reference)?b.lactate_reference:null;const seconds=typeof b.pace_seconds_km==="number"?Math.round(b.pace_seconds_km):null;return <tr key={String(b.role)}><th>{String(b.label)}</th><td>{typeof b.speed_kmh==="number"?`${n(b.speed_kmh)} км/ч`:"—"}</td><td>{seconds==null?"—":`${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,"0")}`}</td><td>{la&&typeof la.estimated_mmol==="number"?lactateRangeText({low_mmol:la.estimated_mmol,high_mmol:la.estimated_mmol}):"Няма измерена опора при тази скорост"}</td></tr>;})}</tbody></table></div><p>Скоростите са ориентири за избора на метод. Продължителността на отсечките, почивките и общата доза се определят отделно. Лактатните стойности се отнасят за протокола на личния тест.</p></details>}</>;
 }
 export function RaceDurationEstimate({sport, discipline, fallback}: {sport: string; discipline: string; fallback: number | null}) {
+  const scopedFetch = useManagementFetch();
   const [result, setResult] = useState<unknown>(null), [busy, setBusy] = useState(false), [error, setError] = useState("");
   async function estimate() {
     setBusy(true); setError(""); setResult(null);
     try {
-      const response = await fetch("/api/athlete/management/race-duration", {method: "POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({sport,discipline,race_duration_min:fallback})});
+      const response = await scopedFetch("/api/athlete/management/race-duration", {method: "POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({sport,discipline,race_duration_min:fallback})});
       const value: unknown = await response.json();
       if (!response.ok || !isRecord(value)) throw new Error("Оценката временно не е достъпна. Можеш да въведеш приблизително време ръчно.");
       setResult(value);

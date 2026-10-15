@@ -21,7 +21,7 @@ def proven_shortage(monkeypatch):
         "available_sessions": 1, "basis": "TEST_PROVEN_SLOT_SHORTAGE"})
 
 
-@pytest.mark.parametrize('recovery,role,fraction', [(49.99,'NONE',0), (50,'MAINTENANCE',.1625), (90,'MAINTENANCE',.2925), (90.01,'BUILDING',.585065), (100,'BUILDING',.65)])
+@pytest.mark.parametrize('recovery,role,fraction', [(49.99,'NONE',0), (50,'BUILDING',.4875), (90,'BUILDING',.6175), (90.01,'BUILDING',.6175325), (100,'BUILDING',.65)])
 def test_role_boundaries_are_inclusive_and_apply_recovery_once(recovery, role, fraction):
     method = {'zone':'Z2','structure':'CONTINUOUS'}
     policy = adaptive_methods.readiness_policy(method, {}, {'Z1':100., 'Z2':recovery})
@@ -117,7 +117,7 @@ def parents():
         'min_work_min':1.,'max_work_min':100.,'warmup_min':10.,'cooldown_min':5.,'instructions':'Steady'} for z in ('Z3','Z2')]
 
 
-@pytest.mark.parametrize('recovery,expected',[ (100.,32.5),(80.,13.) ])
+@pytest.mark.parametrize('recovery,expected',[ (100.,32.5),(80.,29.) ])
 def test_combination_halves_each_own_role_budget_then_scales_once(recovery,expected):
     shortage=combined_methods.shortage({'Z3':65.,'Z2':65.},{'Z3':65.,'Z2':65.},1)
     _,method=combined_methods.candidates([('Run',m) for m in parents()],shortage)[0]

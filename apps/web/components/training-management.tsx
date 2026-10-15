@@ -1,4 +1,5 @@
 "use client";
+import { useManagementFetch } from "./management-scope";
 import { lactateRangeText } from "../lib/training-observations";
 
 import Link from "next/link";
@@ -30,7 +31,7 @@ const number = (value: unknown, digits = 1) => typeof value === "number" && Numb
 const dateLabel = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString("bg-BG", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 const datePlus = (day: string, days: number) => { const value = new Date(`${day}T12:00:00Z`); value.setUTCDate(value.getUTCDate() + days); return value.toISOString().slice(0, 10); };
 const STATUS_LABELS: Record<string, string> = { TRAINING: "Тренировка", REST: "Почивка", EXISTING_ACTIVITY: "Има изпълнена активност", UNAVAILABLE: "Няма свободно време", RACE: "Състезание", REVIEW_REQUIRED: "Нужен е преглед", SKIPPED: "Пропусната тренировка" };
-const LIMIT_LABELS: Record<string, string> = { LONG_TERM_QUALITY_PREPARATION: "Запазен товар за следващите основни задачи", FUTURE_QUALITY_RESERVATION_WORK_CAP: "Резерв за бъдеща основна или силова тренировка", SUPPLEMENTARY_DOSE_CAP: "Дозов лимит на допълващия компонент според готовността", DEVELOPMENTAL_DOSE_CAP: "Дозов лимит на краткия въвеждащ вариант", COMPLETE_DOSE_ALLOCATION: "Разпределение в цели сесии над минималната доза", ROLLING_Q_AND_7_40_BUDGET: "Оставащ обем и товар от дългосрочната цел", WHOLE_STRUCTURE_DOSE_FRACTION: "Общ дозов таван за всички работни части", COMPONENT_SLOT_ALLOCATION: "Разпределен товар за тази сесия", TECHNICAL_SESSION_CEILING: "Техническа граница на сесията, не оценка на свободното време", ACTUAL_SPORT_EXPOSURE: "Историческа поносимост за конкретното средство", ACTUAL_SPORT_SESSION_EXPOSURE: "Най-дълга скорошна сесия за това средство × вълна", RESERVE_LONG_SESSION_TIME: "Запазено време за дългата тренировка", METHOD_WORK_CAP: "Максимална основна работа за метода", DAILY_AVAILABLE_WORK: "Оставащо време след загрявка и разпускане", REMAINING_WEEKLY_WORK: "Оставащ седмичен обем за основна работа", LOW_ABSOLUTE_RECOVERY_CAP: "Лимит на възстановителната работа", TAPER_DAILY_WORK_CAP: "Лимит за предсъстезателно разтоварване", ROLLING_7_40_COMPONENT_BUDGET: "Оставащ товар за текущия микроцикъл", RACE_DURATION_WORK_CAP: "Граница според дисциплината", RESERVE_KEY_SESSION_TIME: "Запазено време за ключовите сесии" };
+const LIMIT_LABELS: Record<string, string> = { ALTERNATIVE_EASY_ALLOCATION: "Преразпределение за покриване на акцентната цел", LONG_TERM_QUALITY_PREPARATION: "Запазен товар за следващите основни задачи", FUTURE_QUALITY_RESERVATION_WORK_CAP: "Резерв за бъдеща основна или силова тренировка", SUPPLEMENTARY_DOSE_CAP: "Дозов лимит на допълващия компонент според готовността", DEVELOPMENTAL_DOSE_CAP: "Дозов лимит на краткия въвеждащ вариант", COMPLETE_DOSE_ALLOCATION: "Разпределение в цели сесии над минималната доза", ROLLING_Q_AND_7_40_BUDGET: "Оставащ обем и товар от дългосрочната цел", WHOLE_STRUCTURE_DOSE_FRACTION: "Общ дозов таван за всички работни части", COMPONENT_SLOT_ALLOCATION: "Разпределен товар за тази сесия", TECHNICAL_SESSION_CEILING: "Техническа граница на сесията, не оценка на свободното време", ACTUAL_SPORT_EXPOSURE: "Историческа поносимост за конкретното средство", ACTUAL_SPORT_SESSION_EXPOSURE: "Най-дълга скорошна сесия за това средство × вълна", RESERVE_LONG_SESSION_TIME: "Запазено време за дългата тренировка", METHOD_WORK_CAP: "Максимална основна работа за метода", DAILY_AVAILABLE_WORK: "Оставащо време след загрявка и разпускане", REMAINING_WEEKLY_WORK: "Оставащ седмичен обем за основна работа", LOW_ABSOLUTE_RECOVERY_CAP: "Лимит на възстановителната работа", TAPER_DAILY_WORK_CAP: "Лимит за предсъстезателно разтоварване", ROLLING_7_40_COMPONENT_BUDGET: "Оставащ товар за текущия микроцикъл", RACE_DURATION_WORK_CAP: "Граница според дисциплината", RESERVE_KEY_SESSION_TIME: "Запазено време за ключовите сесии" };
 const FALLBACK_LABELS: Record<string, string> = {
   NO_INDIVIDUAL_SPEED_CURVE: "Все още няма индивидуално калибрирана крива скорост–време.",
   EXPLORATORY_OR_NONMAXIMAL_TESTS: "Наличните тестове са ориентировъчни или не са максимални.",
@@ -79,7 +80,7 @@ function SingleSessionCard({ day, expanded = false }: { day: DraftDay; expanded?
         <p className="management-muted">Метод: {session.method_id} · Версия на оценката: {evidence.model_version}</p>
       </>}
       <h4>Готовност и натрупано натоварване</h4>
-      <p className="management-muted">Готовността след задачата е прогноза. Липсващата оценка е показана с „—“. Първо се определя ролята: под 50% готовност се допуска само Z1; от 50% до 90% включително работата е поддържаща. При Tmax 100 минути и развиващ дял 65% поддържащата доза е половината: 32,5 минути. При готовност 80% тя става 32,5 × 0,8 = 26 минути. Recovery намалява ролевата доза веднъж според най-слабо възстановения необходим компонент. При комбинация всяка част започва от половината от собствения си ролеви бюджет. Преливането се отчита в 7/40 и прогнозата за възстановяване, без повторно ограничаване на дозата на отделния метод. Загрявката и общият товар се проверяват отделно.</p>
+      <p className="management-muted">Ролята следва тренировъчната цел. При Tmax 100 минути и методен дял 65% поддържащата работа е 65 × 60% = 39 минути, без допълнително намаление по Recovery. Развиващата доза използва половината от дефицита: при Recovery 80% тя е 65 × 90% = 58,5 минути. Под 50% Recovery не се допуска целева работа над Z1. Комбинираните части използват половината от собствения си ролеви бюджет. Целите повторения, загрявката, времето и общият товар се проверяват отделно.</p>
       {segmentBudget?.long_term_window_start && segmentBudget.long_term_window_end && <p className="management-muted">Оставащата доза следва дългосрочната цел за {dateLabel(segmentBudget.long_term_window_start)} – {dateLabel(segmentBudget.long_term_window_end)}. Натрупаното за 7 дни и индексът 7/40 описват общия товар от историята и предложените задачи.</p>}
       <div className="management-table-wrap"><table><thead><tr><th>Компонент</th><th>Преди</th><th>След</th><th>7/40</th><th>Натрупано за 7 дни*</th><th>{segmentBudget ? "Цел за отрязъка*" : "Цел за 7 дни*"}</th><th>Оставащ товар*</th>{segmentBudget && <th>Оставащ пряк обем**</th>}</tr></thead><tbody>{COMPONENTS.map(zone => {
         const budget = day.load_budget.components[zone];
@@ -97,16 +98,18 @@ function DayCard({ day, expanded = false }: { day: DraftDay; expanded?: boolean 
     <SingleSessionCard key={index} day={{...day, session, explanation: "Сесия "+(index+1)+" от "+sessions.length+". "+day.explanation}} expanded={expanded}/>)}</section>;
 }
 
-async function requestJson(path: string, method: "GET" | "PUT" | "POST", body?: unknown, signal?: AbortSignal) {
-  const response = await fetch(`/api/athlete/management/${path}`, { method, signal, cache: "no-store", headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  const value: unknown = await response.json();
-  if (!response.ok) throw new Error(isRecord(value) && typeof value.error === "string" ? value.error : "Неуспешна заявка.");
-  return value;
-}
 
 export function TrainingManagement({ initialView = "week", initialOutlook = null, athleteName, canEdit, initialProfile, initialDrafts, initialActive = { active: null, history: [] }, initialSyncState = null, syncError = false, today }: {
   initialOutlook?: ManagementOutlook | null; initialView?: "week" | "overview"; athleteName: string; canEdit: boolean; initialProfile: ManagementProfileResponse; initialDrafts: DraftRecord[]; initialActive?: ActivePlanResponse; initialSyncState?: SyncState | null; syncError?: boolean; today: string;
 }) {
+  const scopedFetch = useManagementFetch();
+  const requestJson = useCallback(async (path: string, method: "GET" | "PUT" | "POST", body?: unknown, signal?: AbortSignal) => {
+  const response = await scopedFetch(`/api/athlete/management/${path}`, { method, signal, cache: "no-store", headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const value: unknown = await response.json();
+  if (!response.ok) throw new Error(isRecord(value) && typeof value.error === "string" ? value.error : "Неуспешна заявка.");
+  return value;
+}, [scopedFetch]);
+
   const [active, setActive] = useState(initialActive);
   const saved = initialProfile;
   const [drafts, setDrafts] = useState(initialDrafts);
@@ -162,7 +165,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     };
     timer = setTimeout(refresh, 60_000);
     return () => { cancelled = true; clearTimeout(timer); request?.abort(); };
-  }, [initialView, receiveActive, active.active?.revision, active.active?.stale]);
+  }, [initialView, receiveActive, active.active?.revision, active.active?.stale, requestJson]);
 
   async function activateDraft() {
     if (!draft) return;
@@ -185,7 +188,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
       setNotice(record.payload.status === "BLOCKED" ? "Нужна е още една стъпка. Виж указанието по-долу." : "Програмата е подготвена. Прегледай я преди започване.");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Програмата не беше създадена."); }
     finally { setBusy(null); }
-  }, [saved.revision, startDate]);
+  }, [saved.revision, startDate, requestJson]);
 
   async function generate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -200,7 +203,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
       void Promise.resolve().then(async () => {
         if (!beginActiveChange()) return;
         try {
-          const result = await changeActivePlan("action", {action: "REFRESH", expected_revision: current.revision});
+          const result = await changeActivePlan("action", {action: "REFRESH", expected_revision: current.revision}, scopedFetch);
           receiveActive(result.value);
           setNotice(result.conflict ? PLAN_CHANGED_NOTICE : "Програмата е преизчислена. Прегледай предложението и ограниченията по-долу.");
         } catch (caught) { setError(caught instanceof Error ? caught.message : "Обновяването не завърши."); }
@@ -210,7 +213,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
       refreshed.current = true;
       void Promise.resolve().then(prepare);
     }
-  }, [active, busy, canEdit, draft, guidance.step, initialView, prepare, saved.configured, beginActiveChange, endActiveChange, receiveActive]);
+  }, [active, busy, canEdit, draft, guidance.step, initialView, prepare, saved.configured, beginActiveChange, endActiveChange, receiveActive, scopedFetch]);
 
   function exportDraft() {
     if (!draft) return;

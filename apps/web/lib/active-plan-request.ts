@@ -9,12 +9,12 @@ export function newerActivePlan(current: ActivePlanResponse, next: ActivePlanRes
 
 // A conflict reloads the current proposal. Never replay approval/day actions
 // against a revision the coach has not reviewed.
-export async function changeActivePlan(endpoint: string, body: Record<string, unknown>) {
-  const response = await fetch(`/api/athlete/management/${endpoint}`, {
+export async function changeActivePlan(endpoint: string, body: Record<string, unknown>, request: typeof fetch = fetch) {
+  const response = await request(`/api/athlete/management/${endpoint}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   if (response.status === 409) {
-    const latest = await fetch("/api/athlete/management/active", { cache: "no-store", signal: AbortSignal.timeout(75_000) });
+    const latest = await request("/api/athlete/management/active", { cache: "no-store", signal: AbortSignal.timeout(75_000) });
     if (!latest.ok) throw new Error("Програмата е променена, но последната версия не се зареди. Презареди страницата преди следващо действие.");
     return { value: parseActivePlanResponse(await latest.json()), conflict: true };
   }

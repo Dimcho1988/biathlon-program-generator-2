@@ -177,8 +177,8 @@ def test_half_ready_strength_produces_one_complete_circuit_with_accounted_q_and_
     assert sessions
     day, session = sessions[0]
     assert session["method_id"] == m["id"]
-    assert session["dose_evidence"]["readiness_dose_factor"] == .5
-    assert session["dose_evidence"]["requested_primary_work_minutes"] == 3.
+    assert session["dose_evidence"]["readiness_dose_factor"] == .75
+    assert session["dose_evidence"]["requested_primary_work_minutes"] == 4.5
     work = [b for b in session["blocks"] if b["kind"] == "WORK" and b["zone"] == "STR"]
     transitions = [b for b in session["blocks"] if b["kind"] == "TRANSITION"]
     assert len(work) == 9 and len(transitions) == 8

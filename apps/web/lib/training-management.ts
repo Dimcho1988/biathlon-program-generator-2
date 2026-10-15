@@ -148,6 +148,8 @@ export interface AllocationReport {
   components: Partial<Record<Component, ComponentAllocation>>; segments?: AllocationSegment[];
   scheduled_slots?: number; weekly_session_limit?: number; planned_sessions?: number; planned_minutes?: number;
   has_unallocated_load?: boolean; requires_catchup?: boolean;
+  strength_feasibility?: { desired_q: number; attainable_upper_bound_q: number; session_quota: number; quota_bound_below_target: boolean };
+  search?: { conclusion: string; alternatives: number; improved: boolean; hard_limit_proven: boolean };
   constraints: Array<{ code: string; reason: string; days?: string[]; evaluated_alternatives?: number }>;
   dose_limits: string[];
 }
@@ -209,7 +211,7 @@ function normalizeBuildingFraction(value: unknown): unknown {
 export function withContinuousDoseFractions(profile: ManagementProfile): ManagementProfile {
   const building = normalizeBuildingFraction(profile.building_fraction);
   if (!finite(building)) return profile;
-  return { ...profile, building_fraction: building, maintenance_fraction: building / 2, reentry_fraction: building / 2 };
+  return { ...profile, building_fraction: building, maintenance_fraction: building * .6, reentry_fraction: building * .6 };
 }
 
 export function parseManagementProfile(value: unknown): ManagementProfile {
@@ -232,14 +234,14 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     || !(value.reentry_days === null || integer(value.reentry_days, 0, 21))
     || !integer(value.taper_days, 0, 21) || !integer(value.max_key_sessions_per_week, 0, 8)
     || !range(buildingFraction, .6, .7)
-    || (value.maintenance_fraction !== undefined && !range(value.maintenance_fraction, .3, .4))
+    || (value.maintenance_fraction !== undefined && !range(value.maintenance_fraction, .3, .42))
     || (value.reentry_fraction !== undefined && !range(value.reentry_fraction, .3, .5))
     || !range(value.recovery_session_cap_min, 5, 45) || typeof value.allow_expert_fallback !== "boolean") {
     throw new Error("Проверете датите, наличното време и параметрите на профила.");
   }
   const normalized: Record<string, unknown> = { adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, component_targets_weekly: {},
     horizon_mode: "AUTO_CALENDAR", interval_profiles: [], strength_enabled: false, strength_circuits: 2, transition_days: 0, ...value,
-    building_fraction: buildingFraction, maintenance_fraction: buildingFraction / 2, reentry_fraction: buildingFraction / 2 };
+    building_fraction: buildingFraction, maintenance_fraction: buildingFraction * .6, reentry_fraction: buildingFraction * .6 };
   if (isRecord(value.planning_controls) && typeof value.planning_controls.double_threshold_fraction === "number" && value.planning_controls.double_threshold_fraction >= .25 && value.planning_controls.double_threshold_fraction < .5) {
     normalized.planning_controls = {...value.planning_controls, double_threshold_fraction: .5};
   }
@@ -409,7 +411,7 @@ export function defaultManagementProfile(today: string): ManagementProfile {
     age_years: null, training_experience_years: null, race_duration_min: null,
     horizon_mode: "AUTO_CALENDAR", program_start: today, program_end: end.toISOString().slice(0, 10), available_minutes: [60, 60, 60, 60, 60, 90, 0], availability_mode: "AUTO_HISTORY", training_days: [0,1,2,3,4,5,6],
     recent_weekly_hours: null, reentry_days: null, taper_days: 7, max_key_sessions_per_week: 2,
-    building_fraction: .65, maintenance_fraction: .325, reentry_fraction: .325,
+    building_fraction: .65, maintenance_fraction: .39, reentry_fraction: .39,
     recovery_session_cap_min: 30, allow_expert_fallback: true,
     adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, load_progression: defaultLoadProgression(), individual_learning: defaultIndividualLearning(), component_targets_weekly: {}, interval_profiles: [],
     strength_enabled: false, strength_circuits: 2, transition_days: 0,

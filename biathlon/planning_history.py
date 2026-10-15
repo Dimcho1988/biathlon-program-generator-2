@@ -88,3 +88,18 @@ def reentry(profile, evidence):
     if evidence.get("history_policy", {}).get("usable"):
         return 0, "CONTINUING_OBSERVED_TRAINING"
     return None, "SHORT_OR_INTERRUPTED_HISTORY"
+
+
+def recovery_coverage(source, today):
+    """Bounded metadata check; never fills unknown days with zero load."""
+    start = today-timedelta(days=40)
+    end = today-timedelta(days=1)
+    expected = {(start+timedelta(days=i)).isoformat() for i in range(max(0,(end-start).days+1))}
+    per_zone = [{r["date"] for r in source.get("daily", []) if r["zone"] == z} for z in COMPONENTS[:5]]
+    covered = set.intersection(*per_zone)
+    missing = len(expected-covered)
+    quality = source.get("quality") or {}
+    partial = sum(int(quality.get(k) or 0) for k in ("limited_activities", "excluded_activities"))
+    return {"complete": bool(expected) and not missing and not partial,
+            "missing_days": missing, "partial_activities": partial,
+            "expected_days": len(expected), "covered_days": len(expected & covered)}

@@ -259,7 +259,7 @@ def resolved_methods(profile):
                                       "total_capacity_ratio": ratio, "rest_type": "ACTIVE_Z1",
                                       "dose_status": "VERSIONED_COACH_DEFAULT_NOT_VALIDATED_NORM"},
                 "instructions": "Силно, но повторяемо усилие; без спринт или финал до отказ. Остави резерв за още две качествени отсечки. Запази ритъма и техниката; прекрати при разпадането им. Не ускорявай, за да достигнеш пулсово число.",
-                "adaptation": "Отделни onFlows профили v2: Z4 — 3–6 × 3 min / 3 min, общ работен бюджет до 1,2 от непрекъснатия капацитет; Z5 — 6–20 × 30 s / 30 s, до 1,5. Това са конкретни начални треньорски настройки, не универсални множители или научно валидирани норми. Изграждането използва 100% от този бюджет, поддържането — 50%, след което Recovery намалява обема веднъж. Цели повторения, почивки, резерв и всички бюджети се проверяват съвместно. Индивидуалният профил замества тези настройки."})
+                "adaptation": "Отделни onFlows профили v2: Z4 — 3–6 × 3 min / 3 min, общ работен бюджет до 1,2 от непрекъснатия капацитет; Z5 — 6–20 × 30 s / 30 s, до 1,5. Това са конкретни начални треньорски настройки, не универсални множители или научно валидирани норми. Изграждането използва 100% от този бюджет, поддържането — 60% без Recovery множител. Развиващата доза намалява с половината от дефицита на Recovery. Цели повторения, почивки, резерв и всички бюджети се проверяват съвместно. Индивидуалният профил замества тези настройки."})
     methods.extend(_bounded_variants(methods))
     if adaptive_methods.developmental(profile):
         methods = [adaptive_methods.short_variant(m) if m["structure"] in {"MODEL_INTERVALS", "METABOLIC_INTERVALS"}
@@ -278,18 +278,18 @@ def resolved_methods(profile):
     for method in methods:
         interval = (method.get("interval_template") if method["structure"] == "MODEL_INTERVALS"
                     else method.get("interval_profile") if method["structure"] == "METABOLIC_INTERVALS" else None)
-        method["dosing_policy"] = ({"version": "expert-method-role-budget-v1",
+        method["dosing_policy"] = ({"version": "expert-method-role-budget-v2",
             "capacity_basis": "CONTINUOUS_TMAX_AT_PRESCRIBED_EFFORT",
             "total_capacity_ratio": interval["total_capacity_ratio"],
             "speed_time_duration_ratio": interval.get("speed_time_duration_ratio"),
-            "building_budget_fraction": 1., "maintenance_budget_fraction": .5,
-            "recovery_adjustment": "MULTIPLY_VOLUME_ONCE",
+            "building_budget_fraction": 1., "maintenance_budget_fraction": .6,
+            "recovery_adjustment": "BUILDING_HALF_DEFICIT_MAINTENANCE_FIXED",
             "profile_source": "EXPLICIT_COACH_PROFILE" if method["structure"] == "METABOLIC_INTERVALS" else "EXISTING_VERSIONED_COACH_DEFAULT"}
-            if interval else {"version": "continuous-role-budget-v2",
+            if interval else {"version": "continuous-role-budget-v3",
                 "capacity_basis": "CONTINUOUS_TMAX_AT_PRESCRIBED_EFFORT",
                 "building_fraction": continuous_building_fraction(profile),
                 "maintenance_fraction": continuous_maintenance_fraction(profile),
-                "recovery_adjustment": "MULTIPLY_VOLUME_ONCE"}
+                "recovery_adjustment": "BUILDING_HALF_DEFICIT_MAINTENANCE_FIXED"}
             if method["zone"] != "STR" else {"version": "strength-method-profile-v1", "capacity_basis": "STRENGTH_PROFILE"})
         method["method_family"] = method_family(method)
         method["method_family_version"] = VARIETY_VERSION

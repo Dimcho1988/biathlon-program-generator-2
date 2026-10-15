@@ -1,3 +1,4 @@
+import { ManagementScope } from "../../components/management-scope";
 import { getManagementView } from "../../lib/management-server";
 import type { SyncState } from "../../lib/sync";
 import { currentAuthorizedAthlete } from "../../lib/account-access";
@@ -26,6 +27,6 @@ export default async function ManagementPage({ searchParams }: { searchParams: P
   } catch (caught) {
     return <ErrorState message={caught instanceof Error ? caught.message : "Управлението временно не е достъпно."} retryAvailable retryHref={query.view === "overview" ? "/management/outlook" : "/management"} />;
   }
-  return <TrainingManagement key={`${access.athleteAlias}:${sync?.active_generation_id ?? "none"}:${query.sync ?? ""}:${profile.revision}:${inputFingerprint}:${query.view ?? "week"}`} initialView={query.view ?? "week"} athleteName={access.displayName} canEdit={access.canEditPlan}
-    initialOutlook={outlook} initialSyncState={sync} syncError={query.sync === "enqueue-error"} initialProfile={profile} initialDrafts={drafts} initialActive={active} today={profile.today ?? new Date().toISOString().slice(0, 10)} />;
+  return <ManagementScope key={`${access.actorUserId}:${access.athleteAlias}`} athleteAlias={access.athleteAlias} actorUserId={access.actorUserId}><TrainingManagement key={`${access.athleteAlias}:${sync?.active_generation_id ?? "none"}:${query.sync ?? ""}:${profile.revision}:${inputFingerprint}:${query.view ?? "week"}`} initialView={query.view ?? "week"} athleteName={access.displayName} canEdit={access.canEditPlan}
+    initialOutlook={outlook} initialSyncState={sync} syncError={query.sync === "enqueue-error"} initialProfile={profile} initialDrafts={drafts} initialActive={active} today={profile.today ?? new Date().toISOString().slice(0, 10)} /></ManagementScope>;
 }

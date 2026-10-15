@@ -129,14 +129,14 @@ describe("management data and review interface", () => {
   });
   it("migrates legacy doses to exact half budgets for maintenance and reentry without mutating stored input", () => {
     expect(defaultManagementProfile("2026-10-08").building_fraction).toBe(.65);
-    expect(defaultManagementProfile("2026-10-08").maintenance_fraction).toBe(.325);
-    expect(defaultManagementProfile("2026-10-08").reentry_fraction).toBe(.325);
+    expect(defaultManagementProfile("2026-10-08").maintenance_fraction).toBe(.39);
+    expect(defaultManagementProfile("2026-10-08").reentry_fraction).toBe(.39);
     for (const [legacy, expected] of [[.5, .65], [.55, .6], [.75, .7], [.8, .7]]) {
       const original = { ...profile, building_fraction: legacy, maintenance_fraction: .4, reentry_fraction: .5 };
       const parsed = parseManagementProfile(original);
       expect(parsed.building_fraction).toBe(expected);
-      expect(parsed.maintenance_fraction).toBe(expected / 2);
-      expect(parsed.reentry_fraction).toBe(expected / 2);
+      expect(parsed.maintenance_fraction).toBe(expected * .6);
+      expect(parsed.reentry_fraction).toBe(expected * .6);
       expect(original.building_fraction).toBe(legacy);
       expect(original.maintenance_fraction).toBe(.4);
       expect(original.reentry_fraction).toBe(.5);
@@ -145,7 +145,7 @@ describe("management data and review interface", () => {
     delete missing.building_fraction;
     delete missing.maintenance_fraction;
     delete missing.reentry_fraction;
-    expect(parseManagementProfile(missing)).toMatchObject({building_fraction:.65,maintenance_fraction:.325,reentry_fraction:.325});
+    expect(parseManagementProfile(missing)).toMatchObject({building_fraction:.65,maintenance_fraction:.39,reentry_fraction:.39});
     for (const bad of [{maintenance_fraction:.1},{reentry_fraction:.6},{maintenance_fraction:".325"},{reentry_fraction:null}])
       expect(()=>parseManagementProfile({...profile,...bad})).toThrow();
   });
@@ -175,7 +175,7 @@ describe("management data and review interface", () => {
     const scaled = structuredClone(record);
     Object.assign(scaled.payload.days[0].session!.dose_evidence, {base_fraction:.6,readiness_dose_factor:.5});
     const html = renderToStaticMarkup(<TrainingManagement athleteName="Тестов спортист" canEdit initialProfile={{ configured: true, profile, revision: 1 }} initialDrafts={[scaled]} today="2026-09-21" />);
-    for (const expected of ["Равномерна аеробна работа", "0:45:00", "0:30:00", "Защо тази задача и доза?", "Експертен Tmax", "Избраната продължителност е извън диапазона", "Специално подготвителен", "32,5 × 0,8 = 26 минути", "Начален дял за метода", "Множител от готовността", "Изтегли пълния отчет"]) expect(html).toContain(expected);
+    for (const expected of ["Равномерна аеробна работа", "0:45:00", "0:30:00", "Защо тази задача и доза?", "Експертен Tmax", "Избраната продължителност е извън диапазона", "Специално подготвителен", "65 × 60% = 39 минути", "Начален дял за метода", "Множител от готовността", "Изтегли пълния отчет"]) expect(html).toContain(expected);
     expect(html).not.toContain("NaN");
     expect(html).not.toContain("Активирай");
   });
@@ -198,7 +198,7 @@ describe("management data and review interface", () => {
 describe("management API access and optimistic revision", () => {
   const access = { userId: "athlete", actorUserId: "coach", athleteAlias: "ath-test", displayName: "Fixture", isOwner: false, canEditPlan: true, canViewPlan: true, canViewRecovery: false };
   const context = (path: string) => ({ params: Promise.resolve({ path: path.split("/") }) });
-  const request = (method: string, body?: unknown, origin = "https://web.example.test") => new Request("http://internal:3000/api/athlete/management/profile", { method, headers: { origin, "x-forwarded-host": "web.example.test", "x-forwarded-proto": "https", "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const request = (method: string, body?: unknown, origin = "https://web.example.test") => scopedRequest("http://internal:3000/api/athlete/management/profile", { method, headers: { origin, "x-forwarded-host": "web.example.test", "x-forwarded-proto": "https", "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   beforeEach(() => {
     vi.mocked(currentAuthorizedAthlete).mockResolvedValue(access);
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
@@ -218,7 +218,7 @@ describe("management API access and optimistic revision", () => {
     const saved={...profile,building_fraction:.7,maintenance_fraction:.4,reentry_fraction:.5,interval_profiles:[interval]};
     expect((await PUT(request("PUT",{profile:saved,expected_revision:3}),context("profile"))).status).toBe(200);
     const forwarded=JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string).profile;
-    expect(forwarded).toMatchObject({building_fraction:.7,maintenance_fraction:.35,reentry_fraction:.35,interval_profiles:[interval]});
+    expect(forwarded).toMatchObject({building_fraction:.7,maintenance_fraction:.42,reentry_fraction:.42,interval_profiles:[interval]});
     expect((await PUT(request("PUT",{profile:{...saved,interval_profiles:[{...interval,speed_time_duration_ratio:1}]},expected_revision:3}),context("profile"))).status).toBe(422);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
@@ -256,10 +256,10 @@ describe("management API access and optimistic revision", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
   it("forwards only a valid date filter to find revisions outside the recent history", async () => {
-    const valid = new Request("http://internal:3000/api/athlete/management/drafts?start_date=2026-09-22&athlete_alias=other");
+    const valid = scopedRequest("http://internal:3000/api/athlete/management/drafts?start_date=2026-09-22&athlete_alias=other");
     expect((await GET(valid, context("drafts"))).status).toBe(200);
     expect(fetch).toHaveBeenCalledWith(new URL("https://api.example.test/api/v2/athlete/management/drafts?start_date=2026-09-22"), expect.any(Object));
-    const invalid = new Request("http://internal:3000/api/athlete/management/drafts?start_date=2026-02-30");
+    const invalid = scopedRequest("http://internal:3000/api/athlete/management/drafts?start_date=2026-02-30");
     expect((await GET(invalid, context("drafts"))).status).toBe(422);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
@@ -287,7 +287,7 @@ describe("management API access and optimistic revision", () => {
 describe("active plan access", () => {
   const access = { userId: "athlete", actorUserId: "coach", athleteAlias: "ath-test", displayName: "Fixture", isOwner: false, canEditPlan: true, canViewPlan: true, canViewRecovery: false };
   const ctx = (path: string) => ({ params: Promise.resolve({ path: [path] }) });
-  const req = (body: unknown) => new Request("https://web.test/api/athlete/management/action", { method: "POST", headers: { Origin: "https://web.test", "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const req = (body: unknown) => scopedRequest("https://web.test/api/athlete/management/action", { method: "POST", headers: { Origin: "https://web.test", "Content-Type": "application/json" }, body: JSON.stringify(body) });
   beforeEach(() => {
     vi.mocked(currentAuthorizedAthlete).mockResolvedValue(access);
     process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
@@ -319,3 +319,9 @@ it("identifies the exact calendar block when program start moves past it", () =>
   expect(()=>parseManagementProfile(p)).toThrow(/Септемврийски блок.*2026-09-22.*2026-09-24/);
   expect(()=>parseManagementProfile({...p,program_start:"2026-09-01"})).not.toThrow();
 });
+
+function scopedRequest(input: string | URL | Request, init?: RequestInit) {
+  const headers = new Headers(init?.headers);
+  headers.set("X-Onflows-Athlete", "ath-test"); headers.set("X-Onflows-Actor", "coach");
+  return new Request(input, { ...init, headers });
+}

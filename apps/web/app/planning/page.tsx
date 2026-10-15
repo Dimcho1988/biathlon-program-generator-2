@@ -1,3 +1,4 @@
+import { ManagementScope } from "../../components/management-scope";
 import { getManagementProfile, getManagementOutlook } from "../../lib/management-server";
 import "../management/management.css";
 import { ErrorState } from "../../components/error-state";
@@ -64,7 +65,7 @@ export default async function PlanningPage({
       retryAvailable
     />;
   }
-  return <PlanningProfileForm
+  return <ManagementScope key={`${athlete.actorUserId}:${athlete.athleteAlias}`} athleteAlias={athlete.athleteAlias} actorUserId={athlete.actorUserId}><PlanningProfileForm
     key={athleteAlias}
     managementProfile={managementProfile}
     outlook={outlook}
@@ -73,5 +74,5 @@ export default async function PlanningPage({
     accentPreferences={accentPreferences}
     planningCalendar={planningCalendar}
     notice={query.planning ? notices[query.planning] : undefined}
-  />;
+  /></ManagementScope>;
 }

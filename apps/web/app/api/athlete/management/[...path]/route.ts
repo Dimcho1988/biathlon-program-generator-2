@@ -1,3 +1,4 @@
+import { matchesManagementScope } from "../../../../../lib/management-scope";
 import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
 import { currentAuthorizedAthlete } from "../../../../../lib/account-access";
@@ -25,6 +26,7 @@ async function proxy(request: Request, context: Context) {
     if (write && !isSameOrigin(request)) return error("Невалиден източник на заявката.", 403);
     const access = await currentAuthorizedAthlete();
     if (!access) return error("Влезте отново в профила си.", 401);
+    if (!matchesManagementScope(request, access)) return error("Профилът е сменен. Презареди страницата.", 412);
     if (!access.canViewPlan) return error("Този спортист не е споделил тренировъчния си план с вас.", 403);
     if (write && !access.canEditPlan) return error("Този профил е достъпен само за преглед.", 403);
     let body: string | undefined;

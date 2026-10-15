@@ -1,3 +1,4 @@
+import { matchesManagementScope } from "../../../../lib/management-scope";
 import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
 import { currentAuthorizedAthlete } from "../../../../lib/account-access";
@@ -21,6 +22,7 @@ export async function POST(request: Request) {
         status: 303,
         headers: { Location: "/?intervals=session-required" },
       });
+    if (!matchesManagementScope(request, athlete)) return NextResponse.json({ error: "Профилът е сменен. Презареди страницата." }, { status: 412 });
     if (!athlete.canEditPlan)
       return new NextResponse(null, { status: 303, headers: { Location: "/planning?planning=forbidden" } });
     const baseUrl = process.env.ONFLOWS_API_BASE_URL;

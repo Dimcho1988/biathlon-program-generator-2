@@ -87,15 +87,19 @@ def project_recovery(repository,alias,snapshot,*,now=None,config=None):
     if not daily: raise ValueError("Daily E history is required for Recovery v2")
     result=recovery_v2.simulate(daily,cfg["zones"],target=today)
     stale=date.fromisoformat(source["period_end"]) < today
+    from biathlon.planning_history import recovery_coverage
+    coverage = recovery_coverage(source, today)
     fingerprint=sha256(json.dumps({"model":recovery_v2.VERSION,"zones":cfg["zones"]},sort_keys=True,separators=(",",":")).encode()).hexdigest()
     history=RecoveryHistoryV2(**result,athlete_id=alias,
         period_start=source["period_start"],period_end=source["period_end"],
         model={"algorithm_version":recovery_v2.VERSION,"parameter_version":f"profile-{cfg['expected_revision']}",
                "parameter_fingerprint":fingerprint,"practical_full_recovery_percent":90},
         config_revision=cfg["expected_revision"],settings=cfg["zones"],source_as_of=source["period_end"],source_stale=stale,
+        data_quality=coverage,
         wellness_diagnostics=(snapshot.get("recovery_history") or {}).get("wellness_diagnostics"),
         warnings=["EXPERT_MODEL", "DAILY_AGGREGATED_DOSES", "UNKNOWN_FATIGUE_BEFORE_HISTORY"]
             + (["SOURCE_STALE_NO_NEW_LOAD_ASSUMPTION"] if stale else [])
+            + (["INCOMPLETE_LOAD_COVERAGE"] if not coverage["complete"] else [])
             + (["BASELINE_USES_PRIOR"] if any(r["baseline_source"]!="PERSONAL" for r in result["current"]) else []))
     out=deepcopy(snapshot)
     out["recovery_history"]=history.model_dump(mode="json")

@@ -41,6 +41,8 @@ def definition(record, profile):
                if key in group_ids and any(k != 'enabled' for k in value)}
     identity = {'version': VERSION, 'group': spec['group'], 'discipline': profile.get('discipline'),
                 'overrides': numeric, 'recipes': _group_recipes(spec['group']) or [{k: record.get(k) for k in ('id', 'version', 'prescription', 'progression')}]}
+    if rx.get('structure') == 'CONTINUOUS':
+        identity['continuous_start_policy'] = 'FIRST_ADMISSIBLE_POINT_WITHIN_SOURCE_RANGE_V1'
     spec['key'] = sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:20]
     return spec
 
@@ -87,8 +89,8 @@ def state(record, profile, *, phase=None):
         'position': step / max(1, spec['steps']-1) if spec.get('kind') == 'WITHIN_RANGE' else 0.,
         'eligible': step <= unlocked, 'successful_dates_at_step': successes,
         'required_successes': SUCCESS_COUNT, 'last_observation_date': last_day,
-        'basis': 'CONFIRMED_COMPARABLE_EXECUTION', 'advancement_recovery_min_exclusive': 90,
-        'explanation': 'След две потвърдени качествени изпълнения на различни дати може да се премине една стъпка напред при Recovery над 90%. Умора с неизпълнена доза връща една стъпка. Датата сама не удължава отсечките.'}
+        'basis': 'CONFIRMED_COMPARABLE_EXECUTION', 'advancement_recovery_min_inclusive': 50,
+        'explanation': 'След две потвърдени качествени изпълнения на различни дати може да се премине една стъпка напред при допустима готовност и развиваща цел. Умора с неизпълнена доза връща една стъпка. Датата сама не удължава отсечките.'}
 
 
 def descriptor(method):

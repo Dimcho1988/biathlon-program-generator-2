@@ -219,10 +219,24 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
         raise HTTPException(422, "The draft must start within the planning period")
     include_response = True
     before = input_state(repository, alias, evaluated_at=now, include_response=include_response)
-    payload = training_plan_engine.generate_plan(
-        repository, alias, profile.model_dump(mode="json"), start_date=start_date, now=now,
-        decisions=decisions, locked_day=locked_day,
-    )
+    from .planning_computation import compute
+    computation_key = _hash({"athlete": alias, "inputs": before,
+        "profile": profile.model_dump(mode="json"), "profile_revision": stored["revision"],
+        "start_date": start_date.isoformat(), "decisions": decisions or {}, "locked_day": locked_day})
+    def calculate():
+        from .planning_search import improve
+        normalized = profile.model_dump(mode="json")
+        def replay(caps=None):
+            return training_plan_engine.generate_plan(repository, alias,
+                {**normalized, **({"_search_easy_caps": caps} if caps else {})},
+                start_date=start_date, now=now, decisions=decisions, locked_day=locked_day)
+        from time import monotonic
+        started = monotonic()
+        baseline = replay()
+        elapsed = monotonic()-started
+        return improve(baseline, normalized, replay, seconds_remaining=max(0., 150.-elapsed),
+                       estimated_trial_seconds=elapsed)
+    payload = compute(live_repository, alias, computation_key, calculate)
     after = input_state(live_repository, alias, evaluated_at=now, include_response=include_response)
     if _hash(before) != _hash(after):
         raise HTTPException(409, "Analysis or planning inputs changed; generate a new draft")

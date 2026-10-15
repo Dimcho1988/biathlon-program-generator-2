@@ -1,4 +1,5 @@
 "use client";
+import { useManagementFetch } from "./management-scope";
 
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { PlanningCycleEditor } from "./planning-cycle-editor";
@@ -39,6 +40,7 @@ export function PlanningCalendarPanel({
   onSaveProfile?: () => Promise<boolean>; profileDirty?: boolean; plan?: PlanProjection | null; disabled?: boolean;
   onOutlookChange?: (plan: ManagementOutlook | null) => void; onPendingChange?: (pending: boolean) => void;
 }) {
+  const scopedFetch = useManagementFetch();
   const formId = useId();
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -113,7 +115,7 @@ export function PlanningCalendarPanel({
       }
       if (eventsDirty) {
         const body = new FormData(); body.set("schema_version", "planning-calendar-v1"); body.set("events_json", JSON.stringify(canonicalEvents));
-        const result = await fetch("/api/athlete/planning-calendar", { method: "POST", headers: { Accept: "application/json" }, body });
+        const result = await scopedFetch("/api/athlete/planning-calendar", { method: "POST", headers: { Accept: "application/json" }, body });
         if (!result.ok || !result.headers.get("content-type")?.includes("application/json") || !(await result.json()).saved) throw new Error("Събитията не бяха записани. Провери достъпа и датите и опитай отново.");
         if (!mounted.current) return;
         setSavedEvents(canonicalEvents);
@@ -121,7 +123,7 @@ export function PlanningCalendarPanel({
       if (profile?.discipline.trim()) {
         setNeedsRefresh(true);
         try {
-          const result = await fetch("/api/athlete/management/outlook", { cache: "no-store", signal: AbortSignal.timeout(80_000) });
+          const result = await scopedFetch("/api/athlete/management/outlook", { cache: "no-store", signal: AbortSignal.timeout(80_000) });
           if (!result.ok) throw new Error();
           const updated = parseManagementOutlook(await result.json());
           if (!updated) throw new Error();
