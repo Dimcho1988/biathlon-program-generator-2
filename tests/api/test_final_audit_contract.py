@@ -128,7 +128,8 @@ def test_failed_computation_is_retryable_and_changed_input_is_not_reused():
     assert compute(repository, 'athlete', 'b'*64, lambda: {'version': 2}) == {'version': 2}
 
 
-def test_actual_strength_counts_toward_the_same_manual_quota(monkeypatch):
+@pytest.mark.parametrize("completed_lock", [False, True])
+def test_actual_strength_counts_toward_the_same_manual_quota(monkeypatch, completed_lock):
     from tests.api.test_training_plan_engine import Repository, reference_speed
     from tests.api.test_management_schedule import body
     repo = Repository()
@@ -146,7 +147,13 @@ def test_actual_strength_counts_toward_the_same_manual_quota(monkeypatch):
     monkeypatch.setattr(engine.model_service,'speed_view',reference_speed)
     monkeypatch.setattr(engine,'resolved_methods',lambda _:[deepcopy(method)])
     monkeypatch.setattr(engine.method_registry,'executable_methods',lambda *args,legacy_methods,**kw:legacy_methods)
-    plan = engine.generate_plan(repo,'athlete',profile,start_date=TODAY,now=NOW)
+    # A pre-import approved task is no longer a pending session once actual
+    # execution closes today's slots. It must not consume a second quota.
+    locked = {'date': TODAY.isoformat(), 'sessions': [
+        {'zone': 'STR', 'purpose': 'MAINTENANCE', 'is_key_session': False}
+    ]} if completed_lock else None
+    plan = engine.generate_plan(repo,'athlete',profile,start_date=TODAY,now=NOW,locked_day=locked)
+    assert not plan['days'][0]['sessions']
     planned = [s for day in plan['days'] for s in day['sessions'] if s['zone']=='STR']
     assert planned  # This fixture has room for a legal remaining strength dose.
     assert len(planned)+1 <= 2

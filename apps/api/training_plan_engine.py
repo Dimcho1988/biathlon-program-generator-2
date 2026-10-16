@@ -33,8 +33,8 @@ from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 
-VERSION = "training-management-v45-sport-strength"
-PARAMETER_VERSION = "management-parameters-v42"
+VERSION = "training-management-v46-pending-lock-quotas"
+PARAMETER_VERSION = "management-parameters-v43"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -1610,13 +1610,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     for session in planning_schedule.day_sessions(d) if strength_activity(session)]
         # A locked day is represented exactly once when it reaches result_days.
         if locked_day and first <= locked_day["date"] <= last and not any(d.get("locked") for d in result_days):
-            proposed += [v for v in planning_schedule.day_sessions(locked_day) if strength_activity(v)
+            proposed += [v for v in locked_sessions if strength_activity(v)
                          and v.get("activity_ref") not in strength_actual]
         all_sessions = actual + proposed
         window = [a for a in strength_actual.values() if start_date.isoformat() <= a["date"] <= end_date.isoformat()]
         window += [v for d in result_days for v in planning_schedule.day_sessions(d) if strength_activity(v)]
         if locked_day and not any(d.get("locked") for d in result_days):
-            window += [v for v in planning_schedule.day_sessions(locked_day) if strength_activity(v)
+            window += [v for v in locked_sessions if strength_activity(v)
                        and v.get("activity_ref") not in strength_actual]
         return (max(len(all_sessions), len(window)),
                 max(sum(v.get("purpose") not in {"MAINTENANCE", "ACTIVATION"} for v in all_sessions),
@@ -1675,7 +1675,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             z.get("raw_time_min", 0) >= 5 and z["zone"] in {"Z3", "Z4", "Z5"}
                             for z in a.get("zones", []))]
     last_key_day = max(recent_key_dates) if recent_key_dates else None
-    locked_sessions = planning_schedule.day_sessions(locked_day or {})
+    # Imported execution may already close the approved day's slots. Keep the
+    # lock for identity/continuation checks, but count only tasks still pending.
+    # Otherwise the actual workout and its obsolete approved task consume two
+    # strength/key quotas and block valid sessions later in the draft.
+    locked_date = date.fromisoformat(locked_day["date"]) if locked_day else None
+    locked_sessions = (planning_schedule.day_sessions(locked_day)
+        if locked_date in slot_counts and unexecuted_slot_count(locked_date) > 0 else [])
     if any(v.get("is_key_session", v["zone"] in {"Z3", "Z4", "Z5"}) for v in locked_sessions):
         last_key_day = date.fromisoformat(locked_day["date"])
         key_sessions += sum(v.get("is_key_session", v["zone"] in {"Z3", "Z4", "Z5"}) for v in locked_sessions)
