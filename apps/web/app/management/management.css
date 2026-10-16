@@ -46,6 +46,11 @@
 .management-table-wrap { overflow-x: auto; }
 .management-page table { border-collapse: collapse; width: 100%; font-size: .85rem; }
 .management-page th,.management-page td { text-align: left; padding: .65rem; border-bottom: 1px solid var(--border,#dbe4e3); white-space: nowrap; }
+.management-strength-prescription { min-width: 0; }
+.management-strength-prescription table { table-layout: fixed; }
+.management-strength-prescription th,.management-strength-prescription td { white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
+.management-strength-prescription th:nth-child(1) { width: 38%; }
+.management-strength-prescription th:nth-child(2) { width: 20%; }
 .management-page pre { font-size: .75rem; max-height: 26rem; overflow: auto; padding: 1rem; border-radius: 8px; background: #f4f7f5; }
 @media(max-width: 700px) { .management-form-grid,.management-facts { grid-template-columns: 1fr; } .management-week-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } .management-panel,.management-day { padding: 1rem; } .management-plan-heading label { width: 100%; } }
 
