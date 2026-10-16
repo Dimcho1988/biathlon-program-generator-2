@@ -3059,7 +3059,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     return (session["zone"] == "Z1" and remaining_q is not None
                             and 0 <= remaining_q-session["direct_equivalent_minutes"]["Z1"] < .5)
                 choices.sort(key=lambda c: (*choice_priority(c),
-                    -len(bundles.get((c[2]["sport"], c[2]["method_id"]), {}).get("components", [])),
+                    # Extra reservations protect unfinished work from an easy
+                    # finish. They must not reward repeatedly postponing that
+                    # work: Z1 can reserve more different components merely
+                    # because it performs none of their primary work today.
+                    -sum(bool(planning_allocation.quality_priority(z, period_objectives)
+                              or relative_recovery and planning_allocation.remaining_priority(z, period_objectives))
+                         for z in bundles.get((c[2]["sport"], c[2]["method_id"]), {}).get("components", [])),
                     not closes_easy_objective(c), -c[0], c[1]))
                 _, _, session, selected_rows, selected_after = choices[0]
                 if period_objectives is not None:
