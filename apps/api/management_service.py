@@ -226,9 +226,9 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
     def calculate():
         from .planning_search import improve
         normalized = profile.model_dump(mode="json")
-        def replay(caps=None):
+        def replay(allocation_policy=None):
             return training_plan_engine.generate_plan(repository, alias,
-                {**normalized, **({"_search_easy_caps": caps} if caps else {})},
+                {**normalized, **({"_allocation_policy": allocation_policy} if allocation_policy else {})},
                 start_date=start_date, now=now, decisions=decisions, locked_day=locked_day)
         from time import monotonic
         started = monotonic()

@@ -27,6 +27,14 @@ const samePart = (a: SessionBlock, b: SessionBlock) => a.kind === b.kind && a.zo
   && a.target_hr_bpm === b.target_hr_bpm && a.target_speed_kmh === b.target_speed_kmh;
 const partLabel = (b: SessionBlock) => `${durationHms(b.duration_min)} ${componentLabel(b.zone)}`;
 
+export function strengthDuration(session: DraftSession) {
+  const blocks = session.blocks.filter(b => b.zone === "STR" && !["WARMUP", "COOLDOWN", "PREPARATION"].includes(b.kind));
+  if (!blocks.length) return null;
+  const work = blocks.filter(b => b.kind === "WORK").reduce((sum, b) => sum + b.duration_min, 0);
+  const rest = blocks.filter(b => b.kind !== "WORK").reduce((sum, b) => sum + b.duration_min, 0);
+  return {work, rest, main: work + rest};
+}
+
 /** Describe the saved sequence; never rebuild the workout from its method title. */
 export function sessionSummary(session: DraftSession): string {
   const blocks = visibleBlocks(session);
@@ -44,7 +52,9 @@ export function sessionSummary(session: DraftSession): string {
     const label = !circuits.includes(undefined) && equalCircuits && uniform
       ? `${ids.length} кръга × ${strength.length / ids.length} упражнения · ${durationHms(strength[0].duration_min)} работа`
       : `${strength.length} силови части · ${durationHms(strength.reduce((sum, b) => sum + b.duration_min, 0))} работа`;
-    return strength.length === works.length ? label : `Аеробна работа + ${label}`;
+    const duration = strengthDuration(session)!;
+    const summary = `${label} · ${durationHms(duration.main)} силова част с паузите`;
+    return strength.length === works.length ? summary : `Аеробна работа + ${summary}`;
   }
   if (works.length === 1) return `${partLabel(works[0])} основна работа`;
   const recoveries = main.filter(b => b.kind === "RECOVERY");

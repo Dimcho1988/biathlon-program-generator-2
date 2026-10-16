@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { WorkoutProfile } from "../components/workout-profile";
 import { TrainingPlanWeek } from "../components/training-plan-week";
-import { blockHeight, sessionSummary } from "../lib/training-visuals";
+import { blockHeight, sessionSummary, strengthDuration } from "../lib/training-visuals";
 import type { DraftDay, DraftSession, SessionBlock } from "../lib/training-management";
 
 const block = (kind: string, zone: string, duration_min: number, extra: Partial<SessionBlock> = {}): SessionBlock => ({
@@ -54,7 +54,8 @@ describe("saved workout visualization", () => {
       block("WORK", "STR", 1 / 3, {label: `Кръг ${circuit}: Напад`}),
       ...(circuit === 1 ? [block("RECOVERY", "STR", 2)] : []),
     ])], "STR");
-    expect(sessionSummary(s)).toBe("2 кръга × 2 упражнения · 0:00:20 работа");
+    expect(sessionSummary(s)).toBe("2 кръга × 2 упражнения · 0:00:20 работа · 0:04:20 силова част с паузите");
+    expect(strengthDuration(s)).toEqual({work: 4/3, rest: 3, main: 4/3+3});
     const html = renderToStaticMarkup(<WorkoutProfile session={s}/>);
     expect(html).toContain('class="workout-strength-lane"');
     expect(html).toContain("var(--strength)");
