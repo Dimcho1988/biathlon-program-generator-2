@@ -18,6 +18,7 @@ import { TrainingPlanOverview } from "./training-plan-overview";
 import { IndividualLearningPanel } from "./individual-learning-panel";
 import { MesocyclePriorities } from "./mesocycle-priorities";
 import { SessionMethodGuidance } from "./session-method-guidance";
+import { SessionRole } from "./session-role";
 import { methodHrText, rangeText } from "../lib/method-library";
 import { managementGuidance, hasProgramDays } from "../lib/management-guidance";
 import { SyncActionForm } from "./sync-action-form";
@@ -61,6 +62,7 @@ function SingleSessionCard({ day, expanded = false }: { day: DraftDay; expanded?
   return <article className={`management-day ${session ? "has-session" : ""}`} style={session ? { borderLeftColor: componentColor(session.zone) } : undefined}>
     <header><div><p className="management-day-date">{dateLabel(day.date)}</p><h3>{session?.title ?? (day.time_limit_exhausted ? "Изчерпан лимит за време" : STATUS_LABELS[day.status]) ?? day.status}</h3></div>
       <span className="management-badge">{PHASE_LABELS[day.period] ?? day.period}{day.taper ? " · тейпър" : ""}</span></header>
+    {session && <SessionRole session={session} day={day}/>}
     {session && <div className="management-session-visual"><div className="management-session-total"><strong>{durationHms(session.total_minutes)}</strong> общо · {durationHms(session.main_work_minutes)} основна работа <SessionAccent zone={session.zone}/></div><p className="workout-summary">{sessionSummary(session)}</p><WorkoutProfile session={session}/><p className="workout-profile-note">Ширина: продължителност · височина: целева зона Z1–Z5. Сила и NMS се показват отделно.</p></div>}
     <p>{day.explanation}</p>
     {session && <SessionMethodGuidance session={session}/>}

@@ -37,6 +37,25 @@ const record = parseDraftRecord({
 });
 
 describe("management data and review interface", () => {
+  it.each([
+    { purpose: "MAINTENANCE", resolved: "MAINTENANCE", period: "GENERAL_PREPARATION", cycle: "RECOVERY", expected: ["Поддържаща"], absent: "Възстановителна" },
+    { purpose: "BUILDING", resolved: "MAINTENANCE", period: "GENERAL_PREPARATION", cycle: "RE_ENTRY", expected: ["Вработваща"], absent: "Развиваща" },
+    { purpose: "RECOVERY", resolved: "MAINTENANCE", period: "RE_ENTRY", cycle: "RE_ENTRY", expected: ["Възстановителна"], absent: "Вработваща" },
+    { purpose: "BUILDING", resolved: "BUILDING", period: "SPECIAL_PREPARATION", cycle: "BUILD", expected: ["Z4 · Развиваща", "Z3 · Поддържаща"], absent: "Възстановителна", combined: [{zone:"Z4",role:"BUILDING"},{zone:"Z3",role:"MAINTENANCE"}] },
+  ])("shows the prescribed role in the week and detail for $purpose / $cycle", ({purpose,resolved,period,cycle,expected,absent,combined}) => {
+    const labeled = structuredClone(record);
+    const day = labeled.payload.days[0];
+    day.period = period; day.cycle = {kind:cycle};
+    day.session!.purpose = purpose;
+    Object.assign(day.session!.dose_evidence, {resolved_role:resolved,combined_budgets:combined});
+    const html = renderToStaticMarkup(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:1}} initialDrafts={[labeled]} today="2026-09-21"/>);
+    const roles = [...html.matchAll(/aria-label="Роля на тренировката"[^>]*>(.*?)<\/span><\/span>/g)].map(match => match[1]);
+    expect(roles).toHaveLength(2);
+    for (const role of roles) {
+      for (const label of expected) expect(role).toContain(label);
+      expect(role).not.toContain(absent);
+    }
+  });
   it("defaults to historical planning and preserves explicit day limits", () => {
     expect(availabilityMode(profile)).toBe("AUTO_HISTORY");
     expect(trainingDays(profile)).toEqual([0,1,2,3,4,5,6]);
