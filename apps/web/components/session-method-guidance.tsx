@@ -11,8 +11,9 @@ export function sessionMethods(session: DraftSession): SessionMethod[] {
 
 export function SessionMethodGuidance({ session }: { session: DraftSession }) {
   const methods = sessionMethods(session);
-  if (!methods.length) return null;
-  return <section className="management-method-guidance" aria-label="Метод и инструкции">{methods.map(method => {
+  const strength = session.dose_evidence?.strength_prescription;
+  if (!methods.length && !strength) return null;
+  return <section className="management-method-guidance" aria-label="Метод и инструкции">{strength && <div className="management-strength-prescription"><h4>Силова програма · постоянен набор</h4><p>{strength.total_sets} работни серии · {(strength.dose_fraction * 100).toLocaleString("bg-BG", { maximumFractionDigits: 1 })}% от изграждащата доза за едно занимание</p><table><thead><tr><th>Упражнение</th><th>Серии × повторения</th><th>Основни мускулни групи</th></tr></thead><tbody>{strength.exercises.map(exercise => <tr key={exercise.id}><td>{exercise.name}</td><td>{exercise.sets} × {exercise.reps}</td><td>{exercise.muscle_groups}</td></tr>)}</tbody></table><p>{strength.reserve_definition}</p><p>{strength.continuity}</p><p>{strength.progression}</p><details><summary>Научна основа и адаптация</summary><p>Треньорска адаптация на onFlows; упражненията, резервът и комбинацията не възпроизвеждат дословно изследван протокол.</p><ul>{strength.sources.map(source => <li key={source.url}><a href={source.url} target="_blank" rel="noreferrer">{source.authors}</a></li>)}</ul></details></div>}{methods.map(method => {
     const resolution = method.resolution;
     return <div key={method.id}><h4>{method.id.startsWith("COMBO-") ? method.title : <Link href={methodHref(method.id)}>Метод {method.id}{method.title ? ` · ${method.title}` : ""} →</Link>}</h4>
       {method.guidance?.purpose && <p>{method.guidance.purpose}</p>}

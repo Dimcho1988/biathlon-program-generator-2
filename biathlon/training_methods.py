@@ -10,10 +10,10 @@ from functools import lru_cache
 from hashlib import sha256
 import json
 from pathlib import Path
-from . import adaptive_methods
+from . import adaptive_methods, strength_methods
 from .method_dosing import continuous_building_fraction, continuous_maintenance_fraction
 
-VERSION = "training-methods-v13-sourced-library"
+VERSION = "training-methods-v14-sport-strength"
 VARIETY_VERSION = "onflows-bounded-method-variety-v1"
 COMMON = ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "COMPETITION")
 METHODS = (
@@ -149,7 +149,7 @@ def method_family(method):
         "THRESHOLD_LONG": "LONG_REPETITIONS", "THRESHOLD_SHORT": "SHORT_REPETITIONS",
         "ALTERNATING": "AEROBIC_ALTERNATING", "CRUISE_ALTERNATING": "AEROBIC_CRUISE",
         "AEROBIC_SUPPORT": "EASY_THRESHOLD", "THRESHOLD_HIGH": "THRESHOLD_HIGH",
-        "STRENGTH_CIRCUIT": "STRENGTH_CIRCUIT", "AEROBIC_STRENGTH": "AEROBIC_STRENGTH",
+        "STRENGTH_CIRCUIT": "STRENGTH_CIRCUIT", "STRENGTH_SETS": "STRENGTH_CAPACITY", "AEROBIC_STRENGTH": "AEROBIC_STRENGTH",
         "MIXED_AEROBIC": "STEADY" if method.get("mixed_variant") == "STEADY" else "SHORT_REPETITIONS",
     }.get(structure, structure)
     if structure in {"MODEL_INTERVALS", "METABOLIC_INTERVALS"}:
@@ -222,11 +222,12 @@ def resolved_methods(profile):
             "warmup_min": 10., "cooldown_min": 5., "source_id": "STR-CIRCUIT-RUN-01", "source_version": "0.1",
             "instructions": "20 секунди контролирана работа, 30 секунди преход. Съпротивление с поне 3 качествени повторения в резерв. Спри при болка или загуба на техника.",
             "adaptation": "Общ силов профил: 9 упражнения; 1–3 цели кръга според дозата и зададения треньорски максимум, 2 минути между кръговете. Един цял кръг е намаленият изпълним вариант. При ски е обща, а не специфична силова подготовка.",
-            "circuits": profile.get("strength_circuits", 2)}
+            "circuits": profile.get("strength_circuits", 2), "automatic_selection": False}
         methods.append(strength)
         methods.append({**strength, "id": "END-AER-STR-COMBINATION-V2", "title": "Леко аеробно движение и обща сила",
             "structure": "AEROBIC_STRENGTH", "min_work_min": 13., "max_work_min": 33.,
             "adaptation": "Половин аеробна поддържаща доза и един кръг от силовия профил; обща сесийна граница."})
+    methods.extend(strength_methods.methods(profile))
     for p in profile.get("interval_profiles", []):
         zone = p["zone"]
         method = {"id": f"END-VO2-TREF-01-{zone}", "title": f"Контролирани интервали в {zone}", "zone": zone,

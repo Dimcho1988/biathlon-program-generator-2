@@ -158,6 +158,7 @@ def test_half_ready_strength_produces_one_complete_circuit_with_accounted_q_and_
     m = next(m for m in resolved(strength_enabled=True, strength_circuits=2)
              if m["structure"] == "STRENGTH_CIRCUIT")
     assert m["min_work_min"] == 3. and m["max_work_min"] == 6.
+    m["automatic_selection"] = True  # Explicit legacy regression; new plans use sport capacity profiles.
     monkeypatch.setattr(engine, "resolved_methods", lambda _: [deepcopy(m)])
     original_simulate = engine.recovery_v2.simulate
 
