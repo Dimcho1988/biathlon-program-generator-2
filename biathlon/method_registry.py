@@ -8,15 +8,15 @@ from hashlib import sha256
 import json
 from . import method_library, training_methods, race_specific
 
-VERSION = 'method-registry-v2-role-guidance'
+VERSION = 'method-registry-v3-sport-strength'
 COMBINED_STRUCTURES = {'ALTERNATING', 'CRUISE_ALTERNATING', 'THRESHOLD_HIGH', 'AEROBIC_STRENGTH', 'AEROBIC_SUPPORT', 'MIXED_AEROBIC'}
 
 
 def coach_card(method):
     interval = method.get('interval_template') or method.get('interval_profile') or {}
-    return {'id': method['id'], 'title': method['title'], 'sports': list(method['sports']),
+    card = {'id': method['id'], 'title': method['title'], 'sports': list(method['sports']),
         'periods': list(method['periods']), 'disciplines': [], 'registry_kind': 'COACH_PROFILE',
-        'automatic_selection': True, 'prescription': None,
+        'automatic_selection': method.get('automatic_selection', True), 'prescription': None,
         'source': {'authors': 'onFlows', 'reference': method.get('source_id', method['id']),
                    'locator': method.get('implementation_profile', training_methods.VERSION)},
         'adaptation': method.get('adaptation', 'Работен треньорски профил с индивидуална опора и общите правила за Recovery и дозиране.'),
@@ -32,6 +32,17 @@ def coach_card(method):
             'interval': deepcopy(interval), 'work_minutes': [method['min_work_min'], method['max_work_min']]}}
 
 
+    if method.get('strength_profile'):
+        p = method['strength_profile']
+        card['coach_profile']['strength'] = deepcopy(p)
+        card['guidance'].update(
+            execution='; '.join(f"{e['name']}: {p['sets']} × {e['reps']}" for e in p['exercises']) + '. ' + p['reserve_definition'],
+            recovery=f"{p['rest_seconds']} сек между сериите; {p['transition_seconds']} сек между упражненията. Загрявката и разпускането са извън STR.",
+            adjustment='Поддържащата и активиращата доза са 50–60% от изграждащите повторения за едно занимание. Запазват се всички упражнения и цели серии. ' + p['continuity'],
+            progression=p['progression'])
+    return card
+
+
 def enabled(profile, method):
     preferences = profile.get('method_library') or {}
     if not preferences.get('enabled', True):
@@ -39,7 +50,7 @@ def enabled(profile, method):
     overrides = preferences.get('overrides') or {}
     identifier = method.get('method_library_id') or method['id']
     parent = method.get('variation_parent_id')
-    if overrides.get(identifier, {}).get('enabled') is False:
+    if not overrides.get(identifier, {}).get('enabled', method.get('automatic_selection', True)):
         return False
     return not (parent and overrides.get(parent, {}).get('enabled') is False)
 

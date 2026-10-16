@@ -315,6 +315,8 @@ class ManagementProfile(BaseModel):
     interval_profiles: list[IntervalDoseProfile] = Field(default_factory=list, max_length=2)
     strength_enabled: bool = False
     strength_circuits: int = Field(default=2, ge=2, le=3)
+    strength_maintenance_fraction: float = Field(default=.6, ge=.5, le=.6,
+        description="Per-session fraction of developmental repetitions for maintenance AND activation; whole balanced sets, never square the fraction.")
     transition_days: int = Field(default=0, ge=0, le=28)
     planning_controls: PlanningControls | None = None
     lactate_guidance_enabled: bool = True

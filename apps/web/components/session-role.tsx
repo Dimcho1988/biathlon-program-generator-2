@@ -2,6 +2,7 @@ import { isRecord } from "../lib/training-status";
 import type { DraftDay, DraftSession } from "../lib/training-management";
 
 const LABELS: Record<string, string> = {
+  ACTIVATION: "Активираща",
   BUILD: "Развиваща", BUILDING: "Развиваща",
   MAINTAIN: "Поддържаща", MAINTENANCE: "Поддържаща", SUPPORTING: "Поддържаща",
   REENTRY: "Вработваща", RE_ENTRY: "Вработваща", RECOVERY: "Възстановителна",

@@ -11,6 +11,8 @@ from tests.api.test_training_plan_engine import TODAY, NOW, Repository
 def selected_methods(monkeypatch, body, identifiers):
     methods = [method for method in engine.resolved_methods(body) if method["id"] in identifiers]
     assert len(methods) == len(identifiers)
+    for method in methods:
+        method["automatic_selection"] = True  # Explicit test selection, including the archived circuit.
     monkeypatch.setattr(engine, "resolved_methods", lambda _: deepcopy(methods))
 
 

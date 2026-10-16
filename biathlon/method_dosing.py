@@ -28,7 +28,7 @@ def recovery_factor(policy, role):
     if not policy.get("allowed", True):
         return 0.
     observed = policy.get("observed_dose_factor", policy.get("dose_factor", 1.))
-    if role in {"MAINTENANCE", "SUPPORTING"}:
+    if role in {"MAINTENANCE", "SUPPORTING", "ACTIVATION"}:
         return 1.
     # Light recovery sessions retain their existing proportional reduction.
     return observed if role == "RECOVERY" else .5 + .5 * observed

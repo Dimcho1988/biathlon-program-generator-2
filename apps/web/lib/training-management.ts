@@ -36,6 +36,7 @@ export interface ManagementProfile {
   interval_profiles: IntervalDoseProfile[];
   strength_enabled: boolean;
   strength_circuits: number;
+  strength_maintenance_fraction?: number;
   transition_days: number;
   planning_controls?: PlanningControls | null;
   lactate_guidance_enabled?: boolean;
@@ -107,7 +108,15 @@ export interface DraftRecord { entry_key: string; revision: number; recorded_at?
 export type Component = "Z1" | "Z2" | "Z3" | "Z4" | "Z5" | "STR";
 export const COMPONENTS: Component[] = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"];
 export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; lactate_reference?: LactateReference; method_library?: SessionMethod; parent_method_card?: SessionMethod; hr_reference_range_bpm?: [number, number] | null; hr_reference_basis?: string; hr_role?: string; target_speed_range_kmh?: [number, number] }
+export interface StrengthPrescription {
+  exercise_bank_id: string; main_sport: string; method: string;
+  exercises: Array<{id: string; name: string; muscle_groups: string; reps: number; sets: number}>;
+  total_sets: number; building_total_sets: number; dose_fraction: number;
+  reserve_definition: string; continuity: string; progression: string;
+  sources: Array<{authors: string; url: string; protocol: string}>;
+}
 export interface DoseEvidence {
+  strength_prescription?: StrengthPrescription;
   resolved_role?: string; reentry_dose_policy?: string;
   combined_budgets?: Array<{ zone: string; role: string }>;
   planned_gap_hours?: number; mixed_component?: boolean;
@@ -242,7 +251,7 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     throw new Error("Проверете датите, наличното време и параметрите на профила.");
   }
   const normalized: Record<string, unknown> = { adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, component_targets_weekly: {},
-    horizon_mode: "AUTO_CALENDAR", interval_profiles: [], strength_enabled: false, strength_circuits: 2, transition_days: 0, ...value,
+    horizon_mode: "AUTO_CALENDAR", interval_profiles: [], strength_enabled: false, strength_circuits: 2, strength_maintenance_fraction: .6, transition_days: 0, ...value,
     building_fraction: buildingFraction, maintenance_fraction: buildingFraction * .6, reentry_fraction: buildingFraction * .6 };
   if (isRecord(value.planning_controls) && typeof value.planning_controls.double_threshold_fraction === "number" && value.planning_controls.double_threshold_fraction >= .25 && value.planning_controls.double_threshold_fraction < .5) {
     normalized.planning_controls = {...value.planning_controls, double_threshold_fraction: .5};
@@ -251,6 +260,7 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
   if (value.method_library !== undefined) normalized.method_library = parseMethodPreferences(value.method_library);
   if (typeof normalized.auto_import_enabled !== "boolean" || !["AUTO", "REVIEW"].includes(String(normalized.adaptation_mode)) || !range(normalized.progression_percent, 0, 10)
     || typeof normalized.strength_enabled !== "boolean" || !integer(normalized.strength_circuits, 2, 3)
+    || !range(normalized.strength_maintenance_fraction, .5, .6)
     || !integer(normalized.transition_days, 0, 28) || !isRecord(normalized.component_targets_weekly)
     || !Object.entries(normalized.component_targets_weekly).every(([k, v]) => COMPONENTS.includes(k as Component) && range(v, 0, 3000))
     || !Array.isArray(normalized.interval_profiles) || normalized.interval_profiles.length > 2) throw new Error("Невалидни правила за адаптация или компонентни цели.");
@@ -416,7 +426,7 @@ export function defaultManagementProfile(today: string): ManagementProfile {
     building_fraction: .65, maintenance_fraction: .39, reentry_fraction: .39,
     recovery_session_cap_min: 30, allow_expert_fallback: true,
     adaptation_mode: "AUTO", auto_import_enabled: true, progression_percent: 5, load_progression: defaultLoadProgression(), individual_learning: defaultIndividualLearning(), component_targets_weekly: {}, interval_profiles: [],
-    strength_enabled: false, strength_circuits: 2, transition_days: 0,
+    strength_enabled: false, strength_circuits: 2, strength_maintenance_fraction: .6, transition_days: 0,
     lactate_guidance_enabled: true, lactate_profiles: [], neuromuscular: defaultNeuromuscular(),
   };
 }
