@@ -119,6 +119,13 @@ def objective_load(direct, effective, objectives):
     return {z: direct[z] if objectives[z]['basis'] == 'DIRECT_Q' else effective[z] for z in COMPONENTS}
 
 
+def remaining_slots(slots, day, slot, *, segment_keys=None):
+    """Count capacity only where the current objective can be prescribed."""
+    return sum((d > day or d == day and s >= slot)
+               and (segment_keys is None or segment_keys[d] == segment_keys[day])
+               for d, s in slots)
+
+
 def dose_share(remaining, minimum, maximum, opportunities):
     """Balance complete doses over the sessions actually needed for this method.
 
@@ -196,7 +203,7 @@ def quality_priority(zone, objectives):
 def remaining_priority(zone, objectives):
     """Known direct-Q shortfall after the first complete exposure.
 
-    A small first dose does not finish a recovery week's component objective.
+    A small first dose does not finish a microcycle's component objective.
     This is only a ranking/reservation hint; full dose, Q/E and readiness
     checks still decide whether another session can be prescribed.
     """

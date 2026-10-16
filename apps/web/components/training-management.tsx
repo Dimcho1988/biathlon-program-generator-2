@@ -7,7 +7,7 @@ import Link from "next/link";
 import { changeActivePlan, newerActivePlan, PLAN_CHANGED_NOTICE } from "../lib/active-plan-request";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { durationHms } from "../lib/duration-format";
-import { componentColor, sessionSummary } from "../lib/training-visuals";
+import { componentColor, sessionSummary, strengthDuration } from "../lib/training-visuals";
 import { SessionAccent, WorkoutProfile } from "./workout-profile";
 import { isCalendarDate, isRecord } from "../lib/training-status";
 import { ActiveTrainingPlan } from "./active-training-plan";
@@ -55,6 +55,7 @@ function PeriodizationTable({ value }: { value: unknown }) {
 
 function SingleSessionCard({ day, expanded = false }: { day: DraftDay; expanded?: boolean }) {
   const session = day.session;
+  const strength = session ? strengthDuration(session) : null;
   const evidence = session?.dose_evidence;
   const execution = executionGuidance(session?.blocks ?? []);
   const segmentBudget = COMPONENTS.map(zone => day.load_budget.components[zone]).find(budget =>
@@ -63,7 +64,8 @@ function SingleSessionCard({ day, expanded = false }: { day: DraftDay; expanded?
     <header><div><p className="management-day-date">{dateLabel(day.date)}</p><h3>{session?.title ?? (day.time_limit_exhausted ? "Изчерпан лимит за време" : STATUS_LABELS[day.status]) ?? day.status}</h3></div>
       <span className="management-badge">{PHASE_LABELS[day.period] ?? day.period}{day.taper ? " · тейпър" : ""}</span></header>
     {session && <SessionRole session={session} day={day}/>}
-    {session && <div className="management-session-visual"><div className="management-session-total"><strong>{durationHms(session.total_minutes)}</strong> общо · {durationHms(session.main_work_minutes)} основна работа <SessionAccent zone={session.zone}/></div><p className="workout-summary">{sessionSummary(session)}</p><WorkoutProfile session={session}/><p className="workout-profile-note">Ширина: продължителност · височина: целева зона Z1–Z5. Сила и NMS се показват отделно.</p></div>}
+    {session && <div className="management-session-visual"><div className="management-session-total"><strong>{durationHms(session.total_minutes)}</strong> общо · {durationHms(session.main_work_minutes)} {strength ? "активна работа" : "основна работа"} <SessionAccent zone={session.zone}/></div><p className="workout-summary">{sessionSummary(session)}</p><WorkoutProfile session={session}/><p className="workout-profile-note">Ширина: продължителност · височина: целева зона Z1–Z5. Сила и NMS се показват отделно.</p></div>}
+    {strength && <p className="management-notice">Силова част: {durationHms(strength.main)} = {durationHms(strength.work)} упражнения + {durationHms(strength.rest)} почивки и преходи. Загрявката и разпускането са извън този силов обем.</p>}
     <p>{day.explanation}</p>
     {session && <SessionMethodGuidance session={session}/>}
     {evidence?.planned_gap_hours && <p className="management-notice">Планирай поне {durationHms(evidence.planned_gap_hours * 60)} между двете прагови сесии. Преди втората прецени реакцията към първата и контрола на усилието.</p>}
