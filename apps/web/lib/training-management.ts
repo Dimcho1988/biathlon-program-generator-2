@@ -108,6 +108,8 @@ export type Component = "Z1" | "Z2" | "Z3" | "Z4" | "Z5" | "STR";
 export const COMPONENTS: Component[] = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"];
 export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; lactate_reference?: LactateReference; method_library?: SessionMethod; parent_method_card?: SessionMethod; hr_reference_range_bpm?: [number, number] | null; hr_reference_basis?: string; hr_role?: string; target_speed_range_kmh?: [number, number] }
 export interface DoseEvidence {
+  resolved_role?: string; reentry_dose_policy?: string;
+  combined_budgets?: Array<{ zone: string; role: string }>;
   planned_gap_hours?: number; mixed_component?: boolean;
   zone_tmax_minutes?: Partial<Record<Component, number>>; zone_tmax_sources?: Partial<Record<Component, string>>;
   capacity_is_estimate?: boolean; within_observed_test_window?: boolean;

@@ -104,6 +104,9 @@
 .management-workout-meta>strong { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
 .management-workout-shape { display: block; min-width: 0; }
 .management-workout-shape>strong { display: block; font-size: .9rem; line-height: 1.4; }
+.management-session-roles { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .4rem; margin-block: .4rem; font-size: .76rem; line-height: 1.4; }
+.management-role-caption { color: var(--text-secondary); }
+.management-session-role { padding: .2rem .55rem; border: 1px solid var(--border); border-radius: 1rem; background: var(--surface-secondary); color: var(--text); font-weight: 600; }
 .workout-summary { display: block; margin: .25rem 0 .45rem; font-size: .83rem; color: var(--text-secondary); line-height: 1.5; overflow-wrap: anywhere; }
 .management-workout-open { grid-column: 2; font-size: .72rem; color: var(--text-muted); }
 .management-workout-rest { padding: .15rem 0; color: var(--text-secondary); font-size: .9rem; }
