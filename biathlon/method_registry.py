@@ -65,6 +65,8 @@ def executable_methods(profile, speed_by_sport, *, legacy_methods=None, race_ref
     for m in legacy:
         if not enabled(profile, m) or (not mixed and (m.get('mixed_component') or m['structure'] in COMBINED_STRUCTURES)):
             continue
+        if m['zone'] != 'STR':
+            m['dosing'] = method_dosing.parameters(m, profile)
         m['method_card'] = coach_card(m)
         m['registry_version'] = VERSION
         result.append(m)
@@ -86,6 +88,8 @@ def catalog(profile, speed_view=None, *, phase=None, today=None):
         ref = race_specific.reference(profile, speed_view, event, today)
         methods += race_specific.methods(profile, ref, methods)
     for m in methods:
+        if m['zone'] != 'STR':
+            m['dosing'] = method_dosing.parameters(m, profile)
         card = coach_card(m)
         allowed = enabled(profile, m)
         mixed_off = not (profile.get('planning_controls') or {}).get('mixed_sessions_enabled', True) and (m.get('mixed_component') or m['structure'] in COMBINED_STRUCTURES)

@@ -79,3 +79,15 @@ def test_progressive_efforts_use_method_coefficient_but_minimum_stays_continuous
               dict(kind='WORK',zone='Z2',target_hr_bpm=155.,duration_min=10.)]
     assert engine._dose_usage(blocks,evidence,'Z2') == pytest.approx(.4)
     assert engine._minimum_dose_usage(blocks,evidence,'Z2') == pytest.approx(1.)
+
+
+def test_dynamic_native_methods_receive_range_preferences_before_capacity_resolution():
+    from biathlon import method_registry
+    method = deepcopy(next(m for m in engine.resolved_methods({'planning_controls':{'automatic_intervals':True}})
+                           if m['structure'] == 'MODEL_INTERVALS'))
+    method['id'] = 'ONFLOWS-RACE-RACE-Z4-V1'
+    profile = {'method_library':{'overrides':{method['id']:{'speed_tolerance_fraction':.01, 'hr_tolerance_bpm':2., 'total_capacity_ratio':2.5}}}}
+    resolved = method_registry.executable_methods(profile, {}, legacy_methods=[method])[0]
+    assert resolved['dosing']['speed_tolerance_fraction'] == .01
+    assert resolved['dosing']['hr_tolerance_bpm'] == 2.
+    assert resolved['method_card']['dosing']['total_capacity_ratio'] == 2.5
