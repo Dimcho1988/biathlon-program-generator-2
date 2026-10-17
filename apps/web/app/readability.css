@@ -1,0 +1,135 @@
+/* Shared analytical surfaces. The painting remains visible around the cards. */
+:root { --chart-zone-1: color-mix(in srgb,var(--zone-1) 72%,#075230); --chart-zone-3: color-mix(in srgb,var(--zone-3) 64%,#735000); --chart-zone-4: color-mix(in srgb,var(--zone-4) 75%,#803b00); }
+:root[data-theme="dark"] { --chart-zone-1: var(--zone-1); --chart-zone-3: var(--zone-3); --chart-zone-4: var(--zone-4); }
+.workspace-shell .chart-frame { --zone-1: var(--chart-zone-1); --zone-3: var(--chart-zone-3); --zone-4: var(--chart-zone-4); }
+.workspace-shell .chart-frame { width: 100%; min-width: 0; }
+.workspace-shell .chart-frame > svg { display: block; width: 100%; height: auto; min-height: 0; min-width: 0; background: var(--surface); overflow: hidden; border-radius: 0; touch-action: pan-y; }
+.workspace-shell .chart-frame text { font-family: inherit; font-size: 12px; fill: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.workspace-shell .chart-frame .metric-axis-unit { font-size: 12px; font-weight: 650; }
+.workspace-shell .chart-frame .chart-grid { stroke: var(--border); stroke-width: 1; }
+.workspace-shell .chart-frame .chart-reference { stroke: var(--text-secondary); stroke-dasharray: 6 5; stroke-width: 1.3; }
+.workspace-shell .chart-frame .metric-cursor { stroke: var(--text-secondary); stroke-width: 1; stroke-dasharray: 3 4; opacity: .6; pointer-events: none; }
+.workspace-shell .chart-frame .metric-tick { stroke: var(--border-strong); }
+.chart-frame :is(path, polyline, line) { vector-effect: non-scaling-stroke; }
+.metric-chart { min-width: 0; margin-top: 10px; }
+.metric-chart-controls { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 12px; }
+.metric-chart-controls button { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 8px 11px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
+.metric-chart-controls button i { width: 18px; border-top: 3px solid; }
+.metric-chart-controls button[aria-pressed="false"] { color: var(--text-muted); background: var(--surface-secondary); }
+.metric-chart-controls button[aria-pressed="false"] i { opacity: .3; }
+.metric-chart-readout { padding: 12px 14px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-secondary); font-size: 13px; }
+.metric-chart-readout > strong { font-size: 13px; }
+.metric-chart-readout dl { display: grid; grid-template-columns: repeat(auto-fit,minmax(130px,1fr)); gap: 10px 18px; margin: 12px 0 0; }
+.metric-chart-readout dl > div { min-width: 0; }
+.metric-chart-readout dt { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; letter-spacing: 0; }
+.metric-chart-readout dt i { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.metric-chart-readout dd { margin: 4px 0 0 13px; font-size: 15px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.metric-chart-scrubber { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 16px; margin: 10px 0 0; color: var(--text-secondary); font-size: 12px; }
+.workspace-shell input[type="range"] { width: 100%; min-width: 0; min-height: 36px; margin-inline: 0; accent-color: var(--accent); cursor: pointer; }
+.metric-chart-reference { margin: 0 0 8px; color: var(--text-secondary); font-size: 12px; }
+.workspace-shell :is(.history-chart,.canonical-chart,.shadow-chart,.index-chart-panel) { min-width: 0; margin-inline: 0; }
+.trainability-content { grid-template-columns: minmax(0,1fr); }
+.workspace-shell :is(.shadow-lab,.shadow-plots) { grid-template-columns: minmax(0,1fr); }
+.workspace-shell .index-channels { min-width: 0; }
+.workspace-shell :is(.activity-table-wrap,.shadow-table-wrap,.report-table-wrap,.response-table) { max-width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-inline: contain; }
+.workspace-shell :is(td,dd,strong) { font-variant-numeric: tabular-nums; }
+.mobile-navigation,.workspace-menu-backdrop { display: none; }
+.completed-calendar { container-type: inline-size; }
+.calendar-weekdays { grid-template-columns: repeat(7,minmax(0,1fr)); padding-inline-start: 144px; }
+.completed-week { grid-template-columns: 144px repeat(7,minmax(0,1fr)); }
+.completed-activity-card > strong { font-size: 12px; line-height: 1.4; }
+.activity-card-metrics { font-size: 11px; }
+.calendar-empty-day { display: none; }
+.season-item-picker { display: grid; gap: 8px; margin: 16px 0; font-size: 13px; color: var(--text-secondary); }
+.season-item-picker select { width: 100%; min-height: 44px; padding: 10px; border: 1px solid var(--border-strong); border-radius: 8px; color: var(--text); background: var(--surface); font: inherit; }
+.workspace-shell .season-timeline-row { height: 44px; }
+.workspace-shell .season-bar { height: 40px; font-size: 12px; }
+.season-bar[aria-pressed="true"] { outline: 2px solid var(--text); outline-offset: 1px; z-index: 1; }
+.workspace-shell .workout-profile-axis,.workspace-shell .workout-lane-label { font-size: 12px; }
+
+/* Switch to a chronological agenda when the content column cannot fit seven days. */
+@container (max-width: 1050px) {
+  .calendar-weekdays { display: none; }
+  .completed-week { grid-template-columns: 1fr; }
+  .completed-week-summary { border-right: 0; border-bottom: 1px solid var(--border); padding: 14px; }
+  .completed-week-summary strong { font-size: 14px; }
+  .completed-week-summary > span:not(.week-zone-bar) { font-size: 12px; }
+  .completed-day { order: 0; display: grid; grid-template-columns: 94px minmax(0,1fr); min-height: 48px; padding: 12px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .completed-day.outside-period { display: none; }
+  .completed-day > header { font-size: 12px; padding: 2px 12px 0 0; }
+  .completed-day.no-activities { min-height: 40px; }
+  .calendar-empty-day { display: block; align-self: center; color: var(--text-muted); font-size: 12px; }
+  .day-activities { min-width: 0; gap: 9px; }
+  .completed-activity-card { gap: 9px; padding: 12px; }
+  .completed-activity-card > strong { font-size: 14px; }
+  .activity-card-top,.activity-card-metrics { font-size: 12px; }
+  .activity-zone-strip { height: 10px; }
+  .activity-zone-visual small { font-size: 10px; }
+  .calendar-wellness { font-size: 10px; }
+}
+
+@media (max-width: 900px) {
+  .activity-detail-layout .activity-private-panel { grid-row: auto; }
+  .activity-private-panel dl { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .workspace-content .activity-summary-grid dd { font-size: 20px; line-height: 1.35; }
+}
+@media (max-width: 760px) {
+  .workspace-sidebar { z-index: 45; padding-top: max(10px,env(safe-area-inset-top)); }
+  .workspace-navigation.is-open { position: absolute; top: 100%; inset-inline: 0; max-height: calc(100dvh - 65px - env(safe-area-inset-top)); padding: 10px 16px 22px; border-bottom: 1px solid var(--border); background: var(--surface); box-shadow: 0 14px 28px #07111d18; overscroll-behavior: contain; }
+  .workspace-links a { min-height: 48px; font-size: 14px; }
+  .menu-toggle { min-height: 44px; font-size: 14px; }
+  .workspace-menu-backdrop { display: block; position: fixed; inset: 60px 0 0; z-index: 40; border: 0; background: #07111d42; }
+  .mobile-navigation { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); position: fixed; inset: auto 0 0; z-index: 35; min-height: 64px; padding: 6px max(8px,env(safe-area-inset-left)) max(6px,env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: var(--surface); box-shadow: 0 -4px 20px #07111d08; }
+  .mobile-navigation a { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 5px; min-height: 50px; border-radius: 8px; color: var(--text-secondary); text-decoration: none; font-size: 11px; font-weight: 650; }
+  .mobile-navigation svg { width: 22px; height: 22px; }
+  .mobile-navigation a[aria-current="page"] { color: var(--accent); background: color-mix(in srgb,var(--accent) 9%,var(--surface)); }
+  .workspace-content { padding: 24px max(14px,env(safe-area-inset-right)) calc(90px + env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left)); }
+  .workspace-content :is(.speed-page,.response-page) { padding-inline: 0; }
+  .workspace-content h1 { font-size: 28px; line-height: 1.18; overflow-wrap: anywhere; }
+  .workspace-content h2 { font-size: 21px; line-height: 1.3; }
+  .workspace-content :is(.history-chart,.canonical-chart,.shadow-chart) { padding: 14px; border-radius: 12px; }
+  .workspace-content :is(.history-chart-heading h3,.canonical-chart h3,.shadow-chart h3) { font-size: 17px; line-height: 1.4; }
+  .workspace-content :is(.history-chart-heading > p,.index-note,.report-note,.overview-explanation) { font-size: 13px; line-height: 1.6; }
+  .workspace-content :is(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]),select,textarea) { min-width: 0; max-width: 100%; min-height: 44px; font-size: 16px; }
+  .workspace-content :is(.action-button,.activity-period-controls a,.recovery-zone-controls button,.metric-chart-controls button) { min-height: 44px; }
+  .activity-period-controls a { display: flex; align-items: center; justify-content: center; font-size: 13px; }
+  .activity-period-controls { gap: 8px; padding: 10px; }
+  .activity-period-controls > div a { flex: 1; }
+  .workspace-content .activity-summary-grid dt { min-height: 0; font-size: 13px; letter-spacing: 0; line-height: 1.4; }
+  .activity-summary-grid > div { padding: 16px 12px; }
+  .activity-private-panel dl { grid-template-columns: 1fr; }
+  .activity-tabs { flex-wrap: wrap; }
+  .activity-tabs :is(a,span) { min-height: 40px; display: flex; align-items: center; line-height: 1.4; }
+  .metric-chart-scrubber { grid-template-columns: 1fr; gap: 2px; }
+  .metric-chart-readout dl { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .metric-chart-controls { gap: 6px; }
+  .metric-chart-controls button { flex-grow: 1; gap: 5px; padding-inline: 7px; }
+  .metric-chart-controls button i { width: 12px; }
+  .workspace-content .load-summary-card > div { grid-template-columns: auto minmax(0,1fr); column-gap: 8px; }
+  .workspace-content .load-summary-card > div strong { font-size: 24px; }
+  .workspace-content .load-summary-card > div small { grid-column: 1 / -1; justify-self: start; min-width: 0; max-width: 100%; font-size: 12px; overflow-wrap: anywhere; }
+  .workspace-content .management-metrics > div { min-width: 0; }
+  .workspace-content .management-metrics > div > * { min-width: 0; overflow-wrap: anywhere; }
+  .workspace-content .management-metrics strong { font-size: 20px; }
+  .workspace-content .response-card { margin: 16px 0; padding: 16px; border-color: var(--border); }
+  .workspace-content .response-card p { color: var(--text-secondary); }
+  .workspace-content :is(.model-controls,.index-period-controls,.report-period) { width: 100%; }
+  .workspace-content .model-controls > label { width: 100%; min-width: 0; }
+  .workspace-content .model-controls > button { flex-grow: 1; }
+  .workspace-content :is(.shadow-table-wrap,.report-table-wrap,.response-table) table { min-width: 520px; }
+  .workspace-content :is(.shadow-table-wrap,.report-table-wrap,.response-table) th:first-child { position: sticky; left: 0; z-index: 1; background: var(--surface); max-width: 160px; white-space: normal; }
+  .workspace-content .index-channels label { min-height: 44px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-secondary); }
+  .workspace-content :is(.index-filters,.index-trend-controls) label { min-width: 0; max-width: 100%; }
+  .workspace-content .index-filters select { width: 100%; }
+  .workspace-content .index-cursor-values { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .workspace-content .index-cursor-values > div { min-width: 0; }
+  .workspace-content .index-combined-value { grid-column: 1 / -1; }
+  .workspace-content .index-scrubber { padding: 12px; }
+  .workspace-content .index-scrubber > label { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .workspace-content [id] { scroll-margin-top: 82px; }
+}
+@media (max-width: 380px) {
+  .completed-day { grid-template-columns: 68px minmax(0,1fr); padding: 10px; }
+  .completed-day > header { padding-right: 8px; }
+  .workspace-content .activity-summary-grid dd { font-size: 18px; }
+}
