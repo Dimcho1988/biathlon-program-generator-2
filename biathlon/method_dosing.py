@@ -53,7 +53,7 @@ def prepare_native_budget(method, evidence, profile):
     if "capacity_minutes" not in evidence or "max_work_min" not in method:
         return
     capacity = evidence["capacity_minutes"] * ratio
-    key = (evidence["capacity_minutes"], ratio)
+    key = (method["structure"], evidence["capacity_minutes"], ratio)
     if method.get("_resolved_dose_key") == key:
         return
     method["_resolved_dose_key"] = key

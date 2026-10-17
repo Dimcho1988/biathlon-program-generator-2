@@ -1000,7 +1000,11 @@ def _dose_usage(blocks, evidence, zone):
         if b["kind"] != "WORK" or b["zone"] == "STR" or b["zone"] not in capacities:
             continue
         effort = f"{b['zone']}:{b['target_hr_bpm']:.3f}" if b.get("target_hr_bpm") is not None else None
-        usages[b["zone"]] = usages.get(b["zone"], 0.) + b["duration_min"]/by_effort.get(effort, capacities[b["zone"]])
+        effort_capacity = capacities[b["zone"]]
+        if effort in by_effort:
+            ratio = 1. if evidence.get("dose_capacity_basis") == "INDEPENDENT_CONTINUOUS_TMAX" else evidence.get("method_work_capacity_ratio", 1.)
+            effort_capacity = by_effort[effort] * ratio
+        usages[b["zone"]] = usages.get(b["zone"], 0.) + b["duration_min"]/effort_capacity
     if secondary and evidence.get("secondary_max_fraction") is not None and not evidence.get("minimum_combined_fraction"):
         return usages.get(zone, 0.)
     return sum(usages.values()) if evidence.get("minimum_combined_fraction") else max(usages.values(), default=0.)

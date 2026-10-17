@@ -70,3 +70,12 @@ def test_native_and_source_controls_round_trip_and_reject_invalid_numbers():
         bad=deepcopy(values);bad['overrides']['END-Z2-PROG-01'][key]=value
         with pytest.raises(ValidationError):
             MethodLibraryPreferences.model_validate(bad)
+
+
+def test_progressive_efforts_use_method_coefficient_but_minimum_stays_continuous():
+    evidence = {'capacity_minutes':20., 'method_work_capacity_ratio':2.5,
+                'capacity_by_effort':{'Z2:150.000':40., 'Z2:155.000':20.}}
+    blocks = [dict(kind='WORK',zone='Z2',target_hr_bpm=150.,duration_min=20.),
+              dict(kind='WORK',zone='Z2',target_hr_bpm=155.,duration_min=10.)]
+    assert engine._dose_usage(blocks,evidence,'Z2') == pytest.approx(.4)
+    assert engine._minimum_dose_usage(blocks,evidence,'Z2') == pytest.approx(1.)
