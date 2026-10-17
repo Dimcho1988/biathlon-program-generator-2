@@ -144,8 +144,8 @@ def test_progressive_run_scales_every_phase_and_uses_continuous_capacity(monkeyp
     blocks=engine._blocks(m,63,e,settings)
     assert len(blocks)==6
     assert [b["duration_min"] for b in blocks]==pytest.approx([21,16.8,10.5,8.4,4.2,2.1])
-    assert engine._dose_usage(blocks,e,m["zone"])==pytest.approx(63/e["capacity_minutes"])
-    assert engine._interval_budget_profile(m) is None
+    assert engine._dose_usage(blocks,e,m["zone"])==pytest.approx(63/e["library_work_ceiling_minutes"])
+    assert engine._interval_budget_profile(m)["total_capacity_ratio"] == pytest.approx(e["library_work_ceiling_minutes"]/e["capacity_minutes"])
     assert not engine._blocks(m,29,e,settings)
 
 

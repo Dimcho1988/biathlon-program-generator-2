@@ -20,7 +20,7 @@ def model_method():
 
 @pytest.mark.parametrize("structure, ratio", [("MODEL_INTERVALS", 1.2), ("MODEL_INTERVALS", 1.5),
                                                ("METABOLIC_INTERVALS", 1.2), ("METABOLIC_INTERVALS", 1.5)])
-def test_interval_budget_replaces_generic_continuous_tmax_fraction(structure, ratio):
+def test_interval_budget_multiplies_selected_building_fraction(structure, ratio):
     method = model_method()
     method["structure"] = structure
     template = {**method.pop("interval_template"), "total_capacity_ratio": ratio}
@@ -28,13 +28,13 @@ def test_interval_budget_replaces_generic_continuous_tmax_fraction(structure, ra
     evidence = {"capacity_minutes": 34., "effort_profile": template, "readiness_dose_factor": .5}
     fraction = engine._nominal_fraction(method, "BUILDING", {"building_fraction": .65},
                                         "GENERAL_PREPARATION", evidence, None)
-    assert fraction == ratio
+    assert fraction == pytest.approx(ratio*.65)
     assert evidence["approved_interval_work_capacity_ratio"] == ratio
     assert evidence["nominal_capacity_basis"] == "EXPERT_METHOD_WORK_BUDGET_TIMES_CONTINUOUS_TMAX"
     # The approved ratio defines the method work budget, before Recovery.
     blocks = [{"kind": "WORK", "zone": "Z4", "duration_min": 34.*fraction*.5,
                "target_hr_bpm": None}]
-    assert engine._dose_usage(blocks, evidence, "Z4") == pytest.approx(.5)
+    assert engine._dose_usage(blocks, evidence, "Z4") == pytest.approx(.65*.5)
 
 
 def test_missing_building_preference_defaults_to_65_percent_tmax():
@@ -60,7 +60,9 @@ def test_large_interval_ceiling_cannot_raise_the_continuous_tmax_minimum(readine
     assert minimum <= requested
     assert blocks and sum(block["duration_min"] for block in blocks if block["kind"] == "WORK") <= requested
     assert engine._dose_usage(blocks, evidence, "Z4") <= readiness_factor
-    assert evidence["effort_profile"] == original["effort_profile"]
+    assert evidence["effort_profile"]["work_seconds"] == original["effort_profile"]["work_seconds"]
+    assert evidence["effort_profile"]["total_capacity_ratio"] == 3.
+    assert evidence["effort_profile"]["max_repetitions"] == 34
 
 
 def test_composite_minimum_uses_independent_secondary_tmax_without_mutating_its_ceiling():
@@ -105,7 +107,7 @@ def test_short_building_structure_retains_the_expert_method_budget(selected_frac
     assert method["developmental_variant"]
     evidence = {"capacity_minutes": 34., "dose_capacity_basis": "INDEPENDENT_CONTINUOUS_TMAX"}
     assert engine._nominal_fraction(method, "BUILDING", {"building_fraction": selected_fraction},
-                                    "GENERAL_PREPARATION", evidence, None) == method["interval_template"]["total_capacity_ratio"]
+                                    "GENERAL_PREPARATION", evidence, None) == pytest.approx(selected_fraction*method["interval_template"]["total_capacity_ratio"])
 
 
 def test_strength_nominal_dose_keeps_circuit_capacity_without_continuous_tmax():
@@ -175,7 +177,8 @@ def test_curve_supported_interval_building_scales_selected_fraction_once(
     evidence = session["dose_evidence"]
     assert session["purpose"] == "BUILDING"
     assert evidence["capacity_source"] in {"SPEED_DURATION", "BLENDED_DOSING_CURVE"}
-    assert evidence["base_fraction"] == 1.2
+    expected_fraction *= selected_fraction
+    assert evidence["base_fraction"] == pytest.approx(1.2*selected_fraction)
     assert evidence["fraction"] == pytest.approx(expected_fraction)
     assert evidence["requested_primary_work_minutes"] / evidence["capacity_minutes"] == pytest.approx(expected_fraction, abs=.0001)
     assert session["main_work_minutes"] <= evidence["requested_primary_work_minutes"] + .001

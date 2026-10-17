@@ -163,7 +163,7 @@ def test_mixed_reservation_and_prescription_share_curve_policy_and_single_recove
     factor = .5 + readiness / 200
     assert evidence["capacity_minutes"] == pytest.approx(tmax_seconds / 60)
     assert evidence["primary_requested_work"] == pytest.approx(tmax_seconds / 60 * .65 * .5 * factor)
-    assert evidence["combination_high_work_cap"] == pytest.approx(80 / 60 * 3 * .5 * factor)
+    assert evidence["combination_high_work_cap"] == pytest.approx(80 / 60 * 3 * .65 * .5 * factor)
     secondary = evidence["secondary_capacity"]
     assert secondary["capacity_reference"] == "EXPERT_REPETITION_DURATION_COEFFICIENT_ON_CURVE"
     assert secondary["capacity_minutes"] == pytest.approx(80 / 60)

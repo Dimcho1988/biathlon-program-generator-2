@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
-from biathlon import method_library, method_registry, planning_schedule
+from biathlon import method_library, method_registry, planning_schedule, method_dosing
 from biathlon.periodization import build_periodization
 
 from . import model_service
@@ -32,7 +32,10 @@ def validate_preferences(preferences, profile=None):
         if entry is None:
             raise HTTPException(422, f"Unknown training method: {key}")
         prescription = entry.get("prescription")
-        numeric = set(override) - {"enabled"}
+        dose_controls = set(override) & method_dosing.DOSE_CONTROLS
+        if dose_controls and not (prescription or (entry.get("coach_profile") or {}).get("zone") in {"Z1", "Z2", "Z3", "Z4", "Z5"} or key.startswith("ONFLOWS-RACE-")):
+            raise HTTPException(422, f"Method {key} has no aerobic dose to override")
+        numeric = set(override) - {"enabled"} - method_dosing.DOSE_CONTROLS
         if numeric and not prescription:
             raise HTTPException(422, f"Method {key} has no executable prescription to override")
         if "speed_multiplier" in numeric and not prescription.get("speed_multiplier"):
@@ -104,8 +107,8 @@ def _coach_previews(catalog, profile, speed, settings, today, phase):
                  message="Лична работна опора от същия изчислител като седмичния план. Крайната доза зависи и от Recovery, наличното време и общия бюджет.")
         velocity = cap.get("target_speed_kmh")
         if velocity:
-            r.update(target_speed_kmh=velocity, target_speed_range_kmh=[velocity,velocity])
-            r.update(method_library._hr_reference({"target_speed_range_kmh":[velocity,velocity],
+            r.update(target_speed_kmh=velocity, target_speed_range_kmh=cap["target_speed_range_kmh"])
+            r.update(method_library._hr_reference({"target_speed_range_kmh":cap["target_speed_range_kmh"],
                 "zone":method["zone"], "work_duration_seconds":time_range[0]}, context[0]))
         elif method["zone"] != "STR" and context[0]:
             i=int(method["zone"][1:])-1

@@ -2,7 +2,7 @@ import { isRecord } from "./training-status";
 import { durationSeconds } from "./duration-format";
 
 export type MethodRange = [number, number];
-export interface MethodOverride { enabled?: boolean; speed_multiplier?: MethodRange; work_range?: MethodRange; repetitions?: MethodRange }
+export interface MethodOverride { enabled?: boolean; speed_multiplier?: MethodRange; work_range?: MethodRange; repetitions?: MethodRange; total_capacity_ratio?: number; speed_tolerance_fraction?: number; hr_tolerance_bpm?: number }
 export interface MethodPreferences { enabled: boolean; overrides: Record<string, MethodOverride> }
 export interface MethodGuidance { purpose?: string; execution?: string; recovery?: string; success?: string; errors?: string; progression?: string; adjustment?: string }
 export interface MethodPrescription {
@@ -63,8 +63,13 @@ export function parseMethodPreferences(value: unknown): MethodPreferences {
     throw new Error("Провери настройките на базата от методи.");
   for (const [id, override] of Object.entries(value.overrides)) {
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(id) || !isRecord(override)
-      || Object.keys(override).some(k => !["enabled", "speed_multiplier", "work_range", "repetitions"].includes(k))
+      || Object.keys(override).some(k => !["enabled", "speed_multiplier", "work_range", "repetitions", "total_capacity_ratio", "speed_tolerance_fraction", "hr_tolerance_bpm"].includes(k))
       || (override.enabled !== undefined && typeof override.enabled !== "boolean")) throw new Error("Невалидна корекция на метод.");
+    for (const [key, minimum, maximum] of [["total_capacity_ratio", 0, 20], ["speed_tolerance_fraction", 0, .1], ["hr_tolerance_bpm", 0, 15]] as const) {
+      const n = override[key];
+      if (n !== undefined && (typeof n !== "number" || !Number.isFinite(n) || n <= minimum || n > maximum || (key === "hr_tolerance_bpm" && n < 1)))
+        throw new Error("Провери коефициента за Tmax и допустимите отклонения.");
+    }
     for (const key of ["speed_multiplier", "work_range", "repetitions"]) {
       const r = override[key];
       if (r !== undefined && (!isMethodRange(r) || (key === "repetitions" && !r.every(Number.isInteger))))

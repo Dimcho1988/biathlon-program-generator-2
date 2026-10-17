@@ -84,7 +84,7 @@ def test_quality_balance_keeps_first_sport_method_and_curve_when_catalog_ids_rep
     monkeypatch.setattr(engine, "_dose_usage", observed_usage)
     plan = engine.generate_plan(repo, "athlete", body, start_date=start, now=now)
     selected = [session for day in plan["days"] for session in day["sessions"]
-                if session["sport"] == "NordicSki" and session["zone"] == "Z3"
+                if session["sport"] == "NordicSki" and session["zone"] == "Z2"
                 and any(limit["code"] == "LONG_TERM_QUALITY_PREPARATION"
                         for limit in session["dose_evidence"]["limits"])]
     assert selected, "The first sport must undergo real quality balancing."

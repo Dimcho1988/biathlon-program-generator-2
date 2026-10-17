@@ -110,8 +110,8 @@ def test_interval_maintenance_nominal_retains_a_complete_relative_minimum_after_
     minimum = engine._minimum_work(method, evidence, Repository().settings)
     blocks = engine._blocks(method, work, evidence, Repository().settings)
     assert minimum == 9.
-    assert fraction == .72  # 60% of the expert 1.2 × Tmax work budget.
+    assert fraction == .78  # 60% of the developmental method dose.
     assert work >= minimum
-    assert [block["duration_min"] for block in blocks if block["kind"] == "WORK"] == [3.]*6
+    assert [block["duration_min"] for block in blocks if block["kind"] == "WORK"] == [3.]*8
     assert engine._dose_usage(blocks, evidence, "Z4") <= .5*evidence["readiness_dose_factor"]
     assert fraction <= method["interval_template"]["total_capacity_ratio"]

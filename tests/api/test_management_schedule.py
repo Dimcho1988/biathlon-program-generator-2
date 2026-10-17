@@ -330,8 +330,8 @@ def test_metabolic_total_can_exceed_continuous_capacity_only_through_profile():
     cap["effort_profile"]["continuous_capacity_min"] = 10
     work = min(method["max_work_min"], 10*method["interval_template"]["total_capacity_ratio"])
     blocks = engine._blocks(method, work, cap, Repository().settings)
-    assert sum(b["duration_min"] for b in blocks if b["kind"] == "WORK") == 12
-    assert [b["duration_min"] for b in blocks if b["kind"] == "RECOVERY"] == [3,3,3]
+    assert sum(b["duration_min"] for b in blocks if b["kind"] == "WORK") == 18
+    assert [b["duration_min"] for b in blocks if b["kind"] == "RECOVERY"] == [3]*5
     assert all(b["duration_min"] < 10 for b in blocks if b["kind"] == "WORK")
 
 

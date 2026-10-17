@@ -197,7 +197,7 @@ def library_curve_capacity(method, speed, context, *, use_model_prior=False):
             "capacity_confidence": "SOURCE_RECIPE_ON_INDIVIDUAL_CURVE_ESTIMATE", "capacity_is_estimate": True,
             "model_version": resolved["curve_model_version"], "fallback_reasons": list(reasons),
             "hr_role": "OBSERVATION_ONLY", "speed_role": resolved["speed_role"],
-            "method_library": deepcopy(library), "library_work_ceiling_minutes": resolved["maximum_work_seconds"] / 60,
+            "method_library": deepcopy(library), "library_work_ceiling_minutes": resolved["method_work_capacity_seconds"] / 60,
             "effort_profile": {**deepcopy(method["interval_template"]),
                                "continuous_capacity_min": duration / 60,
                                "target_speed_kmh": resolved["target_speed_kmh"], "speed_basis": "FLAT_EQUIVALENT"}}

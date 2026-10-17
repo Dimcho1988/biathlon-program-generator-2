@@ -239,11 +239,11 @@ def test_double_threshold_split_reports_each_session_base_fraction_and_one_readi
     assert len(pair) == 2 and all(s["double_threshold"] for s in pair)
     for session in pair:
         evidence = session["dose_evidence"]
-        assert evidence["base_fraction"] == configured["planning_controls"]["double_threshold_fraction"]
+        assert evidence["base_fraction"] == configured["planning_controls"]["double_threshold_fraction"]*.65
         assert evidence["readiness_dose_factor"] == .975
         assert evidence["fraction"] == pytest.approx(evidence["base_fraction"] * .975, abs=.0001)
-        assert evidence["requested_work_minutes"] / evidence["capacity_minutes"] == pytest.approx(.4875, abs=.0001)
-        assert evidence["applied_structure_fraction"] <= .4875 + .001
+        assert evidence["requested_work_minutes"] / evidence["capacity_minutes"] == pytest.approx(.4875*.65, abs=.0001)
+        assert evidence["applied_structure_fraction"] <= .4875*.65 + .001
         assert any(b["kind"] == "WARMUP" for b in session["blocks"])
         assert any(b["kind"] == "COOLDOWN" for b in session["blocks"])
     assert_rolling_budgets(plan)
@@ -263,14 +263,14 @@ def test_z4_maintenance_can_fit_whole_profile_at_less_than_full_readiness(monkey
     assert session["purpose"] == "MAINTENANCE"
     evidence = session["dose_evidence"]
     assert evidence["maintenance_policy"]
-    assert evidence["base_fraction"] == .75
-    assert evidence["fraction"] == .75
+    assert evidence["base_fraction"] == pytest.approx(.75*.65)
+    assert evidence["fraction"] == pytest.approx(.75*.65)
     assert evidence["readiness_dose_factor"] == 1.
-    assert evidence["requested_primary_work_minutes"] == pytest.approx(9.)
-    assert session["main_work_minutes"] == 9.
-    assert [b["duration_min"] for b in session["blocks"] if b["kind"] == "WORK"] == [3., 3., 3.]
-    assert [b["duration_min"] for b in session["blocks"] if b["kind"] == "RECOVERY"] == [3., 3.]
-    assert evidence["applied_structure_fraction"] == .6
+    assert evidence["requested_primary_work_minutes"] == pytest.approx(9.*.65)
+    assert session["main_work_minutes"] == 3.
+    assert [b["duration_min"] for b in session["blocks"] if b["kind"] == "WORK"] == [3.]
+    assert [b["duration_min"] for b in session["blocks"] if b["kind"] == "RECOVERY"] == []
+    assert evidence["applied_structure_fraction"] == .2
     assert evidence["applied_structure_fraction"] <= evidence["max_dose_fraction"] + .001
     assert_rolling_budgets(plan)
 
