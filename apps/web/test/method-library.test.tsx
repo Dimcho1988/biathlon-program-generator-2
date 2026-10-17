@@ -70,6 +70,13 @@ describe("source-preserving method library", () => {
     expect(JSON.parse(JSON.stringify(profile)).method_library).toEqual(preferences);
     for (const bad of [{ speed_multiplier: [1.1, .9] }, { anchor: "V5" }, { repetitions: [1.5, 4] }]) expect(() => parseMethodPreferences({ enabled: true, overrides: { XC01: bad } })).toThrow();
   });
+  it("round trips editable Tmax and execution tolerances for native methods", () => {
+    const preferences = {enabled: true, overrides: {"END-Z2-PROG-01": {total_capacity_ratio: 2.5, speed_tolerance_fraction: .015, hr_tolerance_bpm: 4}}};
+    expect(parseMethodPreferences(JSON.parse(JSON.stringify(preferences)))).toEqual(preferences);
+    for (const bad of [{total_capacity_ratio: 0}, {total_capacity_ratio: Infinity}, {speed_tolerance_fraction: -.01}, {hr_tolerance_bpm: 0}]) {
+      expect(() => parseMethodPreferences({enabled:true, overrides:{"END-Z2-PROG-01":bad}})).toThrow();
+    }
+  });
   it("links every component of a combined saved session once", () => {
     const metadata = { id: testMethod.id, title: testMethod.title, guidance: testMethod.guidance, resolution: testMethod.resolution };
     const session = { method_library: metadata, blocks: [{ method_library: metadata }, { method_library: { ...metadata, id: "XC02" } }] } as DraftSession;

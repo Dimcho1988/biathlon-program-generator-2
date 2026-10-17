@@ -6,9 +6,9 @@ resolver; personal coach profiles retain their own capacity calculation.
 from copy import deepcopy
 from hashlib import sha256
 import json
-from . import method_library, training_methods, race_specific
+from . import method_dosing, method_library, training_methods, race_specific
 
-VERSION = 'method-registry-v3-sport-strength'
+VERSION = 'method-registry-v4-individual-tmax'
 COMBINED_STRUCTURES = {'ALTERNATING', 'CRUISE_ALTERNATING', 'THRESHOLD_HIGH', 'AEROBIC_STRENGTH', 'AEROBIC_SUPPORT', 'MIXED_AEROBIC'}
 
 
@@ -17,6 +17,7 @@ def coach_card(method):
     card = {'id': method['id'], 'title': method['title'], 'sports': list(method['sports']),
         'periods': list(method['periods']), 'disciplines': [], 'registry_kind': 'COACH_PROFILE',
         'automatic_selection': method.get('automatic_selection', True), 'prescription': None,
+        'dosing': method.get('dosing') or (method_dosing.parameters(method) if method['zone'] != 'STR' else None),
         'source': {'authors': 'onFlows', 'reference': method.get('source_id', method['id']),
                    'locator': method.get('implementation_profile', training_methods.VERSION)},
         'adaptation': method.get('adaptation', 'Работен треньорски профил с индивидуална опора и общите правила за Recovery и дозиране.'),
@@ -25,7 +26,7 @@ def coach_card(method):
             'recovery': ('Запази предписаните паузи и резерв от качествени повторения. Почивката не увеличава автоматично дозовия бюджет.' if interval else 'Работата е контролирана; загрявката, разпускането и преходите се отчитат в общия товар.'),
             'success': 'Изпълни предписаното усилие с равномерен ритъм и запазена техника. Потвърди реалното изпълнение към активността.',
             'errors': 'Не ускорявай, за да достигнеш пулсово число, и не добавяй работа само за да запълниш свободното време.',
-            'adjustment': 'Под 50% Recovery целевата работа над Z1 отпада. Ролята следва тренировъчната цел. Поддържащата работа е 60% от методния бюджет без допълнителен Recovery множител. Развиващата доза намалява с половината от дефицита на Recovery.',
+            'adjustment': 'Под 50% Recovery целевата работа над Z1 отпада. Ролята следва тренировъчната цел. Поддържащата работа е 60% от развиващата методна доза без допълнителен Recovery множител. Развиващата доза намалява с половината от дефицита на Recovery.',
             'progression': 'Поддържащата работа може да подготви следваща развиваща сесия. Увеличението изисква успешно изпълнение и допустими доза, общ товар и възстановяване. 90% Recovery не е задължителен праг; календарът сам не доказва готовност.'},
         'coach_profile': {'zone': method['zone'], 'structure': method['structure'],
             'purpose': method['purpose'], 'dose_policy': deepcopy(method.get('dose_policy')),

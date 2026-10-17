@@ -12,9 +12,9 @@ import math
 from pathlib import Path
 import re
 
-from . import dosing_curve, preliminary_capacity, speed_duration, speed_zones, method_progression, hr_speed
+from . import method_dosing, dosing_curve, preliminary_capacity, speed_duration, speed_zones, method_progression, hr_speed
 
-VERSION = "training-method-library-v4-admissible-start"
+VERSION = "training-method-library-v5-individual-tmax"
 CATALOG_PATH = Path(__file__).parent / "data" / "training_method_library.json"
 PHASE_POSITION = {"RE_ENTRY": 0., "GENERAL_PREPARATION": 0., "SPECIAL_PREPARATION": .5,
                   "PRECOMPETITION": 1., "COMPETITION": 1., "TRANSITION": 0.}
@@ -254,7 +254,8 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
     phase = phase or "GENERAL_PREPARATION"
     config = profile.get("method_library") or {}
     override = (config.get("overrides") or {}).get(record["id"], {})
-    result = {"status": "UNAVAILABLE", "reason": None, "phase": phase,
+    dosing = method_dosing.parameters(record, profile)
+    result = {"dosing": dosing, "status": "UNAVAILABLE", "reason": None, "phase": phase,
               "speed_role": "FLAT_EQUIVALENT_REFERENCE_NOT_TERRAIN_PACE",
               "selection_basis": "EXPLICIT_METHOD_RANGES_CURRENT_CURVE", "curve_improvement_assumed": False}
     if config.get("enabled", True) is False or override.get("enabled", True) is False:
@@ -308,7 +309,11 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
         segments = [_segment(s, p, profile, speed_view, curve, tests, position, zones) for s in pattern]
         tail = _segment(p["tail"], p, profile, speed_view, curve, tests, position, zones) if p.get("tail") else None
         for segment in segments + ([tail] if tail else []):
+            segment.update(method_dosing.target_ranges(segment["target_speed_kmh"], None, segment["zone"],
+                dosing=dosing, speed_range=segment["target_speed_range_kmh"], speed_zones=zones))
             segment.update(_hr_reference(segment, _hr_predictor))
+            segment.update(method_dosing.target_ranges(None, None, segment["zone"], dosing=dosing,
+                hr_range=segment.get("hr_reference_range_bpm"), hr_bounds=getattr(_hr_predictor, "bounds", None)))
         if (profile.get("planning_controls") or {}).get("capacity_policy", "MODEL_WITH_PRIOR") != "MODEL_WITH_PRIOR":
             observed = sorted({t["duration_s"] for t in tests})
             if len(observed) < 2 or any(not observed[0] <= s["continuous_capacity_seconds"] <= observed[-1] for s in segments if s["kind"] == "WORK"):
@@ -336,47 +341,37 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
                 if duration and segment["work_duration_seconds"] > duration * p["race_duration_fraction_max"]:
                     raise ValueError("WORK_INTERVAL_TOO_LONG_FOR_SELECTED_DISCIPLINE")
         original_repetitions = (None if p.get("repetitions_from_budget") else p.get("source_repetitions_range") or list(repetitions))
-        # The source count is a ceiling. Recovery and shared weekly budgets
-        # may remove complete repeats, without shortening the recipe itself.
-        if p.get("allow_fewer_repetitions") and override.get("repetitions") is None and repetitions[0] == repetitions[1] and repetitions[0] > 1:
-            repetitions[0] = 1
-        minimum, maximum = cycle * repetitions[0] * count, cycle * repetitions[1] * count
+        maximum, allocation = method_dosing.recipe_capacity(segments, dosing["total_capacity_ratio"])
+        capacity_seconds = maximum
         work_options = None
-        if p.get("structure") == "SEQUENCE":
-            if count != 1 or repetitions != [1., 1.] or not tail:
+        structure = p.get("structure", "INTERVALS")
+        if structure == "CONTINUOUS":
+            minimum = .25 * work_segments[0]["continuous_capacity_seconds"]
+            repetitions = [1, 1]
+        elif structure in {"SCALED_SEQUENCE", "PROGRESSIVE_CONTINUOUS"}:
+            # Scale all work phases together; the source length is not a cap.
+            minimum = .25 * maximum / dosing["total_capacity_ratio"]
+            repetitions = [1, 1]
+        elif structure == "SEQUENCE":
+            if not tail or count != 1:
                 raise ValueError("INVALID_SEQUENCE")
-            limits = _range(p.get("tail_repetitions", [0, 0]), "tail_repetitions", zero=True)
-            if any(v != int(v) or v > 100 for v in limits):
-                raise ValueError("INVALID_SEQUENCE")
-            work_options = [cycle + n * tail["work_duration_seconds"] for n in range(int(limits[0]), int(limits[1])+1)]
-            minimum, maximum = work_options[0], work_options[-1]
-        if p.get("structure") in {"SCALED_SEQUENCE", "PROGRESSIVE_CONTINUOUS"}:
-            scale = p.get("minimum_scale", .5)
-            if not _positive(scale) or scale > 1 or count != 1 or repetitions != [1., 1.]:
-                raise ValueError("INVALID_SEQUENCE_SCALE")
-            minimum, maximum = cycle * scale, cycle
-        if p.get("repetitions_from_budget"):
-            continuous_capacity = min(s["continuous_capacity_seconds"] for s in work_segments)
-            maximum = min(maximum, continuous_capacity)
-            if maximum < minimum:
+            # Keep the complete opening sequence; add whole tail efforts until
+            # one component exhausts its independent share of Tmax.
+            tail_usage = tail["work_duration_seconds"] / tail["continuous_capacity_seconds"]
+            component_usage = sum(v["work_duration_seconds"] / v["continuous_capacity_seconds"] for v in work_segments if v["zone"] == tail["zone"])
+            remaining = max(0., dosing["total_capacity_ratio"]*allocation-component_usage)
+            work_options = [cycle + n*tail["work_duration_seconds"] for n in range(math.floor(remaining/tail_usage)+1)]
+            work_options = [v for v in work_options if v <= maximum+1e-7]
+            if not work_options:
                 raise ValueError("NO_COMPLETE_REPEAT_WITHIN_METHOD_BUDGET")
-            repetitions[1] = min(repetitions[1], math.floor((maximum+1e-7)/(cycle*count)))
-        if p.get("structure") == "CONTINUOUS":
-            source_minimum, source_maximum = segments[0]["work_duration_range_seconds"]
-            # Start progression at a complete admissible dose inside the source
-            # range. A shorter introductory point must not deadlock advancement.
-            minimum = max(source_minimum, .25 * segments[0]["continuous_capacity_seconds"])
-            if minimum > source_maximum + 1e-7:
-                raise ValueError("SOURCE_RANGE_BELOW_MINIMUM_TMAX_DOSE")
-            maximum = minimum + position * (source_maximum-minimum)
-            result["continuous_start_adjustment"] = {
-                "policy": "FIRST_ADMISSIBLE_POINT_WITHIN_SOURCE_RANGE",
-                "source_minimum_seconds": source_minimum,
-                "minimum_seconds": minimum,
-                "adapted": minimum > source_minimum + 1e-7}
-            segments[0]["work_duration_seconds"] = maximum
-            segments[0]["work_distance_m"] = maximum * segments[0]["target_speed_kmh"] / 3.6
-            cycle = maximum
+            minimum, maximum = work_options[0], work_options[-1]
+            repetitions = [1, 1]
+        else:
+            repetitions = list(override["repetitions"]) if override.get("repetitions") is not None else [1, math.floor((maximum+1e-7)/(cycle*count))]
+            minimum = cycle * count * repetitions[0]
+            maximum = min(maximum, cycle * count * repetitions[1])
+            if repetitions[1] < repetitions[0] or maximum < minimum:
+                raise ValueError("NO_COMPLETE_REPEAT_WITHIN_METHOD_BUDGET")
         recovery_resolution = None
         if recovery.get("anchor") or recovery.get("speed_multiplier"):
             recovery_resolution = _segment({"anchor": recovery.get("anchor", p.get("anchor")),
@@ -386,7 +381,7 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
             recovery_resolution.update(_hr_reference(recovery_resolution, _hr_predictor))
         return {**result, **deepcopy(dominant), "status": "READY", "curve_source": curve_source,
                 "actual_sport": actual_sport, "source_repetitions": original_repetitions,
-                "source_count_policy": "INDEPENDENT_TMAX_COACH_CEILING_NOT_SOURCE_COUNT" if p.get("repetitions_from_budget") else "EXPLICIT_COACH_REPEAT_RANGE" if override.get("repetitions") is not None else "CEILING_ALLOW_COMPLETE_REPEAT_REDUCTION",
+                "source_count_policy": "EXPLICIT_COACH_REPEAT_RANGE" if override.get("repetitions") is not None else "INDIVIDUAL_TMAX_NOT_SOURCE_COUNT",
                 "automatic_selection_enabled": override.get("enabled", record.get("automatic_selection", True)),
                 "requires_coach_activation": not override.get("enabled", record.get("automatic_selection", True)),
                 "recovery_resolution": recovery_resolution,
@@ -399,7 +394,8 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
                 "minimum_work_seconds": minimum, "maximum_work_seconds": maximum,
                 "cycle_work_seconds": cycle, "structure": p.get("structure", "INTERVALS"),
                 "expert_override": deepcopy(override), "active_test_count": len(tests),
-                "budget_policy": "COMPLETE_RECIPE_WORK_CEILING_SINGLE_RECOVERY_SCALE"}
+                "method_work_capacity_seconds": capacity_seconds, "component_allocation": allocation,
+                "budget_policy": "INDIVIDUAL_TMAX_TIMES_METHOD_COEFFICIENT_ROLE_AND_RECOVERY"}
     except (ValueError, KeyError, TypeError, OverflowError) as exc:
         return {**result, "reason": str(exc) or "UNRESOLVED_RECIPE"}
 
@@ -450,5 +446,5 @@ def executable_methods(profile, speed_view, *, phase=None):
                 "interval_template": {"zone": r["zone"], "work_seconds": r["cycle_work_seconds"],
                     "recovery_seconds": r["recovery_seconds"], "min_repetitions": r["repetitions"][0],
                     "max_repetitions": r["repetitions"][1], "reserve_repetitions": 2,
-                    "total_capacity_ratio": r["maximum_work_seconds"]/capacity}})
+                    "total_capacity_ratio": r["method_work_capacity_seconds"]/capacity}})
     return result

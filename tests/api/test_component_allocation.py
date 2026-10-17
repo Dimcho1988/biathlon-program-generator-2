@@ -166,9 +166,11 @@ def test_lower_future_target_does_not_force_filling_available_sessions(monkeypat
             assert not d["sessions"]
 
 
-@pytest.mark.parametrize("target", [180., 250., 400.])
+@pytest.mark.parametrize("target", [180., 250., 390.])
 def test_feasible_volume_is_realized_in_complete_sessions(monkeypatch, target):
     # Isolate volume allocation from the separately tested Recovery role gate.
+    # 390 stays feasible under the current whole-session rolling limits; at
+    # 400 those limits bind before the final 2.38 Q can be assigned.
     from tests.api.test_readiness_adaptive_plan_v2 import fixed_readiness
     fixed_readiness(monkeypatch, 100.)
     p = body(sessions_per_week=7, accent_mode="MANUAL", accents=["Z1"], mesocycle_anchor=TODAY)

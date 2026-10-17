@@ -17,6 +17,7 @@ import pandas as pd
 
 from biathlon import hr_speed, recovery_v2, speed_duration, training_targets, planning_controls, planning_history, planning_schedule, planning_allocation, load_progression, mesocycle_focus, training_return
 from biathlon.constants import COMPONENTS, DEFAULT_PARAMETERS, fresh_parameters
+from biathlon import method_dosing
 from biathlon.method_dosing import continuous_building_fraction, continuous_maintenance_fraction, recovery_factor, threshold_allowed
 from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION, DOWNWARD_FACTORS
 from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, equivalence_slope
@@ -33,8 +34,8 @@ from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 
-VERSION = "training-management-v46-pending-lock-quotas"
-PARAMETER_VERSION = "management-parameters-v43"
+VERSION = "training-management-v47-individual-tmax"
+PARAMETER_VERSION = "management-parameters-v44"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -299,6 +300,13 @@ def capacity_for(method, settings, speed, context, today, allow_fallback=True, *
     local = local_settings(settings, method.get("actual_sport") or (speed or {}).get("sport"))
     basis = (getattr(context[0], "component_load_context", None) if context[0] is not None else None)
     basis = basis or context_from_speed_view(speed)
+    predictor = context[0]
+    result["dosing_speed_zones"] = ((speed or {}).get("dosing_model") or {}).get("speed_zones") or (speed or {}).get("speed_zones")
+    ranges = method_dosing.target_ranges(result.get("target_speed_kmh"), result.get("target_hr_bpm"), method["zone"],
+        dosing=method.get("dosing"), speed_zones=result["dosing_speed_zones"], hr_bounds=list(local.zone_bounds_bpm))
+    if not ranges.get("hr_reference_range_bpm") and result.get("target_speed_kmh") and predictor:
+        ranges.update(method_library._hr_reference({**ranges, "zone":method["zone"], "work_duration_seconds": (result.get("effort_profile") or {}).get("work_seconds", 300)}, predictor))
+    result.update(ranges)
     return {**result, "zone_tmax_minutes": basis["minutes"], "zone_tmax_sources": basis["sources"],
             "dose_settings": {"zone_bounds_bpm": list(local.zone_bounds_bpm), "hrmax_bpm": local.hrmax_bpm,
                               "sport_hr_offset_bpm": getattr(local, "sport_hr_offset_bpm", 0.)}}
@@ -467,6 +475,22 @@ def _block(kind, label, zone, minutes, hr, instructions, *, speed=None, repetiti
 
 
 def _blocks(method, work, evidence, settings):
+    blocks = _blocks_impl(method, work, evidence, settings)
+    from biathlon.sport_heart_rate import local_settings
+    local = local_settings(settings, method.get("actual_sport"))
+    for block in blocks:
+        if block["zone"] == "STR" or block.get("passive_rest"):
+            continue
+        same = block.get("target_speed_kmh") is not None and evidence.get("target_speed_kmh") is not None and abs(block["target_speed_kmh"]-evidence["target_speed_kmh"]) < .002
+        block.update(method_dosing.target_ranges(block.get("target_speed_kmh"), block.get("target_hr_bpm"), block["zone"],
+            dosing=method.get("dosing") or evidence.get("dosing"),
+            speed_range=block.get("target_speed_range_kmh") or (evidence.get("target_speed_range_kmh") if same else None),
+            hr_range=block.get("hr_reference_range_bpm") or (evidence.get("hr_reference_range_bpm") if same else None),
+            speed_zones=evidence.get("dosing_speed_zones"), hr_bounds=list(local.zone_bounds_bpm)))
+    return blocks
+
+
+def _blocks_impl(method, work, evidence, settings):
     from biathlon.sport_heart_rate import local_settings, reference_offset
     settings=local_settings(settings,method.get("actual_sport"))
     if method.get("combined_methods"):
@@ -686,7 +710,7 @@ def _blocks(method, work, evidence, settings):
         blocks.append(_block("WORK", "Поддържаща част в Z3", "Z3", work,
                              evidence["target_hr_bpm"], method["instructions"], speed=evidence["target_speed_kmh"]))
     elif structure == "THRESHOLD_REPETITIONS":
-        reps = min(8, max(2, math.ceil(work/12)))
+        reps = max(2, math.ceil(work/12))
         duration = math.floor(work/reps*2)/2
         if duration < 6:
             return []
@@ -696,7 +720,7 @@ def _blocks(method, work, evidence, settings):
             if rep < reps-1:
                 blocks.append(_block("RECOVERY", "Активна почивка", "Z1", 2, easy, "Две минути леко движение."))
     elif structure == "CRUISE_ALTERNATING":
-        cycles = min(10, int(work//15))
+        cycles = int(work//15)
         if cycles < 3:
             return []
         for i in range(cycles):
@@ -956,15 +980,15 @@ def _dose_usage(blocks, evidence, zone):
             part = [{k: v for k, v in b.items() if k != "session_index"} for b in blocks if b.get("session_index", 1) == slot]
             usages.append(_dose_usage(part, cap, cap.get("zone", zone)))
         return max(usages, default=0.)
-    if evidence.get("method_library") and evidence["method_library"]["resolution"]["structure"] not in {"CONTINUOUS", "PROGRESSIVE_CONTINUOUS"}:
-        # A sourced integrated recipe owns one complete work ceiling. Its
+    if evidence.get("method_library"):
+        # An individual recipe budget owns one continuous-Tmax denominator. Its
         # segment loads still enter Q/E and Recovery in their actual zones.
         ceiling = evidence["library_work_ceiling_minutes"]
         return sum(b["duration_min"] for b in blocks if b["kind"] == "WORK") / ceiling
-    capacities = {zone: evidence["capacity_minutes"]}
+    capacities = {zone: evidence["capacity_minutes"] * (evidence.get("method_work_capacity_ratio", 1.) if evidence.get("dose_capacity_basis") != "INDEPENDENT_CONTINUOUS_TMAX" else 1.)}
     if evidence.get("method_library"):
         return sum(b["duration_min"] for b in blocks if b["kind"] == "WORK") / evidence["capacity_minutes"]
-    if evidence.get("effort_profile") and evidence.get("dose_capacity_basis") != "INDEPENDENT_CONTINUOUS_TMAX":
+    if evidence.get("effort_profile") and "method_work_capacity_ratio" not in evidence and evidence.get("dose_capacity_basis") != "INDEPENDENT_CONTINUOUS_TMAX":
         capacities[zone] *= evidence["effort_profile"]["total_capacity_ratio"]
     secondary = evidence.get("secondary_capacity")
     if secondary:
@@ -986,7 +1010,7 @@ def _dose_fits(blocks, evidence, zone, maximum, *, tolerance=.001):
     if _dose_usage(blocks, evidence, zone) > maximum + tolerance:
         return False
     # An easy part keeps its own maintenance budget even when an interval
-    # primary is allowed 100% of its expert-defined repeatable-work budget.
+    # primary uses the selected developmental fraction of its method budget.
     secondary = evidence.get("secondary_capacity")
     limit = evidence.get("secondary_max_fraction")
     if secondary and limit is not None:
@@ -1038,9 +1062,7 @@ def _primary_work_share(method):
 
 
 def _interval_budget_profile(method):
-    if (method.get("method_library") or {}).get("resolution", {}).get("structure") == "PROGRESSIVE_CONTINUOUS":
-        return None
-    if method["structure"] in {"MODEL_INTERVALS", "LIBRARY_INTERVALS"}:
+    if method["structure"] in {"MODEL_INTERVALS", "LIBRARY_INTERVALS", "LIBRARY_CONTINUOUS"}:
         return method["interval_template"]
     if method["structure"] == "METABOLIC_INTERVALS":
         return method["interval_profile"]
@@ -1049,6 +1071,7 @@ def _interval_budget_profile(method):
 
 def _nominal_fraction(method, purpose, profile, period, evidence, controls):
     """Method/role dose before exactly one proportional Recovery adjustment."""
+    method_dosing.prepare_native_budget(method, evidence, profile)
     purpose = adaptive_methods.purpose_for(purpose, evidence.get("readiness_policy", {}))
     evidence["resolved_role"] = "MAINTENANCE" if period == "RE_ENTRY" else purpose
     policy = evidence.get("readiness_policy", {})
@@ -1076,13 +1099,13 @@ def _nominal_fraction(method, purpose, profile, period, evidence, controls):
                             "nominal_work_minutes": cap["capacity_minutes"]*own*.5})
         evidence.update(combined_budgets=budgets, combination_allocation="HALF_EACH_OWN_ROLE_BUDGET_WITH_ROLE_RECOVERY", nominal_capacity_basis="INDEPENDENT_METHOD_ROLE_BUDGETS")
         return budgets[0]["fraction"]
-    maintenance = purpose in {"MAINTENANCE", "RECOVERY", "SUPPORTING"} or period == "RE_ENTRY"
+    maintenance = purpose in {"MAINTENANCE", "RECOVERY", "SUPPORTING", "ACTIVATION"} or period == "RE_ENTRY"
     fraction = continuous_maintenance_fraction(profile) if maintenance else continuous_building_fraction(profile)
     if period == "RE_ENTRY":
         evidence["reentry_dose_policy"] = "MAINTENANCE_ROLE_BUDGET"
     interval = _interval_budget_profile(method)
     if interval:
-        role = .6 if maintenance else 1.
+        role = fraction
         fraction = interval["total_capacity_ratio"] * role
         evidence.update(approved_interval_work_capacity_ratio=interval["total_capacity_ratio"],
                         method_budget_role_fraction=role,
@@ -1093,14 +1116,15 @@ def _nominal_fraction(method, purpose, profile, period, evidence, controls):
     elif method["zone"] == "STR":
         fraction = .6 if maintenance else 1.
     elif not method.get("double_threshold"):
-        evidence["method_budget_role_fraction"] = .6 if maintenance else 1.
+        evidence["method_budget_role_fraction"] = fraction
+        fraction *= evidence.get("method_work_capacity_ratio", 1.)
         if maintenance:
             evidence["maintenance_policy"] = "SIXTY_PERCENT_METHOD_BUDGET_NO_RECOVERY_SCALE"
     if method.get("double_threshold"):
-        fraction = 2*max(.5, (controls or {}).get("double_threshold_fraction", .5)) * (.6 if maintenance else 1.)
+        fraction = 2*(controls or {}).get("double_threshold_fraction", .5) * fraction * evidence.get("method_work_capacity_ratio", 1.)
     if method["zone"] != "STR":
         evidence.setdefault("nominal_capacity_basis", "CONTINUOUS_TMAX_AT_PRESCRIBED_EFFORT")
-        evidence["nominal_dose_policy"] = "GOAL_ROLE_HALF_DEFICIT_OR_FIXED_MAINTENANCE_V4"
+        evidence["nominal_dose_policy"] = "INDIVIDUAL_TMAX_METHOD_ROLE_HALF_DEFICIT_V5"
         evidence["minimum_dose_capacity_basis"] = "INDEPENDENT_CONTINUOUS_TMAX"
     return fraction
 
@@ -1111,18 +1135,19 @@ def _dose_ceiling(method, purpose, profile, period, evidence, controls, generic_
         period = "RE_ENTRY"
     if method.get("strength_profile"):
         return _nominal_fraction(method, purpose, profile, period, evidence, controls)
+    method_dosing.prepare_native_budget(method, evidence, profile)
     purpose = adaptive_methods.purpose_for(purpose, evidence.get("readiness_policy", {}))
     evidence["resolved_role"] = "MAINTENANCE" if period == "RE_ENTRY" else purpose
     if method.get("combined_methods"):
         return _nominal_fraction(method, purpose, profile, period, evidence, controls)
     if method.get("double_threshold"):
-        return max(.5, (controls or {}).get("double_threshold_fraction", .5)) * (.6 if purpose != "BUILDING" or period == "RE_ENTRY" else 1.)
+        return (controls or {}).get("double_threshold_fraction", .5) * (continuous_maintenance_fraction(profile) if purpose != "BUILDING" or period == "RE_ENTRY" else continuous_building_fraction(profile))
     interval = _interval_budget_profile(method)
     if interval:
-        maximum = .6 if purpose in {"MAINTENANCE", "RECOVERY", "SUPPORTING"} or period == "RE_ENTRY" or reentry else 1.
+        maximum = continuous_maintenance_fraction(profile) if purpose in {"MAINTENANCE", "RECOVERY", "SUPPORTING", "ACTIVATION"} or period == "RE_ENTRY" or reentry else continuous_building_fraction(profile)
     else:
         nominal = _nominal_fraction(method, purpose, profile, period, evidence, controls)
-        maximum = min(generic_ceiling, nominal) if method["zone"] != "STR" else generic_ceiling
+        maximum = min(generic_ceiling, nominal / evidence.get("method_work_capacity_ratio", 1.)) if method["zone"] != "STR" else generic_ceiling
         if reentry:
             maximum = min(maximum, continuous_maintenance_fraction(profile))
     if evidence.get("secondary_capacity"):
@@ -1143,12 +1168,14 @@ def _prepare_threshold_high_budget(method, evidence, profile, settings, speed, c
     """
     p = method["interval_profile"]
     controls = profile.get("planning_controls") or {}
-    high_capacity = capacity_for({**method, "zone": p["zone"], "structure": "METABOLIC_INTERVALS"},
+    high_method = {**method, "zone": p["zone"], "structure": "METABOLIC_INTERVALS"}
+    high_capacity = capacity_for(high_method,
         settings, speed, context, today, profile.get("allow_expert_fallback", True),
         use_model_prior=controls.get("capacity_policy") == "MODEL_WITH_PRIOR")
     if high_capacity is None:
         return False
-    high_fraction = p["total_capacity_ratio"] * (.30 if evidence.get("resolved_role") in {"MAINTENANCE", "SUPPORTING", "RECOVERY"} else .5) * readiness_factor
+    method_dosing.prepare_native_budget(high_method, high_capacity, profile)
+    high_fraction = p["total_capacity_ratio"] * continuous_building_fraction(profile) * (.30 if evidence.get("resolved_role") in {"MAINTENANCE", "SUPPORTING", "RECOVERY"} else .5) * readiness_factor
     evidence.update(primary_requested_work=evidence["capacity_minutes"] * primary_fraction * readiness_factor,
                     combination_high_work_cap=high_capacity["capacity_minutes"] * high_fraction,
                     secondary_capacity={**high_capacity, "zone": p["zone"], "fraction": high_fraction})
@@ -2716,7 +2743,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 if method.get("method_library"):
                     evidence["explanation"] = "Скоростта и диапазонът на работната отсечка са от избрания метод, разрешени върху актуалната индивидуална крива. Източникът и треньорската адаптация са показани отделно. Пълните повторения се побират в методния таван и седмичния бюджет; Recovery намалява обема веднъж. Минималната доза се проверява спрямо непрекъснатия Tmax. Пулсът е контролен ориентир, а промяна на формата с датата не се предполага."
                 elif method["structure"] == "MODEL_INTERVALS":
-                    evidence["explanation"] = "Метаболитният профил задава общия работен бюджет, повторенията, паузите и резерв от две отсечки. Процентите за Z1–Z3 не се прилагат втори път. Сумарната работа може да надхвърли непрекъснатата устойчивост само в границите на този профил. Изграждането използва 100% от експертния работен бюджет, поддържането и вработването — 60% без Recovery множител. Развиващата доза се намалява с половината от дефицита на Recovery. Числата са видими начални треньорски настройки; 7/40 и Recovery могат да намалят дозата или да отложат сесията."
+                    evidence["explanation"] = "Метаболитният профил задава общия работен бюджет, повторенията, паузите и резерв от две отсечки. Процентите за Z1–Z3 не се прилагат втори път. Сумарната работа може да надхвърли непрекъснатата устойчивост само в границите на този профил. Изграждането използва избрания процент (начално 65%) от индивидуалния методен капацитет, поддържането и вработването — 60% от тази развиваща доза без Recovery множител. Развиващата доза се намалява с половината от дефицита на Recovery. Числата са видими начални треньорски настройки; 7/40 и Recovery могат да намалят дозата или да отложат сесията."
                 elif method["structure"] == "METABOLIC_INTERVALS":
                     evidence["explanation"] = "Устойчивостта е индивидуално зададена за описаното усилие и средство. Цели повторения и активни паузи използват общия методен бюджет. Пулсът е наблюдение; не определя усилието или дозата. Прогнозният приравнен товар използва горната зонова референция и ще бъде заменен с реалното изпълнение."
                 elif z == "STR":
@@ -2730,7 +2757,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     evidence["combination_allocation"] = "TWO_INDEPENDENT_TMAX_DOSES_SHARED_Q_E_BUDGET"
                     evidence["double_threshold_fraction"] = (controls or {}).get("double_threshold_fraction", .5)
                     evidence["planned_gap_hours"] = (controls or {}).get("double_threshold_gap_hours", 6.)
-                    evidence["explanation"] = (f"Две отделно изчислени цели по {evidence['double_threshold_fraction']*100:g}% от Tmax на съответното усилие: дълги 6–10 мин и кратки 60 сек интервали. "
+                    evidence["explanation"] = (f"Две отделно изчислени цели по {evidence['double_threshold_fraction']*100:g}% от развиващата доза при съответното усилие: дълги 6–10 мин и кратки 60 сек интервали. "
                         f"Планирай поне {evidence['planned_gap_hours']:g} часа между сесиите. Няма повторна проверка за 90% между тях. "
                         "Recovery проверява готовността в началото на деня и сумарния дневен товар; не изчислява възстановяване по часове. "
                         "Общите Q/7–40 и времеви бюджети могат да намалят двете дози. Втората сесия се изпълнява само при запазени техника, поносимост и контрол на усилието.")
@@ -3255,6 +3282,24 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             combined["explanation"] = f"{len(combined['sessions'])} сесии · {sum(v['total_minutes'] for v in combined['sessions']):g} минути общо. Общ бюджет по компоненти; готовността е оценена за началото на деня."
     result_days = list(grouped.values())
     for item in result_days:
+        # More individual repeats must not duplicate pages of identical
+        # guidance. Keep the complete text/reference on its first occurrence.
+        for session in item.get("sessions", []):
+            if item.get("locked"):
+                continue
+            seen_instructions, seen_lactate = {}, set()
+            for index, block in enumerate(session["blocks"], 1):
+                instruction_key = (block["kind"], block["zone"], block.get("instructions"))
+                if instruction_key in seen_instructions:
+                    block["instructions"] = f"Следвай указанията от част {seen_instructions[instruction_key]}."
+                else:
+                    seen_instructions[instruction_key] = index
+                if block.get("lactate_reference"):
+                    key = json.dumps(block["lactate_reference"], sort_keys=True)
+                    if key in seen_lactate:
+                        block.pop("lactate_reference")
+                    else:
+                        seen_lactate.add(key)
         item["rejected_alternatives"] = compact_rejections(item["rejected_alternatives"])
     planned_sessions = [s for d in result_days for s in planning_schedule.day_sessions(d)]
     for session in planned_sessions:

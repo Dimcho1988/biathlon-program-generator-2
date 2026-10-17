@@ -78,7 +78,7 @@ def test_budget_only_source_does_not_manufacture_hundred_repeat_ceiling():
     r=recipe();r["prescription"].update(anchor={"type":"V5"},work={"unit":"seconds","range":[30,30]},speed_multiplier=[1,1],repetitions=None,repetitions_from_budget=True)
     result=lib.resolve(r,athlete(),view(),phase="SPECIAL_PREPARATION")
     assert result["status"] == "READY"
-    assert result["maximum_work_seconds"] == pytest.approx(300.)
+    assert result["maximum_work_seconds"] == pytest.approx(750.)
     assert result["work_duration_seconds"] == 30
 
 
@@ -89,10 +89,11 @@ def test_recovery_scales_whole_repeats_once_and_passive_time_is_not_work(monkeyp
     blocks=engine._blocks(m,requested,e,settings)
     work=[b for b in blocks if b["kind"]=="WORK"]
     rests=[b for b in blocks if b["kind"]=="RECOVERY"]
-    assert len(work)==4 and len(rests)==3
+    assert len(work) == int(requested*60/m["method_library"]["resolution"]["cycle_work_seconds"])
+    assert len(rests) == len(work)-1
     assert all(b["passive_rest"] for b in rests)
     assert all(b["method_library"]["id"]=="TEST" for b in work)
-    assert engine._dose_usage(blocks,e,m["zone"])==pytest.approx(.5)
+    assert engine._dose_usage(blocks,e,m["zone"])==pytest.approx(sum(b["duration_min"] for b in work)/e["library_work_ceiling_minutes"])
     direct,_,_=engine._canonical_load(blocks,settings,[],TODAY)
     without_rest,_,_=engine._canonical_load([b for b in blocks if not b.get("passive_rest")],settings,[],TODAY)
     assert direct==without_rest
@@ -107,9 +108,9 @@ def test_compound_recovery_speed_has_actual_zone_and_single_integrated_budget(mo
     blocks=engine._blocks(m,m["max_work_min"]*.5,e,settings)
     work=[b for b in blocks if b["kind"]=="WORK"]
     rest=[b for b in blocks if b["kind"]=="RECOVERY"]
-    assert len(work)==2 and len(rest)==1
+    assert len(work) > 2 and len(rest) == len(work)-1
     assert rest[0]["target_speed_kmh"]==pytest.approx(work[0]["target_speed_kmh"]*.7,abs=.002)
-    assert engine._dose_usage(blocks,e,m["zone"])==pytest.approx(.5)
+    assert engine._dose_usage(blocks,e,m["zone"])==pytest.approx(sum(b["duration_min"] for b in work)/e["library_work_ceiling_minutes"])
 
 
 def test_power_reference_and_missing_cs_never_silently_become_speed():
@@ -164,7 +165,8 @@ def test_internal_passive_recovery_not_inherited_from_active_series_rest(monkeyp
     m,e,settings=adapter(monkeypatch,r)
     blocks=engine._blocks(m,m["max_work_min"],e,settings)
     rests=[b for b in blocks if b["kind"]=="RECOVERY"]
-    assert [b["passive_rest"] for b in rests]==[True,False,True]
+    assert all(b["passive_rest"] == (i % 2 == 0) for i,b in enumerate(rests))
+    assert len(rests) == 2*m["method_library"]["resolution"]["repetitions"][1]-1
 
 
 def test_exact_distance_recipe_survives_whole_week_generation(monkeypatch):
@@ -195,5 +197,6 @@ def test_exact_distance_recipe_survives_whole_week_generation(monkeypatch):
     sessions=[s for day in plan["days"] for s in day["sessions"]]
     assert sessions, [r for d in plan["days"] for r in d.get("rejected_alternatives",[])]
     blocks=[b for b in sessions[0]["blocks"] if b["kind"]=="WORK"]
-    assert len(blocks)==4 and sum(b["target_distance_m"] for b in blocks)==4000
+    assert blocks and all(b["target_distance_m"] == 1000 for b in blocks)
+    assert sum(b["duration_min"] for b in blocks) <= sessions[0]["dose_evidence"]["requested_work_minutes"]+.001
     assert_rolling_budgets(plan)

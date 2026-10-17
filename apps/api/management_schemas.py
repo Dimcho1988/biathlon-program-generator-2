@@ -247,6 +247,9 @@ class MethodLibraryOverride(BaseModel):
     speed_multiplier: tuple[MethodMultiplier, MethodMultiplier] | None = None
     work_range: tuple[MethodWorkLength, MethodWorkLength] | None = None
     repetitions: tuple[MethodRepetitions, MethodRepetitions] | None = None
+    total_capacity_ratio: float | None = Field(default=None, strict=True, gt=0, le=20)
+    speed_tolerance_fraction: float | None = Field(default=None, strict=True, gt=0, le=.1)
+    hr_tolerance_bpm: float | None = Field(default=None, strict=True, ge=1, le=15)
 
     @model_serializer(mode="wrap")
     def explicit_controls(self, handler):

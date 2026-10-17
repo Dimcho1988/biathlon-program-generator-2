@@ -43,11 +43,11 @@ def test_effort_profile_uses_expert_budget_and_whole_repetition_limit():
     assert high["main_work_minutes"] == 15
     evidence = high["dose_evidence"]
     assert evidence["capacity_minutes"] == 20.
-    assert evidence["base_fraction"] == 1.25
-    assert evidence["requested_primary_work_minutes"] == pytest.approx(25.*evidence["readiness_dose_factor"],abs=.0005)
+    assert evidence["base_fraction"] == 1.25*.65
+    assert evidence["requested_primary_work_minutes"] == pytest.approx(25.*.65*evidence["readiness_dose_factor"],abs=.0005)
     assert evidence["approved_interval_work_capacity_ratio"] == 1.25
     assert high["main_work_minutes"] <= 20.*1.25*evidence["readiness_dose_factor"] + .001
-    assert evidence["base_max_dose_fraction"] == 1.
+    assert evidence["base_max_dose_fraction"] == .65
     assert high["total_minutes"] == 15 + 12 + 15 + 10
     assert all(b["target_hr_bpm"] is None and b["duration_min"] == 3 for b in work)
     assert high["canonical_effective_load"]["STR"] == 0

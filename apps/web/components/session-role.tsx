@@ -27,5 +27,6 @@ export function SessionRole({ session, day }: { session: DraftSession; day: Pick
   return <span className="management-session-roles" role="group" aria-label="Роля на тренировката">
     <span className="management-role-caption">Роля:</span>
     {(labels.length ? labels : [label(role)]).map((value, index) => <span className="management-session-role" key={index}>{value}</span>)}
+    {evidence.dose_reduced === true && <span className="management-session-role">Намалена доза спрямо заявената</span>}
   </span>;
 }

@@ -23,7 +23,7 @@ def interval_method():
             'warmup_min': 15., 'cooldown_min': 10., 'instructions': profile['effort']}
 
 
-@pytest.mark.parametrize('purpose,role,work_seconds', [('BUILDING', 1., 240.), ('MAINTENANCE', .6, 144.), ('SUPPORTING', .6, 144.)])
+@pytest.mark.parametrize('purpose,role,work_seconds', [('BUILDING', .65, 156.), ('MAINTENANCE', .39, 93.6), ('SUPPORTING', .39, 93.6)])
 def test_expert_interval_budget_uses_full_or_half_capacity_before_recovery(purpose, role, work_seconds):
     method = interval_method()
     evidence = {'capacity_minutes': 80/60, 'effort_profile': method['interval_profile'],
@@ -56,7 +56,7 @@ def test_continuous_roles_use_half_building_budget_despite_stale_saved_settings(
     evidence = {"capacity_minutes": 100.}
     nominal = engine._nominal_fraction(method, purpose, profile, period, evidence, None)
     assert nominal * evidence["capacity_minutes"] == pytest.approx(maintenance_minutes)
-    assert evidence["method_budget_role_fraction"] == .6
+    assert evidence["method_budget_role_fraction"] == pytest.approx(building*.6)
     assert evidence["maintenance_policy"] == "SIXTY_PERCENT_METHOD_BUDGET_NO_RECOVERY_SCALE"
     ceiling = engine._dose_ceiling(method, purpose, profile, period, evidence, None)
     assert ceiling == nominal
@@ -83,8 +83,8 @@ def test_half_continuous_rule_does_not_replace_double_threshold_or_strength_budg
     profile = {"building_fraction": .65, "maintenance_fraction": .4}
     double = {"zone": "Z3", "structure": "THRESHOLD_LONG", "double_threshold": True}
     controls = {"double_threshold_fraction": .6}
-    assert engine._nominal_fraction(double, "BUILDING", profile, "GENERAL_PREPARATION", {}, controls) == 1.2
-    assert engine._dose_ceiling(double, "BUILDING", profile, "GENERAL_PREPARATION", {}, controls) == .6
+    assert engine._nominal_fraction(double, "BUILDING", profile, "GENERAL_PREPARATION", {}, controls) == pytest.approx(.78)
+    assert engine._dose_ceiling(double, "BUILDING", profile, "GENERAL_PREPARATION", {}, controls) == .39
     strength = {"zone": "STR", "structure": "CIRCUIT", "min_work_min": 12., "max_work_min": 30.}
     assert engine._nominal_fraction(strength, "BUILDING", profile, "GENERAL_PREPARATION", {}, None) == 1.
     assert engine._nominal_fraction(strength, "MAINTENANCE", profile, "GENERAL_PREPARATION", {}, None) == .6
@@ -96,9 +96,9 @@ def test_interval_recovery_scales_total_work_once_with_whole_repetitions():
                 'target_speed_kmh': 24., 'target_hr_bpm': None, 'readiness_dose_factor': .8}
     fraction = engine._nominal_fraction(method, 'MAINTENANCE', {}, 'GENERAL_PREPARATION', evidence, None)
     requested = evidence['capacity_minutes'] * fraction * evidence['readiness_dose_factor']
-    assert requested * 60 == pytest.approx(144.)
+    assert requested * 60 == pytest.approx(93.6)
     blocks = engine._blocks(method, requested, evidence, Repository().settings)
-    assert [b['duration_s'] for b in blocks if b['kind'] == 'WORK'] == [40., 40., 40.]
+    assert [b['duration_s'] for b in blocks if b['kind'] == 'WORK'] == [40., 40.]
     assert engine._dose_fits(blocks, evidence, 'Z5', .6)
 
 
@@ -136,8 +136,8 @@ def test_reentry_uses_the_maintenance_role_not_a_separate_legacy_fraction(purpos
     assert engine._nominal_fraction(continuous, purpose, profile, "RE_ENTRY", {}, None) == .39
     interval = interval_method()
     evidence = {}
-    assert engine._nominal_fraction(interval, purpose, profile, "RE_ENTRY", evidence, None) == pytest.approx(1.8)
-    assert engine._dose_ceiling(interval, purpose, profile, "RE_ENTRY", evidence, None) == .6
+    assert engine._nominal_fraction(interval, purpose, profile, "RE_ENTRY", evidence, None) == pytest.approx(1.17)
+    assert engine._dose_ceiling(interval, purpose, profile, "RE_ENTRY", evidence, None) == .39
 
 
 def test_short_variant_preserves_the_prescribed_curve_duration():
@@ -189,7 +189,7 @@ def test_mixed_continuous_support_keeps_half_budget_and_single_recovery():
     assert not engine._dose_fits(joint_blocks(52., 156.1), evidence, "Z3", ceiling * .8)
 
 
-def test_threshold_high_keeps_12_plus_8_while_reporting_full_received_load(monkeypatch):
+def test_threshold_high_applies_building_fraction_to_both_independent_budgets(monkeypatch):
     method = interval_method()
     method.update(structure='THRESHOLD_HIGH', zone='Z3')
     method['interval_profile'].update(zone='Z4', total_capacity_ratio=1.,
@@ -207,20 +207,20 @@ def test_threshold_high_keeps_12_plus_8_while_reporting_full_received_load(monke
         None, (None, [], []), TODAY, primary_fraction=nominal*.5, readiness_factor=.8)
     requested = evidence['primary_requested_work']
     assert requested == 12.
-    assert evidence['combination_high_work_cap'] == 8.
+    assert evidence['combination_high_work_cap'] == pytest.approx(4.8)
     blocks = engine._blocks(method, requested, evidence, Repository().settings)
     ceiling = engine._dose_ceiling(method, 'BUILDING', profile, 'SPECIAL_PREPARATION', evidence, None)
     assert engine._dose_fits(blocks, evidence, 'Z3', ceiling*.8)
     work = [b for b in blocks if b['kind'] == 'WORK']
-    assert [b['duration_min'] for b in work if b['zone'] == 'Z4'] == [2.]*4
+    assert [b['duration_min'] for b in work if b['zone'] == 'Z4'] == [2.]*2
     assert sum(b['duration_min'] for b in work if b['zone'] == 'Z3') == 12.
-    # At zone-reference effort, this legal method dose still records E3=30.4.
+    # Received load includes both components after whole-repetition rounding.
     direct, effective, _ = engine._canonical_load(blocks, settings, [], TODAY, zone_tmax_minutes=capacities)
-    assert direct['Z3'] == 12. and direct['Z4'] == 8.
-    assert effective['Z3'] == pytest.approx(30.4)
-    assert effective['Z3'] > 50.*ceiling*.8
-    assert effective['Z2'] == 40.
-    assert effective['Z1'] == pytest.approx(direct['Z1'] + 40.)
+    assert direct['Z3'] == 12. and direct['Z4'] == 4.
+    assert effective['Z3'] == pytest.approx(21.2)
+    assert effective['Z3'] > direct['Z3']
+    assert effective['Z2'] == 30.8
+    assert effective['Z1'] == pytest.approx(direct['Z1'] + 30.8)
 
 
 def test_expert_effort_coefficient_prescribes_curve_speed_and_separate_total_budget():
@@ -236,9 +236,9 @@ def test_expert_effort_coefficient_prescribes_curve_speed_and_separate_total_bud
     assert evidence['target_speed_kmh'] == pytest.approx(context[0].curve.speed(80)*3.6)
     fraction = engine._nominal_fraction(method, 'BUILDING', {}, 'GENERAL_PREPARATION', evidence, None)
     requested = evidence['capacity_minutes'] * fraction
-    assert requested == pytest.approx(4.)
+    assert requested == pytest.approx(2.6)
     work = [b for b in engine._blocks(method, requested, evidence, SETTINGS) if b['kind'] == 'WORK']
-    assert len(work) == 6
+    assert len(work) == 3
     assert all(b['target_speed_kmh'] == pytest.approx(evidence['target_speed_kmh'], abs=.001) for b in work)
 
 

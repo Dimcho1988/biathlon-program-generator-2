@@ -66,7 +66,8 @@ def test_ao31_first_stage_is_inside_source_range_and_above_minimum():
     row = ROWS['AO31']; profile, view, phase = context(row)
     resolution = method_library.resolve(row, profile, view, phase=phase)
     assert resolution['status'] == 'READY'
-    assert resolution['continuous_start_adjustment']['adapted']
+    assert resolution['source_count_policy'] == 'INDIVIDUAL_TMAX_NOT_SOURCE_COUNT'
+    assert resolution['minimum_work_seconds'] == pytest.approx(.25*resolution['continuous_capacity_seconds'])
     assert resolution['maximum_work_seconds'] >= .25 * resolution['continuous_capacity_seconds']
     assert resolution['segments'][0]['work_distance_m'] <= row['prescription']['work']['range'][1]
 
