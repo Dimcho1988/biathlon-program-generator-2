@@ -52,3 +52,13 @@ session/time limits, future-method reconciliation, and forecast parsing/UI.
 This supersedes the display-boundary proration described by the earlier
 allocation audit. Method coefficients, Recovery formula, Q equivalence,
 spill coefficients and the long-term progression trajectory are unchanged.
+
+## Persisted revision capacity
+
+The first staging publication exposed the former 2 MiB JSON revision limit:
+the approved plan plus the new whole-cycle proposal exceeded that envelope.
+Migration `whole_microcycle_revision_capacity` raises the envelope to 4 MiB
+while retaining the JSON-object check, append-only RPC, revision conflict
+checks and existing access controls. The database regression publishes a
+3 MiB fixture through the real RPC and verifies that an over-4 MiB append is
+rejected atomically without moving the active revision.
