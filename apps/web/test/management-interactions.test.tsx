@@ -382,3 +382,20 @@ it("keeps separate microcycle shortfalls visible when the whole-period totals ca
   expect(container.textContent).not.toContain("ROLLING_Q_AND_7_40_BUDGET");
   expect(container.textContent).not.toContain("ограничението по 7/40");
 });
+
+it("distinguishes the visible week from the complete-cycle forecast and validates the tail", async () => {
+  const readiness=Object.fromEntries(COMPONENTS.map(z=>[z,100]));
+  const record={entry_key:"whole",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v48",status:"DRAFT",start_date:"2026-10-17",end_date:"2026-10-23",days:[],source:{},parameters:{volume_governor:"COMPONENT_7_40"},warnings:[],summary:{planned_minutes:0},
+    lookahead_days:[{date:"2026-10-24",provisional:true,status:"REST",period:"GENERAL_PREPARATION",taper:false,session:null,sessions:[],explanation:"Почивка",readiness_before:readiness,readiness_after:readiness,load_budget:{components:{}},rejected_alternatives:[]}],
+    allocation:{scope:"WHOLE_MICROCYCLES",lookahead_end:"2026-10-26",components:{},constraints:[],dose_limits:[],segments:[{window_start:"2026-10-20",window_end:"2026-10-26",days:7,components:{Z5:{basis:"DIRECT_Q",target:9,actual:0,planned:8,remaining:1}}}]}}};
+  const draft=parseDraftRecord(record);
+  await mount(<TrainingPlanSummary plan={draft.payload}/>);
+  expect(container.textContent).toContain("Цел за микроцикъла");
+  expect(container.textContent).toContain("План и прогнозно продължение");
+  expect(container.textContent).toContain("Прогнозно продължение до 26.10.2026 г.");
+  expect(container.textContent).toContain("преразглеждат при следващото обновяване");
+  expect(container.textContent).not.toContain("непълната седмица получава съответния дял");
+  expect(draft.payload.days).toHaveLength(0);
+  expect(()=>parseDraftRecord({...record,payload:{...record.payload,lookahead_days:[{...record.payload.lookahead_days[0],date:"2026-10-23"}]}})).toThrow();
+  expect(()=>parseDraftRecord({...record,payload:{...record.payload,lookahead_days:[{...record.payload.lookahead_days[0],provisional:false}]}})).toThrow();
+});

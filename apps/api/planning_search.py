@@ -7,9 +7,21 @@ Recovery and all Q/E and time gates. Ties retain the first stable schedule.
 from time import monotonic
 
 
+def reservation_methods(plan):
+    """Reconcile guesses against complete, actually selected future methods."""
+    return {d["date"]:[{k:s[k] for k in ("method_id", "sport", "zone", "slot", "purpose", "is_key_session") if k in s}
+                       for s in d.get("sessions", []) if s.get("method_id") and s.get("sport")]
+            for d in [*plan["days"], *plan.get("lookahead_days", [])] if not d.get("locked")}
+
+
 def score(plan, accents):
     rows = (plan.get("allocation") or {}).get("components", {})
+    segments = (plan.get("allocation") or {}).get("segments") or []
     def coverage(z):
+        if segments:
+            parts = [s["components"][z] for s in segments if z in s["components"]]
+            # An overshoot in the previous cycle cannot fill the next one.
+            return sum(min(r["target"], (r.get("actual") or 0.)+r["planned"]) for r in parts) / max(1.,sum(r["target"] for r in parts))
         row = rows[z]
         return min(1., (row.get("actual") or 0.) / max(1., row["target"]) + row["planned"] / max(1., row["target"]))
     support = [z for z in rows if z not in accents and rows[z]["target"] > 0]
@@ -32,8 +44,9 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
     accents.update(controls.get("accents", []))
     # Key quality is the first priority where the selected accent is unmet.
     accents = accents or {z for z in ("Z3", "Z4", "Z5", "STR") if allocation["components"][z]["target"] > 0}
-    unmet = [z for z, row in allocation["components"].items() if (row.get("remaining") or 0) > 1.]
-    trials, best = 0, baseline
+    objective_rows = [r for segment in allocation.get("segments", []) for r in segment["components"].values()] or list(allocation["components"].values())
+    unmet = any((row.get("remaining") or 0) > 1. for row in objective_rows)
+    trials, refits, best = 0, 0, baseline
     if unmet:
         easy = {d["date"]: sum(s["main_work_minutes"] for s in d.get("sessions", []) if s["zone"] in {"Z1", "Z2"})
                 for d in baseline["days"] if not d.get("locked")}
@@ -45,17 +58,34 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
             {"optional_easy_fraction": .5, "easy_caps": {d:w*.85 for d,w in easy.items() if w > 0}},
             {"optional_easy_fraction": 0., "balance_complete_doses": False, "prefer_standalone": True},
         ]
+        # Re-run causally with the selected future methods before exploring
+        # generic heuristics. A changed reservation never edits blocks in place:
+        # every new repetition and every later dose passes the full engine.
+        if any(s.get("method_id") for d in baseline["days"] for s in d.get("sessions", [])):
+            for _ in range(2):
+                if monotonic()+1.5*estimated_trial_seconds >= deadline:
+                    break
+                began = monotonic()
+                candidate = replay({"reservation_methods":reservation_methods(best)})
+                estimated_trial_seconds = max(estimated_trial_seconds, monotonic()-began)
+                trials += 1
+                refits += 1
+                if score(candidate, accents) <= score(best, accents):
+                    break
+                best = candidate
         for policy in policies:
             if monotonic()+1.5*estimated_trial_seconds >= deadline:
                 break
             began = monotonic()
-            candidate = replay(policy)
+            candidate = replay({**policy, **({"reservation_methods":reservation_methods(best)} if refits else {})})
             estimated_trial_seconds = max(estimated_trial_seconds, monotonic()-began)
             trials += 1
             if score(candidate, accents) > score(best, accents):
                 best = candidate
-    best["allocation"]["search"] = {"version": "bounded-causal-replay-v2-segment-method-allocation", "alternatives": trials,
+    best["allocation"]["search"] = {"version": "bounded-causal-replay-v3-reservation-reconciliation", "alternatives": trials,
+        "reservation_replays":refits,
         "improved": best is not baseline, "priority": ["ACCENT", "SUPPORT_MINIMUM", "OVERALL", "STABILITY"],
-        "conclusion": "SEARCH_BUDGET_EXHAUSTED" if any((row.get("remaining") or 0) > 1. for row in best["allocation"]["components"].values()) else "TARGETS_COVERED",
+        "conclusion": "SEARCH_BUDGET_EXHAUSTED" if best["allocation"].get("has_unallocated_load",
+            any((row.get("remaining") or 0) > 1. for row in best["allocation"]["components"].values())) else "TARGETS_COVERED",
         "hard_limit_proven": False}
     return best

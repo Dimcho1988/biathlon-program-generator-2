@@ -128,8 +128,9 @@ def test_nonaccent_endurance_uses_weekly_need_without_raising_coach_fraction(mon
         for z in COMPONENTS:
             total = sum(s["canonical_effective_load"][z] for s in day["sessions"])
             assert total <= day["load_budget"]["components"][z]["deficit_effective"] + .01
+    cycle_sessions = selected + [s for d in plan.get("lookahead_days", []) for s in d["sessions"]]
     for z, row in plan["allocation"]["components"].items():
-        assert row["planned_effective"] == pytest.approx(sum(s["canonical_effective_load"][z] for s in selected), abs=.01)
+        assert row["planned_effective"] == pytest.approx(sum(s["canonical_effective_load"][z] for s in cycle_sessions), abs=.01)
         assert row["unallocated_effective"] == pytest.approx(max(0., row["target_effective"]-row["actual_effective"]-row["planned_effective"]), abs=.01)
 
 

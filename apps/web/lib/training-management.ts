@@ -156,6 +156,9 @@ export interface AllocationSegment {
   window_start: string; window_end: string; days: number; components: Partial<Record<Component, ComponentAllocation>>;
 }
 export interface AllocationReport {
+  scope?: "WHOLE_MICROCYCLES"; visible_start?: string; visible_end?: string; lookahead_end?: string;
+  lookahead_sessions?: number; lookahead_minutes?: number;
+  forecast_complete?: boolean;
   version?: string; status?: string; window_start?: string; window_end?: string;
   components: Partial<Record<Component, ComponentAllocation>>; segments?: AllocationSegment[];
   scheduled_slots?: number; weekly_session_limit?: number; planned_sessions?: number; planned_minutes?: number;
@@ -204,6 +207,7 @@ export interface PlanningDraft extends PlanProjection {
   generated_at?: string;
   engine_version: string;
   days: DraftDay[];
+  lookahead_days?: DraftDay[];
   source: Record<string, unknown>;
   warnings: Array<{ code: string; message: string }>;
   [key: string]: unknown;
@@ -383,8 +387,14 @@ export function parseDraftRecord(value: unknown): DraftRecord {
     || typeof draft.engine_version !== "string" || !isRecord(draft.source)
     || !Array.isArray(draft.warnings) || !draft.warnings.every(w => isRecord(w) && typeof w.message === "string" && typeof w.code === "string")
     || !Array.isArray(draft.days) || draft.days.length > 7) throw new Error("Неподдържана структура на тренировъчната програма.");
-  for (const day of draft.days) {
-    if (!isRecord(day) || !isCalendarDate(day.date) || day.date < draft.start_date || day.date > draft.end_date
+  const lookahead = draft.lookahead_days ?? [];
+  if (!Array.isArray(lookahead) || lookahead.length > 6) throw new Error("Невалидно прогнозно продължение.");
+  const lastLookahead = new Date(Date.parse(draft.end_date)+6*86400000).toISOString().slice(0,10);
+  for (const [index, day] of [...draft.days, ...lookahead].entries()) {
+    const provisional = index >= draft.days.length;
+    if (!isRecord(day) || !isCalendarDate(day.date)
+      || (provisional ? day.date <= draft.end_date || day.date > lastLookahead || day.provisional !== true
+                      : day.date < draft.start_date || day.date > draft.end_date)
       || typeof day.explanation !== "string" || typeof day.period !== "string" || typeof day.status !== "string" || typeof day.taper !== "boolean"
       || !isRecord(day.readiness_before) || !isRecord(day.readiness_after) || !isRecord(day.load_budget) || !isRecord(day.load_budget.components)
       || !Array.isArray(day.rejected_alternatives)) throw new Error("Невалидна дневна задача.");
