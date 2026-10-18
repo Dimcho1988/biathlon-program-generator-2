@@ -73,7 +73,7 @@ def test_last_microcycle_day_does_not_wait_for_next_microcycle_preferred_thresho
     q_calendar(monkeypatch, lambda _:210.)
     repo = Repository()
     plan = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)
-    assert [segment["days"] for segment in plan["allocation"]["segments"]] == [1,6]
+    assert [segment["days"] for segment in plan["allocation"]["segments"]] == [7,7]
     session = plan["days"][0]["sessions"][0]
     assert session["is_key_session"]
     assert session["method_id"] == "END-THR-TIME-01"

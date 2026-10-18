@@ -9,8 +9,8 @@ from datetime import timedelta
 
 from .constants import COMPONENTS
 
-VERSION = "component-allocation-v3-long-term-segments"
-SEGMENT_VERSION = "component-allocation-v3-long-term-segments"
+VERSION = "component-allocation-v4-whole-microcycles"
+SEGMENT_VERSION = VERSION
 
 
 def objectives(windows, actual, forecast, source, days):
@@ -70,13 +70,13 @@ def _segments(windows, segment_keys):
 
 
 def segment_objectives(windows, actual, forecast, source, days, *, segment_keys):
-    """Exact long-term ceilings for the portions covered by this draft.
+    """Exact ceilings for the authoritative goal windows supplied by the engine.
 
-    A displayed weekly level contributes one seventh per calendar day. The
-    first/last partial microcycles are therefore prorated exactly like the
-    long-term outlook, rather than receiving a whole week's quota. Actual
-    load outside the segment affects physiological forecasts but cannot fill
-    or consume another segment's coverage objective.
+    The engine supplies whole anchored microcycles, including execution before
+    the visible week and provisional sessions after it. Only genuine programme
+    boundaries truncate a cycle. Integrating each daily level preserves phase,
+    taper and wave changes without transferring load across microcycles.
+    Legacy callers can still report a partial window explicitly.
     """
     result = []
     for group in _segments(windows, segment_keys):

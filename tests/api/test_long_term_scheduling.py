@@ -44,7 +44,7 @@ def actual_today(repo, zones):
 
 def assert_segment_contract(plan, *, constant_q=None):
     for segment in plan["allocation"]["segments"]:
-        matching = [week for week in plan["long_term"]["weeks"] if week["start_date"] <= segment["window_start"] and week["end_date"] >= segment["window_end"]]
+        matching = [week for week in plan["long_term"]["weeks"] if week["start_date"] <= segment["window_end"] and week["end_date"] >= segment["window_start"]]
         assert len(matching) == 1
         for zone, row in segment["components"].items():
             outlook = matching[0]["components"][zone]
@@ -53,9 +53,13 @@ def assert_segment_contract(plan, *, constant_q=None):
                 assert row["target"] == pytest.approx(target, abs=.001)
             elif zone in (constant_q or {}):
                 assert row["target"] == pytest.approx(constant_q[zone]*segment["days"]/7,abs=.001)
-            assert row["actual"]+row["planned"] <= row["target"]+.005
-            assert row["actual_effective"]+row["planned_effective"] <= row["target_effective"]+.005
-    for day in plan["days"]:
+            else:
+                # The first outlook row starts at as_of; the allocation also
+                # includes the earlier dates of that same anchored cycle.
+                assert row["target"] >= target-.005
+            assert row["planned"] <= max(0.,row["target"]-row["actual"])+.005
+            assert row["planned_effective"] <= max(0.,row["target_effective"]-row["actual_effective"])+.005
+    for day in plan["days"]+plan.get("lookahead_days", []):
         for session in day["sessions"]:
             assert_readiness_dose(session)
 
@@ -111,10 +115,10 @@ def test_short_current_microcycle_cannot_borrow_the_next_microcycle_q_budget(mon
     actual_today(repo, ["Z3"])
     plan = engine.generate_plan(repo,"athlete",body,start_date=TODAY,now=NOW)
     first_planned_q = sum(session["direct_equivalent_minutes"]["Z3"] for day in plan["days"][:2] for session in day["sessions"])
-    assert 2.+first_planned_q <= 80.*2/7+.005
+    assert 2.+first_planned_q <= 80.+.005
     first = plan["allocation"]["segments"][0]
-    assert first["days"] == 2
-    assert first["components"]["Z3"]["target"] == pytest.approx(80.*2/7,abs=.001)
+    assert first["days"] == 7
+    assert first["components"]["Z3"]["target"] == pytest.approx(80.,abs=.001)
     assert first["components"]["Z3"]["actual"] == 2.
     assert first["components"]["Z3"]["planned"] > 0
     assert_segment_contract(plan,constant_q={"Z3":80.})

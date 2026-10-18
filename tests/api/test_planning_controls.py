@@ -158,13 +158,19 @@ def test_integrated_week_respects_separate_strength_days_and_covers_complementar
     assert {b['zone'] for d in sessions for b in d['session']['blocks'] if b['kind']=='WORK'} >= {'Z1','Z2','Z3','STR'}
     for d in sessions:
         z=d['session']['zone'];weekday=engine.date.fromisoformat(d['date']).weekday()
-        if z=='STR': assert weekday in [2,5]
+        if z=='STR' and d['date'] < (TODAY+timedelta(days=7)).isoformat():
+            assert weekday in [2,5]
         if d['session']['is_key_session']: assert weekday in [1,4]
         elif z in {'Z3','Z4','Z5'} and weekday not in [1,4]:
             # A half-budget maintenance task may prepare the next building day.
             assert d['session']['purpose']=='MAINTENANCE'
             assert d['session']['dose_evidence']['method_budget_role_fraction']==pytest.approx(.65*.6)  # Legacy .5 preference normalizes to .65.
         assert_readiness_dose(d['session'])
+    # The last visible day opens a new full microcycle. Its fresh quota can
+    # permit strength there; the display boundary no longer forces 1/7 doses.
+    strengths=[engine.date.fromisoformat(d['date']) for d in r['days']+r.get('lookahead_days',[])
+               if any(s['zone']=='STR' for s in d['sessions'])]
+    assert all((later-earlier).days>=2 for earlier,later in zip(strengths,strengths[1:]))
     assert max(w['components']['Z3']['target_index_7_40'] for w in r['long_term']['weeks'])>1.1
     # Allocation can legitimately choose progressive or continuous work;
     # covering the qualities does not require one fixed catalogue winner.

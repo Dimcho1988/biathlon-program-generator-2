@@ -2,7 +2,14 @@
 from copy import deepcopy
 from datetime import date, timedelta
 
-VERSION = "planning-schedule-v1"
+VERSION = "planning-schedule-v2-microcycle-lookahead"
+
+
+def microcycle_bounds(start, end, anchor, program_start, program_end):
+    """Complete the anchored cycles touched by the visible draft, at most 14 days."""
+    first = anchor + timedelta(days=7*((start-anchor).days//7))
+    last = anchor + timedelta(days=7*((end-anchor).days//7)+6)
+    return max(program_start, first), min(program_end, last)
 
 def horizon(profile, events):
     result = deepcopy(profile)
@@ -20,6 +27,14 @@ def horizon(profile, events):
 
 def slots(profile, available, start, end):
     """Allocate maxima, never force sessions or multiply a load budget."""
+    if (end-start).days >= 7:
+        # Repeat the same seven-day pattern into the provisional tail. Every
+        # rolling seven-day window still has at most the coach's session limit.
+        first_week = slots(profile, available, start, start+timedelta(days=6))
+        counts = {d.weekday(): count for d, _, count in first_week}
+        days = [start+timedelta(days=i) for i in range((end-start).days+1)]
+        return [(d, index, counts[d.weekday()]) for d in days
+                for index in range(max(1, counts[d.weekday()]))]
     controls = profile.get("planning_controls") or {}
     limit = controls.get("sessions_per_week", 7)
     counts = controls.get("sessions_by_day")

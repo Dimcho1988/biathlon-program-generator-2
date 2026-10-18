@@ -78,7 +78,7 @@ def assert_complete_counterfactual_fits(repo, body, plan, now):
     starts = [date.fromisoformat(segment["window_start"]) for segment in segments]
     assert all((later-earlier).days >= 2 for earlier, later in zip(starts, starts[1:]))
     for segment in segments:
-        first = date.fromisoformat(segment["window_start"])
+        first = max(date.fromisoformat(segment["window_start"]), date.fromisoformat(plan["start_date"]))
         last = date.fromisoformat(segment["window_end"])
         placements = (first, first, first+timedelta(days=1), last, last)
         assert all(count <= body["planning_controls"]["sessions_by_day"][day.weekday()]
@@ -132,11 +132,11 @@ def test_long_mixed_tails_and_easy_work_cannot_starve_executable_long_term_quali
     repo, body, start, now = balanced_fixture(monkeypatch)
     plan = engine.generate_plan(repo, "athlete", body, start_date=start, now=now)
     assert plan["allocation"] is not None
-    assert [segment["days"] for segment in plan["allocation"]["segments"]] == [4,3]
+    assert [segment["days"] for segment in plan["allocation"]["segments"]] == [7,7]
     assert_complete_counterfactual_fits(repo, body, plan, now)
     protection_bundles = 0
     for segment in plan["allocation"]["segments"]:
-        days = [day for day in plan["days"] if segment["window_start"] <= day["date"] <= segment["window_end"]]
+        days = [day for day in plan["days"]+plan.get("lookahead_days", []) if segment["window_start"] <= day["date"] <= segment["window_end"]]
         for zone in ("Z2", "Z4", "STR"):
             work = sum(block["duration_min"] for day in days for session in day["sessions"]
                        for block in session["blocks"] if block["kind"] == "WORK" and block["zone"] == zone)
