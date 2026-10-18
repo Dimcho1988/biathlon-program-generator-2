@@ -64,6 +64,25 @@ begin
     jsonb_set(payload,'{plan,source,generation_id}','"stale"'),2,actor,'ADAPT',1,checkpoint,true);
  exception when invalid_parameter_value then denied := true; end;
  assert denied, 'Stale generation activated';
+
+ -- Publication retains the old plan plus the whole-microcycle proposal.
+ -- Exercise the real RPC/table boundary, including rollback of an oversized
+ -- append, rather than merely inspecting the constraint's SQL text.
+ payload := jsonb_set(payload,'{plan,storage_test_padding}',to_jsonb(repeat('x',3*1024*1024)));
+ result := public.save_onflows_management_plan(athlete,payload,2,actor,'ADAPT',1,checkpoint,true);
+ assert result->>'saved'='true', 'Valid whole-microcycle revision above 2 MiB rejected';
+ assert result->>'revision'='3', 'Unexpected revision after larger publication';
+ denied := false;
+ begin
+  perform public.save_onflows_management_plan(athlete,
+    jsonb_set(payload,'{plan,storage_test_padding}',to_jsonb(repeat('x',4*1024*1024))),
+    3,actor,'ADAPT',1,checkpoint,true);
+ exception when check_violation then denied := true; end;
+ assert denied, 'Revision above 4 MiB accepted';
+ assert (select revision from public.onflows_management_plan_state where athlete_alias=athlete)=3,
+   'Oversized publication changed the active revision';
+ assert (select count(*) from public.onflows_management_plan_revisions where athlete_alias=athlete)=3,
+   'Oversized publication left a partial revision';
 end $$;
 
 do $$
