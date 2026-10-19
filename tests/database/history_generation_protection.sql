@@ -152,6 +152,9 @@ begin
 
   -- Owner-only execution on this ephemeral fixture: service pruning stays
   -- revoked. All old generations except FAILED control are now pinned.
+  insert into onflows_private.analysis_retention_coverage(athlete_alias,evidence)
+    values(a,'{"synthetic_fixture":true,"all_history_revisions_scanned":true}')
+    on conflict(athlete_alias) do nothing;
   select * into pruned from public.prune_onflows_analysis_generations(a,1,interval '30 days',100);
   assert pruned.deleted_generations=1, 'Prune did not delete only the unpinned control';
   assert not exists(select 1 from public.onflows_analysis_generations where generation_id=(f->>'control')::uuid),

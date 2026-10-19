@@ -39,6 +39,8 @@ _ACTIVATION_OUTCOMES = frozenset({"ACTIVATED", "STALE", "LEASE_LOST"})
 _STAGE_OUTCOMES = frozenset({"READY", "ALREADY_READY"})
 _MAINTENANCE_INTERVAL_SECONDS = 6 * 60 * 60
 _HISTORY_ARCHIVE_INTERVAL_SECONDS = 15 * 60
+_CLEANUP_RECOVERY_INTERVAL_SECONDS = 15 * 60
+_CLEANUP_RECOVERY_BATCH_LIMIT = 10
 
 
 class SyncRepository(Protocol):
@@ -861,6 +863,7 @@ def run_worker(
     next_management_check = 0.
     management_thread = None
     next_history_check = 0.
+    next_cleanup_recovery_check = 0.
     while not stopping.is_set():
         management_tick = getattr(repository, "refresh_due_training_plans", None)
         if callable(management_tick):
@@ -879,6 +882,34 @@ def run_worker(
                     # One bounded planning lane; imports keep claiming independently.
                     management_thread = Thread(target=check_plans, daemon=True, name="planning-worker")
                     management_thread.start()
+        expiry_tick = getattr(repository, "expire_analysis_cleanup_recovery", None)
+        if not once and callable(expiry_tick) and not stopping.is_set():
+            expiry_now = monotonic_clock()
+            if expiry_now >= next_cleanup_recovery_check:
+                # Run between jobs, before acquiring a lease, so a busy queue
+                # cannot postpone global expiry. A failure cannot hot-loop.
+                next_cleanup_recovery_check = (
+                    expiry_now + _CLEANUP_RECOVERY_INTERVAL_SECONDS
+                )
+                try:
+                    expired_batches = expiry_tick(
+                        batch_limit=_CLEANUP_RECOVERY_BATCH_LIMIT
+                    )
+                    if (
+                        type(expired_batches) is not int
+                        or not 0 <= expired_batches <= _CLEANUP_RECOVERY_BATCH_LIMIT
+                    ):
+                        raise ValueError("Cleanup recovery expiry result is invalid")
+                    logger.info(
+                        "cleanup_recovery_expiry_tick expired_batches=%d", expired_batches
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "cleanup_recovery_expiry_tick_deferred error_type=%s",
+                        type(exc).__name__,
+                    )
+        if stopping.is_set():
+            break
         try:
             claim = repository.claim_sync_job(
                 worker_id=worker_id,
@@ -953,16 +984,22 @@ def _run_optional_housekeeping(
     repository: SyncRepository,
     athlete_alias: str,
 ) -> None:
-    maintenance = getattr(repository, "prune_analysis_generations", None)
+    maintenance = getattr(repository, "maintain_analysis_history", None)
+    fixed_policy = callable(maintenance)
+    if not fixed_policy:
+        maintenance = getattr(repository, "prune_analysis_generations", None)
     if not callable(maintenance):
         return
     try:
-        result = maintenance(
-            athlete_alias=athlete_alias,
-            keep_superseded=5,
-            terminal_older_than_days=30,
-            batch_limit=100,
-        )
+        if fixed_policy:
+            result = maintenance(athlete_alias=athlete_alias)
+        else:
+            result = maintenance(
+                athlete_alias=athlete_alias,
+                keep_superseded=5,
+                terminal_older_than_days=30,
+                batch_limit=100,
+            )
         required_count_names = (
             "deleted_generations",
             "deleted_activity_rows",

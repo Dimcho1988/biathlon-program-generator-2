@@ -19,7 +19,7 @@ from biathlon.athlete_functional_profile import build_functional_profile
 from biathlon.sport_heart_rate import local_settings, reference_offset, policy as sport_hr_policy, is_cycling
 from .trainability_history import HISTORY_DAYS, history_from_calendar, robust_mean, read_calendar, window_start
 from .model_schemas import RecoveryConfigInput, RecoveryHistoryV2, initial_settings
-from .oauth_store import PersistentStoreFailure
+from .oauth_store import HistoricalGenerationReferenceConflict, PersistentStoreFailure
 from .speed_segments import segment_measurement
 
 SPEED_TEST_DAYS=90
@@ -63,9 +63,12 @@ class ModelStore:
         return {"expected_revision":0,"zones":initial_settings()}
 
     def save(self,alias,kind,key,payload,revision,actor):
-        result=self.repository._json(self.repository._request("POST","/rpc/save_onflows_model_entry",json={
-            "p_alias":alias,"p_kind":kind,"p_key":key,"p_payload":payload,
-            "p_expected_revision":revision,"p_actor":str(actor)}))
+        try:
+            result=self.repository._json(self.repository._request("POST","/rpc/save_onflows_model_entry",json={
+                "p_alias":alias,"p_kind":kind,"p_key":key,"p_payload":payload,
+                "p_expected_revision":revision,"p_actor":str(actor)}))
+        except HistoricalGenerationReferenceConflict as exc:
+            raise HTTPException(409,"Historical model sources changed; reload before saving the model input") from exc
         if not isinstance(result,dict): raise PersistentStoreFailure("Invalid model save result")
         if result.get("conflict"): raise HTTPException(409,"Model input changed; reload before editing")
         return result

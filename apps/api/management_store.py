@@ -144,7 +144,9 @@ class ManagementStore:
                 },
             ))
         except HistoricalGenerationReferenceConflict as exc:
-            raise HTTPException(409, "Athlete analysis changed; regenerate the draft") from exc
+            message = ("Athlete analysis changed; regenerate the draft" if kind == "DRAFT"
+                       else "Historical planning sources changed; reload before saving the profile")
+            raise HTTPException(409, message) from exc
         if not isinstance(result, dict):
             raise PersistentStoreFailure("Invalid management save result")
         if result.get("conflict"):

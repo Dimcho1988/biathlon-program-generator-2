@@ -91,12 +91,17 @@ def _history_reference_write_conflict(response, method, resource, arguments):
         "/rpc/save_onflows_management_plan",
         "/rpc/save_onflows_management_plan_compact",
         "/rpc/save_onflows_response_entry",
+        "/rpc/save_onflows_model_entry",
     }:
         return False
-    if resource == "/rpc/save_onflows_management_entry" and (
-        not isinstance(arguments, Mapping) or arguments.get("p_kind") != "DRAFT"
-    ):
-        return False
+    kinds = {
+        "/rpc/save_onflows_management_entry": {"PROFILE", "DRAFT"},
+        "/rpc/save_onflows_model_entry": {"RECOVERY", "SPEED_TEST"},
+    }.get(resource)
+    if kinds is not None:
+        kind = arguments.get("p_kind") if isinstance(arguments, Mapping) else None
+        if not isinstance(kind, str) or kind not in kinds:
+            return False
     try:
         payload = response.json()
     except Exception:
@@ -1190,6 +1195,15 @@ class SupabasePilotRepository(SnapshotRepository):
             raise PersistentStoreFailure("Analysis rollback response is invalid")
         return dict(row)
 
+    def maintain_analysis_history(
+        self, *, athlete_alias: str
+    ) -> Mapping[str, int]:
+        """Invoke the fixed server-owned retention policy once."""
+        row = self._rpc_row(
+            "maintain_onflows_analysis_history", {"p_alias": athlete_alias}
+        )
+        return self._analysis_retention_counts(row)
+
     def prune_analysis_generations(
         self,
         *,
@@ -1213,6 +1227,12 @@ class SupabasePilotRepository(SnapshotRepository):
                 "p_batch_limit": batch_limit,
             },
         )
+        return self._analysis_retention_counts(row)
+
+    @staticmethod
+    def _analysis_retention_counts(
+        row: Mapping[str, Any] | None,
+    ) -> Mapping[str, int]:
         count_keys = (
             "deleted_generations",
             "deleted_activity_rows",
@@ -1443,6 +1463,18 @@ class SupabasePilotRepository(SnapshotRepository):
         if policy[0].get("enabled") is not True:
             return {"scanned": 0, "mode": "disabled"}
         return run(self, apply=True, max_rows=policy[0]["batch_rows"], cursors=self._history_archive_cursors)
+
+    def expire_analysis_cleanup_recovery(self, *, batch_limit: int = 10) -> int:
+        """Expire bounded technical recovery payloads globally, preserving history."""
+        if type(batch_limit) is not int or not 1 <= batch_limit <= 50:
+            raise ValueError("Cleanup recovery expiry batch limit must be between 1 and 50")
+        result = self._json(self._request(
+            "POST", "/rpc/expire_onflows_analysis_cleanup_recovery",
+            json={"p_limit": batch_limit},
+        ))
+        if type(result) is not int or not 0 <= result <= batch_limit:
+            raise PersistentStoreFailure("Cleanup recovery expiry result is invalid")
+        return result
 
     def _decode_shadow(self, payload: Mapping[str, Any], run_key: str = "") -> dict[str, Any]:
         from .request_metrics import current_metrics
