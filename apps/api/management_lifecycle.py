@@ -19,8 +19,8 @@ from .read_session import ReadSession
 _hash = management_service._hash
 
 
-def _context(repository, alias, now, analysis_hints=None):
-    repository = ReadSession(repository, planning_settings_bundle=True)
+def _context(repository, alias, now, analysis_hints=None, *, _initial_read_phase=None):
+    repository = ReadSession.planning(repository, _initial_read_phase)
     stored = ManagementStore(repository).profile(alias)
     if not stored["configured"]:
         raise HTTPException(409, "Configure a planning profile first")
@@ -189,7 +189,9 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
             raise HTTPException(409, "Resume the plan before changing its days")
         return record
     checkpoint = store.checkpoint(alias)
-    profile_revision, profile, frozen, fingerprint, approval_hash = _context(repository, alias, now)
+    initial_read_phase = ReadSession(repository, planning_settings_bundle=True)
+    profile_revision, profile, frozen, fingerprint, approval_hash = _context(
+        repository, alias, now, _initial_read_phase=initial_read_phase)
     if not force and not day_action and old.get("processed_input_fingerprint") == fingerprint:
         store.defer_check(alias, record["revision"])
         return record
@@ -218,7 +220,15 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
     locked = next((d for d in old["plan"]["days"] if d["date"] == today.isoformat() and d.get("session")), None)
     if day_action and day_action.date == today:
         locked = None
-    plan = management_service.build_draft(repository, alias, start, profile_revision, now=now, decisions=decisions, locked_day=locked)
+    # A mutable legacy snapshot or a different reconciliation source keeps the
+    # original fresh-before path. Reuse only the same immutable analysis so an
+    # intervening activation/rollback cannot mix outcomes with another source.
+    same_analysis = (isinstance(frozen.get("generation_id"), str) and bool(frozen["generation_id"])
+        and type(frozen.get("analysis_revision")) is int and frozen["analysis_revision"] > 0
+        and envelope.get("generation_id") == frozen["generation_id"]
+        and type(envelope.get("revision")) is int and envelope["revision"] == frozen["analysis_revision"])
+    plan = management_service.build_draft(repository, alias, start, profile_revision, now=now, decisions=decisions,
+        locked_day=locked, _initial_read_phase=initial_read_phase if same_analysis else None)
     if plan.get("source", {}).get("generation_id") != checkpoint.get("generation_id"):
         raise HTTPException(409, "Analysis changed during replanning")
     payload["changes"] = changes_between(old["plan"], plan)

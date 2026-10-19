@@ -152,8 +152,8 @@ def test_fresh_final_settings_row_removes_three_requests_with_identical_complete
     expected, actual = former.run(monkeypatch, emulate_raw_after=True), current.run(monkeypatch)
     assert actual.status_code == expected.status_code == 200
     assert actual.json() == expected.json()
-    assert len(former.requests) == 31 and len(current.requests) == 28
-    final = current.requests[16:20]
+    assert len(former.requests) == 26 and len(current.requests) == 23
+    final = current.requests[11:15]
     assert [request[1] for request in final] == ["/onflows_athlete_settings", "/rpc/active_onflows_analysis",
         "/onflows_model_entries", "/onflows_response_entries"]
     assert set(final[0][2]["select"].split(",")) == set(settings_row())
@@ -206,4 +206,4 @@ def test_final_read_falls_back_to_individual_readers_for_legacy_repository(monke
     expected, actual = former.run(monkeypatch, emulate_raw_after=True), current.run(monkeypatch)
     assert actual.status_code == expected.status_code == 200
     assert actual.json() == expected.json()
-    assert len(former.requests) == len(current.requests) == 40
+    assert len(former.requests) == len(current.requests) == 32
