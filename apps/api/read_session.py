@@ -10,15 +10,21 @@ from functools import wraps
 
 
 class ReadSession:
-    _READS = frozenset({
-        "athlete_settings", "active_analysis", "athlete_planning_calendar",
+    _SETTINGS_READS = frozenset({
+        "athlete_settings", "athlete_planning_calendar",
         "athlete_planning_profile", "athlete_mesocycle_accent_preferences",
+    })
+    _READS = frozenset({
+        "athlete_settings", "active_analysis", "active_analysis_metadata", "athlete_planning_calendar",
+        "athlete_planning_profile", "athlete_mesocycle_accent_preferences",
+        "athlete_planning_settings_bundle",
         "active_trainability_calendar", "active_planning_calendar", "active_activity_calendar",
         "trainability_summaries", "sync_state",
     })
 
-    def __init__(self, repository):
+    def __init__(self, repository, *, planning_settings_bundle=False):
         self._repository = repository
+        self._planning_settings_bundle = planning_settings_bundle
         self._values = {}
 
     def _read(self, key, reader):
@@ -51,6 +57,14 @@ class ReadSession:
 
         @wraps(reader)
         def read(*args):
-            return self._read((name, *args), lambda: reader(*args))
+            def calculate():
+                if self._planning_settings_bundle and name in self._SETTINGS_READS:
+                    bundle_reader = getattr(self._repository, "athlete_planning_settings_bundle", None)
+                    if callable(bundle_reader):
+                        bundle = self._read(("athlete_planning_settings_bundle", *args), lambda: bundle_reader(*args))
+                        return getattr(bundle, name)()
+                return reader(*args)
+
+            return self._read((name, *args), calculate)
 
         return read

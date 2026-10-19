@@ -92,6 +92,99 @@ class PersistentStoreFailure(RuntimeError):
     """Sanitized storage failure without database response bodies."""
 
 
+class _PlanningSettingsBundle:
+    """Parse one captured settings row lazily, preserving per-field validation."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def athlete_settings(self) -> AthleteModelSettings | None:
+        payload = self._rows
+        if not isinstance(payload, list) or not payload:
+            return None
+        row = payload[0]
+        bounds = row.get("hr_zone_bounds") if isinstance(row, Mapping) else None
+        athlete_timezone = row.get("timezone") if isinstance(row, Mapping) else None
+        hrmax_bpm = row.get("hrmax_bpm") if isinstance(row, Mapping) else None
+        zone_source = row.get("hr_zone_source", "MANUAL") if isinstance(row, Mapping) else None
+        percentages = row.get("hr_zone_percentages") if isinstance(row, Mapping) else None
+        if (
+            not isinstance(bounds, list)
+            or len(bounds) != 6
+            or not all(isinstance(value, int) and not isinstance(value, bool) for value in bounds)
+            or not isinstance(athlete_timezone, str)
+            or not isinstance(zone_source, str)
+            or (hrmax_bpm is not None and (
+                not isinstance(hrmax_bpm, int) or isinstance(hrmax_bpm, bool)
+            ))
+            or (percentages is not None and (
+                not isinstance(percentages, list)
+                or not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in percentages)
+            ))
+        ):
+            raise PersistentStoreFailure("Stored athlete settings are invalid")
+        try:
+            return AthleteModelSettings(
+                tuple(bounds), athlete_timezone, hrmax_bpm, zone_source,
+                tuple(percentages) if percentages is not None else None,
+            ).validate()
+        except ValueError as exc:
+            raise PersistentStoreFailure("Stored athlete settings are invalid") from exc
+
+    def athlete_planning_profile(self) -> AthletePlanningProfile | None:
+        payload = self._rows
+        if not isinstance(payload, list) or not payload:
+            return None
+        row = payload[0]
+        profile = row.get("planning_profile") if isinstance(row, Mapping) else None
+        if profile is None:
+            return None
+        if not isinstance(profile, Mapping):
+            raise PersistentStoreFailure("Stored planning profile is invalid")
+        try:
+            return AthletePlanningProfile.from_mapping(profile)
+        except ValueError as exc:
+            raise PersistentStoreFailure("Stored planning profile is invalid") from exc
+
+    def athlete_mesocycle_accent_preferences(self) -> AthleteMesocycleAccentPreferences | None:
+        payload = self._rows
+        if not isinstance(payload, list) or not payload:
+            return None
+        row = payload[0]
+        preferences = (
+            row.get("mesocycle_accent_preferences")
+            if isinstance(row, Mapping)
+            else None
+        )
+        if preferences is None:
+            return None
+        if not isinstance(preferences, Mapping):
+            raise PersistentStoreFailure(
+                "Stored mesocycle accent preferences are invalid"
+            )
+        try:
+            return AthleteMesocycleAccentPreferences.from_mapping(preferences)
+        except ValueError as exc:
+            raise PersistentStoreFailure(
+                "Stored mesocycle accent preferences are invalid"
+            ) from exc
+
+    def athlete_planning_calendar(self) -> AthletePlanningCalendar | None:
+        payload = self._rows
+        if not isinstance(payload, list) or not payload:
+            return None
+        row = payload[0]
+        calendar = row.get("planning_calendar") if isinstance(row, Mapping) else None
+        if calendar is None:
+            return None
+        if not isinstance(calendar, Mapping):
+            raise PersistentStoreFailure("Stored planning calendar is invalid")
+        try:
+            return AthletePlanningCalendar.from_mapping(calendar)
+        except ValueError as exc:
+            raise PersistentStoreFailure("Stored planning calendar is invalid") from exc
+
+
 @dataclass(frozen=True)
 class OAuthConnection:
     athlete_alias: str
@@ -501,6 +594,17 @@ class SupabasePilotRepository(SnapshotRepository):
         except ValueError as exc:
             raise PersistentStoreFailure("Stored activity sport rules are invalid") from exc
 
+    def athlete_planning_settings_bundle(self, athlete_alias: str) -> _PlanningSettingsBundle:
+        """Share a settings row only inside an explicit management ReadSession."""
+        response = self._request(
+            "GET",
+            "/onflows_athlete_settings?select=hr_zone_bounds,timezone,hrmax_bpm,"
+            "hr_zone_source,hr_zone_percentages,planning_profile,"
+            "mesocycle_accent_preferences,planning_calendar"
+            f"&athlete_alias=eq.{quote(athlete_alias, safe='')}&limit=1",
+        )
+        return _PlanningSettingsBundle(self._json(response))
+
     def athlete_settings(self, athlete_alias: str) -> AthleteModelSettings | None:
         alias = quote(athlete_alias, safe="")
         response = self._request(
@@ -508,37 +612,7 @@ class SupabasePilotRepository(SnapshotRepository):
             "/onflows_athlete_settings?select=hr_zone_bounds,timezone,hrmax_bpm,hr_zone_source,hr_zone_percentages"
             f"&athlete_alias=eq.{alias}&limit=1",
         )
-        payload = self._json(response)
-        if not isinstance(payload, list) or not payload:
-            return None
-        row = payload[0]
-        bounds = row.get("hr_zone_bounds") if isinstance(row, Mapping) else None
-        athlete_timezone = row.get("timezone") if isinstance(row, Mapping) else None
-        hrmax_bpm = row.get("hrmax_bpm") if isinstance(row, Mapping) else None
-        zone_source = row.get("hr_zone_source", "MANUAL") if isinstance(row, Mapping) else None
-        percentages = row.get("hr_zone_percentages") if isinstance(row, Mapping) else None
-        if (
-            not isinstance(bounds, list)
-            or len(bounds) != 6
-            or not all(isinstance(value, int) and not isinstance(value, bool) for value in bounds)
-            or not isinstance(athlete_timezone, str)
-            or not isinstance(zone_source, str)
-            or (hrmax_bpm is not None and (
-                not isinstance(hrmax_bpm, int) or isinstance(hrmax_bpm, bool)
-            ))
-            or (percentages is not None and (
-                not isinstance(percentages, list)
-                or not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in percentages)
-            ))
-        ):
-            raise PersistentStoreFailure("Stored athlete settings are invalid")
-        try:
-            return AthleteModelSettings(
-                tuple(bounds), athlete_timezone, hrmax_bpm, zone_source,
-                tuple(percentages) if percentages is not None else None,
-            ).validate()
-        except ValueError as exc:
-            raise PersistentStoreFailure("Stored athlete settings are invalid") from exc
+        return _PlanningSettingsBundle(self._json(response)).athlete_settings()
 
     def save_athlete_settings(
         self, athlete_alias: str, settings: AthleteModelSettings
@@ -568,19 +642,7 @@ class SupabasePilotRepository(SnapshotRepository):
             "/onflows_athlete_settings?select=planning_profile"
             f"&athlete_alias=eq.{alias}&limit=1",
         )
-        payload = self._json(response)
-        if not isinstance(payload, list) or not payload:
-            return None
-        row = payload[0]
-        profile = row.get("planning_profile") if isinstance(row, Mapping) else None
-        if profile is None:
-            return None
-        if not isinstance(profile, Mapping):
-            raise PersistentStoreFailure("Stored planning profile is invalid")
-        try:
-            return AthletePlanningProfile.from_mapping(profile)
-        except ValueError as exc:
-            raise PersistentStoreFailure("Stored planning profile is invalid") from exc
+        return _PlanningSettingsBundle(self._json(response)).athlete_planning_profile()
 
     def save_athlete_planning_profile(
         self, athlete_alias: str, profile: AthletePlanningProfile
@@ -605,27 +667,7 @@ class SupabasePilotRepository(SnapshotRepository):
             "/onflows_athlete_settings?select=mesocycle_accent_preferences"
             f"&athlete_alias=eq.{alias}&limit=1",
         )
-        payload = self._json(response)
-        if not isinstance(payload, list) or not payload:
-            return None
-        row = payload[0]
-        preferences = (
-            row.get("mesocycle_accent_preferences")
-            if isinstance(row, Mapping)
-            else None
-        )
-        if preferences is None:
-            return None
-        if not isinstance(preferences, Mapping):
-            raise PersistentStoreFailure(
-                "Stored mesocycle accent preferences are invalid"
-            )
-        try:
-            return AthleteMesocycleAccentPreferences.from_mapping(preferences)
-        except ValueError as exc:
-            raise PersistentStoreFailure(
-                "Stored mesocycle accent preferences are invalid"
-            ) from exc
+        return _PlanningSettingsBundle(self._json(response)).athlete_mesocycle_accent_preferences()
 
     def save_athlete_mesocycle_accent_preferences(
         self,
@@ -652,19 +694,7 @@ class SupabasePilotRepository(SnapshotRepository):
             "/onflows_athlete_settings?select=planning_calendar"
             f"&athlete_alias=eq.{alias}&limit=1",
         )
-        payload = self._json(response)
-        if not isinstance(payload, list) or not payload:
-            return None
-        row = payload[0]
-        calendar = row.get("planning_calendar") if isinstance(row, Mapping) else None
-        if calendar is None:
-            return None
-        if not isinstance(calendar, Mapping):
-            raise PersistentStoreFailure("Stored planning calendar is invalid")
-        try:
-            return AthletePlanningCalendar.from_mapping(calendar)
-        except ValueError as exc:
-            raise PersistentStoreFailure("Stored planning calendar is invalid") from exc
+        return _PlanningSettingsBundle(self._json(response)).athlete_planning_calendar()
 
     def save_athlete_planning_calendar(
         self, athlete_alias: str, calendar: AthletePlanningCalendar
@@ -713,6 +743,25 @@ class SupabasePilotRepository(SnapshotRepository):
             "revision": analysis["revision"],
             "activated_at": analysis["activated_at"],
         }
+
+    def active_analysis_metadata(self, athlete_alias: str) -> Mapping[str, Any] | None:
+        """Read the same coherent pointer without transferring its large snapshot."""
+        rows = self._rpc_rows(
+            "active_onflows_analysis?select=generation_id,revision,analysis_as_of,activated_at",
+            {"p_athlete_alias": athlete_alias},
+        )
+        if not rows:
+            return None
+        if len(rows) != 1:
+            raise PersistentStoreFailure("Stored active analysis metadata is invalid")
+        row = rows[0]
+        if (type(row.get("revision")) is not int or row["revision"] < 0
+                or (row.get("generation_id") is not None and
+                    (not isinstance(row["generation_id"], str) or not row["generation_id"]))
+                or any(row.get(k) is not None and not isinstance(row[k], str)
+                       for k in ("analysis_as_of", "activated_at"))):
+            raise PersistentStoreFailure("Stored active analysis metadata is invalid")
+        return {k: row.get(k) for k in ("generation_id", "revision", "analysis_as_of", "activated_at")}
 
     def active_analysis(self, athlete_alias: str) -> Mapping[str, Any] | None:
         row = self._rpc_row(

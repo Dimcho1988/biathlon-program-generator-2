@@ -141,10 +141,39 @@ def _payload(value):
     return value.to_payload() if value is not None else None
 
 
-def input_state(repository, alias, *, evaluated_at=None, include_response=False):
+def _analysis_identity(repository, alias, hints=None):
+    """Reuse an exact saved digest only for an unchanged immutable generation.
+
+    This hint is supplied only by read-only state polling. Publication and its
+    final concurrency check always read/hash the live snapshot. Legacy snapshots
+    have no immutable generation ID and must also be read in full.
+    """
+    valid = [h for h in hints or [] if isinstance(h, dict)
+             and isinstance(h.get("generation_id"), str) and h["generation_id"]
+             and type(h.get("analysis_revision")) is int and h["analysis_revision"] > 0
+             and isinstance(h.get("snapshot_fingerprint"), str)
+             and len(h["snapshot_fingerprint"]) == 64
+             and all(c in "0123456789abcdef" for c in h["snapshot_fingerprint"])]
+    metadata_reader = getattr(repository, "active_analysis_metadata", None)
+    if valid and callable(metadata_reader):
+        metadata = metadata_reader(alias) or {}
+        if metadata.get("generation_id"):
+            for hint in valid:
+                if (metadata["generation_id"] == hint["generation_id"]
+                        and type(metadata.get("revision")) is int
+                        and metadata["revision"] == hint["analysis_revision"]
+                        and metadata.get("analysis_as_of") == hint.get("analysis_as_of")):
+                    return metadata, hint["snapshot_fingerprint"]
+    # A new analysis may activate between the compact and full reads. Use the
+    # full read's own identity and digest together, never the earlier pointer.
+    analysis = repository.active_analysis(alias) or {}
+    return analysis, _hash(analysis.get("snapshot_payload"))
+
+
+def input_state(repository, alias, *, evaluated_at=None, include_response=False, analysis_hints=None):
     """Capture settings and source identity; never store credentials or wellness."""
     settings = repository.athlete_settings(alias)
-    analysis = repository.active_analysis(alias) or {}
+    analysis, snapshot_fingerprint = _analysis_identity(repository, alias, analysis_hints)
     entries = ModelStore(repository).entries(alias)
     from . import learning_service, speed_zone_history
     responses = sorted([
@@ -175,7 +204,7 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False)
         "generation_id": analysis.get("generation_id"),
         "analysis_revision": analysis.get("revision"),
         "analysis_as_of": analysis.get("analysis_as_of"),
-        "snapshot_fingerprint": _hash(analysis.get("snapshot_payload")),
+        "snapshot_fingerprint": snapshot_fingerprint,
         "response_fingerprint": _hash(responses) if responses is not None else None,
         "response_revisions": responses,
         "physiology": None if settings is None else {
@@ -198,7 +227,7 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
     # Reuse inputs only during calculation. The final check below must observe
     # edits/syncs made while the (potentially long) calculation was running.
     live_repository = repository
-    repository = ReadSession(repository)
+    repository = ReadSession(repository, planning_settings_bundle=True)
     store = ManagementStore(repository)
     stored = store.profile(alias)
     if not stored["configured"]:

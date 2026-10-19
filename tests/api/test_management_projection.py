@@ -75,7 +75,7 @@ def test_every_management_http_transport_projects_private_learning(monkeypatch, 
     payload = private_payload()
     monkeypatch.setattr(dependencies, "model_alias", lambda *args: "athlete")
     monkeypatch.setattr(dependencies, "repository", lambda: object())
-    monkeypatch.setattr(management, "ReadSession", lambda value: value)
+    monkeypatch.setattr(management, "ReadSession", lambda value, **options: value)
     monkeypatch.setattr(management, "public_sync_state", lambda value: None)
     for module, names in ((management_service, ["profile_view", "history", "outlook", "generate"]),
                           (management_lifecycle, ["current", "activate", "refresh", "action"])):
