@@ -21,6 +21,8 @@ _hash = management_service._hash
 
 def _context(repository, alias, now, analysis_hints=None, *, _initial_read_phase=None):
     repository = ReadSession.planning(repository, _initial_read_phase)
+    repository.capture_planning_inputs(alias,
+        analysis_hints=None if analysis_hints is None else management_service.valid_analysis_hints(analysis_hints))
     stored = ManagementStore(repository).profile(alias)
     if not stored["configured"]:
         raise HTTPException(409, "Configure a planning profile first")

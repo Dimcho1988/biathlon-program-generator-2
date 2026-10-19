@@ -26,6 +26,34 @@ class ReadSession:
         self._repository = repository
         self._planning_settings_bundle = planning_settings_bundle
         self._values = {}
+        self._planning_inputs = {}
+
+    def capture_planning_inputs(self, alias, *, analysis_hints=None):
+        """Capture one coherent phase; this never crosses a computation boundary."""
+        if alias not in self._planning_inputs:
+            reader = getattr(self._repository, "planning_inputs_bundle", None)
+            self._planning_inputs[alias] = (reader(alias,
+                analysis_mode="FULL" if analysis_hints is None else "HINTED", analysis_hints=analysis_hints)
+                if callable(reader) else None)
+        return self._planning_inputs[alias]
+
+    def planning_inputs_bundle(self, alias, *, analysis_mode="FULL", analysis_hints=None):
+        # Nested page/context scopes share this phase, while callers using the
+        # raw live repository after computing create a genuinely fresh capture.
+        return self.capture_planning_inputs(alias,
+            analysis_hints=None if analysis_mode == "FULL" else analysis_hints or [])
+
+    def planning_profile_rows(self, alias):
+        bundle = self._planning_inputs.get(alias)
+        return bundle.profile_rows() if bundle is not None else None
+
+    def planning_model_entries(self, alias):
+        bundle = self._planning_inputs.get(alias)
+        return bundle.model_entries() if bundle is not None else None
+
+    def planning_response_entries(self, alias):
+        bundle = self._planning_inputs.get(alias)
+        return bundle.response_entries() if bundle is not None else None
 
     @classmethod
     def planning(cls, repository, initial=None):
@@ -73,6 +101,14 @@ class ReadSession:
         @wraps(reader)
         def read(*args):
             def calculate():
+                bundle = self._planning_inputs.get(args[0]) if len(args) == 1 else None
+                if bundle is not None:
+                    if name in self._SETTINGS_READS:
+                        return getattr(bundle.settings_bundle(), name)()
+                    if name in {"active_analysis", "active_analysis_metadata"}:
+                        return getattr(bundle, name)()
+                    if name == "athlete_planning_settings_bundle":
+                        return bundle.settings_bundle()
                 if name == "active_trainability_calendar" and len(args) == 3:
                     # A bound repository method would otherwise reread analysis
                     # internally, bypassing this phase's existing capture.

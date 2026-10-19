@@ -42,6 +42,10 @@ class ModelStore:
     def __init__(self, repository): self.repository=repository
 
     def entries(self,alias):
+        reader = getattr(self.repository, "planning_model_entries", None)
+        captured = reader(alias) if callable(reader) else None
+        if captured is not None:
+            return captured
         rows=[]
         for offset in range(0,10000,1000):
             result=self.repository._request("GET", "/onflows_model_entries?select=kind,entry_key,revision,payload,recorded_at"

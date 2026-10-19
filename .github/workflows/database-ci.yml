@@ -49,6 +49,11 @@ jobs:
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
           --no-psqlrc --set ON_ERROR_STOP=1
           --file tests/database/management_response_checkpoint.sql
+      - name: Verify coherent service-only planning input bundles
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/planning_inputs_bundle.sql
       - name: Verify monotonic analysis revision publication checkpoints
         run: >-
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"

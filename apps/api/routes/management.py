@@ -107,6 +107,9 @@ def management_view(
     repository = ReadSession(dependencies.repository(), planning_settings_bundle=True)
     compact = view == "overview" and projection == "overview-v1"
     try:
+        capture = getattr(repository, "capture_planning_inputs", None)
+        if callable(capture):
+            capture(alias)
         with timed_stage("profile"):
             profile = management_service.profile_view(repository, alias, include_history=False) if compact else management_service.profile_view(repository, alias)
         with timed_stage("overview_active" if compact else "current"):
