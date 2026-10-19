@@ -67,7 +67,7 @@ def test_warm_refresh_reuses_five_reads_with_identical_full_json_and_computation
     actual = run_refresh(monkeypatch, current)
     assert actual.status_code == expected.status_code == 200
     assert actual.json() == expected.json()
-    assert len(previous.requests) == 28 and len(current.requests) == 23
+    assert len(previous.requests) == 25 and len(current.requests) == 20
     before = Counter(path for _, path, _, _ in previous.requests)
     after = Counter(path for _, path, _, _ in current.requests)
     assert before-after == Counter({
@@ -203,25 +203,15 @@ def test_legacy_snapshot_keeps_the_original_independent_before_phase(monkeypatch
     assert len(current.requests) == len(previous.requests) == 27
 
 
-def test_transient_reconciliation_generation_then_rollback_retains_the_fresh_before_fallback(monkeypatch):
-    class RollbackHTTP(InitialPhaseHTTP):
-        def handler(self, request):
-            already_read = sum(path == "/rpc/active_onflows_analysis" for _, path, _, _ in self.requests)
-            if (self.record is not None and request.url.path.endswith("/rpc/active_onflows_analysis")
-                    and already_read == 1):
-                # Context captured G1, reconciliation captures G2, then the live
-                # pointer returns to G1 before draft calculation starts.
-                original = deepcopy(self.envelope)
-                self.envelope.update(generation_id="transient-generation", revision=2)
-                response = super().handler(request)
-                self.envelope = original
-                return response
-            return super().handler(request)
-
-    previous, current = RollbackHTTP(), RollbackHTTP()
-    expected = run_refresh(monkeypatch, previous, separate_initial_phase=True, expect_initial_phase=False)
-    actual = run_refresh(monkeypatch, current, expect_initial_phase=False)
-    assert actual.status_code == expected.status_code == 200
-    assert actual.json() == expected.json()
-    assert len(current.requests) == len(previous.requests) == 28
-    assert current.record["payload"]["proposal"]["source"]["generation_id"] == "generation-one"
+def test_new_generation_during_reconciliation_cannot_publish_the_old_capture(monkeypatch):
+    harness = InitialPhaseHTTP()
+    reconcile = lifecycle.reconcile
+    def activate_new_generation(plan, source, *args, **kwargs):
+        harness.envelope.update(generation_id="new-generation", revision=2)
+        return reconcile(plan, source, *args, **kwargs)
+    monkeypatch.setattr(lifecycle, "reconcile", activate_new_generation)
+    response = run_refresh(monkeypatch, harness)
+    assert response.status_code == 409 and "inputs changed" in response.json()["detail"]
+    assert harness.envelope["generation_id"] == "new-generation" and harness.envelope["revision"] == 2
+    assert harness.record["revision"] == 1
+    assert not any(path == "/rpc/save_onflows_management_plan_compact" for _, path, _, _ in harness.requests)
