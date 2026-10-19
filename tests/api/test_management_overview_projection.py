@@ -55,14 +55,14 @@ def request_overview(monkeypatch, harness, query="view=overview&projection=overv
     return TestClient(main.app).get(f"/api/v2/athlete/management/view?{query}", headers=HEADERS)
 
 
-def test_opt_in_overview_uses_seventeen_reads_and_preserves_all_other_resources(monkeypatch):
+def test_opt_in_overview_uses_sixteen_reads_and_preserves_all_other_resources(monkeypatch):
     ordinary = PlanningHTTP()
     expected = read_page(monkeypatch, ordinary)
     compact = OverviewHTTP()
     response = request_overview(monkeypatch, compact)
     assert response.status_code == 200, response.text
     result = response.json()
-    assert len(ordinary.requests) == 18 and len(compact.requests) == 17
+    assert len(ordinary.requests) == 17 and len(compact.requests) == 16
     assert result["schema_version"] == "management-overview-v1" and "active" not in result
     assert {k: v for k, v in result["profile"].items() if k != "history"} == {
         k: v for k, v in expected["profile"].items() if k != "history"}

@@ -17,11 +17,23 @@ from tests.api.test_supabase_generation_rpc_contract import ENCRYPTION_KEY, GENE
 from tests.api.test_training_plan_engine import NOW, TODAY, Repository, profile
 
 
+class OriginalReaderOnly:
+    """A repository version without the additive captured-analysis capability."""
+    def __init__(self, repository):
+        self.repository = repository
+
+    def __getattr__(self, name):
+        if name == "trainability_calendar_from_analysis":
+            raise AttributeError(name)
+        return getattr(self.repository, name)
+
+
 class PlanningHTTP:
     """Generation-backed production adapter with 133 activities and 112 TI keys."""
 
     def __init__(self):
         self.requests = []
+        self.response_bytes = Counter()
         self.analysis_reads = 0
         self.activate_on_read = None
         self.activate_after_catalog = False
@@ -98,7 +110,9 @@ class PlanningHTTP:
         else:
             raise AssertionError(f"Unexpected read: {request.method} {path}")
         assert request.method == ("POST" if path.startswith("/rpc/") else "GET")
-        return httpx.Response(200, json=deepcopy(rows))
+        response = httpx.Response(200, json=deepcopy(rows))
+        self.response_bytes[path] += len(response.content)
+        return response
 
     def counts(self):
         return Counter(request.url.path.removeprefix("/rest/v1") for request in self.requests)
@@ -122,17 +136,17 @@ def read_page(monkeypatch, harness):
     return response.json()
 
 
-def test_full_overview_is_identical_with_eighteen_instead_of_twenty_one_store_reads(monkeypatch):
+def test_full_overview_is_identical_with_seventeen_instead_of_twenty_store_reads(monkeypatch):
     baseline = PlanningHTTP()
     reuse = service._planning_calendar_from_speed_inputs
     monkeypatch.setattr(service, "_planning_calendar_from_speed_inputs", lambda *args: None)
     expected = read_page(monkeypatch, baseline)
-    assert len(baseline.requests) == 21
+    assert len(baseline.requests) == 20
     monkeypatch.setattr(service, "_planning_calendar_from_speed_inputs", reuse)
     optimized = PlanningHTTP()
     actual = read_page(monkeypatch, optimized)
     assert actual == expected
-    assert len(optimized.requests) == 18
+    assert len(optimized.requests) == 17
     assert baseline.counts()-optimized.counts() == Counter({
         "/rpc/active_onflows_analysis": 1, "/onflows_analysis_generations": 1,
         "/onflows_analysis_generation_activities": 1})
@@ -195,14 +209,16 @@ def test_unreliable_capture_is_never_reused(change):
     assert service._planning_calendar_from_speed_inputs(inputs, "ath-test", analysis, TODAY) is None
 
 
-def test_generation_activation_between_profile_and_speed_inputs_keeps_original_fallback(monkeypatch):
+def test_repository_without_capture_capability_keeps_original_generation_fallback(monkeypatch):
     baseline = PlanningHTTP()
+    baseline.repo = OriginalReaderOnly(baseline.repo)
     baseline.activate_on_read = 2
     reuse = service._planning_calendar_from_speed_inputs
     monkeypatch.setattr(service, "_planning_calendar_from_speed_inputs", lambda *args: None)
     expected = read_page(monkeypatch, baseline)
     monkeypatch.setattr(service, "_planning_calendar_from_speed_inputs", reuse)
     optimized = PlanningHTTP()
+    optimized.repo = OriginalReaderOnly(optimized.repo)
     optimized.activate_on_read = 2
     assert read_page(monkeypatch, optimized) == expected
     # The old profile analysis and newly activated speed calendar are never
@@ -250,7 +266,7 @@ def test_activation_after_coherent_capture_returns_one_pinned_generation(monkeyp
     assert observed[0]["generation_id"] == GENERATION_ID
     assert observed[0]["snapshot_payload"] == Repository().envelope["snapshot_payload"]
     assert len(observed[0]["activities"]) == 133
-    assert len(harness.requests) == 18 and harness.analysis_reads == 2
+    assert len(harness.requests) == 17 and harness.analysis_reads == 1
 
 
 def test_same_speed_inputs_are_used_once_and_stale_model_still_uses_manual_race_duration(monkeypatch):
