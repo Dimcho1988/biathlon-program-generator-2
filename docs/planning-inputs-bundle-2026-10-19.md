@@ -39,6 +39,14 @@ no new publication locks and exposes no credentials or headers. API token,
 alias and actor authorization boundaries remain in their existing routes and
 write RPCs.
 
+The first database CI attempt exposed a test-baseline error: the September
+accounts migration grants ALL on existing public tables to the service role;
+the later read-contract migration restricts the generation table, not the
+analysis-state table. This bundle does not change either table ACL. The contract
+now verifies the existing state privilege mask is unchanged by the read and
+retains the explicit ban on direct immutable-generation UPDATE. It does not
+silently impose or claim a new SELECT-only state grant.
+
 The private `planning-inputs-v1` object contains the requested alias, settings
 and profile rows, latest model/response entries, separate raw-history overflow
 flags and the analysis row/mode. The API validates its envelope and alias, then

@@ -17,6 +17,7 @@ declare
  role_name text;
  rejected boolean;
  original_rows jsonb;
+ analysis_state_privileges jsonb;
 begin
  assert (select not prosecdef and provolatile='s' and proconfig=array['search_path=""']
    from pg_proc where oid='public.read_onflows_planning_inputs(text,text,jsonb)'::regprocedure),
@@ -27,8 +28,14 @@ begin
    assert not has_function_privilege(role_name,'public.read_onflows_planning_inputs(text,text,jsonb)','EXECUTE'),
      'Planning inputs exposed to a public role';
  end loop;
- assert not has_table_privilege('service_role','public.onflows_athlete_analysis_state','UPDATE'),
-   'Planning inputs widened canonical analysis permissions';
+ -- The September accounts migration grants ALL on existing public tables;
+ -- the later generation read-contract migration narrows only generations.
+ -- Do not invent a SELECT-only state baseline which this read RPC never set.
+ select jsonb_object_agg(permission,has_table_privilege('service_role',
+   'public.onflows_athlete_analysis_state',permission)) into analysis_state_privileges
+ from unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) permission;
+ assert not has_table_privilege('service_role','public.onflows_analysis_generations','UPDATE'),
+   'Immutable generation write access was widened';
 
  -- Latest revisions win despite clock anomalies. Response identity order comes
  -- from the first raw-history occurrence, not the winning revision timestamp.
@@ -59,6 +66,10 @@ begin
 
  execute 'set local role service_role';
  bundle := public.read_onflows_planning_inputs(a);
+ assert (select jsonb_object_agg(permission,has_table_privilege('service_role',
+   'public.onflows_athlete_analysis_state',permission))
+   from unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) permission)
+   =analysis_state_privileges, 'Read bundle changed existing analysis-state privileges';
  assert bundle ?& array['schema_version','athlete_alias','settings_rows','profile_rows',
      'model_entries','model_history_exhausted','response_entries','response_history_exhausted','analysis']
    and bundle-array['schema_version','athlete_alias','settings_rows','profile_rows',
