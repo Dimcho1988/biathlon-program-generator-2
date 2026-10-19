@@ -125,7 +125,8 @@ def test_action_route_discards_compact_ack_and_returns_fresh_current(monkeypatch
         "X-OnFlows-Actor-Id": ACTOR,
     })
     assert response.status_code == 200
-    assert response.json() == {"active": {"revision": 9, "payload": PAYLOAD}, "history": []}
+    assert response.json() == {"active": {"revision": 9, "payload": PAYLOAD}, "history": [],
+                               "capabilities": {"unchanged_checks": True}}
     assert calls == ["publish", "fresh_read"]
 
 

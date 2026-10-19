@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 from typing import Annotated, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Query, Response
 from ..oauth_store import PersistentStoreFailure
 from ..component_load_context import ComponentCapacityUnavailable
 from ..component_load_projection import ComponentLoadRefreshRequired
@@ -19,6 +19,7 @@ from ..management_schemas import (
     MethodLibraryPreferencesWrite,
 )
 from ..management_store import ManagementStore
+from ..management_plan_store import PlanStore
 from .. import management_service
 from .. import management_lifecycle
 from .. import method_library_service
@@ -30,6 +31,14 @@ from ..management_projection import public_management
 from ..request_metrics import timed_stage
 
 router = APIRouter()
+
+
+def _active_response(value, check=None):
+    result = {**value, "capabilities": {"unchanged_checks": True}}
+    if check is not None:
+        result["action_result"] = {"operation": "CHECK_NO_CHANGE", "check_id": check["check_id"],
+            "checked_revision": check["checked_revision"], "recorded_at": check["recorded_at"]}
+    return result
 
 
 @router.get("/api/v2/athlete/management/methods")
@@ -112,7 +121,7 @@ def management_view(
             sync = None
         with timed_stage("projection"):
             result = {"profile": profile, "drafts": drafts, "outlook": outlook, "sync": sync}
-            result.update({"schema_version": "management-overview-v1", "overview_active": active} if compact else {"active": active})
+            result.update({"schema_version": "management-overview-v1", "overview_active": active} if compact else {"active": _active_response(active)})
             return public_management(result)
     except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
         raise HTTPException(409, exc.user_message) from exc
@@ -207,12 +216,28 @@ def management_active(
 ):
     alias = dependencies.model_alias(authorization, athlete_alias)
     try:
-        return public_management(management_lifecycle.current(
-            ReadSession(dependencies.repository(), planning_settings_bundle=True), alias))
+        return public_management(_active_response(management_lifecycle.current(
+            ReadSession(dependencies.repository(), planning_settings_bundle=True), alias)))
     except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
         raise HTTPException(409, exc.user_message) from exc
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "Active planning is temporarily unavailable") from exc
+
+
+@router.get("/api/v2/athlete/management/checks")
+def management_checks(
+    response: Response,
+    before: Annotated[int | None, Query(ge=1, le=9007199254740991)] = None,
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+):
+    alias = dependencies.model_alias(authorization, athlete_alias)
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return PlanStore(dependencies.repository()).checks(alias, before=before, limit=limit)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Plan check history is temporarily unavailable") from exc
 
 
 @router.get("/api/v2/athlete/management/state")
@@ -235,13 +260,14 @@ def _management_action(operation, body, authorization, athlete_alias, actor):
     try:
         repository = dependencies.repository()
         if operation == "activate":
-            management_lifecycle.activate(repository, alias, body, actor, include_saved_payload=False)
+            saved = management_lifecycle.activate(repository, alias, body, actor, include_saved_payload=False)
         elif operation == "day":
-            management_lifecycle.refresh(repository, alias, actor, expected_revision=body.expected_revision,
+            saved = management_lifecycle.refresh(repository, alias, actor, expected_revision=body.expected_revision,
                                          force=True, day_action=body, include_saved_payload=False)
         else:
-            management_lifecycle.action(repository, alias, body, actor, include_saved_payload=False)
-        return public_management(management_lifecycle.current(repository, alias))
+            saved = management_lifecycle.action(repository, alias, body, actor, include_saved_payload=False)
+        check = saved.get("unchanged_check") if isinstance(saved, dict) else None
+        return public_management(_active_response(management_lifecycle.current(repository, alias), check))
     except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
         raise HTTPException(409, exc.user_message) from exc
     except PersistentStoreFailure as exc:

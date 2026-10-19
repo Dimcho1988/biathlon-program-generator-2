@@ -44,6 +44,11 @@ jobs:
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
           --no-psqlrc --set ON_ERROR_STOP=1
           --file tests/database/compact_management_save.sql
+      - name: Verify unchanged refresh audit without duplicate plan revisions
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/unchanged_management_checks.sql
       - name: Verify service-only overview presentation without changing evidence
         run: >-
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"

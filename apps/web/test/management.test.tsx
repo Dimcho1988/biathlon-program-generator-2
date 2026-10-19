@@ -258,6 +258,19 @@ describe("management API access and optimistic revision", () => {
     expect((await GET(request("GET"), context("outlook"))).status).toBe(403);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
+  it("reads checks lazily with the same plan permission and only a bounded sequence cursor", async () => {
+    vi.mocked(currentAuthorizedAthlete).mockResolvedValue({ ...access, canEditPlan: false });
+    const valid = scopedRequest("https://web.test/api/athlete/management/checks?before=41&limit=10&athlete_alias=other");
+    expect((await GET(valid, context("checks"))).status).toBe(200);
+    expect(fetch).toHaveBeenCalledWith(new URL("https://api.example.test/api/v2/athlete/management/checks?before=41&limit=10"), expect.objectContaining({ cache: "no-store", method: "GET" }));
+    for (const query of ["before=0", "before=-1", "before=1.5", "before=9007199254740992", "limit=0", "limit=51", "limit=1e1"]) {
+      expect((await GET(scopedRequest(`https://web.test/api/athlete/management/checks?${query}`), context("checks"))).status).toBe(422);
+    }
+    expect((await POST(request("POST", {}), context("checks"))).status).toBe(404);
+    vi.mocked(currentAuthorizedAthlete).mockResolvedValue({ ...access, canViewPlan: false });
+    expect((await GET(valid, context("checks"))).status).toBe(403);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
   it("rejects anonymous access, unsupported paths, missing versions and large bodies", async () => {
     vi.mocked(currentAuthorizedAthlete).mockResolvedValue(null);
     expect((await GET(request("GET"), context("profile"))).status).toBe(401);
@@ -319,6 +332,16 @@ describe("active plan access", () => {
     const options = vi.mocked(fetch).mock.calls[0][1]!;
     expect(JSON.parse(options.body as string)).toEqual({ action: "APPROVE", expected_revision: 4 });
     expect(options.headers).toMatchObject({ "X-OnFlows-Actor-Id": "coach" });
+  });
+  it.each([undefined, false, true])("forwards refresh opt-in %s while preserving the legacy body", async flag => {
+    const body = { action: "REFRESH", expected_revision: 4, ...(flag === undefined ? {} : { record_unchanged_check: flag }) };
+    expect((await POST(req(body), ctx("action"))).status).toBe(200);
+    expect(JSON.parse(vi.mocked(fetch).mock.calls.at(-1)![1]!.body as string)).toEqual({ action: "REFRESH", expected_revision: 4, ...(flag === true ? { record_unchanged_check: true } : {}) });
+  });
+  it.each(["PAUSE", "RESUME", "APPROVE"])("refuses check opt-in on %s and malformed flags", async action => {
+    expect((await POST(req({ action, expected_revision: 4, record_unchanged_check: true }), ctx("action"))).status).toBe(422);
+    expect((await POST(req({ action: "REFRESH", expected_revision: 4, record_unchanged_check: "true" }), ctx("action"))).status).toBe(422);
+    expect(fetch).not.toHaveBeenCalled();
   });
   it("rejects missing versions and invented completion without actual load", async () => {
     expect((await POST(req({ action: "APPROVE" }), ctx("action"))).status).toBe(422);

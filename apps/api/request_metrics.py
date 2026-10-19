@@ -29,6 +29,8 @@ _STORE_LABELS = {
     "/rpc/defer_onflows_management_check": "defer",
     "/rpc/queue_onflows_management_import": "import_queue",
     "/rpc/read_onflows_management_overview": "overview_plan",
+    "/rpc/record_onflows_management_check": "unchanged_check",
+    "/rpc/read_onflows_management_checks": "check_history",
 }
 _STAGES = frozenset({"profile", "current", "overview_active", "drafts", "outlook", "projection", "input_after"})
 

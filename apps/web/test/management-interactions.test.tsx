@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ManagementProfileEditor } from "../components/management-profile-editor";
 import { TrainingManagement } from "../components/training-management";
+import { ActiveTrainingPlan } from "../components/active-training-plan";
 import { PlanningProfileForm } from "../components/planning-profile-form";
 import { TrainingPlanSummary } from "../components/training-plan-summary";
 import { TimeAvailability, TimeLimitNotice } from "../components/planning-time-limit";
@@ -317,11 +318,97 @@ it("shows the tighter time constraint and keeps long-term estimates distinct",as
 
 const activeResponse=(revision:number,stale=false):ActivePlanResponse=>({active:{revision,stale,actionable:false,payload:{schema_version:"active-plan-v2",status:"REVIEW_REQUIRED",mode:"AUTO",reason:"За преглед",plan:draft.payload,proposal:{...draft.payload,activation_eligible:true},changes:[],outcomes:[],decisions:{}}},history:[]});
 
+const unchangedReceipt = { operation: "CHECK_NO_CHANGE" as const, check_id: "f7dfdc52-69a8-4a01-890d-36bfe2fb00b7", checked_revision: 6, recorded_at: "2026-10-19T09:42:13Z" };
+it.each([6, 7])("opts in only a supported manual refresh and reports the checked version against current version %s", async currentRevision => {
+  const initial = { ...activeResponse(6), capabilities: { unchanged_checks: true } };
+  const result = { ...activeResponse(currentRevision), capabilities: { unchanged_checks: true }, action_result: unchangedReceipt };
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json(result)); vi.stubGlobal("fetch", fetchMock);
+  const receive = vi.fn();
+  await mount(<ActiveTrainingPlan value={initial} onChange={receive} canEdit today="2026-09-21" renderDay={day => <p>{day.date}</p>}/>);
+  expect(fetchMock).not.toHaveBeenCalled();
+  await click(button("Обнови сега"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ action: "REFRESH", expected_revision: 6, record_unchanged_check: true });
+  expect(receive).toHaveBeenCalledWith({ ...activeResponse(currentRevision), capabilities: { unchanged_checks: true } });
+  expect(receive.mock.calls[0][0]).not.toHaveProperty("action_result");
+  expect(container.textContent).toContain(currentRevision === 6 ? "Проверката приключи. Програмата остава без промяна." : "Проверката на версия 6 приключи без промяна. Показана е текущата версия 7.");
+  expect(container.textContent).toContain("Предложението по-долу още не е действаща задача.");
+  expect(container.textContent).toContain("Проверки без промяна");
+  expect(container.querySelector("details:last-child")?.hasAttribute("open")).toBe(false);
+});
+
+it("keeps old API refresh bodies unchanged and does not infer an unchanged check from equal revisions", async () => {
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json(activeResponse(6))); vi.stubGlobal("fetch", fetchMock);
+  await mount(<ActiveTrainingPlan value={activeResponse(6)} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>);
+  await click(button("Обнови сега"));
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ action: "REFRESH", expected_revision: 6 });
+  expect(container.textContent).not.toContain("Проверката приключи");
+  expect(container.textContent).not.toContain("Проверки без промяна");
+});
+
+it("requires the explicit check receipt even when the capability is supported and the revision is equal", async () => {
+  const initial = { ...activeResponse(6), capabilities: { unchanged_checks: true } };
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json(initial)); vi.stubGlobal("fetch", fetchMock);
+  await mount(<ActiveTrainingPlan value={initial} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>);
+  await click(button("Обнови сега"));
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toMatchObject({ record_unchanged_check: true });
+  expect(container.textContent).not.toContain("Проверката приключи");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+it("does not describe the currently displayed newer revision as unchanged when a check response arrives late", async () => {
+  let resolve!: (response: Response) => void;
+  const fetchMock = vi.fn<typeof fetch>(() => new Promise(done => { resolve = done; })); vi.stubGlobal("fetch", fetchMock);
+  const render = (revision: number) => <ActiveTrainingPlan value={{ ...activeResponse(revision), capabilities: { unchanged_checks: true } }} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>;
+  await mount(render(6));
+  await click(button("Обнови сега"));
+  await mount(render(7));
+  await act(async () => resolve(Response.json({ ...activeResponse(6), capabilities: { unchanged_checks: true }, action_result: unchangedReceipt })));
+  expect(container.textContent).toContain("Текущ план · версия 7");
+  expect(container.textContent).toContain("Проверката на версия 6 приключи без промяна. Показана е текущата версия 7.");
+  expect(container.textContent).not.toContain("Проверката приключи. Програмата остава без промяна.");
+});
+
+it.each([
+  ["Пауза", "REVIEW_REQUIRED", "PAUSE"],
+  ["Продължи с текущите настройки", "PAUSED", "RESUME"],
+  ["Утвърди актуалната адаптация", "REVIEW_REQUIRED", "APPROVE"],
+] as const)("never opts %s into a check event", async (label, status, action) => {
+  const initial = { ...activeResponse(6), capabilities: { unchanged_checks: true } };
+  initial.active!.payload.status = status;
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json(initial)); vi.stubGlobal("fetch", fetchMock);
+  await mount(<ActiveTrainingPlan value={initial} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>);
+  await click(button(label));
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ action, expected_revision: 6 });
+});
+
+it("keeps day decisions on the full plan revision without check opt-in", async () => {
+  const initial = { ...activeResponse(6), capabilities: { unchanged_checks: true } };
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json(initial)); vi.stubGlobal("fetch", fetchMock);
+  await mount(<ActiveTrainingPlan value={initial} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>);
+  const rest = [...container.querySelectorAll("button")].find(node => node.textContent?.startsWith("Почивка на "))!;
+  await click(rest);
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ date: "2026-09-22", action: "REST", note: "", expected_revision: 6 });
+});
+
+it("never replays a check refresh after conflict or labels the reloaded plan unchanged", async () => {
+  const initial = { ...activeResponse(6), capabilities: { unchanged_checks: true } };
+  const fetchMock = vi.fn(async (_url, init) => init?.method === "POST" ? Response.json({}, { status: 409 }) : Response.json({ ...activeResponse(7), capabilities: { unchanged_checks: true } }));
+  vi.stubGlobal("fetch", fetchMock);
+  await mount(<ActiveTrainingPlan value={initial} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>);
+  await click(button("Обнови сега"));
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  expect(container.textContent).toContain("Заредена е последната версия");
+  expect(container.textContent).not.toContain("Проверката приключи");
+});
+
 it("disables manual actions during automatic refresh and loads a concurrent newer version without replaying",async()=>{
   let resolvePost!:(response:Response)=>void;
   const fetchMock=vi.fn<(url:string,init?:RequestInit)=>Promise<Response>>((url)=>url.endsWith("/active")?Promise.resolve(Response.json(activeResponse(4))):new Promise(resolve=>{resolvePost=resolve;}));vi.stubGlobal("fetch",fetchMock);
-  await mount(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:2}} initialDrafts={[]} initialActive={activeResponse(3,true)} today="2026-09-21"/>);
+  await mount(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:2}} initialDrafts={[]} initialActive={{...activeResponse(3,true),capabilities:{unchanged_checks:true}}} today="2026-09-21"/>);
   expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ action: "REFRESH", expected_revision: 3 });
   expect(button("Обновяване…").disabled).toBe(true);
   expect(button("Пауза").disabled).toBe(true);
   expect(button("Утвърди актуалната адаптация").disabled).toBe(true);

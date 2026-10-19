@@ -2,6 +2,7 @@ import { parseTrainingObservations, defaultNeuromuscular, type LactateProfile, t
 import { isCalendarDate, isRecord } from "./training-status";
 import { defaultIndividualLearning, parseIndividualLearningConfig, type IndividualLearningConfig } from "./individual-learning";
 import { parseMethodPreferences, type MethodPreferences, type SessionMethod } from "./method-library";
+import { parsePlanCheckReceipt, type PlanCheckReceipt } from "./management-checks";
 
 export interface ManagementProfile {
   schema_version: "management-profile-v1";
@@ -479,10 +480,22 @@ export interface ActivePlanRecord {
     mode: "AUTO" | "REVIEW"; reason: string; plan: PlanningDraft; proposal: PlanningDraft | null;
     changes: PlanChange[]; outcomes: PlanOutcome[]; decisions: Record<string, { action: string; note: string }> };
 }
-export interface ActivePlanResponse { active: ActivePlanRecord | null; history: Array<{ revision: number; operation: string; recorded_at: string; reason: string; changes: PlanChange[] }> }
+export interface ActivePlanResponse {
+  active: ActivePlanRecord | null;
+  history: Array<{ revision: number; operation: string; recorded_at: string; reason: string; changes: PlanChange[] }>;
+  capabilities?: { unchanged_checks?: boolean };
+  action_result?: PlanCheckReceipt;
+}
 export function parseActivePlanResponse(value: unknown): ActivePlanResponse {
   if (!isRecord(value) || !Array.isArray(value.history)) throw new Error("Невалидна история на активния план.");
-  if (value.active === null) return { active: null, history: [] };
+  if (value.capabilities !== undefined && (!isRecord(value.capabilities)
+    || (value.capabilities.unchanged_checks !== undefined && typeof value.capabilities.unchanged_checks !== "boolean")))
+    throw new Error("Невалидни възможности на активния план.");
+  const actionResult = value.action_result === undefined ? undefined : parsePlanCheckReceipt(value.action_result);
+  if (value.active === null) {
+    if (actionResult) throw new Error("Проверката няма свързана активна програма.");
+    return { active: null, history: [], ...(value.capabilities === undefined ? {} : { capabilities: value.capabilities }) } as ActivePlanResponse;
+  }
   const row = value.active;
   if (!isRecord(row) || !integer(row.revision, 1, Number.MAX_SAFE_INTEGER) || typeof row.stale !== "boolean" || typeof row.actionable !== "boolean" || !isRecord(row.payload)) throw new Error("Невалидна активна програма.");
   const p = row.payload;
@@ -491,5 +504,6 @@ export function parseActivePlanResponse(value: unknown): ActivePlanResponse {
     || !Array.isArray(p.outcomes) || !isRecord(p.decisions)) throw new Error("Невалидно състояние на програмата.");
   parseDraftRecord({ entry_key: "active", revision: row.revision, payload: p.plan });
   if (p.proposal !== null) parseDraftRecord({ entry_key: "proposal", revision: row.revision, payload: p.proposal });
+  if (actionResult && actionResult.checked_revision > row.revision) throw new Error("Проверката е за по-нова версия на програмата.");
   return value as unknown as ActivePlanResponse;
 }

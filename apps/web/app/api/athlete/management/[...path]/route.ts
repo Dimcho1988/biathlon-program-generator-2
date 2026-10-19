@@ -16,12 +16,18 @@ async function proxy(request: Request, context: Context) {
   try {
     const { path } = await context.params;
     const endpoint = path.length === 1 ? path[0] : path.length === 2 && path[0] === "methods" && path[1] === "preferences" ? "methods/preferences" : "";
-    const permitted = request.method === "GET" ? ["profile", "drafts", "active", "state", "outlook", "methods"] : request.method === "PUT" ? ["profile", "methods/preferences"] : ["generate", "activate", "action", "day", "race-duration"];
+    const permitted = request.method === "GET" ? ["profile", "drafts", "active", "state", "outlook", "methods", "checks"] : request.method === "PUT" ? ["profile", "methods/preferences"] : ["generate", "activate", "action", "day", "race-duration"];
     if (!permitted.includes(endpoint)) return error("Адресът не е намерен.", 404);
     const startDate = request.method === "GET" && endpoint === "drafts" ? new URL(request.url).searchParams.get("start_date") : null;
     if (startDate !== null && !isCalendarDate(startDate)) return error("Невалидна начална дата на програмата.", 422);
     const phase = request.method === "GET" && endpoint === "methods" ? new URL(request.url).searchParams.get("phase") : null;
     if (phase !== null && !Object.hasOwn(METHOD_PHASES, phase)) return error("Невалиден период на подготовката.", 422);
+    const checksQuery = request.method === "GET" && endpoint === "checks" ? new URL(request.url).searchParams : null;
+    const before = checksQuery?.get("before") ?? null;
+    const limit = checksQuery?.get("limit") ?? null;
+    const positiveQuery = (value: string) => /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value));
+    if ((before !== null && !positiveQuery(before)) || (limit !== null && (!positiveQuery(limit) || Number(limit) > 50)))
+      return error("Невалидна страница с проверки на програмата.", 422);
     const write = request.method !== "GET";
     if (write && !isSameOrigin(request)) return error("Невалиден източник на заявката.", 403);
     const access = await currentAuthorizedAthlete();
@@ -57,8 +63,11 @@ async function proxy(request: Request, context: Context) {
         body = JSON.stringify({ start_date: input.start_date, draft_revision: input.draft_revision, expected_revision: input.expected_revision });
       } else if (endpoint === "action") {
         if (!["PAUSE", "RESUME", "REFRESH", "APPROVE"].includes(String(input.action)) || !revision(input.expected_revision) || Number(input.expected_revision) < 1) return error("Невалидно действие за програмата.", 422);
+        if ((input.record_unchanged_check !== undefined && typeof input.record_unchanged_check !== "boolean")
+          || (input.record_unchanged_check === true && input.action !== "REFRESH")) return error("Невалидна проверка на програмата.", 422);
         plansWeek = input.action === "REFRESH" || input.action === "RESUME";
-        body = JSON.stringify({ action: input.action, expected_revision: input.expected_revision });
+        body = JSON.stringify({ action: input.action, expected_revision: input.expected_revision,
+          ...(input.record_unchanged_check === true ? { record_unchanged_check: true } : {}) });
       } else if (endpoint === "day") {
         if (!isCalendarDate(input.date) || !["SKIP", "REST", "CLEAR"].includes(String(input.action)) || !revision(input.expected_revision) || Number(input.expected_revision) < 1 || typeof input.note !== "string" || input.note.length > 250) return error("Проверете деня и избраното действие.", 422);
         body = JSON.stringify({ date: input.date, action: input.action, note: input.note, expected_revision: input.expected_revision });
@@ -74,6 +83,8 @@ async function proxy(request: Request, context: Context) {
     const url = new URL(`/api/v2/athlete/management/${endpoint}`, base);
     if (startDate !== null) url.searchParams.set("start_date", startDate);
     if (phase !== null) url.searchParams.set("phase", phase);
+    if (before !== null) url.searchParams.set("before", before);
+    if (limit !== null) url.searchParams.set("limit", limit);
     const response = await fetch(url, {
       method: request.method, cache: "no-store", signal: request.method === "GET"
         ? AbortSignal.any([request.signal, AbortSignal.timeout(75_000)])

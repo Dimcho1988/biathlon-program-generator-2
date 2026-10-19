@@ -172,7 +172,7 @@ def changes_between(old, new):
 
 
 def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, automatic=False,
-            force=False, resume=False, day_action=None, include_saved_payload=True):
+            force=False, resume=False, day_action=None, include_saved_payload=True, record_unchanged_check=False):
     now = now or datetime.now(timezone.utc)
     store = PlanStore(repository)
     record = store.current(alias)
@@ -238,6 +238,16 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
                        "Предложената адаптация очаква утвърждаване." if _eligible(plan) else
                        "Липсват достатъчно актуални данни за следващата доза. Обновете активностите и прегледайте причините.")
         operation = "REVIEW"
+    # Compare the complete immutable envelope, including evidence and reasons.
+    # Workout-only signatures and Python equality (True == 1) are insufficient.
+    # The database pins this exact old revision and repeats publication guards;
+    # the trusted API is responsible for candidate equality, as for full writes.
+    if (record_unchanged_check and force and not automatic and not resume and day_action is None
+            and old["status"] in {"ACTIVE", "REVIEW_REQUIRED"} and operation in {"ADAPT", "REVIEW"}
+            and _hash(payload) == _hash(old)):
+        receipt = store.record_unchanged_check(alias, expected_revision=record["revision"], actor_id=actor,
+            expected_profile_revision=profile_revision, checkpoint=checkpoint)
+        return {**record, "unchanged_check": receipt}
     return store.save(alias, payload, record["revision"], actor, operation, profile_revision, checkpoint,
                       automatic=automatic, include_payload=include_saved_payload)
 
@@ -270,7 +280,8 @@ def action(repository, alias, body, actor, *, now=None, include_saved_payload=Tr
         return approve_proposal(repository, alias, body, actor, now=now, include_saved_payload=include_saved_payload)
     if body.action in {"REFRESH", "RESUME"}:
         return refresh(repository, alias, actor, expected_revision=body.expected_revision, now=now,
-                       force=True, resume=body.action == "RESUME", include_saved_payload=include_saved_payload)
+                       force=True, resume=body.action == "RESUME", include_saved_payload=include_saved_payload,
+                       record_unchanged_check=body.record_unchanged_check)
     store = PlanStore(repository)
     record = store.current(alias)
     _require_revision(record, body.expected_revision)
