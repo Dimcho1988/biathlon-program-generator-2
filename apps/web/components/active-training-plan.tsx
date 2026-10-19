@@ -5,11 +5,12 @@ import { SymptomNotice } from "./symptom-notice";
 import { TrainingPlanWeek } from "./training-plan-week";
 import { SyncActionForm } from "./sync-action-form";
 import { hasProgramDays } from "../lib/management-guidance";
-import { useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { isRecord } from "../lib/training-status";
 import { durationHms } from "../lib/duration-format";
 import { type ActivePlanResponse, type DraftDay } from "../lib/training-management";
 import { changeActivePlan, PLAN_CHANGED_NOTICE } from "../lib/active-plan-request";
+import { PlanCheckHistory } from "./plan-check-history";
 
 const STATE: Record<string, string> = { ACTIVE: "Активна програма", PAUSED: "Програмата е на пауза", REVIEW_REQUIRED: "Промяна за преглед", COMPLETED: "Завършена програма" };
 const OUTCOME: Record<string, string> = { RECORDED: "Има реално изпълнение", DIFFERENT_ACTIVITY: "Изпълнено е друго средство", MISSED: "Без изпълнена сесия", SKIPPED: "Пропусната", REST: "Почивка", UNKNOWN: "Липсват данни" };
@@ -23,6 +24,10 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ revision: number; message: string } | null>(null);
   const [notice, setNotice] = useState("");
+  const [checksRefreshKey, setChecksRefreshKey] = useState(0);
+  const lastCheckId = useRef<string | null>(null);
+  const latestRevision = useRef(value.active?.revision ?? 0);
+  useLayoutEffect(() => { latestRevision.current = value.active?.revision ?? 0; }, [value.active?.revision]);
   const inFlight = useRef(false);
   const record = value.active;
   if (!record) return null;
@@ -36,9 +41,22 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
     inFlight.current = true;
     setBusy(true); setError(null); setNotice("");
     try {
-      const result = await changeActivePlan(endpoint, { ...body, expected_revision: record!.revision }, scopedFetch);
-      onChange(result.value);
+      const recordCheck = endpoint === "action" && body.action === "REFRESH" && value.capabilities?.unchanged_checks === true;
+      const result = await changeActivePlan(endpoint, { ...body, expected_revision: record!.revision,
+        ...(recordCheck ? { record_unchanged_check: true } : {}) }, scopedFetch);
+      const { action_result: receipt, ...current } = result.value;
+      onChange(current);
       if (result.conflict) setNotice(PLAN_CHANGED_NOTICE);
+      else if (recordCheck && receipt) {
+        const displayedRevision = Math.max(latestRevision.current, current.active?.revision ?? 0);
+        setNotice(receipt.checked_revision === displayedRevision
+          ? "Проверката приключи. Програмата остава без промяна."
+          : `Проверката на версия ${receipt.checked_revision} приключи без промяна. Показана е текущата версия ${displayedRevision}.`);
+        if (lastCheckId.current !== receipt.check_id) {
+          lastCheckId.current = receipt.check_id;
+          setChecksRefreshKey(key => key + 1);
+        }
+      }
     } catch (caught) { setError({ revision: record!.revision, message: caught instanceof Error ? caught.message : "Програмата не беше променена." }); }
     finally { inFlight.current = false; setBusy(false); onEnd?.(); }
   }
@@ -74,5 +92,6 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
         const link = document.createElement("a"); link.href = url; link.download = `onflows-active-plan-v${record.revision}.json`; link.click(); URL.revokeObjectURL(url);
       }}>Изтегли пълните данни за тази версия</button>
     </details>
+    {value.capabilities?.unchanged_checks === true && <PlanCheckHistory refreshKey={checksRefreshKey} />}
   </section>;
 }

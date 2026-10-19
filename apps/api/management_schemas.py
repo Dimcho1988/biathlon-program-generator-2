@@ -412,6 +412,13 @@ class ManagementPlanAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: Literal["PAUSE", "RESUME", "REFRESH", "APPROVE"]
     expected_revision: int = Field(ge=1, strict=True)
+    record_unchanged_check: bool = Field(default=False, strict=True)
+
+    @model_validator(mode="after")
+    def unchanged_check_is_refresh_only(self):
+        if self.record_unchanged_check and self.action != "REFRESH":
+            raise ValueError("Unchanged checks are supported only for REFRESH")
+        return self
 
 
 class ManagementDayAction(BaseModel):

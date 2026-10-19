@@ -1,9 +1,28 @@
 """Immutable active-plan revisions and a compare-and-swap publication pointer."""
 from urllib.parse import quote
 from datetime import datetime
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from .oauth_store import PersistentStoreFailure
+
+
+def _zoned_timestamp(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        return datetime.fromisoformat(value).utcoffset() is not None
+    except ValueError:
+        return False
+
+
+def _uuid(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        return str(UUID(value)) == value.lower()
+    except ValueError:
+        return False
 
 
 class PlanStore:
@@ -72,6 +91,58 @@ class PlanStore:
         result = self.request("GET", "/rpc/read_onflows_management_overview"
                               f"?p_alias={quote(alias, safe='')}")
         return None if result is None else validate_overview(result)
+
+    def record_unchanged_check(self, alias, *, expected_revision, actor_id, expected_profile_revision, checkpoint):
+        # The full candidate was compared by the lifecycle. Only its immutable
+        # revision identity and the small publication checkpoint cross the wire.
+        # POST has no transport retry; an ambiguous failure never falls back to
+        # another plan save. The nonce also makes a future same-RPC replay safe.
+        check_id = str(uuid4())
+        result = self.request("POST", "/rpc/record_onflows_management_check", json={
+            "p_alias": alias, "p_expected_revision": expected_revision, "p_actor": str(actor_id),
+            "p_expected_profile_revision": expected_profile_revision, "p_checkpoint": checkpoint,
+            "p_check_id": check_id,
+        })
+        if isinstance(result, dict) and result.get("conflict"):
+            raise HTTPException(409, "The plan or its inputs changed; reload and try again")
+        if (not isinstance(result, dict)
+                or set(result) != {"unchanged", "checked_revision", "check_id", "recorded_at", "replayed"}
+                or result["unchanged"] is not True
+                or type(result["checked_revision"]) is not int or result["checked_revision"] < 1
+                or result["checked_revision"] != expected_revision or result["check_id"] != check_id
+                or not _zoned_timestamp(result["recorded_at"]) or type(result["replayed"]) is not bool):
+            raise PersistentStoreFailure("Invalid unchanged plan check result")
+        return result
+
+    def checks(self, alias, *, before=None, limit=10):
+        if type(limit) is not int or not 1 <= limit <= 50 or (before is not None and (type(before) is not int or before < 1)):
+            raise ValueError("Invalid plan check page")
+        path = f"/rpc/read_onflows_management_checks?p_alias={quote(alias, safe='')}&p_limit={limit}"
+        if before is not None:
+            path += f"&p_before={before}"
+        result = self.request("GET", path)
+        if not isinstance(result, dict) or set(result) != {"checks", "next_before"} or not isinstance(result["checks"], list):
+            raise PersistentStoreFailure("Invalid plan check history")
+        rows = result["checks"]
+        previous, identifiers = before, set()
+        if len(rows) > limit:
+            raise PersistentStoreFailure("Invalid plan check history")
+        for row in rows:
+            if (not isinstance(row, dict)
+                    or set(row) != {"id", "sequence", "checked_revision", "operation", "recorded_at", "reason"}
+                    or not _uuid(row["id"]) or row["id"].lower() in identifiers
+                    or type(row["sequence"]) is not int or not 1 <= row["sequence"] <= 9007199254740991
+                    or (previous is not None and row["sequence"] >= previous)
+                    or type(row["checked_revision"]) is not int or not 1 <= row["checked_revision"] <= 9007199254740991
+                    or row["operation"] != "CHECK_NO_CHANGE" or not _zoned_timestamp(row["recorded_at"])
+                    or not isinstance(row["reason"], str) or not row["reason"].strip() or len(row["reason"]) > 500):
+                raise PersistentStoreFailure("Invalid plan check history")
+            identifiers.add(row["id"].lower())
+            previous = row["sequence"]
+        cursor = result["next_before"]
+        if cursor is not None and (type(cursor) is not int or not rows or len(rows) != limit or cursor != rows[-1]["sequence"]):
+            raise PersistentStoreFailure("Invalid plan check history")
+        return result
 
     def save(self, alias, payload, expected_revision, actor, operation, profile_revision, checkpoint, *, automatic=False,
              include_payload=True):
