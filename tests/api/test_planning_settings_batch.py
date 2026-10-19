@@ -92,6 +92,20 @@ def test_nested_read_sessions_share_the_optional_bundle_capability(inner_opt_in)
     assert len(calls) == 1
 
 
+def test_nested_context_reuses_settings_already_captured_by_the_page():
+    row = settings_row()
+    repo, calls = repository({"athlete": row})
+    page = ReadSession(repo, planning_settings_bundle=True)
+    assert page.athlete_settings("athlete").hrmax_bpm == 200
+    row["hrmax_bpm"] = 201
+    row["planning_calendar"] = None
+    context = ReadSession(page, planning_settings_bundle=True)
+    assert context.athlete_settings("athlete").hrmax_bpm == 200
+    assert context.athlete_planning_calendar("athlete") == AthletePlanningCalendar(())
+    assert len(calls) == 1
+    assert repo.athlete_settings("athlete").hrmax_bpm == 201
+
+
 @pytest.mark.parametrize("field,reader,healthy", [
     ("hr_zone_bounds", "athlete_settings", "athlete_planning_calendar"),
     ("planning_profile", "athlete_planning_profile", "athlete_settings"),

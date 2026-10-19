@@ -61,7 +61,7 @@ class ReadSession:
                 if self._planning_settings_bundle and name in self._SETTINGS_READS:
                     bundle_reader = getattr(self._repository, "athlete_planning_settings_bundle", None)
                     if callable(bundle_reader):
-                        bundle = self._read(("planning_settings_bundle", *args), lambda: bundle_reader(*args))
+                        bundle = self._read(("athlete_planning_settings_bundle", *args), lambda: bundle_reader(*args))
                         return getattr(bundle, name)()
                 return reader(*args)
 
