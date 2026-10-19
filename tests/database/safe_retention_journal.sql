@@ -4,6 +4,7 @@ set local statement_timeout='90s';
 set local lock_timeout='5s';
 \ir history_generation_fixture.sql
 \ir safe_retention_fixture.sql
+\ir safe_retention_legacy_reappearance.sql
 
 -- The worker can invoke only the fixed, fully guarded policy. It cannot tune
 -- retention, bypass legacy coverage, or use the older owner-only prune RPC.

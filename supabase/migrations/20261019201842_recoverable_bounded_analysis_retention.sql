@@ -275,6 +275,29 @@ returns boolean language sql immutable parallel safe set search_path='' as $$
 $$;
 revoke all on function onflows_private.has_analysis_archive_locator(jsonb) from public,anon,authenticated,service_role;
 
+-- A previously unavailable deterministic key may be published again without a
+-- later history INSERT. Its ledger remains a retention root in its own right.
+-- Preserve the current catalog parent (including its projection pointers) of a
+-- reappeared input/run, even before another history append creates normal pins.
+create function onflows_private.legacy_history_keeps_activity(p_alias text,p_activity_ref text)
+returns boolean language sql stable set search_path='' as $$
+ select exists(select 1 from onflows_private.legacy_unavailable_activity_references l
+  where l.athlete_alias=p_alias and l.kind='activity' and l.reference_key=p_activity_ref)
+ or exists(select 1 from public.onflows_activity_model_inputs i
+  join onflows_private.legacy_unavailable_activity_references l
+   on l.athlete_alias=i.athlete_alias and l.kind='input' and l.reference_key=i.input_key
+  where i.athlete_alias=p_alias and i.activity_ref=p_activity_ref)
+ or exists(select 1 from public.onflows_activity_derived_runs d
+  join onflows_private.legacy_unavailable_activity_references l
+   on l.athlete_alias=d.athlete_alias and l.kind='run' and l.reference_key=d.run_key
+  where d.athlete_alias=p_alias and d.activity_ref=p_activity_ref)
+ or exists(select 1 from public.onflows_activity_canonical_runs c
+  join onflows_private.legacy_unavailable_activity_references l
+   on l.athlete_alias=c.athlete_alias and l.kind='run' and l.reference_key=c.run_key
+  where c.athlete_alias=p_alias and c.activity_ref=p_activity_ref)
+$$;
+revoke all on function onflows_private.legacy_history_keeps_activity(text,text) from public,anon,authenticated,service_role;
+
 create or replace function public.prune_onflows_analysis_generations(
   p_athlete_alias text,
   p_keep_superseded integer default 5,
@@ -456,6 +479,7 @@ begin
       )
       and not exists(select 1 from onflows_private.history_activity_pins pin
         where pin.athlete_alias=catalog.athlete_alias and pin.activity_ref=catalog.activity_ref)
+      and not onflows_private.legacy_history_keeps_activity(catalog.athlete_alias,catalog.activity_ref)
     order by catalog.last_seen_at, catalog.activity_ref
     limit 50
     for update of catalog skip locked
@@ -487,6 +511,8 @@ begin
       )
       and not exists(select 1 from onflows_private.history_shadow_pins pin
         where pin.athlete_alias=d.athlete_alias and pin.run_key=d.run_key)
+      and not exists(select 1 from onflows_private.legacy_unavailable_activity_references l
+        where l.athlete_alias=d.athlete_alias and l.kind='run' and l.reference_key=d.run_key)
     order by d.created_at, d.run_key
     limit 50
     for update of d skip locked
@@ -515,6 +541,8 @@ begin
       )
       and not exists(select 1 from onflows_private.history_canonical_pins pin
         where pin.athlete_alias=canonical.athlete_alias and pin.run_key=canonical.run_key)
+      and not exists(select 1 from onflows_private.legacy_unavailable_activity_references l
+        where l.athlete_alias=canonical.athlete_alias and l.kind='run' and l.reference_key=canonical.run_key)
     order by canonical.created_at, canonical.run_key
     limit 50
     for update of canonical skip locked
@@ -543,6 +571,8 @@ begin
       )
       and not exists(select 1 from onflows_private.history_input_pins pin
         where pin.athlete_alias=model_input.athlete_alias and pin.input_key=model_input.input_key)
+      and not exists(select 1 from onflows_private.legacy_unavailable_activity_references l
+        where l.athlete_alias=model_input.athlete_alias and l.kind='input' and l.reference_key=model_input.input_key)
     order by model_input.created_at, model_input.input_key
     limit 50
     for update of model_input skip locked
@@ -582,6 +612,7 @@ begin
       )
       and not exists(select 1 from onflows_private.history_activity_pins pin
         where pin.athlete_alias=catalog.athlete_alias and pin.activity_ref=catalog.activity_ref)
+      and not onflows_private.legacy_history_keeps_activity(catalog.athlete_alias,catalog.activity_ref)
     order by catalog.last_seen_at, catalog.activity_ref
     limit 50
     for update of catalog skip locked
