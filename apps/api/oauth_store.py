@@ -797,6 +797,18 @@ class SupabasePilotRepository(SnapshotRepository):
         Keep the captured generation even if a sync activates midway.
         """
         analysis = self.active_analysis(athlete_alias)
+        return self.trainability_calendar_from_analysis(athlete_alias, period_start, period_end, analysis)
+
+    def trainability_calendar_from_analysis(
+        self, athlete_alias: str, period_start: date, period_end: date,
+        analysis: Mapping[str, Any] | None,
+    ) -> Mapping[str, Any] | None:
+        """Read the original validated catalog for an already captured analysis.
+
+        A read session may supply its own immutable generation capture. The
+        ordinary reader above still captures a fresh analysis before delegating;
+        legacy snapshots retain their original activity-calendar RPC fallback.
+        """
         if analysis is None:
             return None
         generation_id = analysis.get("generation_id")

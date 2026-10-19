@@ -58,6 +58,17 @@ class ReadSession:
         @wraps(reader)
         def read(*args):
             def calculate():
+                if name == "active_trainability_calendar" and len(args) == 3:
+                    # A bound repository method would otherwise reread analysis
+                    # internally, bypassing this phase's existing capture.
+                    analysis = self._values.get(("active_analysis", args[0]))
+                    if (isinstance(analysis, dict)
+                            and isinstance(analysis.get("generation_id"), str) and analysis["generation_id"]
+                            and type(analysis.get("revision")) is int and analysis["revision"] > 0
+                            and isinstance(analysis.get("snapshot_payload"), dict)):
+                        calendar_reader = getattr(self._repository, "trainability_calendar_from_analysis", None)
+                        if callable(calendar_reader):
+                            return calendar_reader(*args, deepcopy(analysis))
                 if self._planning_settings_bundle and name in self._SETTINGS_READS:
                     bundle_reader = getattr(self._repository, "athlete_planning_settings_bundle", None)
                     if callable(bundle_reader):
