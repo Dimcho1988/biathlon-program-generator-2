@@ -184,6 +184,19 @@ export function rejectedMethodIds(alternative: RejectedAlternative): string[] { 
 export interface PlanProjection {
   race_duration?: unknown; parameters?: Record<string, unknown>; individual_learning?: unknown; long_term?: unknown; periodization?: unknown; input_snapshot?: unknown; history_comparison?: unknown; component_history?: unknown;
 }
+/** Clock-time inputs for the overview; no executable workout or dosing data. */
+export interface SessionVolumePlan {
+  history_comparison?: unknown;
+  days: Array<{
+    date: string; status: string;
+    sessions?: Array<{ total_minutes: number; blocks: Array<{ zone: string; duration_min: number }> }>;
+    session?: { total_minutes: number; blocks: Array<{ zone: string; duration_min: number }> } | null;
+  }>;
+}
+export interface PlanComparisonOutcome {
+  date: string; planned_minutes: number | null; actual_minutes: number | null;
+  status?: string; planned_title?: string | null;
+}
 export interface ManagementOutlook extends PlanProjection {
   engine_version?: string;
   schema_version: "training-outlook-preview-v1"; profile_revision: number;
@@ -459,7 +472,7 @@ export const CAPACITY_LABELS: Record<string, string> = {
 };
 
 export interface PlanChange { date: string; before: string | null; after: string | null; before_minutes: number; after_minutes: number; reason: string }
-export interface PlanOutcome { planned_load?: Partial<Record<Component, number>> | null; actual_load?: Partial<Record<Component, number>> | null; date: string; status: string; planned_title: string | null; planned_minutes: number; actual_minutes: number | null }
+export interface PlanOutcome extends PlanComparisonOutcome { planned_load?: Partial<Record<Component, number>> | null; actual_load?: Partial<Record<Component, number>> | null; status: string; planned_title: string | null; planned_minutes: number }
 export interface ActivePlanRecord {
   revision: number; stale: boolean; actionable: boolean; stale_reason?: string | null;
   payload: { schema_version: "active-plan-v2"; status: "ACTIVE" | "PAUSED" | "REVIEW_REQUIRED" | "COMPLETED";

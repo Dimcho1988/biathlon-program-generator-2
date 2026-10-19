@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { durationHms } from "../lib/duration-format";
 import { microcycleVolume } from "../lib/microcycle-volume";
-import { COMPONENTS, type Component, type PlanningDraft } from "../lib/training-management";
+import { COMPONENTS, type Component, type SessionVolumePlan } from "../lib/training-management";
 
 export interface VolumeWeek {
   start_date: string; end_date: string; accents: string[];
@@ -14,7 +14,7 @@ export interface VolumeWeek {
 const dateLabel = (day: string) => `${day.slice(8, 10)}.${day.slice(5, 7)}.${day.slice(0, 4)}`;
 const time = (v: number | null | undefined) => v == null ? "—" : durationHms(v);
 
-export function MicrocycleVolumes({ weeks, sessions, status, metric = "volume" }: { weeks: VolumeWeek[]; sessions?: PlanningDraft; status: string; metric?: "volume" | "index" }) {
+export function MicrocycleVolumes({ weeks, sessions, status, metric = "volume" }: { weeks: VolumeWeek[]; sessions?: SessionVolumePlan; status: string; metric?: "volume" | "index" }) {
   const [mode, setMode] = useState<"targets" | "sessions">("targets");
   const index = metric === "index";
   return <section className="management-panel" aria-label="Обем по микроцикли">

@@ -27,6 +27,7 @@ from fastapi import APIRouter
 from .. import dependencies
 from ..sync_service import public_sync_state
 from ..management_projection import public_management
+from ..request_metrics import timed_stage
 
 router = APIRouter()
 
@@ -88,22 +89,31 @@ def management_profile(
 @router.get("/api/v2/athlete/management/view")
 def management_view(
     view: Literal["week", "overview"] = "week",
+    projection: Literal["overview-v1"] | None = None,
     authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
 ):
     """Assemble one page with request-local read reuse; never modify a plan."""
     alias = dependencies.model_alias(authorization, athlete_alias)
     repository = ReadSession(dependencies.repository(), planning_settings_bundle=True)
+    compact = view == "overview" and projection == "overview-v1"
     try:
-        profile = management_service.profile_view(repository, alias)
-        active = management_lifecycle.current(repository, alias)
-        drafts = management_service.history(repository, alias) if view == "week" else {"drafts": []}
-        outlook = management_service.outlook(repository, alias) if view == "overview" else None
+        with timed_stage("profile"):
+            profile = management_service.profile_view(repository, alias, include_history=False) if compact else management_service.profile_view(repository, alias)
+        with timed_stage("overview_active" if compact else "current"):
+            active = management_lifecycle.current_overview(repository, alias) if compact else management_lifecycle.current(repository, alias)
+        with timed_stage("drafts"):
+            drafts = management_service.history(repository, alias) if view == "week" else {"drafts": []}
+        with timed_stage("outlook"):
+            outlook = management_service.outlook(repository, alias) if view == "overview" else None
         try:
             sync = public_sync_state(repository.sync_state(alias))
         except (PersistentStoreFailure, ValueError):
             sync = None
-        return public_management({"profile": profile, "active": active, "drafts": drafts, "outlook": outlook, "sync": sync})
+        with timed_stage("projection"):
+            result = {"profile": profile, "drafts": drafts, "outlook": outlook, "sync": sync}
+            result.update({"schema_version": "management-overview-v1", "overview_active": active} if compact else {"active": active})
+            return public_management(result)
     except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
         raise HTTPException(409, exc.user_message) from exc
     except PersistentStoreFailure as exc:

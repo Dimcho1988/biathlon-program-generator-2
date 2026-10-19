@@ -7,6 +7,7 @@ historical C40 and the technical denominator used by canonical E spillover.
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from hashlib import sha256
@@ -153,8 +154,24 @@ def _daily_rows(source, today):
     return rows
 
 
+@dataclass(frozen=True)
+class PlanningSourceResult:
+    """Separate measured projection from temporary planning-only additions."""
+
+    source: dict
+    evidence: dict
+    measured_source: dict
+
+
 def planning_source(repository, alias, profile, settings, envelope, today, *, speed_by_sport=None):
-    """One estimated input policy shared by the weekly plan and live outlook."""
+    """Retain the existing two-value planning-source interface."""
+    result = planning_source_details(repository, alias, profile, settings, envelope, today,
+                                     speed_by_sport=speed_by_sport)
+    return result.source, result.evidence
+
+
+def planning_source_details(repository, alias, profile, settings, envelope, today, *, speed_by_sport=None):
+    """Project measured Q once, retaining it before declared rest or estimates."""
     measured = (envelope.get("snapshot_payload") or {}).get("load_history") or {}
     calendar = planning_history_estimate.normalized_calendar(envelope.get("activities", []))
     sports = list(dict.fromkeys(s for s in [
@@ -165,6 +182,7 @@ def planning_source(repository, alias, profile, settings, envelope, today, *, sp
     contexts = read_contexts(repository, alias, sports, speed_by_sport=speed_by_sport)
     if measured:
         measured = project_history(measured, contexts)
+    projected_measured = measured
     measured = training_return.confirmed_source(measured, profile, today, calendar)
     quality = measured.get("quality") or {}
     estimates, speed_diagnostics = {}, None
@@ -186,7 +204,7 @@ def planning_source(repository, alias, profile, settings, envelope, today, *, sp
         "version": COMPONENT_LOAD_VERSION, "scope": "ACTIVITY", "contexts_by_sport": contexts}}
     if speed_diagnostics is not None:
         evidence["speed_reconstruction"] = speed_diagnostics
-    return source, evidence
+    return PlanningSourceResult(source, evidence, projected_measured)
 
 
 def _phase(periodization, day):

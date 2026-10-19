@@ -67,6 +67,12 @@ class PlanStore:
                  "status": r["status"], "changes": r.get("changes") or [],
                  "reason": r.get("reason")} for r in result]
 
+    def current_overview(self, alias):
+        from .management_overview import validate_overview
+        result = self.request("GET", "/rpc/read_onflows_management_overview"
+                              f"?p_alias={quote(alias, safe='')}")
+        return None if result is None else validate_overview(result)
+
     def save(self, alias, payload, expected_revision, actor, operation, profile_revision, checkpoint, *, automatic=False,
              include_payload=True):
         # Only callers that discard the saved record opt out of its echo. The

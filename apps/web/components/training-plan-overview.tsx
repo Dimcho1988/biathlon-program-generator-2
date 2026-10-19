@@ -14,7 +14,7 @@ import { durationHms } from "../lib/duration-format";
 import { COMPONENT_COLORS as COLORS, componentLabel } from "../lib/training-visuals";
 import { useState } from "react";
 import { isRecord } from "../lib/training-status";
-import { COMPONENTS, PHASE_LABELS, type Component, type PlanProjection, type PlanOutcome, type PlanningDraft } from "../lib/training-management";
+import { COMPONENTS, PHASE_LABELS, type Component, type PlanProjection, type PlanComparisonOutcome, type SessionVolumePlan } from "../lib/training-management";
 
 const EVENT: Record<string, string> = { MAIN_RACE: "Основен старт", CONTROL_RACE: "Контролен старт", CAMP: "Лагер", TEST: "Тест", UNAVAILABLE: "Без тренировки" };
 const label = (value: unknown) => String(value ?? "");
@@ -31,7 +31,7 @@ function outlookWeeks(plan?: PlanProjection): Week[] {
   })) }));
 }
 
-export function TrainingPlanOverview({ plan, outcomes, today, stale, currentProfileRevision, volumeContext, sessions, sessionStatus = "Няма актуални съставени сесии. Подготви или обнови седмичната програма." }: { plan?: PlanProjection; outcomes: PlanOutcome[]; today: string; stale?: boolean; currentProfileRevision?: number; volumeContext?: Record<string, unknown>; sessions?: PlanningDraft; sessionStatus?: string }) {
+export function TrainingPlanOverview({ plan, outcomes, today, stale, currentProfileRevision, volumeContext, sessions, sessionStatus = "Няма актуални съставени сесии. Подготви или обнови седмичната програма." }: { plan?: PlanProjection; outcomes: PlanComparisonOutcome[]; today: string; stale?: boolean; currentProfileRevision?: number; volumeContext?: Record<string, unknown>; sessions?: SessionVolumePlan; sessionStatus?: string }) {
   const {ref,width,height,left,right,top,bottom,plotWidth,plotHeight,compact} = useChartLayout(82);
   const [zones, setZones] = useState<Component[]>([...COMPONENTS]);
   const [selected, setSelected] = useState(0);

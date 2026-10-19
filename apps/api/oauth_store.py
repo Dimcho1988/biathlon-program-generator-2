@@ -335,9 +335,8 @@ class SupabasePilotRepository(SnapshotRepository):
             finally:
                 metrics = current_metrics.get()
                 if metrics is not None:
-                    metrics.calls += 1
-                    metrics.seconds += perf_counter() - started
-                    metrics.bytes += len(response.content) if response is not None else 0
+                    metrics.record_store(method, path, perf_counter()-started,
+                                         len(response.content) if response is not None else 0)
             if 200 <= response.status_code < 300:
                 return response
             if attempt == 0 and _retryable_store_auth_failure(response):

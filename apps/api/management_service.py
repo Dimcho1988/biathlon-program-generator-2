@@ -22,9 +22,10 @@ from .oauth_store import PersistentStoreFailure
 from . import training_plan_engine, race_duration
 from .management_projection import public_learning
 from .read_session import ReadSession
+from .request_metrics import timed_stage
 
 
-def profile_view(repository, alias, *, now=None):
+def profile_view(repository, alias, *, now=None, include_history=True):
     """Saved profile and its historical volume basis, without generating a plan."""
     profile = ManagementStore(repository).profile(alias)
     if profile.get("profile") is not None:
@@ -33,7 +34,7 @@ def profile_view(repository, alias, *, now=None):
     athlete_timezone = settings.timezone if settings else "UTC"
     today = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(athlete_timezone)).date()
     history = None
-    if hasattr(repository, "active_analysis"):
+    if include_history and hasattr(repository, "active_analysis"):
         from biathlon.planning_controls import volume_history
         analysis = repository.active_analysis(alias) or {}
         source = (analysis.get("snapshot_payload") or {}).get("load_history") or {}
@@ -130,7 +131,6 @@ def outlook(repository, alias, *, now=None):
             event_duration.get("source_revision") != analysis.get("revision")):
         event_duration = {**race_duration.resolve(profile), "reason": "MODEL_UPDATED"}
     profile = race_duration.applied(profile, event_duration)
-    measured_source = (analysis.get("snapshot_payload") or {}).get("load_history") or {}
     calendar_reader = getattr(repository, "active_planning_calendar", None) or getattr(repository, "active_activity_calendar", None)
     activity_calendar = _planning_calendar_from_speed_inputs(speed_inputs, alias, analysis, today)
     if activity_calendar is None:
@@ -138,9 +138,11 @@ def outlook(repository, alias, *, now=None):
     if activity_calendar and (activity_calendar.get("generation_id"), activity_calendar.get("revision")) != (analysis.get("generation_id"), analysis.get("revision")):
         activity_calendar = None
     planning_envelope = {**analysis, "activities": (activity_calendar or {}).get("activities", [])}
-    source, planning_evidence = engine.planning_source(repository, alias, profile, settings, planning_envelope, today, speed_by_sport=speed_by_sport)
+    prepared_source = engine.planning_source_details(repository, alias, profile, settings, planning_envelope, today,
+                                                    speed_by_sport=speed_by_sport)
+    source, planning_evidence = prepared_source.source, prepared_source.evidence
     contexts = (source.get("component_load_model") or {}).get("contexts_by_sport") or {}
-    measured_source = engine.project_history(measured_source, contexts)
+    measured_source = prepared_source.measured_source
     planning_envelope = {**planning_envelope, "snapshot_payload": {
         **(planning_envelope.get("snapshot_payload") or {}), "load_history": measured_source}}
     profile = {**profile, "_component_load_context": contexts.get(profile.get("actual_sport") or profile.get("sport")) or engine.context_from_speed_view(None)}
@@ -328,7 +330,11 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
         return improve(baseline, normalized, replay, seconds_remaining=max(0., 150.-elapsed),
                        estimated_trial_seconds=elapsed)
     payload = compute(live_repository, alias, computation_key, calculate)
-    after = input_state(live_repository, alias, evaluated_at=now, include_response=include_response)
+    # Start a new read phase after calculation. Its single settings-row read is
+    # fresh; no value captured by the calculation's ReadSession is reused.
+    with timed_stage("input_after"):
+        after = input_state(ReadSession(live_repository, planning_settings_bundle=True), alias,
+                            evaluated_at=now, include_response=include_response)
     if _hash(before) != _hash(after):
         raise HTTPException(409, "Analysis or planning inputs changed; generate a new draft")
     source_generation = (payload.get("source") or {}).get("generation_id")
