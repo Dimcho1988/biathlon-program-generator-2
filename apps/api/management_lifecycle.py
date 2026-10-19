@@ -171,6 +171,24 @@ def changes_between(old, new):
     return changes
 
 
+def _reconciliation_analysis(repository, alias, today, frozen, initial_read_phase):
+    """Use the captured immutable load history; reconciliation needs no catalog.
+
+    Calculation compares a fresh input phase and publication checks the live
+    checkpoint. Mutable legacy sources keep the original calendar reader.
+    """
+    if (isinstance(frozen.get("generation_id"), str) and frozen["generation_id"]
+            and type(frozen.get("analysis_revision")) is int and frozen["analysis_revision"] > 0):
+        reader = getattr(initial_read_phase, "active_analysis", None)
+        analysis = reader(alias) if callable(reader) else None
+        if (isinstance(analysis, dict) and analysis.get("generation_id") == frozen["generation_id"]
+                and type(analysis.get("revision")) is int and analysis["revision"] == frozen["analysis_revision"]
+                and isinstance(analysis.get("snapshot_payload"), dict)):
+            return analysis
+    calendar_reader = getattr(repository, "active_planning_calendar", None) or repository.active_activity_calendar
+    return calendar_reader(alias, today - timedelta(days=89), today) or {}
+
+
 def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, automatic=False,
             force=False, resume=False, day_action=None, include_saved_payload=True, record_unchanged_check=False):
     now = now or datetime.now(timezone.utc)
@@ -205,8 +223,7 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
             decisions.pop(day_action.date.isoformat(), None)
         else:
             decisions[day_action.date.isoformat()] = {"action": day_action.action, "note": day_action.note}
-    calendar_reader = getattr(repository, "active_planning_calendar", None) or repository.active_activity_calendar
-    envelope = calendar_reader(alias, today - timedelta(days=89), today) or {}
+    envelope = _reconciliation_analysis(repository, alias, today, frozen, initial_read_phase)
     source = (envelope.get("snapshot_payload") or {}).get("load_history") or {}
     payload["outcomes"] = reconcile(old["plan"], source, today, decisions, old.get("outcomes", []))
     payload.update(evaluated_on=today.isoformat(), processed_input_fingerprint=fingerprint)
@@ -221,8 +238,8 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
     if day_action and day_action.date == today:
         locked = None
     # A mutable legacy snapshot or a different reconciliation source keeps the
-    # original fresh-before path. Reuse only the same immutable analysis so an
-    # intervening activation/rollback cannot mix outcomes with another source.
+    # original fresh-before path. Captured immutable sources share one initial
+    # phase; fresh post-calculation inputs still detect source changes.
     same_analysis = (isinstance(frozen.get("generation_id"), str) and bool(frozen["generation_id"])
         and type(frozen.get("analysis_revision")) is int and frozen["analysis_revision"] > 0
         and envelope.get("generation_id") == frozen["generation_id"]
