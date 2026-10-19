@@ -79,6 +79,17 @@ def state(repository, alias, *, now=None):
     return {"revision": record["revision"], "stale": record["fingerprint"] != fingerprint}
 
 
+def current_overview(repository, alias, *, now=None):
+    """Read only overview presentation fields; freshness uses the same inputs."""
+    from .management_overview import PUBLIC_FIELDS, empty_overview
+    record = PlanStore(repository).current_overview(alias)
+    if record is None:
+        return empty_overview()
+    _, _, _, fingerprint, _ = _context(repository, alias, now or datetime.now(timezone.utc))
+    return {**{key: record[key] for key in PUBLIC_FIELDS},
+            "stale": record.get("stored_fingerprint") != fingerprint}
+
+
 def activate(repository, alias, body, actor, *, now=None, include_saved_payload=True):
     now = now or datetime.now(timezone.utc)
     store = PlanStore(repository)

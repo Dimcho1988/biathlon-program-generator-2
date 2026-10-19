@@ -1,6 +1,7 @@
 import { ManagementScope } from "../../components/management-scope";
 import { getManagementView } from "../../lib/management-server";
 import type { SyncState } from "../../lib/sync";
+import type { ManagementOverviewActive } from "../../lib/management-overview";
 import { currentAuthorizedAthlete } from "../../lib/account-access";
 import { ErrorState } from "../../components/error-state";
 import { TrainingManagement } from "../../components/training-management";
@@ -18,15 +19,16 @@ export default async function ManagementPage({ searchParams }: { searchParams: P
   let profile: ManagementProfileResponse;
   let drafts: DraftRecord[];
   let active: ActivePlanResponse;
+  let overviewActive: ManagementOverviewActive | undefined;
   let outlook: ManagementOutlook | null = null;
   let inputFingerprint = "";
   try {
-    ({ profile, active, drafts, outlook, sync, inputFingerprint } = await getManagementView(
+    ({ profile, active, overviewActive, drafts, outlook, sync, inputFingerprint } = await getManagementView(
       access.athleteAlias, access.actorUserId, query.view ?? "week",
     ));
   } catch (caught) {
     return <ErrorState message={caught instanceof Error ? caught.message : "Управлението временно не е достъпно."} retryAvailable retryHref={query.view === "overview" ? "/management/outlook" : "/management"} />;
   }
   return <ManagementScope key={`${access.actorUserId}:${access.athleteAlias}`} athleteAlias={access.athleteAlias} actorUserId={access.actorUserId}><TrainingManagement key={`${access.athleteAlias}:${sync?.active_generation_id ?? "none"}:${query.sync ?? ""}:${profile.revision}:${inputFingerprint}:${query.view ?? "week"}`} initialView={query.view ?? "week"} athleteName={access.displayName} canEdit={access.canEditPlan}
-    initialOutlook={outlook} initialSyncState={sync} syncError={query.sync === "enqueue-error"} initialProfile={profile} initialDrafts={drafts} initialActive={active} today={profile.today ?? new Date().toISOString().slice(0, 10)} /></ManagementScope>;
+    initialOutlook={outlook} initialOverviewActive={overviewActive} initialSyncState={sync} syncError={query.sync === "enqueue-error"} initialProfile={profile} initialDrafts={drafts} initialActive={active} today={profile.today ?? new Date().toISOString().slice(0, 10)} /></ManagementScope>;
 }

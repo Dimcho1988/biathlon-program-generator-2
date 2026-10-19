@@ -24,6 +24,7 @@ import { managementGuidance, hasProgramDays } from "../lib/management-guidance";
 import { SyncActionForm } from "./sync-action-form";
 import { SyncStatusPanel } from "./sync-status-panel";
 import type { SyncState } from "../lib/sync";
+import type { ManagementOverviewActive } from "../lib/management-overview";
 import {
   daySessions, rejectedMethodIds, CAPACITY_LABELS, COMPONENTS, PHASE_LABELS, parseDraftRecord, parseDrafts,
   parseActivePlanResponse, type ActivePlanResponse, type ManagementOutlook, type DraftDay, type DraftRecord, type ManagementProfileResponse,
@@ -105,8 +106,8 @@ function DayCard({ day, expanded = false }: { day: DraftDay; expanded?: boolean 
 }
 
 
-export function TrainingManagement({ initialView = "week", initialOutlook = null, athleteName, canEdit, initialProfile, initialDrafts, initialActive = { active: null, history: [] }, initialSyncState = null, syncError = false, today }: {
-  initialOutlook?: ManagementOutlook | null; initialView?: "week" | "overview"; athleteName: string; canEdit: boolean; initialProfile: ManagementProfileResponse; initialDrafts: DraftRecord[]; initialActive?: ActivePlanResponse; initialSyncState?: SyncState | null; syncError?: boolean; today: string;
+export function TrainingManagement({ initialView = "week", initialOutlook = null, athleteName, canEdit, initialProfile, initialDrafts, initialActive = { active: null, history: [] }, initialOverviewActive, initialSyncState = null, syncError = false, today }: {
+  initialOutlook?: ManagementOutlook | null; initialOverviewActive?: ManagementOverviewActive; initialView?: "week" | "overview"; athleteName: string; canEdit: boolean; initialProfile: ManagementProfileResponse; initialDrafts: DraftRecord[]; initialActive?: ActivePlanResponse; initialSyncState?: SyncState | null; syncError?: boolean; today: string;
 }) {
   const scopedFetch = useManagementFetch();
   const requestJson = useCallback(async (path: string, method: "GET" | "PUT" | "POST", body?: unknown, signal?: AbortSignal) => {
@@ -146,10 +147,16 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   const archivedDraft = showDraft && !!draft && draft.stale !== false;
   const sessionsCurrent = overviewPlan && (showDraft ? !archivedDraft : active.active?.stale === false)
     && (!initialOutlook?.engine_version || overviewPlan.engine_version === initialOutlook.engine_version);
-  const sessionStatus = !sessionsCurrent ? "Няма актуални съставени сесии. Подготви или обнови седмичната програма."
-    : showDraft ? "Времето е от проект за преглед; тренировките още не са утвърдени."
-    : active.active?.payload.proposal ? "Времето е от предложена адаптация за преглед; тя още не е действаща програма."
-    : active.active?.payload.status === "ACTIVE" ? "Времето е от текущата утвърдена програма."
+  const compactOverview = view === "overview" ? initialOverviewActive : undefined;
+  const overviewSessions = compactOverview ?? overviewPlan;
+  const overviewSessionsCurrent = compactOverview
+    ? compactOverview.revision !== null && !compactOverview.stale
+      && (!initialOutlook?.engine_version || compactOverview.engine_version === initialOutlook.engine_version)
+    : sessionsCurrent;
+  const sessionStatus = !overviewSessionsCurrent ? "Няма актуални съставени сесии. Подготви или обнови седмичната програма."
+    : !compactOverview && showDraft ? "Времето е от проект за преглед; тренировките още не са утвърдени."
+    : (compactOverview ? compactOverview.has_proposal : active.active?.payload.proposal) ? "Времето е от предложена адаптация за преглед; тя още не е действаща програма."
+    : (compactOverview?.status ?? active.active?.payload.status) === "ACTIVE" ? "Времето е от текущата утвърдена програма."
     : "Времето е от запазена програма, която в момента не е активна.";
 
   useEffect(() => {
@@ -239,7 +246,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     {view === "week" && overviewPlan && !archivedDraft && (showDraft || active.active?.stale === false) && <TrainingPlanSummary plan={overviewPlan} />}
     {(view === "overview" || (!archivedDraft && (showDraft || active.active?.stale === false))) && <IndividualLearningPanel plan={view === "overview" ? initialOutlook : overviewPlan} />}
 
-    {view === "overview" ? <TrainingPlanOverview plan={initialOutlook ?? undefined} outcomes={active.active?.payload.outcomes ?? []} today={today} currentProfileRevision={initialOutlook?.profile_revision} volumeContext={initialOutlook?.volume_context} sessions={sessionsCurrent ? overviewPlan : undefined} sessionStatus={sessionStatus} /> : <>
+    {view === "overview" ? <TrainingPlanOverview plan={initialOutlook ?? undefined} outcomes={compactOverview?.outcomes ?? active.active?.payload.outcomes ?? []} today={today} currentProfileRevision={initialOutlook?.profile_revision} volumeContext={initialOutlook?.volume_context} sessions={overviewSessionsCurrent ? overviewSessions : undefined} sessionStatus={sessionStatus} /> : <>
       {active.active && !newDraft && <ActiveTrainingPlan value={active} onChange={receiveActive} externalBusy={busy !== null} onBegin={beginActiveChange} onEnd={endActiveChange} canEdit={canEdit} today={today} renderDay={day => <DayCard day={day} expanded />} />}
       {showDraft && <>
         <section className="management-panel management-next-step" aria-label="Следваща стъпка"><p className="eyebrow">{guidance.step === "REVIEW" ? "Преглед преди започване" : "Следваща стъпка"}</p><h2>{guidance.title}</h2><p>{guidance.description}</p>

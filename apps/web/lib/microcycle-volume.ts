@@ -1,9 +1,11 @@
-import { COMPONENTS, daySessions, type Component, type PlanningDraft } from "./training-management";
+import { COMPONENTS, type Component, type SessionVolumePlan } from "./training-management";
+
+const daySessions = (day: SessionVolumePlan["days"][number]) => day.sessions ?? (day.session ? [day.session] : []);
 
 /** Count prescribed clock time once, from all session blocks, never from E.
  * Missing future days are unknown. Recorded rest days are known zeroes.
  */
-export function microcycleVolume(plan: PlanningDraft | undefined, start: string, end: string) {
+export function microcycleVolume(plan: SessionVolumePlan | undefined, start: string, end: string) {
   const days = plan?.days.filter(d => d.date >= start && d.date <= end
     && (daySessions(d).length > 0 || ["REST", "SKIPPED", "UNAVAILABLE"].includes(d.status))) ?? [];
   const expectedDays = Math.round((Date.parse(end) - Date.parse(start)) / 86400000) + 1;

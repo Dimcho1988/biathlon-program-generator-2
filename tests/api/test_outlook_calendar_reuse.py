@@ -237,13 +237,13 @@ def test_activation_after_coherent_capture_returns_one_pinned_generation(monkeyp
     harness = PlanningHTTP()
     harness.activate_after_catalog = True
     observed = []
-    planning_source = service.training_plan_engine.planning_source
+    planning_source = service.training_plan_engine.planning_source_details
 
     def capture(repository, alias, profile, settings, envelope, today, **kwargs):
         observed.append(deepcopy(envelope))
         return planning_source(repository, alias, profile, settings, envelope, today, **kwargs)
 
-    monkeypatch.setattr(service.training_plan_engine, "planning_source", capture)
+    monkeypatch.setattr(service.training_plan_engine, "planning_source_details", capture)
     result = read_page(monkeypatch, harness)
     assert harness.envelope["generation_id"] != GENERATION_ID
     assert result["outlook"]["outlook"]["source"]["generation_id"] == GENERATION_ID

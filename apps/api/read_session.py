@@ -1,8 +1,8 @@
 """Deduplicate reads while assembling one management page.
 
 This object lives for one read phase only. It must never be used for writes or
-the final concurrency check: write services reread inputs through the original
-repository after computing a draft. Keys
+reused across calculation/publication boundaries. Final concurrency checks start
+a new read phase through the live repository after computing a draft. Keys
 include all arguments (including the athlete). No user data is cached globally.
 """
 from copy import deepcopy
