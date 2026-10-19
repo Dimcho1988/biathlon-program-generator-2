@@ -31,6 +31,9 @@ checked revision, time and bounded proof metadata. Database hashes are hashes of
 database JSON text, not the API's canonical candidate hash. The event and the
 existing next-check deferral commit atomically. The plan pointer, full revision
 count, approved plan, proposal and old revision timestamps are unchanged.
+The revision foreign key has a matching index so existing parent cleanup does
+not repeatedly scan an athlete's entire check history. Its cost is one small
+index entry per event; this is not claimed as a current page-load improvement.
 
 A server-generated UUID identifies one RPC attempt. A same-nonce replay can
 return the original acknowledgement only after authorization and all current

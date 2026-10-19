@@ -21,6 +21,10 @@ create table onflows_private.management_plan_checks (
 );
 create index management_plan_checks_athlete_sequence
  on onflows_private.management_plan_checks(athlete_alias,sequence desc);
+-- Match the parent revision FK for existing athlete/history cleanup; the
+-- history and nonce indexes cannot narrow the second revision key.
+create index management_plan_checks_athlete_revision
+ on onflows_private.management_plan_checks(athlete_alias,checked_revision);
 alter table onflows_private.management_plan_checks enable row level security;
 revoke all on onflows_private.management_plan_checks from public,anon,authenticated,service_role;
 grant select on onflows_private.management_plan_checks to service_role;
