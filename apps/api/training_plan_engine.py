@@ -1462,11 +1462,11 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     calendar_reader = getattr(repository, "active_planning_calendar", None) or repository.active_activity_calendar
     envelope = calendar_reader(alias, today - timedelta(days=89), end_date) or {}
     snapshot = envelope.get("snapshot_payload") or {}
-    measured_source = snapshot.get("load_history") or {}
     speed_by_sport = {s: model_service.speed_view(repository, alias, s) if envelope else None for s in dict.fromkeys([sport, *training_sports])}
-    source, planning_evidence = planning_source(repository, alias, profile, settings, envelope, today, speed_by_sport=speed_by_sport)
+    prepared_source = planning_source_details(repository, alias, profile, settings, envelope, today, speed_by_sport=speed_by_sport)
+    source, planning_evidence = prepared_source.source, prepared_source.evidence
     component_contexts = (source.get("component_load_model") or {}).get("contexts_by_sport") or {}
-    measured_source = project_history(measured_source, component_contexts)
+    measured_source = prepared_source.measured_source
     snapshot = {**snapshot, "load_history": measured_source}
     envelope = {**envelope, "snapshot_payload": snapshot}
     profile = {**profile, "_component_load_context": component_contexts[primary_sport]}
