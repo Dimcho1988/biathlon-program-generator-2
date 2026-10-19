@@ -225,12 +225,12 @@ def _management_action(operation, body, authorization, athlete_alias, actor):
     try:
         repository = dependencies.repository()
         if operation == "activate":
-            management_lifecycle.activate(repository, alias, body, actor)
+            management_lifecycle.activate(repository, alias, body, actor, include_saved_payload=False)
         elif operation == "day":
             management_lifecycle.refresh(repository, alias, actor, expected_revision=body.expected_revision,
-                                         force=True, day_action=body)
+                                         force=True, day_action=body, include_saved_payload=False)
         else:
-            management_lifecycle.action(repository, alias, body, actor)
+            management_lifecycle.action(repository, alias, body, actor, include_saved_payload=False)
         return public_management(management_lifecycle.current(repository, alias))
     except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
         raise HTTPException(409, exc.user_message) from exc

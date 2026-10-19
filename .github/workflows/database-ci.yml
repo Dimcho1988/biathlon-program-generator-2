@@ -39,6 +39,11 @@ jobs:
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
           --no-psqlrc --set ON_ERROR_STOP=1
           --file tests/database/generation_read_contract.sql
+      - name: Verify compact plan acknowledgements preserve publication checks
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/compact_management_save.sql
       - name: Verify lossless storage maintenance boundaries
         run: >-
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"

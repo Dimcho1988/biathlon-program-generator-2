@@ -1,5 +1,6 @@
 """Immutable active-plan revisions and a compare-and-swap publication pointer."""
 from urllib.parse import quote
+from datetime import datetime
 
 from fastapi import HTTPException
 from .oauth_store import PersistentStoreFailure
@@ -66,8 +67,12 @@ class PlanStore:
                  "status": r["status"], "changes": r.get("changes") or [],
                  "reason": r.get("reason")} for r in result]
 
-    def save(self, alias, payload, expected_revision, actor, operation, profile_revision, checkpoint, *, automatic=False):
-        result = self.request("POST", "/rpc/save_onflows_management_plan", json={
+    def save(self, alias, payload, expected_revision, actor, operation, profile_revision, checkpoint, *, automatic=False,
+             include_payload=True):
+        # Only callers that discard the saved record opt out of its echo. The
+        # immutable revision and publication checks are identical in both RPCs.
+        rpc = "save_onflows_management_plan" if include_payload else "save_onflows_management_plan_compact"
+        result = self.request("POST", f"/rpc/{rpc}", json={
             "p_alias": alias, "p_payload": payload, "p_expected_revision": expected_revision,
             "p_actor": str(actor), "p_operation": operation,
             "p_expected_profile_revision": profile_revision, "p_checkpoint": checkpoint, "p_automatic": automatic,
@@ -76,8 +81,17 @@ class PlanStore:
             raise PersistentStoreFailure("Invalid active plan save result")
         if result.get("conflict"):
             raise HTTPException(409, "The plan or its inputs changed; reload and try again")
-        if result.get("saved") is not True or type(result.get("revision")) is not int or not isinstance(result.get("payload"), dict):
+        if (result.get("saved") is not True or type(result.get("revision")) is not int
+                or (include_payload and not isinstance(result.get("payload"), dict))):
             raise PersistentStoreFailure("Invalid active plan save result")
+        if not include_payload:
+            try:
+                recorded_at = datetime.fromisoformat(result["recorded_at"])
+            except (KeyError, TypeError, ValueError):
+                raise PersistentStoreFailure("Invalid active plan save result") from None
+            if (result["revision"] < 1 or result["revision"] != expected_revision + 1
+                    or recorded_at.utcoffset() is None or "payload" in result):
+                raise PersistentStoreFailure("Invalid active plan save result")
         return result
 
     def due(self, now):

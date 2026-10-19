@@ -46,6 +46,60 @@ def profile_view(repository, alias, *, now=None):
     return {**profile, "timezone": athlete_timezone, "today": today.isoformat(), "history": history}
 
 
+def _planning_calendar_from_speed_inputs(inputs, alias, analysis, today):
+    """Reuse only a complete, immutable calendar captured for this local day.
+
+    The analysis remains authoritative. Legacy or inconsistent evidence goes
+    through the existing planning-calendar read and its validation instead.
+    """
+    if not isinstance(inputs, dict) or inputs.get("alias") != alias or inputs.get("today") != today:
+        return None
+    calendar = inputs.get("calendar")
+    if not isinstance(calendar, dict):
+        return None
+    generation, revision = calendar.get("generation_id"), calendar.get("revision")
+    if (not isinstance(generation, str) or not generation or type(revision) is not int
+            or revision < 1 or type(analysis.get("revision")) is not int
+            or (generation, revision) != (analysis.get("generation_id"), analysis.get("revision"))
+            or any(calendar.get(k) != analysis.get(k) for k in ("analysis_as_of", "activated_at"))):
+        return None
+    snapshot = calendar.get("snapshot_payload")
+    if not isinstance(snapshot, dict) or snapshot != analysis.get("snapshot_payload"):
+        return None
+    source = snapshot.get("load_history")
+    if not isinstance(source, dict):
+        return None
+    try:
+        first, last = (date.fromisoformat(source[k]) for k in ("period_start", "period_end"))
+        if (first > last or last > today or first.isoformat() != source["period_start"]
+                or last.isoformat() != source["period_end"]):
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    activities = calendar.get("activities")
+    if not isinstance(activities, list):
+        return None
+    start = today-timedelta(days=89)
+    selected = []
+    seen = set()
+    for activity in activities:
+        if not isinstance(activity, dict):
+            return None
+        reference = activity.get("activity_ref")
+        try:
+            day = date.fromisoformat(activity["local_date"])
+            if day.isoformat() != activity["local_date"] or day > today:
+                return None
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not isinstance(reference, str) or not reference or reference in seen:
+            return None
+        seen.add(reference)
+        if start <= day <= today:
+            selected.append(activity)
+    return {**calendar, "activities": selected}
+
+
 def outlook(repository, alias, *, now=None):
     """Current saved goals, independent of any frozen draft or active plan.
 
@@ -59,7 +113,13 @@ def outlook(repository, alias, *, now=None):
     settings = repository.athlete_settings(alias)
     from . import model_service
     # Race duration and component capacity must share the same model read.
-    speed_by_sport = {profile["sport"]: model_service.speed_view(repository, alias, profile["sport"]) if settings else None}
+    speed_inputs = None
+    if settings and getattr(repository, "speed_load_cache_namespace", None):
+        speed_inputs = model_service.speed_view_inputs(repository, alias)
+        speed = model_service.speed_view(repository, alias, profile["sport"], _inputs=speed_inputs)
+    else:
+        speed = model_service.speed_view(repository, alias, profile["sport"]) if settings else None
+    speed_by_sport = {profile["sport"]: speed}
     event_duration = race_duration.preview(repository, alias, profile, speed_view=speed_by_sport[profile["sport"]])
     now = now or datetime.now(timezone.utc)
     today = now.astimezone(ZoneInfo(settings.timezone) if settings else timezone.utc).date()
@@ -72,7 +132,9 @@ def outlook(repository, alias, *, now=None):
     profile = race_duration.applied(profile, event_duration)
     measured_source = (analysis.get("snapshot_payload") or {}).get("load_history") or {}
     calendar_reader = getattr(repository, "active_planning_calendar", None) or getattr(repository, "active_activity_calendar", None)
-    activity_calendar = calendar_reader(alias, today-timedelta(days=89), today) if calendar_reader else None
+    activity_calendar = _planning_calendar_from_speed_inputs(speed_inputs, alias, analysis, today)
+    if activity_calendar is None:
+        activity_calendar = calendar_reader(alias, today-timedelta(days=89), today) if calendar_reader else None
     if activity_calendar and (activity_calendar.get("generation_id"), activity_calendar.get("revision")) != (analysis.get("generation_id"), analysis.get("revision")):
         activity_calendar = None
     planning_envelope = {**analysis, "activities": (activity_calendar or {}).get("activities", [])}
