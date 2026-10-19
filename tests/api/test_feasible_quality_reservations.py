@@ -1,11 +1,12 @@
 from copy import deepcopy
 from datetime import timedelta
 import math
+import pytest
 
 from apps.api import training_plan_engine as engine
 from tests.api.test_load_progression import configured, observed
 from tests.api.test_readiness_adaptive_plan_v2 import fixed_readiness, assert_rolling_budgets, assert_readiness_dose
-from tests.api.test_training_plan_engine import TODAY, NOW, Repository
+from tests.api.test_training_plan_engine import TODAY, NOW, Repository, append_complete_activity
 
 
 def selected_methods(monkeypatch, body, identifiers):
@@ -80,6 +81,53 @@ def test_last_microcycle_day_does_not_wait_for_next_microcycle_preferred_thresho
     assert not plan["days"][1]["sessions"], "The two-day key spacing still applies."
     assert_readiness_dose(session)
     assert_rolling_budgets(plan)
+
+
+@pytest.mark.parametrize("days_ago", [1, 2, 8])
+def test_historical_key_before_visible_start_preserves_catchup_and_spacing(monkeypatch, days_ago):
+    fixed_readiness(monkeypatch, 100.)
+    body = configured(age_years=25, training_experience_years=5, available_minutes=[180]*7)
+    body["planning_controls"].update(mesocycle_anchor=(TODAY-timedelta(days=6)).isoformat(),
+        sessions_per_week=2, sessions_by_day=[1,1,0,0,0,0,0], threshold_days=[1], threshold_method="INTERVALS")
+    selected_methods(monkeypatch, body, {"END-THR-TIME-01"})
+    q_calendar(monkeypatch, lambda _: 210.)
+    repo = Repository()
+    activity = {"activity_ref": "recent-key", "date": (TODAY-timedelta(days=days_ago)).isoformat(),
+        "sport": "Run", "duration_min": 10., "zones": [
+            {"zone": z, "raw_time_min": 10. if z == "Z3" else 0.,
+             "equivalent_time_min": 2. if z == "Z3" else 0.} for z in engine.COMPONENTS if z != "STR"]}
+    append_complete_activity(repo.envelope["snapshot_payload"]["load_history"], activity)
+    repo.envelope["activities"].append({**deepcopy(activity), "local_date": activity["date"]})
+    original = deepcopy(repo.envelope)
+
+    plan = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)
+
+    assert plan["status"] == "DRAFT"
+    assert repo.envelope == original
+    key_dates = [engine.date.fromisoformat(day["date"]) for day in plan["days"]
+                 if any(s["is_key_session"] for s in day["sessions"])]
+    assert key_dates and all((d-engine.date.fromisoformat(activity["date"])).days >= 2 for d in key_dates)
+    if days_ago == 1:
+        assert TODAY not in key_dates
+    else:
+        # Real execution before the visible start must not be mistaken for
+        # an unexecuted reservation that suppresses this cycle's catch-up.
+        assert TODAY in key_dates
+    assert_readiness_dose(next(s for d in plan["days"] for s in d["sessions"] if s["is_key_session"]))
+    assert_rolling_budgets(plan)
+
+
+def test_future_reserved_key_still_suppresses_extra_catchup_in_its_cycle(monkeypatch):
+    fixed_readiness(monkeypatch, 100.)
+    body = configured(age_years=25, training_experience_years=5, available_minutes=[180]*7,
+                      max_key_sessions_per_week=4)
+    body["planning_controls"].update(mesocycle_anchor=TODAY.isoformat(),
+        sessions_per_week=4, sessions_by_day=[1,1,0,1,0,0,1], threshold_days=[1], threshold_method="INTERVALS")
+    selected_methods(monkeypatch, body, {"END-THR-TIME-01"})
+    q_calendar(monkeypatch, lambda _: 210.)
+    plan = engine.generate_plan(Repository(), "athlete", body, start_date=TODAY, now=NOW)
+    key_dates = [day["date"] for day in plan["days"] if any(s["is_key_session"] for s in day["sessions"])]
+    assert key_dates == [(TODAY+timedelta(days=1)).isoformat()]
 
 
 def test_second_slot_can_use_a_reduced_mixed_dose_after_strength(monkeypatch):
