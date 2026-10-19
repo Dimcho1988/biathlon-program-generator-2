@@ -287,11 +287,12 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False,
     }
 
 
-def build_draft(repository, alias, start_date, expected_profile_revision, *, now=None, decisions=None, locked_day=None):
+def build_draft(repository, alias, start_date, expected_profile_revision, *, now=None, decisions=None, locked_day=None,
+                _initial_read_phase=None):
     # Reuse inputs only during calculation. The final check below must observe
     # edits/syncs made while the (potentially long) calculation was running.
     live_repository = repository
-    repository = ReadSession(repository, planning_settings_bundle=True)
+    repository = ReadSession.planning(repository, _initial_read_phase)
     store = ManagementStore(repository)
     stored = store.profile(alias)
     if not stored["configured"]:

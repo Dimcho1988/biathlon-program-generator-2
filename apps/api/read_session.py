@@ -27,6 +27,21 @@ class ReadSession:
         self._planning_settings_bundle = planning_settings_bundle
         self._values = {}
 
+    @classmethod
+    def planning(cls, repository, initial=None):
+        """Select one initial phase without changing the live repository.
+
+        Only the caller's freshly captured phase may be reused before draft
+        calculation. Publication checks must call this without ``initial``.
+        Athlete isolation remains in the existing per-argument cache keys.
+        """
+        if initial is None:
+            return cls(repository, planning_settings_bundle=True)
+        if (not isinstance(initial, cls) or initial._repository is not repository
+                or not initial._planning_settings_bundle):
+            raise ValueError("Initial planning phase belongs to another repository or configuration")
+        return initial
+
     def _read(self, key, reader):
         if key not in self._values:
             self._values[key] = reader()
