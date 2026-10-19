@@ -79,7 +79,7 @@ def state(repository, alias, *, now=None):
     return {"revision": record["revision"], "stale": record["fingerprint"] != fingerprint}
 
 
-def activate(repository, alias, body, actor, *, now=None):
+def activate(repository, alias, body, actor, *, now=None, include_saved_payload=True):
     now = now or datetime.now(timezone.utc)
     store = PlanStore(repository)
     previous = store.current(alias)
@@ -101,7 +101,8 @@ def activate(repository, alias, body, actor, *, now=None):
                "origin": {"start_date": body.start_date.isoformat(), "draft_revision": body.draft_revision},
                "decisions": {}, "outcomes": [], "changes": [],
                "reason": "Програмата е утвърдена. Следващите дни се адаптират според избрания режим."}
-    return store.save(alias, payload, body.expected_revision, actor, "ACTIVATE", profile_revision, checkpoint)
+    return store.save(alias, payload, body.expected_revision, actor, "ACTIVATE", profile_revision, checkpoint,
+                      include_payload=include_saved_payload)
 
 
 def reconcile(plan, source, today, decisions, previous_outcomes=()):
@@ -160,7 +161,7 @@ def changes_between(old, new):
 
 
 def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, automatic=False,
-            force=False, resume=False, day_action=None):
+            force=False, resume=False, day_action=None, include_saved_payload=True):
     now = now or datetime.now(timezone.utc)
     store = PlanStore(repository)
     record = store.current(alias)
@@ -198,7 +199,8 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
     payload.update(evaluated_on=today.isoformat(), processed_input_fingerprint=fingerprint)
     if today > date.fromisoformat(profile["program_end"]):
         payload.update(status="COMPLETED", proposal=None, changes=[], reason="Периодът на програмата е завършен. Историята е запазена.")
-        return store.save(alias, payload, record["revision"], actor, "COMPLETE", profile_revision, checkpoint, automatic=automatic)
+        return store.save(alias, payload, record["revision"], actor, "COMPLETE", profile_revision, checkpoint,
+                          automatic=automatic, include_payload=include_saved_payload)
     start = max(today, date.fromisoformat(old["origin"]["start_date"]), date.fromisoformat(profile["program_start"]))
     if start > today + timedelta(days=7):
         raise HTTPException(409, "The new program start requires a separate draft")
@@ -225,10 +227,11 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
                        "Предложената адаптация очаква утвърждаване." if _eligible(plan) else
                        "Липсват достатъчно актуални данни за следващата доза. Обновете активностите и прегледайте причините.")
         operation = "REVIEW"
-    return store.save(alias, payload, record["revision"], actor, operation, profile_revision, checkpoint, automatic=automatic)
+    return store.save(alias, payload, record["revision"], actor, operation, profile_revision, checkpoint,
+                      automatic=automatic, include_payload=include_saved_payload)
 
 
-def approve_proposal(repository, alias, body, actor, *, now):
+def approve_proposal(repository, alias, body, actor, *, now, include_saved_payload=True):
     """Approve the exact visible proposal; never silently regenerate on click."""
     store = PlanStore(repository)
     record = store.current(alias)
@@ -246,16 +249,17 @@ def approve_proposal(repository, alias, body, actor, *, now):
                    approved_profile_revision=profile_revision, approved_settings_fingerprint=approval_hash,
                    mode=profile["adaptation_mode"], evaluated_on=frozen["evaluation_date"],
                    processed_input_fingerprint=fingerprint, reason="Показаната адаптация е утвърдена без промяна на прегледаните задачи.")
-    return store.save(alias, payload, record["revision"], actor, "APPROVE", profile_revision, checkpoint)
+    return store.save(alias, payload, record["revision"], actor, "APPROVE", profile_revision, checkpoint,
+                      include_payload=include_saved_payload)
 
 
-def action(repository, alias, body, actor, *, now=None):
+def action(repository, alias, body, actor, *, now=None, include_saved_payload=True):
     now = now or datetime.now(timezone.utc)
     if body.action == "APPROVE":
-        return approve_proposal(repository, alias, body, actor, now=now)
+        return approve_proposal(repository, alias, body, actor, now=now, include_saved_payload=include_saved_payload)
     if body.action in {"REFRESH", "RESUME"}:
         return refresh(repository, alias, actor, expected_revision=body.expected_revision, now=now,
-                       force=True, resume=body.action == "RESUME")
+                       force=True, resume=body.action == "RESUME", include_saved_payload=include_saved_payload)
     store = PlanStore(repository)
     record = store.current(alias)
     _require_revision(record, body.expected_revision)
@@ -266,7 +270,8 @@ def action(repository, alias, body, actor, *, now=None):
     payload = deepcopy(record["payload"])
     payload.update(status="PAUSED", evaluated_on=frozen["evaluation_date"], processed_input_fingerprint=fingerprint,
                    changes=[], reason="Автоматичното планиране е поставено на пауза. Историята е запазена.")
-    return store.save(alias, payload, record["revision"], actor, "PAUSE", profile_revision, checkpoint)
+    return store.save(alias, payload, record["revision"], actor, "PAUSE", profile_revision, checkpoint,
+                      include_payload=include_saved_payload)
 
 
 def run_due(repository, *, now=None):
@@ -278,7 +283,8 @@ def run_due(repository, *, now=None):
     for row in rows:
         try:
             store.queue_import(row["athlete_alias"])
-            refresh(repository, row["athlete_alias"], row["approved_by"], expected_revision=row["revision"], now=now, automatic=True)
+            refresh(repository, row["athlete_alias"], row["approved_by"], expected_revision=row["revision"], now=now,
+                    automatic=True, include_saved_payload=False)
         except Exception as exc:
             logging.getLogger(__name__).warning("management_adaptation_deferred error_type=%s", type(exc).__name__)
             store.defer_check(row["athlete_alias"], row["revision"])
