@@ -34,7 +34,7 @@ from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 
-VERSION = "training-management-v48-whole-microcycle"
+VERSION = "training-management-v49-microcycle-execution-history"
 PARAMETER_VERSION = "management-parameters-v45"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
@@ -1688,6 +1688,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     all_sources_known = planning_history_supported and not planning_evidence["estimated"]
     forecast_known = planning_history_supported
     result_days = []
+    # Historical execution can precede the visible draft but still belong to
+    # its anchored microcycle. Slot occupancy below remains draft-local.
+    executed_dates = {date.fromisoformat(a["date"]) for a in source.get("activities", [])}
     existing_in_draft = [a for a in source.get("activities", []) if start_date.isoformat() <= a["date"] <= end_date.isoformat()]
     actual_by_day = {d: [a for a in existing_in_draft if a["date"] == d.isoformat()] for d in slot_counts}
     from .double_threshold_continuation import reconcile as reconcile_double
@@ -1932,7 +1935,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             # This is catch-up for an unserved segment, not another key after
             # the segment's planned preferred task has already been reserved.
             if (previous in segment_keys and segment_keys[previous] == segment_keys[d]
-                and not actual_by_day[previous]) or any(
+                and previous not in executed_dates) or any(
                     segment_keys[date.fromisoformat(item["date"])] == segment_keys[d]
                     and any(s.get("is_key_session") for s in planning_schedule.day_sessions(item))
                     for item in result_days):
