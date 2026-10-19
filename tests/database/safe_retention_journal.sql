@@ -268,6 +268,95 @@ begin
  assert pg_temp.safe_retention_history_rows(a)=original_history;
 end $$;
 
+-- Synthetic locator JSON only: no Storage API/object operation is performed.
+-- Exact archive marker matching conservatively retains an ordinary-text match.
+create function pg_temp.safe_retention_archived_rows(p_alias text)
+returns jsonb language sql as $$
+ select jsonb_build_object(
+  'shadow',(select coalesce(jsonb_agg(jsonb_build_object('row',to_jsonb(s),'xmin',s.xmin::text,'ctid',s.ctid::text)
+   order by s.run_key),'[]') from public.onflows_activity_derived_runs s where s.athlete_alias=p_alias
+   and onflows_private.has_analysis_archive_locator(s.result_payload)),
+  'input',(select coalesce(jsonb_agg(jsonb_build_object('row',to_jsonb(i),'xmin',i.xmin::text,'ctid',i.ctid::text)
+   order by i.input_key),'[]') from public.onflows_activity_model_inputs i where i.athlete_alias=p_alias
+   and onflows_private.has_analysis_archive_locator(i.input_payload)),
+  'canonical',(select coalesce(jsonb_agg(jsonb_build_object('row',to_jsonb(c),'xmin',c.xmin::text,'ctid',c.ctid::text)
+   order by c.run_key),'[]') from public.onflows_activity_canonical_runs c where c.athlete_alias=p_alias
+   and onflows_private.has_analysis_archive_locator(c.result_payload))
+ );
+$$;
+do $$
+declare f jsonb:=pg_temp.safe_retention_fixture('retention-archive-lookahead');a text:=f->>'alias';
+ i integer;role text;run_id text;locator jsonb;original_graph jsonb;original_history jsonb;archives jsonb;
+ prune_counts jsonb;batch uuid;role_name text;
+begin
+ assert not onflows_private.has_analysis_archive_locator(null);
+ assert not onflows_private.has_analysis_archive_locator('{"samples":[1,2,3],"codec":"ordinary-inline-codec"}');
+ assert onflows_private.has_analysis_archive_locator('{"note":"onflows-history-object-xz-v1"}'),
+  'Archive marker in ordinary text must conservatively retain a row';
+ foreach role_name in array array['service_role','anon','authenticated'] loop
+  assert not has_function_privilege(role_name,'onflows_private.has_analysis_archive_locator(jsonb)','execute');
+ end loop;
+ perform pg_temp.prepare_safe_retention_control(f);
+ -- Keep the preexisting control graph out of this independent archive test.
+ perform onflows_private.pin_history_generations(a,array[(f->>'control')::uuid]);
+ perform onflows_private.pin_history_activity_references(a,
+  jsonb_build_object('run_keys',jsonb_build_array(f->>'control_shadow',f->>'control_canonical')),false);
+ for i in 1..51 loop
+  role:='archive-shadow-'||i;f:=pg_temp.add_safe_retention_orphan(f,role);
+  locator:=jsonb_build_object('codec','onflows-history-object-xz-v1','bucket','onflows-history',
+   'path','synthetic/shadow/'||(f->>(role||'_shadow'))||'.xz','sha256',repeat('1',64));
+  update public.onflows_activity_derived_runs set result_payload=jsonb_build_object('nested',jsonb_build_object('timeseries',locator))
+   where run_key=f->>(role||'_shadow');
+
+  -- No run points at these inputs: the input archive guard is their only exclusion.
+  role:='archive-input-'||i;f:=pg_temp.add_safe_retention_orphan(f,role);
+  delete from public.onflows_activity_derived_runs where run_key=f->>(role||'_shadow');
+  locator:=jsonb_build_object('codec','onflows-history-object-xz-v1','bucket','onflows-history',
+   'path','synthetic/input/'||(f->>(role||'_input'))||'.xz','sha256',repeat('2',64));
+  update public.onflows_activity_model_inputs set input_payload=jsonb_build_object('samples',locator)
+   where input_key=f->>(role||'_input');
+
+  role:='archive-canonical-'||i;f:=pg_temp.add_safe_retention_orphan(f,role);
+  delete from public.onflows_activity_derived_runs where run_key=f->>(role||'_shadow');
+  delete from public.onflows_activity_model_inputs where input_key=f->>(role||'_input');
+  run_id:=encode(sha256(convert_to(a||':'||role||':canonical','UTF8')),'hex');
+  locator:=jsonb_build_object('codec','onflows-history-object-xz-v1','bucket','onflows-history',
+   'path','synthetic/canonical/'||run_id||'.xz','sha256',repeat('3',64));
+  insert into public.onflows_activity_canonical_runs
+   (run_key,athlete_alias,activity_ref,scientific_input_hash,result_hash,schema_version,model_version,result_payload,created_at)
+   values(run_id,a,f->>(role||'_activity'),run_id,run_id,'synthetic-archive-v1','synthetic-archive-v1',
+    jsonb_build_object('payload',locator),clock_timestamp()-interval '89 days');
+ end loop;
+ -- This later ordinary graph falls beyond 50 old archived candidates in all
+ -- three guarded phases. Exclusion AFTER raw LIMIT would starve these rows.
+ f:=pg_temp.add_safe_retention_orphan(f,'inline-after-archives');
+ run_id:=encode(sha256(convert_to(a||':inline-canonical','UTF8')),'hex');
+ insert into public.onflows_activity_canonical_runs
+  (run_key,athlete_alias,activity_ref,scientific_input_hash,result_hash,schema_version,model_version,result_payload,created_at)
+  values(run_id,a,f->>'inline-after-archives_activity',run_id,run_id,'synthetic-inline-v1','synthetic-inline-v1',
+   '{"ordinary_inline":true}',clock_timestamp()-interval '89 days');
+ archives:=pg_temp.safe_retention_archived_rows(a);
+ assert jsonb_array_length(archives->'shadow')=51 and jsonb_array_length(archives->'input')=51
+  and jsonb_array_length(archives->'canonical')=51,'Archive fixtures are not independently eligible by table';
+ original_graph:=pg_temp.safe_retention_graph(a);original_history:=pg_temp.safe_retention_history_rows(a);
+ select to_jsonb(result) into prune_counts from public.prune_onflows_analysis_generations(a,1,interval '30 days',1000) result;
+ assert prune_counts='{"deleted_generations":0,"deleted_activity_rows":0,"deleted_jobs":0,"deleted_shadow_runs":1,"deleted_canonical_runs":1,"deleted_model_inputs":1,"deleted_catalog_rows":1}',
+  'Archive exclusion starved the later inline graph or deleted archived evidence';
+ assert pg_temp.safe_retention_archived_rows(a)=archives,'Archived row/locator/xmin/ctid changed';
+ assert not exists(select 1 from public.onflows_activity_derived_runs where run_key=f->>'inline-after-archives_shadow');
+ assert not exists(select 1 from public.onflows_activity_model_inputs where input_key=f->>'inline-after-archives_input');
+ assert not exists(select 1 from public.onflows_activity_canonical_runs where run_key=run_id);
+ assert pg_temp.safe_retention_history_rows(a)=original_history;
+ select batch_id into strict batch from onflows_private.analysis_cleanup_batches where athlete_alias=a;
+ assert (select backup_rows=5 from onflows_private.analysis_cleanup_batches where batch_id=batch);
+ assert not exists(select 1 from onflows_private.analysis_cleanup_rows where batch_id=batch
+  and before_row::text like '%onflows-history-object-xz-v1%'),'Archived payload entered deletion/recovery journal';
+ perform onflows_private.restore_analysis_cleanup_batch(batch);
+ assert pg_temp.safe_retention_graph(a)=original_graph,'Inline graph restoration changed archived data';
+ assert pg_temp.safe_retention_archived_rows(a)=archives;
+ assert pg_temp.safe_retention_history_rows(a)=original_history;
+end $$;
+
 -- Test-only adversarial fanout AFTER preflight verifies the hard transactional
 -- guard independently from the selector. No production trigger is installed.
 create function pg_temp.inject_retention_fanout_after_preflight()

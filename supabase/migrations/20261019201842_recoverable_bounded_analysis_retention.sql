@@ -265,6 +265,16 @@ end $$;
 revoke all on function onflows_private.analysis_cleanup_candidate_cost(uuid,text,jsonb),
  onflows_private.budget_analysis_cleanup_keys(uuid,text,text[],integer) from public,anon,authenticated,service_role;
 
+-- The archive is a separate Storage lifecycle. Retain a row and its locator
+-- together until object GC/restoration is separately proven. Canonical JSONB
+-- text exposes the exact ASCII marker anywhere without deep-copying arrays;
+-- a marker in ordinary text conservatively retains an extra technical row.
+create function onflows_private.has_analysis_archive_locator(p_payload jsonb)
+returns boolean language sql immutable parallel safe set search_path='' as $$
+ select coalesce(pg_catalog.strpos(p_payload::text,'onflows-history-object-xz-v1')>0,false)
+$$;
+revoke all on function onflows_private.has_analysis_archive_locator(jsonb) from public,anon,authenticated,service_role;
+
 create or replace function public.prune_onflows_analysis_generations(
   p_athlete_alias text,
   p_keep_superseded integer default 5,
@@ -466,6 +476,7 @@ begin
     from public.onflows_activity_derived_runs d
     where d.athlete_alias = p_athlete_alias
       and d.created_at < now() - p_terminal_older_than
+      and not onflows_private.has_analysis_archive_locator(d.result_payload)
       and not exists (
         select 1 from public.onflows_analysis_generation_activities retained
         where retained.shadow_run_key = d.run_key
@@ -493,6 +504,7 @@ begin
     from public.onflows_activity_canonical_runs canonical
     where canonical.athlete_alias = p_athlete_alias
       and canonical.created_at < now() - p_terminal_older_than
+      and not onflows_private.has_analysis_archive_locator(canonical.result_payload)
       and not exists (
         select 1 from public.onflows_analysis_generation_activities retained
         where retained.canonical_run_key = canonical.run_key
@@ -520,6 +532,7 @@ begin
     from public.onflows_activity_model_inputs model_input
     where model_input.athlete_alias = p_athlete_alias
       and model_input.created_at < now() - p_terminal_older_than
+      and not onflows_private.has_analysis_archive_locator(model_input.input_payload)
       and not exists (
         select 1 from public.onflows_analysis_generation_activities retained
         where retained.input_key = model_input.input_key
