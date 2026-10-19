@@ -1323,6 +1323,30 @@ def _volume_ceiling(profile, periodization, events, available, baseline, start, 
     return min(available_window, baseline*weighted/max(1., sum(available)))
 
 
+def _copy_method_budget(method):
+    """Separate a trial's mutable budget from its read-only recipe metadata.
+
+    Native budget preparation replaces interval/dosing dictionaries. Combined
+    budgets also prepare their child methods, so those need independent
+    dictionaries. Source recipes, guidance and curve resolutions are read-only
+    throughout a trial; published method cards still receive a full copy.
+    """
+    method = dict(method)
+    if method.get("combined_methods"):
+        method["combined_methods"] = [_copy_method_budget(part) for part in method["combined_methods"]]
+    return method
+
+
+def _copy_capacity_budget(capacity):
+    """Keep speculative role/Recovery edits out of the source capacity."""
+    capacity = dict(capacity)
+    if capacity.get("combined_capacities"):
+        capacity["combined_capacities"] = [_copy_capacity_budget(cap) for cap in capacity["combined_capacities"]]
+    if capacity.get("readiness_policy") is not None:
+        capacity["readiness_policy"] = dict(capacity["readiness_policy"])
+    return capacity
+
+
 def _volume_estimate(profile, components, baseline, actual_base, days):
     """Display-only duration equivalent at the observed load/time mix.
 
@@ -1881,7 +1905,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 if (original["zone"] not in {"Z3", "Z4", "Z5"} or original["purpose"] in {"RECOVERY", "SUPPORTING"}
                     or sport not in original["sports"] or _phase(periodization, d)[0] not in original["periods"]):
                     continue
-                fm = deepcopy(original)
+                fm = _copy_method_budget(original)
                 future_phase = _phase(periodization, d)[0]
                 future_state = day_goals[d][2]
                 race_zones = (([future_state["race_component"]] if future_phase == "COMPETITION" else future_state["mesocycle_accents"])
@@ -2212,7 +2236,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             or future_sport not in future_method["sports"] or future_period not in future_method["periods"]
                             or future_method["structure"] not in {"CONTINUOUS", "TWO_REPETITIONS", "THRESHOLD_REPETITIONS", "THRESHOLD_LONG", "THRESHOLD_SHORT", "MODEL_INTERVALS", "METABOLIC_INTERVALS", "LIBRARY_CONTINUOUS", "LIBRARY_INTERVALS", "STRENGTH_CIRCUIT", "STRENGTH_SETS"}):
                             continue
-                        fm = deepcopy(future_method)
+                        fm = _copy_method_budget(future_method)
                         if fm["structure"] == "MODEL_INTERVALS" and not fm.get("developmental_variant"):
                             exposures = {a["date"] for a in measured_source.get("activities", []) if a.get("sport") == future_sport
                                 and a.get("quality_status", "valid") == "valid" and a["date"] in history_policy["complete_dates"]
@@ -2458,7 +2482,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     if len(exposures) < 2:
                         method = adaptive_methods.short_variant(method)
                 original_method = method
-                method = deepcopy(method)
+                method = _copy_method_budget(method)
                 method["actual_sport"] = sport
                 race_minutes = profile.get("race_duration_min")
                 if race_minutes and method["zone"] == "Z3" and method["purpose"] != "SUPPORTING" and period in {"SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"}:
@@ -2970,7 +2994,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 blocks = training_guidance.annotate_lactate(blocks, profile, sport, settings, day)
                 if method.get("double_threshold"):
                     training_guidance.annotate_double_threshold(blocks, profile)
-                choice_methods[(sport, method["id"])] = deepcopy(method)
+                choice_methods[(sport, method["id"])] = _copy_method_budget(method)
                 def choice_check(parts, *, capacity=deepcopy(evidence), zone=z, ceiling=max_usage,
                                  time_ceiling=session_ceiling, conflict_check=recovery_conflict):
                     if (not parts or not _dose_fits(parts, capacity, zone, ceiling, tolerance=1e-6)
@@ -3023,7 +3047,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         key=lambda r:(r["date"], min(r.get("slots", [r.get("slot", 0)]))))
                     for record in ledger:
                         placed_day = record["date"]
-                        method, cap, core = deepcopy(record["method"]), deepcopy(record["capacity"]), record["blocks"]
+                        method, cap = _copy_method_budget(record["method"]), _copy_capacity_budget(record["capacity"])
+                        core = record["blocks"]
                         protected = record in protected_cores
                         if protected:
                             method["min_work_min"] = method.get("absolute_min_work_min", method["min_work_min"])

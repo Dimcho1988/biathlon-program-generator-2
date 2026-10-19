@@ -1,8 +1,8 @@
 from pathlib import Path
 
 
-MIGRATION = Path("supabase/migrations/202609020002_working_role_profiles.sql")
-FOLLOWUP_MIGRATION = Path("supabase/migrations/202609030001_role_profile_security_followup.sql")
+MIGRATION = Path("supabase/migrations/20260903041531_working_role_profiles.sql")
+FOLLOWUP_MIGRATION = Path("supabase/migrations/20260903041725_role_profile_security_followup.sql")
 
 
 def migration_sql() -> str:

@@ -21,6 +21,7 @@ services:
         - intervals_inspector/**
         - vflat_b65/**
         - requirements-api.txt
+        - constraints-api.txt
         - render.yaml
     buildCommand: pip install -r requirements-api.txt
     startCommand: uvicorn apps.api.application:app --host 0.0.0.0 --port $PORT --no-access-log
@@ -75,6 +76,7 @@ services:
         - intervals_inspector/**
         - vflat_b65/**
         - requirements-api.txt
+        - constraints-api.txt
         - render.yaml
     buildCommand: pip install -r requirements-api.txt
     startCommand: python -m apps.api.sync_worker --lease-seconds 300

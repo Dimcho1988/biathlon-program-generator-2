@@ -320,16 +320,22 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
     def calculate():
         from .planning_search import improve
         normalized = profile.model_dump(mode="json")
+        replay_count = 0
         def replay(allocation_policy=None):
-            return training_plan_engine.generate_plan(repository, alias,
-                {**normalized, **({"_allocation_policy": allocation_policy} if allocation_policy else {})},
-                start_date=start_date, now=now, decisions=decisions, locked_day=locked_day)
+            nonlocal replay_count
+            stage = "planning_baseline" if replay_count == 0 else "planning_search_replay"
+            replay_count += 1
+            with timed_stage(stage):
+                return training_plan_engine.generate_plan(repository, alias,
+                    {**normalized, **({"_allocation_policy": allocation_policy} if allocation_policy else {})},
+                    start_date=start_date, now=now, decisions=decisions, locked_day=locked_day)
         from time import monotonic
         started = monotonic()
         baseline = replay()
         elapsed = monotonic()-started
-        return improve(baseline, normalized, replay, seconds_remaining=max(0., 150.-elapsed),
-                       estimated_trial_seconds=elapsed)
+        with timed_stage("planning_search"):
+            return improve(baseline, normalized, replay, seconds_remaining=max(0., 150.-elapsed),
+                           estimated_trial_seconds=elapsed)
     payload = compute(live_repository, alias, computation_key, calculate)
     # Start a new read phase after calculation. Its single settings-row read is
     # fresh; no value captured by the calculation's ReadSession is reused.

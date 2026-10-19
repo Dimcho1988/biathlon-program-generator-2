@@ -268,16 +268,21 @@ export const currentAuthorizedAthlete = cache(async (): Promise<CurrentAthleteAc
       .eq("athlete_alias", athleteAlias)
       .maybeSingle<UserAthleteRow>();
     if (error || !athlete) return null;
+    // Verified ownership grants all three permissions independently of team
+    // memberships, assignments and sharing. Other viewers still read the
+    // current authorization graph on every request.
+    const isOwner = athlete.user_id === claimsData.claims.sub && athlete.is_owner === true;
+    const ownerAccess = { data: [], error: null };
     const [profileResult, membershipsResult, assignmentsResult, sharingResult] = await Promise.all([
       supabase.from("onflows_profiles")
         .select("display_name")
         .eq("user_id", athlete.user_id)
         .maybeSingle<{ display_name: string }>(),
-      supabase.from("onflows_organization_memberships")
+      isOwner ? ownerAccess : supabase.from("onflows_organization_memberships")
         .select("organization_id, user_id, role, status"),
-      supabase.from("onflows_coach_athlete_assignments")
+      isOwner ? ownerAccess : supabase.from("onflows_coach_athlete_assignments")
         .select("organization_id, coach_user_id, athlete_user_id, can_edit_plan"),
-      supabase.from("onflows_sharing_grants")
+      isOwner ? ownerAccess : supabase.from("onflows_sharing_grants")
         .select("owner_user_id, viewer_user_id, edit_plan, view_plan, view_recovery"),
     ]);
     if (membershipsResult.error || assignmentsResult.error || sharingResult.error) return null;
@@ -290,7 +295,7 @@ export const currentAuthorizedAthlete = cache(async (): Promise<CurrentAthleteAc
       userId: athlete.user_id,
       athleteAlias: athlete.athlete_alias,
       displayName: profileResult.data?.display_name ?? "Спортист",
-      isOwner: athlete.user_id === claimsData.claims.sub && athlete.is_owner,
+      isOwner,
       canEditPlan: canEditAthlete({
         userId: claimsData.claims.sub,
         athleteUserId: athlete.user_id,
