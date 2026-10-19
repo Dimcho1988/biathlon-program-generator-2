@@ -81,8 +81,11 @@ CI catalog, the staging catalog, a fresh result of
 `migration_metadata_snapshot.sql`, the exact successful CI commit/run URL,
 and an output path. It has no database or network client and never executes
 SQL. It refuses unequal/incomplete catalog evidence, changed source files,
-changed relative order, or any difference from the captured 25-row metadata
-inventory. It then writes a review-only proposal and a separate recovery
+changed relative order, or any difference in the captured 25 original metadata
+rows. Specifically reviewed new append-only migrations may be supplied with
+`--additional-migration`; each added record must match that file's exact version,
+name, length and full SQL SHA-256. Unspecified additions block preparation.
+It then writes a review-only proposal and a separate recovery
 file; existing output files are never overwritten.
 
 The proposed transaction uses short lock/statement limits, a nonblocking lock
@@ -92,9 +95,10 @@ pairs, with **NULL statements**. This records an existing-schema baseline
 without inventing stored SQL execution history. It neither replays the early
 DDL/DML nor changes any existing migration row. No concurrent deployment or
 manual schema work should run during this short, controlled baseline action.
-The expected ledger then contains 37 versions in the unchanged source order.
+The expected ledger then contains the 37 baseline/source versions plus any
+explicitly reviewed new migrations, in the unchanged source order.
 
-The generated recovery transaction requires that exact 37-row after-state,
+The generated recovery transaction requires that exact complete after-state,
 including the 12 NULL-statement rows, before removing only those new metadata
 records. It refuses a changed ledger. It does not reverse application schema
 or touch training data. Filename-only recovery is a normal git revert of the

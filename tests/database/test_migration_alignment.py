@@ -1,6 +1,8 @@
 """Preparation must refuse incomplete or unequal evidence; no database calls."""
 import importlib.util
+import hashlib
 from pathlib import Path
+import tempfile
 import unittest
 
 
@@ -57,6 +59,29 @@ class MigrationEvidenceTests(unittest.TestCase):
         self.assertEqual(wrapped.count(tag), 2)
         with self.assertRaises(ValueError):
             audit.sql_literal("bad\x00literal")
+
+    def test_new_metadata_requires_explicit_file_and_preserves_every_old_row(self):
+        before = [{"version": "20261019193059", "name": "old", "statement_count": 1,
+                   "joined_bytes": 9, "joined_sha256": "a" * 64}]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            folder = root / "supabase/migrations"
+            folder.mkdir(parents=True)
+            path = folder / "20261019202610_reconcile.sql"
+            raw = b"select 1;\n"
+            path.write_bytes(raw)
+            row = dict(version="20261019202610", name="reconcile", statement_count=1,
+                       joined_bytes=len(raw), joined_sha256=hashlib.sha256(raw).hexdigest())
+            metadata = {"format": "onflows-migration-metadata-v1", "rows": before + [row]}
+            self.assertEqual(audit.reviewed_metadata_rows(metadata, before, [path], root), before + [row])
+            with self.assertRaisesRegex(ValueError, "Original 25"):
+                audit.reviewed_metadata_rows(metadata, before, [], root)
+            changed = {**metadata, "rows": [{**before[0], "joined_sha256": "b" * 64}, row]}
+            with self.assertRaisesRegex(ValueError, "Original 25"):
+                audit.reviewed_metadata_rows(changed, before, [path], root)
+            path.write_bytes(b"select 2;\n")
+            with self.assertRaisesRegex(ValueError, "exact SQL hash differs"):
+                audit.reviewed_metadata_rows(metadata, before, [path], root)
 
 
 if __name__ == "__main__":

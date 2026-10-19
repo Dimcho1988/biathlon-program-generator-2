@@ -135,16 +135,49 @@ def do_block(body):
     return "do " + tag + "\n" + body + "\n" + tag + ";\n"
 
 
-def prepare_repair(expected, observed, metadata, *, ci_commit, ci_run_url, root=ROOT):
+def reviewed_metadata_rows(metadata, before_rows, additional_migrations, root=ROOT):
+    """Preserve all 25 old rows; accept only explicitly reviewed new scripts."""
+    if metadata.get("format") != "onflows-migration-metadata-v1":
+        raise ValueError("Unknown migration metadata format")
+    rows = metadata.get("rows")
+    if not isinstance(rows, list) or len({r["version"] for r in rows}) != len(rows):
+        raise ValueError("Invalid or duplicate migration metadata")
+    original_names = {r["name"] for r in before_rows}
+    allowed = {}
+    migration_dir = (root / "supabase/migrations").resolve()
+    for value in additional_migrations:
+        path = Path(value)
+        path = (root / path).resolve() if not path.is_absolute() else path.resolve()
+        if path.parent != migration_dir or not re.fullmatch(r"[0-9]{12,14}_[a-z0-9_]+\.sql", path.name):
+            raise ValueError("Additional metadata must refer to a reviewed repository migration file")
+        version, name = path.stem.split("_", 1)
+        if version <= max(r["version"] for r in before_rows):
+            raise ValueError("Additional metadata must be an appended migration, not a historical baseline")
+        if name in original_names or name in allowed:
+            raise ValueError("Additional metadata must not replace or duplicate an original migration")
+        raw = path.read_bytes()
+        allowed[name] = dict(version=version, name=name, statement_count=1,
+                             joined_bytes=len(raw), joined_sha256=hashlib.sha256(raw).hexdigest())
+    if [r for r in rows if r["name"] not in allowed] != before_rows:
+        raise ValueError("Original 25 migration metadata rows changed or unreviewed rows were added")
+    if len(rows) != len(before_rows) + len(allowed):
+        raise ValueError("Reviewed additional migration metadata is incomplete")
+    for name, expected in allowed.items():
+        matches = [r for r in rows if r["name"] == name]
+        if matches != [expected]:
+            raise ValueError("Additional migration version, name, statements or exact SQL hash differs: " + name)
+    return rows
+
+
+def prepare_repair(expected, observed, metadata, *, ci_commit, ci_run_url,
+                   additional_migrations=(), root=ROOT):
     manifest = verify_files(root)
     differences = compare_catalogs(expected, observed)
     if differences:
         raise ValueError("Catalog proof failed:\n" + "\n".join(differences))
     require_baseline_coverage(expected, manifest, root)
     before = read_json(root / BEFORE.relative_to(ROOT))
-    before_rows = before["rows"]
-    if metadata.get("format") != "onflows-migration-metadata-v1" or metadata.get("rows") != before_rows:
-        raise ValueError("Remote migration metadata differs from the captured 25-row inventory")
+    before_rows = reviewed_metadata_rows(metadata, before["rows"], additional_migrations, root)
     if not re.fullmatch(r"[0-9a-f]{40}", ci_commit):
         raise ValueError("Exact successful CI commit is required")
     if not re.fullmatch(r"https://github\.com/Dimcho1988/biathlon-program-generator-2/actions/runs/[0-9]+", ci_run_url):
@@ -203,6 +236,8 @@ def main():
     repair.add_argument("metadata", type=Path)
     repair.add_argument("--ci-commit", required=True)
     repair.add_argument("--ci-run-url", required=True)
+    repair.add_argument("--additional-migration", action="append", type=Path, default=[],
+                        help="Explicit reviewed new file, whose stored version and exact SQL hash must match")
     repair.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
@@ -220,7 +255,8 @@ def main():
             print("Application catalog objects, ownership and security definitions match exactly")
         else:
             proposal, recovery = prepare_repair(read_json(args.expected), read_json(args.observed),
-                read_json(args.metadata), ci_commit=args.ci_commit, ci_run_url=args.ci_run_url)
+                read_json(args.metadata), ci_commit=args.ci_commit, ci_run_url=args.ci_run_url,
+                additional_migrations=args.additional_migration)
             recovery_path = args.output.with_suffix(".recovery.sql")
             # Exclusive creation preserves any existing reviewed proposal.
             if args.output.exists() or recovery_path.exists():

@@ -8,8 +8,10 @@ import httpx
 import pytest
 
 from apps.api.management_plan_store import PlanStore
-from apps.api.management_store import ManagementStore
-from apps.api import dependencies, management_lifecycle, management_service, response_service
+from apps.api.management_store import ManagementStore, PROFILE_KEY
+from apps.api.model_service import ModelStore
+from apps.api.model_schemas import initial_settings
+from apps.api import dependencies, management_lifecycle, management_service, model_service, response_service
 from apps.api.main import app
 from apps.api.oauth_store import (
     HistoricalGenerationReferenceConflict,
@@ -17,6 +19,7 @@ from apps.api.oauth_store import (
     SupabasePilotRepository,
 )
 from apps.api.response_service import ResponseStore
+from tests.api.test_management_api import PROFILE
 from tests.api.test_supabase_generation_rpc_contract import ENCRYPTION_KEY
 
 
@@ -29,7 +32,7 @@ CHECKPOINT = {"generation_id": GENERATION, "models": [], "responses": []}
 ERROR = {"code": "PT409", "hint": "ONFLOWS_HISTORY_REFERENCE_CONFLICT",
          "message": "Historical generation reference conflict",
          "details": "private-database-detail"}
-WRITERS = ["draft", "plan", "compact_plan", "response"]
+WRITERS = ["draft", "profile", "plan", "compact_plan", "response", "model_recovery", "model_speed_test"]
 
 
 def transport(response):
@@ -49,6 +52,8 @@ def transport(response):
 
 
 def write(repository, writer, payload, checkpoint):
+    if writer == "profile":
+        return ManagementStore(repository).save_profile("athlete", payload, 2, ACTOR)
     if writer == "draft":
         return ManagementStore(repository).save_draft("athlete", payload, ACTOR, 1,
             expected_revision=2, expected_generation_id=GENERATION, check_generation=True,
@@ -56,6 +61,9 @@ def write(repository, writer, payload, checkpoint):
     if writer in {"plan", "compact_plan"}:
         return PlanStore(repository).save("athlete", payload, 2, ACTOR, "REVIEW", 1, checkpoint,
                                           include_payload=writer == "plan")
+    if writer in {"model_recovery", "model_speed_test"}:
+        kind = "RECOVERY" if writer == "model_recovery" else "SPEED_TEST"
+        return ModelStore(repository).save("athlete", kind, "model-key", payload, 2, ACTOR)
     return ResponseStore(repository).save("athlete", "TEST", "test-key", "2026-10-19", payload, 2, ACTOR)
 
 
@@ -124,12 +132,18 @@ def test_ambiguous_or_invalid_responses_never_become_success_or_a_different_writ
     ("POST", "/onflows_management_entries", {"kind": "DRAFT"}),
     ("POST", "/onflows_management_plan_revisions", {}),
     ("POST", "/onflows_response_entries", {}),
+    ("POST", "/onflows_model_entries", {"kind": "SPEED_TEST"}),
     ("POST", "/rpc/record_onflows_management_check", {}),
     ("POST", "/rpc/save_onflows_model_entry", {}),
     ("POST", "/rpc/save_onflows_management_plan_extra", {}),
-    ("POST", "/rpc/save_onflows_management_entry", {"p_kind": "PROFILE"}),
     ("POST", "/rpc/save_onflows_management_entry", {"p_kind": "draft"}),
+    ("POST", "/rpc/save_onflows_management_entry", {"p_kind": "DECISION"}),
+    ("POST", "/rpc/save_onflows_management_entry", {"p_kind": ["PROFILE"]}),
     ("POST", "/rpc/save_onflows_management_entry", {}),
+    ("POST", "/rpc/save_onflows_model_entry", {"p_kind": "speed_test"}),
+    ("POST", "/rpc/save_onflows_model_entry", {"p_kind": "UNKNOWN"}),
+    ("POST", "/rpc/save_onflows_model_entry", {"p_kind": {"kind": "SPEED_TEST"}}),
+    ("GET", "/rpc/save_onflows_model_entry", {"p_kind": "SPEED_TEST"}),
 ])
 def test_matching_error_is_not_reclassified_outside_supported_history_write_paths(method, path, arguments):
     repository, requests = transport((409, ERROR))
@@ -142,7 +156,7 @@ def test_matching_error_is_not_reclassified_outside_supported_history_write_path
 @pytest.mark.parametrize("writer", WRITERS)
 def test_normal_success_and_ordinary_json_conflicts_keep_existing_contracts(writer):
     acknowledgement = {"saved": True, "revision": 3, "recorded_at": STAMP,
-                       "entry_key": PAYLOAD["start_date"],
+                       "entry_key": PROFILE_KEY if writer == "profile" else PAYLOAD["start_date"],
                        **({"payload": deepcopy(PAYLOAD)} if writer != "compact_plan" else {})}
     repository, requests = transport((200, acknowledgement))
     assert write(repository, writer, PAYLOAD, CHECKPOINT) == acknowledgement
@@ -162,6 +176,17 @@ def test_normal_success_and_ordinary_json_conflicts_keep_existing_contracts(writ
     ("response", "PUT", "/api/v2/athlete/response/test",
      {"day": "2026-10-19", "protocol": "same test", "protocol_version": "1", "value": 100.,
       "unit": "W", "direction": "HIGHER", "conditions": "same conditions", "components": ["Z3"]}),
+    ("profile", "PUT", "/api/v2/athlete/management/profile",
+     {"profile": {**PROFILE, "method_library": {}}, "expected_revision": 2}),
+    ("model_recovery", "PUT", "/api/v2/athlete/models/recovery",
+     {"zones": initial_settings(), "expected_revision": 2}),
+    ("model_speed_test", "PUT", "/api/v2/athlete/models/speed-test",
+     {"activity_ref": "act_" + "a" * 32, "start_s": 0, "duration_s": 180, "maximal": True,
+      "comparable": True, "conditions": "same conditions", "expected_revision": 2}),
+    ("model_speed_test", "PUT", "/api/v2/athlete/models/speed-test-manual",
+     {"test_id": ACTOR, "name": "Same measured test", "day": "2026-10-19", "sport": "Run",
+      "duration_s": 180., "speed_kmh": 20., "maximal": True, "comparable": True, "flat_terrain": True,
+      "conditions": "same conditions", "expected_revision": 2}),
 ])
 @pytest.mark.parametrize("exact_signal,status", [(True, 409), (False, 503)])
 def test_real_http_routes_preserve_authentication_and_expose_only_the_trusted_conflict(
@@ -180,6 +205,8 @@ def test_real_http_routes_preserve_authentication_and_expose_only_the_trusted_co
     monkeypatch.setattr(management_service, "generate", publish)
     monkeypatch.setattr(management_lifecycle, "action", publish)
     monkeypatch.setattr(response_service, "save_report", publish)
+    monkeypatch.setattr(model_service, "save_test", publish)
+    monkeypatch.setattr(model_service, "save_manual_test", publish)
     monkeypatch.setattr(management_lifecycle, "current", lambda *args, **kwargs: pytest.fail(
         "A failed publication must not continue with a successful current-plan response"))
     with TestClient(app) as client:

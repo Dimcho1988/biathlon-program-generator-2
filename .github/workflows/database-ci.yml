@@ -49,6 +49,16 @@ jobs:
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
           --no-psqlrc --set ON_ERROR_STOP=1
           --file tests/database/management_response_checkpoint.sql
+      - name: Verify monotonic analysis revision publication checkpoints
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/management_checkpoint_analysis_revision.sql
+      - name: Verify real concurrent checkpoint and input-write boundaries
+        timeout-minutes: 3
+        run: python3 tests/database/management_checkpoint_concurrency.py
+      - name: Verify exact format recovery and atomic schema reconciliation guards
+        run: python3 tests/database/schema_reconciliation_roundtrip.py
       - name: Verify immutable generation read contract
         run: >-
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
@@ -62,6 +72,19 @@ jobs:
       - name: Verify real concurrent history publication and generation deletion
         timeout-minutes: 3
         run: python3 tests/database/history_generation_concurrency.py
+      - name: Verify historical run input activity protection and native writers
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/safe_retention_history.sql
+      - name: Verify bounded cleanup journals recovery expiry and progress
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/safe_retention_journal.sql
+      - name: Verify real concurrent history native publication and bounded cleanup
+        timeout-minutes: 5
+        run: python3 tests/database/safe_retention_concurrency.py
       - name: Verify compact plan acknowledgements preserve publication checks
         run: >-
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"

@@ -3,12 +3,14 @@ begin;
 insert into public.onflows_intervals_connections
  (athlete_alias,provider_athlete_id,encrypted_access_token,status)
  values ('storage-compaction-test','storage-compaction-provider','synthetic-not-a-token','REVOKED');
+insert into public.onflows_activity_catalog(activity_ref,athlete_alias,provider_activity_key)
+ values ('act_'||repeat('a',32),'storage-compaction-test',repeat('a',64));
 insert into public.onflows_activity_model_inputs
  (input_key,athlete_alias,activity_ref,input_hash,schema_version,input_payload)
- values (repeat('a',64),'storage-compaction-test','storage-test-activity',repeat('b',64),'test','{}');
+ values (repeat('a',64),'storage-compaction-test','act_'||repeat('a',32),repeat('b',64),'test','{}');
 insert into public.onflows_activity_derived_runs
  (run_key,input_key,athlete_alias,activity_ref,result_hash,schema_version,result_payload)
- values (repeat('c',64),repeat('a',64),'storage-compaction-test','storage-test-activity',repeat('d',64),'test',
+ values (repeat('c',64),repeat('a',64),'storage-compaction-test','act_'||repeat('a',32),repeat('d',64),'test',
  jsonb_build_object('result_hash',repeat('d',64),'timeseries',jsonb_build_array(jsonb_build_object('x',1)),
                    'zone_summary',jsonb_build_array(jsonb_build_object('zone','Z3','seconds',900))));
 
