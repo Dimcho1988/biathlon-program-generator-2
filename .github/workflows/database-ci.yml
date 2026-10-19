@@ -29,6 +29,21 @@ jobs:
         run: supabase db reset --local
       - name: Verify local migration history
         run: supabase migration list --local
+      - name: Capture clean application catalog before fixtures
+        run: |
+          python3 tests/database/test_migration_alignment.py
+          python3 scripts/audit_migration_alignment.py verify-files
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+            --no-psqlrc --set ON_ERROR_STOP=1 --tuples-only --no-align \
+            --file tests/database/migration_catalog_snapshot.sql > migration-catalog.json
+          python3 scripts/audit_migration_alignment.py validate-catalog migration-catalog.json
+      - name: Retain application catalog evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: onflows-migration-catalog-${{ github.sha }}
+          path: migration-catalog.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Verify response-aware plan publication
         run: >-
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"

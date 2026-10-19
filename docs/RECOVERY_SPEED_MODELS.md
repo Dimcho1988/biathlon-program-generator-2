@@ -250,7 +250,7 @@ The invoker RPC verifies the actor's ownership/planning rights and uses an advis
 lock plus expected revision. Web writes require same origin, authenticated actor,
 planning and recovery access. Service credentials never enter client components.
 
-Apply migration `20260912130629_recovery_speed_models_v2.sql` before deploying the
+Apply migration `20260912132158_recovery_speed_models_v2.sql` before deploying the
 API. The migration has been tested in staging with rollback-only writes, conflict,
 idempotence and unauthorized actor checks; no verification records persisted.
 Enable the API flag and deploy API, worker and web from the integration branch.

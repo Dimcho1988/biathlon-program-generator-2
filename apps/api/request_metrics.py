@@ -32,7 +32,12 @@ _STORE_LABELS = {
     "/rpc/record_onflows_management_check": "unchanged_check",
     "/rpc/read_onflows_management_checks": "check_history",
 }
-_STAGES = frozenset({"profile", "current", "overview_active", "drafts", "outlook", "projection", "input_after"})
+_STAGES = frozenset({
+    "profile", "current", "overview_active", "drafts", "outlook", "projection", "input_after",
+    "planning_claim", "planning_shared_wait", "planning_result_copy", "planning_slot_wait",
+    "planning_calculate", "planning_complete", "planning_baseline", "planning_search",
+    "planning_search_replay",
+})
 
 
 @dataclass
@@ -82,10 +87,12 @@ current_metrics: ContextVar[StoreMetrics | None] = ContextVar("onflows_store_met
 
 @contextmanager
 def timed_stage(name):
-    """Inclusive wall and calling-thread CPU time for a synchronous read stage.
+    """Inclusive wall and calling-thread CPU time for a synchronous stage.
 
     Nested stages overlap. Thread CPU excludes work on other native threads;
-    neither value is an isolated attribution of whole-process CPU usage.
+    neither value is an isolated attribution of whole-process CPU usage. In
+    particular, planning_calculate includes baseline and search, and search
+    includes its replay stages: those values must not be added together.
     """
     metrics = current_metrics.get()
     if metrics is None:

@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 MIGRATION = Path(
-    "supabase/migrations/202609030002_activity_shadow_publish_timeout.sql"
+    "supabase/migrations/20260903202048_activity_shadow_publish_timeout.sql"
 )
 
 

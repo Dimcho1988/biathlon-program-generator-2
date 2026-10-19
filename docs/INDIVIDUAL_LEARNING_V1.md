@@ -205,7 +205,7 @@ exclusion records, internal source identities and response revision dates are
 not transported to plan viewers. Existing recovery permissions govern the
 separate stress page. Server-only storage grants and RLS remain unchanged.
 
-Apply `20260927134122_management_response_checkpoint.sql` **before** deploying
+Apply `20260927141548_management_response_checkpoint.sql` **before** deploying
 the API/worker. The checkpoint adds sorted latest `{kind, entry_key, revision}`
 response identities. Response writes and management publication share the
 per-athlete advisory lock; a new response invalidates a pending plan. Draft
