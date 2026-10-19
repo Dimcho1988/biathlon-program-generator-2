@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
-from .oauth_store import PersistentStoreFailure
+from .oauth_store import HistoricalGenerationReferenceConflict, PersistentStoreFailure
 from .response_monitoring import baselines, build_history, latest_entries
 
 
@@ -28,10 +28,13 @@ class ResponseStore:
         raise PersistentStoreFailure("Response history exceeds the bounded read")
 
     def save(self, alias, kind, key, day, payload, expected_revision, actor_id):
-        # Conflict is returned as ordinary JSON, avoiding retries of writes.
-        response = self.repository._request("POST","/rpc/save_onflows_response_entry",json={
-            "p_alias":alias,"p_kind":kind,"p_key":key,"p_day":day,"p_payload":payload,
-            "p_expected_revision":expected_revision,"p_actor":actor_id})
+        # Ordinary revision conflicts remain JSON; writes are never retried.
+        try:
+            response = self.repository._request("POST","/rpc/save_onflows_response_entry",json={
+                "p_alias":alias,"p_kind":kind,"p_key":key,"p_day":day,"p_payload":payload,
+                "p_expected_revision":expected_revision,"p_actor":actor_id})
+        except HistoricalGenerationReferenceConflict as exc:
+            raise HTTPException(409, "Athlete analysis changed; reload before saving the report") from exc
         result = self.repository._json(response)
         if not isinstance(result,dict):
             raise PersistentStoreFailure("Invalid response write result")
