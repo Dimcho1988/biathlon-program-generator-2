@@ -12,7 +12,7 @@ from urllib.parse import quote
 
 from fastapi import HTTPException
 
-from .oauth_store import PersistentStoreFailure
+from .oauth_store import HistoricalGenerationReferenceConflict, PersistentStoreFailure
 
 
 PROFILE_KEY = "management-profile-v1"
@@ -132,16 +132,19 @@ class ManagementStore:
               profile_revision=None, expected_generation_id=None, check_generation=False,
               expected_responses=None):
         response_check = {"p_expected_responses": expected_responses} if expected_responses is not None else {}
-        result = self.repository._json(self.repository._request(
-            "POST", "/rpc/save_onflows_management_entry", json={
-                "p_alias": alias, "p_kind": kind, "p_key": key, "p_payload": payload,
-                "p_expected_revision": revision, "p_actor": str(actor),
-                "p_expected_profile_revision": profile_revision,
-                "p_expected_generation_id": str(expected_generation_id) if expected_generation_id is not None else None,
-                "p_check_generation": check_generation,
-                **response_check,
-            },
-        ))
+        try:
+            result = self.repository._json(self.repository._request(
+                "POST", "/rpc/save_onflows_management_entry", json={
+                    "p_alias": alias, "p_kind": kind, "p_key": key, "p_payload": payload,
+                    "p_expected_revision": revision, "p_actor": str(actor),
+                    "p_expected_profile_revision": profile_revision,
+                    "p_expected_generation_id": str(expected_generation_id) if expected_generation_id is not None else None,
+                    "p_check_generation": check_generation,
+                    **response_check,
+                },
+            ))
+        except HistoricalGenerationReferenceConflict as exc:
+            raise HTTPException(409, "Athlete analysis changed; regenerate the draft") from exc
         if not isinstance(result, dict):
             raise PersistentStoreFailure("Invalid management save result")
         if result.get("conflict"):

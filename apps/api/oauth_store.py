@@ -84,12 +84,39 @@ def _retryable_store_auth_failure(response: httpx.Response) -> bool:
     return isinstance(payload, Mapping) and payload.get("code") == "PGRST303"
 
 
+def _history_reference_write_conflict(response, method, resource, arguments):
+    """Recognize only the dedicated conflict from a supported history writer."""
+    if response.status_code != 409 or method.upper() != "POST" or resource not in {
+        "/rpc/save_onflows_management_entry",
+        "/rpc/save_onflows_management_plan",
+        "/rpc/save_onflows_management_plan_compact",
+        "/rpc/save_onflows_response_entry",
+    }:
+        return False
+    if resource == "/rpc/save_onflows_management_entry" and (
+        not isinstance(arguments, Mapping) or arguments.get("p_kind") != "DRAFT"
+    ):
+        return False
+    try:
+        payload = response.json()
+    except Exception:
+        return False
+    return (isinstance(payload, Mapping) and payload.get("code") == "PT409"
+            and payload.get("hint") == "ONFLOWS_HISTORY_REFERENCE_CONFLICT")
+
+
 class PersistentStoreConfigurationError(RuntimeError):
     """Safe configuration failure without credential values."""
 
 
 class PersistentStoreFailure(RuntimeError):
     """Sanitized storage failure without database response bodies."""
+
+
+class HistoricalGenerationReferenceConflict(PersistentStoreFailure):
+    """A history write could not safely pin its immutable analysis sources."""
+
+    reason = "ANALYSIS_CHANGED"
 
 
 class _PlanningSettingsBundle:
@@ -358,6 +385,8 @@ class SupabasePilotRepository(SnapshotRepository):
                 response.status_code,
                 diagnostic,
             )
+            if _history_reference_write_conflict(response, method, resource, kwargs.get("json")):
+                raise HistoricalGenerationReferenceConflict("Historical analysis references changed")
             raise PersistentStoreFailure(
                 "Persistent store request failed "
                 f"for {method} {resource} ({response.status_code}; {diagnostic})"

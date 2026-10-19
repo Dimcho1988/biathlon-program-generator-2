@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from .oauth_store import PersistentStoreFailure
+from .oauth_store import HistoricalGenerationReferenceConflict, PersistentStoreFailure
 
 
 def _zoned_timestamp(value):
@@ -149,11 +149,14 @@ class PlanStore:
         # Only callers that discard the saved record opt out of its echo. The
         # immutable revision and publication checks are identical in both RPCs.
         rpc = "save_onflows_management_plan" if include_payload else "save_onflows_management_plan_compact"
-        result = self.request("POST", f"/rpc/{rpc}", json={
-            "p_alias": alias, "p_payload": payload, "p_expected_revision": expected_revision,
-            "p_actor": str(actor), "p_operation": operation,
-            "p_expected_profile_revision": profile_revision, "p_checkpoint": checkpoint, "p_automatic": automatic,
-        })
+        try:
+            result = self.request("POST", f"/rpc/{rpc}", json={
+                "p_alias": alias, "p_payload": payload, "p_expected_revision": expected_revision,
+                "p_actor": str(actor), "p_operation": operation,
+                "p_expected_profile_revision": profile_revision, "p_checkpoint": checkpoint, "p_automatic": automatic,
+            })
+        except HistoricalGenerationReferenceConflict as exc:
+            raise HTTPException(409, "The plan or its inputs changed; reload and try again") from exc
         if not isinstance(result, dict):
             raise PersistentStoreFailure("Invalid active plan save result")
         if result.get("conflict"):
