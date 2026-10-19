@@ -19,14 +19,14 @@ from .read_session import ReadSession
 _hash = management_service._hash
 
 
-def _context(repository, alias, now):
-    repository = ReadSession(repository)
+def _context(repository, alias, now, analysis_hints=None):
+    repository = ReadSession(repository, planning_settings_bundle=True)
     stored = ManagementStore(repository).profile(alias)
     if not stored["configured"]:
         raise HTTPException(409, "Configure a planning profile first")
     profile = ManagementProfile.model_validate(stored["profile"]).model_dump(mode="json")
     state = management_service.input_state(repository, alias, evaluated_at=now,
-        include_response=True)
+        include_response=True, analysis_hints=analysis_hints)
     frozen = {**state, "management_profile": profile, "profile_revision": stored["revision"]}
     # Calendar/preferences edits and new speed observations are ordinary input
     # changes. New dosing rules, physiology or Recovery settings need approval.
@@ -72,7 +72,10 @@ def state(repository, alias, *, now=None):
     record = PlanStore(repository).current(alias, metadata_only=True)
     if record is None:
         return {"revision": 0, "stale": False}
-    _, _, _, fingerprint, _ = _context(repository, alias, now or datetime.now(timezone.utc))
+    hints = [{k: record.get(f"{prefix}_{k}") for k in
+              ("generation_id", "analysis_revision", "analysis_as_of", "snapshot_fingerprint")}
+             for prefix in ("proposal", "plan")]
+    _, _, _, fingerprint, _ = _context(repository, alias, now or datetime.now(timezone.utc), hints)
     return {"revision": record["revision"], "stale": record["fingerprint"] != fingerprint}
 
 

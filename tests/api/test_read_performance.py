@@ -68,7 +68,12 @@ class Repository:
                 "kind": "DRAFT", "entry_key": "2026-09-22", "revision": 1,
                 "payload": {"input_fingerprint": "old"}}]
         elif path.startswith('/onflows_management_plan_state?'):
-            rows = [{"revision": 1}]
+            record = self.record
+            if 'fingerprint:payload->processed_input_fingerprint' in path:
+                record = {"revision": self.record['revision'],
+                          "status": self.record['payload']['status'],
+                          "fingerprint": self.record['payload']['processed_input_fingerprint']}
+            rows = [{"revision": self.record['revision'], "record": record}]
         elif path.startswith('/onflows_management_plan_revisions?'):
             if 'status:payload->status' in path:
                 rows = [{k: self.record[k] for k in ('revision', 'operation', 'recorded_at')}

@@ -93,7 +93,7 @@ def management_view(
 ):
     """Assemble one page with request-local read reuse; never modify a plan."""
     alias = dependencies.model_alias(authorization, athlete_alias)
-    repository = ReadSession(dependencies.repository())
+    repository = ReadSession(dependencies.repository(), planning_settings_bundle=True)
     try:
         profile = management_service.profile_view(repository, alias)
         active = management_lifecycle.current(repository, alias)
@@ -197,7 +197,8 @@ def management_active(
 ):
     alias = dependencies.model_alias(authorization, athlete_alias)
     try:
-        return public_management(management_lifecycle.current(ReadSession(dependencies.repository()), alias))
+        return public_management(management_lifecycle.current(
+            ReadSession(dependencies.repository(), planning_settings_bundle=True), alias))
     except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
         raise HTTPException(409, exc.user_message) from exc
     except PersistentStoreFailure as exc:
@@ -211,7 +212,8 @@ def management_state(
 ):
     alias = dependencies.model_alias(authorization, athlete_alias)
     try:
-        return management_lifecycle.state(ReadSession(dependencies.repository()), alias)
+        return management_lifecycle.state(
+            ReadSession(dependencies.repository(), planning_settings_bundle=True), alias)
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "Planning status is temporarily unavailable") from exc
 

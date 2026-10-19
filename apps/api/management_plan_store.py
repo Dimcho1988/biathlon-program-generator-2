@@ -19,23 +19,41 @@ class PlanStore:
         return result
 
     def current(self, alias, *, metadata_only=False):
-        rows = self.request("GET", "/onflows_management_plan_state?select=revision"
+        select = (
+            "revision,status:payload->status,fingerprint:payload->processed_input_fingerprint,"
+            "plan_generation_id:payload->plan->input_snapshot->generation_id,"
+            "plan_analysis_revision:payload->plan->input_snapshot->analysis_revision,"
+            "plan_analysis_as_of:payload->plan->input_snapshot->analysis_as_of,"
+            "plan_snapshot_fingerprint:payload->plan->input_snapshot->snapshot_fingerprint,"
+            "proposal_generation_id:payload->proposal->input_snapshot->generation_id,"
+            "proposal_analysis_revision:payload->proposal->input_snapshot->analysis_revision,"
+            "proposal_analysis_as_of:payload->proposal->input_snapshot->analysis_as_of,"
+            "proposal_snapshot_fingerprint:payload->proposal->input_snapshot->snapshot_fingerprint"
+        ) if metadata_only else "revision,operation,payload,recorded_at"
+        # Read the publication pointer and its immutable record in one database
+        # snapshot. Keep the default LEFT embedding: an invalid/inaccessible
+        # record must fail validation rather than look like a missing plan.
+        rows = self.request("GET", "/onflows_management_plan_state?select=revision,"
+                            "record:onflows_management_plan_revisions!"
+                            f"onflows_management_plan_state_athlete_alias_revision_fkey({select})"
                             f"&athlete_alias=eq.{quote(alias, safe='')}&limit=1")
         if not isinstance(rows, list):
             raise PersistentStoreFailure("Invalid active plan pointer")
         if not rows:
             return None
+        if len(rows) != 1 or not isinstance(rows[0], dict):
+            raise PersistentStoreFailure("Invalid active plan pointer")
         revision = rows[0].get("revision")
         if type(revision) is not int or revision < 1:
             raise PersistentStoreFailure("Invalid active plan revision")
-        select = "revision,status:payload->status,fingerprint:payload->processed_input_fingerprint" if metadata_only else "revision,operation,payload,recorded_at"
-        records = self.request("GET", f"/onflows_management_plan_revisions?select={select}"
-                               f"&athlete_alias=eq.{quote(alias, safe='')}&revision=eq.{revision}&limit=1")
-        if not isinstance(records, list) or len(records) != 1 or (not metadata_only and not isinstance(records[0].get("payload"), dict)):
+        record = rows[0].get("record")
+        if (not isinstance(record, dict) or type(record.get("revision")) is not int
+                or record["revision"] != revision
+                or (not metadata_only and not isinstance(record.get("payload"), dict))):
             raise PersistentStoreFailure("Invalid active plan record")
-        if metadata_only and (records[0].get("revision") != revision or not isinstance(records[0].get("fingerprint"), str) or not isinstance(records[0].get("status"), str)):
+        if metadata_only and (not isinstance(record.get("fingerprint"), str) or not isinstance(record.get("status"), str)):
             raise PersistentStoreFailure("Invalid active plan metadata")
-        return records[0]
+        return record
 
     def history(self, alias):
         result = self.request("GET", "/onflows_management_plan_revisions?select=revision,operation,recorded_at,"

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
 from hashlib import sha256
 import json
 import math
@@ -281,6 +282,9 @@ def _capacity_context(speed, settings):
     predictor_type = dosing_curve.Predictor if blend else hr_speed.Predictor
     predictor = predictor_type(curve, settings.zone_bounds_bpm, settings.hrmax_bpm, speed["index_summary"], expert_durations=durations or None,
                                normalization_offset_bpm=reference_offset(speed.get("sport")))
+    # Candidate methods reuse this immutable curve/HR context. Keep exact
+    # speed-to-HR results on this predictor only, as the recipe resolver does.
+    predictor.hr_for_speed = lru_cache(maxsize=2048)(predictor.hr_for_speed)
     capacity_view = dict(speed)
     if blend:
         capacity_view["dosing_model"] = {**(speed.get("dosing_model") or {}), "hr_model": predictor.summary()}
