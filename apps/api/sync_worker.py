@@ -984,16 +984,22 @@ def _run_optional_housekeeping(
     repository: SyncRepository,
     athlete_alias: str,
 ) -> None:
-    maintenance = getattr(repository, "prune_analysis_generations", None)
+    maintenance = getattr(repository, "maintain_analysis_history", None)
+    fixed_policy = callable(maintenance)
+    if not fixed_policy:
+        maintenance = getattr(repository, "prune_analysis_generations", None)
     if not callable(maintenance):
         return
     try:
-        result = maintenance(
-            athlete_alias=athlete_alias,
-            keep_superseded=5,
-            terminal_older_than_days=30,
-            batch_limit=100,
-        )
+        if fixed_policy:
+            result = maintenance(athlete_alias=athlete_alias)
+        else:
+            result = maintenance(
+                athlete_alias=athlete_alias,
+                keep_superseded=5,
+                terminal_older_than_days=30,
+                batch_limit=100,
+            )
         required_count_names = (
             "deleted_generations",
             "deleted_activity_rows",

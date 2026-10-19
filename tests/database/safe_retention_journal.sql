@@ -5,6 +5,63 @@ set local lock_timeout='5s';
 \ir history_generation_fixture.sql
 \ir safe_retention_fixture.sql
 
+-- The worker can invoke only the fixed, fully guarded policy. It cannot tune
+-- retention, bypass legacy coverage, or use the older owner-only prune RPC.
+do $$
+declare
+ f jsonb:=pg_temp.safe_retention_fixture('retention-worker-wrapper');
+ a text:=f->>'alias'; batch uuid; worker_counts jsonb; restored jsonb;
+ original_graph jsonb; original_history jsonb; denied boolean:=false; message text;
+ role_name text;
+begin
+ assert (select count(*)=1 and bool_and(pronargs=1 and prosecdef)
+  from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+  where n.nspname='public' and p.proname='maintain_onflows_analysis_history'),
+  'Worker maintenance exposed an overload, variable policy, or invoker function';
+ assert has_function_privilege('service_role','public.maintain_onflows_analysis_history(text)','execute');
+ foreach role_name in array array['anon','authenticated'] loop
+  assert not has_function_privilege(role_name,'public.maintain_onflows_analysis_history(text)','execute');
+ end loop;
+ foreach role_name in array array['service_role','anon','authenticated'] loop
+  assert not has_function_privilege(role_name,'public.prune_onflows_analysis_generations(text,integer,interval,integer)','execute');
+ end loop;
+
+ delete from onflows_private.analysis_retention_coverage where athlete_alias=a;
+ original_graph:=pg_temp.safe_retention_graph(a);
+ original_history:=pg_temp.safe_retention_history_rows(a);
+ execute 'set local role service_role';
+ begin perform * from public.maintain_onflows_analysis_history(a);
+ exception when raise_exception then
+  get stacked diagnostics message=message_text;
+  assert message='Historical activity retention coverage has not been verified';
+  denied:=true;
+ end;
+ execute 'reset role';
+ assert denied,'Service maintenance bypassed the legacy coverage gate';
+ assert pg_temp.safe_retention_graph(a)=original_graph;
+ assert pg_temp.safe_retention_history_rows(a)=original_history;
+ assert not exists(select 1 from onflows_private.analysis_cleanup_batches where athlete_alias=a);
+
+ perform pg_temp.prepare_safe_retention_control(f);
+ original_graph:=pg_temp.safe_retention_graph(a);
+ original_history:=pg_temp.safe_retention_history_rows(a);
+ execute 'set local role service_role';
+ select to_jsonb(result) into worker_counts from public.maintain_onflows_analysis_history(a) result;
+ execute 'reset role';
+ assert worker_counts='{"deleted_generations":1,"deleted_activity_rows":1,"deleted_jobs":1,"deleted_shadow_runs":1,"deleted_canonical_runs":1,"deleted_model_inputs":1,"deleted_catalog_rows":1}',
+  'Service maintenance changed the seven-count result or guarded deletion';
+ select batch_id into strict batch from onflows_private.analysis_cleanup_batches where athlete_alias=a;
+ assert (select b.counts=worker_counts and b.backup_rows=8
+  and b.policy @> '{"keep_superseded":5,"terminal_older_than":"30 days","requested_batch_limit":10,"effective_phase_limit":10,"recovery_days":14}'::jsonb
+  from onflows_private.analysis_cleanup_batches b where batch_id=batch),
+  'Worker policy differs from fixed keep-five, thirty-day, ten-per-phase recovery policy';
+ assert pg_temp.safe_retention_history_rows(a)=original_history;
+ restored:=onflows_private.restore_analysis_cleanup_batch(batch);
+ assert restored->>'restored'='true' and restored->>'rows'='8';
+ assert pg_temp.safe_retention_graph(a)=original_graph,'Service maintenance cannot be restored exactly';
+ assert pg_temp.safe_retention_history_rows(a)=original_history,'Service maintenance/restore rewrote history';
+end $$;
+
 do $$
 declare
  f jsonb:=pg_temp.safe_retention_fixture('retention-journal-sql');

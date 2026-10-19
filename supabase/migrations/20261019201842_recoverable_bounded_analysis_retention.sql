@@ -609,4 +609,20 @@ $$;
 
 -- Deployment/backfill is not authorization to enable cleanup.
 revoke execute on function public.prune_onflows_analysis_generations(text,integer,interval,integer) from service_role;
+
+-- The worker receives only the fixed safe maintenance policy, never arbitrary
+-- pruning parameters. All coverage, historical-pin, opaque, freshness, budget
+-- and recovery guards remain in the single implementation above. Old workers
+-- cannot use their revoked pruning RPC; deployment of the new worker follows
+-- owner bootstrap/coverage and a verified synthetic restore.
+create function public.maintain_onflows_analysis_history(p_alias text)
+returns table(
+ deleted_generations integer,deleted_activity_rows integer,deleted_jobs integer,
+ deleted_shadow_runs integer,deleted_canonical_runs integer,deleted_model_inputs integer,deleted_catalog_rows integer
+)
+language sql security definer set search_path='' as $$
+ select * from public.prune_onflows_analysis_generations(p_alias,5,interval '30 days',10)
+$$;
+revoke all on function public.maintain_onflows_analysis_history(text) from public,anon,authenticated,service_role;
+grant execute on function public.maintain_onflows_analysis_history(text) to service_role;
 commit;

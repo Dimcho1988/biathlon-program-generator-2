@@ -1195,6 +1195,15 @@ class SupabasePilotRepository(SnapshotRepository):
             raise PersistentStoreFailure("Analysis rollback response is invalid")
         return dict(row)
 
+    def maintain_analysis_history(
+        self, *, athlete_alias: str
+    ) -> Mapping[str, int]:
+        """Invoke the fixed server-owned retention policy once."""
+        row = self._rpc_row(
+            "maintain_onflows_analysis_history", {"p_alias": athlete_alias}
+        )
+        return self._analysis_retention_counts(row)
+
     def prune_analysis_generations(
         self,
         *,
@@ -1218,6 +1227,12 @@ class SupabasePilotRepository(SnapshotRepository):
                 "p_batch_limit": batch_limit,
             },
         )
+        return self._analysis_retention_counts(row)
+
+    @staticmethod
+    def _analysis_retention_counts(
+        row: Mapping[str, Any] | None,
+    ) -> Mapping[str, int]:
         count_keys = (
             "deleted_generations",
             "deleted_activity_rows",

@@ -3,8 +3,9 @@
 ## Status and scope
 
 This is an additive implementation prepared for database acceptance. It is not
-evidence that a live cleanup ran. The staging pruning permission remains revoked;
-neither migration grants it back. No training rule, plan approval, historical
+evidence that a live cleanup ran. The old staging pruning permission remains
+revoked; neither migration grants it back. A new service-only fixed-policy
+maintenance wrapper delegates to the same protected implementation. No training rule, plan approval, historical
 model/response/DRAFT/plan JSON, archive object or READY planning result is deleted
 or rewritten by this work.
 
@@ -41,9 +42,51 @@ census found 7,849 source-run occurrences in queried plan-revision ranges 1–70
 30 in management entries and 22 in the model/response inventory, with no malformed
 recognized values. This census used the known-key fast path; suffix fallback,
 activity identities and decoded opaque content require the complete bootstrap
-coverage checks before cleanup is enabled. A separate metadata read observed 659
-plan rows with maximum revision 659; these individual reads were not one pinned
-snapshot and do not replace the final cutoff verification.
+coverage checks before cleanup is enabled.
+
+A subsequent full bounded census captured server time
+`2026-10-19T20:34:25.228748Z`, maximum plan revision 659 and recorded-at cutoffs for
+the other three history sources. It examined 659 plans, 44 models, 11 responses,
+39 management entries and eleven additional response-entry-key wrappers. All
+764 documents had zero unknown run/input suffix keys, zero opaque-history marker
+selectors and zero malformed named references. Model entry keys contained no
+matching activity identity; model payloads contained zero generation references.
+The union was 76 distinct athlete/kind/key roots across two athletes:
+
+| Root / closure | Count | Availability |
+| --- | ---: | --- |
+| Run roots | 8 | Seven local shadow runs; one already unavailable legacy source; zero foreign rows |
+| Explicit input roots | 0 | Inputs arise through shadow-parent closure |
+| Activity roots | 68 | All locally available; zero foreign rows |
+| Required shadow pins | 7 | Six are current SQL prune candidates |
+| Required canonical pins | 0 | No canonical run root observed |
+| Required input pins | 4 | Parent closure of the seven retained shadows |
+| Required activity pins | 68 | Includes all parent closure |
+
+The private census evidence, including exact roots and all seven bounded
+reproduction queries, has SHA-256
+`8d1398ac2eebe10d4af7c6bf6247d9eabaa17f89a8f18b4161c21396a042c8b2`.
+No historical JSON payload is included in that evidence. These individual reads
+were not one transaction snapshot: recheck entries after the recorded cutoffs
+before marking coverage.
+
+The seven directly retained shadow payloads (1,459,778 JSON text bytes) and their
+four parent inputs (1,151,340 fetched JSON bytes including row metadata) were then
+read into a private bounded local inspection. All seven shadow storage hashes
+matched the earlier database metadata. The existing checksum/size-validated
+decoder successfully restored 22 columnar-LZMA-v2 envelopes: 10,053 main-series,
+23,516 speed-test, 1,594 segment and 191 wave rows; the inputs contained 5,926 sample
+rows. An exhaustive recursive scan of the eleven logical payloads found zero
+additional run/input/activity identities, zero malformed recognized keys and zero
+remaining opaque objects. The schemas were seven `activity-shadow-derived-v3`
+and four `activity-model-input-v1` records. The private inspection proof has SHA-256
+`483b278c68de268f1f251e9899bd2c9c153407819fdfa03e1c84b6facbca72a6`.
+
+This establishes the observed direct-root closure, supplemented by the explicit
+current producers in `activity_shadow_pipeline` and the fixed `SERIES_FIELDS`
+decoder. It is not a claim that every arbitrary legacy JSON document was globally
+decoded. Existing generation/activity FKs continue to retain all linked technical
+rows; archive-locator exclusions apply independently.
 
 One original run was already absent: two model revisions of one test, recorded
 on 12 and 13 September 2026, refer to that same unavailable source. No original
@@ -114,6 +157,20 @@ budget. Oversized keys are retained with a small budget-reason record, and other
 keys/phases can continue. A prefix of fifty oversized candidates still requires
 owner review; no larger implicit deletion budget is introduced.
 
+The worker's new `maintain_onflows_analysis_history(alias)` RPC exposes only
+keep-five / 30 days / batch-ten. It has no caller-selected policy parameters and
+uses exactly one invocation of the protected pruning implementation. Anonymous
+and authenticated roles cannot execute either operation. `service_role` can use
+the new wrapper; the old configurable prune RPC remains revoked. SQL/bootstrap,
+coverage and restore acceptance precede deployment of the worker capability.
+
+Rows containing the exact existing archive codec marker
+`onflows-history-object-xz-v1` are excluded from shadow, canonical and input
+candidates before the bounded prefix. The row and blob remain together until a
+separate object-lifecycle policy is proven. Matching a marker in ordinary text
+can only retain an extra row. This work neither deletes Storage metadata nor
+leaves a newly orphaned archive blob by deleting its locator-bearing source row.
+
 The final capture trigger enforces the same whole-transaction budget. Any
 unanticipated extra preimage aborts the entire cleanup. Parent selection uses
 FOR UPDATE SKIP LOCKED; catalog-pointer predicates are rechecked under that lock.
@@ -167,14 +224,17 @@ The live sequence must remain explicit:
    aliases receive an owner coverage record only after this evidence is complete.
    New settings rows start covered only when all four history sources are empty.
 4. Present the exact selected deletion/pointer-change scope and the private
-   recovery batch contract before an owner grants or invokes cleanup.
+   recovery batch contract before an owner invokes cleanup or deploys the worker
+   capability. Keep the old configurable prune RPC revoked.
 5. Start with the bounded transaction, inspect the committed manifest and verify
    history hashes, current pointers and normal application behavior. Compare
    actual SQL duration and reclaimable storage after autovacuum; do not promise
    immediate file shrinkage.
 
-Rollback first revokes prune EXECUTE again, preventing calls from either worker
-version. Keep additive pins/FKs and journal metadata; reverting application code
+Rollback first revokes EXECUTE on the new maintenance wrapper and keeps the old
+prune RPC revoked, preventing calls from either worker version. Revoking the old
+function alone cannot block its owner-level SECURITY DEFINER wrapper. Keep
+additive pins/FKs and journal metadata; reverting application code
 does not require removing them. Within fourteen days an owner can restore an
 eligible batch using its private identifier. If any current state or schema has
 changed, resolve that concrete conflict before a separately reviewed restore.
