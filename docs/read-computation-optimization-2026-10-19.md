@@ -3,8 +3,9 @@
 ## Scope
 
 This change reduces repeated reads and deterministic numerical work. It does
-not change dose rules, approved prescriptions, stored history, schema, grants,
-dependencies, or the engine version.
+not change dose rules, approved prescriptions, stored history, table structure,
+dependencies, or the engine version. One idempotent permission migration restores
+the generation table's original SELECT-only service-role contract.
 
 1. `PlanStore.current` reads the publication pointer and its referenced immutable
    revision in one PostgREST LEFT embedding through the composite foreign key.
@@ -28,6 +29,10 @@ RPC can write snapshot payload only while a generation is BUILDING. READY retry
 accepts only the same hash, and activation/rollback changes identity/status
 without editing the payload. The service role has SELECT-only table access.
 Legacy snapshots have no immutable generation ID and cannot use a saved digest.
+The staging audit found broader actual service-role table grants than the original
+migration specified. Apply the new permission migration before deploying compact
+reads. It revokes direct table writes, retaining SELECT and all six existing
+SECURITY DEFINER writer RPCs owned by postgres. No user permission or row changes.
 
 The reused digest is the existing Python hash of the PostgreSQL read-back JSON,
 not a newly substituted database-side hash. This preserves exact fingerprint
@@ -61,5 +66,7 @@ support through live page/state requests, unchanged plan/proposal fingerprints,
 review status and subsequent polling. Compare equivalent before/after samples;
 distinguish store time, total API time and local CPU measurements.
 
-Recovery is a code revert and API/worker redeploy. There is no migration, backfill,
-deletion, persistent cache, history rewrite or data restoration step.
+Recovery is a code revert and API/worker redeploy. The original SELECT-only table
+contract can remain. If the access correction itself needs recovery, restore the
+previous table ACL captured before rollout; no row restoration is required. There
+is no backfill, deletion, persistent cache or history rewrite.
