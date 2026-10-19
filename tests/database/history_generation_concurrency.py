@@ -50,6 +50,7 @@ class Psql:
         self.output: queue.Queue[str | None] = queue.Queue()
         self.errors: list[str] = []
         self.pending: str | None = None
+        self.on_timeout = None
         self.stdout_thread = threading.Thread(target=self._stdout, daemon=True)
         self.stderr_thread = threading.Thread(target=self._stderr, daemon=True)
         self.stdout_thread.start()
@@ -87,11 +88,14 @@ class Psql:
         while True:
             remaining = until - time.monotonic()
             if remaining <= 0:
-                raise AssertionError("Database barrier timed out; possible lock inversion")
+                self.timeout(result)
             try:
                 line = self.output.get(timeout=remaining)
             except queue.Empty as error:
-                raise AssertionError("Database barrier timed out; possible lock inversion") from error
+                try:
+                    self.timeout(result)
+                except AssertionError as failure:
+                    raise failure from error
             if line is None:
                 self.process.wait(timeout=3)
                 self.stderr_thread.join(timeout=3)
@@ -102,6 +106,14 @@ class Psql:
                 return result
             if line:
                 result.append(line)
+
+    def timeout(self, rows: list[str]):
+        if self.on_timeout is not None:
+            try:
+                self.on_timeout()
+            except Exception as error:
+                print(f"Lock diagnostics unavailable: {error}", flush=True)
+        raise AssertionError(f"Database barrier timed out; possible lock inversion; stdout={rows[-3:]}")
 
     def run(self, sql: str, timeout: float = DEADLINE) -> list[str]:
         self.start(sql)
@@ -154,7 +166,21 @@ class Case:
     def session(self, label: str) -> Psql:
         session = Psql(self.dsn, "history-test-" + self.label + "-" + label)
         self.sessions.append(session)
+        if hasattr(self, "control"):
+            session.on_timeout = self.lock_diagnostics
         return session
+
+    def lock_diagnostics(self):
+        # Emit only this case's synthetic sessions before teardown releases
+        # locks. In particular, query distinguishes an INSERT wait from a
+        # deferred-FK COMMIT wait; a bare timeout cannot prove that distinction.
+        pids = ",".join(str(session.pid) for session in self.sessions[1:])
+        rows = self.control.run(
+            "select coalesce(jsonb_agg(jsonb_build_object('pid',pid,'application',application_name,"
+            "'state',state,'wait_type',wait_event_type,'wait_event',wait_event,"
+            "'blockers',pg_blocking_pids(pid),'query',left(query,700))),'[]'::jsonb) "
+            "from pg_stat_activity where pid in (" + pids + ");", timeout=3)
+        print("LOCK_DIAGNOSTICS " + " ".join(rows), flush=True)
 
     def rows(self):
         return self.control.json("select pg_temp.history_generation_rows(" + literal(self.a) + ");")

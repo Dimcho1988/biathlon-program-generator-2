@@ -18,10 +18,16 @@ for every current numerical calculation.
 
 New pin creation uses a nonblocking per-athlete transaction guard and ordered
 KEY SHARE NOWAIT row locks. Already committed roots need no new generation
-lock. Parent-link changes use a nonblocking row-lock upgrade and extend the
-closure. A deferred composite FK is the final deletion boundary. All three
+lock. Parent-link changes acquire the same nonblocking transaction guard before
+checking pins and extend the closure atomically. A deferred composite FK is the final deletion boundary. All three
 historical tables are guarded, including supported direct service-role INSERT.
 Private helpers and pins receive no application DML/EXECUTE grants.
+
+A concurrent new pin can temporarily refuse a generation link update for the
+same athlete, including staging; this conservative serialization is deliberate.
+The worker's existing retry boundary handles an unsuccessful staging attempt.
+No write is automatically repeated by the API transport. Already committed
+root pins do not require that transaction guard for another history append.
 
 Only the exact PT409 / ONFLOWS_HISTORY_REFERENCE_CONFLICT signal on supported
 history-write RPCs becomes the existing API 409 conflict. Other errors,

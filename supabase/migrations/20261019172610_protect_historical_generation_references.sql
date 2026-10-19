@@ -188,17 +188,15 @@ execute function onflows_private.pin_history_payload();
 create function onflows_private.extend_history_generation_pins()
 returns trigger language plpgsql security definer set search_path='' as $$
 begin
-  -- An ordinary link UPDATE otherwise holds only NO KEY UPDATE, compatible
-  -- with a new pin's KEY SHARE. Upgrade non-blockingly before checking pins,
-  -- including an unpinned row whose first pin may still be uncommitted.
-  begin
-    perform 1 from public.onflows_analysis_generations generation
-      where generation.generation_id=new.generation_id
-        and generation.athlete_alias=new.athlete_alias for update nowait;
-  exception when lock_not_available then
+  -- Serialize every changed lineage edge with NEW pin writers, including an
+  -- unpinned row whose first pin may still be uncommitted. A self-row lock
+  -- upgrade here does not reliably exclude a reader of its older MVCC tuple.
+  -- Use the same non-blocking transaction guard before checking visible pins.
+  if not pg_catalog.pg_try_advisory_xact_lock(
+      pg_catalog.hashtextextended('history-pins:'||new.athlete_alias,0)) then
     raise exception 'Historical analysis reference is unavailable; reload and try again'
       using errcode='PT409',hint='ONFLOWS_HISTORY_REFERENCE_CONFLICT';
-  end;
+  end if;
   if exists(select 1 from onflows_private.history_generation_pins pin
       where pin.athlete_alias=new.athlete_alias and pin.generation_id=new.generation_id) then
     perform onflows_private.pin_history_generations(new.athlete_alias,
