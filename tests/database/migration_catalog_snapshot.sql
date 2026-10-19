@@ -18,7 +18,7 @@ app_functions as (
     or n.nspname='onflows_private')
 ),
 objects(kind,identity,definition) as (
-  select 'schema', n.nspname,
+  select 'schema', n.nspname::text,
     jsonb_build_object('owner',pg_catalog.pg_get_userbyid(n.nspowner),
       'acl',coalesce((select jsonb_agg(jsonb_build_object(
         'grantee',case when a.grantee=0 then 'PUBLIC' else pg_catalog.pg_get_userbyid(a.grantee) end,

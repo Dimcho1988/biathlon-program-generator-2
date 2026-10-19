@@ -192,6 +192,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("verify-files")
+    validate = sub.add_parser("validate-catalog")
+    validate.add_argument("catalog", type=Path)
     compare = sub.add_parser("compare")
     compare.add_argument("expected", type=Path)
     compare.add_argument("observed", type=Path)
@@ -207,6 +209,10 @@ def main():
         if args.command == "verify-files":
             verify_files()
             print("18 filename changes: all 37 SQL hashes and relative order preserved")
+        elif args.command == "validate-catalog":
+            evidence = read_json(args.catalog)
+            require_baseline_coverage(evidence, verify_files())
+            print("Catalog identities are unique and baseline schema/security coverage is complete")
         elif args.command == "compare":
             differences = compare_catalogs(read_json(args.expected), read_json(args.observed))
             if differences:

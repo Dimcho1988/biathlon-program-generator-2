@@ -36,6 +36,7 @@ jobs:
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
             --no-psqlrc --set ON_ERROR_STOP=1 --tuples-only --no-align \
             --file tests/database/migration_catalog_snapshot.sql > migration-catalog.json
+          python3 scripts/audit_migration_alignment.py validate-catalog migration-catalog.json
       - name: Retain application catalog evidence
         uses: actions/upload-artifact@v4
         with:
