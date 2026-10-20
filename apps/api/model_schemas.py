@@ -39,6 +39,7 @@ class SpeedTestInput(Strict):
     enabled: bool = True
     use_for_cs: bool = False
     conditions: str = Field(min_length=3,max_length=400)
+    start_type: Literal["STANDING", "FLYING", "UNKNOWN"] = "UNKNOWN"
     expected_revision: int = Field(default=0,ge=0,strict=True)
     expected_source_run_key: str | None = Field(default=None,pattern=r"^[a-f0-9]{64}$")
 
@@ -58,7 +59,9 @@ class ManualSpeedTestInput(Strict):
     name: str = Field(min_length=1,max_length=120)
     day: date
     sport: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_]{0,39}$")
-    duration_s: float = Field(ge=10.8,le=43516,strict=True)
+    # Exact 10 s is separate boundary evidence; it does not extend the fitted
+    # speed-duration curve's existing 10.8 s domain.
+    duration_s: float = Field(ge=10,le=43516,strict=True)
     distance_m: float | None = Field(default=None,gt=0,le=1000000,strict=True)
     speed_kmh: float | None = Field(default=None,gt=0,le=150,strict=True)
     maximal: Literal[True]
@@ -67,6 +70,7 @@ class ManualSpeedTestInput(Strict):
     enabled: bool = Field(default=True,strict=True)
     use_for_cs: bool = Field(default=False,strict=True)
     conditions: str = Field(min_length=3,max_length=400)
+    start_type: Literal["STANDING", "FLYING", "UNKNOWN"] = "UNKNOWN"
     expected_revision: int = Field(default=0,ge=0,strict=True)
 
     @model_validator(mode="after")
@@ -75,6 +79,8 @@ class ManualSpeedTestInput(Strict):
         self.conditions=self.conditions.strip()
         if not self.name or len(self.conditions)<3:
             raise ValueError("Describe the manual test and its conditions")
+        if self.duration_s < 10.8 and not (self.duration_s == 10 and self.sport in {"Run", "VirtualRun"}):
+            raise ValueError("Only an exact 10-second mean running speed is accepted below the curve domain")
         if (self.distance_m is None)==(self.speed_kmh is None):
             raise ValueError("Enter either distance or speed")
         speed=self.speed_kmh if self.speed_kmh is not None else self.distance_m/self.duration_s*3.6

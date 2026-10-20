@@ -1,4 +1,4 @@
-"""Completed recipes must work in the executor, not only have a numeric card."""
+"""Source recipes execute only with supported anchors and an explicit standard."""
 from copy import deepcopy
 import json
 from types import SimpleNamespace
@@ -32,7 +32,7 @@ def context(row):
     return p,complete_view(p["sport"]),row["periods"][0]
 
 
-def test_every_open_source_has_an_explicit_separate_working_recipe():
+def test_historical_source_links_retain_adaptations_and_explain_automatic_exclusions():
     payload=json.loads(lib.CATALOG_PATH.read_text())
     links=payload["completion_audit"]["source_to_working_methods"]
     assert len(links)==57
@@ -40,7 +40,11 @@ def test_every_open_source_has_an_explicit_separate_working_recipe():
         assert ROWS[source]["related_method_ids"]==targets
         for identifier in targets:
             row=ROWS[identifier]
-            assert row["prescription"] and row["automatic_selection"]
+            assert row["prescription"]
+            if not row["automatic_selection"]:
+                assert row["automatic_selection_disabled_reason"]
+                assert row["automatic_selection_disabled_message"]
+                assert row["provenance"]
             assert source in row["derived_from"]
             if row.get("completion_version"):
                 assert row["is_source_equivalent"] is False
@@ -49,20 +53,49 @@ def test_every_open_source_has_an_explicit_separate_working_recipe():
     assert ROWS["AO17"]["prescription"]["speed_multiplier"]==[1.025,1.025]
 
 
+def test_original_anchors_and_standards_do_not_inherit_the_old_speed_substitutions():
+    assert ROWS["R01"]["prescription"]["anchor"]["type"] == "V5"
+    assert ROWS["R02"]["prescription"]["anchor"]["type"] == "V5"
+    assert ROWS["MD07"]["prescription"]["anchor"]["type"] == "MAS"
+    assert ROWS["AO03"]["prescription"]["anchor"]["type"] == "MAS"
+    xc = ROWS["XC01"]["prescription"]
+    assert xc["anchor"]["type"] == "HRMAX"
+    assert xc["hrmax_fraction"] == [.90, .92]
+    assert xc["source_repetitions_range"] == [4, 5]
+    assert xc["standard_variant"]["repetitions"] == 4
+    assert "speed_multiplier" not in xc
+    beginner = ROWS["HR-RUN-1X4-TJONNA2013"]["prescription"]
+    assert beginner["standard_variant"]["repetitions"] == 1
+    assert beginner["allow_fewer_repetitions"] is False
+    assert beginner["preparation"]["warmup_seconds"] == 600
+    assert beginner["preparation"]["cooldown_seconds"] == 300
+    assert ROWS["AO21"]["prescription"]["standard_variant"]["work"]["range"] == [1200, 1200]
+    assert ROWS["R-YANG2026-RST"]["prescription"] is None
+
+
 @pytest.mark.parametrize("row",NEW,ids=lambda r:r["id"])
 def test_all_completed_recipes_resolve_and_execute_on_compatible_profile(row,monkeypatch):
     p,v,phase=context(row)
-    r=lib.resolve(row,p,v,phase=phase)
-    assert r["status"]=="READY",r
     monkeypatch.setattr(lib,"entries",lambda:[deepcopy(row)])
     methods=lib.executable_methods(p,v,phase=phase)
+    if not row.get("automatic_selection", True):
+        assert methods == []
+        assert row["automatic_selection_disabled_reason"]
+        return
+    r=lib.resolve(row,p,v,phase=phase)
+    if r["status"] == "UNAVAILABLE":
+        assert r["reason"] == "STANDARD_DOSE_REQUIRED"
+        assert methods == []
+        return
+    assert r["status"]=="READY",r
     assert len(methods)==1
     m=methods[0]; settings=SimpleNamespace(zone_bounds_bpm=BOUNDS,hrmax_bpm=190)
     e=engine.capacity_for(m,settings,v,engine._capacity_context(v,settings),TODAY,use_model_prior=True)
     assert e
     minimum=engine._minimum_work(m,e,settings)
     assert minimum is not None
-    assert engine._minimum_dose_usage(engine._blocks(m,minimum,e,settings),e,m["zone"])+1e-9>=engine.MIN_AEROBIC_DOSE_FRACTION
+    assert minimum * 60 == pytest.approx(r["minimum_work_seconds"])
+    assert 0 < r["minimum_work_seconds"] <= r["standard_work_seconds"]
     for seconds in [r["minimum_work_seconds"],r["maximum_work_seconds"]]:
         blocks=engine._blocks(m,seconds/60,e,settings)
         work=[b for b in blocks if b["kind"]=="WORK"]
@@ -72,17 +105,17 @@ def test_all_completed_recipes_resolve_and_execute_on_compatible_profile(row,mon
         assert all(b["target_hr_bpm"] is None for b in work)
 
 
-def test_short_end_needs_real_test_and_parent_disable_is_respected():
+def test_short_test_does_not_validate_an_invented_all_out_percentage(monkeypatch):
     row=ROWS["OF-XC10"]
     p=athlete(sport="NordicSki")
     phase=row["periods"][0]
-    assert lib.resolve(row,p,view("NordicSki"),phase=phase)["reason"]=="SHORT_SPEED_TEST_REQUIRED"
+    assert row["automatic_selection"] is False
+    assert row["automatic_selection_disabled_reason"]
+    monkeypatch.setattr(lib,"entries",lambda:[deepcopy(row)])
+    assert lib.executable_methods(p,view("NordicSki"),phase=phase) == []
     v=complete_view("NordicSki")
-    assert lib.resolve(row,p,v,phase=phase)["status"]=="READY"
-    p["method_library"]={"overrides":{"XC10":{"enabled":False}}}
-    assert lib.resolve(row,p,v,phase=phase)["status"]=="DISABLED"
-    p["method_library"]["overrides"][row["id"]]={"enabled":True}
-    assert lib.resolve(row,p,v,phase=phase)["status"]=="READY"
+    assert lib.executable_methods(p,v,phase=phase) == []
+    assert ROWS["XC10"]["original"]["anchor"]
 
 
 def test_exact_seconds_offset_is_not_a_constant_speed_percentage():
@@ -114,15 +147,13 @@ def test_dynamic_tmax_work_and_recovery_are_resolved_together():
     assert r["recovery_resolution"]["speed_multiplier"]==.7
 
 
-def test_ski_40_20_is_a_speed_adaptation_and_exactly_preserves_cycles(monkeypatch):
-    row=ROWS["OF-S06"];p,v,_=context(row)
-    m,e,settings=adapter(monkeypatch,row,p,v)
-    blocks=engine._blocks(m,4,e,settings)
-    core=[b for b in blocks if b["kind"] in {"WORK","RECOVERY"}]
-    assert [b["kind"] for b in core]==["RECOVERY","WORK"]*6
-    assert [b["duration_s"] for b in core]==[20,40]*6
-    assert core[1]["target_speed_kmh"]==pytest.approx(lib.selected_curve(v)[0].speed(300)*3.6*1.025,abs=.001)
-    assert all(b["hr_role"]=="SECONDARY_OBSERVATION_WITH_LAG" for b in core)
+def test_ski_40_20_power_original_does_not_automatically_become_speed(monkeypatch):
+    row=ROWS["OF-S06"];p,v,phase=context(row)
+    assert ROWS["S06"]["prescription"] is None
+    assert row["automatic_selection"] is False
+    assert row["automatic_selection_disabled_reason"]
+    monkeypatch.setattr(lib,"entries",lambda:[deepcopy(row)])
+    assert lib.executable_methods(p,v,phase=phase) == []
 
 
 def test_decreasing_sequence_keeps_prefix_and_quantizes_only_tail(monkeypatch):
@@ -150,14 +181,17 @@ def test_progressive_run_scales_every_phase_and_uses_continuous_capacity(monkeyp
 
 
 @pytest.mark.parametrize("identifier,seconds",[("OF-MR07",360),("OF-MR08",600),("OF-MR09",30),("OF-MR10",300),("OF-MR11",300),("OF-MR15",480)])
-def test_internal_bursts_and_reliefs_do_not_extend_the_block(identifier,seconds):
+def test_retained_internal_bursts_do_not_authorize_automatic_power_conversion(identifier,seconds,monkeypatch):
     row=ROWS[identifier];p,v,phase=context(row)
     r=lib.resolve(row,p,v,phase=phase)
     assert sum(s["work_duration_seconds"] for s in r["segments"])==seconds
+    assert row["automatic_selection"] is False
+    monkeypatch.setattr(lib,"entries",lambda:[deepcopy(row)])
+    assert lib.executable_methods(p,v,phase=phase) == []
 
 
 def test_hr_range_is_individual_and_never_percent_cs_equals_percent_hrmax():
-    row=ROWS["OF-MR02"];p,v,phase=context(row)
+    row=ROWS["R03"];p,v,phase=context(row)
     r=lib.resolve(row,p,v,phase=phase)
     prepared,predictor=lib._prepare(v)
     predicted=[predictor.hr_for_speed(s) for s in r["target_speed_range_kmh"]]
@@ -193,12 +227,16 @@ def test_coach_cards_use_the_engine_for_personal_speed_hr_and_time():
     assert all(m["resolution"]["minimum_work_seconds"]<=m["resolution"]["maximum_work_seconds"]+1e-6 for m in ready)
 
 
-def test_completed_ski_method_enters_the_actual_weekly_generator(monkeypatch):
+def test_source_hr_ski_method_enters_the_actual_weekly_generator(monkeypatch):
     from datetime import timedelta
     from tests.api.test_load_progression import configured, observed
     from tests.api.test_readiness_adaptive_plan_v2 import fixed_readiness, assert_rolling_budgets
     from tests.api.test_training_plan_engine import NOW
-    row=ROWS["OF-S06"];p,v,phase=context(row)
+    row=deepcopy(ROWS["XC06"])
+    # Isolate execution of the source prescription from the separate seasonal
+    # recommendation layer; the one-week fixture spans its end-of-plan phase.
+    row["periods"]=["GENERAL_PREPARATION","SPECIAL_PREPARATION","PRECOMPETITION","COMPETITION"]
+    p,v,phase=context(row)
     v.update(source_generation_id="generation-one", source_revision=1,
              index_window={"last_activity_date":TODAY.isoformat()})
     monkeypatch.setattr(lib,"entries",lambda:[deepcopy(row)])
@@ -206,6 +244,7 @@ def test_completed_ski_method_enters_the_actual_weekly_generator(monkeypatch):
     profile=configured(age_years=25,training_experience_years=5,sport="NordicSki",actual_sport="NordicSki",discipline="10 km",
         building_fraction=.65,available_minutes=[180]*7,horizon_mode="MANUAL",program_end=(TODAY+timedelta(days=6)).isoformat(),
         component_targets_weekly={"Z1":100.,zone:40.})
+    profile["load_progression"]["training_level"]="HIGH"
     profile["planning_controls"].update(accents=[zone],sessions_per_week=1,sessions_by_day=[0,1,0,0,0,0,0],threshold_days=[1])
     fixed_readiness(monkeypatch,100.)
     monkeypatch.setattr(engine,"resolved_methods",lambda _:[])
@@ -215,8 +254,9 @@ def test_completed_ski_method_enters_the_actual_weekly_generator(monkeypatch):
         activity["sport"]="NordicSki"
     plan=engine.generate_plan(repo,"athlete",profile,start_date=TODAY,now=NOW)
     sessions=[s for d in plan["days"] for s in d["sessions"]]
-    assert sessions,[r for d in plan['days'] for r in d.get('rejected_alternatives',[])]
-    assert sessions[0]["method_library"]["id"]=="OF-S06"
+    assert sessions,plan['days']
+    assert sessions[0]["method_library"]["id"]=="XC06"
     work=[b for b in sessions[0]["blocks"] if b["kind"]=="WORK"]
-    assert work and all(b["duration_s"]==40 and b["hr_reference_range_bpm"] for b in work)
+    assert work and all(b["duration_s"]==300 and b["hr_reference_range_bpm"] for b in work)
+    assert all(b["target_speed_kmh"] is None and b["target_hr_bpm"] for b in work)
     assert_rolling_budgets(plan)

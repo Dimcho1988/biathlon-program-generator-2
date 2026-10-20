@@ -46,3 +46,22 @@ it("makes tests stored under another sport discoverable and explains stale indic
   expect(html).toContain("Има активности за преизчисляване");
   expect(html).toContain("Обнови данните");
 });
+
+
+it("saves exact V10 with known start type and rejects it for other sports", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const v10: SpeedTest = { ...test, payload: { ...test.payload, sport: "Run", duration_s: 10, distance_m: 60, speed_kmh: 21.6, use_for_cs: false, start_type: "FLYING" } };
+  vi.mocked(saveModel).mockResolvedValue({ saved: true, entry_key: test.entry_key, revision: 4 });
+  const div = document.createElement("div"), root = createRoot(div);
+  try {
+    await act(async () => root.render(<ManualSpeedTestEditor model={{ ...model, sport: "Run", tests: [v10] }} test={v10} onReset={() => {}}/>));
+    expect(div.textContent).toContain("Единичен GPS пик не е валиден резултат");
+    const form = div.querySelector("form")!;
+    await act(async () => form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(saveModel).toHaveBeenCalledWith("speed-test-manual", expect.objectContaining({duration_s: 10, start_type: "FLYING", use_for_cs: false}));
+    await act(async () => root.render(<ManualSpeedTestEditor key="ski" model={{ ...model, sport: "NordicSki" }} test={{...v10, payload: {...v10.payload, sport: "NordicSki"}}} onReset={() => {}}/>));
+    expect(div.textContent).toContain("10-секундната опора е достъпна само за бягане");
+    await act(async () => div.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(saveModel).toHaveBeenCalledTimes(1);
+  } finally { await act(async () => root.unmount()); }
+});

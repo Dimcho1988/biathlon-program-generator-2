@@ -1,4 +1,5 @@
 "use client";
+import { PreferredSpeed } from "./running-speed-unit";
 import { durationHms } from "../lib/duration-format";
 import {SpeedZonesSummary,StandardizedCriticalSpeed} from "./speed-zones-summary";
 import {SpeedLoadSummary} from "./speed-load-summary";
@@ -103,13 +104,14 @@ export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minu
       <p role="status">{message|| (pending?(arrived?"Изборът е запазен и моделът е обновен.":"Изборът е запазен. Обновяваме модела…"):"")}</p>
       {waiting&&<button type="button" onClick={()=>router.refresh()}>Обнови модела</button>}
       {!model.tests.some(t=>t.payload.sport===model.sport)?<p>Още няма записани тестове за този спорт.</p>:<div className="activity-table-wrap"><table>
-        <thead><tr><th>Дата / тест</th><th>Време</th><th>Скорост</th><th>Участие в кривата</th><th>Източник</th></tr></thead>
+        <thead><tr><th>Дата / тест</th><th>Време</th><th>Скорост</th><th>Роля в модела</th><th>Източник</th></tr></thead>
         <tbody>{model.tests.filter(t=>t.payload.sport===model.sport).map(t=><tr key={t.entry_key}>
           <td>{t.payload.day}{t.payload.source==="MANUAL"?<><br/>{t.payload.name}</>:<><br/>{time(t.payload.start_s)}–{time(t.payload.start_s+t.payload.duration_s)}</>}
             {t.payload.test_mode==="EXPLORATORY"&&<p><strong>Пробен · {n(t.payload.coverage_percent??0)}% покритие</strong></p>}
           </td>
-          <td>{manualClockTime(t.payload.duration_s)}</td><td>{n(t.payload.speed_kmh)} км/ч<br/><small>{t.payload.source==="MANUAL"?"Равен терен":"Vflat"}</small></td>
-          <td><p>{t.payload.test_mode==="EXPLORATORY"||!t.payload.maximal?"Наблюдение · не е максимална опора":model.active_test_keys.includes(t.entry_key)?"Участва":!t.payload.enabled?"Изключен":"Не участва · провери датата или съпоставимостта"}</p>
+          <td>{manualClockTime(t.payload.duration_s)}</td><td><PreferredSpeed speed={t.payload.speed_kmh} sport={t.payload.sport}/><br/><small>{t.payload.source==="MANUAL"?"Равен терен":"Vflat"}</small></td>
+          <td><p>{model.boundary_test_keys?.includes(t.entry_key)?"V(10 сек) · опора Z5; не променя формата на кривата":t.payload.test_mode==="EXPLORATORY"||!t.payload.maximal?"Наблюдение · не е максимална опора":model.active_test_keys.includes(t.entry_key)?"Участва":!t.payload.enabled?"Изключен":"Не участва · провери датата или съпоставимостта"}</p>
+            {t.payload.start_type && t.payload.start_type !== "UNKNOWN" && <p>{t.payload.start_type === "STANDING" ? "Старт от място" : "Летящ старт"}</p>}
             {canEdit&&t.payload.test_mode!=="EXPLORATORY"&&t.payload.maximal&&<button type="button" onClick={()=>toggle(t)} disabled={busy||waiting}>{t.payload.enabled?"Изключи от модела":"Включи в модела"}</button>}
           </td>
           <td>{t.payload.source==="MANUAL"?<><span>Ръчен тест</span>{canEdit&&<p><button type="button" disabled={busy||waiting} onClick={()=>{setEditing(t);setManualKey(k=>k+1);setTestSource("MANUAL");document.getElementById("speed-tests")?.scrollIntoView({behavior:"smooth"});}}>Редактирай</button></p>}</>:<Link href={`/activities/${t.payload.activity_ref}`}>Отвори активността</Link>}</td>

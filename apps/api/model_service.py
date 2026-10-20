@@ -34,6 +34,26 @@ def _maximal_test(test):
             and test.get("is_maximal_test") is not False)
 
 
+def _boundary_only_test(test):
+    return (_maximal_test(test) and test.get("source") == "MANUAL"
+            and test.get("sport") in {"Run", "VirtualRun"}
+            and isinstance(test.get("duration_s"), (int, float))
+            and abs(test["duration_s"]-10.) < 1e-8)
+
+
+def _curve_test(test):
+    return _maximal_test(test) and not _boundary_only_test(test)
+
+
+def _dosing_boundary(dosing, zone_profile):
+    """Measured V10 is an independent boundary, not a fitted curve anchor."""
+    v10 = (zone_profile or {}).get("v10") or {}
+    if v10.get("evidence") == "MEASURED" and (dosing.get("speed_zones") or {}).get("status") == "AVAILABLE":
+        dosing["speed_zones"]["v10"] = deepcopy(v10)
+        dosing["speed_zones"]["zones"][-1]["high_kmh"] = v10["speed_kmh"]
+    return dosing
+
+
 def enabled():
     return os.getenv("ONFLOWS_RECOVERY_V2_ENABLED", "false").lower()=="true"
 
@@ -151,7 +171,7 @@ def save_test(repository,alias,body,actor):
         "hrmod_version":shadow.get("hrmod_model_version"),
         "source_run_key":row.get("shadow_run_key")})
     comparable=[e["payload"] for e in entries if e["kind"]=="SPEED_TEST" and e["entry_key"]!=key
-        and e["payload"].get("enabled") and _maximal_test(e["payload"]) and e["payload"].get("sport")==payload["sport"]
+        and e["payload"].get("enabled") and _curve_test(e["payload"]) and e["payload"].get("sport")==payload["sport"]
         and (e["payload"].get("source")=="MANUAL" or
              (e["payload"].get("vflat_version"),e["payload"].get("vflat_config_version"))==(payload["vflat_version"],payload["vflat_config_version"]))
         and window_start(today,SPEED_TEST_DAYS).isoformat()<=e["payload"].get("day","")<=today.isoformat()]
@@ -187,13 +207,15 @@ def save_manual_test(repository,alias,body,actor):
             "measurement_input":"DISTANCE" if body.distance_m is not None else "SPEED",
             "distance_basis":"MEASURED_FLAT","coverage_percent":None})
         comparable=[e["payload"] for e in entries if e["kind"]=="SPEED_TEST" and e["entry_key"]!=key
-            and e["payload"].get("enabled") and _maximal_test(e["payload"]) and e["payload"].get("sport")==body.sport
+            and e["payload"].get("enabled") and _curve_test(e["payload"]) and e["payload"].get("sport")==body.sport
             and start.isoformat()<=e["payload"].get("day","")<=today.isoformat()]
         imported=[t for t in comparable if t.get("source")!="MANUAL"]
         if len({(t.get("vflat_version"),t.get("vflat_config_version")) for t in imported})>1:
             raise HTTPException(422,"Resolve incompatible Vflat test versions first")
-        try: speed_duration.calibrated(comparable+[payload])
-        except ValueError as exc: raise HTTPException(422,str(exc)) from exc
+        payload["boundary_only"] = _boundary_only_test(payload)
+        if not payload["boundary_only"]:
+            try: speed_duration.calibrated(comparable+[payload])
+            except ValueError as exc: raise HTTPException(422,str(exc)) from exc
     result=store.save(alias,"SPEED_TEST",key,payload,body.expected_revision,actor)
     return {**result,"entry_key":key}
 
@@ -255,7 +277,8 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     vflat_version,vflat_config=speed_model_versions(sport)
     selected=[e["payload"] for e in entries if e["payload"].get("enabled") and e["payload"]["sport"]==sport
            and start.isoformat()<=e["payload"]["day"]<=today.isoformat()]
-    tests=[t for t in selected if _maximal_test(t)]
+    boundary_tests=[t for t in selected if _boundary_only_test(t)]
+    tests=[t for t in selected if _curve_test(t)]
     imported=[t for t in tests if t.get("source")!="MANUAL"]
     warnings=["EXPERT_REFERENCE_NOT_POPULATION_VALIDATED", "HEART_RATE_ESTIMATE_FROM_PAIRED_INDEX"]
     incompatible_tests=len({(t.get("vflat_version"),t.get("vflat_config_version")) for t in imported})>1
@@ -265,7 +288,8 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     exploratory_count=sum(t.get("test_mode")=="EXPLORATORY" for t in selected)
     if exploratory_count:
         warnings.append("EXPLORATORY_OBSERVATIONS_NOT_MAXIMAL_TESTS")
-    if len(selected)>len(tests): warnings.append("NONMAXIMAL_OBSERVATIONS_NOT_USED_AS_ANCHORS")
+    if len(selected)>len(tests)+len(boundary_tests): warnings.append("NONMAXIMAL_OBSERVATIONS_NOT_USED_AS_ANCHORS")
+    if boundary_tests: warnings.append("TEN_SECOND_TEST_IS_BOUNDARY_ONLY_NOT_CURVE_ANCHOR")
     history=inputs["history"]
     index_start=window_start(today)
     recent=[a for a in history if a["sport"]==sport and index_start.isoformat()<=a["local_date"]<=today.isoformat()]
@@ -331,6 +355,8 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
         except ValueError:
             warnings.append("HR_SPEED_MAPPING_UNAVAILABLE")
     if _capacity_only:
+        from biathlon import speed_zones
+        zone_profile = speed_zones.build(tuned, predictor, tests+boundary_tests)
         # Capacity conversion does not consume chart points, test lists for the
         # editor, functional profiles or critical-speed diagnostics.
         return {"sport": sport,
@@ -338,9 +364,12 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
                 "tests": entries, "active_test_keys": [e["entry_key"] for e in entries if e["payload"] in tests],
                 "preliminary_capacity": preliminary_capacity.summary(prior),
                 "hr_model": predictor.summary() if predictor else None,
-                "dosing_model": dosing_curve.describe(prior["curve"], tuned if not model_error else None, tests,
+                "speed_zones": zone_profile,
+                "boundary_test_keys": [e["entry_key"] for e in entries if e["payload"] in boundary_tests],
+                "boundary_test_count": len(boundary_tests),
+                "dosing_model": _dosing_boundary(dosing_curve.describe(prior["curve"], tuned if not model_error else None, tests,
                     sport_settings.zone_bounds_bpm, sport_settings.hrmax_bpm, indices, prior["anchors"],
-                    normalization_offset_bpm=offset, include_points=False),
+                    normalization_offset_bpm=offset, include_points=False), zone_profile),
                 "source_generation_id": calendar.get("generation_id"), "source_revision": calendar.get("revision")}
     window=[min(t["duration_s"] for t in tests),max(t["duration_s"] for t in tests)] if tests else None
     def prediction(t):
@@ -376,7 +405,7 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     from biathlon import speed_zones
     direct_cs = speed_duration.critical_speed(tests) if not model_error else {"status":"INCONSISTENT_TESTS","count":len(tests)}
     standardized_cs = speed_duration.standardized_critical_speed(tests, tuned) if tuned else {"status":"UNAVAILABLE","points":[]}
-    zone_profile = speed_zones.build(tuned, predictor, tests,
+    zone_profile = speed_zones.build(tuned, predictor, tests+boundary_tests,
         standardized_cs if standardized_cs.get("speed_kmh") else direct_cs)
     points=[prediction(math.exp(tuned._x[0]+(tuned._x[-1]-tuned._x[0])*i/180)) for i in range(181)] if tuned else []
     # Include the exact real anchors in the chart as well as its plotting grid.
@@ -388,8 +417,8 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     if window:
         if any(p["capped"] and p["duration_s"]<window[0] for p in points):limited_tails.append("SHORT")
         if any(p["capped"] and p["duration_s"]>window[1] for p in points):limited_tails.append("LONG")
-    dosing = dosing_curve.describe(prior["curve"], tuned if not model_error else None, tests,
-        sport_settings.zone_bounds_bpm, sport_settings.hrmax_bpm, indices, prior["anchors"],normalization_offset_bpm=offset)
+    dosing = _dosing_boundary(dosing_curve.describe(prior["curve"], tuned if not model_error else None, tests,
+        sport_settings.zone_bounds_bpm, sport_settings.hrmax_bpm, indices, prior["anchors"],normalization_offset_bpm=offset), zone_profile)
     return {"schema_version":"speed-model-v1","model_version":metadata.get("model_version",speed_duration.VERSION),"sport":sport,"sports":sports,
         "sport_hr_policy":sport_hr_policy(sport,settings.zone_bounds_bpm,settings.hrmax_bpm),
         "speed_correction":{"model_version":vflat_version,"config_version":vflat_config},
@@ -400,6 +429,8 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
         "status":"CONFLICTING_TESTS" if model_error else "CALIBRATED" if tests else "PRELIMINARY" if tuned else "UNAVAILABLE",
         "tests":entries,"active_test_count":len(tests),"exploratory_test_count":exploratory_count,
         "active_test_keys":[e["entry_key"] for e in entries if e["payload"] in tests],
+        "boundary_test_keys":[e["entry_key"] for e in entries if e["payload"] in boundary_tests],
+        "boundary_test_count":len(boundary_tests),
         "points":points,"dosing_model":dosing,"curve_metadata":{"mode":metadata.get("calibration_mode","UNAVAILABLE"),
             "absolute_speed_available":tuned is not None,"measured_window_s":window,
             "cap_percent":5 if metadata.get("additional_corridor_fraction")==.05 else None,

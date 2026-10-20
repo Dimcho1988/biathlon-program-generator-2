@@ -1,4 +1,4 @@
-"""The source recipe must never determine an athlete's total work capacity."""
+"""Native Tmax dosing and source-standard doses have distinct capacity bases."""
 from copy import deepcopy
 
 import pytest
@@ -29,18 +29,24 @@ def test_interval_uses_individual_tmax_method_coefficient_role_and_half_deficit(
     assert not engine._dose_fits([{**blocks[0], 'duration_min':expected+.1}], evidence, 'Z4', ceiling*evidence['readiness_dose_factor'])
 
 
-def test_library_source_counts_do_not_change_capacity_or_role_dose(monkeypatch):
+def test_library_source_counts_set_standard_dose_without_changing_physiological_tmax(monkeypatch):
     source = recipe()
     m, cap, _ = adapter(monkeypatch, source)
-    reference = cap['library_work_ceiling_minutes']
-    assert lib.resolve(source, athlete(), view())['source_count_policy'] == 'INDIVIDUAL_TMAX_NOT_SOURCE_COUNT'
+    resolution = lib.resolve(source, athlete(), view())
+    cycle_minutes = resolution['cycle_work_seconds'] / 60.
+    assert resolution['source_count_policy'] == 'SOURCE_STANDARD_WITH_DECLARED_WHOLE_REPEAT_ADAPTATIONS'
     for count in [2, 7, 50]:
         changed = deepcopy(source)
         changed['prescription']['repetitions'] = [count, count]
         other, other_cap, _ = adapter(monkeypatch, changed)
-        assert other_cap['library_work_ceiling_minutes'] == pytest.approx(reference)
-        fraction = engine._nominal_fraction(other, 'BUILDING', {'building_fraction':.65}, 'SPECIAL_PREPARATION', other_cap, {})
-        assert fraction*other_cap['capacity_minutes'] == pytest.approx(reference*.65)
+        standard = count * cycle_minutes
+        assert other_cap['capacity_minutes'] == pytest.approx(cap['capacity_minutes'])
+        assert other_cap['library_work_ceiling_minutes'] == pytest.approx(standard)
+        for role, role_factor in [('BUILDING', 1.), ('MAINTENANCE', .6)]:
+            evidence = deepcopy(other_cap)
+            fraction = engine._nominal_fraction(other, role, {'building_fraction':.65}, 'SPECIAL_PREPARATION', evidence, {})
+            assert fraction*evidence['capacity_minutes'] == pytest.approx(standard * role_factor)
+            assert evidence['standard_method_work_minutes'] == pytest.approx(standard)
 
 
 def test_recipe_mixed_components_each_use_half_independent_capacity():

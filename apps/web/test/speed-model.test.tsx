@@ -69,6 +69,8 @@ describe("speed test selection and prediction",()=>{
   });
   it("preserves fractional manual test times without loosening activity window parsing",()=>{
     expect(parseManualClock("0:10,8")).toBe(10.8);
+    expect(parseManualClock("0:10")).toBe(10);
+    expect(parseManualClock("0:10,001")).toBeNull();
     expect(parseManualClock("2:15.125")).toBe(135.125);
     expect(parseManualClock("1:02:03")).toBe(3723);
     expect(manualClockTime(135.125)).toBe("0:02:15,125");
@@ -80,7 +82,7 @@ describe("speed test selection and prediction",()=>{
   it("renders manual results as editable flat tests without broken activity links",()=>{
     const manual:SpeedModel["tests"][number]={kind:"SPEED_TEST",entry_key:"manual_123",revision:2,recorded_at:"2026-09-19",payload:{
       source:"MANUAL",test_id:"22222222-2222-4222-8222-222222222222",name:"600 м контролно",day:"2026-09-19",sport:"Run",start_s:0,
-      duration_s:135.5,distance_m:600,speed_kmh:600/135.5*3.6,measurement_input:"DISTANCE",flat_terrain:true,
+      duration_s:135.5,distance_m:600,speed_kmh:600/135.5*3.6,measurement_input:"DISTANCE",flat_terrain:true,start_type:"FLYING",
       enabled:true,use_for_cs:true,maximal:true,comparable:true,conditions:"Равна писта",coverage_percent:null}};
     const current={...model,tests:[manual],test_window:{start:"2026-06-21",end:"2026-09-19"}};
     const html=renderToStaticMarkup(<SpeedModelPanel model={current} canEdit/>);
@@ -89,13 +91,28 @@ describe("speed test selection and prediction",()=>{
     const form=renderToStaticMarkup(<ManualSpeedTestEditor model={current} test={manual} onReset={()=>{}}/>);
     expect(form).toContain('value="600"');expect(form).toContain('max="2026-09-19"');
     expect(form).toContain("Тестът е проведен на равен терен");
+    expect(form).toContain("Летящ старт");
     const readOnly=renderToStaticMarkup(<SpeedModelPanel model={current} canEdit={false}/>);
     expect(readOnly).not.toContain("Редактирай");expect(readOnly).not.toContain("Изключи от модела");
-    expect(manualTestPayload(manual,false)).toMatchObject({test_id:manual.payload.test_id,distance_m:600,enabled:false,expected_revision:2});
+    expect(manualTestPayload(manual,false)).toMatchObject({test_id:manual.payload.test_id,distance_m:600,enabled:false,expected_revision:2,start_type:"FLYING"});
     expect(manualTestPayload(manual,false)).not.toHaveProperty("activity_ref");
     const bySpeed={...manual,payload:{...manual.payload,measurement_input:"SPEED" as const}};
     expect(manualTestPayload(bySpeed,true)).toHaveProperty("speed_kmh",manual.payload.speed_kmh);
     expect(manualTestPayload(bySpeed,true)).not.toHaveProperty("distance_m");
+  });
+  it("keeps a measured ten-second Z5 boundary separate from curve fitting",()=>{
+    const boundary:SpeedModel["tests"][number]={kind:"SPEED_TEST",entry_key:"manual_v10",revision:1,recorded_at:"2026-09-19",payload:{
+      source:"MANUAL",test_id:"22222222-2222-4222-8222-222222222222",name:"10 секунди",day:"2026-09-19",sport:"Run",start_s:0,
+      duration_s:10,distance_m:100,speed_kmh:36,measurement_input:"DISTANCE",flat_terrain:true,start_type:"STANDING",
+      enabled:true,use_for_cs:false,maximal:true,comparable:true,conditions:"Равна писта",coverage_percent:null}};
+    const current:SpeedModel={...model,tests:[boundary],boundary_test_keys:[boundary.entry_key],speed_zones:{status:"AVAILABLE",zones:
+      [0,12,14,16,20].map((low,i)=>({zone:`Z${i+1}`,low_kmh:low,high_kmh:[12,14,16,20,36][i],source:"TESTS"}))}};
+    expect(parseSpeedModel(current).speed_zones?.zones[4].high_kmh).toBe(36);
+    const html=renderToStaticMarkup(<SpeedModelPanel model={current} canEdit/>);
+    expect(html).toContain("V(10 сек) · опора Z5");expect(html).toContain("Старт от място");
+    expect(html).not.toContain("Не участва · провери датата");
+    const invalid=structuredClone(current);invalid.speed_zones!.zones[4].high_kmh=19;
+    expect(()=>parseSpeedModel(invalid)).toThrow("Невалидни скоростни зони");
   });
   it("uses unambiguous elapsed time and rejects invalid seconds",()=>{
     expect(parseClock("12:30")).toBe(750);

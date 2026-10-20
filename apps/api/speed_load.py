@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from fastapi import HTTPException
 from biathlon.constants import COMPONENTS, fresh_parameters
+from biathlon import speed_equivalence
 from biathlon.equivalence import equivalence_slope, EQUIVALENCE_VERSION
 from biathlon.component_load import calculate_component_load, VERSION as COMPONENT_LOAD_VERSION
 from biathlon.physiology import linear_equivalence_coefficient, compute_daily_load_history, compute_load_statistics, rolling_load_statistics
@@ -32,6 +33,7 @@ from .trainability import MIN_SECONDS_BY_BAND, MAX_GAP_SECONDS
 from .component_load_context import read_contexts
 
 VERSION="independent-speed-load-causal-ti-v3-weighted-downward-tmax"
+COMPARISON_VERSION = speed_equivalence.VERSION
 ZONES=tuple(f"Z{i}" for i in range(1,6))
 logger = logging.getLogger("uvicorn.error")
 _sample_reads = ThreadPoolExecutor(max_workers=2, thread_name_prefix="speed-samples")
@@ -202,7 +204,7 @@ def calibrated_mapping(history, sport, day, settings):
     return indices, mapping, reason
 
 
-def _activity_record(activity, row, mapping, reason):
+def _activity_record(activity, row, mapping, reason, comparison_parameters=None):
     """Integrate one immutable speed stream; preserve sample order and formulas."""
     s = activity["sport"]
     shadow = row.get("shadow_payload") or {}
@@ -213,9 +215,10 @@ def _activity_record(activity, row, mapping, reason):
         reason = "SPEED_RECOMPUTATION_REQUIRED"
     totals = {z: {"zone": z, "minutes": 0., "equivalent_minutes": 0.} for z in ZONES}
     excluded = outside = 0.
+    intervals = sample_intervals(shadow) if compatible and (mapping or comparison_parameters is not None) else []
     if mapping and compatible:
         convert = _integration_converter(mapping)
-        for left, right, speed, exclusion in sample_intervals(shadow):
+        for left, right, speed, exclusion in intervals:
             dt = right-left
             if exclusion or dt > MAX_GAP_SECONDS:
                 excluded += dt
@@ -232,16 +235,47 @@ def _activity_record(activity, row, mapping, reason):
     duration = max(activity.get("duration_min") or 0.,
                    (activity.get("elapsed_time_s") or activity.get("moving_time_s") or 0.)/60,
                    covered+(excluded+outside)/60)
-    return {"activity_ref": activity["activity_ref"], "date": activity["local_date"], "sport": s,
+    result = {"activity_ref": activity["activity_ref"], "date": activity["local_date"], "sport": s,
             "recorded_minutes": float(duration), "classified_minutes": covered,
             "excluded_speed_minutes": excluded/60, "outside_mapping_minutes": outside/60,
             "status": "CLASSIFIED" if covered else "UNAVAILABLE", "reason": reason,
             "assumes_flat_incline": bool(compatible and any(
                 r.get("grade_assumed_flat") for r in shadow["speed_test_series"])),
             "mapping": mapping, "zones": list(totals.values())}
+    if comparison_parameters is not None:
+        result["speed_equivalence_comparison"] = speed_equivalence.integrate(
+            comparison_parameters, _comparison_segments(intervals, comparison_parameters),
+            recorded_seconds=duration*60,
+            warnings=["VFLAT_21S_SMOOTHING_NOT_VALIDATED_FOR_10S_SPRINTS"]
+                + (["SPEED_RECOMPUTATION_REQUIRED"] if not compatible else []))
+    return result
 
 
-def _activity_records(repository, alias, selected, admitted, settings, namespace, metrics=None):
+def _comparison_segments(intervals, parameters):
+    """Reuse terrain-valid intervals; disclose unvalidated short Z5 bouts."""
+    segments = [{"seconds": right-left, "speed_kmh": speed,
+                 "exclusion_reason": exclusion or ("SAMPLE_GAP" if right-left > MAX_GAP_SECONDS else None)}
+                for left, right, speed, exclusion in intervals]
+    bout = []
+    def finish():
+        if bout and sum(segments[i]["seconds"] for i in bout) <= 21.:
+            for i in bout:
+                segments[i]["exclusion_reason"] = "SHORT_Z5_BOUT_UNRESOLVED_BY_21S_VFLAT"
+        bout.clear()
+    for i, ((left, right, _, _), segment) in enumerate(zip(intervals, segments)):
+        estimate = speed_equivalence.evaluate(parameters, segment["speed_kmh"])
+        if (estimate.get("zone") == "Z5" and estimate["status"] == "AVAILABLE"
+                and not segment["exclusion_reason"]):
+            if bout and left > intervals[bout[-1]][1]+1e-8:
+                finish()
+            bout.append(i)
+        else:
+            finish()
+    finish()
+    return segments
+
+
+def _activity_records(repository, alias, selected, admitted, settings, namespace, metrics=None, comparison_by_sport=None):
     mapping_started = perf_counter()
     mappings, inputs = {}, []
     for activity in selected:
@@ -255,7 +289,8 @@ def _activity_records(repository, alias, selected, admitted, settings, namespace
         metrics["mapping_ms"] = _elapsed_ms(mapping_started)
     def integrate(activity, row, mapping, reason):
         started = perf_counter()
-        result = _activity_record(activity, row, mapping, reason)
+        result = _activity_record(activity, row, mapping, reason,
+            (comparison_by_sport or {}).get(activity["sport"]))
         if metrics is not None:
             metrics["integration_ms"] = metrics.get("integration_ms", 0.) + _elapsed_ms(started)
         return result
@@ -280,6 +315,7 @@ def _activity_records(repository, alias, selected, admitted, settings, namespace
                     "activity": {name: activity.get(name) for name in ("activity_ref", "sport", "local_date",
                         "duration_min", "elapsed_time_s", "moving_time_s", "latest_shadow_run_key")},
                     "mapping": mapping, "reason": reason,
+                    "comparison": (comparison_by_sport or {}).get(activity["sport"]),
                     "speed_versions": speed_model_versions(activity["sport"]),
                     "max_gap_seconds": MAX_GAP_SECONDS}
         key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
@@ -370,6 +406,7 @@ def history_view(repository, alias, sport=None, *, today=None, as_of=None, perio
         "activities": calendar.get("activities", []), "admitted": admitted,
         "component_load_version": COMPONENT_LOAD_VERSION,
         "capacities": {s: c["fingerprint"] for s, c in contexts.items()},
+        "speed_comparison": {s: (c.get("comparison_parameters") or {}).get("parameters_version") for s,c in contexts.items()},
     }
     key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
     metrics["key_ms"] = _elapsed_ms(phase_started)
@@ -384,7 +421,9 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
               and (sport is None or a["sport"]==sport) and warmup.isoformat()<=a.get("local_date","")<=today.isoformat()]
     selected.sort(key=lambda a:(a["local_date"],a["activity_ref"]))
     namespace = getattr(repository, "speed_load_cache_namespace", None) if calendar.get("generation_id") else None
-    records = _activity_records(repository, alias, selected, admitted, settings, namespace, metrics)
+    comparisons = {s: c["comparison_parameters"] for s,c in (contexts or {}).items()
+                   if s in speed_equivalence.RUN_SPORTS and c.get("comparison_parameters")}
+    records = _activity_records(repository, alias, selected, admitted, settings, namespace, metrics, comparisons)
     statistics_started = perf_counter()
     # Cache only direct Q above. Capacity changes can alter E without requiring
     # another full-resolution speed-stream read. Thresholds apply independently
@@ -435,7 +474,12 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
                                 "reference_hr_bpm":settings.zone_bounds_bpm[2],
                                 "comparison_speed_kmh":speed_at_reference_hr(mapping,settings.zone_bounds_bpm[2]),
                                 "hr_policy":policy(s,settings.zone_bounds_bpm,settings.hrmax_bpm)})
+    comparison_sport = sport if sport in comparisons else "Run" if "Run" in comparisons else next(iter(comparisons), None)
+    comparison = (speed_equivalence.aggregate(comparisons[comparison_sport],
+        [a["speed_equivalence_comparison"] for a in visible if a["sport"] == comparison_sport])
+        if comparison_sport is not None else None)
     return {"schema_version":"speed-load-history-v1","model_version":VERSION,
+            "speed_equivalence_comparison": comparison,
             "sport":sport,"sports":available,"start_date":start.isoformat(),"end_date":today.isoformat(),
             "status":"AVAILABLE" if count and covered>=total_recorded-1e-6 else "PARTIAL" if count else "UNAVAILABLE",
             "source_generation_id":calendar.get("generation_id"),"source_revision":calendar.get("revision"),

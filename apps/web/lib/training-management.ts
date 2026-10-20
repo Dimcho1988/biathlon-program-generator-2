@@ -1,3 +1,4 @@
+import { hydrateSessionSpeedEquivalence, isSpeedEquivalenceComparison, isPlanSpeedComparison, type SpeedEquivalenceComparison, type PlanSpeedComparison } from "./speed-equivalence";
 import { parseTrainingObservations, defaultNeuromuscular, type LactateProfile, type NeuromuscularProfile, type LactateReference, type NeuromuscularExposure } from "./training-observations";
 import { isCalendarDate, isRecord } from "./training-status";
 import { defaultIndividualLearning, parseIndividualLearningConfig, type IndividualLearningConfig } from "./individual-learning";
@@ -35,6 +36,7 @@ export interface ManagementProfile {
   individual_learning?: IndividualLearningConfig | null;
   component_targets_weekly: Partial<Record<Component, number>>;
   interval_profiles: IntervalDoseProfile[];
+  ant_references?: AnTReference[];
   strength_enabled: boolean;
   strength_circuits: number;
   strength_maintenance_fraction?: number;
@@ -44,6 +46,11 @@ export interface ManagementProfile {
   lactate_profiles?: LactateProfile[];
   neuromuscular?: NeuromuscularProfile;
   method_library?: MethodPreferences;
+}
+
+export interface AnTReference {
+  sport: "Run" | "NordicSki" | "RollerSki"; speed_kmh: number;
+  source: "MEASURED" | "MANUAL"; assessed_on?: string | null; notes?: string;
 }
 
 export interface TrainingReturn {
@@ -117,6 +124,9 @@ export interface StrengthPrescription {
   sources: Array<{authors: string; url: string; protocol: string}>;
 }
 export interface DoseEvidence {
+  standard_method_work_minutes?: number; method_budget_role_fraction?: number; nominal_dose_policy?: string;
+  method_dose_factors?: Array<{stage: string; factor?: number; work_minutes?: number}>;
+  unrounded_requested_work_minutes?: number;
   strength_prescription?: StrengthPrescription;
   resolved_role?: string; reentry_dose_policy?: string;
   combined_budgets?: Array<{ zone: string; role: string }>;
@@ -133,6 +143,7 @@ export interface DoseEvidence {
   explanation: string; technical_spill_reference: Record<Component, number>;
 }
 export interface DraftSession {
+  speed_equivalence_comparison?: SpeedEquivalenceComparison;
   method_id: string; title: string; sport: string; zone: string; purpose: string; blocks: SessionBlock[];
   neuromuscular_exposure?: NeuromuscularExposure | null;
   method_library?: SessionMethod;
@@ -185,6 +196,7 @@ export function daySessions(day: DraftDay): DraftSession[] { return day.sessions
 export function rejectedMethodIds(alternative: RejectedAlternative): string[] { return alternative.method_ids ?? [alternative.method_id]; }
 
 export interface PlanProjection {
+  speed_equivalence_comparison?: PlanSpeedComparison;
   race_duration?: unknown; parameters?: Record<string, unknown>; individual_learning?: unknown; long_term?: unknown; periodization?: unknown; input_snapshot?: unknown; history_comparison?: unknown; component_history?: unknown;
 }
 /** Clock-time inputs for the overview; no executable workout or dosing data. */
@@ -279,6 +291,16 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
   }
   normalized.individual_learning = parseIndividualLearningConfig(value.individual_learning);
   if (value.method_library !== undefined) normalized.method_library = parseMethodPreferences(value.method_library);
+  if (value.ant_references !== undefined) {
+    const refs = value.ant_references;
+    if (!Array.isArray(refs) || refs.length > 3 || refs.some(r => !isRecord(r)
+      || Object.keys(r).some(k => !["sport", "speed_kmh", "source", "assessed_on", "notes"].includes(k))
+      || !["Run", "NordicSki", "RollerSki"].includes(String(r.sport)) || !range(r.speed_kmh, .000001, 80)
+      || !["MANUAL", "MEASURED"].includes(String(r.source)) || r.assessed_on != null && !isCalendarDate(r.assessed_on)
+      || r.notes !== undefined && (typeof r.notes !== "string" || r.notes.length > 400))
+      || new Set(refs.map(r => r.sport)).size !== refs.length) throw new Error("Провери индивидуалните AnT опори: положителна скорост, източник и само една стойност за спорт.");
+    normalized.ant_references = refs;
+  }
   if (typeof normalized.auto_import_enabled !== "boolean" || !["AUTO", "REVIEW"].includes(String(normalized.adaptation_mode)) || !range(normalized.progression_percent, 0, 10)
     || typeof normalized.strength_enabled !== "boolean" || !integer(normalized.strength_circuits, 2, 3)
     || !range(normalized.strength_maintenance_fraction, .5, .6)
@@ -403,10 +425,17 @@ export function parseDraftRecord(value: unknown): DraftRecord {
     || typeof draft.engine_version !== "string" || !isRecord(draft.source)
     || !Array.isArray(draft.warnings) || !draft.warnings.every(w => isRecord(w) && typeof w.message === "string" && typeof w.code === "string")
     || !Array.isArray(draft.days) || draft.days.length > 7) throw new Error("Неподдържана структура на тренировъчната програма.");
+  if (draft.speed_equivalence_comparison !== undefined && !isPlanSpeedComparison(draft.speed_equivalence_comparison)) throw new Error("Несъпоставим скоростен отчет на плана.");
   const lookahead = draft.lookahead_days ?? [];
   if (!Array.isArray(lookahead) || lookahead.length > 6) throw new Error("Невалидно прогнозно продължение.");
+  const speedPlan = draft.speed_equivalence_comparison as PlanSpeedComparison | undefined;
+  const hydrateSession = (session: unknown) => !isRecord(session) || session.speed_equivalence_comparison === undefined ? session
+    : {...session, speed_equivalence_comparison: hydrateSessionSpeedEquivalence(session.speed_equivalence_comparison, speedPlan)};
+  const normalizedDays = [...draft.days, ...lookahead].map(day => !isRecord(day) ? day : {...day,
+    ...(day.session !== undefined ? {session: hydrateSession(day.session)} : {}),
+    ...(Array.isArray(day.sessions) ? {sessions: day.sessions.map(hydrateSession)} : {})});
   const lastLookahead = new Date(Date.parse(draft.end_date)+6*86400000).toISOString().slice(0,10);
-  for (const [index, day] of [...draft.days, ...lookahead].entries()) {
+  for (const [index, day] of normalizedDays.entries()) {
     const provisional = index >= draft.days.length;
     if (!isRecord(day) || !isCalendarDate(day.date)
       || (provisional ? day.date <= draft.end_date || day.date > lastLookahead || day.provisional !== true
@@ -430,11 +459,13 @@ export function parseDraftRecord(value: unknown): DraftRecord {
         || session.main_work_minutes > session.total_minutes || !Array.isArray(session.blocks)
         || !isRecord(session.dose_evidence) || typeof session.dose_evidence.explanation !== "string"
         || !Array.isArray(session.dose_evidence.limits) || !Array.isArray(session.dose_evidence.fallback_reasons)) throw new Error("Невалидна дозировка на тренировката.");
+      if (session.speed_equivalence_comparison !== undefined && !isSpeedEquivalenceComparison(session.speed_equivalence_comparison)) throw new Error("Невалидна скоростна оценка на сесията.");
       for (const block of session.blocks) if (!isRecord(block) || typeof block.label !== "string" || typeof block.instructions !== "string"
         || !range(block.duration_min, 0, 1440) || !optionalRange(block.target_hr_bpm, 0, 250) || !optionalRange(block.target_speed_kmh, 0, 150)) throw new Error("Невалиден тренировъчен блок.");
     }
   }
-  return value as unknown as DraftRecord;
+  return {...value, payload: {...draft, days: normalizedDays.slice(0, draft.days.length),
+    ...(draft.lookahead_days !== undefined ? {lookahead_days: normalizedDays.slice(draft.days.length)} : {})}} as unknown as DraftRecord;
 }
 
 export function parseDrafts(value: unknown): DraftRecord[] {
@@ -504,8 +535,8 @@ export function parseActivePlanResponse(value: unknown): ActivePlanResponse {
   if (p.schema_version !== "active-plan-v2" || !["ACTIVE", "PAUSED", "REVIEW_REQUIRED", "COMPLETED"].includes(String(p.status))
     || !["AUTO", "REVIEW"].includes(String(p.mode)) || typeof p.reason !== "string" || !Array.isArray(p.changes)
     || !Array.isArray(p.outcomes) || !isRecord(p.decisions)) throw new Error("Невалидно състояние на програмата.");
-  parseDraftRecord({ entry_key: "active", revision: row.revision, payload: p.plan });
-  if (p.proposal !== null) parseDraftRecord({ entry_key: "proposal", revision: row.revision, payload: p.proposal });
+  const plan = parseDraftRecord({ entry_key: "active", revision: row.revision, payload: p.plan }).payload;
+  const proposal = p.proposal === null ? null : parseDraftRecord({ entry_key: "proposal", revision: row.revision, payload: p.proposal }).payload;
   if (actionResult && actionResult.checked_revision > row.revision) throw new Error("Проверката е за по-нова версия на програмата.");
-  return value as unknown as ActivePlanResponse;
+  return {...value, active: {...row, payload: {...p, plan, proposal}}} as unknown as ActivePlanResponse;
 }

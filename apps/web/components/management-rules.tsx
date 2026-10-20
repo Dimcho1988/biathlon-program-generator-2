@@ -1,6 +1,7 @@
 "use client";
 
 import { COMPONENTS, type ManagementProfile, type IntervalDoseProfile } from "../lib/training-management";
+import { AnTReferenceEditor } from "./ant-reference-editor";
 
 export function ManagementRules({ profile, onChange, today, hideAutomation = false }: {
   profile: ManagementProfile; onChange: (profile: ManagementProfile) => void; today: string; hideAutomation?: boolean;
@@ -8,6 +9,7 @@ export function ManagementRules({ profile, onChange, today, hideAutomation = fal
   const update = <K extends keyof ManagementProfile>(key: K, value: ManagementProfile[K]) => onChange({ ...profile, [key]: value });
   const interval = (index: number, patch: Partial<IntervalDoseProfile>) => update("interval_profiles", profile.interval_profiles.map((p, i) => i === index ? { ...p, ...patch } : p));
   return <>
+    <AnTReferenceEditor value={profile.ant_references} onChange={refs => update("ant_references", refs)} today={today}/>
     <div className="management-form-grid">
       {!hideAutomation && <label>След утвърждаване<select value={profile.adaptation_mode} onChange={e => update("adaptation_mode", e.target.value as "AUTO" | "REVIEW")}><option value="AUTO">Адаптирай следващите дни автоматично</option><option value="REVIEW">Предлагай промените за преглед</option></select></label>}
       <label>Преход след последния основен старт, дни<input type="number" min="0" max="28" value={profile.transition_days} onChange={e => update("transition_days", Number(e.target.value))} /></label>

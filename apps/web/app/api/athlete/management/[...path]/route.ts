@@ -16,7 +16,7 @@ async function proxy(request: Request, context: Context) {
   try {
     const { path } = await context.params;
     const endpoint = path.length === 1 ? path[0] : path.length === 2 && path[0] === "methods" && path[1] === "preferences" ? "methods/preferences" : "";
-    const permitted = request.method === "GET" ? ["profile", "drafts", "active", "state", "outlook", "methods", "checks"] : request.method === "PUT" ? ["profile", "methods/preferences"] : ["generate", "activate", "action", "day", "race-duration"];
+    const permitted = request.method === "GET" ? ["profile", "drafts", "active", "state", "outlook", "methods", "checks", "speed-comparison"] : request.method === "PUT" ? ["profile", "methods/preferences"] : ["generate", "activate", "action", "day", "race-duration"];
     if (!permitted.includes(endpoint)) return error("Адресът не е намерен.", 404);
     const startDate = request.method === "GET" && endpoint === "drafts" ? new URL(request.url).searchParams.get("start_date") : null;
     if (startDate !== null && !isCalendarDate(startDate)) return error("Невалидна начална дата на програмата.", 422);
@@ -28,12 +28,21 @@ async function proxy(request: Request, context: Context) {
     const positiveQuery = (value: string) => /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value));
     if ((before !== null && !positiveQuery(before)) || (limit !== null && (!positiveQuery(limit) || Number(limit) > 50)))
       return error("Невалидна страница с проверки на програмата.", 422);
+    const comparisonQuery = request.method === "GET" && endpoint === "speed-comparison" ? new URL(request.url).searchParams : null;
+    const comparisonKind = comparisonQuery?.get("kind");
+    const comparisonRevision = comparisonQuery?.get("revision");
+    const comparisonStart = comparisonQuery?.get("start_date");
+    if (comparisonQuery && (!["DRAFT", "ACTIVE"].includes(comparisonKind ?? "") || !comparisonRevision || !positiveQuery(comparisonRevision)
+      || comparisonKind === "DRAFT" && !isCalendarDate(comparisonStart) || comparisonKind === "ACTIVE" && comparisonStart !== null
+      || [...comparisonQuery.keys()].some(k => !["kind", "revision", "start_date"].includes(k))))
+      return error("Посочи точна версия на програмата за скоростното сравнение.", 422);
     const write = request.method !== "GET";
     if (write && !isSameOrigin(request)) return error("Невалиден източник на заявката.", 403);
     const access = await currentAuthorizedAthlete();
     if (!access) return error("Влезте отново в профила си.", 401);
     if (!matchesManagementScope(request, access)) return error("Профилът е сменен. Презареди страницата.", 412);
     if (!access.canViewPlan) return error("Този спортист не е споделил тренировъчния си план с вас.", 403);
+    if (endpoint === "speed-comparison" && !access.canViewRecovery) return error("Скоростният отчет на този спортист не е споделен с вас.", 403);
     if (write && !access.canEditPlan) return error("Този профил е достъпен само за преглед.", 403);
     let body: string | undefined;
     let plansWeek = endpoint === "generate" || endpoint === "day";
@@ -85,6 +94,7 @@ async function proxy(request: Request, context: Context) {
     if (phase !== null) url.searchParams.set("phase", phase);
     if (before !== null) url.searchParams.set("before", before);
     if (limit !== null) url.searchParams.set("limit", limit);
+    if (comparisonQuery) for (const [key, value] of comparisonQuery) url.searchParams.set(key, value);
     const response = await fetch(url, {
       method: request.method, cache: "no-store", signal: request.method === "GET"
         ? AbortSignal.any([request.signal, AbortSignal.timeout(75_000)])

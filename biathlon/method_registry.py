@@ -8,7 +8,7 @@ from hashlib import sha256
 import json
 from . import method_dosing, method_library, training_methods, race_specific
 
-VERSION = 'method-registry-v4-individual-tmax'
+VERSION = 'method-registry-v5-source-standard'
 COMBINED_STRUCTURES = {'ALTERNATING', 'CRUISE_ALTERNATING', 'THRESHOLD_HIGH', 'AEROBIC_STRENGTH', 'AEROBIC_SUPPORT', 'MIXED_AEROBIC'}
 
 

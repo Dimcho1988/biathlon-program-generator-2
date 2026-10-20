@@ -13,6 +13,7 @@ export function ManualSpeedTestEditor({model,test,onReset}:{model:SpeedModel;tes
   const [durationText,setDurationText]=useState(p?manualClockTime(p.duration_s):"");
   const [basis,setBasis]=useState<"DISTANCE"|"SPEED">(p?.measurement_input??"DISTANCE");
   const [measurement,setMeasurement]=useState(p?String(p.measurement_input==="SPEED"?p.speed_kmh:p.distance_m):"");
+  const [startType,setStartType]=useState<"STANDING"|"FLYING"|"UNKNOWN">(p?.start_type??"UNKNOWN");
   const [conditions,setConditions]=useState(p?.conditions??"");
   const [maximal,setMaximal]=useState(Boolean(p?.maximal));
   const [comparable,setComparable]=useState(Boolean(p?.comparable));
@@ -25,7 +26,7 @@ export function ManualSpeedTestEditor({model,test,onReset}:{model:SpeedModel;tes
   const duration=parseManualClock(durationText),value=Number(measurement.replace(",","."));
   const speed=duration&&value>0?(basis==="DISTANCE"?value/duration*3.6:value):null;
   const distance=duration&&speed?speed*duration/3.6:null;
-  const valid=Boolean(duration&&speed&&Number.isFinite(speed)&&speed<=150&&distance&&distance<=1000000&&name.trim()&&day&&conditions.trim().length>=3&&maximal&&comparable&&flat);
+  const valid=Boolean(duration&&(duration!==10||["Run","VirtualRun"].includes(sport))&&speed&&Number.isFinite(speed)&&speed<=150&&distance&&distance<=1000000&&name.trim()&&day&&conditions.trim().length>=3&&maximal&&comparable&&flat);
   const csEligible=duration!==null&&duration>=120&&duration<=1200;
 
   async function save(event:FormEvent<HTMLFormElement>) {
@@ -36,7 +37,7 @@ export function ManualSpeedTestEditor({model,test,onReset}:{model:SpeedModel;tes
     try {
       const result=await saveModel("speed-test-manual",{test_id:testId.current,name:name.trim(),day,sport,duration_s:duration,
         ...(basis==="DISTANCE"?{distance_m:value}:{speed_kmh:value}),conditions:conditions.trim(),
-        maximal:true,comparable:true,flat_terrain:true,use_for_cs:useCS&&csEligible,enabled:true,
+        maximal:true,comparable:true,flat_terrain:true,start_type:startType,use_for_cs:useCS&&csEligible,enabled:true,
         expected_revision:saved?.revision??test?.revision??0});
       setSaved({key:result.entry_key??`manual_${testId.current.replaceAll("-","")}`,revision:result.revision});
       if(sport!==model.sport)router.push(`/speed?sport=${encodeURIComponent(sport)}#speed-tests`);
@@ -58,7 +59,7 @@ export function ManualSpeedTestEditor({model,test,onReset}:{model:SpeedModel;tes
           <label>Дата на теста<input type="date" value={day} min={model.test_window?.start} max={model.test_window?.end} onChange={e=>setDay(e.target.value)} required/></label>
           <label>Продължителност, ч:мм:сс<input value={durationText} onChange={e=>setDurationText(e.target.value)} placeholder="Напр. 0:02:15,5" required aria-describedby="manual-time-help"/></label>
         </div>
-        <p id="manual-time-help" className="muted-copy">От 0:00:10,8 до 12:05:16. Допуска се и мин:сек, с до три знака след десетичната запетая.</p>
+        <p id="manual-time-help" className="muted-copy">Точно 0:00:10 за V(10 сек) при бягане или от 0:00:10,8 до 12:05:16. Допуска се и мин:сек, с до три знака след десетичната запетая.</p>
         {durationText&&duration===null&&<p role="alert">Въведи валидна продължителност в този диапазон.</p>}
         <div className="model-controls">
           <label>Въвеждам<select value={basis} onChange={e=>{setBasis(e.target.value as "DISTANCE"|"SPEED");setMeasurement("");}}><option value="DISTANCE">Дистанция, метри</option><option value="SPEED">Средна скорост, км/ч</option></select></label>
@@ -66,13 +67,16 @@ export function ManualSpeedTestEditor({model,test,onReset}:{model:SpeedModel;tes
         </div>
         {speed!==null&&distance!==null&&Number.isFinite(speed)&&<p role="status">Средна скорост: <strong>{speedNumber(speed)} км/ч</strong> · дистанция: <strong>{speedNumber(distance)} м</strong></p>}
         {speed!==null&&speed>150&&<p role="alert">Провери мерните единици — скоростта е над 150 км/ч.</p>}
+        {duration===10 && <p className="muted-copy">V(10 сек) е максималната средна скорост за целия 10-секунден участък. Единичен GPS пик не е валиден резултат. Тази опора задава горната граница на Z5 и не променя формата на останалата крива.</p>}
+        {duration===10 && !["Run","VirtualRun"].includes(sport) && <p role="alert">10-секундната опора е достъпна само за бягане.</p>}
+        <label>Начало на теста<select value={startType} onChange={e=>setStartType(e.target.value as typeof startType)}><option value="UNKNOWN">Не е уточнено</option><option value="STANDING">Старт от място</option><option value="FLYING">Летящ старт</option></select></label>
         <label>Условия и съпоставимост<input value={conditions} onChange={e=>setConditions(e.target.value)} required minLength={3} maxLength={400} placeholder="Напр. равна писта, без вятър; същите ролки и техника"/></label>
         <label><input type="checkbox" checked={maximal} onChange={e=>setMaximal(e.target.checked)} required/> Максимално непрекъснато усилие, без спирания</label>
         <label><input type="checkbox" checked={flat} onChange={e=>setFlat(e.target.checked)} required/> Тестът е проведен на равен терен</label>
         <label><input type="checkbox" checked={comparable} onChange={e=>setComparable(e.target.checked)} required/> Условията са съпоставими с останалите тестове; при първи тест ги описах по-горе</label>
         <label><input type="checkbox" checked={useCS&&csEligible} disabled={!csEligible} onChange={e=>setUseCS(e.target.checked)}/> Използвай и за критична скорост · само от 2 до 20 минути</label>
       </fieldset>
-      <p className="muted-copy">Ръчният резултат участва в кривата като скорост на равен терен. Не се прилага допълнителна корекция за наклон. Записът служи за калибрация и не добавя тренировъчно натоварване.</p>
+      <p className="muted-copy">Ръчният резултат е средна скорост на равен терен. Резултатите от 10,8 секунди нагоре участват в скоростната крива; точният 10-секунден тест е отделна опора за Z5. Не се прилага допълнителна корекция за наклон. Записът служи за калибрация и не добавя тренировъчно натоварване.</p>
       <div className="model-controls"><button className="action-button" disabled={!valid||busy}>{saving?"Записваме…":waiting?"Обновяваме кривата…":"Запази теста и обнови кривата"}</button>
         {(test||saved)&&<button className="action-button secondary" type="button" disabled={busy} onClick={onReset}>{saved?"Добави още един тест":"Откажи редакцията"}</button>}</div>
     </form>

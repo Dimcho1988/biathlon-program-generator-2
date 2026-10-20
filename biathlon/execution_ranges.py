@@ -33,6 +33,24 @@ def annotate(session):
         seconds = block["duration_min"]*60
         if seconds <= 0:
             continue
+        if block.get("method_library"):
+            # The source resolver owns the admissible combinations. A fixed
+            # published interval must not acquire an invented 90% duration or
+            # 95% speed variant merely because the UI supports ranges.
+            time_range = block.get("duration_range_seconds") or [seconds, seconds]
+            block["duration_range_seconds"] = list(time_range)
+            speed = block.get("target_speed_kmh")
+            if speed and math.isfinite(speed) and speed > 0:
+                speed_range = block.get("target_speed_range_kmh") or [speed, speed]
+                block["target_speed_range_kmh"] = list(speed_range)
+                block["target_pace_range_seconds_km"] = [3600/speed_range[1], 3600/speed_range[0]]
+                # Distance-based protocols couple time inversely to speed.
+                # Prefer the resolver's distance range over a Cartesian product.
+                block["distance_range_m"] = list(block.get("target_distance_range_m")
+                    or ([block["target_distance_m"]]*2 if block.get("target_distance_m") else
+                        distance_range(time_range, speed_range)))
+                block["distance_basis"] = "FLAT_EQUIVALENT" if block.get("speed_basis") == "FLAT_EQUIVALENT" else "SPEED_REFERENCE"
+            continue
         if block["kind"] == "WORK":
             supplied = block.get("duration_range_seconds")
             low = max(seconds*floor, supplied[0] if supplied else 0.)
@@ -52,3 +70,7 @@ def annotate(session):
         block["distance_basis"] = "FLAT_EQUIVALENT" if block.get("speed_basis") == "FLAT_EQUIVALENT" or block.get("primary_control") == "EFFORT_ON_TERRAIN" else "SPEED_REFERENCE"
     session["execution_range_policy"] = {"version": VERSION, "dose_basis": "UPPER_BOUND",
         "note": "Времето е водещо. Горните граници са проверената доза; дистанцията е ориентир. Минималната методна доза и предписаните паузи се запазват. При достигнат минимум времевият диапазон може да се стесни до една стойност."}
+    if any(b.get("method_library") for b in works):
+        session["execution_range_policy"] = {"version": VERSION,
+            "dose_basis": "SELECTED_ADMISSIBLE_METHOD_VARIANT",
+            "note": "Диапазоните и допустимите им комбинации са от избрания метод. За планиране се използват показаните конкретни време и скорост; фиксираната публикувана дозировка се запазва."}

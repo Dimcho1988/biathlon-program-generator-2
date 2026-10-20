@@ -62,14 +62,21 @@ def test_all_numeric_recipes_have_an_executable_first_dose_or_explicit_reason(ro
     assert engine._blocks(method, minimum, capacity, settings)
 
 
-def test_ao31_first_stage_is_inside_source_range_and_above_minimum():
+def test_ao31_standard_is_inside_source_range_and_reduction_is_explicit():
     row = ROWS['AO31']; profile, view, phase = context(row)
     resolution = method_library.resolve(row, profile, view, phase=phase)
     assert resolution['status'] == 'READY'
-    assert resolution['source_count_policy'] == 'INDIVIDUAL_TMAX_NOT_SOURCE_COUNT'
-    assert resolution['minimum_work_seconds'] == pytest.approx(.25*resolution['continuous_capacity_seconds'])
-    assert resolution['maximum_work_seconds'] >= .25 * resolution['continuous_capacity_seconds']
-    assert resolution['segments'][0]['work_distance_m'] <= row['prescription']['work']['range'][1]
+    assert resolution['source_count_policy'] == 'SOURCE_STANDARD_WITH_DECLARED_WHOLE_REPEAT_ADAPTATIONS'
+    standard = resolution['standard_work_seconds']
+    assert resolution['maximum_work_seconds'] == pytest.approx(standard)
+    assert resolution['minimum_work_seconds'] == pytest.approx(row['prescription']['minimum_scale'] * standard)
+    assert row['prescription']['reduction_policy']['origin'] == 'EXPERT_ONFLOWS'
+    distance = resolution['segments'][0]['work_distance_m']
+    low, high = row['prescription']['work']['range']
+    assert distance == pytest.approx(low)
+    assert low <= distance <= high
+    # The published first stage must not be inflated to the former 25% Tmax floor.
+    assert standard < .25 * resolution['continuous_capacity_seconds']
 
 
 @pytest.mark.parametrize('structure,expected', [('CONTINUOUS', True), ('PROGRESSIVE_CONTINUOUS', True), ('INTERVALS', False)])

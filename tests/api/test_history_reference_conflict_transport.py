@@ -177,7 +177,7 @@ def test_normal_success_and_ordinary_json_conflicts_keep_existing_contracts(writ
      {"day": "2026-10-19", "protocol": "same test", "protocol_version": "1", "value": 100.,
       "unit": "W", "direction": "HIGHER", "conditions": "same conditions", "components": ["Z3"]}),
     ("profile", "PUT", "/api/v2/athlete/management/profile",
-     {"profile": {**PROFILE, "method_library": {}}, "expected_revision": 2}),
+     {"profile": {**PROFILE, "method_library": {}, "ant_references": []}, "expected_revision": 2}),
     ("model_recovery", "PUT", "/api/v2/athlete/models/recovery",
      {"zones": initial_settings(), "expected_revision": 2}),
     ("model_speed_test", "PUT", "/api/v2/athlete/models/speed-test",

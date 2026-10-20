@@ -17,7 +17,12 @@ from tests.api.test_training_plan_engine import NOW, TODAY, Repository, referenc
 def budget_fixture(kind, monkeypatch):
     settings = Repository().settings
     if kind == "library":
-        return adapter(monkeypatch, recipe())
+        source = recipe()
+        # Exercise feasible reduced doses: the generic recipe selects one
+        # standard repetition, which cannot survive an 80% Recovery correction.
+        source["prescription"].update(source_repetitions_range=[8, 8], allow_fewer_repetitions=True,
+            reduction_policy={"origin": "EXPERT_ONFLOWS", "mode": "WHOLE_REPETITIONS"})
+        return adapter(monkeypatch, source)
     method = model_method()
     capacity = {"capacity_minutes": 34., "target_hr_bpm": None,
                 "target_speed_kmh": None, "effort_profile": deepcopy(method["interval_template"])}

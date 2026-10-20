@@ -11,7 +11,7 @@ export type MetricSeries = {
 };
 type Props = {
   title: string; series: MetricSeries[]; xKind?: "date" | "duration"; unit: string;
-  yKind?: "number" | "duration" | "percent"; domain?: [number, number];
+  yKind?: "number" | "duration" | "percent" | "pace"; domain?: [number, number];
   reference?: { value: number; label: string }; maxGap?: number; zero?: boolean;
   description?: string; initialIndex?: number; onSelect?: (index: number) => void;
   selectedIndex?: number; controls?: boolean;
@@ -25,7 +25,7 @@ export function MetricChart({ title, series, xKind = "date", unit, yKind = "numb
   const [hidden, setHidden] = useState<string[]>([]);
   const [position, setPosition] = useState(initialIndex ?? -1);
   const active = series.filter(item => !hidden.includes(item.key));
-  const format = (value: number) => yKind === "duration" ? durationSeconds(value) : `${numeric(value)}${yKind === "percent" ? "%" : ""}`;
+  const format = (value: number) => yKind === "duration" ? durationSeconds(value) : yKind === "pace" ? `${Math.floor(Math.round(value) / 60)}:${String(Math.round(value) % 60).padStart(2, "0")}` : `${numeric(value)}${yKind === "percent" ? "%" : ""}`;
   const xFormat = xKind === "date" ? date : durationSeconds;
   const dates = useMemo(() => [...new Set(series.flatMap(item => item.points.filter(point => Number.isFinite(point.x)).map(point => point.x)))].sort((a, b) => a - b).map(x => ({ x })), [series]);
   const bounds = domain ?? chartDomain([...series.flatMap(item => item.points.map(point => point.y)), reference?.value ?? null], zero);
@@ -81,7 +81,7 @@ export function MetricChart({ title, series, xKind = "date", unit, yKind = "numb
       </svg>
     </div>
     {reference && <p className="metric-chart-reference">Пунктиран праг: {reference.label}</p>}
-    <div className="metric-chart-readout"><strong>{xLabel ?? (xKind === "date" ? "Дата" : "Време")}: {xKind === "date" ? new Date(selectedX ?? start).toLocaleDateString("bg-BG", {timeZone:"UTC"}) : xFormat(selectedX ?? start)}</strong><dl>{readout.map(item => <div key={item.key}><dt><i style={{ background: item.color }} />{item.label}</dt><dd>{item.point?.y == null ? "Няма данни" : `${format(item.point.y)}${yKind === "number" && unit !== "Индекс 7/40" && unit !== "Ефективен товар E" ? ` ${unit}` : ""}`}</dd></div>)}</dl>{active.length === 0 && <p>Избери поне една серия.</p>}</div>
+    <div className="metric-chart-readout"><strong>{xLabel ?? (xKind === "date" ? "Дата" : "Време")}: {xKind === "date" ? new Date(selectedX ?? start).toLocaleDateString("bg-BG", {timeZone:"UTC"}) : xFormat(selectedX ?? start)}</strong><dl>{readout.map(item => <div key={item.key}><dt><i style={{ background: item.color }} />{item.label}</dt><dd>{item.point?.y == null ? "Няма данни" : `${format(item.point.y)}${(yKind === "number" || yKind === "pace") && unit !== "Индекс 7/40" && unit !== "Ефективен товар E" ? ` ${unit}` : ""}`}</dd></div>)}</dl>{active.length === 0 && <p>Избери поне една серия.</p>}</div>
     <label className="metric-chart-scrubber">{xKind === "date" ? "Разгледай по дати" : "Разгледай във времето"}<input type="range" min="0" max={Math.max(0, dates.length - 1)} step="1" value={current} disabled={dates.length < 2} aria-label={`Разгледай · ${title}`} aria-valuetext={`${xFormat(selectedX ?? start)} · ${readout.map(item => `${item.label}: ${item.point?.y == null ? "Няма данни" : format(item.point.y)}`).join("; ")}`} onChange={event => change(Number(event.target.value))} /></label>
   </div>;
 }

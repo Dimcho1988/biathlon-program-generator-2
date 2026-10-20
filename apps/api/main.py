@@ -7,6 +7,7 @@ from .http_runtime import lifespan
 from .request_metrics import RequestMetricsMiddleware
 from .routes import (
     management,
+    management_speed_comparison,
     models,
     settings,
     response,
@@ -23,6 +24,7 @@ app.add_middleware(RequestMetricsMiddleware)
 
 ROUTE_MODULES = (
     management,
+    management_speed_comparison,
     models,
     settings,
     response,

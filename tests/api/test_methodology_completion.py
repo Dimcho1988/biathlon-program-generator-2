@@ -77,6 +77,9 @@ def test_race_progression_requires_confirmed_distinct_dates_and_retracts_on_fail
     records={m['id']:m for m in method_library.entries()}
     short,medium,long=[records['OF-RUN-5000-'+suffix] for suffix in ('SHORT','MEDIUM','LONG')]
     p=athlete()
+    # The coaching templates contain no published repeat count. Qualification
+    # changes eligibility only; an explicit selected standard still owns dose.
+    p['method_library']={'overrides':{r['id']:{'repetitions':[6,6]} for r in (short,medium,long)}}
     assert method_library.resolve(medium,p,view(),phase='PRECOMPETITION')['status']=='PROGRESSION_LOCKED'
     one=progression_row(short,p,'2026-09-01')
     p['_method_progression']={'observations':[one,deepcopy(one)]}

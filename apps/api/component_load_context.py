@@ -10,11 +10,12 @@ from hashlib import sha256
 import json
 import math
 
-from biathlon import dosing_curve, hr_speed, preliminary_capacity, speed_duration
+from biathlon import dosing_curve, hr_speed, preliminary_capacity, speed_duration, speed_equivalence
 from .speed_load_cache import SpeedLoadCache
 
 
 VERSION = "component-load-capacity-curve-first-v1"
+COMPARISON_CONTEXT_VERSION = speed_equivalence.VERSION
 ZONES = ("Z1", "Z2", "Z3", "Z4", "Z5")
 _context_cache = SpeedLoadCache(max_entries=32, ttl_seconds=300)
 
@@ -137,10 +138,18 @@ def context_from_speed_view(view=None):
         "curve_model_version": getattr(curve, "model_version", None) if curve is not None else None,
         "status": "CURVE" if curve is not None else "EXPERT",
     }
+    # Additive comparison uses the exact method-dosing boundaries. Canonical
+    # continuous capacities and their fingerprint stay unchanged; Tmax is not
+    # a migrated speed-index Tref. No historical HR normalizer is repurposed.
+    profile = ((view.get("dosing_model") or {}).get("speed_zones")
+               if curve_source == "BLENDED_DOSING_CURVE" else view.get("speed_zones"))
+    comparison = speed_equivalence.prepare(profile, sport=view.get("sport"),
+        curve_version=result["curve_model_version"])
     result["fingerprint"] = sha256(json.dumps(result, sort_keys=True, separators=(",", ":"),
                                                 allow_nan=False).encode()).hexdigest()
     # Source identities are provenance, not physiological parameters: refreshing
     # the same evidence must not invalidate an otherwise identical context.
+    result["comparison_parameters"] = comparison
     result["source_generation_id"] = view.get("source_generation_id")
     result["source_revision"] = view.get("source_revision")
     return result
@@ -161,7 +170,7 @@ def read_contexts(repository, alias, sports, *, speed_by_sport=None):
                 model_service.speed_view(repository, alias, sport)) for sport in sports}
     inputs = model_service.speed_view_inputs(repository, alias)
     settings = inputs["settings"]
-    identity = {"namespace": namespace, "alias": alias, "version": VERSION,
+    identity = {"namespace": namespace, "alias": alias, "version": VERSION, "comparison_version": COMPARISON_CONTEXT_VERSION,
                 "day": inputs["today"].isoformat(), "sports": missing,
                 "bounds": settings.zone_bounds_bpm, "hrmax": settings.hrmax_bpm,
                 "timezone": settings.timezone, "calendar": inputs["calendar"],

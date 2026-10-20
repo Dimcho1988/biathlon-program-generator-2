@@ -1,9 +1,11 @@
+import { isSpeedEquivalenceComparison, type SpeedEquivalenceComparison } from "./speed-equivalence";
 import type {SportHrPolicy} from "./models";
 import {isCalendarDate} from "./training-status";
 
 export interface SpeedLoad {
   schema_version:"speed-load-history-v1"; model_version:"independent-speed-load-causal-ti-v1"|"independent-speed-load-causal-ti-v2-adjacent-tmax"|"independent-speed-load-causal-ti-v3-weighted-downward-tmax";
   component_load_version?: string;
+  speed_equivalence_comparison?: SpeedEquivalenceComparison | null;
   status:"AVAILABLE"|"PARTIAL"|"UNAVAILABLE"; sport:string|null; sports:string[];
   source_generation_id:string|null; source_revision:number|null; start_date:string; end_date:string;
   load_role:"PARALLEL_ESTIMATE_NOT_ADDED_TO_HR"; mapping_policy:string;
@@ -34,5 +36,6 @@ export function parseSpeedLoad(value:unknown):SpeedLoad {
   for(const s of r.sport_indices)if(typeof s.sport!=="string"||!nonnegative(s.reference_hr_bpm)
     ||s.comparison_speed_kmh!==null&&!nonnegative(s.comparison_speed_kmh)||!s.hr_policy||!nonnegative(s.hr_policy.offset_bpm)
     ||s.hr_policy.raw_hr_unchanged!==true||!s.indices||Object.values(s.indices).some(b=>!b||!nonnegative(b.count)||!nonnegative(b.seconds)||b.index!==null&&!nonnegative(b.index)))throw bad();
+  if (r.speed_equivalence_comparison != null && !isSpeedEquivalenceComparison(r.speed_equivalence_comparison)) throw bad();
   return r;
 }

@@ -58,7 +58,8 @@ it("distinguishes continuous doses from expert interval budgets and applies read
   const migrated = parseManagementProfile({ ...profile, building_fraction: .5 });
   await mount(<ManagementProfileEditor initialProfile={{ configured: true, profile: migrated, revision: 1 }} today="2026-09-21"/>);
   await click(button("4. Методи и дозиране"));
-  const dose = input("Непрекъснат метод · изграждаща доза");
+  const dose = input("Други треньорски профили · изграждащ дял");
+  expect(container.textContent).toContain("65% от индивидуалното Tmax е фиксираният резервен вариант");
   expect(dose.value).toBe("65");
   expect(dose.min).toBe("60");
   expect(dose.max).toBe("70");
@@ -74,14 +75,14 @@ it("distinguishes continuous doses from expert interval budgets and applies read
   expect(container.textContent).not.toContain("Процентите за Z1–Z3 не се прилагат");
 });
 
-it("derives maintenance and reentry immediately when the building dose changes and saves both halves", async () => {
+it("derives maintenance and reentry for other coach profiles without redefining the fixed continuous fallback", async () => {
   const fetchMock=vi.fn(async (_url,init)=>Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile}));vi.stubGlobal("fetch",fetchMock);
   await mount(<ManagementProfileEditor initialProfile={{configured:true,profile:{...profile,maintenance_fraction:.4,reentry_fraction:.5},revision:1}} today="2026-09-21"/>);
   await click(button("4. Методи и дозиране"));
-  expect(input("Непрекъснат метод · поддържаща и вработваща доза").value).toBe("39");
-  expect(input("Непрекъснат метод · поддържаща и вработваща доза").readOnly).toBe(true);
-  await enter(input("Непрекъснат метод · изграждаща доза"),"68");
-  expect(input("Непрекъснат метод · поддържаща и вработваща доза").value).toBe("40.8");
+  expect(input("Други треньорски профили · поддържащ дял").value).toBe("39");
+  expect(input("Други треньорски профили · поддържащ дял").readOnly).toBe(true);
+  await enter(input("Други треньорски профили · изграждащ дял"),"68");
+  expect(input("Други треньорски профили · поддържащ дял").value).toBe("40.8");
   await click(button("Запази промените"));
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(JSON.parse(fetchMock.mock.calls[0][1].body).profile).toMatchObject({building_fraction:.68,maintenance_fraction:.68*.6,reentry_fraction:.68*.6});

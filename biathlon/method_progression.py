@@ -31,7 +31,7 @@ def definition(record, profile):
     rx = record.get('prescription') or {}
     if explicit:
         spec = deepcopy(explicit)
-    elif rx.get('work', {}).get('range', [0, 0])[0] != rx.get('work', {}).get('range', [0, 0])[-1]:
+    elif (rx.get('work') or {}).get('range', [0, 0])[0] != (rx.get('work') or {}).get('range', [0, 0])[-1]:
         spec = {'group': record['id'], 'stage': None, 'steps': 3, 'kind': 'WITHIN_RANGE'}
     else:
         return None
