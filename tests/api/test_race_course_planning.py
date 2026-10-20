@@ -9,7 +9,7 @@ from apps.api import dependencies, management_service, race_duration, training_p
 from apps.api.cloud import AthletePlanningCalendar, AthleteModelSettings
 from apps.api.main import app
 from apps.api.schemas import PlanningCalendarEvent
-from biathlon import execution_ranges, race_course, race_specific
+from biathlon import adaptive_methods, execution_ranges, race_course, race_specific
 from biathlon.training_methods import resolved_methods
 from tests.api.test_management_schedule import body, high_capacity_history, run
 from tests.api.test_training_plan_engine import TODAY, NOW
@@ -147,8 +147,23 @@ def test_model_work_time_changes_with_expected_race_time_not_literal_distance():
         lo, hi = method["interval_template"]["work_seconds_range"]
         assert 0 < lo < hi <= 300
         assert method["race_specific"]["speed_range_kmh"][0] < method["race_specific"]["speed_range_kmh"][1]
+        short = adaptive_methods.short_variant(method)["interval_template"]
+        assert 0 < short["work_seconds_range"][0] < short["work_seconds_range"][1] == short["work_seconds"] <= 30
         work.append(hi)
     assert work[0] < work[1] < work[2]
+
+
+def test_three_model_repetitions_keep_approved_time_range_and_relative_minimum():
+    session = {"blocks": [{"kind": "WORK", "zone": "Z3", "duration_min": 4,
+                          "race_specific": {"role": "RACE"}, "duration_range_seconds": [216, 240]} for _ in range(3)],
+               "dose_evidence": {"minimum_structure_work_minutes": 12, "min_dose_fraction": .1,
+                                 "applied_minimum_capacity_fraction": .3}}
+    execution_ranges.annotate(session)
+    assert len(session["blocks"]) == 3
+    assert all(b["duration_range_seconds"] == [216, 240] for b in session["blocks"])
+    session["dose_evidence"]["applied_minimum_capacity_fraction"] = .1
+    execution_ranges.annotate(session)
+    assert all(b["duration_range_seconds"] == [240, 240] for b in session["blocks"])
 
 
 def test_generator_and_outlook_use_calendar_course_without_changing_saved_profile(monkeypatch):

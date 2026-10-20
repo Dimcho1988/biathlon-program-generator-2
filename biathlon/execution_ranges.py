@@ -20,6 +20,12 @@ def annotate(session):
     if not total or any(b["zone"] in {"STR", "NMS"} for b in session["blocks"]):
         return
     minimum = evidence.get("minimum_structure_work_minutes", evidence.get("minimum_primary_work_minutes", 0.)) or 0.
+    if all(b.get("race_specific") and b.get("duration_range_seconds") for b in works):
+        # The selection minimum is quantized at whole upper-bound repetitions.
+        # The same repetitions may use their explicitly approved lower times;
+        # do not turn a legal three-repeat range back into three fixed times.
+        # The independent continuous-capacity minimum below still applies.
+        minimum = sum(b["duration_range_seconds"][0] for b in works)/60
     minimum_fraction = evidence.get("min_dose_fraction") or 0.
     applied = evidence.get("applied_minimum_capacity_fraction") or 0.
     floor = max(.9, min(1., minimum/total), min(1., minimum_fraction/applied) if applied else 0.)
@@ -45,4 +51,4 @@ def annotate(session):
         block["distance_range_m"] = distance_range(block["duration_range_seconds"], block["target_speed_range_kmh"])
         block["distance_basis"] = "FLAT_EQUIVALENT" if block.get("speed_basis") == "FLAT_EQUIVALENT" or block.get("primary_control") == "EFFORT_ON_TERRAIN" else "SPEED_REFERENCE"
     session["execution_range_policy"] = {"version": VERSION, "dose_basis": "UPPER_BOUND",
-        "note": "Времето е водещо. Горните граници са проверената доза; дистанцията е ориентир. Минималната методна доза и предписаните паузи се запазват."}
+        "note": "Времето е водещо. Горните граници са проверената доза; дистанцията е ориентир. Минималната методна доза и предписаните паузи се запазват. При достигнат минимум времевият диапазон може да се стесни до една стойност."}
