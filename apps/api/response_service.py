@@ -15,6 +15,10 @@ class ResponseStore:
         self.repository = repository
 
     def entries(self, alias):
+        reader = getattr(self.repository, "planning_response_entries", None)
+        captured = reader(alias) if callable(reader) else None
+        if captured is not None:
+            return captured
         rows = []
         for offset in range(0, 10000, 1000):
             response = self.repository._request("GET", "/onflows_response_entries?select=kind,entry_key,observed_date,revision,payload,recorded_at"

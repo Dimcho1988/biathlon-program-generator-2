@@ -302,6 +302,7 @@ class SupabasePilotRepository(SnapshotRepository):
         encryption_key: str,
         client: httpx.Client | None = None,
         generation_reads: bool = False,
+        planning_inputs_reads: bool = False,
     ) -> None:
         if not supabase_url.startswith("https://") or not secret_key:
             raise PersistentStoreConfigurationError(
@@ -322,6 +323,7 @@ class SupabasePilotRepository(SnapshotRepository):
         self._history_archive = HistoryArchive(supabase_url, self._headers, self._client)
         self._history_archive_cursors: dict[str, str] = {}
         self._generation_reads = generation_reads
+        self._planning_inputs_reads = planning_inputs_reads
 
     @property
     def speed_load_cache_namespace(self) -> str | None:
@@ -342,6 +344,7 @@ class SupabasePilotRepository(SnapshotRepository):
             encryption_key=env.get("ONFLOWS_TOKEN_ENCRYPTION_KEY", "").strip(),
             client=client,
             generation_reads=True,
+            planning_inputs_reads=True,
         )
 
     def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
@@ -417,8 +420,12 @@ class SupabasePilotRepository(SnapshotRepository):
     def _secret_hash(value: str) -> str:
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
-    def _rpc_rows(self, name: str, payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-        response = self._request("POST", f"/rpc/{name}", json=dict(payload))
+    def _rpc_rows(
+        self, name: str, payload: Mapping[str, Any], *,
+        timeout: httpx.Timeout | None = None,
+    ) -> list[Mapping[str, Any]]:
+        options = {"timeout": timeout} if timeout is not None else {}
+        response = self._request("POST", f"/rpc/{name}", json=dict(payload), **options)
         value = self._json(response)
         if not isinstance(value, list) or not all(
             isinstance(row, Mapping) for row in value
@@ -427,9 +434,10 @@ class SupabasePilotRepository(SnapshotRepository):
         return value
 
     def _rpc_row(
-        self, name: str, payload: Mapping[str, Any]
+        self, name: str, payload: Mapping[str, Any], *,
+        timeout: httpx.Timeout | None = None,
     ) -> Mapping[str, Any] | None:
-        rows = self._rpc_rows(name, payload)
+        rows = self._rpc_rows(name, payload, timeout=timeout)
         return dict(rows[0]) if rows else None
 
     @staticmethod
@@ -638,6 +646,16 @@ class SupabasePilotRepository(SnapshotRepository):
         )
         return _PlanningSettingsBundle(self._json(response))
 
+    def planning_inputs_bundle(self, athlete_alias, *, analysis_mode="FULL", analysis_hints=None):
+        if not self._planning_inputs_reads:
+            return None  # Explicit capability opt-in; no request/failure fallback.
+        from .planning_input_bundle import PlanningInputBundle, valid_analysis_hints
+        hints = valid_analysis_hints(analysis_hints)
+        path = ("/rpc/read_onflows_planning_inputs?p_alias=" + quote(athlete_alias, safe="")
+                + "&p_analysis_mode=" + quote(analysis_mode, safe="")
+                + "&p_analysis_hints=" + quote(json.dumps(hints, separators=(",", ":")), safe=""))
+        return PlanningInputBundle(self._json(self._request("GET", path)), athlete_alias, analysis_mode, hints)
+
     def athlete_settings(self, athlete_alias: str) -> AthleteModelSettings | None:
         alias = quote(athlete_alias, safe="")
         response = self._request(
@@ -787,39 +805,15 @@ class SupabasePilotRepository(SnapshotRepository):
             return None
         if len(rows) != 1:
             raise PersistentStoreFailure("Stored active analysis metadata is invalid")
-        row = rows[0]
-        if (type(row.get("revision")) is not int or row["revision"] < 0
-                or (row.get("generation_id") is not None and
-                    (not isinstance(row["generation_id"], str) or not row["generation_id"]))
-                or any(row.get(k) is not None and not isinstance(row[k], str)
-                       for k in ("analysis_as_of", "activated_at"))):
-            raise PersistentStoreFailure("Stored active analysis metadata is invalid")
-        return {k: row.get(k) for k in ("generation_id", "revision", "analysis_as_of", "activated_at")}
+        from .planning_input_bundle import parse_analysis_metadata
+        return parse_analysis_metadata(rows[0])
 
     def active_analysis(self, athlete_alias: str) -> Mapping[str, Any] | None:
         row = self._rpc_row(
             "active_onflows_analysis", {"p_athlete_alias": athlete_alias}
         )
-        if row is None:
-            return None
-        snapshot = row.get("snapshot_payload")
-        revision = row.get("revision")
-        generation_id = row.get("generation_id")
-        if (
-            not isinstance(snapshot, Mapping)
-            or isinstance(revision, bool)
-            or not isinstance(revision, int)
-            or revision < 0
-            or (generation_id is not None and not isinstance(generation_id, str))
-        ):
-            raise PersistentStoreFailure("Stored active analysis is invalid")
-        return {
-            "generation_id": generation_id,
-            "revision": revision,
-            "analysis_as_of": row.get("analysis_as_of"),
-            "activated_at": row.get("activated_at"),
-            "snapshot_payload": dict(snapshot),
-        }
+        from .planning_input_bundle import parse_analysis
+        return parse_analysis(row)
 
     def active_trainability_calendar(
         self, athlete_alias: str, period_start: date, period_end: date
@@ -1200,7 +1194,11 @@ class SupabasePilotRepository(SnapshotRepository):
     ) -> Mapping[str, int]:
         """Invoke the fixed server-owned retention policy once."""
         row = self._rpc_row(
-            "maintain_onflows_analysis_history", {"p_alias": athlete_alias}
+            "maintain_onflows_analysis_history", {"p_alias": athlete_alias},
+            # The live recovery/archival checks can exceed the normal 15 s read
+            # timeout. Allow the RPC's 30 s SQL budget plus a network margin.
+            # This POST still has exactly one attempt on ambiguous failures.
+            timeout=httpx.Timeout(35.0, connect=5.0),
         )
         return self._analysis_retention_counts(row)
 

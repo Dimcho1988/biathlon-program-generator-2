@@ -23,6 +23,7 @@ from . import training_plan_engine, race_duration
 from .management_projection import public_learning
 from .read_session import ReadSession
 from .request_metrics import timed_stage
+from .planning_input_bundle import valid_analysis_hints
 
 
 def profile_view(repository, alias, *, now=None, include_history=True):
@@ -212,12 +213,7 @@ def _analysis_identity(repository, alias, hints=None):
     final concurrency check always read/hash the live snapshot. Legacy snapshots
     have no immutable generation ID and must also be read in full.
     """
-    valid = [h for h in hints or [] if isinstance(h, dict)
-             and isinstance(h.get("generation_id"), str) and h["generation_id"]
-             and type(h.get("analysis_revision")) is int and h["analysis_revision"] > 0
-             and isinstance(h.get("snapshot_fingerprint"), str)
-             and len(h["snapshot_fingerprint"]) == 64
-             and all(c in "0123456789abcdef" for c in h["snapshot_fingerprint"])]
+    valid = valid_analysis_hints(hints)
     metadata_reader = getattr(repository, "active_analysis_metadata", None)
     if valid and callable(metadata_reader):
         metadata = metadata_reader(alias) or {}
@@ -236,6 +232,9 @@ def _analysis_identity(repository, alias, hints=None):
 
 def input_state(repository, alias, *, evaluated_at=None, include_response=False, analysis_hints=None):
     """Capture settings and source identity; never store credentials or wellness."""
+    if isinstance(repository, ReadSession):
+        repository.capture_planning_inputs(alias,
+            analysis_hints=None if analysis_hints is None else valid_analysis_hints(analysis_hints))
     settings = repository.athlete_settings(alias)
     analysis, snapshot_fingerprint = _analysis_identity(repository, alias, analysis_hints)
     entries = ModelStore(repository).entries(alias)
@@ -293,6 +292,7 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
     # edits/syncs made while the (potentially long) calculation was running.
     live_repository = repository
     repository = ReadSession.planning(repository, _initial_read_phase)
+    repository.capture_planning_inputs(alias)
     store = ManagementStore(repository)
     stored = store.profile(alias)
     if not stored["configured"]:

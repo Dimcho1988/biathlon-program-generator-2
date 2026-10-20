@@ -10,8 +10,8 @@ model/response/DRAFT/plan JSON, archive object or READY planning result is delet
 or rewritten by this work.
 
 The implementation is split into migrations
-`20261019201602_protect_historical_activity_references.sql` and
-`20261019201842_recoverable_bounded_analysis_retention.sql`. Existing generation
+`20261019210500_protect_historical_activity_references.sql` and
+`20261020062027_recoverable_bounded_analysis_retention.sql`. Existing generation
 pins and their base/activity-set ancestor closure remain in force.
 
 ## Read-only findings before implementation

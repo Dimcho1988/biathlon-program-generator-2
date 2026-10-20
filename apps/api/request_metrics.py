@@ -22,6 +22,7 @@ _STORE_LABELS = {
     "/onflows_activity_run_summaries": "summaries",
     "/onflows_activity_catalog": "activity_catalog",
     "/rpc/active_onflows_analysis": "analysis",
+    "/rpc/read_onflows_planning_inputs": "planning_inputs",
     "/rpc/onflows_management_checkpoint": "checkpoint",
     "/rpc/onflows_planning_computation": "computation",
     "/rpc/save_onflows_management_plan": "publication",

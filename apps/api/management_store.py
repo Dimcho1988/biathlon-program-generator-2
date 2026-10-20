@@ -33,6 +33,10 @@ class ManagementStore:
             f"&athlete_alias=eq.{quote(alias, safe='')}&kind=eq.{kind}{key_filter}"
             f"&order={ordering}&limit={limit}",
         ))
+        return self._validated_rows(result, kind, limit, selected_key)
+
+    @staticmethod
+    def _validated_rows(result, kind, limit, selected_key):
         if not isinstance(result, list) or len(result) > limit:
             raise PersistentStoreFailure("Invalid management history")
         for row in result:
@@ -45,7 +49,10 @@ class ManagementStore:
         return result
 
     def profile(self, alias):
-        rows = self._rows(alias, "PROFILE", 1)
+        reader = getattr(self.repository, "planning_profile_rows", None)
+        rows = reader(alias) if callable(reader) else None
+        rows = (self._rows(alias, "PROFILE", 1) if rows is None
+                else self._validated_rows(rows, "PROFILE", 1, PROFILE_KEY))
         if not rows:
             return {"configured": False, "profile": None, "revision": 0}
         return {"configured": True, "profile": rows[0]["payload"], "revision": rows[0]["revision"]}

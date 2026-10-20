@@ -8,6 +8,9 @@ on:
       - "supabase/**"
       - "tests/database/**"
       - "tests/api/test_account_access_migration.py"
+      - "scripts/audit_migration_alignment.py"
+      - "docs/migration-alignment-2026-10-19.json"
+      - "docs/migration-remote-before-2026-10-19.json"
       - ".github/workflows/database-ci.yml"
 
 permissions:
@@ -49,6 +52,11 @@ jobs:
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
           --no-psqlrc --set ON_ERROR_STOP=1
           --file tests/database/management_response_checkpoint.sql
+      - name: Verify coherent service-only planning input bundles
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/planning_inputs_bundle.sql
       - name: Verify monotonic analysis revision publication checkpoints
         run: >-
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
