@@ -29,15 +29,15 @@ from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VER
 from biathlon import training_guidance, adaptive_methods, preliminary_capacity, planning_consistency, race_specific, dosing_curve, method_library
 from .component_load_context import context_from_speed_view, read_contexts
 from .component_load_projection import project_history
-from . import model_service, load_adaptation, race_duration, planning_history_estimate
+from . import model_service, load_adaptation, race_duration, planning_history_estimate, training_sessions
 from biathlon import method_registry, combined_methods, strength_methods
 from .learning_methods import method_descriptor
 from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 
-VERSION = "training-management-v49-microcycle-execution-history"
-PARAMETER_VERSION = "management-parameters-v45"
+VERSION = "training-management-v50-recorded-session-counts"
+PARAMETER_VERSION = "management-parameters-v46"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -1489,6 +1489,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     speed_by_sport = {s: model_service.speed_view(repository, alias, s) if envelope else None for s in dict.fromkeys([sport, *training_sports])}
     prepared_source = planning_source_details(repository, alias, profile, settings, envelope, today, speed_by_sport=speed_by_sport)
     source, planning_evidence = prepared_source.source, prepared_source.evidence
+    recorded_sessions = training_sessions.group_recordings(source.get("activities", []),
+        planning_history_estimate.normalized_calendar(envelope.get("activities", [])), settings.timezone)
     component_contexts = (source.get("component_load_model") or {}).get("contexts_by_sport") or {}
     measured_source = prepared_source.measured_source
     snapshot = {**snapshot, "load_history": measured_source}
@@ -1690,34 +1692,40 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     strength_actual = {a.get("activity_ref") or ("unidentified", index): a
         for index, a in enumerate(source.get("activities", [])) if strength_activity(a)
         and min(allocation_start, start_date-timedelta(days=6)).isoformat() <= a["date"] <= end_date.isoformat()}
+    strength_recorded_sessions = [s for s in recorded_sessions if any(strength_activity(a) for a in s.activities)
+        and min(allocation_start, start_date-timedelta(days=6)).isoformat() <= s.date <= end_date.isoformat()]
+    def recorded_strength_building(session):
+        return any(strength_activity(a) and a.get("purpose") not in {"MAINTENANCE", "ACTIVATION"}
+                   for a in session.activities)
     def strength_week(day):
         first = meso_anchor + timedelta(days=7*((day-meso_anchor).days//7))
         return first.isoformat(), (first+timedelta(days=6)).isoformat()
     def strength_counts(day):
         first, last = strength_week(day)
-        actual = [a for a in strength_actual.values() if first <= a["date"] <= last]
+        actual = [s for s in strength_recorded_sessions if first <= s.date <= last]
         proposed = [session for d in result_days if first <= d["date"] <= last
                     for session in planning_schedule.day_sessions(d) if strength_activity(session)]
         # A locked day is represented exactly once when it reaches result_days.
         if locked_day and first <= locked_day["date"] <= last and not any(d.get("locked") for d in result_days):
             proposed += [v for v in locked_sessions if strength_activity(v)
                          and v.get("activity_ref") not in strength_actual]
-        all_sessions = actual + proposed
         window_start = (day-timedelta(days=6)).isoformat() if component_governed else start_date.isoformat()
         window_end = day.isoformat() if component_governed else end_date.isoformat()
-        window = [a for a in strength_actual.values() if window_start <= a["date"] <= window_end]
-        window += [v for d in result_days if window_start <= d["date"] <= window_end
+        window_actual = [s for s in strength_recorded_sessions if window_start <= s.date <= window_end]
+        window = [v for d in result_days if window_start <= d["date"] <= window_end
                    for v in planning_schedule.day_sessions(d) if strength_activity(v)]
         if (locked_day and window_start <= locked_day["date"] <= window_end
             and not any(d.get("locked") for d in result_days)):
             window += [v for v in locked_sessions if strength_activity(v)
                        and v.get("activity_ref") not in strength_actual]
-        return (max(len(all_sessions), len(window)),
-                max(sum(v.get("purpose") not in {"MAINTENANCE", "ACTIVATION"} for v in all_sessions),
-                    sum(v.get("purpose") not in {"MAINTENANCE", "ACTIVATION"} for v in window)))
-    strength_sessions = len(strength_actual)
+        return (max(len(actual)+len(proposed), len(window_actual)+len(window)),
+                max(sum(recorded_strength_building(s) for s in actual)
+                    + sum(v.get("purpose") not in {"MAINTENANCE", "ACTIVATION"} for v in proposed),
+                    sum(recorded_strength_building(s) for s in window_actual)
+                    + sum(v.get("purpose") not in {"MAINTENANCE", "ACTIVATION"} for v in window)))
+    strength_sessions = len(strength_recorded_sessions)
     # Unknown execution roles cannot be used to claim the required maintenance session.
-    strength_building = sum(a.get("purpose") not in {"MAINTENANCE", "ACTIVATION"} for a in strength_actual.values())
+    strength_building = sum(recorded_strength_building(s) for s in strength_recorded_sessions)
     strength_limit = min(3 if "STR" in _accents(_phase(periodization, start_date)[0], preferences) else 2,
                          (controls or {}).get("max_strength_sessions", 2))
     if controls:
@@ -1739,6 +1747,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     executed_dates = {date.fromisoformat(a["date"]) for a in source.get("activities", [])}
     existing_in_draft = [a for a in source.get("activities", []) if start_date.isoformat() <= a["date"] <= end_date.isoformat()]
     actual_by_day = {d: [a for a in existing_in_draft if a["date"] == d.isoformat()] for d in slot_counts}
+    recorded_sessions_by_day = {d: [s for s in recorded_sessions if s.date == d.isoformat()] for d in slot_counts}
+    recorded_in_draft = [s for s in recorded_sessions if start_date.isoformat() <= s.date <= end_date.isoformat()]
     from .double_threshold_continuation import reconcile as reconcile_double
     if locked_day:
         locked_day = reconcile_double(locked_day, actual_by_day.get(date.fromisoformat(locked_day["date"]), []), profile["_method_progression"]["observations"])
@@ -1758,19 +1768,16 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             and (not locked_day or locked_day["date"] != d.isoformat()
                 or set(locked_day.get("activity_refs", [])) == {a["activity_ref"] for a in actual}))
     def first_plannable_slot(d):
-        return (len(actual_by_day[d]) if actual_slots_known(d) else slot_counts[d]) if actual_by_day[d] else 0
+        return (len(recorded_sessions_by_day[d]) if actual_slots_known(d) else slot_counts[d]) if actual_by_day[d] else 0
 
     def unexecuted_slot_count(d):
         return max(0, slot_counts[d]-first_plannable_slot(d))
 
-    sessions = len(existing_in_draft)
-    key_sessions = sum(any(z.get("raw_time_min", 0) >= 5 and z["zone"] in {"Z3", "Z4", "Z5"}
-                           for z in a.get("zones", [])) for a in existing_in_draft)
+    sessions = len(recorded_in_draft)
+    key_sessions = sum(s.is_key for s in recorded_in_draft)
     forecast_rows = deepcopy(rows)
-    recent_key_dates = [date.fromisoformat(a["date"]) for a in source.get("activities", [])
-                        if a["date"] <= today.isoformat() and any(
-                            z.get("raw_time_min", 0) >= 5 and z["zone"] in {"Z3", "Z4", "Z5"}
-                            for z in a.get("zones", []))]
+    recent_key_dates = [date.fromisoformat(s.date) for s in recorded_sessions
+                        if s.date <= today.isoformat() and s.is_key]
     last_key_day = max(recent_key_dates) if recent_key_dates else None
     # Imported execution may already close the approved day's slots. Keep the
     # lock for identity/continuation checks, but count only tasks still pending.
@@ -1790,20 +1797,19 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     def session_counts(at_day, extra=()):
         """Real and proposed sessions in the same rolling seven-day window."""
         left, right = (at_day-timedelta(days=6)).isoformat(), at_day.isoformat()
-        actual = [a for a in source.get("activities", []) if left <= a["date"] <= right]
+        actual = [s for s in recorded_sessions if left <= s.date <= right]
         planned = [s for d in result_days if left <= d["date"] <= right
                    for s in planning_schedule.day_sessions(d)]
         if (locked_day and left <= locked_day["date"] < right
             and not any(d.get("locked") for d in result_days)):
             planned += locked_sessions
         count = len(actual)+len(planned)
-        keys = sum(any(z.get("raw_time_min", 0) >= 5 and z["zone"] in {"Z3", "Z4", "Z5"}
-                       for z in a.get("zones", [])) for a in actual)
+        keys = sum(s.is_key for s in actual)
         keys += sum(s.get("is_key_session", s["zone"] in {"Z3", "Z4", "Z5"}) for s in planned)
         keys += len({str(e["start_date"]) for e in events
                      if e["event_type"] in {"MAIN_RACE", "CONTROL_RACE", "TEST"}
                      and left <= str(e["start_date"]) <= right
-                     and not any(a["date"] == str(e["start_date"]) for a in actual)})
+                     and not any(s.date == str(e["start_date"]) for s in actual)})
         for d, n, is_key in extra:
             if left <= d.isoformat() <= right:
                 count += n
@@ -1863,7 +1869,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         if not count or any(e["event_type"] in {"MAIN_RACE", "CONTROL_RACE", "TEST", "UNAVAILABLE"}
                             and str(e["start_date"]) <= d.isoformat() <= str(e["end_date"]) for e in events):
             continue
-        if actual_by_day[d] and (not actual_slots_known(d) or slot < len(actual_by_day[d])):
+        if actual_by_day[d] and (not actual_slots_known(d) or slot < len(recorded_sessions_by_day[d])):
             continue
         for z in COMPONENTS:
             if z in {"Z3", "Z4", "Z5"} and d not in key_slots and not (progression and z == "Z3" and key_slots and d > key_slots[-1]):
@@ -2103,7 +2109,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 "rejected_alternatives": [], "explanation": "Почивка; не е необходимо да се запълва всяка свободна минута."}
         if actual_day_minutes:
             item["actual_minutes"] = _round(actual_day_minutes)
-            item["actual_sessions"] = len(actual_by_day[day])
+            item["actual_sessions"] = len(recorded_sessions_by_day[day])
+            item["actual_activity_records"] = len(actual_by_day[day])
         if allocation is not None:
             item["load_budget"]["component_allocation"] = {z: _round(v) for z, v in allocation.items()}
         events_today = [e for e in events if str(e["start_date"]) <= key <= str(e["end_date"])]
@@ -2111,11 +2118,11 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         if not existing:
             existing = [a for a in source.get("activities", []) if a["date"] == key]
         known_actual_load = any(r["date"] == key and r["effective_load"] > 0 for r in rows)
-        if existing and (not actual_slots_known(day) or slot_index < len(actual_by_day[day])):
+        if existing and (not actual_slots_known(day) or slot_index < len(recorded_sessions_by_day[day])):
             item.update(status="EXISTING_ACTIVITY", explanation="Има реално изпълнена активност. Не се добавя втора планирана доза за същия ден.",
                         activity_refs=[a.get("activity_ref") for a in existing])
-            if actual_slots_known(day) and len(actual_by_day[day]) < slots_today:
-                item["explanation"] = "Изпълнените активности заемат собствените си сесии. Останалите разрешени места се проверяват с вече отчетения реален товар."
+            if actual_slots_known(day) and len(recorded_sessions_by_day[day]) < slots_today:
+                item["explanation"] = "Изпълнените занимания заемат собствените си сесии. Близките записи се броят заедно; целият им товар се отчита при проверката на останалите места."
         elif known_actual_load and not existing:
             item.update(status="EXISTING_ACTIVITY", explanation="За деня има реален приравнен товар, но липсва пълно описание на сесията. Не се добавя и не се заменя тренировъчна доза.", activity_refs=[])
             blocked = True
@@ -2161,7 +2168,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 item.update(status="REVIEW_REQUIRED", explanation="Днешната утвърдена задача е под минималната относителна доза. Нужен е преглед; не се запазва автоматично кратката сесия.")
                 item["rejected_alternatives"].append({"method_id": "LOCKED_SESSION", "code": "MINIMUM_CAPACITY_DOSE", "reason": item["explanation"]})
                 activation_eligible = False
-            elif len(preserved)+len(actual_by_day[day]) > slots_today or sessions + len(preserved) > session_limit or any(
+            elif len(preserved)+len(recorded_sessions_by_day[day]) > slots_today or sessions + len(preserved) > session_limit or any(
                 not _locked_dose_fits(s, profile, ready) for s in preserved) or any(effective[z] > budgets[z]["deficit_effective"] + .001 for z in COMPONENTS) or any(preserved_q[z] > value + .001 for z, value in q_remaining.items()) or total > min(remaining, day_available) + .001:
                 item.update(status="REVIEW_REQUIRED", explanation="Новите данни изискват преглед на днешните утвърдени задачи.")
                 activation_eligible = False
@@ -2184,7 +2191,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             item["rejected_alternatives"].append({"method_id": "TIME_BUDGET", "code": "WEEKLY_TIME_LIMIT_EXHAUSTED",
                                                    "reason": item["explanation"]})
         elif sessions >= session_limit:
-            item["explanation"] = "Достигнат е предпочитаният брой сесии за седемдневния проект."
+            item["explanation"] = f"Достигнат е максимумът от {session_limit} тренировъчни занимания за периода; отчетени са {sessions} изпълнени и планирани сесии."
         else:
             # Protect complete future quality doses before optional work uses
             # their preparation/cascade budget. These are local reservations,
@@ -3477,7 +3484,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         # and the desired target. Never relabel a greedy miss as a hard limit.
         strength_accent = any("STR" in goals[1] for goals in day_goals.values())
         quota = min(3 if strength_accent else 2, (controls or {}).get("max_strength_sessions", 2)) if profile.get("strength_enabled") else 0
-        actual_strength = [a for a in strength_actual.values() if allocation_start.isoformat() <= a["date"] <= end_date.isoformat()]
+        actual_strength = [s for s in strength_recorded_sessions if allocation_start.isoformat() <= s.date <= end_date.isoformat()]
         cycle_count = len(allocation_report.get("segments") or [None])
         total_quota = quota*cycle_count
         remaining_slots = max(0, total_quota-len(actual_strength))
@@ -3490,7 +3497,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 nominal = _nominal_fraction(method, role, profile, "GENERAL_PREPARATION", cap, controls)
                 blocks = _blocks(method, _quantized_work(method, min(method["max_work_min"], cap["capacity_minutes"]*nominal)), cap, settings)
                 role_q[role] = max(role_q[role], sum(b["duration_min"] for b in blocks if b["zone"] == "STR"))
-        building_slots = min(remaining_slots, max(0, 2*cycle_count-sum(a.get("purpose") not in {"MAINTENANCE", "ACTIVATION"} for a in actual_strength))) if strength_accent else 0
+        building_slots = min(remaining_slots, max(0, 2*cycle_count-sum(recorded_strength_building(s) for s in actual_strength))) if strength_accent else 0
         actual_q = allocation_report["components"]["STR"].get("actual") or 0.
         upper = actual_q + building_slots*role_q["BUILDING"] + (remaining_slots-building_slots)*role_q["MAINTENANCE"]
         allocation_report["strength_feasibility"] = {"desired_q": allocation_report["components"]["STR"]["target"],
@@ -3508,6 +3515,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     result_days = [d for d in result_days if d["date"] <= display_end.isoformat()]
     planned_sessions = [s for d in result_days for s in planning_schedule.day_sessions(d)]
     existing_in_draft = [a for a in existing_in_draft if a["date"] <= display_end.isoformat()]
+    recorded_in_draft = [s for s in recorded_in_draft if s.date <= display_end.isoformat()]
     actual_window_minutes = sum(float(a.get("duration_min") or 0.) for a in existing_in_draft)
     end_date = display_end
     if not automatic_time and component_governed:
@@ -3517,6 +3525,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                              if rolling_time_limit is not None else float("inf"))
         remaining = max(0., weekly_ceiling-actual_window_minutes-sum(s["total_minutes"] for s in planned_sessions))
     parameters = {"version": PARAMETER_VERSION, "method_library": method_library.provenance(), "method_registry_version": method_registry.VERSION,
+                  "recorded_session_policy": {"version": training_sessions.VERSION,
+                      "max_end_to_start_gap_minutes": training_sessions.MAX_GAP_MINUTES,
+                      "same_calendar_day": True, "unknown_timing": "SEPARATE_RECORDS"},
                   "method_progression": {k:v for k,v in profile["_method_progression"].items() if k != "observations"}, "race_duration": event_duration, "status": "COACH_HEURISTICS_FOR_REVIEW",
                   "individual_learning": (progression or {}).get("individual_learning"),
                   "recovery_mode": "LOAD_ONLY", "ready_threshold_percent": 50,
@@ -3609,7 +3620,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         "volume_by_microcycle": planning_schedule.microcycle_volume(source, result_days, meso_anchor,
                             program_start, program_end) if component_governed else [],
                         "key_sessions": sum(s.get("is_key_session", s["zone"] in {"Z3", "Z4", "Z5"}) for s in planned_sessions),
-                        "actual_sessions": len(existing_in_draft),
+                        "actual_sessions": len(recorded_in_draft),
+                        "actual_activity_records": len(existing_in_draft),
                         "actual_minutes": _round(actual_window_minutes),
                         "total_minutes": _round(actual_window_minutes+sum(s["total_minutes"] for s in planned_sessions)),
                         "planned_minutes": _round(sum(s["total_minutes"] for s in planned_sessions)),
