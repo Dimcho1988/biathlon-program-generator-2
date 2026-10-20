@@ -8,6 +8,9 @@ on:
       - "supabase/**"
       - "tests/database/**"
       - "tests/api/test_account_access_migration.py"
+      - "scripts/audit_migration_alignment.py"
+      - "docs/migration-alignment-2026-10-19.json"
+      - "docs/migration-remote-before-2026-10-19.json"
       - ".github/workflows/database-ci.yml"
 
 permissions:
