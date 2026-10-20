@@ -37,7 +37,7 @@ previous 90.163-second request.
 
 ## Minimal change
 
-Migration `20261019202456_include_analysis_revision_in_management_checkpoint.sql`
+Migration `20261020062208_include_analysis_revision_in_management_checkpoint.sql`
 adds only `analysis_revision`, read directly from the analysis state's
 `active_revision`. The single STABLE SQL statement gives the generation and
 revision a consistent read snapshot; the existing save core compares them
