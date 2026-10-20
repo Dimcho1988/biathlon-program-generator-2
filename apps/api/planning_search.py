@@ -4,6 +4,7 @@ An unsuccessful search is not proof of physiological impossibility. Complete
 engine replays preserve calendar locks, actual work, whole structures, causal
 Recovery and all Q/E and time gates. Ties retain the first stable schedule.
 """
+from datetime import date
 from time import monotonic
 
 
@@ -96,7 +97,12 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
             # an instruction to fill rest days or invent short fragments.
             easy = {d["date"]:sum(s["main_work_minutes"] for s in d.get("sessions", []) if s["zone"] == "Z1")
                     for d in best["days"] if not d.get("locked")}
-            if any(easy.values()):
+            first_easy = min((d for d, work in easy.items() if work > 0), default=None)
+            slots = controls.get("sessions_by_day") or [1]*7
+            later_empty = first_easy and any(
+                d["date"] > first_easy and not d.get("locked") and not d.get("sessions")
+                and slots[date.fromisoformat(d["date"]).weekday()] > 0 for d in best["days"])
+            if later_empty:
                 candidate = replay({**((best.get("parameters") or {}).get("allocation_policy") or {}),
                     "reservation_methods":reservation_methods(best),
                     "easy_caps":{d:w*.75 for d,w in easy.items() if w > 0},

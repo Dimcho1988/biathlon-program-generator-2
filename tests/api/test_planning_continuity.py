@@ -225,3 +225,7 @@ def test_search_prefers_distribution_without_extra_preparation_after_covering_pr
     assert calls[-1]["balance_complete_doses"] is False
     assert calls[-1]["easy_cap_zones"] == ["Z1"]
     assert calls[-1]["easy_caps"] == {"2026-10-20":45.}
+    calls.clear()
+    improve(plan, {"planning_controls":{"accents":["Z3"],
+        "sessions_by_day":[1,1,1,0,1,1,1]}}, replay)
+    assert not any(policy.get("spread_recovery") for policy in calls)
