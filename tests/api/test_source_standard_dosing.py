@@ -1,5 +1,6 @@
 """20 October contract: source dose, single Recovery and explicit adaptation."""
 from copy import deepcopy
+from types import SimpleNamespace
 import pytest
 from biathlon import method_library as lib, adaptive_methods, combined_methods
 from apps.api import training_plan_engine as engine
@@ -153,3 +154,26 @@ def test_undosed_continuous_z1_method_uses_one_sixty_five_percent_tmax_fallback(
     assert result['zone'] in {'Z1','Z2'}
     assert result['standard_work_seconds']==pytest.approx(.65*result['continuous_capacity_seconds'])
     assert result['dose_basis']=='INDIVIDUAL_TMAX_FALLBACK_65_PERCENT'
+
+
+@pytest.mark.parametrize('speeds,times,position,expected_products', [
+    ([10.,20.], [10.,20.], .5, [200.,225.]),
+    ([10.,20.], [10.,30.], .4, [200.,312.5]),
+    ([10.,20.], [10.,11.], .5, [110.,200.]),
+    ([20.,20.], [10.,20.], .5, [200.,400.]),
+    ([10.,20.], [10.,10.], .5, [100.,200.]),
+])
+def test_time_dosed_distance_range_covers_paired_endpoints_and_interior_peak(
+        monkeypatch, speeds, times, position, expected_products):
+    monkeypatch.setattr(lib, '_anchor', lambda *args: {'speed_kmh':20.})
+    monkeypatch.setattr(lib.speed_zones, 'classify', lambda *args: 'Z4')
+    segment = lib._segment({}, {'speed_multiplier':[v/20 for v in speeds],
+        'work':{'unit':'seconds','range':times}}, {}, {},
+        SimpleNamespace(inverse=lambda *_: 3600.), [], position, {})
+    low, high = segment['work_distance_range_m']
+    assert [low,high] == pytest.approx([v/3.6 for v in expected_products])
+    assert low <= segment['work_distance_m'] <= high
+    assert segment['target_speed_range_kmh'] == speeds
+    assert segment['work_duration_range_seconds'] == times
+    if speeds[0] != speeds[1] and times[0] != times[1]:
+        assert high < speeds[1] * times[1] / 3.6  # Never the Cartesian maximum.

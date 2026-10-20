@@ -239,7 +239,15 @@ def _segment(spec, base, profile, view, curve, tests, position, zone_profile):
         seconds, seconds_range = amount, works
         distance = velocity / 3.6 * seconds
         # The endpoints describe the paired short/fast and long/slow options.
-        distance_range = sorted([velocities[1] / 3.6 * works[0], velocities[0] / 3.6 * works[1]])
+        # Their product can peak between them; bound that same linear paired
+        # family, without combining the longest duration and fastest speed.
+        distances = [velocities[1] / 3.6 * works[0], velocities[0] / 3.6 * works[1], distance]
+        speed_delta, time_delta = velocities[0] - velocities[1], works[1] - works[0]
+        if speed_delta and time_delta:
+            stationary = -(velocities[1] * time_delta + works[0] * speed_delta) / (2 * speed_delta * time_delta)
+            if 0 < stationary < 1:
+                distances.append((velocities[1] + stationary * speed_delta) * (works[0] + stationary * time_delta) / 3.6)
+        distance_range = [min(distances), max(distances)]
     elif work.get("unit") == "meters":
         distance, distance_range = amount, works
         seconds = amount / (velocity / 3.6)
