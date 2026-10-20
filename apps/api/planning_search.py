@@ -4,6 +4,7 @@ An unsuccessful search is not proof of physiological impossibility. Complete
 engine replays preserve calendar locks, actual work, whole structures, causal
 Recovery and all Q/E and time gates. Ties retain the first stable schedule.
 """
+from datetime import date
 from time import monotonic
 
 
@@ -25,9 +26,17 @@ def score(plan, accents):
         row = rows[z]
         return min(1., (row.get("actual") or 0.) / max(1., row["target"]) + row["planned"] / max(1., row["target"]))
     support = [z for z in rows if z not in accents and rows[z]["target"] > 0]
+    # A preparation exception rescues an otherwise blocked quality. Prefer an
+    # equally covered plan that distributes the original allowance instead.
+    # Post-target maintenance is deliberate and is not penalized as excess.
+    preparation_cost = sum(
+        sum(item.get("additional_q", {}).values()) / max(1., rows.get("Z1", {}).get("target", 0.))
+        for item in (plan.get("allocation") or {}).get("continuity", {}).get("sessions", [])
+        if item.get("mode") == "QUALITY_PREPARATION_RESERVE")
     return (round(sum(coverage(z) for z in accents if z in rows), 5),
             round(min((coverage(z) for z in support), default=1.), 5),
-            round(sum(coverage(z) for z in rows), 5))
+            round(sum(coverage(z) for z in rows)-preparation_cost, 5),
+            sum(bool(d.get("sessions")) for d in plan.get("days", [])))
 
 
 def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_trial_seconds=0.):
@@ -82,9 +91,28 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
             trials += 1
             if score(candidate, accents) > score(best, accents):
                 best = candidate
-    best["allocation"]["search"] = {"version": "bounded-causal-replay-v3-reservation-reconciliation", "alternatives": trials,
+        if monotonic()+1.5*estimated_trial_seconds < deadline:
+            # Cap only early Z1 work; keep the Z2 accent intact and leave later
+            # empty training days uncapped. This is another causal trial, not
+            # an instruction to fill rest days or invent short fragments.
+            easy = {d["date"]:sum(s["main_work_minutes"] for s in d.get("sessions", []) if s["zone"] == "Z1")
+                    for d in best["days"] if not d.get("locked")}
+            first_easy = min((d for d, work in easy.items() if work > 0), default=None)
+            slots = controls.get("sessions_by_day") or [1]*7
+            later_empty = first_easy and any(
+                d["date"] > first_easy and not d.get("locked") and not d.get("sessions")
+                and slots[date.fromisoformat(d["date"]).weekday()] > 0 for d in best["days"])
+            if later_empty:
+                candidate = replay({**((best.get("parameters") or {}).get("allocation_policy") or {}),
+                    "reservation_methods":reservation_methods(best),
+                    "easy_caps":{d:w*.75 for d,w in easy.items() if w > 0},
+                    "easy_cap_zones":["Z1"], "spread_recovery":True})
+                trials += 1
+                if score(candidate, accents) > score(best, accents):
+                    best = candidate
+    best["allocation"]["search"] = {"version": "bounded-causal-replay-v4-continuity", "alternatives": trials,
         "reservation_replays":refits,
-        "improved": best is not baseline, "priority": ["ACCENT", "SUPPORT_MINIMUM", "OVERALL", "STABILITY"],
+        "improved": best is not baseline, "priority": ["ACCENT", "SUPPORT_MINIMUM", "COVERAGE_MINUS_PREPARATION_EXCESS", "TRAINING_DAYS", "STABILITY"],
         "conclusion": "SEARCH_BUDGET_EXHAUSTED" if best["allocation"].get("has_unallocated_load",
             any((row.get("remaining") or 0) > 1. for row in best["allocation"]["components"].values())) else "TARGETS_COVERED",
         "hard_limit_proven": False}

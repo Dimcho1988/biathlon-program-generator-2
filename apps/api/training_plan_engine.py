@@ -19,7 +19,7 @@ import pandas as pd
 
 from biathlon import hr_speed, recovery_v2, speed_duration, training_targets, planning_controls, planning_history, planning_schedule, planning_allocation, load_progression, mesocycle_focus, training_return
 from biathlon.constants import COMPONENTS, DEFAULT_PARAMETERS, fresh_parameters
-from biathlon import method_dosing
+from biathlon import method_dosing, planning_continuity
 from biathlon.method_dosing import continuous_building_fraction, continuous_maintenance_fraction, recovery_factor, threshold_allowed
 from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION, DOWNWARD_FACTORS
 from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, equivalence_slope
@@ -36,8 +36,8 @@ from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 
-VERSION = "training-management-v51-race-course-ranges"
-PARAMETER_VERSION = "management-parameters-v47"
+VERSION = "training-management-v52-bounded-maintenance"
+PARAMETER_VERSION = "management-parameters-v48"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -1922,6 +1922,68 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 q[z] = objective["remaining"] or 0.
         return values, q, segment
 
+    continuity_references = {}
+    manual_components = set(profile.get("component_targets_weekly") or {})
+
+    def continuity_reserve(segment):
+        """Freeze reference doses per anchored cycle, independently of forecasts."""
+        if segment is None:
+            return {"q": {}, "e": {}, "references": {}}
+        identity = segment["window_start"]
+        eligible = {z for z, row in segment["components"].items()
+                    if z not in manual_components and planning_continuity.eligible(row)}
+        if identity not in continuity_references:
+            references = {}
+            reference_day = date.fromisoformat(identity)
+            reference_period = _phase(periodization, reference_day)[0]
+            for original in methods_for_day(reference_day) if eligible else []:
+                z = original["zone"]
+                if (z not in eligible or original.get("mixed_component") or original.get("combined_methods")
+                    or original.get("double_threshold") or original.get("neuromuscular_profile")
+                    or original["purpose"] == "SUPPORTING" or reference_period not in original["periods"]
+                    or original["structure"] not in {"CONTINUOUS", "TWO_REPETITIONS", "THRESHOLD_REPETITIONS",
+                        "THRESHOLD_LONG", "THRESHOLD_SHORT", "MODEL_INTERVALS", "METABOLIC_INTERVALS",
+                        "LIBRARY_CONTINUOUS", "LIBRARY_INTERVALS", "STRENGTH_CIRCUIT", "STRENGTH_SETS"}):
+                    continue
+                for reference_sport in training_sports:
+                    if (reference_sport not in original["sports"] or not by_sport_minutes.get(reference_sport, 0.)
+                        or z == "STR" and reference_sport != primary_sport):
+                        continue
+                    method = _copy_method_budget(original)
+                    method["actual_sport"] = reference_sport
+                    cap = capacity_for(method, settings, speed_by_sport[reference_sport], context_by_sport[reference_sport],
+                        today, profile.get("allow_expert_fallback", True),
+                        use_model_prior=(controls or {}).get("capacity_policy") == "MODEL_WITH_PRIOR")
+                    if cap is None:
+                        continue
+                    cap["readiness_policy"] = adaptive_methods.readiness_policy(method, profile, {c:100. for c in COMPONENTS})
+                    role = "RECOVERY" if method["purpose"] == "RECOVERY" else "MAINTENANCE"
+                    nominal = _nominal_fraction(method, role, profile, reference_period, cap, controls)
+                    minimum = _minimum_work(method, cap, settings)
+                    maximum = min(method["max_work_min"], cap["capacity_minutes"]*nominal)
+                    if role == "RECOVERY":
+                        maximum = min(maximum, profile.get("recovery_session_cap_min", 30.))
+                    work = _quantized_work(method, maximum)
+                    ceiling = _dose_ceiling(method, role, profile, reference_period, cap, controls)
+                    blocks = _blocks(method, work, cap, settings) if minimum is not None and work >= minimum else []
+                    while blocks and not _dose_fits(blocks, cap, z, ceiling, tolerance=1e-6):
+                        work = _previous_work(method, work)
+                        blocks = _blocks(method, work, cap, settings) if work >= minimum else []
+                    if not blocks:
+                        continue
+                    q, e, _ = _candidate_load(blocks, settings, rows, reference_day, zone_tmax_minutes=cap["zone_tmax_minutes"])
+                    if q[z] <= .005:
+                        continue
+                    reference = {"method_id":method["id"], "sport":reference_sport, "q":q, "e":e,
+                                 "work_minutes":work, "purpose":role}
+                    # Pick the least costly complete nominal maintenance dose,
+                    # never the largest method in a growing catalogue.
+                    if z not in references or (q[z], q["Z1"], method["id"]) < (
+                            references[z]["q"][z], references[z]["q"]["Z1"], references[z]["method_id"]):
+                        references[z] = reference
+            continuity_references[identity] = references
+        return planning_continuity.reserves(segment["components"], continuity_references[identity], manual_components)
+
     def executable_key(d, forecast_ready, future_budget, future_q):
         """A calendar reservation requires a complete executable method."""
         for sport in training_sports:
@@ -2117,6 +2179,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         for z, remaining_q in q_remaining.items():
             budgets[z].update(target_weekly_q=goals[z]["target_weekly_q"], remaining_q=remaining_q)
         period_objectives = active_segment["components"] if active_segment else None
+        continuity_allowed = bool(period_objectives and all_sources_known and not taper
+            and not reentry_dose_active(periodization, day) and period != "TRANSITION"
+            and (not cycle_state or cycle_state["kind"] != "RECOVERY"))
+        maintenance_reserve = continuity_reserve(active_segment) if continuity_allowed else {"q": {}, "e": {}, "references": {}}
         allocation = planning_allocation.quota(goal_windows, opportunities, forecast_rows, day, slot_index,
             objectives=period_objectives) if component_governed else None
         def objective_load(direct, effective):
@@ -2181,6 +2247,36 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     effective[z] += load[z]
                     preserved_q[z] += direct_load[z]
             total = sum(v["total_minutes"] for v in preserved)
+            preserved_budget_ok = (all(effective[z] <= budgets[z]["deficit_effective"] + .001 for z in COMPONENTS)
+                and all(preserved_q[z] <= value + .001 for z, value in q_remaining.items()))
+            if not preserved_budget_ok and continuity_allowed:
+                # Revalidate an approved exception against today's real ledger.
+                # Saved metadata is explanatory, never authority to refill it.
+                shadow_rows, shadow_days = forecast_rows, list(result_days)
+                preserved_budget_ok = True
+                for session in preserved:
+                    cb, cq, cs = component_budgets(shadow_rows, shadow_days, day)
+                    reserve = continuity_reserve(cs)
+                    z = session["zone"]
+                    maintenance = (session["purpose"] in {"MAINTENANCE", "RECOVERY"}
+                        and z in reserve["references"] and not session.get("mixed_component")
+                        and not session.get("double_threshold"))
+                    allowance = planning_continuity.limits(cs["components"], cb, cq, reserve, zone=z,
+                        maintenance=maintenance, preparation=bool("Z1" not in manual_components
+                            and cs["components"]["Z1"]["basis"] == "DIRECT_Q" and z not in {"Z1", "Z2"}
+                            and not session.get("mixed_component")
+                            and not any(b["kind"] == "WORK" and b["zone"] == "Z1" for b in session["blocks"])))
+                    direct, effective_part = session["direct_equivalent_minutes"], session["canonical_effective_load"]
+                    if not planning_continuity.fits(direct, effective_part, allowance, cs["components"]):
+                        preserved_budget_ok = False
+                        break
+                    current_exception = planning_continuity.evidence(direct, effective_part, allowance, cs)
+                    if current_exception:
+                        session["dose_evidence"]["continuity"] = current_exception
+                    else:
+                        session["dose_evidence"].pop("continuity", None)
+                    shadow_rows = _add_forecast_session(shadow_rows, day, effective_part)
+                    shadow_days.append({"date":key, "sessions":[session]})
             below_minimum = any(s["zone"] != "STR" and
                 _minimum_dose_usage(s["blocks"], s["dose_evidence"], s["zone"], primary_only=bool(s.get("mixed_component") or s["dose_evidence"].get("developmental_variant"))) + 1e-9 < (s["dose_evidence"].get("min_dose_fraction", MIN_AEROBIC_DOSE_FRACTION) or 0.)
                 for s in preserved)
@@ -2189,7 +2285,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 item["rejected_alternatives"].append({"method_id": "LOCKED_SESSION", "code": "MINIMUM_CAPACITY_DOSE", "reason": item["explanation"]})
                 activation_eligible = False
             elif len(preserved)+len(recorded_sessions_by_day[day]) > slots_today or sessions + len(preserved) > session_limit or any(
-                not _locked_dose_fits(s, profile, ready) for s in preserved) or any(effective[z] > budgets[z]["deficit_effective"] + .001 for z in COMPONENTS) or any(preserved_q[z] > value + .001 for z, value in q_remaining.items()) or total > min(remaining, day_available) + .001:
+                not _locked_dose_fits(s, profile, ready) for s in preserved) or not preserved_budget_ok or total > min(remaining, day_available) + .001:
                 item.update(status="REVIEW_REQUIRED", explanation="Новите данни изискват преглед на днешните утвърдени задачи.")
                 activation_eligible = False
             else:
@@ -2241,7 +2337,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         (r.get("is_key_session") if future_kind == "KEY" else
                          r["zone"] == "STR" if future_kind == "STRENGTH" else r["zone"] == "Z1")]
                     if not preferred_future:
-                        continue
+                        # A replay with no strength session is evidence of a
+                        # missed task, not permission to erase its preparation
+                        # reservation while its cycle objective remains open.
+                        if future_kind == "STRENGTH":
+                            preferred_future = None
+                        else:
+                            continue
                 for future_sport in training_sports:
                     future_candidates = [(future_sport, m) for m in methods_for_day(future_day) if future_sport in m["sports"]]
                     future_state = day_goals[future_day][2]
@@ -2452,6 +2554,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             choices = []
             choice_methods = {}
             choice_checks = {}
+            choice_headroom = {}
             candidates = [(m_sport, m) for m_sport in training_sports for m in methods_for_day(day)
                           if m_sport in m["sports"] and (m["zone"] != "STR" or m_sport == primary_sport)]
             allocation_segments = segment_keys if period_objectives is not None else None
@@ -2534,7 +2637,18 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 if method.get("double_threshold"):
                     initial_purpose = "BUILDING"
                 initial_purpose = adaptive_methods.purpose_for(initial_purpose, readiness_rule)
+                post_target_maintenance = bool(continuity_allowed and z in maintenance_reserve["references"]
+                    and not mixed and not method.get("combined_methods") and not method.get("double_threshold")
+                    and not method.get("neuromuscular_profile")
+                    and method["structure"] not in method_registry.COMBINED_STRUCTURES)
+                if post_target_maintenance:
+                    initial_purpose = "RECOVERY" if method["purpose"] == "RECOVERY" else "MAINTENANCE"
+                    allocation = {**allocation, z: max(0., period_objectives[z]["target"]
+                        + maintenance_reserve["q"][z] - period_objectives[z]["actual"] - period_objectives[z]["planned"])}
                 is_key = z in {"Z3", "Z4", "Z5"} and initial_purpose == "BUILDING"
+                # High-intensity post-target work still consumes a key quota
+                # and obeys spacing; changing its role cannot bypass either.
+                is_key = is_key or post_target_maintenance and z in {"Z3", "Z4", "Z5"}
                 if not is_key and z in {"Z3", "Z4", "Z5"} and allocation is not None and period_objectives is not None:
                     allocation = {**allocation, z: period_objectives[z]["remaining"] or 0.}
                 is_strength = z == "STR" or method["structure"] == "AEROBIC_STRENGTH" or any(p["zone"] == "STR" for p in method.get("combined_methods", []))
@@ -2551,6 +2665,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     rejection = ("SEPARATE_SESSIONS_AVAILABLE", "Комбинацията не е необходима: няма доказан недостиг на места за отделните основни методи.")
                 elif period not in method["periods"]:
                     rejection = ("PERIOD_NOT_SUPPORTED", "Методът не е включен в този период.")
+                elif (z == "Z1" and not mixed and (profile.get("_allocation_policy") or {}).get("spread_recovery")
+                    and any(s["zone"] == "Z1" for prior in prior_today for s in planning_schedule.day_sessions(prior))
+                    and any(d > day and segment_keys[d] == segment_keys[day] for d,s in free_slots)):
+                    rejection = ("EASY_WORK_DISTRIBUTED", "Леката работа е разпределена и в следващите тренировъчни дни; днешната основна задача в Z1 вече е зададена.")
                 elif method.get("neuromuscular_profile") and (slot_index != 0 or day.weekday() not in method["neuromuscular_profile"]["days"]):
                     rejection = ("NMS_DAY_PREFERENCE", "Кратките ускорения са включени само в избраните дни и в първата подходяща сесия.")
                 elif cycle_state and controls["accent_mode"] == "AUTO" and not cycle_state["explicit"] and period in {"PRECOMPETITION", "COMPETITION"} and method["purpose"] == "BUILDING" and not is_strength and z not in race_development_zones:
@@ -2567,7 +2685,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     rejection = ("STRENGTH_SESSION_LIMIT", "Достигнат е силовият лимит или липсва достатъчно разстояние между силовите сесии.")
                 elif is_key and (key_sessions >= key_limit or (last_key_day and (day - last_key_day).days < 2)):
                     rejection = ("KEY_SESSION_LIMIT", "Достигнат е лимитът или липсва достатъчно разстояние между ключови сесии.")
-                elif is_key and day not in key_slots:
+                elif is_key and day not in key_slots and not post_target_maintenance:
                     probe = capacity_for(method, settings, speed, context, today, profile.get("allow_expert_fallback", True),
                                          use_model_prior=(controls or {}).get("capacity_policy") == "MODEL_WITH_PRIOR")
                     rejection = (("CAPACITY_UNAVAILABLE", "Няма допустима индивидуална крива за този метод и средство.")
@@ -2644,6 +2762,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     purpose = "MAINTENANCE"
                 if method.get("double_threshold"):
                     purpose = "BUILDING"
+                if post_target_maintenance:
+                    purpose = "RECOVERY" if method["purpose"] == "RECOVERY" else "MAINTENANCE"
                 purpose = adaptive_methods.purpose_for(purpose, readiness_rule)
                 if is_strength and strength_building >= 2:
                     purpose = "MAINTENANCE"
@@ -2691,7 +2811,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                           {"code": "TECHNICAL_SESSION_CEILING" if availability_mode == "AUTO_HISTORY" else "DAILY_AVAILABLE_WORK", "limit_minutes": max(0., day_available - overhead)}]
                 allocation_policy = profile.get("_allocation_policy") or {}
                 search_cap = allocation_policy.get("easy_caps", {}).get(day.isoformat())
-                if search_cap is not None and z in {"Z1", "Z2"} and not mixed:
+                if search_cap is not None and z in allocation_policy.get("easy_cap_zones", ["Z1", "Z2"]) and not mixed:
                     limits.append({"code": "ALTERNATIVE_EASY_ALLOCATION", "limit_minutes": search_cap})
                 if mixed or method.get("developmental_variant"):
                     limits.append({"code": "SUPPLEMENTARY_DOSE_CAP" if mixed else "DEVELOPMENTAL_DOSE_CAP",
@@ -2770,7 +2890,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 # Balance only the complete doses needed, not all free slots.
                 # This avoids taking a maximum now and stranding a tiny remainder.
                 stranded_fraction = 0.
-                if allocation and allocation_policy.get("balance_complete_doses", True) and not method.get("double_threshold") and not mixed:
+                if allocation and (allocation_policy.get("balance_complete_doses", True)
+                    or z == "Z1" and purpose == "RECOVERY" and allocation_policy.get("spread_recovery")) and not method.get("double_threshold") and not mixed:
                     minimum_blocks = _blocks(method, method["min_work_min"], evidence, settings)
                     minimum_q, minimum_e, _ = candidate_load(minimum_blocks, capacity=evidence)
                     minimum_load = objective_load(minimum_q, minimum_e)[z]
@@ -2778,6 +2899,12 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     remaining_slots = (planning_allocation.remaining_slots(opportunities[z], day, slot_index,
                         segment_keys=allocation_segments) if is_key else separate_slots)
                     share = planning_allocation.dose_share(allocation[z], minimum_load, maximum_load, remaining_slots)
+                    if z == "Z1" and purpose == "RECOVERY" and allocation_policy.get("spread_recovery"):
+                        future_days = len({d for d,s in free_slots if d >= day
+                            and (allocation_segments is None or allocation_segments[d] == allocation_segments[day])})
+                        count = min(future_days, math.floor((allocation[z]+.001)/max(.001, minimum_load)))
+                        if count > 1:
+                            share = min(maximum_load, allocation[z]/count)
                     if share is not None and share < maximum_load:
                         lo, hi = method["min_work_min"], work
                         for _ in range(16):
@@ -2797,7 +2924,16 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         if 1. < remainder < minimum_load:
                             stranded_fraction = remainder / max(1., allocation[z])
                 if not limited:
-                    def fits_component_budget(candidate, candidate_q):
+                    headroom = (planning_continuity.limits(period_objectives, budgets, q_remaining, maintenance_reserve,
+                        zone=z, maintenance=post_target_maintenance,
+                        preparation=bool(continuity_allowed and "Z1" not in manual_components
+                            and period_objectives["Z1"]["basis"] == "DIRECT_Q"
+                            and z not in {"Z1", "Z2"} and not mixed and not method.get("combined_methods")
+                            and not any(b["kind"] == "WORK" and b["zone"] == "Z1" for b in blocks)))
+                        if period_objectives else None)
+                    def fits_component_budget(candidate, candidate_q, *, allowance=headroom):
+                        if allowance is not None:
+                            return planning_continuity.fits(candidate_q, candidate, allowance, period_objectives)
                         return (all(candidate[z] <= budgets[z]["deficit_effective"] + .001 for z in COMPONENTS)
                                 and all(candidate_q[z] <= available_q + .001 for z, available_q in q_remaining.items())
                                 and (period_objectives is None or all(
@@ -2874,14 +3010,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         limits.append({"code": "FUTURE_QUALITY_RESERVATION_WORK_CAP", "limit_minutes": _round(work)})
                     elif conflict[0] == "RESERVE_FUTURE_QUALITY_BUDGET" and (is_key or is_strength) and minimum_blocks:
                         # A future opportunity must not cancel today's due,
-                        # executable quality. Use its legal minimum; later
-                        # opportunities are recalculated from the actual choice.
-                        conflict = recovery_conflict(_add_forecast_session(forecast_rows, day, minimum_load),
-                                                     minimum_q, minimum_load, minimum_minutes, protect_future=False)
-                        if not conflict and fits_component_budget(minimum_load, minimum_q):
-                            work = method["min_work_min"]
-                            blocks, direct, effective, technical = minimum_blocks, minimum_q, minimum_load, minimum_technical
-                            after_rows = _add_forecast_session(forecast_rows, day, effective)
+                        # executable quality. If even the current minimum cannot
+                        # preserve that future guess, shrinking today's legal
+                        # dose has no benefit. Reconcile later opportunities
+                        # against the complete selected dose instead.
+                        conflict = recovery_conflict(after_rows, direct, effective,
+                            sum(b["duration_min"] for b in blocks), protect_future=False)
+                        if not conflict and fits_component_budget(effective, direct):
                             evidence["future_reservation_relaxed_for_current_quality"] = True
                         elif not conflict:
                             conflict = ("RESERVE_FUTURE_QUALITY_BUDGET", "Минималната текуща доза не се побира в компонентния бюджет.")
@@ -2966,11 +3101,18 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 since = (day-date.fromisoformat(last_stimulus)).days if last_stimulus else 28
                 maintenance_need = min(3., since/7)
                 score += maintenance_need - (0. if allocation is not None else 2.5*len(proposed_dates))
+                if post_target_maintenance:
+                    # Balance actual + proposed coverage. An overfilled high
+                    # zone gains no priority by copying the original mix again.
+                    score -= max(0., (period_objectives[z]["actual"] + period_objectives[z]["planned"])
+                                 / max(1., period_objectives[z]["target"]) - 1.)
                 if is_key and len(key_slots) > 1 and day == key_slots[-1] and z not in selected_accents:
                     score += 1.5
                 evidence["selection"] = {"accent": z in selected_accents, "role": purpose,
                                          "days_since_component_work": since, "proposed_component_days": len(proposed_dates),
                                          "maintenance_priority": maintenance_need, "stranded_fraction": stranded_fraction}
+                if post_target_maintenance:
+                    evidence["selection"]["post_target_maintenance"] = True
                 if allocation is not None:
                     evidence["selection"].update(component_allocation={k: _round(v) for k, v in allocation.items()},
                                                    coverage_score=_round(planning_allocation.coverage(objective_load(direct, effective), allocation, selected_accents, targets=ranking_targets)),
@@ -3023,16 +3165,18 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     training_guidance.annotate_double_threshold(blocks, profile)
                 choice_methods[(sport, method["id"])] = _copy_method_budget(method)
                 def choice_check(parts, *, capacity=deepcopy(evidence), zone=z, ceiling=max_usage,
-                                 time_ceiling=session_ceiling, conflict_check=recovery_conflict):
+                                 time_ceiling=session_ceiling, conflict_check=recovery_conflict,
+                                 budget_check=fits_component_budget if not limited else lambda e, q: True):
                     if (not parts or not _dose_fits(parts, capacity, zone, ceiling, tolerance=1e-6)
                         or sum(b["duration_min"] for b in parts) > min(day_available, remaining) + .001
                         or any(sum(b["duration_min"] for b in parts if b.get("session_index", 1) == part) > time_ceiling + .001
                                for part in {b.get("session_index", 1) for b in parts})):
                         return False
                     q, e, _ = candidate_load(parts, capacity=capacity)
-                    return (fits_component_budget(e, q) and not conflict_check(
+                    return (budget_check(e, q) and not conflict_check(
                         _add_forecast_session(forecast_rows, day, e), q, e, sum(b["duration_min"] for b in parts)))
                 choice_checks[(sport, method["id"])] = choice_check
+                choice_headroom[(sport, method["id"])] = headroom if not limited else None
                 choices.append((score, method["id"], {"method_id": method["id"], "title": method["title"],
                                 "execution_descriptor": method_descriptor(original_method, sport),
                                 "sport": sport, "zone": z, "purpose": purpose, "method_family": family, "blocks": blocks, "is_key_session": is_key,
@@ -3284,7 +3428,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         methods=protected_methods, cores=protected_cores)
                 def choice_priority(c):
                     preferred = [r for r in reservation_methods.get(day.isoformat(), []) if r.get("slot") == slot_index+1]
-                    return (bool(preferred) and not any(r["method_id"] == c[2]["method_id"] and r["sport"] == c[2]["sport"] for r in preferred),
+                    return (bool((choice_headroom[(c[2]["sport"], c[2]["method_id"])] or {}).get("mode") == "POST_TARGET_MAINTENANCE"),
+                        bool(preferred) and not any(r["method_id"] == c[2]["method_id"] and r["sport"] == c[2]["sport"] for r in preferred),
                         not c[2]["is_key_session"] if day in key_slots and slot_index == first_plannable_slot(day) else False,
                         not (c[2]["zone"] == "Z1" and c[2]["purpose"] != "RECOVERY"
                              and choice_methods[(c[2]["sport"], c[2]["method_id"])]["structure"] in {"CONTINUOUS", "TWO_REPETITIONS"})
@@ -3327,6 +3472,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             return False
                         if protected_components:
                             return reservation_check(parts, bundle["cores"], capacity=selected_evidence) is not None
+                        if not any(protected_q.values()) and not any(protected_e.values()):
+                            return True  # The selected candidate's own policy was checked above.
                         cq, ce, _ = candidate_load(parts, capacity=selected_evidence)
                         return (all(cq[c]+protected_q[c] <= available_q+.001 for c, available_q in q_remaining.items())
                             and all(ce[c]+protected_e[c] <= budgets[c]["deficit_effective"]+.001 for c in COMPONENTS)
@@ -3409,6 +3556,14 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     selected_evidence["selection"]["long_term_uncovered_quality"] = bool(
                         planning_allocation.quality_priority(session["zone"], period_objectives))
                 forecast_rows, after = selected_rows, selected_after
+                allowance = choice_headroom[(session["sport"], session["method_id"])]
+                continuity = (planning_continuity.evidence(session["direct_equivalent_minutes"],
+                    session["canonical_effective_load"], allowance, active_segment) if allowance else None)
+                if continuity:
+                    session["dose_evidence"]["continuity"] = continuity
+                    session["dose_evidence"]["explanation"] += (" Използван е ограничен поддържащ резерв след реално изпълнена цел."
+                        if continuity["mode"] == "POST_TARGET_MAINTENANCE" else
+                        " Използван е резерв до 10% от целта за Z1 само за подготовката и паузите на непокрития основен компонент.")
                 if session.get("mixed_component") and session["dose_evidence"].get("selection", {}).get("component_allocation"):
                     item["load_budget"]["component_allocation"] = session["dose_evidence"]["selection"]["component_allocation"]
                 after_ready = {r["zone"]: _round(r["readiness_percent"]) for r in after["current"]}
@@ -3417,6 +3572,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 item.update(status="TRAINING", session=parts[0], sessions=parts,
                             readiness_after=after_ready if forecast_known else {z: None for z in COMPONENTS},
                             explanation=f"{session['title']}: {session['main_work_minutes']:g} минути основна работа, {session['total_minutes']:g} минути общо. " + ("Развитие на акцентния компонент." if session["purpose"] == "BUILDING" else "Поддържане на компонента извън основния акцент." if session["purpose"] == "MAINTENANCE" else "Активираща силова задача с намалена доза." if session["purpose"] == "ACTIVATION" else "Лека възстановителна задача.") + " Дозата е проверена спрямо капацитета, 7/40 и Recovery.")
+                if continuity:
+                    item["explanation"] += (" Целта вече е изпълнена; зададена е намалена поддържаща доза от общия резерв за микроцикъла."
+                        if continuity["mode"] == "POST_TARGET_MAINTENANCE" else
+                        " Недостигът в Z1 е покрит с ограничен резерв за загрявка, паузи и разпускане.")
                 item["rejected_alternatives"] += [{"method_id": c[1], "code": "LOWER_CURRENT_PRIORITY", "reason": "Допустим метод с по-нисък текущ приоритет; не се добавя втора пълна доза."} for c in choices[1:]]
                 remaining -= session["total_minutes"]
                 if session["zone"] != "STR":
@@ -3431,6 +3590,12 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     last_key_day = day
             else:
                 item["explanation"] = "Няма метод с едновременно подходяща доза, бюджет и готовност. Почивката е допустим резултат."
+                q_blockers = sorted({z for r in item["rejected_alternatives"]
+                    if r["code"] == "DIRECT_Q_PROGRESSION_BUDGET" for z in r.get("blocking_components", [])})
+                if q_blockers:
+                    item["explanation"] = ("Оставащият приравнен обем в " + ", ".join(q_blockers)
+                        + " не допуска минималната цяла тренировка с подготовката ѝ. "
+                        "Приложимите резерви за поддържане и подготовка също не осигуряват допустима доза.")
                 manual_blockers = sorted({z for r in item["rejected_alternatives"] for z in r.get("manual_target_components", [])})
                 if manual_blockers:
                     item["explanation"] = ("Ръчна цел за " + ", ".join(manual_blockers)
@@ -3500,6 +3665,17 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     allocation_report = planning_allocation.report(goal_windows, rows, forecast_rows, result_days,
         sum(n for d,n in slot_counts.items() if d <= display_end), session_limit, weekly_minutes, source=source, segment_keys=segment_keys if component_governed else None) if component_governed and forecast_known and not blocked else None
     if allocation_report:
+        continuity_sessions = [{"date":d["date"], "method_id":s["method_id"],
+            "mode":s["dose_evidence"]["continuity"]["mode"],
+            "additional_q":{z:v for z,v in s["dose_evidence"]["continuity"]["additional_q"].items() if v}}
+            for d in result_days for s in planning_schedule.day_sessions(d)
+            if s.get("dose_evidence", {}).get("continuity")]
+        if continuity_sessions:
+            allocation_report["continuity"] = {"version":planning_continuity.VERSION,
+                "preparation_fraction":planning_continuity.PREPARATION_FRACTION,
+                "reference_doses":{k:v for k,v in continuity_references.items() if v},
+                "sessions":continuity_sessions,
+                "targets_unchanged":True, "rolling_limits_preserved":True}
         # Optimistic structural upper bound, separate from physiological gates
         # and the desired target. Never relabel a greedy miss as a hard limit.
         strength_accent = any("STR" in goals[1] for goals in day_goals.values())
@@ -3551,6 +3727,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                              if rolling_time_limit is not None else float("inf"))
         remaining = max(0., weekly_ceiling-actual_window_minutes-sum(s["total_minutes"] for s in planned_sessions))
     parameters = {"version": PARAMETER_VERSION, "method_library": method_library.provenance(), "method_registry_version": method_registry.VERSION,
+                  "continuity_policy": {"version":planning_continuity.VERSION,
+                      "preparation_fraction":planning_continuity.PREPARATION_FRACTION,
+                      "maintenance_reserve":"ONE_NOMINAL_MAINTENANCE_REFERENCE_PER_EXECUTED_COMPONENT",
+                      "basis":"COACH_POLICY_NOT_PHYSIOLOGICAL_THRESHOLD", "rolling_limits_preserved":True},
                   "race_course_policy": race_course.VERSION, "execution_range_policy": execution_ranges.VERSION,
                   "recorded_session_policy": {"version": training_sessions.VERSION,
                       "max_end_to_start_gap_minutes": training_sessions.MAX_GAP_MINUTES,
