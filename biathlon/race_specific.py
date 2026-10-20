@@ -2,14 +2,14 @@
 from copy import deepcopy
 from . import speed_duration, speed_zones, training_guidance, adaptive_methods, preliminary_capacity, dosing_curve
 
-VERSION = "race-specific-speed-methods-v3"
+VERSION = "race-specific-speed-methods-v4-time-ranges"
 PERIODS = ("SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION")
 
 
 def reference(profile, view, event, today):
     result = {"version":VERSION,"status":"UNAVAILABLE","discipline":profile.get("discipline"),
               "sport":profile.get("sport"),"bands":[],"dose_from_maximum_time":False}
-    if not view or view.get("sport") != profile.get("sport") or event.get("source") != "SPEED_DURATION":
+    if not view or view.get("sport") != profile.get("sport") or event.get("source") not in {"SPEED_DURATION", "COURSE_EXPECTATION"}:
         return result
     keys = set(view.get("active_test_keys",[]))
     tests = [e["payload"] for e in view.get("tests",[]) if e["entry_key"] in keys]
@@ -17,9 +17,9 @@ def reference(profile, view, event, today):
         return result
     try:
         curve = speed_duration.calibrated(tests, prior=preliminary_capacity.curve_from_summary(view.get("preliminary_capacity")))
-        seconds = curve.inverse(event["distance_m"],distance=True)
+        seconds = event["duration_min"]*60 if event.get("source") == "COURSE_EXPECTATION" else curve.inverse(event["distance_m"],distance=True)
         blend = dosing_curve.from_view(view)
-        dosing_seconds = blend.inverse(event["distance_m"], distance=True) if blend else seconds
+        dosing_seconds = blend.inverse(event["distance_m"], distance=True) if blend and event.get("source") != "COURSE_EXPECTATION" else seconds
         bands = []
         dosing_bands = []
         # Versioned coaching references around the event. These durations
@@ -33,6 +33,7 @@ def reference(profile, view, event, today):
             velocity = curve.speed(duration)*3.6
             zone = speed_zones.classify(view.get("speed_zones"),velocity)
             bands.append({"role":name,"label":label,"speed_kmh":velocity,
+                "speed_range_kmh": [velocity*.95, velocity],
                 "pace_seconds_km":3600/velocity,"maximum_duration_s":duration,"zone":zone,
                 "evidence":"INTERPOLATED" if min(t["duration_s"] for t in tests) <= duration <= max(t["duration_s"] for t in tests) else "EXTRAPOLATED",
                 "lactate_reference":training_guidance.lactate_at_speed(profile,profile["sport"],velocity,today)})
@@ -40,6 +41,7 @@ def reference(profile, view, event, today):
                 dosing_duration = dosing_seconds*factor
                 working_speed = blend.speed(dosing_duration)*3.6
                 dosing_bands.append({**bands[-1], "speed_kmh": working_speed,
+                    "speed_range_kmh": [working_speed*.95, working_speed],
                     "pace_seconds_km": 3600/working_speed, "maximum_duration_s": dosing_duration,
                     "label": {"BELOW":"Под състезателния ориентир", "RACE":"Състезателен ориентир", "ABOVE":"Над състезателния ориентир"}[name]+" · 30/70",
                     "zone": speed_zones.classify(view["dosing_model"]["speed_zones"], working_speed),
@@ -47,6 +49,9 @@ def reference(profile, view, event, today):
                     "dosing_model_version": dosing_curve.VERSION,
                     "lactate_reference": training_guidance.lactate_at_speed(profile,profile["sport"],working_speed,today)})
         return {**result,"status":"AVAILABLE","duration_s":seconds,
+            "duration_range_s": [v*60 for v in event["duration_range_min"]] if event.get("duration_range_min") else [seconds*.95, seconds*1.05],
+            "event_id": (profile.get("_race_event") or {}).get("event_id"),
+            "course": deepcopy(profile.get("_race_course")),
             "speed_kmh":curve.speed(seconds)*3.6,"bands":bands,"dosing_bands":dosing_bands,"accepted_test_count":len(tests),
             "active_test_keys":sorted(keys),"source_generation_id":view.get("source_generation_id"),
             "source_revision":view.get("source_revision"),"model_version":view.get("model_version"),
@@ -75,21 +80,27 @@ def methods(profile, reference, base_methods):
         if any(p["zone"] == zone for p in profile.get("interval_profiles",[])):
             continue
         m = deepcopy(template)
-        # Explicit versioned recipe durations, independent of continuous Tmax.
-        work = {"BELOW": 180., "RACE": 90., "ABOVE": 45.}[band["role"]]
+        # Coach convention: event duration chooses the interval length only.
+        # Capacity, whole repetitions, recovery and Q/E still determine dose.
+        ratio, lower_cap, upper_cap = {"BELOW": (.25, 60., 360.), "RACE": (.2, 30., 300.), "ABOVE": (.1, 15., 120.)}[band["role"]]
+        race_times = reference.get("duration_range_s") or [reference["duration_s"]*.95, reference["duration_s"]*1.05]
+        work_range = [min(upper_cap, max(lower_cap, value*ratio)) for value in race_times]
+        work = work_range[1]
         if adaptive_methods.developmental(profile):
             work = min(work,30.)
         work = max(10.,round(work/5)*5)
+        work_range = [min(work, max(10., min(work*.9, work_range[0]))), work]
         rest = work*(2 if adaptive_methods.developmental(profile) else 1)
         minimum, maximum = 3,12
-        m.update(id=f"ONFLOWS-RACE-{band['role']}-{zone}-V1",title=band["label"]+" · "+profile["discipline"],
+        m.update(id=f"ONFLOWS-RACE-{band['role']}-{zone}-V2",title=band["label"]+" · "+profile["discipline"],
             zone=zone,sports=(profile["sport"],),periods=PERIODS,purpose="BUILDING",
             min_work_min=minimum*work/60,max_work_min=maximum*work/60,minimum_fraction=.1,
-            warmup_min=15.,cooldown_min=10.,race_specific=band,
+            warmup_min=15.,cooldown_min=10.,race_specific={**band, "event_id": reference.get("event_id"), "race_duration_s": reference["duration_s"]},
             instructions="Следвай зададеното темпо на подходящ равен участък с резерв за още две качествени отсечки. Запази почивките. Лактатът се сравнява само с личен съпоставим протокол.",
             implementation_profile=VERSION,source_id="INDIVIDUAL_RACE_CURVE",source_version="1",
-            adaptation="Скоростта следва индивидуалната крива около основната дисциплина. Дозата следва метода, Q/E и Recovery; максималното време не е тренировъчен обем.")
+            adaptation="Продължителността на състезанието определя времевия диапазон на отсечката. Скоростта следва индивидуалната крива; дозата се проверява отделно спрямо метода, Q/E и Recovery.")
         m["interval_template"] = {"zone":zone,"work_seconds":work,"recovery_seconds":rest,
+            "work_seconds_range": work_range,
             "min_repetitions":minimum,"max_repetitions":maximum,"reserve_repetitions":2,
             "total_capacity_ratio":1.,"rest_type":"ACTIVE_Z1","dose_status":"VERSIONED_COACH_RACE_METHOD"}
         result.append(m)

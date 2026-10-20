@@ -24,8 +24,12 @@ export function blockHeight(block: SessionBlock): number {
 
 const sameDuration = (a: SessionBlock, b: SessionBlock) => Math.abs(a.duration_min - b.duration_min) < 1 / 600;
 const samePart = (a: SessionBlock, b: SessionBlock) => a.kind === b.kind && a.zone === b.zone && sameDuration(a, b)
-  && a.target_hr_bpm === b.target_hr_bpm && a.target_speed_kmh === b.target_speed_kmh;
-const partLabel = (b: SessionBlock) => `${durationHms(b.duration_min)} ${componentLabel(b.zone)}`;
+  && a.target_hr_bpm === b.target_hr_bpm && a.target_speed_kmh === b.target_speed_kmh
+  && JSON.stringify(a.duration_range_seconds) === JSON.stringify(b.duration_range_seconds)
+  && JSON.stringify(a.target_speed_range_kmh) === JSON.stringify(b.target_speed_range_kmh);
+export const blockDurationLabel = (b: SessionBlock) => b.duration_range_seconds
+  ? b.duration_range_seconds.map(v => durationHms(v / 60)).join("–") : durationHms(b.duration_min);
+const partLabel = (b: SessionBlock) => `${blockDurationLabel(b)} ${componentLabel(b.zone)}`;
 
 export function strengthDuration(session: DraftSession) {
   const blocks = session.blocks.filter(b => b.zone === "STR" && !["WARMUP", "COOLDOWN", "PREPARATION"].includes(b.kind));

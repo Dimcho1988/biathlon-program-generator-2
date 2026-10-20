@@ -130,7 +130,8 @@ def test_failed_computation_is_retryable_and_changed_input_is_not_reused():
 
 
 @pytest.mark.parametrize("completed_lock", [False, True])
-def test_actual_strength_counts_toward_the_same_manual_quota(monkeypatch, completed_lock):
+@pytest.mark.parametrize("recordings", [1, 3])
+def test_actual_strength_counts_toward_the_same_manual_quota(monkeypatch, completed_lock, recordings):
     from tests.api.test_training_plan_engine import Repository, reference_speed
     from tests.api.test_management_schedule import body
     repo = Repository()
@@ -140,7 +141,13 @@ def test_actual_strength_counts_toward_the_same_manual_quota(monkeypatch, comple
     source = repo.envelope['snapshot_payload']['load_history']
     actual = {'activity_ref':'completed-strength', 'date':TODAY.isoformat(), 'local_date':TODAY.isoformat(),
               'sport':'WeightTraining', 'duration_min':20., 'quality_status':'valid', 'zones':[{'zone':z, 'raw_time_min':0., 'equivalent_time_min':0., 'effective_load':0.} for z in ('Z1','Z2','Z3','Z4','Z5')]}
-    source['activities'].append(deepcopy(actual)); repo.envelope['activities'].append(deepcopy(actual))
+    for index in range(recordings):
+        recorded = {**deepcopy(actual), 'activity_ref': f'completed-strength-{index}',
+                    'duration_min': actual['duration_min']/recordings}
+        source['activities'].append(deepcopy(recorded))
+        if recordings > 1:
+            recorded.update(start_local=f'{TODAY}T08:{index*10:02}:00', elapsed_time_s=400.)
+        repo.envelope['activities'].append(recorded)
     for row in source['strength']['daily']:
         if row['date'] == TODAY.isoformat(): row['effective_load'] = 20.
         elif row['effective_load'] > 0: row['effective_load'] = 8.

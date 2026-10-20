@@ -7,7 +7,8 @@ import Link from "next/link";
 import { changeActivePlan, newerActivePlan, PLAN_CHANGED_NOTICE } from "../lib/active-plan-request";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { durationHms } from "../lib/duration-format";
-import { componentColor, sessionSummary, strengthDuration } from "../lib/training-visuals";
+import { blockDurationLabel, componentColor, sessionSummary, strengthDuration } from "../lib/training-visuals";
+import { BlockExecutionRange } from "./block-execution-range";
 import { SessionAccent, WorkoutProfile } from "./workout-profile";
 import { isCalendarDate, isRecord } from "../lib/training-status";
 import { ActiveTrainingPlan } from "./active-training-plan";
@@ -19,7 +20,7 @@ import { IndividualLearningPanel } from "./individual-learning-panel";
 import { MesocyclePriorities } from "./mesocycle-priorities";
 import { SessionMethodGuidance } from "./session-method-guidance";
 import { SessionRole } from "./session-role";
-import { methodHrText, rangeText } from "../lib/method-library";
+import { methodHrText } from "../lib/method-library";
 import { managementGuidance, hasProgramDays } from "../lib/management-guidance";
 import { SyncActionForm } from "./sync-action-form";
 import { SyncStatusPanel } from "./sync-status-panel";
@@ -65,17 +66,20 @@ function SingleSessionCard({ day, expanded = false }: { day: DraftDay; expanded?
     <header><div><p className="management-day-date">{dateLabel(day.date)}</p><h3>{session?.title ?? (day.time_limit_exhausted ? "Изчерпан лимит за време" : STATUS_LABELS[day.status]) ?? day.status}</h3></div>
       <span className="management-badge">{PHASE_LABELS[day.period] ?? day.period}{day.taper ? " · тейпър" : ""}</span></header>
     {session && <SessionRole session={session} day={day}/>}
-    {session && <div className="management-session-visual"><div className="management-session-total"><strong>{durationHms(session.total_minutes)}</strong> общо · {durationHms(session.main_work_minutes)} {strength ? "активна работа" : "основна работа"} <SessionAccent zone={session.zone}/></div><p className="workout-summary">{sessionSummary(session)}</p><WorkoutProfile session={session}/><p className="workout-profile-note">Ширина: продължителност · височина: целева зона Z1–Z5. Сила и NMS се показват отделно.</p></div>}
+    {session && <div className="management-session-visual"><div className="management-session-total"><strong>{session.execution_range_policy ? "до " : ""}{durationHms(session.total_minutes)}</strong> общо · {session.execution_range_policy ? "до " : ""}{durationHms(session.main_work_minutes)} {strength ? "активна работа" : "основна работа"} <SessionAccent zone={session.zone}/></div><p className="workout-summary">{sessionSummary(session)}</p><WorkoutProfile session={session}/><p className="workout-profile-note">Ширина: продължителност{session.execution_range_policy ? " по горната граница" : ""} · височина: целева зона Z1–Z5. Сила и NMS се показват отделно.</p></div>}
     {strength && <p className="management-notice">Силова част: {durationHms(strength.main)} = {durationHms(strength.work)} упражнения + {durationHms(strength.rest)} почивки и преходи. Загрявката и разпускането са извън този силов обем.</p>}
     <p>{day.explanation}</p>
+    {session?.race_course_guidance && <p className="management-notice"><strong>{session.race_course_guidance.event_name}:</strong> {session.race_course_guidance.note}</p>}
+    {session?.execution_range_policy && <p className="management-muted">{session.execution_range_policy.note}</p>}
     {session && <SessionMethodGuidance session={session}/>}
     {evidence?.planned_gap_hours && <p className="management-notice">Планирай поне {durationHms(evidence.planned_gap_hours * 60)} между двете прагови сесии. Преди втората прецени реакцията към първата и контрола на усилието.</p>}
     {session?.neuromuscular_exposure && <p className="management-notice">{session.neuromuscular_exposure.repetitions} ускорения · {session.neuromuscular_exposure.work_seconds} s работа. {session.neuromuscular_exposure.note}</p>}
     <MesocyclePriorities cycle={isRecord(day.cycle) ? day.cycle : undefined}/>
-    {session && <details className="management-execution" open={expanded}><summary>Как да изпълня тренировката</summary>{execution.common.length > 0 && <div className="management-common-guidance"><h4>Общи указания за повтарящите се части</h4>{execution.common.map((group, index) => <p key={index}><strong>{group.zone}:</strong> {group.text}</p>)}</div>}<ol className="management-blocks">{session.blocks.map((block, index) => <li key={`${block.kind}-${index}`} style={{ borderLeft: `3px solid ${componentColor(block.zone)}` }}><div><strong>{block.label}</strong><span>{durationHms(block.duration_min)} · {block.zone}</span></div>{execution.blocks[index].showInstructions && <p>{block.instructions}</p>}
-      {(block.hr_reference_range_bpm || block.target_speed_range_kmh || block.target_hr_bpm != null || block.target_speed_kmh != null) && <small>{block.hr_reference_range_bpm ? `${block.hr_reference_range_bpm.map(v => number(v, 0)).join("–")} уд./мин` : block.target_hr_bpm != null ? `${number(block.target_hr_bpm, 0)} уд./мин` : ""}{(block.hr_reference_range_bpm || block.target_hr_bpm != null) && (block.target_speed_range_kmh || block.target_speed_kmh != null) ? " · " : ""}{block.target_speed_range_kmh ? `${block.target_speed_range_kmh.map(v => number(v, 1)).join("–")} km/h · равнинна референция` : block.target_speed_kmh != null ? `${number(block.target_speed_kmh)} km/h · равнинна референция` : ""}</small>}
+    {session && <details className="management-execution" open={expanded}><summary>Как да изпълня тренировката</summary>{execution.common.length > 0 && <div className="management-common-guidance"><h4>Общи указания за повтарящите се части</h4>{execution.common.map((group, index) => <p key={index}><strong>{group.zone}:</strong> {group.text}</p>)}</div>}<ol className="management-blocks">{session.blocks.map((block, index) => <li key={`${block.kind}-${index}`} style={{ borderLeft: `3px solid ${componentColor(block.zone)}` }}><div><strong>{block.label}</strong><span>{blockDurationLabel(block)} · {block.zone}</span></div>{execution.blocks[index].showInstructions && <p>{block.instructions}</p>}
+      {(block.hr_reference_range_bpm || block.target_hr_bpm != null) && <small>{block.hr_reference_range_bpm ? `${block.hr_reference_range_bpm.map(v => number(v, 0)).join("–")} уд./мин` : `${number(block.target_hr_bpm, 0)} уд./мин`}</small>}
+      {!block.target_speed_range_kmh && block.target_speed_kmh != null && <small>{number(block.target_speed_kmh)} km/h · равнинна референция</small>}
       {block.lactate_reference && execution.blocks[index].showLactate && <p className="management-muted">Лактат за частите със същия ориентир: {lactateRangeText(block.lactate_reference)} · {block.lactate_reference.label}{block.lactate_reference.assessed_on ? ` · ${block.lactate_reference.assessed_on}` : ""}{block.lactate_reference.note ? `. ${block.lactate_reference.note}` : ""}</p>}
-      {block.target_speed_range_kmh && <small>Работен диапазон: {rangeText(block.target_speed_range_kmh)} km/h{block.primary_control === "EFFORT_ON_TERRAIN" ? " · по терена водещи са усилието и техниката" : ""}.</small>}
+      <BlockExecutionRange block={block}/>
       {block.hr_reference_range_bpm && <small>{methodHrText(block)}</small>}
     </li>)}</ol></details>}
     <details className="management-detail"><summary>Защо тази задача и доза?</summary>

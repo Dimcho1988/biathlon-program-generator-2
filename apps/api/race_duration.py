@@ -30,10 +30,17 @@ def distance_m(discipline):
 
 
 def resolve(profile, view=None):
-    distance = distance_m(profile.get("discipline"))
+    course = profile.get("_race_course") or {}
+    distance = course.get("distance_m") or distance_m(profile.get("discipline"))
     sport = profile.get("sport")
     result = {"source": "UNAVAILABLE", "duration_min": None, "distance_m": distance,
               "sport": sport, "reason": "DISTANCE_REQUIRED" if distance is None else "CALIBRATED_MODEL_REQUIRED"}
+    if course.get("expected_duration_min"):
+        bounds = course["expected_duration_min"]
+        return {**result, "source": "COURSE_EXPECTATION", "duration_min": sum(bounds)/2,
+                "duration_range_min": list(bounds), "reason": None, "approximate": True,
+                "event_id": (profile.get("_race_event") or {}).get("event_id"),
+                "duration_basis": "COACH_COURSE_EXPECTATION"}
     # speed_view admits only maximal comparable tests as active anchors.
     # Separately retained exploratory observations do not invalidate that curve.
     if distance is not None and view and view.get("sport") == sport and view.get("status") == "CALIBRATED" and view.get("active_test_count", 0) > 0:
@@ -55,6 +62,10 @@ def resolve(profile, view=None):
     manual = profile.get("race_duration_min")
     if result["duration_min"] is None and isinstance(manual, (float,int)) and not isinstance(manual,bool) and math.isfinite(manual) and 0 < manual <= 1440:
         result.update(source="MANUAL", duration_min=manual)
+    if course:
+        from biathlon.race_course import flat
+        result.update(event_id=(profile.get("_race_event") or {}).get("event_id"),
+                      duration_basis="FLAT_REFERENCE_NOT_COURSE_PREDICTION" if not flat(course) else "SPEED_REFERENCE")
     return result
 
 

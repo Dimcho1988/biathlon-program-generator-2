@@ -113,6 +113,11 @@ def outlook(repository, alias, *, now=None):
         return {"configured": False, "outlook": None}
     profile = ManagementProfile.model_validate(stored["profile"]).model_dump(mode="json")
     settings = repository.athlete_settings(alias)
+    now = now or datetime.now(timezone.utc)
+    today = now.astimezone(ZoneInfo(settings.timezone) if settings else timezone.utc).date()
+    engine = training_plan_engine
+    calendar = engine._read_optional(repository, "athlete_planning_calendar", alias) or {"events": []}
+    profile = engine.race_course.apply_event(profile, calendar["events"], today)
     from . import model_service
     # Race duration and component capacity must share the same model read.
     speed_inputs = None
@@ -123,13 +128,14 @@ def outlook(repository, alias, *, now=None):
         speed = model_service.speed_view(repository, alias, profile["sport"]) if settings else None
     speed_by_sport = {profile["sport"]: speed}
     event_duration = race_duration.preview(repository, alias, profile, speed_view=speed_by_sport[profile["sport"]])
-    now = now or datetime.now(timezone.utc)
-    today = now.astimezone(ZoneInfo(settings.timezone) if settings else timezone.utc).date()
-    engine = training_plan_engine
     analysis = repository.active_analysis(alias) or {}
     if event_duration["source"] == "SPEED_DURATION" and (
             event_duration.get("source_generation_id") != analysis.get("generation_id") or
             event_duration.get("source_revision") != analysis.get("revision")):
+        event_duration = {**race_duration.resolve(profile), "reason": "MODEL_UPDATED"}
+    elif event_duration["source"] == "COURSE_EXPECTATION" and speed and (
+            speed.get("source_generation_id") != analysis.get("generation_id") or
+            speed.get("source_revision") != analysis.get("revision")):
         event_duration = {**race_duration.resolve(profile), "reason": "MODEL_UPDATED"}
     profile = race_duration.applied(profile, event_duration)
     calendar_reader = getattr(repository, "active_planning_calendar", None) or getattr(repository, "active_activity_calendar", None)
@@ -148,7 +154,6 @@ def outlook(repository, alias, *, now=None):
         **(planning_envelope.get("snapshot_payload") or {}), "load_history": measured_source}}
     profile = {**profile, "_component_load_context": contexts.get(profile.get("actual_sport") or profile.get("sport")) or engine.context_from_speed_view(None)}
     rows = engine._daily_rows(source, today)
-    calendar = engine._read_optional(repository, "athlete_planning_calendar", alias) or {"events": []}
     profile, horizon = engine.planning_schedule.horizon(profile, calendar["events"])
     preferences = engine._read_optional(repository, "athlete_planning_profile", alias) or {}
     accents = engine._read_optional(repository, "athlete_mesocycle_accent_preferences", alias)

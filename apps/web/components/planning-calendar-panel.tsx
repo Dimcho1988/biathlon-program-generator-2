@@ -3,6 +3,7 @@ import { useManagementFetch } from "./management-scope";
 
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { PlanningCycleEditor } from "./planning-cycle-editor";
+import { RaceCourseEditor } from "./race-course-editor";
 import { timelineItems, CYCLE_LABELS } from "../lib/planning-timeline";
 import { parseManagementOutlook, type ManagementOutlook, type ManagementProfile, type PlanProjection, type CycleDirective } from "../lib/training-management";
 import { PlanningRangeCalendar } from "./planning-range-calendar";
@@ -60,7 +61,7 @@ export function PlanningCalendarPanel({
     value: PlanningCalendarEvent[Field],
   ) => setEvents((current) => current.map((event) =>
     event.event_id === eventId
-      ? { ...event, [field]: value }
+      ? { ...event, [field]: value, ...(field === "event_type" && !["MAIN_RACE", "CONTROL_RACE"].includes(String(value)) ? { race_course: undefined } : {}) }
       : event));
 
   const canonicalEvents = [...events].sort((left, right) =>
@@ -225,6 +226,7 @@ export function PlanningCalendarPanel({
                 ))}
               >Премахни</button>
             </div>
+            {["MAIN_RACE", "CONTROL_RACE"].includes(event.event_type) && <RaceCourseEditor value={event.race_course} onChange={value => updateEvent(event.event_id, "race_course", value)}/>}
           </fieldset>)}
         </div>
         {profile && onProfileChange && <PlanningCycleEditor profile={profile} onChange={onProfileChange}/>}

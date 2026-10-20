@@ -140,6 +140,7 @@ def build_periodization(
             "name": str(raw.get("name", "")),
             "start_date": event_start.isoformat(),
             "end_date": event_end.isoformat(),
+            **({"race_course": raw["race_course"]} if raw.get("race_course") else {}),
         })
     normalized.sort(key=lambda event: (
         event["start_date"], event["end_date"], event["event_type"], event["event_id"],

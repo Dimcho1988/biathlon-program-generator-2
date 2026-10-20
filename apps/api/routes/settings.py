@@ -384,6 +384,7 @@ def update_athlete_planning_calendar(
                     name=event.name,
                     start_date=event.start_date,
                     end_date=event.end_date,
+                    race_course=event.race_course,
                 )
                 for event in body.events
             ),
