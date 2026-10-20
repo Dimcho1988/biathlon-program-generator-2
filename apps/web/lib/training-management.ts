@@ -108,7 +108,7 @@ export interface ManagementProfileResponse { configured: boolean; profile: Manag
 export interface DraftRecord { entry_key: string; revision: number; recorded_at?: string; stale?: boolean | null; stale_reason?: string | null; payload: PlanningDraft }
 export type Component = "Z1" | "Z2" | "Z3" | "Z4" | "Z5" | "STR";
 export const COMPONENTS: Component[] = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"];
-export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; lactate_reference?: LactateReference; method_library?: SessionMethod; parent_method_card?: SessionMethod; hr_reference_range_bpm?: [number, number] | null; hr_reference_basis?: string; hr_role?: string; target_speed_range_kmh?: [number, number] }
+export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; lactate_reference?: LactateReference; method_library?: SessionMethod; parent_method_card?: SessionMethod; hr_reference_range_bpm?: [number, number] | null; hr_reference_basis?: string; hr_role?: string; target_speed_range_kmh?: [number, number]; duration_range_seconds?: [number, number]; target_pace_range_seconds_km?: [number, number]; distance_range_m?: [number, number]; distance_basis?: "FLAT_EQUIVALENT" | "SPEED_REFERENCE" }
 export interface StrengthPrescription {
   exercise_bank_id: string; main_sport: string; method: string;
   exercises: Array<{id: string; name: string; muscle_groups: string; reps: number; sets: number}>;
@@ -136,6 +136,8 @@ export interface DraftSession {
   method_id: string; title: string; sport: string; zone: string; purpose: string; blocks: SessionBlock[];
   neuromuscular_exposure?: NeuromuscularExposure | null;
   method_library?: SessionMethod;
+  race_course_guidance?: { event_id: string; event_name: string; status: "SPECIFIC" | "FAMILIAR_TERRAIN_REQUIRED"; note: string };
+  execution_range_policy?: { version: string; dose_basis: "UPPER_BOUND"; note: string };
   main_work_minutes: number; total_minutes: number; canonical_effective_load: Record<Component, number>;
   direct_equivalent_minutes: Record<Component, number>; dose_evidence: DoseEvidence;
 }

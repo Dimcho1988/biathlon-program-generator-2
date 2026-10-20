@@ -9,12 +9,25 @@ export const PLANNING_EVENT_TYPES = [
 ] as const;
 export type PlanningEventType = typeof PLANNING_EVENT_TYPES[number];
 
+export interface RaceCourse {
+  distance_m: number;
+  surface: "TRACK" | "ROAD" | "CROSS" | "TRAIL" | "SNOW";
+  profile: "FLAT" | "UPHILL" | "ROLLING";
+  gradient_percent?: [number, number];
+  ascent_m?: number;
+  descent_m?: number;
+  expected_duration_min?: [number, number];
+  specific_sessions_percent?: number;
+  familiar_terrain?: boolean;
+}
+
 export interface PlanningCalendarEvent {
   event_id: string;
   event_type: PlanningEventType;
   name: string;
   start_date: string;
   end_date: string;
+  race_course?: RaceCourse;
 }
 
 export interface PlanningCalendar {
@@ -67,10 +80,28 @@ const missingInputOrder: PlanningMissingInput[] = [
   "TRAINING_SNAPSHOT",
 ];
 
+export function parseRaceCourse(value: unknown): RaceCourse {
+  const keys = ["distance_m", "surface", "profile", "gradient_percent", "ascent_m", "descent_m", "expected_duration_min", "specific_sessions_percent", "familiar_terrain"];
+  const number = (v: unknown, lo: number, hi: number) => typeof v === "number" && Number.isFinite(v) && v >= lo && v <= hi;
+  const pair = (v: unknown, lo: number, hi: number) => v === undefined || (Array.isArray(v) && v.length === 2 && v.every(n => number(n, lo, hi)) && v[0] <= v[1]);
+  if (!isRecord(value) || Object.keys(value).some(k => !keys.includes(k))
+    || !number(value.distance_m, 50, 1_000_000)
+    || typeof value.surface !== "string" || !["TRACK", "ROAD", "CROSS", "TRAIL", "SNOW"].includes(value.surface)
+    || typeof value.profile !== "string" || !["FLAT", "UPHILL", "ROLLING"].includes(value.profile)
+    || !pair(value.gradient_percent, .1, 60) || !pair(value.expected_duration_min, .1, 1440)
+    || (value.ascent_m !== undefined && !number(value.ascent_m, 0, 100_000))
+    || (value.descent_m !== undefined && !number(value.descent_m, 0, 100_000))
+    || (value.specific_sessions_percent !== undefined && !number(value.specific_sessions_percent, 0, 100))
+    || (value.familiar_terrain !== undefined && typeof value.familiar_terrain !== "boolean")
+    || (value.profile !== "UPHILL" && value.gradient_percent !== undefined)
+    || (value.surface === "TRACK" && value.profile !== "FLAT")) throw new Error("Проверете дистанцията, условията и диапазоните на състезателното трасе.");
+  return value as unknown as RaceCourse;
+}
+
 const parseEvent = (value: unknown): PlanningCalendarEvent => {
   if (
     !isRecord(value)
-    || !exactKeys(value, eventKeys)
+    || !exactKeys(value, "race_course" in value ? [...eventKeys, "race_course"] : eventKeys)
     || typeof value.event_id !== "string"
     || !/^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/.test(value.event_id)
     || !PLANNING_EVENT_TYPES.includes(value.event_type as PlanningEventType)
@@ -82,6 +113,10 @@ const parseEvent = (value: unknown): PlanningCalendarEvent => {
     || !isCalendarDate(value.end_date)
     || value.end_date < value.start_date
   ) throw new Error("Невалидно събитие в календара за планиране.");
+  if (value.race_course !== undefined) {
+    if (!["MAIN_RACE", "CONTROL_RACE"].includes(String(value.event_type))) throw new Error("Състезателно трасе се задава само към състезание.");
+    parseRaceCourse(value.race_course);
+  }
   return value as unknown as PlanningCalendarEvent;
 };
 

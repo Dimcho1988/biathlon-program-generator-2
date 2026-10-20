@@ -6,7 +6,7 @@ from datetime import date, timedelta
 import math
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator, model_serializer
 
 
 class StrictModel(BaseModel):
@@ -175,6 +175,23 @@ class PlanningCalendarEvent(StrictModel):
     name: str
     start_date: date
     end_date: date
+    race_course: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_course(self):
+        if self.race_course is not None:
+            from biathlon.race_course import validate
+            if self.event_type not in {"MAIN_RACE", "CONTROL_RACE"}:
+                raise ValueError("Race conditions require a race event")
+            self.race_course = validate(self.race_course)
+        return self
+
+    @model_serializer(mode="wrap")
+    def serialize_event(self, handler):
+        value = handler(self)
+        if value.get("race_course") is None:
+            value.pop("race_course", None)
+        return value
 
 
 class PlanningCalendarInput(StrictModel):

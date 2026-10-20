@@ -398,6 +398,7 @@ class AthletePlanningCalendarEvent:
     name: str
     start_date: date
     end_date: date
+    race_course: dict[str, Any] | None = None
 
     def validate(self) -> "AthletePlanningCalendarEvent":
         if not PLANNING_CALENDAR_EVENT_ID_PATTERN.fullmatch(self.event_id):
@@ -413,9 +414,14 @@ class AthletePlanningCalendarEvent:
             raise ValueError("planning calendar event name is invalid")
         if self.end_date < self.start_date:
             raise ValueError("planning calendar event end precedes its start")
+        if self.race_course is not None:
+            from biathlon.race_course import validate
+            if self.event_type not in {"MAIN_RACE", "CONTROL_RACE"}:
+                raise ValueError("race conditions require a race event")
+            validate(self.race_course)
         return self
 
-    def to_payload(self) -> dict[str, str]:
+    def to_payload(self) -> dict[str, Any]:
         self.validate()
         return {
             "event_id": self.event_id,
@@ -423,17 +429,19 @@ class AthletePlanningCalendarEvent:
             "name": self.name,
             "start_date": self.start_date.isoformat(),
             "end_date": self.end_date.isoformat(),
+            **({"race_course": deepcopy(self.race_course)} if self.race_course is not None else {}),
         }
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "AthletePlanningCalendarEvent":
-        if set(payload) != {
+        fields = {
             "event_id",
             "event_type",
             "name",
             "start_date",
             "end_date",
-        } or any(not isinstance(payload[field], str) for field in payload):
+        }
+        if not fields <= set(payload) or set(payload)-fields-{"race_course"} or any(not isinstance(payload[field], str) for field in fields):
             raise ValueError("planning calendar event fields are invalid")
         try:
             event = cls(
@@ -442,6 +450,7 @@ class AthletePlanningCalendarEvent:
                 name=payload["name"],
                 start_date=date.fromisoformat(payload["start_date"]),
                 end_date=date.fromisoformat(payload["end_date"]),
+                race_course=deepcopy(payload.get("race_course")),
             )
         except (TypeError, ValueError) as exc:
             raise ValueError("planning calendar event fields are invalid") from exc

@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import { durationHms } from "../lib/duration-format";
 import { COMPONENTS, type DraftSession } from "../lib/training-management";
-import { blockHeight, componentColor, componentLabel, sessionSummary, visibleBlocks } from "../lib/training-visuals";
+import { blockDurationLabel, blockHeight, componentColor, componentLabel, sessionSummary, visibleBlocks } from "../lib/training-visuals";
 
 export function ComponentLegend() {
   return <div className="workout-legend" aria-label="Цветове на тренировъчните компоненти">{COMPONENTS.map(zone =>
@@ -18,8 +18,8 @@ export function WorkoutProfile({ session, compact = false }: { session: DraftSes
   const lane = (kind: "AEROBIC" | "STR" | "NMS") => <span className="workout-profile-bars" aria-hidden="true">{blocks.map((block, index) =>
     <span key={index} className="workout-profile-slot" style={{ width: `${block.duration_min / duration * 100}%` }}>
       {(block.zone === "STR" ? "STR" : block.zone === "NMS" ? "NMS" : "AEROBIC") === kind && <span className={`workout-profile-bar ${block.kind === "TRANSITION" || (kind === "STR" && block.kind === "RECOVERY") ? "is-pause" : ""}`}
-        style={{ height: `${blockHeight(block)}%`, background: componentColor(block.zone) }} title={`${block.label} · ${durationHms(block.duration_min)} · ${componentLabel(block.zone)}`}/>}</span>)}</span>;
-  return <span className={`workout-profile ${compact ? "is-compact" : ""}`} role="img" aria-label={`Структура: ${sessionSummary(session)}. ${blocks.map(b => `${b.label}: ${durationHms(b.duration_min)} ${componentLabel(b.zone)}`).join("; ")}`}>
+        style={{ height: `${blockHeight(block)}%`, background: componentColor(block.zone) }} title={`${block.label} · ${blockDurationLabel(block)} · ${componentLabel(block.zone)}`}/>}</span>)}</span>;
+  return <span className={`workout-profile ${compact ? "is-compact" : ""}`} role="img" aria-label={`Структура: ${sessionSummary(session)}. ${blocks.map(b => `${b.label}: ${blockDurationLabel(b)} ${componentLabel(b.zone)}`).join("; ")}`}>
     {hasAerobic && lane("AEROBIC")}
     {hasStrength && <span className="workout-strength-lane"><span className="workout-lane-label">Сила</span>{lane("STR")}</span>}
     {hasNms && <span className="workout-strength-lane"><span className="workout-lane-label">NMS</span>{lane("NMS")}</span>}
