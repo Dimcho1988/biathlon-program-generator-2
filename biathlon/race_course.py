@@ -51,7 +51,7 @@ def target_event(events, day):
     for kind in ("MAIN_RACE", "CONTROL_RACE"):
         candidates = [e for e in future if e["event_type"] == kind]
         if candidates:
-            return min(candidates, key=lambda e: (str(e["start_date"]), str(e["end_date"]), e["event_id"]))
+            return min(candidates, key=lambda e: (str(e["start_date"]), str(e["end_date"]), e.get("event_id", "")))
     return None
 
 
