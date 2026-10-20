@@ -110,6 +110,30 @@ def test_guarded_maintenance_does_not_retry_ambiguous_network_failure():
     assert requests[0].method == "POST" and requests[0].url.path == RPC
 
 
+def test_maintenance_timeout_exceeds_sql_budget_without_changing_other_requests():
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json=[COUNTS])
+
+    store = SupabasePilotRepository(
+        supabase_url="https://project.supabase.co",
+        secret_key="sb_secret_server-key",
+        encryption_key=ENCRYPTION_KEY,
+        client=httpx.Client(
+            transport=httpx.MockTransport(respond),
+            timeout=httpx.Timeout(15.0, connect=5.0),
+        ),
+    )
+    assert store.maintain_analysis_history(athlete_alias=ALIAS) == COUNTS
+    store._rpc_row("ordinary_read", {})
+    assert requests[0].extensions["timeout"] == {
+        "connect": 5.0, "read": 35.0, "write": 35.0, "pool": 35.0,
+    }
+    assert requests[1].extensions["timeout"]["read"] == 15.0
+
+
 @pytest.mark.parametrize("fail", [False, True])
 def test_worker_prefers_guarded_capability_between_jobs_with_existing_cadence(fail, caplog):
     stopping = Event()

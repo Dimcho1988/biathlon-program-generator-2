@@ -420,8 +420,12 @@ class SupabasePilotRepository(SnapshotRepository):
     def _secret_hash(value: str) -> str:
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
-    def _rpc_rows(self, name: str, payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-        response = self._request("POST", f"/rpc/{name}", json=dict(payload))
+    def _rpc_rows(
+        self, name: str, payload: Mapping[str, Any], *,
+        timeout: httpx.Timeout | None = None,
+    ) -> list[Mapping[str, Any]]:
+        options = {"timeout": timeout} if timeout is not None else {}
+        response = self._request("POST", f"/rpc/{name}", json=dict(payload), **options)
         value = self._json(response)
         if not isinstance(value, list) or not all(
             isinstance(row, Mapping) for row in value
@@ -430,9 +434,10 @@ class SupabasePilotRepository(SnapshotRepository):
         return value
 
     def _rpc_row(
-        self, name: str, payload: Mapping[str, Any]
+        self, name: str, payload: Mapping[str, Any], *,
+        timeout: httpx.Timeout | None = None,
     ) -> Mapping[str, Any] | None:
-        rows = self._rpc_rows(name, payload)
+        rows = self._rpc_rows(name, payload, timeout=timeout)
         return dict(rows[0]) if rows else None
 
     @staticmethod
@@ -1189,7 +1194,11 @@ class SupabasePilotRepository(SnapshotRepository):
     ) -> Mapping[str, int]:
         """Invoke the fixed server-owned retention policy once."""
         row = self._rpc_row(
-            "maintain_onflows_analysis_history", {"p_alias": athlete_alias}
+            "maintain_onflows_analysis_history", {"p_alias": athlete_alias},
+            # The live recovery/archival checks can exceed the normal 15 s read
+            # timeout. Allow the RPC's 30 s SQL budget plus a network margin.
+            # This POST still has exactly one attempt on ambiguous failures.
+            timeout=httpx.Timeout(35.0, connect=5.0),
         )
         return self._analysis_retention_counts(row)
 

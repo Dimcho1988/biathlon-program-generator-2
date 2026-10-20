@@ -20,6 +20,9 @@ begin
   where n.nspname='public' and p.proname='maintain_onflows_analysis_history'),
   'Worker maintenance exposed an overload, variable policy, or invoker function';
  assert has_function_privilege('service_role','public.maintain_onflows_analysis_history(text)','execute');
+ assert (select proconfig @> array['search_path=""','statement_timeout=30s']
+  from pg_proc where oid='public.maintain_onflows_analysis_history(text)'::regprocedure),
+  'Maintenance must have its own bounded PostgREST timeout and empty search path';
  foreach role_name in array array['anon','authenticated'] loop
   assert not has_function_privilege(role_name,'public.maintain_onflows_analysis_history(text)','execute');
  end loop;

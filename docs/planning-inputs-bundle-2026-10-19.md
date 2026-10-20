@@ -1,8 +1,9 @@
 # Coherent planning inputs per read phase
 
-Status: implementation and focused verification; database CI and deployed
-acceptance remain separate requirements. No live database writes or coach
-approval were performed for this change.
+Status (20 October): API, Web and Database CI passed at e48aee2. The additive
+bundle RPC is installed on staging; the complete 918-object application catalog
+matched the clean CI rebuild. Application deployment and measured live acceptance
+are recorded in PR #176. No coach approval or training-method change is included.
 
 ## Measured reason and scope
 
