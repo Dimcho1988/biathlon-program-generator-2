@@ -37,7 +37,7 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v53-source-standard-comparison"
+VERSION = "training-management-v54-pinned-speed-history"
 PARAMETER_VERSION = "management-parameters-v48"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
@@ -1605,7 +1605,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     if limited:
         warnings.append(_warning("LIMITED_LOAD_HISTORY", "Историята е кратка или съдържа непълни активности. Само ограничени леки предложения; липсващата умора не се приема за нулева."))
     if planning_evidence["estimated"]:
-        warnings.append(_warning("ESTIMATED_LOAD_HISTORY", "Общата продължителност е записана. Липсващото пулсово покритие е оценено по експертните Q опори; разпределението по зони, 7/40 и Recovery за плана са приблизителни, а не измерени."))
+        estimate_basis = ("по валидни скоростни сегменти и експертни Q опори за непокрития остатък"
+                          if planning_evidence.get("speed_estimated_activity_count") else "по експертните Q опори")
+        warnings.append(_warning("ESTIMATED_LOAD_HISTORY", "Общата продължителност е записана. Липсващото пулсово покритие е оценено "
+            + estimate_basis + "; разпределението по зони, 7/40 и Recovery за плана са приблизителни, а не измерени."))
     methods = resolved_methods(profile)
     warnings.append(_warning("VERSIONED_COACHING_RULES", "Целите и прогресията използват видими начални треньорски правила. Нисък стрес сам по себе си не увеличава товара."))
     if (controls and controls.get("double_threshold_days") and "Z4" in controls.get("double_threshold_components", [])
@@ -3671,8 +3674,31 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     if r["code"] == "DIRECT_Q_PROGRESSION_BUDGET" for z in r.get("blocking_components", [])})
                 if q_blockers:
                     item["explanation"] = ("Оставащият приравнен обем в " + ", ".join(q_blockers)
-                        + " не допуска минималната цяла тренировка с подготовката ѝ. "
-                        "Приложимите резерви за поддържане и подготовка също не осигуряват допустима доза.")
+                        + " не допуска минималната цяла тренировка с подготовката ѝ.")
+                effective_blockers = sorted({z for r in item["rejected_alternatives"]
+                    if r["code"] == "COMPONENT_BUDGET_EXHAUSTED" for z in r.get("blocking_components", [])})
+                if effective_blockers:
+                    item["explanation"] += (" Бюджетът за ефективен товар (включително 7/40) в "
+                        + ", ".join(effective_blockers) + " не допуска минималния цял вариант на останалите методи.")
+                if q_blockers or effective_blockers:
+                    if continuity_allowed:
+                        item["explanation"] += " Приложимите резерви за поддържане и подготовка също не осигуряват допустима доза."
+                    else:
+                        restrictions = []
+                        if taper:
+                            restrictions.append("предсъстезателно разтоварване")
+                        if cycle_state and cycle_state["kind"] == "RECOVERY":
+                            restrictions.append("възстановителен микроцикъл")
+                        if reentry_dose_active(periodization, day):
+                            restrictions.append("връщане след пауза")
+                        if period == "TRANSITION":
+                            restrictions.append("преходен период")
+                        if not all_sources_known:
+                            restrictions.append("непълно измерена история")
+                        if not period_objectives:
+                            restrictions.append("липсващи съпоставими цели за периода")
+                        item["explanation"] += (" Резервите за поддържане и подготовка не се прилагат: "
+                            + ", ".join(restrictions) + ".")
                 manual_blockers = sorted({z for r in item["rejected_alternatives"] for z in r.get("manual_target_components", [])})
                 if manual_blockers:
                     item["explanation"] = ("Ръчна цел за " + ", ".join(manual_blockers)

@@ -91,8 +91,11 @@ class ReadSession:
         return self._read(("json", id(value)), lambda: self._repository._json(value))
 
     def __getattr__(self, name):
-        if name in {"speed_load_cache_namespace", "activity_speed_exposure_samples"}:
+        if name in {"speed_load_cache_namespace", "activity_speed_exposure_samples",
+                    "activity_speed_history_samples"}:
             # Raw streams must never accumulate in the request snapshot.
+            # Planning's missing-HR estimates use the same immutable run keys;
+            # hiding this reader silently replaces them with expert Q priors.
             return getattr(self._repository, name)
         if name not in self._READS:
             raise AttributeError(name)
