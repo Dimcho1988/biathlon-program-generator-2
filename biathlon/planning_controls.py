@@ -9,10 +9,10 @@ from .constants import COMPONENTS, fresh_parameters
 from . import planning_history, mesocycle_focus
 from .periodization import reentry_dose_active
 
-VERSION = "planning-controls-v6-race-band"
+VERSION = "planning-controls-v7-taper-priority"
 
 
-def resolve(profile, day, period, automatic_accents, *, periodization=None):
+def resolve(profile, day, period, automatic_accents, *, periodization=None, taper=None):
     controls = profile.get("planning_controls")
     if not controls:
         return None
@@ -61,6 +61,19 @@ def resolve(profile, day, period, automatic_accents, *, periodization=None):
                  support_candidates=[z for z in dict.fromkeys([*automatic_accents, "Z1", "Z2", "STR", "Z3", "Z4", "Z5"])
                                      if z not in (state["accents"][:2] if state.get("component_indices") else state["accents"]) and (z != "STR" or profile.get("strength_enabled"))],
                  reason="Акцентите се запазват през натоварващите микроцикли и се редуват в следващия мезоцикъл според периода и състезателното време." if mode != "MANUAL" and not state["explicit"] else "Запазен е ръчният избор на акценти.")
+    if taper is None:
+        taper = any(p["start_date"] <= day.isoformat() <= p["end_date"]
+                    for p in (periodization or {}).get("taper_windows", []))
+    if taper and not reentry and period != "TRANSITION":
+        # Taper owns the reduction. A coincident loading/recovery wave must
+        # neither multiply it nor change its neutral pre-taper reference.
+        state["taper_priority"] = {"superseded_kind": state["kind"],
+            "superseded_wave_factor": state["wave_factor"],
+            "superseded_volume_factor": state["volume_factor"]}
+        state.update(kind="MAINTAIN", name="Предстартов тейпър", wave_factor=1., volume_factor=1.,
+            target_index=1., maintenance_index=1., automatic_shock=False, background_development=False,
+            component_indices={z: 1. for z in state["accents"]}, focus_role="TAPER",
+            reason="Тейпърът заменя вълната и разтоварването.")
     return state
 
 

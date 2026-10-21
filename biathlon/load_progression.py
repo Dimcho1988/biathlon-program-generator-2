@@ -378,6 +378,8 @@ def cycle_shape(profile, state, zone):
     Deliberately reduced waves and explicit calendar overrides are not refilled.
     Near-term observed recovery references are applied separately, once.
     """
+    if state.get("taper_priority") and state["kind"] == "MAINTAIN":
+        return 1.  # apply() applies the taper factor once to this reference.
     wave = profile["planning_controls"]["wave"]
     mean = sum(wave)/len(wave)
     focus = zone in state.get("mesocycle_accents", state["accents"])

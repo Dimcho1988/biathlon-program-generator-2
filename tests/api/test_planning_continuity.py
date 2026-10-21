@@ -144,6 +144,18 @@ def test_engine_keeps_recovery_overshoot_manual_rest_and_rolling_gates(monkeypat
     assert not adaptive_sessions(plan)
 
 
+def test_taper_rest_explains_bounded_easy_reserve_cannot_extend_quality_work(monkeypatch):
+    body, repo = scenario(monkeypatch, actual_q=25., unloading="TAPER")
+    plan = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)
+    blocked = [d for d in plan["days"] if d["status"] == "REST" and any(
+        r["code"] == "DIRECT_Q_PROGRESSION_BUDGET" for r in d["rejected_alternatives"])]
+    assert blocked
+    for day in blocked:
+        assert "Ограниченият тейпър резерв до 10%" in day["explanation"]
+        assert "не увеличава бюджета за основната работа в Z3–Z5" in day["explanation"]
+    assert not adaptive_sessions(plan)
+
+
 def test_approved_maintenance_is_revalidated_without_replenishing_the_reserve(monkeypatch):
     body, repo = scenario(monkeypatch)
     plan = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)

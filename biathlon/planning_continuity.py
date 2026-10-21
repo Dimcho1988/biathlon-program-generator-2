@@ -1,4 +1,4 @@
-"""Bounded prescription exceptions, separate from physiological rolling gates.
+"""Bounded prescription exceptions, without changing load or Recovery models.
 
 These are versioned coaching policies. A reserve is anchored to the original
 microcycle target and charged for *all* actual and proposed excess. It is never
@@ -6,8 +6,9 @@ rebased on current execution or replenished by generating another draft.
 """
 from .constants import COMPONENTS
 
-VERSION = "planning-continuity-v1-anchored-maintenance"
+VERSION = "planning-continuity-v2-bounded-taper"
 PREPARATION_FRACTION = .10
+TAPER_FRACTION = .10  # Initial coach setting, not a physiological threshold.
 
 
 def eligible(row):
@@ -71,6 +72,52 @@ def fits(direct, effective, headroom, components):
                     <= headroom["objective"][z] + .005 for z in COMPONENTS))
 
 
+def taper_limits(components, budgets, q_remaining, *, zone, light=False,
+                 preparation=False, manual=()):
+    """At most 10% extra in easy components, charged against original targets.
+
+    The caller must establish supported history, taper and ordinary readiness,
+    method/time eligibility. High-zone work never receives extra Q or E here.
+    Both the microcycle and prospective rolling E ceilings remain bounded;
+    adding a percentage to a clipped remainder would erase prior overshoot.
+    """
+    result = limits(components, budgets, q_remaining,
+                    {"q": {}, "e": {}, "references": {}}, zone=zone)
+    zones, mode = set(), None
+    if light and zone in {"Z1", "Z2"}:
+        zones, mode = {zone, "Z1"}, "TAPER_LIGHT_MAINTENANCE"
+    elif preparation and zone not in {"Z1", "Z2"} and (components[zone]["remaining"] or 0.) > .005:
+        zones, mode = {"Z1"}, "TAPER_QUALITY_PREPARATION"
+    result["original_e"] = {z: budgets[z]["deficit_effective"] for z in COMPONENTS}
+    result["rolling_limits"] = {}
+    for z in zones - set(manual):
+        row, budget = components[z], budgets[z]
+        if (row["basis"] != "DIRECT_Q" or row.get("actual_q") is None
+                or row.get("planned_q") is None or row["target"] <= 0
+                or row["target_effective"] <= 0 or budget["target_weekly_effective"] <= 0):
+            continue
+        extra_q, extra_e = row["target"]*TAPER_FRACTION, row["target_effective"]*TAPER_FRACTION
+        q_left = max(0., row["target"] + extra_q - row["actual_q"] - row["planned_q"])
+        rolling_limit = budget["target_weekly_effective"]*(1+TAPER_FRACTION)
+        result["q"][z] = result["objective"][z] = q_left
+        result["e"][z] = min(max(0., rolling_limit - budget["rolling_7d_effective"]),
+            max(0., row["target_effective"] + extra_e - row["actual_effective"] - row["planned_effective"]))
+        result["reserve_q"][z], result["reserve_e"][z] = extra_q, extra_e
+        result["rolling_limits"][z] = {"original": budget["target_weekly_effective"],
+            "with_reserve": rolling_limit, "used": budget["rolling_7d_effective"]}
+        result["mode"] = mode
+    return result
+
+
+def explanation(mode):
+    return {
+        "POST_TARGET_MAINTENANCE": "Използван е ограничен поддържащ резерв след реално изпълнена цел.",
+        "QUALITY_PREPARATION_RESERVE": "Използван е резерв до 10% от целта за Z1 само за подготовката и паузите на непокрития основен компонент.",
+        "TAPER_LIGHT_MAINTENANCE": "Използван е ограничен тейпър резерв до 10% от целта за лека работа в Z1–Z2. Реалният и планираният товар изчерпват същия резерв; Recovery и дневният тейпър лимит остават в сила.",
+        "TAPER_QUALITY_PREPARATION": "Използван е ограничен тейпър резерв до 10% в Z1 само за подготовката на допустим основен компонент; основната работа не получава допълнителен бюджет.",
+    }[mode]
+
+
 def evidence(direct, effective, headroom, segment):
     """Keep the target and exception visible without erasing any overshoot."""
     if not headroom.get("mode"):
@@ -78,12 +125,20 @@ def evidence(direct, effective, headroom, segment):
     rows = segment["components"]
     extra = {z: max(0., direct[z] - (rows[z]["remaining"] or 0.)) for z in COMPONENTS}
     extra_e = {z: max(0., effective[z] - rows[z]["remaining_effective"]) for z in COMPONENTS}
+    if "original_e" in headroom:
+        extra_e = {z: max(extra_e[z], effective[z] - headroom["original_e"][z]) for z in COMPONENTS}
     if not any(v > .005 for v in [*extra.values(), *extra_e.values()]):
         return None
-    return {"version": VERSION, "mode": headroom["mode"],
+    result = {"version": VERSION, "mode": headroom["mode"],
             "window_start": segment["window_start"], "window_end": segment["window_end"],
             "additional_q": {z: round(v, 3) for z, v in extra.items() if v > .005},
             "additional_effective": {z: round(v, 3) for z, v in extra_e.items() if v > .005},
             "reserve_q": {z: round(v, 3) for z, v in headroom["reserve_q"].items() if v > .005},
             "basis": "COACH_POLICY_NOT_PHYSIOLOGICAL_THRESHOLD",
-            "rolling_limits_preserved": True}
+            "rolling_limits_preserved": "rolling_limits" not in headroom}
+    if "rolling_limits" in headroom:
+        result.update(maximum_excess_fraction=TAPER_FRACTION,
+            reserve_effective={z: round(v, 3) for z, v in headroom["reserve_e"].items() if v > .005},
+            rolling_limits=headroom["rolling_limits"],
+            effective_excess_scope="MAX_OF_MICROCYCLE_AND_ROLLING_EXCESS_NOT_SUM")
+    return result

@@ -44,9 +44,10 @@ def test_stress_microcycle_is_followed_by_unloading_and_cannot_override_taper():
     assert b['kind']=='RECOVERY' and b['target_index']==.78
     rows=engine._daily_rows(Repository().envelope['snapshot_payload']['load_history'],TODAY)
     ref=engine.training_targets.development_reference(rows,TODAY,TODAY,4)
-    taper,_,_=engine._goals(p,TODAY,'PRECOMPETITION',True,ref,None,0,4,rows,TODAY,False,.5)
-    plain,_,_=engine._goals(p,TODAY,'PRECOMPETITION',False,ref,None,0,4,rows,TODAY,False,1)
-    assert taper['Z4']['target']==plain['Z4']['target']*.5
+    taper,_,state=engine._goals(p,TODAY,'PRECOMPETITION',True,ref,None,0,4,rows,TODAY,False,.5)
+    assert state['kind'] == 'MAINTAIN' and state['taper_priority']['superseded_kind'] == 'STRESS'
+    base=planning_controls.reference(rows,TODAY)['Z4']['c40']*7
+    assert taper['Z4']['target']==pytest.approx(base*.5)
     with pytest.raises(ValidationError): controls(cycles=[d,{**d,'start_date':TODAY+timedelta(days=9),'end_date':TODAY+timedelta(days=12)}])
     with pytest.raises(ValidationError): CycleDirective(**{**d,'end_date':TODAY+timedelta(days=7)})
 

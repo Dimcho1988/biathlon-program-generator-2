@@ -10,6 +10,7 @@ import pytest
 from apps.api import speed_zone_history as history
 from apps.api.oauth_store import PersistentStoreFailure, SupabasePilotRepository
 from apps.api.shadow_storage import encode_shadow_payload
+from apps.api.read_session import ReadSession
 
 
 TODAY = date(2026, 9, 29)
@@ -59,6 +60,25 @@ def test_only_missing_hr_spans_use_measured_speed_and_paired_index_q():
     assert diagnostic["estimated_activity_count"] == 1
     assert (source,calendar,speeds,shadow) == original
     assert "tests" not in estimate and "index_summary" not in estimate
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_planning_read_phase_preserves_pinned_speed_estimates_without_retaining_raw_streams(nested):
+    source, calendar, speeds, shadow = inputs()
+    repo = Repository(shadow)
+    expected = history.prepare_history(repo, "athlete", source, calendar, speeds, SETTINGS, TODAY)
+    repo.calls.clear()
+    phase = ReadSession.planning(repo)
+    if nested:
+        phase = ReadSession.planning(phase)
+    for _ in range(2):
+        actual = history.prepare_history(phase, "athlete", source, calendar, speeds, SETTINGS, TODAY)
+        assert actual == expected
+    assert repo.calls == [("athlete", (KEY,))] * 2
+    assert not phase._values
+    # A read capability must not expose write methods on the live repository.
+    repo.publish_activity_shadow = lambda **kwargs: pytest.fail("No writes during planning")
+    assert not hasattr(phase, "publish_activity_shadow")
 
 
 @pytest.mark.parametrize("change,reason", [

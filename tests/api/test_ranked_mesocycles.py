@@ -69,7 +69,9 @@ def test_one_shock_per_phase_with_following_recovery_and_no_taper_overlap():
     assert list(s["component_indices"].values()) == [2,1.8,1.6]
     assert max(planning_controls.component_index(s,True,zone=z) for z in s["accents"]) == 2
     assert state(p,77,"SPECIAL_PREPARATION",periodization=phases)["kind"] == "RECOVERY"
-    assert state(p,105,"PRECOMPETITION",periodization=phases)["kind"] == "RECOVERY"
+    taper = state(p,105,"PRECOMPETITION",periodization=phases)
+    assert taper["kind"] == "MAINTAIN"
+    assert taper["taper_priority"]["superseded_kind"] == "RECOVERY"
     assert all(s["recovery_end"] <= s["phase_end"] for s in schedule)
 
 
