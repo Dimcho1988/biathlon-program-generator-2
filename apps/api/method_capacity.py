@@ -181,6 +181,16 @@ def library_curve_capacity(method, speed, context, *, use_model_prior=False):
     library = method.get("method_library") or {}
     resolved = library.get("resolution") or {}
     predictor, tests, reasons = context
+    if resolved.get("status") == "READY" and resolved.get("primary_control") == "HRMAX":
+        standard = resolved["standard_work_seconds"] / 60
+        return {"capacity_source": "SOURCE_HR_PROTOCOL", "capacity_minutes": standard,
+                "target_hr_bpm": resolved["target_hr_bpm"], "target_speed_kmh": None,
+                "capacity_reference": "SOURCE_STANDARD_WORK_NOT_PHYSIOLOGICAL_TMAX",
+                "capacity_confidence": "PUBLISHED_HR_PRESCRIPTION", "capacity_is_estimate": False,
+                "model_version": resolved.get("version"), "fallback_reasons": resolved.get("fallback_reasons", []),
+                "hr_role": "PRIMARY_HRMAX", "speed_role": "NO_RELIABLE_SPEED_REQUIRED",
+                "method_library": deepcopy(library), "library_work_ceiling_minutes": standard,
+                "effort_profile": deepcopy(method["interval_template"])}
     if resolved.get("status") != "READY" or predictor is None:
         return None
     if any(reason != "INSUFFICIENT_INDEPENDENT_TEST_DURATIONS" for reason in reasons):

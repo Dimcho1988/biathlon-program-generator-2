@@ -146,13 +146,21 @@ def save_management_profile(
         repository = dependencies.repository()
         store = ManagementStore(repository)
         payload = body.profile.model_dump(mode="json")
+        retained_profile = None
         if "method_library" in body.profile.model_fields_set:
             payload["method_library"] = method_library_service.validate_preferences(payload["method_library"], payload)
         else:
             # Older profile editors do not know the new section. Their writes
             # must not reset settings saved on the method-library page.
             current = store.profile(alias)
+            retained_profile = current.get("profile") or {}
             payload["method_library"] = (current.get("profile") or {}).get("method_library", payload["method_library"])
+        if "ant_references" not in body.profile.model_fields_set:
+            # An older editor cannot erase a measured/manual reference merely
+            # by omitting a field it does not yet understand.
+            if retained_profile is None:
+                retained_profile = (store.profile(alias).get("profile") or {})
+            payload["ant_references"] = retained_profile.get("ant_references", [])
         if body.profile.lactate_profiles:
             settings = repository.athlete_settings(alias)
             today = datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone if settings else "UTC")).date()

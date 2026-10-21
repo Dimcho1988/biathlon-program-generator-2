@@ -45,18 +45,18 @@ def test_continuous_65_percent_at_80_recovery_uses_half_role_then_single_scale()
     assert evidence['capacity_minutes'] * nominal * recovery == 58.5
 
 
-@pytest.mark.parametrize("building,maintenance_minutes", [(.6, 36.), (.65, 39.), (.7, 42.)])
+@pytest.mark.parametrize("building,maintenance_minutes", [(.6, 39.), (.65, 39.), (.7, 39.)])
 @pytest.mark.parametrize("purpose,period", [("MAINTENANCE", "GENERAL_PREPARATION"),
     ("SUPPORTING", "GENERAL_PREPARATION"), ("RECOVERY", "GENERAL_PREPARATION"),
     ("BUILDING", "RE_ENTRY")])
-def test_continuous_roles_use_half_building_budget_despite_stale_saved_settings(building, maintenance_minutes, purpose, period):
+def test_undosed_z2_roles_use_sixty_percent_of_fixed_sixty_five_percent_fallback(building, maintenance_minutes, purpose, period):
     profile = {"building_fraction": building, "maintenance_fraction": .4, "reentry_fraction": .5}
     before = deepcopy(profile)
     method = {"zone": "Z2", "structure": "CONTINUOUS"}
     evidence = {"capacity_minutes": 100.}
     nominal = engine._nominal_fraction(method, purpose, profile, period, evidence, None)
     assert nominal * evidence["capacity_minutes"] == pytest.approx(maintenance_minutes)
-    assert evidence["method_budget_role_fraction"] == pytest.approx(building*.6)
+    assert evidence["method_budget_role_fraction"] == pytest.approx(.65*.6)
     assert evidence["maintenance_policy"] == "SIXTY_PERCENT_METHOD_BUDGET_NO_RECOVERY_SCALE"
     ceiling = engine._dose_ceiling(method, purpose, profile, period, evidence, None)
     assert ceiling == nominal

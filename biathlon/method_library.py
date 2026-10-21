@@ -14,7 +14,7 @@ import re
 
 from . import method_dosing, dosing_curve, preliminary_capacity, speed_duration, speed_zones, method_progression, hr_speed
 
-VERSION = "training-method-library-v5-individual-tmax"
+VERSION = "training-method-library-v6-source-standard"
 CATALOG_PATH = Path(__file__).parent / "data" / "training_method_library.json"
 PHASE_POSITION = {"RE_ENTRY": 0., "GENERAL_PREPARATION": 0., "SPECIAL_PREPARATION": .5,
                   "PRECOMPETITION": 1., "COMPETITION": 1., "TRANSITION": 0.}
@@ -154,17 +154,33 @@ def primary_distance(profile):
 def _anchor(spec, profile, view, curve, tests):
     kind = spec.get("type")
     result = deepcopy(spec)
-    if kind == "CV":
+    if kind in {"CV", "CS", "AnT", "ANT"}:
+        # A measured/manual threshold belongs to the athlete; a model estimate
+        # must never overwrite it. The estimate is only a prescription anchor.
+        actual_sport = profile.get("actual_sport") or profile.get("sport")
+        threshold = next((item for item in profile.get("ant_references", [])
+                          if item.get("sport") == actual_sport and item.get("source") in {"MEASURED", "MANUAL"}), {})
+        if kind in {"AnT", "ANT"} and _positive(threshold.get("speed_kmh")):
+            return {**result, **deepcopy(threshold), "type": kind,
+                    "is_estimate": threshold.get("source") not in {"MEASURED", "MANUAL"},
+                    "source": threshold.get("source", "EXPLICIT_ATHLETE_REFERENCE")}
         descriptor = speed_duration.prescription_critical_speed(tests, curve,
             allow_model_estimate=(profile.get("planning_controls") or {}).get("capacity_policy", "MODEL_WITH_PRIOR") == "MODEL_WITH_PRIOR")
         velocity = descriptor["speed_kmh"]
         result["evidence"] = descriptor
-    elif kind in {"V5", "V6", "V_DURATION", "RACE_DURATION"}:
-        seconds = {"V5": 300., "V6": 360.}.get(kind, spec.get("duration_seconds"))
+        if kind in {"AnT", "ANT"}:
+            velocity *= .95
+            result.update(source="EXPERT_0_95_CS_ESTIMATE", is_measured_lactate_threshold=False,
+                          label="AnT · работна оценка 0,95 × CS")
+    elif kind in {"MAS", "V5", "V6", "V_DURATION", "RACE_DURATION"}:
+        seconds = {"MAS": 360., "V5": 300., "V6": 360.}.get(kind, spec.get("duration_seconds"))
         if not _positive(seconds):
             raise ValueError("RACE_DURATION_REQUIRED")
         velocity = curve.speed(seconds) * 3.6
         result["duration_seconds"] = seconds
+        if kind == "MAS":
+            result.update(source="V_360_SECONDS_WORKING_ESTIMATE", is_laboratory_measurement=False,
+                          label="MAS · работна оценка V(6 мин)")
     elif kind in {"RACE_DISTANCE", "PRIMARY_RACE"}:
         distance = spec.get("distance_m") or primary_distance(profile)
         if _positive(distance):
@@ -189,7 +205,10 @@ def _anchor(spec, profile, view, curve, tests):
 def _segment(spec, base, profile, view, curve, tests, position, zone_profile):
     anchor = _anchor(spec.get("anchor", base.get("anchor", {})), profile, view, curve, tests)
     multipliers = _range(spec.get("speed_multiplier", base.get("speed_multiplier")), "speed_multiplier")
-    work = spec.get("work", base.get("work", {}))
+    work = spec.get("work", base.get("work", {})) or {}
+    fallback_duration = not work.get("range") and base.get("structure") == "CONTINUOUS"
+    if fallback_duration:
+        work = {"unit": "capacity_fraction", "range": [.65, .65]}
     works = _range(work.get("range"), "work_range")
     # Couple shorter work to the upper speed bound only where this recipe
     # actually declares a variable work range. A fixed 8-minute method does
@@ -218,7 +237,17 @@ def _segment(spec, base, profile, view, curve, tests, position, zone_profile):
         anchor["pace_offset"] = deepcopy(offset)
     if work.get("unit") == "seconds":
         seconds, seconds_range = amount, works
-        distance, distance_range = velocity / 3.6 * seconds, None
+        distance = velocity / 3.6 * seconds
+        # The endpoints describe the paired short/fast and long/slow options.
+        # Their product can peak between them; bound that same linear paired
+        # family, without combining the longest duration and fastest speed.
+        distances = [velocities[1] / 3.6 * works[0], velocities[0] / 3.6 * works[1], distance]
+        speed_delta, time_delta = velocities[0] - velocities[1], works[1] - works[0]
+        if speed_delta and time_delta:
+            stationary = -(velocities[1] * time_delta + works[0] * speed_delta) / (2 * speed_delta * time_delta)
+            if 0 < stationary < 1:
+                distances.append((velocities[1] + stationary * speed_delta) * (works[0] + stationary * time_delta) / 3.6)
+        distance_range = [min(distances), max(distances)]
     elif work.get("unit") == "meters":
         distance, distance_range = amount, works
         seconds = amount / (velocity / 3.6)
@@ -244,10 +273,60 @@ def _segment(spec, base, profile, view, curve, tests, position, zone_profile):
             "work_duration_seconds": seconds, "work_duration_range_seconds": seconds_range,
             "work_distance_m": distance, "work_distance_range_m": distance_range,
             "work_unit": work["unit"], "work_range": works, "continuous_capacity_seconds": duration,
+            "duration_is_tmax_fallback": fallback_duration,
             "zone": zone, "recovery_after_seconds": sum(rest) / 2,
             "recovery_after_type": spec.get("recovery_after_type", (base.get("recovery") or {}).get("type", "UNSPECIFIED")),
             "recovery_after_instructions": spec.get("recovery_after_instructions"),
             "execution_control": spec.get("execution_control", base.get("execution_control", "SPEED_AND_QUALITY"))}
+
+
+def _athlete_level(profile):
+    """Use the existing explicit level; no universal beginner dose multiplier."""
+    level = profile.get("athlete_level") or (profile.get("load_progression") or {}).get("training_level")
+    return {"LOW": "BEGINNER", "MEDIUM": "ADVANCED", "HIGH": "HIGHLY_TRAINED"}.get(level, level)
+
+
+def _selected_prescription(p, override):
+    """Choose one coupled standard, without combining independent maxima."""
+    standard = deepcopy(p.get("standard_variant") or {})
+    variants = deepcopy(p.get("allowed_variants") or [])
+    for variant in ([standard] if standard else []) + variants:
+        for key, upper in (("repetitions", 100), ("sets", 10)):
+            value = variant.get(key, 1)
+            if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= upper:
+                raise ValueError("INVALID_VARIANT_" + key.upper())
+        if variant.get("work"):
+            _range(variant["work"].get("range"), "variant_work")
+            if variant["work"].get("unit") not in {"seconds", "meters", "capacity_fraction"}:
+                raise ValueError("INVALID_VARIANT_WORK_UNIT")
+        for key in ("speed_multiplier", "hrmax_fraction"):
+            if key in variant:
+                _range(variant[key], "variant_" + key)
+    if standard:
+        if variants and standard not in variants:
+            raise ValueError("STANDARD_VARIANT_NOT_ALLOWED")
+        for key in ("work", "speed_multiplier"):
+            if key in standard:
+                p[key] = deepcopy(standard[key])
+        if "sets" in standard:
+            p["sets"] = {**(p.get("sets") or {}), "count": standard["sets"]}
+    source_repeats = p.get("source_repetitions_range") or p.get("repetitions")
+    repeats = standard.get("repetitions", source_repeats[0] if source_repeats else None)
+    if override.get("repetitions") is not None:
+        # Explicit coach changes remain attributable and do not alter originals.
+        repeats = override["repetitions"][0]
+    if repeats is None and p.get("structure") not in {"CONTINUOUS", "SCALED_SEQUENCE", "PROGRESSIVE_CONTINUOUS", "SEQUENCE"}:
+        raise ValueError("STANDARD_DOSE_REQUIRED_NO_SOURCE_COUNT")
+    if not isinstance(repeats or 1, int) or isinstance(repeats, bool):
+        raise ValueError("INVALID_STANDARD_REPETITIONS")
+    p["selected_standard_repetitions"] = repeats or 1
+    p["source_standard_variant"] = deepcopy(standard)
+    p["selected_standard_variant"] = {**standard,
+        "repetitions": repeats or 1, "sets": (p.get("sets") or {}).get("count", 1),
+        "work": deepcopy(p.get("work")), "speed_multiplier": deepcopy(override.get("speed_multiplier", p.get("speed_multiplier")))}
+    if override.get("work_range") is not None:
+        p["selected_standard_variant"]["work"] = {**p["work"], "range": deepcopy(override["work_range"])}
+    return p
 
 
 def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr_predictor=None):
@@ -275,6 +354,11 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
         return {**result, "status": "INCOMPATIBLE", "reason": "PRIMARY_DISCIPLINE_NOT_SUPPORTED"}
     if phase not in record.get("periods", PHASE_POSITION):
         return {**result, "status": "INCOMPATIBLE", "reason": "PERIOD_NOT_SUPPORTED"}
+    levels = record.get("athlete_levels") or []
+    level = _athlete_level(profile)
+    result.update(athlete_level=level, suitable_athlete_levels=levels)
+    if levels and level not in levels and not override.get("enabled"):
+        return {**result, "status": "INCOMPATIBLE", "reason": "ATHLETE_LEVEL_REQUIRED" if level in {None, "AUTO"} else "ATHLETE_LEVEL_NOT_SUPPORTED"}
     if speed_view and speed_view.get("sport") != actual_sport:
         return {**result, "reason": "SPEED_SPORT_MISMATCH"}
     progression = method_progression.state(record, profile, phase=phase)
@@ -293,6 +377,17 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
             if p.get("pattern"):
                 raise ValueError("COMPOUND_WORK_OVERRIDE_REQUIRES_SEGMENT_PRESCRIPTION")
             p["work"]["range"] = deepcopy(override["work_range"])
+        p = _selected_prescription(p, override)
+        # Explicit work/intensity overrides take precedence over the retained
+        # original standard; they remain marked in expert_override below.
+        for key in ("speed_multiplier", "repetitions"):
+            if override.get(key) is not None:
+                p[key] = deepcopy(override[key])
+        if override.get("work_range") is not None:
+            p["work"]["range"] = deepcopy(override["work_range"])
+        if (p.get("anchor") or {}).get("type") == "HRMAX":
+            from . import method_hr
+            return {**result, **method_hr.resolve(record, profile, speed_view, phase=phase, prescription=p)}
         if _prepared is None:
             _prepared, _hr_predictor = _prepare(speed_view)
         curve, tests, curve_source = _prepared
@@ -309,8 +404,8 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
         segments = [_segment(s, p, profile, speed_view, curve, tests, position, zones) for s in pattern]
         tail = _segment(p["tail"], p, profile, speed_view, curve, tests, position, zones) if p.get("tail") else None
         for segment in segments + ([tail] if tail else []):
-            segment.update(method_dosing.target_ranges(segment["target_speed_kmh"], None, segment["zone"],
-                dosing=dosing, speed_range=segment["target_speed_range_kmh"], speed_zones=zones))
+            # A fixed source intensity remains fixed. Generic ±2% tolerances
+            # are not a published method range.
             segment.update(_hr_reference(segment, _hr_predictor))
             segment.update(method_dosing.target_ranges(None, None, segment["zone"], dosing=dosing,
                 hr_range=segment.get("hr_reference_range_bpm"), hr_bounds=getattr(_hr_predictor, "bounds", None)))
@@ -318,7 +413,8 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
             observed = sorted({t["duration_s"] for t in tests})
             if len(observed) < 2 or any(not observed[0] <= s["continuous_capacity_seconds"] <= observed[-1] for s in segments if s["kind"] == "WORK"):
                 raise ValueError("OUTSIDE_OBSERVED_CAPACITY_SUPPORT")
-        repetitions = [1, 100] if p.get("repetitions_from_budget") else p.get("repetitions", [1, 1])
+        repetitions = (override.get("repetitions") or p.get("source_repetitions_range")
+                       or p.get("repetitions") or [1, 1])
         repetitions = _range(repetitions, "repetitions")
         if any(v != int(v) or v > 100 for v in repetitions):
             raise ValueError("INVALID_REPETITIONS")
@@ -340,38 +436,71 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
                 duration = segment["anchor"].get("duration_seconds")
                 if duration and segment["work_duration_seconds"] > duration * p["race_duration_fraction_max"]:
                     raise ValueError("WORK_INTERVAL_TOO_LONG_FOR_SELECTED_DISCIPLINE")
-        original_repetitions = (None if p.get("repetitions_from_budget") else p.get("source_repetitions_range") or list(repetitions))
-        maximum, allocation = method_dosing.recipe_capacity(segments, dosing["total_capacity_ratio"])
-        capacity_seconds = maximum
+        source_prescription = record.get("prescription") or {}
+        original_repetitions = (source_prescription.get("source_repetitions_range") or
+                                (None if source_prescription.get("repetitions_from_budget") else source_prescription.get("repetitions")))
+        published_repetitions = deepcopy(original_repetitions)
+        standard_repetitions = int(p["selected_standard_repetitions"])
+        if standard_repetitions < repetitions[0] or standard_repetitions > repetitions[1]:
+            raise ValueError("STANDARD_REPETITIONS_OUTSIDE_METHOD")
+        # Source recipes own the work dose. Tmax is retained as individual
+        # feasibility evidence, never used to multiply a prescribed dose.
+        allocation = 1.
+        standard_seconds = cycle * count * standard_repetitions
+        maximum = cycle * count * repetitions[1]
         work_options = None
         structure = p.get("structure", "INTERVALS")
         if structure == "CONTINUOUS":
-            minimum = .25 * work_segments[0]["continuous_capacity_seconds"]
+            minimum, maximum = work_segments[0]["work_duration_range_seconds"]
+            standard_seconds = cycle
+            if work_segments[0].get("duration_is_tmax_fallback"):
+                if dominant["zone"] not in {"Z1", "Z2"}:
+                    raise ValueError("TMAX_FALLBACK_ONLY_Z1_Z2")
+                minimum, maximum = standard_seconds * .3, standard_seconds
+            reduction = p.get("minimum_scale")
+            if reduction is not None:
+                if not 0 < reduction <= 1:
+                    raise ValueError("INVALID_CONTINUOUS_REDUCTION")
+                minimum = min(minimum, standard_seconds * reduction)
             repetitions = [1, 1]
         elif structure in {"SCALED_SEQUENCE", "PROGRESSIVE_CONTINUOUS"}:
-            # Scale all work phases together; the source length is not a cap.
-            minimum = .25 * maximum / dosing["total_capacity_ratio"]
+            minimum = cycle * p.get("minimum_scale", 1.)
+            maximum = standard_seconds = cycle
             repetitions = [1, 1]
         elif structure == "SEQUENCE":
             if not tail or count != 1:
                 raise ValueError("INVALID_SEQUENCE")
-            # Keep the complete opening sequence; add whole tail efforts until
-            # one component exhausts its independent share of Tmax.
-            tail_usage = tail["work_duration_seconds"] / tail["continuous_capacity_seconds"]
-            component_usage = sum(v["work_duration_seconds"] / v["continuous_capacity_seconds"] for v in work_segments if v["zone"] == tail["zone"])
-            remaining = max(0., dosing["total_capacity_ratio"]*allocation-component_usage)
-            work_options = [cycle + n*tail["work_duration_seconds"] for n in range(math.floor(remaining/tail_usage)+1)]
-            work_options = [v for v in work_options if v <= maximum+1e-7]
+            low, high = _range(p.get("tail_repetitions", [0, 0]), "tail_repetitions", zero=True)
+            if any(v != int(v) for v in (low, high)):
+                raise ValueError("INVALID_TAIL_REPETITIONS")
+            work_options = [cycle + n*tail["work_duration_seconds"] for n in range(int(low), int(high)+1)]
             if not work_options:
                 raise ValueError("NO_COMPLETE_REPEAT_WITHIN_METHOD_BUDGET")
             minimum, maximum = work_options[0], work_options[-1]
+            standard_seconds = work_options[0]
             repetitions = [1, 1]
         else:
-            repetitions = list(override["repetitions"]) if override.get("repetitions") is not None else [1, math.floor((maximum+1e-7)/(cycle*count))]
-            minimum = cycle * count * repetitions[0]
-            maximum = min(maximum, cycle * count * repetitions[1])
-            if repetitions[1] < repetitions[0] or maximum < minimum:
+            if p.get("allow_fewer_repetitions") and override.get("repetitions") is None:
+                repetitions[0] = min(repetitions[0], p.get("minimum_repetitions", 1))
+            if repetitions[1] < repetitions[0]:
                 raise ValueError("NO_COMPLETE_REPEAT_WITHIN_METHOD_BUDGET")
+            allowed_counts = set(range(int(repetitions[0]), int(repetitions[1])+1))
+            variants = p.get("allowed_variants") or []
+            dose_override = any(key in override for key in ("repetitions", "work_range", "speed_multiplier"))
+            if variants and not dose_override:
+                allowed_counts = {int(v["repetitions"]) for v in variants
+                    if v.get("sets", count) == count and v.get("work", p.get("work")) == p.get("work")
+                    and v.get("speed_multiplier", p.get("speed_multiplier")) == p.get("speed_multiplier")
+                    and isinstance(v.get("repetitions"), int) and not isinstance(v.get("repetitions"), bool)}
+                if p.get("allow_fewer_repetitions"):
+                    allowed_counts.update(range(int(repetitions[0]), standard_repetitions+1))
+                if standard_repetitions not in allowed_counts:
+                    raise ValueError("NO_COMPLETE_STANDARD_VARIANT")
+            if not allowed_counts:
+                raise ValueError("NO_COMPLETE_REPEAT_WITHIN_METHOD_BUDGET")
+            repetitions = [min(allowed_counts), max(allowed_counts)]
+            work_options = sorted(cycle * count * n for n in allowed_counts)
+            minimum, maximum = work_options[0], work_options[-1]
         recovery_resolution = None
         if recovery.get("anchor") or recovery.get("speed_multiplier"):
             recovery_resolution = _segment({"anchor": recovery.get("anchor", p.get("anchor")),
@@ -381,7 +510,7 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
             recovery_resolution.update(_hr_reference(recovery_resolution, _hr_predictor))
         return {**result, **deepcopy(dominant), "status": "READY", "curve_source": curve_source,
                 "actual_sport": actual_sport, "source_repetitions": original_repetitions,
-                "source_count_policy": "EXPLICIT_COACH_REPEAT_RANGE" if override.get("repetitions") is not None else "INDIVIDUAL_TMAX_NOT_SOURCE_COUNT",
+                "source_count_policy": "EXPLICIT_COACH_REPEAT_RANGE" if override.get("repetitions") is not None else "SOURCE_STANDARD_WITH_DECLARED_WHOLE_REPEAT_ADAPTATIONS",
                 "automatic_selection_enabled": override.get("enabled", record.get("automatic_selection", True)),
                 "requires_coach_activation": not override.get("enabled", record.get("automatic_selection", True)),
                 "recovery_resolution": recovery_resolution,
@@ -392,10 +521,17 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
                 "recovery_seconds": sum(rests)/2, "recovery_range_seconds": rests,
                 "recovery_type": recovery.get("type", "UNSPECIFIED"), "recovery_mode_hint": recovery.get("mode_hint"), "set_recovery_seconds": sum(set_rest)/2, "set_recovery_type": sets.get("recovery_type", recovery.get("type", "UNSPECIFIED")),
                 "minimum_work_seconds": minimum, "maximum_work_seconds": maximum,
+                "standard_work_seconds": standard_seconds, "published_repetitions": published_repetitions,
+                "standard_variant": p["selected_standard_variant"], "allowed_variants": deepcopy(p.get("allowed_variants") or []),
+                "source_standard_variant": deepcopy(p.get("source_standard_variant")),
+                "dose_basis": ("INDIVIDUAL_TMAX_FALLBACK_65_PERCENT" if work_segments[0].get("duration_is_tmax_fallback") else
+                               "EXPLICIT_COACH_OVERRIDE" if any(key in override for key in ("repetitions", "work_range", "speed_multiplier"))
+                               else p.get("dose_basis", "EXPLICIT_SOURCE_RECIPE")),
+                "reduction_policy": deepcopy(p.get("reduction_policy")),
                 "cycle_work_seconds": cycle, "structure": p.get("structure", "INTERVALS"),
                 "expert_override": deepcopy(override), "active_test_count": len(tests),
-                "method_work_capacity_seconds": capacity_seconds, "component_allocation": allocation,
-                "budget_policy": "INDIVIDUAL_TMAX_TIMES_METHOD_COEFFICIENT_ROLE_AND_RECOVERY"}
+                "method_work_capacity_seconds": standard_seconds, "component_allocation": allocation,
+                "budget_policy": "SELECTED_SOURCE_STANDARD_TIMES_ROLE_TIMES_RECOVERY_ONCE"}
     except (ValueError, KeyError, TypeError, OverflowError) as exc:
         return {**result, "reason": str(exc) or "UNRESOLVED_RECIPE"}
 
@@ -409,7 +545,7 @@ def catalog(profile, speed_view=None, *, phase=None, today=None):
 
 
 def metadata(record, resolution):
-    return {k: deepcopy(record.get(k)) for k in ("id", "title", "source", "original", "adaptation", "guidance", "prescription", "progression", "derived_from", "requirements")} | {"resolution": deepcopy(resolution)}
+    return {k: deepcopy(record.get(k)) for k in ("id", "title", "source", "original", "adaptation", "guidance", "prescription", "progression", "derived_from", "requirements", "athlete_levels", "provenance")} | {"resolution": deepcopy(resolution)}
 
 
 def executable_methods(profile, speed_view, *, phase=None):
@@ -418,7 +554,7 @@ def executable_methods(profile, speed_view, *, phase=None):
     try:
         prepared, predictor = _prepare(speed_view)
     except (ValueError, KeyError, TypeError):
-        return result
+        prepared, predictor = None, None
     for record in entries():
         if not automatic_intervals and (record.get("prescription") or {}).get("structure") not in {"CONTINUOUS", "PROGRESSIVE_CONTINUOUS"}:
             continue
@@ -430,15 +566,20 @@ def executable_methods(profile, speed_view, *, phase=None):
             if r["status"] != "READY":
                 continue
             guidance = record.get("guidance") or {}
-            capacity = min(s["continuous_capacity_seconds"] for s in r["segments"] if s["kind"] == "WORK")
+            preparation = (record.get("prescription") or {}).get("preparation") or {}
+            capacity = (r["standard_work_seconds"] if r.get("primary_control") == "HRMAX" else
+                        min(s["continuous_capacity_seconds"] for s in r["segments"] if s["kind"] == "WORK"))
             interval = r["structure"] != "CONTINUOUS"
             result.append({"id": "LIB-" + record["id"] + "-" + actual_phase,
                 "method_library_id": record["id"], "title": record["title"], "zone": r["zone"],
                 "sports": (r["actual_sport"],), "periods": (actual_phase,), "purpose": "BUILDING", "position": .5,
                 "structure": "LIBRARY_INTERVALS" if interval else "LIBRARY_CONTINUOUS",
                 "min_work_min": r["minimum_work_seconds"]/60, "max_work_min": r["maximum_work_seconds"]/60,
-                "warmup_min": 0. if (record.get("prescription") or {}).get("includes_preparation") else 15.,
-                "cooldown_min": 0. if (record.get("prescription") or {}).get("includes_preparation") else 10.,
+                "minimum_fraction": r["minimum_work_seconds"] / r["standard_work_seconds"],
+                "warmup_min": preparation.get("warmup_seconds", 0. if (record.get("prescription") or {}).get("includes_preparation") else 900.) / 60,
+                "cooldown_min": preparation.get("cooldown_seconds", 0. if (record.get("prescription") or {}).get("includes_preparation") else 600.) / 60,
+                "source_preparation": deepcopy(preparation),
+                "preparation_basis": "SOURCE_SPECIFIED" if preparation else "EXPLICIT_ONFLOWS_PREPARATION_DEFAULT",
                 "source_id": record["id"], "source_version": VERSION, "implementation_profile": VERSION,
                 "instructions": guidance.get("execution") or record.get("adaptation") or record["title"],
                 "adaptation": record.get("adaptation"), "method_library": metadata(record, r),

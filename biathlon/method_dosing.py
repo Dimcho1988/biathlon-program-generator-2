@@ -1,7 +1,7 @@
 """Shared method role budgets and role-specific Recovery adjustment."""
 import math
 
-VERSION = "individual-method-tmax-v1"
+VERSION = "source-standard-and-native-method-tmax-v2"
 DEFAULT_SPEED_TOLERANCE = .02
 DEFAULT_HR_TOLERANCE = 3.
 DOSE_CONTROLS = {"total_capacity_ratio", "speed_tolerance_fraction", "hr_tolerance_bpm"}
@@ -18,7 +18,8 @@ def parameters(method, profile=None):
     overrides = ((profile or {}).get("method_library") or {}).get("overrides") or {}
     parent = method.get("variation_parent_id")
     chosen = {**overrides.get(parent, {}), **overrides.get(method.get("method_library_id", method.get("id")), {})}
-    return {"version": VERSION, "basis": "EDITABLE_COACH_STARTING_VALUES_NOT_VALIDATED_MAXIMUM",
+    return {"version": VERSION, "basis": "SOURCE_STANDARD_NO_CAPACITY_MULTIPLIER" if prescription else "EDITABLE_COACH_STARTING_VALUES_NOT_VALIDATED_MAXIMUM",
+            "applies_to_standard_dose": not bool(prescription),
             "total_capacity_ratio": chosen.get("total_capacity_ratio", interval.get("total_capacity_ratio", prescription.get("total_capacity_ratio", default))),
             "speed_tolerance_fraction": chosen.get("speed_tolerance_fraction", DEFAULT_SPEED_TOLERANCE),
             "hr_tolerance_bpm": chosen.get("hr_tolerance_bpm", DEFAULT_HR_TOLERANCE)}
@@ -46,6 +47,9 @@ def prepare_native_budget(method, evidence, profile):
     dosing = parameters(method, profile)
     method["dosing"] = dosing
     ratio = dosing["total_capacity_ratio"]
+    if method["structure"] == "CONTINUOUS" and method["zone"] in {"Z1", "Z2"}:
+        ratio = 1.
+        dosing.update(total_capacity_ratio=1., basis="UNDOSED_CONTINUOUS_Z1_Z2_TMAX_FALLBACK")
     # The high component in a mixed threshold method has a separate budget.
     if method["structure"] == "THRESHOLD_HIGH":
         ratio = 1.

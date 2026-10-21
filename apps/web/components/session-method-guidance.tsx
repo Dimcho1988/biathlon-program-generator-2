@@ -1,3 +1,6 @@
+"use client";
+import { speedRangeText } from "../lib/speed-format";
+import { useRunningSpeedUnit } from "./running-speed-unit";
 import Link from "next/link";
 import { durationSeconds } from "../lib/duration-format";
 import { methodAnchorLabel, methodHref, methodHrText, rangeText, type SessionMethod } from "../lib/method-library";
@@ -10,6 +13,7 @@ export function sessionMethods(session: DraftSession): SessionMethod[] {
 }
 
 export function SessionMethodGuidance({ session }: { session: DraftSession }) {
+  const unit = useRunningSpeedUnit();
   const methods = sessionMethods(session);
   const strength = session.dose_evidence?.strength_prescription;
   if (!methods.length && !strength) return null;
@@ -18,7 +22,7 @@ export function SessionMethodGuidance({ session }: { session: DraftSession }) {
     return <div key={method.id}><h4>{method.id.startsWith("COMBO-") ? method.title : <Link href={methodHref(method.id)}>Метод {method.id}{method.title ? ` · ${method.title}` : ""} →</Link>}</h4>
       {method.guidance?.purpose && <p>{method.guidance.purpose}</p>}
       {resolution?.hr_reference_range_bpm && <p className="management-muted"><strong>Пулсов ориентир:</strong> {methodHrText(resolution)}</p>}
-      {resolution?.anchor && <p className="management-muted"><strong>{methodAnchorLabel(resolution.anchor)}</strong>{resolution.target_speed_range_kmh ? ` · ${rangeText(resolution.target_speed_range_kmh)} km/h` : ""}{resolution.work_duration_range_seconds ? ` · отсечка ${rangeText(resolution.work_duration_range_seconds, durationSeconds)}` : ""}</p>}
+      {resolution?.anchor && <p className="management-muted"><strong>{methodAnchorLabel(resolution.anchor)}</strong>{resolution.target_speed_range_kmh ? ` · ${speedRangeText(resolution.target_speed_range_kmh, unit, session.sport)}` : ""}{resolution.work_duration_range_seconds ? ` · отсечка ${rangeText(resolution.work_duration_range_seconds, durationSeconds)}` : ""}</p>}
       <details><summary>Указания и критерии за изпълнение</summary>{(["execution", "recovery", "success", "errors", "adjustment", "progression"] as const).map(key => method.guidance?.[key] ? <p key={key}><strong>{{ execution: "Изпълнение", recovery: "Почивка", success: "Успех", errors: "Избягвай", adjustment: "Корекция", progression: "Прогресия" }[key]}:</strong> {method.guidance[key]}</p> : null)}<p className="management-muted">Дозата и личната скорост са запазени при съставянето на тази тренировка. Базата показва текущата крива и настройки.</p></details>
     </div>;
   })}</section>;

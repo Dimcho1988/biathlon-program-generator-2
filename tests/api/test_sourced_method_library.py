@@ -29,7 +29,7 @@ def recipe(**changes):
 
 
 def athlete(**changes):
-    return {"sport":"Run", "discipline":"5000 m", "planning_controls":{"capacity_policy":"MODEL_WITH_PRIOR"}, **changes}
+    return {"sport":"Run", "discipline":"5000 m", "planning_controls":{"capacity_policy":"MODEL_WITH_PRIOR"}, "load_progression":{"training_level":"HIGH"}, **changes}
 
 
 def adapter(monkeypatch, r, p=None, v=None):
@@ -77,13 +77,13 @@ def test_ski_primary_discipline_uses_actual_rollers_curve_and_explicit_ranges():
 def test_budget_only_source_does_not_manufacture_hundred_repeat_ceiling():
     r=recipe();r["prescription"].update(anchor={"type":"V5"},work={"unit":"seconds","range":[30,30]},speed_multiplier=[1,1],repetitions=None,repetitions_from_budget=True)
     result=lib.resolve(r,athlete(),view(),phase="SPECIAL_PREPARATION")
-    assert result["status"] == "READY"
-    assert result["maximum_work_seconds"] == pytest.approx(750.)
-    assert result["work_duration_seconds"] == 30
+    assert result["status"] == "UNAVAILABLE"
+    assert result["reason"] == "STANDARD_DOSE_REQUIRED_NO_SOURCE_COUNT"
 
 
 def test_recovery_scales_whole_repeats_once_and_passive_time_is_not_work(monkeypatch):
-    m,e,settings=adapter(monkeypatch,recipe())
+    r=recipe(); r["prescription"].update(source_repetitions_range=[8,8],allow_fewer_repetitions=True)
+    m,e,settings=adapter(monkeypatch,r)
     fraction=engine._nominal_fraction(m,"BUILDING",athlete(),"SPECIAL_PREPARATION",e,{})
     requested=e["capacity_minutes"]*fraction*.5
     blocks=engine._blocks(m,requested,e,settings)
@@ -108,7 +108,7 @@ def test_compound_recovery_speed_has_actual_zone_and_single_integrated_budget(mo
     blocks=engine._blocks(m,m["max_work_min"]*.5,e,settings)
     work=[b for b in blocks if b["kind"]=="WORK"]
     rest=[b for b in blocks if b["kind"]=="RECOVERY"]
-    assert len(work) > 2 and len(rest) == len(work)-1
+    assert len(work) == 2 and len(rest) == len(work)-1
     assert rest[0]["target_speed_kmh"]==pytest.approx(work[0]["target_speed_kmh"]*.7,abs=.002)
     assert engine._dose_usage(blocks,e,m["zone"])==pytest.approx(sum(b["duration_min"] for b in work)/e["library_work_ceiling_minutes"])
 
@@ -125,12 +125,12 @@ def test_power_reference_and_missing_cs_never_silently_become_speed():
     assert result["anchor"]["evidence"]["measured"] is False
 
 
-def test_continuous_recipe_uses_continuous_tmax_denominator(monkeypatch):
+def test_continuous_recipe_uses_selected_source_standard_denominator(monkeypatch):
     r=recipe();r["prescription"].update(anchor={"type":"CV"},speed_multiplier=[.95,.95],structure="CONTINUOUS",work={"unit":"seconds","range":[1200,2400]},repetitions=[1,1])
     m,e,settings=adapter(monkeypatch,r)
     blocks=engine._blocks(m,m["min_work_min"],e,settings)
     assert blocks
-    assert engine._dose_usage(blocks,e,m["zone"]) == pytest.approx(m["min_work_min"]/e["capacity_minutes"])
+    assert engine._dose_usage(blocks,e,m["zone"]) == pytest.approx(m["min_work_min"]/e["library_work_ceiling_minutes"])
 
 
 def test_explicit_repeat_override_preserves_coach_minimum():
@@ -189,6 +189,7 @@ def test_exact_distance_recipe_survives_whole_week_generation(monkeypatch):
         program_end=(TODAY+timedelta(days=6)).isoformat(),component_targets_weekly={"Z1":100.,method["zone"]:40.})
     profile["planning_controls"].update(accents=[method["zone"]],sessions_per_week=1,
         sessions_by_day=[0,1,0,0,0,0,0],threshold_days=[1])
+    profile["load_progression"]["training_level"]="HIGH"
     fixed_readiness(monkeypatch,100.)
     monkeypatch.setattr(engine,"resolved_methods",lambda _:[])
     monkeypatch.setattr(engine.model_service,"speed_view",lambda *args,**kwargs:deepcopy(v))

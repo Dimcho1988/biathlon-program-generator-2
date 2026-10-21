@@ -19,7 +19,7 @@ export function parseManualClock(value:string):number|null {
   const values=parts.map(Number);
   if(values.at(-1)!>=60||parts.length===3&&values[1]>=60)return null;
   const seconds=values.reduce((sum,v)=>sum*60+v,0);
-  return Number.isFinite(seconds)&&seconds>=10.8&&seconds<=43516?seconds:null;
+  return Number.isFinite(seconds)&&(seconds===10||seconds>=10.8)&&seconds<=43516?seconds:null;
 }
 export function manualClockTime(seconds:number):string {
   if (!Number.isFinite(seconds) || seconds < 0) return "—";
@@ -32,6 +32,7 @@ export function manualTestPayload(test:SpeedTest,enabled:boolean) {
   return {test_id:p.test_id,name:p.name,day:p.day,sport:p.sport,duration_s:p.duration_s,
     ...(p.measurement_input==="SPEED"?{speed_kmh:p.speed_kmh}:{distance_m:p.distance_m}),
     maximal:true,comparable:true,flat_terrain:true,conditions:p.conditions,use_for_cs:p.use_for_cs,
+    ...(p.start_type ? {start_type:p.start_type} : {}),
     enabled,expected_revision:test.revision};
 }
 export function testActivities(activities:SpeedModel["activities"], sport:string, query="") {

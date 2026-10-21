@@ -8,6 +8,7 @@ export interface MethodGuidance { purpose?: string; execution?: string; recovery
 export interface MethodPrescription {
   anchor: { type: string; distance_m?: number; duration_seconds?: number };
   speed_multiplier?: MethodRange;
+  hrmax_fraction?: MethodRange;
   work?: { unit: "seconds" | "meters" | "capacity_fraction"; range: MethodRange };
   structure?: string;
   pace_offset?: { distance_m: number; seconds: MethodRange };
@@ -20,7 +21,7 @@ export interface MethodPrescription {
 }
 export interface MethodResolution {
   status: string; reason?: string; message?: string; reasons?: string[];
-  anchor?: { type: string; speed_kmh?: number; distance_m?: number; duration_seconds?: number; evidence?: Record<string, unknown> };
+  anchor?: { type: string; speed_kmh?: number; distance_m?: number; duration_seconds?: number; source?: string; evidence?: Record<string, unknown> };
   target_speed_kmh?: number; target_speed_range_kmh?: MethodRange;
   speed_multiplier_range?: MethodRange; work_range?: MethodRange; work_unit?: "seconds" | "meters" | "capacity_fraction";
   hr_reference_range_bpm?: MethodRange | null; hr_reference_basis?: string; hr_role?: string;
@@ -43,6 +44,7 @@ export interface SessionMethod {
   id: string; title?: string; source?: LibraryMethod["source"]; original?: LibraryMethod["original"];
   adaptation?: LibraryMethod["adaptation"]; guidance?: MethodGuidance; prescription?: MethodPrescription | null;
   resolution?: MethodResolution; components?: SessionMethod[];
+  dosing_ref?: "dose_evidence.dosing";
 }
 export interface MethodLibraryResponse {
   version: string; methods: LibraryMethod[]; configured: boolean; revision: number; preferences: MethodPreferences;
@@ -88,12 +90,14 @@ export function parseMethodLibrary(value: unknown): MethodLibraryResponse {
     throw new Error("Базата от методи временно не е достъпна. Опитай отново.");
   return { ...value, preferences: parseMethodPreferences(value.preferences) } as unknown as MethodLibraryResponse;
 }
-export function methodAnchorLabel(anchor?: { type: string; distance_m?: number; duration_seconds?: number }): string {
+export function methodAnchorLabel(anchor?: { type: string; distance_m?: number; duration_seconds?: number; source?: string }): string {
   if (!anchor) return "Индивидуален работен профил";
-  if (anchor.type === "CV") return "КС · критична скорост";
+  if (["CV", "CS"].includes(anchor.type)) return "КС · критична скорост";
   if (anchor.type === "INDIVIDUAL_ZONE") return "Индивидуален профил на компонента";
-  if (anchor.type === "V5") return "V5 · оценка на МАС от максимални 5 мин";
-  if (anchor.type === "V6") return "V6 · максимална скорост за 6 мин";
+  if (anchor.type === "V5") return "V(5 мин) · максимална средна скорост за 5 мин";
+  if (["MAS", "V6"].includes(anchor.type)) return "MAS · работна оценка чрез V(6 мин), не лабораторно измерване";
+  if (["ANT", "AnT"].includes(anchor.type)) return anchor.source === "MEASURED" ? "AnT · въведена измерена опора" : anchor.source === "MANUAL" ? "AnT · ръчно зададена опора" : "AnT · работна оценка 0,95 × CS при липсваща зададена или измерена опора";
+  if (anchor.type === "HRMAX") return "%HRmax · публикуван пулсов ориентир";
   if (anchor.type === "V_DURATION") return `V(t) · скорост за ${durationSeconds(anchor.duration_seconds)}`;
   if (["RACE_DISTANCE", "PRIMARY_RACE"].includes(anchor.type)) return anchor.distance_m ? `V${anchor.distance_m} · скорост за ${anchor.distance_m} m` : "Скорост за основната дисциплина";
   if (anchor.type === "RACE_DURATION") return "Скорост за продължителността на старта";
@@ -108,6 +112,7 @@ export function methodWorkText(work?: MethodPrescription["work"]): string {
 }
 export function methodHrText(resolution?: Pick<MethodResolution, "hr_reference_range_bpm" | "hr_reference_basis" | "hr_role">): string {
   if (!resolution?.hr_reference_range_bpm) return "Нужен е индивидуален пулсов профил.";
+  if (resolution.hr_role === "PRIMARY_SOURCE_PRESCRIPTION") return `${rangeText(resolution.hr_reference_range_bpm)} уд./мин · основен ориентир по публикувания %HRmax и индивидуалната настройка за максимален пулс. Не е процент от MAS.`;
   const basis = resolution.hr_reference_basis === "INDIVIDUAL_ZONE_OBSERVATION_NOT_SPEED_PREDICTION" ? "пулсов диапазон на зоната за наблюдение; извън точната скорост–пулс връзка" : "индивидуална моделна оценка";
   return `${rangeText(resolution.hr_reference_range_bpm)} уд./мин · ${basis}.${resolution.hr_role === "SECONDARY_OBSERVATION_WITH_LAG" ? " Пулсът изостава при кратките части; не ускорявай, за да го достигнеш." : " Вторичен ориентир при устойчиво усилие."}`;
 }

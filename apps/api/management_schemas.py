@@ -278,6 +278,16 @@ class MethodLibraryPreferencesWrite(BaseModel):
     preferences: MethodLibraryPreferences
 
 
+class AnTReference(BaseModel):
+    """Explicit threshold-speed reference; never populated by the .95 CS estimate."""
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    sport: Literal["Run", "NordicSki", "RollerSki"]
+    speed_kmh: float = Field(gt=0, le=80)
+    source: Literal["MEASURED", "MANUAL"]
+    assessed_on: date | None = None
+    notes: str = Field(default="", max_length=400)
+
+
 class ManagementProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -314,6 +324,7 @@ class ManagementProfile(BaseModel):
     training_return: TrainingReturn | None = None
     individual_learning: IndividualLearning = Field(default_factory=IndividualLearning)
     method_library: MethodLibraryPreferences = Field(default_factory=MethodLibraryPreferences)
+    ant_references: list[AnTReference] = Field(default_factory=list, max_length=3)
     component_targets_weekly: dict[Literal["Z1", "Z2", "Z3", "Z4", "Z5", "STR"], float] = Field(default_factory=dict)
     interval_profiles: list[IntervalDoseProfile] = Field(default_factory=list, max_length=2)
     strength_enabled: bool = False
@@ -333,6 +344,8 @@ class ManagementProfile(BaseModel):
 
     @model_validator(mode="after")
     def coherent(self):
+        if len({p.sport for p in self.ant_references}) != len(self.ant_references):
+            raise ValueError("Keep one current explicit AnT speed reference per sport")
         if len({p.sport for p in self.lactate_profiles}) != len(self.lactate_profiles):
             raise ValueError("Keep one current lactate profile per sport")
         if self.training_return and self.training_return.mode == "CONFIRMED_BREAK" and (

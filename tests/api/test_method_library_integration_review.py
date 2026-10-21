@@ -23,6 +23,7 @@ def source(identifier):
 
 def athlete(**changes):
     return {"sport": "Run", "actual_sport": "Run", "discipline": "5000 m",
+            "load_progression": {"training_level": "HIGH"},
             "planning_controls": {"capacity_policy": "MODEL_WITH_PRIOR"}, **changes}
 
 
@@ -59,6 +60,9 @@ def test_ski_discipline_uses_rollerski_curve_and_never_calendar_fitness_uplift()
     view = example()
     view["sport"] = "RollerSki"
     profile = athlete(sport="NordicSki", actual_sport="RollerSki", discipline="10 km")
+    # This coaching template has no published count; an explicit standard is
+    # required instead of manufacturing repetitions from Tmax.
+    profile["method_library"] = {"overrides": {"OF-XC-SHORT": {"repetitions": [6, 6]}}}
     row = source("OF-XC-SHORT")
     early = method_library.resolve(row, profile, view, phase="GENERAL_PREPARATION")
     special = method_library.resolve(row, profile, view, phase="SPECIAL_PREPARATION")
@@ -84,37 +88,42 @@ def test_fixed_source_repeat_count_reduces_once_for_recovery(monkeypatch):
     assert repeats and len(repeats) == int(work*60/evidence["method_library"]["resolution"]["cycle_work_seconds"])
     assert sum(b["target_distance_m"] for b in repeats) == 1000*len(repeats)
     assert evidence["method_library"]["resolution"]["source_repetitions"] == [4, 4]
-    assert engine._dose_usage(blocks, evidence, method["zone"]) <= .65*.5
+    assert engine._dose_usage(blocks, evidence, method["zone"]) <= .5
 
 
-def test_continuous_source_uses_tmax_denominator_not_its_own_recipe_ceiling(monkeypatch):
+def test_continuous_source_uses_selected_standard_without_second_tmax_fraction(monkeypatch):
     method, evidence, _ = executable("AO21", monkeypatch, phase="SPECIAL_PREPARATION")
     blocks = engine._blocks(method, 15, evidence, SETTINGS)
     assert blocks
     assert engine._dose_usage(blocks, evidence, method["zone"]) == pytest.approx(
-        sum(b["duration_min"] for b in blocks if b["kind"] == "WORK") / evidence["capacity_minutes"])
-    assert engine._dose_fits(blocks, evidence, method["zone"], .65)
+        sum(b["duration_min"] for b in blocks if b["kind"] == "WORK") / 20.)
+    assert engine._dose_fits(blocks, evidence, method["zone"], 1.)
 
 
 def test_no_source_repeat_count_does_not_manufacture_a_hundred_repeat_budget():
     row = source("R07")
     resolved = method_library.resolve(row, athlete(), example(), phase=row["periods"][0])
-    assert resolved["status"] == "READY", resolved
-    assert resolved["maximum_work_seconds"] <= resolved["continuous_capacity_seconds"] * resolved["dosing"]["total_capacity_ratio"] + 1e-6
-    assert resolved["maximum_work_seconds"] < 100 * resolved["cycle_work_seconds"]
+    assert resolved["status"] == "UNAVAILABLE", resolved
+    assert resolved["reason"] == "STANDARD_DOSE_REQUIRED_NO_SOURCE_COUNT"
 
 
 def test_active_recovery_keeps_its_source_speed_anchor(monkeypatch):
     method, evidence, view = executable("R10", monkeypatch)
     blocks = engine._blocks(method, 12.5, evidence, SETTINGS)
     rests = [b for b in blocks if b["kind"] == "RECOVERY"]
-    expected = .6 * dosing_curve.from_view(view).speed(300) * 3.6
+    expected = .6 * dosing_curve.from_view(view).speed(360) * 3.6
     assert rests and len(rests) == len([b for b in blocks if b["kind"] == "WORK"])-1
     assert all(b["target_speed_kmh"] == pytest.approx(expected, abs=.001) for b in rests)
 
 
 def test_alternating_recovery_is_not_counted_as_primary_work(monkeypatch):
-    method, evidence, _ = executable("R04", monkeypatch)
+    row = deepcopy(source("R04"))
+    row["prescription"].update(repetitions=[2,2], repetitions_from_budget=False)
+    profile=athlete(method_library={"overrides":{"R04":{"repetitions":[2,2]}}})
+    monkeypatch.setattr(method_library, "entries", lambda:[row])
+    view=example()
+    method=method_library.executable_methods(profile,view,phase=row["periods"][0])[0]
+    evidence=engine.capacity_for(method,SETTINGS,view,engine._capacity_context(view,SETTINGS),TODAY,use_model_prior=True)
     cycle = evidence["method_library"]["resolution"]["cycle_work_seconds"] / 60
     blocks = engine._blocks(method, 2 * cycle, evidence, SETTINGS)
     work = [b for b in blocks if b["kind"] == "WORK"]
@@ -144,7 +153,7 @@ def test_source_method_is_selected_and_published_as_real_weekly_blocks(monkeypat
     assert sessions, [r for d in plan["days"] for r in d.get("rejected_alternatives", [])]
     assert sessions[0]["method_library"]["id"] == "R10"
     work = [b for b in sessions[0]["blocks"] if b["kind"] == "WORK"]
-    assert work and all(b["duration_min"] == 2.5 for b in work)
+    assert work and all(b["duration_min"] == pytest.approx(3.) for b in work)
     assert all(b["target_speed_kmh"] > 0 for b in work)
     assert_rolling_budgets(plan)
 

@@ -1,4 +1,6 @@
 "use client";
+import { SpeedEquivalenceComparison } from "./speed-equivalence-comparison";
+import { RunningSpeedUnitControl } from "./running-speed-unit";
 
 import { useEffect, useState } from "react";
 import type { SpeedLoad } from "../lib/speed-load";
@@ -29,6 +31,8 @@ export function SpeedWorkReport({ start, end, generation, revision, totalDuratio
   return <div aria-label="Отчет по скорост" aria-busy={!data && !error}>
     <div role="status">{error ? <><p>{error}</p><button type="button" className="action-button secondary" onClick={() => { setError(""); setData(null); setAttempt(a => a + 1); }}>Опитай отново</button></> : !data && <p>Изчисляване на отчета по скорост за избрания период…</p>}</div>
     {data && <>
+      <RunningSpeedUnitControl/>
+      <SpeedEquivalenceComparison value={data.speed_equivalence_comparison}/>
       <p className="report-note">Време по скоростни зони, приравнен обем Q и ефективен товар E за избрания период. Зоните се определят чрез Vflat и предходните индекси за съответния спорт. Продължителностите са във формат ч:мм:сс.</p>
       <div className="report-totals"><dl>
         <div><dt>Продължителност на всички активности</dt><dd>{durationHms(totalDuration)}</dd></div>
