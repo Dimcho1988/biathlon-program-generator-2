@@ -510,6 +510,10 @@ export interface PlanOutcome extends PlanComparisonOutcome { planned_load?: Part
 export interface ActivePlanRecord {
   revision: number; stale: boolean; actionable: boolean; stale_reason?: string | null;
   payload: { schema_version: "active-plan-v2"; status: "ACTIVE" | "PAUSED" | "REVIEW_REQUIRED" | "COMPLETED";
+    week_window?: { start_date: string; end_date: string };
+    proposal_mode?: "AUTO" | "REVIEW";
+    proposal_week_window?: { start_date: string; end_date: string };
+    monitoring?: { evaluated_on: string; history_comparison: unknown[]; days: Array<{ date: string; status: "RECORDED" | "REVIEW_REQUIRED" | "MATCHED"; reason: string; readiness_before?: Partial<Record<Component, number | null>> }> };
     mode: "AUTO" | "REVIEW"; reason: string; plan: PlanningDraft; proposal: PlanningDraft | null;
     changes: PlanChange[]; outcomes: PlanOutcome[]; decisions: Record<string, { action: string; note: string }> };
 }
@@ -535,6 +539,16 @@ export function parseActivePlanResponse(value: unknown): ActivePlanResponse {
   if (p.schema_version !== "active-plan-v2" || !["ACTIVE", "PAUSED", "REVIEW_REQUIRED", "COMPLETED"].includes(String(p.status))
     || !["AUTO", "REVIEW"].includes(String(p.mode)) || typeof p.reason !== "string" || !Array.isArray(p.changes)
     || !Array.isArray(p.outcomes) || !isRecord(p.decisions)) throw new Error("Невалидно състояние на програмата.");
+  for (const key of ["week_window", "proposal_week_window"] as const) {
+    const window = p[key];
+    if (window !== undefined && (!isRecord(window) || !isCalendarDate(window.start_date) || !isCalendarDate(window.end_date)
+      || window.start_date > window.end_date)) throw new Error("Невалиден период на седмицата.");
+  }
+  if (p.proposal_mode !== undefined && !["AUTO", "REVIEW"].includes(String(p.proposal_mode))) throw new Error("Невалиден предложен режим.");
+  if (p.monitoring !== undefined && (!isRecord(p.monitoring) || !isCalendarDate(p.monitoring.evaluated_on)
+    || !Array.isArray(p.monitoring.history_comparison) || !Array.isArray(p.monitoring.days)
+    || p.monitoring.days.some(d => !isRecord(d) || !isCalendarDate(d.date) || typeof d.reason !== "string"
+      || !["RECORDED", "REVIEW_REQUIRED", "MATCHED"].includes(String(d.status))))) throw new Error("Невалидна текуща проверка на седмицата.");
   const plan = parseDraftRecord({ entry_key: "active", revision: row.revision, payload: p.plan }).payload;
   const proposal = p.proposal === null ? null : parseDraftRecord({ entry_key: "proposal", revision: row.revision, payload: p.proposal }).payload;
   if (actionResult && actionResult.checked_revision > row.revision) throw new Error("Проверката е за по-нова версия на програмата.");

@@ -487,3 +487,33 @@ it("distinguishes the visible week from the complete-cycle forecast and validate
   expect(()=>parseDraftRecord({...record,payload:{...record.payload,lookahead_days:[{...record.payload.lookahead_days[0],date:"2026-10-23"}]}})).toThrow();
   expect(()=>parseDraftRecord({...record,payload:{...record.payload,lookahead_days:[{...record.payload.lookahead_days[0],provisional:false}]}})).toThrow();
 });
+
+it("keeps approved fixed tasks first and presents changed doses as a separate proposal", async () => {
+  const response = activeResponse(12);
+  const p = response.active!.payload;
+  p.mode = "REVIEW";
+  p.week_window = { start_date: "2026-09-22", end_date: "2026-09-28" };
+  p.plan = { ...draft.payload, days: draft.payload.days.map(d => ({ ...d, explanation: "Първоначално утвърдена задача" })) };
+  p.proposal = { ...draft.payload, activation_eligible: true, days: draft.payload.days.map(d => ({ ...d, explanation: "Предложена корекция след допълнителен товар" })) };
+  p.proposal_mode = "AUTO";
+  p.monitoring = { evaluated_on: "2026-09-22", history_comparison: [], days: [{ date: "2026-09-22", status: "REVIEW_REQUIRED", reason: "Променено възстановяване" }] };
+  await mount(<ActiveTrainingPlan value={response} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={d => <p>{d.explanation}</p>}/>);
+  const text = container.textContent!;
+  expect(text).toContain("Фиксирана седмица");
+  expect(text).toContain("2026-09-22 – 2026-09-28");
+  expect(text).toContain("Нужен е преглед на запазената задача");
+  expect(text).toContain("Предложена смяна към адаптивна седмица");
+  expect(text.indexOf("Първоначално утвърдена задача")).toBeLessThan(text.indexOf("Предложена корекция след допълнителен товар"));
+  expect(container.querySelector('[aria-label="Предложени промени"]')?.textContent).not.toContain("Първоначално утвърдена задача");
+});
+
+it("saves an explicit fixed-week choice through the existing profile revision", async () => {
+  const fetchMock = vi.fn(async (_url, init) => Response.json({ configured: true, revision: 2, profile: JSON.parse(init.body).profile }));
+  vi.stubGlobal("fetch", fetchMock);
+  await mount(<ManagementProfileEditor initialProfile={{ configured: true, profile, revision: 1 }} today="2026-09-21"/>);
+  await click(button("4. Методи и дозиране"));
+  const select = [...container.querySelectorAll("select")].find(s => s.parentElement?.textContent?.startsWith("Режим на седмицата"))!;
+  await choose(select, "REVIEW");
+  await click(button("Запази промените"));
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ profile: { adaptation_mode: "REVIEW" }, expected_revision: 1 });
+});

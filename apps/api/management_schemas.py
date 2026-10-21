@@ -317,6 +317,7 @@ class ManagementProfile(BaseModel):
     allow_expert_fallback: bool = True
     # New optional fields preserve stored v1 profiles. The activation freezes
     # these rules; editing them subsequently requires a fresh approval.
+    # REVIEW retains its stored value and now means a fixed, explicitly approved week.
     adaptation_mode: Literal["AUTO", "REVIEW"] = "AUTO"
     auto_import_enabled: bool = True
     progression_percent: float = Field(default=5, ge=0, le=10)

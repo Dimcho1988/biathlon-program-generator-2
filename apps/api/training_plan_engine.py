@@ -37,7 +37,7 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v55-taper-priority"
+VERSION = "training-management-v56-fixed-weeks"
 PARAMETER_VERSION = "management-parameters-v49"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
@@ -1516,7 +1516,8 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
 
 
 def generate_plan(repository, alias: str, profile: dict, *, start_date: date, now: datetime | None = None,
-                  decisions: dict | None = None, locked_day: dict | None = None) -> dict:
+                  decisions: dict | None = None, locked_day: dict | None = None,
+                  window_end: date | None = None) -> dict:
     from .management_schemas import normalize_building_profile
     profile = normalize_building_profile(profile)
     # Candidate trials share immutable historical calculations only within
@@ -1536,6 +1537,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     profile, horizon_context = planning_schedule.horizon(profile, calendar_settings["events"])
     program_start, program_end = map(date.fromisoformat, (profile["program_start"], profile["program_end"]))
     end_date = min(start_date + timedelta(days=6), program_end)
+    if window_end is not None:
+        if not start_date <= window_end <= start_date + timedelta(days=6):
+            raise ValueError("The approved week end must bound the remaining seven-day window")
+        end_date = min(end_date, window_end)
     horizon = (end_date - start_date).days + 1
     decisions = decisions or {}
     calendar_settings = _read_optional(repository, "athlete_planning_calendar", alias) or {"events": []}

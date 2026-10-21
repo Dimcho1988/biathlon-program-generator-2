@@ -292,7 +292,7 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False,
 
 
 def build_draft(repository, alias, start_date, expected_profile_revision, *, now=None, decisions=None, locked_day=None,
-                _initial_read_phase=None):
+                window_end=None, _initial_read_phase=None):
     # Reuse inputs only during calculation. The final check below must observe
     # edits/syncs made while the (potentially long) calculation was running.
     live_repository = repository
@@ -321,7 +321,8 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
     from .planning_computation import compute
     computation_key = _hash({"athlete": alias, "inputs": before,
         "profile": profile.model_dump(mode="json"), "profile_revision": stored["revision"],
-        "start_date": start_date.isoformat(), "decisions": decisions or {}, "locked_day": locked_day})
+        "start_date": start_date.isoformat(), "decisions": decisions or {}, "locked_day": locked_day,
+        **({"window_end": window_end.isoformat()} if window_end else {})})
     def calculate():
         from .planning_search import improve
         normalized = profile.model_dump(mode="json")
@@ -333,7 +334,8 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
             with timed_stage(stage):
                 return training_plan_engine.generate_plan(repository, alias,
                     {**normalized, **({"_allocation_policy": allocation_policy} if allocation_policy else {})},
-                    start_date=start_date, now=now, decisions=decisions, locked_day=locked_day)
+                    start_date=start_date, now=now, decisions=decisions, locked_day=locked_day,
+                    **({"window_end": window_end} if window_end else {}))
         from time import monotonic
         started = monotonic()
         baseline = replay()
@@ -356,7 +358,8 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
               "profile_revision": stored["revision"]}
     payload.update({"input_snapshot": frozen, "input_fingerprint": _hash(frozen),
                     "review_required": True, "automatically_published": False,
-                    "operational_context": {"decisions": decisions or {}, "locked_day": locked_day}})
+                    "operational_context": {"decisions": decisions or {}, "locked_day": locked_day,
+                        **({"window_end": window_end.isoformat()} if window_end else {})}})
     return payload
 
 
