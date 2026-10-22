@@ -8,6 +8,7 @@ import { ActiveTrainingPlan } from "../components/active-training-plan";
 import { PlanningProfileForm } from "../components/planning-profile-form";
 import { TrainingPlanSummary } from "../components/training-plan-summary";
 import { TimeAvailability, TimeLimitNotice } from "../components/planning-time-limit";
+import { RunningSpeedUnitControl, setRunningSpeedUnit } from "../components/running-speed-unit";
 import { changeActivePlan, newerActivePlan } from "../lib/active-plan-request";
 import type { ActivePlanResponse } from "../lib/training-management";
 import type { PlanningCalendarResponse } from "../lib/planning-calendar";
@@ -591,6 +592,31 @@ it("approves the reviewed revision once and confirms the accepted changes", asyn
   expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ action: "APPROVE", expected_revision: 12 });
   expect(receive).toHaveBeenCalledWith(result);
   expect(container.textContent).toContain("Предложението е утвърдено.");
+});
+
+it("shows an intensity-only change in review and shares the running speed unit preference", async () => {
+  const value = activeResponse(12);
+  const p = value.active!.payload;
+  const first = draft.payload.days[0];
+  const before = { ...first.sessions![0], blocks: [{ ...first.sessions![0].blocks[0], target_speed_kmh: 15, target_hr_bpm: 140 }] };
+  const after = { ...before, blocks: [{ ...before.blocks[0], target_speed_kmh: 18, target_hr_bpm: 152 }] };
+  p.plan = { ...draft.payload, days: [{ ...first, sessions: [before] }] };
+  p.proposal = { ...draft.payload, activation_eligible: true, days: [{ ...first, sessions: [after] }] };
+  p.changes = [{ date: first.date, before: before.title, after: after.title, before_minutes: 45, after_minutes: 45, reason: "Актуализирана скоростна опора" }];
+  await act(async () => setRunningSpeedUnit("pace"));
+  try {
+    await mount(<><RunningSpeedUnitControl/><ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/></>);
+    await click(button("Прегледай"));
+    const changes = container.querySelector(".management-proposal-changes")!;
+    expect(changes.textContent).toContain("4:00 мин/км");
+    expect(changes.textContent).toContain("3:20 мин/км");
+    expect(changes.textContent).toContain("140 уд./мин");
+    expect(changes.textContent).toContain("152 уд./мин");
+    await choose(select("Бягане · показване"), "kmh");
+    expect(changes.textContent).toContain("15 км/ч");
+    expect(changes.textContent).toContain("18 км/ч");
+    expect(changes.textContent).not.toContain("мин/км");
+  } finally { await act(async () => setRunningSpeedUnit("pace")); }
 });
 
 it("closes a previously opened review when a newer proposal arrives", async () => {

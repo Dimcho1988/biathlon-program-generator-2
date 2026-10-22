@@ -2,19 +2,36 @@
 
 import { useId, useState, type ReactNode } from "react";
 import { durationHms } from "../lib/duration-format";
-import { daySessions, type ActivePlanRecord, type DraftDay, type PlanChange } from "../lib/training-management";
+import { daySessions, type ActivePlanRecord, type DraftDay, type DraftSession, type PlanChange } from "../lib/training-management";
 import { sessionSummary, SPORT_LABELS } from "../lib/training-visuals";
+import { BlockExecutionRange } from "./block-execution-range";
+import { PreferredSpeed } from "./running-speed-unit";
 import { SyncActionForm } from "./sync-action-form";
 import { TrainingPlanSummary } from "./training-plan-summary";
 import { TrainingPlanWeek } from "./training-plan-week";
 
 const dateLabel = (date: string) => new Date(`${date}T12:00:00Z`).toLocaleDateString("bg-BG", { day: "numeric", month: "long", timeZone: "UTC" });
 
+function WorkTargets({ session }: { session: DraftSession }) {
+  const seen = new Set<string>();
+  const targets = session.blocks.filter(block => {
+    if (block.kind !== "WORK" || (!block.target_speed_range_kmh && block.target_speed_kmh == null && !block.hr_reference_range_bpm && block.target_hr_bpm == null)) return false;
+    const key = JSON.stringify([block.zone, block.target_speed_range_kmh, block.target_speed_kmh, block.hr_reference_range_bpm, block.target_hr_bpm, block.primary_control, block.speed_basis, block.distance_basis, block.distance_range_m]);
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  });
+  return targets.length > 0 && <ul className="management-proposal-targets" aria-label="Интензивност на работните части">{targets.map((block, index) => <li key={index}>
+    <strong>{block.zone}:</strong> {block.target_speed_range_kmh ? <BlockExecutionRange block={block} sport={session.sport}/> : block.target_speed_kmh != null && <>Равнинна референция: <PreferredSpeed speed={block.target_speed_kmh} sport={session.sport}/>. </>}
+    {block.hr_reference_range_bpm ? ` ${block.hr_reference_range_bpm.join("–")} уд./мин` : block.target_hr_bpm != null && ` ${block.target_hr_bpm} уд./мин`}
+  </li>)}</ul>;
+}
+
 function TaskSummary({ day, title, minutes }: { day?: DraftDay; title: string | null; minutes: number }) {
   const sessions = day ? daySessions(day) : [];
   return sessions.length ? <>{sessions.map((session, index) => <div key={index}>
     <p><strong>{session.title}</strong> · {SPORT_LABELS[session.sport] ?? session.sport} · {durationHms(session.total_minutes)}</p>
     <p className="management-muted">{sessionSummary(session)}</p>
+    <WorkTargets session={session}/>
   </div>)}</> : <p>{title ?? "Няма задача в този вариант"}{minutes > 0 && ` · ${durationHms(minutes)}`}</p>;
 }
 
