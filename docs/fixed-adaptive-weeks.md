@@ -21,6 +21,10 @@ Approval promotes the exact fresh proposal after revision, profile, analysis and
 
 After a fixed week ends, the next seven-day window is anchored to the previous end and proposed from current actual data. Approval is required. Delayed approval does not move its end. After longer absence, expired windows are skipped without catch-up work. Pause and program completion retain their existing guards.
 
+The week header explicitly separates the **mode of the approved programme** from the **saved choice in the profile**. A mismatch remains visible until approval, with the next step for refresh, review, pause or completion. Review-required, stale and paused states never claim that automatic adaptation is currently taking place. Profile editing distinguishes an unsaved choice from the saved choice and explains that saving a mode does not switch an existing approved programme. A no-change refresh receipt preserves the reminder that an existing proposal still awaits review.
+
+The header reuses the profile already loaded with the week. A newer versioned profile frozen in a subsequently received plan/proposal supersedes older initial page props for this display only. Legacy proposal mode is read from its own frozen profile when the explicit field is missing, never from a different current profile. No extra requests, planning calculations, approval policy, or stored modes are changed.
+
 Changing the profile mode previews the effect first; the active mode changes only on approval. Existing `REVIEW` records derive the first fixed window from their approved plan. Existing `AUTO` records remain adaptive. No athlete is silently switched to fixed mode.
 
 Validation covers immutable doses under extra/unplanned load, freshness without changes, same-day recording, late imports, mode changes in both directions, fixed end after delayed approval, missing-history rejection, explicit day decisions, duplicate refreshes, bounded generation, and approved-versus-proposed UI/SQL projections. Database fixtures run in a rollback transaction and preserve service-only permissions.
