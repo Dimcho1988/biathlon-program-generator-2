@@ -9,6 +9,7 @@ import { PreferredSpeed } from "./running-speed-unit";
 import { SyncActionForm } from "./sync-action-form";
 import { TrainingPlanSummary } from "./training-plan-summary";
 import { TrainingPlanWeek } from "./training-plan-week";
+import { proposedWeekMode, WEEK_MODE_LABEL } from "../lib/week-mode";
 
 const dateLabel = (date: string) => new Date(`${date}T12:00:00Z`).toLocaleDateString("bg-BG", { day: "numeric", month: "long", timeZone: "UTC" });
 
@@ -67,6 +68,7 @@ export function PlanProposalReview({ record, canEdit, busy, symptomHold, onAppro
   const p = record.payload;
   const proposal = p.proposal;
   if (!proposal) return null;
+  const proposalMode = proposedWeekMode(record);
   const blocked = !canEdit ? "Имате достъп само за преглед. Утвърждаването изисква право за редакция на плана."
     : p.status === "PAUSED" ? "Програмата е на пауза. Продължи с текущите настройки и прегледай актуалното предложение."
     : p.status !== "REVIEW_REQUIRED" ? "В момента няма предложение, което може да бъде утвърдено."
@@ -84,7 +86,8 @@ export function PlanProposalReview({ record, canEdit, busy, symptomHold, onAppro
     </div>
     <div id={id} hidden={!expanded}>{expanded && <>
       <p><strong>Предложен период:</strong> {dateLabel(proposal.start_date)} – {dateLabel(proposal.end_date)}.</p>
-      {p.proposal_mode && p.proposal_mode !== p.mode && <p><strong>Смяна на режима:</strong> {p.mode === "AUTO" ? "адаптивна → фиксирана" : "фиксирана → адаптивна"} седмица.</p>}
+      {proposalMode && <p><strong>Режим в предложението:</strong> {WEEK_MODE_LABEL[proposalMode]}.</p>}
+      {proposalMode && proposalMode !== p.mode && <p><strong>Смяна на режима:</strong> {p.mode === "AUTO" ? "адаптивна → фиксирана" : "фиксирана → адаптивна"} седмица.</p>}
       {p.changes.length ? <><h4>Засегнати дни: {p.changes.length}</h4>
         <ol className="management-proposal-changes">{p.changes.map(change => <ChangedDay key={change.date} change={change}
           before={p.plan.days.find(day => day.date === change.date)} after={proposal.days.find(day => day.date === change.date)} renderDay={renderDay}/>)}</ol>
@@ -95,7 +98,7 @@ export function PlanProposalReview({ record, canEdit, busy, symptomHold, onAppro
           <TrainingPlanSummary plan={proposal}/><TrainingPlanWeek days={proposal.days} today={today} renderDay={renderDay}/></>}
       </details>
       <div className="management-proposal-decision">
-        <p>С „Утвърди предложението“ прилагаш целия прегледан вариант за посочения период{p.proposal_mode && p.proposal_mode !== p.mode ? ", включително новия режим" : ""}.</p>
+        <p>С „Утвърди предложението“ прилагаш целия прегледан вариант за посочения период{proposalMode && proposalMode !== p.mode ? ", включително новия режим" : ""}.</p>
         {blocked && <p id={`${id}-blocked`} role="status">{blocked}</p>}
         <div className="management-actions">
           <button type="button" className="action-button" disabled={blocked !== null} aria-describedby={blocked ? `${id}-blocked` : undefined} onClick={onApprove}>Утвърди предложението</button>

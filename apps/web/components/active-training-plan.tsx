@@ -5,19 +5,21 @@ import { SymptomNotice } from "./symptom-notice";
 import Link from "next/link";
 import { TrainingPlanWeek } from "./training-plan-week";
 import { PlanProposalReview } from "./plan-proposal-review";
+import { WeekModeStatus } from "./week-mode-status";
 import { hasProgramDays } from "../lib/management-guidance";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { isRecord } from "../lib/training-status";
 import { durationHms } from "../lib/duration-format";
-import { COMPONENTS, type ActivePlanResponse, type DraftDay } from "../lib/training-management";
+import { COMPONENTS, type ActivePlanResponse, type DraftDay, type ManagementProfileResponse } from "../lib/training-management";
 import { changeActivePlan, PLAN_CHANGED_NOTICE } from "../lib/active-plan-request";
 import { PlanCheckHistory } from "./plan-check-history";
 
 const STATE: Record<string, string> = { ACTIVE: "Активна програма", PAUSED: "Програмата е на пауза", REVIEW_REQUIRED: "Промяна за преглед", COMPLETED: "Завършена програма" };
 const OUTCOME: Record<string, string> = { RECORDED: "Има реално изпълнение", DIFFERENT_ACTIVITY: "Изпълнено е друго средство", MISSED: "Без изпълнена сесия", SKIPPED: "Пропусната", REST: "Почивка", UNKNOWN: "Липсват данни" };
 
-export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay, externalBusy = false, onBegin, onEnd }: {
+export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay, externalBusy = false, onBegin, onEnd, profile }: {
   value: ActivePlanResponse; onChange: (v: ActivePlanResponse) => void; canEdit: boolean; today: string;
+  profile?: ManagementProfileResponse;
   externalBusy?: boolean; onBegin?: () => boolean; onEnd?: () => void;
   renderDay: (day: DraftDay) => ReactNode;
 }) {
@@ -55,7 +57,9 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
       else if (recordCheck && receipt) {
         const displayedRevision = Math.max(latestRevision.current, current.active?.revision ?? 0);
         setNotice(receipt.checked_revision === displayedRevision
-          ? "Проверката приключи. Програмата остава без промяна."
+          ? current.active?.payload.proposal
+            ? "Проверката приключи. Утвърденият график остава без промяна; предложението още чака преглед и утвърждаване."
+            : "Проверката приключи. Програмата остава без промяна."
           : `Проверката на версия ${receipt.checked_revision} приключи без промяна. Показана е текущата версия ${displayedRevision}.`);
         if (lastCheckId.current !== receipt.check_id) {
           lastCheckId.current = receipt.check_id;
@@ -68,9 +72,9 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
   const actionsDisabled = !canEdit || busy || externalBusy;
   return <section className="management-active" aria-label="Активна тренировъчна програма">
     <div className="management-panel management-current-heading"><div><p className="eyebrow">Текущ план · версия {record.revision}</p><h2>{STATE[p.status]}</h2>
-      <p>{p.mode === "AUTO" ? "Адаптивна седмица — оставащите задачи се адаптират автоматично след нов анализ и при смяна на деня." : "Фиксирана седмица — датите, методите и дозите се запазват до утвърждаване на промяна."}</p>{!symptomHold && !p.proposal && <p>{p.reason}</p>}
+      <WeekModeStatus record={record} profile={profile}/>{!symptomHold && !p.proposal && <p>{p.reason}</p>}
       <p>Утвърден период: {week.start_date} – {week.end_date}. <Link href="/planning">Смени режима в профила</Link></p>
-      {p.proposal && p.proposal_mode && p.proposal_mode !== p.mode && <p role="status">Предложена смяна към {p.proposal_mode === "AUTO" ? "адаптивна" : "фиксирана"} седмица. Текущият режим остава до утвърждаване.</p>}</div>
+      </div>
       <div className="management-actions">
         {p.status !== "COMPLETED" && <button type="button" className="action-button secondary" disabled={actionsDisabled} onClick={() => mutate("action", { action: p.status === "PAUSED" ? "RESUME" : "PAUSE" })}>{p.status === "PAUSED" ? "Продължи с текущите настройки" : "Пауза"}</button>}
         {p.status !== "PAUSED" && p.status !== "COMPLETED" && <button type="button" className="action-button" disabled={actionsDisabled} onClick={() => mutate("action", { action: "REFRESH" })}>{busy || externalBusy ? "Обновяване…" : "Обнови сега"}</button>}

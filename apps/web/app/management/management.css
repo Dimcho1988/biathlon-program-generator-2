@@ -56,6 +56,13 @@
 
 .management-current-heading { border-top: 4px solid #397e68; }
 .management-current-heading h2 { margin-block: .2rem .8rem; }
+.management-week-modes { display: flex; gap: .75rem; flex-wrap: wrap; margin-block: 1rem; }
+.management-week-modes>div { flex: 1 1 16rem; padding: .8rem 1rem; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-secondary); }
+.management-week-modes dt { color: var(--muted); font-size: .85rem; }
+.management-week-modes dd { margin: .35rem 0 0; font-size: 1.1rem; font-weight: 700; }
+.management-week-modes dd span { display: block; margin-top: .3rem; font-size: .85rem; font-weight: 500; }
+.management-week-modes .management-mode-pending { background: #fff8e8; border-color: #d4b56c; color: #654c19; }
+.management-mode-next { border-left: 3px solid #b68a33; padding-left: .8rem; }
 .management-proposal { border-left: 4px solid var(--accent); }
 .management-proposal-heading { display: flex; align-items: start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .management-proposal-heading>div { flex: 1 1 24rem; }
