@@ -56,6 +56,18 @@
 
 .management-current-heading { border-top: 4px solid #397e68; }
 .management-current-heading h2 { margin-block: .2rem .8rem; }
+.management-proposal { border-left: 4px solid var(--accent); }
+.management-proposal-heading { display: flex; align-items: start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.management-proposal-heading>div { flex: 1 1 24rem; }
+.management-proposal h3,.management-proposal h4 { margin-top: 0; }
+.management-proposal h5 { margin: 0 0 .5rem; font-size: .95rem; }
+.management-proposal-changes { list-style: none; padding: 0; }
+.management-proposal-changes>li { margin-block: 1.2rem; padding-top: 1.2rem; border-top: 1px solid var(--border); }
+.management-proposal-pair { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1rem; margin-block: 1rem; }
+.management-proposal-pair>div { min-width: 0; padding: 1rem; border-radius: 10px; background: var(--surface-secondary); overflow-wrap: anywhere; }
+.management-proposal-pair .management-day { padding: .8rem; }
+.management-proposal-decision { margin-top: 1.2rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+@media(max-width: 700px) { .management-proposal-pair { grid-template-columns: 1fr; } }
 .management-day-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: -.5rem 0 1.5rem 1rem; }
 .management-execution { margin-top: .8rem; }
 .management-reference { border-left: 2px dashed #bdc8c1; padding-left: .6rem; }

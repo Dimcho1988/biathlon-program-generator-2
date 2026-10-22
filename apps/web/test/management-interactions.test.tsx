@@ -8,6 +8,7 @@ import { ActiveTrainingPlan } from "../components/active-training-plan";
 import { PlanningProfileForm } from "../components/planning-profile-form";
 import { TrainingPlanSummary } from "../components/training-plan-summary";
 import { TimeAvailability, TimeLimitNotice } from "../components/planning-time-limit";
+import { RunningSpeedUnitControl, setRunningSpeedUnit } from "../components/running-speed-unit";
 import { changeActivePlan, newerActivePlan } from "../lib/active-plan-request";
 import type { ActivePlanResponse } from "../lib/training-management";
 import type { PlanningCalendarResponse } from "../lib/planning-calendar";
@@ -333,7 +334,7 @@ it.each([6, 7])("opts in only a supported manual refresh and reports the checked
   expect(receive).toHaveBeenCalledWith({ ...activeResponse(currentRevision), capabilities: { unchanged_checks: true } });
   expect(receive.mock.calls[0][0]).not.toHaveProperty("action_result");
   expect(container.textContent).toContain(currentRevision === 6 ? "Проверката приключи. Програмата остава без промяна." : "Проверката на версия 6 приключи без промяна. Показана е текущата версия 7.");
-  expect(container.textContent).toContain("Предложението по-долу още не е действаща задача.");
+  expect(container.textContent).toContain("Предложението още не е приложено.");
   expect(container.textContent).toContain("Проверки без промяна");
   expect(container.querySelector("details:last-child")?.hasAttribute("open")).toBe(false);
 });
@@ -373,12 +374,13 @@ it("does not describe the currently displayed newer revision as unchanged when a
 it.each([
   ["Пауза", "REVIEW_REQUIRED", "PAUSE"],
   ["Продължи с текущите настройки", "PAUSED", "RESUME"],
-  ["Утвърди актуалната адаптация", "REVIEW_REQUIRED", "APPROVE"],
+  ["Утвърди предложението", "REVIEW_REQUIRED", "APPROVE"],
 ] as const)("never opts %s into a check event", async (label, status, action) => {
   const initial = { ...activeResponse(6), capabilities: { unchanged_checks: true } };
   initial.active!.payload.status = status;
   const fetchMock = vi.fn<typeof fetch>(async () => Response.json(initial)); vi.stubGlobal("fetch", fetchMock);
   await mount(<ActiveTrainingPlan value={initial} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>);
+  if (action === "APPROVE") await click(button("Прегледай"));
   await click(button(label));
   expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ action, expected_revision: 6 });
 });
@@ -412,7 +414,8 @@ it("disables manual actions during automatic refresh and loads a concurrent newe
   expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ action: "REFRESH", expected_revision: 3 });
   expect(button("Обновяване…").disabled).toBe(true);
   expect(button("Пауза").disabled).toBe(true);
-  expect(button("Утвърди актуалната адаптация").disabled).toBe(true);
+  await click(button("Прегледай"));
+  expect(button("Утвърди предложението").disabled).toBe(true);
   await click(button("Обновяване…"));
   expect(fetchMock).toHaveBeenCalledTimes(1);
   await act(async()=>resolvePost(Response.json({error:"Conflict"},{status:409})));
@@ -420,7 +423,9 @@ it("disables manual actions during automatic refresh and loads a concurrent newe
   expect(container.textContent).toContain("Текущ план · версия 4");
   expect(container.textContent).toContain("Заредена е последната версия");
   expect(container.querySelector('[role="alert"]')).toBeNull();
-  expect(button("Утвърди актуалната адаптация").disabled).toBe(false);
+  expect(button("Утвърди предложението")).toBeUndefined();
+  await click(button("Прегледай"));
+  expect(button("Утвърди предложението").disabled).toBe(false);
 });
 
 it("never automatically retries an approval after conflict or replaces a newer response with an older poll",async()=>{
@@ -488,7 +493,7 @@ it("distinguishes the visible week from the complete-cycle forecast and validate
   expect(()=>parseDraftRecord({...record,payload:{...record.payload,lookahead_days:[{...record.payload.lookahead_days[0],provisional:false}]}})).toThrow();
 });
 
-it("keeps approved fixed tasks first and presents changed doses as a separate proposal", async () => {
+it("keeps the approved week alone until review and only renders detailed comparisons on demand", async () => {
   const response = activeResponse(12);
   const p = response.active!.payload;
   p.mode = "REVIEW";
@@ -496,15 +501,32 @@ it("keeps approved fixed tasks first and presents changed doses as a separate pr
   p.plan = { ...draft.payload, days: draft.payload.days.map(d => ({ ...d, explanation: "Първоначално утвърдена задача" })) };
   p.proposal = { ...draft.payload, activation_eligible: true, days: draft.payload.days.map(d => ({ ...d, explanation: "Предложена корекция след допълнителен товар" })) };
   p.proposal_mode = "AUTO";
+  p.changes = [{ date: "2026-09-22", before: "Две сесии", after: "Коригирани сесии", before_minutes: 75, after_minutes: 60, reason: "Допълнителен товар" }];
   p.monitoring = { evaluated_on: "2026-09-22", history_comparison: [], days: [{ date: "2026-09-22", status: "REVIEW_REQUIRED", reason: "Променено възстановяване" }] };
-  await mount(<ActiveTrainingPlan value={response} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={d => <p>{d.explanation}</p>}/>);
+  const renderDay = vi.fn((d: typeof draft.payload.days[number]) => <p>{d.explanation}</p>);
+  await mount(<ActiveTrainingPlan value={response} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={renderDay}/>);
   const text = container.textContent!;
   expect(text).toContain("Фиксирана седмица");
   expect(text).toContain("2026-09-22 – 2026-09-28");
   expect(text).toContain("Нужен е преглед на запазената задача");
   expect(text).toContain("Предложена смяна към адаптивна седмица");
-  expect(text.indexOf("Първоначално утвърдена задача")).toBeLessThan(text.indexOf("Предложена корекция след допълнителен товар"));
-  expect(container.querySelector('[aria-label="Предложени промени"]')?.textContent).not.toContain("Първоначално утвърдена задача");
+  expect(text).toContain("Първоначално утвърдена задача");
+  expect(text).not.toContain("Предложена корекция след допълнителен товар");
+  expect(renderDay).toHaveBeenCalledTimes(1);
+  expect(button("Утвърди предложението")).toBeUndefined();
+  await click(button("Прегледай"));
+  const review = container.querySelector('[aria-label="Предложени промени"]')!;
+  expect(review.textContent).toContain("Засегнати дни: 1");
+  expect(review.textContent).toContain("Смяна на режима: фиксирана → адаптивна");
+  expect(review.querySelectorAll(".management-proposal-changes>li")).toHaveLength(1);
+  expect(container.querySelectorAll('[aria-label="Избери ден от програмата"]')).toHaveLength(1);
+  expect(review.textContent).not.toContain("Предложена корекция след допълнителен товар");
+  const detail = review.querySelector<HTMLDetailsElement>(".management-proposal-changes details")!;
+  await act(async () => { detail.open = true; detail.dispatchEvent(new Event("toggle")); });
+  expect(review.textContent).toContain("Първоначално утвърдена задача");
+  expect(review.textContent).toContain("Предложена корекция след допълнителен товар");
+  await click(button("Затвори прегледа"));
+  expect(review.textContent).not.toContain("Предложена корекция след допълнителен товар");
 });
 
 it("saves an explicit fixed-week choice through the existing profile revision", async () => {
@@ -516,4 +538,136 @@ it("saves an explicit fixed-week choice through the existing profile revision", 
   await choose(select, "REVIEW");
   await click(button("Запази промените"));
   expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ profile: { adaptation_mode: "REVIEW" }, expected_revision: 1 });
+});
+
+it.each(["AUTO", "REVIEW"] as const)("keeps warnings visible while a %s proposal is closed", async mode => {
+  const value = activeResponse(12);
+  value.active!.payload.mode = mode;
+  value.active!.payload.proposal!.warnings = [{ code: "LIMITED_LOAD_HISTORY", message: "Има непълни активности." }];
+  await mount(<ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/>);
+  const warnings = container.querySelector('[aria-label="Предупреждения и условия"]')!;
+  expect(warnings.textContent).toContain("Има непълни активности.");
+  expect(warnings.closest("details, [hidden]")).toBeNull();
+  expect(button("Прегледай").getAttribute("aria-expanded")).toBe("false");
+  expect(button("Утвърди предложението")).toBeUndefined();
+});
+
+it("shows only changed dates in review and keeps the whole exact proposal available on request", async () => {
+  const value = activeResponse(12);
+  const p = value.active!.payload;
+  const first = draft.payload.days[0];
+  const unchanged = { ...first, date: "2026-09-23", explanation: "Непроменена задача" };
+  p.plan = { ...draft.payload, days: [first, unchanged] };
+  const reduced = { ...first.sessions![0], title: "Нова доза", total_minutes: 25, main_work_minutes: 25,
+    blocks: first.sessions![0].blocks.map(block => ({ ...block, duration_min: 25 })) };
+  p.proposal = { ...draft.payload, activation_eligible: true, days: [{ ...first, sessions: [reduced] }, unchanged] };
+  p.changes = [{ date: first.date, before: "Две сесии", after: "Нова доза", before_minutes: 75, after_minutes: 25, reason: "Намален обем след изпълнението" }];
+  await mount(<ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={d => <p>{d.explanation}</p>}/>);
+  await click(button("Прегледай"));
+  const review = container.querySelector('[aria-label="Предложени промени"]')!;
+  const changes = review.querySelector(".management-proposal-changes")!;
+  expect(changes.textContent).toContain("0:45:00");
+  expect(changes.textContent).toContain("0:30:00");
+  expect(changes.textContent).toContain("0:25:00");
+  expect(changes.textContent).not.toContain("Непроменена задача");
+  expect(review.querySelector('[aria-label="Избери ден от програмата"]')).toBeNull();
+  const full = review.querySelector<HTMLDetailsElement>("details.management-detail")!;
+  await act(async () => { full.open = true; full.dispatchEvent(new Event("toggle")); });
+  expect(review.querySelectorAll(".management-workout-day")).toHaveLength(2);
+});
+
+it("approves the reviewed revision once and confirms the accepted changes", async () => {
+  const value = activeResponse(12);
+  const result = activeResponse(13);
+  result.active!.payload.status = "ACTIVE";
+  result.active!.payload.proposal = null;
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json(result)); vi.stubGlobal("fetch", fetchMock);
+  const receive = vi.fn();
+  await mount(<ActiveTrainingPlan value={value} onChange={receive} canEdit today="2026-09-22" renderDay={() => null}/>);
+  await click(button("Прегледай"));
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("Няма отчетени промени в тренировъчните задачи.");
+  await click(button("Утвърди предложението"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ action: "APPROVE", expected_revision: 12 });
+  expect(receive).toHaveBeenCalledWith(result);
+  expect(container.textContent).toContain("Предложението е утвърдено.");
+});
+
+it("shows an intensity-only change in review and shares the running speed unit preference", async () => {
+  const value = activeResponse(12);
+  const p = value.active!.payload;
+  const first = draft.payload.days[0];
+  const before = { ...first.sessions![0], blocks: [{ ...first.sessions![0].blocks[0], target_speed_kmh: 15, target_hr_bpm: 140 }] };
+  const after = { ...before, blocks: [{ ...before.blocks[0], target_speed_kmh: 18, target_hr_bpm: 152 }] };
+  p.plan = { ...draft.payload, days: [{ ...first, sessions: [before] }] };
+  p.proposal = { ...draft.payload, activation_eligible: true, days: [{ ...first, sessions: [after] }] };
+  p.changes = [{ date: first.date, before: before.title, after: after.title, before_minutes: 45, after_minutes: 45, reason: "Актуализирана скоростна опора" }];
+  await act(async () => setRunningSpeedUnit("pace"));
+  try {
+    await mount(<><RunningSpeedUnitControl/><ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/></>);
+    await click(button("Прегледай"));
+    const changes = container.querySelector(".management-proposal-changes")!;
+    expect(changes.textContent).toContain("4:00 мин/км");
+    expect(changes.textContent).toContain("3:20 мин/км");
+    expect(changes.textContent).toContain("140 уд./мин");
+    expect(changes.textContent).toContain("152 уд./мин");
+    await choose(select("Бягане · показване"), "kmh");
+    expect(changes.textContent).toContain("15 км/ч");
+    expect(changes.textContent).toContain("18 км/ч");
+    expect(changes.textContent).not.toContain("мин/км");
+  } finally { await act(async () => setRunningSpeedUnit("pace")); }
+});
+
+it("closes a previously opened review when a newer proposal arrives", async () => {
+  const render = (revision: number) => <ActiveTrainingPlan value={activeResponse(revision)} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/>;
+  await mount(render(12));
+  await click(button("Прегледай"));
+  expect(button("Утвърди предложението").disabled).toBe(false);
+  await mount(render(13));
+  expect(button("Утвърди предложението")).toBeUndefined();
+  expect(button("Прегледай").getAttribute("aria-expanded")).toBe("false");
+  await click(button("Прегледай"));
+  expect(button("Утвърди предложението").disabled).toBe(false);
+});
+
+it.each([
+  ["stale", "Данните са променени."],
+  ["read-only", "Имате достъп само за преглед."],
+  ["ineligible", "Утвърждаването е задържано."],
+  ["symptoms", "Първо запиши актуална сутрешна оценка"],
+  ["paused", "Програмата е на пауза."],
+  ["busy", "Изчакай текущото обновяване"],
+] as const)("explains blocked approval for %s and never sends a mutation", async (condition, message) => {
+  const value = activeResponse(12, condition === "stale");
+  const p = value.active!.payload;
+  if (condition === "ineligible") p.proposal!.activation_eligible = false;
+  if (condition === "paused") p.status = "PAUSED";
+  if (condition === "symptoms") p.proposal!.warnings = [{ code: "REPORTED_ILLNESS_OR_PAIN", message: "Отчетена болка" }];
+  const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
+  await mount(<ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit={condition !== "read-only"} externalBusy={condition === "busy"} today="2026-09-22" renderDay={() => null}/>);
+  if (condition === "symptoms") {
+    expect(container.textContent).toContain("има отметка за болка или заболяване");
+    expect(container.querySelector('a[href="/response#daily-report"]')?.closest("details, [hidden]")).toBeNull();
+  }
+  await click(button("Прегледай"));
+  const approve = button("Утвърди предложението");
+  expect(approve.disabled).toBe(true);
+  expect(document.getElementById(approve.getAttribute("aria-describedby")!)?.textContent).toContain(message);
+  await click(approve);
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it("distinguishes published adaptive corrections from pending proposals and retains warnings", async () => {
+  const value = activeResponse(12);
+  const p = value.active!.payload;
+  p.status = "ACTIVE"; p.proposal = null;
+  p.plan = { ...draft.payload, warnings: [{ code: "LIMITED_LOAD_HISTORY", message: "Историята е непълна." }] };
+  p.changes = [{ date: "2026-09-22", before: "Преди", after: "След", before_minutes: 75, after_minutes: 60, reason: "Допълнително изпълнение" }];
+  await mount(<ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/>);
+  expect(container.textContent).toContain("Автоматично приложени промени");
+  expect(container.textContent).toContain("Не чакат утвърждаване.");
+  expect(container.querySelector('[aria-label="Предупреждения и условия"]')?.textContent).toContain("Историята е непълна.");
+  expect(button("Прегледай")).toBeUndefined();
+  expect(button("Утвърди предложението")).toBeUndefined();
 });
