@@ -32,7 +32,9 @@ begin
  insert into public.onflows_management_plan_revisions(athlete_alias,revision,operation,actor_id,payload) values
    ('compact-overview-test',1,'ACTIVATE','99000000-0000-0000-0000-000000000031',payload),
    ('compact-overview-test',2,'REVIEW','99000000-0000-0000-0000-000000000031',
-     payload || jsonb_build_object('status','REVIEW_REQUIRED','proposal',proposal));
+     payload || jsonb_build_object('status','REVIEW_REQUIRED','proposal',proposal,
+       'monitoring',jsonb_build_object('history_comparison',jsonb_build_array(jsonb_build_object(
+         'start_date','2026-10-12','end_date','2026-10-18','actual_minutes',240,'covered_days',7)))));
  insert into public.onflows_management_plan_state(athlete_alias,revision,status,approved_by) values
    ('compact-overview-test',1,'ACTIVE','99000000-0000-0000-0000-000000000031');
  assert not (select prosecdef from pg_proc where oid='public.read_onflows_management_overview(text)'::regprocedure);
@@ -71,14 +73,10 @@ begin
  result := public.read_onflows_management_overview('compact-overview-test');
  assert result->'revision'='2'::jsonb and result->'has_proposal'='true'::jsonb;
  assert result->>'status'='REVIEW_REQUIRED' and result->>'engine_version'='same-engine';
- assert jsonb_array_length(result->'days')=3, 'Lookahead was included or a known zero day was removed';
- assert jsonb_array_length(result#>'{days,0,sessions}')=2, 'Multi-session day lost work';
- assert result#>>'{days,0,sessions,0,total_minutes}'='6' and result#>>'{days,0,sessions,1,total_minutes}'='7',
-   'Session precedence or order changed';
- assert result#>'{days,1,sessions}'='[]'::jsonb and result#>'{days,2,sessions}'='[]'::jsonb,
-   'Rest or an explicit empty session array was not preserved';
- assert result#>'{history_comparison,0,actual_minutes}'='null'::jsonb;
- assert result::text not like '%PRIVATE%', 'Selected proposal leaked evidence';
+ assert jsonb_array_length(result->'days')=1, 'An unapproved proposal replaced the approved calendar';
+ assert result#>>'{days,0,sessions,0,total_minutes}'='4', 'Approved dose changed on presentation';
+ assert result#>>'{history_comparison,0,actual_minutes}'='240', 'Monitoring history must update independently of the frozen prescriptions';
+ assert result::text not like '%PRIVATE%', 'Projection leaked evidence';
  perform public.read_onflows_management_overview('compact-overview-test');
  assert (select payload=before_payload from public.onflows_management_plan_revisions
    where athlete_alias='compact-overview-test' and revision=2), 'Reading changed immutable evidence';
@@ -92,9 +90,9 @@ begin
    where athlete_alias='compact-overview-test' and revision=2;
  for n in 3..6 loop
    broken := case n
-     when 3 then original #- '{proposal,days}'
+     when 3 then original #- '{plan,days}'
      when 4 then original - 'outcomes'
-     when 5 then original #- '{proposal,days,0,sessions,0,blocks}'
+     when 5 then original #- '{plan,days,0,session,blocks}'
      else original - 'proposal' end;
    insert into public.onflows_management_plan_revisions(athlete_alias,revision,operation,actor_id,payload)
      values ('compact-overview-test',n,'REVIEW','99000000-0000-0000-0000-000000000031',broken);

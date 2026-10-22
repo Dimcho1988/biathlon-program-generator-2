@@ -67,8 +67,8 @@ def test_two_real_manual_recalculations_write_once_then_only_record_the_check(mo
     assert "unchanged_check" not in first and "unchanged_check" not in second["payload"]
     assert len(receipts) == 1 and receipts[0]["checked_revision"] == 2
     if mode == "REVIEW":
-        assert second["payload"]["status"] == "REVIEW_REQUIRED"
-        assert second["payload"]["proposal"] is not None
+        assert second["payload"]["status"] == "ACTIVE"
+        assert second["payload"]["proposal"] is None
         assert second["payload"]["plan"] == approved
         assert second["payload"]["approved_by"] == ACTOR
     else:

@@ -2,13 +2,15 @@
 import { useManagementFetch } from "./management-scope";
 
 import { SymptomNotice } from "./symptom-notice";
+import Link from "next/link";
+import { TrainingPlanSummary } from "./training-plan-summary";
 import { TrainingPlanWeek } from "./training-plan-week";
 import { SyncActionForm } from "./sync-action-form";
 import { hasProgramDays } from "../lib/management-guidance";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { isRecord } from "../lib/training-status";
 import { durationHms } from "../lib/duration-format";
-import { type ActivePlanResponse, type DraftDay } from "../lib/training-management";
+import { COMPONENTS, type ActivePlanResponse, type DraftDay } from "../lib/training-management";
 import { changeActivePlan, PLAN_CHANGED_NOTICE } from "../lib/active-plan-request";
 import { PlanCheckHistory } from "./plan-check-history";
 
@@ -32,10 +34,13 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
   const record = value.active;
   if (!record) return null;
   const p = record.payload;
-  const display = p.proposal ?? p.plan;
-  const progression = isRecord(display.parameters?.load_progression) ? display.parameters?.load_progression : {};
+  const display = p.plan;
+  const checked = p.proposal ?? p.plan;
+  const week = p.week_window ?? { start_date: display.start_date, end_date: display.end_date };
+  const fixed = p.mode === "REVIEW";
+  const progression = isRecord(checked.parameters?.load_progression) ? checked.parameters?.load_progression : {};
   const feedback = isRecord(progression.adaptation) ? progression.adaptation : {};
-  const symptomHold = display.warnings.some(w => w.code === "REPORTED_ILLNESS_OR_PAIN");
+  const symptomHold = checked.warnings.some(w => w.code === "REPORTED_ILLNESS_OR_PAIN");
   async function mutate(endpoint: string, body: Record<string, unknown>) {
     if (!canEdit || inFlight.current || externalBusy || (onBegin && !onBegin())) return;
     inFlight.current = true;
@@ -63,7 +68,9 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
   const actionsDisabled = !canEdit || busy || externalBusy;
   return <section className="management-active" aria-label="Активна тренировъчна програма">
     <div className="management-panel management-current-heading"><div><p className="eyebrow">Текущ план · версия {record.revision}</p><h2>{STATE[p.status]}</h2>
-      <p>{p.mode === "AUTO" ? "Следващите дни се адаптират автоматично след нов анализ и при смяна на деня." : "Адаптациите се предлагат за утвърждаване."}</p>{!symptomHold && <p>{p.reason}</p>}</div>
+      <p>{p.mode === "AUTO" ? "Адаптивна седмица — оставащите задачи се адаптират автоматично след нов анализ и при смяна на деня." : "Фиксирана седмица — датите, методите и дозите се запазват до утвърждаване на промяна."}</p>{!symptomHold && <p>{p.reason}</p>}
+      <p>Утвърден период: {week.start_date} – {week.end_date}. <Link href="/planning">Смени режима в профила</Link></p>
+      {p.proposal && p.proposal_mode && p.proposal_mode !== p.mode && <p role="status">Предложена смяна към {p.proposal_mode === "AUTO" ? "адаптивна" : "фиксирана"} седмица. Текущият режим остава до утвърждаване.</p>}</div>
       <div className="management-actions">
         {p.status !== "COMPLETED" && <button type="button" className="action-button secondary" disabled={actionsDisabled} onClick={() => mutate("action", { action: p.status === "PAUSED" ? "RESUME" : "PAUSE" })}>{p.status === "PAUSED" ? "Продължи с текущите настройки" : "Пауза"}</button>}
         {p.status !== "PAUSED" && p.status !== "COMPLETED" && <button type="button" className="action-button" disabled={actionsDisabled} onClick={() => mutate("action", { action: "REFRESH" })}>{busy || externalBusy ? "Обновяване…" : "Обнови сега"}</button>}
@@ -75,15 +82,30 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
     {p.status === "REVIEW_REQUIRED" && <div className="management-notice"><p>Предложението по-долу още не е действаща задача.</p>
       {symptomHold ? <SymptomNotice day={feedback.latest_report_day}/> : p.proposal?.activation_eligible === true ? <button type="button" className="action-button" disabled={actionsDisabled || record.stale} onClick={() => mutate("action", { action: "APPROVE" })}>Утвърди актуалната адаптация</button> : canEdit ? <SyncActionForm scope="FULL" returnTo="/management" label="Обнови тренировките" /> : <p>Треньорът трябва да прегледа актуалните данни.</p>}
     </div>}
-    {p.changes.length > 0 && <details className="management-panel"><summary>Какво се промени и защо · {p.changes.length} дни</summary><ul>{p.changes.map(change => <li key={change.date}><strong>{change.date}:</strong> {change.before ? `${change.before} → ` : ""}{change.after}<p>{change.reason}</p></li>)}</ul></details>}
+    {fixed && p.monitoring && <details className="management-panel"><summary>Актуална проверка на Recovery · {p.monitoring.evaluated_on}</summary>
+      <p>Готовност в началото на деня, %. Бъдещите стойности са прогноза за предложения вариант, а не потвърждение на запазените дози. При липсващо покритие стойността остава неизвестна.</p>
+      <div className="management-table-wrap"><table><thead><tr><th>Ден</th>{COMPONENTS.map(z => <th key={z}>{z}</th>)}</tr></thead><tbody>{p.monitoring.days.map(d => <tr key={d.date}><th>{d.date}</th>{COMPONENTS.map(z => <td key={z}>{typeof d.readiness_before?.[z] === "number" ? d.readiness_before[z]!.toFixed(0) : "—"}</td>)}</tr>)}</tbody></table></div>
+    </details>}
+    {p.changes.length > 0 && <details className="management-panel"><summary>Разлики спрямо утвърдения график · {p.changes.length} дни</summary><ul>{p.changes.map(change => <li key={change.date}><strong>{change.date}:</strong> {change.before ? `${change.before} → ` : ""}{change.after}<p>{change.reason}</p></li>)}</ul></details>}
+    <h3>Утвърден график</h3>
+    {fixed && <p className="management-muted">Оценките в запазените задачи са от утвърждаването. Новото изпълнение се отчита отделно и не променя автоматично тези дози. {p.monitoring ? `Последна проверка: ${p.monitoring.evaluated_on}.` : ""}</p>}
     {p.status !== "COMPLETED" && hasProgramDays(display) && <div className={`management-days ${record.actionable ? "" : "management-reference"}`}><TrainingPlanWeek days={display.days} today={today} renderDay={day => <div key={day.date}>
+      {p.monitoring?.days.find(d => d.date === day.date)?.status === "REVIEW_REQUIRED" && <p className="management-notice" role="status">Нужен е преглед на запазената задача. {p.monitoring.days.find(d => d.date === day.date)?.reason}</p>}
+      {p.outcomes.some(o => o.date === day.date && ["RECORDED", "DIFFERENT_ACTIVITY"].includes(o.status)) && <p className="management-muted">Има отчетена активност за този ден. Запазената задача е показана за съпоставка, не като допълнителна тренировка.</p>}
       {renderDay(day)}
-      {canEdit && ["ACTIVE", "REVIEW_REQUIRED"].includes(p.status) && day.date >= today && day.status !== "EXISTING_ACTIVITY" && day.status !== "RACE" && <div className="management-day-actions">
+      {canEdit && ["ACTIVE", "REVIEW_REQUIRED"].includes(p.status) && day.date >= today && !p.outcomes.some(o => o.date === day.date && ["RECORDED", "DIFFERENT_ACTIVITY"].includes(o.status)) && day.status !== "EXISTING_ACTIVITY" && day.status !== "RACE" && <div className="management-day-actions">
         <button type="button" className="action-button secondary" disabled={actionsDisabled || record.stale} onClick={() => mutate("day", { date: day.date, action: "REST", note: "" })}>Почивка на {day.date}</button>
         {day.session && <button type="button" className="action-button secondary" disabled={actionsDisabled || record.stale} onClick={() => mutate("day", { date: day.date, action: "SKIP", note: "" })}>Пропускам тренировките за деня</button>}
         {p.decisions[day.date] && <button type="button" className="action-button secondary" disabled={actionsDisabled || record.stale} onClick={() => mutate("day", { date: day.date, action: "CLEAR", note: "" })}>Върни избора на системата</button>}
       </div>}
     </div>} /></div>}
+    {p.proposal && <details className="management-panel" aria-label="Предложени промени" open>
+      <summary>Предложение за утвърждаване · {p.proposal.start_date} – {p.proposal.end_date}</summary>
+      <p>Това е отделен вариант според актуалното изпълнение. Прогнозите за Recovery и бюджетите тук се отнасят до предложените задачи.</p>
+      <TrainingPlanSummary plan={p.proposal}/>
+      <TrainingPlanWeek days={p.proposal.days} today={today} renderDay={renderDay}/>
+      {p.proposal.warnings.length > 0 && <details><summary>Условия за предложението</summary><ul>{p.proposal.warnings.map((w, i) => <li key={i}>{w.message}</li>)}</ul></details>}
+    </details>}
     <p className="management-muted">Изпълнението се отчита от реалните активности. Приравненият товар и готовността се преизчисляват от тях; отбелязването „Пропускам“ не създава измислено натоварване.</p>
     {p.outcomes.length > 0 && <details className="management-panel"><summary>План и реално изпълнение</summary><div className="management-table-wrap"><table><thead><tr><th>Ден</th><th>Резултат</th><th>План</th><th>Изпълнено</th></tr></thead><tbody>{p.outcomes.slice(-28).reverse().map(o => <tr key={o.date}><td>{o.date}</td><td>{OUTCOME[o.status] ?? o.status}</td><td>{durationHms(o.planned_minutes)}</td><td>{o.actual_minutes === null ? "Няма данни" : durationHms(o.actual_minutes)}</td></tr>)}</tbody></table></div><p>Съпоставянето е по ден и средство. Наличието на активност не доказва, че всички предписани блокове са изпълнени.</p></details>}
     <details className="management-panel"><summary>История и пълна проследимост</summary><ol>{value.history.map(h => <li key={h.revision}><strong>Версия {h.revision}</strong> · {new Date(h.recorded_at).toLocaleString("bg-BG")}<p>{h.reason}</p></li>)}</ol>

@@ -107,6 +107,8 @@ def test_pause_survives_worker_and_manual_refresh(system):
 def test_review_preserves_plan_until_explicit_approval(system):
     system.profiles.body.adaptation_mode = "REVIEW"
     original = activate(system)["payload"]["plan"]
+    system.profiles.body.progression_percent = 7
+    system.profiles.revision = 2
     now = advance(system, 1)
     updated = lifecycle.refresh(system.repo, "athlete", automatic=True, now=now)
     assert updated["payload"]["status"] == "REVIEW_REQUIRED"

@@ -52,9 +52,9 @@ function activeResponse(status: ActivePlanRecord["payload"]["status"], hasPropos
 }
 function compactActive(active: ActivePlanResponse): ManagementOverviewActive {
   if (!active.active) return parseManagementOverviewActive({ revision: null, stale: false, status: null, has_proposal: false, engine_version: null, days: [], history_comparison: [], outcomes: [] });
-  const row = active.active, plan = row.payload.proposal ?? row.payload.plan;
+  const row = active.active, plan = row.payload.plan;
   return parseManagementOverviewActive({ revision: row.revision, stale: row.stale, status: row.payload.status, has_proposal: row.payload.proposal !== null,
-    engine_version: plan.engine_version, history_comparison: plan.history_comparison,
+    engine_version: plan.engine_version, history_comparison: row.payload.monitoring?.history_comparison ?? plan.history_comparison,
     days: plan.days.map(day => ({ date: day.date, status: day.status, sessions: daySessions(day).map(s => ({ total_minutes: s.total_minutes,
       blocks: s.blocks.map(b => ({ zone: b.zone, duration_min: b.duration_min })) })) })),
     outcomes: row.payload.outcomes.map(o => ({ date: o.date, planned_minutes: o.planned_minutes, actual_minutes: o.actual_minutes })),
@@ -147,7 +147,7 @@ describe("full and compact overview rendering parity", () => {
     expect(projected).toContain(stale ? "2026-08-24" : "2026-08-17");
     expect(projected).not.toContain(stale ? "2026-08-17" : "2026-08-24");
     if (stale) expect(projected).toContain("Няма актуални съставени сесии");
-    else if (proposal) expect(projected).toContain("предложена адаптация за преглед");
+    else if (proposal) expect(projected).toContain("Има отделно предложение за промяна");
     else if (status === "ACTIVE") expect(projected).toContain("текущата утвърдена програма");
     else expect(projected).toContain("запазена програма, която в момента не е активна");
   });

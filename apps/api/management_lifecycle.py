@@ -112,8 +112,10 @@ def activate(repository, alias, body, actor, *, now=None, include_saved_payload=
                "approved_settings_fingerprint": approval, "processed_input_fingerprint": fingerprint,
                "evaluated_on": frozen["evaluation_date"], "plan": plan, "proposal": None,
                "origin": {"start_date": body.start_date.isoformat(), "draft_revision": body.draft_revision},
+               "week_window": _window(plan), "week_policy": "fixed-or-adaptive-v1",
                "decisions": {}, "outcomes": [], "changes": [],
-               "reason": "Програмата е утвърдена. Следващите дни се адаптират според избрания режим."}
+               "reason": "Седмицата е фиксирана. Изпълнението се отчита ежедневно; промени се прилагат след утвърждаване." if profile["adaptation_mode"] == "REVIEW" else
+                         "Програмата е утвърдена. Следващите дни се адаптират автоматично."}
     return store.save(alias, payload, body.expected_revision, actor, "ACTIVATE", profile_revision, checkpoint,
                       include_payload=include_saved_payload)
 
@@ -125,12 +127,15 @@ def reconcile(plan, source, today, decisions, previous_outcomes=()):
     planned_days = {o["date"]: {"date": o["date"], "session": {
         "title": o.get("planned_title"), "total_minutes": o.get("planned_minutes", 0),
         "sport": o.get("planned_sport"), "canonical_effective_load": o.get("planned_load")} if o.get("planned_title") else None} for o in previous_outcomes}
-    planned_days.update({d["date"]: d for d in plan.get("days", [])})
+    planned_days.update({d["date"]: d for d in plan.get("days", [])
+                         if d.get("status") != "EXISTING_ACTIVITY" or d["date"] not in planned_days})
     for day in planned_days.values():
         key = day["date"]
-        if key >= today.isoformat():
+        if key > today.isoformat():
             continue
         actual = [a for a in source.get("activities", []) if a.get("date") == key]
+        if key == today.isoformat() and not actual:
+            continue  # An unfinished day without a recording is not a missed workout.
         covered = {r["zone"] for r in daily if r["date"] == key} >= {"Z1", "Z2", "Z3", "Z4", "Z5"}
         covered = covered and any(r["date"] == key for r in (source.get("strength") or {}).get("daily", []))
         if key in outcomes and not covered and not actual:
@@ -150,6 +155,7 @@ def reconcile(plan, source, today, decisions, previous_outcomes=()):
             "actual_load": {z: round(sum(float(r["effective_load"]) for r in (daily if z != "STR" else (source.get("strength") or {}).get("daily", []))
                                          if r["date"] == key and (z == "STR" or r["zone"] == z)), 3)
                             for z in ("Z1", "Z2", "Z3", "Z4", "Z5", "STR")} if covered else None,
+            "day_complete": key < today.isoformat(),
             "activity_refs": [a.get("activity_ref") for a in actual],
             "matching": "CALENDAR_DAY_AND_ACTUAL_SPORT_NOT_INFERRED_WORKOUT_IDENTITY",
             "load_source": "IMPORTED_ACTUAL_ONLY", "catchup_required": False}
@@ -163,7 +169,7 @@ def changes_between(old, new):
         before = previous.get(day["date"])
         prior = day_totals(before) if before and day_sessions(before) else None
         following = day_totals(day) if day_sessions(day) else None
-        signature = lambda d: [(s.get("method_id"), s.get("total_minutes"), s.get("blocks")) for s in day_sessions(d or {})]
+        signature = lambda d: [(s.get("method_id"), s.get("sport"), s.get("purpose"), s.get("total_minutes"), s.get("blocks")) for s in day_sessions(d or {})]
         if before is None or signature(before) != signature(day) or before["status"] != day["status"]:
             changes.append({"date": day["date"], "before": prior.get("title") if prior else None,
                             "after": following.get("title") if following else day["explanation"],
@@ -171,6 +177,43 @@ def changes_between(old, new):
                             "after_minutes": following.get("total_minutes") if following else 0,
                             "reason": day["explanation"]})
     return changes
+
+
+def _window(plan):
+    days = sorted(d["date"] for d in plan.get("days", []))
+    return {"start_date": plan.get("start_date") or days[0], "end_date": plan.get("end_date") or days[-1]}
+
+
+def _next_window(window, today, program_end):
+    """Keep seven-day boundaries anchored to the approved end, even after a pause."""
+    start = date.fromisoformat(window["end_date"]) + timedelta(days=1)
+    start += timedelta(days=max(0, (today-start).days // 7) * 7)
+    return {"start_date": start.isoformat(), "end_date": min(start+timedelta(days=6), program_end).isoformat()}
+
+
+def _monitoring(plan, changes, source, today):
+    changed = {c["date"] for c in changes}
+    actual_dates = {a.get("date") for a in source.get("activities", [])}
+    return {"evaluated_on": today.isoformat(), "source": deepcopy(plan.get("source", {})),
+            "forecast_basis": "PROPOSED_SCHEDULE_NOT_APPROVED_FIXED_WEEK",
+            "history_comparison": deepcopy(plan.get("history_comparison", [])),
+            "days": [{"date": d["date"],
+                      "status": "REVIEW_REQUIRED" if d["date"] in changed or not _eligible(plan) else
+                                "RECORDED" if d["date"] in actual_dates else "MATCHED",
+                      "reason": d["explanation"],
+                      "readiness_before": d.get("readiness_before"),
+                      "readiness_after": d.get("readiness_after")}
+                     for d in plan.get("days", [])]}
+
+
+def _published_monitoring(payload):
+    """A reviewed proposal becomes the approved forecast, not a pending warning."""
+    monitoring = payload.get("monitoring")
+    if monitoring:
+        monitoring["forecast_basis"] = "APPROVED_SCHEDULE"
+        recorded = {d["date"] for d in payload["plan"].get("days", []) if d["status"] == "EXISTING_ACTIVITY"}
+        for day in monitoring["days"]:
+            day["status"] = "RECORDED" if day["date"] in recorded else "MATCHED"
 
 
 def _reconciliation_analysis(repository, alias, today, frozen, initial_read_phase):
@@ -236,9 +279,18 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
     start = max(today, date.fromisoformat(old["origin"]["start_date"]), date.fromisoformat(profile["program_start"]))
     if start > today + timedelta(days=7):
         raise HTTPException(409, "The new program start requires a separate draft")
+    # REVIEW is the backwards-compatible fixed-week mode. Saving a different
+    # mode is a rules change: it creates a preview and never switches the plan.
+    fixed = profile["adaptation_mode"] == "REVIEW"
+    approved_window = old.get("week_window") or _window(old["plan"])
+    next_week = fixed and today.isoformat() > approved_window["end_date"]
+    candidate_window = (_next_window(approved_window, today, date.fromisoformat(profile["program_end"]))
+                        if next_week else approved_window) if fixed else None
+    if fixed:
+        start = max(start, date.fromisoformat(candidate_window["start_date"]))
     locked = next((d for d in old["plan"]["days"] if d["date"] == today.isoformat() and d.get("session")), None)
-    if day_action and day_action.date == today:
-        locked = None
+    if fixed or (day_action and day_action.date == today):
+        locked = None  # Independently check the candidate; never silently validate a frozen dose.
     # A mutable legacy snapshot or a different reconciliation source keeps the
     # original fresh-before path. Captured immutable sources share one initial
     # phase; fresh post-calculation inputs still detect source changes.
@@ -247,15 +299,35 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
         and envelope.get("generation_id") == frozen["generation_id"]
         and type(envelope.get("revision")) is int and envelope["revision"] == frozen["analysis_revision"])
     plan = management_service.build_draft(repository, alias, start, profile_revision, now=now, decisions=decisions,
-        locked_day=locked, _initial_read_phase=initial_read_phase if same_analysis else None)
+        locked_day=locked, _initial_read_phase=initial_read_phase if same_analysis else None,
+        **({"window_end": date.fromisoformat(candidate_window["end_date"])} if fixed else {}))
     if plan.get("source", {}).get("generation_id") != checkpoint.get("generation_id"):
         raise HTTPException(409, "Analysis changed during replanning")
     payload["changes"] = changes_between(old["plan"], plan)
+    # A recording is execution, not a proposal to erase the original prescription.
+    actual_dates = {a.get("date") for a in source.get("activities", [])}
+    if fixed:
+        completed_single = {d["date"] for d in plan["days"] if d.get("status") == "EXISTING_ACTIVITY"
+            and d["date"] in actual_dates and len(day_sessions(next((previous for previous in old["plan"]["days"]
+                if previous["date"] == d["date"]), {}))) <= 1}
+        payload["changes"] = [c for c in payload["changes"] if c["date"] not in completed_single]
+    payload.update(week_policy="fixed-or-adaptive-v1", week_window=approved_window,
+                   proposal_mode=profile["adaptation_mode"],
+                   proposal_week_window=candidate_window or _window(plan),
+                   monitoring=_monitoring(plan, payload["changes"], source, today))
     needs_rule_approval = approval_hash != old["approved_settings_fingerprint"] or profile_revision != old["approved_profile_revision"]
-    if _eligible(plan) and old["mode"] == "AUTO" and not needs_rule_approval:
+    if fixed and _eligible(plan) and not needs_rule_approval and not next_week and not payload["changes"]:
+        # Monitoring freshness advances while every approved dose stays identical.
+        payload.update(status="ACTIVE", proposal=None,
+                       reason="Фиксираната седмица е запазена. Актуалната проверка не предлага промяна на оставащите задачи.")
+        operation = "RESUME" if resume else "REVIEW"
+        if resume:
+            payload["approved_by"] = str(actor)
+    elif _eligible(plan) and old["mode"] == "AUTO" and not needs_rule_approval:
         plan.update(review_required=False, automatically_published=automatic)
-        payload.update(status="ACTIVE", plan=plan, proposal=None,
+        payload.update(status="ACTIVE", plan=plan, proposal=None, week_window=_window(plan),
                        reason="Следващите дни са адаптирани към реалното изпълнение. Пропуснатото не се наваксва автоматично.")
+        _published_monitoring(payload)
         operation = "RESUME" if resume else "DAY" if day_action else "ADAPT"
         if resume:
             payload["approved_by"] = str(actor)
@@ -263,7 +335,9 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
         illness_hold = next((w for w in plan.get("warnings", []) if w["code"] in {"REPORTED_ILLNESS_OR_PAIN", "LEARNING_REVIEW"}), None)
         payload.update(status="REVIEW_REQUIRED", proposal=plan,
                        reason=illness_hold["message"] if illness_hold else
-                       "Нужен е преглед на променените правила." if needs_rule_approval else
+                       "Новият режим или променените правила очакват утвърждаване." if needs_rule_approval else
+                       "Фиксираната седмица приключи. Следващата е предложена според актуалното изпълнение и очаква утвърждаване." if next_week else
+                       "Нужен е преглед. Фиксираните задачи са запазени; предложените корекции не са приложени." if fixed else
                        "Предложената адаптация очаква утвърждаване." if _eligible(plan) else
                        "Липсват достатъчно актуални данни за следващата доза. Обновете активностите и прегледайте причините.")
         operation = "REVIEW"
@@ -295,10 +369,14 @@ def approve_proposal(repository, alias, body, actor, *, now, include_saved_paylo
     if not proposal or proposal.get("input_fingerprint") != fingerprint or not _eligible(proposal):
         raise HTTPException(409, "Refresh and review the current proposal before approval")
     proposal.update(review_required=False, automatically_published=False)
+    # Past prescriptions remain in immutable revisions and reconciled outcomes.
+    # Approving a correction retains the fixed week end rather than rolling it.
+    window = payload.get("proposal_week_window") or _window(proposal)
     payload.update(status="ACTIVE", plan=proposal, proposal=None, approved_by=str(actor),
                    approved_profile_revision=profile_revision, approved_settings_fingerprint=approval_hash,
-                   mode=profile["adaptation_mode"], evaluated_on=frozen["evaluation_date"],
+                   mode=profile["adaptation_mode"], week_window=window, evaluated_on=frozen["evaluation_date"],
                    processed_input_fingerprint=fingerprint, reason="Показаната адаптация е утвърдена без промяна на прегледаните задачи.")
+    _published_monitoring(payload)
     return store.save(alias, payload, record["revision"], actor, "APPROVE", profile_revision, checkpoint,
                       include_payload=include_saved_payload)
 

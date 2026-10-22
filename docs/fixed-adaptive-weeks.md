@@ -1,0 +1,24 @@
+# Fixed and adaptive weeks
+
+Policy `fixed-or-adaptive-v1`, engine `training-management-v56-fixed-weeks`.
+
+The profile's existing `adaptation_mode` storage values remain compatible:
+
+| Value | Interface | Publication |
+| --- | --- | --- |
+| `AUTO` | Адаптивна седмица | Eligible future work adapts automatically; changed rules require approval. |
+| `REVIEW` | Фиксирана седмица | Approved dates, methods, blocks, intensities and doses stay unchanged until explicit approval. |
+
+`week_window` records the approved start/end. A fixed week's candidate is generated from today through that same end. The ordinary generator, method limits, taper, recovery and component budgets are reused; there is no alternative dosing algorithm. Its whole-microcycle lookahead remains provisional and is not part of the approved week.
+
+The worker still reconciles real activity, including additional work, and evaluates the current inputs. It saves fresh `monitoring` separately from the original `plan`. Identical eligible remaining prescriptions need no reapproval. Changed candidates, incomplete coverage, illness/learning holds and rule changes require review. A changed candidate is a reason for review, not proof that the original dose is physiologically unsafe. Monitoring forecasts describe the proposed schedule; forecasts inside the preserved plan describe its original approval, not current readiness.
+
+The main calendar and compact overview select `plan` even when `proposal` exists. Proposals have their own section, reasons, dose summary and eligibility gate. Current actual history comes from monitoring, while planned volume remains from approved prescriptions. HR and speed Q are not added together, and speed Q remains comparison-only.
+
+Approval promotes the exact fresh proposal after revision, profile, analysis and response checks. A correction within a fixed week retains its original end. Past work stays in immutable revisions and reconciled outcomes. A recording today is reported immediately, without declaring the day complete or erasing the original prescription on the next refresh. Calendar-day matching is not proof of exact workout completion; partial multiple-session days still require review.
+
+After a fixed week ends, the next seven-day window is anchored to the previous end and proposed from current actual data. Approval is required. Delayed approval does not move its end. After longer absence, expired windows are skipped without catch-up work. Pause and program completion retain their existing guards.
+
+Changing the profile mode previews the effect first; the active mode changes only on approval. Existing `REVIEW` records derive the first fixed window from their approved plan. Existing `AUTO` records remain adaptive. No athlete is silently switched to fixed mode.
+
+Validation covers immutable doses under extra/unplanned load, freshness without changes, same-day recording, late imports, mode changes in both directions, fixed end after delayed approval, missing-history rejection, explicit day decisions, duplicate refreshes, bounded generation, and approved-versus-proposed UI/SQL projections. Database fixtures run in a rollback transaction and preserve service-only permissions.
