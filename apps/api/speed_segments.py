@@ -4,6 +4,8 @@ import math
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
+from vflat_b65.load import VERSION as LOAD_SAMPLES_VERSION, REST_SPEED_KMH
+from vflat_b65.sports import is_running, is_nordic
 
 COVERAGE_PERCENT = {"STRICT": 98, "EXPLORATORY": 70}
 
@@ -18,8 +20,11 @@ def finite(value):
     return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
 
 
-def sample_intervals(shadow):
+def sample_intervals(shadow, *, for_load=False, sport=None):
+    """Select load estimates explicitly; tests always retain observed Vflat."""
     independent = shadow.get("speed_test_series")
+    load_annotations = (for_load and (is_running(sport) or is_nordic(sport))
+                        and (shadow.get("speed_load_summary") or {}).get("version") == LOAD_SAMPLES_VERSION)
     rows = sorted((r for r in (independent if independent is not None else shadow.get("timeseries") or [])
                    if finite(r.get("elapsed_s"))), key=lambda r: r["elapsed_s"])
     result = []
@@ -37,9 +42,22 @@ def sample_intervals(shadow):
         speed, grade = row.get("vflat_b65_kmh"), row.get("grade_smoothed_pct")
         reason = ("DOWNHILL" if finite(grade) and grade < -3 else
                   "INVALID" if not finite(speed) or speed <= 0 or not finite(grade) or row.get("exclusion_reason") else None)
+        if load_annotations:
+            speed = row.get("load_speed_kmh")
+            status = row.get("load_status")
+            reason = ("REST" if status == "REST" and finite(speed) and speed >= 0 else
+                      None if status == "ACTIVE" and finite(speed) and speed >= REST_SPEED_KMH else
+                      row.get("load_reason") or "INVALID")
+        elif for_load and (is_running(sport) or is_nordic(sport)):
+            # Older runs already contain a downhill correction. Only their
+            # shared test filter was discarding these intervals from load.
+            if is_running(sport) and reason == "DOWNHILL":
+                reason = "INVALID" if not finite(speed) or speed < 0 or row.get("exclusion_reason") else None
+            if reason is None and speed < REST_SPEED_KMH:
+                reason = "REST"
         left = max(left, previous_right)
         if right > left:
-            result.append((left, right, speed if finite(speed) and speed > 0 else None, reason))
+            result.append((left, right, speed if finite(speed) and (speed >= 0 if for_load else speed > 0) else None, reason))
             previous_right = right
     return result
 

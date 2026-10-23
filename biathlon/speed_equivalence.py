@@ -11,6 +11,7 @@ import json
 import math
 
 VERSION = "run-local-speed-equivalence-v1-2026-10-20"
+INTEGRATION_VERSION = "run-local-speed-integration-v2-known-rest"
 SETTINGS_VERSION = "expert-run-weights-2026-10-20-v1"
 ZONES = tuple(f"Z{i}" for i in range(1, 6))
 COEFFICIENTS = dict(zip(ZONES, (1., 1., 1., 1.2, 1.5)))
@@ -176,7 +177,7 @@ def integrate(parameters, segments, *, recorded_seconds=None, warnings=(), fallb
     """
     totals = {z: {"real_seconds": 0., "covered_seconds": 0., "equivalent_seconds": 0.,
                   "baseline_equivalent_seconds": 0.} for z in ZONES}
-    excluded = outside = supplied = 0.
+    excluded = outside = supplied = rest = 0.
     reasons = set()
     starts = set()
     for segment in segments:
@@ -187,6 +188,9 @@ def integrate(parameters, segments, *, recorded_seconds=None, warnings=(), fallb
         supplied += seconds
         if segment.get("start_type"):
             starts.add(segment["start_type"])
+        if segment.get("exclusion_reason") == "REST":
+            rest += seconds
+            continue
         estimate = evaluate(parameters, segment.get("speed_kmh"))
         zone = estimate.get("zone")
         if zone in totals:
@@ -219,13 +223,15 @@ def integrate(parameters, segments, *, recorded_seconds=None, warnings=(), fallb
                      "baseline_equivalent_minutes": baseline/60 if baseline is not None else None,
                      "normalized_q": eq/(60*tref) if eq is not None and tref else None,
                      "baseline_normalized_q": baseline/(60*tref) if baseline is not None and tref else None})
-    return {"version": VERSION, "role": "COMPARISON_ONLY", "parameters_version": parameters["parameters_version"],
+    return {"version": VERSION, "integration_version": INTEGRATION_VERSION,
+            "role": "COMPARISON_ONLY", "parameters_version": parameters["parameters_version"],
             "settings": deepcopy(parameters["settings"]), "sport": parameters["sport"],
             "reference_policy": parameters["reference_policy"],
-            "status": "AVAILABLE" if recorded and covered >= recorded-1e-8 else "PARTIAL" if covered else "UNAVAILABLE",
+            "status": "AVAILABLE" if recorded and covered+rest >= recorded-1e-8 else "PARTIAL" if covered+rest else "UNAVAILABLE",
             "recorded_minutes": recorded/60, "classified_minutes": covered/60,
+            "passive_rest_minutes": rest/60, "accounted_minutes": (covered+rest)/60,
             "excluded_minutes": excluded/60, "outside_range_minutes": outside/60,
-            "uncovered_minutes": max(0., recorded-covered)/60,
+            "uncovered_minutes": max(0., recorded-covered-rest)/60,
             "coverage_percent": 100*covered/recorded if recorded else 0., "zones": rows,
             "equivalent_time_unit": parameters["equivalent_time_unit"], "normalized_q_unit": parameters["normalized_q_unit"],
             "fallback_indicator": fallback_indicator, "start_types": sorted(starts) or ["UNKNOWN"],
@@ -238,11 +244,16 @@ def aggregate(parameters, comparisons):
     if any(c["parameters_version"] != parameters["parameters_version"] for c in comparisons):
         raise ValueError("Cannot combine different speed-equivalence parameter versions")
     result = integrate(parameters, [], recorded_seconds=0)
-    for field in ("recorded_minutes", "classified_minutes", "excluded_minutes", "outside_range_minutes", "uncovered_minutes"):
-        result[field] = sum(c[field] for c in comparisons)
+    for field in ("recorded_minutes", "classified_minutes", "excluded_minutes", "outside_range_minutes", "uncovered_minutes",
+                  "passive_rest_minutes"):
+        result[field] = sum(c.get(field, 0.) for c in comparisons)
+    # Planned passive rests are outside the plan's recorded work subtotal;
+    # execution rests are inside recorded activity time. Retain that distinction.
+    result["accounted_minutes"] = sum(c.get("accounted_minutes", c["classified_minutes"]) for c in comparisons)
     total, covered = result["recorded_minutes"], result["classified_minutes"]
     result["coverage_percent"] = 100*covered/total if total else 0.
-    result["status"] = "AVAILABLE" if total and covered >= total-1e-8 else "PARTIAL" if covered else "UNAVAILABLE"
+    accounted = result["accounted_minutes"]
+    result["status"] = "AVAILABLE" if total and accounted >= total-1e-8 else "PARTIAL" if accounted else "UNAVAILABLE"
     for i,row in enumerate(result["zones"]):
         for field in ("real_seconds", "covered_seconds", "real_minutes", "covered_minutes"):
             row[field] = sum(c["zones"][i][field] for c in comparisons)

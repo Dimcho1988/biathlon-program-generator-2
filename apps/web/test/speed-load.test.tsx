@@ -181,3 +181,13 @@ it("accepts weighted downward load reports",()=>{
   const updated={...fixture(),model_version:"independent-speed-load-causal-ti-v3-weighted-downward-tmax",component_load_version:"component-load-weighted-downward-tmax-v2"};
   expect(parseSpeedLoad(updated).component_load_version).toBe("component-load-weighted-downward-tmax-v2");
 });
+
+
+it("accepts the descent/rest ledger and rejects inconsistent duration accounting",()=>{
+  const data={...fixture(),model_version:"independent-speed-load-causal-ti-v4-descent-rest",
+    rest_minutes:10,accounted_minutes:30,unaccounted_minutes:10,accounted_percent:75,estimated_descent_minutes:8};
+  expect(parseSpeedLoad(data).accounted_minutes).toBe(30);
+  expect(()=>parseSpeedLoad({...data,rest_minutes:15})).toThrow();
+  expect(()=>parseSpeedLoad({...data,unaccounted_minutes:0})).toThrow();
+  expect(()=>parseSpeedLoad({...data,estimated_descent_minutes:-1})).toThrow();
+});

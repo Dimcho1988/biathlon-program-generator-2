@@ -2049,7 +2049,7 @@ class InMemorySnapshotRepository:
         from .shadow_storage import decode_shadow_payload
         requested = set(run_keys)
         fields = ("configuration_fingerprint", "vflat_model_version", "vflat_config_version", "trainability_index",
-                  "speed_test_series", "timeseries")
+                  "speed_test_series", "timeseries", "speed_load_summary")
         with self._lock:
             return {run["run_key"]: {"run_key": run["run_key"], "activity_ref": activity_ref,
                 "shadow_payload": decode_shadow_payload({name: run["result_payload"].get(name) for name in fields})}

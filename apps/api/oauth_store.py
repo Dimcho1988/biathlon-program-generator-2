@@ -1503,7 +1503,7 @@ class SupabasePilotRepository(SnapshotRepository):
         result = {}
         keys = sorted(set(run_keys))
         fields = ("configuration_fingerprint", "vflat_model_version", "vflat_config_version", "trainability_index",
-                  "speed_test_series") + (("timeseries",) if hr_mask else ())
+                  "speed_test_series", "speed_load_summary") + (("timeseries",) if hr_mask else ())
         selection = "run_key,activity_ref," + ",".join(f"{name}:result_payload->{name}" for name in fields)
         for offset in range(0, len(keys), 10):
             batch = keys[offset:offset+10]

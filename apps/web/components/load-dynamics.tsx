@@ -87,9 +87,11 @@ function SpeedDynamics({ speed, history, comparison }: { speed: SpeedLoad; histo
       <p>Бягане · ролки/ски · колело</p>
     </div>
     <div className="load-speed-coverage">
-      <strong>Скоростно покритие: {decimal(speed.coverage_percent)}%</strong>
-      <span>{decimal(speed.classified_minutes)} от {decimal(speed.recorded_minutes)} записани минути за поддържаните спортове · {displayDate(speed.start_date)} – {displayDate(speed.end_date)}</span>
+      <strong>Отчетено време по скорост: {decimal(speed.accounted_percent ?? speed.coverage_percent)}%</strong>
+      <span>{decimal(speed.classified_minutes)} мин по зони · {decimal(speed.rest_minutes ?? 0)} мин почивка с Q = 0 · {decimal(speed.unaccounted_minutes ?? speed.recorded_minutes - speed.classified_minutes)} мин без оценка · общо {decimal(speed.recorded_minutes)} мин · {displayDate(speed.start_date)} – {displayDate(speed.end_date)}</span>
     </div>
+    {(speed.estimated_descent_minutes ?? 0) > 0 && <p>Ски спускания: {decimal(speed.estimated_descent_minutes)} мин с приравнена скорост, оценена чрез изравняване на средните скорости. Тези стойности участват в натоварването; тестовете използват измерения Vflat.</p>}
+    {speed.warnings.includes("NEGATIVE_DESCENT_RESIDUAL") && <p>При част от ски активностите остатъкът за спусканията е отрицателен. Тези участъци остават без оценка на натоварването.</p>}
     {speed.warnings.includes("TREADMILL_GRADE_ASSUMED_FLAT") && <p>Пътека: при липсващ запис за наклона използваме скоростта с допускане за 0% наклон.</p>}
     {speed.warnings.includes("TREADMILL_PRIOR_RUN_INDEX_FALLBACK") && <p>За пътека без предходен собствен индекс е използван предходният индекс от бягане на същия спортист.</p>}
     {speed.status === "UNAVAILABLE" ? <p className="history-unavailable">Още няма достатъчно данни за скоростен товар. Нужни са валидни индекси от предходни тренировки за същия спорт и преизчислени скорости. Липсващите стойности не означават нулево натоварване.</p> : aligned?.error ? <div className="history-unavailable"><p>{aligned.error}</p><p>По пулс: {history ? displayDate(history.period_end) : "няма данни"} · По скорост: {displayDate(speed.end_date)}</p></div> : <>
@@ -103,7 +105,7 @@ function SpeedDynamics({ speed, history, comparison }: { speed: SpeedLoad; histo
         {comparison && <p>Q се сравнява за еднакви дати. E7, E40 и 7/40 са оценките на всеки модел; покритието и наличната история могат да се различават.</p>}
         {(short.partial || long.partial) && <p>Непълна скоростна история: {short.days}/7 и {long.days}/40 календарни дни. Седмичният еквивалент е предварителен.</p>}
         {(!short.complete || !long.complete) && <p>Липсват дневни данни; засегнатият Q не се изчислява.</p>}
-        {speed.activities.some(a => a.reason === "SPEED_RECOMPUTATION_REQUIRED") && <p>Има активности със стар модел. Използвай „Обнови данните“ от горния бутон.</p>}
+        {speed.warnings.includes("SPEED_RECOMPUTATION_REQUIRED") && <p>Има активности със стар модел. Използвай „Обнови данните“ от горния бутон.</p>}
       </div>
       <div className={`load-summary${comparison ? " load-comparison-cards" : ""}`} role="list" aria-label={comparison ? "Сравнение на показателите по зони" : "Показатели по скоростни зони"}>
         {speed.zones.map((zone, index) => {
@@ -138,8 +140,8 @@ function SpeedDynamics({ speed, history, comparison }: { speed: SpeedLoad; histo
         <div className="activities-heading"><div><p className="section-kicker">Последни сесии</p><h3>Скоростно покритие по активности</h3></div></div>
         <div className="activity-list">{[...speed.activities].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 12).map(activity => <a key={activity.activity_ref} className="activity-row speed-load-activity" href={`/activities/${encodeURIComponent(activity.activity_ref)}`}>
           <span><strong>{activity.sport}</strong><small>{displayDate(activity.date)}</small></span>
-          <span>{durationHms(activity.classified_minutes)} от {durationHms(activity.recorded_minutes)}</span>
-          <span className={activity.classified_minutes >= activity.recorded_minutes ? "quality-valid" : "quality-limited"}>{activity.classified_minutes > 0 ? `${decimal(activity.recorded_minutes ? 100 * activity.classified_minutes / activity.recorded_minutes : 0)}% по скорост` : "Няма скоростна оценка"}</span>
+          <span>{durationHms(activity.accounted_minutes ?? activity.classified_minutes)} от {durationHms(activity.recorded_minutes)}{(activity.rest_minutes ?? 0) > 0 && <small>Почивка: {durationHms(activity.rest_minutes)}</small>}</span>
+          <span className={(activity.accounted_minutes ?? activity.classified_minutes) >= activity.recorded_minutes ? "quality-valid" : "quality-limited"}>{(activity.accounted_minutes ?? activity.classified_minutes) > 0 ? `${decimal(activity.recorded_minutes ? 100 * (activity.accounted_minutes ?? activity.classified_minutes) / activity.recorded_minutes : 0)}% по скорост` : "Няма скоростна оценка"}</span>
         </a>)}</div>
       </>}
     </>}

@@ -3,7 +3,7 @@
 Activities use only earlier-date paired indices from 40 days. Treadmills without
 a same-sport calibration can explicitly use this athlete's ordinary-run index.
 This prevents the activity's own HR (or future training) defining its speed load.
-Only measured Vflat is integrated; estimated HR is a conversion coordinate.
+Load-only Nordic descent estimates are explicit; estimated HR is a conversion coordinate.
 """
 from bisect import bisect_right
 from collections import deque
@@ -24,7 +24,8 @@ from biathlon.equivalence import equivalence_slope, EQUIVALENCE_VERSION
 from biathlon.component_load import calculate_component_load, VERSION as COMPONENT_LOAD_VERSION
 from biathlon.physiology import linear_equivalence_coefficient, compute_daily_load_history, compute_load_statistics, rolling_load_statistics
 from biathlon.sport_heart_rate import reference_offset, policy
-from vflat_b65.sports import speed_model_versions, supports_speed_load, is_treadmill
+from vflat_b65.sports import speed_model_versions, supports_speed_load, is_treadmill, is_nordic, is_running
+from vflat_b65.load import VERSION as LOAD_SAMPLES_VERSION
 from .activity_shadow_pipeline import activity_shadow_configuration_fingerprint
 from .speed_segments import sample_intervals
 from .speed_load_cache import speed_load_cache, speed_activity_cache
@@ -32,7 +33,7 @@ from .trainability_history import history_from_calendar, read_calendar, robust_m
 from .trainability import MIN_SECONDS_BY_BAND, MAX_GAP_SECONDS
 from .component_load_context import read_contexts
 
-VERSION="independent-speed-load-causal-ti-v3-weighted-downward-tmax"
+VERSION="independent-speed-load-causal-ti-v4-descent-rest"
 COMPARISON_VERSION = speed_equivalence.VERSION
 ZONES=tuple(f"Z{i}" for i in range(1,6))
 logger = logging.getLogger("uvicorn.error")
@@ -214,31 +215,44 @@ def _activity_record(activity, row, mapping, reason, comparison_parameters=None)
     if not compatible:
         reason = "SPEED_RECOMPUTATION_REQUIRED"
     totals = {z: {"zone": z, "minutes": 0., "equivalent_minutes": 0.} for z in ZONES}
-    excluded = outside = 0.
-    intervals = sample_intervals(shadow) if compatible and (mapping or comparison_parameters is not None) else []
-    if mapping and compatible:
-        convert = _integration_converter(mapping)
-        for left, right, speed, exclusion in intervals:
-            dt = right-left
-            if exclusion or dt > MAX_GAP_SECONDS:
-                excluded += dt
-                continue
-            estimate = convert(speed)
-            if estimate is None:
-                outside += dt
-                continue
-            zone, coefficient = estimate
-            total = totals[zone]
-            total["minutes"] += dt/60
-            total["equivalent_minutes"] += dt/60*coefficient
+    excluded = outside = rest = 0.
+    intervals = sample_intervals(shadow, for_load=True, sport=s) if compatible else []
+    convert = _integration_converter(mapping) if mapping else lambda speed: None
+    for left, right, speed, exclusion in intervals:
+        dt = right-left
+        if exclusion == "REST" and dt <= MAX_GAP_SECONDS:
+            rest += dt
+            continue
+        if exclusion or dt > MAX_GAP_SECONDS:
+            excluded += dt
+            continue
+        estimate = convert(speed)
+        if estimate is None:
+            outside += dt
+            continue
+        zone, coefficient = estimate
+        total = totals[zone]
+        total["minutes"] += dt/60
+        total["equivalent_minutes"] += dt/60*coefficient
     covered = sum(z["minutes"] for z in totals.values())
     duration = max(activity.get("duration_min") or 0.,
                    (activity.get("elapsed_time_s") or activity.get("moving_time_s") or 0.)/60,
-                   covered+(excluded+outside)/60)
+                   covered+(excluded+outside+rest)/60)
+    accounted = covered + rest/60
+    load_summary = shadow.get("speed_load_summary") or {}
+    warnings = []
+    if compatible and (is_nordic(s) or is_running(s)) and load_summary.get("version") != LOAD_SAMPLES_VERSION:
+        warnings.append("SPEED_RECOMPUTATION_REQUIRED")
+    if load_summary.get("balance_status") == "NEGATIVE_RESIDUAL":
+        warnings.append("NEGATIVE_DESCENT_RESIDUAL")
     result = {"activity_ref": activity["activity_ref"], "date": activity["local_date"], "sport": s,
             "recorded_minutes": float(duration), "classified_minutes": covered,
+            "rest_minutes": rest/60, "accounted_minutes": accounted,
+            "unaccounted_minutes": max(0., duration-accounted),
+            "estimated_descent_minutes": load_summary.get("estimated_descent_duration_s", 0.)/60 if compatible else 0.,
+            "speed_load_summary": load_summary, "warnings": warnings,
             "excluded_speed_minutes": excluded/60, "outside_mapping_minutes": outside/60,
-            "status": "CLASSIFIED" if covered else "UNAVAILABLE", "reason": reason,
+            "status": "CLASSIFIED" if covered else "REST_ONLY" if rest else "UNAVAILABLE", "reason": reason,
             "assumes_flat_incline": bool(compatible and any(
                 r.get("grade_assumed_flat") for r in shadow["speed_test_series"])),
             "mapping": mapping, "zones": list(totals.values())}
@@ -453,8 +467,10 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
     loads=compute_daily_load_history(pd.DataFrame(activity_summaries),parameters,today)
     statistics=compute_load_statistics(loads,parameters,today)
     visible=[a for a in records if a["date"]>=start.isoformat()]
-    count=sum(a["classified_minutes"]>0 for a in visible)
+    count=sum(a["accounted_minutes"]>0 for a in visible)
     total_recorded=sum(a["recorded_minutes"] for a in visible);covered=sum(a["classified_minutes"] for a in visible)
+    rest = sum(a["rest_minutes"] for a in visible)
+    accounted = covered + rest
     # The load history is already one row per calendar day. Existing rolling
     # statistics use the same inclusive windows and base formula without
     # repeatedly filtering the growing history for every chart day.
@@ -481,12 +497,16 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
     return {"schema_version":"speed-load-history-v1","model_version":VERSION,
             "speed_equivalence_comparison": comparison,
             "sport":sport,"sports":available,"start_date":start.isoformat(),"end_date":today.isoformat(),
-            "status":"AVAILABLE" if count and covered>=total_recorded-1e-6 else "PARTIAL" if count else "UNAVAILABLE",
+            "status":"AVAILABLE" if count and accounted>=total_recorded-1e-6 else "PARTIAL" if count else "UNAVAILABLE",
             "source_generation_id":calendar.get("generation_id"),"source_revision":calendar.get("revision"),
             "load_role":"PARALLEL_ESTIMATE_NOT_ADDED_TO_HR","equivalence_version":EQUIVALENCE_VERSION,
             "component_load_version":COMPONENT_LOAD_VERSION,
             "mapping_policy":"PRIOR_40_DAYS_EXCLUDING_CURRENT_DAY_WITH_TREADMILL_RUN_FALLBACK",
             "recorded_minutes":total_recorded,"classified_minutes":covered,
+            "rest_minutes":rest,"accounted_minutes":accounted,
+            "unaccounted_minutes":max(0.,total_recorded-accounted),
+            "accounted_percent":100*accounted/total_recorded if total_recorded else 0.,
+            "estimated_descent_minutes":sum(a["estimated_descent_minutes"] for a in visible),
             "coverage_percent":100*covered/total_recorded if total_recorded else 0.,
             "activities":visible,"sport_indices":current_indices,"daily":daily,
             "zones":[{"zone":z,"minutes":sum(a["zones"][i]["minutes"] for a in visible),
@@ -497,6 +517,7 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
             "warnings":["SPEED_LOAD_IS_ESTIMATED","RATIOS_DESCRIBE_COVERED_SPEED_HISTORY_ONLY",
                         "GENERAL_INDEX_USED_WHEN_ZONE_INDEX_MISSING","CYCLING_PARAMETERS_ARE_REFERENCE_ASSUMPTIONS"]
                        + (["SPEED_RECOMPUTATION_REQUIRED"] if any(a["reason"] == "SPEED_RECOMPUTATION_REQUIRED" for a in records) else [])
+                       + sorted({w for a in visible for w in a["warnings"]})
                        + (["TREADMILL_GRADE_ASSUMED_FLAT"] if any(a["assumes_flat_incline"] for a in visible) else [])
                        + (["TREADMILL_PRIOR_RUN_INDEX_FALLBACK"] if any(
                            a["classified_minutes"] > 0 and (a["mapping"] or {}).get("index_sport") == "Run" for a in visible) else [])}

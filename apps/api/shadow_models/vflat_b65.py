@@ -18,6 +18,7 @@ from vflat_b65.running import RunningGradeConfig, apply_running_grade
 from vflat_b65.sports import is_running, is_cycling, is_treadmill, speed_model_versions
 from vflat_b65.cycling import CyclingConfig, apply_cycling_grade
 from vflat_b65.treadmill import TreadmillConfig, apply_treadmill_speed
+from vflat_b65.load import complete_load_speed
 
 
 def run_vflat_b65_shadow(
@@ -91,6 +92,8 @@ def run_vflat_b65_shadow(
                 "vflat_config_version": config_version,
             }
         )
+    rows, load_summary = complete_load_speed(rows, sport=sport,
+        terrain_factor=result.attrs["terrain_correction"]["factor"])
     return {
         "status": "computed",
         "experimental": True,
@@ -101,6 +104,7 @@ def run_vflat_b65_shadow(
         "sprint_str_config_version": SPRINT_STR_CONFIG_VERSION,
         "config": selected.to_dict(),
         "terrain_correction": result.attrs["terrain_correction"],
+        "speed_load_summary": load_summary,
         "sprint_str_summary": sprint_detection.summary,
         "sprint_str_intervals": list(sprint_detection.intervals),
         "timeseries": rows,

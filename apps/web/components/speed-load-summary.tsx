@@ -42,6 +42,8 @@ function SpeedLoadSummaryView({generation,revision,cacheScope}:Props) {
       <SpeedEquivalenceComparison value={data.speed_equivalence_comparison}/>
       <label>Обхват <select value={sport} disabled={busy} onChange={e=>read(e.target.value)}><option value="">Всички поддържани спортове</option>{data.sports.map(s=><option key={s}>{s}</option>)}</select></label>
       <p><strong>Покритие: {n(data.coverage_percent)}%</strong> · {durationHms(data.classified_minutes)} от {durationHms(data.recorded_minutes)}. {data.status==="UNAVAILABLE"?"Нужни са валидни индекси от по-ранни дни и преизчислени активности.":"Q, E и 7/40 описват само отчетената част от историята."}</p>
+      {data.rest_minutes !== undefined && <p>Отделно отчетена почивка с Q = 0: {durationHms(data.rest_minutes)} · време без оценка: {durationHms(data.unaccounted_minutes ?? 0)}.</p>}
+      {(data.estimated_descent_minutes ?? 0) > 0 && <p>Ски спускания с оценена приравнена скорост: {durationHms(data.estimated_descent_minutes)}.</p>}
       {data.warnings.includes("TREADMILL_GRADE_ASSUMED_FLAT")&&<p>Пътека: при липсващ запис за наклона използваме скоростта с допускане за 0% наклон.</p>}
       {data.warnings.includes("TREADMILL_PRIOR_RUN_INDEX_FALLBACK")&&<p>За пътека без предходен собствен индекс е използван предходният индекс от бягане на същия спортист.</p>}
       {data.activities.some(a=>a.reason==="SPEED_RECOMPUTATION_REQUIRED")&&<p>Има активности със стар модел. Използвай „Обнови данните“ на началния екран.</p>}
