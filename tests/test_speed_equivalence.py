@@ -13,6 +13,37 @@ def profile():
             for i in range(5)], "v10":{"status":"AVAILABLE", "duration_s":10., "speed_kmh":24., "evidence":"MEASURED"}}
 
 
+def test_known_rest_has_zero_q_and_distinct_accounting_in_single_and_aggregate_reports():
+    parameters = model.prepare(profile())
+    active = model.integrate(parameters, [{"seconds":60,"speed_kmh":15.}])
+    mixed = model.integrate(parameters, [{"seconds":60,"speed_kmh":15.},
+        {"seconds":30,"speed_kmh":4.,"exclusion_reason":"REST"}],recorded_seconds=100)
+    assert mixed["zones"] == active["zones"]
+    assert mixed["passive_rest_minutes"] == .5
+    assert mixed["accounted_minutes"] == 1.5
+    assert mixed["uncovered_minutes"] == pytest.approx(10/60)
+    assert mixed["excluded_minutes"] == 0
+    total = model.aggregate(parameters, [mixed,mixed])
+    assert total["passive_rest_minutes"] == 1.
+    assert total["accounted_minutes"] == 3.
+    assert total["uncovered_minutes"] == pytest.approx(20/60)
+
+
+def test_rest_integration_version_does_not_invalidate_approved_zone_parameters(monkeypatch):
+    parameters = model.prepare(profile())
+    monkeypatch.setattr(model,"INTEGRATION_VERSION","future-accounting-version")
+    assert model.prepare(profile())["parameters_version"] == parameters["parameters_version"]
+    result = model.integrate(parameters,[],recorded_seconds=0)
+    assert result["integration_version"] == "future-accounting-version"
+    # Plan passive rest is outside its recorded work subtotal; aggregation
+    # must not inflate coverage when combining it with execution accounting.
+    active = model.integrate(parameters,[{"seconds":60,"speed_kmh":15.}],recorded_seconds=120)
+    planned = {**active,"passive_rest_minutes":5.}
+    total = model.aggregate(parameters,[planned])
+    assert total["accounted_minutes"] == 1.
+    assert total["status"] == "PARTIAL"
+
+
 def test_all_control_examples_and_exact_proportional_case():
     p = model.prepare(profile())
     assert model.equivalent_seconds(p, 3600, 13, 15, zone="Z2") / 60 == pytest.approx(52)

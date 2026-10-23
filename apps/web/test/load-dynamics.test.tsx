@@ -63,7 +63,7 @@ it("switches cards and both charts between real independent sources, fetching on
   expect(requestedDates(fetcher.mock.calls[0][0]).get("as_of")).toBe(history.period_end);
   expect(requestedDates(fetcher.mock.calls[0][0]).has("period_start")).toBe(false);
   expect(requestedDates(fetcher.mock.calls[0][0]).has("period_end")).toBe(false);
-  expect(container.textContent).toContain("Скоростно покритие: 75%");
+  expect(container.textContent).toContain("Отчетено време по скорост: 75%");
   const z1 = container.querySelector('[aria-label="Показатели по скоростни зони"] [aria-label="Z1"]')!;
   expect(z1.textContent).toContain("Q · 7 дни0:07:00");
   expect(z1.textContent).toContain("E7 · на ден100");
@@ -134,7 +134,7 @@ it.each(["start", "end"])("resets the view and aborts its pending request when H
   expect(signal.aborted).toBe(true);
   expect(container.querySelector('button[aria-pressed="true"]')!.textContent).toBe("По пулс");
   await act(async () => resolve({ ok: true, json: async () => fixture(older) }));
-  expect(container.textContent).not.toContain("Скоростно покритие");
+  expect(container.textContent).not.toContain("Отчетено време по скорост");
   await click("Сравнение");
   expect(fetcher).toHaveBeenCalledTimes(2);
   expect(requestedDates(fetcher.mock.calls[1][0]).get("as_of")).toBe(changed.period_end);
@@ -206,13 +206,13 @@ it("resets cached views on profile or revision changes and aborts outstanding re
   await render("B", "new", 2);
   expect(signal.aborted).toBe(true);
   await act(async () => resolve({ ok: true, json: async () => fixture() }));
-  expect(container.textContent).not.toContain("Скоростно покритие");
+  expect(container.textContent).not.toContain("Отчетено време по скорост");
   expect(container.querySelector('button[aria-pressed="true"]')!.textContent).toBe("По пулс");
   fetcher.mockResolvedValue({ ok: true, json: async () => ({ ...fixture(), source_generation_id: "new", source_revision: 2 }) });
   await click("По скорост");
-  expect(container.textContent).toContain("Скоростно покритие: 75%");
+  expect(container.textContent).toContain("Отчетено време по скорост: 75%");
   await render("B", "new", 3);
-  expect(container.textContent).not.toContain("Скоростно покритие");
+  expect(container.textContent).not.toContain("Отчетено време по скорост");
 });
 
 it("does not present unavailable speed load as zero or accept a response at another analysis date", async () => {
@@ -258,4 +258,17 @@ it("uses true calendar spacing and breaks plotted lines across missing dates", a
   const coordinates = [...path.matchAll(/[ML]([\d.]+),/g)].map(match => Number(match[1]));
   expect(coordinates[1] - coordinates[0]).toBeGreaterThan(0);
   expect(coordinates[2] - coordinates[1]).toBeCloseTo(2 * (coordinates[1] - coordinates[0]));
+});
+
+
+it("discloses rest, remaining unknown time and estimated descents separately from zone time", async () => {
+  const data: SpeedLoad = {...fixture(), model_version:"independent-speed-load-causal-ti-v4-descent-rest",
+    rest_minutes:60,accounted_minutes:360,unaccounted_minutes:40,accounted_percent:90,estimated_descent_minutes:30};
+  vi.stubGlobal("fetch",vi.fn().mockResolvedValue({ok:true,json:async()=>data}));
+  await render(); await click("По скорост");
+  expect(container.textContent).toContain("Отчетено време по скорост: 90%");
+  expect(container.textContent).toContain("300 мин по зони");
+  expect(container.textContent).toContain("60 мин почивка с Q = 0");
+  expect(container.textContent).toContain("40 мин без оценка");
+  expect(container.textContent).toContain("Ски спускания: 30 мин");
 });

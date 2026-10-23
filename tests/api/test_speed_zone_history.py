@@ -87,10 +87,10 @@ def test_planning_read_phase_preserves_pinned_speed_estimates_without_retaining_
     (lambda v:v["Run"]["index_summary"]["Z2"].update(index=50),"NONMONOTONE_PAIRED_ZONE_BOUNDARIES"),
     (lambda v:v["Run"]["index_window"].update(last_activity_date="2026-08-01"),"NO_RECENT_PAIRED_INDEX"),
     (lambda v:v["Run"].update(sport="Ride"),"NO_SPORT_SPECIFIC_INDEX")])
-def test_unsupported_map_uses_no_raw_reads_and_leaves_expert_fallback(change,reason):
+def test_unsupported_map_checks_rest_only_and_leaves_active_time_for_expert_fallback(change,reason):
     source,calendar,speeds,shadow=inputs();change(speeds);repo=Repository(shadow)
     estimates,info=history.prepare_history(repo,"athlete",source,calendar,speeds,SETTINGS,TODAY)
-    assert estimates == {} and repo.calls == []
+    assert estimates == {} and repo.calls == [("athlete", (KEY,))]
     assert info["skipped"][0]["reason"] == reason
 
 
@@ -100,7 +100,6 @@ def test_unsupported_map_uses_no_raw_reads_and_leaves_expert_fallback(change,rea
     (lambda s:s.pop("speed_test_series"),"INDEPENDENT_SPEED_SERIES_REQUIRED"),
     (lambda s:s.update(timeseries=[]),"PARTIAL_HR_MASK_UNAVAILABLE"),
     (lambda s:[r.update(hr_raw_bpm=500) for r in s["timeseries"] if r["hr_raw_bpm"] is None],"NO_SUPPORTED_MISSING_HR_SPEED_INTERVALS"),
-    (lambda s:[r.update(grade_smoothed_pct=-4) for r in s["speed_test_series"]],"NO_SUPPORTED_MISSING_HR_SPEED_INTERVALS"),
     (lambda s:[r.update(vflat_b65_kmh=30) for r in s["speed_test_series"]],"NO_SUPPORTED_MISSING_HR_SPEED_INTERVALS")])
 def test_incompatible_or_missing_signals_never_become_observed_load(change,reason):
     source,calendar,speeds,shadow=inputs();change(shadow)
@@ -113,7 +112,7 @@ def test_no_hr_entire_record_still_preserves_uncovered_time_and_rejects_conflict
     source["activities"][0].update(hr_coverage_percent=0,zones=[])
     shadow["timeseries"]=[]
     result,_=history.prepare_history(Repository(shadow),"athlete",source,calendar,speeds,SETTINGS,TODAY)
-    assert result["run"]["covered_missing_minutes"] == pytest.approx(100/60)
+    assert result["run"]["covered_missing_minutes"] == pytest.approx(2.)
     shadow["timeseries"]=[{"elapsed_s":1,"hr_raw_bpm":130}]
     result,info=history.prepare_history(Repository(shadow),"athlete",source,calendar,speeds,SETTINGS,TODAY)
     assert not result and info["skipped"][0]["reason"]=="HR_MASK_COVERAGE_CONFLICT"
@@ -181,3 +180,20 @@ def test_individual_curve_boundaries_allow_missing_hr_estimation_without_z5_inde
     assert estimates["run"]["covered_missing_minutes"] == pytest.approx(59/60)
     assert estimates["run"]["provenance"]["hr"] == "INDIVIDUAL_ZONE_ESTIMATE"
     assert info["estimated_activity_count"] == 1
+
+
+def test_running_descents_cover_missing_hr_and_known_rest_needs_no_index():
+    source,calendar,speeds,shadow=inputs()
+    for row in shadow["speed_test_series"]:
+        row["grade_smoothed_pct"] = -4.
+    result,_=history.prepare_history(Repository(shadow),"athlete",source,calendar,speeds,SETTINGS,TODAY)
+    assert result["run"]["covered_missing_minutes"] == pytest.approx(59/60)
+    source["activities"][0].update(hr_coverage_percent=0,zones=[])
+    shadow["timeseries"]=[]
+    for row in shadow["speed_test_series"]:
+        row["vflat_b65_kmh"] = 4.
+    result,_=history.prepare_history(Repository(shadow),"athlete",source,calendar,{},SETTINGS,TODAY)
+    assert result["run"]["rest_missing_minutes"] == pytest.approx(2.)
+    assert result["run"]["covered_missing_minutes"] == pytest.approx(2.)
+    assert result["run"]["paired_lag_seconds"] == 0
+    assert all(z["equivalent_time_min"] == 0 for z in result["run"]["zones"])

@@ -307,3 +307,20 @@ def test_estimated_activity_and_daily_ledger_reconcile_and_invalidate_measured_f
     projected = project_history(result, contexts)
     assert projected["component_load_model"]["fingerprint"] != fingerprint
     assert {row["zone"]: row["effective_load"] for row in projected["daily"]} == daily_values
+
+
+def test_known_speed_rest_is_never_backfilled_with_expert_q():
+    repo, source = incomplete(1)
+    _, baseline = estimate.prepare(source, repo.envelope["activities"], configured(), TODAY)
+    activity = baseline["activities"][0]
+    minutes = activity["missing_minutes"]
+    speed = {activity["activity_ref"]: {
+        "covered_missing_minutes": minutes, "rest_missing_minutes": minutes,
+        "provenance": {"load": "ESTIMATED_NOT_MEASURED_HR"},
+        "zones": [{"zone": z, "raw_time_min": 0., "equivalent_time_min": 0.} for z in estimate.ZONES]}}
+    ledger, info = estimate.prepare(source, repo.envelope["activities"], configured(), TODAY, speed_estimates=speed)
+    row = info["activities"][0]
+    assert row["speed_rest_minutes"] == minutes
+    assert row["expert_covered_minutes"] == 0
+    assert sum(row["estimated_q"].values()) == 0
+    assert all(z["planning_estimated_q"] == 0 for a in ledger["activities"] if a["activity_ref"] == activity["activity_ref"] for z in a["zones"])

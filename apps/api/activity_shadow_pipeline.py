@@ -15,7 +15,8 @@ from apps.api.shadow_models.hrmod_v4 import SOURCE_COMMIT, run_hrmod_v4_shadow
 from apps.api.shadow_models.vflat_b65 import run_vflat_b65_shadow
 from apps.api.trainability import MODEL_VERSION as TRAINABILITY_MODEL_VERSION, compute_trainability
 from vflat_b65.terrain_correction import terrain_metadata
-from vflat_b65.sports import is_running, is_cycling, is_treadmill, speed_model_versions
+from vflat_b65.sports import is_running, is_cycling, is_treadmill, is_nordic, speed_model_versions
+from vflat_b65.load import VERSION as SPEED_LOAD_SAMPLES_VERSION
 from biathlon.sport_heart_rate import reference_offset, policy as sport_hr_policy
 from hrmod_lab.schemas import (
     CONFIG_VERSION as HRMOD_CONFIG_VERSION,
@@ -128,6 +129,8 @@ def activity_shadow_configuration_fingerprint(
     # key: different routes remain comparable under the same model.
     if activity_detail is not None:
         payload["vflat_terrain_metadata"] = terrain_metadata(activity_detail)
+        if is_running(sport) or is_nordic(sport):
+            payload["speed_load_samples_version"] = SPEED_LOAD_SAMPLES_VERSION
     if is_cycling(sport):
         payload["sport_hr_policy"] = sport_hr_policy(sport, zone_bounds_bpm, explicit_hrmax_bpm)
     return _canonical_hash(payload)
@@ -490,6 +493,7 @@ def compute_activity_shadow(
         "hrmod_source_commit": hrmod.get("source_commit"),
         "terrain_model_version": hrmod.get("terrain_model_version"),
         "timeseries": rows,
+        "speed_load_summary": vflat.get("speed_load_summary"),
         # Independent 1 Hz Vflat samples for maximal tests. Combined rows above
         # retain original HR timestamps and HR exclusions, so cannot supply this.
         "speed_test_series": [{
@@ -497,6 +501,10 @@ def compute_activity_shadow(
             "dt_s": r["dt_s"], "vflat_b65_kmh": _plain_number(r.get("vflat_b65_kmh")),
             "grade_smoothed_pct": _plain_number(r.get("grade_raw_pct")),
             "exclusion_reason": r.get("exclusion_reason"),
+            **({"speed_raw_kmh": _plain_number(r.get("speed_raw_kmh")),
+                "load_speed_kmh": _plain_number(r.get("load_speed_kmh")),
+                **{key: r[key] for key in ("load_status", "load_source", "load_reason")}}
+               if "load_status" in r else {}),
             **({"grade_assumed_flat": r["grade_assumed_flat"]} if "grade_assumed_flat" in r else {}),
         } for r in vflat["timeseries"]],
         "segments_15s": _segments_15s(rows),

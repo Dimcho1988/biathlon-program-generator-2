@@ -51,7 +51,9 @@ export function SpeedWorkReport({ start, end, generation, revision, totalDuratio
       </table></div>
       <p className="report-note">Q и E описват само покритото скоростно време. Двата отчета са отделни оценки на една и съща работа и не се събират. Силата и неподдържаните спортове остават в пулсовия отчет. Видът спорт включва одобрените индивидуални корекции на етикетите.</p>
       {data.status === "PARTIAL" && <p className="quality-limited">Покритието е частично: липсващите скорости, неподходящите участъци и липсващите предходни индекси не се заместват с предполагаем товар.</p>}
-      {data.activities.some(a => a.reason === "SPEED_RECOMPUTATION_REQUIRED") && <p>Има активности със стар анализ. Използвайте „Обнови данните“.</p>}
+      {(data.warnings.includes("SPEED_RECOMPUTATION_REQUIRED") || data.activities.some(a => a.reason === "SPEED_RECOMPUTATION_REQUIRED")) && <p>Има активности със стар анализ. Използвайте „Обнови данните“.</p>}
+      {data.rest_minutes !== undefined && <p>Отделно отчетена почивка с Q = 0: {durationHms(data.rest_minutes)} · време без оценка: {durationHms(data.unaccounted_minutes ?? 0)}.</p>}
+      {(data.estimated_descent_minutes ?? 0) > 0 && <p>Ски спускания с оценена приравнена скорост: {durationHms(data.estimated_descent_minutes)}.</p>}
       {data.warnings.includes("TREADMILL_GRADE_ASSUMED_FLAT") && <p>За пътека без записан наклон е приет 0% наклон.</p>}
       {data.warnings.includes("TREADMILL_PRIOR_RUN_INDEX_FALLBACK") && <p>За пътека без собствен предходен индекс е използван предходният индекс от бягане на същия спортист.</p>}
     </>}

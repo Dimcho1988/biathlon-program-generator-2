@@ -12,7 +12,7 @@ from biathlon import load_progression
 from biathlon.constants import COMPONENTS
 from biathlon.component_load import calculate_component_load
 
-VERSION = "planning-history-estimate-v4-activity-weighted-downward-tmax"
+VERSION = "planning-history-estimate-v5-known-speed-rest"
 POLICY = "RECORDED_DURATION_EXPERT_Q_WITH_RECOVERY"
 ZONES = tuple(z for z in COMPONENTS if z != "STR")
 
@@ -124,12 +124,14 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None,
     for activity, missing in candidates:
         speed = (speed_estimates or {}).get(activity["activity_ref"]) or {}
         speed_minutes = _number(speed.get("covered_missing_minutes")) or 0.
+        rest_minutes = _number(speed.get("rest_missing_minutes", 0.))
         speed_zones = {r["zone"]: r for r in speed.get("zones", []) if r.get("zone") in ZONES}
         valid_speed = (0 < speed_minutes <= missing+1e-6 and speed.get("provenance", {}).get("load") == "ESTIMATED_NOT_MEASURED_HR"
                        and all(_number(r.get("raw_time_min")) is not None and _number(r.get("equivalent_time_min")) is not None for r in speed_zones.values())
-                       and abs(sum(r["raw_time_min"] for r in speed_zones.values())-speed_minutes) < 1e-6)
+                       and rest_minutes is not None and 0 <= rest_minutes <= speed_minutes
+                       and abs(sum(r["raw_time_min"] for r in speed_zones.values())+rest_minutes-speed_minutes) < 1e-6)
         if not valid_speed:
-            speed_minutes, speed_zones = 0., {}
+            speed_minutes, speed_zones, rest_minutes = 0., {}, 0.
         else:
             diagnostics["speed_estimated_activity_count"] += 1
         remainder = max(0., missing-speed_minutes)
@@ -167,6 +169,7 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None,
         diagnostics["activities"].append({"activity_ref": activity["activity_ref"], "date": day,
                                          "missing_minutes": missing, "estimated_q": estimate,
                                          "speed_covered_minutes": speed_minutes,
+                                         "speed_rest_minutes": rest_minutes,
                                          "expert_covered_minutes": remainder,
                                          "speed_provenance": speed.get("provenance") if valid_speed else None})
     rows = [{"date": r["date"], "zone": r["zone"], "effective_load": r["effective_load"]}

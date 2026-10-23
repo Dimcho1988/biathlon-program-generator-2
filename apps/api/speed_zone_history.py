@@ -17,7 +17,7 @@ from .oauth_store import PersistentStoreFailure
 from .speed_segments import sample_intervals
 from .trainability import LAG_SECONDS, MAX_GAP_SECONDS, MIN_SECONDS_BY_BAND
 
-VERSION = "speed-zone-planning-history-v2"
+VERSION = "speed-zone-planning-history-v3-descent-rest"
 ZONES = tuple(f"Z{i}" for i in range(1, 6))
 PROVENANCE = {"speed": "MEASURED_VFLAT", "hr": "PAIRED_INDEX_ESTIMATE",
               "load": "ESTIMATED_NOT_MEASURED_HR"}
@@ -54,7 +54,7 @@ def _mapping(view, settings, today, sport):
             if z5 and z5 > upper[-1]:
                 speeds.append(z5)
                 effective_bounds.append(bounds[5])
-            return {"bounds_bpm":effective_bounds,"bounds_kmh":speeds,
+            return {"sport":sport,"bounds_bpm":effective_bounds,"bounds_kmh":speeds,
                 "last_activity_date":(view.get("index_window") or {}).get("last_activity_date"),
                 "vflat_versions":speed_model_versions(sport),"boundary_basis":"INDIVIDUAL_SPEED_ZONES",
                 "comparison_key":activity_shadow_configuration_fingerprint(bounds,settings.hrmax_bpm,sport=sport)},None
@@ -78,7 +78,7 @@ def _mapping(view, settings, today, sport):
     speeds = (100*bounds[0]/hrmax/indices[0],) + tuple(100*bounds[i+1]/hrmax/v for i, v in enumerate(indices))
     if not all(a < b for a, b in zip(speeds, speeds[1:])):
         return None, "NONMONOTONE_PAIRED_ZONE_BOUNDARIES"
-    return {"bounds_bpm": bounds, "bounds_kmh": speeds,
+    return {"sport":sport,"bounds_bpm": bounds, "bounds_kmh": speeds,
             "last_activity_date": window["last_activity_date"],
             "vflat_versions": speed_model_versions(sport),
             "comparison_key": activity_shadow_configuration_fingerprint(bounds, settings.hrmax_bpm, sport=sport)}, None
@@ -117,14 +117,19 @@ def _estimate(shadow, mapping, *, missing_minutes, coverage, elapsed):
     if reason:
         return None, reason
     totals = {z: {"zone": z, "raw_time_min": 0., "equivalent_time_min": 0.} for z in ZONES}
-    bounds, speeds = mapping["bounds_bpm"], mapping["bounds_kmh"]
+    bounds, speeds = mapping.get("bounds_bpm", ()), mapping.get("bounds_kmh", ())
+    rest = 0.
+    # Entirely absent HR needs no temporal alignment to observed HR. Retain
+    # the whole supported speed duration; partial masks retain paired TI lag.
+    lag = 0 if coverage == 0 else LAG_SECONDS
     cursor = 0
-    for left, right, speed, exclusion in sample_intervals(shadow):
-        if exclusion or right-left > MAX_GAP_SECONDS or speed is None or not speeds[0] <= speed <= speeds[-1]:
+    for left, right, speed, exclusion in sample_intervals(shadow, for_load=True, sport=mapping["sport"]):
+        if (exclusion not in (None, "REST") or right-left > MAX_GAP_SECONDS or speed is None
+                or exclusion != "REST" and (not speeds or not speeds[0] <= speed <= speeds[-1])):
             continue
         # Paired TI relates speed at t to HR at t+lag. Shift only the mask
         # overlap, and never fabricate end-of-record or paused samples.
-        left, right = max(0., left+LAG_SECONDS), min(elapsed, right+LAG_SECONDS)
+        left, right = max(0., left+lag), min(elapsed, right+lag)
         while cursor < len(spans) and spans[cursor][1] <= left:
             cursor += 1
         if cursor >= len(spans):
@@ -134,6 +139,9 @@ def _estimate(shadow, mapping, *, missing_minutes, coverage, elapsed):
             overlap += max(0., min(right, spans[i][1])-max(left, spans[i][0])); i += 1
         if overlap <= 0:
             continue
+        if exclusion == "REST":
+            rest += overlap/60.
+            continue
         index = min(len(speeds)-2, max(0, bisect_right(speeds, speed)-1))
         fraction = (speed-speeds[index])/(speeds[index+1]-speeds[index])
         estimated_hr = bounds[index]+fraction*(bounds[index+1]-bounds[index])
@@ -142,7 +150,7 @@ def _estimate(shadow, mapping, *, missing_minutes, coverage, elapsed):
             equivalence_slope(zone), is_z5=zone == "Z5")
         totals[zone]["raw_time_min"] += overlap/60.
         totals[zone]["equivalent_time_min"] += overlap/60.*coefficient
-    covered = sum(row["raw_time_min"] for row in totals.values())
+    covered = rest + sum(row["raw_time_min"] for row in totals.values())
     if covered <= 0:
         return None, "NO_SUPPORTED_MISSING_HR_SPEED_INTERVALS"
     # A mismatch is evidence of a wrong mask/ledger, not permission to scale
@@ -150,9 +158,11 @@ def _estimate(shadow, mapping, *, missing_minutes, coverage, elapsed):
     if covered > missing_minutes+1e-8:
         return None, "MISSING_HR_TIME_MASK_MISMATCH"
     provenance = {**PROVENANCE,"hr":"INDIVIDUAL_ZONE_ESTIMATE"} if mapping.get("boundary_basis") else dict(PROVENANCE)
-    return {"zones": list(totals.values()), "covered_missing_minutes": covered,
+    if (shadow.get("speed_load_summary") or {}).get("estimated_descent_duration_s", 0) > 0:
+        provenance["speed"] = "VFLAT_WITH_ESTIMATED_DESCENTS"
+    return {"zones": list(totals.values()), "covered_missing_minutes": covered, "rest_missing_minutes": rest,
             "model_version": VERSION, "provenance": provenance,
-            "equivalence_version": EQUIVALENCE_VERSION, "paired_lag_seconds": LAG_SECONDS,
+            "equivalence_version": EQUIVALENCE_VERSION, "paired_lag_seconds": lag,
             "boundary_basis": mapping.get("boundary_basis","PAIRED_INDEX_ONLY"), "boundary_speeds_kmh": list(speeds)}, None
 
 
@@ -191,9 +201,14 @@ def prepare_history(repository, alias, source, calendar, speed_by_sport, setting
             mappings[sport] = _mapping(view, settings, today, sport)
         mapping, reason = mappings[sport]
         run_key = item.get("latest_shadow_run_key")
-        if mapping is None or not run_key:
+        if not run_key or mapping is None and settings is None:
             diagnostics["skipped"].append({"activity_ref": ref, "reason": reason or "NO_PINNED_SPEED_RUN"})
             continue
+        if mapping is None:
+            # Known rest is zero Q even when active speed cannot be calibrated.
+            mapping = {"sport":sport,"vflat_versions":speed_model_versions(sport),
+                "comparison_key":activity_shadow_configuration_fingerprint(settings.zone_bounds_bpm,settings.hrmax_bpm,sport=sport),
+                "last_activity_date":None,"unavailable_reason":reason}
         elapsed = _number(item.get("elapsed_time_s")) or duration*60
         candidates.append((ref, run_key, mapping, missing, coverage, elapsed))
     if not candidates:
@@ -215,7 +230,7 @@ def prepare_history(repository, alias, source, calendar, speed_by_sport, setting
         estimate, reason = _estimate(row["shadow_payload"], mapping,
             missing_minutes=missing, coverage=coverage, elapsed=elapsed)
         if estimate is None:
-            diagnostics["skipped"].append({"activity_ref": ref, "reason": reason})
+            diagnostics["skipped"].append({"activity_ref": ref, "reason": mapping.get("unavailable_reason") or reason})
             continue
         estimates[ref] = {**estimate, "activity_ref": ref, "source_run_key": run_key,
                           "paired_index_last_activity_date": mapping["last_activity_date"]}
@@ -247,27 +262,42 @@ def exposure_history(repository, alias, view, today):
     keys = tuple(sorted({a["latest_shadow_run_key"] for a in selected if a.get("latest_shadow_run_key")}))
     samples = reader(alias,keys) if keys else {}
     totals = {z:0. for z in ZONES}
+    rest_total = estimated_total = 0.
     records = []
     for a in selected:
-        minutes = float(a.get("duration_min") or (a.get("elapsed_time_s") or 0.)/60)
-        result["recorded_minutes"] += minutes
+        minutes = max(float(a.get("duration_min") or 0.), (a.get("elapsed_time_s") or 0.)/60)
         row = samples.get(a.get("latest_shadow_run_key")) or {}
         shadow = row.get("shadow_payload") or {}
         by_zone = {z:0. for z in ZONES}
+        rest = supplied = 0.
         compatible = (row.get("activity_ref") == a.get("activity_ref")
             and (shadow.get("vflat_model_version"),shadow.get("vflat_config_version")) == speed_model_versions(a.get("sport")))
         if compatible and isinstance(shadow.get("speed_test_series"),list):
-            for left,right,speed,exclusion in sample_intervals(shadow):
+            for left,right,speed,exclusion in sample_intervals(shadow, for_load=True, sport=a.get("sport")):
+                supplied += (right-left)/60
+                if exclusion == "REST" and right-left <= MAX_GAP_SECONDS:
+                    rest += (right-left)/60
+                    continue
                 zone = speed_zones.classify(profile,speed)
                 if not exclusion and right-left <= MAX_GAP_SECONDS and zone:
                     by_zone[zone] += (right-left)/60
         covered = sum(by_zone.values())
+        minutes = max(minutes, supplied)
+        result["recorded_minutes"] += minutes
+        rest_total += rest
+        estimated = (shadow.get("speed_load_summary") or {}).get("estimated_descent_duration_s", 0.)/60 if compatible else 0.
+        estimated_total += estimated
         records.append({"activity_ref":a.get("activity_ref"),"date":a["local_date"],"sport":a.get("sport"),
             "recorded_minutes":minutes,"classified_minutes":round(covered,3),
-            "status":"CLASSIFIED" if covered else "NO_SUPPORTED_SPEED_SAMPLES",
+            "rest_minutes":round(rest,3),"accounted_minutes":round(covered+rest,3),
+            "unaccounted_minutes":round(max(0.,minutes-covered-rest),3),"estimated_descent_minutes":round(estimated,3),
+            "status":"CLASSIFIED" if covered else "REST_ONLY" if rest else "NO_SUPPORTED_SPEED_SAMPLES",
             "zones":[{"zone":z,"minutes":round(v,3)} for z,v in by_zone.items()]})
         for z,v in by_zone.items():
             totals[z] += v
     return {**result,"status":"AVAILABLE","activities":records,
+        "rest_minutes":round(rest_total,3),"accounted_minutes":round(sum(totals.values())+rest_total,3),
+        "unaccounted_minutes":round(max(0.,result["recorded_minutes"]-sum(totals.values())-rest_total),3),
+        "estimated_descent_minutes":round(estimated_total,3),
         "zones":[{"zone":z,"minutes":round(v,3)} for z,v in totals.items()],
         "classified_minutes":round(sum(totals.values()),3),"recorded_minutes":round(result["recorded_minutes"],3)}

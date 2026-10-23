@@ -17,11 +17,15 @@ def is_treadmill(sport):
     return sport_key(sport) in {"virtualrun", "treadmillrun", "treadmillrunning"}
 
 
+def is_nordic(sport):
+    return sport_key(sport) in {
+        "nordicski", "rollerski", "rollerskiing", "crosscountryskiing", "crosscountryski", "skating"}
+
+
 def speed_model_versions(sport):
     model = treadmill if is_treadmill(sport) else running if is_running(sport) else cycling if is_cycling(sport) else core
     return model.MODEL_VERSION, model.CONFIG_VERSION
 
 
 def supports_speed_load(sport):
-    return is_running(sport) or is_cycling(sport) or sport_key(sport) in {
-        "nordicski","rollerski","rollerskiing","crosscountryskiing","crosscountryski","skating"}
+    return is_running(sport) or is_cycling(sport) or is_nordic(sport)
