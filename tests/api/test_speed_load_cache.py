@@ -153,11 +153,19 @@ def test_batched_activity_cache_bounds_entries_isolates_mutation_and_retries_mis
     assert cache.get_or_compute_many(["error"], compute)[0]["value"] == ["error"]
 
 
-def test_missing_activity_does_not_disable_reuse_and_repair_invalidates_only_that_activity(monkeypatch):
+@pytest.mark.parametrize("current_samples", [False, True])
+def test_missing_activity_does_not_disable_reuse_and_repair_invalidates_only_that_activity(monkeypatch, current_samples):
     repo = Repository()
     repo.speed_load_cache_namespace = str(uuid4())
     repo.add("prior", "Run", TODAY-timedelta(days=1), 150, 15)
     repo.add("missing", "Run", TODAY, 150, 15)
+    if current_samples:
+        from vflat_b65.load import complete_load_speed
+        for stored in repo.shadows.values():
+            shadow = stored["shadow_payload"]
+            rows, summary = complete_load_speed(
+                [{**row,"speed_raw_kmh":15.} for row in shadow["speed_test_series"]],sport="Run")
+            shadow.update(speed_test_series=rows,speed_load_summary=summary)
     repo.activities[-1]["latest_shadow_run_key"] = None
     original = repo.activity_speed_exposure_samples
     reads = []
@@ -171,7 +179,9 @@ def test_missing_activity_does_not_disable_reuse_and_repair_invalidates_only_tha
     repo.activities[-1]["latest_shadow_run_key"] = "missing"
     repaired = model.history_view(repo, "authorized-athlete", today=TODAY)
     assert reads == ["prior", "missing"]
-    assert "SPEED_RECOMPUTATION_REQUIRED" not in repaired["warnings"]
+    # Repairing the pointer does not upgrade an immutable legacy analysis.
+    # Only the current load annotations clear the full-refresh notice.
+    assert ("SPEED_RECOMPUTATION_REQUIRED" not in repaired["warnings"]) == current_samples
 
 
 def test_unrelated_calendar_metadata_does_not_invalidate_activity_q(monkeypatch):
