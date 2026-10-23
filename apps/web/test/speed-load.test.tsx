@@ -191,3 +191,15 @@ it("accepts the descent/rest ledger and rejects inconsistent duration accounting
   expect(()=>parseSpeedLoad({...data,unaccounted_minutes:0})).toThrow();
   expect(()=>parseSpeedLoad({...data,estimated_descent_minutes:-1})).toThrow();
 });
+
+
+it.each(["summary","report"])("shows the load-version refresh warning in the %s even with no activity-level reason",async(view)=>{
+  vi.stubGlobal("fetch",vi.fn().mockResolvedValue({ok:true,json:async()=>({...fixture(),warnings:["SPEED_RECOMPUTATION_REQUIRED"]})}));
+  if(view==="summary") {
+    await act(async()=>root.render(<SpeedLoadSummary generation="g" revision={1}/>));
+    await act(async()=>container.querySelector("button")!.click());
+  } else {
+    await act(async()=>root.render(<SpeedWorkReport start="2026-09-01" end="2026-10-01" generation="g" revision={1} totalDuration={40}/>));
+  }
+  expect(container.textContent).toContain("Обнови данните");
+});

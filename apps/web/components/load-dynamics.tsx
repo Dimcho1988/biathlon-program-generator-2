@@ -94,6 +94,7 @@ function SpeedDynamics({ speed, history, comparison }: { speed: SpeedLoad; histo
     {speed.warnings.includes("NEGATIVE_DESCENT_RESIDUAL") && <p>При част от ски активностите остатъкът за спусканията е отрицателен. Тези участъци остават без оценка на натоварването.</p>}
     {speed.warnings.includes("TREADMILL_GRADE_ASSUMED_FLAT") && <p>Пътека: при липсващ запис за наклона използваме скоростта с допускане за 0% наклон.</p>}
     {speed.warnings.includes("TREADMILL_PRIOR_RUN_INDEX_FALLBACK") && <p>За пътека без предходен собствен индекс е използван предходният индекс от бягане на същия спортист.</p>}
+    {speed.warnings.includes("SPEED_RECOMPUTATION_REQUIRED") && <p>Има активности със стар модел. Използвай „Обнови данните“ от горния бутон.</p>}
     {speed.status === "UNAVAILABLE" ? <p className="history-unavailable">Още няма достатъчно данни за скоростен товар. Нужни са валидни индекси от предходни тренировки за същия спорт и преизчислени скорости. Липсващите стойности не означават нулево натоварване.</p> : aligned?.error ? <div className="history-unavailable"><p>{aligned.error}</p><p>По пулс: {history ? displayDate(history.period_end) : "няма данни"} · По скорост: {displayDate(speed.end_date)}</p></div> : <>
       <div className="history-explainer">
         <strong>{comparison ? "Как да сравняваш" : "Как се изчислява"}</strong>
@@ -105,7 +106,6 @@ function SpeedDynamics({ speed, history, comparison }: { speed: SpeedLoad; histo
         {comparison && <p>Q се сравнява за еднакви дати. E7, E40 и 7/40 са оценките на всеки модел; покритието и наличната история могат да се различават.</p>}
         {(short.partial || long.partial) && <p>Непълна скоростна история: {short.days}/7 и {long.days}/40 календарни дни. Седмичният еквивалент е предварителен.</p>}
         {(!short.complete || !long.complete) && <p>Липсват дневни данни; засегнатият Q не се изчислява.</p>}
-        {speed.warnings.includes("SPEED_RECOMPUTATION_REQUIRED") && <p>Има активности със стар модел. Използвай „Обнови данните“ от горния бутон.</p>}
       </div>
       <div className={`load-summary${comparison ? " load-comparison-cards" : ""}`} role="list" aria-label={comparison ? "Сравнение на показателите по зони" : "Показатели по скоростни зони"}>
         {speed.zones.map((zone, index) => {
