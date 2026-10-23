@@ -1,0 +1,503 @@
+{
+  "format": "onflows-migration-alignment-v1",
+  "source_commit": "3bb8da6c1934d5af51177173f74bb7c2d31f8094",
+  "project_ref": "xhaiawljiebclqpvyewt",
+  "observed_remote_count": 25,
+  "repository_count": 37,
+  "rename_count": 18,
+  "renames": [
+    {
+      "name": "working_role_profiles",
+      "before": "supabase/migrations/202609020002_working_role_profiles.sql",
+      "after": "supabase/migrations/20260903041531_working_role_profiles.sql",
+      "sha256": "2bb0138591943e47fce91c93e4790eef0089cf1818da50e6c00ca503a338535e",
+      "bytes": 12907
+    },
+    {
+      "name": "role_profile_security_followup",
+      "before": "supabase/migrations/202609030001_role_profile_security_followup.sql",
+      "after": "supabase/migrations/20260903041725_role_profile_security_followup.sql",
+      "sha256": "aa501811a0b5731955bd8351a994d0956a510cd5de82c85ef900cf7dfba2f8f9",
+      "bytes": 1284
+    },
+    {
+      "name": "activity_shadow_publish_timeout",
+      "before": "supabase/migrations/202609030002_activity_shadow_publish_timeout.sql",
+      "after": "supabase/migrations/20260903202048_activity_shadow_publish_timeout.sql",
+      "sha256": "a56a10fb4593286a1efb851facc31bb7d52bbf7103a326ca3f126634d322e815",
+      "bytes": 490
+    },
+    {
+      "name": "response_monitoring_v1",
+      "before": "supabase/migrations/20260909125100_response_monitoring_v1.sql",
+      "after": "supabase/migrations/20260909155610_response_monitoring_v1.sql",
+      "sha256": "42e9df1d4f77a11412366e43009aaae641c6f3d3341780c6cc0a7cf8c70b5983",
+      "bytes": 5191
+    },
+    {
+      "name": "recovery_speed_models_v2",
+      "before": "supabase/migrations/20260912130629_recovery_speed_models_v2.sql",
+      "after": "supabase/migrations/20260912132158_recovery_speed_models_v2.sql",
+      "sha256": "aca15594781f6610398e6557e88a2a334e2c31b4ebe74476662d08c23c2eaee7",
+      "bytes": 3729
+    },
+    {
+      "name": "management_drafts_v1",
+      "before": "supabase/migrations/20260921094544_management_drafts_v1.sql",
+      "after": "supabase/migrations/20260921105852_management_drafts_v1.sql",
+      "sha256": "b5c8977ca3924877e2425492a5f58d0f22b53a8847fdf72f9f8831b9fea5e680",
+      "bytes": 7593
+    },
+    {
+      "name": "management_active_v2",
+      "before": "supabase/migrations/20260921115425_management_active_v2.sql",
+      "after": "supabase/migrations/20260921124704_management_active_v2.sql",
+      "sha256": "03a74dade7379c6a3b0cb2493dfedab168e77f91d45590bce36bac27743b7cfe",
+      "bytes": 14215
+    },
+    {
+      "name": "body_observations",
+      "before": "supabase/migrations/20260927112725_body_observations.sql",
+      "after": "supabase/migrations/20260927124640_body_observations.sql",
+      "sha256": "9ce1464a7fce5d4a2e5d79902572d949589ec20be334526be5d7cb4bc514dea7",
+      "bytes": 4482
+    },
+    {
+      "name": "management_response_checkpoint",
+      "before": "supabase/migrations/20260927134122_management_response_checkpoint.sql",
+      "after": "supabase/migrations/20260927141548_management_response_checkpoint.sql",
+      "sha256": "b91bca9cf3c77c444c09a03903098b2ba78031a7d615591347d180ecda5c8edb",
+      "bytes": 13315
+    },
+    {
+      "name": "management_import_cooldown",
+      "before": "supabase/migrations/20261012230000_management_import_cooldown.sql",
+      "after": "supabase/migrations/20261012213317_management_import_cooldown.sql",
+      "sha256": "4119a5fab221748e93eff2b08a3c3c7fc7d8415046481db042342a81c5313a05",
+      "bytes": 2438
+    },
+    {
+      "name": "final_audit_planning_contract",
+      "before": "supabase/migrations/20261015094629_final_audit_planning_contract.sql",
+      "after": "supabase/migrations/20261015100739_final_audit_planning_contract.sql",
+      "sha256": "b36c17888c60e17fc170b069ef92e63a382ec97f04567da9645d0eaa987640c4",
+      "bytes": 12778
+    },
+    {
+      "name": "planning_import_fairness",
+      "before": "supabase/migrations/20261015101252_planning_import_fairness.sql",
+      "after": "supabase/migrations/20261015101426_planning_import_fairness.sql",
+      "sha256": "da276a6546f667110b138def8bf1d70a2acfcd24d4fc09b15a1e744522b6318f",
+      "bytes": 955
+    },
+    {
+      "name": "whole_microcycle_revision_capacity",
+      "before": "supabase/migrations/20261018182102_whole_microcycle_revision_capacity.sql",
+      "after": "supabase/migrations/20261018182514_whole_microcycle_revision_capacity.sql",
+      "sha256": "5695ad0667f540a62147d5fb317cf47c955d1ce2fafcc14edbeadca26b5acae5",
+      "bytes": 576
+    },
+    {
+      "name": "enforce_generation_read_contract",
+      "before": "supabase/migrations/20261019085147_enforce_generation_read_contract.sql",
+      "after": "supabase/migrations/20261019085817_enforce_generation_read_contract.sql",
+      "sha256": "86e8eadf89a900f48493e23e8d24405c86b06a6dc52137b44dae19aea68551df",
+      "bytes": 453
+    },
+    {
+      "name": "compact_management_save_response",
+      "before": "supabase/migrations/20261019091702_compact_management_save_response.sql",
+      "after": "supabase/migrations/20261019092624_compact_management_save_response.sql",
+      "sha256": "96ab5f6400059eeff8dbe505207700aa301848f4ab298e962902a9bfd52860d5",
+      "bytes": 1067
+    },
+    {
+      "name": "compact_management_overview",
+      "before": "supabase/migrations/20261019095304_compact_management_overview.sql",
+      "after": "supabase/migrations/20261019101004_compact_management_overview.sql",
+      "sha256": "d64610182c6e77517db81bc76fe51f8bbcd1b14d0dd95d25188872625cf0a2b5",
+      "bytes": 3324
+    },
+    {
+      "name": "materialize_management_overview",
+      "before": "supabase/migrations/20261019102426_materialize_management_overview.sql",
+      "after": "supabase/migrations/20261019103152_materialize_management_overview.sql",
+      "sha256": "5a1da130fe5e75d58fb650313a02a94234d7c4c15e5f5e6f0121769391d82c2c",
+      "bytes": 3418
+    },
+    {
+      "name": "unchanged_management_checks",
+      "before": "supabase/migrations/20261019110256_unchanged_management_checks.sql",
+      "after": "supabase/migrations/20261019112003_unchanged_management_checks.sql",
+      "sha256": "2c94a3ff92b644ed27ea095febbc61065406ccab8271dc782d7c473f8b23626a",
+      "bytes": 13166
+    }
+  ],
+  "original_files": [
+    {
+      "version": "202608150001",
+      "name": "cloud_oauth_pilot",
+      "path": "supabase/migrations/202608150001_cloud_oauth_pilot.sql",
+      "bytes": 2211,
+      "sha256": "3499b7a3c1e31f2d97654e237e0ec500c67870494189b10bd01e28e5c375b469"
+    },
+    {
+      "version": "202608160001",
+      "name": "multi_athlete_sessions",
+      "path": "supabase/migrations/202608160001_multi_athlete_sessions.sql",
+      "bytes": 2491,
+      "sha256": "8d647448f69b18271425476fb6a8ca34bbb5b70dce18f10f4fc73cbd29d8d955"
+    },
+    {
+      "version": "202608160002",
+      "name": "athlete_model_settings",
+      "path": "supabase/migrations/202608160002_athlete_model_settings.sql",
+      "bytes": 1191,
+      "sha256": "367a136661ca324f5537ffd321557a63232d27993f4bce42c7684303b88fedf1"
+    },
+    {
+      "version": "202608180001",
+      "name": "athlete_planning_profile",
+      "path": "supabase/migrations/202608180001_athlete_planning_profile.sql",
+      "bytes": 814,
+      "sha256": "6e03425653205ce51e56ea40f5068839e363714af81e5d84aa14221af0e0de44"
+    },
+    {
+      "version": "202608180002",
+      "name": "mesocycle_accent_preferences",
+      "path": "supabase/migrations/202608180002_mesocycle_accent_preferences.sql",
+      "bytes": 1245,
+      "sha256": "daeeeb26cb4257408d572c2911e3b14dc0184213c2db5b0c8662b74187722922"
+    },
+    {
+      "version": "202608190001",
+      "name": "planning_calendar",
+      "path": "supabase/migrations/202608190001_planning_calendar.sql",
+      "bytes": 963,
+      "sha256": "2086ad2535a2abc5721ba818c76df7cf5969df203676f069134c0f2a2ce8ada2"
+    },
+    {
+      "version": "202608220001",
+      "name": "activity_shadow_results",
+      "path": "supabase/migrations/202608220001_activity_shadow_results.sql",
+      "bytes": 4494,
+      "sha256": "76e89413b6130d2c52684dd9ee196e49f87c03cbfd3e3612cf451d102d764182"
+    },
+    {
+      "version": "202608220002",
+      "name": "explicit_athlete_hrmax",
+      "path": "supabase/migrations/202608220002_explicit_athlete_hrmax.sql",
+      "bytes": 698,
+      "sha256": "5680175b7480b95044673c87e3cda420634e3a5614833ebe77df802e2f1a415d"
+    },
+    {
+      "version": "202608230001",
+      "name": "activity_catalog",
+      "path": "supabase/migrations/202608230001_activity_catalog.sql",
+      "bytes": 7828,
+      "sha256": "bb8f7fb96fa926ce4c2f7af7bb14841994950ff73a3be81d3d60c925eb08e86b"
+    },
+    {
+      "version": "202608270001",
+      "name": "sync_queue_generations",
+      "path": "supabase/migrations/202608270001_sync_queue_generations.sql",
+      "bytes": 70784,
+      "sha256": "7941d91afc3b24aa70341e9a2cf6585a61478f6573f050ecd90f84cbce498fd2"
+    },
+    {
+      "version": "202608270002",
+      "name": "enqueue_sync_job_conflict_target",
+      "path": "supabase/migrations/202608270002_enqueue_sync_job_conflict_target.sql",
+      "bytes": 2879,
+      "sha256": "341a480ec9d55b28535afc947c713374e0b9200304a0731d5fce6bfa51416232"
+    },
+    {
+      "version": "202609020001",
+      "name": "accounts_sharing_organizations_v1",
+      "path": "supabase/migrations/202609020001_accounts_sharing_organizations_v1.sql",
+      "bytes": 15586,
+      "sha256": "754fdad557bcd1ab2d75092b2b7a2371cadaa964792027effad9a2458d2feb8a"
+    },
+    {
+      "version": "202609020002",
+      "name": "working_role_profiles",
+      "path": "supabase/migrations/202609020002_working_role_profiles.sql",
+      "bytes": 12907,
+      "sha256": "2bb0138591943e47fce91c93e4790eef0089cf1818da50e6c00ca503a338535e"
+    },
+    {
+      "version": "202609030001",
+      "name": "role_profile_security_followup",
+      "path": "supabase/migrations/202609030001_role_profile_security_followup.sql",
+      "bytes": 1284,
+      "sha256": "aa501811a0b5731955bd8351a994d0956a510cd5de82c85ef900cf7dfba2f8f9"
+    },
+    {
+      "version": "202609030002",
+      "name": "activity_shadow_publish_timeout",
+      "path": "supabase/migrations/202609030002_activity_shadow_publish_timeout.sql",
+      "bytes": 490,
+      "sha256": "a56a10fb4593286a1efb851facc31bb7d52bbf7103a326ca3f126634d322e815"
+    },
+    {
+      "version": "20260909125100",
+      "name": "response_monitoring_v1",
+      "path": "supabase/migrations/20260909125100_response_monitoring_v1.sql",
+      "bytes": 5191,
+      "sha256": "42e9df1d4f77a11412366e43009aaae641c6f3d3341780c6cc0a7cf8c70b5983"
+    },
+    {
+      "version": "20260912130629",
+      "name": "recovery_speed_models_v2",
+      "path": "supabase/migrations/20260912130629_recovery_speed_models_v2.sql",
+      "bytes": 3729,
+      "sha256": "aca15594781f6610398e6557e88a2a334e2c31b4ebe74476662d08c23c2eaee7"
+    },
+    {
+      "version": "20260921094544",
+      "name": "management_drafts_v1",
+      "path": "supabase/migrations/20260921094544_management_drafts_v1.sql",
+      "bytes": 7593,
+      "sha256": "b5c8977ca3924877e2425492a5f58d0f22b53a8847fdf72f9f8831b9fea5e680"
+    },
+    {
+      "version": "20260921115425",
+      "name": "management_active_v2",
+      "path": "supabase/migrations/20260921115425_management_active_v2.sql",
+      "bytes": 14215,
+      "sha256": "03a74dade7379c6a3b0cb2493dfedab168e77f91d45590bce36bac27743b7cfe"
+    },
+    {
+      "version": "20260925061426",
+      "name": "performance_read_projections",
+      "path": "supabase/migrations/20260925061426_performance_read_projections.sql",
+      "bytes": 5609,
+      "sha256": "3519d379651a8c97efb3fff24c3824fb4ed09c26e2505945d333dd23ce8da4d9"
+    },
+    {
+      "version": "20260927112725",
+      "name": "body_observations",
+      "path": "supabase/migrations/20260927112725_body_observations.sql",
+      "bytes": 4482,
+      "sha256": "9ce1464a7fce5d4a2e5d79902572d949589ec20be334526be5d7cb4bc514dea7"
+    },
+    {
+      "version": "20260927134122",
+      "name": "management_response_checkpoint",
+      "path": "supabase/migrations/20260927134122_management_response_checkpoint.sql",
+      "bytes": 13315,
+      "sha256": "b91bca9cf3c77c444c09a03903098b2ba78031a7d615591347d180ecda5c8edb"
+    },
+    {
+      "version": "20260930045944",
+      "name": "athlete_hr_zone_provenance",
+      "path": "supabase/migrations/20260930045944_athlete_hr_zone_provenance.sql",
+      "bytes": 2005,
+      "sha256": "cd9aaf3ca1b19ef154fab0d27f6dbf9d25ea53a4ad3e48767d267548b3f50149"
+    },
+    {
+      "version": "20261001175538",
+      "name": "athlete_activity_sport_rules",
+      "path": "supabase/migrations/20261001175538_athlete_activity_sport_rules.sql",
+      "bytes": 1301,
+      "sha256": "9b5cff3eb53c1cdc88f7cc6cca320206f1906d22249577ac315d2a11016e9477"
+    },
+    {
+      "version": "20261002184215",
+      "name": "lossless_shadow_compaction",
+      "path": "supabase/migrations/20261002184215_lossless_shadow_compaction.sql",
+      "bytes": 4006,
+      "sha256": "2ad71c8487ee420f6b1702ed04add0e301c27c1a0dc510b16b401b513371fc4e"
+    },
+    {
+      "version": "20261002204908",
+      "name": "history_archive",
+      "path": "supabase/migrations/20261002204908_history_archive.sql",
+      "bytes": 10766,
+      "sha256": "d389645c6c835e79c396ffe133fe1860fed8994246cc734fa6aec701876eca3c"
+    },
+    {
+      "version": "20261012230000",
+      "name": "management_import_cooldown",
+      "path": "supabase/migrations/20261012230000_management_import_cooldown.sql",
+      "bytes": 2438,
+      "sha256": "4119a5fab221748e93eff2b08a3c3c7fc7d8415046481db042342a81c5313a05"
+    },
+    {
+      "version": "20261015094629",
+      "name": "final_audit_planning_contract",
+      "path": "supabase/migrations/20261015094629_final_audit_planning_contract.sql",
+      "bytes": 12778,
+      "sha256": "b36c17888c60e17fc170b069ef92e63a382ec97f04567da9645d0eaa987640c4"
+    },
+    {
+      "version": "20261015101252",
+      "name": "planning_import_fairness",
+      "path": "supabase/migrations/20261015101252_planning_import_fairness.sql",
+      "bytes": 955,
+      "sha256": "da276a6546f667110b138def8bf1d70a2acfcd24d4fc09b15a1e744522b6318f"
+    },
+    {
+      "version": "20261018182102",
+      "name": "whole_microcycle_revision_capacity",
+      "path": "supabase/migrations/20261018182102_whole_microcycle_revision_capacity.sql",
+      "bytes": 576,
+      "sha256": "5695ad0667f540a62147d5fb317cf47c955d1ce2fafcc14edbeadca26b5acae5"
+    },
+    {
+      "version": "20261019085147",
+      "name": "enforce_generation_read_contract",
+      "path": "supabase/migrations/20261019085147_enforce_generation_read_contract.sql",
+      "bytes": 453,
+      "sha256": "86e8eadf89a900f48493e23e8d24405c86b06a6dc52137b44dae19aea68551df"
+    },
+    {
+      "version": "20261019091702",
+      "name": "compact_management_save_response",
+      "path": "supabase/migrations/20261019091702_compact_management_save_response.sql",
+      "bytes": 1067,
+      "sha256": "96ab5f6400059eeff8dbe505207700aa301848f4ab298e962902a9bfd52860d5"
+    },
+    {
+      "version": "20261019095304",
+      "name": "compact_management_overview",
+      "path": "supabase/migrations/20261019095304_compact_management_overview.sql",
+      "bytes": 3324,
+      "sha256": "d64610182c6e77517db81bc76fe51f8bbcd1b14d0dd95d25188872625cf0a2b5"
+    },
+    {
+      "version": "20261019102426",
+      "name": "materialize_management_overview",
+      "path": "supabase/migrations/20261019102426_materialize_management_overview.sql",
+      "bytes": 3418,
+      "sha256": "5a1da130fe5e75d58fb650313a02a94234d7c4c15e5f5e6f0121769391d82c2c"
+    },
+    {
+      "version": "20261019110256",
+      "name": "unchanged_management_checks",
+      "path": "supabase/migrations/20261019110256_unchanged_management_checks.sql",
+      "bytes": 13166,
+      "sha256": "2c94a3ff92b644ed27ea095febbc61065406ccab8271dc782d7c473f8b23626a"
+    },
+    {
+      "version": "20261019163204",
+      "name": "suspend_unsafe_generation_pruning",
+      "path": "supabase/migrations/20261019163204_suspend_unsafe_generation_pruning.sql",
+      "bytes": 346,
+      "sha256": "8dea2687b61cb5d070756b9f85f00b733a84b56ac2d4ec33b1c23dbf880584ae"
+    },
+    {
+      "version": "20261019193059",
+      "name": "protect_historical_generation_references",
+      "path": "supabase/migrations/20261019193059_protect_historical_generation_references.sql",
+      "bytes": 22139,
+      "sha256": "d23d44da0b3f020c03da2636fd4d769232cfb951f0a808c2a42444d0fbc6b05e"
+    }
+  ],
+  "missing_metadata": [
+    {
+      "version": "202608150001",
+      "name": "cloud_oauth_pilot",
+      "path": "supabase/migrations/202608150001_cloud_oauth_pilot.sql",
+      "bytes": 2211,
+      "sha256": "3499b7a3c1e31f2d97654e237e0ec500c67870494189b10bd01e28e5c375b469"
+    },
+    {
+      "version": "202608160001",
+      "name": "multi_athlete_sessions",
+      "path": "supabase/migrations/202608160001_multi_athlete_sessions.sql",
+      "bytes": 2491,
+      "sha256": "8d647448f69b18271425476fb6a8ca34bbb5b70dce18f10f4fc73cbd29d8d955"
+    },
+    {
+      "version": "202608160002",
+      "name": "athlete_model_settings",
+      "path": "supabase/migrations/202608160002_athlete_model_settings.sql",
+      "bytes": 1191,
+      "sha256": "367a136661ca324f5537ffd321557a63232d27993f4bce42c7684303b88fedf1"
+    },
+    {
+      "version": "202608180001",
+      "name": "athlete_planning_profile",
+      "path": "supabase/migrations/202608180001_athlete_planning_profile.sql",
+      "bytes": 814,
+      "sha256": "6e03425653205ce51e56ea40f5068839e363714af81e5d84aa14221af0e0de44"
+    },
+    {
+      "version": "202608180002",
+      "name": "mesocycle_accent_preferences",
+      "path": "supabase/migrations/202608180002_mesocycle_accent_preferences.sql",
+      "bytes": 1245,
+      "sha256": "daeeeb26cb4257408d572c2911e3b14dc0184213c2db5b0c8662b74187722922"
+    },
+    {
+      "version": "202608190001",
+      "name": "planning_calendar",
+      "path": "supabase/migrations/202608190001_planning_calendar.sql",
+      "bytes": 963,
+      "sha256": "2086ad2535a2abc5721ba818c76df7cf5969df203676f069134c0f2a2ce8ada2"
+    },
+    {
+      "version": "202608220001",
+      "name": "activity_shadow_results",
+      "path": "supabase/migrations/202608220001_activity_shadow_results.sql",
+      "bytes": 4494,
+      "sha256": "76e89413b6130d2c52684dd9ee196e49f87c03cbfd3e3612cf451d102d764182"
+    },
+    {
+      "version": "202608220002",
+      "name": "explicit_athlete_hrmax",
+      "path": "supabase/migrations/202608220002_explicit_athlete_hrmax.sql",
+      "bytes": 698,
+      "sha256": "5680175b7480b95044673c87e3cda420634e3a5614833ebe77df802e2f1a415d"
+    },
+    {
+      "version": "202608230001",
+      "name": "activity_catalog",
+      "path": "supabase/migrations/202608230001_activity_catalog.sql",
+      "bytes": 7828,
+      "sha256": "bb8f7fb96fa926ce4c2f7af7bb14841994950ff73a3be81d3d60c925eb08e86b"
+    },
+    {
+      "version": "202608270001",
+      "name": "sync_queue_generations",
+      "path": "supabase/migrations/202608270001_sync_queue_generations.sql",
+      "bytes": 70784,
+      "sha256": "7941d91afc3b24aa70341e9a2cf6585a61478f6573f050ecd90f84cbce498fd2"
+    },
+    {
+      "version": "202608270002",
+      "name": "enqueue_sync_job_conflict_target",
+      "path": "supabase/migrations/202608270002_enqueue_sync_job_conflict_target.sql",
+      "bytes": 2879,
+      "sha256": "341a480ec9d55b28535afc947c713374e0b9200304a0731d5fce6bfa51416232"
+    },
+    {
+      "version": "202609020001",
+      "name": "accounts_sharing_organizations_v1",
+      "path": "supabase/migrations/202609020001_accounts_sharing_organizations_v1.sql",
+      "bytes": 15586,
+      "sha256": "754fdad557bcd1ab2d75092b2b7a2371cadaa964792027effad9a2458d2feb8a"
+    }
+  ],
+  "known_sql_text_differences": [
+    {
+      "name": "enforce_generation_read_contract",
+      "difference": "Stored script omits the final LF; body unchanged."
+    },
+    {
+      "name": "suspend_unsafe_generation_pruning",
+      "difference": "Stored script omits the final LF; body unchanged."
+    },
+    {
+      "name": "activity_shadow_publish_timeout",
+      "difference": "Stored script omits explanatory leading comments and final LF; ALTER FUNCTION bytes match."
+    },
+    {
+      "name": "role_profile_security_followup",
+      "difference": "Repository guards the last REVOKE with DO/IF to_regprocedure; stored script uses a direct REVOKE. Policies/prefix match. Old SQL remains unchanged."
+    }
+  ],
+  "repair_status": "NOT_PREPARED_PENDING_FRESH_CATALOG_EQUALITY",
+  "historical_statement_execution": "Not established; a later repair would acknowledge equivalent existing schema, not claim these scripts ran verbatim."
+}
