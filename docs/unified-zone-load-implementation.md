@@ -86,7 +86,10 @@ Implementation and validation checkpoint:
   conditional HRmax RPC and matching planning/checkpoint projections. It is
   applied in staging; existing configured profiles have the approved endpoints.
   RPC role restrictions and a missing-profile conditional update are verified.
-  Synthetic transactional SQL acceptance tests are added to Database CI.
+  Synthetic transactional SQL acceptance tests pass in Database CI, including
+  a clean rebuild and the existing concurrency and immutable-history checks.
+- Pure mathematical checks run with canonical dependencies; refresh/planning
+  integration checks live in the API test partition with its own dependencies.
 
 Q definition (zone-local reference units): let l/u be the speed bounds,
 C=(1,1,1,1.2,1.5), R=C*u/l, f=(v-l)/(u-l), and W=1+f*(R-1).
@@ -114,7 +117,7 @@ Research references and interpretation:
 - V50/V6 HR anchors and within-zone coefficients remain explicit model priors.
   Z5 HR/speed interpolation is bookkeeping, not a physiological sprint-HR fit.
 
-Remaining release steps: SQL acceptance CI, PR integration, staging API/web/worker
+Remaining release steps: Python CI after test partition correction, PR integration, staging API/web/worker
 deploy and live verification.
 Production remains separate.
 
