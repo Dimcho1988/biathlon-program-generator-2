@@ -127,7 +127,9 @@ def test_history_reconstruction_preserves_work_after_a_pause(monkeypatch):
 
 def test_shadow_retains_validated_recording_intervals_without_synthesizing_raw_hr():
     from apps.api.activity_shadow_pipeline import compute_activity_shadow
-    from intervals_inspector.stream_normalizer import NormalizerInput, normalize_stream_intervals
+    from intervals_inspector.stream_normalizer import DEFAULT_CONFIG, NormalizerInput, normalize_stream_intervals
+    assert unified_load.LEGACY_SHORT_SMART_RECORDING_S == DEFAULT_CONFIG.short_smart_recording_max_sec
+    assert unified_load.LEGACY_EXTENDED_SMART_RECORDING_S == DEFAULT_CONFIG.extended_smart_recording_max_sec
     offsets = list(range(0, 61, 5))
     normalized = normalize_stream_intervals(NormalizerInput(offsets=offsets,
         metrics={"heartrate": [160.]*len(offsets)}, elapsed_time_sec=60.))

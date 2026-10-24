@@ -6,6 +6,8 @@ from .sport_heart_rate import reference_offset
 
 VERSION = "unified-leading-indicator-load-v2-recording-intervals"
 HR_INTERVAL_VERSION = "normalized-hr-recording-intervals-v1"
+LEGACY_SHORT_SMART_RECORDING_S = 5.
+LEGACY_EXTENDED_SMART_RECORDING_S = 10.
 
 
 def finite(value):
@@ -19,17 +21,17 @@ def _smart_span(row, following):
     dt = following["elapsed_s"]-row["elapsed_s"]
     if "hr_interval_classification" in row:
         return (row["hr_interval_classification"] == "smart_recording"
-                and row.get("hr_interval_end_s") == following["elapsed_s"] and 1. < dt <= 10.)
-    if dt <= 1. or dt > 10.:
+                and row.get("hr_interval_end_s") == following["elapsed_s"]
+                and 1. < dt <= LEGACY_EXTENDED_SMART_RECORDING_S)
+    if dt <= 1. or dt > LEGACY_EXTENDED_SMART_RECORDING_S:
         return False
     # Older pinned runs retain original timestamps but no interval annotation.
     # Apply the normalizer's conservative short/extended recording rules.
-    from intervals_inspector.stream_normalizer import DEFAULT_CONFIG
     if any("recording_stop" in str(flag) for r in (row, following) for flag in r.get("quality_flags", ())):
         return False
-    if 1. < dt <= DEFAULT_CONFIG.short_smart_recording_max_sec:
+    if 1. < dt <= LEGACY_SHORT_SMART_RECORDING_S:
         return True
-    return (DEFAULT_CONFIG.short_smart_recording_max_sec < dt <= DEFAULT_CONFIG.extended_smart_recording_max_sec
+    return (LEGACY_SHORT_SMART_RECORDING_S < dt <= LEGACY_EXTENDED_SMART_RECORDING_S
             and all(finite(r.get("speed_raw_kmh")) and r["speed_raw_kmh"] > 0 for r in (row, following)))
 
 
