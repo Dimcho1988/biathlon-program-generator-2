@@ -38,14 +38,8 @@ logger = logging.getLogger(__name__)
 
 
 def _automatic_hr_zone_percentages():
-    raw = os.environ.get("ONFLOWS_HRMAX_ZONE_PERCENTAGES", "").strip()
-    if not raw:
-        return None
-    try:
-        return validate_percentages(raw.split(","))
-    except (TypeError, ValueError):
-        logger.warning("Automatic HR zones disabled: invalid expert percentage configuration")
-        return None
+    from biathlon.zone_profile import HR_PERCENTAGES
+    return HR_PERCENTAGES
 
 
 def _settings_response(settings):
@@ -57,24 +51,38 @@ def _settings_response(settings):
         hr_zone_source=settings.hr_zone_source if settings else None,
         hr_zone_percentages=settings.hr_zone_percentages if settings else None,
         automatic_hr_zone_percentages=_automatic_hr_zone_percentages(),
+        age_years=settings.age_years if settings else None,
+        leading_indicator=settings.leading_indicator if settings else "HEART_RATE",
+        hrmax_source=settings.hrmax_source if settings else None,
+        hrmax_observation=dict(settings.hrmax_observation) if settings and settings.hrmax_observation else None,
     )
 
 
 def _resolve_settings(body, previous):
+    from biathlon.hrmax import tanaka
+    age = body.age_years if body.age_years is not None else previous.age_years if previous else None
+    maximum = body.hrmax_bpm
+    maximum_source = "MANUAL"
+    observation = None
+    if maximum is None:
+        if previous and previous.hrmax_bpm is not None and previous.hrmax_source != "TANAKA":
+            maximum, maximum_source, observation = previous.hrmax_bpm, previous.hrmax_source, previous.hrmax_observation
+        elif age is not None:
+            maximum, maximum_source = tanaka(age), "TANAKA"
+        elif previous:
+            maximum, maximum_source, observation = previous.hrmax_bpm, previous.hrmax_source, previous.hrmax_observation
+    elif previous and maximum == previous.hrmax_bpm:
+        maximum_source, observation = previous.hrmax_source, previous.hrmax_observation
     source = body.hr_zone_source
     if source is None:
         source = "MANUAL" if body.hr_zone_bounds_bpm is not None else (
             previous.hr_zone_source if previous else "AUTOMATIC_HRMAX"
         )
     if source == "AUTOMATIC_HRMAX":
-        percentages = (
-            previous.hr_zone_percentages
-            if previous and previous.hr_zone_source == "AUTOMATIC_HRMAX"
-            else _automatic_hr_zone_percentages()
-        )
+        percentages = _automatic_hr_zone_percentages()
         if percentages is None:
             raise ValueError("An expert HRmax zone scheme has not been configured")
-        bounds = bounds_from_hrmax(body.hrmax_bpm, percentages)
+        bounds = bounds_from_hrmax(maximum, percentages)
     else:
         percentages = None
         bounds = body.hr_zone_bounds_bpm
@@ -82,8 +90,15 @@ def _resolve_settings(body, previous):
             bounds = previous.zone_bounds_bpm
         if bounds is None:
             raise ValueError("Manual HR zone boundaries are required")
+        if maximum is not None:
+            # The common lower/upper accounting endpoints are fixed by the
+            # approved policy; individual interior thresholds remain personal.
+            import math
+            bounds = (math.floor(.45*maximum+.5), *bounds[1:5], maximum)
     return AthleteModelSettings(
-        tuple(bounds), body.timezone.strip(), body.hrmax_bpm, source, percentages
+        tuple(bounds), body.timezone.strip(), maximum, source, percentages,
+        age_years=age, leading_indicator=body.leading_indicator or (previous.leading_indicator if previous else "HEART_RATE"),
+        hrmax_source=maximum_source, hrmax_observation=observation,
     ).validate()
 
 

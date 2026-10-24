@@ -160,16 +160,15 @@ def test_direct_q_budget_counts_actual_and_multiple_proposals_once():
     assert policy.remaining_q(source,planned,TODAY,{'Z5':{'target_weekly_q':10}})=={'Z5':0}
 
 
-@pytest.mark.parametrize('hr,expected', [(180,5),(190,7.5),(200,10),(210,10)])
-def test_z5_actual_integrator_and_planner_have_identical_five_percent_units(hr,expected):
+@pytest.mark.parametrize('hr,expected', [(180,5),(190,20/3),(200,25/3),(210,25/3)])
+def test_z5_actual_integrator_and_planner_share_the_common_kernel(hr,expected):
+    from biathlon import unified_load
     settings=SimpleNamespace(zone_bounds_bpm=(100,125,145,160,180,200),hrmax_bpm=200)
-    profile=profile_from_configuration(configuration_with_hr_boundaries(settings.zone_bounds_bpm,hrmax_bpm=200))
-    observed=calculate_onflows_intrazone_load(_result(list(range(301)),[hr]*301),profile)
-    z5=next(z for z in observed['zones'] if z['zone']=='Z5')
+    measured=unified_load.integrate({"timeseries":[{"elapsed_s":t,"hr_raw_bpm":hr} for t in range(300)]},
+        bounds=settings.zone_bounds_bpm,sport="Run",duration_s=300)
     direct,_,_=engine._canonical_load([{'zone':'Z5','duration_min':5,'target_hr_bpm':hr}],settings,[],TODAY)
-    assert z5['equivalent_minutes']==pytest.approx(expected)
-    assert direct['Z5']==pytest.approx(expected)
-    assert [z.equivalence_slope_pp_per_bpm for z in profile.zones]==[3,3,3,3,5]
+    assert measured['zones'][-1]['equivalent_time_min'] == pytest.approx(expected)
+    assert direct['Z5'] == pytest.approx(expected)
 
 
 def test_new_z5_units_require_reanalysis_before_new_prescriptions():

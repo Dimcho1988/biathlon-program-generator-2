@@ -33,7 +33,7 @@ from .trainability_history import history_from_calendar, read_calendar, robust_m
 from .trainability import MIN_SECONDS_BY_BAND, MAX_GAP_SECONDS
 from .component_load_context import read_contexts
 
-VERSION="independent-speed-load-causal-ti-v4-descent-rest"
+VERSION="speed-load-common-profile-v5-relative-rest"
 COMPARISON_VERSION = speed_equivalence.VERSION
 ZONES=tuple(f"Z{i}" for i in range(1,6))
 logger = logging.getLogger("uvicorn.error")
@@ -95,7 +95,7 @@ def convert_speed(mapping, speed):
     fraction=(speed-speeds[i])/(speeds[i+1]-speeds[i])
     hr=bounds[i]+fraction*(bounds[i+1]-bounds[i])
     zone=ZONES[i]
-    coefficient=linear_equivalence_coefficient(hr,bounds[i],bounds[i+1],equivalence_slope(zone),is_z5=zone=="Z5")
+    coefficient=speed_equivalence.relative_coefficient(speed,speeds[i],speeds[i+1],zone)
     return {"zone":zone,"reference_hr_bpm":hr,"sport_hr_bpm":hr-reference_offset(mapping["sport"]),
             "coefficient":coefficient}
 
@@ -109,6 +109,14 @@ def _integration_converter(mapping):
     array dispatch. Interpolation, arithmetic order and sequential Q summation
     are unchanged; nonfinite interpolation still uses the reference function.
     """
+    if mapping.get("parameters"):
+        parameters = mapping["parameters"]
+        def convert(speed):
+            estimate = speed_equivalence.evaluate(parameters, speed)
+            if estimate.get("reason") == "ABOVE_V10_UPDATE_ANCHOR":
+                estimate = speed_equivalence.evaluate(parameters, parameters["zones"][-1]["high_kmh"])
+            return (estimate["zone"], estimate["coefficient"]) if estimate.get("status") == "AVAILABLE" else None
+        return convert
     speeds = mapping["bounds_kmh"]
     bounds = mapping["reference_bounds_bpm"]
     last = len(speeds)-2
@@ -120,14 +128,8 @@ def _integration_converter(mapping):
         i = min(last, bisect_right(speeds, speed)-1)
         fraction = (speed-speeds[i])/(speeds[i+1]-speeds[i])
         hr = bounds[i]+fraction*(bounds[i+1]-bounds[i])
-        zone, slope, low, high = prepared[i]
-        if not math.isfinite(hr):
-            coefficient = linear_equivalence_coefficient(hr, bounds[i], bounds[i+1],
-                equivalence_slope(zone), is_z5=zone == "Z5")
-        elif zone == "Z5":
-            coefficient = max(1., 1.+slope*(min(float(hr), high)-low))
-        else:
-            coefficient = min(1., max(0., 1.-slope*(high-float(hr))))
+        zone = ZONES[i]
+        coefficient = speed_equivalence.relative_coefficient(speed, speeds[i], speeds[i+1], zone)
         return zone, coefficient
     return convert
 
@@ -216,7 +218,8 @@ def _activity_record(activity, row, mapping, reason, comparison_parameters=None)
         reason = "SPEED_RECOMPUTATION_REQUIRED"
     totals = {z: {"zone": z, "minutes": 0., "equivalent_minutes": 0.} for z in ZONES}
     excluded = outside = rest = 0.
-    intervals = sample_intervals(shadow, for_load=True, sport=s) if compatible else []
+    floor = mapping["bounds_kmh"][0] if mapping else None
+    intervals = sample_intervals(shadow, for_load=True, sport=s, rest_threshold_kmh=floor) if compatible else []
     convert = _integration_converter(mapping) if mapping else lambda speed: None
     for left, right, speed, exclusion in intervals:
         dt = right-left
@@ -270,33 +273,28 @@ def _comparison_segments(intervals, parameters):
     segments = [{"seconds": right-left, "speed_kmh": speed,
                  "exclusion_reason": exclusion or ("SAMPLE_GAP" if right-left > MAX_GAP_SECONDS else None)}
                 for left, right, speed, exclusion in intervals]
-    bout = []
-    def finish():
-        if bout and sum(segments[i]["seconds"] for i in bout) <= 21.:
-            for i in bout:
-                segments[i]["exclusion_reason"] = "SHORT_Z5_BOUT_UNRESOLVED_BY_21S_VFLAT"
-        bout.clear()
-    for i, ((left, right, _, _), segment) in enumerate(zip(intervals, segments)):
+    for segment in segments:
         estimate = speed_equivalence.evaluate(parameters, segment["speed_kmh"])
-        if (estimate.get("zone") == "Z5" and estimate["status"] == "AVAILABLE"
-                and not segment["exclusion_reason"]):
-            if bout and left > intervals[bout[-1]][1]+1e-8:
-                finish()
-            bout.append(i)
-        else:
-            finish()
-    finish()
+        if estimate.get("reason") == "ABOVE_V10_UPDATE_ANCHOR":
+            segment["speed_kmh"] = parameters["zones"][-1]["high_kmh"]
     return segments
 
 
-def _activity_records(repository, alias, selected, admitted, settings, namespace, metrics=None, comparison_by_sport=None):
+def _activity_records(repository, alias, selected, admitted, settings, namespace, metrics=None, comparison_by_sport=None, causal_contexts=None):
     mapping_started = perf_counter()
     mappings, inputs = {}, []
     for activity in selected:
         day = date.fromisoformat(activity["local_date"])
         key = (activity["sport"], day)
         if key not in mappings:
-            _, mapping, reason = calibrated_mapping(admitted, activity["sport"], day, settings)
+            context = (causal_contexts or {}).get(key)
+            if context is not None:
+                profile = context.get("zone_profile") or {}
+                mapping = {**profile, "parameters": context["comparison_parameters"], "capacity_context":
+                           {k: context[k] for k in ("minutes", "sources", "references", "fingerprint")}} if profile.get("status") == "AVAILABLE" else None
+                reason = profile.get("reason") or (None if mapping else "ABSOLUTE_SPEED_EVIDENCE_REQUIRED")
+            else:
+                _, mapping, reason = calibrated_mapping(admitted, activity["sport"], day, settings)
             mappings[key] = mapping, reason
         inputs.append((activity, *mappings[key]))
     if metrics is not None:
@@ -304,7 +302,7 @@ def _activity_records(repository, alias, selected, admitted, settings, namespace
     def integrate(activity, row, mapping, reason):
         started = perf_counter()
         result = _activity_record(activity, row, mapping, reason,
-            (comparison_by_sport or {}).get(activity["sport"]))
+            (mapping or {}).get("parameters") or (comparison_by_sport or {}).get(activity["sport"]))
         if metrics is not None:
             metrics["integration_ms"] = metrics.get("integration_ms", 0.) + _elapsed_ms(started)
         return result
@@ -436,8 +434,21 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
     selected.sort(key=lambda a:(a["local_date"],a["activity_ref"]))
     namespace = getattr(repository, "speed_load_cache_namespace", None) if calendar.get("generation_id") else None
     comparisons = {s: c["comparison_parameters"] for s,c in (contexts or {}).items()
-                   if s in speed_equivalence.RUN_SPORTS and c.get("comparison_parameters")}
-    records = _activity_records(repository, alias, selected, admitted, settings, namespace, metrics, comparisons)
+                   if speed_equivalence.supports_sport(s) and c.get("comparison_parameters")}
+    causal_contexts = None
+    if hasattr(repository, "_request"):
+        from . import model_service
+        from .component_load_context import context_from_speed_view
+        inputs = model_service.speed_view_inputs(repository, alias)
+        causal_contexts = {}
+        for a in selected:
+            day = date.fromisoformat(a["local_date"])
+            key = (a["sport"], day)
+            if key not in causal_contexts:
+                view = model_service.speed_view(repository, alias, a["sport"],
+                    _inputs={**inputs, "today": day-timedelta(days=1)}, _capacity_only=True)
+                causal_contexts[key] = context_from_speed_view(view)
+    records = _activity_records(repository, alias, selected, admitted, settings, namespace, metrics, comparisons, causal_contexts)
     statistics_started = perf_counter()
     # Cache only direct Q above. Capacity changes can alter E without requiring
     # another full-resolution speed-stream read. Thresholds apply independently
@@ -447,7 +458,7 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
     for activity in records:
         direct = {z: next((b["equivalent_minutes"] for b in activity["zones"] if b["zone"] == z), 0.)
                   for z in COMPONENTS}
-        context = (contexts or {}).get(activity["sport"], {})
+        context = (activity.get("mapping") or {}).get("capacity_context") or (contexts or {}).get(activity["sport"], {})
         load = calculate_component_load(direct, context.get("minutes"),
                                         capacity_sources=context.get("sources"))
         resolved_records.append({**activity, "component_load": load})
@@ -486,6 +497,9 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
     current_indices=[]
     for s in available if sport is None else [sport]:
         indices,mapping,reason=calibrated_mapping(admitted,s,today+timedelta(days=1),settings)
+        profile = ((contexts or {}).get(s) or {}).get("zone_profile") or {}
+        if profile.get("status") == "AVAILABLE":
+            mapping, reason = profile, profile.get("reason")
         current_indices.append({"sport":s,"indices":indices,"mapping":mapping,"reason":reason,
                                 "reference_hr_bpm":settings.zone_bounds_bpm[2],
                                 "comparison_speed_kmh":speed_at_reference_hr(mapping,settings.zone_bounds_bpm[2]),
@@ -499,7 +513,7 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
             "sport":sport,"sports":available,"start_date":start.isoformat(),"end_date":today.isoformat(),
             "status":"AVAILABLE" if count and accounted>=total_recorded-1e-6 else "PARTIAL" if count else "UNAVAILABLE",
             "source_generation_id":calendar.get("generation_id"),"source_revision":calendar.get("revision"),
-            "load_role":"PARALLEL_ESTIMATE_NOT_ADDED_TO_HR","equivalence_version":EQUIVALENCE_VERSION,
+            "load_role":"INDEPENDENT_SPEED_VIEW_OF_SHARED_KERNEL","equivalence_version":speed_equivalence.VERSION,
             "component_load_version":COMPONENT_LOAD_VERSION,
             "mapping_policy":"PRIOR_40_DAYS_EXCLUDING_CURRENT_DAY_WITH_TREADMILL_RUN_FALLBACK",
             "recorded_minutes":total_recorded,"classified_minutes":covered,

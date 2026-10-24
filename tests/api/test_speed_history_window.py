@@ -157,7 +157,7 @@ def test_frozen_test_with_different_vflat_settings_cannot_use_current_index(chan
     assert result["status"] == "CALIBRATED" and result["active_test_count"] == 1
     assert result["index_summary"]["Z3"]["index"] is None
     assert result["index_admission"]["incompatible"] == 1
-    assert result["prediction"]["hr_prediction_source"] == "EXPERT_MINIMUM"
+    assert result["prediction"]["hr_prediction_source"] == "INITIAL_V50_V6_ESTIMATE"
     assert "INCOMPARABLE_INDEX_CONFIGURATION" in result["warnings"]
 
 
@@ -187,7 +187,7 @@ def test_no_recent_index_uses_explicit_expert_fallback_without_reaching_further_
     assert result["index_window"]["last_activity_date"] is None
     assert result["index_admission"]["used"] == 0
     assert all(x["index"] is None and x["count"] == 0 for x in result["index_summary"].values())
-    assert result["prediction"]["hr_prediction_source"] == "EXPERT_MINIMUM"
+    assert result["prediction"]["hr_prediction_source"] == "INITIAL_V50_V6_ESTIMATE"
 
 
 def test_window_uses_athlete_local_day_in_both_prediction_directions(monkeypatch):

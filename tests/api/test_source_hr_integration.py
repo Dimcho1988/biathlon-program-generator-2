@@ -65,8 +65,8 @@ def test_hr_source_runs_without_curve_and_keeps_full_original_rest(monkeypatch):
     assert all(b["duration_min"] == 3 and b["target_hr_bpm"] == 140 for b in rests)
     assert all(b["target_speed_kmh"] is None for b in blocks)
     direct, _, _ = engine._canonical_load(blocks, SETTINGS, [], date(2026, 10, 20))
-    expected_work = 16 * linear_equivalence_coefficient(185, 180, 190, equivalence_slope("Z4"))
-    expected_rest = 9 * linear_equivalence_coefficient(140, 100, 150, equivalence_slope("Z1"))
+    expected_work = 16 * 17/19
+    expected_rest = 9 * 140/150
     assert direct["Z4"] == pytest.approx(expected_work)
     assert direct["Z1"] == pytest.approx(expected_rest)
     assert all(direct[z] == 0 for z in ("Z2", "Z3", "Z5", "STR"))

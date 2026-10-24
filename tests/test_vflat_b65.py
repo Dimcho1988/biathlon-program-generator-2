@@ -37,7 +37,7 @@ GOLDEN = {
 def test_locked_versions_defaults_and_golden_multipliers() -> None:
     config = VFlatB65Config()
     assert MODEL_VERSION == "vflat_b65_dynamic_v5_terrain_density"
-    assert CONFIG_VERSION == "vflat_b65_config_v5_terrain_density"
+    assert CONFIG_VERSION == "vflat_b65_config_v6_relative_load_floor"
     assert config.descent_grade_weight == 1.7
     assert config.descent_grade_horizon_s == 20.0
     assert config.descent_memory_strength_kmh == 0.0

@@ -87,7 +87,7 @@ export function LoadHistorySection({ history, message }: { history: LoadHistory 
 
       <ZoneHistoryChart rows={history.daily} ratio={false} />
 
-      <div className="activities-heading"><div><p className="section-kicker">Последни сесии</p><h3>Реално → приравнено → ефективно</h3></div><p>{history.quality.limited_activities} с ограничено HR покритие · {history.quality.excluded_activities} изключени</p></div>
+      <div className="activities-heading"><div><p className="section-kicker">Последни сесии</p><h3>Реално → приравнено → ефективно</h3></div><p>{history.quality.limited_activities} с непълни данни за натоварването · {history.quality.excluded_activities} изключени</p></div>
       <div className="activity-list">
         {history.activities.slice(0, 12).map((activity) => <details key={activity.activity_ref} className="activity-row">
           <summary>

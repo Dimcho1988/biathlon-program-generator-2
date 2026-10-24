@@ -27,3 +27,12 @@ it("preserves compatibility with unstamped history and rejects malformed policy 
     expect(()=>parseLoadHistory({...version2,sport_hr_policy_version:policy})).toThrow();
   expect(()=>parseLoadHistory({...version2,sport_hr_policy_version:null,unrecognized_field:true})).toThrow(/структура/);
 });
+
+it("accepts the unified leading indicator and activity provenance from the API",()=>{
+  const selection={version:"unified-leading-indicator-load-v1",leading_indicator:"SPEED",fallback_seconds:60,unknown_seconds:0};
+  const history={...version2,load_selection:selection,activities:version2.activities.map(a=>({...a,
+    load_source:{...selection,rest_seconds:30}}))};
+  expect(parseLoadHistory(JSON.parse(JSON.stringify(history))).load_selection?.leading_indicator).toBe("SPEED");
+  expect(parseLoadHistory({...history,load_selection:null,activities:history.activities.map(a=>({...a,load_source:null}))}).activities[0].load_source).toBeNull();
+  expect(()=>parseLoadHistory({...history,load_selection:{...selection,unknown_seconds:-1}})).toThrow();
+});

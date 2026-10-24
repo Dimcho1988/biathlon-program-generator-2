@@ -124,6 +124,10 @@ def fixed_clocks(monkeypatch):
         @classmethod
         def now(cls, tz=None):
             return NOW.astimezone(tz)
+    from apps.api import actual_load_projection
+    # These query-reuse tests isolate the immutable calendar capture. The new
+    # sample ledger has separate causal reconstruction and dose integration tests.
+    monkeypatch.setattr(actual_load_projection, "reconstruct_history", lambda repo,alias,source: source)
     monkeypatch.setattr(service, "datetime", Clock)
     monkeypatch.setattr(model_service, "datetime", Clock)
 

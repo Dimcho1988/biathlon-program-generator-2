@@ -5,7 +5,7 @@ import {useState} from "react";
 import type {DosingModel} from "../lib/models";
 import {clockTime} from "../lib/speed-tests";
 
-const n=(v:number)=>new Intl.NumberFormat("bg-BG",{maximumFractionDigits:2}).format(v);
+const n=(v:number|null)=>v===null?"—":new Intl.NumberFormat("bg-BG",{maximumFractionDigits:2}).format(v);
 const series=[
   {key:"index_speed_kmh",label:"От индекса",color:"#398bff",dash:"5 4"},
   {key:"test_speed_kmh",label:"От максималните тестове",color:"#f59e0b",dash:undefined},
@@ -35,7 +35,7 @@ export function DosingCurvePanel({model}:{model:DosingModel}){
       <text x={left} y="18" fill="currentColor" fontSize="12">км/ч · равен терен</text>
     </svg></div><figcaption>Трите криви са отделни. Общата крива е работна оценка за дозиране и не представлява нов максимален тест.</figcaption></figure>
     <div className="speed-curve-readout"><strong>{clockTime(sample.duration_s)} · Обща скорост {n(sample.speed_kmh)} км/ч</strong><span>Индекс {n(sample.index_speed_kmh)} · Тестове {n(sample.test_speed_kmh)} км/ч · {sample.estimated_hr_bpm===null?"Пулс: извън поддържания обхват":`Оценен пулс ${n(sample.estimated_hr_bpm)} уд./мин`}</span><label>Разгледай общата крива<input type="range" min="0" max={points.length-1} step="1" value={Math.min(cursor,points.length-1)} onChange={e=>setCursor(Number(e.target.value))}/></label></div>
-    <h3>Горни граници на зоните за дозиране</h3><div className="activity-table-wrap"><table><thead><tr><th>Зона</th><th>Пулс</th><th>Времеви ориентир</th><th>От индекса, км/ч</th><th>От тестовете, км/ч</th><th>Обща скорост, км/ч</th></tr></thead><tbody>{zones.map(z=><tr key={z.zone}><th>{z.zone}</th><td>{n(z.hr_bpm)}</td><td>{clockTime(z.duration_s)}</td><td>{n(z.index_speed_kmh)}</td><td>{n(z.test_speed_kmh)}</td><td><strong>{n(z.speed_kmh)}</strong></td></tr>)}{last&&<tr><th>Z5</th><td>над {n(last.hr_bpm)}</td><td>Според усилието</td><td>над {n(last.index_speed_kmh)}</td><td>над {n(last.test_speed_kmh)}</td><td><strong>над {n(last.speed_kmh)}</strong></td></tr>}</tbody></table></div>
+    <h3>Горни граници на зоните за дозиране</h3><div className="activity-table-wrap"><table><thead><tr><th>Зона</th><th>Пулс</th><th>Времеви ориентир</th><th>От индекса, км/ч</th><th>От тестовете, км/ч</th><th>Обща скорост, км/ч</th></tr></thead><tbody>{zones.map(z=><tr key={z.zone}><th>{z.zone}</th><td>{n(z.hr_bpm)}</td><td>{z.duration_s===null?"Извън обхвата":clockTime(z.duration_s)}</td><td>{n(z.index_speed_kmh)}</td><td>{n(z.test_speed_kmh)}</td><td><strong>{n(z.speed_kmh)}</strong></td></tr>)}{last&&<tr><th>Z5</th><td>над {n(last.hr_bpm)}</td><td>Според усилието</td><td>над {n(last.index_speed_kmh)}</td><td>над {n(last.test_speed_kmh)}</td><td><strong>над {n(last.speed_kmh)}</strong></td></tr>}</tbody></table></div>
     <p>Времевите ориентири са оценки за непрекъсната устойчивост. Тренировъчната доза се определя отделно според метода, Q/E, 7/40, Recovery и настройките. При кратки интензивни повторения скоростта и качеството на изпълнение водят, а пулсът служи за наблюдение.</p>
   </section>;
 }

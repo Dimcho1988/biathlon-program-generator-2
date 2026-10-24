@@ -26,7 +26,7 @@ def test_sport_specific_speed_converts_to_equal_effort_with_transparent_fallback
     run=mapping("Run",5);ride=mapping("Ride",2.5)
     a=model.convert_speed(run,15);b=model.convert_speed(ride,30)
     assert a["zone"]==b["zone"]=="Z3"
-    assert a["coefficient"]==b["coefficient"]==pytest.approx(.7)
+    assert a["coefficient"]==b["coefficient"]==pytest.approx(.9375)
     assert b["sport_hr_bpm"]==143 and a["sport_hr_bpm"]==150
     assert run["uses_general_index"] and ride["uses_general_index"]
     assert model.convert_speed(ride,60) is None
@@ -90,9 +90,9 @@ def test_speed_load_is_causal_independent_and_preserves_uncovered_history():
     result=model.history_view(repo,"authorized-athlete",today=TODAY)
     assert result["classified_minutes"]==pytest.approx(20)
     assert result["recorded_minutes"]==pytest.approx(40) and result["coverage_percent"]==pytest.approx(50)
-    assert result["status"]=="PARTIAL" and result["load_role"]=="PARALLEL_ESTIMATE_NOT_ADDED_TO_HR"
+    assert result["status"]=="PARTIAL" and result["load_role"]=="INDEPENDENT_SPEED_VIEW_OF_SHARED_KERNEL"
     z3=result["zones"][2]
-    assert z3["minutes"]==pytest.approx(20) and z3["equivalent_minutes"]==pytest.approx(14)
+    assert z3["minutes"]==pytest.approx(20) and z3["equivalent_minutes"]==pytest.approx(18.75)
     assert len(result["daily"])==20  # First observed day through today, five zones.
     assert repo.__dict__==before
     # Current activity HR and same-day/future indices cannot explain its own Q.
@@ -163,7 +163,7 @@ def test_custom_report_dates_include_both_boundaries_and_prior_calibration():
     assert result["start_date"]==start.isoformat() and result["end_date"]==end.isoformat()
     assert [a["activity_ref"] for a in result["activities"]]==["first","last"]
     assert result["classified_minutes"]==pytest.approx(20)
-    assert result["zones"][2]["equivalent_minutes"]==pytest.approx(14)
+    assert result["zones"][2]["equivalent_minutes"]==pytest.approx(18.75)
     assert len(result["daily"])==15
     assert sum(d["effective_load"] for d in result["daily"] if d["zone"]=="Z3")==pytest.approx(result["zones"][2]["effective_load"])
     one=model.history_view(repo,"authorized-athlete",today=TODAY,period_start=end,period_end=end)
@@ -204,7 +204,7 @@ def test_analysis_date_matches_prior_day_default_and_excludes_later_activities()
     assert anchored["end_date"]==end.isoformat()
     assert [a["activity_ref"] for a in anchored["activities"]]==["prior","boundary"]
     assert anchored["classified_minutes"]==pytest.approx(10)
-    assert anchored["zones"][2]["equivalent_minutes"]==pytest.approx(7)
+    assert anchored["zones"][2]["equivalent_minutes"]==pytest.approx(9.375)
 
 
 @pytest.mark.parametrize("timezone_name,instant,local_day", [
@@ -321,14 +321,14 @@ def test_speed_spill_is_per_activity_and_uses_current_individual_capacity(monkey
                                  "fingerprint": str(capacities)}})
     result = model.history_view(repo, "authorized-athlete", today=TODAY)
     today = {row["zone"]: row["effective_load"] for row in result["daily"] if row["date"] == TODAY.isoformat()}
-    assert today["Z3"] == pytest.approx(14.)
+    assert today["Z3"] == pytest.approx(18.75)
     # Each Q=7 is below 50% of Tmax=20, although the daily sum is above 50%.
-    assert today["Z1"] == today["Z2"] == pytest.approx(25.2)
+    assert today["Z1"] == today["Z2"] == pytest.approx(33.75)
     assert today["Z4"] == 0.
     capacities["Z3"] = 10.
     changed = model.history_view(repo, "authorized-athlete", today=TODAY)
     today = {row["zone"]: row["effective_load"] for row in changed["daily"] if row["date"] == TODAY.isoformat()}
-    assert today["Z2"] == pytest.approx(26.6)
-    assert today["Z4"] == pytest.approx(2.8)
-    assert today["Z1"] == pytest.approx(25.2)
+    assert today["Z2"] == pytest.approx(37.5)
+    assert today["Z4"] == pytest.approx(5.625)
+    assert today["Z1"] == pytest.approx(33.75)
     assert today["Z5"] == 0.

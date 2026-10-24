@@ -18,17 +18,21 @@ def test_manual_ten_second_mean_is_separate_boundary_and_does_not_change_curve()
     sprint_id=UUID("44444444-4444-4444-8444-444444444444")
     boundary=model_service.save_manual_test(repo,"ath-test",body(test_id=sprint_id,duration_s=10.,distance_m=None,speed_kmh=32.,start_type="FLYING"),ACTOR)
     after=model_service.speed_view(repo,"ath-test","Run",duration_s=180.)
-    assert after["prediction"] == before["prediction"]
+    assert {k:after["prediction"][k] for k in ("duration_s","speed_kmh","distance_m")} == {k:before["prediction"][k] for k in ("duration_s","speed_kmh","distance_m")}
     assert after["active_test_keys"] == [main["entry_key"]]
     assert after["boundary_test_keys"] == [boundary["entry_key"]]
     assert after["speed_zones"]["v10"]["speed_kmh"] == 32.
     assert after["speed_zones"]["v10"]["evidence"] == "MEASURED"
     assert after["speed_zones"]["v10"]["start_type"] == "FLYING"
-    assert after["points"] == before["points"]
-    assert context_from_speed_view(after)["fingerprint"] == context_from_speed_view(before)["fingerprint"]
+    assert [{k:p[k] for k in ("duration_s","speed_kmh","distance_m")} for p in after["points"]] == [{k:p[k] for k in ("duration_s","speed_kmh","distance_m")} for p in before["points"]]
+    assert context_from_speed_view(after)["fingerprint"] != context_from_speed_view(before)["fingerprint"]
+    assert context_from_speed_view(after)["minutes"] == context_from_speed_view(before)["minutes"]
     from apps.api.speed_zone_history import _mapping
     from datetime import date
-    assert _mapping(after,repo.athlete_settings("ath-test"),date(2026,9,19),"Run") == _mapping(before,repo.athlete_settings("ath-test"),date(2026,9,19),"Run")
+    new_mapping=_mapping(after,repo.athlete_settings("ath-test"),date(2026,9,19),"Run")[0]
+    old_mapping=_mapping(before,repo.athlete_settings("ath-test"),date(2026,9,19),"Run")[0]
+    assert new_mapping["bounds_kmh"][:-1] == old_mapping["bounds_kmh"][:-1]
+    assert new_mapping["bounds_kmh"][-1] == 32.
     assert repo.writes[-1]["p_payload"]["boundary_only"] is True
     capacity=model_service.speed_view(repo,"ath-test","Run",_capacity_only=True)
     params=context_from_speed_view(capacity)["comparison_parameters"]
@@ -58,7 +62,7 @@ def test_actual_comparison_uses_individual_profile_without_mutating_legacy_ledge
     actual=output["activities"][0]
     assert actual["zones"] == baseline["zones"]
     assert "SPEED_TREF_NOT_MIGRATED" in comparison["warnings"]
-    assert output["load_role"] == "PARALLEL_ESTIMATE_NOT_ADDED_TO_HR"
+    assert output["load_role"] == "INDEPENDENT_SPEED_VIEW_OF_SHARED_KERNEL"
 
 
 def test_smoothed_short_sprint_is_unresolved_not_fabricated_equivalent_zero():
@@ -71,9 +75,9 @@ def test_smoothed_short_sprint_is_unresolved_not_fabricated_equivalent_zero():
     result=speed_load._activity_record(activity,row,None,None,params)["speed_equivalence_comparison"]
     assert result["recorded_minutes"] == pytest.approx(10/60)
     assert result["zones"][-1]["real_seconds"] == 10
-    assert result["zones"][-1]["equivalent_seconds"] is None
-    assert result["coverage_percent"] == 0
-    assert "SHORT_Z5_BOUT_UNRESOLVED_BY_21S_VFLAT" in result["warnings"]
+    assert result["zones"][-1]["equivalent_seconds"] == pytest.approx(18.)
+    assert result["coverage_percent"] == 100
+    assert "VFLAT_21S_SMOOTHING_NOT_VALIDATED_FOR_10S_SPRINTS" in result["warnings"]
     # The same prescribed unsmoothed plan dose is scored exactly, no actual-stream warning.
     planned=speed_equivalence.integrate(params,[{"seconds":10,"speed_kmh":24}])
     assert planned["zones"][-1]["equivalent_seconds"] == pytest.approx(18.)

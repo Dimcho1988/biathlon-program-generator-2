@@ -146,3 +146,84 @@ class Predictor:
                                      'speed_kmh':self.curve.speed(self.times[3])*3.6,'source':'Z4_SHARED_BOUNDARY',
                                      'index':None,'count':0,'reason':None,'candidate_duration_s':None,
                                      'candidate_speed_kmh':None,'candidate_reason':'Z4_SHARED_BOUNDARY'}]}
+
+
+class ZonalPredictor:
+    """Invert one common accounting profile without moving measured TI edges.
+
+    Expert duration bounds are diagnostic only. The selected continuous V(t)
+    is inverted at the accepted boundary, never used to replace that boundary.
+    Z5 interpolation is an accounting estimate, not a sprint-HR observation.
+    """
+    def __init__(self, curve, bounds, hrmax, indices, *, expert_durations=None,
+                 normalization_offset_bpm=0., sport="Run", tests=(), profile=None):
+        from copy import deepcopy
+        from . import zone_profile
+        from .speed_duration import with_ten_second_tail
+        curve = with_ten_second_tail(curve)
+        self.curve = curve
+        self.bounds = tuple(float(v) for v in bounds)
+        self.hrmax = float(hrmax)
+        self.normalization_offset_bpm = float(normalization_offset_bpm)
+        self.profile = deepcopy(profile) if profile and profile.get("version") == zone_profile.VERSION and profile.get("status") == "AVAILABLE" else zone_profile.build(curve,
+            tuple(v+self.normalization_offset_bpm for v in self.bounds),
+            self.hrmax+self.normalization_offset_bpm, indices, sport=sport, tests=tests)
+        if self.profile["status"] != "AVAILABLE":
+            raise ValueError(self.profile.get("reason") or "Common profile unavailable")
+        self.min_hr, self.max_hr = self.bounds[0], self.bounds[-1]
+        self.speed_range = (self.profile["bounds_kmh"][0], self.profile["bounds_kmh"][-1])
+        self.anchors = []
+        for i, zone in enumerate(("Z1", "Z2", "Z3", "Z4")):
+            speed = self.profile["bounds_kmh"][i+1]
+            try:
+                duration = curve.inverse(speed/3.6)
+            except (ValueError, ArithmeticError):
+                duration = None
+            source = self.profile["zones"][i]["boundary_source"]
+            self.anchors.append({"zone": zone, "hr_bpm": self.bounds[i+1],
+                "duration_s": duration, "speed_kmh": speed,
+                "duration_min_s": TMAX_RANGES_S[zone][0], "duration_max_s": TMAX_RANGES_S[zone][1],
+                "candidate_duration_s": duration, "candidate_speed_kmh": speed,
+                "candidate_reason": "BOUNDARY_PRESERVED", "source": "INDEX" if "INDEX" in source else source,
+                "boundary_source": source, "index": (indices.get(zone) or {}).get("index"),
+                "count": (indices.get(zone) or {}).get("count", 0), "reason": None})
+        self.times = tuple(a["duration_s"] for a in self.anchors)
+
+    def zone_index(self, hr):
+        return min(4, max(0, bisect_right(self.bounds, hr)-1))
+
+    def speed_for_hr(self, hr):
+        from .zone_profile import speed_for_hr
+        return speed_for_hr(self.profile, hr+self.normalization_offset_bpm)
+
+    def hr_for_speed(self, speed):
+        from .zone_profile import hr_for_speed
+        return hr_for_speed(self.profile, speed)-self.normalization_offset_bpm
+
+    def duration(self, hr):
+        return self.curve.inverse(self.speed_for_hr(hr)/3.6)
+
+    def hr_for_duration(self, duration):
+        return self.hr_for_speed(self.curve.speed(duration)*3.6)
+
+    def metadata(self, hr):
+        zone = self.zone_index(hr)
+        row = self.profile["zones"][zone]
+        return {"hr_prediction_source": "INDEX" if "INDEX" in row["source"] else row["source"], "hr_prediction_reason":
+                "Z5_ACCOUNTING_ESTIMATE_NOT_PHYSIOLOGICAL_INVERSION" if zone == 4 else None,
+                "zone": row["zone"]}
+
+    def summary(self):
+        from .zone_profile import VERSION as PROFILE_VERSION
+        shared = {**self.anchors[3], "zone": "Z5", "hr_bpm": self.bounds[4],
+                  "source": "Z4_SHARED_BOUNDARY", "index": None, "count": 0}
+        return {"model_version": PROFILE_VERSION, "hr_range_bpm": [self.min_hr, self.max_hr],
+                "hr_reference_offset_bpm": self.normalization_offset_bpm,
+                "curve_duration_range_s": [self.curve.times[0], self.curve.times[-1]],
+                "curve_speed_range_kmh": [self.curve.speed(self.curve.times[-1])*3.6,
+                                           self.curve.speed(self.curve.times[0])*3.6],
+                "speed_range_kmh": list(self.speed_range), "zones": self.anchors+[shared],
+                "conflicting_zones": [], "expert_duration_conflicts": [],
+                "equivalence_slope_percent_per_bpm": None,
+                "z5_equivalence_slope_percent_per_bpm": None,
+                "profile_version": self.profile["parameters_version"], "hr_is_estimate": True}

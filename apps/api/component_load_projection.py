@@ -76,13 +76,17 @@ def project_history(source, contexts_by_sport):
             persisted_activity_e[day][row["zone"]].append(_number(row.get("effective_load"), "activity effective load"))
         sport = activity.get("sport")
         context = contexts_by_sport.get(sport)
+        observed_context = (activity.get("load_source") or {}).get("capacity_context")
+        if observed_context:
+            context = observed_context
         if context is None:
             raise ValueError(f"Missing component capacity context for {sport}")
         result = calculate_component_load(q, context["minutes"], capacity_sources=context["sources"])
-        if any(q.values()):
+        if any(q.values()) or activity.get("load_source"):
             observed_q_days.add(day)
         per_activity.append(result["effective"])
-        activity_inputs.append({"ref": activity.get("activity_ref"), "date": day, "sport": sport, "q": q})
+        activity_inputs.append({"ref": activity.get("activity_ref"), "date": day, "sport": sport, "q": q,
+                                "capacity": context.get("fingerprint")})
     for day, row in original.iterrows():
         key = day.date().isoformat()
         # Compare like with like: both sides still use the persisted load rule.
@@ -130,7 +134,8 @@ def project_history(source, contexts_by_sport):
 def project_snapshot(repository, alias, snapshot, *, contexts_by_sport=None, speed_by_sport=None):
     if not snapshot or not snapshot.get("load_history"):
         return snapshot
-    source = snapshot["load_history"]
+    from .actual_load_projection import reconstruct_history
+    source = reconstruct_history(repository, alias, snapshot["load_history"])
     sports = list(dict.fromkeys(a["sport"] for a in source.get("activities", [])))
     if contexts_by_sport is None:
         if callable(getattr(repository, "_request", None)) or speed_by_sport is not None:
@@ -151,6 +156,12 @@ def project_snapshot(repository, alias, snapshot, *, contexts_by_sport=None, spe
             current = summaries[row["zone"]]
             row["status_7_40"] = current["status_7_40"]
             row["tref_min"] = current["tref_min"]
+    latest = max(projected.get("activities", ()), key=lambda a: (a["date"], a["activity_ref"]), default=None)
+    if latest and latest.get("load_source"):
+        zones = {z["zone"]: z for z in latest["zones"]}
+        for row in (out.get("training_status") or {}).get("zones", []):
+            row["raw_time_min"] = zones[row["zone"]]["raw_time_min"]
+            row["equivalent_time_min"] = zones[row["zone"]]["equivalent_time_min"]
     return out
 
 

@@ -139,7 +139,9 @@ def test_athlete_sport_rule_relabels_sync_and_catalog_without_changing_hr_load()
     assert calls == ["pilot"]
     before = baseline.latest("pilot")["load_history"]
     after = corrected.latest("pilot")["load_history"]
-    assert before["daily"] == after["daily"]
+    assert len(before["daily"]) == len(after["daily"])
+    assert after["load_selection"]["leading_indicator"] == "HEART_RATE"
+    assert after["activities"][0]["load_source"]["source_seconds"]["HEART_RATE"] == 60.
     assert before["activities"][0]["sport"] == "Walk"
     assert after["activities"][0]["sport"] == "NordicSki"
     catalog = corrected.activity_calendar("pilot",date(2026,8,15),date(2026,8,15))

@@ -20,7 +20,7 @@ from .terrain_correction import terrain_correction
 
 
 MODEL_VERSION = "vflat_b65_dynamic_v5_terrain_density"
-CONFIG_VERSION = "vflat_b65_config_v5_terrain_density"
+CONFIG_VERSION = "vflat_b65_config_v6_relative_load_floor"
 
 # Authoritative B65 multipliers supplied for the locked model.  Above +5%,
 # these anchors define the approved literature reference curve used by the
@@ -88,7 +88,7 @@ class VFlatB65Config:
     transition_accel_scale_mps2: float = 0.10
     transition_decay_s: float = 18.0
 
-    min_speed_kmh: float = 5.0
+    min_speed_kmh: float = 0.0
     turn_threshold_deg: float = 55.0
     min_segment_coverage: float = 0.60
 

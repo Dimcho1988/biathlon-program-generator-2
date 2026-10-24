@@ -240,7 +240,7 @@ def test_shared_zone_volume_keeps_tests_and_hr_mapping_sport_specific(monkeypatc
                 {"name":zone,"valid":True,"hr_seconds":600,"index":100*hr/190/v}
                 for zone,v,hr in (("Z1",sports[sport][2]*.6,115),("Z2",sports[sport][2],135),
                                   ("Z3",sports[sport][2]*1.2,152))],
-            "general":{"name":"GENERAL","valid":False}}} for sport in keys}
+            "general":{"name":"GENERAL","valid":True,"hr_seconds":600,"index":100*135/190/sports[sport][2]}}} for sport in keys}
     repo.trainability_summaries=summaries
     expected={"Z1":2400*7/history_days,"Z2":1800*7/history_days,"Z3":0,"Z4":0,"Z5":0}
     models=[]

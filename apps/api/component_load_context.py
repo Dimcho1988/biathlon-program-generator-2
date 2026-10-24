@@ -14,7 +14,7 @@ from biathlon import dosing_curve, hr_speed, preliminary_capacity, speed_duratio
 from .speed_load_cache import SpeedLoadCache
 
 
-VERSION = "component-load-capacity-curve-first-v1"
+VERSION = "component-load-common-profile-v2"
 COMPARISON_CONTEXT_VERSION = speed_equivalence.VERSION
 ZONES = ("Z1", "Z2", "Z3", "Z4", "Z5")
 _context_cache = SpeedLoadCache(max_entries=32, ttl_seconds=300)
@@ -79,6 +79,14 @@ def context_from_speed_view(view=None):
     """
     view = view or {}
     curve, hr_model, curve_source = _selected_curve(view)
+    if curve is not None and hr_model is None:
+        # Absolute speed evidence alone is not an HR-boundary observation.
+        # Keep HR-only load available with explicit expert continuous capacity.
+        profile = (view.get("dosing_model") or {}).get("speed_zones") or view.get("speed_zones")
+        if profile and profile.get("status") == "UNAVAILABLE":
+            curve, curve_source = None, None
+        else:
+            raise ComponentCapacityUnavailable()
     anchors = {row.get("zone"): row for row in
                (view.get("preliminary_capacity") or {}).get("anchors", ())}
     references = {}
@@ -115,7 +123,17 @@ def context_from_speed_view(view=None):
             try:
                 seconds = curve.inverse(float(speed) / 3.6)
             except (ValueError, ArithmeticError) as exc:
-                raise ComponentCapacityUnavailable(reference_zone) from exc
+                anchor = anchors.get(reference_zone) or {}
+                seconds = anchor.get("duration_s") or sum(hr_speed.TMAX_RANGES_S[reference_zone])/2
+                if not _positive(seconds):
+                    raise ComponentCapacityUnavailable(reference_zone) from exc
+                minutes[zone] = float(seconds)/60
+                sources[zone] = "EXPERT_CONTINUOUS_TMAX"
+                references[zone] = {"reference_zone": reference_zone,
+                    "reference_edge": "LOWER_SHARED_Z4" if zone == "Z5" else "UPPER",
+                    "reference_speed_kmh": float(speed), "reference_source": row.get("source"),
+                    "reference_reason": "BOUNDARY_OUTSIDE_CURVE_DOMAIN", "is_estimate": True}
+                continue
             if not _positive(seconds):
                 raise ComponentCapacityUnavailable(reference_zone)
             minutes[zone] = float(seconds) / 60
@@ -145,6 +163,7 @@ def context_from_speed_view(view=None):
                if curve_source == "BLENDED_DOSING_CURVE" else view.get("speed_zones"))
     comparison = speed_equivalence.prepare(profile, sport=view.get("sport"),
         curve_version=result["curve_model_version"])
+    result["zone_profile"] = profile
     result["fingerprint"] = sha256(json.dumps(result, sort_keys=True, separators=(",", ":"),
                                                 allow_nan=False).encode()).hexdigest()
     # Source identities are provenance, not physiological parameters: refreshing

@@ -221,6 +221,6 @@ def test_other_sports_never_receive_running_weights(source):
         {"sport": "NordicSki", "blocks": [work()]}]}], {}, source=source)
     planned = result["sports"][0]["planned"]
     assert planned["status"] == "UNAVAILABLE"
-    assert "RUN_ONLY" in planned["warnings"]
-    assert result["sports"][0]["actual"]["reason"] == "RUN_ONLY"
-    assert all(row["actual_equivalent_minutes"] is None for row in result["sports"][0]["targets"])
+    assert "INVALID_ZONE_BOUNDARIES" in planned["warnings"]
+    assert result["sports"][0]["actual"]["reason"] == ("EXECUTION_SOURCE_UNAVAILABLE" if source is None else None)
+    assert all(row["actual_equivalent_minutes"] is None if source is None else row["actual_equivalent_minutes"] == 0 for row in result["sports"][0]["targets"])

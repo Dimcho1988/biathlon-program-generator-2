@@ -47,19 +47,22 @@ def test_exact_30_70_mean_preserves_both_sources_and_both_inverses():
         curve.speed(curve.times[-1]*1.01)
 
 
-def test_hr_coordinates_are_preserved_instead_of_cancelling_the_blend():
-    view = example()
-    curve = dosing_curve.from_view(view)
-    predictor = dosing_curve.Predictor(curve, BOUNDS, 205, INDICES,
-        expert_durations={a["zone"]: a["duration_s"] for a in view["preliminary_capacity"]["anchors"]})
+def test_paired_speed_edges_are_preserved_when_capacity_uses_the_blend():
+    view=example()
+    curve=dosing_curve.from_view(view)
+    predictor=dosing_curve.Predictor(curve,BOUNDS,205,INDICES)
     for row in view["dosing_model"]["zone_comparison"]:
-        hr, t = row["hr_bpm"], row["duration_s"]
-        assert predictor.duration(hr) == pytest.approx(t)
-        assert predictor.speed_for_hr(hr) == pytest.approx(.3*row["index_speed_kmh"]+.7*row["test_speed_kmh"])
-        assert predictor.hr_for_speed(predictor.speed_for_hr(hr)) == pytest.approx(hr)
-        assert row["source"] == "COACH_INDEX_TEST_BLEND"
+        hr,t=row["hr_bpm"],row["duration_s"]
+        expected=100*hr/205/INDICES[row["zone"]]["index"]
+        assert predictor.speed_for_hr(hr) == pytest.approx(expected)
+        assert predictor.hr_for_speed(expected) == pytest.approx(hr)
+        assert row["source"] == "INDEX"
+        if t is None:
+            with pytest.raises(ValueError): predictor.duration(hr)
+        else:
+            assert predictor.duration(hr) == pytest.approx(t)
+            assert curve.speed(t)*3.6 == pytest.approx(expected)
     assert all(p["evidence"] == "COACH_BLEND_ESTIMATE" for p in view["dosing_model"]["points"])
-    assert any(p["estimated_hr_bpm"] is None for p in view["dosing_model"]["points"])
 
 
 def test_missing_or_nonmaximal_source_cannot_be_presented_as_a_blend():

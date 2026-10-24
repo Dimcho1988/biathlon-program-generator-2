@@ -28,11 +28,12 @@ def test_load_and_test_selection_are_separate_and_rest_survives_without_a_mappin
     strict = speed_segments.sample_intervals(shadow)
     load = speed_segments.sample_intervals(shadow,for_load=True,sport="Run")
     assert strict[0][3] == "DOWNHILL"
-    assert [r[3] for r in load] == ["REST","REST"]
+    assert [r[3] for r in load] == [None,"REST"]
+    assert [r[3] for r in speed_segments.sample_intervals(shadow,for_load=True,sport="Run",rest_threshold_kmh=5.)] == ["REST","REST"]
     result = speed_load._activity_record({"activity_ref":"run","sport":"Run","local_date":TODAY.isoformat(),"duration_min":2/60},
         {"activity_ref":"run","shadow_payload":shadow},None,"NO_PRIOR_SPORT_INDEX")
-    assert result["rest_minutes"] == pytest.approx(2/60)
-    assert result["unaccounted_minutes"] == 0
+    assert result["rest_minutes"] == pytest.approx(1/60)
+    assert result["unaccounted_minutes"] == pytest.approx(1/60)
     assert result["classified_minutes"] == 0
     assert all(z["equivalent_minutes"] == 0 for z in result["zones"])
     assert shadow == original
@@ -49,7 +50,7 @@ def test_ski_balanced_descent_enters_q_but_never_speed_tests_and_roundtrips_stor
     assert record["estimated_descent_minutes"] == 1.
     assert record["unaccounted_minutes"] == pytest.approx(1.)  # Declared but unrecorded time is not rest.
     assert record["zones"][1]["minutes"] == pytest.approx(1.)  # Residual 13 km/h -> Z2.
-    assert record["zones"][1]["equivalent_minutes"] == pytest.approx(.7)
+    assert record["zones"][1]["equivalent_minutes"] == pytest.approx(13/14)
     test = speed_segments.measure(speed_segments.sample_intervals(restored),0,240)
     assert test["excluded_seconds"]["downhill"] == 60
     assert test["measured_duration_s"] == 180
@@ -81,7 +82,7 @@ def test_running_downhill_flows_to_q_e_and_7_40_without_mutating_hr_observations
     assert view["rest_minutes"] == pytest.approx(1.)
     assert view["accounted_percent"] == pytest.approx(100.)
     assert view["status"] == "AVAILABLE"
-    assert view["zones"][2]["equivalent_minutes"] == pytest.approx(6.3)
+    assert view["zones"][2]["equivalent_minutes"] == pytest.approx(8.4375)
     assert view["zones"][2]["effective_load"] > 0
     assert view["zones"][2]["ratio_7_40"] is not None
     assert repo.__dict__ == original

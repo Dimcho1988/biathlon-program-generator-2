@@ -29,6 +29,7 @@ export interface ActivityZoneLoad {
 }
 
 export interface LoadHistoryActivity {
+  load_source?: {version:string; leading_indicator:"HEART_RATE"|"SPEED"; fallback_seconds:number; unknown_seconds:number; rest_seconds:number; [key:string]:unknown} | null;
   activity_ref: string;
   date: string;
   sport: string;
@@ -84,6 +85,7 @@ export interface ComponentLoadModel {
 }
 
 export interface LoadHistory {
+  load_selection?: {version:string; leading_indicator:"HEART_RATE"|"SPEED"; fingerprint?:string; fallback_seconds:number; unknown_seconds:number; [key:string]:unknown} | null;
   component_load_model?: ComponentLoadModel | null;
   schema_version: "load-history-v1" | "load-history-v2";
   athlete_id: string;
@@ -111,7 +113,7 @@ const legacyRootKeys = ["schema_version", "athlete_id", "period_start", "period_
 const rootKeys = [...legacyRootKeys, "strength"];
 const legacyRootKeysWithTrefProfile = [...legacyRootKeys, "tref_bounds_profile_version"];
 const rootKeysWithTrefProfile = [...rootKeys, "tref_bounds_profile_version"];
-const equivalenceKeys = ["equivalence_version", "zone_bounds_bpm", "hrmax_bpm", "sport_hr_policy_version"];
+const equivalenceKeys = ["equivalence_version", "zone_bounds_bpm", "hrmax_bpm", "sport_hr_policy_version", "load_selection"];
 const qualityKeys = ["processed_activities", "limited_activities", "excluded_activities", "no_activity_days", "warnings"];
 const summaryKeys = ["zone", "e7_daily", "e40_daily", "status_7_40", "tref_min", "history_reliability"];
 const dailyKeys = ["date", "zone", "effective_load", "e7_daily", "e40_daily", "status_7_40"];
@@ -147,6 +149,10 @@ export function parseLoadHistory(value: unknown): LoadHistory {
     : exactKeys(core, rootKeys) || exactKeys(core, legacyRootKeys) ||
       exactKeys(core, rootKeysWithTrefProfile) || exactKeys(core, legacyRootKeysWithTrefProfile);
   if (!validRoot) throw new Error("Невалидна структура на историята.");
+  const validSelection = (item:unknown) => item == null || isRecord(item)
+    && typeof item.version === "string" && ["HEART_RATE","SPEED"].includes(String(item.leading_indicator))
+    && [item.fallback_seconds,item.unknown_seconds].every(v=>finite(v)&&v>=0);
+  if (!validSelection(value.load_selection)) throw new Error("Невалиден водещ показател в историята.");
   if (value.component_load_model != null) {
     const model = value.component_load_model;
     if (!isRecord(model) || typeof model.version !== "string" || !model.version.trim() ||
@@ -213,7 +219,8 @@ export function parseLoadHistory(value: unknown): LoadHistory {
   if (!Array.isArray(value.activities)) throw new Error("Невалиден списък с активности.");
   const references = new Set<string>();
   const activities = value.activities.map((item) => {
-    if (!isRecord(item) || (!exactKeys(item, activityKeys) && !exactKeys(item, legacyActivityKeys)) || typeof item.activity_ref !== "string" || !item.activity_ref ||
+    const activityCore = isRecord(item) ? Object.fromEntries(Object.entries(item).filter(([key])=>key!=="load_source")) : item;
+    if (!isRecord(item) || (!exactKeys(activityCore, activityKeys) && !exactKeys(activityCore, legacyActivityKeys)) || !validSelection(item.load_source) || typeof item.activity_ref !== "string" || !item.activity_ref ||
         references.has(item.activity_ref) || !isCalendarDate(item.date) || typeof item.sport !== "string" || !item.sport ||
         !optionalFinite(item.duration_min) || (finite(item.duration_min) && item.duration_min < 0) ||
         !(item.strength_time_min === undefined || (finite(item.strength_time_min) && item.strength_time_min >= 0)) ||

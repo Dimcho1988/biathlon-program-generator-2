@@ -5,7 +5,7 @@ Provider credentials stop at :func:`refresh`; downstream code receives an
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
@@ -443,6 +443,7 @@ def dataset_to_load_history(
                 hr_coverage_percent=_bounded_percentage(
                     activity.hr_coverage_percent, "activity HR coverage"
                 ),
+                load_source=getattr(activity, "load_source", None) if isinstance(getattr(activity, "load_source", None), dict) else None,
                 zones=[
                     ActivityZoneLoad(
                         zone=zone,
@@ -541,7 +542,14 @@ def dataset_to_load_history(
     )
 
     from biathlon.sport_heart_rate import VERSION as SPORT_HR_VERSION
+    selected_sources = [a.load_source for a in activities if a.load_source]
     return LoadHistoryResponse(
+        load_selection=({"version": selected_sources[0]["version"],
+            "leading_indicator": selected_sources[0]["leading_indicator"],
+            "fallback_seconds": sum(s["fallback_seconds"] for s in selected_sources),
+            "unknown_seconds": sum(s["unknown_seconds"] for s in selected_sources),
+            "profile_policy": "PRIOR_DATE_CALIBRATION_CURRENT_SETTINGS",
+            "calibration_eligible": False} if selected_sources else None),
         component_load_model={"version": COMPONENT_LOAD_VERSION,
                               "contexts_by_sport": getattr(dataset, "component_load_contexts", None) or {},
                               "scope": "ACTIVITY"},
@@ -1207,7 +1215,8 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
     from intervals_inspector.intervals_client import IntervalsAPIError, IntervalsClient
     from intervals_inspector.real_data_source import load_real_history
     from intervals_inspector.shadow_model import configuration_with_hr_boundaries
-    provider = client or IntervalsClient(token, context.provider_athlete_id)
+    from .provider_replay import ProviderReplay
+    provider = ProviderReplay(client or IntervalsClient(token, context.provider_athlete_id))
     end = period_end or date.today(); start = end.fromordinal(end.toordinal() - days + 1)
     stage = "athlete"
     try:
@@ -1246,6 +1255,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         catalog_provider_keys: dict[str, str] = {}
         shadow_runs: dict[str, str] = {}
         scientific_input_hashes: dict[str, str] = {}
+        observed_hrmax_candidates = []
         identity_secret = env.get("ONFLOWS_ACTIVITY_ID_SECRET", "").strip() or salt
         from .activity_sport_rules import apply_sport_rules
         rules_reader = getattr(repository, "activity_sport_rules", None)
@@ -1315,11 +1325,20 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 ):
                     existing_run_key = str(existing_run["run_key"])
                     shadow_runs[activity_ref] = existing_run_key
+                    samples_reader = getattr(repository, "activity_speed_history_samples", None)
+                    load_shadow = None
+                    if callable(samples_reader):
+                        stored = samples_reader(context.public_alias, (existing_run_key,)).get(existing_run_key)
+                        if stored and stored.get("activity_ref") == activity_ref:
+                            load_shadow = stored.get("shadow_payload")
+                    if load_shadow:
+                        record_observed_peak(load_shadow, activity_ref, detail.get("type"))
                     return {
                         "status": "unchanged",
                         "run_key": existing_run_key,
                         "experimental": True,
                         "affects_canonical_load": False,
+                        "_unified_load_shadow": load_shadow,
                     }
             immutable_input, derived = compute_activity_shadow(
                 detail=detail,
@@ -1334,15 +1353,45 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 derived_payload=derived,
             )
             shadow_runs[activity_ref] = run_key
+            record_observed_peak(derived, activity_ref, detail.get("type"))
             return {
                 "status": "published",
                 "run_key": run_key,
                 "experimental": True,
                 "affects_canonical_load": False,
+                "_unified_load_shadow": derived,
             }
+
+        def record_observed_peak(shadow, activity_ref, sport):
+            from biathlon.hrmax import observed_peak
+            from biathlon.sport_heart_rate import reference_offset
+            candidate = observed_peak(shadow.get("timeseries", ()), offset_bpm=reference_offset(sport))
+            if candidate is not None:
+                observed_hrmax_candidates.append({**candidate, "activity_ref": activity_ref, "sport": sport})
 
         from .component_load_context import context_from_speed_view, read_contexts
         load_capacity_contexts = {}
+        historical_load_contexts = {}
+        speed_inputs = None
+        def activity_load_context(sport, day):
+            nonlocal speed_inputs
+            from . import model_service
+            if not callable(getattr(repository, "_request", None)):
+                return load_capacity_for_sport(sport)
+            if speed_inputs is None:
+                speed_inputs = model_service.speed_view_inputs(repository, context.public_alias)
+            identity = (sport, day)
+            if identity not in historical_load_contexts:
+                view = model_service.speed_view(repository, context.public_alias, sport,
+                    _inputs={**speed_inputs, "today": day-timedelta(days=1)}, _capacity_only=True)
+                value = context_from_speed_view(view)
+                from biathlon import speed_equivalence, unified_load
+                if speed_equivalence.supports_sport(sport):
+                    value = {**value, "unified_load_version": unified_load.VERSION,
+                        "reference_bounds_bpm": list(context.zone_bounds_bpm),
+                        "leading_indicator": getattr(athlete_settings, "leading_indicator", "HEART_RATE")}
+                historical_load_contexts[identity] = value
+            return historical_load_contexts[identity]
         def load_capacity_for_sport(sport):
             if sport not in load_capacity_contexts:
                 if callable(getattr(repository, "athlete_settings", None)):
@@ -1352,19 +1401,40 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                     # store. This is an explicit expert mode, not a catch for
                     # errors reading an existing model from persistence.
                     load_capacity_contexts[sport] = context_from_speed_view({"sport": sport})
+                from biathlon import speed_equivalence, unified_load
+                if speed_equivalence.supports_sport(sport):
+                    load_capacity_contexts[sport].update(unified_load_version=unified_load.VERSION,
+                        reference_bounds_bpm=list(context.zone_bounds_bpm),
+                        leading_indicator=getattr(athlete_settings, "leading_indicator", "HEART_RATE"))
             return load_capacity_contexts[sport]
 
-        dataset = load_real_history(provider, profile_identifier=context.provider_athlete_id,
+        def calculate_dataset():
+            return load_real_history(provider, profile_identifier=context.provider_athlete_id,
                                     session_salt=salt, parameters=parameters,
                                     period_end=end, days=days, loaded_at_utc=now,
                                     configuration=configuration_with_hr_boundaries(context.zone_bounds_bpm, hrmax_bpm=context.hrmax_bpm),
                                     load_capacity_resolver=load_capacity_for_sport,
+                                    activity_load_context_resolver=activity_load_context,
                                     activity_shadow_processor=process_activity_shadow,
                                     activity_ref_resolver=resolve_activity_ref,
                                     activity_metadata_collector=collect_activity_metadata,
                                     activity_detail_transformer=(
                                         lambda detail: apply_sport_rules(detail, sport_rules)
                                     ) if sport_rules else None)
+        dataset = calculate_dataset()
+        candidate = max(observed_hrmax_candidates, key=lambda c: c["reference_hrmax_bpm"], default=None)
+        increase = getattr(repository, "increase_athlete_hrmax", None)
+        if candidate and callable(increase) and candidate["reference_hrmax_bpm"] >= (context.hrmax_bpm or context.zone_bounds_bpm[-1])+1:
+            increase(context.public_alias, candidate, expected_hrmax=context.hrmax_bpm)
+            updated = repository.athlete_settings(context.public_alias)
+            if updated and (updated.hrmax_bpm != context.hrmax_bpm or updated.zone_bounds_bpm != context.zone_bounds_bpm):
+                athlete_settings = updated
+                context = replace(context, hrmax_bpm=updated.hrmax_bpm, zone_bounds_bpm=updated.zone_bounds_bpm)
+                load_capacity_contexts.clear()
+                historical_load_contexts.clear()
+                speed_inputs = None
+                dataset = calculate_dataset()
+        provider.close()
         catalog_rows: list[Mapping[str, Any]] = []
         for activity in dataset.activities.itertuples(index=False):
             metadata = catalog_metadata.get(str(activity.activity_ref))

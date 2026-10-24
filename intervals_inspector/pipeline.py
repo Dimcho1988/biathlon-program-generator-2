@@ -224,6 +224,7 @@ def process_activity_payloads(
     propagate_shadow_processor_errors: bool = False,
     zone_tmax_minutes: Mapping[str, float] | None = None,
     capacity_sources: Mapping[str, str] | None = None,
+    unified_load_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate, normalize, adapt, and model one already-loaded activity."""
 
@@ -277,7 +278,26 @@ def process_activity_payloads(
     if shadow_processor is not None:
         try:
             shadow_status = shadow_processor(detail_payload, interval_result)
-            summary["activity_shadow_status"] = dict(shadow_status)
+            shadow_status = dict(shadow_status)
+            load_shadow = shadow_status.pop("_unified_load_shadow", None)
+            summary["activity_shadow_status"] = shadow_status
+            if unified_load_context is not None and isinstance(load_shadow, Mapping):
+                from biathlon.unified_load import apply_to_summary
+                if summary.get("shadow_model_comparison") is None:
+                    # Missing HR can still have a complete speed ledger. Keep
+                    # the genuine causal Tref calculation, not zero placeholders.
+                    from .shadow_model import calculate_shadow_result
+                    reference = calculate_shadow_result(summary["onflows_load_analysis"], configuration,
+                        prior_daily_effective_load=prior_experimental_effective_load,
+                        activity_date=canonical_input.activity_date,
+                        zone_tmax_minutes=zone_tmax_minutes, capacity_sources=capacity_sources)
+                    summary["shadow_model_comparison"] = {"baseline": {"rows": []}, "experimental": reference}
+                apply_to_summary(summary, load_shadow, unified_load_context,
+                    bounds=unified_load_context["reference_bounds_bpm"],
+                    sport=str(detail_payload.get("type") or "Unknown"),
+                    leading_indicator=unified_load_context["leading_indicator"],
+                    duration_s=max(float(detail_payload.get("elapsed_time") or 0.),
+                                   float(detail_payload.get("moving_time") or 0.)))
         except Exception:
             if propagate_shadow_processor_errors:
                 raise

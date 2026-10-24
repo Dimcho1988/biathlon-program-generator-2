@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
-from biathlon import planning_schedule
+from biathlon import planning_schedule, speed_equivalence
 from .component_load_context import read_contexts
 from .management_plan_store import PlanStore
 from .management_store import ManagementStore
@@ -71,7 +71,7 @@ def view(repository, alias, *, kind, revision, start_date=None, now=None):
     days = deepcopy(plan["days"])
     sports = {session.get("sport") for day in days for session in planning_schedule.day_sessions(day)
               if session.get("sport")}
-    running_sports = sports & {"Run", "VirtualRun"}
+    running_sports = {s for s in sports if speed_equivalence.supports_sport(s)}
     activities = []
     generation = None
     if first <= through and running_sports:

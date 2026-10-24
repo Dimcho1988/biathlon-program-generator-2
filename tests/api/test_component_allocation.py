@@ -249,7 +249,7 @@ def test_automatic_q_targets_match_outlook_and_no_micro_sessions(monkeypatch):
 
 
 @pytest.mark.parametrize("long_day", [None, 5])
-def test_feasible_automatic_q_target_is_realized_without_filling_e_headroom(monkeypatch, long_day):
+def test_automatic_q_target_keeps_whole_session_minimum_without_filling_e_headroom(monkeypatch, long_day):
     # Isolate volume allocation from the separately tested Recovery role gate.
     from tests.api.test_readiness_adaptive_plan_v2 import fixed_readiness
     fixed_readiness(monkeypatch, 100.)
@@ -275,12 +275,14 @@ def test_feasible_automatic_q_target_is_realized_without_filling_e_headroom(monk
     plan = run(monkeypatch, p, repo)
     row = plan["allocation"]["components"]["Z1"]
     assert row["basis"] == "DIRECT_Q"
-    assert 0 <= row["remaining"] < .5
+    assert 0 <= row["remaining"] < 9.  # Below the complete ten-minute recovery dose.
     assert row["target_q"] == plan["long_term"]["weeks"][0]["components"]["Z1"]["target_period_q"]
     # The 50-Q activity ledger leaves a substantial separate E ceiling after
     # the direct objective is met; it must not be filled automatically.
     assert row["unallocated_effective"] > 40
-    assert not plan["allocation"]["has_unallocated_load"]
+    assert plan["allocation"]["has_unallocated_load"] == (row["remaining"] >= .5)
+    if row["remaining"] >= .5:
+        assert any(r["code"] == "DIRECT_Q_PROGRESSION_BUDGET" for d in plan["days"] for r in d.get("rejected_alternatives",[]))
     if long_day is not None:
         long = next(d for d in plan["days"] if (TODAY+timedelta(days=plan["days"].index(d))).weekday() == long_day)
         assert any(s["zone"] == "Z1" and s["purpose"] != "RECOVERY" and s["main_work_minutes"] >= 60 for s in long["sessions"])

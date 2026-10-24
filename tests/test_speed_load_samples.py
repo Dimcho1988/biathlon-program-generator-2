@@ -26,7 +26,7 @@ def test_45_minutes_known_and_15_descent_preserve_vflat_and_balance_identical_ti
     assert info["estimated_descent_duration_s"] == 900
 
 
-@pytest.mark.parametrize("known,expected,status", [(20.,4.,"REST"),(64/3,0.,"REST"),(19.,7.,"ACTIVE")])
+@pytest.mark.parametrize("known,expected,status", [(20.,4.,"ACTIVE"),(64/3,0.,"REST"),(19.,7.,"ACTIVE")])
 def test_low_residual_is_rest_but_retains_numeric_speed_for_balance(known, expected, status):
     rows, info = complete_load_speed([sample(vflat=known) for _ in range(3)] + [sample(grade=-4)], sport="NordicSki")
     assert info["balance_status"] == "BALANCED"
@@ -52,13 +52,13 @@ def test_raw_rest_grade_boundary_quality_and_zero_duration_have_distinct_roles()
               sample(grade=-5., exclusion="TURN"), sample(grade=-5., raw=None),
               sample(grade=-5., dt=0.), sample(grade=-5., dt=30.)]
     rows, info = complete_load_speed(source, sport="RollerSki")
-    assert rows[0]["load_status"] == "REST" and rows[0]["load_speed_kmh"] == 4.9
+    assert rows[0]["load_status"] == "UNAVAILABLE" and rows[0]["load_speed_kmh"] is None
     assert rows[1]["load_status"] == "ACTIVE" and rows[1]["load_source"] == "VFLAT"
     assert rows[2]["load_source"] == "DESCENT_BALANCE"
     assert all(r["load_status"] == "UNAVAILABLE" for r in rows[3:])
-    assert info["balance_duration_s"] == 3
+    assert info["balance_duration_s"] == 2
     assert info["descent_duration_s"] == 1
-    assert info["excluded_interval_s"] == 2
+    assert info["excluded_interval_s"] == 3
 
 
 def test_fractional_intervals_weight_the_residual_and_running_keeps_measured_downhill():

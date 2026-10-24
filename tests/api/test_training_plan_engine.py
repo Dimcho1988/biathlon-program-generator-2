@@ -116,9 +116,10 @@ def supported_speed(settings):
     tests = [{"duration_s": 600., "speed_kmh": 22., "maximal": True, "test_mode": "STRICT"},
              {"duration_s": 7200., "speed_kmh": 15., "maximal": True, "test_mode": "STRICT"}]
     curve = speed_duration.calibrated(tests)
-    index = (100*settings.zone_bounds_bpm[3]/settings.hrmax_bpm)/(curve.speed(3000)*3.6)
-    indices = {"Z3": {"index": index, "count": 3}}
-    predictor = hr_speed.Predictor(curve, settings.zone_bounds_bpm, settings.hrmax_bpm, indices)
+    durations=(15300.,9900.,3150.,1500.)
+    indices={f"Z{i+1}":{"index":100*settings.zone_bounds_bpm[i+1]/settings.hrmax_bpm/(curve.speed(t)*3.6),
+                         "count":3,"seconds":1800.} for i,t in enumerate(durations)}
+    predictor = hr_speed.ZonalPredictor(curve, settings.zone_bounds_bpm, settings.hrmax_bpm, indices)
     return {"status": "CALIBRATED", "model_version": speed_duration.VERSION,
             "hr_model": predictor.summary(),
             "active_test_keys": ["a", "b"], "tests": [{"entry_key": key, "payload": t} for key, t in zip(("a", "b"), tests)],

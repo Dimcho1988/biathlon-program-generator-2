@@ -20,7 +20,7 @@ def finite(value):
     return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
 
 
-def sample_intervals(shadow, *, for_load=False, sport=None):
+def sample_intervals(shadow, *, for_load=False, sport=None, rest_threshold_kmh=None):
     """Select load estimates explicitly; tests always retain observed Vflat."""
     independent = shadow.get("speed_test_series")
     load_annotations = (for_load and (is_running(sport) or is_nordic(sport))
@@ -53,8 +53,11 @@ def sample_intervals(shadow, *, for_load=False, sport=None):
             # shared test filter was discarding these intervals from load.
             if is_running(sport) and reason == "DOWNHILL":
                 reason = "INVALID" if not finite(speed) or speed < 0 or row.get("exclusion_reason") else None
-            if reason is None and speed < REST_SPEED_KMH:
+            if reason is None and speed <= 0:
                 reason = "REST"
+        if (for_load and finite(speed) and speed >= 0 and finite(rest_threshold_kmh)
+                and speed < rest_threshold_kmh and reason in {None, "REST"}):
+            reason = "REST"
         left = max(left, previous_right)
         if right > left:
             result.append((left, right, speed if finite(speed) and (speed >= 0 if for_load else speed > 0) else None, reason))

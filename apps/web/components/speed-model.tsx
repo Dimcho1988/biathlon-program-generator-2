@@ -6,7 +6,7 @@ import {SpeedLoadSummary} from "./speed-load-summary";
 import Link from "next/link";
 import {useState} from "react";
 import {useRouter} from "next/navigation";
-import {saveModel,type SpeedModel,type SpeedTest,type Prediction} from "../lib/models";
+import {saveModel,type SpeedModel,type SpeedTest,type Prediction,type AccountingPrediction} from "../lib/models";
 import {HrSpeedZones} from "./hr-speed-zones";
 import {SpeedTestEditor} from "./speed-test-editor";
 import {clockTime,manualClockTime,manualTestPayload} from "../lib/speed-tests";
@@ -18,7 +18,8 @@ import {AthleteFunctionalProfile} from "./athlete-functional-profile";
 const n=(v:number)=>new Intl.NumberFormat("bg-BG",{maximumFractionDigits:2}).format(v);
 const time=clockTime;
 const evidenceLabels={MEASURED:"Реален максимален тест",INTERPOLATED:"Оценка между реалните тестове",EXTRAPOLATED:"Прогноза извън реалните тестове",ESTIMATED:"Предварителна оценка"};
-function evidenceLabel(point:Prediction,model:SpeedModel){
+function evidenceLabel(point:Prediction|AccountingPrediction,model:SpeedModel){
+  if(point.evidence==="ACCOUNTING_PROFILE_ESTIMATE")return "Зонална оценка; времевият капацитет е извън обхвата на кривата.";
   if(point.evidence)return evidenceLabels[point.evidence];
   if(model.status==="PRELIMINARY")return evidenceLabels.ESTIMATED;
   const window=model.curve_metadata?.measured_window_s;
@@ -82,7 +83,7 @@ export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minu
 
     </section>
     <section className="history-section"><h2>{exploratory?"Пробна прогноза":"Прогноза"}</h2><form method="get" className="model-controls"><input type="hidden" name="sport" value={model.sport}/><label>Известна величина<select name="input" value={input} onChange={e=>setInput(e.target.value)}><option value="minutes">Време, минути</option><option value="km">Дистанция, километри</option><option value="speed">Скорост, км/ч</option><option value="hr" disabled={!model.hr_model}>Пулс, уд./мин{!model.hr_model?" · няма връзка пулс–скорост":""}</option></select></label><label>Стойност<input name="value" type="number" min={limits[0]} max={limits[1]} step="any" value={value} onChange={e=>setValue(e.target.value)} required/></label><button className="action-button" disabled={!canPredict} aria-describedby="speed-prediction-help">Изчисли</button></form><p id="speed-prediction-help">{hrUnavailable?"За прогноза по пулс е нужна валидна връзка пулс–скорост. Избери време, дистанция или скорост.":!canPredict?<>Провери или <a href="#speed-tests">добави максимален тест</a> за {model.sport}, за да получиш индивидуална прогноза.</>:`Обхват: ${n(limits[0]!)}–${n(limits[1]!)} ${input==="minutes"?"минути":input==="km"?"км":input==="hr"?"уд./мин":"км/ч"}.`}</p>{["OUTSIDE_PREDICTION_RANGE","INVALID_PREDICTION_INPUT"].includes(model.prediction_error??"")&&<p role="alert">Стойността е извън допустимия обхват или е невалидна. Провери величината и стойността; формата и кривата остават достъпни.</p>}
-      {canPredict&&model.prediction&&<dl className="model-prediction"><div><dt>Максимална продължителност</dt><dd>{time(model.prediction.duration_s)}</dd></div><div><dt>Скорост</dt><dd>{n(model.prediction.speed_kmh)} км/ч</dd></div><div><dt>Дистанция</dt><dd>{n(model.prediction.distance_m/1000)} км</dd></div><div><dt>Оценен пулс</dt><dd>{model.prediction.estimated_hr_bpm===null?"Извън наличната HR–скоростна база":`${n(model.prediction.estimated_hr_bpm)} уд/мин`}</dd></div></dl>}
+      {canPredict&&model.prediction&&<dl className="model-prediction"><div><dt>Максимална продължителност</dt><dd>{model.prediction.duration_s === null ? "Извън обхвата на кривата" : time(model.prediction.duration_s)}</dd></div><div><dt>Скорост</dt><dd>{n(model.prediction.speed_kmh)} км/ч</dd></div><div><dt>Дистанция</dt><dd>{model.prediction.distance_m === null ? "—" : `${n(model.prediction.distance_m/1000)} км`}</dd></div><div><dt>Оценен пулс</dt><dd>{model.prediction.estimated_hr_bpm===null?"Извън наличната HR–скоростна база":`${n(model.prediction.estimated_hr_bpm)} уд/мин`}</dd></div></dl>}
       {canPredict&&model.prediction&&<p className="speed-prediction-evidence">{evidenceLabel(model.prediction,model)}{model.prediction.capped?" · достигнато ограничение на допълнителното отклонение":""}</p>}
       {canPredict&&model.prediction?.hr_prediction_source === "EXPERT_MIDPOINT" && <p role="status">Използван е ориентир по времевите граници за {model.prediction.zone}: индексът липсва или не съответства на допустимата продължителност.</p>}
       <p><strong>Максималната продължителност не е тренировъчна доза.</strong> Работата и интервалите се определят отделно според метода, приравнения обем Q, 7/40, Recovery и настройките.</p>

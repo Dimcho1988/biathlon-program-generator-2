@@ -109,6 +109,9 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ v
       initialHrmax={settings.hrmax_bpm}
       initialSource={settings.hr_zone_source}
       initialPercentages={settings.hr_zone_percentages}
+      initialAge={settings.age_years}
+      initialIndicator={settings.leading_indicator}
+      initialHrmaxSource={settings.hrmax_source}
       automaticPercentages={settings.automatic_hr_zone_percentages}
     />;
   }

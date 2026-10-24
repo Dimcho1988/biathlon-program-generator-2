@@ -1,4 +1,4 @@
-"""Versioned, local RUN speed-equivalent time; never an energy measurement.
+"""Shared multisport HR/Vflat equivalent-time kernel; not measured energy.
 
 The settings are expert weights at each zone's upper edge. They are not the
 legacy HR-equivalence slopes. All speeds are km/h, all internal time is seconds.
@@ -10,12 +10,60 @@ from hashlib import sha256
 import json
 import math
 
-VERSION = "run-local-speed-equivalence-v1-2026-10-20"
-INTEGRATION_VERSION = "run-local-speed-integration-v2-known-rest"
-SETTINGS_VERSION = "expert-run-weights-2026-10-20-v1"
+VERSION = "common-zone-equivalence-v2-2026-10-24"
+INTEGRATION_VERSION = "common-zone-integration-v3-relative-rest"
+SETTINGS_VERSION = "expert-multisport-weights-2026-10-24-v2"
 ZONES = tuple(f"Z{i}" for i in range(1, 6))
 COEFFICIENTS = dict(zip(ZONES, (1., 1., 1., 1.2, 1.5)))
 RUN_SPORTS = {"Run", "VirtualRun"}
+
+
+def supports_sport(sport):
+    from .sport_heart_rate import is_cycling, sport_key
+    return is_cycling(sport) or sport_key(sport) in {
+        "run", "running", "trailrun", "trailrunning", "virtualrun", "trackrun",
+        "trackrunning", "roadrun", "roadrunning", "crosscountryrun", "crosscountryrunning",
+        "treadmillrun", "treadmillrunning", "jogging", "nordicski", "rollerski",
+        "rollerskiing", "crosscountryskiing", "crosscountryski", "skating"}
+
+
+def relative_coefficient(value, low, high, zone, *, boundary_ratio=None, expert_coefficient=None):
+    """One kernel for either coordinate, with a common speed-boundary ratio.
+
+    HR-only cold starts use their own boundary ratio explicitly; no absolute
+    speed is invented. When a speed profile exists, HR receives its ratio.
+    """
+    if not all(positive(v) for v in (value, low, high)) or high <= low or zone not in COEFFICIENTS:
+        return None
+    if value < low or value > high:
+        return None
+    ratio = boundary_ratio if positive(boundary_ratio) else high/low
+    upper_weight = (expert_coefficient if positive(expert_coefficient) else COEFFICIENTS[zone])*ratio
+    fraction = (value-low)/(high-low)
+    weight = 1.+fraction*(upper_weight-1.)
+    return weight if zone == "Z5" else weight/upper_weight
+
+
+def evaluate_hr(parameters, hr_bpm, *, bounds=None, offset_bpm=0., zone=None):
+    """Evaluate measured HR against the same profile and kernel as Vflat."""
+    edges = bounds
+    if edges is None:
+        return {"status": "UNAVAILABLE", "reason": "HR_PROFILE_REQUIRED"}
+    value = hr_bpm+offset_bpm if positive(hr_bpm) else None
+    if value is None:
+        return {"status": "UNAVAILABLE", "reason": "INVALID_HR"}
+    if value < edges[0]:
+        return {"status": "REST", "coefficient": 0., "zone": None}
+    index = ZONES.index(zone) if zone in ZONES else min(4, bisect_right(edges[1:5], value))
+    zone = ZONES[index]
+    value = min(value, edges[-1])
+    row = next((r for r in (parameters or {}).get("zones", ()) if r["zone"] == zone), {})
+    ratio = row.get("boundary_ratio") if row.get("status") == "AVAILABLE" else None
+    coefficient = relative_coefficient(value, edges[index], edges[index+1], zone, boundary_ratio=ratio,
+        expert_coefficient=row.get("coefficient") if ratio is not None else None)
+    return {"status": "AVAILABLE" if coefficient is not None else "UNAVAILABLE",
+            "zone": zone, "coefficient": coefficient,
+            "basis": "COMMON_SPEED_PROFILE" if ratio is not None else "HR_ONLY_RELATIVE_BOUNDS"}
 
 
 def positive(value):
@@ -53,7 +101,7 @@ def prepare(profile=None, *, sport="Run", tref_minutes=None, tref_version=None, 
     rows = {row.get("zone"): row for row in profile.get("zones", ())}
     output = []
     warnings = ["EXPERT_WEIGHTS_NOT_MEASURED_ENERGY", "LOCAL_REFERENCES_NOT_CONTINUOUS_ENERGY_CURVE",
-                "LEGACY_HR_AND_SPEED_LOADS_RETAINED"]
+                "SHARED_WITH_SELECTED_LOAD_LEDGER"]
     if not tref_minutes:
         warnings.append("SPEED_TREF_NOT_MIGRATED")
     v10_evidence = profile.get("v10") or {}
@@ -72,7 +120,7 @@ def prepare(profile=None, *, sport="Run", tref_minutes=None, tref_version=None, 
         low = float(low) if isinstance(low, (int, float)) and not isinstance(low, bool) and math.isfinite(low) and low >= 0 else None
         high = float(high) if isinstance(high, (int, float)) and not isinstance(high, bool) and math.isfinite(high) and high >= 0 else None
         c = float(coefficients[zone])
-        reason = ("RUN_ONLY" if sport not in RUN_SPORTS else
+        reason = ("UNSUPPORTED_SPORT" if not supports_sport(sport) else
                   "SPEED_ZONE_PROFILE_UNAVAILABLE" if profile.get("status") != "AVAILABLE" else
                   "NONPOSITIVE_LOWER_BOUND" if not positive(low) else
                   "V10_REQUIRED" if zone == "Z5" and not positive(high) else
@@ -134,13 +182,16 @@ def evaluate(parameters, speed_kmh, *, zone=None):
     """
     if not positive(speed_kmh):
         return {"status": "UNAVAILABLE", "reason": "INVALID_SPEED", "zone": zone}
-    if parameters.get("sport") not in RUN_SPORTS:
-        return {"status": "UNAVAILABLE", "reason": "RUN_ONLY", "zone": zone}
+    if not supports_sport(parameters.get("sport")):
+        return {"status": "UNAVAILABLE", "reason": "UNSUPPORTED_SPORT", "zone": zone}
     if zone is None:
         boundaries = parameters.get("classification_bounds_kmh")
         if not boundaries:
             return {"status": "UNAVAILABLE", "reason": "INVALID_ZONE_BOUNDARIES", "zone": None}
         zone = ZONES[bisect_right(boundaries, speed_kmh)]
+        first = parameters["zones"][0].get("low_kmh")
+        if positive(first) and speed_kmh < first:
+            return {"status": "REST", "reason": "BELOW_RELATIVE_SPEED_FLOOR", "zone": None, "coefficient": 0.}
     row = next((r for r in parameters["zones"] if r["zone"] == zone), None)
     if row is None:
         return {"status": "UNAVAILABLE", "reason": "INVALID_ZONE", "zone": None}
@@ -192,6 +243,9 @@ def integrate(parameters, segments, *, recorded_seconds=None, warnings=(), fallb
             rest += seconds
             continue
         estimate = evaluate(parameters, segment.get("speed_kmh"))
+        if estimate["status"] == "REST":
+            rest += seconds
+            continue
         zone = estimate.get("zone")
         if zone in totals:
             totals[zone]["real_seconds"] += seconds

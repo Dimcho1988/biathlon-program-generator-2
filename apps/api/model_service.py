@@ -49,8 +49,15 @@ def _dosing_boundary(dosing, zone_profile):
     """Measured V10 is an independent boundary, not a fitted curve anchor."""
     v10 = (zone_profile or {}).get("v10") or {}
     if v10.get("evidence") == "MEASURED" and (dosing.get("speed_zones") or {}).get("status") == "AVAILABLE":
+        if v10["speed_kmh"] <= dosing["speed_zones"]["bounds_kmh"][-2]:
+            return {**dosing, "status": "UNAVAILABLE", "reason": "V10_BELOW_Z5_BOUNDARY", "speed_zones": None, "hr_model": None}
         dosing["speed_zones"]["v10"] = deepcopy(v10)
         dosing["speed_zones"]["zones"][-1]["high_kmh"] = v10["speed_kmh"]
+        dosing["speed_zones"]["bounds_kmh"][-1] = v10["speed_kmh"]
+        dosing["speed_zones"]["supported_z5_high_kmh"] = v10["speed_kmh"]
+        dosing["speed_zones"]["parameters_version"] = sha256(json.dumps(
+            {k:v for k,v in dosing["speed_zones"].items() if k != "parameters_version"},
+            sort_keys=True, allow_nan=False, separators=(",", ":")).encode()).hexdigest()
     return dosing
 
 
@@ -344,14 +351,22 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
             warnings.append(model_error)
     else:
         tuned=prior["curve"]
+    tuned = speed_duration.with_ten_second_tail(tuned)
     # History has already positioned the preliminary expert TIME anchors.
     # Never deform the calibrated curve again with a second volume correction.
     corrections=[speed_duration.volume_correction(z,volumes[z]) for z in volumes]
+    from biathlon import speed_zones
+    dosing = _dosing_boundary(dosing_curve.describe(prior["curve"], tuned if not model_error else None, tests,
+        sport_settings.zone_bounds_bpm, sport_settings.hrmax_bpm, indices, prior["anchors"],
+        normalization_offset_bpm=offset, include_points=not _capacity_only, sport=sport),
+        {"v10": speed_zones.v10_anchor(tuned, tests+boundary_tests)})
+    active_profile = dosing.get("speed_zones") if dosing.get("status") == "AVAILABLE" else None
     predictor=None
     if tuned and settings.hrmax_bpm:
         try:
-            predictor=hr_speed.Predictor(tuned,sport_settings.zone_bounds_bpm,sport_settings.hrmax_bpm,indices,
-                expert_durations={a["zone"]:a["duration_s"] for a in prior["anchors"]},normalization_offset_bpm=offset)
+            predictor=hr_speed.ZonalPredictor(tuned,sport_settings.zone_bounds_bpm,sport_settings.hrmax_bpm,indices,
+                expert_durations={a["zone"]:a["duration_s"] for a in prior["anchors"]},normalization_offset_bpm=offset,
+                sport=sport, tests=tests+boundary_tests, profile=active_profile)
         except ValueError:
             warnings.append("HR_SPEED_MAPPING_UNAVAILABLE")
     if _capacity_only:
@@ -367,9 +382,7 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
                 "speed_zones": zone_profile,
                 "boundary_test_keys": [e["entry_key"] for e in entries if e["payload"] in boundary_tests],
                 "boundary_test_count": len(boundary_tests),
-                "dosing_model": _dosing_boundary(dosing_curve.describe(prior["curve"], tuned if not model_error else None, tests,
-                    sport_settings.zone_bounds_bpm, sport_settings.hrmax_bpm, indices, prior["anchors"],
-                    normalization_offset_bpm=offset, include_points=False), zone_profile),
+                "dosing_model": dosing,
                 "source_generation_id": calendar.get("generation_id"), "source_revision": calendar.get("revision")}
     window=[min(t["duration_s"] for t in tests),max(t["duration_s"] for t in tests)] if tests else None
     def prediction(t):
@@ -400,7 +413,17 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
                     t=duration_s if duration_s is not None else tuned.inverse(distance_m,distance=True) if distance_m is not None else tuned.inverse(speed_kmh/3.6)
                 output=prediction(t)
             except ValueError:
-                prediction_error="OUTSIDE_PREDICTION_RANGE"
+                if predictor is not None and (hr_bpm is not None or speed_kmh is not None):
+                    try:
+                        velocity = predictor.speed_for_hr(hr_bpm) if hr_bpm is not None else speed_kmh
+                        pulse = hr_bpm if hr_bpm is not None else predictor.hr_for_speed(velocity)
+                        output = {"duration_s": None, "distance_m": None, "speed_kmh": velocity,
+                            "estimated_hr_bpm": pulse, "evidence": "ACCOUNTING_PROFILE_ESTIMATE", "capped": False,
+                            "capacity_reason": "OUTSIDE_CURVE_DURATION_DOMAIN", **predictor.metadata(pulse)}
+                    except ValueError:
+                        prediction_error="OUTSIDE_PREDICTION_RANGE"
+                else:
+                    prediction_error="OUTSIDE_PREDICTION_RANGE"
     metadata=speed_duration.model_metadata(tuned) if tuned else {}
     from biathlon import speed_zones
     direct_cs = speed_duration.critical_speed(tests) if not model_error else {"status":"INCONSISTENT_TESTS","count":len(tests)}
@@ -417,8 +440,6 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     if window:
         if any(p["capped"] and p["duration_s"]<window[0] for p in points):limited_tails.append("SHORT")
         if any(p["capped"] and p["duration_s"]>window[1] for p in points):limited_tails.append("LONG")
-    dosing = _dosing_boundary(dosing_curve.describe(prior["curve"], tuned if not model_error else None, tests,
-        sport_settings.zone_bounds_bpm, sport_settings.hrmax_bpm, indices, prior["anchors"],normalization_offset_bpm=offset), zone_profile)
     return {"schema_version":"speed-model-v1","model_version":metadata.get("model_version",speed_duration.VERSION),"sport":sport,"sports":sports,
         "sport_hr_policy":sport_hr_policy(sport,settings.zone_bounds_bpm,settings.hrmax_bpm),
         "speed_correction":{"model_version":vflat_version,"config_version":vflat_config},
@@ -492,6 +513,11 @@ def _speed_volume_evidence(source, activities, today):
         values=[]
         complete=not incomplete_hr
         for a in measured:
+            if (a.get("load_source") or {}).get("calibration_eligible") is False:
+                # Accounting estimates may dose training, but never position
+                # the curve that generated those same HR/speed estimates.
+                complete = False
+                continue
             rows=[r for r in a.get("zones",[]) if r.get("zone")==z]
             if len(rows)==1 and valid(rows[0].get("equivalent_time_min")):
                 values.append(rows[0]["equivalent_time_min"])

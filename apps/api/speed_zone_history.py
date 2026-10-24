@@ -12,12 +12,13 @@ from biathlon.equivalence import EQUIVALENCE_VERSION, equivalence_slope
 from biathlon.physiology import linear_equivalence_coefficient
 from vflat_b65.sports import speed_model_versions, is_running
 from biathlon import speed_zones
+from biathlon.speed_equivalence import relative_coefficient, VERSION as COMMON_EQUIVALENCE_VERSION
 from .activity_shadow_pipeline import activity_shadow_configuration_fingerprint
 from .oauth_store import PersistentStoreFailure
 from .speed_segments import sample_intervals
 from .trainability import LAG_SECONDS, MAX_GAP_SECONDS, MIN_SECONDS_BY_BAND
 
-VERSION = "speed-zone-planning-history-v3-descent-rest"
+VERSION = "speed-zone-planning-history-v4-common-kernel"
 ZONES = tuple(f"Z{i}" for i in range(1, 6))
 PROVENANCE = {"speed": "MEASURED_VFLAT", "hr": "PAIRED_INDEX_ESTIMATE",
               "load": "ESTIMATED_NOT_MEASURED_HR"}
@@ -123,7 +124,7 @@ def _estimate(shadow, mapping, *, missing_minutes, coverage, elapsed):
     # the whole supported speed duration; partial masks retain paired TI lag.
     lag = 0 if coverage == 0 else LAG_SECONDS
     cursor = 0
-    for left, right, speed, exclusion in sample_intervals(shadow, for_load=True, sport=mapping["sport"]):
+    for left, right, speed, exclusion in sample_intervals(shadow, for_load=True, sport=mapping["sport"], rest_threshold_kmh=speeds[0] if speeds else None):
         if (exclusion not in (None, "REST") or right-left > MAX_GAP_SECONDS or speed is None
                 or exclusion != "REST" and (not speeds or not speeds[0] <= speed <= speeds[-1])):
             continue
@@ -146,8 +147,7 @@ def _estimate(shadow, mapping, *, missing_minutes, coverage, elapsed):
         fraction = (speed-speeds[index])/(speeds[index+1]-speeds[index])
         estimated_hr = bounds[index]+fraction*(bounds[index+1]-bounds[index])
         zone = ZONES[index]
-        coefficient = linear_equivalence_coefficient(estimated_hr, bounds[index], bounds[index+1],
-            equivalence_slope(zone), is_z5=zone == "Z5")
+        coefficient = relative_coefficient(speed, speeds[index], speeds[index+1], zone)
         totals[zone]["raw_time_min"] += overlap/60.
         totals[zone]["equivalent_time_min"] += overlap/60.*coefficient
     covered = rest + sum(row["raw_time_min"] for row in totals.values())
@@ -162,7 +162,7 @@ def _estimate(shadow, mapping, *, missing_minutes, coverage, elapsed):
         provenance["speed"] = "VFLAT_WITH_ESTIMATED_DESCENTS"
     return {"zones": list(totals.values()), "covered_missing_minutes": covered, "rest_missing_minutes": rest,
             "model_version": VERSION, "provenance": provenance,
-            "equivalence_version": EQUIVALENCE_VERSION, "paired_lag_seconds": lag,
+            "equivalence_version": COMMON_EQUIVALENCE_VERSION, "paired_lag_seconds": lag,
             "boundary_basis": mapping.get("boundary_basis","PAIRED_INDEX_ONLY"), "boundary_speeds_kmh": list(speeds)}, None
 
 

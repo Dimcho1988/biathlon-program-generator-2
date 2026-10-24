@@ -24,7 +24,7 @@ def test_repeated_speed_reference_keeps_exact_value_without_reinverting(monkeypa
     monkeypatch.setattr(predictor.curve, "inverse", counted)
     for _ in range(3):
         assert [predictor.hr_for_speed(speed) for speed in speeds] == expected
-    assert len(calls) == len(speeds)
+    assert len(calls) == 0  # Common zone pairs invert directly, without V(t).
 
 
 @pytest.mark.parametrize("blended", [False, True])
@@ -68,7 +68,7 @@ def test_different_curve_contexts_do_not_share_the_same_speed_reference(monkeypa
         monkeypatch.setattr(predictor.curve, "inverse", counted)
     for _ in range(2):
         assert [predictor.hr_for_speed(velocity) for predictor in (first, second)] == expected
-    assert calls == [1, 1]
+    assert calls == [0, 0]
 
 
 def test_outside_curve_reference_still_raises_instead_of_becoming_a_prediction():

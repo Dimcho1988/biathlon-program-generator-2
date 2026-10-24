@@ -54,7 +54,7 @@ begin
  insert into public.onflows_management_entries(athlete_alias,kind,entry_key,revision,payload,actor_id,recorded_at)
    values(a,'PROFILE','management-profile-v1',2,'{"latest_profile":true}',actor,'1970-01-01T00:00:00Z');
  select jsonb_build_array(to_jsonb(s)) into expected_settings from (
-   select hr_zone_bounds,timezone,hrmax_bpm,hr_zone_source,hr_zone_percentages,
+   select hr_zone_bounds,timezone,hrmax_bpm,hr_zone_source,hr_zone_percentages,model_preferences,
      planning_profile,mesocycle_accent_preferences,planning_calendar
    from public.onflows_athlete_settings where athlete_alias=a
  ) s;

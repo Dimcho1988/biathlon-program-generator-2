@@ -205,10 +205,10 @@ def session_projection(session, parameters):
 
 
 def _actual_projection(parameters, activities, *, source_available=True):
-    if parameters.get("sport") not in speed_equivalence.RUN_SPORTS:
+    if not speed_equivalence.supports_sport(parameters.get("sport")):
         return {"status": "INCOMPLETE", "comparison": None, "activity_count": len(activities),
                 "available_activity_count": 0, "missing_comparison_count": 0,
-                "different_version_count": 0, "reason": "RUN_ONLY"}
+                "different_version_count": 0, "reason": "UNSUPPORTED_SPORT"}
     matched, missing, conflicting = [], [], []
     for activity in activities:
         comparison = activity.get("speed_equivalence_comparison")

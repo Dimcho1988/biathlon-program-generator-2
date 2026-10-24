@@ -62,5 +62,6 @@ def test_flat_identity_masks_and_block_smoothing_do_not_manufacture_measurements
     result=apply_running_grade(data)
     assert result.loc[44,"vflat_b65_kmh"]==pytest.approx(10.)
     assert result.loc[45,"vflat_b65_kmh"]==pytest.approx(20.)
-    assert not result.loc[[5,15,25,30,35],"valid"].any()
+    assert not result.loc[[5,15,25,35],"valid"].any()
+    assert result.loc[30,"valid"]  # Positive low speed is retained for the relative load floor.
     assert result.loc[[5,15,35],"vflat_b65_kmh"].isna().all()

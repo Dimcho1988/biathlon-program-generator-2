@@ -18,7 +18,7 @@ const minutes = (value: number | null | undefined) => value == null ? "—" : du
 
 export function LoadDynamics(props: Props) {
   // A profile, generation or snapshot-period change must never reuse another analysis.
-  return <LoadDynamicsView key={`${props.cacheScope}:${props.athleteId}:${props.generation}:${props.revision}:${props.history?.period_start}:${props.history?.period_end}`} {...props}/>;
+  return <LoadDynamicsView key={`${props.cacheScope}:${props.athleteId}:${props.generation}:${props.revision}:${props.history?.period_start}:${props.history?.period_end}:${props.history?.load_selection?.fingerprint}`} {...props}/>;
 }
 
 function LoadDynamicsView({ history, message, generation, revision, cacheScope }: Props) {
@@ -58,12 +58,13 @@ function LoadDynamicsView({ history, message, generation, revision, cacheScope }
     <div className="load-source-toolbar">
       <div><p className="section-kicker">Основа на натоварването</p>
         <div className="load-source-switch" role="group" aria-label="Основа на натоварването">
-          {choices.map(([key, label]) => <button key={key} type="button" aria-pressed={source === key} onClick={() => selectSource(key)}>{label}</button>)}
+          {choices.map(([key, label]) => <button key={key} type="button" aria-pressed={source === key} onClick={() => selectSource(key)}>{key === "hr" && history?.load_selection ? "Основен отчет" : label}</button>)}
         </div>
       </div>
       {source !== "hr" && speed && <button className="action-button secondary" type="button" onClick={() => void readSpeed(true)}>Обнови скоростния отчет</button>}
     </div>
-    <p className="load-source-note">Изборът променя показания отчет. Recovery и планирането използват пулсовия товар.</p>
+    <p className="load-source-note">{history?.load_selection ? `Водещ показател: ${history.load_selection.leading_indicator === "SPEED" ? "приравнена скорост" : "пулс"}. Q/E, 7/40, възстановяването и планирането използват основния отчет. Водещият показател се сменя от настройките на профила.` : "Изборът променя показания отчет. Recovery и планирането използват пулсовия товар."}</p>
+    {history?.load_selection && <p className="load-source-note">{decimal(history.load_selection.fallback_seconds/60)} мин с другия показател · {decimal(history.load_selection.unknown_seconds/60)} мин без оценка по двата показателя.</p>}
     {source === "hr" ? <LoadHistorySection history={history} message={message}/> : <div aria-busy={busy}>
       <div role="status" aria-live="polite">
         {busy && <p className="load-source-loading">Изчисляване на Q, E и 7/40 по скорост…</p>}
@@ -75,6 +76,7 @@ function LoadDynamicsView({ history, message, generation, revision, cacheScope }
 }
 
 function SpeedDynamics({ speed, history, comparison }: { speed: SpeedLoad; history: LoadHistory | null; comparison: boolean }) {
+  const primaryLabel = history?.load_selection ? "Основен отчет" : "Пулс";
   const aligned = comparison ? loadComparison(history, speed) : null;
   const short = speedEquivalentWindow(speed, 7, aligned?.start);
   const long = speedEquivalentWindow(speed, 40, aligned?.start);
@@ -95,14 +97,14 @@ function SpeedDynamics({ speed, history, comparison }: { speed: SpeedLoad; histo
     {speed.warnings.includes("TREADMILL_GRADE_ASSUMED_FLAT") && <p>Пътека: при липсващ запис за наклона използваме скоростта с допускане за 0% наклон.</p>}
     {speed.warnings.includes("TREADMILL_PRIOR_RUN_INDEX_FALLBACK") && <p>За пътека без предходен собствен индекс е използван предходният индекс от бягане на същия спортист.</p>}
     {speed.warnings.includes("SPEED_RECOMPUTATION_REQUIRED") && <p>Има активности със стар модел. Използвай „Обнови данните“ от горния бутон.</p>}
-    {speed.status === "UNAVAILABLE" ? <p className="history-unavailable">Още няма достатъчно данни за скоростен товар. Нужни са валидни индекси от предходни тренировки за същия спорт и преизчислени скорости. Липсващите стойности не означават нулево натоварване.</p> : aligned?.error ? <div className="history-unavailable"><p>{aligned.error}</p><p>По пулс: {history ? displayDate(history.period_end) : "няма данни"} · По скорост: {displayDate(speed.end_date)}</p></div> : <>
+    {speed.status === "UNAVAILABLE" ? <p className="history-unavailable">Още няма достатъчно данни за скоростен товар. Нужна е индивидуална скоростна крива от предходен индекс или максимален тест за същия спорт, както и преизчислени скорости. Липсващите стойности не означават нулево натоварване.</p> : aligned?.error ? <div className="history-unavailable"><p>{aligned.error}</p><p>{primaryLabel}: {history ? displayDate(history.period_end) : "няма данни"} · По скорост: {displayDate(speed.end_date)}</p></div> : <>
       <div className="history-explainer">
         <strong>{comparison ? "Как да сравняваш" : "Как се изчислява"}</strong>
-        <p>{comparison ? "Един цвят за всяка зона: плътна линия по пулс, прекъсната по скорост. Графиките използват общ период и скала. Двата товара са отделни оценки и не се събират." : "Vflat и предходните индекси за същия спорт определят зоната и Q. E включва влиянието между зоните. 7/40 сравнява средния дневен E за 7 и 40 дни със стабилизираща база."}</p>
+        <p>{comparison ? "Един цвят за всяка зона: плътна линия за основния отчет, прекъсната по скорост. Графиките използват общ период и скала. Двата товара са отделни оценки и не се събират." : "Vflat и общият зонален профил за същия спорт определят зоната и Q. E включва влиянието между зоните. 7/40 сравнява средния дневен E за 7 и 40 дни със стабилизираща база."}</p>
       </div>
       <div className="volume-period-note">
         <p><strong>Приравнен обем Q:</strong> сбор за {displayDate(short.start)} – {displayDate(short.end)}; седмичен еквивалент за {displayDate(long.start)} – {displayDate(long.end)} = сбор ÷ {long.days} × 7. Крайната дата е включена.</p>
-        <p>Q, E и 7/40 по скорост описват само минутите с покритие. Силовите тренировки се отчитат отделно по продължителност в пулсовия изглед.</p>
+        <p>Q, E и 7/40 по скорост описват само минутите с покритие. Силовите тренировки се отчитат отделно по продължителност в основния отчет.</p>
         {comparison && <p>Q се сравнява за еднакви дати. E7, E40 и 7/40 са оценките на всеки модел; покритието и наличната история могат да се различават.</p>}
         {(short.partial || long.partial) && <p>Непълна скоростна история: {short.days}/7 и {long.days}/40 календарни дни. Седмичният еквивалент е предварителен.</p>}
         {(!short.complete || !long.complete) && <p>Липсват дневни данни; засегнатият Q не се изчислява.</p>}
@@ -120,7 +122,7 @@ function SpeedDynamics({ speed, history, comparison }: { speed: SpeedLoad; histo
             {comparison ? <>
               <h3 className="summary-zone">{key}</h3>
               <table className="load-comparison-table"><caption className="sr-only">{key} · Q в ч:мм:сс, E като ефективен товар</caption>
-                <thead><tr><th scope="col"><span className="sr-only">Показател</span></th><th scope="col">Пулс</th><th scope="col">Скорост</th></tr></thead>
+                <thead><tr><th scope="col"><span className="sr-only">Показател</span></th><th scope="col">{primaryLabel}</th><th scope="col">Скорост</th></tr></thead>
                 <tbody><tr className="load-ratio-row"><th scope="row">7/40</th><td>{decimal(hr?.status_7_40)}</td><td>{decimal(zone.ratio_7_40)}</td></tr>
                   {metrics.map(([label, pulse, value]) => <tr key={label}><th scope="row">{label}</th><td>{label.startsWith("Q") ? minutes(pulse) : decimal(pulse)}</td><td>{label.startsWith("Q") ? minutes(value) : decimal(value)}</td></tr>)}
                 </tbody>
@@ -133,8 +135,8 @@ function SpeedDynamics({ speed, history, comparison }: { speed: SpeedLoad; histo
         })}
       </div>
       {comparison && <p className="load-source-note">Q е в приравнени минути; E7 и E40 са средни ефективни минути на ден.</p>}
-      <LoadSourceChart series={series} metric="ratio" start={start} end={speed.end_date}/>
-      <LoadSourceChart series={series} metric="effective" start={start} end={speed.end_date}/>
+      <LoadSourceChart series={series} metric="ratio" start={start} end={speed.end_date} primaryLabel={primaryLabel}/>
+      <LoadSourceChart series={series} metric="effective" start={start} end={speed.end_date} primaryLabel={primaryLabel}/>
       <p className="load-source-note"><a href="/speed">Индекси по спортове и връзка пулс–скорост →</a></p>
       {!comparison && <>
         <div className="activities-heading"><div><p className="section-kicker">Последни сесии</p><h3>Скоростно покритие по активности</h3></div></div>

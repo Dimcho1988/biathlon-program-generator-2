@@ -107,8 +107,8 @@ def test_non_running_plan_does_not_request_unsupported_speed_history(configured,
                           start_date=date(2026, 10, 20), now=NOW)
     assert calls == []
     assert result["sports"][0]["planned"]["status"] == "UNAVAILABLE"
-    assert all(row["reason"] == "RUN_ONLY" for row in result["sports"][0]["planned"]["zones"])
-    assert result["sports"][0]["actual"]["reason"] == "RUN_ONLY"
+    assert all(row["reason"] == "UNSUPPORTED_SPORT" for row in result["sports"][0]["planned"]["zones"])
+    assert result["sports"][0]["actual"]["reason"] == "UNSUPPORTED_SPORT"
     assert all(row["actual_equivalent_minutes"] is None for row in result["sports"][0]["targets"])
 
 

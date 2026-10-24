@@ -6,7 +6,7 @@ import numpy as np
 from .running import RunningGradeConfig, apply_running_grade
 
 MODEL_VERSION = "vflat_treadmill_recorded_speed_v1"
-CONFIG_VERSION = "vflat_treadmill_recorded_incline_or_flat_v1"
+CONFIG_VERSION = "vflat_treadmill_recorded_incline_or_flat_v2_relative_floor"
 ASSUMED_FLAT_FLAG = "TREADMILL_GRADE_ASSUMED_FLAT"
 
 

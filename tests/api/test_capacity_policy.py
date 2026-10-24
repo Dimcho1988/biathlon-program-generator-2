@@ -84,7 +84,7 @@ def test_expert_effort_assessment_is_used_only_without_an_individual_curve(durat
 @pytest.mark.parametrize("durations,use_model_prior,allowed", [
     ([1050.], False, False), ([180., 720.], False, False),
     ([1050.], True, True), ([180., 720.], True, True),
-    ([180., 7200.], False, True),
+    ([180., 7200.], False, False),
 ])
 def test_continuous_blend_honors_same_observed_only_policy(durations, use_model_prior, allowed):
     speed, settings, context = view_at(durations, blended=True)

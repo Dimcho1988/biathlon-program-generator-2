@@ -7,6 +7,8 @@ VERSION = "individual-speed-zones-v2-v10-provenance"
 
 def v10_anchor(curve, tests):
     """Maximal ten-second mean only; never a single GPS peak or V(10.8 s)."""
+    from .speed_duration import with_ten_second_tail
+    curve = with_ten_second_tail(curve)
     exact = [t for t in tests if t.get("maximal") is True
              and t.get("test_mode", "STRICT") == "STRICT"
              and t.get("comparable") is not False and not t.get("generated") and not t.get("is_estimated")
@@ -31,7 +33,9 @@ def v10_anchor(curve, tests):
                 "curve_duration_range_s": [curve.times[0], curve.times[-1]]}
     if not math.isfinite(value) or value <= 0:
         return {**result, "reason": "INVALID_TEN_SECOND_PREDICTION"}
-    measured = [t["duration_s"] for t in tests if t.get("maximal") is True and t.get("test_mode", "STRICT") == "STRICT"]
+    measured = [t["duration_s"] for t in tests if t.get("maximal") is True and t.get("test_mode", "STRICT") == "STRICT"
+                and not t.get("generated") and not t.get("is_estimated") and t.get("comparable") is not False
+                and (abs(t["duration_s"]-10.) >= 1e-8 or t.get("source") == "MANUAL" or t.get("sprint_speed_validated") is True)]
     extrapolated = not measured or not min(measured) <= 10. <= max(measured)
     return {**result, "status": "AVAILABLE", "speed_kmh": value,
             "evidence": "EXTRAPOLATED" if extrapolated else "INTERPOLATED", "extrapolated": extrapolated,
@@ -39,6 +43,18 @@ def v10_anchor(curve, tests):
 
 
 def build(curve, predictor, tests, cs=None):
+    if getattr(predictor, "profile", None):
+        from copy import deepcopy
+        result = deepcopy(predictor.profile)
+        # A measured V10 is a boundary observation, never a GPS peak or a
+        # calibration point fabricated from the inferred HR relationship.
+        v10 = v10_anchor(curve, tests)
+        if (v10.get("evidence") == "MEASURED" or (result.get("v10") or {}).get("status") != "AVAILABLE") and v10.get("status") == "AVAILABLE" and v10["speed_kmh"] > result["zones"][-1]["low_kmh"]:
+            result["v10"] = v10
+            result["zones"][-1]["high_kmh"] = v10["speed_kmh"]
+            result["bounds_kmh"][-1] = v10["speed_kmh"]
+        result["cs_kmh"] = (cs or {}).get("speed_kmh")
+        return result
     result = {"version": VERSION, "status": "UNAVAILABLE", "zones": [],
               "basis": "INDIVIDUAL_CURVE_AND_ZONE_TIME_REFERENCES",
               "speed_role": "FLAT_EQUIVALENT", "is_measured_hr": False, "v10": v10_anchor(curve, tests)}

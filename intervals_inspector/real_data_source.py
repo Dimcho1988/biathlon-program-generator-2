@@ -24,6 +24,7 @@ from typing import Any
 import pandas as pd
 
 from biathlon import __version__ as MAIN_MODEL_VERSION
+from biathlon.speed_equivalence import VERSION as COMMON_EQUIVALENCE_VERSION
 from biathlon.component_load import resolve_zone_tmax
 from biathlon.constants import (
     AEROBIC_COMPONENTS,
@@ -335,7 +336,7 @@ def _activity_duration_seconds(
 
 
 def _activity_columns() -> list[str]:
-    return [
+    return ["load_source",
         "activity_ref",
         "date",
         "sport",
@@ -401,6 +402,7 @@ def load_real_history(
     | None = None,
     activity_detail_transformer: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
     load_capacity_resolver: Callable[[str], Mapping[str, Any]] | None = None,
+    activity_load_context_resolver: Callable[[str, date], Mapping[str, Any]] | None = None,
 ) -> RealHistoryDataset:
     """Load and process one bounded real history in chronological order."""
 
@@ -542,6 +544,8 @@ def load_real_history(
                     from intervals_inspector.shadow_model import configuration_for_sport
                     activity_configuration=configuration_for_sport(selected_configuration,detail.get("type"))
                     capacity_sport = str(detail.get("type") or "Unknown")
+                    if activity_load_context_resolver is not None:
+                        component_load_contexts[capacity_sport] = deepcopy(dict(activity_load_context_resolver(capacity_sport, current_day)))
                     if capacity_sport not in component_load_contexts:
                         try:
                             # Freeze nested maps too: later processing or other
@@ -562,6 +566,7 @@ def load_real_history(
                         experimental_configuration=activity_configuration,
                         zone_tmax_minutes=load_capacity.get("minutes"),
                         capacity_sources=load_capacity.get("sources"),
+                        unified_load_context=load_capacity if load_capacity.get("unified_load_version") else None,
                         prior_baseline_effective_load=(
                             prior_baseline_effective_load
                         ),
@@ -690,6 +695,8 @@ def load_real_history(
                     "hr_coverage_percent": coverage,
                     "normalization_version": NORMALIZATION_VERSION,
                     "model_version": selected_configuration.physiology_profile_version,
+                    "load_source": ({k: v for k,v in summary.get("unified_load", {}).items() if k != "zones"}
+                                    if isinstance(summary, Mapping) and summary.get("unified_load") else None),
                     "tref_bounds_profile_version": (
                         selected_configuration.tref_bounds_profile_version
                     ),
@@ -1049,7 +1056,8 @@ def load_real_history(
         equivalent_time_algorithm_version=(
             EQUIVALENT_TIME_ALGORITHM_VERSION
         ),
-        equivalence_version=INTRA_ZONE_EQUIVALENCE_VERSION,
+        equivalence_version=(COMMON_EQUIVALENCE_VERSION
+                             if any(r.get("load_source") for r in activity_records) else INTRA_ZONE_EQUIVALENCE_VERSION),
         effective_hr_adapter_version=EFFECTIVE_HR_ADAPTER_VERSION,
         zone_profile_fingerprint=profile.fingerprint,
         configuration_fingerprint=selected_configuration.fingerprint,

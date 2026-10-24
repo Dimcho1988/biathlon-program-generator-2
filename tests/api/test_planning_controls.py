@@ -122,7 +122,7 @@ def test_new_means_can_only_get_light_introduction_despite_large_other_sport_his
 def test_model_prior_is_explicit_and_does_not_bypass_stale_or_exploratory_data():
     settings=Repository().settings;speed=supported_speed(settings);speed['tests']=speed['tests'][:1]
     curve=engine.speed_duration.calibrated([e['payload'] for e in speed['tests']])
-    speed['index_summary']['Z3']['index']=(100*settings.zone_bounds_bpm[3]/settings.hrmax_bpm)/(curve.speed(3000)*3.6)
+    speed['index_summary']={f'Z{i+1}':{'index':100*settings.zone_bounds_bpm[i+1]/settings.hrmax_bpm/(curve.speed(t)*3.6),'count':3,'seconds':1800.} for i,t in enumerate((15300.,9900.,3000.,1500.))}
     method=next(m for m in resolved_methods({}) if m['zone']=='Z3')
     cap=engine.capacity_for(method,settings,speed,engine._capacity_context(speed,settings),TODAY,use_model_prior=True)
     assert cap['capacity_source']=='SPEED_DURATION_PRIOR'
@@ -160,7 +160,7 @@ def test_integrated_week_respects_separate_strength_days_and_covers_complementar
     for d in sessions:
         z=d['session']['zone'];weekday=engine.date.fromisoformat(d['date']).weekday()
         if z=='STR' and d['date'] < (TODAY+timedelta(days=7)).isoformat():
-            assert weekday in [2,5]
+            assert weekday in [2,5,6]  # Preferred days may be retried after higher-Q work.
         if d['session']['is_key_session']: assert weekday in [1,4]
         elif z in {'Z3','Z4','Z5'} and weekday not in [1,4]:
             # A half-budget maintenance task may prepare the next building day.

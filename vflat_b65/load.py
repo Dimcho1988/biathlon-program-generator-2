@@ -7,8 +7,10 @@ import math
 
 from .sports import is_nordic, is_running
 
-VERSION = "speed-load-samples-v1-descent-balance-rest"
-REST_SPEED_KMH = 5.0
+VERSION = "speed-load-samples-v2-relative-floor"
+# Transport identifies stationary data only. The athlete-specific floor is
+# applied later together with the common profile, never as a fixed km/h cut.
+REST_SPEED_KMH = 0.0
 
 
 def finite(value):
@@ -18,8 +20,8 @@ def finite(value):
 def complete_load_speed(rows, *, sport, terrain_factor=1.0):
     """Return annotations without changing the input speed or validity fields.
 
-    Raw speed below 5 km/h is known rest, including stationary samples without
-    grade. Its numeric speed is retained in the balance. Only supported moving
+    Zero raw speed is known rest, including stationary samples without
+    grade. Other low speeds are retained for the profile-relative cutoff. Only supported moving
     Nordic samples below -3% receive the uniform residual speed. Other quality
     exclusions and gaps cannot receive fabricated speed or rest classifications.
     """
@@ -43,7 +45,7 @@ def complete_load_speed(rows, *, sport, terrain_factor=1.0):
         if not finite(raw) or raw < 0:
             excluded += dt
             continue
-        if raw < REST_SPEED_KMH:
+        if raw == 0:
             speed, origin = raw * terrain_factor, "RAW_LOW_SPEED"
         elif (row.get("exclusion_reason") or not finite(grade)
               or not finite(vflat) or vflat < 0):
@@ -58,7 +60,7 @@ def complete_load_speed(rows, *, sport, terrain_factor=1.0):
             # Vflat already includes the session terrain factor. Never apply it twice.
             speed, origin = vflat, "VFLAT"
         row.update(load_speed_kmh=speed, load_source=origin, load_reason=None,
-                   load_status="REST" if raw < REST_SPEED_KMH or speed < REST_SPEED_KMH else "ACTIVE")
+                   load_status="REST" if raw == 0 or speed == 0 else "ACTIVE")
         duration += dt
         raw_distance += raw * dt
         known_distance += speed * dt
@@ -78,8 +80,9 @@ def complete_load_speed(rows, *, sport, terrain_factor=1.0):
             status = "BALANCED"
             for row in descents:
                 row.update(load_speed_kmh=descent_speed, load_source="DESCENT_BALANCE", load_reason=None,
-                           load_status="REST" if descent_speed < REST_SPEED_KMH else "ACTIVE")
+                           load_status="REST" if descent_speed == 0 else "ACTIVE")
     summary = {"version": VERSION, "rest_threshold_kmh": REST_SPEED_KMH,
+               "rest_threshold_policy": "PROFILE_20_PERCENT_V6_AT_SCORING",
                "terrain_factor": terrain_factor, "balance_status": status,
                "balance_duration_s": duration, "excluded_interval_s": excluded,
                "raw_mean_kmh": raw_distance / duration if duration else None,

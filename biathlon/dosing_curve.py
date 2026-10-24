@@ -2,16 +2,15 @@
 
 The component curves and measured tests are immutable. The weighted mean
 is evaluated directly, never refitted through chart samples. Positive mixtures
-preserve decreasing speed, increasing distance and C1 continuity. HR keeps the
-index model's time coordinates; reinverting the index against the mixture
-would silently cancel the requested blend.
+preserve decreasing speed, increasing distance and C1 continuity. Measured
+HR/speed zone pairs stay fixed; capacity is inverted on the selected mixture.
 """
 from copy import deepcopy
 import math
 
 from . import hr_speed, preliminary_capacity, speed_duration, speed_zones
 
-VERSION = "dosing-index-test-30-70-v1"
+VERSION = "dosing-index-test-30-70-v2-common-profile"
 INDEX_WEIGHT, TEST_WEIGHT = .3, .7
 
 
@@ -20,6 +19,8 @@ class Curve:
     calibration_mode = "COACH_INDEX_TEST_BLEND"
 
     def __init__(self, index_curve, test_curve):
+        index_curve = speed_duration.with_ten_second_tail(index_curve)
+        test_curve = speed_duration.with_ten_second_tail(test_curve)
         self.index_curve, self.test_curve = index_curve, test_curve
         low = max(index_curve.times[0], test_curve.times[0])
         high = min(index_curve.times[-1], test_curve.times[-1])
@@ -43,17 +44,15 @@ class Curve:
         return speed_duration.Curve.inverse(self, value, distance=distance)
 
 
-class Predictor(hr_speed.Predictor):
-    def __init__(self, curve, bounds, hrmax, indices, *, expert_durations=None,normalization_offset_bpm=0.):
-        super().__init__(curve.index_curve, bounds, hrmax, indices, expert_durations=expert_durations,
-                         normalization_offset_bpm=normalization_offset_bpm)
-        self.curve = curve
+class Predictor(hr_speed.ZonalPredictor):
+    def __init__(self, curve, bounds, hrmax, indices, *, expert_durations=None,normalization_offset_bpm=0., sport="Run", profile=None, tests=()):
+        super().__init__(curve, bounds, hrmax, indices, expert_durations=expert_durations,
+                         normalization_offset_bpm=normalization_offset_bpm, sport=sport, profile=profile, tests=tests)
         for anchor in self.anchors:
             anchor["index_hr_source"] = anchor["source"]
-            anchor["source"] = "COACH_INDEX_TEST_BLEND"
-            anchor["index_speed_kmh"] = curve.index_curve.speed(anchor["duration_s"])*3.6
-            anchor["test_speed_kmh"] = curve.test_curve.speed(anchor["duration_s"])*3.6
-            anchor["speed_kmh"] = curve.speed(anchor["duration_s"])*3.6
+            duration = anchor["duration_s"]
+            anchor["index_speed_kmh"] = curve.index_curve.speed(duration)*3.6 if duration is not None else None
+            anchor["test_speed_kmh"] = curve.test_curve.speed(duration)*3.6 if duration is not None else None
         self.speed_range = (self.speed_for_hr(self.min_hr), self.speed_for_hr(self.max_hr))
 
     def summary(self):
@@ -75,7 +74,7 @@ def from_view(view):
     return Curve(prior, speed_duration.calibrated(tests))
 
 
-def describe(index_curve, test_curve, tests, bounds, hrmax, indices, anchors, *, normalization_offset_bpm=0., include_points=True):
+def describe(index_curve, test_curve, tests, bounds, hrmax, indices, anchors, *, normalization_offset_bpm=0., include_points=True, sport="Run"):
     result = {"model_version": VERSION, "status": "UNAVAILABLE", "points": [], "hr_model": None,
               "speed_zones": None, "weights": {"index": INDEX_WEIGHT, "tests": TEST_WEIGHT},
               "weight_basis": "COACH_POLICY_NOT_VALIDATED_RELIABILITY", "is_maximal_test": False,
@@ -86,10 +85,10 @@ def describe(index_curve, test_curve, tests, bounds, hrmax, indices, anchors, *,
         curve = Curve(index_curve, test_curve)
         predictor = Predictor(curve, bounds, hrmax, indices,
                               expert_durations={a["zone"]: a["duration_s"] for a in anchors},
-                              normalization_offset_bpm=normalization_offset_bpm)
+                              normalization_offset_bpm=normalization_offset_bpm, sport=sport)
     except ValueError:
         return {**result, "reason": "INCOMPATIBLE_DURATION_OR_HR_DOMAIN"}
-    fixed = {curve.times[0], curve.times[-1]} | {a["duration_s"] for a in predictor.anchors} | {t["duration_s"] for t in tests}
+    fixed = {curve.times[0], curve.times[-1]} | {a["duration_s"] for a in predictor.anchors if a["duration_s"] is not None and curve.times[0] <= a["duration_s"] <= curve.times[-1]} | {t["duration_s"] for t in tests}
     grid = [math.exp(curve._x[0]+(curve._x[-1]-curve._x[0])*i/180) for i in range(1, 180)]
     times = sorted(fixed | {t for t in grid if all(abs(math.log(t/f)) > 1e-10 for f in fixed)})
     points = []
@@ -99,15 +98,13 @@ def describe(index_curve, test_curve, tests, bounds, hrmax, indices, anchors, *,
         except ValueError:
             hr = None
         points.append({"duration_s": t, "speed_kmh": curve.speed(t)*3.6,
-                       "index_speed_kmh": index_curve.speed(t)*3.6,
-                       "test_speed_kmh": test_curve.speed(t)*3.6,
+                       "index_speed_kmh": curve.index_curve.speed(t)*3.6,
+                       "test_speed_kmh": curve.test_curve.speed(t)*3.6,
                        "distance_m": curve.distance(t), "estimated_hr_bpm": hr,
                        "evidence": "COACH_BLEND_ESTIMATE"})
     zones = speed_zones.build(curve, predictor, [])
     zones.update(basis="COACH_INDEX_TEST_BLEND", model_version=VERSION,
                  note="Работни скоростни зони от общата крива 30/70 за дозиране на методите.")
-    for z in zones["zones"]:
-        z["source"] = "COACH_INDEX_TEST_BLEND"
     return {**result, "status": "AVAILABLE", "points": points, "hr_model": predictor.summary(),
             "speed_zones": zones, "duration_range_s": [curve.times[0], curve.times[-1]],
             "component_versions": {"index": index_curve.model_version, "tests": test_curve.model_version},

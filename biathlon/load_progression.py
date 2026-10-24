@@ -11,11 +11,12 @@ from statistics import median
 from hashlib import sha256
 import json
 from .equivalence import EQUIVALENCE_VERSION
+from .speed_equivalence import VERSION as LOAD_EQUIVALENCE_VERSION
 
 from .constants import COMPONENTS
 from . import planning_controls, planning_history, mesocycle_focus, training_return
 
-VERSION = "load-progression-v10-linear-return"
+VERSION = "load-progression-v11-common-zone-q"
 RECOVERY_RETAINED_FRACTION = .70
 # A reference may retain its measured portion with small, separately labelled
 # gaps. This is a coaching data-quality policy, not a physiological threshold.
@@ -121,7 +122,7 @@ def reference_key(profile, physiology=None):
     payload = {"program_start": profile["program_start"], "sport": profile["sport"],
                "reference_revision": config["reference_revision"],
                "training_level": config["training_level"], "positions": config["component_reference_positions"],
-               "equivalence": EQUIVALENCE_VERSION, "physiology": physiology}
+               "equivalence": LOAD_EQUIVALENCE_VERSION, "physiology": physiology}
     return sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
@@ -218,7 +219,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
                 "estimated_q_excluded_from_reference": True,
                 "observed_windows": len(samples), "established_on": today.isoformat()}
         frozen = {"version": VERSION, "key": key, "created_on": today.isoformat(),
-                  "equivalence_version": EQUIVALENCE_VERSION, "expert_basis": expert_basis,
+                  "equivalence_version": LOAD_EQUIVALENCE_VERSION, "expert_basis": expert_basis,
                   "windows": [{k:w[k] for k in ("start_date", "end_date", "covered_days")} for w in complete] if reliable else [],
                   "components": frozen_components}
     if retained_valid and frozen is not retained_valid:
@@ -249,7 +250,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
            "reference_is_clamped": any(c["reference_selection"] == "LOWER_BOUND" for c in components.values()),
            "normative_role": "LOWER_PLANNING_REFERENCE_NOT_POTENTIAL_CEILING", "percentages_are_coaching_parameters": True,
             "history_usable": reliable, "estimated_history_supported": estimated_supported,
-            "planning_history": planning_evidence, "equivalence_version": EQUIVALENCE_VERSION,
+            "planning_history": planning_evidence, "equivalence_version": LOAD_EQUIVALENCE_VERSION,
            "overall_basis": "DIRECT_Q_COMPONENT_TARGETS_EFFECTIVE_LOAD_CHECKED_SEPARATELY"}
     recovery_start = cycle_start + timedelta(days=days-7)
     cutoff = min(today, recovery_start)
@@ -589,6 +590,9 @@ def history_matches(source, physiology=None):
     from .sport_heart_rate import is_cycling, VERSION as SPORT_HR_VERSION
     if any(is_cycling(a.get("sport")) for a in source.get("activities",[])) and source.get("sport_hr_policy_version") != SPORT_HR_VERSION:
         return False
-    return (source.get("equivalence_version") == EQUIVALENCE_VERSION and
+    from .speed_equivalence import VERSION as COMMON_EQUIVALENCE_VERSION
+    expected = COMMON_EQUIVALENCE_VERSION if source.get("load_selection") or any(
+        a.get("load_source") for a in source.get("activities", ())) else EQUIVALENCE_VERSION
+    return (source.get("equivalence_version") == expected and
             (physiology is None or source.get("zone_bounds_bpm") == physiology["bounds"] and
              source.get("hrmax_bpm") == physiology["hrmax"]))

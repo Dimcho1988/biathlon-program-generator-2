@@ -121,6 +121,53 @@ class ScaledCurve:
             "within_test_window": t == self.anchor, "additional_correction": 0., "extrapolation_capped": False}
 
 
+class TenSecondTail:
+    """C1 short-tail continuation from 10.8 to 10 s, never a measured sprint.
+
+    The original curve is exactly unchanged on its original domain. Keeping
+    its endpoint log slope preserves decreasing speed and increasing distance.
+    """
+    def __init__(self, curve):
+        self.base = curve
+        self.join = curve.times[0]
+        self.slope = curve.log_slope(self.join)
+        if not -1 < self.slope < 0:
+            raise ValueError("Invalid ten-second continuation slope")
+        self.times = (10., *curve.times)
+        self._x = tuple(math.log(t) for t in self.times)
+        self.speeds = tuple(self.speed(t) for t in self.times)
+        self.model_version = getattr(curve, "model_version", VERSION)+"-10s-tail-v1"
+
+    def __getattr__(self, name):
+        return getattr(self.base, name)
+
+    def speed(self, t):
+        if t < 10.:
+            raise ValueError("Outside the calibrated duration range")
+        return self.base.speed(self.join)*(t/self.join)**self.slope if t < self.join else self.base.speed(t)
+
+    def distance(self, t):
+        return t*self.speed(t)
+
+    def log_slope(self, t):
+        self.speed(t)
+        return self.slope if t < self.join else self.base.log_slope(t)
+
+    def inverse(self, value, *, distance=False):
+        return Curve.inverse(self, value, distance=distance)
+
+    def point_metadata(self, t):
+        metadata = self.base.point_metadata(max(t, self.join)) if hasattr(self.base, "point_metadata") else {}
+        return {**metadata, "short_tail_extension": t < self.join,
+                **({"extrapolated": True, "within_test_window": False} if t < self.join else {})}
+
+
+def with_ten_second_tail(curve):
+    if curve is not None and 10. < curve.times[0] <= 10.8+1e-9:
+        return TenSecondTail(curve)
+    return curve
+
+
 @lru_cache(maxsize=16)
 def _two_anchor_curve(pairs):
     from .speed_duration_5pct import TwoAnchorCurve

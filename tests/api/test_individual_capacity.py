@@ -47,8 +47,10 @@ def test_single_test_scales_normative_shape_and_preserves_exact_anchor():
     view = service.speed_view(repo, "ath-test", "Run", duration_s=180)
     prior = preliminary_capacity.curve_from_summary(view["preliminary_capacity"])
     assert prior is not None
+    assert view["dosing_model"]["status"] == "AVAILABLE"
+    assert view["speed_zones"]["bounds_kmh"] == view["dosing_model"]["speed_zones"]["bounds_kmh"]
     assert view["prediction"]["speed_kmh"] == pytest.approx(22., abs=1e-8)
-    reference = speed_duration.calibrated([])
+    reference = speed_duration.with_ten_second_tail(speed_duration.calibrated([]))
     ratio = 22. / (reference.speed(180)*3.6)
     for point in view["points"]:
         assert point["speed_kmh"] == pytest.approx(reference.speed(point["duration_s"])*3.6*ratio)
@@ -105,7 +107,7 @@ def test_nonmaximal_or_generated_records_cannot_become_curve_measurements(change
 
 def test_multipoint_mode_retains_every_accepted_measurement():
     repo = Repository()
-    reference = speed_duration.calibrated([])
+    reference = speed_duration.with_ten_second_tail(speed_duration.calibrated([]))
     for t in (60., 180., 1200., 7200.):
         measured_test(repo, t, reference.speed(t)*3.6*.7)
     view = service.speed_view(repo, "ath-test", "Run")
