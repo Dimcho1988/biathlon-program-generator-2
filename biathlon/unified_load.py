@@ -1,15 +1,36 @@
 """Integrate one HR/speed choice per supported interval, preserving unknown time."""
-from bisect import bisect_right
 import math
 
 from . import speed_equivalence
 from .sport_heart_rate import reference_offset
 
-VERSION = "unified-leading-indicator-load-v1"
+VERSION = "unified-leading-indicator-load-v2-recording-intervals"
+HR_INTERVAL_VERSION = "normalized-hr-recording-intervals-v1"
 
 
 def finite(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _smart_span(row, following):
+    """Keep validated recording spans; never extend over arbitrary gaps."""
+    if following is None:
+        return False
+    dt = following["elapsed_s"]-row["elapsed_s"]
+    if "hr_interval_classification" in row:
+        return (row["hr_interval_classification"] == "smart_recording"
+                and row.get("hr_interval_end_s") == following["elapsed_s"] and 1. < dt <= 10.)
+    if dt <= 1. or dt > 10.:
+        return False
+    # Older pinned runs retain original timestamps but no interval annotation.
+    # Apply the normalizer's conservative short/extended recording rules.
+    from intervals_inspector.stream_normalizer import DEFAULT_CONFIG
+    if any("recording_stop" in str(flag) for r in (row, following) for flag in r.get("quality_flags", ())):
+        return False
+    if 1. < dt <= DEFAULT_CONFIG.short_smart_recording_max_sec:
+        return True
+    return (DEFAULT_CONFIG.short_smart_recording_max_sec < dt <= DEFAULT_CONFIG.extended_smart_recording_max_sec
+            and all(finite(r.get("speed_raw_kmh")) and r["speed_raw_kmh"] > 0 for r in (row, following)))
 
 
 def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEART_RATE", duration_s=None):
@@ -21,20 +42,44 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
     speed_rows = sorted((r for r in (speed_rows if speed_rows is not None else hr_rows)
                          if finite(r.get("elapsed_s"))), key=lambda r: r["elapsed_s"])
     hr, speeds = [], []
+    offset = reference_offset(sport)
     calibrated_bounds = (shadow.get("trainability_index") or {}).get("zone_bounds_bpm")
     adjusted_hr_compatible = calibrated_bounds is None or list(calibrated_bounds) == list(bounds)
     previous = 0.
     for i, row in enumerate(hr_rows):
+        following = hr_rows[i+1] if i+1 < len(hr_rows) else None
         left = max(0., row["elapsed_s"], previous)
-        right = min(row["elapsed_s"]+1., hr_rows[i+1]["elapsed_s"]) if i+1 < len(hr_rows) else row["elapsed_s"]+1.
+        smart = _smart_span(row, following)
+        right = row["elapsed_s"]+1.
+        if following is not None:
+            right = following["elapsed_s"] if smart else min(right, following["elapsed_s"])
         if right <= left:
             continue
         raw = row.get("hr_raw_bpm")
         # Derived HR never makes a missing raw observation become measured.
         value = row.get("hrmod_final_bpm") if adjusted_hr_compatible else None
         value = value if finite(value) and value > 0 else raw
-        estimate = speed_equivalence.evaluate_hr(parameters, value, bounds=bounds, offset_bpm=reference_offset(sport)) if finite(raw) and raw > 0 else None
-        hr.append((left, right, estimate))
+        estimate = speed_equivalence.evaluate_hr(parameters, value, bounds=bounds, offset_bpm=offset) if finite(raw) and raw > 0 else None
+        if (row.get("hr_interval_classification") not in {None, "original_1hz", "smart_recording"}
+                and following is not None):
+            estimate = None
+        if smart:
+            next_raw = following.get("hr_raw_bpm")
+            next_value = following.get("hrmod_final_bpm") if adjusted_hr_compatible else None
+            next_value = next_value if finite(next_value) and next_value > 0 else next_raw
+            if estimate and finite(next_raw) and next_raw > 0 and finite(next_value):
+                cuts = [0., 1.]
+                if next_value != value:
+                    cuts += [(edge-offset-value)/(next_value-value) for edge in bounds
+                             if 0. < (edge-offset-value)/(next_value-value) < 1.]
+                cuts.sort()
+                for start, end in zip(cuts, cuts[1:]):
+                    hr.append((left+start*(right-left), left+end*(right-left),
+                               {"_linear_hr": (value+start*(next_value-value), value+end*(next_value-value))}))
+            else:
+                hr.append((left, right, None))
+        else:
+            hr.append((left, right, estimate))
         previous = right
     previous = 0.
     for i, row in enumerate(speed_rows):
@@ -87,6 +132,11 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
         while si < len(speeds) and speeds[si][1] <= left:
             si += 1
         h = hr[hi][2] if hi < len(hr) and hr[hi][0] <= left < hr[hi][1] else None
+        if h and "_linear_hr" in h:
+            start, end = h["_linear_hr"]
+            fraction = ((left+right)/2-hr[hi][0])/(hr[hi][1]-hr[hi][0])
+            h = speed_equivalence.evaluate_hr(parameters, start+fraction*(end-start),
+                bounds=bounds, offset_bpm=offset)
         s = speeds[si][2] if si < len(speeds) and speeds[si][0] <= left < speeds[si][1] else None
         order = (("HEART_RATE", h), ("SPEED", s)) if leading_indicator == "HEART_RATE" else (("SPEED", s), ("HEART_RATE", h))
         chosen = next(((kind, value) for kind, value in order if value and value.get("status") in {"AVAILABLE", "REST"}), None)

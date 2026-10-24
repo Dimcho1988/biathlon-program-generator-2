@@ -194,3 +194,64 @@ def test_final_timestamp_does_not_add_an_extra_recorded_second():
                                  parameters=speed_equivalence.prepare(profile()))
     assert result["recorded_seconds"] == 60.
     assert result["active_seconds"] == pytest.approx(60.)
+
+
+@pytest.mark.parametrize("step", [2., 2.5, 5., 8., 10.])
+@pytest.mark.parametrize("annotated", [False, True])
+def test_smart_recording_preserves_valid_duration_without_speed_fallback(step, annotated):
+    offsets = [i*step for i in range(int(60/step)+1)]
+    if offsets[-1] < 60.:
+        offsets.append(60.)
+    rows = [{"elapsed_s": t, "hr_raw_bpm": 160., "speed_raw_kmh": 18.} for t in offsets]
+    if annotated:
+        for row, following in zip(rows, rows[1:]):
+            row.update(hr_interval_classification="smart_recording", hr_interval_end_s=following["elapsed_s"])
+    parameters = speed_equivalence.prepare(profile())
+    result = unified_load.integrate({"timeseries": rows, "speed_test_series": []},
+        bounds=BOUNDS, sport="Run", parameters=parameters, duration_s=60.)
+    regular = unified_load.integrate(streams(160., None), bounds=BOUNDS, sport="Run",
+        parameters=parameters, duration_s=60.)
+    for actual, expected in zip(result["zones"], regular["zones"]):
+        assert actual["zone"] == expected["zone"]
+        assert actual["raw_time_min"] == pytest.approx(expected["raw_time_min"], abs=1e-12)
+        assert actual["equivalent_time_min"] == pytest.approx(expected["equivalent_time_min"], abs=1e-12)
+    assert result["source_seconds"] == {"HEART_RATE": 60., "SPEED": 0.}
+    assert result["unknown_seconds"] == 0.
+
+
+def test_smart_recording_splits_crossed_hr_zones_and_keeps_q_exact():
+    parameters = speed_equivalence.prepare(profile())
+    shadow = {"timeseries": [
+        {"elapsed_s": 0., "hr_raw_bpm": 140., "hr_interval_classification": "smart_recording", "hr_interval_end_s": 5.},
+        {"elapsed_s": 5., "hr_raw_bpm": 190.}], "speed_test_series": []}
+    result = unified_load.integrate(shadow, bounds=BOUNDS, sport="Run", parameters=parameters, duration_s=5.)
+    durations = [.4, 1.4, 2., 1., .2]
+    assert [z["raw_time_min"]*60 for z in result["zones"]] == pytest.approx(durations)
+    for z, seconds, pulse in zip(result["zones"], durations, [142., 151., 168., 183., 189.]):
+        coefficient = speed_equivalence.evaluate_hr(parameters, pulse, bounds=BOUNDS)["coefficient"]
+        assert z["equivalent_time_min"] == pytest.approx(seconds/60*coefficient)
+
+
+def test_smart_recording_uses_actual_hr_position_for_partial_speed_fallback():
+    parameters = speed_equivalence.prepare(profile())
+    shadow = {"timeseries": [
+        {"elapsed_s": 0., "hr_raw_bpm": 160., "hr_interval_classification": "smart_recording", "hr_interval_end_s": 5.},
+        {"elapsed_s": 5., "hr_raw_bpm": 170.}],
+        "speed_test_series": streams(None, 16., seconds=2)["speed_test_series"]}
+    result = unified_load.integrate(shadow, bounds=BOUNDS, sport="Run", parameters=parameters,
+        duration_s=5., leading_indicator="SPEED")
+    assert result["source_seconds"] == {"HEART_RATE": 3., "SPEED": 2.}
+    assert result["fallback_seconds"] == 3.
+    expected = (2*speed_equivalence.evaluate(parameters, 16.)["coefficient"]
+                +3*speed_equivalence.evaluate_hr(parameters, 167., bounds=BOUNDS)["coefficient"])/60
+    assert sum(z["equivalent_time_min"] for z in result["zones"]) == pytest.approx(expected)
+
+
+def test_recording_stops_are_not_filled_as_smart_hr_intervals():
+    rows = [{"elapsed_s": t, "hr_raw_bpm": 160.} for t in [0., 5., 40., 45.]]
+    for row, following, kind in zip(rows, rows[1:], ["smart_recording", "recording_stop", "smart_recording"]):
+        row.update(hr_interval_classification=kind, hr_interval_end_s=following["elapsed_s"])
+    result = unified_load.integrate({"timeseries": rows, "speed_test_series": []},
+        bounds=BOUNDS, sport="Run", parameters=speed_equivalence.prepare(profile()), duration_s=45.)
+    assert result["active_seconds"] == 10.
+    assert result["unknown_seconds"] == 35.

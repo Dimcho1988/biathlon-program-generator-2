@@ -15,6 +15,7 @@ from biathlon.periodization import ENGINE_VERSION as PERIODIZATION_VERSION
 from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION
 from biathlon.zone_profile import VERSION as ZONE_PROFILE_VERSION
 from biathlon.speed_equivalence import VERSION as ZONE_EQUIVALENCE_VERSION
+from biathlon.unified_load import VERSION as UNIFIED_LOAD_VERSION
 from .component_load_context import VERSION as COMPONENT_CAPACITY_VERSION
 
 from .management_schemas import ManagementProfile, normalize_building_profile
@@ -267,6 +268,7 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False,
             "hr_speed": training_plan_engine.hr_speed.VERSION,
             "zone_profile": ZONE_PROFILE_VERSION,
             "zone_equivalence": ZONE_EQUIVALENCE_VERSION,
+            "unified_load": UNIFIED_LOAD_VERSION,
             "planning_history_estimate": training_plan_engine.planning_history_estimate.VERSION,
             "speed_zone_history": speed_zone_history.VERSION,
             "load_progression": training_plan_engine.load_progression.VERSION,

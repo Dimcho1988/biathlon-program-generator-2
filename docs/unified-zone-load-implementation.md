@@ -74,11 +74,19 @@ Implementation and validation checkpoint:
   remain the only individual speed/HR evidence.
 - Speed-only prescriptions without a target HR use their known speed. HRmax
   is not substituted for an absent interval pulse.
-- 32 new invariant and integration checks pass, including a real application
+- 47 new invariant and integration checks pass, including a real application
   refresh with no HR that produces Q, 7/40 and Recovery from speed.
 - 644 web checks, TypeScript validation and a clean production build pass.
   The full Python regression suite passes (3,662 checks). An additional 54
   targeted checks pass after the final boundary/validation refinements.
+- Review regressions preserve all work after pauses by using elapsed calendar
+  duration, not the history's moving-time subtotal. Duration changes invalidate
+  the history cache. Validated smart-recording HR spans retain their exact time
+  and split at crossed zone edges; partial speed fallback uses the actual HR
+  position within the span. Recording stops remain unknown without another
+  measurement. Raw endpoints are never synthesized or admitted as new evidence.
+  Legacy runs use the normalizer's conservative short/extended interval rules.
+  131 targeted Python checks pass after these recording-boundary fixes.
 - Read-only aggregate checks confirm pinned speed data for skiing, cycling
   and running. This is coverage evidence, not validation of the new per-sample
   numerical results. A detailed retrospective comparison remains pending.
@@ -117,7 +125,7 @@ Research references and interpretation:
 - V50/V6 HR anchors and within-zone coefficients remain explicit model priors.
   Z5 HR/speed interpolation is bookkeeping, not a physiological sprint-HR fit.
 
-Remaining release steps: Python CI after test partition correction, PR integration, staging API/web/worker
+Remaining release steps: Python CI after recording-boundary corrections, PR integration, staging API/web/worker
 deploy and live verification.
 Production remains separate.
 

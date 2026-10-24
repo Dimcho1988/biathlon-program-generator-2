@@ -35,7 +35,8 @@ def reconstruct_history(repository, alias, source, *, speed_inputs=None):
                 "alias": alias, "namespace": getattr(repository, "speed_load_cache_namespace", None),
                 "settings": {"bounds": settings.zone_bounds_bpm, "max": settings.hrmax_bpm,
                              "leading": settings.leading_indicator},
-                "calendar": [(a.get("activity_ref"), a.get("latest_shadow_run_key"), a.get("local_date"))
+                "calendar": [(a.get("activity_ref"), a.get("latest_shadow_run_key"), a.get("local_date"),
+                              a.get("elapsed_time_s"), a.get("moving_time_s"))
                              for a in calendar.get("activities", ())],
                 "source": original_identity, "tests": inputs["entries"]}
     key = sha256(json.dumps(identity, sort_keys=True, allow_nan=False, default=str,
@@ -81,9 +82,13 @@ def _reconstruct(repository, alias, source, inputs, settings, key, original_iden
                 profile = (view.get("dosing_model") or {}).get("speed_zones") or view.get("speed_zones")
                 from .component_load_context import context_from_speed_view
                 models[identity] = context_from_speed_view(view)
+            recording_seconds = (max(calendar[ref].get("elapsed_time_s") or 0.,
+                                     calendar[ref].get("moving_time_s") or 0.)
+                or (activity.get("load_source") or {}).get("recorded_seconds")
+                or (activity.get("duration_min") or 0.)*60)
             ledger = unified_load.integrate(row["shadow_payload"], bounds=settings.zone_bounds_bpm,
                 sport=activity["sport"], parameters=models[identity]["comparison_parameters"], leading_indicator=settings.leading_indicator,
-                duration_s=(activity.get("duration_min") or 0.)*60)
+                duration_s=recording_seconds)
             ledger["capacity_context"] = {k: models[identity][k] for k in ("minutes", "sources", "references", "fingerprint")}
             zones = {z["zone"]: z for z in ledger["zones"]}
             for zone in activity["zones"]:

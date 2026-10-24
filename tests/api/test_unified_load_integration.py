@@ -94,6 +94,56 @@ def test_provider_replay_downloads_each_stream_only_once():
         replay.close()
 
 
+def test_history_reconstruction_preserves_work_after_a_pause(monkeypatch):
+    from types import SimpleNamespace
+    from apps.api import actual_load_projection, model_service
+    settings = SimpleNamespace(zone_bounds_bpm=BOUNDS, hrmax_bpm=200, leading_indicator="SPEED")
+    recorded = streams(None, 16., seconds=90)
+    for row in recorded["speed_test_series"][30:60]:
+        row["vflat_b65_kmh"] = 0.
+    inputs = {"alias": "pause-test", "calendar": {"activities": [{"activity_ref": "paused", "sport": "Run",
+        "local_date": "2026-10-23", "elapsed_time_s": 90., "moving_time_s": 60., "latest_shadow_run_key": "paused-key"}]}, "entries": []}
+    repo = SimpleNamespace(athlete_settings=lambda _: settings,
+        activity_speed_history_samples=lambda a, k: {"paused-key": {"activity_ref": "paused", "shadow_payload": recorded}})
+    monkeypatch.setattr(model_service, "speed_view", lambda *a, **k: {
+        "sport": "Run", "speed_zones": profile(), "status": "UNAVAILABLE"})
+    source = {"period_start": "2026-10-23", "period_end": "2026-10-23", "activities": [{
+        "activity_ref": "paused", "sport": "Run", "date": "2026-10-23", "duration_min": 1.,
+        "zones": [{"zone": z, "effective_load": 0.} for z in speed_equivalence.ZONES]}]}
+    result = actual_load_projection.reconstruct_history(repo, "pause-test", source, speed_inputs=inputs)
+    activity = result["activities"][0]
+    assert activity["load_source"]["recorded_seconds"] == 90.
+    assert activity["load_source"]["active_seconds"] == pytest.approx(60.)
+    assert activity["load_source"]["rest_seconds"] == 30.
+    assert activity["load_source"]["unknown_seconds"] == 0.
+    fresh = unified_load.integrate(recorded, bounds=BOUNDS, sport="Run", leading_indicator="SPEED",
+        parameters=speed_equivalence.prepare(profile()), duration_s=90.)
+    assert [z["equivalent_time_min"] for z in activity["zones"]] == [z["equivalent_time_min"] for z in fresh["zones"]]
+    inputs["calendar"]["activities"][0]["elapsed_time_s"] = 95.
+    revised = actual_load_projection.reconstruct_history(repo, "pause-test", source, speed_inputs=inputs)
+    assert revised["activities"][0]["load_source"]["recorded_seconds"] == 95.
+    assert revised["load_selection"]["unknown_seconds"] == 5.
+
+
+def test_shadow_retains_validated_recording_intervals_without_synthesizing_raw_hr():
+    from apps.api.activity_shadow_pipeline import compute_activity_shadow
+    from intervals_inspector.stream_normalizer import NormalizerInput, normalize_stream_intervals
+    offsets = list(range(0, 61, 5))
+    normalized = normalize_stream_intervals(NormalizerInput(offsets=offsets,
+        metrics={"heartrate": [160.]*len(offsets)}, elapsed_time_sec=60.))
+    immutable, derived = compute_activity_shadow(detail={"start_date": "2026-10-23T10:00:00Z",
+        "type": "Run", "elapsed_time": 60., "moving_time": 60.}, normalized=normalized,
+        zone_bounds_bpm=BOUNDS, explicit_hrmax_bpm=200)
+    assert len(immutable["samples"]) == len(derived["timeseries"]) == len(offsets)
+    assert derived["timeseries"][0]["hr_interval_classification"] == "smart_recording"
+    assert derived["timeseries"][0]["hr_interval_end_s"] == 5.
+    derived["speed_test_series"] = []
+    ledger = unified_load.integrate(derived, bounds=BOUNDS, sport="Run",
+        parameters=speed_equivalence.prepare(profile()), duration_s=60.)
+    assert ledger["source_seconds"]["HEART_RATE"] == 60.
+    assert ledger["unknown_seconds"] == 0.
+
+
 
 def test_accounting_q_is_not_reused_as_curve_calibration():
     from datetime import date
