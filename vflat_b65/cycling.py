@@ -9,7 +9,7 @@ import pandas as pd
 from .core import _rolling_median
 
 MODEL_VERSION = "vflat_cycling_mechanical_v1"
-CONFIG_VERSION = "vflat_cycling_80kg_crr005_cda032_v1"
+CONFIG_VERSION = "vflat_cycling_80kg_crr005_cda032_v2_relative_floor"
 
 
 @dataclass(frozen=True)
@@ -19,7 +19,7 @@ class CyclingConfig:
     cda_m2: float = .32
     air_density_kg_m3: float = 1.225
     gravity_m_s2: float = 9.81
-    min_speed_kmh: float = 5.
+    min_speed_kmh: float = 0.
     min_grade_pct: float = -3.
     max_grade_pct: float = 30.
     post_descent_s: int = 20

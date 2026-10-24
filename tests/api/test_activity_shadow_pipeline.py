@@ -64,7 +64,7 @@ def test_running_configuration_changes_cache_and_comparison_without_changing_ski
     from vflat_b65.sports import speed_model_versions
     kwargs=dict(zone_bounds_bpm=(124,144,164,182,190,205),explicit_hrmax_bpm=205)
     legacy=activity_shadow_configuration_fingerprint(**kwargs)
-    assert legacy=="30100e84ef63bda169b5da6f2f07ffb137bd658d083f32e2a68b4dd5240fea52"
+    assert legacy=="3234f9a655cd867fe0b85cb64a68a783f551e49de45942d619af3619e073d698"
     assert activity_shadow_configuration_fingerprint(**kwargs,sport="NordicSki")==legacy
     run=activity_shadow_configuration_fingerprint(**kwargs,sport="Run")
     assert run!=legacy

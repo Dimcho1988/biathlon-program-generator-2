@@ -20,6 +20,9 @@ type AthleteSettingsFormProps = {
   initialPercentages?: number[] | null;
   automaticPercentages?: number[] | null;
   editing?: boolean;
+  initialAge?: number | null;
+  initialIndicator?: "HEART_RATE" | "SPEED";
+  initialHrmaxSource?: "MANUAL" | "TANAKA" | "OBSERVED" | null;
 };
 
 export function AthleteSettingsForm({
@@ -31,15 +34,21 @@ export function AthleteSettingsForm({
   initialPercentages = null,
   automaticPercentages = null,
   editing = false,
+  initialAge = null,
+  initialIndicator = "HEART_RATE",
+  initialHrmaxSource = null,
 }: AthleteSettingsFormProps) {
   const percentages = initialSource === "AUTOMATIC_HRMAX" ? initialPercentages : automaticPercentages;
   const autoAvailable = percentages?.length === 6;
   const [source, setSource] = useState<"MANUAL" | "AUTOMATIC_HRMAX">(
     initialSource ?? (!initialBounds && autoAvailable ? "AUTOMATIC_HRMAX" : "MANUAL")
   );
-  const [hrmax, setHrmax] = useState(initialHrmax?.toString() ?? "");
-  const automaticBounds = percentages?.map(percent => Math.floor(Number(hrmax) * percent / 100 + 0.5));
-  const validPreview = hrmax !== "" && Number(hrmax) >= 30 && Number(hrmax) <= 240
+  const [hrmax, setHrmax] = useState(initialHrmaxSource === "TANAKA" ? "" : initialHrmax?.toString() ?? "");
+  const [age, setAge] = useState(initialAge?.toString() ?? "");
+  const predictedMaximum = age !== "" ? Math.floor(208 - 0.7 * Number(age) + 0.5) : null;
+  const maximum = hrmax !== "" ? Number(hrmax) : predictedMaximum;
+  const automaticBounds = maximum ? percentages?.map(percent => Math.floor(maximum * percent / 100 + 0.5)) : null;
+  const validPreview = maximum !== null && maximum >= 30 && maximum <= 240
     && automaticBounds?.every((bound, index) => bound >= 30 && (index === 0 || automaticBounds[index - 1] < bound));
   return (
     <main className="state-page settings-page">
@@ -47,15 +56,30 @@ export function AthleteSettingsForm({
       <h1>{editing ? "Настройки на профила" : "Настройте пулсовите зони"}</h1>
       <p className="muted">
         {editing
-          ? "Новите граници ще се използват при следващото обновяване на тренировките."
+          ? "Водещият показател се използва за натоварването, 7/40 и възстановяването."
           : "Задайте своя максимален пулс и начина за определяне на зоните."}
       </p>
       {notice && <p className="connection-notice">{notice}</p>}
       <form className="athlete-settings-form" action="/api/athlete/settings" method="post">
         <label className="timezone-field">
           <span>Максимален пулс (уд/мин)</span>
-          <input name="hrmax_bpm" type="number" min="30" max="240" required inputMode="numeric" value={hrmax} onChange={event => setHrmax(event.target.value)} />
-          <small>Въведете известния HRmax. Не го изчисляваме от възрастта или от една тренировка.</small>
+          <input name="hrmax_bpm" type="number" min="30" max="240" inputMode="numeric" value={hrmax} onChange={event => setHrmax(event.target.value)} />
+          <small>Въведете известния HRmax или оставете празно за начална оценка по възрастта. По-висок устойчив записан пулс може автоматично да го уточни.</small>
+          {initialHrmaxSource === "TANAKA" && <small>Текущият HRmax е начална оценка по Tanaka.</small>}
+          {initialHrmaxSource === "OBSERVED" && <small>Текущият HRmax е уточнен от устойчив записан пулсов пик.</small>}
+        </label>
+        <label className="timezone-field">
+          <span>Възраст (години)</span>
+          <input name="age_years" type="number" min="5" max="100" inputMode="numeric" value={age} onChange={event => setAge(event.target.value)} required={hrmax === ""} />
+          {hrmax === "" && predictedMaximum !== null && <small>Начален HRmax по Tanaka: {predictedMaximum} уд/мин.</small>}
+        </label>
+        <label className="timezone-field">
+          <span>Водещ показател за натоварването</span>
+          <select name="leading_indicator" defaultValue={initialIndicator}>
+            <option value="HEART_RATE">Пулс</option>
+            <option value="SPEED">Приравнена скорост (Vflat)</option>
+          </select>
+          <small>При липсващ водещ показател се използва другият, когато има необходимите данни за връзката между тях.</small>
         </label>
         {autoAvailable ? <label className="timezone-field">
           <span>Пулсови зони</span>
@@ -74,7 +98,9 @@ export function AthleteSettingsForm({
             {boundaryFields.map(([name, label], index) => (
               <label key={name}>
                 <span>{label}</span>
-                <input name={name} type="number" min="30" max="240" required inputMode="numeric" defaultValue={initialBounds?.[index]} />
+                {index === 0 || index === 5 ? <input name={name} type="number" min="30" max="240" required inputMode="numeric" readOnly
+                  value={maximum ? (index === 0 ? Math.floor(maximum * .45 + .5) : maximum) : ""} />
+                  : <input name={name} type="number" min="30" max="240" required inputMode="numeric" defaultValue={initialBounds?.[index]} />}
               </label>
             ))}
           </div>
@@ -86,7 +112,7 @@ export function AthleteSettingsForm({
         </label>
         <button className="action-button" type="submit">Запази настройките</button>
       </form>
-      <p className="state-help">Версиите на Tref, intra-zone и recovery модела остават общи и одобрени за всички профили.</p>
+      <p className="state-help">Началото на Z1 е 45% от максималния пулс. При колоездене работните пулсови граници са със 7 уд/мин по-ниски.</p>
     </main>
   );
 }

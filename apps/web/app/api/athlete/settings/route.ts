@@ -22,16 +22,24 @@ export async function POST(request: Request) {
     const source = String(form.get("hr_zone_source") ?? "MANUAL");
     const bounds = fieldNames.map((name) => Number(form.get(name)));
     const timezone = String(form.get("timezone") ?? "").trim();
-    const hrmax = Number(form.get("hrmax_bpm"));
+    const maximumText = String(form.get("hrmax_bpm") ?? "").trim();
+    const hrmax = maximumText ? Number(maximumText) : null;
+    const ageText = String(form.get("age_years") ?? "").trim();
+    const age = ageText ? Number(ageText) : null;
+    const indicator = String(form.get("leading_indicator") ?? "HEART_RATE");
+    const resolvedMaximum = hrmax ?? (age !== null ? Math.floor(208 - .7 * age + .5) : null);
     if (
       !["MANUAL", "AUTOMATIC_HRMAX"].includes(source)
       || (source === "MANUAL" && (
         bounds.some((value) => !Number.isInteger(value) || value < 30 || value > 240)
         || bounds.some((value, index) => index > 0 && bounds[index - 1] >= value)
-        || bounds[5] > hrmax
+        || (resolvedMaximum !== null && bounds[5] > resolvedMaximum)
       ))
       || !timezone
-      || !Number.isInteger(hrmax) || hrmax < 30 || hrmax > 240
+      || (hrmax !== null && (!Number.isInteger(hrmax) || hrmax < 30 || hrmax > 240))
+      || (age !== null && (!Number.isInteger(age) || age < 5 || age > 100))
+      || resolvedMaximum === null
+      || !["HEART_RATE", "SPEED"].includes(indicator)
     ) return new NextResponse(null, { status: 303, headers: { Location: "/?settings=invalid" } });
     stage = "api";
     await waitForApi(baseUrl);
@@ -44,7 +52,8 @@ export async function POST(request: Request) {
         "Content-Type": "application/json",
         "X-OnFlows-Athlete-Alias": athleteAlias,
       },
-      body: JSON.stringify({ hr_zone_bounds_bpm: source === "MANUAL" ? bounds : null, timezone, hrmax_bpm: hrmax, hr_zone_source: source }),
+      body: JSON.stringify({ hr_zone_bounds_bpm: source === "MANUAL" ? bounds : null, timezone, hrmax_bpm: hrmax, hr_zone_source: source,
+        age_years: age, leading_indicator: indicator }),
       signal: AbortSignal.timeout(75_000),
     });
     stage = `api-response-${response.status}`;

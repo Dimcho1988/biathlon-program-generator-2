@@ -13,8 +13,8 @@ from apps.api.oauth_store import PersistentStoreFailure, SupabasePilotRepository
 from biathlon.hr_zones import bounds_from_hrmax
 
 # Synthetic percentages for contract testing, not a recommended expert scheme.
-PERCENTAGES = (50, 60, 70, 80, 90, 100)
-BOUNDS = (100, 120, 140, 160, 180, 200)
+PERCENTAGES = (45, 72, 79, 89, 94, 100)
+BOUNDS = (90, 144, 158, 178, 188, 200)
 PATH = "/api/v2/athlete/settings"
 
 
@@ -34,20 +34,19 @@ def settings_client(monkeypatch):
     yield client, items
 
 
-def test_missing_scheme_does_not_invent_zones(settings_client):
+def test_approved_scheme_is_available_without_deployment_configuration(settings_client):
     client, items = settings_client
-    assert client.get(PATH).json()["automatic_hr_zone_percentages"] is None
-    response = client.put(PATH, json={"timezone": "Europe/Sofia", "hrmax_bpm": 200})
-    assert response.status_code == 422
-    assert not items
+    assert client.get(PATH).json()["automatic_hr_zone_percentages"] == list(PERCENTAGES)
+    response = client.put(PATH, json={"timezone":"UTC", "hrmax_bpm":200})
+    assert response.status_code == 200
+    assert response.json()["hr_zone_bounds_bpm"] == list(BOUNDS)
 
 
-@pytest.mark.parametrize("invalid", ["50,60,70,80,90", "50,60,60,80,90,100", "50,60,70,80,90,nan", "0,60,70,80,90,100", "0.5,0.6,0.7,0.8,0.9,1"])
-def test_invalid_configuration_never_enables_automatic_mode(settings_client, monkeypatch, invalid):
+@pytest.mark.parametrize("old", ["50,60,70,80,90,100", "invalid"])
+def test_old_deployment_configuration_cannot_replace_approved_policy(settings_client, monkeypatch, old):
     client, _ = settings_client
-    monkeypatch.setenv("ONFLOWS_HRMAX_ZONE_PERCENTAGES", invalid)
-    assert client.get(PATH).json()["automatic_hr_zone_percentages"] is None
-    assert client.put(PATH, json={"timezone": "UTC", "hrmax_bpm": 200}).status_code == 422
+    monkeypatch.setenv("ONFLOWS_HRMAX_ZONE_PERCENTAGES", old)
+    assert client.get(PATH).json()["automatic_hr_zone_percentages"] == list(PERCENTAGES)
 
 
 def test_hrmax_only_creates_estimated_zones_with_saved_provenance(settings_client, monkeypatch):
@@ -66,9 +65,9 @@ def test_hrmax_only_creates_estimated_zones_with_saved_provenance(settings_clien
     # A deployment changing/removing its default cannot silently change this athlete's scheme.
     monkeypatch.delenv("ONFLOWS_HRMAX_ZONE_PERCENTAGES")
     updated = client.put(PATH, json={"timezone": "Europe/Sofia", "hrmax_bpm": 190}).json()
-    assert updated["hr_zone_bounds_bpm"] == [95, 114, 133, 152, 171, 190]
+    assert updated["hr_zone_bounds_bpm"] == [86, 137, 150, 169, 179, 190]
     assert updated["hr_zone_percentages"] == list(PERCENTAGES)
-    assert updated["automatic_hr_zone_percentages"] is None
+    assert updated["automatic_hr_zone_percentages"] == list(PERCENTAGES)
 
 
 def test_manual_boundaries_survive_hrmax_only_update_and_active_default(settings_client, monkeypatch):
@@ -77,7 +76,7 @@ def test_manual_boundaries_survive_hrmax_only_update_and_active_default(settings
     items["ath-test"] = AthleteModelSettings(manual, "UTC", 200)
     monkeypatch.setenv("ONFLOWS_HRMAX_ZONE_PERCENTAGES", ",".join(map(str, PERCENTAGES)))
     result = client.put(PATH, json={"timezone": "UTC", "hrmax_bpm": 205}).json()
-    assert result["hr_zone_bounds_bpm"] == list(manual)
+    assert result["hr_zone_bounds_bpm"] == [92, *manual[1:5], 205]
     assert result["hr_zone_source"] == "MANUAL"
     assert result["hr_zone_percentages"] is None
     # Changing source must be deliberate.
@@ -91,7 +90,7 @@ def test_explicit_manual_edit_replaces_automatic_provenance(settings_client):
     items["ath-test"] = AthleteModelSettings(BOUNDS, "UTC", 200, "AUTOMATIC_HRMAX", PERCENTAGES)
     changed = (99, 119, 139, 159, 179, 199)
     result = client.put(PATH, json={"timezone": "UTC", "hrmax_bpm": 200, "hr_zone_bounds_bpm": changed}).json()
-    assert result["hr_zone_bounds_bpm"] == list(changed)
+    assert result["hr_zone_bounds_bpm"] == [90, *changed[1:5], 200]
     assert result["hr_zone_source"] == "MANUAL"
     assert result["hr_zone_percentages"] is None
 
@@ -105,7 +104,7 @@ def test_automatic_mode_requires_known_valid_hrmax(settings_client, monkeypatch,
 
 
 def test_rounding_and_unusable_rounded_scheme():
-    assert bounds_from_hrmax(195, PERCENTAGES) == (98, 117, 137, 156, 176, 195)
+    assert bounds_from_hrmax(195, PERCENTAGES) == (88, 140, 154, 174, 183, 195)
     with pytest.raises(ValueError, match="increasing boundaries"):
         bounds_from_hrmax(200, (97.5, 97.6, 97.7, 97.8, 97.9, 100))
 
@@ -133,3 +132,17 @@ def test_repository_roundtrips_provenance_and_rejects_inconsistent_estimates():
     saved["hr_zone_bounds"][0] = 99
     with pytest.raises(PersistentStoreFailure, match="invalid"):
         repository.athlete_settings("ath-test")
+
+
+def test_age_only_uses_tanaka_and_indicator_change_preserves_individual_maximum(settings_client):
+    client, items = settings_client
+    response=client.put(PATH,json={"timezone":"UTC","age_years":40,"leading_indicator":"SPEED"})
+    assert response.status_code == 200
+    assert response.json()["hrmax_bpm"] == 180
+    assert response.json()["hrmax_source"] == "TANAKA"
+    assert response.json()["leading_indicator"] == "SPEED"
+    assert client.put(PATH,json={"timezone":"UTC","hrmax_bpm":195}).json()["hrmax_source"] == "MANUAL"
+    changed=client.put(PATH,json={"timezone":"UTC","age_years":50,"leading_indicator":"HEART_RATE"}).json()
+    assert changed["hrmax_bpm"] == 195
+    assert changed["hrmax_source"] == "MANUAL"
+    assert changed["leading_indicator"] == "HEART_RATE"

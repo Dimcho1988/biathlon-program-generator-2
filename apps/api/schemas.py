@@ -87,6 +87,8 @@ class AthleteSettingsInput(StrictModel):
     timezone: str
     hrmax_bpm: int | None = None
     hr_zone_source: Literal["MANUAL", "AUTOMATIC_HRMAX"] | None = None
+    age_years: int | None = None
+    leading_indicator: Literal["HEART_RATE", "SPEED"] | None = None
 
 
 class AthleteSettingsResponse(StrictModel):
@@ -97,6 +99,10 @@ class AthleteSettingsResponse(StrictModel):
     hr_zone_source: Literal["MANUAL", "AUTOMATIC_HRMAX"] | None = None
     hr_zone_percentages: tuple[float, float, float, float, float, float] | None = None
     automatic_hr_zone_percentages: tuple[float, float, float, float, float, float] | None = None
+    age_years: int | None = None
+    leading_indicator: Literal["HEART_RATE", "SPEED"] = "HEART_RATE"
+    hrmax_source: Literal["MANUAL", "TANAKA", "OBSERVED"] | None = None
+    hrmax_observation: dict[str, Any] | None = None
 
 
 class AthletePlanningProfileInput(StrictModel):
@@ -302,6 +308,7 @@ class LoadHistoryActivity(StrictModel):
     quality_status: Literal["valid", "limited"]
     hr_coverage_percent: float
     zones: list[ActivityZoneLoad]
+    load_source: dict[str, Any] | None = None
 
 
 class StrengthLoadModel(StrictModel):
@@ -356,6 +363,7 @@ class LoadHistoryResponse(StrictModel):
     activities: list[LoadHistoryActivity]
     strength: StrengthLoadHistory | None = None
     component_load_model: dict[str, Any] | None = None
+    load_selection: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_v2_tref_provenance(self) -> "LoadHistoryResponse":

@@ -128,5 +128,5 @@ def test_completed_work_tracks_current_curve_capacity_without_refreshing_persist
                            for row in activity["zones"] if row["zone"] == report_zone["zone"])
             assert report_zone["effective_load"] == pytest.approx(expected)
         actual_z3.append(next(row["effective_load"] for row in report["zones"] if row["zone"] == "Z3"))
-    assert actual_z3 == pytest.approx([12., 0.])
+    assert actual_z3 == pytest.approx([0., 0.])  # Recorded load retains its causal capacity context.
     assert repository.latest("pilot") == persisted

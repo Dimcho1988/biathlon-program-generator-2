@@ -106,15 +106,15 @@ def test_tight_ranges_report_sensitivity_and_degenerate_ranges_reject():
     assert model.evaluate(model.prepare(source),16.)["reason"] == "INVALID_ZONE_BOUNDARIES"
 
 
-def test_v10_requires_ten_second_evidence_and_never_uses_10point8_or_gps_peak():
+def test_v10_uses_explicit_ten_second_continuation_or_measured_boundary():
     curve=Curve(REFERENCE_TIMES,REFERENCE_SPEEDS)
     value=v10_anchor(curve,[])
-    assert value["status"] == "UNAVAILABLE" and value["speed_kmh"] is None
-    assert value["reason"] == "TEN_SECONDS_OUTSIDE_CURVE_DOMAIN"
+    assert value["status"] == "AVAILABLE" and value["extrapolated"] is True
+    assert value["speed_kmh"] > curve.speed(10.8)*3.6
     test={"duration_s":10.,"speed_kmh":24.,"source":"MANUAL","maximal":True,"start_type":"FLYING"}
     assert v10_anchor(curve,[test])["start_type"] == "FLYING"
-    assert v10_anchor(curve,[{**test,"source":"VFLAT"}])["status"] == "UNAVAILABLE"
-    assert v10_anchor(curve,[{**test,"duration_s":10.8}])["status"] == "UNAVAILABLE"
+    assert v10_anchor(curve,[{**test,"source":"VFLAT"}])["extrapolated"] is True
+    assert v10_anchor(curve,[{**test,"duration_s":10.8}])["extrapolated"] is True
     extended=Curve((10.,100.),(8.,6.))
     extrapolated=v10_anchor(extended,[{"duration_s":100.,"speed_kmh":21.6,"maximal":True}])
     assert extrapolated["extrapolated"] is True and extrapolated["evidence"] == "EXTRAPOLATED"
@@ -147,5 +147,6 @@ def test_explicit_exclusions_and_other_sports_preserve_real_time():
     result=model.integrate(p,[{"seconds":60,"speed_kmh":19,"exclusion_reason":"DOWNHILL"}],recorded_seconds=120)
     assert result["uncovered_minutes"] == 2 and result["excluded_minutes"] == 1
     assert result["zones"][3]["equivalent_minutes"] is None
-    for sport in ["Ride","NordicSki","RollerSki","WeightTraining"]:
-        assert model.evaluate(model.prepare(profile(),sport=sport),19)["reason"] == "RUN_ONLY"
+    for sport in ["Ride","NordicSki","RollerSki"]:
+        assert model.evaluate(model.prepare(profile(),sport=sport),19)["status"] == "AVAILABLE"
+    assert model.evaluate(model.prepare(profile(),sport="WeightTraining"),19)["reason"] == "UNSUPPORTED_SPORT"

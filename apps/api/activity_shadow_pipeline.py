@@ -18,6 +18,7 @@ from vflat_b65.terrain_correction import terrain_metadata
 from vflat_b65.sports import is_running, is_cycling, is_treadmill, is_nordic, speed_model_versions
 from vflat_b65.load import VERSION as SPEED_LOAD_SAMPLES_VERSION
 from biathlon.sport_heart_rate import reference_offset, policy as sport_hr_policy
+from biathlon.unified_load import HR_INTERVAL_VERSION
 from hrmod_lab.schemas import (
     CONFIG_VERSION as HRMOD_CONFIG_VERSION,
     MODEL_VERSION as HRMOD_MODEL_VERSION,
@@ -128,6 +129,7 @@ def activity_shadow_configuration_fingerprint(
     # Session metadata belongs in the cache fingerprint, not the comparison
     # key: different routes remain comparable under the same model.
     if activity_detail is not None:
+        payload["hr_recording_intervals_version"] = HR_INTERVAL_VERSION
         payload["vflat_terrain_metadata"] = terrain_metadata(activity_detail)
         if is_running(sport) or is_nordic(sport):
             payload["speed_load_samples_version"] = SPEED_LOAD_SAMPLES_VERSION
@@ -393,6 +395,7 @@ def compute_activity_shadow(
     vflat_by_timestamp = {
         str(row.get("timestamp")): row for row in vflat["timeseries"]
     }
+    hr_intervals = {interval.start_offset_sec: interval for interval in normalized.intervals}
     rows = []
     for index, sample in enumerate(samples):
         hr_row = hrmod["timeseries"][index] if index < len(hrmod["timeseries"]) else {}
@@ -411,6 +414,12 @@ def compute_activity_shadow(
             {
                 "timestamp": sample.timestamp.isoformat(),
                 "elapsed_s": references.samples[index].elapsed_s,
+                "hr_interval_classification": (
+                    hr_intervals[references.samples[index].elapsed_s].classification
+                    if references.samples[index].elapsed_s in hr_intervals else None),
+                "hr_interval_end_s": (
+                    hr_intervals[references.samples[index].elapsed_s].end_offset_sec
+                    if references.samples[index].elapsed_s in hr_intervals else None),
                 "speed_raw_kmh": _plain_number(
                     vf_row.get("speed_raw_kmh")
                     if vf_row

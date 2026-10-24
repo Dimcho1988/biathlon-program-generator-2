@@ -199,12 +199,14 @@ def planning_source_details(repository, alias, profile, settings, envelope, toda
     ] if s and s != "Активност"))
     contexts = read_contexts(repository, alias, sports, speed_by_sport=speed_by_sport)
     if measured:
+        from .actual_load_projection import reconstruct_history
+        measured = reconstruct_history(repository, alias, measured)
         measured = project_history(measured, contexts)
     projected_measured = measured
     measured = training_return.confirmed_source(measured, profile, today, calendar)
     quality = measured.get("quality") or {}
     estimates, speed_diagnostics = {}, None
-    if quality.get("limited_activities") or quality.get("excluded_activities"):
+    if not measured.get("load_selection") and (quality.get("limited_activities") or quality.get("excluded_activities")):
         from .speed_zone_history import prepare_history
         models = dict(speed_by_sport or {})
         missing_sports = {a.get("sport") for a in [*measured.get("activities", []), *calendar]
@@ -315,9 +317,13 @@ def _capacity_context(speed, settings):
     blend = dosing_curve.from_view(speed)
     curve = blend or speed_duration.calibrated(tests, prior=prior)
     durations = {a["zone"]: a["duration_s"] for a in prior_summary.get("anchors", [])}
-    predictor_type = dosing_curve.Predictor if blend else hr_speed.Predictor
-    predictor = predictor_type(curve, settings.zone_bounds_bpm, settings.hrmax_bpm, speed["index_summary"], expert_durations=durations or None,
-                               normalization_offset_bpm=reference_offset(speed.get("sport")))
+    predictor_type = dosing_curve.Predictor if blend else hr_speed.ZonalPredictor
+    try:
+        predictor = predictor_type(curve, settings.zone_bounds_bpm, settings.hrmax_bpm, speed["index_summary"], expert_durations=durations or None,
+                                   normalization_offset_bpm=reference_offset(speed.get("sport")), sport=speed.get("sport", "Run"),
+                                   profile=((speed.get("dosing_model") or {}).get("speed_zones") if blend else speed.get("speed_zones")), tests=tests)
+    except ValueError:
+        return None, tests, [*reasons, "INVALID_HR_SPEED_ZONE_PROFILE"]
     # Candidate methods reuse this immutable curve/HR context. Keep exact
     # speed-to-HR results on this predictor only, as the recipe resolver does.
     predictor.hr_for_speed = lru_cache(maxsize=2048)(predictor.hr_for_speed)
@@ -463,17 +469,18 @@ def _capacity_for_impl(method, settings, speed, context, today, allow_fallback=T
         if (speed.get("index_summary", {}).get(zone) or {}).get("count", 0) < 3:
             reasons.append("INSUFFICIENT_COMPARABLE_INDEX_OBSERVATIONS")
         try:
+            velocity = predictor.speed_for_hr(target_hr)
             duration = predictor.duration(target_hr)
             if predictor.metadata(target_hr)["hr_prediction_source"] not in {"INDEX", "COACH_INDEX_TEST_BLEND"}:
                 reasons.append("HR_MAPPING_USES_EXPERT_ANCHOR")
             # The broad reference curve is not an athlete-supported domain.
             if not tests or not min(t["duration_s"] for t in tests) <= duration <= max(t["duration_s"] for t in tests):
                 reasons.append("OUTSIDE_OBSERVED_TEST_DURATION_SUPPORT")
-            velocity = predictor.speed_for_hr(target_hr)
         except ValueError:
-            reasons.append("OUTSIDE_HR_SPEED_PREDICTION_RANGE")
+            reasons.append("BOUNDARY_OUTSIDE_CURVE_DOMAIN" if velocity is not None else "OUTSIDE_HR_SPEED_PREDICTION_RANGE")
     prior_reasons = {"INSUFFICIENT_INDEPENDENT_TEST_DURATIONS", "OUTSIDE_OBSERVED_TEST_DURATION_SUPPORT"}
-    prior_allowed = use_model_prior and allow_fallback and reasons and set(reasons) <= prior_reasons
+    mapping_priors = {"HR_MAPPING_USES_EXPERT_ANCHOR", "INSUFFICIENT_COMPARABLE_INDEX_OBSERVATIONS"}
+    prior_allowed = use_model_prior and allow_fallback and reasons and set(reasons) <= prior_reasons | mapping_priors
     # The separate 30/70 curve is an explicit coaching estimate, including its
     # extrapolated part. Existing fallback settings still control whether such
     # estimates may prescribe a dose; stale/invalid data remain disqualifying.
@@ -481,24 +488,27 @@ def _capacity_for_impl(method, settings, speed, context, today, allow_fallback=T
     blend_allowed = (isinstance(predictor, dosing_curve.Predictor)
         and (use_model_prior or observed_curve_support(tests, duration))
         and (not reasons or allow_fallback
-             and set(reasons) <= prior_reasons | {"INSUFFICIENT_COMPARABLE_INDEX_OBSERVATIONS"}))
+             and set(reasons) <= prior_reasons | mapping_priors))
     if (not reasons or prior_allowed or blend_allowed) and duration is not None:
         source = "BLENDED_DOSING_CURVE" if blend_allowed else "SPEED_DURATION_PRIOR" if prior_allowed else "SPEED_DURATION"
         minutes = duration / 60.
         model_version = dosing_curve.VERSION if blend_allowed else speed["model_version"]
     else:
-        if predictor is not None or (speed or {}).get("status") in {"CALIBRATED", "PRELIMINARY"} or not allow_fallback:
+        outside_curve = (predictor is not None and velocity is not None and use_model_prior
+                         and set(reasons) <= prior_reasons | mapping_priors | {"BOUNDARY_OUTSIDE_CURVE_DOMAIN"})
+        if not allow_fallback or ((predictor is not None or (speed or {}).get("status") in {"CALIBRATED", "PRELIMINARY"}) and not outside_curve):
             return None
         # Expert continuous capacity at the upper zone edge; explicitly NOT
         # the canonical load history's bounded 7*E40 variable also named Tref.
         prior_anchor = next((a for a in (speed or {}).get("preliminary_capacity", {}).get("anchors", [])
                              if a.get("zone") == zone and a.get("kind") == "ESTIMATE"), None)
         upper_capacity = (prior_anchor["duration_s"]/60 if prior_anchor else sum(hr_speed.TMAX_RANGES_S[zone]) / 120.)
-        coefficient = linear_equivalence_coefficient(target_hr, low, high,
-                                                     DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM)
+        from biathlon.speed_equivalence import relative_coefficient
+        coefficient = relative_coefficient(target_hr, low, high, zone) or .1
         minutes = upper_capacity / max(.1, coefficient)
         source = "EXPERT_CONTINUOUS_TREF"
-        velocity = None
+        if not outside_curve:
+            velocity = None
         model_version = "expert-continuous-capacity-v1"
     return {"capacity_source": source, "capacity_minutes": _round(minutes),
             "capacity_reference": "EXPERT_CONTINUOUS_TMAX" if source == "EXPERT_CONTINUOUS_TREF" else "CURVE_AT_PRESCRIBED_EFFORT",
@@ -524,6 +534,7 @@ def _blocks(method, work, evidence, settings):
     from biathlon.sport_heart_rate import local_settings
     local = local_settings(settings, method.get("actual_sport"))
     for block in blocks:
+        block.setdefault("load_sport", method.get("actual_sport") or (method.get("sports") or ["Run"])[0])
         if block["zone"] == "STR" or block.get("passive_rest") or block.get("method_library") or block.get("primary_control") == "HRMAX":
             continue
         same = block.get("target_speed_kmh") is not None and evidence.get("target_speed_kmh") is not None and abs(block["target_speed_kmh"]-evidence["target_speed_kmh"]) < .002
@@ -861,9 +872,22 @@ def _canonical_load(blocks, settings, rows, day, *, technical_reference=None, zo
         # Effort-led intervals carry a planning estimate, never a fabricated
         # measured HR or an instruction to chase the HR target.
         load_hr = block["target_hr_bpm"] if block["target_hr_bpm"] is not None else (block.get("load_reference_hr_bpm") or high)
-        coefficient = linear_equivalence_coefficient(load_hr, low, high,
-                                                     equivalence_slope(z), is_z5=z == "Z5")
-        direct[z] += block["duration_min"] * coefficient
+        from biathlon import speed_equivalence
+        contexts = getattr(settings, "load_contexts_by_sport", {})
+        sport = block.get("load_sport") or getattr(settings, "load_default_sport", "Run")
+        zone_parameters = (contexts.get(sport) or {}).get("comparison_parameters")
+        speed = block.get("target_speed_kmh")
+        use_speed = (speed is not None and zone_parameters
+                     and (getattr(settings, "leading_indicator", "HEART_RATE") == "SPEED"
+                          or block.get("target_hr_bpm") is None))
+        estimate = speed_equivalence.evaluate(zone_parameters, speed, zone=z) if use_speed else None
+        if estimate is None or estimate.get("status") == "UNAVAILABLE":
+            local_offset = getattr(settings, "sport_hr_offset_bpm", 0.)
+            common_bounds = tuple(v+local_offset for v in settings.zone_bounds_bpm)
+            total_offset = block.get("sport_hr_offset_bpm", local_offset)
+            estimate = speed_equivalence.evaluate_hr(zone_parameters, load_hr, bounds=common_bounds, offset_bpm=total_offset, zone=z)
+        if estimate.get("status") == "AVAILABLE":
+            direct[estimate["zone"]] += block["duration_min"] * estimate["coefficient"]
     lower = (day - timedelta(days=40)).isoformat()
     upper = day.isoformat()
     technical = technical_reference if technical_reference is not None else {z: _causal_tref(z, pd.Series([r["effective_load"] for r in rows
@@ -1578,6 +1602,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     snapshot = {**snapshot, "load_history": measured_source}
     envelope = {**envelope, "snapshot_payload": snapshot}
     profile = {**profile, "_component_load_context": component_contexts[primary_sport]}
+    from types import SimpleNamespace
+    settings = SimpleNamespace(**{name: getattr(settings, name) for name in dir(settings)
+        if not name.startswith("_") and not callable(getattr(settings, name))},
+        load_contexts_by_sport=component_contexts, load_default_sport=primary_sport)
     rows = _daily_rows(source, today)
     volume_evidence = planning_controls.volume_history(source, today, 0, gap_days=(controls or {}).get("history_gap_days", planning_history.DEFAULT_GAP_DAYS))
     history_policy = volume_evidence["history_policy"]

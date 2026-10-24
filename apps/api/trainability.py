@@ -54,7 +54,9 @@ def compute_trainability(hr_rows: Sequence[Mapping[str,Any]], speed_rows: Sequen
     if hrmax_bpm is not None and (not math.isfinite(hrmax_bpm) or hrmax_bpm<=0): raise ValueError("HRmax must be positive")
     quality=signal_quality(hr_rows)
     # Preserve missing HR timestamps. Never join across missing observations.
-    hr_by_time={t:_number(r.get("hr_raw_bpm")) for r in hr_rows if (t:=_time(r)) is not None}
+    hr_by_time={t:(_number(r.get("hr_raw_bpm")) if not r.get("is_estimated") and not r.get("generated")
+                   and r.get("hr_source", "raw") in {"raw", "RAW", "MEASURED"} else None)
+                for r in hr_rows if (t:=_time(r)) is not None}
     ordered=sorted(hr_by_time)
     times=np.asarray(ordered,float)
     hrs=np.asarray([hr_by_time[t] if hr_by_time[t] is not None else np.nan for t in ordered],float)
@@ -65,7 +67,8 @@ def compute_trainability(hr_rows: Sequence[Mapping[str,Any]], speed_rows: Sequen
         dt=_number(row.get("dt_s"));end=_time(row)
         if dt is None or dt<=0: continue
         v=_number(row.get("vflat_b65_kmh"));grade=_number(row.get("grade_raw_pct"))
-        if end is None or dt>MAX_GAP_SECONDS or v is None or v<=0 or grade is None or row.get("exclusion_reason"):
+        if (end is None or dt>MAX_GAP_SECONDS or v is None or v<=0 or grade is None or row.get("exclusion_reason")
+                or row.get("is_estimated") or row.get("generated") or row.get("source") in {"MODEL", "ESTIMATED"}):
             unavailable+=dt;continue
         if grade<MIN_GRADE_PCT: downhill+=dt;continue
         pairs.append((end-dt/2,dt,v))

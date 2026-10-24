@@ -76,7 +76,7 @@ def test_unrelated_read_sessions_keep_narrow_settings_projections_by_default():
     scope = ReadSession(repo)
     assert scope.athlete_settings("athlete").hrmax_bpm == 200
     assert set(calls[0].url.params["select"].split(",")) == {
-        "hr_zone_bounds", "timezone", "hrmax_bpm", "hr_zone_source", "hr_zone_percentages"}
+        "hr_zone_bounds", "timezone", "hrmax_bpm", "hr_zone_source", "hr_zone_percentages", "model_preferences"}
     assert scope.athlete_planning_calendar("athlete") == AthletePlanningCalendar(())
     assert calls[1].url.params["select"] == "planning_calendar"
 

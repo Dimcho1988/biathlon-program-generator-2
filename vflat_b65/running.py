@@ -12,7 +12,7 @@ import pandas as pd
 from .core import _rolling_median
 
 MODEL_VERSION = "vflat_run_grade_table_v1"
-CONFIG_VERSION = "vflat_run_grade_config_v1"
+CONFIG_VERSION = "vflat_run_grade_config_v2_relative_floor"
 GRADE_TABLE = (
     (-32., 1.6), (-26., 1.4), (-24., 1.2), (-20., 1.1), (-18., 1.),
     (-14., .9), (-10., .87), (-4., .9), (0., 1.), (4., 1.12),
@@ -22,7 +22,7 @@ GRADE_TABLE = (
 
 @dataclass(frozen=True)
 class RunningGradeConfig:
-    min_speed_kmh: float = 5.
+    min_speed_kmh: float = 0.
     output_smoothing_s: int = 21
 
     def to_dict(self):

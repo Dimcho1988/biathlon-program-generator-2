@@ -85,6 +85,9 @@ export async function getResponseHistory(athleteAlias:string,start?:string,end?:
 }
 export interface TrainingStatusResult { data: TrainingStatus; mode: DataMode }
 export interface AthleteSettings {
+  age_years?: number | null;
+  leading_indicator?: "HEART_RATE" | "SPEED";
+  hrmax_source?: "MANUAL" | "TANAKA" | "OBSERVED" | null;
   configured: boolean;
   hr_zone_bounds_bpm: [number, number, number, number, number, number] | null;
   timezone: string | null;
@@ -305,6 +308,9 @@ export async function getAthleteSettings(athleteAlias: string): Promise<AthleteS
     || (source === "AUTOMATIC_HRMAX" && (percentages === null || hrmax === null)))
     throw new Error("API услугата върна невалидна схема за HR зоните.");
   return { configured: payload.configured, hr_zone_bounds_bpm: bounds as AthleteSettings["hr_zone_bounds_bpm"], timezone, hrmax_bpm: hrmax as number | null,
+    age_years: "age_years" in payload && typeof payload.age_years === "number" ? payload.age_years : null,
+    leading_indicator: "leading_indicator" in payload && payload.leading_indicator === "SPEED" ? "SPEED" : "HEART_RATE",
+    hrmax_source: "hrmax_source" in payload ? payload.hrmax_source as AthleteSettings["hrmax_source"] : null,
     hr_zone_source: source, hr_zone_percentages: percentages as number[] | null, automatic_hr_zone_percentages: automaticPercentages as number[] | null };
 }
 

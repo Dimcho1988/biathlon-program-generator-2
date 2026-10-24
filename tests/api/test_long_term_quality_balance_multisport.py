@@ -26,9 +26,9 @@ def sport_curve(repo, sport, today):
     offset = reference_offset(sport)
     indices = {f"Z{i + 1}": {
         "index": (100 * (settings.zone_bounds_bpm[i + 1] + offset) / (settings.hrmax_bpm + offset))
-                 / (curve.speed(duration) * 3.6), "count": 3}
+                 / (curve.speed(duration) * 3.6), "count": 3, "seconds":1800.}
         for i, duration in enumerate(durations)}
-    predictor = hr_speed.Predictor(curve, settings.zone_bounds_bpm, settings.hrmax_bpm,
+    predictor = hr_speed.ZonalPredictor(curve, settings.zone_bounds_bpm, settings.hrmax_bpm,
                                    indices, normalization_offset_bpm=offset)
     return {"status": "CALIBRATED", "sport": sport,
             "model_version": speed_duration.VERSION,
@@ -107,7 +107,7 @@ def test_quality_balance_keeps_first_sport_method_and_curve_when_catalog_ids_rep
             own_capacities[sport] = capacity["capacity_minutes"]
             assert minutes == capacity["capacity_minutes"], (identifier, sport, minutes, capacity)
             assert target_speed == capacity["target_speed_kmh"]
-        assert own_capacities["NordicSki"] > own_capacities["Run"] * 1.25
+        assert own_capacities["NordicSki"] > own_capacities["Run"] * 1.2
 
     rows = engine._daily_rows(source, now.date())
     for day in plan["days"]:

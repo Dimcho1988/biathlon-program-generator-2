@@ -49,6 +49,24 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None,
     """
     if (source.get("planning_history") or {}).get("estimated"):
         raise ValueError("Planning estimates cannot become new observed inputs")
+    if source.get("load_selection"):
+        # The selected ledger already used the alternate measured indicator
+        # once. Missing both streams stays unknown; do not add expert minutes.
+        unresolved = [a["activity_ref"] for a in source.get("activities", ())
+                      if a.get("quality_status") != "valid"]
+        covered = {(r["date"], r["zone"]) for r in source.get("daily", ())}
+        covered.update((r["date"], "STR") for r in source.get("strength", {}).get("daily", ()))
+        begin = max(date.fromisoformat(source.get("period_start", today.isoformat())), today-timedelta(days=40))
+        end = min(date.fromisoformat(source.get("period_end", today.isoformat()))+timedelta(days=1), today)
+        missing_days = [(begin+timedelta(days=i)).isoformat() for i in range(max(0, (end-begin).days))
+                        if any(((begin+timedelta(days=i)).isoformat(), z) not in covered for z in COMPONENTS)]
+        diagnostics = {"version": VERSION, "policy": "UNIFIED_RECORDED_INDICATORS",
+            "estimated": False, "supported": not unresolved and not missing_days and not (source.get("quality") or {}).get("excluded_activities"),
+            "unresolved_activity_refs": unresolved, "missing_calendar_days": missing_days,
+            "estimated_activity_count": 0, "estimated_minutes": 0.,
+            "basis": "SELECTED_HR_SPEED_LEDGER", "q_convention": "COMMON_ZONE_REFERENCE",
+            "is_measured_zone_distribution": False, "activities": []}
+        return {**deepcopy(source), "planning_history": diagnostics}, diagnostics
     result = deepcopy(source)
     quality = source.get("quality") or {}
     activities = {a["activity_ref"]: deepcopy(a) for a in source.get("activities", [])}

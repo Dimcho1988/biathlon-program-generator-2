@@ -140,8 +140,10 @@ class _PlanningSettingsBundle:
         hrmax_bpm = row.get("hrmax_bpm") if isinstance(row, Mapping) else None
         zone_source = row.get("hr_zone_source", "MANUAL") if isinstance(row, Mapping) else None
         percentages = row.get("hr_zone_percentages") if isinstance(row, Mapping) else None
+        preferences = row.get("model_preferences") or {} if isinstance(row, Mapping) else {}
         if (
-            not isinstance(bounds, list)
+            not isinstance(preferences, Mapping)
+            or not isinstance(bounds, list)
             or len(bounds) != 6
             or not all(isinstance(value, int) and not isinstance(value, bool) for value in bounds)
             or not isinstance(athlete_timezone, str)
@@ -159,6 +161,10 @@ class _PlanningSettingsBundle:
             return AthleteModelSettings(
                 tuple(bounds), athlete_timezone, hrmax_bpm, zone_source,
                 tuple(percentages) if percentages is not None else None,
+                age_years=preferences.get("age_years"),
+                leading_indicator=preferences.get("leading_indicator", "HEART_RATE"),
+                hrmax_source=preferences.get("hrmax_source", "MANUAL"),
+                hrmax_observation=preferences.get("hrmax_observation"),
             ).validate()
         except ValueError as exc:
             raise PersistentStoreFailure("Stored athlete settings are invalid") from exc
@@ -660,7 +666,7 @@ class SupabasePilotRepository(SnapshotRepository):
         alias = quote(athlete_alias, safe="")
         response = self._request(
             "GET",
-            "/onflows_athlete_settings?select=hr_zone_bounds,timezone,hrmax_bpm,hr_zone_source,hr_zone_percentages"
+            "/onflows_athlete_settings?select=hr_zone_bounds,timezone,hrmax_bpm,hr_zone_source,hr_zone_percentages,model_preferences"
             f"&athlete_alias=eq.{alias}&limit=1",
         )
         return _PlanningSettingsBundle(self._json(response)).athlete_settings()
@@ -679,10 +685,20 @@ class SupabasePilotRepository(SnapshotRepository):
                 "hrmax_bpm": validated.hrmax_bpm,
                 "hr_zone_source": validated.hr_zone_source,
                 "hr_zone_percentages": list(validated.hr_zone_percentages) if validated.hr_zone_percentages is not None else None,
+                "model_preferences": validated.model_preferences(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
             headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
         )
+
+    def increase_athlete_hrmax(self, athlete_alias, observation, *, expected_hrmax):
+        """Conditional increase preserves simultaneous manual preference edits."""
+        result = self._json(self._request("POST", "/rpc/increase_onflows_hrmax", json={
+            "p_alias": athlete_alias, "p_candidate": observation["reference_hrmax_bpm"],
+            "p_expected_hrmax": expected_hrmax, "p_observation": dict(observation)}))
+        if type(result) is not bool:
+            raise PersistentStoreFailure("Invalid observed HRmax update result")
+        return result
 
     def athlete_planning_profile(
         self, athlete_alias: str

@@ -13,6 +13,9 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 from biathlon.periodization import ENGINE_VERSION as PERIODIZATION_VERSION
 from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION
+from biathlon.zone_profile import VERSION as ZONE_PROFILE_VERSION
+from biathlon.speed_equivalence import VERSION as ZONE_EQUIVALENCE_VERSION
+from biathlon.unified_load import VERSION as UNIFIED_LOAD_VERSION
 from .component_load_context import VERSION as COMPONENT_CAPACITY_VERSION
 
 from .management_schemas import ManagementProfile, normalize_building_profile
@@ -263,6 +266,9 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False,
             "dosing_curve": training_plan_engine.dosing_curve.VERSION,
             "preliminary_capacity": training_plan_engine.preliminary_capacity.VERSION,
             "hr_speed": training_plan_engine.hr_speed.VERSION,
+            "zone_profile": ZONE_PROFILE_VERSION,
+            "zone_equivalence": ZONE_EQUIVALENCE_VERSION,
+            "unified_load": UNIFIED_LOAD_VERSION,
             "planning_history_estimate": training_plan_engine.planning_history_estimate.VERSION,
             "speed_zone_history": speed_zone_history.VERSION,
             "load_progression": training_plan_engine.load_progression.VERSION,
@@ -279,6 +285,9 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False,
             "zone_bounds_bpm": list(settings.zone_bounds_bpm),
             "hrmax_bpm": settings.hrmax_bpm,
             "timezone": settings.timezone,
+            "leading_indicator": getattr(settings, "leading_indicator", "HEART_RATE"),
+            "age_years": getattr(settings, "age_years", None),
+            "hrmax_source": getattr(settings, "hrmax_source", "MANUAL"),
         },
         "calendar": _payload(repository.athlete_planning_calendar(alias)),
         "planning_preferences": _payload(repository.athlete_planning_profile(alias)),

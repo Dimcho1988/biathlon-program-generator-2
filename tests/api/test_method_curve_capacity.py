@@ -179,8 +179,8 @@ def test_curve_capacity_changes_denominator_without_creating_canonical_zone_work
     assert sum(b["duration_min"] for b in blocks if b["kind"] == "WORK") == 3.
     # Existing Z5 upper-edge equivalence is 1.5; the new curve capacity must
     # not add another capacity or interval-budget multiplier to canonical Q.
-    assert direct["Z5"] == pytest.approx(4.5)
-    assert effective["Z5"] == pytest.approx(4.5)
+    assert direct["Z5"] == pytest.approx(3*1.5*180/170)
+    assert effective["Z5"] == pytest.approx(3*1.5*180/170)
 
 
 def test_actual_terrain_speed_profile_preserves_coach_capacity_and_assessment_recency():

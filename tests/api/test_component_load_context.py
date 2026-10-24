@@ -38,9 +38,17 @@ def test_blended_curve_uses_its_own_references_and_retains_expert_mapping_proven
     curve = dosing_curve.from_view(view)
     result = capacity.context_from_speed_view(view)
     for row in view["dosing_model"]["hr_model"]["zones"][:4]:
-        assert result["minutes"][row["zone"]] == pytest.approx(curve.inverse(row["speed_kmh"] / 3.6) / 60)
-        assert result["sources"][row["zone"]] == "BLENDED_DOSING_CURVE"
-        assert result["references"][row["zone"]]["reference_source"] == row["index_hr_source"]
+        zone=row["zone"]
+        try:
+            expected=curve.inverse(row["speed_kmh"]/3.6)/60
+        except ValueError:
+            assert result["sources"][zone] == "EXPERT_CONTINUOUS_TMAX"
+            assert result["references"][zone]["reference_reason"] == "BOUNDARY_OUTSIDE_CURVE_DOMAIN"
+        else:
+            assert result["minutes"][zone] == pytest.approx(expected)
+            assert result["sources"][zone] == "BLENDED_DOSING_CURVE"
+        assert result["references"][zone]["reference_speed_kmh"] == row["speed_kmh"]
+        assert result["references"][zone]["reference_source"] == row["index_hr_source"]
     assert view == unchanged
 
 

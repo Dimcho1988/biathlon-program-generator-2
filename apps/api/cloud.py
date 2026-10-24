@@ -30,8 +30,18 @@ class AthleteModelSettings:
     hrmax_bpm: int | None = None
     hr_zone_source: str = "MANUAL"
     hr_zone_percentages: tuple[float, ...] | None = None
+    age_years: int | None = None
+    leading_indicator: str = "HEART_RATE"
+    hrmax_source: str = "MANUAL"
+    hrmax_observation: Mapping[str, Any] | None = None
 
     def validate(self) -> "AthleteModelSettings":
+        if self.age_years is not None and (type(self.age_years) is not int or not 5 <= self.age_years <= 100):
+            raise ValueError("age must be between 5 and 100 years")
+        if self.leading_indicator not in {"HEART_RATE", "SPEED"}:
+            raise ValueError("unsupported leading indicator")
+        if self.hrmax_source not in {"MANUAL", "TANAKA", "OBSERVED"}:
+            raise ValueError("unsupported HRmax source")
         if len(self.zone_bounds_bpm) != 6 or any(
             not 30 <= value <= 240 for value in self.zone_bounds_bpm
         ) or any(
@@ -59,6 +69,11 @@ class AthleteModelSettings:
         elif self.hr_zone_percentages is not None:
             raise ValueError("manual zones cannot carry automatic percentages")
         return self
+
+    def model_preferences(self):
+        return {"version": "unified-load-preferences-v1", "age_years": self.age_years,
+                "leading_indicator": self.leading_indicator, "hrmax_source": self.hrmax_source,
+                "hrmax_observation": deepcopy(self.hrmax_observation)}
 
 
 @dataclass(frozen=True)

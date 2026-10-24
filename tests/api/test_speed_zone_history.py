@@ -51,9 +51,9 @@ def test_only_missing_hr_spans_use_measured_speed_and_paired_index_q():
     assert repo.calls == [("athlete",(KEY,))]
     assert estimate["covered_missing_minutes"] == pytest.approx(59/60)
     z3 = next(row for row in estimate["zones"] if row["zone"]=="Z3")
-    # 15 km/h maps to estimated 150 bpm, hence Q=.7 per Z3 minute.
+    # 15 km/h maps to estimated 150 bpm, hence shared speed-style Q=15/16 per Z3 minute.
     assert z3["raw_time_min"] == pytest.approx(59/60)
-    assert z3["equivalent_time_min"] == pytest.approx(59/60*.7)
+    assert z3["equivalent_time_min"] == pytest.approx(59/60*15/16)
     assert sum(row["raw_time_min"] for row in estimate["zones"] if row["zone"]!="Z3") == 0
     assert estimate["provenance"]["load"] == "ESTIMATED_NOT_MEASURED_HR"
     assert estimate["paired_lag_seconds"] == 20
@@ -191,7 +191,7 @@ def test_running_descents_cover_missing_hr_and_known_rest_needs_no_index():
     source["activities"][0].update(hr_coverage_percent=0,zones=[])
     shadow["timeseries"]=[]
     for row in shadow["speed_test_series"]:
-        row["vflat_b65_kmh"] = 4.
+        row["vflat_b65_kmh"] = 0.
     result,_=history.prepare_history(Repository(shadow),"athlete",source,calendar,{},SETTINGS,TODAY)
     assert result["run"]["rest_missing_minutes"] == pytest.approx(2.)
     assert result["run"]["covered_missing_minutes"] == pytest.approx(2.)

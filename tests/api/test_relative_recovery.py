@@ -76,7 +76,7 @@ def test_partial_recovery_dose_does_not_spend_other_components_preparation(monke
         mixed_sessions_enabled=True)
     # Synthetic coach objectives isolate allocation from the progression
     # policy above. Keep real capacities, readiness, whole doses and Q/E gates.
-    targets = {"Z1":300., "Z2":100., "Z3":80., "Z4":20., "Z5":0., "STR":0.}
+    targets = {"Z1":400., "Z2":100., "Z3":80., "Z4":20., "Z5":0., "STR":0.}
     ceilings = {"Z1":1500., "Z2":800., "Z3":350., "Z4":120., "Z5":20., "STR":0.}
     original = engine._goals
     def goals(*args, **kwargs):

@@ -100,7 +100,7 @@ def test_supported_z5_target_includes_the_complete_minimums_canonical_direct_q()
     # Existing Z5 equivalence is 1+.05*(190-175), so 2 work min are 3.5 Q.
     # A target of 5 with 2 actual Q cannot fit it; the executable fixture
     # above deliberately gives 6−2=4 Q rather than bypassing this gate.
-    assert direct["Z5"] == 3.5
+    assert direct["Z5"] == pytest.approx(2*1.5*190/175)
     assert 5.-2. < direct["Z5"] <= 6.-2.
 
 

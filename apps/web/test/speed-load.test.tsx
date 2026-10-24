@@ -53,7 +53,7 @@ it("shows coverage, sport HR conversion and distinct Q without double counting",
   expect(container.textContent).toContain("Покритие: 50%");
   expect(container.textContent).toContain("143");expect(container.textContent).toContain("150");
   expect(container.textContent).toContain("Q · ч:мм:сс");
-  expect(container.textContent).toContain("не се добавя към пулсовия товар");
+  expect(container.textContent).toContain("Водещият показател за основното натоварване");
   expect(container.textContent).toContain("Използван е общият индекс");
 });
 
