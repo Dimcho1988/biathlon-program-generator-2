@@ -131,3 +131,11 @@ Production remains separate.
 
 The existing staging API, web and worker have automatic deployment disabled.
 Production deployment is separate from this implementation.
+
+2026-10-25 validation follow-up: an explicit UNAVAILABLE load-speed annotation
+is authoritative. The shared ledger now uses valid HR as the alternate source,
+or retains unknown time when HR is absent. It does not reuse a legacy Vflat
+value rejected by the descent balance. Unannotated legacy rows retain their
+existing fallback behavior. Six regression cases cover zero and positive
+rejected speeds, with and without measured HR. The ledger version invalidates
+history and planning fingerprints without changing the zone or Q coefficients.

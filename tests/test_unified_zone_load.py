@@ -255,3 +255,20 @@ def test_recording_stops_are_not_filled_as_smart_hr_intervals():
         bounds=BOUNDS, sport="Run", parameters=speed_equivalence.prepare(profile()), duration_s=45.)
     assert result["active_seconds"] == 10.
     assert result["unknown_seconds"] == 35.
+
+
+@pytest.mark.parametrize("rejected_vflat", [0., 16., 30.])
+@pytest.mark.parametrize("has_hr", [False, True])
+def test_explicitly_unavailable_speed_uses_hr_or_remains_unknown(rejected_vflat, has_hr):
+    shadow = streams(160. if has_hr else None, 16., seconds=10)
+    for row in shadow["speed_test_series"][4:7]:
+        row.update(load_status="UNAVAILABLE", load_speed_kmh=None,
+                   load_reason="NEGATIVE_DESCENT_RESIDUAL", vflat_b65_kmh=rejected_vflat)
+    result = unified_load.integrate(shadow, bounds=BOUNDS, sport="NordicSki",
+        parameters=speed_equivalence.prepare(profile("NordicSki")),
+        leading_indicator="SPEED", duration_s=10.)
+    assert result["source_seconds"] == {"HEART_RATE": 3. if has_hr else 0., "SPEED": 7.}
+    assert result["fallback_seconds"] == (3. if has_hr else 0.)
+    assert result["unknown_seconds"] == (0. if has_hr else 3.)
+    assert result["active_seconds"] == pytest.approx(10. if has_hr else 7.)
+    assert result["rest_seconds"] == 0.
