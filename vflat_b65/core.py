@@ -20,7 +20,7 @@ from .terrain_correction import terrain_correction
 
 
 MODEL_VERSION = "vflat_b65_dynamic_v5_terrain_density"
-CONFIG_VERSION = "vflat_b65_config_v6_relative_load_floor"
+CONFIG_VERSION = "vflat_b65_config_v7_uphill_110"
 
 # Authoritative B65 multipliers supplied for the locked model.  Above +5%,
 # these anchors define the approved literature reference curve used by the
@@ -60,8 +60,8 @@ class VFlatB65Config:
     uphill_amplitude: float = 1.20
     uphill_scale_pct: float = 14.34
     uphill_shape: float = 0.53
-    # V3 used 1.50; 1.20 = 1.50 * 0.80, reducing only its uphill increment.
-    uphill_increment_scale: float = 1.20
+    # Scale only the uphill increment; approved after the 67-workout replay.
+    uphill_increment_scale: float = 1.10
     negative_grade_gain: float = 0.229
     steep_blend_start_pct: float = 5.0
     steep_blend_end_pct: float = 8.0

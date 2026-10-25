@@ -37,7 +37,7 @@ GOLDEN = {
 def test_locked_versions_defaults_and_golden_multipliers() -> None:
     config = VFlatB65Config()
     assert MODEL_VERSION == "vflat_b65_dynamic_v5_terrain_density"
-    assert CONFIG_VERSION == "vflat_b65_config_v6_relative_load_floor"
+    assert CONFIG_VERSION == "vflat_b65_config_v7_uphill_110"
     assert config.descent_grade_weight == 1.7
     assert config.descent_grade_horizon_s == 20.0
     assert config.descent_memory_strength_kmh == 0.0
@@ -48,8 +48,8 @@ def test_locked_versions_defaults_and_golden_multipliers() -> None:
     assert config.output_smoothing_s == 21
     grades = np.asarray(list(GOLDEN))
     expected = np.asarray(list(GOLDEN.values()))
-    # Approved V3 anchors reduced by 20% only above the flat multiplier.
-    expected = np.where(grades > 1.0, 1.0 + 0.8 * (expected - 1.0), expected)
+    # Approved V3 scale 1.50 replaced by 1.10 only above the flat band.
+    expected = np.where(grades > 1.0, 1.0 + (1.10 / 1.50) * (expected - 1.0), expected)
     assert stationary_multiplier_b65(grades, config) == pytest.approx(
         expected, abs=1e-9
     )
