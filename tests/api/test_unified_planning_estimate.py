@@ -6,6 +6,7 @@ import pytest
 
 from apps.api import planning_history_estimate as estimate, training_plan_engine as engine
 from apps.api.management_lifecycle import _eligible
+from tests.api.test_management_lifecycle import system, activate, ACTOR
 from tests.api.test_load_progression import configured, observed
 from tests.api.test_training_plan_engine import TODAY, NOW, reference_speed
 
@@ -105,3 +106,35 @@ def test_unified_partial_history_supports_reviewable_plan_in_both_week_modes(mon
     assert plan["source"]["planning_history"]["policy"] == estimate.UNIFIED_POLICY
     assert not any(w["code"] == "LIMITED_LOAD_HISTORY" for w in plan["warnings"])
     assert source == original
+
+
+def test_fixed_to_adaptive_proposal_can_be_approved_with_separate_estimated_load(system):
+    from apps.api import management_lifecycle as lifecycle
+    from apps.api.management_schemas import ManagementPlanAction
+
+    system.profiles.body.adaptation_mode = "REVIEW"
+    approved_before = activate(system)["payload"]["plan"]
+    _, selected, _ = selected_history()
+    source = system.repo.envelope["snapshot_payload"]["load_history"]
+    source["load_selection"] = deepcopy(selected["load_selection"])
+    partial = source["activities"][-1]
+    partial.update(quality_status="limited", load_source=deepcopy(selected["activities"][-1]["load_source"]))
+    source["quality"]["limited_activities"] = 1
+    measured = deepcopy(source)
+    system.profiles.body.adaptation_mode = "AUTO"
+    system.profiles.revision = 2
+
+    pending = lifecycle.refresh(system.repo, "athlete", automatic=True, now=NOW)
+    assert pending["payload"]["status"] == "REVIEW_REQUIRED"
+    assert pending["payload"]["mode"] == "REVIEW"
+    assert pending["payload"]["proposal_mode"] == "AUTO"
+    assert pending["payload"]["plan"] == approved_before
+    assert _eligible(pending["payload"]["proposal"])
+    result = lifecycle.action(system.repo, "athlete",
+        ManagementPlanAction(action="APPROVE", expected_revision=pending["revision"]), ACTOR, now=NOW)
+    assert result["payload"]["status"] == "ACTIVE"
+    assert result["payload"]["mode"] == "AUTO"
+    assert result["payload"]["proposal"] is None
+    assert result["payload"]["plan"]["source"]["readiness_basis"] == "ESTIMATED_LOAD"
+    assert source == measured
+
