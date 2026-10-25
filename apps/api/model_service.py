@@ -25,6 +25,12 @@ from .speed_segments import segment_measurement
 SPEED_TEST_DAYS=90
 
 
+def _current_ski_anchor(test, sport):
+    from vflat_b65.sports import is_nordic, speed_model_versions
+    return (not is_nordic(sport) or test.get("source") == "MANUAL" or
+            (test.get("vflat_version"), test.get("vflat_config_version")) == speed_model_versions(sport))
+
+
 def _maximal_test(test):
     """Only an explicitly accepted maximal measurement is a hard anchor."""
     return (test.get("test_mode", "STRICT") == "STRICT"
@@ -215,6 +221,7 @@ def save_manual_test(repository,alias,body,actor):
             "distance_basis":"MEASURED_FLAT","coverage_percent":None})
         comparable=[e["payload"] for e in entries if e["kind"]=="SPEED_TEST" and e["entry_key"]!=key
             and e["payload"].get("enabled") and _curve_test(e["payload"]) and e["payload"].get("sport")==body.sport
+            and _current_ski_anchor(e["payload"], body.sport)
             and start.isoformat()<=e["payload"].get("day","")<=today.isoformat()]
         imported=[t for t in comparable if t.get("source")!="MANUAL"]
         if len({(t.get("vflat_version"),t.get("vflat_config_version")) for t in imported})>1:
@@ -286,9 +293,7 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
            and start.isoformat()<=e["payload"]["day"]<=today.isoformat()]
     # Imported ski speeds depend on the terrain transform. Preserve saved
     # records, but do not use old-transform anchors with the current model.
-    from vflat_b65.sports import is_nordic
-    stale_ski_tests = [t for t in selected if is_nordic(sport) and t.get("source") != "MANUAL"
-        and (t.get("vflat_version"), t.get("vflat_config_version")) != (vflat_version, vflat_config)]
+    stale_ski_tests = [t for t in selected if not _current_ski_anchor(t, sport)]
     selected = [t for t in selected if t not in stale_ski_tests]
     boundary_tests=[t for t in selected if _boundary_only_test(t)]
     tests=[t for t in selected if _curve_test(t)]

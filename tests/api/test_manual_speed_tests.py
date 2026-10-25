@@ -184,3 +184,17 @@ def test_api_requires_authenticated_profile_and_actor(monkeypatch):
     assert client.put(url, json={**payload, "flat_terrain": False}, headers=headers).status_code == 422
     assert client.put(url, json=payload, headers=headers).status_code == 200
     assert len(repo.writes) == 1
+
+
+def test_stale_ski_imports_do_not_block_new_manual_flat_calibration():
+    repo = Repository()
+    for i, version in enumerate(("vflat_b65_config_v5", "vflat_b65_config_v6_relative_load_floor")):
+        repo.rows.append({"kind":"SPEED_TEST", "entry_key":f"old-{i}", "revision":1,
+            "payload":{"sport":"NordicSki", "day":NOW.date().isoformat(), "enabled":True,
+                "duration_s":180., "speed_kmh":99., "maximal":True, "comparable":True,
+                "vflat_version":"vflat_b65_dynamic_v5_terrain_density", "vflat_config_version":version}})
+    before = deepcopy(repo.rows)
+    result = service.save_manual_test(repo, "ath-test", body(sport="NordicSki"), ACTOR)
+    assert result["saved"] is True
+    assert repo.rows[:2] == before
+    assert repo.writes[-1]["p_payload"]["speed_kmh"] == pytest.approx(24.)
