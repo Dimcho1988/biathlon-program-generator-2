@@ -9,7 +9,7 @@ import { PreferredSpeed } from "./running-speed-unit";
 import { SyncActionForm } from "./sync-action-form";
 import { TrainingPlanSummary } from "./training-plan-summary";
 import { TrainingPlanWeek } from "./training-plan-week";
-import { proposedWeekMode, WEEK_MODE_LABEL } from "../lib/week-mode";
+import { proposalHasIncompleteLoad, proposedWeekMode, WEEK_MODE_LABEL } from "../lib/week-mode";
 
 const dateLabel = (date: string) => new Date(`${date}T12:00:00Z`).toLocaleDateString("bg-BG", { day: "numeric", month: "long", timeZone: "UTC" });
 
@@ -74,6 +74,7 @@ export function PlanProposalReview({ record, canEdit, busy, symptomHold, onAppro
     : p.status !== "REVIEW_REQUIRED" ? "В момента няма предложение, което може да бъде утвърдено."
     : record.stale ? "Данните са променени. Избери „Обнови сега“ и прегледай актуалното предложение."
     : symptomHold ? "Първо запиши актуална сутрешна оценка и обнови програмата."
+    : proposalHasIncompleteLoad(proposal) ? `Утвърждаването е задържано заради непълна история на натоварването. Същото ограничение допуска само леки предложения${proposalMode && proposalMode !== p.mode ? " и задържа предложената смяна на режима" : ""}, докато непокритите участъци бъдат изяснени.`
     : proposal.activation_eligible !== true ? "Утвърждаването е задържано. Прегледай предупрежденията и условията по-горе и обнови необходимите данни."
     : busy ? "Изчакай текущото обновяване, преди да утвърдиш предложението." : null;
   return <section className="management-panel management-proposal" aria-label="Предложени промени">
