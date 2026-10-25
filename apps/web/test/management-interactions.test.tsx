@@ -320,6 +320,32 @@ it("shows the tighter time constraint and keeps long-term estimates distinct",as
 
 const activeResponse=(revision:number,stale=false):ActivePlanResponse=>({active:{revision,stale,actionable:false,payload:{schema_version:"active-plan-v2",status:"REVIEW_REQUIRED",mode:"AUTO",reason:"За преглед",plan:draft.payload,proposal:{...draft.payload,activation_eligible:true},changes:[],outcomes:[],decisions:{}}},history:[]});
 
+it.each(["AUTO", "REVIEW"] as const)("hides the draft-only warning for an approved %s plan and preserves its stored evidence", async mode => {
+  const value = activeResponse(31);
+  const warnings = [
+    { code: "DRAFT_REQUIRES_COACH_REVIEW", message: "Проект за треньорски преглед; не е активирана програма." },
+    { code: "ESTIMATED_LOAD_HISTORY", message: "Товарът за планиране включва оценка." },
+  ];
+  Object.assign(value.active!.payload, { status: "ACTIVE", mode, proposal: null,
+    plan: { ...value.active!.payload.plan, warnings } });
+  const before = JSON.stringify(value);
+  await mount(<ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>);
+  expect(container.textContent).toContain("Активна програма");
+  expect(container.textContent).not.toContain("не е активирана програма");
+  expect(container.textContent).toContain("Товарът за планиране включва оценка");
+  expect(JSON.stringify(value)).toBe(before);
+});
+
+it("retains the review warning while a proposal still awaits approval", async () => {
+  const value = activeResponse(32);
+  value.active!.payload.proposal = { ...value.active!.payload.proposal!, warnings: [
+    { code: "DRAFT_REQUIRES_COACH_REVIEW", message: "Проект за треньорски преглед; не е активирана програма." },
+  ] };
+  await mount(<ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>);
+  expect(container.textContent).toContain("Проект за треньорски преглед; не е активирана програма");
+  expect(button("Прегледай")).toBeTruthy();
+});
+
 const unchangedReceipt = { operation: "CHECK_NO_CHANGE" as const, check_id: "f7dfdc52-69a8-4a01-890d-36bfe2fb00b7", checked_revision: 6, recorded_at: "2026-10-19T09:42:13Z" };
 it.each([6, 7])("opts in only a supported manual refresh and reports the checked version against current version %s", async currentRevision => {
   const initial = { ...activeResponse(6), capabilities: { unchanged_checks: true } };
@@ -787,7 +813,8 @@ it("distinguishes published adaptive corrections from pending proposals and reta
   p.plan = { ...draft.payload, warnings: [{ code: "LIMITED_LOAD_HISTORY", message: "Историята е непълна." }] };
   p.changes = [{ date: "2026-09-22", before: "Преди", after: "След", before_minutes: 75, after_minutes: 60, reason: "Допълнително изпълнение" }];
   await mount(<ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/>);
-  expect(container.textContent).toContain("Автоматично приложени промени");
+  expect(container.textContent).toContain("Приложени промени");
+  expect(container.textContent).not.toContain("Автоматично приложени промени");
   expect(container.textContent).toContain("Не чакат утвърждаване.");
   expect(container.querySelector('[aria-label="Предупреждения и условия"]')?.textContent).toContain("Историята е непълна.");
   expect(button("Прегледай")).toBeUndefined();
