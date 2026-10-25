@@ -1,5 +1,10 @@
 # Unified zone profile and load, 2026-10-24
 
+This is a dated implementation log. PR 187–190 are integrated; old pending
+rollout checkpoints below are historical. The
+[current model contract](CURRENT_MODEL_CONTRACT.md) records the active rules,
+including HRmod load, raw-HR TI, the implemented 1.10 correction and source coverage.
+
 Authorized scope: implement the agreed research proposal, not just a comparison.
 Repository base e8bbb2f, branch codex/unified-zone-load-2026-10-24.
 

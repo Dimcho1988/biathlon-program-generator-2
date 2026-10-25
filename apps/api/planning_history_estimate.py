@@ -66,6 +66,13 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None,
             "estimated_activity_count": 0, "estimated_minutes": 0.,
             "basis": "SELECTED_HR_SPEED_LEDGER", "q_convention": "COMMON_ZONE_REFERENCE",
             "is_measured_zone_distribution": False, "activities": []}
+        from .load_metadata import selection_metadata
+        coverage = selection_metadata(source.get("activities", ()))
+        diagnostics["unresolved_activity_count"] = len(unresolved)
+        if coverage:
+            diagnostics["load_coverage"] = {k: coverage[k] for k in (
+                "activity_count", "total_aerobic_activities", "recorded_seconds",
+                "unknown_seconds", "rest_seconds", "fallback_seconds", "source_seconds")}
         return {**deepcopy(source), "planning_history": diagnostics}, diagnostics
     result = deepcopy(source)
     quality = source.get("quality") or {}

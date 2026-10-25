@@ -1,5 +1,10 @@
 # Speed load: Nordic descents, running and known rest
 
+Historical implementation note for PR 186. The fixed 5 km/h rule below was
+superseded by PR 187's athlete-relative 20% V6 floor. See
+[the current model contract](CURRENT_MODEL_CONTRACT.md) for the active rules,
+HR/speed source selection and the implemented 1.10 ski correction.
+
 Implemented load sample version: `speed-load-samples-v1-descent-balance-rest`.
 The measured Vflat model versions, terrain coefficients, inertia corrections,
 paired TI admission and maximal-test input are unchanged.

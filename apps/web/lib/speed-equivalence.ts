@@ -78,7 +78,7 @@ export function speedEquivalenceReason(reason?: string | null): string {
     NARROW_ZONE_RANGE: "Тесният диапазон прави теглото чувствително към малка промяна на скоростта.",
     OUTSIDE_VALIDATED_RANGE: "Има скорости извън диапазона; нужна е проверка на опорите.",
     VFLAT_SMOOTHING_NOT_SPRINT_VALIDATED: "Изглаждането на Vflat не потвърждава надеждна 10-секундна спринтова скорост.",
-    RUN_ONLY: "Коефициентите се прилагат само за бягане.",
+    RUN_ONLY: "Запазеният отчет е от стария режим само за бягане; обнови сравнението.",
     TREF_UNAVAILABLE: "Липсва съпоставимо Tref за нормализиран Q.",
   };
   return labels[reason] ?? "Няма достатъчно надеждни данни за тази оценка.";

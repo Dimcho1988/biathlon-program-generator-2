@@ -21,6 +21,7 @@ import { StatusOverview } from "./status-overview";
 import { equivalentWindow, latestTrainingDay, displayDate } from "../lib/dashboard-periods";
 import { VolumePeriodNote } from "./volume-period-note";
 import { TrefDetails } from "./tref-details";
+import { LoadSourceDetails } from "./load-source-details";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
 const decimal = (value: number) => number.format(value);
@@ -156,12 +157,12 @@ export function Dashboard({
             {generationRevision !== undefined && generationRevision > 0 && <div><dt>Активна версия</dt><dd>№ {generationRevision}</dd></div>}
             <div><dt>Версия на договора</dt><dd>{data.schema_version}</dd></div>
             <div><dt>Алгоритъм</dt><dd>{data.model.algorithm_version}</dd></div>
-            <div><dt>Effective HR версия</dt><dd>{data.model.effective_hr_version}</dd></div>
-            <div><dt>Effective HR източник</dt><dd>{data.model.effective_hr_source}</dd></div>
+            {!data.model.load_selection && <><div><dt>Пулсов адаптер на запазената версия</dt><dd>{data.model.effective_hr_version}</dd></div><div><dt>Източник на адаптера</dt><dd>{data.model.effective_hr_source}</dd></div></>}
             <div><dt>Версия на параметрите</dt><dd>{data.model.parameter_version}</dd></div>
             {generationId && <div><dt>Generation ID</dt><dd>{generationId}</dd></div>}
             {generationActivatedAt && <div><dt>Активирана</dt><dd><time dateTime={generationActivatedAt}>{timestamp(generationActivatedAt)}</time></dd></div>}
           </dl>
+          {data.model.load_selection && <LoadSourceDetails value={data.model.load_selection}/>}
         </details>}
       </section>
       {view === "details" && sessionActions && athleteCanEdit && <p className="dashboard-settings-link"><Link href="/?settings=edit">Зони и HRmax →</Link></p>}

@@ -349,13 +349,15 @@ def dataset_to_training_status(
         )
         / 100.0
     )
+    from .load_metadata import with_load_metadata
+    metadata = with_load_metadata({"algorithm_version": dataset.model_version,
+        "effective_hr_version": dataset.effective_hr_adapter_version,
+        "effective_hr_source": EFFECTIVE_HR_SOURCE, "parameter_version": 1},
+        dataset.activities.to_dict("records"))
     return TrainingStatusResponse(
         schema_version="training-status-v1", as_of=dataset.period_end,
         athlete_id=context.public_alias,
-        model=ModelMetadata(algorithm_version=dataset.model_version,
-                            effective_hr_version=dataset.effective_hr_adapter_version,
-                            effective_hr_source=EFFECTIVE_HR_SOURCE,
-                            parameter_version=1),
+        model=ModelMetadata(**metadata),
         data_quality=DataQuality(history_reliability=reliability,
                                  latest_activity_quality_score=quality,
                                  warnings=warnings),

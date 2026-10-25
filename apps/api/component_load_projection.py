@@ -146,10 +146,15 @@ def project_snapshot(repository, alias, snapshot, *, contexts_by_sport=None, spe
             frozen = (source.get("component_load_model") or {}).get("contexts_by_sport") or {}
             contexts_by_sport = {sport: frozen.get(sport) or context_from_speed_view({"sport": sport}) for sport in sports}
     projected = project_history(source, contexts_by_sport)
-    if projected is source:
+    from .load_metadata import with_load_metadata
+    original_model = (snapshot.get("training_status") or {}).get("model")
+    metadata = with_load_metadata(original_model, projected.get("activities", ())) if original_model else None
+    if projected is source and metadata == original_model:
         return snapshot
     out = deepcopy(snapshot)
     out["load_history"] = projected
+    if metadata is not None:
+        out["training_status"]["model"] = metadata
     summaries = {row["zone"]: row for row in projected.get("zones", [])}
     for row in (out.get("training_status") or {}).get("zones", []):
         if row["zone"] in summaries:

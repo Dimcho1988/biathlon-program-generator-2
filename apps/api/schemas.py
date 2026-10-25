@@ -236,6 +236,14 @@ class ModelMetadata(StrictModel):
     effective_hr_version: str
     effective_hr_source: str
     parameter_version: int
+    load_selection: dict[str, Any] | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_metadata(self, handler):
+        value = handler(self)
+        if self.load_selection is None:
+            value.pop("load_selection", None)
+        return value
 
 
 class DataQuality(StrictModel):

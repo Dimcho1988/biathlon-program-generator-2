@@ -442,7 +442,7 @@ it("compares direct period volume with actual plus planned without counting casc
   const draft=parseDraftRecord({entry_key:"test",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v17",status:"DRAFT",start_date:"2026-09-23",end_date:"2026-09-29",days:[],source:{},parameters:{},warnings:[],summary:{planned_minutes:0}}});
   await mount(<TrainingPlanSummary plan={{...draft.payload,allocation:{scheduled_slots:7,weekly_session_limit:7,components:{Z1:{basis:"DIRECT_Q",target:120,actual:20,planned:70,remaining:30,target_effective:500,actual_effective:100,planned_effective:400,unallocated_effective:0}},constraints:[],dose_limits:[]}}}/>);
   expect(container.textContent).toContain("Остава непланиран товар: Z1");
-  const table=container.querySelector("table")!;
+  const table=[...container.querySelectorAll("table")].find(t=>t.querySelector("caption")?.textContent?.startsWith("Покритие на целите за периода"))!;
   expect(table.textContent).toContain("Изпълнено");
   expect(table.textContent).toContain("Приравнен обем");
   expect(table.textContent).toContain("2:00:00");
@@ -462,7 +462,7 @@ it("keeps separate microcycle shortfalls visible when the whole-period totals ca
   }}}/>);
   expect(container.textContent).toContain("Цели на дългосрочната програма");
   expect(container.textContent).toContain("Остава непланиран товар: Z1");
-  const tables=[...container.querySelectorAll("table")];
+  const tables=[...container.querySelectorAll("table")].filter(t=>t.querySelector("caption")?.textContent?.startsWith("Дългосрочна цел"));
   expect(tables).toHaveLength(2);
   expect(tables[0].querySelector("caption")?.textContent).toContain("23.09.2026 г. – 25.09.2026 г.");
   expect(tables[1].querySelector("caption")?.textContent).toContain("26.09.2026 г. – 29.09.2026 г.");
