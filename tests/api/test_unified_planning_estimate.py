@@ -38,6 +38,7 @@ def test_only_unknown_selected_time_is_estimated_and_source_is_immutable():
     ledger, info = estimate.prepare(source, repo.envelope["activities"], configured(), TODAY, speed_estimates=speed)
     assert info["supported"] and info["estimated"]
     assert info["policy"] == estimate.UNIFIED_POLICY
+    assert info["q_convention"] == "COMMON_ZONE_REFERENCE"
     assert info["estimated_minutes"] == 1.
     assert info["speed_estimated_activity_count"] == 0
     assert sum(info["activities"][0]["estimated_q"].values()) == pytest.approx(1.)

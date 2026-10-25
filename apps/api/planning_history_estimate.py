@@ -129,7 +129,7 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None,
                    "estimated_activity_count": len(candidates),
                    "estimated_minutes": sum(v for _, v in candidates),
                    "basis": "RECORDED_ACTIVITY_DURATION_AND_EXPERT_Q_PROPORTIONS" if candidates else "MEASURED_HR",
-                   "q_convention": "ZONE_UPPER_EDGE_EQUIVALENT_MINUTES",
+                   "q_convention": "COMMON_ZONE_REFERENCE" if unified else "ZONE_UPPER_EDGE_EQUIVALENT_MINUTES",
                    "is_measured_zone_distribution": False if candidates else True,
                    "activities": []}
     diagnostics["unresolved_activity_count"] = len(unresolved)
