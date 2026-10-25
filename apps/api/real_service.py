@@ -1258,6 +1258,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         shadow_runs: dict[str, str] = {}
         scientific_input_hashes: dict[str, str] = {}
         observed_hrmax_candidates = []
+        refresh_speed_evidence = None
         identity_secret = env.get("ONFLOWS_ACTIVITY_ID_SECRET", "").strip() or salt
         from .activity_sport_rules import apply_sport_rules
         rules_reader = getattr(repository, "activity_sport_rules", None)
@@ -1283,6 +1284,8 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             )
             if isinstance(detail.get("onflows_sport_rule"), Mapping):
                 catalog_sport_classifications[activity_ref] = dict(detail["onflows_sport_rule"])
+            if refresh_speed_evidence is not None:
+                refresh_speed_evidence.record(catalog_metadata[activity_ref])
 
         def process_activity_shadow(
             activity_ref: str,
@@ -1335,13 +1338,15 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                             load_shadow = stored.get("shadow_payload")
                     if load_shadow:
                         record_observed_peak(load_shadow, activity_ref, detail.get("type"))
-                    return {
-                        "status": "unchanged",
-                        "run_key": existing_run_key,
-                        "experimental": True,
-                        "affects_canonical_load": False,
-                        "_unified_load_shadow": load_shadow,
-                    }
+                        if refresh_speed_evidence is not None:
+                            refresh_speed_evidence.record(catalog_metadata[activity_ref], load_shadow)
+                        return {
+                            "status": "unchanged",
+                            "run_key": existing_run_key,
+                            "experimental": True,
+                            "affects_canonical_load": False,
+                            "_unified_load_shadow": load_shadow,
+                        }
             immutable_input, derived = compute_activity_shadow(
                 detail=detail,
                 normalized=normalized,
@@ -1356,6 +1361,8 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             )
             shadow_runs[activity_ref] = run_key
             record_observed_peak(derived, activity_ref, detail.get("type"))
+            if refresh_speed_evidence is not None:
+                refresh_speed_evidence.record(catalog_metadata[activity_ref], derived)
             return {
                 "status": "published",
                 "run_key": run_key,
@@ -1375,17 +1382,26 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         load_capacity_contexts = {}
         historical_load_contexts = {}
         speed_inputs = None
+        def refreshed_speed_inputs(day):
+            nonlocal speed_inputs, refresh_speed_evidence
+            from . import model_service
+            from .refresh_speed_evidence import RefreshSpeedEvidence
+            if refresh_speed_evidence is None:
+                speed_inputs = model_service.speed_view_inputs(repository, context.public_alias)
+                refresh_speed_evidence = RefreshSpeedEvidence(speed_inputs, start, end)
+                # The first detail is collected before capacity resolution.
+                for metadata in catalog_metadata.values():
+                    refresh_speed_evidence.record(metadata)
+            return refresh_speed_evidence.at(day)
+
         def activity_load_context(sport, day):
-            nonlocal speed_inputs
             from . import model_service
             if not callable(getattr(repository, "_request", None)):
                 return load_capacity_for_sport(sport)
-            if speed_inputs is None:
-                speed_inputs = model_service.speed_view_inputs(repository, context.public_alias)
             identity = (sport, day)
             if identity not in historical_load_contexts:
                 view = model_service.speed_view(repository, context.public_alias, sport,
-                    _inputs={**speed_inputs, "today": day-timedelta(days=1)}, _capacity_only=True)
+                    _inputs=refreshed_speed_inputs(day-timedelta(days=1)), _capacity_only=True)
                 value = context_from_speed_view(view)
                 from biathlon import speed_equivalence, unified_load
                 if speed_equivalence.supports_sport(sport):
@@ -1435,7 +1451,17 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 load_capacity_contexts.clear()
                 historical_load_contexts.clear()
                 speed_inputs = None
+                refresh_speed_evidence = None
                 dataset = calculate_dataset()
+        if refresh_speed_evidence is not None:
+            # Export current capacities after all refreshed observations exist.
+            # Per-activity ledgers above retain their prior-date contexts.
+            from . import model_service
+            current_inputs = refreshed_speed_inputs(end)
+            for sport in dataset.component_load_contexts or {}:
+                view = model_service.speed_view(repository, context.public_alias, sport,
+                    _inputs=current_inputs, _capacity_only=True)
+                dataset.component_load_contexts[sport] = context_from_speed_view(view)
         provider.close()
         catalog_rows: list[Mapping[str, Any]] = []
         for activity in dataset.activities.itertuples(index=False):
