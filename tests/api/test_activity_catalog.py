@@ -380,7 +380,7 @@ def test_calendar_adds_daily_wellness_and_hrmod_final_zone_visualization(monkeyp
     assert payload["wellness_days"][0]["metrics"]["sleep_duration"]["value"] == 28200
     assert payload["wellness_days"][0]["metrics"]["hrv"]["value"] == 96
     activity = payload["activities"][0]
-    assert activity["zone_visualization_source"] == "hrmod_final"
+    assert activity["zone_visualization_source"] == "canonical_load"
     assert len(activity["hrmod_zones"]) == 5
     assert sum(zone["final_time_s"] for zone in activity["hrmod_zones"]) > 0
 

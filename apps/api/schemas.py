@@ -6,7 +6,7 @@ from datetime import date, timedelta
 import math
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator, model_serializer
+from pydantic import BaseModel, Field, ConfigDict, model_validator, model_serializer
 
 
 class StrictModel(BaseModel):
@@ -466,7 +466,7 @@ class ActivityCalendarItem(StrictModel):
     shadow_available: bool
     zones: list[ActivityZoneSummary]
     hrmod_zones: list[ActivityHrmodZoneSummary]
-    zone_visualization_source: Literal["hrmod_final", "canonical_raw", "none"]
+    zone_visualization_source: Literal["canonical_load", "hrmod_final", "canonical_raw", "none"]
 
 
 class ActivityWeekSummary(StrictModel):
@@ -519,7 +519,15 @@ class ActivityCalendarResponse(StrictModel):
         return self
 
 
+class ActivityHrZoneTimes(StrictModel):
+    zone: Literal["Z1", "Z2", "Z3", "Z4", "Z5"]
+    raw_time_s: float
+    hrmod_time_s: float
+
+
 class ActivityDetailResponse(ActivityCalendarItem):
+    hr_zone_times: list[ActivityHrZoneTimes] = Field(default_factory=list)
+    hr_zone_time_method: str | None = None
     schema_version: Literal["activity-detail-v1"]
     description: str | None
     moving_time_min: float | None

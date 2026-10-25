@@ -21,6 +21,7 @@ from ..schemas import (
 from fastapi import APIRouter
 from .. import dependencies
 from ..sync_service import optional_iso
+from ..hr_zone_times import synchronize_hr_zone_times
 
 router = APIRouter()
 ACTIVITY_SHADOW_REF_PATTERN = re.compile(r"^(?:shadow-|act_)[a-f0-9]{32}$")
@@ -226,6 +227,10 @@ def _activity_view_payload(
     ):
         raise ValueError("Activity view canonical pointer is invalid")
 
+    duration_s = max(float(catalog.get("elapsed_time_s") or 0.), float(catalog.get("moving_time_s") or 0.))
+    raw_shadow = synchronize_hr_zone_times(raw_shadow, sport=str(catalog.get("sport") or "Unknown"),
+                                          duration_s=duration_s)
+
     shadow_zone_summary = (
         raw_shadow.get("zone_summary")
         if isinstance(raw_shadow, Mapping)
@@ -244,6 +249,12 @@ def _activity_view_payload(
         },
         [item for item in shadow_zone_summary if isinstance(item, Mapping)],
     )
+    method = (raw_shadow or {}).get("hr_zone_time_method")
+    if isinstance(method, Mapping):
+        detail["hr_zone_times"] = [{"zone": item["zone_name"], "raw_time_s": item["raw_seconds"],
+                                    "hrmod_time_s": item["hrmod_final_seconds"]}
+                                   for item in shadow_zone_summary]
+        detail["hr_zone_time_method"] = method.get("version")
     series = None
     if isinstance(raw_series, Mapping):
         series = {
@@ -260,6 +271,15 @@ def _activity_view_payload(
         "series": series,
         "shadow": dict(raw_shadow) if isinstance(raw_shadow, Mapping) else None,
     }
+
+
+def _synchronized_activity_shadow(repository, alias, activity_ref):
+    reader = getattr(repository, "active_activity_view", None)
+    if activity_ref.startswith("act_") and callable(reader):
+        row = reader(alias, activity_ref)
+        if isinstance(row, Mapping):
+            return _activity_view_payload(row, activity_ref)["shadow"]
+    return synchronize_hr_zone_times(repository.activity_shadow(alias, activity_ref))
 
 
 @router.get(
@@ -362,10 +382,10 @@ def real_activity_shadow_detail(
     if not ACTIVITY_REF_PATTERN.fullmatch(activity_ref):
         raise HTTPException(status_code=422, detail="Invalid activity reference")
     try:
-        payload = dependencies.repository().activity_shadow(
+        payload = _synchronized_activity_shadow(dependencies.repository(),
             dependencies.validated_alias(athlete_alias), activity_ref
         )
-    except PersistentStoreFailure as exc:
+    except (PersistentStoreFailure, TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
         ) from exc
@@ -386,10 +406,10 @@ def real_activity_shadow(
     if not ACTIVITY_SHADOW_REF_PATTERN.fullmatch(activity_ref):
         raise HTTPException(status_code=422, detail="Invalid activity shadow reference")
     try:
-        payload = dependencies.repository().activity_shadow(
+        payload = _synchronized_activity_shadow(dependencies.repository(),
             dependencies.validated_alias(athlete_alias), activity_ref
         )
-    except PersistentStoreFailure as exc:
+    except (PersistentStoreFailure, TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
         ) from exc

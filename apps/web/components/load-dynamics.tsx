@@ -63,7 +63,7 @@ function LoadDynamicsView({ history, message, generation, revision, cacheScope }
       </div>
       {source !== "hr" && speed && <button className="action-button secondary" type="button" onClick={() => void readSpeed(true)}>Обнови скоростния отчет</button>}
     </div>
-    <p className="load-source-note">{history?.load_selection ? `Водещ показател: ${history.load_selection.leading_indicator === "SPEED" ? "приравнена скорост" : "пулс"}. Q/E, 7/40, възстановяването и планирането използват основния отчет. Водещият показател се сменя от настройките на профила.` : "Изборът променя показания отчет. Recovery и планирането използват пулсовия товар."}</p>
+    <p className="load-source-note">{history?.load_selection ? `Водещ показател: ${history.load_selection.leading_indicator === "SPEED" ? "приравнена скорост" : "пулс — HRmod при наличност, иначе измерен пулс"}. Q/E, 7/40, възстановяването и планирането използват основния отчет. Водещият показател се сменя от настройките на профила.` : "Изборът променя показания отчет. Recovery и планирането използват пулсовия товар."}</p>
     {history?.load_selection && <p className="load-source-note">{decimal(history.load_selection.fallback_seconds/60)} мин с другия показател · {decimal(history.load_selection.unknown_seconds/60)} мин без оценка по двата показателя.</p>}
     {source === "hr" ? <LoadHistorySection history={history} message={message}/> : <div aria-busy={busy}>
       <div role="status" aria-live="polite">

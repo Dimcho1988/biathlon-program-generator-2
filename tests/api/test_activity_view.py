@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from apps.api import dependencies
-
-
+from copy import deepcopy
+import pytest
 from fastapi.testclient import TestClient
 
+from apps.api import dependencies
 from apps.api.main import app
 
 
@@ -91,6 +91,32 @@ def _active_row() -> dict:
     }
 
 
+def test_detail_and_comparison_use_the_same_intervals_without_mutating_pinned_data():
+    from apps.api.routes.activities import _activity_view_payload
+    from biathlon import unified_load
+    row = _active_row()
+    bounds = [80,120,140,160,180,200]
+    row["catalog_payload"].update(elapsed_time_s=4., moving_time_s=4.)
+    row["shadow_payload"] = {
+        "trainability_index": {"zone_bounds_bpm":bounds},
+        "zone_summary": [{"zone_name":f"Z{i+1}", "lower_bpm":bounds[i], "upper_bpm":bounds[i+1],
+                          "raw_seconds":999.,"hrmod_final_seconds":999.} for i in range(5)],
+        "timeseries": [
+            {"elapsed_s":0.,"hr_raw_bpm":150.,"hr_clean_bpm":150.,"hrmod_candidate_bpm":170.,"hrmod_final_bpm":170.,
+             "hr_interval_classification":"smart_recording","hr_interval_end_s":4.},
+            {"elapsed_s":4.,"hr_raw_bpm":170.,"hr_clean_bpm":170.,"hrmod_candidate_bpm":190.,"hrmod_final_bpm":190.}],
+    }
+    before = deepcopy(row)
+    result = _activity_view_payload(row, ACTIVITY_REF)
+    detail = result["activity"]["hr_zone_times"]
+    comparison = result["shadow"]["zone_summary"]
+    assert result["activity"]["hr_zone_time_method"] == unified_load.HR_ZONE_TIME_VERSION
+    assert [r["raw_time_s"] for r in detail] == pytest.approx([r["raw_seconds"] for r in comparison])
+    assert [r["hrmod_time_s"] for r in detail] == pytest.approx([0.,0.,0.,2.,2.])
+    assert result["activity"]["hrmod_zones"][-1]["final_time_s"] == pytest.approx(2.)
+    assert row == before
+
+
 def test_activity_view_is_one_generation_pinned_repository_read(monkeypatch):
     class Repository:
         def __init__(self):
@@ -171,3 +197,37 @@ def test_activity_view_fails_closed_when_a_pointer_payload_is_missing(monkeypatc
 
     assert response.status_code == 503
     assert response.json()["detail"] == "Persistent server storage is unavailable"
+
+
+@pytest.mark.parametrize("endpoint", [f"/api/v2/real/activities/{ACTIVITY_REF}/shadow",
+                                       f"/api/v2/real/activity-shadow?activity_ref={ACTIVITY_REF}"])
+def test_standalone_shadow_uses_same_pinned_elapsed_window_as_activity_view(monkeypatch, endpoint):
+    from apps.api.hr_zone_times import synchronize_hr_zone_times
+    row = _active_row()
+    row["catalog_payload"].update(elapsed_time_s=3., moving_time_s=1.)
+    row["shadow_payload"].update({
+        "trainability_index": {"zone_bounds_bpm": [80,120,140,160,180,200], "activity_duration_s": 1.},
+        "zone_summary": [{"zone_name":f"Z{i+1}","raw_seconds":99.,"hrmod_final_seconds":99.} for i in range(5)],
+        "timeseries": [{"elapsed_s":float(t),"hr_raw_bpm":150.,"hrmod_final_bpm":170.} for t in (0,1)],
+    })
+    class Repository:
+        def active_activity_view(self, alias, ref):
+            return deepcopy(row)
+        def activity_shadow(self, alias, ref):
+            pytest.fail("Standalone detail must use its coherent pinned catalog window")
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
+    monkeypatch.setattr(dependencies, "repository", lambda: Repository())
+    client = TestClient(app)
+    main = client.get(f"/api/v2/real/activities/{ACTIVITY_REF}/view",headers=AUTH)
+    shadow = client.get(endpoint,headers=AUTH)
+    assert main.status_code == shadow.status_code == 200
+    assert shadow.json()["zone_summary"] == main.json()["shadow"]["zone_summary"]
+    assert shadow.json()["hr_zone_time_method"]["recorded_seconds"] == 3.
+    assert sum(r["hrmod_final_seconds"] for r in shadow.json()["zone_summary"]) == 2.
+    # Legacy standalone runs lack a catalog but retain a usable duration.
+    legacy = deepcopy(row["shadow_payload"])
+    legacy["trainability_index"]["activity_duration_s"] = 2.
+    assert synchronize_hr_zone_times(legacy)["hr_zone_time_method"]["recorded_seconds"] == 2.
+    # Stored moving time must never clip later elapsed samples.
+    legacy["trainability_index"]["activity_duration_s"] = .5
+    assert synchronize_hr_zone_times(legacy)["hr_zone_time_method"]["recorded_seconds"] == 1.

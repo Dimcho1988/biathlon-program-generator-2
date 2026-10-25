@@ -76,7 +76,7 @@ export function AthleteSettingsForm({
         <label className="timezone-field">
           <span>Водещ показател за натоварването</span>
           <select name="leading_indicator" defaultValue={initialIndicator}>
-            <option value="HEART_RATE">Пулс</option>
+            <option value="HEART_RATE">Пулс · HRmod при наличност</option>
             <option value="SPEED">Приравнена скорост (Vflat)</option>
           </select>
           <small>При липсващ водещ показател се използва другият, когато има необходимите данни за връзката между тях.</small>
