@@ -7,7 +7,8 @@ export const WEEK_MODE_LABEL: Record<WeekMode, string> = { AUTO: "Адаптив
 export function proposalHasIncompleteLoad(plan: PlanningDraft | null): boolean {
   const history = plan?.source.planning_history;
   return plan?.activation_eligible !== true && isRecord(history)
-    && history.policy === "UNIFIED_RECORDED_INDICATORS" && history.supported === false;
+    && (history.policy === "UNIFIED_RECORDED_INDICATORS"
+      || history.policy === "UNIFIED_RECORDED_INDICATORS_WITH_PLANNING_ESTIMATES") && history.supported === false;
 }
 
 function snapshotChoice(plan: PlanningDraft | null): { mode: WeekMode; revision: unknown } | null {
