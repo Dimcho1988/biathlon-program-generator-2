@@ -243,3 +243,16 @@ def test_history_outlier_screen_also_uses_exact_40_dates():
     rows[0]["local_date"] = "2026-08-11"
     rows[0]["start_at_utc"] = "2026-08-11T09:00:00Z"
     assert admit_activities(rows)[-1]["index"]["admission"]["reason"] == "INDEX_OUTLIER"
+
+
+def test_old_ski_transform_anchors_do_not_mix_with_manual_flat_tests():
+    repo = Repository()
+    repo.test(sport="NordicSki", source="MANUAL")
+    repo.test(sport="NordicSki", vflat_version=speed_model_versions("NordicSki")[0],
+              vflat_config_version="vflat_b65_config_v6_relative_load_floor", duration_s=300., speed_kmh=30.)
+    before = deepcopy(repo.rows)
+    result = service.speed_view(repo, "ath-test", "NordicSki")
+    assert result["active_test_count"] == 1
+    assert result["active_test_keys"] == ["0"]
+    assert "INCOMPARABLE_MODEL_VERSIONS" in result["warnings"]
+    assert repo.rows == before

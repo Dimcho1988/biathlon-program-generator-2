@@ -284,10 +284,17 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     vflat_version,vflat_config=speed_model_versions(sport)
     selected=[e["payload"] for e in entries if e["payload"].get("enabled") and e["payload"]["sport"]==sport
            and start.isoformat()<=e["payload"]["day"]<=today.isoformat()]
+    # Imported ski speeds depend on the terrain transform. Preserve saved
+    # records, but do not use old-transform anchors with the current model.
+    from vflat_b65.sports import is_nordic
+    stale_ski_tests = [t for t in selected if is_nordic(sport) and t.get("source") != "MANUAL"
+        and (t.get("vflat_version"), t.get("vflat_config_version")) != (vflat_version, vflat_config)]
+    selected = [t for t in selected if t not in stale_ski_tests]
     boundary_tests=[t for t in selected if _boundary_only_test(t)]
     tests=[t for t in selected if _curve_test(t)]
     imported=[t for t in tests if t.get("source")!="MANUAL"]
     warnings=["EXPERT_REFERENCE_NOT_POPULATION_VALIDATED", "HEART_RATE_ESTIMATE_FROM_PAIRED_INDEX"]
+    if stale_ski_tests: warnings.append("INCOMPARABLE_MODEL_VERSIONS")
     incompatible_tests=len({(t.get("vflat_version"),t.get("vflat_config_version")) for t in imported})>1
     if is_cycling(sport) and any((t.get("vflat_version"),t.get("vflat_config_version"))!=(vflat_version,vflat_config) for t in imported):
         incompatible_tests=True
