@@ -4,7 +4,7 @@ import math
 from . import speed_equivalence
 from .sport_heart_rate import reference_offset
 
-VERSION = "unified-leading-indicator-load-v3-explicit-speed-validity"
+VERSION = "unified-leading-indicator-load-v4-source-coverage"
 HR_INTERVAL_VERSION = "normalized-hr-recording-intervals-v1"
 HR_ZONE_TIME_VERSION = "shared-hr-zone-times-v1"
 HR_SIGNALS = {"MODEL", "hr_raw_bpm", "hr_clean_bpm", "hrmod_candidate_bpm", "hrmod_final_bpm"}
@@ -44,6 +44,13 @@ def _hr_value(row, signal, compatible):
     return value if finite(value) and value > 0 else row.get("hr_raw_bpm")
 
 
+def _hr_origin(row, signal, compatible):
+    if signal != "MODEL":
+        return signal
+    value = row.get("hrmod_final_bpm") if compatible else None
+    return "HRMOD" if finite(value) and value > 0 else "RAW_HR"
+
+
 def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEART_RATE", duration_s=None,
               hr_signal="MODEL"):
     if leading_indicator not in {"HEART_RATE", "SPEED"}:
@@ -72,7 +79,10 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
         raw = row.get("hr_raw_bpm")
         # Derived HR never makes a missing raw observation become measured.
         value = _hr_value(row, hr_signal, adjusted_hr_compatible)
+        origin = _hr_origin(row, hr_signal, adjusted_hr_compatible)
         estimate = speed_equivalence.evaluate_hr(parameters, value, bounds=bounds, offset_bpm=offset) if finite(raw) and raw > 0 else None
+        if estimate:
+            estimate = {**estimate, "_hr_origin": origin}
         if (row.get("hr_interval_classification") not in {None, "original_1hz", "smart_recording"}
                 and following is not None):
             estimate = None
@@ -86,8 +96,10 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
                              if 0. < (edge-offset-value)/(next_value-value) < 1.]
                 cuts.sort()
                 for start, end in zip(cuts, cuts[1:]):
+                    next_origin = _hr_origin(following, hr_signal, adjusted_hr_compatible)
                     hr.append((left+start*(right-left), left+end*(right-left),
-                               {"_linear_hr": (value+start*(next_value-value), value+end*(next_value-value))}))
+                               {"_linear_hr": (value+start*(next_value-value), value+end*(next_value-value)),
+                                "_hr_origin": origin if origin == next_origin else "MIXED_HR_INTERPOLATION"}))
             else:
                 hr.append((left, right, None))
         else:
@@ -124,6 +136,11 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
                     # promoted to a measured maximum or calibration point.
                     top = parameters["zones"][-1]["high_kmh"]
                     estimate = {**speed_equivalence.evaluate(parameters, top), "saturated_above_v10": True}
+        # Preserve rejection provenance for coverage only. Rejected speeds
+        # still cannot contribute Q or become calibration observations.
+        estimate = {**(estimate or {"status": "UNAVAILABLE"}),
+                    "_speed_origin": row.get("load_source") or "VFLAT",
+                    "_speed_reason": row.get("load_reason") or (estimate or {}).get("reason") or "INVALID_OR_UNSUPPORTED_SPEED"}
         speeds.append((left, right, estimate))
         previous = right
     endpoints = {0.}
@@ -137,6 +154,10 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
     points = sorted(endpoints)
     totals = {z: {"zone": z, "raw_time_min": 0., "equivalent_time_min": 0.} for z in speed_equivalence.ZONES}
     sources = {"HEART_RATE": 0., "SPEED": 0.}
+    hr_sources = {}
+    speed_status = {"ACTIVE": 0., "REST": 0., "UNAVAILABLE": 0.}
+    unavailable_reasons = {}
+    unavailable_speed_hr = estimated_descent = 0.
     fallback = rest = unknown = saturated = 0.
     hi = si = 0
     for left, right in zip(points, points[1:]):
@@ -150,17 +171,29 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
         if h and "_linear_hr" in h:
             start, end = h["_linear_hr"]
             fraction = ((left+right)/2-hr[hi][0])/(hr[hi][1]-hr[hi][0])
-            h = speed_equivalence.evaluate_hr(parameters, start+fraction*(end-start),
-                bounds=bounds, offset_bpm=offset)
+            h = {**speed_equivalence.evaluate_hr(parameters, start+fraction*(end-start),
+                bounds=bounds, offset_bpm=offset), "_hr_origin": h["_hr_origin"]}
         s = speeds[si][2] if si < len(speeds) and speeds[si][0] <= left < speeds[si][1] else None
         order = (("HEART_RATE", h), ("SPEED", s)) if leading_indicator == "HEART_RATE" else (("SPEED", s), ("HEART_RATE", h))
         chosen = next(((kind, value) for kind, value in order if value and value.get("status") in {"AVAILABLE", "REST"}), None)
         dt = right-left
+        speed_state = "ACTIVE" if s and s.get("status") == "AVAILABLE" else "REST" if s and s.get("status") == "REST" else "UNAVAILABLE"
+        speed_status[speed_state] += dt
+        if speed_state == "UNAVAILABLE":
+            reason = s["_speed_reason"] if s else "NO_SPEED_INTERVAL"
+            unavailable_reasons[reason] = unavailable_reasons.get(reason, 0.)+dt
+        if s and s.get("_speed_origin") == "DESCENT_BALANCE" and speed_state != "UNAVAILABLE":
+            estimated_descent += dt
         if not chosen:
             unknown += dt
             continue
         kind, value = chosen
         sources[kind] += dt
+        if kind == "HEART_RATE":
+            origin = value["_hr_origin"]
+            hr_sources[origin] = hr_sources.get(origin, 0.)+dt
+            if speed_state == "UNAVAILABLE":
+                unavailable_speed_hr += dt
         if kind != leading_indicator:
             fallback += dt
         if value["status"] == "REST":
@@ -178,6 +211,10 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
             "recorded_seconds": recorded, "active_seconds": active,
             "rest_seconds": rest, "unknown_seconds": unknown, "fallback_seconds": fallback,
             "source_seconds": sources, "saturated_above_v10_seconds": saturated,
+            "hr_source_seconds": hr_sources, "speed_status_seconds": speed_status,
+            "speed_unavailable_reasons_seconds": unavailable_reasons,
+            "unavailable_speed_hr_seconds": unavailable_speed_hr,
+            "estimated_descent_seconds": estimated_descent,
             "hr_coordinate": ("CURRENT_HRMOD_WHEN_AVAILABLE" if adjusted_hr_compatible else "RAW_HR_SETTINGS_CHANGED")
                 if hr_signal == "MODEL" else hr_signal,
             "profile_version": (parameters or {}).get("parameters_version"),

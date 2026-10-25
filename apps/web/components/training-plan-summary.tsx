@@ -6,6 +6,7 @@ import { componentColor, componentLabel } from "../lib/training-visuals";
 import { daySessions, rejectedMethodIds, COMPONENTS, type PlanningDraft, type VolumeHistory } from "../lib/training-management";
 import { HistoryVolume } from "./planning-controls-editor";
 import { PlanningEvidenceNotice, planningHistoryEstimated } from "./planning-evidence-notice";
+import { PlanQComparison } from "./plan-q-comparison";
 
 type AllocationRow = Record<string, unknown> & { zone: string };
 const allocationRows = (components: unknown): AllocationRow[] => !isRecord(components) ? [] : COMPONENTS.flatMap(zone => {
@@ -34,7 +35,7 @@ function AllocationCoverage({ components, caption, estimatedHistory, segment = f
   </table></div>;
 }
 
-export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
+export function TrainingPlanSummary({plan, planKind = "DRAFT"}:{plan:PlanningDraft; planKind?: "DRAFT" | "APPROVED"}) {
   const p=isRecord(plan.parameters)?plan.parameters:{};
   const summary=isRecord(plan.summary)?plan.summary:{};
   const volumes=Array.isArray(summary.volume_by_microcycle)?summary.volume_by_microcycle.filter(isRecord):[];
@@ -72,6 +73,7 @@ export function TrainingPlanSummary({plan}:{plan:PlanningDraft}) {
     {typeof summary.total_minutes==="number"&&<div><small>Общо за показаните дати</small><strong>{duration(summary.total_minutes)}</strong><span>{duration(summary.actual_minutes)} изпълнено + {duration(summary.planned_minutes)} предложено</span></div>}
     {volumes.map(volume=><div key={String(volume.start_date)}><small>Изпълнено + предложено · {dateLabel(volume.start_date)} – {dateLabel(volume.end_date)}</small><strong>{duration(volume.total_minutes)}</strong><span>{duration(volume.actual_minutes)} изпълнено + {duration(volume.planned_minutes)} предложено{volume.complete_microcycle!==true&&` · до ${dateLabel(volume.through_date)}, непълен микроцикъл`}</span></div>)}
     </div><TimeLimitNotice context={p}/>{typeof p.available_weekly_minutes === "number" && typeof p.historical_training_weekly_minutes === "number" && Number(p.available_weekly_minutes) < p.historical_training_weekly_minutes && <p className="management-notice">Свободното време в профила е под историческия обем и ограничава седмицата. <Link href="/planning">Провери дните и минутите →</Link></p>}<p className="management-muted">{sources.includes("BLENDED_DOSING_CURVE")?"Дозировката използва общата крива: 30% от индекса и 70% от максималните тестове. ":""}{sources.includes("SPEED_DURATION")?"Използвана е индивидуалната крива скорост–време. ":""}{sources.includes("SPEED_DURATION_PRIOR")?"Използвана е индивидуално мащабирана крива с експертна форма. ":""}{sources.some(source => ["EXPERT_CONTINUOUS_TREF", "EXPERT_CONTINUOUS_TMAX", "EXPERT_TMAX"].includes(source))?"За част от дозите се използва експертен Tmax — виж причината в конкретната тренировка. ":""}Наличието на модел не означава, че всяка негова оценка е достатъчно подкрепена за дозиране.</p>
+    <PlanQComparison plan={plan} planKind={planKind}/>
     {allocation&&<>
       {shortfall.length>0&&<aside className="management-notice" role="status"><strong>Остава непланиран товар: {shortfall.join(", ")}.</strong> {whole?"Целите за целите микроцикли не са покрити изцяло.":"Целта за показаните дати не е покрита изцяло."} Остатъкът остава видим за преглед на ограниченията и разпределението.</aside>}
       {segments.length ? <>{segments.map(segment=><AllocationCoverage key={`${segment.window_start}-${segment.window_end}`} components={segment.components} caption={`Дългосрочна цел · ${dateLabel(segment.window_start)} – ${dateLabel(segment.window_end)}`} estimatedHistory={estimatedHistory} segment whole={whole}/>)}</> : <AllocationCoverage components={allocation.components} caption="Покритие на целите за периода" estimatedHistory={estimatedHistory}/>}

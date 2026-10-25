@@ -8,6 +8,7 @@
 
 За работа по текущото приложение започнете от:
 
+- [Действащи правила за товара, метаданните и приемането](docs/CURRENT_MODEL_CONTRACT.md)
 - [Архитектура, отговорности и правила за развитие](docs/ARCHITECTURE.md)
 - [Измерени оптимизации и проверки в staging](docs/performance-audit-2026-09-25.md)
 - [Операции, опашка, rollout и rollback](docs/SYNC_GENERATION_OPERATIONS.md)
