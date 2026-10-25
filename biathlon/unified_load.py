@@ -4,7 +4,7 @@ import math
 from . import speed_equivalence
 from .sport_heart_rate import reference_offset
 
-VERSION = "unified-leading-indicator-load-v2-recording-intervals"
+VERSION = "unified-leading-indicator-load-v3-explicit-speed-validity"
 HR_INTERVAL_VERSION = "normalized-hr-recording-intervals-v1"
 LEGACY_SHORT_SMART_RECORDING_S = 5.
 LEGACY_EXTENDED_SMART_RECORDING_S = 10.
@@ -97,7 +97,10 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
             continue
         value = row.get("load_speed_kmh")
         eligible = row.get("load_status") in {"ACTIVE", "REST"} and finite(value) and value >= 0
-        if not eligible:
+        if "load_status" not in row:
+            # Legacy rows have no load annotation. An explicit unavailable
+            # result (for example a negative descent residual) must never be
+            # replaced by a Vflat value rejected for load accounting.
             value = row.get("vflat_b65_kmh")
             eligible = finite(value) and value >= 0 and not row.get("exclusion_reason")
         estimate = None
