@@ -81,19 +81,19 @@ function WellnessStatus({ calendar, syncBusy }: { calendar: ActivityCalendar; sy
 }
 
 function ActivityZoneStrip({ activity }: { activity: ActivityCalendarItem }) {
-  const source = activity.zone_visualization_source;
+  const source = activity.zones.length ? "canonical_load" : activity.zone_visualization_source;
   const zones = source === "hrmod_final"
     ? activity.hrmod_zones.map((zone) => ({ zone: zone.zone, seconds: zone.final_time_s }))
     : activity.zones.map((zone) => ({ zone: zone.zone, seconds: zone.raw_time_s }));
   const total = zones.reduce((sum, zone) => sum + zone.seconds, 0);
   if (source === "none" || total <= 0) return null;
-  const sourceLabel = source === "hrmod_final" ? "HRmod final · experimental" : "Реален пулс";
+  const sourceLabel = source === "canonical_load" ? "Отчетено време по зони" : source === "hrmod_final" ? "HRmod final" : "Измерен пулс";
   const distribution = zones.map((zone) => `${zone.zone} ${durationSeconds(zone.seconds)}`).join(", ");
   return <span className={`activity-zone-visual source-${source}`} aria-label={`${sourceLabel}: ${distribution}`} title={`${sourceLabel}: ${distribution}`}>
     <span className="activity-zone-strip">
       {zones.filter((zone) => zone.seconds > 0).map((zone) => <i key={zone.zone} className={zone.zone.toLowerCase()} style={{ flexGrow: zone.seconds / total }} />)}
     </span>
-    <small>{source === "hrmod_final" ? "HRmod" : "Raw HR"}</small>
+    <small>{source === "canonical_load" ? "Отчетен товар" : source === "hrmod_final" ? "HRmod" : "Raw HR"}</small>
   </span>;
 }
 
@@ -131,7 +131,7 @@ function WeekSummary({ calendar, weekStart }: { calendar: ActivityCalendar; week
   return <aside className="completed-week-summary" aria-label={`Обобщение за седмицата от ${weekStart}`}>
     <strong>{weekLabel.format(utcDate(weekStart))} — {weekLabel.format(utcDate(sunday(weekStart)))}</strong>
     <span>{activities.length} активности</span><span>{durationHms(duration)}</span><span>{number.format(distance / 1000)} km</span><span>{number.format(load)} load</span>
-    <span className="week-zone-bar" aria-label="Реално HR време по зони">
+    <span className="week-zone-bar" aria-label="Отчетено време по зони">
       {zones.map((zone) => <i key={zone.zone} className={zone.zone.toLowerCase()} style={{ flexGrow: totalZone ? zone.raw_time_s / totalZone : 0 }} title={`${zone.zone}: ${durationSeconds(zone.raw_time_s)}`} />)}
     </span>
   </aside>;
@@ -148,7 +148,7 @@ export function ActivityCalendarView({ calendar, syncBusy = false }: { calendar:
   const weeks = Array.from({ length: Math.ceil(days.length / 7) }, (_, index) => days.slice(index * 7, index * 7 + 7)).reverse();
   return <section className="completed-calendar" aria-label="Календар на завършените активности">
     <WellnessStatus calendar={calendar} syncBusy={syncBusy} />
-    <div className="calendar-visual-key"><span><i className="z1" /><i className="z2" /><i className="z3" /><i className="z4" /><i className="z5" /> Z1–Z5 разпределение</span><small>HRmod final при наличен shadow резултат; иначе Raw HR. Wellness и HRmod са диагностични и не променят canonical load.</small></div>
+    <div className="calendar-visual-key"><span><i className="z1" /><i className="z2" /><i className="z3" /><i className="z4" /><i className="z5" /> Z1–Z5 разпределение</span><small>Активностите и седмичният сбор използват един и същ отчет за натоварване. При водещ пулс се използва HRmod, когато е наличен; иначе измереният пулс.</small></div>
     <div className="calendar-weekdays" aria-hidden="true">{weekdays.map((day) => <span key={day}>{day}</span>)}</div>
     <div className="completed-calendar-grid">
       {weeks.map((week) => <section className="completed-week" key={week[0]}>

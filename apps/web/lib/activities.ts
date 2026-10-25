@@ -57,7 +57,7 @@ export interface ActivityCalendarItem {
   shadow_available: boolean;
   zones: ActivityZoneSummary[];
   hrmod_zones: ActivityHrmodZoneSummary[];
-  zone_visualization_source: "hrmod_final" | "canonical_raw" | "none";
+  zone_visualization_source: "canonical_load" | "hrmod_final" | "canonical_raw" | "none";
 }
 
 export interface ActivityWeekSummary {
@@ -88,6 +88,8 @@ export interface ActivityCalendar {
 }
 
 export interface ActivityDetail extends ActivityCalendarItem {
+  hr_zone_times?: Array<{zone: ActivityZone; raw_time_s: number; hrmod_time_s: number}>;
+  hr_zone_time_method?: string | null;
   schema_version: "activity-detail-v1";
   description: string | null;
   moving_time_min: number | null;
@@ -145,7 +147,7 @@ function assertActivityItem(value: unknown): asserts value is ActivityCalendarIt
   value.hrmod_zones = hrmodZones;
   if (!hrmodZones.every((zone) => isObject(zone) && zones.has(zone.zone as ActivityZone)))
     throw new Error("API услугата върна невалидни HRmod зони.");
-  if (!(value.zone_visualization_source === "hrmod_final" || value.zone_visualization_source === "canonical_raw" || value.zone_visualization_source === "none"))
+  if (!(value.zone_visualization_source === "canonical_load" || value.zone_visualization_source === "hrmod_final" || value.zone_visualization_source === "canonical_raw" || value.zone_visualization_source === "none"))
     value.zone_visualization_source = hrmodZones.length ? "hrmod_final" : value.zones.length ? "canonical_raw" : "none";
 }
 
@@ -179,6 +181,10 @@ export function parseActivityDetail(value: unknown): ActivityDetail {
   assertActivityItem(value);
   if (!isObject(value) || value.schema_version !== "activity-detail-v1" || !Array.isArray(value.intervals))
     throw new Error("API услугата върна невалиден activity detail.");
+  if (value.hr_zone_times !== undefined && (!Array.isArray(value.hr_zone_times) || !value.hr_zone_times.every(row =>
+    isObject(row) && zones.has(row.zone as ActivityZone) && typeof row.raw_time_s === "number" && Number.isFinite(row.raw_time_s) && row.raw_time_s >= 0
+    && typeof row.hrmod_time_s === "number" && Number.isFinite(row.hrmod_time_s) && row.hrmod_time_s >= 0)))
+    throw new Error("API услугата върна невалидни пулсови времена.");
   return value as unknown as ActivityDetail;
 }
 

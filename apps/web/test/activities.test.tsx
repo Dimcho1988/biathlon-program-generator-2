@@ -9,11 +9,24 @@ import {
   activityDetailFixture,
   activitySeriesFixture,
   parseActivityCalendar,
+  parseActivityDetail,
   parseActivityView,
 } from "../lib/activities";
 import { getActivityDetail, getActivityView } from "../lib/api";
 
 describe("completed activities calendar", () => {
+  it("uses the saved model ledger on cards even when legacy HRmod times differ", () => {
+    const calendar = structuredClone(activityCalendarFixture);
+    const activity = calendar.activities[0];
+    activity.zone_visualization_source = "hrmod_final";
+    activity.zones = [{zone: "Z4", raw_time_s: 61, equivalent_time_s: 75, effective_load: 0.1}];
+    activity.hrmod_zones = [{zone: "Z4", final_time_s: 999}];
+    const container = document.createElement("div");
+    container.innerHTML = renderToStaticMarkup(<ActivityCalendarView calendar={calendar} />);
+    const card = container.querySelector(`a[href="/activities/${activity.activity_ref}"]`)!;
+    expect(card.querySelector(".activity-zone-visual")!.getAttribute("aria-label"))
+      .toBe("Отчетено време по зони: Z4 0:01:01");
+  });
   it("shows newest weeks, mobile days and same-day sessions first regardless of source order", () => {
     const calendar = structuredClone(activityCalendarFixture);
     calendar.activities.reverse();
@@ -41,9 +54,9 @@ describe("completed activities calendar", () => {
     expect(html).toContain("Обобщение за седмицата");
     expect(html).toContain("Wellness: сън 8:00:00");
     expect(html).toContain("HRV 92");
-    expect(html).toContain("HRmod final · experimental");
+    expect(html).toContain("Отчетено време по зони");
     expect(html).toContain("HRmod");
-    expect(html).toContain("не променят canonical load");
+    expect(html).toContain("един и същ отчет за натоварване");
     expect(html).toContain("/activities/act_22222222222222222222222222222222");
     expect(html).not.toContain("activity-001");
   });
@@ -88,6 +101,23 @@ describe("completed activities calendar", () => {
 });
 
 describe("canonical activity detail", () => {
+  it("shows measured and modulated HR separately with their common interval accounting", () => {
+    const activity = parseActivityDetail({...activityDetailFixture,
+      hr_zone_time_method: "shared-hr-zone-times-v1",
+      hr_zone_times: [{zone: "Z4", raw_time_s: 61, hrmod_time_s: 122.4},
+        {zone: "Z5", raw_time_s: 0, hrmod_time_s: 34.8}],
+    });
+    const container = document.createElement("div");
+    container.innerHTML = renderToStaticMarkup(<ActivityDetailView activity={activity} series={null} />);
+    const section = container.querySelector(".activity-zones")!;
+    expect(section.textContent).toContain("моделите използват HRmod");
+    expect(section.textContent).toContain("Измерен пулс · Raw HR");
+    expect(section.textContent).toContain("Модулиран пулс · HRmod");
+    expect([...section.querySelectorAll("tbody tr")].map(row => [...row.children].map(cell => cell.textContent)))
+      .toEqual([["Z4", "0:01:01", "0:02:02"], ["Z5", "0:00:00", "0:00:35"]]);
+    expect(() => parseActivityDetail({...activity, hr_zone_times: [{zone: "Z4", raw_time_s: -1, hrmod_time_s: 1}]}))
+      .toThrow(/пулсови времена/);
+  });
   it("uses hours, minutes and seconds for all duration metrics, zones and intervals", () => {
     const html = renderToStaticMarkup(<ActivityDetailView activity={{
       ...activityDetailFixture, duration_min: 9.3, moving_time_min: 9.15,
@@ -108,7 +138,7 @@ describe("canonical activity detail", () => {
     const html = renderToStaticMarkup(<ActivityDetailView activity={activityDetailFixture} series={activitySeriesFixture} />);
     expect(html).toContain("Canonical activity");
     expect(html).toContain("Canonical load");
-    expect(html).toContain("HR време по зони");
+    expect(html).toContain("Отчетено време по зони");
     expect(html).toContain("Лично съдържание");
     expect(html).toContain("Experimental · Raw ↔ Shadow");
     expect(html).toContain(`/activities/${activityDetailFixture.activity_ref}/shadow`);
@@ -162,7 +192,7 @@ describe("canonical activity detail", () => {
     const html = renderToStaticMarkup(<ActivityDetailView activity={activityDetailFixture} series={null} seriesUnavailable />);
     expect(html).toContain("Canonical load");
     expect(html).toContain("Графиките временно не са заредени");
-    expect(html).toContain("HR време по зони");
+    expect(html).toContain("Отчетено време по зони");
   });
 
   it("shows a working same-activity retry action outside the integration dashboard", () => {

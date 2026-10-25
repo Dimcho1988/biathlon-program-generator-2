@@ -21,6 +21,7 @@ from ..schemas import (
 from fastapi import APIRouter
 from .. import dependencies
 from ..sync_service import optional_iso
+from ..hr_zone_times import synchronize_hr_zone_times
 
 router = APIRouter()
 ACTIVITY_SHADOW_REF_PATTERN = re.compile(r"^(?:shadow-|act_)[a-f0-9]{32}$")
@@ -226,6 +227,10 @@ def _activity_view_payload(
     ):
         raise ValueError("Activity view canonical pointer is invalid")
 
+    duration_s = max(float(catalog.get("elapsed_time_s") or 0.), float(catalog.get("moving_time_s") or 0.))
+    raw_shadow = synchronize_hr_zone_times(raw_shadow, sport=str(catalog.get("sport") or "Unknown"),
+                                          duration_s=duration_s)
+
     shadow_zone_summary = (
         raw_shadow.get("zone_summary")
         if isinstance(raw_shadow, Mapping)
@@ -244,6 +249,12 @@ def _activity_view_payload(
         },
         [item for item in shadow_zone_summary if isinstance(item, Mapping)],
     )
+    method = (raw_shadow or {}).get("hr_zone_time_method")
+    if isinstance(method, Mapping):
+        detail["hr_zone_times"] = [{"zone": item["zone_name"], "raw_time_s": item["raw_seconds"],
+                                    "hrmod_time_s": item["hrmod_final_seconds"]}
+                                   for item in shadow_zone_summary]
+        detail["hr_zone_time_method"] = method.get("version")
     series = None
     if isinstance(raw_series, Mapping):
         series = {
@@ -371,7 +382,7 @@ def real_activity_shadow_detail(
         ) from exc
     if payload is None:
         raise HTTPException(status_code=404, detail="Activity shadow result is unavailable")
-    return payload
+    return synchronize_hr_zone_times(payload)
 
 
 @router.get("/api/v2/real/activity-shadow")
@@ -395,4 +406,4 @@ def real_activity_shadow(
         ) from exc
     if payload is None:
         raise HTTPException(status_code=404, detail="Activity shadow result is unavailable")
-    return payload
+    return synchronize_hr_zone_times(payload)

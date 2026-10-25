@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from apps.api import dependencies
-
-
+from copy import deepcopy
+import pytest
 from fastapi.testclient import TestClient
 
+from apps.api import dependencies
 from apps.api.main import app
 
 
@@ -89,6 +89,32 @@ def _active_row() -> dict:
             ],
         },
     }
+
+
+def test_detail_and_comparison_use_the_same_intervals_without_mutating_pinned_data():
+    from apps.api.routes.activities import _activity_view_payload
+    from biathlon import unified_load
+    row = _active_row()
+    bounds = [80,120,140,160,180,200]
+    row["catalog_payload"].update(elapsed_time_s=4., moving_time_s=4.)
+    row["shadow_payload"] = {
+        "trainability_index": {"zone_bounds_bpm":bounds},
+        "zone_summary": [{"zone_name":f"Z{i+1}", "lower_bpm":bounds[i], "upper_bpm":bounds[i+1],
+                          "raw_seconds":999.,"hrmod_final_seconds":999.} for i in range(5)],
+        "timeseries": [
+            {"elapsed_s":0.,"hr_raw_bpm":150.,"hr_clean_bpm":150.,"hrmod_candidate_bpm":170.,"hrmod_final_bpm":170.,
+             "hr_interval_classification":"smart_recording","hr_interval_end_s":4.},
+            {"elapsed_s":4.,"hr_raw_bpm":170.,"hr_clean_bpm":170.,"hrmod_candidate_bpm":190.,"hrmod_final_bpm":190.}],
+    }
+    before = deepcopy(row)
+    result = _activity_view_payload(row, ACTIVITY_REF)
+    detail = result["activity"]["hr_zone_times"]
+    comparison = result["shadow"]["zone_summary"]
+    assert result["activity"]["hr_zone_time_method"] == unified_load.HR_ZONE_TIME_VERSION
+    assert [r["raw_time_s"] for r in detail] == pytest.approx([r["raw_seconds"] for r in comparison])
+    assert [r["hrmod_time_s"] for r in detail] == pytest.approx([0.,0.,0.,2.,2.])
+    assert result["activity"]["hrmod_zones"][-1]["final_time_s"] == pytest.approx(2.)
+    assert row == before
 
 
 def test_activity_view_is_one_generation_pinned_repository_read(monkeypatch):

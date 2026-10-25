@@ -269,9 +269,8 @@ def calendar_item(
         "zones": canonical_zones,
         "hrmod_zones": hrmod_zones,
         "zone_visualization_source": (
-            "hrmod_final"
-            if hrmod_zones
-            else "canonical_raw" if canonical_zones else "none"
+            "canonical_load" if canonical_zones
+            else "hrmod_final" if hrmod_zones else "none"
         ),
     }
 

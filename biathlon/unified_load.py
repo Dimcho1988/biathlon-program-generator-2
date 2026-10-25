@@ -6,6 +6,8 @@ from .sport_heart_rate import reference_offset
 
 VERSION = "unified-leading-indicator-load-v3-explicit-speed-validity"
 HR_INTERVAL_VERSION = "normalized-hr-recording-intervals-v1"
+HR_ZONE_TIME_VERSION = "shared-hr-zone-times-v1"
+HR_SIGNALS = {"MODEL", "hr_raw_bpm", "hr_clean_bpm", "hrmod_candidate_bpm", "hrmod_final_bpm"}
 LEGACY_SHORT_SMART_RECORDING_S = 5.
 LEGACY_EXTENDED_SMART_RECORDING_S = 10.
 
@@ -35,9 +37,19 @@ def _smart_span(row, following):
             and all(finite(r.get("speed_raw_kmh")) and r["speed_raw_kmh"] > 0 for r in (row, following)))
 
 
-def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEART_RATE", duration_s=None):
+def _hr_value(row, signal, compatible):
+    if signal != "MODEL":
+        return row.get(signal)
+    value = row.get("hrmod_final_bpm") if compatible else None
+    return value if finite(value) and value > 0 else row.get("hr_raw_bpm")
+
+
+def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEART_RATE", duration_s=None,
+              hr_signal="MODEL"):
     if leading_indicator not in {"HEART_RATE", "SPEED"}:
         raise ValueError("Unsupported leading indicator")
+    if hr_signal not in HR_SIGNALS:
+        raise ValueError("Unsupported HR signal")
     hr_rows = sorted((r for r in shadow.get("timeseries", ()) if finite(r.get("elapsed_s"))),
                      key=lambda r: r["elapsed_s"])
     speed_rows = shadow.get("speed_test_series")
@@ -59,17 +71,15 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
             continue
         raw = row.get("hr_raw_bpm")
         # Derived HR never makes a missing raw observation become measured.
-        value = row.get("hrmod_final_bpm") if adjusted_hr_compatible else None
-        value = value if finite(value) and value > 0 else raw
+        value = _hr_value(row, hr_signal, adjusted_hr_compatible)
         estimate = speed_equivalence.evaluate_hr(parameters, value, bounds=bounds, offset_bpm=offset) if finite(raw) and raw > 0 else None
         if (row.get("hr_interval_classification") not in {None, "original_1hz", "smart_recording"}
                 and following is not None):
             estimate = None
         if smart:
             next_raw = following.get("hr_raw_bpm")
-            next_value = following.get("hrmod_final_bpm") if adjusted_hr_compatible else None
-            next_value = next_value if finite(next_value) and next_value > 0 else next_raw
-            if estimate and finite(next_raw) and next_raw > 0 and finite(next_value):
+            next_value = _hr_value(following, hr_signal, adjusted_hr_compatible)
+            if estimate and finite(value) and finite(next_raw) and next_raw > 0 and finite(next_value):
                 cuts = [0., 1.]
                 if next_value != value:
                     cuts += [(edge-offset-value)/(next_value-value) for edge in bounds
@@ -168,9 +178,45 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
             "recorded_seconds": recorded, "active_seconds": active,
             "rest_seconds": rest, "unknown_seconds": unknown, "fallback_seconds": fallback,
             "source_seconds": sources, "saturated_above_v10_seconds": saturated,
-            "hr_coordinate": "CURRENT_HRMOD_WHEN_AVAILABLE" if adjusted_hr_compatible else "RAW_HR_SETTINGS_CHANGED",
+            "hr_coordinate": ("CURRENT_HRMOD_WHEN_AVAILABLE" if adjusted_hr_compatible else "RAW_HR_SETTINGS_CHANGED")
+                if hr_signal == "MODEL" else hr_signal,
             "profile_version": (parameters or {}).get("parameters_version"),
             "calibration_eligible": False}
+
+
+def hr_zone_times(shadow, *, bounds, sport, duration_s=None):
+    """Report all HR channels with the exact timing used by Q, without speed fallback.
+
+    A selected diagnostic channel never falls back to another channel. Missing
+    raw HR remains unknown even if a derived value exists. Model selection stays
+    HRmod-final-when-available; this function does not change its values or Q.
+    """
+    if (len(bounds) != 6 or not all(finite(v) and v > 0 for v in bounds)
+            or any(a >= b for a,b in zip(bounds,bounds[1:]))):
+        raise ValueError("Five ordered HR zones are required")
+    isolated = {**shadow, "speed_test_series": []}
+    names = {"raw": "hr_raw_bpm", "clean": "hr_clean_bpm",
+             "hrmod_candidate": "hrmod_candidate_bpm", "hrmod_final": "hrmod_final_bpm"}
+    ledgers = {name: integrate(isolated, bounds=bounds, sport=sport, duration_s=duration_s,
+                              hr_signal=field) for name,field in names.items()}
+    offset = reference_offset(sport)
+    rows = []
+    for i,zone in enumerate(speed_equivalence.ZONES):
+        row = {"zone_name": zone, "lower_bpm": bounds[i]-offset, "upper_bpm": bounds[i+1]-offset}
+        for name,ledger in ledgers.items():
+            seconds = ledger["zones"][i]["raw_time_min"]*60.
+            known = ledger["recorded_seconds"]-ledger["unknown_seconds"]
+            row[name+"_seconds"] = seconds
+            row[name+"_percent"] = 100*seconds/known if known else 0.
+        for name in ("candidate", "final"):
+            row[name+"_minus_clean_seconds"] = row["hrmod_"+name+"_seconds"]-row["clean_seconds"]
+        row["final_minus_raw_seconds"] = row["hrmod_final_seconds"]-row["raw_seconds"]
+        row["final_minus_candidate_seconds"] = row["hrmod_final_seconds"]-row["hrmod_candidate_seconds"]
+        rows.append(row)
+    return {"version": HR_ZONE_TIME_VERSION, "rows": rows,
+            "recorded_seconds": next(iter(ledgers.values()))["recorded_seconds"],
+            "channels": {name: {key: ledger[key] for key in ("active_seconds", "rest_seconds", "unknown_seconds")}
+                         for name,ledger in ledgers.items()}}
 
 
 def apply_to_summary(summary, shadow, context, *, bounds, sport, leading_indicator, duration_s=None):
