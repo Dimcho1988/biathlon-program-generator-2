@@ -34,7 +34,11 @@ def synchronize_hr_zone_times(shadow, *, sport=None, duration_s=None):
             or any(a>=b for a,b in zip(bounds,bounds[1:]))):
         return shadow
     if not unified_load.finite(duration_s) or duration_s <= 0:
-        duration_s = max((r.get("elapsed_s",0.) for r in rows if unified_load.finite(r.get("elapsed_s"))), default=0.)
+        last_sample_s = max((r.get("elapsed_s",0.) for r in rows if unified_load.finite(r.get("elapsed_s"))), default=0.)
+        stored_duration_s = (shadow.get("trainability_index") or {}).get("activity_duration_s")
+        # Older runs can retain moving time here. It must not truncate later
+        # elapsed samples. Current endpoints supply the pinned catalog window.
+        duration_s = max(last_sample_s, stored_duration_s if unified_load.finite(stored_duration_s) else 0.)
     comparison = unified_load.hr_zone_times(shadow, bounds=bounds, sport=sport, duration_s=duration_s)
     return {**shadow, "zone_summary": comparison["rows"],
             "hr_zone_time_method": {k:v for k,v in comparison.items() if k != "rows"}}

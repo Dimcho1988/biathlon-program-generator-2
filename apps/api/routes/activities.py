@@ -273,6 +273,15 @@ def _activity_view_payload(
     }
 
 
+def _synchronized_activity_shadow(repository, alias, activity_ref):
+    reader = getattr(repository, "active_activity_view", None)
+    if activity_ref.startswith("act_") and callable(reader):
+        row = reader(alias, activity_ref)
+        if isinstance(row, Mapping):
+            return _activity_view_payload(row, activity_ref)["shadow"]
+    return synchronize_hr_zone_times(repository.activity_shadow(alias, activity_ref))
+
+
 @router.get(
     "/api/v2/real/activities/{activity_ref}/view",
     response_model=ActivityViewResponse,
@@ -373,16 +382,16 @@ def real_activity_shadow_detail(
     if not ACTIVITY_REF_PATTERN.fullmatch(activity_ref):
         raise HTTPException(status_code=422, detail="Invalid activity reference")
     try:
-        payload = dependencies.repository().activity_shadow(
+        payload = _synchronized_activity_shadow(dependencies.repository(),
             dependencies.validated_alias(athlete_alias), activity_ref
         )
-    except PersistentStoreFailure as exc:
+    except (PersistentStoreFailure, TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
         ) from exc
     if payload is None:
         raise HTTPException(status_code=404, detail="Activity shadow result is unavailable")
-    return synchronize_hr_zone_times(payload)
+    return payload
 
 
 @router.get("/api/v2/real/activity-shadow")
@@ -397,13 +406,13 @@ def real_activity_shadow(
     if not ACTIVITY_SHADOW_REF_PATTERN.fullmatch(activity_ref):
         raise HTTPException(status_code=422, detail="Invalid activity shadow reference")
     try:
-        payload = dependencies.repository().activity_shadow(
+        payload = _synchronized_activity_shadow(dependencies.repository(),
             dependencies.validated_alias(athlete_alias), activity_ref
         )
-    except PersistentStoreFailure as exc:
+    except (PersistentStoreFailure, TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
         ) from exc
     if payload is None:
         raise HTTPException(status_code=404, detail="Activity shadow result is unavailable")
-    return synchronize_hr_zone_times(payload)
+    return payload
