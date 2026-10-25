@@ -560,6 +560,27 @@ it.each(["AUTO", "REVIEW"] as const)("keeps warnings visible while a %s proposal
   expect(button("Утвърди предложението")).toBeUndefined();
 });
 
+it.each(["AUTO", "REVIEW"] as const)("explains a saved mode change blocked by incomplete load before opening review (%s)", async mode => {
+  const requested = mode === "AUTO" ? "REVIEW" : "AUTO";
+  const value = activeResponse(12);
+  value.active!.payload.mode = mode;
+  value.active!.payload.proposal_mode = requested;
+  value.active!.payload.proposal!.activation_eligible = false;
+  value.active!.payload.proposal!.source = { ...value.active!.payload.proposal!.source,
+    planning_history: { policy: "UNIFIED_RECORDED_INDICATORS", supported: false } };
+  const fetchMock = vi.fn<typeof fetch>(); vi.stubGlobal("fetch", fetchMock);
+  await mount(<ActiveTrainingPlan value={value} profile={{ configured: true, revision: 2, profile: { ...profile, adaptation_mode: requested } }}
+    onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/>);
+  const modes = container.querySelector('[aria-label="Режим на седмицата"]')!;
+  expect(modes.textContent).toContain("Изборът е записан, но предложението не може да се утвърди заради непълна история");
+  expect(modes.closest("details, [hidden]")).toBeNull();
+  await click(button("Прегледай"));
+  expect(button("Утвърди предложението").disabled).toBe(true);
+  expect(container.querySelector('[aria-label="Предложени промени"]')!.textContent).toContain("допуска само леки предложения");
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(value.active!.payload.mode).toBe(mode);
+});
+
 it.each(["AUTO", "REVIEW"] as const)("separates the saved choice from approved %s mode until the exact proposal is approved", async mode => {
   const requested = mode === "AUTO" ? "REVIEW" : "AUTO";
   const label = mode === "AUTO" ? "Адаптивна седмица" : "Фиксирана седмица";

@@ -4,6 +4,12 @@ import { isRecord } from "./training-status";
 export type WeekMode = ManagementProfile["adaptation_mode"];
 export const WEEK_MODE_LABEL: Record<WeekMode, string> = { AUTO: "Адаптивна седмица", REVIEW: "Фиксирана седмица" };
 
+export function proposalHasIncompleteLoad(plan: PlanningDraft | null): boolean {
+  const history = plan?.source.planning_history;
+  return plan?.activation_eligible !== true && isRecord(history)
+    && history.policy === "UNIFIED_RECORDED_INDICATORS" && history.supported === false;
+}
+
 function snapshotChoice(plan: PlanningDraft | null): { mode: WeekMode; revision: unknown } | null {
   const snapshot = plan?.input_snapshot;
   if (!isRecord(snapshot) || !isRecord(snapshot.management_profile)) return null;

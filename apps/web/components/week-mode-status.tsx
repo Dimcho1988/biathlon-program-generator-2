@@ -1,5 +1,5 @@
 import type { ActivePlanRecord, ManagementProfileResponse } from "../lib/training-management";
-import { proposedWeekMode, savedWeekMode, WEEK_MODE_LABEL } from "../lib/week-mode";
+import { proposalHasIncompleteLoad, proposedWeekMode, savedWeekMode, WEEK_MODE_LABEL } from "../lib/week-mode";
 
 export function WeekModeStatus({ record, profile }: { record: ActivePlanRecord; profile?: ManagementProfileResponse }) {
   const p = record.payload;
@@ -15,6 +15,7 @@ export function WeekModeStatus({ record, profile }: { record: ActivePlanRecord; 
   const nextStep = p.status === "COMPLETED" ? "Записаният избор ще се използва при започване на нова програма."
     : p.status === "PAUSED" ? "Избери „Продължи с текущите настройки“, после прегледай актуалното предложение."
     : record.stale || !p.proposal || obsolete || !proposed ? "Избери „Обнови сега“, после „Прегледай“, за да провериш актуалното предложение за режима."
+    : proposalHasIncompleteLoad(p.proposal) ? "Изборът е записан, но предложението не може да се утвърди заради непълна история на натоварването. Това задържа и смяната на режима. Нужно е да се изяснят непокритите участъци; дотогава действа утвърденият график."
     : "Избери „Прегледай“ в предложението по-долу, после „Утвърди предложението“, когато условията позволяват това.";
   return <div aria-label="Режим на седмицата">
     <dl className="management-week-modes">
