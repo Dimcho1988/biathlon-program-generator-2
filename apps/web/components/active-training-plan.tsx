@@ -42,6 +42,8 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
   const progression = isRecord(checked.parameters?.load_progression) ? checked.parameters?.load_progression : {};
   const feedback = isRecord(progression.adaptation) ? progression.adaptation : {};
   const symptomHold = checked.warnings.some(w => w.code === "REPORTED_ILLNESS_OR_PAIN");
+  const displayedWarnings = checked.warnings.filter(w => w.code !== "REPORTED_ILLNESS_OR_PAIN"
+    && (w.code !== "DRAFT_REQUIRES_COACH_REVIEW" || !!p.proposal));
   async function mutate(endpoint: string, body: Record<string, unknown>) {
     if (!canEdit || inFlight.current || externalBusy || (onBegin && !onBegin())) return;
     inFlight.current = true;
@@ -84,9 +86,9 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
     {notice && <p className="management-notice" role="status">{notice}</p>}
     {record.stale && <p className="management-notice" role="status">{record.stale_reason} Последната версия е показана само за справка.</p>}
     {symptomHold && <SymptomNotice day={feedback.latest_report_day}/>}
-    {checked.warnings.some(w => w.code !== "REPORTED_ILLNESS_OR_PAIN") && <aside className="management-notice" aria-label="Предупреждения и условия">
+    {displayedWarnings.length > 0 && <aside className="management-notice" aria-label="Предупреждения и условия">
       <h3>Предупреждения и условия {p.proposal ? "за предложението" : "към текущия график"}</h3>
-      <ul>{checked.warnings.filter(w => w.code !== "REPORTED_ILLNESS_OR_PAIN").map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}</ul>
+      <ul>{displayedWarnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}</ul>
     </aside>}
     {p.proposal && <PlanProposalReview key={record.revision} record={record} canEdit={canEdit} busy={busy || externalBusy}
       symptomHold={symptomHold} onApprove={() => mutate("action", { action: "APPROVE" })} renderDay={renderDay} today={today}/>}
@@ -94,7 +96,7 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
       <p>Готовност в началото на деня, %. Бъдещите стойности са прогноза за предложения вариант, а не потвърждение на запазените дози. При липсващо покритие стойността остава неизвестна.</p>
       <div className="management-table-wrap"><table><thead><tr><th>Ден</th>{COMPONENTS.map(z => <th key={z}>{z}</th>)}</tr></thead><tbody>{p.monitoring.days.map(d => <tr key={d.date}><th>{d.date}</th>{COMPONENTS.map(z => <td key={z}>{typeof d.readiness_before?.[z] === "number" ? d.readiness_before[z]!.toFixed(0) : "—"}</td>)}</tr>)}</tbody></table></div>
     </details>}
-    {!p.proposal && p.mode === "AUTO" && p.status === "ACTIVE" && p.changes.length > 0 && <details className="management-panel"><summary>Автоматично приложени промени · {p.changes.length} дни</summary>
+    {!p.proposal && p.mode === "AUTO" && p.status === "ACTIVE" && p.changes.length > 0 && <details className="management-panel"><summary>Приложени промени · {p.changes.length} дни</summary>
       <p>Тези корекции вече са включени в текущия график. Не чакат утвърждаване.</p>
       <ul>{p.changes.map(change => <li key={change.date}><strong>{change.date}:</strong> {change.before ? `${change.before} (${durationHms(change.before_minutes)}) → ` : ""}{change.after} ({durationHms(change.after_minutes)})<p>{change.reason}</p></li>)}</ul>
     </details>}
