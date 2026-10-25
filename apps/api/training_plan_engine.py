@@ -1640,7 +1640,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     if planning_evidence["estimated"]:
         estimate_basis = ("по валидни скоростни сегменти и експертни Q опори за непокрития остатък"
                           if planning_evidence.get("speed_estimated_activity_count") else "по експертните Q опори")
-        warnings.append(_warning("ESTIMATED_LOAD_HISTORY", "Общата продължителност е записана. Липсващото пулсово покритие е оценено "
+        warnings.append(_warning("ESTIMATED_LOAD_HISTORY", "Общата продължителност е записана. Непокритият товар е оценен "
             + estimate_basis + "; разпределението по зони, 7/40 и Recovery за плана са приблизителни, а не измерени."))
     methods = resolved_methods(profile)
     warnings.append(_warning("VERSIONED_COACHING_RULES", "Целите и прогресията използват видими начални треньорски правила. Нисък стрес сам по себе си не увеличава товара."))

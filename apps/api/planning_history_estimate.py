@@ -1,4 +1,4 @@
-"""Transient planning estimates for recorded activities with incomplete HR.
+"""Transient planning estimates for recorded activities with incomplete load.
 
 The canonical ledger is immutable. Only missing minutes of identifiable,
 duration-covered activities are estimated; missing calendar/provider records
@@ -8,12 +8,13 @@ from copy import deepcopy
 from datetime import date, timedelta
 import math
 
-from biathlon import load_progression
+from biathlon import load_progression, speed_equivalence
 from biathlon.constants import COMPONENTS
 from biathlon.component_load import calculate_component_load
 
-VERSION = "planning-history-estimate-v5-known-speed-rest"
+VERSION = "planning-history-estimate-v6-unified-unknown-duration"
 POLICY = "RECORDED_DURATION_EXPERT_Q_WITH_RECOVERY"
+UNIFIED_POLICY = "UNIFIED_RECORDED_INDICATORS_WITH_PLANNING_ESTIMATES"
 ZONES = tuple(z for z in COMPONENTS if z != "STR")
 
 
@@ -39,6 +40,26 @@ def normalized_calendar(calendar):
     return result
 
 
+def _unified_missing_minutes(activity):
+    """Only the conserved, explicitly unknown interval can be estimated.
+
+    HR coverage and moving duration cannot describe a ledger that already
+    selected HR/speed fallback and retained the full elapsed recording.
+    Known REST (including speeds below the individual floor) stays zero.
+    """
+    evidence = activity.get("load_source") or {}
+    values = [_number(evidence.get(k)) for k in
+              ("recorded_seconds", "active_seconds", "rest_seconds", "unknown_seconds")]
+    if any(v is None for v in values) or not speed_equivalence.supports_sport(activity.get("sport")):
+        return None
+    recorded, active, rest, unknown = values
+    observed_active = sum(_number(z.get("raw_time_min")) or 0. for z in activity.get("zones", ())) * 60
+    if (not math.isclose(recorded, active+rest+unknown, abs_tol=1e-4, rel_tol=1e-6)
+            or not math.isclose(active, observed_active, abs_tol=1e-4, rel_tol=1e-6)):
+        return None
+    return unknown / 60
+
+
 def prepare(source, calendar, profile, today, *, speed_estimates=None,
             zone_tmax_minutes=None, capacity_sources=None, capacity_contexts_by_sport=None):
     """Return an isolated planning ledger and explicit coverage/provenance.
@@ -49,31 +70,7 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None,
     """
     if (source.get("planning_history") or {}).get("estimated"):
         raise ValueError("Planning estimates cannot become new observed inputs")
-    if source.get("load_selection"):
-        # The selected ledger already used the alternate measured indicator
-        # once. Missing both streams stays unknown; do not add expert minutes.
-        unresolved = [a["activity_ref"] for a in source.get("activities", ())
-                      if a.get("quality_status") != "valid"]
-        covered = {(r["date"], r["zone"]) for r in source.get("daily", ())}
-        covered.update((r["date"], "STR") for r in source.get("strength", {}).get("daily", ()))
-        begin = max(date.fromisoformat(source.get("period_start", today.isoformat())), today-timedelta(days=40))
-        end = min(date.fromisoformat(source.get("period_end", today.isoformat()))+timedelta(days=1), today)
-        missing_days = [(begin+timedelta(days=i)).isoformat() for i in range(max(0, (end-begin).days))
-                        if any(((begin+timedelta(days=i)).isoformat(), z) not in covered for z in COMPONENTS)]
-        diagnostics = {"version": VERSION, "policy": "UNIFIED_RECORDED_INDICATORS",
-            "estimated": False, "supported": not unresolved and not missing_days and not (source.get("quality") or {}).get("excluded_activities"),
-            "unresolved_activity_refs": unresolved, "missing_calendar_days": missing_days,
-            "estimated_activity_count": 0, "estimated_minutes": 0.,
-            "basis": "SELECTED_HR_SPEED_LEDGER", "q_convention": "COMMON_ZONE_REFERENCE",
-            "is_measured_zone_distribution": False, "activities": []}
-        from .load_metadata import selection_metadata
-        coverage = selection_metadata(source.get("activities", ()))
-        diagnostics["unresolved_activity_count"] = len(unresolved)
-        if coverage:
-            diagnostics["load_coverage"] = {k: coverage[k] for k in (
-                "activity_count", "total_aerobic_activities", "recorded_seconds",
-                "unknown_seconds", "rest_seconds", "fallback_seconds", "source_seconds")}
-        return {**deepcopy(source), "planning_history": diagnostics}, diagnostics
+    unified = bool(source.get("load_selection"))
     result = deepcopy(source)
     quality = source.get("quality") or {}
     activities = {a["activity_ref"]: deepcopy(a) for a in source.get("activities", [])}
@@ -90,9 +87,10 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None,
         duration = _number((original or {}).get("duration_min", item.get("duration_min")))
         coverage = _number((original or {}).get("hr_coverage_percent", item.get("hr_coverage_percent")))
         reason = str(item.get("quality_reason") or "").lower()
-        # A failed API request/unknown activity is not a missing-HR recording.
+        # A failed API request/unknown activity is not a missing-sensor interval.
         hr_reason = not reason or any(term in reason for term in ("hr", "пулс", "heart rate", "heartrate"))
-        if status == "provider_missing" or item.get("quality_status") == "provider_missing" or duration is None or coverage is None or coverage > 100 or not hr_reason:
+        if (status == "provider_missing" or item.get("quality_status") == "provider_missing"
+                or duration is None or (not unified and (coverage is None or coverage > 100 or not hr_reason))):
             unresolved.append(ref)
             continue
         sport = (original or {}).get("sport") or item.get("sport")
@@ -103,8 +101,9 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None,
         # An excluded recording has no canonical contribution at all. Its
         # nominal HR coverage is not a measured Q ledger; account for its entire
         # duration, letting a timestamp-supported speed estimate cover a subset.
-        missing = duration if original is None else min(duration * (1. - coverage / 100.), max(0., duration - known_time))
-        if missing <= 0:
+        missing = (_unified_missing_minutes(original or {}) if unified else
+                   duration if original is None else min(duration * (1. - coverage / 100.), max(0., duration - known_time)))
+        if missing is None or missing <= 0:
             unresolved.append(ref)
             continue
         activity = original or {"activity_ref": ref, "date": day, "sport": sport,
@@ -124,15 +123,31 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None,
     end = min(date.fromisoformat(source.get("period_end", today.isoformat()))+timedelta(days=1), today)
     missing_days = [(begin+timedelta(days=i)).isoformat() for i in range(max(0, (end-begin).days))
                     if any(((begin+timedelta(days=i)).isoformat(), z) not in covered for z in COMPONENTS)]
-    diagnostics = {"version": VERSION, "policy": POLICY, "estimated": bool(candidates),
+    diagnostics = {"version": VERSION, "policy": UNIFIED_POLICY if unified else POLICY, "estimated": bool(candidates),
                    "supported": not unresolved and not missing_days, "unresolved_activity_refs": unresolved,
                    "missing_calendar_days": missing_days,
                    "estimated_activity_count": len(candidates),
                    "estimated_minutes": sum(v for _, v in candidates),
                    "basis": "RECORDED_ACTIVITY_DURATION_AND_EXPERT_Q_PROPORTIONS" if candidates else "MEASURED_HR",
-                   "q_convention": "ZONE_UPPER_EDGE_EQUIVALENT_MINUTES",
+                   "q_convention": "COMMON_ZONE_REFERENCE" if unified else "ZONE_UPPER_EDGE_EQUIVALENT_MINUTES",
                    "is_measured_zone_distribution": False if candidates else True,
                    "activities": []}
+    diagnostics["unresolved_activity_count"] = len(unresolved)
+    if unified:
+        from .load_metadata import selection_metadata
+        try:
+            coverage = selection_metadata(source.get("activities", ()))
+        except (TypeError, ValueError, OverflowError):
+            # Invalid metadata remains unresolved above. Do not present a
+            # partial aggregate or replace invalid durations with zero.
+            coverage = None
+        if coverage:
+            diagnostics["load_coverage"] = {k: coverage[k] for k in (
+                "activity_count", "total_aerobic_activities", "recorded_seconds",
+                "unknown_seconds", "rest_seconds", "fallback_seconds", "source_seconds")}
+        diagnostics["basis"] = ("SELECTED_HR_SPEED_LEDGER_WITH_EXPERT_Q_FOR_UNKNOWN_DURATION"
+                                if candidates else "SELECTED_HR_SPEED_LEDGER")
+        diagnostics["measured_history_unchanged"] = True
     if not candidates:
         result["planning_history"] = diagnostics
         return result, diagnostics
@@ -147,7 +162,9 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None,
     diagnostics["speed_estimated_activity_count"] = 0
     additions = {}
     for activity, missing in candidates:
-        speed = (speed_estimates or {}).get(activity["activity_ref"]) or {}
+        # The unified ledger already used both indicators. A legacy speed
+        # estimate must never fill selected REST or count fallback twice.
+        speed = {} if unified else (speed_estimates or {}).get(activity["activity_ref"]) or {}
         speed_minutes = _number(speed.get("covered_missing_minutes")) or 0.
         rest_minutes = _number(speed.get("rest_missing_minutes", 0.))
         speed_zones = {r["zone"]: r for r in speed.get("zones", []) if r.get("zone") in ZONES}

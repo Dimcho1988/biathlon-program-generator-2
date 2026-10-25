@@ -49,7 +49,8 @@ def _eligible(plan):
     supported_estimate = (source.get("planning_history_supported") is True
         and source.get("readiness_basis") == "ESTIMATED_LOAD"
         and history.get("supported") is True and history.get("estimated") is True
-        and history.get("policy") == "RECORDED_DURATION_EXPERT_Q_WITH_RECOVERY")
+        and history.get("policy") in {"RECORDED_DURATION_EXPERT_Q_WITH_RECOVERY",
+                                     "UNIFIED_RECORDED_INDICATORS_WITH_PLANNING_ESTIMATES"})
     return plan.get("activation_eligible") is True and (source.get("readiness_known") is True or supported_estimate)
 
 

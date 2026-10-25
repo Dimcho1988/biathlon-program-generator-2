@@ -24,14 +24,24 @@ describe("one next action without relaxing publication gates", () => {
   });
   it("labels estimated zone load and readiness while preserving measured total activity time",()=>{
     const plan=draft([]).payload;
-    plan.source={planning_history:{estimated:true,estimated_minutes:90,supported:true},readiness_basis:"ESTIMATED_LOAD"};
+    plan.source={planning_history:{policy:"UNIFIED_RECORDED_INDICATORS_WITH_PLANNING_ESTIMATES",estimated:true,estimated_minutes:90,supported:true,load_coverage:{unknown_seconds:5400}},readiness_basis:"ESTIMATED_LOAD"};
     const html=renderToStaticMarkup(<PlanningEvidenceNotice plan={plan}/>);
-    expect(html).toContain("Общото време е от записаните активности");
-    expect(html).toContain("Показаните 7/40 и готовност използват тази оценка");
+    expect(html).toContain("Наличният товар и известната почивка са запазени");
+    expect(html).toContain("Показаните 7/40 и готовност за плана използват тази оценка");
     expect(html).toContain("1:30:00");
     expect(html).toContain("Допълнената част е оценка; измереното разпределение по зони остава запазено");
+    expect(html).toContain("В измерената история остават 1:30:00 без допустим източник");
+    expect(html).toContain("не участва в ИТ, зоните или самообучението");
+    expect(html).not.toContain("Непълният товар ограничава програмата");
     const outlook=renderToStaticMarkup(<PlanningEvidenceNotice plan={{long_term:{planning_history:{estimated:true}}}}/>);
     expect(outlook).toContain("План с предварителна оценка по зони");
+  });
+  it("keeps unexplained gaps blocked even if other intervals received planning estimates",()=>{
+    const plan=draft([]).payload;
+    plan.source={planning_history:{policy:"UNIFIED_RECORDED_INDICATORS_WITH_PLANNING_ESTIMATES",estimated:true,supported:false,unresolved_activity_count:1}};
+    const html=renderToStaticMarkup(<PlanningEvidenceNotice plan={plan}/>);
+    expect(html).toContain("Непълният товар ограничава програмата");
+    expect(html).toContain("Неоценими активности в предоставената история: 1");
   });
   it("directs stale history to import even if optional methods are unconfigured", () => {
     expect(managementGuidance({ ...base, draft: draft(["METHOD_PROFILE_Z4", "METHOD_PROFILE_STR", "STALE_LOAD_SNAPSHOT"]) }).step).toBe("SYNC");
