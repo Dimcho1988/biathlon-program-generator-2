@@ -215,6 +215,25 @@ def remaining_priority(zone, objectives):
     return min(1., max(0., row["remaining"] / target)) if target > 0 and row["remaining"] >= .5 else 0.
 
 
+def strength_feasibility(segments):
+    """Report structural bounds without transferring excess across cycles.
+
+    A bound below its local target establishes a method/quota shortfall only.
+    A higher bound does not establish a feasible schedule or recovered dose.
+    """
+    return {
+        "desired_q": round(sum(row["desired_q"] for row in segments), 3),
+        "attainable_upper_bound_q": round(sum(row["attainable_upper_bound_q"] for row in segments), 3),
+        "target_coverage_upper_bound_q": round(sum(min(row["desired_q"], row["attainable_upper_bound_q"])
+                                                  for row in segments), 3),
+        "session_quota": sum(row["session_quota"] for row in segments),
+        "quota_bound_below_target": any(row["quota_bound_below_target"] for row in segments),
+        "basis": "CYCLE_LOCAL_ACTUAL_PLUS_WHOLE_METHOD_ROLE_BUDGETS_WITH_SESSION_QUOTA",
+        "other_constraints_may_reduce": True,
+        "segments": segments,
+    }
+
+
 def report(windows, actual, forecast, days, scheduled_slots, weekly_limit, history_minutes, *, source=None, segment_keys=None):
     end = max(windows)
     lower = min(windows).isoformat()

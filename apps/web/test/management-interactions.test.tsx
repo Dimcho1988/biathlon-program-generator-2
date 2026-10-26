@@ -502,6 +502,32 @@ it("keeps separate microcycle shortfalls visible when the whole-period totals ca
   expect(container.textContent).not.toContain("ограничението по 7/40");
 });
 
+it("reports the deficient strength cycle even when another cycle exceeds its target", async () => {
+  await mount(<TrainingPlanSummary plan={{...draft.payload,days:[],allocation:{components:{},constraints:[],dose_limits:[],
+    strength_feasibility:{desired_q:200,attainable_upper_bound_q:220,session_quota:4,quota_bound_below_target:true,
+      segments:[
+        {window_start:"2026-09-08",window_end:"2026-09-14",desired_q:100,attainable_upper_bound_q:160,session_quota:2,quota_bound_below_target:false},
+        {window_start:"2026-09-15",window_end:"2026-09-21",desired_q:100,attainable_upper_bound_q:60,session_quota:2,quota_bound_below_target:true},
+      ]}}}}/>);
+  expect(container.textContent).toContain("Силовата цел за 15.09.2026 г. – 21.09.2026 г.");
+  expect(container.textContent).toContain("лимит от 2 сесии");
+  expect(container.textContent).toContain("Горна граница за прекия силов товар: 1:00:00; желана цел: 1:40:00");
+  expect(container.textContent).not.toContain("Силовата цел за 8.09.2026");
+});
+
+it("keeps the strength explanation available for older saved reports", async () => {
+  await mount(<TrainingPlanSummary plan={{...draft.payload,days:[],allocation:{components:{},constraints:[],dose_limits:[],
+    strength_feasibility:{desired_q:100,attainable_upper_bound_q:60,session_quota:2,quota_bound_below_target:true}}}}/>);
+  expect(container.textContent).toContain("Горна граница за прекия силов товар: 1:00:00; желана цел: 1:40:00");
+});
+
+it("does not imply that alternative schedules were tested when no replay ran", async () => {
+  await mount(<TrainingPlanSummary plan={{...draft.payload,days:[],allocation:{components:{},constraints:[],dose_limits:[],
+    search:{conclusion:"SEARCH_BUDGET_EXHAUSTED",alternatives:0,improved:false,hard_limit_proven:false}}}}/>);
+  expect(container.textContent).toContain("не е проверено алтернативно разпределение");
+  expect(container.textContent).not.toContain("след проверените варианти");
+});
+
 it("distinguishes the visible week from the complete-cycle forecast and validates the tail", async () => {
   const readiness=Object.fromEntries(COMPONENTS.map(z=>[z,100]));
   const record={entry_key:"whole",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v48",status:"DRAFT",start_date:"2026-10-17",end_date:"2026-10-23",days:[],source:{},parameters:{volume_governor:"COMPONENT_7_40"},warnings:[],summary:{planned_minutes:0},

@@ -159,7 +159,7 @@ def test_annual_goal_changes_plan_but_never_rewrites_history():
 def test_goal_factor_changes_progressively_before_safety_cap():
     from copy import deepcopy
 
-    base = generate_demo_bundle(seed=20250315, history_days=150)
+    base = generate_demo_bundle(seed=20250315, history_days=150, reference_date=date(2026, 6, 20))
     factors = []
     for target in (500.0, 600.0, 700.0):
         bundle = deepcopy(base)
