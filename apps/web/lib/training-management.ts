@@ -177,7 +177,9 @@ export interface AllocationReport {
   components: Partial<Record<Component, ComponentAllocation>>; segments?: AllocationSegment[];
   scheduled_slots?: number; weekly_session_limit?: number; planned_sessions?: number; planned_minutes?: number;
   has_unallocated_load?: boolean; requires_catchup?: boolean;
-  strength_feasibility?: { desired_q: number; attainable_upper_bound_q: number; session_quota: number; quota_bound_below_target: boolean };
+  strength_feasibility?: { desired_q: number; attainable_upper_bound_q: number; session_quota: number; quota_bound_below_target: boolean;
+    target_coverage_upper_bound_q?: number;
+    segments?: Array<{ window_start: string; window_end: string; desired_q: number; attainable_upper_bound_q: number; session_quota: number; quota_bound_below_target: boolean }> };
   search?: { conclusion: string; alternatives: number; improved: boolean; hard_limit_proven: boolean };
   constraints: Array<{ code: string; reason: string; days?: string[]; evaluated_alternatives?: number }>;
   dose_limits: string[];

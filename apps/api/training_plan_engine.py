@@ -37,8 +37,8 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v56-fixed-weeks"
-PARAMETER_VERSION = "management-parameters-v49"
+VERSION = "training-management-v57-unfilled-quality"
+PARAMETER_VERSION = "management-parameters-v50"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -1827,7 +1827,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     def strength_week(day):
         first = meso_anchor + timedelta(days=7*((day-meso_anchor).days//7))
         return first.isoformat(), (first+timedelta(days=6)).isoformat()
-    def strength_counts(day):
+    def strength_counts(day, extra=()):
         first, last = strength_week(day)
         actual = [s for s in strength_recorded_sessions if first <= s.date <= last]
         proposed = [session for d in result_days if first <= d["date"] <= last
@@ -1845,11 +1845,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             and not any(d.get("locked") for d in result_days)):
             window += [v for v in locked_sessions if strength_activity(v)
                        and v.get("activity_ref") not in strength_actual]
-        return (max(len(actual)+len(proposed), len(window_actual)+len(window)),
+        cycle_extra = [building for d, building in extra if first <= d.isoformat() <= last]
+        window_extra = [building for d, building in extra if window_start <= d.isoformat() <= window_end]
+        return (max(len(actual)+len(proposed)+len(cycle_extra), len(window_actual)+len(window)+len(window_extra)),
                 max(sum(recorded_strength_building(s) for s in actual)
-                    + sum(v.get("purpose") not in {"MAINTENANCE", "ACTIVATION"} for v in proposed),
+                    + sum(v.get("purpose") not in {"MAINTENANCE", "ACTIVATION"} for v in proposed)+sum(cycle_extra),
                     sum(recorded_strength_building(s) for s in window_actual)
-                    + sum(v.get("purpose") not in {"MAINTENANCE", "ACTIVATION"} for v in window)))
+                    + sum(v.get("purpose") not in {"MAINTENANCE", "ACTIVATION"} for v in window)+sum(window_extra)))
     strength_sessions = len(strength_recorded_sessions)
     # Unknown execution roles cannot be used to claim the required maintenance session.
     strength_building = sum(recorded_strength_building(s) for s in strength_recorded_sessions)
@@ -2439,7 +2441,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             future_options = []
             future_strength_dates = sorted({
                 d for d, _, count in schedule if d > day and count
-                and profile.get("strength_enabled") and strength_sessions < strength_limit
+                and profile.get("strength_enabled")
+                and strength_counts(d)[0] < min(3 if "STR" in day_goals[d][1] else 2,
+                                                (controls or {}).get("max_strength_sessions", 2))
                 and (d not in key_slots or count >= 2)
                 and (not last_strength_day or (d-last_strength_day).days >= 2)})
             future_tasks = sorted([(d, "KEY") for d in key_slots if d > day] +
@@ -2610,6 +2614,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 selected = set()
                 selected_key_sessions = []
                 extra_sessions = [(day, candidate_count, current_key)] if candidate_e is not None else []
+                extra_strength = [(day, True)] if current_strength else []
                 for future_day, future_kind, options in future_options:
                     task = (future_day, future_kind)
                     if required_dates is not None and task not in required_dates:
@@ -2617,6 +2622,12 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     if component_governed:
                         future_count, future_keys = session_counts(future_day, extra_sessions)
                         sessions_left, keys_left = max(0, session_limit-future_count), max(0, key_limit-future_keys)
+                    # A past session may have left the rolling window by the
+                    # reservation date. Apply that date's cycle and rolling
+                    # quota, including every hypothetical session once.
+                    future_strength_limit = min(3 if "STR" in day_goals[future_day][1] else 2,
+                                                (controls or {}).get("max_strength_sessions", 2))
+                    strengths_left = max(0, future_strength_limit-strength_counts(future_day, extra_strength)[0])
                     remaining_slots = min(sessions_left, slot_counts[future_day]-date_slots.get(future_day, 0))
                     kind_left = keys_left if future_kind == "KEY" else sessions_left if future_kind == "LONG" else strengths_left
                     previous = previous_key if future_kind == "KEY" else None if future_kind == "LONG" else previous_strength
@@ -2664,6 +2675,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         previous_key = future_day
                     elif future_kind == "STRENGTH":
                         strengths_left -= 1
+                        extra_strength.append((future_day, chosen["purpose"] not in {"MAINTENANCE", "ACTIVATION"}))
                         previous_strength = future_day
                     reserved_rows = _add_forecast_session(reserved_rows, future_day, chosen["e"])
                     reserved_days.append({"date": future_day.isoformat(), "status": "TRAINING",
@@ -3125,8 +3137,18 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 after_rows = _add_forecast_session(forecast_rows, day, effective)
                 def recovery_conflict(candidate_rows, candidate_q, candidate_e, candidate_minutes, *, protect_future=True,
                                       candidate_primary=z if is_key or is_strength else None,
-                                      candidate_count=2 if method.get("double_threshold") else 1):
-                    if protect_future and reservable_dates and reserved_future_work(candidate_q, candidate_e, reservable_dates,
+                                      candidate_count=2 if method.get("double_threshold") else 1,
+                                      first_quality=bool(period_objectives and z in {"Z3", "Z4", "Z5"}
+                                          and planning_allocation.quality_priority(z, period_objectives))):
+                    protected_dates = reservable_dates
+                    if first_quality and period_objectives and not planning_allocation.quality_priority("STR", period_objectives):
+                        # A speculative repeat of an already represented
+                        # strength component cannot exclude the first legal
+                        # exposure of another quality. Keep future key tasks
+                        # protected; every actual dose still passes Q/E,
+                        # readiness, spacing and session-quota checks.
+                        protected_dates = {task for task in protected_dates if task[1] != "STRENGTH"}
+                    if protect_future and protected_dates and reserved_future_work(candidate_q, candidate_e, protected_dates,
                         candidate_primary=candidate_primary,
                         candidate_count=candidate_count, candidate_minutes=candidate_minutes) is None:
                         return "RESERVE_FUTURE_QUALITY_BUDGET", "Дозата използва необходимия Q/7–40 бюджет за минимална цяла бъдеща ключова или силова задача, включително загрявката и товара от по-високите и съседните зони."
@@ -3597,6 +3619,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 best_priority = min(choice_priority(c) for c in choices)
                 bundles = {(c[2]["sport"], c[2]["method_id"]):preparation_bundle(c) for c in choices
                     if choice_priority(c) == best_priority} if period_objectives else {}
+                executable_quality = bool(period_objectives and any(
+                    c[2]["zone"] in {"Z3", "Z4", "Z5", "STR"}
+                    and planning_allocation.remaining_priority(c[2]["zone"], period_objectives)
+                    and choice_priority(c) == best_priority for c in choices))
                 def closes_easy_objective(candidate):
                     session = candidate[2]
                     remaining_q = q_remaining.get("Z1")
@@ -3610,6 +3636,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     -sum(bool(planning_allocation.quality_priority(z, period_objectives)
                               or relative_recovery and planning_allocation.remaining_priority(z, period_objectives))
                          for z in bundles.get((c[2]["sport"], c[2]["method_id"]), {}).get("components", [])),
+                    # A small easy finish must not consume the preparation
+                    # for an executable residual quality objective. Preserve
+                    # the existing ranking among the other legal candidates.
+                    bool(executable_quality and closes_easy_objective(c)),
                     not closes_easy_objective(c), -c[0], c[1]))
                 _, _, session, selected_rows, selected_after = choices[0]
                 if period_objectives is not None:
@@ -3856,12 +3886,6 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 "rolling_limits_preserved":all(s["rolling_limits_preserved"] for s in continuity_sessions)}
         # Optimistic structural upper bound, separate from physiological gates
         # and the desired target. Never relabel a greedy miss as a hard limit.
-        strength_accent = any("STR" in goals[1] for goals in day_goals.values())
-        quota = min(3 if strength_accent else 2, (controls or {}).get("max_strength_sessions", 2)) if profile.get("strength_enabled") else 0
-        actual_strength = [s for s in strength_recorded_sessions if allocation_start.isoformat() <= s.date <= end_date.isoformat()]
-        cycle_count = len(allocation_report.get("segments") or [None])
-        total_quota = quota*cycle_count
-        remaining_slots = max(0, total_quota-len(actual_strength))
         role_q = {"BUILDING": 0., "MAINTENANCE": 0.}
         for method in methods:
             if method["zone"] != "STR":
@@ -3871,14 +3895,24 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 nominal = _nominal_fraction(method, role, profile, "GENERAL_PREPARATION", cap, controls)
                 blocks = _blocks(method, _quantized_work(method, min(method["max_work_min"], cap["capacity_minutes"]*nominal)), cap, settings)
                 role_q[role] = max(role_q[role], sum(b["duration_min"] for b in blocks if b["zone"] == "STR"))
-        building_slots = min(remaining_slots, max(0, 2*cycle_count-sum(recorded_strength_building(s) for s in actual_strength))) if strength_accent else 0
-        actual_q = allocation_report["components"]["STR"].get("actual") or 0.
-        upper = actual_q + building_slots*role_q["BUILDING"] + (remaining_slots-building_slots)*role_q["MAINTENANCE"]
-        allocation_report["strength_feasibility"] = {"desired_q": allocation_report["components"]["STR"]["target"],
-            "attainable_upper_bound_q": _round(upper), "session_quota": total_quota,
-            "basis": "ACTUAL_PLUS_WHOLE_METHOD_ROLE_BUDGETS_WITH_SESSION_QUOTA",
-            "other_constraints_may_reduce": True,
-            "quota_bound_below_target": upper+.001 < allocation_report["components"]["STR"]["target"]}
+        strength_bounds = []
+        for segment in allocation_report.get("segments") or [allocation_report]:
+            first, last = segment["window_start"], segment["window_end"]
+            strength_accent = any("STR" in goals[1] for d, goals in day_goals.items()
+                                  if first <= d.isoformat() <= last)
+            quota = min(3 if strength_accent else 2, (controls or {}).get("max_strength_sessions", 2)) if profile.get("strength_enabled") else 0
+            actual_strength = [s for s in strength_recorded_sessions if first <= s.date <= last]
+            remaining_slots = max(0, quota-len(actual_strength))
+            building_slots = min(remaining_slots, max(0, 2-sum(recorded_strength_building(s)
+                for s in actual_strength))) if strength_accent else 0
+            actual_q = segment["components"]["STR"].get("actual") or 0.
+            upper = actual_q + building_slots*role_q["BUILDING"] + (remaining_slots-building_slots)*role_q["MAINTENANCE"]
+            desired = segment["components"]["STR"]["target"]
+            strength_bounds.append({"window_start": first, "window_end": last,
+                "desired_q": desired, "actual_q": actual_q,
+                "attainable_upper_bound_q": _round(upper), "session_quota": quota,
+                "quota_bound_below_target": upper+.001 < desired})
+        allocation_report["strength_feasibility"] = planning_allocation.strength_feasibility(strength_bounds)
     lookahead_days = [dict(d, provisional=True) for d in result_days if d["date"] > display_end.isoformat()]
     if allocation_report:
         allocation_report.update(scope="WHOLE_MICROCYCLES", visible_start=start_date.isoformat(),
