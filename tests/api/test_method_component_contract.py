@@ -159,6 +159,30 @@ def test_unrepresentable_effort_anchor_is_unavailable_without_breaking_catalogue
     json.dumps(cards, allow_nan=False)
 
 
+def test_personal_api_preview_retains_the_resolved_anchor_and_profile(monkeypatch):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from apps.api import method_library_service as service
+    profile = body()
+    before = deepcopy(profile)
+    monkeypatch.setattr(service, "ManagementStore", lambda _: SimpleNamespace(
+        profile=lambda _: {"configured": True, "profile": deepcopy(profile), "revision": 1}))
+    monkeypatch.setattr(service.model_service, "speed_view", lambda *args: deepcopy(example()))
+    repository = SimpleNamespace(athlete_settings=lambda _: SETTINGS)
+    result = service.view(repository, "athlete", phase="SPECIAL_PREPARATION",
+        now=datetime.combine(TODAY, datetime.min.time(), tzinfo=timezone.utc))
+    card = next(c for c in result["methods"] if c["id"] == "END-THR-LONG-01")
+    resolved = card["resolution"]
+    method = next(m for m in engine.resolved_methods(profile) if m["id"] == card["id"])
+    expected_hr = SETTINGS.zone_bounds_bpm[2]+method["position"]*(SETTINGS.zone_bounds_bpm[3]-SETTINGS.zone_bounds_bpm[2])
+    assert resolved["status"] == "READY"
+    assert resolved["anchor"]["type"] == "HR_ZONE_POSITION"
+    assert resolved["anchor"]["zone"] == "Z3"
+    assert resolved["anchor"]["target_hr_bpm"] == pytest.approx(expected_hr, abs=.001)
+    assert resolved["anchor"]["speed_kmh"] == resolved["target_speed_kmh"]
+    assert profile == before
+
+
 def test_q_ledger_uses_the_same_arithmetic_and_preserves_passive_and_strength_rules():
     settings = Repository().settings
     threshold_hr = sum(settings.zone_bounds_bpm[2:4])/2

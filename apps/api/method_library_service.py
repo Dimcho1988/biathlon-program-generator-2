@@ -103,7 +103,7 @@ def _coach_previews(catalog, profile, speed, settings, today, phase):
         time_range = [seconds, seconds] if seconds else [minimum, max(minimum, maximum)]
         r.update(work_unit="seconds", work_range=time_range, work_duration_range_seconds=time_range,
                  minimum_work_seconds=minimum, maximum_work_seconds=maximum,
-                 anchor={"type":"INDIVIDUAL_ZONE", "speed_kmh":cap.get("target_speed_kmh")},
+                 anchor={**cap["effort_anchor"], "speed_kmh":cap.get("target_speed_kmh")},
                  message="Лична работна опора от същия изчислител като седмичния план. Крайната доза зависи и от Recovery, наличното време и общия бюджет.")
         velocity = cap.get("target_speed_kmh")
         if velocity:
