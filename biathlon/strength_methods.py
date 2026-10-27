@@ -9,6 +9,19 @@ from copy import deepcopy
 
 VERSION = "sport-strength-v1"
 REDUCED_ROLES = {"MAINTENANCE", "ACTIVATION", "SUPPORTING", "RECOVERY"}
+
+
+def session_limit(controls, *, accent=False):
+    """One quota for selection, future reservations and feasibility reports.
+
+    None selects automatic frequency. Two-day spacing permits at most four
+    exposures in seven days; the actual target, doses and Recovery still govern
+    selection. Saved numeric limits remain explicit, including zero.
+    """
+    if controls is None:
+        return 3 if accent else 2
+    chosen = controls.get("max_strength_sessions", 2)
+    return 4 if chosen is None else chosen
 PERIODS = ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION",
            "PRECOMPETITION", "COMPETITION", "TRANSITION")
 RESERVE = ("Резервът е броят допълнителни пълни повторения със същата тежест, "

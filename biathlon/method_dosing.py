@@ -143,11 +143,24 @@ def threshold_structure(method):
     if method.get("double_threshold"):
         return "DOUBLE"
     structure = ((method.get("method_library") or {}).get("resolution") or {}).get("structure", method.get("structure"))
-    if structure in {"CONTINUOUS", "LIBRARY_CONTINUOUS", "PROGRESSIVE_CONTINUOUS"}:
+    if (structure in {"CONTINUOUS", "LIBRARY_CONTINUOUS", "PROGRESSIVE_CONTINUOUS", "AEROBIC_SUPPORT"}
+            or structure == "MIXED_AEROBIC" and method.get("mixed_variant") == "STEADY"):
         return "CONTINUOUS"
     return "INTERVALS"
 
 
 def threshold_allowed(method, preference):
-    return (method.get("zone") != "Z3" or preference == "AUTO"
-            or threshold_structure(method) in {"DOUBLE", preference})
+    """Check the actual threshold parts, regardless of the wrapper's zone.
+
+    A combined method cannot turn a continuous Z3 parent into intervals.
+    Explicit double-threshold days retain their separate two-session policy.
+    """
+    if preference == "AUTO":
+        return True
+    if method.get("combined_methods"):
+        return all(threshold_allowed(part, preference) for part in method["combined_methods"])
+    resolution = (method.get("method_library") or {}).get("resolution") or {}
+    threshold = method.get("zone") == "Z3" or any(
+        part.get("zone") == "Z3" and part.get("kind") == "WORK"
+        for part in resolution.get("segments", []))
+    return not threshold or threshold_structure(method) in {"DOUBLE", preference}

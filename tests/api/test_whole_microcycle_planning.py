@@ -87,6 +87,8 @@ def test_search_reclaims_unused_reservations_by_causal_replay_including_tail():
     def replay(policy):
         calls.append(policy)
         updated=deepcopy(baseline)
+        if 'reservation_methods' not in policy:
+            return updated  # Scheduling alternatives precede reservation refits.
         actual=policy['reservation_methods']['2026-10-24'][0]
         assert actual['method_id']=='Z4_ONLY'  # replace the earlier guessed Z5 future method
         assert policy['reservation_methods']['2026-10-25']==[]  # no imaginary task on a rest day
@@ -104,9 +106,11 @@ def test_search_does_not_credit_previous_cycle_overshoot_to_the_next_cycle():
     plan={'allocation':{'components':{'Z5':{'target':120.,'actual':100.,'planned':20.}},
         'segments':[{'components':{'Z5':{'target':60.,'actual':100.,'planned':0.}}},
                     {'components':{'Z5':{'target':60.,'actual':0.,'planned':20.}}}]}}
-    assert score(plan,{'Z5'})[0] == pytest.approx(2/3,abs=1e-5)
+    incomplete = score(plan,{'Z5'})
+    assert incomplete[0] < 0  # The next cycle is still outside its own band.
     plan['allocation']['segments'][1]['components']['Z5']['planned']=60.
-    assert score(plan,{'Z5'})[0] == 1.
+    assert score(plan,{'Z5'})[0] == 0.
+    assert score(plan,{'Z5'}) > incomplete
 
 
 def test_unmeasured_race_in_tail_blocks_later_forecast_without_invalidating_visible_week(monkeypatch):

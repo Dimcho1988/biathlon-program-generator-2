@@ -105,4 +105,5 @@ def test_search_fills_support_and_optional_tails_even_when_accents_are_covered()
     result = improve(baseline, {"planning_controls": {"accents": ["Z3"]}}, replay)
     assert result["allocation"]["components"]["Z2"]["planned"] == 60
     assert result["allocation"]["search"]["conclusion"] == "TARGETS_COVERED"
-    assert len(calls) == 3
+    assert len(calls) == 1
+    assert result["allocation"]["search"]["alternatives"] == 1

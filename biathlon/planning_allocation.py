@@ -9,8 +9,68 @@ from datetime import timedelta
 
 from .constants import COMPONENTS
 
-VERSION = "component-allocation-v4-whole-microcycles"
+VERSION = "component-allocation-v5-component-tolerance"
 SEGMENT_VERSION = VERSION
+COVERAGE_TOLERANCE = .10
+
+
+def assess_component(row):
+    """Acceptance around the unchanged target, never extra dose permission.
+
+    Each component and microcycle is assessed independently. Unknown actual
+    work cannot become zero, and excess in another component earns no credit.
+    """
+    target, actual, planned = row["target"], row.get("actual", 0.), row.get("planned", 0.)
+    lower, upper = target*(1-COVERAGE_TOLERANCE), target*(1+COVERAGE_TOLERANCE)
+    if actual is None or planned is None:
+        percent, status = None, "UNKNOWN"
+    else:
+        total = actual+planned
+        percent = 100*total/target if target > 0 else None
+        epsilon = 1e-9*max(1., target)
+        status = ("BELOW_RANGE" if total < lower-epsilon else "ABOVE_RANGE" if total > upper+epsilon
+                  else "NOT_REQUIRED" if target == 0 else "WITHIN_RANGE")
+    return {"coverage_percent": percent, "coverage_status": status,
+            "within_tolerance": status in {"WITHIN_RANGE", "NOT_REQUIRED"},
+            "lower_acceptable": lower, "upper_acceptable": upper}
+
+
+def objective_rows(allocation):
+    """Use local cycles when present; aggregates cannot hide a local gap."""
+    segments = allocation.get("segments") or []
+    return [(z, row) for s in segments for z, row in s["components"].items()] if segments else list(
+        allocation.get("components", {}).items())
+
+
+def acceptance(allocation):
+    rows = objective_rows(allocation)
+    return {"target_percent": 100., "lower_percent": 90., "upper_percent": 110.,
+            "scope": "EACH_COMPONENT_IN_EACH_MICROCYCLE", "changes_load_limits": False,
+            "within_tolerance": bool(rows) and all(row.get("within_tolerance", assess_component(row)["within_tolerance"]) for _, row in rows)}
+
+
+def gap_score(rows):
+    """Larger is better: worst local gap, all range gaps, distance to 100%."""
+    errors, outside = [], []
+    for _, row in rows:
+        actual, planned, target = row.get("actual", 0.), row.get("planned", 0.), row["target"]
+        if actual is None or planned is None:
+            error = 1.
+            gap = 1.
+        else:
+            # Completed excess cannot be undone; extra proposals still cost.
+            error = abs(actual+planned-max(target, actual))/(target if target > 0 else 1.)
+            gap = max(0., error-COVERAGE_TOLERANCE)
+        errors.append(error)
+        outside.append(gap)
+    return (-round(max(outside, default=0.), 5), -round(sum(outside), 5), -round(sum(errors), 5))
+
+
+def needs_search(allocation):
+    return any(row.get("actual") is not None and row.get("planned") is not None
+               and abs(row["actual"]+row["planned"]-max(row["target"], row["actual"]))
+                   > (min(1., row["target"]*.01) if row["target"] > 0 else .001)
+               for _, row in objective_rows(allocation))
 
 
 def objectives(windows, actual, forecast, source, days):
@@ -47,6 +107,7 @@ def objectives(windows, actual, forecast, source, days):
             target_q=target_q, actual_q=done_q if actual_q_known else None, planned_q=planned_q,
             target_effective=target_e, actual_effective=done_e, planned_effective=max(0., total_e-done_e),
             unallocated_effective=max(0., target_e-total_e))
+        components[z].update(assess_component(components[z]))
     return components
 
 
@@ -237,7 +298,7 @@ def strength_feasibility(segments):
 def report(windows, actual, forecast, days, scheduled_slots, weekly_limit, history_minutes, *, source=None, segment_keys=None):
     end = max(windows)
     lower = min(windows).isoformat()
-    components = {z: {k: round(v, 3) if isinstance(v, (float, int)) else v for k, v in row.items()}
+    components = {z: {k: round(v, 3) if isinstance(v, (float, int)) and not isinstance(v, bool) else v for k, v in row.items()}
                   for z, row in objectives(windows, actual, forecast, source or {}, days).items()}
     sessions = [s for d in days for s in d.get("sessions", [])]
     reasons = {}
@@ -277,4 +338,5 @@ def report(windows, actual, forecast, days, scheduled_slots, weekly_limit, histo
                       has_unallocated_load=any(row["remaining"] is None or row["remaining"] > 1.
                                                for segment in segment_reports
                                                for row in segment["components"].values()))
+    result["acceptance"] = acceptance(result)
     return result

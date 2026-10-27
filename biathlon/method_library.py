@@ -10,8 +10,8 @@ from hashlib import sha256
 from functools import lru_cache
 import math
 from pathlib import Path
-import re
 
+from .method_anchors import primary_distance, resolve_speed as _anchor
 from . import method_dosing, dosing_curve, preliminary_capacity, speed_duration, speed_zones, method_progression, hr_speed
 
 VERSION = "training-method-library-v6-source-standard"
@@ -131,75 +131,6 @@ def _hr_reference(segment, predictor):
     return {"hr_reference_range_bpm": [math.floor(values[0]), math.ceil(values[1])],
             "hr_reference_basis": basis, "hr_role": "SECONDARY_OBSERVATION_WITH_LAG" if segment["work_duration_seconds"] < 180 else "SECONDARY_OBSERVATION",
             "hr_is_measured": False}
-
-
-def primary_distance(profile):
-    text = str(profile.get("discipline") or "").strip().lower()
-    if text in {"marathon", "маратон"}:
-        return 42195.
-    if text in {"half marathon", "half-marathon", "полумаратон"}:
-        return 21097.5
-    if re.search(r"\d\s*[xх×*]\s*\d", text):
-        return None
-    matches = list(re.finditer(r"(?<![\w.,+\-])([0-9]+(?:[.,][0-9]+)?)\s*(km|км|m|м)(?!\w)", text))
-    if len(matches) != 1:
-        return None
-    m = matches[0]
-    if re.search(r"\d", text[:m.start()] + text[m.end():]):
-        return None
-    value = float(m[1].replace(",", ".")) * (1000 if m[2] in {"km", "км"} else 1)
-    return value if 0 < value <= 1e6 else None
-
-
-def _anchor(spec, profile, view, curve, tests):
-    kind = spec.get("type")
-    result = deepcopy(spec)
-    if kind in {"CV", "CS", "AnT", "ANT"}:
-        # A measured/manual threshold belongs to the athlete; a model estimate
-        # must never overwrite it. The estimate is only a prescription anchor.
-        actual_sport = profile.get("actual_sport") or profile.get("sport")
-        threshold = next((item for item in profile.get("ant_references", [])
-                          if item.get("sport") == actual_sport and item.get("source") in {"MEASURED", "MANUAL"}), {})
-        if kind in {"AnT", "ANT"} and _positive(threshold.get("speed_kmh")):
-            return {**result, **deepcopy(threshold), "type": kind,
-                    "is_estimate": threshold.get("source") not in {"MEASURED", "MANUAL"},
-                    "source": threshold.get("source", "EXPLICIT_ATHLETE_REFERENCE")}
-        descriptor = speed_duration.prescription_critical_speed(tests, curve,
-            allow_model_estimate=(profile.get("planning_controls") or {}).get("capacity_policy", "MODEL_WITH_PRIOR") == "MODEL_WITH_PRIOR")
-        velocity = descriptor["speed_kmh"]
-        result["evidence"] = descriptor
-        if kind in {"AnT", "ANT"}:
-            velocity *= .95
-            result.update(source="EXPERT_0_95_CS_ESTIMATE", is_measured_lactate_threshold=False,
-                          label="AnT · работна оценка 0,95 × CS")
-    elif kind in {"MAS", "V5", "V6", "V_DURATION", "RACE_DURATION"}:
-        seconds = {"MAS": 360., "V5": 300., "V6": 360.}.get(kind, spec.get("duration_seconds"))
-        if not _positive(seconds):
-            raise ValueError("RACE_DURATION_REQUIRED")
-        velocity = curve.speed(seconds) * 3.6
-        result["duration_seconds"] = seconds
-        if kind == "MAS":
-            result.update(source="V_360_SECONDS_WORKING_ESTIMATE", is_laboratory_measurement=False,
-                          label="MAS · работна оценка V(6 мин)")
-    elif kind in {"RACE_DISTANCE", "PRIMARY_RACE"}:
-        distance = spec.get("distance_m") or primary_distance(profile)
-        if _positive(distance):
-            seconds = curve.inverse(distance, distance=True)
-            velocity = curve.speed(seconds) * 3.6
-            result.update(distance_m=distance, duration_seconds=seconds,
-                          inverse_equation="distance_m = duration_seconds * speed_m_per_second")
-        elif _positive(profile.get("race_duration_min")):
-            seconds = profile["race_duration_min"] * 60
-            velocity = curve.speed(seconds) * 3.6
-            result.update(duration_seconds=seconds, evidence="PROFILE_RACE_DURATION_ON_CURRENT_CURVE")
-        else:
-            raise ValueError("PRIMARY_RACE_DISTANCE_OR_DURATION_REQUIRED")
-        result["discipline"] = profile.get("discipline")
-    else:
-        raise ValueError("UNSUPPORTED_OR_NON_SPEED_ANCHOR")
-    if not _positive(velocity):
-        raise ValueError("INVALID_ANCHOR_SPEED")
-    return {**result, "speed_kmh": velocity, "is_estimate": True}
 
 
 def _segment(spec, base, profile, view, curve, tests, position, zone_profile):
