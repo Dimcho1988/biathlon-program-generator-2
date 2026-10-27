@@ -84,7 +84,7 @@ export interface PlanningControls {
   mixed_sessions_enabled?: boolean; mixed_min_readiness?: number;
   history_gap_days?: number; automatic_intervals?: boolean;
   sessions_per_week: number; intensity_days: number[]; strength_days: number[]; long_session_day: number | null;
-  capacity_policy?: "OBSERVED_ONLY" | "MODEL_WITH_PRIOR"; max_strength_sessions: number; training_sports: ManagementProfile["actual_sport"][]; weekly_target_hours: number | null;
+  capacity_policy?: "OBSERVED_ONLY" | "MODEL_WITH_PRIOR"; max_strength_sessions: number | null; training_sports: ManagementProfile["actual_sport"][]; weekly_target_hours: number | null;
   mesocycle_anchor: string | null; wave: number[]; accent_mode: "AUTO" | "MANUAL" | "HYBRID";
   automatic_focus_count?: number; ranked_indices?: number[]; shock_indices?: number[];
   accent_limit: number; accents: Component[]; accent_index: number; maintenance_index: number; cycles: CycleDirective[];
@@ -97,7 +97,7 @@ export function trainingDays(profile: Pick<ManagementProfile, "availability_mode
   return profile.training_days ?? (availabilityMode(profile) === "AUTO_HISTORY" ? [0,1,2,3,4,5,6] : profile.available_minutes.flatMap((v,i) => v > 0 ? [i] : []));
 }
 export function defaultPlanningControls(sport: ManagementProfile["actual_sport"]): PlanningControls {
-  return { sessions_by_day: null, threshold_days: [], threshold_method: "AUTO", double_threshold_days: [], double_threshold_components: ["Z3"], double_threshold_fraction: .5, double_threshold_gap_hours: 6, double_threshold_lactate_ceiling: 3.5, mixed_sessions_enabled: true, mixed_min_readiness: 70, history_gap_days: 10, automatic_intervals: true, sessions_per_week: 7, intensity_days: [], strength_days: [], long_session_day: null, max_strength_sessions: 2,
+  return { sessions_by_day: null, threshold_days: [], threshold_method: "AUTO", double_threshold_days: [], double_threshold_components: ["Z3"], double_threshold_fraction: .5, double_threshold_gap_hours: 6, double_threshold_lactate_ceiling: 3.5, mixed_sessions_enabled: true, mixed_min_readiness: 70, history_gap_days: 10, automatic_intervals: true, sessions_per_week: 7, intensity_days: [], strength_days: [], long_session_day: null, max_strength_sessions: null,
     training_sports: [sport], weekly_target_hours: null, capacity_policy: "MODEL_WITH_PRIOR", mesocycle_anchor: null, wave: [.96, 1.04, 1.10, .78],
     accent_mode: "AUTO", automatic_focus_count: 3, ranked_indices: [1.6, 1.5, 1.2], shock_indices: [2, 1.8, 1.6], accent_limit: 2, accents: [], accent_index: 1.1, maintenance_index: 1, cycles: [] };
 }
@@ -123,7 +123,14 @@ export interface StrengthPrescription {
   reserve_definition: string; continuity: string; progression: string;
   sources: Array<{authors: string; url: string; protocol: string}>;
 }
+export interface EffortAnchor {
+  type: string; zone?: string; position?: number; target_hr_bpm?: number; speed_kmh?: number;
+  duration_seconds?: number; distance_m?: number; source?: string;
+  anchor?: EffortAnchor | null;
+  parts?: Array<{ zone: string; kind?: string; method_id?: string; anchor: EffortAnchor }>;
+}
 export interface DoseEvidence {
+  effort_anchor?: EffortAnchor;
   standard_method_work_minutes?: number; method_budget_role_fraction?: number; nominal_dose_policy?: string;
   method_dose_factors?: Array<{stage: string; factor?: number; work_minutes?: number}>;
   unrounded_requested_work_minutes?: number;
@@ -143,6 +150,9 @@ export interface DoseEvidence {
   explanation: string; technical_spill_reference: Record<Component, number>;
 }
 export interface DraftSession {
+  q_accounting?: { basis: string; status?: "COMPLETE" | "INCOMPLETE"; unavailable_minutes?: number; unknown_metabolic_minutes: number; rows: Array<{
+    kind: string; zone: string; duration_min: number; coefficient: number; equivalent_min: number; source: string;
+  }> };
   speed_equivalence_comparison?: SpeedEquivalenceComparison;
   method_id: string; title: string; sport: string; zone: string; purpose: string; blocks: SessionBlock[];
   neuromuscular_exposure?: NeuromuscularExposure | null;
@@ -160,6 +170,8 @@ export interface ComponentLoadBudget {
   target_period_effective?: number; target_weekly_q?: number | null; remaining_q?: number | null;
 }
 export interface ComponentAllocation {
+  coverage_percent?: number | null; coverage_status?: "WITHIN_RANGE" | "BELOW_RANGE" | "ABOVE_RANGE" | "NOT_REQUIRED" | "UNKNOWN";
+  within_tolerance?: boolean; lower_acceptable?: number; upper_acceptable?: number;
   basis?: "DIRECT_Q" | "CANONICAL_E"; target?: number; actual?: number | null; planned?: number; remaining?: number | null;
   desired_target_q?: number | null; target_q?: number | null; actual_q?: number | null; planned_q?: number;
   target_effective?: number; actual_effective?: number; planned_effective?: number; unallocated_effective?: number; remaining_effective?: number;
@@ -170,6 +182,7 @@ export interface AllocationSegment {
   window_start: string; window_end: string; days: number; components: Partial<Record<Component, ComponentAllocation>>;
 }
 export interface AllocationReport {
+  acceptance?: { target_percent: number; lower_percent: number; upper_percent: number; within_tolerance: boolean };
   scope?: "WHOLE_MICROCYCLES"; visible_start?: string; visible_end?: string; lookahead_end?: string;
   lookahead_sessions?: number; lookahead_minutes?: number;
   forecast_complete?: boolean;
@@ -344,7 +357,7 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
     const zones = (v: unknown): v is Component[] => Array.isArray(v) && new Set(v).size === v.length && v.every(z => COMPONENTS.includes(z));
     if (!isRecord(c) || (c.history_gap_days !== undefined && !integer(c.history_gap_days, 5, 14)) || (c.automatic_intervals !== undefined && typeof c.automatic_intervals !== "boolean") || (c.capacity_policy !== undefined && !["OBSERVED_ONLY", "MODEL_WITH_PRIOR"].includes(String(c.capacity_policy))) || !integer(c.sessions_per_week, 1, 21) || !days(c.intensity_days) || !days(c.strength_days)
       || !(c.long_session_day === null || (integer(c.long_session_day, 0, 6) && days([c.long_session_day])))
-      || !integer(c.max_strength_sessions, 0, 3) || !Array.isArray(c.training_sports) || c.training_sports.length > 3
+      || !(c.max_strength_sessions === null || integer(c.max_strength_sessions, 0, 4)) || !Array.isArray(c.training_sports) || c.training_sports.length > 3
       || (c.training_sports.length > 0 && !c.training_sports.includes(String(value.actual_sport)))
       || new Set(c.training_sports).size !== c.training_sports.length || !c.training_sports.every(s => ["Run", "NordicSki", "RollerSki"].includes(s) && (value.sport !== "Run" || s === "Run"))
       || !optionalRange(c.weekly_target_hours, .01, 42) || !(c.mesocycle_anchor === null || isCalendarDate(c.mesocycle_anchor))

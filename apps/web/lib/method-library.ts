@@ -90,10 +90,15 @@ export function parseMethodLibrary(value: unknown): MethodLibraryResponse {
     throw new Error("Базата от методи временно не е достъпна. Опитай отново.");
   return { ...value, preferences: parseMethodPreferences(value.preferences) } as unknown as MethodLibraryResponse;
 }
-export function methodAnchorLabel(anchor?: { type: string; distance_m?: number; duration_seconds?: number; source?: string }): string {
+export function methodAnchorLabel(anchor?: { type: string; zone?: string; position?: number; distance_m?: number; duration_seconds?: number; source?: string }): string {
   if (!anchor) return "Индивидуален работен профил";
   if (["CV", "CS"].includes(anchor.type)) return "КС · критична скорост";
   if (anchor.type === "INDIVIDUAL_ZONE") return "Индивидуален профил на компонента";
+  if (anchor.type === "HR_ZONE_POSITION") return `Индивидуална зонова опора${anchor.zone ? ` · ${anchor.zone}` : ""}${typeof anchor.position === "number" ? ` · ${(100*anchor.position).toLocaleString("bg-BG", { maximumFractionDigits: 1 })}% от работния интервал на зоната` : ""}`;
+  if (anchor.type === "INDIVIDUAL_SPEED") return "Скорост по индивидуалния модел";
+  if (anchor.type === "STRENGTH_PROFILE") return "Силов профил · цели серии, повторения и резерв";
+  if (anchor.type === "COACH_EFFORT") return "Изрично зададена треньорска оценка на усилието";
+  if (anchor.type === "UNRESOLVED") return "Липсва допустима числова опора";
   if (anchor.type === "V5") return "V(5 мин) · максимална средна скорост за 5 мин";
   if (["MAS", "V6"].includes(anchor.type)) return "MAS · работна оценка чрез V(6 мин), не лабораторно измерване";
   if (["ANT", "AnT"].includes(anchor.type)) return anchor.source === "MEASURED" ? "AnT · въведена измерена опора" : anchor.source === "MANUAL" ? "AnT · ръчно зададена опора" : "AnT · работна оценка 0,95 × CS при липсваща зададена или измерена опора";

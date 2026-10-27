@@ -183,7 +183,17 @@ def test_search_keeps_stability_on_ties_and_distinguishes_unproven_shortage():
         calls.append(caps)
         return deepcopy(baseline)
     result = improve(baseline, {'planning_controls':{'accents':['Z3']}}, replay)
-    assert result is baseline and len(calls)==3
+    assert result is baseline
+    assert result['allocation']['search']['alternatives'] == len(calls) > 0
+    assert any(policy.get('component_gap_first') for policy in calls)
+    assert result['allocation']['search']['conclusion']=='CHECKED_VARIANTS_EXHAUSTED'
+    assert result['allocation']['search']['improved'] is False
+    assert result['allocation']['search']['hard_limit_proven'] is False
+
+    calls.clear()
+    time_limited = deepcopy(baseline)
+    result = improve(time_limited, {'planning_controls':{'accents':['Z3']}}, replay, seconds_remaining=0.)
+    assert result is time_limited and not calls
     assert result['allocation']['search']['conclusion']=='SEARCH_BUDGET_EXHAUSTED'
     assert result['allocation']['search']['hard_limit_proven'] is False
 

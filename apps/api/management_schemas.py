@@ -125,7 +125,7 @@ class PlanningControls(BaseModel):
     intensity_days: list[int] = Field(default_factory=list, max_length=7)
     strength_days: list[int] = Field(default_factory=list, max_length=7)
     long_session_day: int | None = Field(default=None, ge=0, le=6)
-    max_strength_sessions: int = Field(default=2, ge=0, le=3)
+    max_strength_sessions: int | None = Field(default=None, ge=0, le=4)
     training_sports: list[Literal["Run", "NordicSki", "RollerSki"]] = Field(default_factory=list, max_length=3)
     weekly_target_hours: float | None = Field(default=None, gt=0, le=42)
     history_gap_days: int = Field(default=10, ge=5, le=14)

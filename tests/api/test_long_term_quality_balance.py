@@ -46,7 +46,8 @@ def balanced_fixture(monkeypatch):
         mesocycle_anchor=(TODAY-timedelta(days=13)).isoformat(), accent_mode="AUTO",
         accents=[], automatic_focus_count=3, sessions_per_week=13,
         sessions_by_day=[2,2,2,2,2,1,0], threshold_days=[1,4], strength_days=[1,4],
-        threshold_method="INTERVALS", mixed_sessions_enabled=True, history_gap_days=10)
+        threshold_method="INTERVALS", mixed_sessions_enabled=True, history_gap_days=10,
+        max_strength_sessions=2)  # This counterfactual explicitly tests the saved numeric quota.
     cutoff = TODAY + timedelta(days=8)
     # Coach intent is known directly in Q. Preserve genuine canonical E
     # goals, capacities, complete structures and all scheduling constraints.

@@ -6,9 +6,9 @@ resolver; personal coach profiles retain their own capacity calculation.
 from copy import deepcopy
 from hashlib import sha256
 import json
-from . import method_dosing, method_library, training_methods, race_specific
+from . import method_anchors, method_dosing, method_library, training_methods, race_specific
 
-VERSION = 'method-registry-v5-source-standard'
+VERSION = 'method-registry-v6-explicit-anchors'
 COMBINED_STRUCTURES = {'ALTERNATING', 'CRUISE_ALTERNATING', 'THRESHOLD_HIGH', 'AEROBIC_STRENGTH', 'AEROBIC_SUPPORT', 'MIXED_AEROBIC'}
 
 
@@ -94,8 +94,11 @@ def catalog(profile, speed_view=None, *, phase=None, today=None):
         allowed = enabled(profile, m)
         mixed_off = not (profile.get('planning_controls') or {}).get('mixed_sessions_enabled', True) and (m.get('mixed_component') or m['structure'] in COMBINED_STRUCTURES)
         compatible = sport in m['sports'] and (phase is None or phase in m['periods'])
-        card['resolution'] = {'status': 'DISABLED' if not allowed or mixed_off else 'READY' if compatible else 'INCOMPATIBLE',
-            'reason': 'DISABLED_BY_PROFILE' if not allowed or mixed_off else None if compatible else 'SPORT_OR_PERIOD_NOT_SUPPORTED',
+        anchor = method_anchors.definition(m)
+        unresolved = anchor['type'] == 'UNRESOLVED'
+        card['resolution'] = {'status': 'DISABLED' if not allowed or mixed_off else 'UNAVAILABLE' if unresolved else 'READY' if compatible else 'INCOMPATIBLE',
+            'anchor': anchor,
+            'reason': 'DISABLED_BY_PROFILE' if not allowed or mixed_off else anchor['reason'] if unresolved else None if compatible else 'SPORT_OR_PERIOD_NOT_SUPPORTED',
             'phase': phase, 'zone': m['zone'], 'automatic_selection_enabled': allowed and not mixed_off,
             'selection_basis': 'COACH_PROFILE_RECHECKED_AGAINST_CAPACITY_RECOVERY_AND_WEEKLY_BUDGET',
             'message': 'Личната доза се изчислява в седмичния план. Числовият профил се настройва в „Управление“.'}
