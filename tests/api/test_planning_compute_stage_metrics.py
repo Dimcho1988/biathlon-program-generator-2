@@ -4,6 +4,7 @@ from contextvars import copy_context
 from copy import deepcopy
 import json
 import logging
+from itertools import cycle
 from threading import BoundedSemaphore, Event, Thread, current_thread
 from time import sleep
 from types import SimpleNamespace
@@ -192,10 +193,14 @@ def test_pure_calculation_without_persistence_uses_calling_thread_clocks(monkeyp
     assert (stage.calls, stage.seconds, stage.cpu_seconds) == (1, 2., .25)
 
 
-def test_full_http_and_shared_input_key_are_identical_with_aggregate_baseline_search_timings(monkeypatch, caplog):
+@pytest.mark.parametrize("baseline_seconds", [0., 100.])
+def test_full_http_and_shared_input_key_are_identical_with_aggregate_baseline_search_timings(monkeypatch, caplog, baseline_seconds):
     caplog.set_level(logging.INFO, logger="uvicorn.error")
+    clock = cycle((10., 10.+baseline_seconds))
+    monkeypatch.setattr(management_service, "monotonic", lambda: next(clock))
     def search(baseline, profile, replay, **kwargs):
-        assert 0 <= kwargs["seconds_remaining"] <= 150.
+        assert kwargs["seconds_remaining"] == 150.
+        assert kwargs["estimated_trial_seconds"] == baseline_seconds
         replay({"optional_easy_fraction": 0.})
         return replay({"optional_easy_fraction": .5})
     monkeypatch.setattr(planning_search, "improve", search)

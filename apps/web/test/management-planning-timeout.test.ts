@@ -37,15 +37,17 @@ function delayedApi(milliseconds: number) {
   })));
 }
 
-it.each([
+const planRequests = [
   ["generate", { start_date: "2026-10-12", expected_profile_revision: 1, expected_draft_revision: 0 }],
   ["action", { action: "REFRESH", expected_revision: 1 }],
   ["action", { action: "RESUME", expected_revision: 1 }],
   ["day", { action: "REST", date: "2026-10-13", note: "", expected_revision: 1 }],
-] as const)("returns a successful 82-second %s plan calculation without repeating the write", async (path, body) => {
-  delayedApi(82_000); // Observed live planner latency exceeded the old 75-second deadline.
+] as const;
+it.each(planRequests.flatMap(([path, body]) => [82_000, 240_000].map(ms => [path, ms, body] as const)))
+("returns a successful %s plan calculation after %i ms without repeating the write", async (path, milliseconds, body) => {
+  delayedApi(milliseconds);
   const pending = send(path, body);
-  await vi.advanceTimersByTimeAsync(82_000);
+  await vi.advanceTimersByTimeAsync(milliseconds);
   const result = await pending;
   expect(result.status).toBe(200);
   expect(await result.json()).toEqual({ saved: true, revision: 2 });
@@ -53,10 +55,10 @@ it.each([
 });
 
 it("keeps a bounded deadline for a stalled calculation without retrying a mutation", async () => {
-  delayedApi(181_000);
+  delayedApi(361_000);
   let settled = false;
   const pending = send("action", { action: "REFRESH", expected_revision: 1 }).then(r => { settled = true; return r; });
-  await vi.advanceTimersByTimeAsync(179_999);
+  await vi.advanceTimersByTimeAsync(359_999);
   expect(settled).toBe(false);
   await vi.advanceTimersByTimeAsync(1);
   expect((await pending).status).toBe(503);

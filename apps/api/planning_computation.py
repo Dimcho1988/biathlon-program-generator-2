@@ -16,7 +16,7 @@ from .request_metrics import timed_stage
 
 _SLOTS = BoundedSemaphore(1)  # Bound CPU/memory per API or worker process.
 
-def compute(repository, alias, key, calculate, *, wait_seconds=180., poll_seconds=1.):
+def compute(repository, alias, key, calculate, *, wait_seconds=300., poll_seconds=1.):
     rpc = getattr(repository, "planning_computation", None)
     if rpc is None:
         # Non-persistent repositories are used by the pure engine/test harness.
