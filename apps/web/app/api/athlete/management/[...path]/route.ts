@@ -100,7 +100,7 @@ async function proxy(request: Request, context: Context) {
         ? AbortSignal.any([request.signal, AbortSignal.timeout(75_000)])
         // Planning can finish after the ordinary read/write deadline on staging.
         // Keep one bounded mutation; never retry a potentially committed write.
-        : AbortSignal.timeout(plansWeek ? 180_000 : 75_000),
+        : AbortSignal.timeout(plansWeek ? 360_000 : 75_000),
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-OnFlows-Athlete-Alias": access.athleteAlias, "X-OnFlows-Actor-Id": access.actorUserId },
       ...(body ? { body } : {}),
     });
