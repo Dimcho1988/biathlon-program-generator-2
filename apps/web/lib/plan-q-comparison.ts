@@ -52,17 +52,19 @@ export function planQComparison(plan: PlanningDraft, options: QComparisonOptions
         const row = p.components[zone];
         const historical = new Map((options.outcomes ?? []).filter(o => inPeriod(o.date))
           .map(o => [o.date, quantity(o.planned_q?.[zone])]));
-        const schedule = options.planKind === "APPROVED" ? new Map([...historical].filter(([d]) => d <= plan.end_date)) : new Map<string, number | null>();
+        const schedule = new Map<string, number | null>();
         for (const d of prescribed) {
           if (d.status !== "EXISTING_ACTIVITY") schedule.set(d.date, dayQ(d, zone));
-          else if (options.planKind === "APPROVED" && !schedule.has(d.date)) schedule.set(d.date, null);
         }
-        const completed = [...schedule.keys()].filter(d => d < today && d < asOf);
+        // The main column is the displayed programme. Historical prescriptions
+        // belong to adherence, not to a new rolling week's remaining tasks.
+        const adherence = options.planKind === "APPROVED" ? new Map([...historical, ...schedule]) : schedule;
+        const completed = [...adherence.keys()].filter(d => d < today && d < asOf);
         return {zone, target: qValue(row, "target"), targetBasis: row?.basis ?? "UNKNOWN",
           planned: sum([...schedule.values()]), forecast: sum(forecast.map(d => dayQ(d, zone))),
           actual: execution ? sum(actualKeys.map(d => quantity(actualDays.get(d)?.q[zone]))) : qValue(row, "actual"),
           actualEstimated: execution ? sum(actualKeys.map(d => quantity(actualDays.get(d)?.estimated_q?.[zone] ?? 0))) : null,
-          plannedCompleted: completed.length ? sum(completed.map(d => schedule.get(d) ?? null)) : null,
+          plannedCompleted: completed.length ? sum(completed.map(d => adherence.get(d) ?? null)) : null,
           actualCompleted: completed.length ? sum(completed.map(d => quantity(actualDays.get(d)?.q[zone]))) : null};
       })};
   });

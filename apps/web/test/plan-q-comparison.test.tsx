@@ -91,14 +91,18 @@ it("missing dates or Q do not disappear from execution or adherence totals", () 
   expect(r.actual).toBeNull(); expect(r.actualCompleted).toBeNull(); expect(r.plannedCompleted).toBe(80);
 });
 
-it("an adapted approved plan retains historical prescriptions while a proposal reports only its own tasks", () => {
+it("past prescriptions affect adherence without replacing the displayed programme's known Q", () => {
   const p = plan(); p.start_date = "2026-10-26"; p.days = [];
   const outcomes = [{date: "2026-10-25", planned_q: {Z1: 80}, planned_minutes: 100, actual_minutes: 90,
     planned_title: "Prior prescription", status: "RECORDED"}];
-  expect(planQComparison(p, {planKind: "APPROVED", outcomes})[0].rows[0].planned).toBe(80);
+  const execution = {schema_version: "direct-q-execution-v1" as const, as_of: "2026-10-26", days: [
+    {date: "2026-10-25", q: {Z1: 60}, day_complete: true, activity_count: 1}]};
+  const row = planQComparison(p, {planKind: "APPROVED", outcomes, qExecution: execution})[0].rows[0];
+  expect(row.planned).toBe(0); expect(row.plannedCompleted).toBe(80); expect(row.actualCompleted).toBe(60);
   expect(planQComparison(p, {planKind: "DRAFT", outcomes})[0].rows[0].planned).toBe(0);
   delete (outcomes[0] as {planned_q?: unknown}).planned_q;
-  expect(planQComparison(p, {planKind: "APPROVED", outcomes})[0].rows[0].planned).toBeNull();
+  const unknown = planQComparison(p, {planKind: "APPROVED", outcomes, qExecution: execution})[0].rows[0];
+  expect(unknown.planned).toBe(0); expect(unknown.plannedCompleted).toBeNull();
 });
 
 it("defaults to the current microcycle and keeps provisional Q outside the main three columns", () => {
