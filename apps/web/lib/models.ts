@@ -73,11 +73,30 @@ export interface SportHrPolicy {
   reference_hrmax_bpm:number|null; sport_hrmax_bpm:number|null; raw_hr_unchanged:true;
 }
 export interface SpeedModel {sport_hr_policy?:SportHrPolicy}
+export interface InitialThresholdEstimate {
+  model_version:"heuristic_v0.1_unvalidated"; status:"AVAILABLE"|"UNAVAILABLE";
+  use_status:"THRESHOLD_ONLY"|"SUPERSEDED"|"UNAVAILABLE"; reason:string|null;
+  p_percent:number|null; v_threshold_estimated_kmh:number|null;
+  speed_role:"RAW_MOVING_SPEED"; is_estimated:true; calibration_eligible:false; used_for_zones:false;
+  superseded_by?:"TESTS"|"INDEX"; inputs?:{H:number;v:number;S:number};
+  window?:{start:string;end_exclusive:string;days:number};
+}
+export interface SpeedModel {initial_threshold?:InitialThresholdEstimate}
 export function parseSpeedModel(value:unknown):SpeedModel {
   const r=value as SpeedModel;
   if(!r||r.schema_version!=="speed-model-v1"||!Array.isArray(r.points)||!Array.isArray(r.tests))throw new Error("Невалиден скоростен модел.");
   for(const p of r.points)if(!finite(p.duration_s)||p.duration_s<=0||!finite(p.speed_kmh)||p.speed_kmh<=0||!finite(p.distance_m)||p.distance_m<=0)throw new Error("Невалидна скоростна крива.");
   if (r.boundary_test_keys !== undefined && (!Array.isArray(r.boundary_test_keys) || !r.boundary_test_keys.every(k => typeof k === "string"))) throw new Error("Невалидни опори за скоростните зони.");
+  const initial=r.initial_threshold;
+  if(initial&&(initial.model_version!=="heuristic_v0.1_unvalidated"||initial.speed_role!=="RAW_MOVING_SPEED"
+    ||initial.is_estimated!==true||initial.calibration_eligible!==false||initial.used_for_zones!==false
+    ||!["THRESHOLD_ONLY","SUPERSEDED","UNAVAILABLE"].includes(initial.use_status)
+    ||!["AVAILABLE","UNAVAILABLE"].includes(initial.status)
+    ||initial.status==="AVAILABLE"&&(!finite(initial.p_percent)||initial.p_percent<=0
+      ||!finite(initial.v_threshold_estimated_kmh)||initial.v_threshold_estimated_kmh<=0
+      ||!initial.inputs||!finite(initial.inputs.H)||initial.inputs.H<=0||!finite(initial.inputs.v)||initial.inputs.v<=0
+      ||!finite(initial.inputs.S)||initial.inputs.S<0||!initial.window||!Number.isInteger(initial.window.days)||initial.window.days<7)))
+    throw new Error("Невалидна начална прагова оценка.");
   const metadata=r.curve_metadata;
   if(metadata&&(typeof metadata.absolute_speed_available!=="boolean"||typeof metadata.mode!=="string"
     ||metadata.cap_percent!=null&&(!finite(metadata.cap_percent)||metadata.cap_percent<0||metadata.cap_percent>5)

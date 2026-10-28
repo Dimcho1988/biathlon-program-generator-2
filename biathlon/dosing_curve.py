@@ -85,7 +85,7 @@ def describe(index_curve, test_curve, tests, bounds, hrmax, indices, anchors, *,
         curve = Curve(index_curve, test_curve)
         predictor = Predictor(curve, bounds, hrmax, indices,
                               expert_durations={a["zone"]: a["duration_s"] for a in anchors},
-                              normalization_offset_bpm=normalization_offset_bpm, sport=sport)
+                              normalization_offset_bpm=normalization_offset_bpm, sport=sport, tests=tests)
     except ValueError:
         return {**result, "reason": "INCOMPATIBLE_DURATION_OR_HR_DOMAIN"}
     fixed = {curve.times[0], curve.times[-1]} | {a["duration_s"] for a in predictor.anchors if a["duration_s"] is not None and curve.times[0] <= a["duration_s"] <= curve.times[-1]} | {t["duration_s"] for t in tests}
@@ -102,9 +102,13 @@ def describe(index_curve, test_curve, tests, bounds, hrmax, indices, anchors, *,
                        "test_speed_kmh": curve.test_curve.speed(t)*3.6,
                        "distance_m": curve.distance(t), "estimated_hr_bpm": hr,
                        "evidence": "COACH_BLEND_ESTIMATE"})
-    zones = speed_zones.build(curve, predictor, [])
-    zones.update(basis="COACH_INDEX_TEST_BLEND", model_version=VERSION,
-                 note="Работни скоростни зони от общата крива 30/70 за дозиране на методите.")
+    zones = speed_zones.build(curve, predictor, tests)
+    if zones.get("basis") == "TEST_CURVE_AFTER_PAIRED_PROFILE_CONFLICT":
+        zones.update(model_version=VERSION, capacity_basis="COACH_INDEX_TEST_BLEND",
+                     note="Границите използват тестовата крива поради несъвместими индексни граници; дозировката използва кривата 30/70.")
+    else:
+        zones.update(basis="COACH_INDEX_TEST_BLEND", model_version=VERSION,
+                     note="Работни скоростни зони от общата крива 30/70 за дозиране на методите.")
     return {**result, "status": "AVAILABLE", "points": points, "hr_model": predictor.summary(),
             "speed_zones": zones, "duration_range_s": [curve.times[0], curve.times[-1]],
             "component_versions": {"index": index_curve.model_version, "tests": test_curve.model_version},

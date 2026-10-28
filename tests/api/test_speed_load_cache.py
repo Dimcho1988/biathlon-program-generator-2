@@ -89,6 +89,36 @@ def test_changed_capacity_invalidates_effective_report_but_reuses_direct_activit
     assert after["zones"][1]["effective_load"] == pytest.approx(18.75)
 
 
+def test_saved_test_reclassifies_prior_fourteen_days_even_with_unchanged_current_capacity(monkeypatch):
+    from apps.api import model_service
+    repo = Repository()
+    repo.speed_load_cache_namespace = str(uuid4())
+    repo._request = lambda *args, **kwargs: []
+    repo.add("within", "Run", TODAY-timedelta(days=14), 150, 15)
+    repo.add("outside", "Run", TODAY-timedelta(days=15), 150, 15)
+    inputs = {"alias": "authorized-athlete", "settings": SETTINGS, "today": TODAY,
+        "calendar": repo.active_trainability_calendar("authorized-athlete", None, None),
+        "entries": [], "history": []}
+    monkeypatch.setattr(model_service, "speed_view_inputs", lambda *args: deepcopy(inputs))
+    before = model.history_view(repo, "authorized-athlete", today=TODAY)
+    assert before["classified_minutes"] == 0
+    inputs["entries"].append({"kind": "SPEED_TEST", "entry_key": "new-test", "revision": 1,
+        "payload": {"sport": "Run", "day": TODAY.isoformat(), "enabled": True, "source": "MANUAL",
+            "duration_s": 600., "speed_kmh": 22., "maximal": True, "comparable": True}})
+    after = model.history_view(repo, "authorized-athlete", today=TODAY)
+    records = {a["activity_ref"]: a for a in after["activities"]}
+    assert records["within"]["classified_minutes"] == pytest.approx(10.)
+    assert records["outside"]["classified_minutes"] == 0
+    assert records["outside"]["unaccounted_minutes"] == pytest.approx(10.)
+    comparison = after["speed_equivalence_comparison"]
+    assert comparison["calibration_scope"] == "CURRENT_SPORT_PROFILE"
+    assert all(a["speed_equivalence_comparison"]["parameters_version"] == comparison["parameters_version"]
+               for a in records.values())
+    assert model.history_view(repo, "authorized-athlete", today=TODAY) == after
+    inputs["entries"][0]["payload"]["enabled"] = False
+    assert model.history_view(repo, "authorized-athlete", today=TODAY)["classified_minutes"] == 0
+
+
 def test_activity_cache_reuses_only_unchanged_causal_inputs_and_recomputes_downstream_load(monkeypatch):
     repo = Repository()
     repo.speed_load_cache_namespace = str(uuid4())

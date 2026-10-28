@@ -6,11 +6,12 @@ explicit initial estimates only where paired observations are unavailable.
 identity. Cycling HR is already expressed in the common +7 bpm frame here.
 """
 from bisect import bisect_right
+from collections.abc import Mapping
 from hashlib import sha256
 import json
 import math
 
-VERSION = "common-zone-profile-v1-2026-10-24"
+VERSION = "common-zone-profile-v2-test-conflict-fallback"
 HR_PERCENTAGES = (45., 72., 79., 89., 94., 100.)
 REST_V6_FRACTION = .20
 MIN_SECONDS = {"Z1": 420., "Z2": 420., "Z3": 420., "Z4": 420., "Z5": 300., "GENERAL": 420.}
@@ -19,6 +20,24 @@ ZONES = tuple(f"Z{i}" for i in range(1, 6))
 
 def positive(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0
+
+
+def _accepted_tests(tests, sport):
+    """Retain real, comparable measurements; declarations alone are not evidence."""
+    generated_sources = {"MODEL", "MODEL_GENERATED", "GENERATED", "ESTIMATED", "REFERENCE"}
+    return tuple(t for t in (tests or ()) if isinstance(t, Mapping)
+                 and t.get("maximal") is True and t.get("comparable") is True
+                 and t.get("sport", sport) == sport
+                 and t.get("enabled") is not False and t.get("is_maximal_test") is not False
+                 and t.get("test_mode", "STRICT") == "STRICT"
+                 and str(t.get("source", "")).upper() not in generated_sources
+                 and str(t.get("kind", "")).upper() not in {"ESTIMATE", "MODEL_POINT"}
+                 and not t.get("generated") and not t.get("is_estimated")
+                 and positive(t.get("duration_s")) and positive(t.get("speed_kmh")))
+
+
+def _ordered(speeds):
+    return all(positive(v) for v in speeds) and all(a < b for a, b in zip(speeds, speeds[1:]))
 
 
 def interpolate(x, xs, ys):
@@ -66,15 +85,23 @@ def initial_speed(percent, v50, v6, *, cycling=False):
 def build(curve, bounds, hrmax, indices=None, *, sport="Run", tests=()):
     from .sport_heart_rate import is_cycling, policy
     from .speed_zones import v10_anchor
-    bounds = tuple(float(v) for v in bounds)
+    try:
+        raw_bounds = tuple(bounds)
+        bounds = tuple(float(v) for v in raw_bounds)
+    except (ValueError, TypeError, OverflowError):
+        bounds, raw_bounds = (), ()
+    valid_hr = (len(bounds) == 6 and positive(hrmax) and bounds[-1] <= hrmax
+                and all(positive(v) for v in raw_bounds) and _ordered(bounds))
+    tests = _accepted_tests(tests, sport) if isinstance(tests, (list, tuple)) else ()
     result = {"version": VERSION, "status": "UNAVAILABLE", "sport": sport,
               "zones": [], "basis": "MEASURED_TI_WITH_EXPLICIT_INITIAL_FALLBACK",
-              "reference_bounds_bpm": list(bounds), "reference_hrmax_bpm": hrmax,
+              "reference_bounds_bpm": list(bounds) if valid_hr else [], "reference_hrmax_bpm": hrmax if positive(hrmax) else None,
               "speed_role": "FLAT_EQUIVALENT", "is_measured_hr": False,
-              "calibration_eligible": False, "hr_policy": policy(sport, bounds, hrmax),
-              "rest_v6_fraction": REST_V6_FRACTION, "v10": v10_anchor(curve, tests)}
-    if len(bounds) != 6 or not positive(hrmax) or bounds[-1] > hrmax or not all(positive(v) for v in bounds) or any(a >= b for a,b in zip(bounds,bounds[1:])):
+              "calibration_eligible": False, "hr_policy": policy(sport, bounds if valid_hr else (), hrmax if positive(hrmax) else None),
+              "rest_v6_fraction": REST_V6_FRACTION, "v10": None}
+    if not valid_hr:
         return {**result, "reason": "HR_PROFILE_REQUIRED"}
+    result["v10"] = v10_anchor(curve, tests)
     if curve is None:
         return {**result, "reason": "ABSOLUTE_SPEED_EVIDENCE_REQUIRED"}
     try:
@@ -84,10 +111,10 @@ def build(curve, bounds, hrmax, indices=None, *, sport="Run", tests=()):
     v10 = result["v10"].get("speed_kmh")
     if not positive(v10) or not 0 < v50 < v6 < v10:
         return {**result, "reason": "CONFLICTING_SPEED_ANCHORS"}
-    indices = indices or {}
+    indices = indices if isinstance(indices, Mapping) else {}
     def usable(key):
         row = indices.get(key) or {}
-        return (positive(row.get("index")) and positive(row.get("count")) and row["count"] >= 1
+        return (isinstance(row, Mapping) and positive(row.get("index")) and positive(row.get("count")) and row["count"] >= 1
                 and positive(row.get("seconds")) and row["seconds"] >= MIN_SECONDS[key]
                 and not row.get("is_estimated") and not row.get("generated") and row.get("valid") is not False)
     speeds, sources = [REST_V6_FRACTION*v6], []
@@ -106,15 +133,52 @@ def build(curve, bounds, hrmax, indices=None, *, sport="Run", tests=()):
         sources.append(source)
     speeds.append(float(v10))
     conflict = None
-    if any(a >= b for a,b in zip(speeds,speeds[1:])):
+    if not _ordered(speeds):
+        rejected = [{"source": "ZONAL_OR_GENERAL_PAIRED_PROFILE",
+                     "bounds_kmh": [v if positive(v) else None for v in speeds]}]
         # One observed GENERAL relationship is preferable to sorting independent
         # zonal estimates. Never change an accepted pair to fit an expert Tmax.
         if usable("GENERAL"):
             speeds = [REST_V6_FRACTION*v6] + [100*h/hrmax/indices["GENERAL"]["index"] for h in bounds[1:5]] + [float(v10)]
             sources = ["GENERAL_CONFLICT_FALLBACK"]*4
             conflict = "CONFLICTING_ZONAL_INDICES"
-        if any(a >= b for a,b in zip(speeds,speeds[1:])):
-            return {**result, "reason": "NONMONOTONE_INDEX_BOUNDARIES", "candidate_bounds_kmh": speeds}
+            if not _ordered(speeds):
+                rejected.append({"source": "GENERAL_PAIRED_PROFILE",
+                                 "bounds_kmh": [v if positive(v) else None for v in speeds]})
+        if not _ordered(speeds):
+            unavailable = {**result, "reason": "NONMONOTONE_INDEX_BOUNDARIES",
+                           "candidate_bounds_kmh": rejected[-1]["bounds_kmh"],
+                           "excluded_profiles": rejected}
+            # A sprint boundary alone cannot establish V50/V6. The caller has
+            # already selected current, sport-compatible curve measurements.
+            curve_tests = [t for t in tests if t["duration_s"] > 10.]
+            if not curve_tests:
+                return unavailable
+            from .speed_duration import calibrated, with_ten_second_tail
+            try:
+                # The supplied curve may be a dosing mixture. Reconstruct the
+                # test-only curve to keep boundary provenance independent.
+                fallback_curve = with_ten_second_tail(calibrated(curve_tests))
+            except (ValueError, ArithmeticError):
+                return {**unavailable, "fallback_reason": "INVALID_ACCEPTED_TEST_CURVE"}
+            try:
+                v6, v50 = fallback_curve.speed(360.)*3.6, fallback_curve.speed(3000.)*3.6
+                fallback_v10 = v10_anchor(fallback_curve, tests)
+                v10 = fallback_v10.get("speed_kmh")
+                if not positive(v10) or not 0 < v50 < v6 < v10:
+                    return {**unavailable, "fallback_reason": "CONFLICTING_SPEED_ANCHORS"}
+                speeds = [REST_V6_FRACTION*v6] + [
+                    initial_speed(100*h/hrmax, v50, v6, cycling=is_cycling(sport))
+                    for h in bounds[1:5]] + [float(v10)]
+            except (ValueError, ArithmeticError):
+                return {**unavailable, "fallback_reason": "INITIAL_ANCHORS_OUTSIDE_CURVE"}
+            if not _ordered(speeds):
+                return {**unavailable, "fallback_reason": "CONFLICTING_SPEED_ANCHORS"}
+            sources = ["TEST_CURVE_CONFLICT_FALLBACK"]*4
+            conflict = "CONFLICTING_PAIRED_BOUNDARIES_TEST_FALLBACK"
+            result.update(basis="TEST_CURVE_AFTER_PAIRED_PROFILE_CONFLICT",
+                          v10=fallback_v10, excluded_profiles=rejected,
+                          boundary_curve_model_version=fallback_curve.model_version)
     rows = []
     for i, zone in enumerate(ZONES):
         source = sources[i] if i < 4 else "V10_BOUNDARY"

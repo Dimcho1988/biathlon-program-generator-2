@@ -33,7 +33,7 @@ from .trainability_history import history_from_calendar, read_calendar, robust_m
 from .trainability import MIN_SECONDS_BY_BAND, MAX_GAP_SECONDS
 from .component_load_context import read_contexts
 
-VERSION="speed-load-common-profile-v5-relative-rest"
+VERSION="speed-load-common-profile-v6-retrospective-tests"
 COMPARISON_VERSION = speed_equivalence.VERSION
 ZONES=tuple(f"Z{i}" for i in range(1,6))
 logger = logging.getLogger("uvicorn.error")
@@ -301,8 +301,12 @@ def _activity_records(repository, alias, selected, admitted, settings, namespace
         metrics["mapping_ms"] = _elapsed_ms(mapping_started)
     def integrate(activity, row, mapping, reason):
         started = perf_counter()
+        # The comparison panel evaluates a period against one current sport
+        # profile. Direct historical Q above retains its own day's calibration.
+        # Mixing historical parameter versions in a current-profile aggregate
+        # is undefined and previously made the entire report fail.
         result = _activity_record(activity, row, mapping, reason,
-            (mapping or {}).get("parameters") or (comparison_by_sport or {}).get(activity["sport"]))
+            (comparison_by_sport or {}).get(activity["sport"]) or (mapping or {}).get("parameters"))
         if metrics is not None:
             metrics["integration_ms"] = metrics.get("integration_ms", 0.) + _elapsed_ms(started)
         return result
@@ -388,10 +392,12 @@ def history_view(repository, alias, sport=None, *, today=None, as_of=None, perio
                              and (sport is None or a["sport"] == sport)})
     phase_started = perf_counter()
     contexts = read_contexts(repository, alias, capacity_sports)
+    from . import model_service
+    speed_inputs = model_service.speed_view_inputs(repository, alias) if hasattr(repository, "_request") else None
     metrics["capacity_ms"] = _elapsed_ms(phase_started)
     def compute():
         return _compute_history(repository, alias, sport, settings, today, start, warmup,
-                                calendar, admitted, custom_period, metrics, contexts)
+                                calendar, admitted, custom_period, metrics, contexts, speed_inputs)
     def finish(result):
         # No athlete identifiers, settings, mappings or source keys are logged.
         logger.info("onflows_speed_load elapsed_ms=%.1f report_cache=%s "
@@ -419,6 +425,9 @@ def history_view(repository, alias, sport=None, *, today=None, as_of=None, perio
         "component_load_version": COMPONENT_LOAD_VERSION,
         "capacities": {s: c["fingerprint"] for s, c in contexts.items()},
         "speed_comparison": {s: (c.get("comparison_parameters") or {}).get("parameters_version") for s,c in contexts.items()},
+        "historical_calibration": {"policy": model_service.HISTORICAL_SPEED_POLICY,
+            "evaluation_day": speed_inputs["today"].isoformat(),
+            "tests": speed_inputs["entries"]} if speed_inputs is not None else None,
     }
     key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
     metrics["key_ms"] = _elapsed_ms(phase_started)
@@ -426,7 +435,7 @@ def history_view(repository, alias, sport=None, *, today=None, as_of=None, perio
 
 
 def _compute_history(repository, alias, sport, settings, today, start, warmup,
-                     calendar, admitted, custom_period, metrics=None, contexts=None):
+                     calendar, admitted, custom_period, metrics=None, contexts=None, speed_inputs=None):
     available=sorted({a["sport"] for a in calendar.get("activities",[]) if supports_speed_load(a.get("sport"))})
     if sport is not None and not supports_speed_load(sport):raise HTTPException(422,"Unsupported speed-load sport")
     selected=[a for a in calendar.get("activities",[]) if supports_speed_load(a.get("sport"))
@@ -439,14 +448,14 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
     if hasattr(repository, "_request"):
         from . import model_service
         from .component_load_context import context_from_speed_view
-        inputs = model_service.speed_view_inputs(repository, alias)
+        inputs = speed_inputs if speed_inputs is not None else model_service.speed_view_inputs(repository, alias)
         causal_contexts = {}
         for a in selected:
             day = date.fromisoformat(a["local_date"])
             key = (a["sport"], day)
             if key not in causal_contexts:
                 view = model_service.speed_view(repository, alias, a["sport"],
-                    _inputs={**inputs, "today": day-timedelta(days=1)}, _capacity_only=True)
+                    _inputs=model_service.historical_speed_inputs(inputs, day), _capacity_only=True)
                 causal_contexts[key] = context_from_speed_view(view)
     records = _activity_records(repository, alias, selected, admitted, settings, namespace, metrics, comparisons, causal_contexts)
     statistics_started = perf_counter()
@@ -508,6 +517,8 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
     comparison = (speed_equivalence.aggregate(comparisons[comparison_sport],
         [a["speed_equivalence_comparison"] for a in visible if a["sport"] == comparison_sport])
         if comparison_sport is not None else None)
+    if comparison is not None:
+        comparison["calibration_scope"] = "CURRENT_SPORT_PROFILE"
     return {"schema_version":"speed-load-history-v1","model_version":VERSION,
             "speed_equivalence_comparison": comparison,
             "sport":sport,"sports":available,"start_date":start.isoformat(),"end_date":today.isoformat(),
@@ -515,7 +526,7 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
             "source_generation_id":calendar.get("generation_id"),"source_revision":calendar.get("revision"),
             "load_role":"INDEPENDENT_SPEED_VIEW_OF_SHARED_KERNEL","equivalence_version":speed_equivalence.VERSION,
             "component_load_version":COMPONENT_LOAD_VERSION,
-            "mapping_policy":"PRIOR_40_DAYS_EXCLUDING_CURRENT_DAY_WITH_TREADMILL_RUN_FALLBACK",
+            "mapping_policy":"PRIOR_40_DAY_INDEX_WITH_14_DAY_MAXIMAL_TEST_RETROSPECTIVE_AND_TREADMILL_RUN_FALLBACK",
             "recorded_minutes":total_recorded,"classified_minutes":covered,
             "rest_minutes":rest,"accounted_minutes":accounted,
             "unaccounted_minutes":max(0.,total_recorded-accounted),

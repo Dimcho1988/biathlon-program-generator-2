@@ -13,6 +13,7 @@ export function SpeedEquivalenceComparison({ value, title = "Еквивален�
   if (!value) return null;
   return <section className="history-section" aria-label={title}>
     <h3>{title}</h3>
+    {value.calibration_scope === "CURRENT_SPORT_PROFILE" && <p>Всички тренировки в този сравнителен панел са преоценени с текущия профил за спорта. Историческият товар използва приложимия профил за датата на всяка тренировка.</p>}
     <p>{value.sport === "VirtualRun" ? "Бягане на пътека" : !value.sport || value.sport === "Run" ? "Бягане" : value.sport} · c = 1; 1; 1; 1,2; 1,5 срещу c = 1 във всички зони. Същите експертни коефициенти участват в общия модел по пулс и скорост. Този допълнителен отчет разглежда само скоростта и не заменя водещия товар.</p>
     <p>Покритие: <strong>{number(value.coverage_percent)}%</strong> · {durationHms(value.classified_minutes)} от {durationHms(value.recorded_minutes)}. Липсващата оценка не означава нулева работа. Показателят не е измерен енергоразход.</p>
     <div className="activity-table-wrap"><table><caption>Отделни зонални опори · еквивалентно време, ч:мм:сс</caption><thead><tr><th>Зона</th><th>Реално време</th><th>Еквивалентно · c = 1</th><th>Еквивалентно · договорени c</th><th>E/Tref · c = 1</th><th>E/Tref · договорени c</th></tr></thead>

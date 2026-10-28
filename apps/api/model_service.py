@@ -23,6 +23,23 @@ from .oauth_store import HistoricalGenerationReferenceConflict, PersistentStoreF
 from .speed_segments import segment_measurement
 
 SPEED_TEST_DAYS=90
+RETROSPECTIVE_TEST_DAYS = 14
+HISTORICAL_SPEED_POLICY = "PRIOR_DAY_INDEX_WITH_14_DAY_MAXIMAL_TEST_RETROSPECTIVE_V1"
+
+
+def historical_speed_inputs(inputs, activity_day, *, evaluation_day=None):
+    """Keep training evidence causal while admitting nearby real test anchors.
+
+    A maximal test can describe the preceding fourteen calendar days. Its real
+    date is never moved, and this exception never advances the HR/index window.
+    """
+    evaluation_day = evaluation_day or inputs.get("evaluation_day") or inputs["today"]
+    return {**inputs, "today": activity_day-timedelta(days=1),
+            "evaluation_day": evaluation_day,
+            "test_end": min(activity_day+timedelta(days=RETROSPECTIVE_TEST_DAYS), evaluation_day),
+            "historical_calibration": {"policy": HISTORICAL_SPEED_POLICY,
+                "activity_day": activity_day.isoformat(), "evaluation_day": evaluation_day.isoformat(),
+                "retrospective_test_days": RETROSPECTIVE_TEST_DAYS}}
 
 
 def _current_ski_anchor(test, sport):
@@ -36,8 +53,11 @@ def _maximal_test(test):
     return (test.get("test_mode", "STRICT") == "STRICT"
             and test.get("maximal") is True and test.get("comparable") is True
             and str(test.get("source", "")).upper() not in {"MODEL", "MODEL_GENERATED", "GENERATED", "ESTIMATED", "REFERENCE"}
+            and str(test.get("kind", "")).upper() not in {"ESTIMATE", "MODEL_POINT"}
             and not test.get("generated") and not test.get("is_estimated")
-            and test.get("is_maximal_test") is not False)
+            and test.get("is_maximal_test") is not False
+            and all(isinstance(test.get(key), (int, float)) and not isinstance(test[key], bool)
+                    and math.isfinite(test[key]) and test[key] > 0 for key in ("duration_s", "speed_kmh")))
 
 
 def _boundary_only_test(test):
@@ -272,7 +292,7 @@ def _speed_view_inputs(repository, alias):
 
 
 def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,speed_kmh=None,hr_bpm=None,
-               _inputs=None, _capacity_only=False):
+               initial_history_days=None, _inputs=None, _capacity_only=False):
     from biathlon import hr_speed
     from .activity_shadow_pipeline import activity_shadow_configuration_fingerprint
     from vflat_b65.sports import speed_model_versions
@@ -289,12 +309,19 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     sport_settings=local_settings(settings,sport)
     offset=reference_offset(sport)
     vflat_version,vflat_config=speed_model_versions(sport)
+    test_end = inputs.get("test_end", today)
     selected=[e["payload"] for e in entries if e["payload"].get("enabled") and e["payload"]["sport"]==sport
-           and start.isoformat()<=e["payload"]["day"]<=today.isoformat()]
+           and start.isoformat()<=e["payload"]["day"]<=test_end.isoformat()
+           and (e["payload"]["day"]<=today.isoformat() or _maximal_test(e["payload"]))]
     # Imported ski speeds depend on the terrain transform. Preserve saved
     # records, but do not use old-transform anchors with the current model.
     stale_ski_tests = [t for t in selected if not _current_ski_anchor(t, sport)]
     selected = [t for t in selected if t not in stale_ski_tests]
+    historical_calibration = inputs.get("historical_calibration")
+    if historical_calibration:
+        historical_calibration = {**historical_calibration,
+            "retrospective_test_keys": [e["entry_key"] for e in entries
+                if e["payload"] in selected and e["payload"]["day"] > today.isoformat()]}
     boundary_tests=[t for t in selected if _boundary_only_test(t)]
     tests=[t for t in selected if _curve_test(t)]
     imported=[t for t in tests if t.get("source")!="MANUAL"]
@@ -394,6 +421,7 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
                 "speed_zones": zone_profile,
                 "boundary_test_keys": [e["entry_key"] for e in entries if e["payload"] in boundary_tests],
                 "boundary_test_count": len(boundary_tests),
+                "historical_calibration": historical_calibration,
                 "dosing_model": dosing,
                 "source_generation_id": calendar.get("generation_id"), "source_revision": calendar.get("revision")}
     window=[min(t["duration_s"] for t in tests),max(t["duration_s"] for t in tests)] if tests else None
@@ -452,10 +480,26 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
     if window:
         if any(p["capped"] and p["duration_s"]<window[0] for p in points):limited_tails.append("SHORT")
         if any(p["capped"] and p["duration_s"]>window[1] for p in points):limited_tails.append("LONG")
+    # This display-only estimate is never passed into tests, the speed curve,
+    # historical accounting or learning. A threshold is not a V50/V6 pair.
+    from .initial_threshold_view import build as initial_threshold_view
+    reliable_anchor = "TESTS" if tests and tuned is not None and not model_error else None
+    if reliable_anchor is None and zone_profile.get("status") == "AVAILABLE" and any(
+            row.get("source") in {"PAIRED_INDEX", "GENERAL_PAIRED_INDEX", "GENERAL_CONFLICT_FALLBACK"}
+            for row in zone_profile.get("zones", [])):
+        reliable_anchor = "INDEX"
+    profile = None
+    if reliable_anchor is None:
+        from .management_store import ManagementStore
+        profile = ManagementStore(repository).profile(alias).get("profile")
+    initial_threshold = initial_threshold_view(calendar, profile, today, sport,
+        reliable_anchor=reliable_anchor, requested_days=initial_history_days)
     return {"schema_version":"speed-model-v1","model_version":metadata.get("model_version",speed_duration.VERSION),"sport":sport,"sports":sports,
+        "initial_threshold": initial_threshold,
         "sport_hr_policy":sport_hr_policy(sport,settings.zone_bounds_bpm,settings.hrmax_bpm),
         "speed_correction":{"model_version":vflat_version,"config_version":vflat_config},
-        "test_window":{"start":start.isoformat(),"end":today.isoformat()},
+        "test_window":{"start":start.isoformat(),"end":test_end.isoformat()},
+        "historical_calibration": historical_calibration,
         "index_window":{"start":index_start.isoformat(),"end":today.isoformat(),"days":HISTORY_DAYS,
                         "last_activity_date":max(used_dates) if used_dates else None},
         "activities":[{"activity_ref":a["activity_ref"],"name":a.get("name") or a["sport"],"day":a.get("local_date"),"sport":a["sport"],"elapsed_s":a.get("elapsed_time_s")} for a in activities],

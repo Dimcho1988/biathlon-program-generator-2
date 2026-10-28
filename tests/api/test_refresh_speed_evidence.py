@@ -80,14 +80,19 @@ def test_refresh_uses_new_prior_day_ti_and_exports_all_completed_observations(mo
     monkeypatch.setattr(model_service,'speed_view_inputs',lambda *a:frozen)
     original=model_service.speed_view
     seen=[]
+    historical_windows=[]
     def view(*args,**kw):
         inputs=kw['_inputs']
         seen.append((inputs['today'],len([r for r in inputs['history'] if r['index']])))
+        if inputs.get('historical_calibration'):
+            historical_windows.append((inputs['today'], inputs['test_end'], inputs['evaluation_day']))
         return original(*args,**kw)
     monkeypatch.setattr(model_service,'speed_view',view)
     client=TwoDays()
     refresh(repo,environ=ENV,client=client,period_end=date(2026,8,15),athlete_settings=settings)
     assert seen==[(date(2026,8,13),0),(date(2026,8,14),1),(date(2026,8,15),2)]
+    assert historical_windows == [(date(2026,8,13),date(2026,8,15),date(2026,8,15)),
+                                  (date(2026,8,14),date(2026,8,15),date(2026,8,15))]
     assert client.reads==2
     current=repo.latest('pilot')['load_history']['component_load_model']['contexts_by_sport']['Run']
     assert current['zone_profile']['zones'][2]['boundary_source']=='PAIRED_INDEX'

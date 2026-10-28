@@ -21,6 +21,8 @@ class Store:
     def _request(self,method,path,**kwargs):
         if method=="GET":
             assert "athlete_alias=eq.ath-test" in path
+            if path.startswith("/onflows_management_entries?"):
+                return []
             return self.rows
         self.saved.append(kwargs["json"])
         return {"saved":True,"revision":1}

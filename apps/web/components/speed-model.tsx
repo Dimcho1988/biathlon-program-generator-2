@@ -6,7 +6,7 @@ import {SpeedLoadSummary} from "./speed-load-summary";
 import Link from "next/link";
 import {useState} from "react";
 import {useRouter} from "next/navigation";
-import {saveModel,type SpeedModel,type SpeedTest,type Prediction,type AccountingPrediction} from "../lib/models";
+import {saveModel,type SpeedModel,type SpeedTest,type Prediction,type AccountingPrediction,type InitialThresholdEstimate} from "../lib/models";
 import {HrSpeedZones} from "./hr-speed-zones";
 import {SpeedTestEditor} from "./speed-test-editor";
 import {clockTime,manualClockTime,manualTestPayload} from "../lib/speed-tests";
@@ -18,6 +18,18 @@ import {AthleteFunctionalProfile} from "./athlete-functional-profile";
 const n=(v:number)=>new Intl.NumberFormat("bg-BG",{maximumFractionDigits:2}).format(v);
 const time=clockTime;
 const evidenceLabels={MEASURED:"Реален максимален тест",INTERPOLATED:"Оценка между реалните тестове",EXTRAPOLATED:"Прогноза извън реалните тестове",ESTIMATED:"Предварителна оценка"};
+export function InitialThresholdPanel({value}:{value?:InitialThresholdEstimate}){
+  if(!value||value.use_status==="SUPERSEDED")return null;
+  const available=value.status==="AVAILABLE"&&value.v_threshold_estimated_kmh!==null&&value.inputs;
+  return <section className="history-section" aria-label="Начална прагова оценка"><h2>Начална прагова оценка</h2>
+    {available?<><p>Оценена прагова скорост: <strong>{n(value.v_threshold_estimated_kmh!)} км/ч</strong>.</p>
+      <p>Средна скорост {n(value.inputs!.v)} км/ч · общ седмичен обем {n(value.inputs!.H)} ч · стаж {n(value.inputs!.S)} г. · {value.window?.days} пълни дни.</p>
+      <p>Моделна оценка по реалната скорост, без корекция за релефа. Засега служи като ориентир за прага; скоростните зони изискват допълнителни индивидуални опори.</p></>:
+      <p>{value.reason==="TRAINING_YEARS_REQUIRED"?"Добави тренировъчния стаж в профила за планиране, за да получиш начална оценка.":
+        ["INSUFFICIENT_HISTORY","INCOMPLETE_HISTORY_COVERAGE"].includes(value.reason??"")?"Нужни са поне 7 последователни пълни дни заредена история, включително почивните.":
+        "За началната оценка са нужни надеждни данни за продължителност, дистанция и време в движение за избрания спорт."}</p>}
+    </section>;
+}
 function evidenceLabel(point:Prediction|AccountingPrediction,model:SpeedModel){
   if(point.evidence==="ACCOUNTING_PROFILE_ESTIMATE")return "Зонална оценка; времевият капацитет е извън обхвата на кривата.";
   if(point.evidence)return evidenceLabels[point.evidence];
@@ -58,6 +70,7 @@ export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minu
   }
   return <>
     <SpeedLoadSummary cacheScope={cacheScope} key={`load:${model.source_generation_id}:${model.source_revision}`} generation={model.source_generation_id} revision={model.source_revision}/>
+    <InitialThresholdPanel value={model.initial_threshold}/>
     <section className="history-section"><form method="get" className="model-controls"><label>Спорт<select name="sport" defaultValue={model.sport}>{[...new Set([model.sport,...model.sports])].map(s=><option key={s}>{s}</option>)}</select></label><button className="action-button secondary">Покажи</button></form>
       <p className="speed-model-status"><strong>{curveLabel}</strong>{model.active_test_count>0?` · ${model.active_test_count} активни ${exploratory?"контролни точки":"максимални теста"}`:""}</p>
       {!!model.sport_hr_policy?.offset_bpm&&<p>Зоните и целевият пулс за колело са със 7 уд./мин по-ниски. За индекса прибавяме 7 към измерения пулс, без да променяме записа. Използва се собствен модел за приравняване на скоростта към равен терен.</p>}

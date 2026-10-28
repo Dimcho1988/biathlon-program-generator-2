@@ -14,6 +14,7 @@ export interface SpeedEquivalencePart {
 }
 export interface SpeedEquivalenceComparison {
   version: string; role: "COMPARISON_ONLY"; parameters_version: string;
+  calibration_scope?: "CURRENT_SPORT_PROFILE";
   settings: { version: string; origin: "EXPERT_DEFINED"; coefficients: Record<string, number> };
   reference_policy: string; recorded_minutes: number; classified_minutes: number; coverage_percent: number;
   zones: SpeedEquivalenceZone[]; warnings: string[];
