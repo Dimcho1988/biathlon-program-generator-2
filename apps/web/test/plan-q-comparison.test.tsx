@@ -5,10 +5,13 @@ import { planQComparison } from "../lib/plan-q-comparison";
 import { parseTrainingStatus, type LoadSelectionMetadata } from "../lib/training-status";
 import { trainingStatusFixture } from "../lib/fixture";
 import type { PlanningDraft } from "../lib/training-management";
+import { planDates, planWeekView } from "../lib/plan-week-view";
+
+const restDays = (start: string, end: string) => planDates(start,end).map(date => ({date,status:"REST",sessions:[]}));
 
 const plan = () => ({ schema_version: "planning-draft-v1", status: "DRAFT", start_date: "2026-10-25", end_date: "2026-10-31",
-  generated_at: "2026-10-25T14:00:00Z", days: [{date: "2026-10-25", status: "PLANNED", sessions: [{direct_equivalent_minutes: {Z1: 80, Z3: 10, Z4: 0}}]}],
-  lookahead_days: [{date: "2026-11-01", status: "PLANNED", sessions: [{direct_equivalent_minutes: {Z1: 120}}]}], allocation: { scope: "WHOLE_MICROCYCLES", constraints: [], dose_limits: [],
+  generated_at: "2026-10-25T14:00:00Z", days: [{date: "2026-10-25", status: "PLANNED", sessions: [{direct_equivalent_minutes: {Z1: 80, Z3: 10, Z4: 0}}]},...restDays("2026-10-26","2026-10-31")],
+  lookahead_days: [{date: "2026-11-01", status: "PLANNED", sessions: [{direct_equivalent_minutes: {Z1: 120}}]},...restDays("2026-11-02","2026-11-06")], allocation: { scope: "WHOLE_MICROCYCLES", constraints: [], dose_limits: [],
     components: {Z1: {basis: "DIRECT_Q", target_q: 999, actual_q: 999, planned_q: 999}}, segments: [
       {window_start: "2026-10-24", window_end: "2026-10-30", days: 7, components: {
         Z1: {basis: "DIRECT_Q", target_q: 120, actual_q: 30, planned_q: 80},
@@ -79,7 +82,7 @@ it("refreshes actual Q without adding it to the approved prescription or forecas
   const periods = planQComparison(p, {planKind: "APPROVED", qExecution: execution});
   expect(periods[0].rows[0]).toMatchObject({target: 120, planned: 80, actual: 25, forecast: 0,
     plannedCompleted: 80, actualCompleted: 20});
-  expect(periods[1].rows[0]).toMatchObject({target: 130, planned: 0, actual: 0, forecast: 120});
+  expect(periods[1].rows[0]).toMatchObject({target: 130, planned: 120, scheduled:0, actual: 0, forecast: 120});
   expect(p).toEqual(saved);
   execution.days[1].q.Z1 = 30;
   expect(planQComparison(p, {qExecution: execution})[0].rows[0].actual).toBe(35);
@@ -92,7 +95,7 @@ it("missing dates or Q do not disappear from execution or adherence totals", () 
 });
 
 it("past prescriptions affect adherence without replacing the displayed programme's known Q", () => {
-  const p = plan(); p.start_date = "2026-10-26"; p.days = [];
+  const p = plan(); p.start_date = "2026-10-26"; p.days = restDays("2026-10-26","2026-10-31") as unknown as PlanningDraft["days"];
   const outcomes = [{date: "2026-10-25", planned_q: {Z1: 80}, planned_minutes: 100, actual_minutes: 90,
     planned_title: "Prior prescription", status: "RECORDED"}];
   const execution = {schema_version: "direct-q-execution-v1" as const, as_of: "2026-10-26", days: [
@@ -105,9 +108,24 @@ it("past prescriptions affect adherence without replacing the displayed programm
   expect(unknown.planned).toBe(0); expect(unknown.plannedCompleted).toBeNull();
 });
 
-it("defaults to the current microcycle and keeps provisional Q outside the main three columns", () => {
+it("defaults to the current microcycle and explicitly includes forecast Q for its full dates", () => {
   const markup = renderToStaticMarkup(<PlanQComparison plan={plan()} today="2026-11-01"/>);
-  expect(markup).toContain('<option value="2026-10-31" selected="">');
-  expect(markup).toContain("Прогнозно продължение извън показания график");
+  expect(markup).toContain("График и цел: 31.10.2026 – 06.11.2026");
+  expect(markup).toContain("Планирано · предложение + прогноза");
+  expect(markup).toContain("Вкл. прогноза: 2:00:00");
+  expect(markup).toContain("92.3% от целта");
   expect(markup).toContain("ниска стойност в незавършен цикъл сама по себе си не означава изоставане");
+});
+
+it("keeps incomplete future dates unknown and never counts an overlapping forecast twice", () => {
+  const p = plan();
+  p.lookahead_days!.push({...p.lookahead_days![0],date:"2026-10-25"});
+  expect(planQComparison(p)[0].rows[0].planned).toBe(80);
+  p.lookahead_days = p.lookahead_days!.filter(d => d.date !== "2026-11-04");
+  const period = planQComparison(p)[1];
+  expect(period.missingDates).toEqual(["2026-11-04"]);
+  expect(period.rows[0]).toMatchObject({planned:null,scheduled:0,forecast:120});
+  const view = planWeekView(p,{start:period.start,end:period.end});
+  expect(view.days.map(d => d.date)).not.toContain("2026-11-04");
+  expect(renderToStaticMarkup(<PlanQComparison plan={p} selectedWeek={period.start}/>)).toContain("Непълен разчет");
 });
