@@ -30,3 +30,30 @@ def test_cached_calculations_do_not_skip_invalid_input_validation():
         recovery.simulate(rows,configs,calculation_cache=cache,include_details=False)
     with pytest.raises(ValueError,match="Duplicate"):
         recovery.simulate(rows+[rows[0]],calculation_cache=cache,include_details=False)
+
+
+@pytest.mark.parametrize("deadlines", [False, True])
+def test_shared_prefix_keeps_revised_history_unknown_days_and_parameters_exact(deadlines):
+    rows, configs, cache = history(), recovery.defaults(), {}
+    before = deepcopy((rows, configs))
+    cases = [(rows, configs, date(2026, 3, 1)),
+             (rows, configs, date(2026, 2, 12)),
+             (rows + [{"date": "2026-03-02", "zone": "Z3", "effective_load": 30.}], configs, date(2026, 3, 3))]
+    revised = deepcopy(rows)
+    revised[7]["effective_load"] += 40.
+    revised[-3]["effective_load"] += 60.
+    # An explicit rest day and an uncovered day have different causal windows.
+    cases.extend((r, configs, date(2026, 3, 3)) for r in (revised, revised[:-6]))
+    adjusted = deepcopy(configs)
+    adjusted["Z3"].update(shape=2., duration_coefficient=1.5, initial_daily_min=15.)
+    cases.append((revised, adjusted, date(2026, 3, 4)))
+    for doses, policy, day in cases:
+        expected = recovery.simulate(doses, policy, target=day,
+            include_details=False, include_deadlines=deadlines)
+        result = recovery.simulate(doses, policy, target=day,
+            include_details=False, include_deadlines=deadlines, calculation_cache=cache)
+        assert result == expected
+        result["current"][0]["readiness_percent"] = -1.
+        assert recovery.simulate(doses, policy, target=day, include_details=False,
+            include_deadlines=deadlines, calculation_cache=cache) == expected
+    assert (rows, configs) == before

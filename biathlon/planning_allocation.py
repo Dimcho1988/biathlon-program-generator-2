@@ -185,10 +185,12 @@ def segment_headroom(windows, actual, forecast, source, days, day, *, segment_ke
     is diagnostic only. Actual rolling 7/40 and Recovery checks use the real
     composed sessions, not a second microcycle E allowance.
     """
-    for segment in segment_objectives(windows, actual, forecast, source, days,
-                                      segment_keys=segment_keys):
-        if segment["window_start"] <= day.isoformat() <= segment["window_end"]:
-            return segment
+    # A hypothetical future dose needs only its own anchored cycle. Other
+    # cycles cannot lend it Q and do not need their coverage recalculated.
+    for group in _segments(windows, segment_keys):
+        if day in group["windows"]:
+            return segment_objectives(group["windows"], actual, forecast, source, days,
+                                      segment_keys=segment_keys)[0]
     raise ValueError("Allocation day is outside the long-term draft windows")
 
 
