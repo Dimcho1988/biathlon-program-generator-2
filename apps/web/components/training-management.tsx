@@ -24,6 +24,7 @@ import { SessionMethodGuidance } from "./session-method-guidance";
 import { SessionRole } from "./session-role";
 import { methodHrText } from "../lib/method-library";
 import { managementGuidance, hasProgramDays } from "../lib/management-guidance";
+import { planRangeLabel, planWeekView, selectedPlanWeek } from "../lib/plan-week-view";
 import { SyncActionForm } from "./sync-action-form";
 import { SyncStatusPanel } from "./sync-status-panel";
 import type { SyncState } from "../lib/sync";
@@ -157,11 +158,17 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   const guidance = effectiveEnd && effectiveEnd < today ? { step: "PROFILE", title: "Периодът на подготовката е приключил", description: "Задай следващия период в профила, за да подготвим нова програма." } : saved.profile && saved.profile.program_start > datePlus(today, 7) ? { step: "WAIT", title: "Подготовката започва по-късно", description: "Седмичната програма може да бъде подготвена до седем дни преди началото. При нужда промени датите в профила." } : managementGuidance({ configured: saved.configured, dirty: false, draft, sync: initialSyncState, today });
   const view = initialView;
   const [newDraft, setNewDraft] = useState(false);
+  const [selectedWeek, setSelectedWeek] = useState<string>();
+  const [showProposal, setShowProposal] = useState(false);
   const showDraft = !active.active || newDraft;
   const approvedPlan = active.active?.payload.plan;
   const overviewPlan = showDraft ? draft?.payload : approvedPlan && active.active?.payload.monitoring
     ? {...approvedPlan, history_comparison: active.active.payload.monitoring.history_comparison} : approvedPlan;
+  const viewingProposal = !showDraft && showProposal && !!active.active?.payload.proposal;
+  const visibleWeekPlan = viewingProposal ? active.active!.payload.proposal! : overviewPlan;
   const archivedDraft = showDraft && !!draft && draft.stale !== false;
+  const draftWeek = draft ? selectedPlanWeek(draft.payload,today,selectedWeek) : undefined;
+  const draftSchedule = draft && draftWeek ? planWeekView(draft.payload,draftWeek) : undefined;
   const sessionsCurrent = overviewPlan && (showDraft ? !archivedDraft : active.active?.stale === false)
     && (!initialOutlook?.engine_version || overviewPlan.engine_version === initialOutlook.engine_version);
   const compactOverview = view === "overview" ? initialOverviewActive : undefined;
@@ -261,11 +268,11 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     {syncError && <p className="management-error" role="alert">Обновяването не започна. Опитай отново или провери връзката с Intervals в настройките.</p>}
     {initialSyncState && <SyncStatusPanel initialState={initialSyncState} renderedGenerationId={initialSyncState.active_generation_id} returnTo="/management" compact timezone={saved.timezone} />}
     <nav className="management-view-switch" aria-label="Изглед на плана"><Link href="/management" aria-current={view === "week" ? "page" : undefined}>Седмична програма</Link><Link href="/management/outlook" aria-current={view === "overview" ? "page" : undefined}>Дългосрочен план</Link></nav>
-    {view === "week" && overviewPlan && !archivedDraft && (showDraft || active.active?.stale === false) && <TrainingPlanReport plan={overviewPlan} planKind={showDraft ? "DRAFT" : "APPROVED"} today={today} proposal={showDraft ? null : active.active?.payload.proposal} qExecution={showDraft ? undefined : active.active?.payload.q_execution} outcomes={showDraft ? [] : active.active?.payload.outcomes}/>}
-    {(view === "overview" || (!archivedDraft && (showDraft || active.active?.stale === false))) && <IndividualLearningPanel plan={view === "overview" ? initialOutlook : overviewPlan} />}
+    {view === "week" && overviewPlan && !archivedDraft && (showDraft || active.active?.stale === false) && <TrainingPlanReport plan={overviewPlan} planKind={showDraft ? "DRAFT" : "APPROVED"} today={today} selectedWeek={selectedWeek} onWeekChange={setSelectedWeek} showProposal={!showDraft && showProposal} onShowProposalChange={setShowProposal} proposal={showDraft ? null : active.active?.payload.proposal} qExecution={showDraft ? undefined : active.active?.payload.q_execution} outcomes={showDraft ? [] : active.active?.payload.outcomes}/>}
+    {(view === "overview" || (!archivedDraft && (showDraft || active.active?.stale === false))) && <IndividualLearningPanel plan={view === "overview" ? initialOutlook : visibleWeekPlan} />}
 
     {view === "overview" ? <TrainingPlanOverview plan={initialOutlook ?? undefined} outcomes={compactOverview?.outcomes ?? active.active?.payload.outcomes ?? []} today={today} currentProfileRevision={initialOutlook?.profile_revision} volumeContext={initialOutlook?.volume_context} sessions={overviewSessionsCurrent ? overviewSessions : undefined} sessionStatus={sessionStatus} /> : <>
-      {active.active && !newDraft && <ActiveTrainingPlan value={active} profile={saved} onChange={receiveActive} externalBusy={busy !== null} onBegin={beginActiveChange} onEnd={endActiveChange} canEdit={canEdit} today={today} renderDay={day => <DayCard day={day} expanded={day.date === today} />} />}
+      {active.active && !newDraft && <ActiveTrainingPlan value={active} profile={saved} onChange={receiveActive} externalBusy={busy !== null} onBegin={beginActiveChange} onEnd={endActiveChange} canEdit={canEdit} today={today} selectedWeek={selectedWeek} showProposal={showProposal} renderDay={day => <DayCard day={day} expanded={day.date === today} />} />}
       {showDraft && <>
         <section className="management-panel management-next-step" aria-label="Следваща стъпка"><p className="eyebrow">{guidance.step === "REVIEW" ? "Преглед преди започване" : "Следваща стъпка"}</p><h2>{guidance.title}</h2><p>{guidance.description}</p>
           {archivedDraft && <p className="management-notice">{draft?.stale_reason ?? "Показваният досега проект е остарял."} Неговите часове и тренировки не отразяват текущите настройки. Новият проект се преизчислява с актуалните записани данни. Ако това не завърши, използвай „Подготви програма“.</p>}
@@ -275,10 +282,10 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
           {guidance.step === "CHECK" && <div className="management-actions"><a href="#plan-details">Виж конкретните причини ↓</a><Link href="/planning">Провери профила →</Link></div>}
           {guidance.step === "REVIEW" && <><p className="management-muted">{saved.profile?.adaptation_mode === "AUTO" ? "След започване следващите дни ще се адаптират автоматично според реалното изпълнение." : "Седмицата ще остане фиксирана до показания край. Промените и следващата седмица ще изискват утвърждаване."} Можеш да поставиш програмата на пауза.</p><button type="button" className="action-button" disabled={!canEdit || busy !== null || draft?.stale !== false || draft?.payload.activation_eligible !== true} onClick={activateDraft}>{busy === "activate" ? "Започване…" : "Започни програмата"}</button></>}
         </section>
-        {draft && !archivedDraft && hasProgramDays(draft.payload) && <section className="management-plan" aria-label="Проект на тренировъчна програма"><h2>{dateLabel(draft.payload.start_date)} – {dateLabel(draft.payload.end_date)}</h2><p className="management-muted">Предложение за преглед — още не е започната програма.</p><TrainingPlanWeek days={draft.payload.days} today={today} renderDay={day => <DayCard day={day} expanded={day.date === today} />} /></section>}
+        {draft && !archivedDraft && draftWeek && draftSchedule && hasProgramDays(draft.payload) && <section className="management-plan" aria-label="Проект на тренировъчна програма"><h2>{planRangeLabel(draftWeek)}</h2><p className="management-muted">Предложение за преглед — още не е започната програма.</p><TrainingPlanWeek days={draftSchedule.days} period={draftWeek} forecastDates={draftSchedule.forecastDates} programmeLabel="Предложение" today={today} renderDay={day => <DayCard day={day} expanded={day.date === today} />} /></section>}
       </>}
     </>}
-    {view === "week" && !archivedDraft && <PlanComparison plan={overviewPlan && !showDraft && active.active?.payload.monitoring ? {...overviewPlan, history_comparison: active.active.payload.monitoring.history_comparison} : overviewPlan} outcomes={active.active?.payload.outcomes ?? []} speedSource={showDraft && draft && !archivedDraft ? {kind:"DRAFT",revision:draft.revision,start_date:draft.payload.start_date} : active.active?.stale === false ? {kind:"ACTIVE",revision:active.active.revision} : undefined} />}
+    {view === "week" && !archivedDraft && <PlanComparison plan={visibleWeekPlan} outcomes={active.active?.payload.outcomes ?? []} speedSource={viewingProposal ? undefined : showDraft && draft && !archivedDraft ? {kind:"DRAFT",revision:draft.revision,start_date:draft.payload.start_date} : active.active?.stale === false ? {kind:"ACTIVE",revision:active.active.revision} : undefined} />}
     {view === "week" && <details className="management-panel" id="plan-details"><summary>Обяснения и отчет</summary>
       {active.active && <button type="button" className="action-button secondary" onClick={() => { setNewDraft(!newDraft); }}>{newDraft ? "Обратно към активната програма" : "Подготви друга програма"}</button>}
       {draft && !archivedDraft && <>

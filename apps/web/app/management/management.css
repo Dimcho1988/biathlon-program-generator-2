@@ -48,6 +48,20 @@
 .plan-q-comparison > label { max-width: 26rem; }
 .plan-q-comparison details { margin-top: 1rem; overflow-x: auto; }
 .plan-q-comparison th { white-space: normal; }
+.management-day-source { display:block; font-weight:650; }
+.management-forecast-day { border-style:dashed; }
+@media(max-width:700px) {
+  .plan-q-comparison .management-table-wrap { overflow:visible; }
+  .plan-q-comparison .q-primary-table { display:block; }
+  .plan-q-comparison .q-primary-table caption { display:block; text-align:left; white-space:normal; padding-block:.6rem; }
+  .plan-q-comparison .q-primary-table thead { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+  .plan-q-comparison .q-primary-table tbody { display:grid; gap:.75rem; }
+  .plan-q-comparison .q-primary-table tr { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); border:1px solid var(--border,#dbe4e3); border-radius:12px; padding:.6rem; }
+  .plan-q-comparison .q-primary-table th { grid-column:1/-1; border:0; padding:.25rem .2rem .65rem; }
+  .plan-q-comparison .q-primary-table td { min-width:0; border:0; padding:.25rem .2rem; font-size:clamp(.72rem,2.8vw,.9rem); white-space:normal; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+  .plan-q-comparison .q-primary-table td::before { content:attr(data-label); display:block; color:var(--muted,#5b6e6b); font-size:.7rem; font-weight:650; margin-bottom:.35rem; }
+  .plan-q-comparison .q-primary-table td small { font-size:.7rem; line-height:1.4; }
+}
 .management-actions button[aria-pressed="true"] { outline: 2px solid var(--accent,#397e68); outline-offset: 2px; }
 .management-page table { border-collapse: collapse; width: 100%; font-size: .85rem; }
 .management-page th,.management-page td { text-align: left; padding: .65rem; border-bottom: 1px solid var(--border,#dbe4e3); white-space: nowrap; }

@@ -10,6 +10,7 @@ import { SyncActionForm } from "./sync-action-form";
 import { TrainingPlanSummary } from "./training-plan-summary";
 import { TrainingPlanWeek } from "./training-plan-week";
 import { proposalHasIncompleteLoad, proposedWeekMode, WEEK_MODE_LABEL } from "../lib/week-mode";
+import { planWeekView, selectedPlanWeek } from "../lib/plan-week-view";
 
 const dateLabel = (date: string) => new Date(`${date}T12:00:00Z`).toLocaleDateString("bg-BG", { day: "numeric", month: "long", timeZone: "UTC" });
 
@@ -64,10 +65,13 @@ export function PlanProposalReview({ record, canEdit, busy, symptomHold, onAppro
 }) {
   const [expanded, setExpanded] = useState(false);
   const [fullPlan, setFullPlan] = useState(false);
+  const [selectedWeek, setSelectedWeek] = useState<string>();
   const id = useId();
   const p = record.payload;
   const proposal = p.proposal;
   if (!proposal) return null;
+  const week = selectedPlanWeek(proposal,today,selectedWeek);
+  const schedule = planWeekView(proposal,week);
   const proposalMode = proposedWeekMode(record);
   const blocked = !canEdit ? "Имате достъп само за преглед. Утвърждаването изисква право за редакция на плана."
     : p.status === "PAUSED" ? "Програмата е на пауза. Продължи с текущите настройки и прегледай актуалното предложение."
@@ -96,7 +100,7 @@ export function PlanProposalReview({ record, canEdit, busy, symptomHold, onAppro
       <details className="management-detail" onToggle={event => setFullPlan(event.currentTarget.open)}>
         <summary>Всички дни и обобщение на предложението</summary>
         {fullPlan && <><p>Прогнозите за Recovery и бюджетите тук се отнасят до предложения вариант.</p>
-          <TrainingPlanSummary plan={proposal} qExecution={p.q_execution} today={today}/><TrainingPlanWeek days={proposal.days} today={today} renderDay={renderDay}/></>}
+          <TrainingPlanSummary plan={proposal} qExecution={p.q_execution} today={today} selectedWeek={selectedWeek} onWeekChange={setSelectedWeek}/><TrainingPlanWeek days={schedule.days} period={week} forecastDates={schedule.forecastDates} programmeLabel="Предложение" today={today} renderDay={renderDay}/></>}
       </details>
       <div className="management-proposal-decision">
         <p>С „Утвърди предложението“ прилагаш целия прегледан вариант за посочения период{proposalMode && proposalMode !== p.mode ? ", включително новия режим" : ""}.</p>

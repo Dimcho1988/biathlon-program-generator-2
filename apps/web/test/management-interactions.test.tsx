@@ -14,6 +14,7 @@ import { changeActivePlan, newerActivePlan } from "../lib/active-plan-request";
 import type { ActivePlanResponse } from "../lib/training-management";
 import type { PlanningCalendarResponse } from "../lib/planning-calendar";
 import { defaultManagementProfile, defaultPlanningControls, parseManagementProfile, parseDraftRecord, COMPONENTS } from "../lib/training-management";
+import { planDates } from "../lib/plan-week-view";
 
 vi.mock("next/navigation", () => ({useRouter: () => ({refresh: vi.fn()})}));
 let root: Root, container: HTMLDivElement;
@@ -748,7 +749,9 @@ it("shows only changed dates in review and keeps the whole exact proposal availa
   expect(review.querySelector('[aria-label="Избери ден от програмата"]')).toBeNull();
   const full = review.querySelector<HTMLDetailsElement>("details.management-detail")!;
   await act(async () => { full.open = true; full.dispatchEvent(new Event("toggle")); });
-  expect(review.querySelectorAll(".management-workout-day")).toHaveLength(2);
+  expect(review.querySelectorAll(".management-workout-day")).toHaveLength(7);
+  expect(review.querySelectorAll(".management-workout-sessions")).toHaveLength(2);
+  expect(review.textContent).toContain("Няма изчислени задачи");
 });
 
 it("approves the reviewed revision once and confirms the accepted changes", async () => {
@@ -864,4 +867,78 @@ it("switches the Q report between approved and proposed prescriptions without ap
   expect(mainHeadings()).toContain("Планирано · утвърдено");
   expect(fetchMock).not.toHaveBeenCalled();
   expect(container.querySelector(".plan-q-comparison")!.closest("details")).toBeNull();
+});
+
+function twoWeekProgramme() {
+  const value = activeResponse(60);
+  value.active!.actionable = true;
+  const p = structuredClone(draft.payload);
+  p.start_date = "2026-10-28"; p.end_date = "2026-11-03";
+  const template = p.days[0];
+  const day = (date:string) => ({...structuredClone(template),date,status:"REST",session:null,sessions:[]});
+  p.days = planDates(p.start_date,p.end_date).map(day);
+  p.lookahead_days = planDates("2026-11-04","2026-11-09").map(day);
+  const setTask = (date:string,zone:typeof COMPONENTS[number],q:number,title:string) => {
+    const d = [...p.days,...p.lookahead_days!].find(d=>d.date===date)!;
+    const s = {...structuredClone(template.sessions![0]),title,zone,
+      direct_equivalent_minutes:{Z1:0,Z2:0,Z3:0,Z4:0,Z5:0,STR:0,[zone]:q}};
+    d.status="TRAINING"; d.sessions=[s]; d.session=s;
+  };
+  setTask("2026-11-03","Z2",100,"Утвърдена задача на 3 ноември");
+  setTask("2026-11-04","Z3",45,"Прогнозна Z3 на 4 ноември");
+  setTask("2026-11-06","Z3",55,"Прогнозна Z3 на 6 ноември");
+  setTask("2026-11-05","STR",30,"Прогнозна сила на 5 ноември");
+  setTask("2026-11-09","STR",30,"Прогнозна сила на 9 ноември");
+  const components = Object.fromEntries(COMPONENTS.map(z=>[z,{basis:"DIRECT_Q" as const,target_q:100,actual_q:0,planned_q:0}]));
+  p.allocation={constraints:[],dose_limits:[],components,segments:[
+    {window_start:"2026-10-27",window_end:"2026-11-02",days:7,components},
+    {window_start:"2026-11-03",window_end:"2026-11-09",days:7,components}]};
+  value.active!.payload.plan = p;
+  value.active!.payload.proposal = structuredClone(p);
+  const proposedDay = value.active!.payload.proposal.lookahead_days!.find(d=>d.date==="2026-11-04")!;
+  proposedDay.sessions![0].title="Предложена Z3 на 4 ноември";
+  proposedDay.sessions![0].direct_equivalent_minutes.Z3=20;
+  return value;
+}
+
+it("switches the full anchored week, Q totals and task variant together without applying changes", async () => {
+  const value = twoWeekProgramme();
+  const saved = structuredClone(value);
+  const fetchMock=vi.fn(); vi.stubGlobal("fetch",fetchMock);
+  await mount(<TrainingManagement athleteName="Спортист" canEdit today="2026-10-28" initialProfile={{configured:true,profile,revision:2}} initialDrafts={[]} initialActive={value}/>);
+  expect(select("Седмица").options[0].textContent).toBe("Текуща седмица · 27.10.2026 – 02.11.2026");
+  expect(select("Седмица").options[1].textContent).toBe("Следваща седмица · 03.11.2026 – 09.11.2026");
+  const row = (zone:string) => [...container.querySelectorAll(".q-primary-table tbody tr")].find(tr=>tr.querySelector("th")?.textContent===zone)!;
+  await choose(select("Седмица"),"2026-11-03");
+  expect(row("Z3").querySelector('[data-label="Планирано"]')?.textContent).toContain("1:40:00");
+  expect(row("Z3").textContent).toContain("100.0% от целта");
+  expect(row("Сила").querySelector('[data-label="Планирано"]')?.textContent).toContain("1:00:00");
+  expect(container.querySelectorAll(".management-days .management-workout-day")).toHaveLength(7);
+  expect(container.querySelector(".management-days")?.textContent).toContain("Прогнозна Z3 на 4 ноември");
+  const day4=()=>[...container.querySelectorAll<HTMLButtonElement>(".management-days .management-workout-day")].find(b=>b.textContent?.includes("4.11"))!;
+  await click(day4());
+  expect(container.querySelector(".management-selected-day")?.textContent).toContain("Прогнозна Z3 на 4 ноември");
+  expect(container.querySelector(".management-day-actions")).toBeNull();
+  await click(button("Ново предложение"));
+  expect(select("Седмица").value).toBe("2026-11-03");
+  expect(row("Z3").querySelector('[data-label="Планирано"]')?.textContent).toContain("1:15:00");
+  expect(container.querySelector(".management-selected-day")?.textContent).toContain("Предложена Z3 на 4 ноември");
+  expect(container.querySelector(".management-day-actions")).toBeNull();
+  await click(button("Утвърдена програма"));
+  expect(row("Z3").querySelector('[data-label="Планирано"]')?.textContent).toContain("1:40:00");
+  expect(value).toEqual(saved);
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it("shows missing future days explicitly instead of inventing rest or zero planned Q", async () => {
+  const value=twoWeekProgramme();
+  value.active!.payload.plan.lookahead_days=value.active!.payload.plan.lookahead_days!.filter(d=>d.date!=="2026-11-04");
+  await mount(<TrainingManagement athleteName="Спортист" canEdit={false} today="2026-10-28" initialProfile={{configured:true,profile,revision:2}} initialDrafts={[]} initialActive={value}/>);
+  await choose(select("Седмица"),"2026-11-03");
+  expect(container.querySelector(".plan-q-comparison")?.textContent).toContain("Непълен разчет");
+  const missing=[...container.querySelectorAll<HTMLButtonElement>(".management-days .management-workout-day")].find(b=>b.textContent?.includes("4.11"))!;
+  expect(missing.textContent).toContain("Няма изчислени задачи");
+  await click(missing);
+  expect(container.querySelector(".management-selected-day")?.textContent).toContain("Няма изчислени задачи");
+  expect(container.querySelector(".management-day-actions")).toBeNull();
 });

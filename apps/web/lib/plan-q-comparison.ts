@@ -1,16 +1,19 @@
 import { COMPONENTS, daySessions, type Component, type ComponentAllocation, type DraftDay, type PlanOutcome, type PlanningDraft, type QExecution } from "./training-management";
+import { planDates, planWeekView } from "./plan-week-view";
 
 export interface QComparisonRow {
   zone: Component; target: number | null; planned: number | null; actual: number | null;
-  forecast: number | null; plannedCompleted: number | null; actualCompleted: number | null; actualEstimated: number | null;
+  scheduled: number | null; forecast: number | null; plannedCompleted: number | null; actualCompleted: number | null; actualEstimated: number | null;
   targetBasis: "DIRECT_Q" | "CANONICAL_E" | "UNKNOWN";
 }
 export interface QComparisonPeriod {
   start: string; end: string; includesForecast: boolean; rows: QComparisonRow[];
   actualAsOf: string; liveExecution: boolean;
+  forecastDates: string[]; programmeDates: string[]; missingDates: string[];
 }
 export interface QComparisonOptions {
   planKind?: "DRAFT" | "APPROVED"; qExecution?: QExecution | null; outcomes?: PlanOutcome[]; today?: string;
+  selectedWeek?: string; onWeekChange?: (start: string) => void;
 }
 const quantity = (v: unknown): number | null => typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
 const sum = (values: Array<number | null>) => values.every(v => v !== null) ? values.reduce<number>((a, b) => a + (b ?? 0), 0) : null;
@@ -25,13 +28,6 @@ function qValue(row: ComponentAllocation | undefined, key: "target" | "planned" 
 const dayQ = (day: DraftDay, zone: Component) => day.status === "EXISTING_ACTIVITY" ? null
   : sum(daySessions(day).map(s => quantity(s.direct_equivalent_minutes?.[zone])));
 
-function dates(start: string, end: string) {
-  const result: string[] = [];
-  for (let t = Date.parse(`${start}T12:00:00Z`); t <= Date.parse(`${end}T12:00:00Z`); t += 86400000)
-    result.push(new Date(t).toISOString().slice(0, 10));
-  return result;
-}
-
 export function planQComparison(plan: PlanningDraft, options: QComparisonOptions = {}): QComparisonPeriod[] {
   const execution = options.qExecution ?? plan.q_execution;
   const asOf = execution?.as_of ?? plan.generated_at?.slice(0, 10) ?? plan.start_date;
@@ -43,10 +39,12 @@ export function planQComparison(plan: PlanningDraft, options: QComparisonOptions
   }];
   return periods.map(p => {
     const inPeriod = (key: string) => p.window_start <= key && key <= p.window_end;
-    const prescribed = plan.days.filter(d => inPeriod(d.date) && plan.start_date <= d.date && d.date <= plan.end_date);
-    const forecast = (plan.lookahead_days ?? []).filter(d => inPeriod(d.date) && d.date > plan.end_date);
-    const actualKeys = dates(p.window_start, p.window_end < asOf ? p.window_end : asOf);
+    const view = planWeekView(plan, {start:p.window_start,end:p.window_end});
+    const prescribed = view.days.filter(d => !view.forecastDates.includes(d.date));
+    const forecast = view.days.filter(d => view.forecastDates.includes(d.date));
+    const actualKeys = planDates(p.window_start, p.window_end < asOf ? p.window_end : asOf);
     return {start: p.window_start, end: p.window_end, includesForecast: forecast.length > 0,
+      forecastDates:view.forecastDates,programmeDates:view.programmeDates,missingDates:view.missingDates,
       actualAsOf: asOf, liveExecution: !!execution,
       rows: COMPONENTS.map(zone => {
         const row = p.components[zone];
@@ -56,12 +54,14 @@ export function planQComparison(plan: PlanningDraft, options: QComparisonOptions
         for (const d of prescribed) {
           if (d.status !== "EXISTING_ACTIVITY") schedule.set(d.date, dayQ(d, zone));
         }
-        // The main column is the displayed programme. Historical prescriptions
-        // belong to adherence, not to a new rolling week's remaining tasks.
+        // The displayed cycle includes explicitly labelled provisional days.
+        // Historical prescriptions belong only to completed-day adherence.
         const adherence = options.planKind === "APPROVED" ? new Map([...historical, ...schedule]) : schedule;
         const completed = [...adherence.keys()].filter(d => d < today && d < asOf);
+        const scheduled = sum([...schedule.values()]);
+        const forecastQ = sum(forecast.map(d => dayQ(d, zone)));
         return {zone, target: qValue(row, "target"), targetBasis: row?.basis ?? "UNKNOWN",
-          planned: sum([...schedule.values()]), forecast: sum(forecast.map(d => dayQ(d, zone))),
+          planned: view.missingDates.length ? null : sum([scheduled,forecastQ]), scheduled, forecast:forecastQ,
           actual: execution ? sum(actualKeys.map(d => quantity(actualDays.get(d)?.q[zone]))) : qValue(row, "actual"),
           actualEstimated: execution ? sum(actualKeys.map(d => quantity(actualDays.get(d)?.estimated_q?.[zone] ?? 0))) : null,
           plannedCompleted: completed.length ? sum(completed.map(d => adherence.get(d) ?? null)) : null,
