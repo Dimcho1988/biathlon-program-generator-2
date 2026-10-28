@@ -16,6 +16,7 @@ def test_new_config_indices_lower_boundaries_without_changing_manual_test(manual
     if manual_test:
         repo.test(sport='NordicSki', source='MANUAL', vflat_version=None, vflat_config_version=None)
     inputs = model_service.speed_view_inputs(repo, 'ath-test')
+    inputs['today'] = NOW.date()  # Both sides use the fixture's calibration day.
     old = model_service.speed_view(repo, 'ath-test', 'NordicSki', _inputs=inputs)
     saved = deepcopy(inputs)
     # The active generation carries the previous transform's comparison key.

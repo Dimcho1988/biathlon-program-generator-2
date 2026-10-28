@@ -75,7 +75,8 @@ def test_two_real_tests_use_checked_model_and_history_never_moves_them():
     assert second["curve_metadata"]["mode"] == "TWO_ANCHOR_5PCT"
     assert second["curve_metadata"]["cap_percent"] == 5
     measured = [p for p in second["points"] if p["evidence"] == "MEASURED"]
-    assert [(p["duration_s"], p["speed_kmh"]) for p in measured] == pytest.approx([(180., 22.), (720., 18.46)])
+    assert [p["duration_s"] for p in measured] == pytest.approx([180., 720.])
+    assert [p["speed_kmh"] for p in measured] == pytest.approx([22., 18.46])
     assert second["functional_profile"]["status"] == "TEST_SUPPORTED"
 
 

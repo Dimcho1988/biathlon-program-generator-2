@@ -14,15 +14,15 @@ def inputs():
     return goals,profile,reference
 
 
-def test_reconciled_q_fits_adjacent_budget_without_exceeding_7_40_ceiling():
+def test_projection_discloses_e_without_shrinking_the_prescribed_q():
     goals,p,ref = inputs()
     result = policy.reconcile(goals,p,{"kind":"BUILD"},ref)
-    assert result["Z1"]["target"] == 350  # Weighted received E reaches the existing 7/40 ceiling.
+    assert result["Z1"]["target"] == 140
     assert result["Z1"]["desired_weekly_q"] == 240
-    assert 0 < result["Z1"]["target_weekly_q"] <= 240
+    assert result["Z1"]["target_weekly_q"] == 240
     for g in result.values():
-        assert g["consistency"]["projected_weekly_effective"] <= g["target"]+1e-6
-        assert g["target_index"] <= 2
+        assert not g["consistency"]["projection_is_limit"]
+        assert g["consistency"]["q_scale"] == 1.
 
 
 @pytest.mark.parametrize("case", ["manual","taper","recovery"])
@@ -32,8 +32,9 @@ def test_coherent_objectives_keep_manual_and_unloading_budgets(case):
     original = deepcopy(goals)
     result = policy.reconcile(goals,p,{"kind":"RECOVERY" if case=="recovery" else "BUILD"},ref,taper=case=="taper")
     assert result["Z1"]["target"] == original["Z1"]["target"]
-    assert result["Z1"]["target_weekly_q"] < result["Z1"]["desired_weekly_q"]
-    assert result["Z1"]["consistency"]["projected_weekly_effective"] <= 140+1e-6
+    assert result["Z1"]["target_weekly_q"] == original["Z1"]["target_weekly_q"]
+    assert result["Z1"]["consistency"]["projected_weekly_effective"] > 140.
+    assert not result["Z1"]["consistency"]["projection_is_limit"]
 
 
 def test_limited_history_does_not_inherit_an_enlarged_automatic_budget():

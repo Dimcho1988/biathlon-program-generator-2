@@ -18,6 +18,7 @@ VERSION = "component-load-weighted-downward-tmax-v2"
 # Total multiplier to EACH lower aerobic zone, not an addition to 100%.
 # Coach-approved starting coefficients; not universal physiological constants.
 DOWNWARD_FACTORS = {"Z2": 1.4, "Z3": 1.8, "Z4": 2.3, "Z5": 2.3}
+ADJACENT_FRACTIONS = ((.20, .10), (.30, .20))
 EXPERT_CAPACITY_SOURCE = "EXPERT_CONTINUOUS_TMAX"
 CURVE_CAPACITY_SOURCE = "SPEED_TIME_CURVE"
 
@@ -98,7 +99,7 @@ def calculate_component_load(
         ratio = ratios[zone]
         if ratio < 0.50:
             continue
-        up, down = (0.30, 0.20) if ratio > 0.80 else (0.20, 0.10)
+        up, down = ADJACENT_FRACTIONS[int(ratio > .80)]
         up_fraction[zone], down_fraction[zone] = up, down
         if index + 1 < len(AEROBIC_COMPONENTS):
             up_out[zone] = up * direct[zone]
@@ -125,3 +126,25 @@ def calculate_component_load(
         "spill_basis": "ENTIRE_DIRECT_EQUIVALENT_LOAD",
         "capacity_basis": "CONTINUOUS_TMAX_AT_ZONE_EQUIVALENCE_REFERENCE",
     }
+
+
+def effective_upper_bound(direct_q: Mapping[str, float]) -> dict[str, float]:
+    """Numerical search bound for any split of the supplied nonnegative Q.
+
+    Every donor can use the largest approved adjacent fractions. This is an
+    optimistic bound, never a predicted session or a new physiological limit.
+    """
+    raw = {z: float(direct_q.get(z, 0.)) for z in COMPONENTS}
+    if not all(math.isfinite(v) for v in raw.values()):
+        raise ValueError("Direct-Q bounds must be finite")
+    direct = {z: max(0., v) for z, v in raw.items()}
+    result = dict(direct)
+    up, down = ADJACENT_FRACTIONS[-1]
+    for i, zone in enumerate(AEROBIC_COMPONENTS):
+        for lower in AEROBIC_COMPONENTS[:i]:
+            result[lower] += DOWNWARD_FACTORS.get(zone, 0.)*direct[zone]
+        if i:
+            result[AEROBIC_COMPONENTS[i-1]] += down*direct[zone]
+        if i+1 < len(AEROBIC_COMPONENTS):
+            result[AEROBIC_COMPONENTS[i+1]] += up*direct[zone]
+    return result

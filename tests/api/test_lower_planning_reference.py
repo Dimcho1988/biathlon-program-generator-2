@@ -49,7 +49,8 @@ def test_lower_planning_reference_reconciles_e_without_changing_measured_history
         assert after[z]["target_weekly_q"] == pytest.approx(before[z]["target_weekly_q"]*low/measured[z])
         assert after[z]["target"] >= before[z]["target"]
         assert after[z]["target_index"] <= 2.
-        assert after[z]["consistency"]["projected_weekly_effective"] <= after[z]["target"] + 1e-6
+        assert not after[z]["consistency"]["projection_is_limit"]
+        assert after[z]["target_weekly_q"] == after[z]["desired_weekly_q"]
     assert source == original_source
     assert context["reference_is_clamped"]
 

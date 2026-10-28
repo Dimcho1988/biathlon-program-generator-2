@@ -98,6 +98,23 @@ describe("management data and review interface", () => {
     expect(html.split(label)).toHaveLength(3);
     expect(html).not.toContain(code);
   });
+  it("shows direct-Q intent and the independent index limit without an E cycle quota", () => {
+    const current = structuredClone(record);
+    for (const zone of COMPONENTS) Object.assign(current.payload.days[0].load_budget.components[zone], {
+      prescription_basis:"LONG_TERM_MICROCYCLE_Q",long_term_window_start:"2026-09-22",long_term_window_end:"2026-09-28",
+      target_period_q:100, remaining_target_q:10, remaining_q:20,
+      target_period_effective:180,rolling_7d_effective:215,deficit_effective:40,
+      index_7_40_before:1.2,index_7_40_limit:2,desired_index_7_40:1,
+    });
+    const html=renderToStaticMarkup(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:1}} initialDrafts={[current]} today="2026-09-21"/>);
+    expect(html).toContain("Прогнозен 7/40 преди задачата");
+    expect(html).toContain("Граница 7/40");
+    expect(html).toContain("<td>100 Q</td><td>10 Q</td><td>20 Q</td>");
+    expect(html).toContain("без отделна квота за микроцикъла");
+    expect(html).not.toContain("Цел за отрязъка*");
+    expect(html).not.toContain("LONG_TERM_MICROCYCLE_Q");
+    expect(parseDraftRecord(current)).toEqual(current);
+  });
   it("distinguishes current microcycle remainder from rolling history and labels estimated curve capacity", () => {
     const current = structuredClone(record);
     for (const zone of COMPONENTS) Object.assign(current.payload.days[0].load_budget.components[zone], {

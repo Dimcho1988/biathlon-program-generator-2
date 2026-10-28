@@ -91,5 +91,9 @@ def test_partial_recovery_dose_does_not_spend_other_components_preparation(monke
     assert plan["days"][6]["status"] == "UNAVAILABLE" and not plan["days"][6]["sessions"]
     assert plan["allocation"]["components"]["Z2"]["planned_q"] >= 90.
     long_day = plan["days"][5]["sessions"]
-    assert len(long_day) == 1 and long_day[0]["zone"] == "Z1" and long_day[0]["total_minutes"] >= 60.
+    assert len(long_day) == 1 and long_day[0]["zone"] == "Z1"
+    # A long-day preference cannot invent more Q after the component target
+    # has already been distributed. Keep a legal whole dose and the range.
+    assert long_day[0]["main_work_minutes"] >= long_day[0]["dose_evidence"]["minimum_primary_work_minutes"]
+    assert all(row["within_tolerance"] for row in plan["allocation"]["components"].values())
     assert_segment_contract(plan)

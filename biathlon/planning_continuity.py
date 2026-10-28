@@ -5,8 +5,9 @@ microcycle target and charged for *all* actual and proposed excess. It is never
 rebased on current execution or replenished by generating another draft.
 """
 from .constants import COMPONENTS
+from .planning_allocation import prescription_headroom
 
-VERSION = "planning-continuity-v2-bounded-taper"
+VERSION = "planning-continuity-v3-shared-q-tolerance"
 PREPARATION_FRACTION = .10
 TAPER_FRACTION = .10  # Initial coach setting, not a physiological threshold.
 
@@ -47,21 +48,30 @@ def limits(components, budgets, q_remaining, reserve, *, zone, maintenance=False
         mode = "QUALITY_PREPARATION_RESERVE"
         extra_q["Z1"] = components["Z1"]["target"] * PREPARATION_FRACTION
         extra_e["Z1"] = extra_q["Z1"]
-    q_limits, e_limits, objective_limits = {}, {}, {}
+    q_limits, e_limits, objective_limits, index_only = {}, {}, {}, []
     for z, row in components.items():
+        q_policy = budgets[z].get("effective_limit_basis") == "PROSPECTIVE_CANONICAL_7_40"
         known = row.get("actual_q") is not None and row.get("planned_q") is not None
         extra = extra_q[z] if known and row["basis"] == "DIRECT_Q" else 0.
         objective_limits[z] = (max(0., row["target"] + extra - row["actual"] - row["planned"])
                                if row.get("actual") is not None else None)
+        if q_policy:
+            # Preparation and taper share 110%. The separately approved
+            # post-execution maintenance reserve remains one frozen dose,
+            # not another percentage or a resettable target.
+            objective_limits[z] = prescription_headroom(row,
+                maintenance_reserve=extra if mode == "POST_TARGET_MAINTENANCE" else 0.)
+            index_only.append(z)
         if z in q_remaining:
             q_limits[z] = objective_limits[z] or 0.
         # Preserve the original rolling 7/40 envelope even when its anchored
         # prescription target is already covered. A reserve is not load-free.
-        e_limits[z] = min(budgets[z].get("rolling_deficit_effective", budgets[z]["deficit_effective"]),
+        rolling = budgets[z].get("rolling_deficit_effective", budgets[z]["deficit_effective"])
+        e_limits[z] = (rolling if q_policy else min(rolling,
             max(0., row["target_effective"] + extra_e[z]
-                - row["actual_effective"] - row["planned_effective"]))
+                - row["actual_effective"] - row["planned_effective"])))
     return {"mode": mode, "q": q_limits, "e": e_limits, "objective": objective_limits,
-            "reserve_q": extra_q, "reserve_e": extra_e}
+            "reserve_q": extra_q, "reserve_e": extra_e, "index_only_components": index_only}
 
 
 def fits(direct, effective, headroom, components):
@@ -92,6 +102,9 @@ def taper_limits(components, budgets, q_remaining, *, zone, light=False,
     result["rolling_limits"] = {}
     for z in zones - set(manual):
         row, budget = components[z], budgets[z]
+        if budget.get("effective_limit_basis") == "PROSPECTIVE_CANONICAL_7_40":
+            result["mode"] = mode
+            continue  # The reduced taper target already owns its 10% Q band.
         if (row["basis"] != "DIRECT_Q" or row.get("actual_q") is None
                 or row.get("planned_q") is None or row["target"] <= 0
                 or row["target_effective"] <= 0 or budget["target_weekly_effective"] <= 0):
@@ -124,9 +137,11 @@ def evidence(direct, effective, headroom, segment):
         return None
     rows = segment["components"]
     extra = {z: max(0., direct[z] - (rows[z]["remaining"] or 0.)) for z in COMPONENTS}
-    extra_e = {z: max(0., effective[z] - rows[z]["remaining_effective"]) for z in COMPONENTS}
+    extra_e = {z: max(0., effective[z] - rows[z]["remaining_effective"])
+               if z not in headroom.get("index_only_components", []) else 0. for z in COMPONENTS}
     if "original_e" in headroom:
-        extra_e = {z: max(extra_e[z], effective[z] - headroom["original_e"][z]) for z in COMPONENTS}
+        extra_e = {z: max(extra_e[z], effective[z] - headroom["original_e"][z])
+                   if z not in headroom.get("index_only_components", []) else 0. for z in COMPONENTS}
     if not any(v > .005 for v in [*extra.values(), *extra_e.values()]):
         return None
     result = {"version": VERSION, "mode": headroom["mode"],
@@ -135,8 +150,8 @@ def evidence(direct, effective, headroom, segment):
             "additional_effective": {z: round(v, 3) for z, v in extra_e.items() if v > .005},
             "reserve_q": {z: round(v, 3) for z, v in headroom["reserve_q"].items() if v > .005},
             "basis": "COACH_POLICY_NOT_PHYSIOLOGICAL_THRESHOLD",
-            "rolling_limits_preserved": "rolling_limits" not in headroom}
-    if "rolling_limits" in headroom:
+            "rolling_limits_preserved": not bool(headroom.get("rolling_limits"))}
+    if headroom.get("rolling_limits"):
         result.update(maximum_excess_fraction=TAPER_FRACTION,
             reserve_effective={z: round(v, 3) for z, v in headroom["reserve_e"].items() if v > .005},
             rolling_limits=headroom["rolling_limits"],

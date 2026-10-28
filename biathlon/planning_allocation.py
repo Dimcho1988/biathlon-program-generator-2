@@ -2,20 +2,20 @@
 
 Quotas are a scheduling heuristic, not permission to exceed a dose or a target.
 Each long-term microcycle segment keeps its own target; unused load is never
-borrowed across its boundaries. Direct Q objectives and canonical E limits
-are distinct.
+borrowed across its boundaries. Q is prescribed within a component-local
+tolerance; E is checked by the actual 7/40 and Recovery models.
 """
 from datetime import timedelta
 
 from .constants import COMPONENTS
 
-VERSION = "component-allocation-v5-component-tolerance"
+VERSION = "component-allocation-v6-q-prescription"
 SEGMENT_VERSION = VERSION
 COVERAGE_TOLERANCE = .10
 
 
 def assess_component(row):
-    """Acceptance around the unchanged target, never extra dose permission.
+    """Acceptance around the unchanged target, separate from method capacity.
 
     Each component and microcycle is assessed independently. Unknown actual
     work cannot become zero, and excess in another component earns no credit.
@@ -46,6 +46,7 @@ def acceptance(allocation):
     rows = objective_rows(allocation)
     return {"target_percent": 100., "lower_percent": 90., "upper_percent": 110.,
             "scope": "EACH_COMPONENT_IN_EACH_MICROCYCLE", "changes_load_limits": False,
+            "prescription_tolerance_percent": 10.,
             "within_tolerance": bool(rows) and all(row.get("within_tolerance", assess_component(row)["within_tolerance"]) for _, row in rows)}
 
 
@@ -71,6 +72,21 @@ def needs_search(allocation):
                and abs(row["actual"]+row["planned"]-max(row["target"], row["actual"]))
                    > (min(1., row["target"]*.01) if row["target"] > 0 else .001)
                for _, row in objective_rows(allocation))
+
+
+def prescription_headroom(row, *, maintenance_reserve=0.):
+    """Whole doses approach 100% within the ordinary 110% ceiling.
+
+    Legacy E targets keep their original units and limit. Unknown Q cannot
+    authorize a proposal; execution above the limit is not a new baseline.
+    A separately approved post-execution reserve can be supplied explicitly.
+    """
+    if row.get("actual") is None or row.get("planned") is None:
+        return None
+    limit = row["target"]*(1+COVERAGE_TOLERANCE if row.get("basis") == "DIRECT_Q" else 1.)
+    if row.get("basis") == "DIRECT_Q" and maintenance_reserve > 0:
+        limit = max(limit, row["target"]+maintenance_reserve)
+    return max(0., limit-row["actual"]-row["planned"])
 
 
 def objectives(windows, actual, forecast, source, days):
@@ -108,6 +124,8 @@ def objectives(windows, actual, forecast, source, days):
             target_effective=target_e, actual_effective=done_e, planned_effective=max(0., total_e-done_e),
             unallocated_effective=max(0., target_e-total_e))
         components[z].update(assess_component(components[z]))
+        components[z].update(prescription_remaining=prescription_headroom(components[z]),
+                             effective_is_prescription_limit=not q_known)
     return components
 
 
@@ -160,14 +178,12 @@ def segment_objectives(windows, actual, forecast, source, days, *, segment_keys)
 
 
 def segment_headroom(windows, actual, forecast, source, days, day, *, segment_keys):
-    """Return the active long-term segment's separate Q and E headroom.
+    """Return coverage and prescription headroom for the active microcycle.
 
-    ``components[z]['remaining']`` is the governing coverage headroom, in
-    DIRECT_Q or CANONICAL_E according to ``basis``. Unknown actual Q remains
-    None and cannot authorize a dose. ``remaining_effective`` is the separate
-    canonical-E ceiling, including actual preparation and cascade already
-    present in the supplied forecast. Callers must still calculate complete
-    candidate loads and Recovery from their real blocks.
+    ``remaining`` measures the distance to 100%; ``prescription_remaining``
+    permits complete doses within 110%. For DIRECT_Q, ``remaining_effective``
+    is diagnostic only. Actual rolling 7/40 and Recovery checks use the real
+    composed sessions, not a second microcycle E allowance.
     """
     for segment in segment_objectives(windows, actual, forecast, source, days,
                                       segment_keys=segment_keys):

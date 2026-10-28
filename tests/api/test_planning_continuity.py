@@ -136,12 +136,20 @@ def test_engine_prescribes_reduced_whole_maintenance_after_actual_target_and_doe
 
 
 @pytest.mark.parametrize("changes", [{"readiness":40.}, {"actual_q":100.}, {"manual":True},
-                                     {"rest":True}, {"rolling":10.}, {"unloading":"TAPER"},
+                                     {"rest":True}, {"unloading":"TAPER"},
                                      {"unloading":"RE_ENTRY"}])
 def test_engine_keeps_recovery_overshoot_manual_rest_and_rolling_gates(monkeypatch, changes):
     body, repo = scenario(monkeypatch, **changes)
     plan = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)
     assert not adaptive_sessions(plan)
+
+
+def test_old_e_reference_cannot_cancel_admissible_post_target_maintenance(monkeypatch):
+    body, repo = scenario(monkeypatch, rolling=10.)
+    plan = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)
+    assert adaptive_sessions(plan)
+    assert all(day["load_budget"]["components"]["Z3"].get("index_7_40_limit") == 2.
+               for day in plan["days"] if day["sessions"])
 
 
 def test_taper_rest_explains_bounded_easy_reserve_cannot_extend_quality_work(monkeypatch):
@@ -190,7 +198,7 @@ def test_empty_replay_day_does_not_erase_future_strength_preparation(monkeypatch
     plan = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)
     assert plan["days"][0]["sessions"][0]["zone"] == "Z1"
     assert any(s["zone"] == "STR" for s in plan["days"][4]["sessions"])
-    assert sum(s["direct_equivalent_minutes"]["Z1"] for d in plan["days"] for s in d["sessions"]) <= 100.005
+    assert sum(s["direct_equivalent_minutes"]["Z1"] for d in plan["days"] for s in d["sessions"]) <= 110.005
 
 
 def test_recovery_trial_spreads_complete_doses_across_training_days(monkeypatch):

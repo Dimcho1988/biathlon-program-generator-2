@@ -43,13 +43,14 @@ def test_old_profiles_default_to_shadow_and_validate_bounded_controls():
             IndividualLearning(**values)
 
 
-def test_control_volume_changes_q_once_and_reconciles_its_canonical_e_budget():
+def test_control_volume_changes_q_once_without_a_second_e_prescription():
     profile, _, _, rows, context = setup_context()
     baseline_context = {k: v for k, v in context.items() if k != "individual_learning"}
     before, after = goals(profile, rows, baseline_context), goals(profile, rows, context)
     assert after["Z3"]["target_weekly_q"] == pytest.approx(before["Z3"]["target_weekly_q"]*1.05)
     assert after["Z3"]["target"] >= before["Z3"]["target"]
-    assert after["Z3"]["consistency"]["projected_weekly_effective"] <= after["Z3"]["target"]
+    assert after["Z3"]["consistency"]["q_scale"] == 1.
+    assert not after["Z3"]["consistency"]["projection_is_limit"]
     assert after["Z3"]["target_index"] <= 2
     assert after["Z2"]["target_weekly_q"] == before["Z2"]["target_weekly_q"]
     assert after["Z3"]["progression"]["individual_learning"]["applied_volume_factor"] == pytest.approx(1.05)
