@@ -166,9 +166,25 @@ def simulate(daily, configs=None, *, target=None, include_details=True, include_
         contributions = []
         previous_window = deque()
         last_baseline = baseline([], config["initial_daily_min"])
-        for day, effective in ordered_doses:
-            if day > target:
-                break
+        # Candidate bundles share their entire recorded prefix. Replaying
+        # that prefix's baseline windows for every changed final dose can
+        # consume the whole scheduling search budget. Keep immutable causal
+        # states in the caller's bounded cache; detailed views still replay
+        # all rows so their attribution and plots remain complete.
+        causal_doses, config_key = current_key[2:]
+        prefix_cache = (calculation_cache.setdefault("prefix", {})
+                        if calculation_cache is not None and not include_details else None)
+        prefix_length = 0
+        if prefix_cache is not None:
+            for count in range(len(causal_doses), 0, -1):
+                saved = prefix_cache.get((config_key, causal_doses[:count]))
+                if saved is not None:
+                    impulses = list(saved[0])
+                    previous_window = deque(saved[1])
+                    last_baseline = saved[2]
+                    prefix_length = count
+                    break
+        for position, (day, effective) in enumerate(causal_doses[prefix_length:], prefix_length+1):
             cutoff = day-timedelta(days=40)
             while previous_window and previous_window[0][0] < cutoff:
                 previous_window.popleft()
@@ -192,6 +208,11 @@ def simulate(daily, configs=None, *, target=None, include_details=True, include_
                     "isolated_days_to_90":days_to_ready([added],day) if added else 0.})
                 contributions.append((rows[-1], added))
             last_baseline = used, raw, n, source
+            if prefix_cache is not None:
+                if len(prefix_cache) >= 2048:
+                    prefix_cache.pop(next(iter(prefix_cache)))
+                prefix_cache[(config_key, causal_doses[:position])] = (
+                    tuple(impulses), tuple(previous_window), last_baseline)
         # Attribute today's fatigue to its original daily doses. This is a
         # diagnostic projection; the history, rates and readiness are unchanged.
         for row, added in contributions:

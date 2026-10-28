@@ -155,3 +155,19 @@ def test_complete_native_and_combined_weeks_keep_published_data_independent(monk
     for session in selected:
         mutate(session)
     assert retained_methods == before
+
+
+@pytest.mark.parametrize("mode", ["legacy", "controls", "double", "locked"])
+def test_reserved_bundle_reuse_preserves_the_entire_plan_and_inputs(monkeypatch, mode):
+    from tests.api.test_recovery_computation import _planning_inputs
+
+    monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
+    repo, profile, locked = _planning_inputs(mode)
+    original = deepcopy((repo.envelope, profile, locked))
+    cached = engine.lru_cache
+    monkeypatch.setattr(engine, "lru_cache", lambda **kwargs: lambda function: function)
+    expected = engine.generate_plan(repo, "athlete", profile, start_date=TODAY, now=NOW, locked_day=locked)
+    monkeypatch.setattr(engine, "lru_cache", cached)
+    result = engine.generate_plan(repo, "athlete", profile, start_date=TODAY, now=NOW, locked_day=locked)
+    assert result == expected
+    assert (repo.envelope, profile, locked) == original

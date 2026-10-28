@@ -7,6 +7,7 @@ historical C40 and the technical denominator used by canonical E spillover.
 from __future__ import annotations
 
 from copy import deepcopy
+from functools import lru_cache
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
@@ -37,7 +38,7 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v59-q-prescription"
+VERSION = "training-management-v60-q-prescription-reuse"
 PARAMETER_VERSION = "management-parameters-v52"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
@@ -266,7 +267,8 @@ def _with_forecast_day(rows, day, effective):
 
 
 def _add_forecast_session(rows, day, effective):
-    current = {r["zone"]: r["effective_load"] for r in rows if r["date"] == day.isoformat()}
+    key = day.isoformat()
+    current = {r["zone"]: r["effective_load"] for r in rows if r["date"] == key}
     return _with_forecast_day(rows, day, {z: current.get(z, 0.) + effective.get(z, 0.) for z in COMPONENTS})
 
 
@@ -2657,7 +2659,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 return (option["work"] <= cap["capacity_minutes"]*nominal*policy["dose_factor"] + .001
                     and _dose_fits(option["blocks"], cap, option["zone"], ceiling*policy["dose_factor"]))
 
-            def reserved_future_work(candidate_q=None, candidate_e=None, required_dates=None, candidate_primary=None, candidate_count=1, candidate_minutes=0., *, return_key_sessions=False):
+            @lru_cache(maxsize=256)
+            def replay_reserved_future_work(candidate_q, candidate_e, required_dates, candidate_primary, candidate_count, candidate_minutes, return_key_sessions):
+                candidate_q = dict(candidate_q) if candidate_q is not None else None
+                candidate_e = dict(candidate_e) if candidate_e is not None else None
                 reserved_rows = forecast_rows
                 reserved_days = list(result_days)
                 objective_spent = {z: 0. for z in COMPONENTS}
@@ -2746,6 +2751,16 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     for z, value in objective_load(chosen["q"], chosen["e"]).items():
                         objective_spent[z] += value
                 return selected_key_sessions if return_key_sessions else selected
+
+            def reserved_future_work(candidate_q=None, candidate_e=None, required_dates=None, candidate_primary=None, candidate_count=1, candidate_minutes=0., *, return_key_sessions=False):
+                # All causal history, slots, quotas and future options are
+                # fixed for this slot. Whole-dose trials often revisit the
+                # exact same Q/E bundle; reuse only that identical replay.
+                return replay_reserved_future_work(
+                    tuple(sorted(candidate_q.items())) if candidate_q is not None else None,
+                    tuple(sorted(candidate_e.items())) if candidate_e is not None else None,
+                    frozenset(required_dates) if required_dates is not None else None,
+                    candidate_primary, candidate_count, candidate_minutes, return_key_sessions)
 
             reservable_dates = reserved_future_work() if not limited else set()
             reserved_keys = reserved_future_work(return_key_sessions=True) if not limited else []
