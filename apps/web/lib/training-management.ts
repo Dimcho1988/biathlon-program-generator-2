@@ -168,10 +168,14 @@ export interface ComponentLoadBudget {
   target_weekly_effective: number; rolling_7d_effective: number; deficit_effective: number;
   prescription_basis?: string; long_term_window_start?: string; long_term_window_end?: string;
   target_period_effective?: number; target_weekly_q?: number | null; remaining_q?: number | null;
+  target_period_q?: number | null; remaining_target_q?: number | null;
+  index_7_40_before?: number; index_7_40_limit?: number; desired_index_7_40?: number | null;
+  effective_limit_basis?: string; index_limit_binding?: boolean;
 }
 export interface ComponentAllocation {
   coverage_percent?: number | null; coverage_status?: "WITHIN_RANGE" | "BELOW_RANGE" | "ABOVE_RANGE" | "NOT_REQUIRED" | "UNKNOWN";
   within_tolerance?: boolean; lower_acceptable?: number; upper_acceptable?: number;
+  prescription_remaining?: number | null; effective_is_prescription_limit?: boolean;
   basis?: "DIRECT_Q" | "CANONICAL_E"; target?: number; actual?: number | null; planned?: number; remaining?: number | null;
   desired_target_q?: number | null; target_q?: number | null; actual_q?: number | null; planned_q?: number;
   target_effective?: number; actual_effective?: number; planned_effective?: number; unallocated_effective?: number; remaining_effective?: number;

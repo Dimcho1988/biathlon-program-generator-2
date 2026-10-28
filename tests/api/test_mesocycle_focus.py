@@ -63,7 +63,8 @@ def test_rotation_changes_final_load_not_only_labels_and_maintenance_has_no_load
                     # a non-accented component; it remains inside the 7/40 cap.
                     c = goals[z]["consistency"]
                     assert goals[z]["target_index"] <= 2
-                    assert c["projected_weekly_effective"] <= goals[z]["target"]+1e-6
+                    assert not c["projection_is_limit"]
+                    assert c["q_scale"] == 1.
                     assert goals[z]["target"] <= max(c["original_effective_target"],c["requested_weekly_effective"])+1e-6
                 else:
                     assert goals[z]["target_index"]<=1.1+1e-9
