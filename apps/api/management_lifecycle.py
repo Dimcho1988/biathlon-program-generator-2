@@ -170,6 +170,20 @@ def reconcile(plan, source, today, decisions, previous_outcomes=(), *, q_executi
     return [outcomes[k] for k in sorted(outcomes)][-366:]
 
 
+def _attach_execution_q(outcomes, report):
+    """Overlay the prepared Q ledger after the original reconciliation phase.
+
+    Preserve the early source-change boundary and daily matching. Do not run
+    reconciliation again after the build's fresh-input verification.
+    """
+    rows = {row["date"]: row for row in (report or {}).get("days", [])}
+    for outcome in outcomes:
+        row = rows.get(outcome["date"])
+        if row is not None:
+            outcome["actual_q"] = deepcopy(row["q"])
+            outcome["actual_q_estimated"] = deepcopy(row.get("estimated_q"))
+
+
 def changes_between(old, new):
     previous = {d["date"]: d for d in old.get("days", [])}
     changes = []
@@ -278,6 +292,7 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
             decisions[day_action.date.isoformat()] = {"action": day_action.action, "note": day_action.note}
     envelope = _reconciliation_analysis(repository, alias, today, frozen, initial_read_phase)
     source = (envelope.get("snapshot_payload") or {}).get("load_history") or {}
+    payload["outcomes"] = reconcile(old["plan"], source, today, decisions, old.get("outcomes", []))
     payload.update(evaluated_on=today.isoformat(), processed_input_fingerprint=fingerprint)
     if today > date.fromisoformat(profile["program_end"]):
         from .training_plan_engine import planning_source_details
@@ -285,8 +300,7 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
         prepared = planning_source_details(initial_read_phase, alias, profile,
             initial_read_phase.athlete_settings(alias), envelope, today)
         payload["q_execution"] = execution_report(prepared.source, today, [payload["plan"]], old.get("q_execution"))
-        payload["outcomes"] = reconcile(old["plan"], source, today, decisions, old.get("outcomes", []),
-                                         q_execution=payload["q_execution"])
+        _attach_execution_q(payload["outcomes"], payload["q_execution"])
         return store.save(alias, payload, record["revision"], actor, "COMPLETE", profile_revision, checkpoint,
                           automatic=automatic, include_payload=include_saved_payload)
     start = max(today, date.fromisoformat(old["origin"]["start_date"]), date.fromisoformat(profile["program_start"]))
@@ -356,8 +370,7 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
         operation = "REVIEW"
     payload["q_execution"] = deepcopy(plan.get("q_execution")) or execution_report(source, today,
         [payload["plan"], payload.get("proposal")], old.get("q_execution"))
-    payload["outcomes"] = reconcile(old["plan"], source, today, decisions, old.get("outcomes", []),
-                                     q_execution=payload["q_execution"])
+    _attach_execution_q(payload["outcomes"], payload["q_execution"])
     # Compare the complete immutable envelope, including evidence and reasons.
     # Workout-only signatures and Python equality (True == 1) are insufficient.
     # The database pins this exact old revision and repeats publication guards;
