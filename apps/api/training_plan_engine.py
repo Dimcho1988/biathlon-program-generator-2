@@ -7,7 +7,6 @@ historical C40 and the technical denominator used by canonical E spillover.
 from __future__ import annotations
 
 from copy import deepcopy
-from functools import lru_cache
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
@@ -67,6 +66,16 @@ def _round(value):
     return round(float(value), 3)
 
 
+def _metadata_sessions(day):
+    sessions = list(planning_schedule.day_sessions(day))
+    legacy = day.get("session")
+    # JSON storage separates the legacy alias from sessions[0]. Compact both
+    # local copies without assuming that different aliases are equal.
+    if isinstance(legacy, dict) and all(legacy is not session for session in sessions):
+        sessions.append(legacy)
+    return sessions
+
+
 def _compact_duplicate_dosing_cards(days):
     """Keep identical native dosing settings once in the frozen session.
 
@@ -76,12 +85,42 @@ def _compact_duplicate_dosing_cards(days):
     for day in days:
         if day.get("locked"):
             continue
-        for session in planning_schedule.day_sessions(day):
+        for session in _metadata_sessions(day):
             card = session.get("method_library") or {}
             dosing = (session.get("dose_evidence") or {}).get("dosing")
             if card.get("registry_kind") == "COACH_PROFILE" and dosing and card.get("dosing") == dosing:
                 card.pop("dosing")
                 card["dosing_ref"] = "dose_evidence.dosing"
+
+
+def _compact_parent_method_cards(days):
+    """Each identical parent card already lives in the frozen combined method."""
+    for day in days:
+        if day.get("locked"):
+            continue
+        for session in _metadata_sessions(day):
+            components = (session.get("method_library") or {}).get("components") or []
+            references = {_hash(card): index for index, card in enumerate(components)
+                          if isinstance(card, dict)}
+            for block in session.get("blocks", []):
+                card = block.get("parent_method_card")
+                index = references.get(_hash(card)) if isinstance(card, dict) else None
+                if index is not None:
+                    block.pop("parent_method_card")
+                    block["parent_method_card_ref"] = f"method_library.components[{index}]"
+
+
+def compact_plan_metadata(plan):
+    """Fold equal local evidence in visible and provisional days, losslessly.
+
+    Also apply this after a durable cache hit: an older completed calculation
+    has the same prescription but can still carry repeated JSON metadata.
+    Locked approved days and unequal source cards remain intact.
+    """
+    days = [*plan.get("days", []), *plan.get("lookahead_days", [])]
+    _compact_duplicate_dosing_cards(days)
+    _compact_parent_method_cards(days)
+    _compact_goal_cycles(days)
 
 
 def _compact_goal_cycles(days):
@@ -4170,8 +4209,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     parameters["speed_equivalence_comparison_version"] = plan_speed_comparison.VERSION
     speed_comparison = plan_speed_comparison.build(result_days, component_contexts,
         source=measured_source, start_date=start_date.isoformat(), end_date=end_date.isoformat())
-    _compact_duplicate_dosing_cards(result_days)
-    _compact_goal_cycles(result_days)
+    compact_plan_metadata({"days": result_days, "lookahead_days": lookahead_days})
     # Common speed-equivalence anchors/settings are retained once in the
     # per-sport comparison header. Runtime contexts stay complete and immutable.
     parameters["canonical_effective_load"]["contexts_by_sport"] = {
