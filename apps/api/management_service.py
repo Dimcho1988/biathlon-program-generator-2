@@ -355,6 +355,7 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
             return improve(baseline, normalized, replay, seconds_remaining=150.,
                            estimated_trial_seconds=elapsed)
     payload = compute(live_repository, alias, computation_key, calculate)
+    training_plan_engine.compact_plan_metadata(payload)
     # Start a new read phase after calculation. Its single settings-row read is
     # fresh; no value captured by the calculation's ReadSession is reused.
     with timed_stage("input_after"):

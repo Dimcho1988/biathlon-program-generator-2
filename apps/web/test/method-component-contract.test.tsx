@@ -38,6 +38,19 @@ it("retains every combined parent anchor and never renames native work as MAS", 
   expect(html).not.toContain("MAS");
 });
 
+it("renders the same complete frozen guidance when repeated parent cards use local references", () => {
+  const parent = { id: "parent", title: "Parent method", guidance: { execution: "Complete frozen instructions", recovery: "Complete frozen recovery" } };
+  const raw = { ...structuredClone(session), method_library: { id: "COMBO-LOCAL", components: [parent] },
+    blocks: [{ parent_method_card: parent }, { parent_method_card: parent }] } as unknown as DraftSession;
+  const compact = structuredClone(raw);
+  compact.blocks = compact.blocks.map(block => {
+    const rest = { ...block };
+    delete rest.parent_method_card;
+    return { ...rest, parent_method_card_ref: "method_library.components[0]" };
+  });
+  expect(renderToStaticMarkup(<SessionMethodGuidance session={compact}/>)).toBe(renderToStaticMarkup(<SessionMethodGuidance session={raw}/>));
+});
+
 it("does not clamp an overshoot to 100% or transfer it to an underfilled component", () => {
   const plan = { start_date: "2026-10-26", end_date: "2026-11-01", days: [], parameters: {}, summary: {}, allocation: {
     components: {
