@@ -1,44 +1,49 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useState } from "react";
 import { durationHms } from "../lib/duration-format";
-import { planQComparison } from "../lib/plan-q-comparison";
-import { componentLabel } from "../lib/training-visuals";
+import { planQComparison, qPercent, type QComparisonOptions } from "../lib/plan-q-comparison";
+import { componentLabel, componentColor } from "../lib/training-visuals";
 import type { PlanningDraft } from "../lib/training-management";
 
 const day = (value: string) => `${value.slice(8, 10)}.${value.slice(5, 7)}.${value.slice(0, 4)}`;
 const time = (value: number | null) => value === null ? "Няма съпоставима стойност" : durationHms(value);
-const COLORS = ["#718399", "#c58a2b", "#24745f"];
+const percent = (value: number | null) => value === null ? "—" : `${value.toFixed(1)}%`;
 
-export function PlanQComparison({ plan, planKind = "DRAFT" }: { plan: PlanningDraft; planKind?: "DRAFT" | "APPROVED" }) {
-  const periods = planQComparison(plan);
-  const [selected, setSelected] = useState(0);
-  const id = useId();
+export function PlanQComparison({plan, planKind = "DRAFT", ...options}: {plan: PlanningDraft} & QComparisonOptions) {
+  const periods = planQComparison(plan, {...options, planKind});
+  const [selected, setSelected] = useState<string | null>(null);
   if (!periods.length) return null;
-  const period = periods[Math.min(selected, periods.length - 1)];
-  const keys = ["target", "planned", "actual"] as const;
-  const labels = ["Цел Q", planKind === "APPROVED" ? "Утвърдено Q" : "Предложено Q", "Изпълнено Q"];
-  const max = Math.max(1, ...period.rows.flatMap(r => keys.map(k => r[k] ?? 0))) * 1.12;
-  const top = 18, bottom = 214, left = 78, group = 101, bar = 21;
-  const y = (value: number) => bottom - (bottom - top) * value / max;
+  const today = options.today ?? periods[0].actualAsOf;
+  const current = periods.find(p => p.start <= today && today <= p.end) ?? periods.find(p => p.start > today) ?? periods[periods.length-1];
+  const period = periods.find(p => p.start === selected) ?? current;
+  const strength = plan.allocation?.strength_feasibility?.segments?.find(s => s.window_start === period.start && s.window_end === period.end);
   return <section className="plan-q-comparison" aria-label="Цел, програма и изпълнение Q">
-    <h3>Цел → програма → изпълнение Q</h3>
-    {!plan.allocation && <p className="management-notice">Тази версия няма завършен компонентен разчет. Показан е известният Q от съставените сесии; целта и изпълнението остават без съпоставима стойност.</p>}
-    {periods.length > 1 && <label>Микроцикъл<select value={Math.min(selected, periods.length - 1)} onChange={e => setSelected(Number(e.target.value))}>{periods.map((p, i) => <option key={`${p.start}-${p.end}`} value={i}>{day(p.start)} – {day(p.end)}</option>)}</select></label>}
-    <p>{day(period.start)} – {day(period.end)} · {planKind === "APPROVED" ? "утвърдена програма" : "предложение"}. Q е приравнен обем, показан в ч:мм:сс.</p>
-    <div className="management-zone-legend">{labels.map((label, i) => <span key={label}><i style={{ background: COLORS[i] }} aria-hidden="true"/>{label}</span>)}</div>
-    <div className="chart-frame" style={{overflowX: "auto"}}><svg viewBox="0 0 710 255" role="img" aria-labelledby={`${id}-title ${id}-description`} style={{ width: "100%", minWidth: 620 }}>
-      <title id={`${id}-title`}>Цел, съставена програма и изпълнено Q по компоненти</title>
-      <desc id={`${id}-description`}>Три отделни колони за всеки компонент. Точните стойности и липсващите оценки са в таблицата.</desc>
-      {[0, 1, 2, 3, 4].map(i => <g key={i}><line x1={left - 10} x2="697" y1={y(max * i / 4)} y2={y(max * i / 4)} stroke="var(--border)"/><text x={left - 16} y={y(max * i / 4) + 4} textAnchor="end" fontSize="11" fill="currentColor">{durationHms(max * i / 4)}</text></g>)}
-      {period.rows.map((row, i) => <g key={row.zone}>{keys.map((key, j) => {
-        const value = row[key];
-        return value === null ? null : <rect key={key} x={left + i * group + j * (bar + 3)} y={y(value)} width={bar} height={bottom - y(value)} fill={COLORS[j]} rx="2"><title>{`${componentLabel(row.zone)} · ${labels[j]}: ${time(value)}`}</title></rect>;
-      })}<text x={left + i * group + 35} y="239" textAnchor="middle" fontSize="13" fill="currentColor">{componentLabel(row.zone)}</text></g>)}
-    </svg></div>
-    <div className="management-table-wrap"><table><caption>Съпоставка Q за {day(period.start)} – {day(period.end)} · ч:мм:сс</caption><thead><tr><th>Компонент</th>{labels.map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{period.rows.map(row => <tr key={row.zone}><th>{componentLabel(row.zone)}</th>{keys.map(key => <td key={key}>{time(row[key])}</td>)}</tr>)}</tbody></table></div>
-    <p className="management-muted">Стойностите са от входните данни при съставянето на тази версия{plan.generated_at ? ` (${day(plan.generated_at.slice(0, 10))})` : ""}. Новото предложение след обновяване на историята има собствен отчет. Изпълненото и съставените сесии се показват отделно.</p>
-    {period.includesForecast && <p className="management-muted">Включено е прогнозното продължение след {day(plan.end_date)}, за да се сравни целият микроцикъл.</p>}
-    {period.rows.some(r => r.target === null) && <p className="management-muted">Липсващата Q цел не се заменя с нула или с товар E. Целите с разлив E остават в отделната таблица.</p>}
+    <h3>Цел → планирано → изпълнено</h3>
+    {periods.length > 1 && <label>Микроцикъл<select value={period.start} onChange={e => setSelected(e.target.value)}>{periods.map(p => <option key={p.start} value={p.start}>{day(p.start)} – {day(p.end)}</option>)}</select></label>}
+    <p><strong>{day(period.start)} – {day(period.end)}</strong> · {planKind === "APPROVED" ? "утвърдена програма" : "предложение"}.</p>
+    <p>Целта е Q от дългосрочната програма за целия избран микроцикъл. Всички стойности са приравнен обем Q в ч:мм:сс; процентите са спрямо тази цел.</p>
+    <div className="management-table-wrap"><table><caption>Q по компоненти · {day(period.start)} – {day(period.end)}</caption>
+      <thead><tr><th>Компонент</th><th>Цел по модела</th><th>Планирано · {planKind === "APPROVED" ? "утвърдено" : "предложение"}</th><th>Изпълнено</th></tr></thead>
+      <tbody>{period.rows.map(row => <tr key={row.zone}>
+        <th><span className="management-zone-legend"><i style={{background: componentColor(row.zone)}} aria-hidden="true"/>{componentLabel(row.zone)}</span></th>
+        <td>{time(row.target)}<small>{row.target !== null && row.target > 0 ? "100%" : row.target === 0 ? "Няма зададен обем" : "Целта по Q е неизвестна"}</small></td>
+        <td>{time(row.planned)}<small>{percent(qPercent(row.planned, row.target))} от целта</small></td>
+        <td>{time(row.actual)}<small>{percent(qPercent(row.actual, row.target))} от целта</small>{row.actual !== null && row.actualEstimated !== null && row.actualEstimated > 0 && <small>От него оценено: {time(row.actualEstimated)}</small>}</td>
+      </tr>)}</tbody></table></div>
+    <p className="management-muted">График: {day(plan.start_date)} – {day(plan.end_date)}. {period.liveExecution ? "Изпълнението е обновено от реалните записи" : "Архивна оценка на изпълнението при съставяне на плана"} към {day(period.actualAsOf)}. Текущият ден може да е непълен.</p>
+    {period.rows.some(r => r.actualEstimated !== null && r.actualEstimated > 0) && <p className="management-muted">Оцененото Q допълва участъци с липсващ сигнал в реално записани активности по същия метод като модела за планиране. То е част от показаното изпълнение, но не е измерено разпределение по зони.</p>}
+    <p className="management-muted">„Планирано“ съдържа задачите от показания график. При програма, съставена след реални тренировки, това може да са само оставащите задачи. Изпълненото се отчита отделно.</p>
+    <p className="management-muted">Целим 100%, с допустими 90–110% за всеки компонент в разпределението на целия микроцикъл. Процентът на изпълнение показва напредък; ниска стойност в незавършен цикъл сама по себе си не означава изоставане.</p>
+    {strength?.quota_bound_below_target && <p className="management-notice">При зададения лимит от {strength.session_quota} силови сесии изчислената горна граница е {percent(qPercent(strength.attainable_upper_bound_q, strength.desired_q))} от силовата цел. Ограничението и методните дози са показани в подробния разчет.</p>}
+    {period.includesForecast && <details><summary>Прогнозно продължение извън показания график</summary>
+      <p>Тези предварителни сесии след {day(plan.end_date)} са извън колоната „Планирано“ и се преразглеждат при следващото обновяване.</p>
+      <table><thead><tr><th>Компонент</th><th>Прогнозно Q</th><th>От целта</th></tr></thead><tbody>{period.rows.map(r => <tr key={r.zone}><th>{componentLabel(r.zone)}</th><td>{time(r.forecast)}</td><td>{percent(qPercent(r.forecast, r.target))}</td></tr>)}</tbody></table>
+    </details>}
+    {planKind === "APPROVED" && <details><summary>Спазване на плана до завършилите дни</summary>
+      <p>Сравняват се само отчетените завършили дни с предписания за същите дати. Текущият ден и бъдещите задачи не се оценяват като пропуснати. Съпоставянето е по календарен ден, без доказване на изпълнение на конкретни блокове.</p>
+      <table><thead><tr><th>Компонент</th><th>Планирано до момента</th><th>Изпълнено за същите дни</th><th>Спрямо планираното</th></tr></thead><tbody>{period.rows.map(r => <tr key={r.zone}><th>{componentLabel(r.zone)}</th><td>{time(r.plannedCompleted)}</td><td>{time(r.actualCompleted)}</td><td>{percent(qPercent(r.actualCompleted, r.plannedCompleted))}</td></tr>)}</tbody></table>
+    </details>}
+    {period.rows.some(r => r.target === null || r.planned === null || r.actual === null) && <p className="management-muted">Липсващите Q стойности остават неизвестни. Продължителността и товарът E не ги заместват; старите предписания без запазено Q не се преизчисляват със задна дата.</p>}
   </section>;
 }

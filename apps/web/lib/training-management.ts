@@ -246,6 +246,7 @@ export function parseManagementOutlook(value: unknown): ManagementOutlook | null
   return p as unknown as ManagementOutlook;
 }
 export interface PlanningDraft extends PlanProjection {
+  q_execution?: QExecution;
   allocation?: AllocationReport;
   schema_version: "planning-draft-v1";
   status: "DRAFT" | "LIMITED_DRAFT" | "BLOCKED";
@@ -439,6 +440,7 @@ export function parseDraftRecord(value: unknown): DraftRecord {
   if (!isRecord(value) || typeof value.entry_key !== "string" || !integer(value.revision, 1, Number.MAX_SAFE_INTEGER) || !isRecord(value.payload)) throw new Error("Невалидна версия на програмата.");
   if (value.stale !== undefined && value.stale !== null && typeof value.stale !== "boolean") throw new Error("Невалидна актуалност на програмата.");
   const draft = value.payload;
+  validateQExecution(draft.q_execution);
   if (draft.schema_version !== "planning-draft-v1" || !["DRAFT", "LIMITED_DRAFT", "BLOCKED"].includes(String(draft.status))
     || !isCalendarDate(draft.start_date) || !isCalendarDate(draft.end_date) || draft.end_date < draft.start_date
     || typeof draft.engine_version !== "string" || !isRecord(draft.source)
@@ -525,10 +527,32 @@ export const CAPACITY_LABELS: Record<string, string> = {
 };
 
 export interface PlanChange { date: string; before: string | null; after: string | null; before_minutes: number; after_minutes: number; reason: string }
-export interface PlanOutcome extends PlanComparisonOutcome { planned_load?: Partial<Record<Component, number>> | null; actual_load?: Partial<Record<Component, number>> | null; status: string; planned_title: string | null; planned_minutes: number }
+export interface QExecution {
+  schema_version: "direct-q-execution-v1"; as_of: string; source_period_end?: string | null;
+  days: Array<{date: string; q: Partial<Record<Component, number | null>>;
+    estimated_q?: Partial<Record<Component, number | null>>; estimated_activity_count?: number;
+    day_complete: boolean; activity_count: number}>;
+}
+function validateQExecution(value: unknown) {
+  if (value === undefined || value === null) return;
+  if (!isRecord(value) || value.schema_version !== "direct-q-execution-v1" || !isCalendarDate(value.as_of)
+    || !Array.isArray(value.days) || value.days.length > 366
+    || new Set(value.days.map(d => isRecord(d) ? d.date : null)).size !== value.days.length
+    || value.days.some(d => !isRecord(d) || !isCalendarDate(d.date) || d.date > String(value.as_of)
+      || typeof d.day_complete !== "boolean" || d.day_complete !== (d.date < String(value.as_of))
+      || !integer(d.activity_count, 0, Number.MAX_SAFE_INTEGER) || !isRecord(d.q)
+      || Object.values(d.q).some(q => q !== null && (typeof q !== "number" || !Number.isFinite(q) || q < 0))))
+    throw new Error("Невалиден отчет за изпълнено Q.");
+}
+export interface PlanOutcome extends PlanComparisonOutcome {
+  planned_q?: Partial<Record<Component, number | null>> | null; actual_q?: Partial<Record<Component, number | null>> | null;
+  day_complete?: boolean;
+  planned_load?: Partial<Record<Component, number>> | null; actual_load?: Partial<Record<Component, number>> | null; status: string; planned_title: string | null; planned_minutes: number;
+}
 export interface ActivePlanRecord {
   revision: number; stale: boolean; actionable: boolean; stale_reason?: string | null;
   payload: { schema_version: "active-plan-v2"; status: "ACTIVE" | "PAUSED" | "REVIEW_REQUIRED" | "COMPLETED";
+    q_execution?: QExecution | null;
     week_window?: { start_date: string; end_date: string };
     proposal_mode?: "AUTO" | "REVIEW";
     proposal_week_window?: { start_date: string; end_date: string };
@@ -555,6 +579,7 @@ export function parseActivePlanResponse(value: unknown): ActivePlanResponse {
   const row = value.active;
   if (!isRecord(row) || !integer(row.revision, 1, Number.MAX_SAFE_INTEGER) || typeof row.stale !== "boolean" || typeof row.actionable !== "boolean" || !isRecord(row.payload)) throw new Error("Невалидна активна програма.");
   const p = row.payload;
+  validateQExecution(p.q_execution);
   if (p.schema_version !== "active-plan-v2" || !["ACTIVE", "PAUSED", "REVIEW_REQUIRED", "COMPLETED"].includes(String(p.status))
     || !["AUTO", "REVIEW"].includes(String(p.mode)) || typeof p.reason !== "string" || !Array.isArray(p.changes)
     || !Array.isArray(p.outcomes) || !isRecord(p.decisions)) throw new Error("Невалидно състояние на програмата.");

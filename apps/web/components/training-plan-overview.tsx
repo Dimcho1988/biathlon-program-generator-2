@@ -38,6 +38,7 @@ export function TrainingPlanOverview({ plan, outcomes, today, stale, currentProf
   const [metric, setMetric] = useState<"volume" | "index">("volume");
   const weeks = outlookWeeks(plan);
   const current = weeks[Math.min(selected, weeks.length - 1)];
+  const currentDays = current ? Math.round((Date.parse(current.end_date) - Date.parse(current.start_date)) / 86400000) + 1 : 0;
   const shockSchedule = Array.isArray(weeks[0]?.cycle?.shock_schedule) ? weeks[0].cycle.shock_schedule.filter(isRecord) : [];
   const periodization = isRecord(plan?.periodization) ? plan.periodization : {};
   const phases = Array.isArray(periodization.phases) ? periodization.phases.filter(isRecord) : [];
@@ -68,6 +69,7 @@ export function TrainingPlanOverview({ plan, outcomes, today, stale, currentProf
       </>}
     </section>
     <section className="management-panel"><h2>Динамика по зони</h2><p className="management-muted">Целеви товар според периода, акцентите и разтоварването. Дневната доза се уточнява отделно според готовността.</p>
+      {currentDays > 0 && currentDays < 7 && <p className="management-notice">Показаният период е непълен: {currentDays} дни. Приравненият обем тук се отнася само за тези дати. В седмичния отчет целта е за целия избран микроцикъл, включително вече изминалите му дни.</p>}
       {isRecord(plan?.long_term) && plan.long_term.limited === true && <p className="management-notice">Данните за дневната готовност са непълни или неактуални. Показани са зададените цели; допустимите тренировки се проверяват отделно след обновяване на данните.</p>}
       {weeks.length === 0 ? <p>Няма бъдещи седмици за показване. Провери периода на подготовката в профила.</p> : <>
         <div className="management-view-switch" role="group" aria-label="Показател за динамиката">
