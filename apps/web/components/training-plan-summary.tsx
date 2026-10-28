@@ -7,6 +7,7 @@ import { daySessions, rejectedMethodIds, COMPONENTS, type PlanningDraft, type Vo
 import { HistoryVolume } from "./planning-controls-editor";
 import { PlanningEvidenceNotice, planningHistoryEstimated } from "./planning-evidence-notice";
 import { PlanQComparison } from "./plan-q-comparison";
+import type { QComparisonOptions } from "../lib/plan-q-comparison";
 
 type AllocationRow = Record<string, unknown> & { zone: string };
 const allocationRows = (components: unknown): AllocationRow[] => !isRecord(components) ? [] : COMPONENTS.flatMap(zone => {
@@ -24,7 +25,7 @@ function AllocationCoverage({ components, caption, estimatedHistory, segment = f
   if (!rows.length) return null;
   return <div className="management-table-wrap"><table>
     <caption>{caption} · ч:мм:сс</caption>
-    <thead><tr><th>Компонент / величина</th><th>Желана цел</th><th>{whole ? "Цел за микроцикъла" : segment ? "Цел за отрязъка" : "Съгласувана цел"}</th><th>{estimatedHistory ? "Изпълнено · с оценен товар" : "Изпълнено"}</th><th>{whole ? "План и прогнозно продължение" : "Планирано"}</th><th>Остатък</th><th>Покритие</th>{segment && <th>Оставащ товар с разлив</th>}</tr></thead>
+    <thead><tr><th>Компонент / величина</th><th>Желана цел</th><th>{whole ? "Цел за микроцикъла" : segment ? "Цел за отрязъка" : "Съгласувана цел"}</th><th>{estimatedHistory ? "Изпълнено · с оценен товар" : "Изпълнено"}</th><th>{whole ? "План и прогнозно продължение" : "Планирано"}</th><th>Неразпределено до целта</th><th>Прогнозно покритие</th>{segment && <th>Оставащ товар с разлив</th>}</tr></thead>
     <tbody>{rows.map(row => {
       const target = row.target ?? row.target_effective;
       const actual = "actual" in row ? row.actual : row.actual_effective;
@@ -35,7 +36,7 @@ function AllocationCoverage({ components, caption, estimatedHistory, segment = f
   </table></div>;
 }
 
-export function TrainingPlanSummary({plan, planKind = "DRAFT"}:{plan:PlanningDraft; planKind?: "DRAFT" | "APPROVED"}) {
+export function TrainingPlanSummary({plan, planKind = "DRAFT", ...reportOptions}:{plan:PlanningDraft} & QComparisonOptions) {
   const p=isRecord(plan.parameters)?plan.parameters:{};
   const summary=isRecord(plan.summary)?plan.summary:{};
   const volumes=Array.isArray(summary.volume_by_microcycle)?summary.volume_by_microcycle.filter(isRecord):[];
@@ -65,10 +66,14 @@ export function TrainingPlanSummary({plan, planKind = "DRAFT"}:{plan:PlanningDra
   const limitLabels:Record<string,string>={LONG_TERM_QUALITY_PREPARATION:"Запазен товар за следващите основни задачи",CLOSEST_WHOLE_Q_DOSE:"Цяла методна доза най-близо до целта по Q",COMPLETE_DOSE_ALLOCATION:"Разпределение в цели сесии над минималната доза",ROLLING_Q_AND_7_40_BUDGET:"Оставащият обем и товар от дългосрочната цел",FUTURE_QUALITY_RESERVATION_WORK_CAP: "Резерв за бъдеща основна или силова тренировка", RECOVERY_RESERVATION_WORK_CAP:"Готовността за предстоящата ключова тренировка или старт",METHOD_CAPACITY_FRACTION:"Делът от индивидуалния капацитет за метода",METHOD_WORK_CAP:"Максималната работа в методния профил",ACTUAL_SPORT_SESSION_EXPOSURE:"Досегашната продължителност на сесиите с конкретното средство",COMPONENT_SLOT_ALLOCATION:"Разпределението на товара между оставащите сесии",ROLLING_7_40_COMPONENT_BUDGET:"Оставащият товар за текущия микроцикъл",DAILY_AVAILABLE_WORK:"Свободното време за деня",TECHNICAL_SESSION_CEILING:"Максималната продължителност за деня",TAPER_DAILY_WORK_CAP:"Разтоварването преди старт",LOW_ABSOLUTE_RECOVERY_CAP:"Лимитът за възстановителна работа",REMAINING_WEEKLY_WORK:"Седмичният лимит за време",RACE_DURATION_WORK_CAP:"Спецификата на състезателната дисциплина"};
   const reasons=new Map<string,number>();
   for(const d of plan.days.filter(d=>!d.session)) for(const r of d.rejected_alternatives) reasons.set(r.reason,(reasons.get(r.reason)??0)+rejectedMethodIds(r).length);
-  return <section className="management-panel"><h2>Обем и основа на програмата</h2>
+  return <section className="management-panel"><h2>Отчет по компоненти</h2>
+    <PlanQComparison plan={plan} planKind={planKind} {...reportOptions}/>
+    {manual.length>0&&<aside className="management-notice" role="status"><strong>Програмата използва ръчни цели:</strong> {manual.map(([z,v])=>`${z}: ${duration(v)} приравнено време / 7 дни`).join("; ")}.<p>Те заместват автоматичните цели от историята. Нисък бюджет за Z1 може да блокира и по-високите аеробни зони. Ако целта е въведена по погрешка, избери „Използвай автоматичните цели“ в профила и запази.</p><Link href="/planning">Провери ръчните цели →</Link></aside>}
+    <details><summary>Основа на програмата, ограничения и разчет при съставяне</summary>
+    <p className="management-muted">Следващите оценки са запазени при съставянето на тази версия. „Прогнозно покритие“ включва тогавашното изпълнение, предложенията и прогнозното продължение; актуалното изпълнение е в основната таблица.</p>
     <PlanningEvidenceNotice plan={plan}/>
     {recoveryShown&&recovery?.usable===true&&<p className="management-notice">Възстановителен микроцикъл: началната цел е 70% от приравнения обем и товара за {dateLabel(recovery.start_date)} – {dateLabel(recovery.end_date)} — намаление с 30%, приложено веднъж. Готовността, целите по зони и целите повторения могат да намалят конкретните дози допълнително. Часовниковата продължителност зависи и от избраната интензивност.</p>}
-    {manual.length>0&&<aside className="management-notice" role="status"><strong>Програмата използва ръчни цели:</strong> {manual.map(([z,v])=>`${z}: ${duration(v)} приравнено време / 7 дни`).join("; ")}.<p>Те заместват автоматичните цели от историята. Нисък бюджет за Z1 може да блокира и по-високите аеробни зони. Ако целта е въведена по погрешка, избери „Използвай автоматичните цели“ в профила и запази.</p><Link href="/planning">Провери ръчните цели →</Link></aside>}
+
     <div className="management-metrics">
     <div><small>Средна продължителност от историята</small><strong>{duration(p.historical_training_weekly_minutes??p.historical_selected_weekly_minutes??p.baseline_weekly_minutes)}</strong><span>време за тренировки за 7 дни</span></div>
     <TimeAvailability context={p}/>
@@ -77,7 +82,6 @@ export function TrainingPlanSummary({plan, planKind = "DRAFT"}:{plan:PlanningDra
     {typeof summary.total_minutes==="number"&&<div><small>Общо за показаните дати</small><strong>{duration(summary.total_minutes)}</strong><span>{duration(summary.actual_minutes)} изпълнено + {duration(summary.planned_minutes)} предложено</span></div>}
     {volumes.map(volume=><div key={String(volume.start_date)}><small>Изпълнено + предложено · {dateLabel(volume.start_date)} – {dateLabel(volume.end_date)}</small><strong>{duration(volume.total_minutes)}</strong><span>{duration(volume.actual_minutes)} изпълнено + {duration(volume.planned_minutes)} предложено{volume.complete_microcycle!==true&&` · до ${dateLabel(volume.through_date)}, непълен микроцикъл`}</span></div>)}
     </div><TimeLimitNotice context={p}/>{typeof p.available_weekly_minutes === "number" && typeof p.historical_training_weekly_minutes === "number" && Number(p.available_weekly_minutes) < p.historical_training_weekly_minutes && <p className="management-notice">Свободното време в профила е под историческия обем и ограничава седмицата. <Link href="/planning">Провери дните и минутите →</Link></p>}<p className="management-muted">{sources.includes("BLENDED_DOSING_CURVE")?"Дозировката използва общата крива: 30% от индекса и 70% от максималните тестове. ":""}{sources.includes("SPEED_DURATION")?"Използвана е индивидуалната крива скорост–време. ":""}{sources.includes("SPEED_DURATION_PRIOR")?"Използвана е индивидуално мащабирана крива с експертна форма. ":""}{sources.some(source => ["EXPERT_CONTINUOUS_TREF", "EXPERT_CONTINUOUS_TMAX", "EXPERT_TMAX"].includes(source))?"За част от дозите се използва експертен Tmax — виж причината в конкретната тренировка. ":""}Наличието на модел не означава, че всяка негова оценка е достатъчно подкрепена за дозиране.</p>
-    <PlanQComparison plan={plan} planKind={planKind}/>
     {allocation&&<>
       {shortfall.length>0&&<aside className="management-notice" role="status"><strong>{componentBands?"Компоненти извън допустимите граници":"Остава непланиран товар"}: {shortfall.join(", ")}.</strong> {componentBands?"Провери недостига, превишението и известността на изпълнението във всеки микроцикъл.":whole?"Целите за целите микроцикли не са покрити изцяло.":"Целта за показаните дати не е покрита изцяло."} Остатъкът остава видим за преглед на ограниченията и разпределението.</aside>}
       {allocation.acceptance && <p>Целим 100% за всеки компонент във всеки микроцикъл. Допустимото покритие е 90–110%; излишъкът в една зона не покрива недостига в друга. Дозата, Q/E и Recovery запазват отделните си ограничения.</p>}
@@ -103,5 +107,6 @@ export function TrainingPlanSummary({plan, planKind = "DRAFT"}:{plan:PlanningDra
     </>}
     <details><summary>Кои качества тренираме тази седмица?</summary><p>Показана е основната работа. Загрявката, почивките и разливът на товара не се броят като отделна развиваща тренировка.</p><div className="management-zone-legend">{COMPONENTS.map(z=>{const blocks=sessions.flatMap(s=>s.blocks).filter(b=>b.kind==="WORK"&&b.zone===z);const minutes=blocks.reduce((sum,b)=>sum+b.duration_min,0);return <span key={z}><i style={{background:componentColor(z)}} aria-hidden="true"/>{componentLabel(z)}: <strong>{minutes>0?duration(minutes):"без основна работа"}</strong></span>;})}</div><p>Акцентите получават приоритет; останалите качества се поддържат според нуждата и готовността. Не всяка зона изисква отделна тежка тренировка всяка седмица.</p></details>
     <details><summary>Защо обемът е такъв?</summary><HistoryVolume history={v} selected={sports}/><p>Дългосрочната цел направлява плана. Методът, Tmax, времето и прогнозното възстановяване определят конкретната доза. Общият товар включва загрявката, почивките и разлива; от него се изчисляват 7/40 и Recovery. Непокритият обем остава видим за преглед.</p>{reasons.size>0&&<ul>{[...reasons].sort((a,b)=>b[1]-a[1]).slice(0,5).map(([reason])=><li key={reason}>{reason}</li>)}</ul>}<Link href="/planning">Промени дни, средства, методи и акценти в профила →</Link></details>
+    </details>
   </section>;
 }

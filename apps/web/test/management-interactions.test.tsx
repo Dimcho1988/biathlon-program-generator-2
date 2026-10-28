@@ -6,6 +6,7 @@ import { ManagementProfileEditor } from "../components/management-profile-editor
 import { TrainingManagement } from "../components/training-management";
 import { ActiveTrainingPlan } from "../components/active-training-plan";
 import { PlanningProfileForm } from "../components/planning-profile-form";
+import { TrainingPlanReport } from "../components/training-plan-report";
 import { TrainingPlanSummary } from "../components/training-plan-summary";
 import { TimeAvailability, TimeLimitNotice } from "../components/planning-time-limit";
 import { RunningSpeedUnitControl, setRunningSpeedUnit } from "../components/running-speed-unit";
@@ -845,4 +846,22 @@ it("distinguishes published adaptive corrections from pending proposals and reta
   expect(container.querySelector('[aria-label="Предупреждения и условия"]')?.textContent).toContain("Историята е непълна.");
   expect(button("Прегледай")).toBeUndefined();
   expect(button("Утвърди предложението")).toBeUndefined();
+});
+
+
+it("switches the Q report between approved and proposed prescriptions without approving a plan", async () => {
+  const approved = structuredClone(draft.payload);
+  const proposed = structuredClone(draft.payload);
+  proposed.start_date = "2026-09-23";
+  const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
+  await mount(<TrainingPlanReport plan={approved} proposal={proposed} planKind="APPROVED" today="2026-09-22"/>);
+  const mainHeadings = () => container.querySelector(".plan-q-comparison table thead")!.textContent;
+  expect(mainHeadings()).toContain("Планирано · утвърдено");
+  await click(button("Ново предложение"));
+  expect(mainHeadings()).toContain("Планирано · предложение");
+  expect(container.textContent).toContain("То очаква утвърждаване");
+  await click(button("Утвърдена програма"));
+  expect(mainHeadings()).toContain("Планирано · утвърдено");
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(container.querySelector(".plan-q-comparison")!.closest("details")).toBeNull();
 });

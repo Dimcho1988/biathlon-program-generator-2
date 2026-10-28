@@ -19,7 +19,7 @@ import pandas as pd
 
 from biathlon import hr_speed, recovery_v2, speed_duration, training_targets, planning_controls, planning_history, planning_schedule, planning_allocation, load_progression, mesocycle_focus, training_return
 from biathlon.constants import COMPONENTS, DEFAULT_PARAMETERS, fresh_parameters
-from biathlon import method_dosing, planning_continuity, planning_envelope
+from biathlon import method_dosing, planning_continuity, planning_envelope, planning_q
 from biathlon.method_dosing import continuous_building_fraction, continuous_maintenance_fraction, recovery_factor, threshold_allowed
 from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION, DOWNWARD_FACTORS, effective_upper_bound
 from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, equivalence_slope
@@ -37,7 +37,7 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v61-q-prescription-search"
+VERSION = "training-management-v62-live-q-report"
 PARAMETER_VERSION = "management-parameters-v52"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
@@ -4231,6 +4231,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             "long_term": _long_term_outlook(profile, periodization, target_reference, accents, preferences, rows, today, limited, volume=volume, events=events, progression=progression, planning_evidence=planning_evidence),
             "parameters": parameters, "warnings": warnings, "catalog": method_registry.plan_catalog(profile),
             "allocation": allocation_report,
+            "q_execution": planning_q.execution_report(source, today, [{
+                "start_date": start_date.isoformat(), "end_date": end_date.isoformat(),
+                "allocation": allocation_report}], include_history=True),
             "history_comparison": volume_evidence["weeks"],
             "component_history": load_progression.history(measured_source, _daily_rows(measured_source, today), today),
             "summary": {"sessions": len(planned_sessions),

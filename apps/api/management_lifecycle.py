@@ -4,6 +4,7 @@ The daily worker and post-sync hook share this idempotent service. A paused plan
 cannot be restarted by a worker. Missing load coverage never means a rest day.
 """
 from biathlon.planning_schedule import day_sessions, day_totals, horizon
+from biathlon.planning_q import actual_day, prescribed_day, execution_report
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -115,19 +116,22 @@ def activate(repository, alias, body, actor, *, now=None, include_saved_payload=
                "origin": {"start_date": body.start_date.isoformat(), "draft_revision": body.draft_revision},
                "week_window": _window(plan), "week_policy": "fixed-or-adaptive-v1",
                "decisions": {}, "outcomes": [], "changes": [],
+               "q_execution": deepcopy(plan.get("q_execution")),
                "reason": "Седмицата е фиксирана. Изпълнението се отчита ежедневно; промени се прилагат след утвърждаване." if profile["adaptation_mode"] == "REVIEW" else
                          "Програмата е утвърдена. Следващите дни се адаптират автоматично."}
     return store.save(alias, payload, body.expected_revision, actor, "ACTIVATE", profile_revision, checkpoint,
                       include_payload=include_saved_payload)
 
 
-def reconcile(plan, source, today, decisions, previous_outcomes=()):
+def reconcile(plan, source, today, decisions, previous_outcomes=(), *, q_execution=None):
     """Calendar-day matching is transparent, not a claim of workout identity."""
     outcomes = {o["date"]: deepcopy(o) for o in previous_outcomes}
+    q_days = {r["date"]: r for r in (q_execution or {}).get("days", [])}
     daily = source.get("daily", [])
     planned_days = {o["date"]: {"date": o["date"], "session": {
         "title": o.get("planned_title"), "total_minutes": o.get("planned_minutes", 0),
-        "sport": o.get("planned_sport"), "canonical_effective_load": o.get("planned_load")} if o.get("planned_title") else None} for o in previous_outcomes}
+        "sport": o.get("planned_sport"), "canonical_effective_load": o.get("planned_load"),
+        "direct_equivalent_minutes": o.get("planned_q")} if o.get("planned_title") else None} for o in previous_outcomes}
     planned_days.update({d["date"]: d for d in plan.get("days", [])
                          if d.get("status") != "EXISTING_ACTIVITY" or d["date"] not in planned_days})
     for day in planned_days.values():
@@ -153,6 +157,9 @@ def reconcile(plan, source, today, decisions, previous_outcomes=()):
             "planned_minutes": session.get("total_minutes", 0.) if session else 0.,
             "actual_minutes": round(sum(float(a.get("duration_min") or 0.) for a in actual), 2) if covered or actual else None,
             "planned_load": session.get("canonical_effective_load") if session else None,
+            "planned_q": prescribed_day(day),
+            "actual_q": deepcopy(q_days[key]["q"]) if key in q_days else actual_day(source, key),
+            "actual_q_estimated": deepcopy(q_days.get(key, {}).get("estimated_q")),
             "actual_load": {z: round(sum(float(r["effective_load"]) for r in (daily if z != "STR" else (source.get("strength") or {}).get("daily", []))
                                          if r["date"] == key and (z == "STR" or r["zone"] == z)), 3)
                             for z in ("Z1", "Z2", "Z3", "Z4", "Z5", "STR")} if covered else None,
@@ -271,10 +278,15 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
             decisions[day_action.date.isoformat()] = {"action": day_action.action, "note": day_action.note}
     envelope = _reconciliation_analysis(repository, alias, today, frozen, initial_read_phase)
     source = (envelope.get("snapshot_payload") or {}).get("load_history") or {}
-    payload["outcomes"] = reconcile(old["plan"], source, today, decisions, old.get("outcomes", []))
     payload.update(evaluated_on=today.isoformat(), processed_input_fingerprint=fingerprint)
     if today > date.fromisoformat(profile["program_end"]):
+        from .training_plan_engine import planning_source_details
         payload.update(status="COMPLETED", proposal=None, changes=[], reason="Периодът на програмата е завършен. Историята е запазена.")
+        prepared = planning_source_details(initial_read_phase, alias, profile,
+            initial_read_phase.athlete_settings(alias), envelope, today)
+        payload["q_execution"] = execution_report(prepared.source, today, [payload["plan"]], old.get("q_execution"))
+        payload["outcomes"] = reconcile(old["plan"], source, today, decisions, old.get("outcomes", []),
+                                         q_execution=payload["q_execution"])
         return store.save(alias, payload, record["revision"], actor, "COMPLETE", profile_revision, checkpoint,
                           automatic=automatic, include_payload=include_saved_payload)
     start = max(today, date.fromisoformat(old["origin"]["start_date"]), date.fromisoformat(profile["program_start"]))
@@ -342,6 +354,10 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
                        "Предложената адаптация очаква утвърждаване." if _eligible(plan) else
                        "Липсват достатъчно актуални данни за следващата доза. Обновете активностите и прегледайте причините.")
         operation = "REVIEW"
+    payload["q_execution"] = deepcopy(plan.get("q_execution")) or execution_report(source, today,
+        [payload["plan"], payload.get("proposal")], old.get("q_execution"))
+    payload["outcomes"] = reconcile(old["plan"], source, today, decisions, old.get("outcomes", []),
+                                     q_execution=payload["q_execution"])
     # Compare the complete immutable envelope, including evidence and reasons.
     # Workout-only signatures and Python equality (True == 1) are insufficient.
     # The database pins this exact old revision and repeats publication guards;

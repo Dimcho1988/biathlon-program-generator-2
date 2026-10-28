@@ -96,7 +96,7 @@ export function PlanProposalReview({ record, canEdit, busy, symptomHold, onAppro
       <details className="management-detail" onToggle={event => setFullPlan(event.currentTarget.open)}>
         <summary>Всички дни и обобщение на предложението</summary>
         {fullPlan && <><p>Прогнозите за Recovery и бюджетите тук се отнасят до предложения вариант.</p>
-          <TrainingPlanSummary plan={proposal}/><TrainingPlanWeek days={proposal.days} today={today} renderDay={renderDay}/></>}
+          <TrainingPlanSummary plan={proposal} qExecution={p.q_execution} today={today}/><TrainingPlanWeek days={proposal.days} today={today} renderDay={renderDay}/></>}
       </details>
       <div className="management-proposal-decision">
         <p>С „Утвърди предложението“ прилагаш целия прегледан вариант за посочения период{proposalMode && proposalMode !== p.mode ? ", включително новия режим" : ""}.</p>
