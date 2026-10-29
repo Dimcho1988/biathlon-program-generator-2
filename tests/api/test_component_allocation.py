@@ -157,7 +157,8 @@ def test_lower_future_target_does_not_force_filling_available_sessions(monkeypat
     # minimum and may use the remaining budget without filling all 21 slots.
     selected = [s for d in plan["days"] for s in d["sessions"]]
     assert selected and len(selected) < 21
-    assert all(s["purpose"] == "RECOVERY" and 10 <= s["main_work_minutes"] <= 30 for s in selected)
+    assert all(s["purpose"] in {"RECOVERY", "MAINTENANCE"} and s["zone"] in {"Z1", "Z2"}
+               and s["main_work_minutes"] >= s["dose_evidence"]["minimum_primary_work_minutes"] for s in selected)
     allocation = plan["allocation"]["components"]["Z1"]
     assert allocation["planned_effective"] <= allocation["target_effective"] + .01
     assert any(r["code"] in {"COMPONENT_BUDGET_EXHAUSTED", "PERIOD_COMPONENT_REMAINDER", "INSUFFICIENT_DOSE_BUDGET"} for d in plan["days"] for r in d["rejected_alternatives"])
@@ -185,9 +186,12 @@ def test_feasible_volume_is_realized_in_complete_sessions(monkeypatch, target):
     assert 1 < len(selected) < 7
     for session in selected:
         assert_readiness_dose(session)
-        if session["purpose"] != "RECOVERY":
-            evidence = session["dose_evidence"]
+        evidence = session["dose_evidence"]
+        if evidence["min_dose_fraction"] is not None:
             assert evidence.get("applied_minimum_capacity_fraction", evidence["applied_structure_fraction"]) >= evidence["min_dose_fraction"] - .001
+        else:
+            assert session["zone"] in {"Z1", "Z2"} and session["purpose"] in {"MAINTENANCE", "RECOVERY"}
+            assert session["main_work_minutes"] >= evidence["minimum_primary_work_minutes"]
 
 
 def test_period_objective_integrates_wave_and_counts_q_without_cascade():
@@ -230,7 +234,11 @@ def test_automatic_q_targets_match_outlook_and_no_micro_sessions(monkeypatch):
     for session in regular:
         evidence = session["dose_evidence"]
         assert_readiness_dose(session)
-        assert evidence.get("applied_minimum_capacity_fraction", evidence["applied_structure_fraction"]) >= evidence["min_dose_fraction"] - .001
+        if evidence["min_dose_fraction"] is not None:
+            assert evidence.get("applied_minimum_capacity_fraction", evidence["applied_structure_fraction"]) >= evidence["min_dose_fraction"] - .001
+        else:
+            assert session["zone"] in {"Z1", "Z2"} and session["purpose"] == "MAINTENANCE"
+            assert session["main_work_minutes"] >= evidence["minimum_primary_work_minutes"]
     # Recovery and supporting mixed blocks have their own existing minima;
     # changed expert capacities may make those methods win an allocation slot.
     for session in selected:

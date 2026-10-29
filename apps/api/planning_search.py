@@ -34,7 +34,8 @@ def score(plan, accents):
         for item in allocation.get("continuity", {}).get("sessions", [])
         if item.get("mode") == "QUALITY_PREPARATION_RESERVE")
     sessions = [s for d in [*plan.get("days", []), *plan.get("lookahead_days", [])] for s in d.get("sessions", [])]
-    return (*planning_allocation.gap_score(rows), round(sum(accent_credit), 5),
+    training_days = len({d["date"] for d in [*plan.get("days", []), *plan.get("lookahead_days", [])] if d.get("sessions")})
+    return (*planning_allocation.gap_score(rows), training_days, round(sum(accent_credit), 5),
             -round(preparation_cost, 5), -len(sessions))
 
 
@@ -93,6 +94,12 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
                    if s.get("dose_evidence", {}).get("selection", {}).get("accent"))
     controls = profile.get("planning_controls") or {}
     accents.update(controls.get("accents", []))
+    def empty_requested_day(plan):
+        slots = controls.get("sessions_by_day") or [1]*7
+        available = profile.get("available_minutes") or [1]*7
+        return any(not d.get("sessions") and not d.get("locked") and d.get("status", "REST") == "REST"
+            and slots[date.fromisoformat(d["date"]).weekday()] > 0
+            and available[date.fromisoformat(d["date"]).weekday()] > 0 for d in plan["days"])
     # Accents only break ties after all component gaps have been compared.
     accents = accents or {z for z in ("Z3", "Z4", "Z5", "STR") if allocation["components"].get(z, {}).get("target", 0.) > 0}
     unmet = planning_allocation.needs_search(allocation)
@@ -104,7 +111,7 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
             budget_exhausted = True
             return False
         return True
-    if unmet:
+    if unmet or empty_requested_day(baseline):
         easy = {d["date"]: sum(s["main_work_minutes"] for s in d.get("sessions", []) if s["zone"] in {"Z1", "Z2"})
                 for d in baseline["days"] if not d.get("locked")}
         # Explore the optional Z1 finishes and the balancing heuristic too.
@@ -112,14 +119,17 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
         # alternative replays the full engine with the same Q/E/dose gates.
         policies = [
             {"optional_easy_fraction": 0., "balance_complete_doses": False, "component_gap_first": True},
+            {"optional_easy_fraction": 0., "balance_complete_doses": True, "component_gap_first": True, "spread_recovery": empty_requested_day(baseline)},
             {"optional_easy_fraction": .5, "balance_complete_doses": False, "component_gap_first": True},
             {"optional_easy_fraction": 1., "balance_complete_doses": False, "component_gap_first": True},
             {"optional_easy_fraction": 0., "balance_complete_doses": False},
             {"optional_easy_fraction": .5, "easy_caps": {d:w*.85 for d,w in easy.items() if w > 0}},
             {"optional_easy_fraction": 0., "balance_complete_doses": False, "prefer_standalone": True},
         ]
+        if not unmet:
+            policies = [policies[1]]  # Only distribution needs another trial.
         for index, policy in enumerate(policies):
-            if not planning_allocation.needs_search(best["allocation"]):
+            if not planning_allocation.needs_search(best["allocation"]) and not empty_requested_day(best):
                 break
             if not time_available():
                 break
@@ -174,9 +184,9 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
                 trials += 1
                 if score(candidate, accents) > score(best, accents):
                     best = candidate
-    best["allocation"]["search"] = {"version": "bounded-causal-replay-v6-preparation-repair", "alternatives": trials,
+    best["allocation"]["search"] = {"version": "bounded-causal-replay-v7-day-coverage", "alternatives": trials,
         "reservation_replays":refits,
-        "improved": best is not baseline, "priority": ["WORST_COMPONENT_RANGE_GAP", "SUM_COMPONENT_RANGE_GAPS", "DISTANCE_TO_100_PERCENT", "ACCENT", "PREPARATION_EXCESS", "FEWER_SESSIONS", "STABILITY"],
+        "improved": best is not baseline, "priority": ["WORST_COMPONENT_RANGE_GAP", "SUM_COMPONENT_RANGE_GAPS", "DISTANCE_TO_100_PERCENT", "TRAINING_DAYS", "ACCENT", "PREPARATION_EXCESS", "FEWER_SESSIONS", "STABILITY"],
         "conclusion": ("TARGETS_WITHIN_TOLERANCE" if planning_allocation.acceptance(best["allocation"])["within_tolerance"]
             and best["allocation"].get("has_unallocated_load", any((row.get("remaining") or 0) > 1. for _, row in planning_allocation.objective_rows(best["allocation"])))
             else "TARGETS_COVERED" if planning_allocation.acceptance(best["allocation"])["within_tolerance"]
