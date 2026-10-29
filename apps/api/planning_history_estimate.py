@@ -13,7 +13,7 @@ from biathlon.constants import COMPONENTS
 from biathlon.component_load import calculate_component_load
 from biathlon.unified_load import recorded_coverage
 
-VERSION = "planning-history-estimate-v7-conserved-indicator-coverage"
+VERSION = "planning-history-estimate-v8-preserved-recorded-time"
 POLICY = "RECORDED_DURATION_EXPERT_Q_WITH_RECOVERY"
 UNIFIED_POLICY = "UNIFIED_RECORDED_INDICATORS_WITH_PLANNING_ESTIMATES"
 ZONES = tuple(z for z in COMPONENTS if z != "STR")
@@ -225,6 +225,7 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None,
                 "effective_load": after["effective"][z],
                 "planning_estimated_effective_load": after["effective"][z] - before["effective"][z],
                 "planning_measured_effective_load": before["effective"][z],
+                "planning_measured_time_min": previous.get("raw_time_min"),
                 "planning_estimated_q": estimate[z], "planning_measured_q": previous.get("equivalent_time_min")})
         activity["planning_estimated"] = True
         activity["component_load"] = after

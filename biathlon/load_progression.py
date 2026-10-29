@@ -16,11 +16,11 @@ from .speed_equivalence import VERSION as LOAD_EQUIVALENCE_VERSION
 from .constants import COMPONENTS
 from . import planning_controls, planning_history, mesocycle_focus, training_return
 
-VERSION = "load-progression-v11-common-zone-q"
+VERSION = "load-progression-v12-recorded-indicator-reference"
 RECOVERY_RETAINED_FRACTION = .70
 # A reference may retain its measured portion with small, separately labelled
 # gaps. This is a coaching data-quality policy, not a physiological threshold.
-MIN_MEASURED_REFERENCE_COVERAGE = .90
+MIN_RECORDED_REFERENCE_COVERAGE = .90
 # Deliberately separate from speed-duration correction and canonical Tref.
 WEEKLY_Q_BOUNDS = {"Z1": (240., 900.), "Z2": (60., 300.), "Z3": (30., 120.),
                    "Z4": (10., 50.), "Z5": (10., 50.)}
@@ -69,26 +69,45 @@ def _valid(value):
 def observed_window(source, rows, start, end):
     """Half-open window; uncovered days/unknown Q are not zero-load days."""
     from .learning_provenance import initial_heuristic_load
+    from .unified_load import recorded_coverage
     keys = [(start+timedelta(days=i)).isoformat() for i in range((end-start).days)]
     effective = {(r["date"], r["zone"]): r["effective_load"] for r in rows}
     complete = [d for d in keys if all((d, z) in effective for z in COMPONENTS)]
     activities = [a for a in source.get("activities", []) if a["date"] in complete]
-    duration = sum(float(a.get("duration_min") or 0.) for a in activities if a.get("sport") != "WeightTraining")
-    measured_duration = sum(float(a.get("duration_min") or 0.) * (
-        0. if initial_heuristic_load(a) else
-        1. if a.get("quality_status", "valid") == "valid" else
-        max(0., min(1., float(a.get("hr_coverage_percent") or 0.)/100)))
-        for a in activities if a.get("sport") != "WeightTraining")
+    ledgers, unified = {}, {}
+    duration = measured_duration = recorded_duration = 0.
+    for a in activities:
+        if a.get("sport") == "WeightTraining":
+            continue
+        # Validate the original ledger, before the separately labelled missing
+        # interval estimate. Sensor coverage is independent of HR coverage.
+        original = {**a, "zones": [{**z, "raw_time_min": z.get("planning_measured_time_min")}
+                    for z in a.get("zones", [])]} if a.get("planning_estimated") else a
+        ledger = recorded_coverage(original)
+        ledgers[id(a)] = ledger
+        unified[id(a)] = bool(source.get("load_selection") or any(k in (a.get("load_source") or {})
+                             for k in ("recorded_seconds", "active_seconds", "unknown_seconds")))
+        minutes = ledger["recorded_seconds"]/60 if ledger else float(a.get("duration_min") or 0.)
+        covered = (ledger["recorded_seconds"]-ledger["unknown_seconds"])/60 if ledger else (
+            0. if unified[id(a)] or initial_heuristic_load(a) else
+            minutes if a.get("quality_status", "valid") == "valid" else
+            minutes*max(0., min(1., float(a.get("hr_coverage_percent") or 0.)/100)))
+        duration += minutes
+        recorded_duration += covered
+        measured_duration += 0. if initial_heuristic_load(a) else covered
     coverage = measured_duration/duration if duration else 1.
+    recorded_fraction = recorded_duration/duration if duration else 1.
     strength = {r["date"]:r for r in source.get("strength", {}).get("daily", [])}
     components = {}
     for z in COMPONENTS:
-        q = t = measured_q = estimated_q = 0.
+        q = t = measured_q = estimated_q = reference_q = 0.
         known = z != "STR"
         for activity in activities:
             if activity.get("sport") == "WeightTraining":
                 continue
-            if activity.get("quality_status", "valid") != "valid" and not activity.get("planning_estimated"):
+            if activity.get("quality_status") == "provider_missing" or (unified[id(activity)] and ledgers[id(activity)] is None):
+                known = False
+            if activity.get("quality_status", "valid") != "valid" and not activity.get("planning_estimated") and ledgers[id(activity)] is None:
                 known = False
             zone = next((v for v in activity.get("zones", []) if v["zone"] == z), {})
             values = [zone.get("equivalent_time_min"), zone.get("raw_time_min")]
@@ -100,18 +119,25 @@ def observed_window(source, rows, start, end):
                 estimated = values[0] if initial_heuristic_load(activity) else float(zone.get("planning_estimated_q") or 0.)
                 estimated_q += estimated
                 measured_q += max(0., values[0]-estimated)
+                # Recorded speed with modelled zones is valid planning history,
+                # including the initial mapping. It remains excluded from model
+                # learning. Duration-only residual estimates cannot seed growth.
+                reference_q += max(0., values[0]-float(zone.get("planning_estimated_q") or 0.))
         if z == "STR":
             known = all(_valid(strength.get(d, {}).get(k)) for d in complete for k in ("real_time_min", "equivalent_time_min"))
             if known:
                 q = sum(strength[d]["equivalent_time_min"] for d in complete)
                 t = sum(strength[d]["real_time_min"] for d in complete)
                 measured_q = q
+                reference_q = q
         n = len(complete)
         components[z] = {"weekly_q": q*7/n if n and known else None,
                          "measured_weekly_q": measured_q*7/n if n and known else None,
                          "estimated_weekly_q": estimated_q*7/n if n and known else None,
+                         "reference_weekly_q": reference_q*7/n if n and known else None,
                          "measured_coverage_percent": 100*coverage,
-                         "reference_supported": bool(n >= planning_history.MINIMUM_DAYS and known and coverage >= MIN_MEASURED_REFERENCE_COVERAGE),
+                         "recorded_coverage_percent": 100*recorded_fraction,
+                         "reference_supported": bool(n >= planning_history.MINIMUM_DAYS and known and recorded_fraction >= MIN_RECORDED_REFERENCE_COVERAGE),
                          "weekly_minutes": t*7/n if n and known else None,
                          "weekly_effective": sum(effective[(d,z)] for d in complete)*7/n if n else None}
     return {"start_date": start.isoformat(), "end_date": (end-timedelta(days=1)).isoformat(),
@@ -161,11 +187,8 @@ def reference_from_history(q, prior, zone):
         return q, "OBSERVED" if q is not None else "UNKNOWN"
     if q is None:
         return prior, "EXPERT_FALLBACK"
-    # The lower prior guides planning without rewriting measured exposure.
-    # It is not a session minimum or permission to bypass E/7–40 and Recovery.
-    # Higher personal references remain uncapped by the population range.
-    low = WEEKLY_Q_BOUNDS[zone][0]
-    return (low, "LOWER_BOUND") if q < low else (q, "OBSERVED")
+    # Normative bounds set the growth rate, never replace recorded exposure.
+    return q, "OBSERVED"
 
 
 def context(profile, source, rows, today, adaptation=None, *, retained=None, physiology=None, periodization=None):
@@ -185,7 +208,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
     recent = observed_window(source, rows, today-timedelta(days=40), today)
     reliable = valid_units and all(recent["components"][z]["reference_supported"] for z in WEEKLY_Q_BOUNDS)
     key = reference_key(profile, physiology)
-    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v9-relative-recovery", "load-progression-v8-observed-coverage", "load-progression-v7-lower-planning-reference", "load-progression-v6-individual-reference", "load-progression-v5-cycle-q", "load-progression-v4-clamped-q", "load-progression-v3-stable-q"} else None
+    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v11-common-zone-q", "load-progression-v9-relative-recovery", "load-progression-v8-observed-coverage", "load-progression-v7-lower-planning-reference", "load-progression-v6-individual-reference", "load-progression-v5-cycle-q", "load-progression-v4-clamped-q", "load-progression-v3-stable-q"} else None
     if frozen and frozen["version"] != VERSION:
         # Re-select the reference without replacing saved measurements or dates.
         frozen = deepcopy(frozen)
@@ -207,7 +230,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
         frozen_components = {}
         for z in COMPONENTS:
             samples = [w["components"][z] for w in complete if w["components"][z]["reference_supported"]] if valid_units else []
-            q = median(v["measured_weekly_q"] for v in samples) if samples else None
+            q = median(v["reference_weekly_q"] for v in samples) if samples else None
             effective = median(v["weekly_effective"] for v in samples) if samples else None
             low, high = WEEKLY_Q_BOUNDS.get(z, (None, None))
             prior = low + (high-low)*positions[z] if low is not None else None
@@ -218,7 +241,10 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
                 "reference_q": reference_q, "reference_selection": selection,
                 "source": "OBSERVED_CYCLES_AND_EXPERT" if samples else "EXPERT_ONLY" if prior is not None else "UNKNOWN",
                 "measured_coverage_percent": min(v["measured_coverage_percent"] for v in samples) if samples else None,
+                "recorded_coverage_percent": min(v["recorded_coverage_percent"] for v in samples) if samples else None,
+                "reference_basis": "RECORDED_HR_SPEED_WITH_MODELLED_ZONES" if samples else "EXPERT_PRIOR",
                 "estimated_q_excluded_from_reference": True,
+                "initial_speed_mapping_allowed_for_planning_only": True,
                 "observed_windows": len(samples), "established_on": today.isoformat()}
         frozen = {"version": VERSION, "key": key, "created_on": today.isoformat(),
                   "equivalence_version": LOAD_EQUIVALENCE_VERSION, "expert_basis": expert_basis,
@@ -241,8 +267,8 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
         components[z] = {**b, "annual_rate_percent": rate,
                          "governed_annual_rate_percent": rate*feedback_factor(adaptation, z, "growth_factor", today) if rate is not None else None,
                          "expert_q_bounds": WEEKLY_Q_BOUNDS.get(z), "observed_cycle_growth_percent": growth,
-                         "current_observed_q": a["measured_weekly_q"] if valid_units and a["reference_supported"] and current["complete"] else None,
-                          "recent_observed_q": recent["components"][z]["measured_weekly_q"] if valid_units and recent["components"][z]["reference_supported"] else None,
+                         "current_observed_q": a["reference_weekly_q"] if valid_units and a["reference_supported"] and current["complete"] else None,
+                          "recent_observed_q": recent["components"][z]["reference_weekly_q"] if valid_units and recent["components"][z]["reference_supported"] else None,
                           "recent_estimated_q": recent["components"][z]["weekly_q"] if estimated_supported and recent["covered_days"] >= planning_history.MINIMUM_DAYS else None}
     ctx = {"version": VERSION, "config": config, "basis": "STABLE_PREPARATION_REFERENCE",
            "as_of": today.isoformat(), "cycle_start": cycle_start.isoformat(), "cycle_days": days,
@@ -250,7 +276,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
            "previous_cycle": previous, "completed_cycle": current, "components": components,
            "adaptation": adaptation, "recovery_is_learning_input": False, "requires_catchup": False,
            "reference_is_clamped": any(c["reference_selection"] == "LOWER_BOUND" for c in components.values()),
-           "normative_role": "LOWER_PLANNING_REFERENCE_NOT_POTENTIAL_CEILING", "percentages_are_coaching_parameters": True,
+           "normative_role": "INITIAL_PRIOR_NOT_POTENTIAL_CEILING", "percentages_are_coaching_parameters": True,
             "history_usable": reliable, "estimated_history_supported": estimated_supported,
             "planning_history": planning_evidence, "equivalence_version": LOAD_EQUIVALENCE_VERSION,
            "overall_basis": "DIRECT_Q_COMPONENT_TARGETS_EFFECTIVE_LOAD_CHECKED_SEPARATELY"}
@@ -275,7 +301,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
                               retained_fraction=RECOVERY_RETAINED_FRACTION,
                               usable=valid_units and recovery_reference["complete"] and
                               (recovery_start-cutoff).days <= 7 and
-                              all(c["weekly_q"] is not None and c["measured_coverage_percent"] >= 90
+                              all(c["weekly_q"] is not None and c["recorded_coverage_percent"] >= 90
                                   for z,c in recovery_reference["components"].items() if z != "STR"))
     ctx["recovery_reference"] = recovery_reference
     if valid_units:
@@ -462,6 +488,9 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
         exposure = c.get("recent_observed_q", c["weekly_q"])
         if exposure is None and context.get("estimated_history_supported"):
             exposure = c.get("recent_estimated_q")
+            # Incomplete sensing permits a labelled initial estimate, never an
+            # expert weekly target many times larger than the recorded history.
+            q = min(q, exposure) if q is not None and exposure is not None else exposure
         if exposure is None or exposure == 0:
             q = exposure
         if state["kind"] == "RE_ENTRY" and q is not None:
@@ -503,7 +532,7 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
         if automatic and z != "STR" and not limited and period in {"RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION"}:
             goal["target_weekly_q"] = requested_q*learning if requested_q is not None else None
             goal["basis"] = ("RELATIVE_RECOVERY_Q_WITH_7_40_GATE" if goal.get("recovery_reference") else
-                             "EXPERT_Q_TARGET_WITH_ESTIMATED_7_40_GATE" if context.get("estimated_history_supported") else "STABLE_Q_TARGET_WITH_7_40_GATE")
+                             "RECORDED_Q_TARGET_WITH_ESTIMATED_7_40_GATE" if context.get("estimated_history_supported") else "STABLE_Q_TARGET_WITH_7_40_GATE")
         individual = individual_adjustment(context, profile, z, day, period, state, taper=taper, limited=limited)
         correction = individual["volume_factor"]
         if correction != 1.:

@@ -130,7 +130,10 @@ def test_large_component_remainder_cannot_expand_selected_building_fraction(monk
                                      sessions_by_day=[1, 0, 0, 1, 0, 0, 0])
     method = next(method for method in engine.resolved_methods(body) if method["id"] == "END-LONG-Z1-01-BUILD")
     monkeypatch.setattr(engine, "resolved_methods", lambda _: [deepcopy(method)])
-    repo, _, _ = observed()
+    repo, source, _ = observed()
+    # This fixture isolates dose/allocation; recorded sessions support its methods.
+    for activity in source["activities"]:
+        activity["duration_min"] = 180.
     plan = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)
     sessions = [session for day in plan["days"] for session in day["sessions"] if session["purpose"] == "BUILDING"]
     assert sessions

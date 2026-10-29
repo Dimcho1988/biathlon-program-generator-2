@@ -77,3 +77,11 @@ it("distinguishes lower planning reference from observed history and a mandatory
   expect(html).toContain("Разтоварването, тейпърът и непълният микроцикъл");
   expect(html).not.toContain("Архивна версия");
 });
+
+it("explains recorded speed history and keeps normative bounds out of the starting target",()=>{
+  const html=renderToStaticMarkup(<LoadProgressionSummary plan={{long_term:{progression:{version:"load-progression-v12-recorded-indicator-reference",basis:"STABLE_PREPARATION_REFERENCE",normative_role:"INITIAL_PRIOR_NOT_POTENTIAL_CEILING",history_usable:true,estimated_history_supported:true,components:{Z1:{weekly_q:42,reference_q:42,expert_q_bounds:[240,900]}}}}}}/>);
+  expect(html).toContain("валиден пулс или скорост");
+  expect(html).toContain("включително под експертните ориентири");
+  expect(html).toContain("не увеличават историческата основа");
+  expect(html).not.toContain("5% за удар над долната");
+});

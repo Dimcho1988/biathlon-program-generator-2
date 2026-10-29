@@ -68,7 +68,10 @@ def test_manual_targets_keep_their_explicit_recovery_gate():
 def test_partial_recovery_dose_does_not_spend_other_components_preparation(monkeypatch):
     from apps.api import training_plan_engine as engine
     from tests.api.test_long_term_scheduling import assert_segment_contract
-    repo, _, _ = observed()
+    repo, source, _ = observed()
+    # This fixture isolates dose/allocation; recorded sessions support its methods.
+    for activity in source["activities"]:
+        activity["duration_min"] = 180.
     body = configured(age_years=30, training_experience_years=10,
                       available_minutes=[300]*6+[0], building_fraction=.65)
     body["planning_controls"].update(mesocycle_anchor=(TODAY-timedelta(days=21)).isoformat(),

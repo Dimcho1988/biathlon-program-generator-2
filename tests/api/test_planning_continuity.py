@@ -194,7 +194,10 @@ def test_empty_replay_day_does_not_erase_future_strength_preparation(monkeypatch
         values["STR"]["target"] = 60.
         return values, accents, cycle
     monkeypatch.setattr(engine, "_goals", goals)
-    repo, _, _ = observed()
+    repo, source, _ = observed()
+    # This fixture isolates dose/allocation; recorded sessions support its methods.
+    for activity in source["activities"]:
+        activity["duration_min"] = 180.
     plan = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)
     assert plan["days"][0]["sessions"][0]["zone"] == "Z1"
     assert any(s["zone"] == "STR" for s in plan["days"][4]["sessions"])

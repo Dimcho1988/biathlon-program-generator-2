@@ -38,8 +38,8 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v63-interchangeable-speed-evidence"
-PARAMETER_VERSION = "management-parameters-v53"
+VERSION = "training-management-v64-recorded-history-progression"
+PARAMETER_VERSION = "management-parameters-v54"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -1968,9 +1968,12 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         return week, state["volume_factor"] if state else training_targets.cycle_factor(week, meso_length, profile.get("progression_percent", 5), development=development)
     target_reference = training_targets.development_reference(rows, today, meso_anchor, meso_length)
     meso_week, meso_factor = meso_at(start_date)
+    def observed_session_ceiling(sport, day, overhead):
+        observed = volume_evidence["max_session_minutes_by_sport"].get(sport, 0.)
+        return observed*max(1., meso_at(day)[1]) if observed else profile.get("recovery_session_cap_min", 30.)+overhead
     # Measured automatic history uses component 7/40 budgets, including spill.
-    # Estimated zone loads also retain an initial recorded-time envelope: the
-    # expert Q floor must not turn missing HR into an abrupt time-volume jump.
+    # Incomplete indicator coverage also retains an initial recorded-time
+    # envelope, independent of the provisional component distribution.
     # This limits this draft, not capacity or the unchanged component targets.
     available_window = sum(available[(start_date+timedelta(days=i)).weekday()] for i in range((end_date-start_date).days+1))
     weekly_ceiling = available_window if component_governed else _volume_ceiling(
@@ -2732,6 +2735,12 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             continue
                         if not future_blocks or sum(b["duration_min"] for b in future_blocks) > available[future_day.weekday()]:
                             continue
+                        if controls and fz != "STR":
+                            cap_time = observed_session_ceiling(future_sport, future_day,
+                                fm["warmup_min"]+fm["cooldown_min"]+fm.get("recovery_min", 0.))
+                            if any(sum(b["duration_min"] for b in future_blocks if b.get("session_index", 1) == slot) > cap_time+.001
+                                   for slot in {b.get("session_index", 1) for b in future_blocks}):
+                                continue
                         fq, fe, _ = _candidate_load(future_blocks, settings, forecast_rows, future_day, zone_tmax_minutes=cap.get("zone_tmax_minutes"))
                         options.append({"q": fq, "e": fe, "zone": fz, "double": bool(fm.get("double_threshold")),
                             "method_id": fm["id"], "sport": future_sport,
@@ -3167,10 +3176,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     # athlete's total programme equal the history of one means.
                     # Keep the observed session exposure separate from total
                     # volume and from the capacity estimate for this exact means.
-                    observed = volume_evidence["max_session_minutes_by_sport"].get(sport, 0.)
-                    if not progression or not observed:
-                        session_ceiling = observed * max(1., day_meso_factor) if observed else profile.get("recovery_session_cap_min", 30.) + overhead
-                        limits.append({"code": "ACTUAL_SPORT_SESSION_EXPOSURE", "limit_minutes": max(0., session_ceiling*(2 if method.get("double_threshold") else 1)-overhead)})
+                    session_ceiling = observed_session_ceiling(sport, day, overhead)
+                    limits.append({"code": "ACTUAL_SPORT_SESSION_EXPOSURE", "limit_minutes": max(0., session_ceiling*(2 if method.get("double_threshold") else 1)-overhead)})
                 if event_specificity["work_cap_min"] is not None:
                     # Specificity limits each session, not the entire double day.
                     specificity_cap = event_specificity["work_cap_min"]
@@ -3201,10 +3208,12 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 work = _quantized_work(method, min(requested, *(r["limit_minutes"] for r in limits)))
                 if work < method["min_work_min"]:
                     time_limited = not automatic_time and remaining < overhead + method["min_work_min"]
+                    exposure_limited = any(r["code"] == "ACTUAL_SPORT_SESSION_EXPOSURE" and r["limit_minutes"] < method["min_work_min"] for r in limits)
                     item["rejected_alternatives"].append({"method_id": method["id"],
-                        "code": "INSUFFICIENT_TIME_BUDGET" if time_limited else "INSUFFICIENT_DOSE_BUDGET",
+                        "code": "INSUFFICIENT_TIME_BUDGET" if time_limited else "ACTUAL_SPORT_SESSION_EXPOSURE" if exposure_limited else "INSUFFICIENT_DOSE_BUDGET",
                         "reason": (f"Остават {max(0., remaining):g} минути от лимита за периода; методът изисква поне {overhead + method['min_work_min']:g} минути с подготвителните части."
-                                   if time_limited else "Оставащият бюджет е под минималната работна доза на метода.")})
+                                   if time_limited else f"Минималният вариант изисква поне {overhead + method['min_work_min']:g} минути; историческата граница за една сесия с това средство е {session_ceiling:.1f} минути."
+                                   if exposure_limited else "Оставащият бюджет е под минималната работна доза на метода.")})
                     continue
                 blocks = _blocks(method, work, evidence, settings)
                 # Interval roles own 100%/60% of the expert method budget; joint
