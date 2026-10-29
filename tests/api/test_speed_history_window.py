@@ -73,6 +73,8 @@ class Repository:
     def _request(self, method, path, **kwargs):
         if method == "GET":
             assert "athlete_alias=eq.ath-test" in path
+            if path.startswith("/onflows_management_entries?"):
+                return []
             return self.rows
         self.saved.append(kwargs["json"])
         return {"saved": True, "revision": 1}
@@ -213,6 +215,51 @@ def test_test_calibration_window_is_90_dates_and_cannot_include_future_or_91st_d
     assert result["test_window"] == {"start": "2026-06-22", "end": "2026-09-19"}
     assert result["active_test_keys"] == ["0"]
     assert "CONFLICTING_TESTS" not in result["warnings"]
+
+
+@pytest.mark.parametrize("activity_offset,test_offset,extra,accepted", [
+    (-14, 0, {}, True),
+    (-15, 0, {}, False),
+    (0, 0, {}, True),
+    (-5, 1, {}, False),  # A scheduled future test is not an observed anchor.
+    (-5, 0, {"maximal": False}, False),
+    (-5, 0, {"comparable": False}, False),
+    (-5, 0, {"test_mode": "EXPLORATORY"}, False),
+    (-5, 0, {"source": "MODEL"}, False),
+    (-5, 0, {"source": "MANUAL", "kind": "MODEL_POINT"}, False),
+    (-5, 0, {"source": "MANUAL", "kind": "ESTIMATE"}, False),
+    (-5, 0, {"duration_s": False}, False),
+    (-5, 0, {"speed_kmh": float("nan")}, False),
+    (-5, 0, {"enabled": False}, False),
+])
+def test_retrospective_window_admits_only_actual_accepted_maximal_tests(activity_offset, test_offset, extra, accepted):
+    repo = Repository()
+    repo.test(test_offset, **extra)
+    original = deepcopy(repo.rows)
+    day = NOW.date()+timedelta(days=activity_offset)
+    inputs = service.historical_speed_inputs(service.speed_view_inputs(repo, "ath-test"), day)
+    result = service.speed_view(repo, "ath-test", "Run", _inputs=inputs)
+    assert result["active_test_keys"] == (["0"] if accepted else [])
+    assert result["historical_calibration"]["retrospective_test_keys"] == (["0"] if accepted else [])
+    assert result["index_window"]["end"] == (day-timedelta(days=1)).isoformat()
+    assert repo.rows == original and repo.saved == []
+
+
+def test_retrospective_test_never_imports_same_day_or_later_hr_indices():
+    repo = Repository()
+    repo.test(source="MANUAL")
+    repo.add("prior", -6, value=5.)
+    repo.add("same-day", -5, value=8.)
+    repo.add("later", -1, value=9.)
+    inputs = service.speed_view_inputs(repo, "ath-test")
+    saved = deepcopy(inputs)
+    historical = service.historical_speed_inputs(inputs, NOW.date()-timedelta(days=5))
+    result = service.speed_view(repo, "ath-test", "Run", _inputs=historical)
+    assert result["active_test_keys"] == ["0"]
+    assert result["index_summary"]["Z3"] == pytest.approx({"index": 5., "count": 1, "seconds": 600})
+    assert result["test_window"]["end"] == NOW.date().isoformat()
+    assert result["tests"][0]["payload"]["day"] == NOW.date().isoformat()
+    assert inputs == saved
 
 
 @pytest.mark.parametrize("days,accepted", [(-90, False), (-89, True), (0, True), (1, False)])

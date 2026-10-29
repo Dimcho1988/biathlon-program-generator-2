@@ -15,8 +15,8 @@ export interface SpeedLoad {
   daily:Array<{date:string; zone:string; equivalent_minutes:number; effective_load:number; ratio_7_40:number|null}>;
   sport_indices:Array<{sport:string; reference_hr_bpm:number; comparison_speed_kmh:number|null; hr_policy:SportHrPolicy;
     reason:string|null; indices:Record<string,{index:number|null; count:number; seconds:number}>;
-    mapping:{uses_general_index:boolean;mapping_basis?:string}|null}>;
-  activities:Array<{activity_ref:string; date:string; sport:string; recorded_minutes:number; classified_minutes:number; reason:string|null; rest_minutes?:number; accounted_minutes?:number; unaccounted_minutes?:number; estimated_descent_minutes?:number; component_load?: Record<string, unknown>}>;
+    mapping:{uses_general_index:boolean;mapping_basis?:string;speed_role?:string;source?:string}|null}>;
+  activities:Array<{activity_ref:string; date:string; sport:string; recorded_minutes:number; classified_minutes:number; reason:string|null; rest_minutes?:number; accounted_minutes?:number; unaccounted_minutes?:number; estimated_descent_minutes?:number; component_load?: Record<string, unknown>;speed_role?:string;initial_heuristic?:boolean}>;
   warnings:string[];
 }
 const nonnegative=(v:unknown):v is number=>typeof v==="number"&&Number.isFinite(v)&&v>=0;

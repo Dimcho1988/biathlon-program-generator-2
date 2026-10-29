@@ -4,7 +4,7 @@ import re
 from datetime import date
 from typing import Annotated
 from uuid import UUID
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Query
 from ..oauth_store import PersistentStoreFailure
 from .. import model_service
 from ..model_schemas import RecoveryConfigInput, SpeedTestInput, ManualSpeedTestInput
@@ -72,11 +72,13 @@ def save_recovery_configuration(body: RecoveryConfigInput,
 @router.get("/api/v2/athlete/models/speed")
 def speed_model(sport: str | None = None, duration_s: float | None = None,
     distance_m: float | None = None, speed_kmh: float | None = None, hr_bpm: float | None = None,
+    initial_history_days: Annotated[int | None, Query(ge=7, le=28)] = None,
     authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None):
     alias = dependencies.model_alias(authorization, athlete_alias)
     try:
-        return model_service.speed_view(dependencies.repository(),alias,sport,duration_s=duration_s,distance_m=distance_m,speed_kmh=speed_kmh,hr_bpm=hr_bpm)
+        return model_service.speed_view(dependencies.repository(),alias,sport,duration_s=duration_s,distance_m=distance_m,speed_kmh=speed_kmh,hr_bpm=hr_bpm,
+            initial_history_days=initial_history_days)
     except PersistentStoreFailure as exc:
         raise HTTPException(503,"Speed model sources are unavailable") from exc
 

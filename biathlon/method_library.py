@@ -74,6 +74,12 @@ def validate_overrides(config):
 
 
 def selected_curve(view):
+    if view and view.get("status") == "INITIAL_HEURISTIC":
+        from .initial_speed_profile import curve_from_view
+        curve = curve_from_view(view)
+        if curve is None:
+            raise ValueError("INVALID_INITIAL_HEURISTIC_PROFILE")
+        return curve, [], "INITIAL_HEURISTIC"
     if not view or view.get("status") not in {"CALIBRATED", "PRELIMINARY"}:
         raise ValueError("NO_INDIVIDUAL_SPEED_CURVE")
     keys = set(view.get("active_test_keys", []))
@@ -106,10 +112,11 @@ def _prepare(view):
     policy = (view or {}).get("sport_hr_policy") or {}
     predictor = None
     try:
-        predictor_type = dosing_curve.Predictor if source == "BLENDED_DOSING_CURVE" else hr_speed.Predictor
+        predictor_type = dosing_curve.Predictor if source == "BLENDED_DOSING_CURVE" else hr_speed.ZonalPredictor if source == "INITIAL_HEURISTIC" else hr_speed.Predictor
         durations = {a["zone"]: a["duration_s"] for a in (view.get("preliminary_capacity") or {}).get("anchors", [])}
+        kwargs = {"profile": view.get("speed_zones"), "sport": view.get("sport", "Run"), "tests": ()} if source == "INITIAL_HEURISTIC" else {}
         predictor = predictor_type(curve, policy["sport_zone_bounds_bpm"], policy["sport_hrmax_bpm"], view.get("index_summary", {}),
-            expert_durations=durations or None, normalization_offset_bpm=policy.get("offset_bpm", 0))
+            expert_durations=durations or None, normalization_offset_bpm=policy.get("offset_bpm", 0), **kwargs)
         predictor.hr_for_speed = lru_cache(maxsize=2048)(predictor.hr_for_speed)
     except (ValueError, KeyError, TypeError):
         pass
@@ -266,7 +273,7 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
     override = (config.get("overrides") or {}).get(record["id"], {})
     dosing = method_dosing.parameters(record, profile)
     result = {"dosing": dosing, "status": "UNAVAILABLE", "reason": None, "phase": phase,
-              "speed_role": "FLAT_EQUIVALENT_REFERENCE_NOT_TERRAIN_PACE",
+              "speed_role": "RAW_MOVING_SPEED" if (speed_view or {}).get("speed_role") == "RAW_MOVING_SPEED" else "FLAT_EQUIVALENT_REFERENCE_NOT_TERRAIN_PACE",
               "selection_basis": "EXPLICIT_METHOD_RANGES_CURRENT_CURVE", "curve_improvement_assumed": False}
     if config.get("enabled", True) is False or override.get("enabled", True) is False:
         return {**result, "status": "DISABLED", "reason": "DISABLED_BY_PROFILE"}
@@ -322,6 +329,9 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
         if _prepared is None:
             _prepared, _hr_predictor = _prepare(speed_view)
         curve, tests, curve_source = _prepared
+        if (curve_source == "INITIAL_HEURISTIC" and
+                (profile.get("planning_controls") or {}).get("capacity_policy", "MODEL_WITH_PRIOR") != "MODEL_WITH_PRIOR"):
+            raise ValueError("INITIAL_HEURISTIC_REQUIRES_MODEL_PRIOR_POLICY")
         short_test = (record.get("requirements") or {}).get("short_test_max_seconds")
         if short_test and not any(0 < t.get("duration_s", math.inf) <= short_test for t in tests):
             return {**result, "reason": "SHORT_SPEED_TEST_REQUIRED", "required_test_max_seconds": short_test}
@@ -338,6 +348,9 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
             # A fixed source intensity remains fixed. Generic ±2% tolerances
             # are not a published method range.
             segment.update(_hr_reference(segment, _hr_predictor))
+            if curve_source == "INITIAL_HEURISTIC":
+                segment.update(speed_role="RAW_MOVING_SPEED", speed_basis="RAW_MOVING_SPEED",
+                               initial_heuristic=True, calibration_eligible=False)
             segment.update(method_dosing.target_ranges(None, None, segment["zone"], dosing=dosing,
                 hr_range=segment.get("hr_reference_range_bpm"), hr_bounds=getattr(_hr_predictor, "bounds", None)))
         if (profile.get("planning_controls") or {}).get("capacity_policy", "MODEL_WITH_PRIOR") != "MODEL_WITH_PRIOR":
@@ -439,7 +452,11 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
                 "work": {"unit": "seconds", "range": rests}, "kind": "RECOVERY"},
                 p, profile, speed_view, curve, tests, .5, zones)
             recovery_resolution.update(_hr_reference(recovery_resolution, _hr_predictor))
+            if curve_source == "INITIAL_HEURISTIC":
+                recovery_resolution.update(speed_role="RAW_MOVING_SPEED", speed_basis="RAW_MOVING_SPEED",
+                                           initial_heuristic=True, calibration_eligible=False)
         return {**result, **deepcopy(dominant), "status": "READY", "curve_source": curve_source,
+                "initial_heuristic": curve_source == "INITIAL_HEURISTIC", "calibration_eligible": False,
                 "actual_sport": actual_sport, "source_repetitions": original_repetitions,
                 "source_count_policy": "EXPLICIT_COACH_REPEAT_RANGE" if override.get("repetitions") is not None else "SOURCE_STANDARD_WITH_DECLARED_WHOLE_REPEAT_ADAPTATIONS",
                 "automatic_selection_enabled": override.get("enabled", record.get("automatic_selection", True)),

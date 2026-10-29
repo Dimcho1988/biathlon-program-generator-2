@@ -9,6 +9,9 @@ PERIODS = ("SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION")
 def reference(profile, view, event, today):
     result = {"version":VERSION,"status":"UNAVAILABLE","discipline":profile.get("discipline"),
               "sport":profile.get("sport"),"bands":[],"dose_from_maximum_time":False}
+    if (view or {}).get("status") == "INITIAL_HEURISTIC":
+        return {**result, "reason": "REAL_TESTS_REQUIRED_FOR_RACE_REFERENCE",
+                "speed_role": "RAW_MOVING_SPEED", "initial_heuristic": True, "calibration_eligible": False}
     if not view or view.get("sport") != profile.get("sport") or event.get("source") not in {"SPEED_DURATION", "COURSE_EXPECTATION"}:
         return result
     keys = set(view.get("active_test_keys",[]))

@@ -12,6 +12,7 @@ const date = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "numeric
 
 export function StatusOverview({ data, recovery, load }: { data: TrainingStatus; recovery: RecoveryHistory | null; load: LoadHistory | null }) {
   const v2 = recovery?.schema_version === "recovery-history-v2" ? recovery : null;
+  const incomplete = v2?.data_quality?.complete === false;
   const threshold = v2?.ready_threshold_percent ?? (recovery?.schema_version === "recovery-history-v1" ? recovery.model.practical_full_recovery_percent : null);
   const zones = data.zones.map((zone) => ({
     zone: zone.zone as string,
@@ -32,10 +33,11 @@ export function StatusOverview({ data, recovery, load }: { data: TrainingStatus;
     <section className="overview-readiness" aria-labelledby="overview-readiness-title">
       <div className="section-heading"><div><p className="section-kicker">Товарна готовност</p><h2 id="overview-readiness-title">Възстановяване по зони</h2></div><Link href="/?view=recovery" prefetch={false}>Разгледай →</Link></div>
       <p className="overview-explanation">{threshold === null ? "Готовност според текущия модел." : `Ориентир за възстановяване: ${number.format(threshold)}%.`} Всяка зона се оценява отделно. Ролята и дозата на тренировката следват целта; този ориентир не е минимално условие за развиваща работа.</p>
+      {incomplete && <p role="status" className="integration-notice">Недостатъчни данни за възстановяването: {v2.data_quality!.partial_activities} непълно оценени активности и {v2.data_quality!.missing_days} дни без пълни данни. Показателят 7/40 е изчислен само от отчетения товар.</p>}
       <div className="readiness-grid">{zones.map(({ zone, readiness, ratio }) => <article key={zone} style={{ "--zone": zone === "STR" ? "var(--strength)" : `var(--zone-${zone.slice(1)})` } as CSSProperties}>
-        <span className="readiness-zone">{zone}</span><strong>{number.format(readiness)}<small>%</small></strong>
-        <div className="readiness-bar" aria-hidden="true"><span style={{ width: `${Math.max(0, Math.min(100, readiness))}%` }} /></div>
-        <span className="readiness-label">{threshold === null ? "готовност" : readiness >= threshold ? "достигнат ориентир" : "възстановява се"}</span>
+        <span className="readiness-zone">{zone}</span><strong>{incomplete ? "—" : <>{number.format(readiness)}<small>%</small></>}</strong>
+        {!incomplete && <div className="readiness-bar" aria-hidden="true"><span style={{ width: `${Math.max(0, Math.min(100, readiness))}%` }} /></div>}
+        <span className="readiness-label">{incomplete ? "Недостатъчни данни" : threshold === null ? "готовност" : readiness >= threshold ? "достигнат ориентир" : "възстановява се"}</span>
         <div className="readiness-ratio"><span>7/40 · товар E</span><b>{number.format(ratio)}</b></div>
       </article>)}</div>
       <p className="overview-date">{v2 ? `Готовност към ${date(v2.as_of)}` : `Анализ към ${date(data.as_of)}`} · Тренировъчни данни до {date(periodEnd)}.{v2?.source_stale && " Прогнозата допуска, че след това няма ново натоварване."}</p>

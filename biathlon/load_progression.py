@@ -68,12 +68,14 @@ def _valid(value):
 
 def observed_window(source, rows, start, end):
     """Half-open window; uncovered days/unknown Q are not zero-load days."""
+    from .learning_provenance import initial_heuristic_load
     keys = [(start+timedelta(days=i)).isoformat() for i in range((end-start).days)]
     effective = {(r["date"], r["zone"]): r["effective_load"] for r in rows}
     complete = [d for d in keys if all((d, z) in effective for z in COMPONENTS)]
     activities = [a for a in source.get("activities", []) if a["date"] in complete]
     duration = sum(float(a.get("duration_min") or 0.) for a in activities if a.get("sport") != "WeightTraining")
     measured_duration = sum(float(a.get("duration_min") or 0.) * (
+        0. if initial_heuristic_load(a) else
         1. if a.get("quality_status", "valid") == "valid" else
         max(0., min(1., float(a.get("hr_coverage_percent") or 0.)/100)))
         for a in activities if a.get("sport") != "WeightTraining")
@@ -95,7 +97,7 @@ def observed_window(source, rows, start, end):
             else:
                 q += values[0]
                 t += values[1]
-                estimated = float(zone.get("planning_estimated_q") or 0.)
+                estimated = values[0] if initial_heuristic_load(activity) else float(zone.get("planning_estimated_q") or 0.)
                 estimated_q += estimated
                 measured_q += max(0., values[0]-estimated)
         if z == "STR":

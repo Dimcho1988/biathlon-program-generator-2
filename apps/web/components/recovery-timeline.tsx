@@ -18,6 +18,10 @@ export function RecoveryTimeline({ history }: { history: RecoveryV2 }) {
   const y = (value: number) => bottom - value * plotHeight / 100;
   const [visible, setVisible] = useState<ModelZone[]>([...MODEL_ZONES]);
   const [cursor, setCursor] = useState(0);
+  if (history.data_quality?.complete === false) return <figure className="history-chart recovery-timeline">
+    <div className="history-chart-heading"><h3>Възстановяване · история и прогноза</h3></div>
+    <p role="status">Недостатъчни данни за графика на възстановяването. Има неоценени натоварвания или дни без пълни данни. Отчетеният товар остава достъпен в дневната история.</p>
+  </figure>;
   const series = MODEL_ZONES.map(zone => ({
     zone,
     past: recoveryHistorySegments(history, zone),

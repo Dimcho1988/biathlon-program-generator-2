@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from scipy.stats import beta
 
 from biathlon.training_methods import VERSION as CATALOG_VERSION, resolved_methods
+from biathlon.learning_provenance import intensity_provenance
 from .response_monitoring import latest_entries
 
 VERSION = "confirmed-method-tolerability-v1"
@@ -30,6 +31,10 @@ def _hash(value):
 
 def _number(value):
     return float(value) if isinstance(value, (float, int)) and not isinstance(value, bool) and isfinite(value) else None
+
+
+def _speed_role(value):
+    return "FLAT_EQUIVALENT" if value == "FLAT_EQUIVALENT_REFERENCE_NOT_TERRAIN_PACE" else value
 
 
 def method_descriptor(method, sport):
@@ -54,11 +59,13 @@ def method_descriptor(method, sport):
         definition["expert_override"] = {key: value for key, value in (resolution.get("expert_override") or {}).items()
                                          if key != "enabled"}
     from biathlon.method_progression import descriptor as progression_descriptor
+    speed_role = method.get("speed_role") or ((method.get("method_library") or {}).get("resolution") or {}).get("speed_role")
     return {"id": method["id"], "zone": method["zone"], "sport": sport, "progression": progression_descriptor(method),
             "structure": method["structure"], "purpose": method["purpose"],
             "version": f"{CATALOG_VERSION}:{_hash(definition)[:20]}",
             "catalog_version": CATALOG_VERSION, "position": method.get("position"),
-            "parts": [method_descriptor(part, sport) for part in method.get("combined_methods", [])]}
+            "parts": [method_descriptor(part, sport) for part in method.get("combined_methods", [])],
+            **({"speed_role": _speed_role(speed_role)} if speed_role else {})}
 
 
 def _methods(repository, alias, *, include_library=True, library_sport=None, library_method_id=None, execution_date=None, exclude_activity_ref=None):
@@ -153,7 +160,14 @@ def confirmed_descriptor(repository, alias, report, activity):
                    and (sport in m["sports"] or (sport == "WeightTraining" and m["zone"] == "STR"))), None)
     if method is None:
         raise HTTPException(422, "Choose an available method for the actual activity sport")
-    return method_descriptor(method, sport)
+    descriptor = method_descriptor(method, sport)
+    # Preserve the frame of this recorded execution when later calibrations
+    # rebuild the activity's accounting profile. No plan/activity link is inferred.
+    evidence = intensity_provenance(activity)
+    for key in ("speed_role", "initial_heuristic", "calibration_source"):
+        if key in evidence:
+            descriptor[key] = _speed_role(evidence[key]) if key == "speed_role" else evidence[key]
+    return descriptor
 
 
 def _activity_map(source):
@@ -237,9 +251,10 @@ def _observation(entry, activity, excluded, today):
         # High RPE alone, or fatigue without failure of intended dose, does not
         # mean that the workout method failed.
         return None
+    speed_role = _speed_role(descriptor.get("speed_role") or intensity_provenance(activity).get("speed_role")) if planned_speed is not None else None
     return {"id": entry["entry_key"], "revision": entry["revision"], "payload_hash": _hash(p), "day": day,
             "method": dict(descriptor), "planned_minutes": planned, "actual_minutes": actual,
-            "planned_speed_kmh": planned_speed, "rpe": rpe, "timing": p["timing"],
+            "planned_speed_kmh": planned_speed, "speed_role": speed_role, "rpe": rpe, "timing": p["timing"],
             "success": success, "execution_reason": reason}
 
 
@@ -265,6 +280,8 @@ def _comparable(row, anchor):
         return False
     sa, sb = row.get("planned_speed_kmh"), anchor.get("planned_speed_kmh")
     if (sa is None) != (sb is None) or (sa is not None and not .95 <= sa/sb <= 1.05):
+        return False
+    if sa is not None and row.get("speed_role") != anchor.get("speed_role"):
         return False
     return row["timing"] == anchor["timing"]
 

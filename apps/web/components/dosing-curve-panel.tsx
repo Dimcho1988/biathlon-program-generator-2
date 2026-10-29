@@ -12,11 +12,11 @@ const series=[
   {key:"speed_kmh",label:"Обща за дозиране · 30/70",color:"#be77ff",dash:undefined},
 ] as const;
 
-export function DosingCurvePanel({model}:{model:DosingModel}){
+export function DosingCurvePanel({model,initialHeuristic=false}:{model:DosingModel;initialHeuristic?:boolean}){
   const {ref,width,height,left,right,top,bottom,plotWidth,plotHeight} = useChartLayout(52);
   const [cursor,setCursor]=useState(90);
   const [visible,setVisible]=useState([true,true,true]);
-  if(model.status!=="AVAILABLE"||model.points.length<2)return <section className="history-section"><h2>Обща крива за дозиране · 30/70</h2><p>Нужни са едновременно съпоставим индекс и активен максимален тест за този спорт. Дотогава методите използват наличните индивидуални или експертни ориентири.</p></section>;
+  if(model.status!=="AVAILABLE"||model.points.length<2)return <section className="history-section"><h2>Обща крива за дозиране · 30/70</h2><p>Нужни са едновременно съпоставим индекс и активен максимален тест за този спорт. {initialHeuristic?"Текущите начални скоростни ориентири са по модела от историята, без корекция за релефа; те не участват като тест или индекс в смесването 30/70.":"Дотогава методите използват наличните индивидуални или експертни ориентири."}</p></section>;
   const points=model.points,sample=points[Math.min(cursor,points.length-1)];
   const lo=Math.log(points[0].duration_s),hi=Math.log(points.at(-1)!.duration_s);
   const vmax=Math.max(...points.map(p=>Math.max(p.index_speed_kmh,p.test_speed_kmh)))*1.05;

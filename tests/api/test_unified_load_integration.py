@@ -59,7 +59,7 @@ def test_history_reconstruction_uses_prior_date_and_keeps_unknown_separate(monke
     recorded = streams(None, 16., seconds=30)
     rows = {"pinned-key": {"activity_ref":"one", "shadow_payload":recorded}}
     repo = SimpleNamespace(athlete_settings=lambda _:settings, activity_speed_history_samples=lambda a,k:rows)
-    inputs = {"alias":"test", "calendar":{"activities":[{"activity_ref":"one", "sport":"Run",
+    inputs = {"alias":"test", "today":date(2026,10,24), "calendar":{"activities":[{"activity_ref":"one", "sport":"Run",
               "local_date":"2026-10-23", "latest_shadow_run_key":"pinned-key"}]}, "entries":[]}
     days = []
     def view(repository, alias, sport, *, _inputs, _capacity_only):
@@ -96,12 +96,13 @@ def test_provider_replay_downloads_each_stream_only_once():
 
 def test_history_reconstruction_preserves_work_after_a_pause(monkeypatch):
     from types import SimpleNamespace
+    from datetime import date
     from apps.api import actual_load_projection, model_service
     settings = SimpleNamespace(zone_bounds_bpm=BOUNDS, hrmax_bpm=200, leading_indicator="SPEED")
     recorded = streams(None, 16., seconds=90)
     for row in recorded["speed_test_series"][30:60]:
         row["vflat_b65_kmh"] = 0.
-    inputs = {"alias": "pause-test", "calendar": {"activities": [{"activity_ref": "paused", "sport": "Run",
+    inputs = {"alias": "pause-test", "today": date(2026,10,24), "calendar": {"activities": [{"activity_ref": "paused", "sport": "Run",
         "local_date": "2026-10-23", "elapsed_time_s": 90., "moving_time_s": 60., "latest_shadow_run_key": "paused-key"}]}, "entries": []}
     repo = SimpleNamespace(athlete_settings=lambda _: settings,
         activity_speed_history_samples=lambda a, k: {"paused-key": {"activity_ref": "paused", "shadow_payload": recorded}})
@@ -123,6 +124,37 @@ def test_history_reconstruction_preserves_work_after_a_pause(monkeypatch):
     revised = actual_load_projection.reconstruct_history(repo, "pause-test", source, speed_inputs=inputs)
     assert revised["activities"][0]["load_source"]["recorded_seconds"] == 95.
     assert revised["load_selection"]["unknown_seconds"] == 5.
+
+
+def test_saved_maximal_test_reconstructs_no_hr_history_without_moving_its_date():
+    from datetime import date, timedelta
+    from types import SimpleNamespace
+    from apps.api import actual_load_projection
+    today = date(2026,10,24)
+    settings = SimpleNamespace(zone_bounds_bpm=BOUNDS, hrmax_bpm=200, timezone="UTC", leading_indicator="HEART_RATE")
+    activities = [{"activity_ref": str(days), "sport": "Run", "local_date": (today-timedelta(days=days)).isoformat(),
+        "elapsed_time_s": 60., "moving_time_s": 60., "latest_shadow_run_key": str(days)} for days in (14,15)]
+    rows = {a["activity_ref"]: {"activity_ref": a["activity_ref"], "shadow_payload": streams(None, 16.)} for a in activities}
+    repo = SimpleNamespace(athlete_settings=lambda _: settings, activity_speed_history_samples=lambda a,k: rows)
+    inputs = {"alias": "retrospective", "settings": settings, "today": today,
+        "calendar": {"activities": activities}, "entries": [], "history": []}
+    source = {"period_start": activities[-1]["local_date"], "period_end": today.isoformat(), "activities": [
+        {"activity_ref": a["activity_ref"], "sport": "Run", "date": a["local_date"], "duration_min": 1.,
+         "zones": [{"zone": z, "effective_load": 0.} for z in speed_equivalence.ZONES]} for a in activities]}
+    before = actual_load_projection.reconstruct_history(repo, "retrospective", source, speed_inputs=inputs)
+    assert before["load_selection"]["unknown_seconds"] == 120.
+    inputs["entries"].append({"entry_key": "maximal", "kind": "SPEED_TEST", "revision": 1,
+        "payload": {"enabled": True, "sport": "Run", "day": today.isoformat(), "source": "MANUAL",
+            "duration_s": 600., "speed_kmh": 22., "maximal": True, "comparable": True}})
+    after = actual_load_projection.reconstruct_history(repo, "retrospective", source, speed_inputs=inputs)
+    reconstructed = {a["activity_ref"]: a for a in after["activities"]}
+    assert reconstructed["14"]["load_source"]["fallback_seconds"] == 60.
+    assert reconstructed["14"]["load_source"]["source_seconds"]["SPEED"] == 60.
+    assert reconstructed["14"]["quality_status"] == "valid"
+    assert reconstructed["15"]["load_source"]["unknown_seconds"] == 60.
+    assert reconstructed["15"]["quality_status"] == "limited"
+    assert inputs["entries"][0]["payload"]["day"] == today.isoformat()
+    assert after["load_selection"]["fingerprint"] != before["load_selection"]["fingerprint"]
 
 
 def test_shadow_retains_validated_recording_intervals_without_synthesizing_raw_hr():

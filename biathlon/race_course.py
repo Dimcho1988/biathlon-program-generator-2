@@ -118,6 +118,10 @@ def annotate_days(days, events):
         ranked = sorted(entries, key=lambda e: (not e[4], e[0]["date"], e[1].get("method_id", "")))
         for day, session, event, course, _ in ranked[:wanted]:
             note = instruction(course)
+            if any(block.get("speed_basis") == "RAW_MOVING_SPEED" or block.get("speed_role") == "RAW_MOVING_SPEED"
+                   for block in session.get("blocks", [])):
+                note = note.replace("Равнинното темпо и дистанция са еквивалент, не цел по наклона.",
+                    "Скоростта и дистанцията са начален ориентир от историята, без корекция за релефа; не са цел по наклона.")
             session["race_course_guidance"] = {"version": VERSION, "event_id": event["event_id"], "event_name": event["name"],
                 "status": "SPECIFIC", "course": deepcopy(course), "note": note,
                 "target_share_percent": share, "eligible_sessions": len(entries), "specific_sessions": wanted,
@@ -127,7 +131,8 @@ def annotate_days(days, events):
                     block["instructions"] = note + " " + block.get("instructions", "").replace("на подходящ равен участък", "в посочените условия")
                     if not flat(course):
                         block["primary_control"] = "EFFORT_ON_TERRAIN"
-                        block["speed_basis"] = "FLAT_EQUIVALENT"
+                        if block.get("speed_basis") != "RAW_MOVING_SPEED" and block.get("speed_role") != "RAW_MOVING_SPEED":
+                            block["speed_basis"] = "FLAT_EQUIVALENT"
                     for key in ("method_library", "parent_method_card"):
                         if (block.get(key) or {}).get("guidance"):
                             block[key]["guidance"]["execution"] = note

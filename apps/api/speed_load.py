@@ -33,7 +33,7 @@ from .trainability_history import history_from_calendar, read_calendar, robust_m
 from .trainability import MIN_SECONDS_BY_BAND, MAX_GAP_SECONDS
 from .component_load_context import read_contexts
 
-VERSION="speed-load-common-profile-v5-relative-rest"
+VERSION="speed-load-common-profile-v7-raw-speed-coordinate"
 COMPARISON_VERSION = speed_equivalence.VERSION
 ZONES=tuple(f"Z{i}" for i in range(1,6))
 logger = logging.getLogger("uvicorn.error")
@@ -159,13 +159,13 @@ def prior_indices(history, sport, day, settings):
     return indices
 
 
-def activity_samples(repository, alias, activities, *, metrics=None):
+def activity_samples(repository, alias, activities, *, metrics=None, include_raw=False):
     """Prefetch one ten-activity batch while integrating the preceding batch.
 
     At most twenty streams are live per report; a shared two-thread lane bounds
     concurrent database reads. Results remain in the original activity order.
     """
-    reader=getattr(repository,"activity_speed_exposure_samples",None)
+    reader=(getattr(repository,"activity_speed_history_samples",None) if include_raw else None) or getattr(repository,"activity_speed_exposure_samples",None)
     batches = [activities[first:first+10] for first in range(0, len(activities), 10)]
     if not batches:
         return
@@ -211,15 +211,21 @@ def _activity_record(activity, row, mapping, reason, comparison_parameters=None)
     """Integrate one immutable speed stream; preserve sample order and formulas."""
     s = activity["sport"]
     shadow = row.get("shadow_payload") or {}
-    compatible = (row.get("activity_ref") == activity["activity_ref"] and
-        (shadow.get("vflat_model_version"), shadow.get("vflat_config_version")) == speed_model_versions(s)
-        and isinstance(shadow.get("speed_test_series"), list))
+    from biathlon import raw_speed
+    speed_role = (mapping or {}).get("speed_role", "FLAT_EQUIVALENT")
+    def compatible_role(role):
+        return (row.get("activity_ref") == activity["activity_ref"] and
+            (raw_speed.available(shadow) if role == raw_speed.ROLE else
+             (shadow.get("vflat_model_version"), shadow.get("vflat_config_version")) == speed_model_versions(s)
+             and isinstance(shadow.get("speed_test_series"), list)))
+    compatible = compatible_role(speed_role)
     if not compatible:
         reason = "SPEED_RECOMPUTATION_REQUIRED"
     totals = {z: {"zone": z, "minutes": 0., "equivalent_minutes": 0.} for z in ZONES}
     excluded = outside = rest = 0.
     floor = mapping["bounds_kmh"][0] if mapping else None
-    intervals = sample_intervals(shadow, for_load=True, sport=s, rest_threshold_kmh=floor) if compatible else []
+    intervals = sample_intervals(shadow, for_load=True, sport=s, rest_threshold_kmh=floor,
+                                 speed_role=speed_role) if compatible else []
     convert = _integration_converter(mapping) if mapping else lambda speed: None
     for left, right, speed, exclusion in intervals:
         dt = right-left
@@ -242,9 +248,9 @@ def _activity_record(activity, row, mapping, reason, comparison_parameters=None)
                    (activity.get("elapsed_time_s") or activity.get("moving_time_s") or 0.)/60,
                    covered+(excluded+outside+rest)/60)
     accounted = covered + rest/60
-    load_summary = shadow.get("speed_load_summary") or {}
+    load_summary = (shadow.get("speed_load_summary") or {}) if speed_role != raw_speed.ROLE else {}
     warnings = []
-    if compatible and (is_nordic(s) or is_running(s)) and load_summary.get("version") != LOAD_SAMPLES_VERSION:
+    if compatible and speed_role != raw_speed.ROLE and (is_nordic(s) or is_running(s)) and load_summary.get("version") != LOAD_SAMPLES_VERSION:
         warnings.append("SPEED_RECOMPUTATION_REQUIRED")
     if load_summary.get("balance_status") == "NEGATIVE_RESIDUAL":
         warnings.append("NEGATIVE_DESCENT_RESIDUAL")
@@ -256,15 +262,25 @@ def _activity_record(activity, row, mapping, reason, comparison_parameters=None)
             "speed_load_summary": load_summary, "warnings": warnings,
             "excluded_speed_minutes": excluded/60, "outside_mapping_minutes": outside/60,
             "status": "CLASSIFIED" if covered else "REST_ONLY" if rest else "UNAVAILABLE", "reason": reason,
-            "assumes_flat_incline": bool(compatible and any(
-                r.get("grade_assumed_flat") for r in shadow["speed_test_series"])),
+            "speed_role": speed_role,
+            "initial_heuristic": bool((mapping or {}).get("initial_heuristic") or
+                str((mapping or {}).get("source", "")).startswith("INITIAL_HEURISTIC")),
+            "assumes_flat_incline": bool(compatible and speed_role != raw_speed.ROLE and any(
+                r.get("grade_assumed_flat") for r in shadow.get("speed_test_series", []))),
             "mapping": mapping, "zones": list(totals.values())}
     if comparison_parameters is not None:
+        comparison_role = comparison_parameters.get("speed_role", "FLAT_EQUIVALENT")
+        comparison_compatible = compatible_role(comparison_role)
+        comparison_floor = comparison_parameters["zones"][0].get("low_kmh")
+        comparison_intervals = (intervals if comparison_role == speed_role and comparison_floor == floor else
+            sample_intervals(shadow, for_load=True, sport=s, rest_threshold_kmh=comparison_floor,
+                             speed_role=comparison_role) if comparison_compatible else [])
         result["speed_equivalence_comparison"] = speed_equivalence.integrate(
-            comparison_parameters, _comparison_segments(intervals, comparison_parameters),
+            comparison_parameters, _comparison_segments(comparison_intervals, comparison_parameters),
             recorded_seconds=duration*60,
-            warnings=["VFLAT_21S_SMOOTHING_NOT_VALIDATED_FOR_10S_SPRINTS"]
-                + (["SPEED_RECOMPUTATION_REQUIRED"] if not compatible else []))
+            warnings=(["RAW_SPEED_INITIAL_HEURISTIC_NOT_TERRAIN_CORRECTED"] if comparison_role == raw_speed.ROLE else
+                      ["VFLAT_21S_SMOOTHING_NOT_VALIDATED_FOR_10S_SPRINTS"])
+                + (["SPEED_RECOMPUTATION_REQUIRED"] if not comparison_compatible else []))
     return result
 
 
@@ -299,17 +315,23 @@ def _activity_records(repository, alias, selected, admitted, settings, namespace
         inputs.append((activity, *mappings[key]))
     if metrics is not None:
         metrics["mapping_ms"] = _elapsed_ms(mapping_started)
+    include_raw = any((mapping or {}).get("speed_role") == "RAW_MOVING_SPEED" for _, mapping, _ in inputs) or any(
+        p.get("speed_role") == "RAW_MOVING_SPEED" for p in (comparison_by_sport or {}).values())
     def integrate(activity, row, mapping, reason):
         started = perf_counter()
+        # The comparison panel evaluates a period against one current sport
+        # profile. Direct historical Q above retains its own day's calibration.
+        # Mixing historical parameter versions in a current-profile aggregate
+        # is undefined and previously made the entire report fail.
         result = _activity_record(activity, row, mapping, reason,
-            (mapping or {}).get("parameters") or (comparison_by_sport or {}).get(activity["sport"]))
+            (comparison_by_sport or {}).get(activity["sport"]) or (mapping or {}).get("parameters"))
         if metrics is not None:
             metrics["integration_ms"] = metrics.get("integration_ms", 0.) + _elapsed_ms(started)
         return result
     if not namespace:
         return [integrate(activity, row, mapping, reason)
                 for (activity, row), (_, mapping, reason) in zip(
-                    activity_samples(repository, alias, selected, metrics=metrics), inputs)]
+                    activity_samples(repository, alias, selected, metrics=metrics, include_raw=include_raw), inputs)]
     keyed, record_keys, unpinned = {}, [], {}
     for position, (activity, mapping, reason) in enumerate(inputs):
         # An activity without a pinned stream is unavailable and may be
@@ -339,7 +361,7 @@ def _activity_records(repository, alias, selected, admitted, settings, namespace
         results = {}
         # Consume each ten-activity sample batch immediately. Only the small
         # integrated results survive; full-season streams are never retained.
-        for activity, row in activity_samples(repository, alias, activities, metrics=metrics):
+        for activity, row in activity_samples(repository, alias, activities, metrics=metrics, include_raw=include_raw):
             key = source_keys[activity["activity_ref"], activity["latest_shadow_run_key"]]
             _, mapping, reason = keyed[key]
             results[key] = integrate(activity, row, mapping, reason)
@@ -388,10 +410,12 @@ def history_view(repository, alias, sport=None, *, today=None, as_of=None, perio
                              and (sport is None or a["sport"] == sport)})
     phase_started = perf_counter()
     contexts = read_contexts(repository, alias, capacity_sports)
+    from . import model_service
+    speed_inputs = model_service.speed_view_inputs(repository, alias) if hasattr(repository, "_request") else None
     metrics["capacity_ms"] = _elapsed_ms(phase_started)
     def compute():
         return _compute_history(repository, alias, sport, settings, today, start, warmup,
-                                calendar, admitted, custom_period, metrics, contexts)
+                                calendar, admitted, custom_period, metrics, contexts, speed_inputs)
     def finish(result):
         # No athlete identifiers, settings, mappings or source keys are logged.
         logger.info("onflows_speed_load elapsed_ms=%.1f report_cache=%s "
@@ -419,6 +443,10 @@ def history_view(repository, alias, sport=None, *, today=None, as_of=None, perio
         "component_load_version": COMPONENT_LOAD_VERSION,
         "capacities": {s: c["fingerprint"] for s, c in contexts.items()},
         "speed_comparison": {s: (c.get("comparison_parameters") or {}).get("parameters_version") for s,c in contexts.items()},
+        "historical_calibration": {"policy": model_service.HISTORICAL_SPEED_POLICY,
+            "evaluation_day": speed_inputs["today"].isoformat(),
+            "tests": speed_inputs["entries"], "initial_profile": speed_inputs.get("initial_profile"),
+            "calendar": speed_inputs["calendar"]} if speed_inputs is not None else None,
     }
     key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
     metrics["key_ms"] = _elapsed_ms(phase_started)
@@ -426,7 +454,7 @@ def history_view(repository, alias, sport=None, *, today=None, as_of=None, perio
 
 
 def _compute_history(repository, alias, sport, settings, today, start, warmup,
-                     calendar, admitted, custom_period, metrics=None, contexts=None):
+                     calendar, admitted, custom_period, metrics=None, contexts=None, speed_inputs=None):
     available=sorted({a["sport"] for a in calendar.get("activities",[]) if supports_speed_load(a.get("sport"))})
     if sport is not None and not supports_speed_load(sport):raise HTTPException(422,"Unsupported speed-load sport")
     selected=[a for a in calendar.get("activities",[]) if supports_speed_load(a.get("sport"))
@@ -439,14 +467,14 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
     if hasattr(repository, "_request"):
         from . import model_service
         from .component_load_context import context_from_speed_view
-        inputs = model_service.speed_view_inputs(repository, alias)
+        inputs = speed_inputs if speed_inputs is not None else model_service.speed_view_inputs(repository, alias)
         causal_contexts = {}
         for a in selected:
             day = date.fromisoformat(a["local_date"])
             key = (a["sport"], day)
             if key not in causal_contexts:
                 view = model_service.speed_view(repository, alias, a["sport"],
-                    _inputs={**inputs, "today": day-timedelta(days=1)}, _capacity_only=True)
+                    _inputs=model_service.historical_speed_inputs(inputs, day), _capacity_only=True)
                 causal_contexts[key] = context_from_speed_view(view)
     records = _activity_records(repository, alias, selected, admitted, settings, namespace, metrics, comparisons, causal_contexts)
     statistics_started = perf_counter()
@@ -508,6 +536,8 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
     comparison = (speed_equivalence.aggregate(comparisons[comparison_sport],
         [a["speed_equivalence_comparison"] for a in visible if a["sport"] == comparison_sport])
         if comparison_sport is not None else None)
+    if comparison is not None:
+        comparison["calibration_scope"] = "CURRENT_SPORT_PROFILE"
     return {"schema_version":"speed-load-history-v1","model_version":VERSION,
             "speed_equivalence_comparison": comparison,
             "sport":sport,"sports":available,"start_date":start.isoformat(),"end_date":today.isoformat(),
@@ -515,7 +545,7 @@ def _compute_history(repository, alias, sport, settings, today, start, warmup,
             "source_generation_id":calendar.get("generation_id"),"source_revision":calendar.get("revision"),
             "load_role":"INDEPENDENT_SPEED_VIEW_OF_SHARED_KERNEL","equivalence_version":speed_equivalence.VERSION,
             "component_load_version":COMPONENT_LOAD_VERSION,
-            "mapping_policy":"PRIOR_40_DAYS_EXCLUDING_CURRENT_DAY_WITH_TREADMILL_RUN_FALLBACK",
+            "mapping_policy":"PRIOR_40_DAY_INDEX_WITH_14_DAY_MAXIMAL_TEST_RETROSPECTIVE_AND_TREADMILL_RUN_FALLBACK",
             "recorded_minutes":total_recorded,"classified_minutes":covered,
             "rest_minutes":rest,"accounted_minutes":accounted,
             "unaccounted_minutes":max(0.,total_recorded-accounted),

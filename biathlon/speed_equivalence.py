@@ -162,7 +162,12 @@ def prepare(profile=None, *, sport="Run", tref_minutes=None, tref_version=None, 
         warnings.append("INCOHERENT_ZONE_BOUNDARIES")
     if not classification_valid:
         warnings.append("NONMONOTONE_OR_MISSING_ZONE_BOUNDARIES")
+    initial_heuristic = bool(profile.get("initial_heuristic") or
+        str(profile.get("source", "")).startswith("INITIAL_HEURISTIC"))
     result = {"version": VERSION, "role": "COMPARISON_ONLY", "sport": sport,
+              "speed_role": profile.get("speed_role") or "FLAT_EQUIVALENT",
+              "initial_heuristic": initial_heuristic,
+              "calibration_source": "INITIAL_HEURISTIC" if initial_heuristic else profile.get("source"),
               "settings": chosen, "curve_version": curve_version, "tref_version": tref_version, "zones": output,
               "classification_bounds_kmh": boundaries if classification_valid else None,
               "v10": _safe_json(profile.get("v10")), "warnings": warnings,
@@ -279,6 +284,9 @@ def integrate(parameters, segments, *, recorded_seconds=None, warnings=(), fallb
                      "baseline_normalized_q": baseline/(60*tref) if baseline is not None and tref else None})
     return {"version": VERSION, "integration_version": INTEGRATION_VERSION,
             "role": "COMPARISON_ONLY", "parameters_version": parameters["parameters_version"],
+            "speed_role": parameters.get("speed_role", "FLAT_EQUIVALENT"),
+            "initial_heuristic": parameters.get("initial_heuristic", False),
+            "calibration_source": parameters.get("calibration_source"),
             "settings": deepcopy(parameters["settings"]), "sport": parameters["sport"],
             "reference_policy": parameters["reference_policy"],
             "status": "AVAILABLE" if recorded and covered+rest >= recorded-1e-8 else "PARTIAL" if covered+rest else "UNAVAILABLE",

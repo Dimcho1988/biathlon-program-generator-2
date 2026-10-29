@@ -2,10 +2,11 @@
 
 The snapshot's persisted E is retained until component_load_projection verifies
 its original daily ledger. New Q is not added to legacy Q. Calibration uses
-only earlier dates, separately from all derived accounting values.
+only earlier training evidence and real maximal tests within fourteen subsequent
+days, separately from all derived accounting values.
 """
 from copy import deepcopy
-from datetime import date, timedelta
+from datetime import date
 from hashlib import sha256
 import json
 
@@ -35,10 +36,10 @@ def reconstruct_history(repository, alias, source, *, speed_inputs=None):
                 "alias": alias, "namespace": getattr(repository, "speed_load_cache_namespace", None),
                 "settings": {"bounds": settings.zone_bounds_bpm, "max": settings.hrmax_bpm,
                              "leading": settings.leading_indicator},
-                "calendar": [(a.get("activity_ref"), a.get("latest_shadow_run_key"), a.get("local_date"),
-                              a.get("elapsed_time_s"), a.get("moving_time_s"))
-                             for a in calendar.get("activities", ())],
-                "source": original_identity, "tests": inputs["entries"]}
+                "calendar": calendar, "initial_profile": inputs.get("initial_profile"),
+                "source": original_identity, "tests": inputs["entries"],
+                "profile_policy": model_service.HISTORICAL_SPEED_POLICY,
+                "evaluation_day": inputs["today"]}
     key = sha256(json.dumps(identity, sort_keys=True, allow_nan=False, default=str,
                            separators=(",", ":")).encode()).hexdigest()
     if (source.get("load_selection") or {}).get("fingerprint") == key:
@@ -74,12 +75,11 @@ def _reconstruct(repository, alias, source, inputs, settings, key, original_iden
             row = samples.get(calendar[ref]["latest_shadow_run_key"])
             if not row or row.get("activity_ref") != ref:
                 raise ValueError("Pinned load activity mismatch")
-            day = date.fromisoformat(activity["date"])-timedelta(days=1)
+            day = date.fromisoformat(activity["date"])
             identity = (activity["sport"], day)
             if identity not in models:
                 view = model_service.speed_view(repository, alias, activity["sport"],
-                    _inputs={**inputs, "today": day}, _capacity_only=True)
-                profile = (view.get("dosing_model") or {}).get("speed_zones") or view.get("speed_zones")
+                    _inputs=model_service.historical_speed_inputs(inputs, day), _capacity_only=True)
                 from .component_load_context import context_from_speed_view
                 models[identity] = context_from_speed_view(view)
             recording_seconds = (max(calendar[ref].get("elapsed_time_s") or 0.,
@@ -105,7 +105,7 @@ def _reconstruct(repository, alias, source, inputs, settings, key, original_iden
     out["load_selection"] = {"version": VERSION, "fingerprint": key,
         "snapshot_identity": original_identity,
         "leading_indicator": settings.leading_indicator, "equivalence_version": speed_equivalence.VERSION,
-        "profile_policy": "PRIOR_DATE_CALIBRATION_CURRENT_SETTINGS",
+        "profile_policy": model_service.HISTORICAL_SPEED_POLICY,
         "unknown_seconds": sum(r["unknown_seconds"] for r in records),
         "fallback_seconds": sum(r["fallback_seconds"] for r in records),
         "reconstructed_activities": len(records)}

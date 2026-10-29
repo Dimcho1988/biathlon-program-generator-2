@@ -31,6 +31,19 @@ def _normalized(count: int = 100):
     )
 
 
+@pytest.mark.parametrize("sport", ["Run", "Ride", "NordicSki"])
+def test_independent_raw_speed_keeps_observed_values_before_smoothing_or_terrain(sport):
+    velocities = [4.]*31
+    velocities[15] = 8.
+    normalized = normalize_stream_intervals(NormalizerInput(offsets=list(range(31)), metrics={
+        "velocity_smooth": velocities, "gradient": [4.]*31}))
+    _, shadow = compute_activity_shadow(detail={"type":sport,"start_date":"2026-10-28T10:00:00Z",
+        "moving_time":30.,"elapsed_time":30.}, normalized=normalized,
+        zone_bounds_bpm=(90,144,158,178,188,200), explicit_hrmax_bpm=200)
+    assert next(r for r in shadow["speed_test_series"] if r["elapsed_s"] == 15.)["speed_raw_kmh"] == pytest.approx(28.8)
+    assert all("speed_raw_kmh" in r for r in shadow["speed_test_series"])
+
+
 def test_duration_gate_invalidates_cache_without_splitting_comparable_activities():
     outputs = []
     for duration in (419, 420):

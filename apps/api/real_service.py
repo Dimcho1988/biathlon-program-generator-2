@@ -544,13 +544,14 @@ def dataset_to_load_history(
     )
 
     from biathlon.sport_heart_rate import VERSION as SPORT_HR_VERSION
+    from .model_service import HISTORICAL_SPEED_POLICY
     selected_sources = [a.load_source for a in activities if a.load_source]
     return LoadHistoryResponse(
         load_selection=({"version": selected_sources[0]["version"],
             "leading_indicator": selected_sources[0]["leading_indicator"],
             "fallback_seconds": sum(s["fallback_seconds"] for s in selected_sources),
             "unknown_seconds": sum(s["unknown_seconds"] for s in selected_sources),
-            "profile_policy": "PRIOR_DATE_CALIBRATION_CURRENT_SETTINGS",
+            "profile_policy": HISTORICAL_SPEED_POLICY,
             "calibration_eligible": False} if selected_sources else None),
         component_load_model={"version": COMPONENT_LOAD_VERSION,
                               "contexts_by_sport": getattr(dataset, "component_load_contexts", None) or {},
@@ -1246,6 +1247,11 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         )
         parameters = fresh_parameters()
         stage = "history"
+        from .refresh_speed_evidence import expected_activity_dates
+        # ProviderReplay serves this same list to load_real_history without a
+        # second download. Expected counts distinguish rest from failed detail.
+        expected_refresh_dates = expected_activity_dates(
+            provider.get_activities_result(start.isoformat(), end.isoformat()).payload, start, end)
         from intervals_inspector.real_data_source import _activity_duration_seconds, is_strength_activity
         from .activity_shadow_pipeline import (
             activity_shadow_configuration_fingerprint,
@@ -1388,7 +1394,8 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             from .refresh_speed_evidence import RefreshSpeedEvidence
             if refresh_speed_evidence is None:
                 speed_inputs = model_service.speed_view_inputs(repository, context.public_alias)
-                refresh_speed_evidence = RefreshSpeedEvidence(speed_inputs, start, end)
+                refresh_speed_evidence = RefreshSpeedEvidence(speed_inputs, start, end,
+                    expected_activity_dates=expected_refresh_dates)
                 # The first detail is collected before capacity resolution.
                 for metadata in catalog_metadata.values():
                     refresh_speed_evidence.record(metadata)
@@ -1400,8 +1407,10 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 return load_capacity_for_sport(sport)
             identity = (sport, day)
             if identity not in historical_load_contexts:
+                historical_inputs = refreshed_speed_inputs(day-timedelta(days=1))
                 view = model_service.speed_view(repository, context.public_alias, sport,
-                    _inputs=refreshed_speed_inputs(day-timedelta(days=1)), _capacity_only=True)
+                    _inputs=model_service.historical_speed_inputs(historical_inputs, day,
+                        evaluation_day=speed_inputs["today"]), _capacity_only=True)
                 value = context_from_speed_view(view)
                 from biathlon import speed_equivalence, unified_load
                 if speed_equivalence.supports_sport(sport):
@@ -1522,6 +1531,10 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 **({"sport_classification": catalog_sport_classifications[str(activity.activity_ref)]}
                    if str(activity.activity_ref) in catalog_sport_classifications else {}),
             }
+            load_source = getattr(activity, "load_source", None)
+            if isinstance(load_source, dict):
+                canonical_summary["intensity_provenance"] = {key: load_source.get(key) for key in
+                    ("speed_role", "initial_heuristic", "calibration_source")}
             source_scientific_input_hash = scientific_input_hashes.get(
                 str(activity.activity_ref)
             )

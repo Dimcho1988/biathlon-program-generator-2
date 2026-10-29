@@ -30,6 +30,8 @@ class Repository:
     def _request(self, method, path, **kwargs):
         if method == "GET":
             assert "athlete_alias=eq.ath-test" in path
+            if path.startswith("/onflows_management_entries?"):
+                return []
             return sorted(self.rows, key=lambda r: -r["revision"])
         assert path == "/rpc/save_onflows_model_entry"
         body = kwargs["json"]

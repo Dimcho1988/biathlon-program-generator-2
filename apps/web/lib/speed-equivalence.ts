@@ -14,6 +14,8 @@ export interface SpeedEquivalencePart {
 }
 export interface SpeedEquivalenceComparison {
   version: string; role: "COMPARISON_ONLY"; parameters_version: string;
+  speed_role?: string; initial_heuristic?: boolean; calibration_source?: string;
+  calibration_scope?: "CURRENT_SPORT_PROFILE";
   settings: { version: string; origin: "EXPERT_DEFINED"; coefficients: Record<string, number> };
   reference_policy: string; recorded_minutes: number; classified_minutes: number; coverage_percent: number;
   zones: SpeedEquivalenceZone[]; warnings: string[];
@@ -66,6 +68,8 @@ export function speedEquivalenceReason(reason?: string | null): string {
     INVALID_ZONE_BOUNDARIES: "Липсват валидни граници за еднозначно скоростно зониране.",
     OUTSIDE_ZONE_RANGE: "Скоростта е извън валидния диапазон на зоната.",
     MODEL_ESTIMATE_NOT_MEASURED_SPRINT: "V(10 сек) е моделна оценка, а не измерен спринтов резултат.",
+    NORMATIVE_TEN_SECOND_CONTINUATION_NOT_MEASURED_SPRINT: "V(10 сек) следва мащабираната нормативна форма; няма измерен индивидуален спринт.",
+    RAW_SPEED_INITIAL_HEURISTIC_NOT_TERRAIN_CORRECTED: "Използвани са начални моделни зони по скоростта в движение, без корекция за релефа.",
     TEN_SECONDS_OUTSIDE_CURVE_DOMAIN: "10 секунди са извън допустимата област на наличната крива. Не е добавена измислена скоростна опора.",
     EXTERNAL_SNAPSHOT_INCOMPLETE: "Външният запис не съдържа всички данни за проверка на скоростната оценка.",
     PRESCRIBED_ZONE_DIFFERS_FROM_SPEED_ZONE: "Предписаната зона се различава от зоната при избраната скорост. Сравнението използва същото скоростно зониране като реалното изпълнение.",

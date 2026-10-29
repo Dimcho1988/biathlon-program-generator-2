@@ -49,7 +49,7 @@ def annotate(session):
                 block["distance_range_m"] = list(block.get("target_distance_range_m")
                     or ([block["target_distance_m"]]*2 if block.get("target_distance_m") else
                         distance_range(time_range, speed_range)))
-                block["distance_basis"] = "FLAT_EQUIVALENT" if block.get("speed_basis") == "FLAT_EQUIVALENT" else "SPEED_REFERENCE"
+                block["distance_basis"] = "RAW_MOVING_SPEED" if block.get("speed_basis") == "RAW_MOVING_SPEED" or block.get("speed_role") == "RAW_MOVING_SPEED" else "FLAT_EQUIVALENT" if block.get("speed_basis") == "FLAT_EQUIVALENT" else "SPEED_REFERENCE"
             continue
         if block["kind"] == "WORK":
             supplied = block.get("duration_range_seconds")
@@ -67,7 +67,7 @@ def annotate(session):
         block["target_speed_range_kmh"] = [round(min(low, speed), 5), speed]
         block["target_pace_range_seconds_km"] = [3600/speed, 3600/block["target_speed_range_kmh"][0]]
         block["distance_range_m"] = distance_range(block["duration_range_seconds"], block["target_speed_range_kmh"])
-        block["distance_basis"] = "FLAT_EQUIVALENT" if block.get("speed_basis") == "FLAT_EQUIVALENT" or block.get("primary_control") == "EFFORT_ON_TERRAIN" else "SPEED_REFERENCE"
+        block["distance_basis"] = "RAW_MOVING_SPEED" if block.get("speed_basis") == "RAW_MOVING_SPEED" or block.get("speed_role") == "RAW_MOVING_SPEED" else "FLAT_EQUIVALENT" if block.get("speed_basis") == "FLAT_EQUIVALENT" or block.get("primary_control") == "EFFORT_ON_TERRAIN" else "SPEED_REFERENCE"
     session["execution_range_policy"] = {"version": VERSION, "dose_basis": "UPPER_BOUND",
         "note": "Времето е водещо. Горните граници са проверената доза; дистанцията е ориентир. Минималната методна доза и предписаните паузи се запазват. При достигнат минимум времевият диапазон може да се стесни до една стойност."}
     if any(b.get("method_library") for b in works):
