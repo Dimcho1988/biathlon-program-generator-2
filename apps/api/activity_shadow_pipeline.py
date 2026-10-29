@@ -129,6 +129,8 @@ def activity_shadow_configuration_fingerprint(
     # Session metadata belongs in the cache fingerprint, not the comparison
     # key: different routes remain comparable under the same model.
     if activity_detail is not None:
+        from biathlon.raw_speed import VERSION as RAW_SPEED_VERSION
+        payload["raw_speed_samples_version"] = RAW_SPEED_VERSION
         payload["hr_recording_intervals_version"] = HR_INTERVAL_VERSION
         payload["vflat_terrain_metadata"] = terrain_metadata(activity_detail)
         if is_running(sport) or is_nordic(sport):
@@ -395,6 +397,8 @@ def compute_activity_shadow(
     vflat_by_timestamp = {
         str(row.get("timestamp")): row for row in vflat["timeseries"]
     }
+    raw_speed_by_timestamp = {timestamp.isoformat(): _plain_number(speed*3.6)
+                              for timestamp, speed in zip(vflat_frame["timestamp"], vflat_frame["speed_raw_mps"])}
     hr_intervals = {interval.start_offset_sec: interval for interval in normalized.intervals}
     rows = []
     for index, sample in enumerate(samples):
@@ -510,8 +514,8 @@ def compute_activity_shadow(
             "dt_s": r["dt_s"], "vflat_b65_kmh": _plain_number(r.get("vflat_b65_kmh")),
             "grade_smoothed_pct": _plain_number(r.get("grade_raw_pct")),
             "exclusion_reason": r.get("exclusion_reason"),
-            **({"speed_raw_kmh": _plain_number(r.get("speed_raw_kmh")),
-                "load_speed_kmh": _plain_number(r.get("load_speed_kmh")),
+            "speed_raw_kmh": raw_speed_by_timestamp.get(r["timestamp"]),
+            **({"load_speed_kmh": _plain_number(r.get("load_speed_kmh")),
                 **{key: r[key] for key in ("load_status", "load_source", "load_reason")}}
                if "load_status" in r else {}),
             **({"grade_assumed_flat": r["grade_assumed_flat"]} if "grade_assumed_flat" in r else {}),

@@ -36,9 +36,7 @@ def reconstruct_history(repository, alias, source, *, speed_inputs=None):
                 "alias": alias, "namespace": getattr(repository, "speed_load_cache_namespace", None),
                 "settings": {"bounds": settings.zone_bounds_bpm, "max": settings.hrmax_bpm,
                              "leading": settings.leading_indicator},
-                "calendar": [(a.get("activity_ref"), a.get("latest_shadow_run_key"), a.get("local_date"),
-                              a.get("elapsed_time_s"), a.get("moving_time_s"))
-                             for a in calendar.get("activities", ())],
+                "calendar": calendar, "initial_profile": inputs.get("initial_profile"),
                 "source": original_identity, "tests": inputs["entries"],
                 "profile_policy": model_service.HISTORICAL_SPEED_POLICY,
                 "evaluation_day": inputs["today"]}

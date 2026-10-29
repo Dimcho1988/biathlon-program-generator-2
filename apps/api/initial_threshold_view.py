@@ -1,4 +1,4 @@
-"""Display-only initial threshold from the already pinned activity catalog."""
+"""Initial threshold from the already pinned activity catalog."""
 from datetime import date, timedelta
 
 from biathlon import initial_threshold
@@ -33,13 +33,15 @@ def _catalog_covers_processed_history(source, catalog):
                                        and quality[field] == counts[field]) for field in fields)
 
 
-def build(calendar, profile, today, sport, *, reliable_anchor=None, requested_days=None):
-    """No additional activity reads; never make this estimate a curve or test.
+def build(calendar, profile, today, sport, *, reliable_anchor=None, requested_days=None, window_end=None):
+    """No additional activity reads; the threshold is never a measured test.
 
     ``profile`` is the management PROFILE payload, not an athlete-settings
     default. ``reliable_anchor`` is explicitly selected by the caller after
     validating tests/index (``TESTS`` or ``INDEX``). Dates come from the pinned
     load ledger; a missing sensor does not itself make catalog coverage absent.
+    ``window_end`` is an optional exclusive historical end date; its own day
+    and later activities never enter the aggregate. It cannot exceed today.
     """
     base = {"use_status": "UNAVAILABLE", "sport": sport, "used_for_zones": False}
     if reliable_anchor in {"TESTS", "INDEX"}:
@@ -47,6 +49,11 @@ def build(calendar, profile, today, sport, *, reliable_anchor=None, requested_da
                 "use_status": "SUPERSEDED", "superseded_by": reliable_anchor}
     if type(today) is not date:
         return {**initial_threshold._result("INVALID_WINDOW"), **base}
+    end = today if window_end is None else window_end
+    if type(end) is not date:
+        return {**initial_threshold._result("INVALID_WINDOW"), **base}
+    if end > today:
+        return {**initial_threshold._result("INCOMPLETE_CALENDAR_DAYS"), **base}
     if requested_days is not None and (type(requested_days) is not int or not 7 <= requested_days <= 28):
         return {**initial_threshold._result("INVALID_WINDOW"), **base}
     years = (profile or {}).get("training_experience_years")
@@ -72,18 +79,18 @@ def build(calendar, profile, today, sport, *, reliable_anchor=None, requested_da
         reliable.discard(row.get("local_date"))
     days = 0
     for i in range(1, (requested_days or initial_threshold.PREFERRED_DAYS)+1):
-        if (today-timedelta(days=i)).isoformat() not in reliable:
+        if (end-timedelta(days=i)).isoformat() not in reliable:
             break
         days = i
     if days < (requested_days or initial_threshold.MINIMUM_DAYS):
         return {**initial_threshold._result("INSUFFICIENT_HISTORY"), **base}
-    start = today-timedelta(days=days)
+    start = end-timedelta(days=days)
     # Prefer an observed full recording duration; speed always uses explicit
     # raw distance and moving time from that same catalog row.
     loads = {row.get("activity_ref"): row for row in source.get("activities", [])}
     rows, duration_sources = [], set()
     for row in catalog:
-        if not start.isoformat() <= str(row.get("local_date") or "") < today.isoformat():
+        if not start.isoformat() <= str(row.get("local_date") or "") < end.isoformat():
             continue
         if row.get("planned") is True or row.get("completed") is False:
             continue
@@ -102,7 +109,7 @@ def build(calendar, profile, today, sport, *, reliable_anchor=None, requested_da
                      "training_duration_s": duration, "moving_time_s": row.get("moving_time_s"),
                      "distance_m": row.get("distance_m")})
     result = initial_threshold.from_history(rows, sport=sport, training_years=years,
-        window_start=start, window_end=today, as_of_date=today, reliable_dates=reliable)
+        window_start=start, window_end=end, as_of_date=today, reliable_dates=reliable)
     return {**result, **base,
             "use_status": "THRESHOLD_ONLY" if result["status"] == "AVAILABLE" else "UNAVAILABLE",
             "duration_sources": sorted(duration_sources)}

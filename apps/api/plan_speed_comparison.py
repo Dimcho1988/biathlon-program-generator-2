@@ -106,12 +106,19 @@ def _range_scenarios(block, parameters):
 
 
 def _block_comparison(block, parameters):
-    result = speed_equivalence.integrate(parameters, [_segment(block)],
+    raw = block.get("speed_basis") in {"RAW_MOVING_SPEED", "ACTUAL"} or block.get("speed_role") == "RAW_MOVING_SPEED"
+    same_frame = raw == (parameters.get("speed_role") == "RAW_MOVING_SPEED")
+    segment = _segment(block)
+    if not same_frame:
+        segment["speed_kmh"] = None
+    result = speed_equivalence.integrate(parameters, [segment],
         fallback_indicator="EXISTING_PLANNED_HR_Q_RETAINED")
     selected_zones = [row["zone"] for row in result["zones"] if row["real_seconds"] > 0]
     if block.get("zone") and selected_zones and block["zone"] not in selected_zones:
         result["warnings"].append("PRESCRIBED_ZONE_DIFFERS_FROM_SPEED_ZONE")
-    scenarios, reason = _range_scenarios(block, parameters)
+    scenarios, reason = _range_scenarios(block, parameters) if same_frame else (None, "SPEED_FRAME_MISMATCH")
+    if not same_frame and block.get("target_speed_kmh") is not None:
+        result["warnings"].append("PRESCRIBED_SPEED_FRAME_DIFFERS_FROM_PROFILE")
     result["range_basis"] = "DECLARED_PAIRED_VARIANTS_AND_SELECTED_VALUE" if scenarios else None
     result["range_reason"] = reason
     for row in result["zones"]:

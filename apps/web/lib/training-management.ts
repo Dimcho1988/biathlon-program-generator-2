@@ -115,7 +115,7 @@ export interface ManagementProfileResponse { configured: boolean; profile: Manag
 export interface DraftRecord { entry_key: string; revision: number; recorded_at?: string; stale?: boolean | null; stale_reason?: string | null; payload: PlanningDraft }
 export type Component = "Z1" | "Z2" | "Z3" | "Z4" | "Z5" | "STR";
 export const COMPONENTS: Component[] = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"];
-export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; lactate_reference?: LactateReference; method_library?: SessionMethod; parent_method_card?: SessionMethod; parent_method_card_ref?: string; hr_reference_range_bpm?: [number, number] | null; hr_reference_basis?: string; hr_role?: string; target_speed_range_kmh?: [number, number]; duration_range_seconds?: [number, number]; target_pace_range_seconds_km?: [number, number]; distance_range_m?: [number, number]; distance_basis?: "FLAT_EQUIVALENT" | "SPEED_REFERENCE" }
+export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; speed_role?: string; lactate_reference?: LactateReference; method_library?: SessionMethod; parent_method_card?: SessionMethod; parent_method_card_ref?: string; hr_reference_range_bpm?: [number, number] | null; hr_reference_basis?: string; hr_role?: string; target_speed_range_kmh?: [number, number]; duration_range_seconds?: [number, number]; target_pace_range_seconds_km?: [number, number]; distance_range_m?: [number, number]; distance_basis?: "FLAT_EQUIVALENT" | "SPEED_REFERENCE" | "RAW_MOVING_SPEED" }
 export interface StrengthPrescription {
   exercise_bank_id: string; main_sport: string; method: string;
   exercises: Array<{id: string; name: string; muscle_groups: string; reps: number; sets: number}>;
@@ -125,7 +125,7 @@ export interface StrengthPrescription {
 }
 export interface EffortAnchor {
   type: string; zone?: string; position?: number; target_hr_bpm?: number; speed_kmh?: number;
-  duration_seconds?: number; distance_m?: number; source?: string;
+  duration_seconds?: number; distance_m?: number; source?: string; speed_role?: string; speed_basis?: string;
   anchor?: EffortAnchor | null;
   parts?: Array<{ zone: string; kind?: string; method_id?: string; anchor: EffortAnchor }>;
 }
@@ -517,6 +517,7 @@ export const PHASE_LABELS: Record<string, string> = {
   COMPETITION: "Състезателен", TRANSITION: "Преходен", TAPER: "Тейпър",
 };
 export const CAPACITY_LABELS: Record<string, string> = {
+  TEST_CURVE_INITIAL_HR_ESTIMATE: "Тестова крива с начална оценка на връзката пулс–скорост",
   BLENDED_DOSING_CURVE: "Обща крива за дозиране · 30% индекс / 70% тестове",
   RACE_SPEED_DURATION: "Индивидуално темпо около състезателната дисциплина",
   SPEED_DURATION_TEST_ANCHOR: "Крива с максимален тест при съпоставимо усилие", SPEED_DURATION_MODEL_CURVE: "Моделна оценка от индивидуалната крива скорост–време", SPEED_DURATION_PRIOR: "Скорост–време с индивидуална опора и експертна форма", SPEED_TIME: "Индивидуална скорост–време", SPEED_DURATION: "Индивидуална скорост–време",

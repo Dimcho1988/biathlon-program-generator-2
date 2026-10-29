@@ -43,7 +43,7 @@ def model_interval_curve_capacity(method, settings, speed, context, *, use_model
     """
     predictor, tests, reasons = context
     if (method.get("structure") != "MODEL_INTERVALS"
-            or not speed or speed.get("status") not in {"CALIBRATED", "PRELIMINARY"}
+            or not speed or speed.get("status") not in {"CALIBRATED", "PRELIMINARY", "INITIAL_HEURISTIC"}
             or predictor is None or not getattr(predictor, "curve", None)):
         return None
     # The context may retain a sparse measured window. Invalid/exploratory
@@ -112,13 +112,17 @@ def model_interval_curve_capacity(method, settings, speed, context, *, use_model
     within_window = bool(observed) and min(observed) <= duration <= max(observed)
     if blended:
         base.update(capacity_source="BLENDED_DOSING_CURVE", capacity_confidence="COACH_30_70_ESTIMATE")
+    heuristic = speed.get("status") == "INITIAL_HEURISTIC"
+    if heuristic:
+        base.update(capacity_source="INITIAL_HEURISTIC", capacity_confidence="INITIAL_HEURISTIC_UNVALIDATED",
+                    initial_heuristic=True, calibration_source="INITIAL_HEURISTIC", calibration_eligible=False)
     return {**base, "capacity_minutes": duration / 60, "target_hr_bpm": None,
             "target_speed_kmh": target,
             "model_version": dosing_curve.VERSION if blended else speed["model_version"],
             "fallback_reasons": list(reasons), "capacity_is_estimate": True,
             "supported_test_duration_s": [min(observed), max(observed)] if observed else None,
             "within_observed_test_window": within_window,
-            "speed_role": "FLAT_EQUIVALENT_REFERENCE_NOT_TERRAIN_PACE"}
+            "speed_role": "RAW_MOVING_SPEED" if heuristic else "FLAT_EQUIVALENT_REFERENCE_NOT_TERRAIN_PACE"}
 
 
 def expert_interval_curve_capacity(method, speed, context, *, use_model_prior=False):
@@ -162,17 +166,19 @@ def expert_interval_curve_capacity(method, speed, context, *, use_model_prior=Fa
         return None
     if not _positive(target):
         return None
+    heuristic = (speed or {}).get("status") == "INITIAL_HEURISTIC"
     resolved = {**deepcopy(profile), "continuous_capacity_min": duration / 60,
-                "target_speed_kmh": target, "speed_basis": "FLAT_EQUIVALENT"}
-    return {"capacity_source": "BLENDED_DOSING_CURVE" if isinstance(predictor, dosing_curve.Predictor) else "SPEED_DURATION",
+                "target_speed_kmh": target, "speed_basis": "RAW_MOVING_SPEED" if heuristic else "FLAT_EQUIVALENT"}
+    return {"capacity_source": "INITIAL_HEURISTIC" if heuristic else "BLENDED_DOSING_CURVE" if isinstance(predictor, dosing_curve.Predictor) else "SPEED_DURATION",
             "capacity_minutes": duration / 60, "target_hr_bpm": None,
             "target_speed_kmh": target, "effort_profile": resolved,
             "model_version": getattr(curve, "model_version", (speed or {}).get("model_version")),
             "capacity_reference": "EXPERT_REPETITION_DURATION_COEFFICIENT_ON_CURVE",
-            "capacity_confidence": "EXPERT_METHOD_ON_INDIVIDUAL_CURVE",
+            "capacity_confidence": "INITIAL_HEURISTIC_UNVALIDATED" if heuristic else "EXPERT_METHOD_ON_INDIVIDUAL_CURVE",
             "capacity_is_estimate": True, "fallback_reasons": [],
             "speed_time_duration_ratio": coefficient, "hr_role": "OBSERVATION_ONLY",
-            "speed_role": "FLAT_EQUIVALENT_REFERENCE_NOT_TERRAIN_PACE",
+            "speed_role": "RAW_MOVING_SPEED" if heuristic else "FLAT_EQUIVALENT_REFERENCE_NOT_TERRAIN_PACE",
+            "initial_heuristic": heuristic, "calibration_eligible": False,
             "implementation_profile": method.get("implementation_profile")}
 
 
@@ -210,4 +216,5 @@ def library_curve_capacity(method, speed, context, *, use_model_prior=False):
             "method_library": deepcopy(library), "library_work_ceiling_minutes": resolved["method_work_capacity_seconds"] / 60,
             "effort_profile": {**deepcopy(method["interval_template"]),
                                "continuous_capacity_min": duration / 60,
-                               "target_speed_kmh": resolved["target_speed_kmh"], "speed_basis": "FLAT_EQUIVALENT"}}
+                               "target_speed_kmh": resolved["target_speed_kmh"],
+                               "speed_basis": "RAW_MOVING_SPEED" if resolved.get("speed_role") == "RAW_MOVING_SPEED" else "FLAT_EQUIVALENT"}}

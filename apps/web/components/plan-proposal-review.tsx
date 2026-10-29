@@ -5,6 +5,7 @@ import { durationHms } from "../lib/duration-format";
 import { daySessions, type ActivePlanRecord, type DraftDay, type DraftSession, type PlanChange } from "../lib/training-management";
 import { sessionSummary, SPORT_LABELS } from "../lib/training-visuals";
 import { BlockExecutionRange } from "./block-execution-range";
+import { speedBasisLabel } from "../lib/speed-basis";
 import { PreferredSpeed } from "./running-speed-unit";
 import { SyncActionForm } from "./sync-action-form";
 import { TrainingPlanSummary } from "./training-plan-summary";
@@ -23,7 +24,7 @@ function WorkTargets({ session }: { session: DraftSession }) {
     seen.add(key); return true;
   });
   return targets.length > 0 && <ul className="management-proposal-targets" aria-label="Интензивност на работните части">{targets.map((block, index) => <li key={index}>
-    <strong>{block.zone}:</strong> {block.target_speed_range_kmh ? <BlockExecutionRange block={block} sport={session.sport}/> : block.target_speed_kmh != null && <>Равнинна референция: <PreferredSpeed speed={block.target_speed_kmh} sport={session.sport}/>. </>}
+    <strong>{block.zone}:</strong> {block.target_speed_range_kmh ? <BlockExecutionRange block={block} sport={session.sport}/> : block.target_speed_kmh != null && <>{speedBasisLabel(block)}: <PreferredSpeed speed={block.target_speed_kmh} sport={session.sport}/>. </>}
     {block.hr_reference_range_bpm ? ` ${block.hr_reference_range_bpm.join("–")} уд./мин` : block.target_hr_bpm != null && ` ${block.target_hr_bpm} уд./мин`}
   </li>)}</ul>;
 }

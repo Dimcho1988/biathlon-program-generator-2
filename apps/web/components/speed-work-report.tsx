@@ -33,7 +33,8 @@ export function SpeedWorkReport({ start, end, generation, revision, totalDuratio
     {data && <>
       <RunningSpeedUnitControl/>
       <SpeedEquivalenceComparison value={data.speed_equivalence_comparison}/>
-      <p className="report-note">Време по скоростни зони, приравнен обем Q и ефективен товар E за избрания период. Зоните се определят чрез Vflat и предходните индекси за съответния спорт. Продължителностите са във формат ч:мм:сс.</p>
+      <p className="report-note">Време по скоростни зони, приравнен обем Q и ефективен товар E за избрания период. Зоните следват приложимия профил за датата: Vflat при индивидуални опори или скорост в движение без корекция за релефа при началния модел. Продължителностите са във формат ч:мм:сс.</p>
+      {data.activities.some(a=>a.initial_heuristic||a.speed_role==="RAW_MOVING_SPEED")&&<p className="report-note">Част от товара е по начални моделни зони от историята. Тези оценки не са индивидуални тестови резултати.</p>}
       <div className="report-totals"><dl>
         <div><dt>Продължителност на всички активности</dt><dd>{durationHms(totalDuration)}</dd></div>
         <div><dt>Поддържани за скоростен анализ</dt><dd>{durationHms(data.recorded_minutes)}</dd></div>

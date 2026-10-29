@@ -11,14 +11,14 @@ import math
 from biathlon.equivalence import EQUIVALENCE_VERSION, equivalence_slope
 from biathlon.physiology import linear_equivalence_coefficient
 from vflat_b65.sports import speed_model_versions, is_running
-from biathlon import speed_zones
+from biathlon import raw_speed, speed_zones
 from biathlon.speed_equivalence import relative_coefficient, VERSION as COMMON_EQUIVALENCE_VERSION
 from .activity_shadow_pipeline import activity_shadow_configuration_fingerprint
 from .oauth_store import PersistentStoreFailure
 from .speed_segments import sample_intervals
 from .trainability import LAG_SECONDS, MAX_GAP_SECONDS, MIN_SECONDS_BY_BAND
 
-VERSION = "speed-zone-planning-history-v4-common-kernel"
+VERSION = "speed-zone-planning-history-v5-raw-speed-coordinate"
 ZONES = tuple(f"Z{i}" for i in range(1, 6))
 PROVENANCE = {"speed": "MEASURED_VFLAT", "hr": "PAIRED_INDEX_ESTIMATE",
               "load": "ESTIMATED_NOT_MEASURED_HR"}
@@ -45,6 +45,9 @@ def _mapping(view, settings, today, sport):
     if not all(a < b for a, b in zip(bounds, bounds[1:])) or bounds[-1] > hrmax:
         return None, "INVALID_HR_BOUNDS"
     profile = view.get("speed_zones") or {}
+    speed_role = profile.get("speed_role", view.get("speed_role", "FLAT_EQUIVALENT"))
+    if speed_role == raw_speed.ROLE and view.get("sport") != sport:
+        return None, "NO_SPORT_SPECIFIC_RAW_SPEED_MODEL"
     if profile.get("status") == "AVAILABLE":
         upper = [z["high_kmh"] for z in profile["zones"][:4]]
         low = profile.get("supported_low_kmh")
@@ -56,6 +59,7 @@ def _mapping(view, settings, today, sport):
                 speeds.append(z5)
                 effective_bounds.append(bounds[5])
             return {"sport":sport,"bounds_bpm":effective_bounds,"bounds_kmh":speeds,
+                "speed_role":speed_role,"initial_heuristic":bool(view.get("initial_heuristic") or profile.get("initial_heuristic")),
                 "last_activity_date":(view.get("index_window") or {}).get("last_activity_date"),
                 "vflat_versions":speed_model_versions(sport),"boundary_basis":"INDIVIDUAL_SPEED_ZONES",
                 "comparison_key":activity_shadow_configuration_fingerprint(bounds,settings.hrmax_bpm,sport=sport)},None
@@ -107,11 +111,14 @@ def _missing_spans(shadow, coverage, elapsed):
 
 
 def _estimate(shadow, mapping, *, missing_minutes, coverage, elapsed):
-    if not isinstance(shadow.get("speed_test_series"), list):
+    raw_coordinate = mapping.get("speed_role") == raw_speed.ROLE
+    if raw_coordinate and not raw_speed.available(shadow):
+        return None, "RAW_SPEED_SERIES_REQUIRED"
+    if not raw_coordinate and not isinstance(shadow.get("speed_test_series"), list):
         return None, "INDEPENDENT_SPEED_SERIES_REQUIRED"
     # Session fingerprint also includes duration/terrain. Use the profile-only
     # comparison key stored even on an insufficient-HR trainability summary.
-    if ((shadow.get("vflat_model_version"), shadow.get("vflat_config_version")) != mapping["vflat_versions"]
+    if not raw_coordinate and ((shadow.get("vflat_model_version"), shadow.get("vflat_config_version")) != mapping["vflat_versions"]
             or (shadow.get("trainability_index") or {}).get("comparison_key") != mapping["comparison_key"]):
         return None, "INCOMPATIBLE_SPEED_CONFIGURATION"
     spans, reason = _missing_spans(shadow, coverage, elapsed)
@@ -122,9 +129,10 @@ def _estimate(shadow, mapping, *, missing_minutes, coverage, elapsed):
     rest = 0.
     # Entirely absent HR needs no temporal alignment to observed HR. Retain
     # the whole supported speed duration; partial masks retain paired TI lag.
-    lag = 0 if coverage == 0 else LAG_SECONDS
+    lag = 0 if coverage == 0 or raw_coordinate else LAG_SECONDS
     cursor = 0
-    for left, right, speed, exclusion in sample_intervals(shadow, for_load=True, sport=mapping["sport"], rest_threshold_kmh=speeds[0] if speeds else None):
+    for left, right, speed, exclusion in sample_intervals(shadow, for_load=True, sport=mapping["sport"],
+            rest_threshold_kmh=speeds[0] if speeds else None, speed_role=mapping.get("speed_role")):
         if (exclusion not in (None, "REST") or right-left > MAX_GAP_SECONDS or speed is None
                 or exclusion != "REST" and (not speeds or not speeds[0] <= speed <= speeds[-1])):
             continue
@@ -158,10 +166,15 @@ def _estimate(shadow, mapping, *, missing_minutes, coverage, elapsed):
     if covered > missing_minutes+1e-8:
         return None, "MISSING_HR_TIME_MASK_MISMATCH"
     provenance = {**PROVENANCE,"hr":"INDIVIDUAL_ZONE_ESTIMATE"} if mapping.get("boundary_basis") else dict(PROVENANCE)
-    if (shadow.get("speed_load_summary") or {}).get("estimated_descent_duration_s", 0) > 0:
+    if raw_coordinate:
+        provenance.update(speed="RAW_MOVING_SPEED", hr="INITIAL_HEURISTIC_ESTIMATE",
+                          initial_heuristic=True, calibration_source="INITIAL_HEURISTIC")
+    elif (shadow.get("speed_load_summary") or {}).get("estimated_descent_duration_s", 0) > 0:
         provenance["speed"] = "VFLAT_WITH_ESTIMATED_DESCENTS"
     return {"zones": list(totals.values()), "covered_missing_minutes": covered, "rest_missing_minutes": rest,
             "model_version": VERSION, "provenance": provenance,
+            "speed_role":mapping.get("speed_role", "FLAT_EQUIVALENT"),
+            "initial_heuristic":mapping.get("initial_heuristic", False), "calibration_eligible":False,
             "equivalence_version": COMMON_EQUIVALENCE_VERSION, "paired_lag_seconds": lag,
             "boundary_basis": mapping.get("boundary_basis","PAIRED_INDEX_ONLY"), "boundary_speeds_kmh": list(speeds)}, None
 
@@ -243,8 +256,11 @@ def exposure_history(repository, alias, view, today):
     """Read speed-zone time on demand, without replacing the canonical HR ledger."""
     from .trainability_history import read_calendar
     profile = view.get("speed_zones") or {}
+    speed_role = profile.get("speed_role", view.get("speed_role", "FLAT_EQUIVALENT"))
+    raw_coordinate = speed_role == raw_speed.ROLE
     start = today-timedelta(days=39)
-    result = {"version":"speed-zone-exposure-v1","status":"UNAVAILABLE","sport":view.get("sport"),
+    result = {"version":"speed-zone-exposure-v2-coordinate","status":"UNAVAILABLE","sport":view.get("sport"),
+        "speed_role":speed_role,"initial_heuristic":bool(view.get("initial_heuristic") or profile.get("initial_heuristic")),
         "start_date":start.isoformat(),"end_date":today.isoformat(),"activities":[],
         "zones":[{"zone":z,"minutes":0.} for z in ZONES],"classified_minutes":0.,
         "recorded_minutes":0.,"source_generation_id":view.get("source_generation_id"),
@@ -255,8 +271,8 @@ def exposure_history(repository, alias, view, today):
     if (calendar.get("generation_id"),calendar.get("revision")) != (view.get("source_generation_id"),view.get("source_revision")):
         return {**result,"status":"MODEL_UPDATED"}
     selected = [a for a in calendar.get("activities",[]) if start.isoformat() <= a.get("local_date","") <= today.isoformat()
-                and (a.get("sport") == view["sport"] or is_running(a.get("sport")) and is_running(view["sport"]))]
-    reader = getattr(repository,"activity_speed_exposure_samples",None)
+                and (a.get("sport") == view["sport"] or not raw_coordinate and is_running(a.get("sport")) and is_running(view["sport"]))]
+    reader = (getattr(repository,"activity_speed_history_samples",None) if raw_coordinate else None) or getattr(repository,"activity_speed_exposure_samples",None)
     if reader is None:
         return result
     keys = tuple(sorted({a["latest_shadow_run_key"] for a in selected if a.get("latest_shadow_run_key")}))
@@ -271,9 +287,11 @@ def exposure_history(repository, alias, view, today):
         by_zone = {z:0. for z in ZONES}
         rest = supplied = 0.
         compatible = (row.get("activity_ref") == a.get("activity_ref")
-            and (shadow.get("vflat_model_version"),shadow.get("vflat_config_version")) == speed_model_versions(a.get("sport")))
-        if compatible and isinstance(shadow.get("speed_test_series"),list):
-            for left,right,speed,exclusion in sample_intervals(shadow, for_load=True, sport=a.get("sport")):
+            and (raw_speed.available(shadow) if raw_coordinate else
+                 (shadow.get("vflat_model_version"),shadow.get("vflat_config_version")) == speed_model_versions(a.get("sport"))))
+        if compatible and (raw_coordinate or isinstance(shadow.get("speed_test_series"),list)):
+            for left,right,speed,exclusion in sample_intervals(shadow, for_load=True, sport=a.get("sport"),
+                    speed_role=speed_role, rest_threshold_kmh=profile.get("supported_low_kmh")):
                 supplied += (right-left)/60
                 if exclusion == "REST" and right-left <= MAX_GAP_SECONDS:
                     rest += (right-left)/60
@@ -285,7 +303,7 @@ def exposure_history(repository, alias, view, today):
         minutes = max(minutes, supplied)
         result["recorded_minutes"] += minutes
         rest_total += rest
-        estimated = (shadow.get("speed_load_summary") or {}).get("estimated_descent_duration_s", 0.)/60 if compatible else 0.
+        estimated = (shadow.get("speed_load_summary") or {}).get("estimated_descent_duration_s", 0.)/60 if compatible and not raw_coordinate else 0.
         estimated_total += estimated
         records.append({"activity_ref":a.get("activity_ref"),"date":a["local_date"],"sport":a.get("sport"),
             "recorded_minutes":minutes,"classified_minutes":round(covered,3),

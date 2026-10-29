@@ -1,4 +1,5 @@
 "use client";
+import { isRawMovingSpeed, RAW_SPEED_NOTE, speedBasisLabel } from "../lib/speed-basis";
 import { speedRangeText } from "../lib/speed-format";
 import { useRunningSpeedUnit } from "./running-speed-unit";
 import Link from "next/link";
@@ -10,7 +11,7 @@ function FrozenAnchor({ anchor, sport }: { anchor: EffortAnchor; sport: string }
   const unit = useRunningSpeedUnit();
   if (anchor.parts?.length) return <>{anchor.parts.filter(p => !p.kind || p.kind === "WORK").map((part, i) => <span key={i}>{i > 0 ? "; " : ""}{part.zone}: <FrozenAnchor anchor={part.anchor} sport={sport}/></span>)}</>;
   if (anchor.anchor) return <FrozenAnchor anchor={anchor.anchor} sport={sport}/>;
-  return <>{methodAnchorLabel(anchor)}{anchor.target_hr_bpm != null ? ` · ${anchor.zone} · ${anchor.target_hr_bpm.toLocaleString("bg-BG", { maximumFractionDigits: 1 })} уд/мин` : ""}{anchor.speed_kmh != null ? ` · ${speedRangeText([anchor.speed_kmh, anchor.speed_kmh], unit, sport)}` : ""}</>;
+  return <>{methodAnchorLabel(anchor)}{anchor.target_hr_bpm != null ? ` · ${anchor.zone} · ${anchor.target_hr_bpm.toLocaleString("bg-BG", { maximumFractionDigits: 1 })} уд/мин` : ""}{anchor.speed_kmh != null ? ` · ${speedRangeText([anchor.speed_kmh, anchor.speed_kmh], unit, sport)} · ${speedBasisLabel(anchor)}` : ""}</>;
 }
 
 function QAccounting({ session }: { session: DraftSession }) {
@@ -43,7 +44,8 @@ export function SessionMethodGuidance({ session }: { session: DraftSession }) {
     return <div key={method.id}><h4>{method.id.startsWith("COMBO-") ? method.title : <Link href={methodHref(method.id)}>Метод {method.id}{method.title ? ` · ${method.title}` : ""} →</Link>}</h4>
       {method.guidance?.purpose && <p>{method.guidance.purpose}</p>}
       {resolution?.hr_reference_range_bpm && <p className="management-muted"><strong>Пулсов ориентир:</strong> {methodHrText(resolution)}</p>}
-      {resolution?.anchor && <p className="management-muted"><strong>{anchor ? "Работен диапазон" : methodAnchorLabel(resolution.anchor)}</strong>{resolution.target_speed_range_kmh ? ` · ${speedRangeText(resolution.target_speed_range_kmh, unit, session.sport)}` : ""}{resolution.work_duration_range_seconds ? ` · отсечка ${rangeText(resolution.work_duration_range_seconds, durationSeconds)}` : ""}</p>}
+      {resolution?.anchor && <p className="management-muted"><strong>{anchor ? "Работен диапазон" : methodAnchorLabel(resolution.anchor)}</strong>{resolution.target_speed_range_kmh ? ` · ${speedRangeText(resolution.target_speed_range_kmh, unit, session.sport)} · ${speedBasisLabel(resolution)}` : ""}{resolution.work_duration_range_seconds ? ` · отсечка ${rangeText(resolution.work_duration_range_seconds, durationSeconds)}` : ""}</p>}
+      {isRawMovingSpeed(resolution)&&<p className="management-muted">{RAW_SPEED_NOTE}</p>}
       <details><summary>Указания и критерии за изпълнение</summary>{(["execution", "recovery", "success", "errors", "adjustment", "progression"] as const).map(key => method.guidance?.[key] ? <p key={key}><strong>{{ execution: "Изпълнение", recovery: "Почивка", success: "Успех", errors: "Избягвай", adjustment: "Корекция", progression: "Прогресия" }[key]}:</strong> {method.guidance[key]}</p> : null)}<p className="management-muted">Дозата и личната скорост са запазени при съставянето на тази тренировка. Базата показва текущата крива и настройки.</p></details>
     </div>;
   })}</section>;

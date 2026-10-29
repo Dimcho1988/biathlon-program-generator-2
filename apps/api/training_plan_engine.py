@@ -356,12 +356,15 @@ def _session_parts(session, settings, rows, day, slot_index):
 def _capacity_context(speed, settings):
     from biathlon.sport_heart_rate import local_settings, reference_offset
     settings=local_settings(settings,(speed or {}).get("sport"))
-    if not speed or speed.get("status") not in {"CALIBRATED", "PRELIMINARY"}:
+    if not speed or speed.get("status") not in {"CALIBRATED", "PRELIMINARY", "INITIAL_HEURISTIC"}:
         return None, [], ["NO_INDIVIDUAL_SPEED_CURVE"]
     keys = set(speed.get("active_test_keys", []))
     tests = [e["payload"] for e in speed.get("tests", []) if e.get("entry_key") in keys]
     reasons = []
-    if any(t.get("test_mode", "STRICT") != "STRICT" or not t.get("maximal", False) for t in tests):
+    if any(t.get("test_mode", "STRICT") != "STRICT" or t.get("maximal") is not True
+           or t.get("comparable") is False or t.get("generated") or t.get("is_estimated")
+           or str(t.get("source", "")).upper() in {"MODEL", "MODEL_GENERATED", "GENERATED", "ESTIMATED", "REFERENCE"}
+           or str(t.get("kind", "")).upper() in {"MODEL_POINT", "ESTIMATE"} for t in tests):
         reasons.append("EXPLORATORY_OR_NONMAXIMAL_TESTS")
     if len({float(t["duration_s"]) for t in tests}) < 2:
         reasons.append("INSUFFICIENT_INDEPENDENT_TEST_DURATIONS")
@@ -371,14 +374,21 @@ def _capacity_context(speed, settings):
         return None, tests, reasons
     prior_summary = speed.get("preliminary_capacity") or {}
     prior = preliminary_capacity.curve_from_summary(prior_summary)
-    if not tests and prior is None:
+    heuristic = speed.get("status") == "INITIAL_HEURISTIC"
+    if not tests and prior is None and not heuristic:
         return None, tests, ["NO_INDIVIDUAL_SPEED_CURVE"]
     blend = dosing_curve.from_view(speed)
-    curve = blend or speed_duration.calibrated(tests, prior=prior)
+    if heuristic:
+        from biathlon.initial_speed_profile import curve_from_view
+        curve = curve_from_view(speed)
+        if curve is None:
+            return None, [], ["INVALID_INITIAL_HEURISTIC_PROFILE"]
+    else:
+        curve = blend or speed_duration.calibrated(tests, prior=prior)
     durations = {a["zone"]: a["duration_s"] for a in prior_summary.get("anchors", [])}
     predictor_type = dosing_curve.Predictor if blend else hr_speed.ZonalPredictor
     try:
-        predictor = predictor_type(curve, settings.zone_bounds_bpm, settings.hrmax_bpm, speed["index_summary"], expert_durations=durations or None,
+        predictor = predictor_type(curve, settings.zone_bounds_bpm, settings.hrmax_bpm, speed.get("index_summary", {}), expert_durations=durations or None,
                                    normalization_offset_bpm=reference_offset(speed.get("sport")), sport=speed.get("sport", "Run"),
                                    profile=((speed.get("dosing_model") or {}).get("speed_zones") if blend else speed.get("speed_zones")), tests=tests)
     except ValueError:
@@ -401,6 +411,13 @@ def capacity_for(method, settings, speed, context, today, allow_fallback=True, *
                                 use_model_prior=use_model_prior)
     if result is None:
         return None
+    if result.get("initial_heuristic") or result.get("capacity_source") == "INITIAL_HEURISTIC":
+        result.update(speed_role="RAW_MOVING_SPEED", initial_heuristic=True,
+                      calibration_source="INITIAL_HEURISTIC", calibration_eligible=False)
+        if result.get("capacity_source") == "INITIAL_HEURISTIC":
+            result["capacity_confidence"] = "INITIAL_HEURISTIC_UNVALIDATED"
+        if result.get("effort_profile"):
+            result["effort_profile"] = {**result["effort_profile"], "speed_basis": "RAW_MOVING_SPEED"}
     from biathlon.sport_heart_rate import local_settings
     local = local_settings(settings, method.get("actual_sport") or (speed or {}).get("sport"))
     basis = (getattr(context[0], "component_load_context", None) if context[0] is not None else None)
@@ -418,6 +435,9 @@ def capacity_for(method, settings, speed, context, today, allow_fallback=True, *
         ranges.update(method_library._hr_reference({**ranges, "zone":method["zone"], "work_duration_seconds": (result.get("effort_profile") or {}).get("work_seconds", 300)}, predictor))
     result.update(ranges)
     result["effort_anchor"] = method_anchors.describe(method, result)
+    if result.get("initial_heuristic"):
+        result["effort_anchor"].update(speed_role="RAW_MOVING_SPEED", initial_heuristic=True,
+                                       calibration_source="INITIAL_HEURISTIC", calibration_eligible=False)
     return {**result, "zone_tmax_minutes": basis["minutes"], "zone_tmax_sources": basis["sources"],
             "dose_settings": {"zone_bounds_bpm": list(local.zone_bounds_bpm), "hrmax_bpm": local.hrmax_bpm,
                               "sport_hr_offset_bpm": getattr(local, "sport_hr_offset_bpm", 0.)}}
@@ -454,7 +474,7 @@ def _capacity_for_impl(method, settings, speed, context, today, allow_fallback=T
             return None
         p = {**method["interval_template"], "sport": method.get("actual_sport", method["sports"][0]),
              "continuous_capacity_min": base["capacity_minutes"], "target_speed_kmh": base["target_speed_kmh"],
-             "speed_basis": "FLAT_EQUIVALENT", "effort": method["instructions"]}
+             "speed_basis": "RAW_MOVING_SPEED" if base.get("initial_heuristic") else "FLAT_EQUIVALENT", "effort": method["instructions"]}
         if p["work_seconds"] >= base["capacity_minutes"]*60:
             return None
         return {**base, "target_hr_bpm": None, "hr_role": "OBSERVATION_ONLY", "effort_profile": p,
@@ -462,6 +482,10 @@ def _capacity_for_impl(method, settings, speed, context, today, allow_fallback=T
                 "capacity_role": "MODEL_ESTIMATE_FOR_REPEATABLE_EFFORT_NOT_MEASURED_TTE"}
     if method["structure"] == "METABOLIC_INTERVALS":
         p = method["interval_profile"]
+        if ((speed or {}).get("speed_role") == "RAW_MOVING_SPEED"
+                and p.get("target_speed_kmh") and p.get("speed_basis") == "FLAT_EQUIVALENT"):
+            # A raw-history scale cannot invert a terrain-corrected target.
+            return None
         capacity = p["continuous_capacity_min"]
         source = "COACH_EFFORT_CAPACITY"
         capacity_model_version = "individual-effort-profile-v2"
@@ -522,11 +546,18 @@ def _capacity_for_impl(method, settings, speed, context, today, allow_fallback=T
     predictor, tests, initial_reasons = context
     reasons = list(initial_reasons)
     duration = velocity = None
+    test_mapping = False
+    heuristic = (speed or {}).get("status") == "INITIAL_HEURISTIC"
     if predictor is not None:
+        from biathlon.zone_profile import _accepted_tests
+        mapping_source = predictor.metadata(target_hr)["hr_prediction_source"]
+        test_mapping = (use_model_prior and allow_fallback and bool(tests)
+            and len(_accepted_tests(tests, speed.get("sport", "Run"))) == len(tests)
+            and mapping_source in {"INITIAL_V50_V6_ESTIMATE", "TEST_CURVE_CONFLICT_FALLBACK"})
         recent = (speed.get("index_window") or {}).get("last_activity_date")
-        if not recent or (today - date.fromisoformat(recent)).days > 14:
+        if not heuristic and not test_mapping and (not recent or (today - date.fromisoformat(recent)).days > 14):
             reasons.append("STALE_HR_SPEED_INDEX")
-        if (speed.get("index_summary", {}).get(zone) or {}).get("count", 0) < 3:
+        if not heuristic and (speed.get("index_summary", {}).get(zone) or {}).get("count", 0) < 3:
             reasons.append("INSUFFICIENT_COMPARABLE_INDEX_OBSERVATIONS")
         try:
             velocity = predictor.speed_for_hr(target_hr)
@@ -550,13 +581,14 @@ def _capacity_for_impl(method, settings, speed, context, today, allow_fallback=T
         and (not reasons or allow_fallback
              and set(reasons) <= prior_reasons | mapping_priors))
     if (not reasons or prior_allowed or blend_allowed) and duration is not None:
-        source = "BLENDED_DOSING_CURVE" if blend_allowed else "SPEED_DURATION_PRIOR" if prior_allowed else "SPEED_DURATION"
+        source = ("INITIAL_HEURISTIC" if heuristic else "BLENDED_DOSING_CURVE" if blend_allowed
+                  else "TEST_CURVE_INITIAL_HR_ESTIMATE" if test_mapping else "SPEED_DURATION_PRIOR" if prior_allowed else "SPEED_DURATION")
         minutes = duration / 60.
         model_version = dosing_curve.VERSION if blend_allowed else speed["model_version"]
     else:
         outside_curve = (predictor is not None and velocity is not None and use_model_prior
                          and set(reasons) <= prior_reasons | mapping_priors | {"BOUNDARY_OUTSIDE_CURVE_DOMAIN"})
-        if not allow_fallback or ((predictor is not None or (speed or {}).get("status") in {"CALIBRATED", "PRELIMINARY"}) and not outside_curve):
+        if not allow_fallback or ((predictor is not None or (speed or {}).get("status") in {"CALIBRATED", "PRELIMINARY", "INITIAL_HEURISTIC"}) and not outside_curve):
             return None
         # Expert continuous capacity at the upper zone edge; explicitly NOT
         # the canonical load history's bounded 7*E40 variable also named Tref.
@@ -575,10 +607,17 @@ def _capacity_for_impl(method, settings, speed, context, today, allow_fallback=T
             "expert_capacity_position": prior_anchor.get("duration_position") if source == "EXPERT_CONTINUOUS_TREF" and prior_anchor else None,
             "target_hr_bpm": _round(target_hr), "target_speed_kmh": _round(velocity) if velocity else None,
             "model_version": model_version, "fallback_reasons": reasons,
-            "capacity_confidence": "COACH_30_70_ESTIMATE" if source == "BLENDED_DOSING_CURVE" else "INDIVIDUAL_TESTS_AND_RECENT_INDEX" if source == "SPEED_DURATION" else "INDIVIDUALLY_SCALED_EXPERT_SHAPE" if source == "SPEED_DURATION_PRIOR" else "EXPERT_REFERENCE",
+            "capacity_confidence": "COACH_30_70_ESTIMATE" if source == "BLENDED_DOSING_CURVE" else "TEST_CURVE_WITH_ESTIMATED_HR_MAPPING" if source == "TEST_CURVE_INITIAL_HR_ESTIMATE" else "INDIVIDUAL_TESTS_AND_RECENT_INDEX" if source == "SPEED_DURATION" else "INDIVIDUALLY_SCALED_EXPERT_SHAPE" if source == "SPEED_DURATION_PRIOR" else "EXPERT_REFERENCE",
             "target_zone_working_bounds_bpm": [low, high],
             "supported_test_duration_s": [min(t["duration_s"] for t in tests), max(t["duration_s"] for t in tests)] if tests else None,
-            "speed_role": "FLAT_EQUIVALENT_REFERENCE_NOT_TERRAIN_PACE"}
+            "speed_role": "RAW_MOVING_SPEED" if heuristic and velocity is not None else "FLAT_EQUIVALENT_REFERENCE_NOT_TERRAIN_PACE",
+            # A bounded expert duration can accompany an initial raw-speed
+            # target. Keep each origin explicit; the duration fallback cannot
+            # change the coordinate frame or make the speed measured evidence.
+            **({"initial_heuristic": True, "calibration_source": "INITIAL_HEURISTIC",
+                "calibration_eligible": False, "target_speed_source": "INITIAL_HEURISTIC",
+                "target_speed_model_version": speed["model_version"]}
+               if heuristic and velocity is not None else {})}
 
 
 def _block(kind, label, zone, minutes, hr, instructions, *, speed=None, repetition=None):
@@ -595,6 +634,9 @@ def _blocks(method, work, evidence, settings):
     local = local_settings(settings, method.get("actual_sport"))
     for block in blocks:
         block.setdefault("load_sport", method.get("actual_sport") or (method.get("sports") or ["Run"])[0])
+        if not method.get("combined_methods") and evidence.get("initial_heuristic") and block.get("target_speed_kmh") is not None:
+            block.update(speed_basis="RAW_MOVING_SPEED", speed_role="RAW_MOVING_SPEED",
+                         initial_heuristic=True, calibration_source="INITIAL_HEURISTIC", calibration_eligible=False)
         if block["zone"] == "STR" or block.get("passive_rest") or block.get("method_library") or block.get("primary_control") == "HRMAX":
             continue
         same = block.get("target_speed_kmh") is not None and evidence.get("target_speed_kmh") is not None and abs(block["target_speed_kmh"]-evidence["target_speed_kmh"]) < .002
@@ -1101,6 +1143,8 @@ def progression_context(repository, alias, profile, source, rows, today, periodi
     control = (profile.get("individual_learning") or {}).get("mode", "SHADOW") == "CONTROL"
     learning_source = measured_source if measured_source is not None else source
     learning_rows = _daily_rows(learning_source, today) if measured_source is not None else rows
+    from biathlon.learning_provenance import eligible_load_rows
+    learning_rows = eligible_load_rows(learning_source, learning_rows)
     if config["feedback_enabled"]:
         from .learning_service import compatible_load_observations
         entries = compatible_load_observations(entries, learning_source)
@@ -3509,7 +3553,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 elif mixed and not shortage["shortage"]:
                     evidence["selection"]["supporting_basis"] = "NO_ADMISSIBLE_STANDALONE_IN_THIS_SLOT"
                 choices.append((score, method["id"], {"method_id": method["id"], "title": method["title"],
-                                "execution_descriptor": method_descriptor(original_method, sport),
+                                "execution_descriptor": {**method_descriptor(original_method, sport),
+                                    **{key: evidence[key] for key in ("speed_role", "initial_heuristic", "calibration_source") if key in evidence}},
                                 "sport": sport, "zone": z, "purpose": purpose, "method_family": family, "blocks": blocks, "is_key_session": is_key,
                                 "neuromuscular_exposure": training_guidance.nms_exposure(blocks),
                                 "double_threshold": method.get("double_threshold", False), "mixed_component": mixed,

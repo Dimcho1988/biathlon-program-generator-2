@@ -16,6 +16,7 @@ from statistics import median
 from biathlon.constants import COMPONENTS
 from biathlon.load_progression import observed_window
 from biathlon.individual_learning import dose_changes
+from biathlon.learning_provenance import eligible_load_rows, heuristic_load_dates
 from .response_monitoring import latest_entries, number, relative_score
 from .stress_model import CHANNELS
 from .trainability import MODEL_VERSION, SCHEMA_VERSION
@@ -346,7 +347,8 @@ def build_evidence(*, source, rows, entries, history, trainability, today, retai
     """
     selected = _available_entries(entries, today)
     days = _response_days(history, selected, entries, today)
-    rows = [r for r in rows if r["date"] < today.isoformat()]
+    excluded_heuristic_dates = heuristic_load_dates(source)
+    rows = eligible_load_rows(source, [r for r in rows if r["date"] < today.isoformat()])
     quality = source.get("quality") or {}
     usable = not (quality.get("limited_activities") or quality.get("excluded_activities")) and bool(rows)
     valid_rows = all(number(r.get("effective_load")) is not None and r["effective_load"] >= 0 for r in rows)
@@ -357,6 +359,9 @@ def build_evidence(*, source, rows, entries, history, trainability, today, retai
                 and e.get("end", "9999") < today.isoformat() and e.get("observed_on", "9999") <= today.isoformat()
                 and e.get("provenance", {}).get("evidence_version") == VERSION}
     episodes, exclusions = {}, []
+    if excluded_heuristic_dates:
+        exclusions.append({"id": None, "reason": "INITIAL_HEURISTIC_NOT_LEARNING_EVIDENCE",
+                           "dates": sorted(d for d in excluded_heuristic_dates if d < today.isoformat())})
     first = str(source.get("period_start") or min((r["date"] for r in rows), default=today.isoformat()))
     # Preserve only genuinely aged-out observations. Recent episodes are rebuilt
     # or removed, so missing/revised data cannot keep an obsolete positive win.

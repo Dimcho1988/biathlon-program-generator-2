@@ -1247,6 +1247,11 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         )
         parameters = fresh_parameters()
         stage = "history"
+        from .refresh_speed_evidence import expected_activity_dates
+        # ProviderReplay serves this same list to load_real_history without a
+        # second download. Expected counts distinguish rest from failed detail.
+        expected_refresh_dates = expected_activity_dates(
+            provider.get_activities_result(start.isoformat(), end.isoformat()).payload, start, end)
         from intervals_inspector.real_data_source import _activity_duration_seconds, is_strength_activity
         from .activity_shadow_pipeline import (
             activity_shadow_configuration_fingerprint,
@@ -1389,7 +1394,8 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             from .refresh_speed_evidence import RefreshSpeedEvidence
             if refresh_speed_evidence is None:
                 speed_inputs = model_service.speed_view_inputs(repository, context.public_alias)
-                refresh_speed_evidence = RefreshSpeedEvidence(speed_inputs, start, end)
+                refresh_speed_evidence = RefreshSpeedEvidence(speed_inputs, start, end,
+                    expected_activity_dates=expected_refresh_dates)
                 # The first detail is collected before capacity resolution.
                 for metadata in catalog_metadata.values():
                     refresh_speed_evidence.record(metadata)
@@ -1525,6 +1531,10 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 **({"sport_classification": catalog_sport_classifications[str(activity.activity_ref)]}
                    if str(activity.activity_ref) in catalog_sport_classifications else {}),
             }
+            load_source = getattr(activity, "load_source", None)
+            if isinstance(load_source, dict):
+                canonical_summary["intensity_provenance"] = {key: load_source.get(key) for key in
+                    ("speed_role", "initial_heuristic", "calibration_source")}
             source_scientific_input_hash = scientific_input_hashes.get(
                 str(activity.activity_ref)
             )

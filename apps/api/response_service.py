@@ -179,6 +179,8 @@ def save_report(repository, alias, kind, body, actor, now=None):
             source = data["load_history"]
             load_supported = False
         rows = [*source.get("daily", []), *[{**r,"zone":"STR"} for r in (source.get("strength") or {}).get("daily", [])]]
+        from biathlon.learning_provenance import eligible_load_rows
+        rows = eligible_load_rows(source, rows)
         quality = source.get("quality") or {}
         entries = compatible_load_observations(store.entries(alias), source if load_supported else {})
         if not load_supported or quality.get("limited_activities") or quality.get("excluded_activities"):

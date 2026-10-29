@@ -60,12 +60,27 @@ def component_load_context_key(source):
 
 def compatible_load_observations(entries, source):
     """Discard only obsolete derived E windows, never original athlete reports."""
+    from biathlon.learning_provenance import heuristic_load_dates
     key = component_load_context_key(source)
+    excluded = heuristic_load_dates(source)
+    def eligible(window):
+        if not excluded:
+            return True
+        try:
+            start = date.fromisoformat(window["start"])
+            end = date.fromisoformat(window["recovery_end"])
+            days = window["days_per_window"]
+            if type(days) is not int or days <= 0 or days != (end-start).days+1:
+                return False
+            first = (start-timedelta(days=days)).isoformat()
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return False
+        return not any(first <= day <= end.isoformat() for day in excluded)
     result = []
     for entry in entries:
         payload = entry.get("payload") or {}
         windows = payload.get("observed_load_windows") or []
-        compatible = [window for window in windows if key is not None and
+        compatible = [window for window in windows if key is not None and eligible(window) and
             (window.get("source") or payload.get("load_source") or {}).get("component_load_context_key") == key]
         if len(compatible) != len(windows):
             entry = {**entry, "payload": {**payload, "observed_load_windows": compatible}}
@@ -161,6 +176,8 @@ def context(repository, alias, profile, source, rows, today, *, periodization=No
     config = {**DEFAULTS, **(profile.get("individual_learning") or {})}
     if not enabled(profile):
         return None
+    from biathlon.learning_provenance import eligible_load_rows
+    rows = eligible_load_rows(source, rows)
     settings = repository.athlete_settings(alias)
     physiology = {"bounds": list(settings.zone_bounds_bpm), "hrmax": settings.hrmax_bpm} if settings else None
     context_key = _digest({"version": VERSION, "sport": profile["sport"], "physiology": physiology,

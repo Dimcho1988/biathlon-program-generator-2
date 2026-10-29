@@ -9,6 +9,7 @@ from apps.api import model_service as service
 from apps.api.activity_shadow_pipeline import activity_shadow_configuration_fingerprint
 from apps.api.read_session import ReadSession
 from apps.api.trainability import MODEL_VERSION, SCHEMA_VERSION
+from biathlon import initial_speed_profile
 from vflat_b65.sports import speed_model_versions
 
 
@@ -22,7 +23,6 @@ class Repository:
         self.entries = []
         self.profile = {"training_experience_years": 4}
         self.summaries = {}
-        self.profile_forbidden = False
         dates = [(NOW.date()-timedelta(days=i)).isoformat() for i in range(1, 29)]
         rows = []
         for i in (1, 8, 15, 22):
@@ -66,7 +66,6 @@ class Repository:
         assert method == "GET" and not kwargs
         assert "athlete_alias=eq.ath-test" in path
         if path.startswith("/onflows_management_entries?"):
-            assert not self.profile_forbidden, "A reliable anchor must not read the fallback profile"
             self.reads.append("profile")
             return [] if self.profile is None else [{"kind": "PROFILE", "revision": 3,
                 "entry_key": "management-profile-v1", "payload": deepcopy(self.profile)}]
@@ -125,14 +124,25 @@ def test_full_service_uses_management_years_raw_matching_sport_and_complete_date
     assert "summaries" not in repo.reads  # no extra raw per-activity reads
     assert repo.calendar == before
     assert model["source_generation_id"] == "pinned-generation"
-    # The estimate cannot turn itself into an individual curve or evidence.
-    assert model["tests"] == model["points"] == []
+    # The approved initial policy supplies a curve and zones, but no tests.
+    assert model["tests"] == model["active_test_keys"] == []
     assert model["active_test_count"] == 0
-    assert model["prediction"] is None
-    assert model["speed_zones"]["status"] == "UNAVAILABLE"
-    assert model["speed_zones"]["zones"] == []
-    assert not model["curve_metadata"]["absolute_speed_available"]
-    assert estimate["used_for_zones"] is False and estimate["calibration_eligible"] is False
+    assert model["status"] == "INITIAL_HEURISTIC"
+    assert model["speed_role"] == "RAW_MOVING_SPEED"
+    assert model["prediction"]["evidence"] == "ESTIMATED"
+    assert model["prediction"]["speed_role"] == "RAW_MOVING_SPEED"
+    assert model["speed_zones"]["status"] == "AVAILABLE"
+    assert len(model["speed_zones"]["zones"]) == 5
+    assert model["speed_zones"]["v50_kmh"] == pytest.approx(14.8980, abs=.0001)
+    assert model["curve_metadata"]["mode"] == "HEURISTIC_REFERENCE_SCALE"
+    assert model["curve_metadata"]["measured_window_s"] is None
+    assert model["points"] and all(p["evidence"] == "ESTIMATED" for p in model["points"])
+    assert all(p["speed_role"] == "RAW_MOVING_SPEED" for p in model["points"])
+    assert estimate["used_for_zones"] is True and estimate["use_status"] == "ZONES"
+    assert estimate["calibration_eligible"] is False
+    assert model["critical_speed"]["standardized"]["status"] == "UNAVAILABLE"
+    assert model["dosing_model"]["status"] == "UNAVAILABLE"
+    assert initial_speed_profile.curve_from_view(model) is not None
 
 
 def test_explicit_21_day_window_reaches_adapter_without_changing_index_window():
@@ -156,26 +166,32 @@ def test_absent_profile_years_remain_unknown_despite_athlete_settings_default(pr
 
 
 @pytest.mark.parametrize("anchor", ["TESTS", "INDEX"])
-def test_reliable_anchor_supersedes_heuristic_and_avoids_profile_read(anchor):
+def test_reliable_anchor_supersedes_heuristic_with_one_pinned_profile_read(anchor):
     repo = Repository()
     (repo.add_test if anchor == "TESTS" else repo.add_index)()
-    repo.profile_forbidden = True
     model = service.speed_view(repo, "ath-test", "Run")
     estimate = model["initial_threshold"]
     assert estimate["use_status"] == "SUPERSEDED"
     assert estimate["superseded_by"] == anchor
     assert estimate["v_threshold_estimated_kmh"] is None
-    assert "profile" not in repo.reads
+    assert repo.reads.count("profile") == 1
+    assert model["status"] != "INITIAL_HEURISTIC"
+    assert model["speed_role"] == "FLAT_EQUIVALENT"
+    assert initial_speed_profile.curve_from_view(model) is None
     assert model["speed_zones"]["status"] == "AVAILABLE"
 
 
-def test_historical_capacity_path_does_not_load_or_produce_fallback_estimate():
+def test_capacity_path_reuses_pinned_initial_profile_and_same_active_policy():
     repo = Repository()
-    repo.profile_forbidden = True
-    model = service.speed_view(repo, "ath-test", "Run", _capacity_only=True)
-    assert "initial_threshold" not in model
-    assert "profile" not in repo.reads
-    assert model["speed_zones"]["status"] == "UNAVAILABLE"
+    session = ReadSession(repo)
+    full = service.speed_view(session, "ath-test", "Run")
+    fast = service.speed_view(session, "ath-test", "Run", _capacity_only=True)
+    assert fast["initial_threshold"] == full["initial_threshold"]
+    assert fast["initial_speed_profile"] == full["initial_speed_profile"]
+    assert fast["speed_zones"] == full["speed_zones"]
+    assert fast["status"] == "INITIAL_HEURISTIC"
+    assert repo.reads.count("profile") == 1
+    assert "points" not in fast
 
 
 def test_one_read_session_reuses_profile_and_pinned_calendar_across_sports():
@@ -186,3 +202,72 @@ def test_one_read_session_reuses_profile_and_pinned_calendar_across_sports():
     assert first["initial_threshold"]["status"] == "AVAILABLE"
     assert second["initial_threshold"]["reason"] == "SPORT_HISTORY_REQUIRED"
     assert repo.reads == ["settings", "calendar", "models", "profile"]
+
+
+def test_conflicting_tests_do_not_become_fake_heuristic_calibration_evidence():
+    repo = Repository()
+    repo.add_test()
+    repo.entries.append({**deepcopy(repo.entries[0]), "entry_key": "conflicting-test"})
+    repo.entries[-1]["payload"].update(duration_s=1200, speed_kmh=25)
+    before = deepcopy(repo.entries)
+    model = service.speed_view(repo, "ath-test", "Run")
+    assert model["status"] == "INITIAL_HEURISTIC"
+    assert model["active_test_keys"] == [] and model["active_test_count"] == 0
+    assert model["tests"] == before == repo.entries
+    assert "CONFLICTING_TESTS" in model["warnings"]
+    assert model["initial_threshold"]["used_for_zones"] is True
+
+
+@pytest.mark.parametrize("conflicting_tests", [False, True])
+def test_unusable_index_boundaries_allow_explicit_initial_policy(conflicting_tests):
+    repo = Repository()
+    repo.add_index()
+    index = repo.summaries["run-shadow"]["trainability_index"]
+    index["general"]["valid"] = False
+    for row in index["zones"]:
+        # Zonal speeds invert their ordering; there is no valid GENERAL rescue.
+        row["index"] = 2 if row["name"] == "Z1" else 8
+    if conflicting_tests:
+        repo.add_test()
+        repo.entries.append({**deepcopy(repo.entries[0]), "entry_key": "conflicting-test"})
+        repo.entries[-1]["payload"].update(duration_s=1200, speed_kmh=25)
+    model = service.speed_view(repo, "ath-test", "Run")
+    assert model["status"] == "INITIAL_HEURISTIC"
+    assert model["speed_zones"]["source"] == initial_speed_profile.SOURCE
+    assert model["initial_speed_profile"]["calibration_eligible"] is False
+
+
+def test_conflicting_tests_cannot_displace_an_independently_valid_paired_index():
+    repo = Repository()
+    repo.add_index()
+    baseline = service.speed_view(repo, "ath-test", "Run")
+    repo.add_test()
+    repo.entries.append({**deepcopy(repo.entries[0]), "entry_key": "conflicting-test"})
+    repo.entries[-1]["payload"].update(duration_s=1200, speed_kmh=25)
+    model = service.speed_view(repo, "ath-test", "Run")
+    assert model["status"] == "PRELIMINARY"
+    assert model["initial_threshold"]["use_status"] == "SUPERSEDED"
+    assert model["initial_threshold"]["superseded_by"] == "INDEX"
+    assert model["speed_zones"]["bounds_kmh"] == pytest.approx(baseline["speed_zones"]["bounds_kmh"])
+    assert model["active_test_keys"] == [] and model["active_test_count"] == 0
+    assert "CONFLICTING_TESTS" in model["warnings"]
+
+
+def test_historical_activity_uses_prior_complete_days_without_self_calibration():
+    repo = Repository()
+    inputs = service.speed_view_inputs(repo, "ath-test")
+    activity_day = NOW.date()-timedelta(days=7)
+    earlier = service.historical_speed_inputs(inputs, activity_day)
+    model = service.speed_view(repo, "ath-test", "Run", _inputs=earlier, _capacity_only=True)
+    estimate = model["initial_threshold"]
+    assert estimate["window"] == {"start": "2026-09-30", "end_exclusive": "2026-10-21", "days": 21}
+    assert estimate["history"]["activity_count"] == 6
+    assert estimate["inputs"] == {"H": 8., "v": 12., "S": 4.}
+    # Change only the current/future workouts. The exact historical model is fixed.
+    for row in repo.calendar["activities"]:
+        if row["local_date"] >= activity_day.isoformat() and row["sport"] == "Run":
+            row["distance_m"] *= 10
+    changed = service.historical_speed_inputs(service.speed_view_inputs(repo, "ath-test"), activity_day)
+    rerun = service.speed_view(repo, "ath-test", "Run", _inputs=changed, _capacity_only=True)
+    assert rerun["initial_threshold"] == estimate
+    assert rerun["speed_zones"] == model["speed_zones"]

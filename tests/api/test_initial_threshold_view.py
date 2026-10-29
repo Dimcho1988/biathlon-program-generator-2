@@ -136,3 +136,25 @@ def test_global_counts_without_valid_source_dates_cannot_prove_coverage(field, v
     source = calendar()
     source["snapshot_payload"]["load_history"][field] = value
     assert run(source)["reason"] == "INCOMPLETE_HISTORY_COVERAGE"
+
+
+def test_historical_window_excludes_its_own_day_and_every_later_activity():
+    value = calendar()
+    end = TODAY-timedelta(days=7)
+    # Move existing sessions to the historical window, leaving complete raw
+    # source counts valid. A newer run with very different speed stays outside.
+    for row in value["activities"]:
+        row["local_date"] = (end-timedelta(days=1)).isoformat()
+    value["activities"].append({**value["activities"][0], "activity_ref": "later",
+                                "local_date": end.isoformat(), "distance_m": 90000})
+    value["snapshot_payload"]["load_history"]["quality"].update(processed_activities=3, limited_activities=2)
+    result = run(value, window_end=end, requested_days=21)
+    assert result["inputs"] == {"H": .5, "v": 12., "S": 4.}
+    assert result["window"] == {"start": "2026-09-30", "end_exclusive": "2026-10-21", "days": 21}
+    assert result["history"]["activity_count"] == 2
+    assert result["speed_role"] == "RAW_MOVING_SPEED"
+
+
+def test_historical_end_cannot_include_a_future_or_open_day():
+    assert run(window_end=TODAY+timedelta(days=1))["reason"] == "INCOMPLETE_CALENDAR_DAYS"
+    assert run(window_end="2026-10-21")["reason"] == "INVALID_WINDOW"

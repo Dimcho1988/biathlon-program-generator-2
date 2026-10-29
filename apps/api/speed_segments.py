@@ -20,8 +20,11 @@ def finite(value):
     return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
 
 
-def sample_intervals(shadow, *, for_load=False, sport=None, rest_threshold_kmh=None):
+def sample_intervals(shadow, *, for_load=False, sport=None, rest_threshold_kmh=None, speed_role=None):
     """Select load estimates explicitly; tests always retain observed Vflat."""
+    from biathlon import raw_speed
+    if for_load and speed_role == raw_speed.ROLE:
+        return raw_speed.intervals(shadow, rest_threshold_kmh=rest_threshold_kmh)
     independent = shadow.get("speed_test_series")
     load_annotations = (for_load and (is_running(sport) or is_nordic(sport))
                         and (shadow.get("speed_load_summary") or {}).get("version") == LOAD_SAMPLES_VERSION)

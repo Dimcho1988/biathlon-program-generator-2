@@ -38,6 +38,10 @@ def primary_distance(profile):
 def resolve_speed(spec, profile, view, curve, tests):
     kind = spec.get("type")
     result = deepcopy(spec)
+    heuristic = (view or {}).get("status") == "INITIAL_HEURISTIC"
+    if heuristic:
+        result.update(speed_role="RAW_MOVING_SPEED", initial_heuristic=True,
+                      calibration_source="INITIAL_HEURISTIC", calibration_eligible=False)
     if kind in {"CV", "CS", "AnT", "ANT"}:
         # A measured/manual threshold belongs to the athlete; a model estimate
         # must never overwrite it. The estimate is only a prescription anchor.
@@ -45,9 +49,15 @@ def resolve_speed(spec, profile, view, curve, tests):
         threshold = next((item for item in profile.get("ant_references", [])
                           if item.get("sport") == actual_sport and item.get("source") in {"MEASURED", "MANUAL"}), {})
         if kind in {"AnT", "ANT"} and _positive(threshold.get("speed_kmh")):
+            if heuristic and threshold.get("speed_role") != "RAW_MOVING_SPEED":
+                raise ValueError("THRESHOLD_SPEED_FRAME_REQUIRED")
             return {**result, **deepcopy(threshold), "type": kind,
                     "is_estimate": threshold.get("source") not in {"MEASURED", "MANUAL"},
                     "source": threshold.get("source", "EXPLICIT_ATHLETE_REFERENCE")}
+        if heuristic and kind in {"AnT", "ANT"}:
+            return {**result, "speed_kmh": curve.speed(3000.)*3.6, "is_estimate": True,
+                    "source": "INITIAL_HEURISTIC_THRESHOLD", "is_measured_lactate_threshold": False,
+                    "label": "AnT · начална моделна оценка, условно V50"}
         descriptor = speed_duration.prescription_critical_speed(tests, curve,
             allow_model_estimate=(profile.get("planning_controls") or {}).get("capacity_policy", "MODEL_WITH_PRIOR") == "MODEL_WITH_PRIOR")
         velocity = descriptor["speed_kmh"]

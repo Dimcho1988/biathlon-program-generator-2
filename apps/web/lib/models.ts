@@ -1,4 +1,5 @@
 import type {WellnessCoverageDiagnostics} from "./recovery-history";
+import type {SpeedRole} from "./speed-basis";
 export const MODEL_ZONES = ["Z1","Z2","Z3","Z4","Z5","STR"] as const;
 export type ModelZone = typeof MODEL_ZONES[number];
 export interface ZoneConfig {duration_coefficient:number;shape:number;sensitivity:number;initial_daily_min:number}
@@ -39,11 +40,11 @@ export function parseRecoveryV2(value:unknown):RecoveryV2 {
   for(const d of r.daily) if(!MODEL_ZONES.includes(d.zone)||!/^\d{4}-\d{2}-\d{2}$/.test(d.date)||!finite(d.readiness_after_percent)||d.readiness_after_percent<0||d.readiness_after_percent>100)throw new Error("Невалидна история на възстановяването.");
   return r;
 }
-export type CurveEvidence = "MEASURED"|"INTERPOLATED"|"EXTRAPOLATED"|"ESTIMATED";
-export interface CurveMetadata {mode:string;absolute_speed_available:boolean;measured_window_s?:[number,number]|null;cap_percent?:number|null;limited_tails?:("SHORT"|"LONG")[];reasons?:string[]}
+export type CurveEvidence = "MEASURED"|"INTERPOLATED"|"EXTRAPOLATED"|"ESTIMATED"|"INITIAL_HEURISTIC_ESTIMATE";
+export interface CurveMetadata {speed_role?:SpeedRole;mode:string;absolute_speed_available:boolean;measured_window_s?:[number,number]|null;cap_percent?:number|null;limited_tails?:("SHORT"|"LONG")[];reasons?:string[]}
 export interface PreliminaryCapacity {status:string;anchors:Array<{zone:string;duration_s:number;duration_min_s:number;duration_max_s:number;duration_position:number;duration_source:string;measured_weekly_q:number|null;hr_bpm:number|null;speed_kmh:number|null}>;warnings:string[]}
 export type AccountingPrediction = Omit<Prediction,"duration_s"|"distance_m"|"evidence"> & {duration_s:null;distance_m:null;evidence:"ACCOUNTING_PROFILE_ESTIMATE";capacity_reason:string};
-export interface Prediction {duration_s:number;speed_kmh:number;distance_m:number;estimated_hr_bpm:number|null;evidence?:CurveEvidence;capped?:boolean;hr_prediction_source?:string|null;hr_prediction_reason?:string|null;zone?:string|null}
+export interface Prediction {speed_role?:SpeedRole;duration_s:number;speed_kmh:number;distance_m:number;estimated_hr_bpm:number|null;evidence?:CurveEvidence;capped?:boolean;hr_prediction_source?:string|null;hr_prediction_reason?:string|null;zone?:string|null}
 export interface DosingModel {
   model_version:string;status:"AVAILABLE"|"UNAVAILABLE";reason?:string|null;
   weights:{index:number;tests:number};weight_basis:string;is_maximal_test:false;use:"METHOD_DOSING";
@@ -52,9 +53,9 @@ export interface DosingModel {
   zone_comparison?:Array<{zone:string;hr_bpm:number;duration_s:number|null;index_speed_kmh:number|null;test_speed_kmh:number|null;speed_kmh:number}>;
 }
 export interface StandardizedCS {status:string;speed_kmh?:number;d_prime_m?:number;difference_percent?:number|null;uses_extrapolation?:boolean;points:Array<{duration_s:number;speed_kmh:number;evidence:string}>}
-export interface SpeedZoneProfile {v10?:{status:string;speed_kmh:number|null;evidence?:string;extrapolated?:boolean|null;start_type?:"STANDING"|"FLYING"|"UNKNOWN";reason?:string};status:string;zones:Array<{zone:string;low_kmh:number;high_kmh:number|null;source:string;upper_percent_cs?:number|null}>;note?:string}
+export interface SpeedZoneProfile {speed_role?:SpeedRole;is_estimated?:boolean;v10?:{status:string;speed_kmh:number|null;evidence?:string;extrapolated?:boolean|null;start_type?:"STANDING"|"FLYING"|"UNKNOWN";reason?:string};status:string;zones:Array<{zone:string;low_kmh:number;high_kmh:number|null;source:string;upper_percent_cs?:number|null}>;note?:string}
 export interface SpeedTest {kind:"SPEED_TEST";entry_key:string;revision:number;recorded_at:string;payload:{activity_ref?:string;source?:"MANUAL";test_id?:string;name?:string;flat_terrain?:true;start_type?:"STANDING"|"FLYING"|"UNKNOWN";measurement_input?:"DISTANCE"|"SPEED";distance_m?:number;start_s:number;duration_s:number;speed_kmh:number;day:string;sport:string;enabled:boolean;use_for_cs:boolean;maximal:boolean;test_mode?:"STRICT"|"EXPLORATORY";exploratory_confirmed?:boolean;measured_duration_s?:number;comparable:true;conditions:string;coverage_percent:number|null}}
-export interface HrModel {curve_duration_range_s?:number[];curve_speed_range_kmh?:number[];conflicting_zones?:string[][];model_version:string;hr_range_bpm:number[];speed_range_kmh:number[];zones:Array<{zone:string;hr_bpm:number;duration_s:number|null;duration_min_s:number;duration_max_s:number;speed_kmh:number;source:string;reason:string|null;index:number|null;count:number;candidate_speed_kmh?:number|null;candidate_duration_s?:number|null;candidate_reason?:string}>}
+export interface HrModel {speed_role?:SpeedRole;curve_duration_range_s?:number[];curve_speed_range_kmh?:number[];conflicting_zones?:string[][];model_version:string;hr_range_bpm:number[];speed_range_kmh:number[];zones:Array<{zone:string;hr_bpm:number;duration_s:number|null;duration_min_s:number;duration_max_s:number;speed_kmh:number;source:string;reason:string|null;index:number|null;count:number;candidate_speed_kmh?:number|null;candidate_duration_s?:number|null;candidate_reason?:string}>}
 export interface FunctionalProfilePoint {
   duration_s:number;speed_kmh:number;reference_speed_kmh:number;difference_percent:number;shape_difference_percent:number;
   evidence:"MEASURED_TEST"|"TEST_SUPPORTED_ESTIMATE"|"EXTRAPOLATED"|"ESTIMATED";extrapolation_capped:boolean;used_for_shape:boolean;
@@ -66,7 +67,7 @@ export interface FunctionalProfile {
   points:FunctionalProfilePoint[];test_points:FunctionalProfilePoint[];
   training_context:{source:string;unit?:"EQUIVALENT_MINUTES";zones:Array<{zone:string;weekly_minutes:number|null;share_percent:number|null}>;interpretation:"ASSOCIATION_ONLY";hypotheses:string[]};warnings:string[];
 }
-export interface SpeedModel {boundary_test_keys?:string[];dosing_model?:DosingModel;speed_zones?:SpeedZoneProfile;hr_zone_source?:"MANUAL"|"AUTOMATIC_HRMAX";test_window?:{start:string;end:string};index_window?:{start:string;end:string;days:number;last_activity_date:string|null};hr_model?:HrModel|null;index_admission?:{activities:number;excluded:number;refresh_required:number;used?:number;incompatible?:number};volume_position_basis?:string;schema_version:"speed-model-v1";model_version:string;sport:string;sports:string[];activities:Array<{activity_ref:string;name:string;day:string;sport:string;elapsed_s?:number|null}>;status:"CALIBRATED"|"PRELIMINARY"|"UNAVAILABLE"|"REFERENCE_ONLY"|"CONFLICTING_TESTS";curve_metadata?:CurveMetadata;functional_profile?:FunctionalProfile;preliminary_capacity?:PreliminaryCapacity;volume_history_basis?:"HR_MEASURED"|"HR_PARTIAL"|"TOTAL_DURATION"|"UNAVAILABLE";total_weekly_minutes?:number|null;calibration_diagnostics?:{residuals?:Array<{duration_s:number;measured_speed_kmh:number;prior_speed_kmh:number;measured_vs_prior_percent:number}>;real_test_anchors_take_precedence?:boolean;prior_shape_used?:boolean;blend_status?:string;blend_reason?:string;model_error?:string};tests:SpeedTest[];active_test_count:number;exploratory_test_count?:number;active_test_keys:string[];points:Prediction[];volume_scope?:"ALL_SPORTS";volume_weekly_min:Record<string,number|null>;history_days:number;zone_corrections:Record<string,number>;correction_applied_fraction:number;critical_speed:{standardized?:StandardizedCS;status:string;count:number;speed_kmh?:number;d_prime_m?:number;distance_rmse_m?:number};prediction:Prediction|AccountingPrediction|null;prediction_error?:string|null;warnings:string[];source_generation_id:string|null;source_revision:number|null;hr_speed_range_kmh:number[]|null}
+export interface SpeedModel {boundary_test_keys?:string[];dosing_model?:DosingModel;speed_zones?:SpeedZoneProfile;hr_zone_source?:"MANUAL"|"AUTOMATIC_HRMAX";test_window?:{start:string;end:string};index_window?:{start:string;end:string;days:number;last_activity_date:string|null};hr_model?:HrModel|null;index_admission?:{activities:number;excluded:number;refresh_required:number;used?:number;incompatible?:number};volume_position_basis?:string;schema_version:"speed-model-v1";model_version:string;sport:string;sports:string[];activities:Array<{activity_ref:string;name:string;day:string;sport:string;elapsed_s?:number|null}>;status:"CALIBRATED"|"PRELIMINARY"|"INITIAL_HEURISTIC"|"UNAVAILABLE"|"REFERENCE_ONLY"|"CONFLICTING_TESTS";curve_metadata?:CurveMetadata;functional_profile?:FunctionalProfile;preliminary_capacity?:PreliminaryCapacity;volume_history_basis?:"HR_MEASURED"|"HR_PARTIAL"|"TOTAL_DURATION"|"UNAVAILABLE";total_weekly_minutes?:number|null;calibration_diagnostics?:{residuals?:Array<{duration_s:number;measured_speed_kmh:number;prior_speed_kmh:number;measured_vs_prior_percent:number}>;real_test_anchors_take_precedence?:boolean;prior_shape_used?:boolean;blend_status?:string;blend_reason?:string;model_error?:string};tests:SpeedTest[];active_test_count:number;exploratory_test_count?:number;active_test_keys:string[];points:Prediction[];volume_scope?:"ALL_SPORTS";volume_weekly_min:Record<string,number|null>;history_days:number;zone_corrections:Record<string,number>;correction_applied_fraction:number;critical_speed:{standardized?:StandardizedCS;status:string;count:number;speed_kmh?:number;d_prime_m?:number;distance_rmse_m?:number};prediction:Prediction|AccountingPrediction|null;prediction_error?:string|null;warnings:string[];source_generation_id:string|null;source_revision:number|null;hr_speed_range_kmh:number[]|null}
 export interface SportHrPolicy {
   version:string; offset_bpm:number; basis:string;
   reference_zone_bounds_bpm:number[]; sport_zone_bounds_bpm:number[];
@@ -75,13 +76,13 @@ export interface SportHrPolicy {
 export interface SpeedModel {sport_hr_policy?:SportHrPolicy}
 export interface InitialThresholdEstimate {
   model_version:"heuristic_v0.1_unvalidated"; status:"AVAILABLE"|"UNAVAILABLE";
-  use_status:"THRESHOLD_ONLY"|"SUPERSEDED"|"UNAVAILABLE"; reason:string|null;
+  use_status:"THRESHOLD_ONLY"|"ZONES"|"SUPERSEDED"|"UNAVAILABLE"; reason:string|null;
   p_percent:number|null; v_threshold_estimated_kmh:number|null;
-  speed_role:"RAW_MOVING_SPEED"; is_estimated:true; calibration_eligible:false; used_for_zones:false;
+  speed_role:"RAW_MOVING_SPEED"; is_estimated:true; calibration_eligible:false; used_for_zones:boolean;
   superseded_by?:"TESTS"|"INDEX"; inputs?:{H:number;v:number;S:number};
   window?:{start:string;end_exclusive:string;days:number};
 }
-export interface SpeedModel {initial_threshold?:InitialThresholdEstimate}
+export interface SpeedModel {initial_threshold?:InitialThresholdEstimate;speed_role?:SpeedRole;initial_speed_profile?:{source:"INITIAL_HEURISTIC_V50_REFERENCE_SCALE";zone_policy_version:string;is_estimated:true;calibration_eligible:false}}
 export function parseSpeedModel(value:unknown):SpeedModel {
   const r=value as SpeedModel;
   if(!r||r.schema_version!=="speed-model-v1"||!Array.isArray(r.points)||!Array.isArray(r.tests))throw new Error("Невалиден скоростен модел.");
@@ -89,14 +90,21 @@ export function parseSpeedModel(value:unknown):SpeedModel {
   if (r.boundary_test_keys !== undefined && (!Array.isArray(r.boundary_test_keys) || !r.boundary_test_keys.every(k => typeof k === "string"))) throw new Error("Невалидни опори за скоростните зони.");
   const initial=r.initial_threshold;
   if(initial&&(initial.model_version!=="heuristic_v0.1_unvalidated"||initial.speed_role!=="RAW_MOVING_SPEED"
-    ||initial.is_estimated!==true||initial.calibration_eligible!==false||initial.used_for_zones!==false
-    ||!["THRESHOLD_ONLY","SUPERSEDED","UNAVAILABLE"].includes(initial.use_status)
+    ||initial.is_estimated!==true||initial.calibration_eligible!==false||typeof initial.used_for_zones!=="boolean"
+    ||initial.used_for_zones!==(initial.use_status==="ZONES")
+    ||initial.use_status==="ZONES"&&initial.status!=="AVAILABLE"
+    ||!["THRESHOLD_ONLY","ZONES","SUPERSEDED","UNAVAILABLE"].includes(initial.use_status)
     ||!["AVAILABLE","UNAVAILABLE"].includes(initial.status)
     ||initial.status==="AVAILABLE"&&(!finite(initial.p_percent)||initial.p_percent<=0
       ||!finite(initial.v_threshold_estimated_kmh)||initial.v_threshold_estimated_kmh<=0
       ||!initial.inputs||!finite(initial.inputs.H)||initial.inputs.H<=0||!finite(initial.inputs.v)||initial.inputs.v<=0
       ||!finite(initial.inputs.S)||initial.inputs.S<0||!initial.window||!Number.isInteger(initial.window.days)||initial.window.days<7)))
     throw new Error("Невалидна начална прагова оценка.");
+  if(r.speed_role!==undefined&&!["RAW_MOVING_SPEED","FLAT_EQUIVALENT"].includes(r.speed_role))throw new Error("Невалидна основа на скоростния модел.");
+  if(r.status==="INITIAL_HEURISTIC"&&(r.speed_role!=="RAW_MOVING_SPEED"||initial?.use_status!=="ZONES"
+    ||r.curve_metadata?.mode!=="HEURISTIC_REFERENCE_SCALE"||r.initial_speed_profile?.source!=="INITIAL_HEURISTIC_V50_REFERENCE_SCALE"
+    ||r.initial_speed_profile.is_estimated!==true||r.initial_speed_profile.calibration_eligible!==false
+    ||typeof r.initial_speed_profile.zone_policy_version!=="string"))throw new Error("Невалидна начална скоростна оценка.");
   const metadata=r.curve_metadata;
   if(metadata&&(typeof metadata.absolute_speed_available!=="boolean"||typeof metadata.mode!=="string"
     ||metadata.cap_percent!=null&&(!finite(metadata.cap_percent)||metadata.cap_percent<0||metadata.cap_percent>5)

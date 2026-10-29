@@ -12,7 +12,7 @@ end-exclusive calendar window supplies both: up to 28 full days, at least 7,
 including rest days. `initial_history_days=21` on the speed-model API requests
 an explicit 21-day window. Missing experience is not treated as zero.
 
-The speed page exposes the result as an initial threshold estimate only.
+The speed page exposes the result as an initial model estimate.
 Available individual tests or a valid paired profile supersede it. Missing
 HR does not invalidate complete activity metadata. Estimates never become
 test records, observed indices, calibration targets or validation truth.
@@ -34,15 +34,31 @@ test records, observed indices, calibration targets or validation truth.
 - Incomplete Recovery history withholds readiness percentages and deadlines.
   Recorded load and baseline diagnostics remain visible as partial information.
 
-## Unresolved zone policy
+## Approved initial zone policy (2026-10-29)
 
-The approved threshold formula provides neither a duration anchor nor V6/V10.
-No equivalence to V50 has been implemented. Scaling the reference curve at
-50 minutes would require a separate explicit modeling decision, along with a
-raw-speed versus Vflat policy. Until then, the threshold is informative and
-does not create a complete speed prescription. The existing HR-only fallback
-remains available when HR data and an HRmax profile exist; dual-missing
-intensity stays unknown.
+The user separately approved the conditional equivalence threshold≈V50.
+`initial-heuristic-v50-reference-scale-v1` uniformly scales the existing
+normative curve at 3000 seconds, including its existing 10-second continuation.
+V6/V10 and the common zone policy remain model estimates. No synthetic tests
+are created, and there is no index/test blend in this mode.
+
+The entire initial path uses `RAW_MOVING_SPEED`: history scoring, the speed
+report, component capacities, basic method prescriptions and their displayed
+targets use the same coordinate. Vflat/descent completion cannot fill a missing
+raw observation. Explicit flat-speed prescriptions cannot be interpreted using
+a raw-speed curve. Methods requiring real maximal tests retain that requirement.
+
+Full and compact speed views carry `INITIAL_HEURISTIC`, the threshold inputs,
+the zone-policy version and `calibration_eligible=false`. Training experience
+and history coverage enter context/reconstruction cache identities. Historical
+estimation uses full days strictly before the activity; refresh proves date
+coverage from the enumerated activities and available metadata.
+
+Heuristic-derived Q remains usable for planning/accounting but is excluded
+from measured learning/adaptation windows. Original sensor observations and
+subjective reports are retained. The existing HR-only fallback remains when
+there is insufficient metadata for the heuristic; dual-missing intensity
+stays unknown.
 
 ## Release verification
 

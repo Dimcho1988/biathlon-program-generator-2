@@ -1,10 +1,10 @@
 """Integrate one HR/speed choice per supported interval, preserving unknown time."""
 import math
 
-from . import speed_equivalence
+from . import raw_speed, speed_equivalence
 from .sport_heart_rate import reference_offset
 
-VERSION = "unified-leading-indicator-load-v4-source-coverage"
+VERSION = "unified-leading-indicator-load-v5-raw-speed-coordinate"
 HR_INTERVAL_VERSION = "normalized-hr-recording-intervals-v1"
 HR_ZONE_TIME_VERSION = "shared-hr-zone-times-v1"
 HR_SIGNALS = {"MODEL", "hr_raw_bpm", "hr_clean_bpm", "hrmod_candidate_bpm", "hrmod_final_bpm"}
@@ -106,6 +106,20 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
             hr.append((left, right, estimate))
         previous = right
     previous = 0.
+    raw_coordinate = (parameters or {}).get("speed_role") == raw_speed.ROLE
+    if raw_coordinate:
+        for left, right, value, reason in raw_speed.intervals(shadow):
+            estimate = None
+            if reason in {None, "REST"} and parameters:
+                estimate = ({"status": "REST", "zone": None, "coefficient": 0.} if value == 0 else
+                            speed_equivalence.evaluate(parameters, value))
+                if estimate.get("reason") == "ABOVE_V10_UPDATE_ANCHOR":
+                    top = parameters["zones"][-1]["high_kmh"]
+                    estimate = {**speed_equivalence.evaluate(parameters, top), "saturated_above_v10": True}
+            speeds.append((left, right, {**(estimate or {"status": "UNAVAILABLE"}),
+                "_speed_origin": raw_speed.ROLE,
+                "_speed_reason": reason or (estimate or {}).get("reason") or "INVALID_RAW_SPEED"}))
+        speed_rows = []
     for i, row in enumerate(speed_rows):
         t, dt = row["elapsed_s"], row.get("dt_s")
         independent = shadow.get("speed_test_series") is not None
@@ -218,6 +232,9 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
             "hr_coordinate": ("CURRENT_HRMOD_WHEN_AVAILABLE" if adjusted_hr_compatible else "RAW_HR_SETTINGS_CHANGED")
                 if hr_signal == "MODEL" else hr_signal,
             "profile_version": (parameters or {}).get("parameters_version"),
+            "speed_role": (parameters or {}).get("speed_role", "FLAT_EQUIVALENT"),
+            "initial_heuristic": (parameters or {}).get("initial_heuristic", False),
+            "calibration_source": (parameters or {}).get("calibration_source"),
             "calibration_eligible": False}
 
 

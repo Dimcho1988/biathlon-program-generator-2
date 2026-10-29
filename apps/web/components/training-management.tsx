@@ -1,4 +1,5 @@
 "use client";
+import { speedBasisLabel } from "../lib/speed-basis";
 import { SpeedEquivalenceComparison } from "./speed-equivalence-comparison";
 import { PreferredSpeed, RunningSpeedUnitControl } from "./running-speed-unit";
 import { executionGuidance } from "../lib/execution-guidance";
@@ -82,7 +83,7 @@ function SingleSessionCard({ day, expanded = false }: { day: DraftDay; expanded?
     <MesocyclePriorities cycle={isRecord(day.cycle) ? day.cycle : undefined}/>
     {session && <details className="management-execution" open={expanded}><summary>Как да изпълня тренировката</summary>{execution.common.length > 0 && <div className="management-common-guidance"><h4>Общи указания за повтарящите се части</h4>{execution.common.map((group, index) => <p key={index}><strong>{group.zone}:</strong> {group.text}</p>)}</div>}<ol className="management-blocks">{session.blocks.map((block, index) => <li key={`${block.kind}-${index}`} style={{ borderLeft: `3px solid ${componentColor(block.zone)}` }}><div><strong>{block.label}</strong><span>{blockDurationLabel(block)} · {block.zone}</span></div>{execution.blocks[index].showInstructions && <p>{block.instructions}</p>}
       {(block.hr_reference_range_bpm || block.target_hr_bpm != null) && <small>{block.hr_reference_range_bpm ? `${block.hr_reference_range_bpm.map(v => number(v, 0)).join("–")} уд./мин` : `${number(block.target_hr_bpm, 0)} уд./мин`}</small>}
-      {!block.target_speed_range_kmh && block.target_speed_kmh != null && <small><PreferredSpeed speed={block.target_speed_kmh} sport={session.sport}/> · равнинна референция</small>}
+      {!block.target_speed_range_kmh && block.target_speed_kmh != null && <small><PreferredSpeed speed={block.target_speed_kmh} sport={session.sport}/> · {speedBasisLabel(block)}</small>}
       {block.lactate_reference && execution.blocks[index].showLactate && <p className="management-muted">Лактат за частите със същия ориентир: {lactateRangeText(block.lactate_reference)} · {block.lactate_reference.label}{block.lactate_reference.assessed_on ? ` · ${block.lactate_reference.assessed_on}` : ""}{block.lactate_reference.note ? `. ${block.lactate_reference.note}` : ""}</p>}
       <BlockExecutionRange block={block} sport={session.sport}/>
       {block.hr_reference_range_bpm && <small>{methodHrText(block)}</small>}

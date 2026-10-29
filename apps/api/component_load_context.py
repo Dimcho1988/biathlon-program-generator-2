@@ -10,11 +10,11 @@ from hashlib import sha256
 import json
 import math
 
-from biathlon import dosing_curve, hr_speed, preliminary_capacity, speed_duration, speed_equivalence
+from biathlon import dosing_curve, hr_speed, preliminary_capacity, speed_duration, speed_equivalence, initial_speed_profile
 from .speed_load_cache import SpeedLoadCache
 
 
-VERSION = "component-load-common-profile-v2"
+VERSION = "component-load-common-profile-v3-initial-heuristic"
 COMPARISON_CONTEXT_VERSION = speed_equivalence.VERSION
 ZONES = ("Z1", "Z2", "Z3", "Z4", "Z5")
 _context_cache = SpeedLoadCache(max_entries=32, ttl_seconds=300)
@@ -54,6 +54,11 @@ def _tests(view):
 
 def _selected_curve(view):
     """Use the exact continuous curve selected for method dosing, not chart samples."""
+    if view.get("status") == "INITIAL_HEURISTIC":
+        curve = initial_speed_profile.curve_from_view(view)
+        if curve is None:
+            raise ValueError("Initial component curve requires explicit heuristic provenance")
+        return curve, view.get("hr_model"), "INITIAL_HEURISTIC"
     if view.get("status") not in {"CALIBRATED", "PRELIMINARY"}:
         return None, None, None
     tests = _tests(view)
@@ -155,6 +160,9 @@ def context_from_speed_view(view=None):
         "sport": view.get("sport"),
         "curve_model_version": getattr(curve, "model_version", None) if curve is not None else None,
         "status": "CURVE" if curve is not None else "EXPERT",
+        "speed_role": view.get("speed_role", "FLAT_EQUIVALENT"),
+        "initial_heuristic": view.get("status") == "INITIAL_HEURISTIC",
+        "calibration_source": "INITIAL_HEURISTIC" if view.get("status") == "INITIAL_HEURISTIC" else curve_source,
     }
     # Additive comparison uses the exact method-dosing boundaries. Canonical
     # continuous capacities and their fingerprint stay unchanged; Tmax is not
@@ -193,7 +201,9 @@ def read_contexts(repository, alias, sports, *, speed_by_sport=None):
                 "day": inputs["today"].isoformat(), "sports": missing,
                 "bounds": settings.zone_bounds_bpm, "hrmax": settings.hrmax_bpm,
                 "timezone": settings.timezone, "calendar": inputs["calendar"],
-                "entries": inputs["entries"], "history": inputs["history"]}
+                "entries": inputs["entries"], "history": inputs["history"],
+                "initial_profile": inputs.get("initial_profile"),
+                "initial_zone_policy": initial_speed_profile.ZONE_POLICY_VERSION}
     key = sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
     calculated = _context_cache.get_or_compute(key, lambda: {
         s: context_from_speed_view(model_service.speed_view(repository, alias, s,
