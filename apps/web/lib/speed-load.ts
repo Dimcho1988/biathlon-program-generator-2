@@ -2,8 +2,13 @@ import { isSpeedEquivalenceComparison, type SpeedEquivalenceComparison } from ".
 import type {SportHrPolicy} from "./models";
 import {isCalendarDate} from "./training-status";
 
+const SPEED_LOAD_VERSIONS = ["independent-speed-load-causal-ti-v1", "independent-speed-load-causal-ti-v2-adjacent-tmax",
+  "independent-speed-load-causal-ti-v3-weighted-downward-tmax", "independent-speed-load-causal-ti-v4-descent-rest",
+  "speed-load-common-profile-v5-relative-rest", "speed-load-common-profile-v6-retrospective-tests",
+  "speed-load-common-profile-v7-raw-speed-coordinate"] as const;
+
 export interface SpeedLoad {
-  schema_version:"speed-load-history-v1"; model_version:"independent-speed-load-causal-ti-v1"|"independent-speed-load-causal-ti-v2-adjacent-tmax"|"independent-speed-load-causal-ti-v3-weighted-downward-tmax"|"independent-speed-load-causal-ti-v4-descent-rest"|"speed-load-common-profile-v5-relative-rest";
+  schema_version:"speed-load-history-v1"; model_version:typeof SPEED_LOAD_VERSIONS[number];
   component_load_version?: string;
   speed_equivalence_comparison?: SpeedEquivalenceComparison | null;
   status:"AVAILABLE"|"PARTIAL"|"UNAVAILABLE"; sport:string|null; sports:string[];
@@ -23,7 +28,7 @@ const nonnegative=(v:unknown):v is number=>typeof v==="number"&&Number.isFinite(
 export function parseSpeedLoad(value:unknown):SpeedLoad {
   const r=value as SpeedLoad;
   const bad=()=>new Error("Невалиден отчет по скорост.");
-  if(!r||r.schema_version!=="speed-load-history-v1"||!["independent-speed-load-causal-ti-v1","independent-speed-load-causal-ti-v2-adjacent-tmax","independent-speed-load-causal-ti-v3-weighted-downward-tmax","independent-speed-load-causal-ti-v4-descent-rest","speed-load-common-profile-v5-relative-rest"].includes(r.model_version)
+  if(!r||r.schema_version!=="speed-load-history-v1"||!SPEED_LOAD_VERSIONS.includes(r.model_version)
     ||!["PARALLEL_ESTIMATE_NOT_ADDED_TO_HR","INDEPENDENT_SPEED_VIEW_OF_SHARED_KERNEL"].includes(r.load_role)||!["AVAILABLE","PARTIAL","UNAVAILABLE"].includes(r.status)
     ||!isCalendarDate(r.start_date)||!isCalendarDate(r.end_date)||!Array.isArray(r.zones)||r.zones.length!==5
     ||!Array.isArray(r.daily)||!Array.isArray(r.sport_indices)||!Array.isArray(r.activities)||!Array.isArray(r.sports)
