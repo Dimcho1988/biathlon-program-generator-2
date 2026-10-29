@@ -18,7 +18,7 @@ from . import planning_controls, planning_history, mesocycle_focus, training_ret
 
 VERSION = "load-progression-v12-recorded-indicator-reference"
 RECOVERY_RETAINED_FRACTION = .70
-# A reference may retain its measured portion with small, separately labelled
+# A reference may retain its recorded portion with small, separately labelled
 # gaps. This is a coaching data-quality policy, not a physiological threshold.
 MIN_RECORDED_REFERENCE_COVERAGE = .90
 # Deliberately separate from speed-duration correction and canonical Tref.
@@ -243,7 +243,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
                 "measured_coverage_percent": min(v["measured_coverage_percent"] for v in samples) if samples else None,
                 "recorded_coverage_percent": min(v["recorded_coverage_percent"] for v in samples) if samples else None,
                 "reference_basis": "RECORDED_HR_SPEED_WITH_MODELLED_ZONES" if samples else "EXPERT_PRIOR",
-                "estimated_q_excluded_from_reference": True,
+                "duration_only_estimates_excluded_from_reference": True,
                 "initial_speed_mapping_allowed_for_planning_only": True,
                 "observed_windows": len(samples), "established_on": today.isoformat()}
         frozen = {"version": VERSION, "key": key, "created_on": today.isoformat(),
