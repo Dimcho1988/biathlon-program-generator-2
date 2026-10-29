@@ -1,4 +1,4 @@
-"""A low observed Q guides execution without trapping the planning target."""
+"""Recorded Q remains the starting reference, including below normative bounds."""
 from copy import deepcopy
 from datetime import timedelta
 
@@ -33,7 +33,7 @@ def goals(profile, rows, context, day=TODAY, period="GENERAL_PREPARATION", limit
                          rows, TODAY, limited, 1., context)[0]
 
 
-def test_lower_planning_reference_reconciles_e_without_changing_measured_history():
+def test_recorded_planning_reference_keeps_q_separate_from_e_and_preserves_history():
     profile, _, source, rows, _, context, measured = low_history()
     original_source = deepcopy(source)
     historical_only = deepcopy(context)
@@ -44,18 +44,18 @@ def test_lower_planning_reference_reconciles_e_without_changing_measured_history
     for z, (low, _) in policy.WEEKLY_Q_BOUNDS.items():
         component = context["components"][z]
         assert component["weekly_q"] == pytest.approx(measured[z])
-        assert component["reference_q"] == low
-        assert component["limitation"] == "BELOW_REFERENCE_BOUND"
-        assert after[z]["target_weekly_q"] == pytest.approx(before[z]["target_weekly_q"]*low/measured[z])
+        assert component["reference_q"] == pytest.approx(measured[z])
+        assert component["limitation"] is None
+        assert after[z]["target_weekly_q"] == pytest.approx(before[z]["target_weekly_q"])
         assert after[z]["target"] >= before[z]["target"]
         assert after[z]["target_index"] <= 2.
         assert not after[z]["consistency"]["projection_is_limit"]
         assert after[z]["target_weekly_q"] == after[z]["desired_weekly_q"]
     assert source == original_source
-    assert context["reference_is_clamped"]
+    assert not context["reference_is_clamped"]
 
 
-def test_outlook_uses_ten_minute_z5_basis_and_keeps_recovery_and_partial_weeks():
+def test_outlook_uses_recorded_z5_basis_and_keeps_recovery_and_partial_weeks():
     profile, _, _, rows, phases, context, _ = low_history()
     reference = {"cutoff": TODAY.isoformat()}
     preferences = {"mesocycle_anchor_date": TODAY.isoformat()}
@@ -64,15 +64,14 @@ def test_outlook_uses_ten_minute_z5_basis_and_keeps_recovery_and_partial_weeks()
     loading = [w for w in full if w["cycle"]["kind"] == "BUILD"]
     recovery = [w for w in full if w["cycle"]["kind"] == "RECOVERY"]
     assert loading and recovery
-    # Ten minutes is the unmodulated cycle reference, not a floor for every
-    # loading week in the mean-one wave.
-    assert context["components"]["Z5"]["reference_q"] == 10
-    assert max(w["components"]["Z5"]["target_period_q"] for w in loading) >= 10
-    assert recovery[0]["components"]["Z5"]["target_period_q"] < 10
+    # Recorded Q is the unmodulated reference; wave and recovery still apply.
+    assert context["components"]["Z5"]["reference_q"] == pytest.approx(110/60)
+    assert max(w["components"]["Z5"]["target_period_q"] for w in loading) >= 110/60
+    assert recovery[0]["components"]["Z5"]["target_period_q"] < 110/60
     short = engine._long_term_outlook(profile, phases, reference, None, preferences, rows, TODAY+timedelta(days=6), False, progression=context)["weeks"][0]
     assert short["days"] == 1
     assert short["components"]["Z5"]["target_period_q"] == pytest.approx(short["components"]["Z5"]["target_weekly_q"]/7, abs=.001)
-    assert context["components"]["Z5"]["target_q"] > 10
+    assert context["components"]["Z5"]["target_q"] > 110/60
     assert context["components"]["Z5"]["weekly_q"] == pytest.approx(110/60)
 
 
@@ -90,7 +89,7 @@ def test_saved_anchors_migrate_once_without_resetting_dates_or_capping_high_pers
     assert migrated["anchor_reused"]
     assert migrated["anchor"]["created_on"] == anchor["created_on"]
     assert migrated["anchor"]["windows"] == anchor["windows"]
-    assert migrated["components"]["Z5"]["reference_q"] == 10
+    assert migrated["components"]["Z5"]["reference_q"] == pytest.approx(110/60)
     assert migrated["components"]["Z5"]["weekly_q"] == pytest.approx(110/60)
     assert migrated["components"]["Z3"]["reference_q"] == 210
     assert policy.context(profile, {}, [], later, retained=migrated["anchor"]) == migrated
@@ -108,7 +107,7 @@ def test_reentry_and_manual_targets_remain_independent_of_lower_reference():
     profile, _, _, rows, _, context, _ = low_history()
     historical_only = deepcopy(context)
     historical_only["components"]["Z5"]["reference_q"] = context["components"]["Z5"]["recent_observed_q"]
-    assert goals(profile, rows, context, period="RE_ENTRY")["Z5"]["target_weekly_q"] == goals(profile, rows, historical_only, period="RE_ENTRY")["Z5"]["target_weekly_q"]
+    assert goals(profile, rows, context, period="RE_ENTRY")["Z5"]["target_weekly_q"] <= goals(profile, rows, historical_only, period="RE_ENTRY")["Z5"]["target_weekly_q"]
     profile["component_targets_weekly"] = {"Z5": 1.}
     before, after = goals(profile, rows, historical_only)["Z5"], goals(profile, rows, context)["Z5"]
     assert after["target"] == before["target"]
@@ -122,7 +121,7 @@ def test_composed_sessions_keep_actual_budgets_readiness_and_session_limits(monk
     profile["planning_controls"].update(sessions_per_week=3, sessions_by_day=[0,1,0,1,0,1,0], mixed_sessions_enabled=False)
     profile["available_minutes"] = [0,80,0,80,0,80,0]
     plan = engine.generate_plan(repo, "athlete", profile, start_date=TODAY+timedelta(days=1), now=NOW)
-    assert plan["parameters"]["load_progression"]["components"]["Z5"]["reference_q"] == 10
+    assert plan["parameters"]["load_progression"]["components"]["Z5"]["reference_q"] == pytest.approx(110/60)
     sessions = [s for d in plan["days"] for s in d["sessions"]]
     assert sessions and len(sessions) <= 3
     for day in plan["days"]:
