@@ -24,7 +24,8 @@ export function LoadProgressionSummary({plan}: {plan?: PlanProjection}) {
   const stable = model.basis === "STABLE_PREPARATION_REFERENCE";
   const estimated = outlook.basis === "ESTIMATED_PLANNING_REFERENCE_FROZEN" || model.estimated_history_supported === true;
   const lowerPlanningReference = model.normative_role === "LOWER_PLANNING_REFERENCE_NOT_POTENTIAL_CEILING";
-  const observedRate = model.version === "load-progression-v13-observed-rate-checkpoints";
+  const observedLoad = model.version === "load-progression-v14-observed-load-checkpoints";
+  const observedRate = observedLoad || model.version === "load-progression-v13-observed-rate-checkpoints";
   const recordedReference = observedRate || model.version === "load-progression-v12-recorded-indicator-reference";
   const returning = isRecord(model.training_return) ? model.training_return : null;
   const returnComponents = isRecord(returning?.components) ? returning.components : {};
@@ -50,6 +51,7 @@ export function LoadProgressionSummary({plan}: {plan?: PlanProjection}) {
       })}</tbody></table></div>
       <p>Годишният темп включва оценената обратна връзка и се натрупва според календарното време. В общата подготовка се развиват всички аеробни компоненти; след това прирастът следва специалните приоритети и настройките по периоди. Отделната колона показва какъв прираст действително е заложен до посочената дата.</p>
       {observedRate && <p>Долният експертен ориентир е желана цел, към която се преминава постепенно от историята. Изпълнимата цел запазва ограниченията за прираст, разтоварване и възстановяване. След завършен цикъл действителният обем обновява бъдещия темп; приближаването до горния ориентир го забавя, без да променя миналите цели.</p>}
+      {observedLoad && <p>Ако надеждно завършеният цикъл показва по-нисък поддържан обем, бъдещата цел се ограничава до тази основа и продължава с постепенен прираст. Корекцията се прилага веднъж за цикъла, от установяването му; миналите цели се запазват.</p>}
       <p>Средната цел се разпределя между натоварващите и възстановителните микроцикли. Дневните ограничения могат да намалят съставените тренировки. Това е планова цел, не обещан резултат; няма автоматично наваксване.</p>
       {lowerPlanningReference && !returning && <p>Долната опора не е задължителен обем за всяка седмица. Разтоварването, тейпърът и непълният микроцикъл могат да дадат по-ниска цел. Липсваща история или нулева скорошна експозиция не разрешава автоматично добавяне на натоварване.</p>}
       {model.history_usable===false&&<p role="status">Текущата история изисква проверка. Запазената опора не замества липсващите измервания или готовност.</p>}

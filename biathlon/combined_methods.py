@@ -6,7 +6,7 @@ import math
 VERSION = 'combined-methods-v1-half-role-budgets'
 
 
-def shortage(remaining, nominal, available_slots, *, vectors=None):
+def shortage(remaining, nominal, available_slots, *, vectors=None, key_costs=None, available_key_slots=None):
     needs = {z: math.ceil(max(0., amount-.001)/nominal[z]) for z, amount in remaining.items()
              if amount > .001 and nominal.get(z, 0.) > .001}
     result = {'required_separate_sessions': sum(needs.values()), 'available_sessions': max(0, available_slots),
@@ -25,6 +25,24 @@ def shortage(remaining, nominal, available_slots, *, vectors=None):
     if not solved.success:
         return {**result, 'shortage': False, 'reason': 'STANDALONE_COVERAGE_UNRESOLVED'}
     required = math.ceil(solved.fun - 1e-7)
+    if key_costs is not None and available_key_slots is not None:
+        from scipy.optimize import Bounds, LinearConstraint, milp
+        import numpy as np
+        # A free easy slot cannot host an additional key workout. Integer
+        # occasions also prevent three separate quality methods from fitting
+        # into two slots merely because each uses a fraction of its full dose.
+        # This relaxation still ignores time, Q ceilings and Recovery, so a
+        # proven shortage can enable combinations without relaxing those gates.
+        key_minimum = milp(np.asarray(key_costs, dtype=float), integrality=np.ones(len(vectors)),
+            bounds=Bounds(0., np.inf), constraints=LinearConstraint(
+                np.asarray([[v.get(z,0.) for v in vectors] for z in components]),
+                np.asarray([remaining[z] for z in components]), np.inf), options={"time_limit":.2})
+        if key_minimum.success:
+            keys = math.ceil(key_minimum.fun-1e-7)
+            result.update(required_key_sessions=keys, available_key_sessions=max(0,available_key_slots))
+            if keys > available_key_slots:
+                return {**result, "required_separate_sessions":required, "relaxed_lower_bound":float(solved.fun),
+                        "shortage":True, "reason":"KEY_SESSION_SHORTAGE_PROVEN_BY_LOWER_BOUND"}
     return {**result, 'required_separate_sessions': required, 'relaxed_lower_bound': float(solved.fun),
             'shortage': required > available_slots, 'reason': 'SESSION_SHORTAGE_PROVEN_BY_LOWER_BOUND' if required > available_slots else 'SEPARATE_SESSIONS_NOT_RULED_OUT'}
 

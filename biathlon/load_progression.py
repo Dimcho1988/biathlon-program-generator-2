@@ -16,7 +16,7 @@ from .speed_equivalence import VERSION as LOAD_EQUIVALENCE_VERSION
 from .constants import COMPONENTS
 from . import planning_controls, planning_history, mesocycle_focus, training_return
 
-VERSION = "load-progression-v13-observed-rate-checkpoints"
+VERSION = "load-progression-v14-observed-load-checkpoints"
 RECOVERY_RETAINED_FRACTION = .70
 # A reference may retain its recorded portion with small, separately labelled
 # gaps. This is a coaching data-quality policy, not a physiological threshold.
@@ -208,7 +208,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
     recent = observed_window(source, rows, today-timedelta(days=40), today)
     reliable = valid_units and all(recent["components"][z]["reference_supported"] for z in WEEKLY_Q_BOUNDS)
     key = reference_key(profile, physiology)
-    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v12-recorded-indicator-reference", "load-progression-v11-common-zone-q", "load-progression-v9-relative-recovery", "load-progression-v8-observed-coverage", "load-progression-v7-lower-planning-reference", "load-progression-v6-individual-reference", "load-progression-v5-cycle-q", "load-progression-v4-clamped-q", "load-progression-v3-stable-q"} else None
+    frozen = retained if retained and retained.get("key") == key and retained.get("version") in {VERSION, "load-progression-v13-observed-rate-checkpoints", "load-progression-v12-recorded-indicator-reference", "load-progression-v11-common-zone-q", "load-progression-v9-relative-recovery", "load-progression-v8-observed-coverage", "load-progression-v7-lower-planning-reference", "load-progression-v6-individual-reference", "load-progression-v5-cycle-q", "load-progression-v4-clamped-q", "load-progression-v3-stable-q"} else None
     if frozen and frozen["version"] != VERSION:
         # Re-select the reference without replacing saved measurements or dates.
         frozen = deepcopy(frozen)
@@ -256,6 +256,7 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
                 frozen["components"][z] = old
         frozen["created_on"] = retained_valid["created_on"]
         frozen["rate_observations"] = deepcopy(retained_valid.get("rate_observations", {}))
+        frozen["load_observations"] = deepcopy(retained_valid.get("load_observations", {}))
         frozen["windows"] = list({w["start_date"]:w for w in [*retained_valid["windows"], *frozen["windows"]]}.values())
     # A completed cycle can change future growth, never the recorded anchor or
     # the past trajectory. Reopening the same cycle cannot compound progress.
@@ -264,6 +265,15 @@ def context(profile, source, rows, today, adaptation=None, *, retained=None, phy
     if reliable and current["complete"] and cycle_start.isoformat() >= frozen["created_on"]:
         observations.setdefault(cycle_start.isoformat(), {z: c["reference_weekly_q"]
             for z, c in current["components"].items() if c["reference_supported"]})
+        if not profile.get("training_return"):
+            # An older, higher anchor cannot require catching up after a whole
+            # reliably observed cycle at a lower load. Apply a downward ceiling
+            # once, from the first calculation that observes the closed cycle.
+            # Higher actual work changes the growth rate, not the load by a jump.
+            frozen.setdefault("load_observations", {}).setdefault(cycle_start.isoformat(), {
+                "effective_from": today.isoformat(),
+                "components": {z: c["reference_weekly_q"] for z,c in current["components"].items()
+                               if c["reference_supported"] and (c["reference_weekly_q"] or 0.) > 0}})
     rate_day = max((d for d in observations if d <= today.isoformat()), default=None)
     rate_reference = observations.get(rate_day, {})
     components = {}
@@ -390,11 +400,17 @@ def trajectory(ctx, profile, periodization):
     end = date.fromisoformat(profile["program_end"])
     factors = {z:1. for z in COMPONENTS}
     result = {}
+    load_observations = ctx["anchor"].get("load_observations", {})
     while day <= end:
         period = next((p["kind"] for p in periodization["phases"] if p["start_date"] <= day.isoformat() <= p["end_date"]), None)
         taper = any(p["start_date"] <= day.isoformat() <= p["end_date"] for p in periodization.get("taper_windows", []))
         state = planning_controls.resolve(profile, day, period, accents(profile, period, ["Z1"]), periodization=periodization)
         for z,c in ctx["components"].items():
+            if c["reference_q"] and not ctx.get("training_return"):
+                for point in load_observations.values():
+                    ceiling = point["components"].get(z)
+                    if point["effective_from"] == day.isoformat() and ceiling is not None:
+                        factors[z] = min(factors[z], ceiling/c["reference_q"])
             observations = ctx["anchor"].get("rate_observations", {})
             latest = max((d for d in observations if d <= day.isoformat()), default=None)
             rate_q = observations.get(latest, {}).get(z, c["reference_q"])
