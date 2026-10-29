@@ -91,7 +91,13 @@ def reentry(profile, evidence):
 
 
 def recovery_coverage(source, today):
-    """Bounded metadata check; never fills unknown days with zero load."""
+    """Check the recovery window against conserved HR/speed recording coverage.
+
+    Older quality flags cannot invalidate a covered recent window. Unidentified
+    excluded/provider records still block it; they cannot be assigned a date.
+    Today's observed doses also matter, although its open day is not a gap.
+    """
+    from .unified_load import recorded_coverage
     start = today-timedelta(days=40)
     end = today-timedelta(days=1)
     expected = {(start+timedelta(days=i)).isoformat() for i in range(max(0,(end-start).days+1))}
@@ -99,7 +105,37 @@ def recovery_coverage(source, today):
     covered = set.intersection(*per_zone)
     missing = len(expected-covered)
     quality = source.get("quality") or {}
-    partial = sum(int(quality.get(k) or 0) for k in ("limited_activities", "excluded_activities"))
+    counted = sum(int(quality.get(k) or 0) for k in ("limited_activities", "excluded_activities"))
+    activities = source.get("activities", [])
+    identified = sum(a.get("quality_status", "valid") != "valid" for a in activities)
+    unidentified = max(0, counted-identified)
+    relevant = [a for a in activities if not a.get("date") or start.isoformat() <= a["date"] <= today.isoformat()]
+    unified = bool(source.get("load_selection"))
+    recorded = unknown = 0.
+    known_durations = unified and not unidentified
+    partial = unidentified
+    for activity in relevant:
+        status = activity.get("quality_status", "valid")
+        if status == "provider_missing" or not activity.get("date"):
+            known_durations = False
+        if activity.get("strength_time_min") or activity.get("sport") == "WeightTraining":
+            partial += status != "valid"
+            continue
+        ledger = recorded_coverage(activity) if unified else None
+        if ledger is not None:
+            recorded += ledger["recorded_seconds"]
+            unknown += ledger["unknown_seconds"]
+            partial += ledger["unknown_seconds"] > 1e-6 or status == "provider_missing" or not activity.get("date")
+        else:
+            known_durations = False
+            partial += unified or status != "valid"
+    complete = bool(expected) and not missing and not partial
     return {"complete": bool(expected) and not missing and not partial,
             "missing_days": missing, "partial_activities": partial,
-            "expected_days": len(expected), "covered_days": len(expected & covered)}
+            "expected_days": len(expected), "covered_days": len(expected & covered),
+            "unidentified_partial_activities": unidentified,
+            "readiness_available": complete,
+            "readiness_basis": "RECORDED_LOAD" if complete else "UNAVAILABLE", "estimated": False,
+            "recorded_seconds": recorded if known_durations else None,
+            "unknown_seconds": unknown if known_durations else None,
+            "coverage_percent": (100.*(recorded-unknown)/recorded if recorded else 100.) if known_durations else None}

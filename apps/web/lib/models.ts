@@ -5,6 +5,12 @@ export type ModelZone = typeof MODEL_ZONES[number];
 export interface ZoneConfig {duration_coefficient:number;shape:number;sensitivity:number;initial_daily_min:number}
 export interface RecoveryConfig {expected_revision:number;zones:Record<ModelZone,ZoneConfig>}
 interface Baseline {baseline_daily_min:number;baseline_raw_daily_min:number|null;history_days:number;baseline_source:"NO_HISTORY"|"NO_ZONE_LOAD"|"SHORT_HISTORY"|"SPARSE_ZONE_HISTORY"|"PERSONAL"}
+export interface RecoveryDataQuality {
+  complete:boolean;missing_days:number;partial_activities:number;expected_days:number;covered_days:number;
+  readiness_available?:boolean;readiness_basis?:"RECORDED_LOAD"|"ESTIMATED_LOAD"|"UNAVAILABLE";estimated?:boolean;
+  recorded_seconds?:number|null;unknown_seconds?:number|null;coverage_percent?:number|null;
+  estimation?:{policy:string;version:string;supported:boolean;estimated_minutes:number;estimated_activity_count:number;unresolved_activity_count:number;missing_calendar_days:string[]}|null;
+}
 export interface RecoveryV2 {
   schema_version:"recovery-history-v2";athlete_id:string;period_start:string;period_end:string;as_of:string;
   basis:"load-only";time_resolution:"calendar-day";ready_threshold_percent:90;
@@ -14,7 +20,7 @@ export interface RecoveryV2 {
   daily:Array<Baseline & {date:string;zone:ModelZone;readiness_before_percent:number;readiness_after_percent:number;residual_fatigue_after:number;impulse:number;effective_load:number;isolated_days_to_90:number;residual_fatigue_now?:number|null}>;
   forecast:Array<{zone:ModelZone;days:number;readiness_percent:number}>;
   source_as_of:string;source_stale:boolean;warnings:string[];
-  data_quality?:{complete:boolean;missing_days:number;partial_activities:number;expected_days:number;covered_days:number}|null;
+  data_quality?:RecoveryDataQuality|null;
   wellness_diagnostics?:WellnessCoverageDiagnostics|null;
 }
 const finite=(v:unknown):v is number=>typeof v==="number"&&Number.isFinite(v);
@@ -38,6 +44,23 @@ export function parseRecoveryV2(value:unknown):RecoveryV2 {
   }
   for(const p of r.forecast) if(!MODEL_ZONES.includes(p.zone)||!finite(p.days)||p.days<0||!finite(p.readiness_percent)||p.readiness_percent<0||p.readiness_percent>100)throw new Error("Невалидна възстановителна крива.");
   for(const d of r.daily) if(!MODEL_ZONES.includes(d.zone)||!/^\d{4}-\d{2}-\d{2}$/.test(d.date)||!finite(d.readiness_after_percent)||d.readiness_after_percent<0||d.readiness_after_percent>100)throw new Error("Невалидна история на възстановяването.");
+  const quality=r.data_quality;
+  if(quality!=null){
+    if(typeof quality.complete!=="boolean"||![quality.missing_days,quality.partial_activities,quality.expected_days,quality.covered_days].every(v=>Number.isInteger(v)&&v>=0)
+      ||quality.covered_days>quality.expected_days)throw new Error("Невалидно покритие за възстановяването.");
+    for(const value of [quality.recorded_seconds,quality.unknown_seconds,quality.coverage_percent])if(value!=null&&(!finite(value)||value<0))throw new Error("Невалидно покритие за възстановяването.");
+    if((quality.coverage_percent??0)>100||(quality.recorded_seconds!=null&&quality.unknown_seconds!=null&&quality.unknown_seconds>quality.recorded_seconds+.001))throw new Error("Несъгласувано покритие за възстановяването.");
+    if(quality.readiness_available!==undefined||quality.readiness_basis!==undefined||quality.estimated!==undefined){
+      if(typeof quality.readiness_available!=="boolean"||typeof quality.estimated!=="boolean"||!["RECORDED_LOAD","ESTIMATED_LOAD","UNAVAILABLE"].includes(quality.readiness_basis??""))throw new Error("Невалиден произход на възстановяването.");
+      const estimated=quality.estimation;
+      if(estimated!=null&&(typeof estimated.policy!=="string"||typeof estimated.version!=="string"||typeof estimated.supported!=="boolean"
+        ||!finite(estimated.estimated_minutes)||estimated.estimated_minutes<0||![estimated.estimated_activity_count,estimated.unresolved_activity_count].every(v=>Number.isInteger(v)&&v>=0)
+        ||!Array.isArray(estimated.missing_calendar_days)||!estimated.missing_calendar_days.every(day=>typeof day==="string"&&/^\d{4}-\d{2}-\d{2}$/.test(day))))throw new Error("Невалидна оценка на липсващия товар.");
+      if(quality.readiness_basis==="ESTIMATED_LOAD"&&(!quality.readiness_available||!quality.estimated||!estimated?.supported||quality.missing_days!==0||estimated.unresolved_activity_count!==0||estimated.missing_calendar_days.length!==0))throw new Error("Неподкрепена моделна оценка за възстановяването.");
+      if(quality.readiness_basis==="RECORDED_LOAD"&&(!quality.readiness_available||quality.estimated||!quality.complete))throw new Error("Несъгласуван отчетен товар за възстановяването.");
+      if(quality.readiness_basis==="UNAVAILABLE"&&(quality.readiness_available||quality.estimated))throw new Error("Несъгласувана наличност на възстановяването.");
+    }
+  }
   return r;
 }
 export type CurveEvidence = "MEASURED"|"INTERPOLATED"|"EXTRAPOLATED"|"ESTIMATED"|"INITIAL_HEURISTIC_ESTIMATE";
@@ -73,7 +96,15 @@ export interface SportHrPolicy {
   reference_zone_bounds_bpm:number[]; sport_zone_bounds_bpm:number[];
   reference_hrmax_bpm:number|null; sport_hrmax_bpm:number|null; raw_hr_unchanged:true;
 }
-export interface SpeedModel {sport_hr_policy?:SportHrPolicy}
+export interface SpeedModel {
+  sport_hr_policy?:SportHrPolicy;
+  index_freshness?:{
+    version:string;as_of:string;max_age_days:number;excluded_bands:string[];
+    last_observation_date:string|null;last_current_observation_date:string|null;
+    bands:Record<string,{status:"CURRENT"|"STALE"|"UNAVAILABLE";last_activity_date:string|null;age_days:number|null;
+      observed_index:number|null;observed_count:number;observed_seconds:number}>;
+  };
+}
 export interface InitialThresholdEstimate {
   model_version:"heuristic_v0.1_unvalidated"; status:"AVAILABLE"|"UNAVAILABLE";
   use_status:"THRESHOLD_ONLY"|"ZONES"|"SUPERSEDED"|"UNAVAILABLE"; reason:string|null;

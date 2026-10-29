@@ -72,6 +72,31 @@ def test_missing_hr_or_long_gap_does_not_bridge_the_lag_window(gap_kind):
     assert r['unavailable_speed_seconds']>20
     assert r['general']['valid']
 
+
+@pytest.mark.parametrize('flag', ['ARTIFACT', 'HR_ARTIFACT', 'INVALID_HR', 'SENSOR_DROPOUT', 'HR_SENSOR_ERROR'])
+def test_explicit_hr_artifacts_do_not_enter_pairs_or_bridge_the_lag_window(flag):
+    hrs,speeds=samples()
+    hrs[300]['quality_flags']=[flag]
+    before=deepcopy((hrs,speeds))
+    r=calculate(hrs,speeds)
+    assert r['signal_quality']['status']=='PASSED_SCREEN'  # Stable raw values alone cannot reveal the artifact.
+    assert r['hr_seconds']<600-20 and r['unavailable_speed_seconds']>20
+    assert r['general']['valid']
+    assert (hrs,speeds)==before
+    for row in hrs:row['quality_flags']=[flag]
+    excluded=calculate(hrs,speeds)
+    assert excluded['hr_seconds']==0
+    assert all(not band['valid'] and band['index'] is None for band in [*excluded['zones'],excluded['general']])
+
+
+@pytest.mark.parametrize('flag', ['MISSING_SOURCE_VALUE', 'INVALID_SOURCE_VALUE', 'SPEED_ARTIFACT', 'SPEED_SENSOR_ERROR'])
+def test_unrelated_source_flags_do_not_discard_valid_raw_hr(flag):
+    hrs,speeds=samples()
+    for row in hrs:row['quality_flags']=[flag]
+    result=calculate(hrs,speeds)
+    assert result['hr_seconds']==600
+    assert result['general']['valid']
+
 def test_signal_screen_excludes_entire_workout_without_modifying_raw_channels():
     hrs,speeds=samples()
     for t in [100,200,300]:hrs[t]['hr_raw_bpm']=180

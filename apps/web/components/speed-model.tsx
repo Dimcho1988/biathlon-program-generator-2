@@ -44,6 +44,8 @@ export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minu
   const router=useRouter();
   const rawSpeed=isRawMovingSpeed(model);
   const heuristic=model.status==="INITIAL_HEURISTIC";
+  const staleBands=model.index_freshness?.excluded_bands??[];
+  const lastExcludedIndexDate=staleBands.map(zone=>model.index_freshness?.bands[zone]?.last_activity_date).filter((day):day is string=>Boolean(day)).sort().at(-1);
   const exploratory=model.tests.some(t=>model.active_test_keys.includes(t.entry_key)&&t.payload.test_mode==="EXPLORATORY");
   const [testSource,setTestSource]=useState<"ACTIVITY"|"MANUAL">("ACTIVITY");
   const [editing,setEditing]=useState<SpeedTest|undefined>();
@@ -86,6 +88,7 @@ export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minu
       {model.warnings.includes("INCOMPARABLE_MODEL_VERSIONS")&&<p role="alert">Тестовете използват различни версии на Vflat. Изключете или преизчислете старите тестове, преди да ги сравнявате.</p>}
       {model.warnings.includes("INCOMPARABLE_INDEX_CONFIGURATION")&&<p role="status">Има несъпоставими резултати след промяна на настройките. Обновете активностите и при нужда запишете тестовете отново. При липса на подходящ ТИ връзката пулс–скорост използва експертните ориентири.</p>}
       {Boolean(model.index_admission?.refresh_required)&&<p role="status">Има активности за преизчисляване с актуалния модел. Отвори <Link href="/">началния екран</Link> → „Обнови данните“ и обнови анализите, за да участват техните индекси във връзката пулс–скорост.</p>}
+      {staleBands.length>0&&<p role="status">Индексите за {staleBands.map(zone=>zone==="GENERAL"?"общата връзка":zone).join(", ")} са по-стари от {model.index_freshness!.max_age_days} дни и не участват в текущите граници.{lastExcludedIndexDate&&` Последно наблюдение за изключените индекси: ${lastExcludedIndexDate.split("-").reverse().join(".")}.`} За всяка граница се избира наличната актуална връзка или оценката по скоростната крива.</p>}
       {sample&&<figure className="history-chart"><div className="chart-frame" ref={ref}><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={exploratory?"Пробна скорост според продължителността":"Средна максимална скорост според продължителността"}>
         {chartTicks(0,vmax,5).map(v=><g key={v}><line x1={left} x2={right} y1={y(v)} y2={y(v)} stroke="currentColor" opacity=".12"/><text x={left - 8} y={y(v)+4} textAnchor="end" fill="currentColor" fontSize="12">{n(v)}</text></g>)}
         {points.slice(1).map((p,i)=>{const previous=points[i];const estimated=p.evidence==="EXTRAPOLATED"||p.evidence==="ESTIMATED"||model.status==="PRELIMINARY"||heuristic||(measuredWindow&&(previous.duration_s<measuredWindow[0]||p.duration_s>measuredWindow[1]));return <line key={p.duration_s} x1={x(previous.duration_s)} y1={y(previous.speed_kmh)} x2={x(p.duration_s)} y2={y(p.speed_kmh)} stroke="var(--accent,#41b88c)" strokeWidth="3" strokeDasharray={estimated?"6 4":undefined}/>;})}
@@ -111,7 +114,7 @@ export function SpeedModelPanel({model,canEdit,activityRef,predictionInput="minu
     {Boolean(model.calibration_diagnostics?.residuals?.length)&&<section className="history-section"><details><summary>Как реалните тестове се сравняват с предварителната оценка?</summary><p>Реалните максимални тестове имат предимство и остават точни опори. Разликата показва какво е било оценено преди калибрацията. Общата крива за дозиране е отделна и запазва двете изходни криви.</p><div className="activity-table-wrap"><table><thead><tr><th>Време</th><th>Реален тест</th><th>Предварителна оценка</th><th>Разлика</th></tr></thead><tbody>{model.calibration_diagnostics!.residuals!.map((row,index)=><tr key={`${row.duration_s}-${index}`}><th>{manualClockTime(row.duration_s)}</th><td>{n(row.measured_speed_kmh)} км/ч</td><td>{n(row.prior_speed_kmh)} км/ч</td><td>{row.measured_vs_prior_percent>0?"+":""}{n(row.measured_vs_prior_percent)}%</td></tr>)}</tbody></table></div></details></section>}
     {model.dosing_model && <DosingCurvePanel model={model.dosing_model} initialHeuristic={heuristic}/>}
     {!heuristic&&model.functional_profile && <AthleteFunctionalProfile profile={model.functional_profile}/>}
-    {model.hr_model && <HrSpeedZones model={model.hr_model} admission={model.index_admission} indexWindow={model.index_window} zoneSource={model.hr_zone_source} speedRole={model.speed_role}/>}
+    {model.hr_model && <HrSpeedZones model={model.hr_model} admission={model.index_admission} indexWindow={model.index_window} indexFreshness={model.index_freshness} zoneSource={model.hr_zone_source} speedRole={model.speed_role}/>}
     <section className="history-section" id="speed-tests"><h2>Максимални тестове и контролни стартове</h2>
       {canEdit&&<div className="model-controls" role="group" aria-label="Източник на теста">
         <button type="button" className="action-button secondary" aria-pressed={testSource==="ACTIVITY"} onClick={()=>setTestSource("ACTIVITY")}>От записана активност</button>

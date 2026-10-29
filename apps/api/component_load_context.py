@@ -203,7 +203,8 @@ def read_contexts(repository, alias, sports, *, speed_by_sport=None):
                 "timezone": settings.timezone, "calendar": inputs["calendar"],
                 "entries": inputs["entries"], "history": inputs["history"],
                 "initial_profile": inputs.get("initial_profile"),
-                "initial_zone_policy": initial_speed_profile.ZONE_POLICY_VERSION}
+                "initial_zone_policy": initial_speed_profile.ZONE_POLICY_VERSION,
+                "speed_anchor_policy": model_service.speed_anchor_policy.VERSION}
     key = sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
     calculated = _context_cache.get_or_compute(key, lambda: {
         s: context_from_speed_view(model_service.speed_view(repository, alias, s,

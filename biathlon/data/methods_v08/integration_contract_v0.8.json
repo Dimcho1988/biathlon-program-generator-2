@@ -242,7 +242,7 @@
   },
   "index": {
     "schema": "trainability-index-v3",
-    "model": "trainability_paired_raw_lag20_v3",
+    "model": "trainability_paired_raw_lag20_v4_observed_validity",
     "pair": "raw_HR(t+20s) with Vflat(t)",
     "formula": "(100 * paired_time_weighted_HR / HRmax) / paired_time_weighted_Vflat_kmh",
     "direction": "lower_is_more_speed_per_relative_HR_under_comparable_conditions",

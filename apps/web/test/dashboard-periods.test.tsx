@@ -37,6 +37,20 @@ describe("dated dashboard volume", () => {
     expect(d.zones[0]).toEqual({ zone: "Z1", raw: 180, equivalent: 90 });
     expect(d.strength).toBe(60);
   });
+  it("uses unified unknown time rather than HR coverage to flag incomplete load", () => {
+    const h = history();
+    const activity = h.activities.find(row => row.activity_ref === "a")!;
+    activity.quality_status = "limited";
+    activity.hr_coverage_percent = 0;
+    activity.load_source = { version: "unified-test", leading_indicator: "SPEED", fallback_seconds: 0, unknown_seconds: 0, rest_seconds: 0 };
+    expect(latestTrainingDay(h)!.limited).toBe(false);
+    expect(equivalentWindow(h, 7).limited).toBe(false);
+    activity.load_source.unknown_seconds = 60;
+    expect(latestTrainingDay(h)!.limited).toBe(true);
+    expect(equivalentWindow(h, 7).limited).toBe(true);
+    delete activity.load_source;
+    expect(latestTrainingDay(h)!.limited).toBe(true);
+  });
   it("separates the training day from the current state and hides Tref in technical details", () => {
     const h = history();
     const html = renderToStaticMarkup(<Dashboard view="details" mode="fixture" data={trainingStatusFixture} loadHistory={h} />);

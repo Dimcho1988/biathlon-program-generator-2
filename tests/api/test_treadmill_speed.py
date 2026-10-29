@@ -53,7 +53,9 @@ def test_treadmill_does_not_invent_speed_from_total_distance_or_remove_grade_lim
 
 def test_only_treadmill_model_identity_changes():
     kwargs = {"zone_bounds_bpm": (124,144,164,182,190,205), "explicit_hrmax_bpm":205}
-    assert activity_shadow_configuration_fingerprint(**kwargs,sport="NordicSki") == "93115d07cde96da1672bcd76006aa894d0a67a03eb89cc5803f1f1e79134ec63"
+    # Includes the shared paired-HR validity v4 policy; treadmill-specific
+    # speed handling still has its own identity below.
+    assert activity_shadow_configuration_fingerprint(**kwargs,sport="NordicSki") == "90b536d21b57b9d0b86f9dfc29451b856b3c9b50f53d7c93c31a47b10faebe3b"
     assert speed_model_versions("Run") == speed_model_versions("TrailRun")
     assert speed_model_versions("VirtualRun") != speed_model_versions("Run")
     assert speed_model_versions("TreadmillRunning") == speed_model_versions("VirtualRun")

@@ -5,9 +5,10 @@ import math
 from typing import Any, Mapping, Sequence
 import numpy as np
 from biathlon.sport_heart_rate import validate_offset
+from biathlon.unified_load import observed_hr_valid
 
 SCHEMA_VERSION = "trainability-index-v3"
-MODEL_VERSION = "trainability_paired_raw_lag20_v3"
+MODEL_VERSION = "trainability_paired_raw_lag20_v4_observed_validity"
 MIN_SECONDS_BY_BAND = {"Z1":420.,"Z2":420.,"Z3":420.,"Z4":420.,"Z5":300.,"GENERAL":420.}
 MIN_ACTIVITY_SECONDS = 420.
 GENERAL_RANGE = (.75,.92)
@@ -54,14 +55,15 @@ def compute_trainability(hr_rows: Sequence[Mapping[str,Any]], speed_rows: Sequen
     if hrmax_bpm is not None and (not math.isfinite(hrmax_bpm) or hrmax_bpm<=0): raise ValueError("HRmax must be positive")
     quality=signal_quality(hr_rows)
     # Preserve missing HR timestamps. Never join across missing observations.
-    hr_by_time={t:(_number(r.get("hr_raw_bpm")) if not r.get("is_estimated") and not r.get("generated")
+    hr_by_time={t:(_number(r.get("hr_raw_bpm")) if observed_hr_valid(r) and not r.get("is_estimated") and not r.get("generated")
                    and r.get("hr_source", "raw") in {"raw", "RAW", "MEASURED"} else None)
                 for r in hr_rows if (t:=_time(r)) is not None}
     ordered=sorted(hr_by_time)
     times=np.asarray(ordered,float)
     hrs=np.asarray([hr_by_time[t] if hr_by_time[t] is not None else np.nan for t in ordered],float)
+    # Shared observed_hr_valid already applies 30–300 bpm and explicit flags.
     # HRmax is a normalization setting, not a sensor-validity cutoff.
-    good=np.isfinite(hrs)&(hrs>=30)&(hrs<=300)
+    good=np.isfinite(hrs)
     pairs=[];downhill=unavailable=0.
     for row in speed_rows:
         dt=_number(row.get("dt_s"));end=_time(row)

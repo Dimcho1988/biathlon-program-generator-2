@@ -23,6 +23,15 @@ const model:SpeedModel={schema_version:"speed-model-v1",model_version:"test",spo
   prediction:null,warnings:[],source_generation_id:"fixture",source_revision:1,hr_speed_range_kmh:null};
 
 describe("speed test selection and prediction",()=>{
+  it("explains excluded stale indices even when there is no HR model",()=>{
+    const html=renderToStaticMarkup(<SpeedModelPanel model={{...model,index_freshness:{version:"speed-anchor-freshness-v1-per-band-14d",as_of:"2026-10-29",max_age_days:14,
+      excluded_bands:["Z3"],last_observation_date:"2026-10-28",last_current_observation_date:"2026-10-28",bands:{
+        Z3:{status:"STALE",last_activity_date:"2026-10-01",age_days:28,observed_index:5,observed_count:1,observed_seconds:600},
+        GENERAL:{status:"CURRENT",last_activity_date:"2026-10-28",age_days:1,observed_index:5,observed_count:1,observed_seconds:600}}}}} canEdit={false}/>);
+    expect(html).toContain("по-стари от 14 дни и не участват");
+    expect(html).toContain("Последно наблюдение за изключените индекси: 01.10.2026.");
+    expect(html).not.toContain("Последно наблюдение за изключените индекси: 28.10.2026.");
+  });
   it("keeps duration-only users functional without showing normative speeds as individual",()=>{
     const unavailable:SpeedModel={...model,status:"UNAVAILABLE",points:[],curve_metadata:{mode:"DURATION_ONLY",absolute_speed_available:false},prediction:null};
     expect(parseSpeedModel(unavailable).points).toEqual([]);

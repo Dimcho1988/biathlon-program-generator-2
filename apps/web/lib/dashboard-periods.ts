@@ -4,6 +4,9 @@ import { ZONES, type Zone } from "./training-status";
 const DAY = 86_400_000;
 export const displayDate = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T12:00:00Z`));
 export const shiftDate = (value: string, days: number) => new Date(Date.parse(`${value}T12:00:00Z`) + days * DAY).toISOString().slice(0, 10);
+const incompleteActivity = (activity: LoadHistory["activities"][number]) => activity.load_source
+  ? activity.load_source.unknown_seconds > .001
+  : activity.quality_status === "limited";
 
 // Display-only aggregation of direct equivalent minutes. E and Tref are never
 // used as a proxy for volume; days without a workout still count as calendar days.
@@ -28,7 +31,7 @@ export function equivalentWindow(history: LoadHistory, days: number) {
   return { start, end, days: availableDays, partial: availableDays < days, complete,
     totals: complete ? totals : null,
     weekly: complete ? Object.fromEntries(ZONES.map((z) => [z, totals[z] * 7 / availableDays])) as Record<Zone, number> : null,
-    limited: activities.some((a) => a.quality_status === "limited") || history.quality.excluded_activities > 0 };
+    limited: activities.some(incompleteActivity) || history.quality.excluded_activities > 0 };
 }
 
 // The aggregate contract has dates, not within-day timestamps. Show the latest
@@ -47,5 +50,5 @@ export function latestTrainingDay(history: LoadHistory) {
       target.equivalent += row.equivalent_time_min;
     }
   }
-  return { day, activities, zones, strength: activities.reduce((sum, a) => sum + a.strength_time_min, 0), limited: activities.some((a) => a.quality_status === "limited") };
+  return { day, activities, zones, strength: activities.reduce((sum, a) => sum + a.strength_time_min, 0), limited: activities.some(incompleteActivity) };
 }

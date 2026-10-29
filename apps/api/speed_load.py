@@ -434,6 +434,7 @@ def history_view(repository, alias, sport=None, *, today=None, as_of=None, perio
     # every request. Immutable run keys, admitted summaries and source metadata
     # invalidate reuse when syncs, corrections or calibration settings change.
     phase_started = perf_counter()
+    from .load_model_policy import identity as load_policy_identity
     identity = {
         "namespace": namespace, "alias": alias, "sport": sport, "version": VERSION,
         "generation": calendar.get("generation_id"), "revision": calendar.get("revision"),
@@ -441,6 +442,7 @@ def history_view(repository, alias, sport=None, *, today=None, as_of=None, perio
         "start": start.isoformat(), "end": today.isoformat(), "custom": custom_period,
         "activities": calendar.get("activities", []), "admitted": admitted,
         "component_load_version": COMPONENT_LOAD_VERSION,
+        "selection_policy": load_policy_identity(),
         "capacities": {s: c["fingerprint"] for s, c in contexts.items()},
         "speed_comparison": {s: (c.get("comparison_parameters") or {}).get("parameters_version") for s,c in contexts.items()},
         "historical_calibration": {"policy": model_service.HISTORICAL_SPEED_POLICY,

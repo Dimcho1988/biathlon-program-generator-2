@@ -4,7 +4,7 @@ import math
 from . import raw_speed, speed_equivalence
 from .sport_heart_rate import reference_offset
 
-VERSION = "unified-leading-indicator-load-v5-raw-speed-coordinate"
+VERSION = "unified-leading-indicator-load-v6-valid-observed-hr"
 HR_INTERVAL_VERSION = "normalized-hr-recording-intervals-v1"
 HR_ZONE_TIME_VERSION = "shared-hr-zone-times-v1"
 HR_SIGNALS = {"MODEL", "hr_raw_bpm", "hr_clean_bpm", "hrmod_candidate_bpm", "hrmod_final_bpm"}
@@ -14,6 +14,39 @@ LEGACY_EXTENDED_SMART_RECORDING_S = 10.
 
 def finite(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def recorded_coverage(activity):
+    """Validate the conserved recording without substituting HR completeness."""
+    evidence = activity.get("load_source") or {}
+    keys = ("recorded_seconds", "active_seconds", "rest_seconds", "unknown_seconds")
+    if any(not finite(evidence.get(k)) or evidence[k] < 0 for k in keys):
+        return None
+    zones = activity.get("zones") or []
+    if ({r.get("zone") for r in zones} != set(speed_equivalence.ZONES)
+            or len(zones) != len(speed_equivalence.ZONES)
+            or any(not finite(r.get("raw_time_min")) or r["raw_time_min"] < 0 for r in zones)):
+        return None
+    recorded, active, rest, unknown = (evidence[k] for k in keys)
+    if (not math.isclose(recorded, active+rest+unknown, abs_tol=1e-4, rel_tol=1e-6)
+            or not math.isclose(active, sum(r["raw_time_min"] for r in zones)*60,
+                                abs_tol=1e-4, rel_tol=1e-6)):
+        return None
+    return {k: float(evidence[k]) for k in keys}
+
+
+def observed_hr_valid(row):
+    """Reuse the paired-index 30–300 bpm range and explicit HR invalidity."""
+    raw = row.get("hr_raw_bpm")
+    if not finite(raw) or not 30 <= raw <= 300:
+        return False
+    # Reuse explicit HR-cleaning outcomes. Generic missing/invalid source flags
+    # also describe speed/altitude, so they cannot invalidate a present pulse.
+    tokens = ("HR_ARTIFACT", "INVALID_HR", "MISSING_HR", "HR_OUT_OF_RANGE",
+              "HR_SENSOR_DROPOUT", "HR_SENSOR_ERROR")
+    flags = [str(flag).upper() for flag in row.get("quality_flags", ())]
+    return not any(flag in {"ARTIFACT", "SENSOR_DROPOUT", "SENSOR_ERROR"}
+                   or any(token in flag for token in tokens) for flag in flags)
 
 
 def _smart_span(row, following):
@@ -76,20 +109,18 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
             right = following["elapsed_s"] if smart else min(right, following["elapsed_s"])
         if right <= left:
             continue
-        raw = row.get("hr_raw_bpm")
         # Derived HR never makes a missing raw observation become measured.
         value = _hr_value(row, hr_signal, adjusted_hr_compatible)
         origin = _hr_origin(row, hr_signal, adjusted_hr_compatible)
-        estimate = speed_equivalence.evaluate_hr(parameters, value, bounds=bounds, offset_bpm=offset) if finite(raw) and raw > 0 else None
+        estimate = speed_equivalence.evaluate_hr(parameters, value, bounds=bounds, offset_bpm=offset) if observed_hr_valid(row) else None
         if estimate:
             estimate = {**estimate, "_hr_origin": origin}
         if (row.get("hr_interval_classification") not in {None, "original_1hz", "smart_recording"}
                 and following is not None):
             estimate = None
         if smart:
-            next_raw = following.get("hr_raw_bpm")
             next_value = _hr_value(following, hr_signal, adjusted_hr_compatible)
-            if estimate and finite(value) and finite(next_raw) and next_raw > 0 and finite(next_value):
+            if estimate and finite(value) and observed_hr_valid(following) and finite(next_value):
                 cuts = [0., 1.]
                 if next_value != value:
                     cuts += [(edge-offset-value)/(next_value-value) for edge in bounds

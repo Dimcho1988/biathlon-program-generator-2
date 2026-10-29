@@ -253,7 +253,12 @@ def test_shared_zone_volume_keeps_tests_and_hr_mapping_sport_specific(monkeypatc
         assert model["volume_weekly_min"]==pytest.approx(expected)
         assert model["active_test_keys"]==[sport]
         assert model["prediction"]["speed_kmh"]==pytest.approx(speed)
-        assert model["index_summary"]["Z2"]["index"]==pytest.approx(100*135/190/speed)
+        if sport=="Run" and history_days==40:
+            assert model["index_summary"]["Z2"]["index"] is None
+            assert model["index_freshness"]["bands"]["Z2"]["status"]=="STALE"
+            assert model["speed_zones"]["zones"][1]["source"]=="INITIAL_V50_V6_ESTIMATE"
+        else:
+            assert model["index_summary"]["Z2"]["index"]==pytest.approx(100*135/190/speed)
         assert model["sport_hr_policy"]["sport_zone_bounds_bpm"]==[b-(7 if sport=="Ride" else 0) for b in (100,125,145,160,175,190)]
         assert model["volume_position_basis"]=="EXPERT_DURATION"
         hr_model=m.speed_view(repo,"ath-test",sport,hr_bpm=155)

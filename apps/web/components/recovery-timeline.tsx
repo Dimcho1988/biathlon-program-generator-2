@@ -6,6 +6,7 @@ import { MODEL_ZONES, type ModelZone, type RecoveryV2 } from "../lib/models";
 import { dateAtOffset, forecastReadiness, recoveryForecastPoints, recoveryHistorySegments, stepRecoveryCursor } from "../lib/recovery-timeline";
 import "./recovery-timeline.css";
 import { useChartLayout } from "./chart-layout";
+import { recoveryDisplayState } from "../lib/recovery-display";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 2 });
 const shortDate = (date: string) => new Intl.DateTimeFormat("bg-BG", { day: "2-digit", month: "2-digit", timeZone: "UTC" }).format(new Date(`${date}T00:00:00Z`));
@@ -18,7 +19,8 @@ export function RecoveryTimeline({ history }: { history: RecoveryV2 }) {
   const y = (value: number) => bottom - value * plotHeight / 100;
   const [visible, setVisible] = useState<ModelZone[]>([...MODEL_ZONES]);
   const [cursor, setCursor] = useState(0);
-  if (history.data_quality?.complete === false) return <figure className="history-chart recovery-timeline">
+  const { unavailable, estimated } = recoveryDisplayState(history);
+  if (unavailable) return <figure className="history-chart recovery-timeline">
     <div className="history-chart-heading"><h3>Възстановяване · история и прогноза</h3></div>
     <p role="status">Недостатъчни данни за графика на възстановяването. Има неоценени натоварвания или дни без пълни данни. Отчетеният товар остава достъпен в дневната история.</p>
   </figure>;
@@ -38,11 +40,12 @@ export function RecoveryTimeline({ history }: { history: RecoveryV2 }) {
     setVisible(previous => previous.includes(zone) ? previous.filter(value => value !== zone) : MODEL_ZONES.filter(value => value === zone || previous.includes(value)));
   }
   const cursorLabel = cursor === 0 ? `Днес · ${shortDate(history.as_of)}`
-    : cursor < 0 ? `${shortDate(dateAtOffset(history.as_of, cursor))} · отчетен товар`
+    : cursor < 0 ? `${shortDate(dateAtOffset(history.as_of, cursor))} · ${estimated ? "отчетен и оценен товар" : "отчетен товар"}`
     : `${shortDate(dateAtOffset(history.as_of, cursor))} · прогноза +${durationHms(cursor * 24 * 60)}`;
 
   return <figure className="history-chart recovery-timeline">
     <div className="history-chart-heading"><div><h3>Възстановяване · история и прогноза</h3><p>5 дни назад · днес · 2 дни напред</p></div></div>
+    {estimated && <p className="recovery-timeline-note">Моделна оценка: историята и прогнозата включват оценения товар за времето без валиден пулс или скорост.</p>}
     <div className="recovery-zone-controls" role="group" aria-label="Зони на графиката">
       <button type="button" onClick={() => setVisible([...MODEL_ZONES])} aria-pressed={visible.length === MODEL_ZONES.length}>Всички</button>
       {MODEL_ZONES.map(zone => <button type="button" key={zone} style={style(zone)} aria-pressed={visible.includes(zone)} onClick={() => toggle(zone)}><i aria-hidden="true" />{zone}</button>)}
@@ -50,7 +53,7 @@ export function RecoveryTimeline({ history }: { history: RecoveryV2 }) {
     <div className="chart-frame" ref={ref}>
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Възстановяване по зони: пет дни история и два дни прогноза" onPointerDown={move} onPointerMove={event => { if(event.pointerType !== "touch" || event.buttons) move(event); }}>
         <title>Възстановяване по зони — обща времева ос</title>
-        <desc>Плътните линии показват дневната готовност след отчетения товар. Пунктираните линии са прогноза без нови тренировки. Хоризонталният ориентир е 90%. Липсващите исторически дни са прекъсвания.</desc>
+        <desc>Плътните линии показват дневната готовност след {estimated ? "отчетения и оценения" : "отчетения"} товар. Пунктираните линии са прогноза без нови тренировки. Хоризонталният ориентир е 90%. Липсващите исторически дни са прекъсвания.</desc>
         <rect className="recovery-forecast-area" x={x(0)} y={top} width={x(2) - x(0)} height={plotHeight} />
         {[0, 25, 50, 75, 90, 100].map(value => <g key={value}><line className={value === 90 ? "recovery-ready-line" : "chart-grid"} x1={x(-5)} x2={x(2)} y1={y(value)} y2={y(value)} /><text className="chart-label" x={left-8} y={y(value) + 4} textAnchor="end">{value}%</text></g>)}
         <text className="chart-label" x={x(-5)} y="24">История</text><text className="chart-label" x={right} y="20" textAnchor="end">Прогноза</text>
@@ -74,7 +77,7 @@ export function RecoveryTimeline({ history }: { history: RecoveryV2 }) {
         setCursor(day => stepRecoveryCursor(day, event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 : 1));
       }
     }} aria-valuetext={cursorLabel} /></label>
-    <figcaption><span><i className="recovery-line-key" />История след дневния товар</span><span><i className="recovery-line-key forecast" />Прогноза без нови тренировки</span><span>Ориентир за готовност: 90%</span></figcaption>
+    <figcaption><span><i className="recovery-line-key" />{estimated ? "История с оценен товар" : "История след дневния товар"}</span><span><i className="recovery-line-key forecast" />Прогноза без нови тренировки</span><span>Ориентир за готовност: 90%</span></figcaption>
     <p className="recovery-timeline-note">Всички зони използват една и съща времева ос. При срок над 2 дни достигането на 90% е извън показаната прогноза. Историята е по календарни дни; липсващите данни не се приемат за почивка.</p>
   </figure>;
 }

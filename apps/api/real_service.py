@@ -31,6 +31,7 @@ from .cloud import (
     wellness_rows_from_payload,
 )
 from .activity_catalog import extract_activity_metadata, provider_activity_key
+from .load_model_policy import identity as load_policy_identity
 from .schemas import (
     ActivityZoneLoad,
     AthleteSnapshot,
@@ -552,6 +553,7 @@ def dataset_to_load_history(
             "fallback_seconds": sum(s["fallback_seconds"] for s in selected_sources),
             "unknown_seconds": sum(s["unknown_seconds"] for s in selected_sources),
             "profile_policy": HISTORICAL_SPEED_POLICY,
+            "selection_policy": load_policy_identity(),
             "calibration_eligible": False} if selected_sources else None),
         component_load_model={"version": COMPONENT_LOAD_VERSION,
                               "contexts_by_sport": getattr(dataset, "component_load_contexts", None) or {},
@@ -1415,6 +1417,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 from biathlon import speed_equivalence, unified_load
                 if speed_equivalence.supports_sport(sport):
                     value = {**value, "unified_load_version": unified_load.VERSION,
+                        "selection_policy": load_policy_identity(),
                         "reference_bounds_bpm": list(context.zone_bounds_bpm),
                         "leading_indicator": getattr(athlete_settings, "leading_indicator", "HEART_RATE")}
                 historical_load_contexts[identity] = value
@@ -1431,6 +1434,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 from biathlon import speed_equivalence, unified_load
                 if speed_equivalence.supports_sport(sport):
                     load_capacity_contexts[sport].update(unified_load_version=unified_load.VERSION,
+                        selection_policy=load_policy_identity(),
                         reference_bounds_bpm=list(context.zone_bounds_bpm),
                         leading_indicator=getattr(athlete_settings, "leading_indicator", "HEART_RATE"))
             return load_capacity_contexts[sport]
@@ -1563,6 +1567,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                         "source_input_hash": source_scientific_input_hash,
                         "tref_bounds_profile_version": tref_profile_version,
                         "tref_used_min": tref_used_min,
+                        "selection_policy": load_policy_identity(),
                     },
                     sort_keys=True,
                     separators=(",", ":"),
