@@ -130,6 +130,7 @@ export interface EffortAnchor {
   parts?: Array<{ zone: string; kind?: string; method_id?: string; anchor: EffortAnchor }>;
 }
 export interface DoseEvidence {
+  continuity?: { mode: string; additional_q?: Partial<Record<Component, number>>; support_q?: Partial<Record<Component, number>>; shared_easy_reserve?: boolean };
   effort_anchor?: EffortAnchor;
   standard_method_work_minutes?: number; method_budget_role_fraction?: number; nominal_dose_policy?: string;
   method_dose_factors?: Array<{stage: string; factor?: number; work_minutes?: number}>;
@@ -173,6 +174,7 @@ export interface ComponentLoadBudget {
   effective_limit_basis?: string; index_limit_binding?: boolean;
 }
 export interface ComponentAllocation {
+  support_reserve_q?: number;
   coverage_percent?: number | null; coverage_status?: "WITHIN_RANGE" | "BELOW_RANGE" | "ABOVE_RANGE" | "NOT_REQUIRED" | "UNKNOWN";
   within_tolerance?: boolean; lower_acceptable?: number; upper_acceptable?: number;
   prescription_remaining?: number | null; effective_is_prescription_limit?: boolean;

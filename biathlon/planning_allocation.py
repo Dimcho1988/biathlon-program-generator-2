@@ -9,7 +9,7 @@ from datetime import timedelta
 
 from .constants import COMPONENTS
 
-VERSION = "component-allocation-v6-q-prescription"
+VERSION = "component-allocation-v7-explicit-support-reserve"
 SEGMENT_VERSION = VERSION
 COVERAGE_TOLERANCE = .10
 
@@ -25,7 +25,7 @@ def assess_component(row):
     if actual is None or planned is None:
         percent, status = None, "UNKNOWN"
     else:
-        total = actual+planned
+        total = actual+planned-row.get("support_reserve_q", 0.)
         percent = 100*total/target if target > 0 else None
         epsilon = 1e-9*max(1., target)
         status = ("BELOW_RANGE" if total < lower-epsilon else "ABOVE_RANGE" if total > upper+epsilon
@@ -60,7 +60,7 @@ def gap_score(rows):
             gap = 1.
         else:
             # Completed excess cannot be undone; extra proposals still cost.
-            error = abs(actual+planned-max(target, actual))/(target if target > 0 else 1.)
+            error = abs(actual+planned-row.get("support_reserve_q", 0.)-max(target, actual))/(target if target > 0 else 1.)
             gap = max(0., error-COVERAGE_TOLERANCE)
         errors.append(error)
         outside.append(gap)
@@ -69,7 +69,7 @@ def gap_score(rows):
 
 def needs_search(allocation):
     return any(row.get("actual") is not None and row.get("planned") is not None
-               and abs(row["actual"]+row["planned"]-max(row["target"], row["actual"]))
+               and abs(row["actual"]+row["planned"]-row.get("support_reserve_q", 0.)-max(row["target"], row["actual"]))
                    > (min(1., row["target"]*.01) if row["target"] > 0 else .001)
                for _, row in objective_rows(allocation))
 
@@ -106,6 +106,8 @@ def objectives(windows, actual, forecast, source, days):
         done_e = sum(r['effective_load'] for r in actual if r['zone'] == z and start <= r['date'] <= end)
         total_e = sum(r['effective_load'] for r in forecast if r['zone'] == z and start <= r['date'] <= end)
         planned_q = sum(s['direct_equivalent_minutes'][z] for s in sessions)
+        support_q = sum((s.get("dose_evidence", {}).get("continuity") or {}).get("support_q", {}).get(z, 0.)
+                        for s in sessions)
         q_values = [next((r.get('equivalent_time_min') for r in a.get('zones', []) if r['zone'] == z), None)
                     for a in source.get('activities', []) if start <= a['date'] <= end and a.get('sport') != 'WeightTraining']
         done_q = done_e if z == 'STR' else sum(v for v in q_values if v is not None)
@@ -121,6 +123,7 @@ def objectives(windows, actual, forecast, source, days):
             actual=done if not q_known or actual_q_known else None, planned=planned,
             remaining=remaining if not q_known or actual_q_known else None,
             target_q=target_q, actual_q=done_q if actual_q_known else None, planned_q=planned_q,
+            support_reserve_q=min(planned_q, support_q) if q_known else 0.,
             target_effective=target_e, actual_effective=done_e, planned_effective=max(0., total_e-done_e),
             unallocated_effective=max(0., target_e-total_e))
         components[z].update(assess_component(components[z]))

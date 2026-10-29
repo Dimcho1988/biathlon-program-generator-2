@@ -82,6 +82,62 @@ def test_rolling_effective_limit_is_not_relaxed_by_either_reserve():
     assert allowed["e"]["Z3"] == 0.
 
 
+def test_planned_easy_and_preparation_share_one_frozen_reserve():
+    rows = ledger(actual=0., planned=100.)
+    refs = {"Z1": reference("Z1"), "Z2": reference("Z2"), "Z3": reference("Z3")}
+    reserve = policy.reserves(rows, refs)
+    assert set(reserve["references"]) == {"Z1", "Z2"}
+    assert policy.eligible(rows["Z1"], planned_easy=True)
+    first = headroom(rows, primary="Z1", maintenance=True, references=refs)
+    assert first["mode"] == "PLANNED_EASY_MAINTENANCE"
+    assert first["q"]["Z1"] == 25
+    rows["Z1"].update(planned=110., planned_q=110.)
+    rows["Z3"].update(planned=0., planned_q=0., remaining=100.)
+    prep = headroom(rows, preparation=True, references=refs)
+    assert prep["q"]["Z1"] == 15  # 25 shared, not 25 plus 10% preparation.
+    rows["Z1"].update(actual=110., actual_q=110., planned=0., planned_q=0.)
+    assert headroom(rows, preparation=True, references=refs)["q"]["Z1"] == 15
+    assert not headroom(rows, primary="Z1", maintenance=True, references=refs, rolling=0.)["e"]["Z1"]
+    assert not policy.reserves(rows, refs, manual={"Z1", "Z2"})["references"]
+    rows["Z1"]["actual_q"] = rows["Z2"]["actual_q"] = None
+    assert not policy.reserves(rows, refs)["references"]
+
+
+def test_support_accounting_cannot_hide_overshoot_in_the_primary_component():
+    rows = ledger(actual=0., planned=0.)
+    rows["Z1"].update(planned=100., planned_q=100., remaining=0.)
+    allowance = headroom(rows, preparation=True, references={"Z1": reference("Z1")})
+    direct = {z: 10. if z == "Z1" else 105. if z == "Z3" else 0. for z in COMPONENTS}
+    evidence = policy.evidence(direct, direct, allowance, {"components":rows, "window_start":"2026-01-01", "window_end":"2026-01-07"})
+    assert evidence["additional_q"] == {"Z1":10., "Z3":5.}
+    assert evidence["support_q"] == {"Z1":10.}
+
+
+def test_day_coverage_wins_a_tie_without_requiring_extra_sessions():
+    from apps.api.planning_search import score
+    session = {"zone":"Z1", "main_work_minutes":15.}
+    allocation = {"components":{"Z1":{"target":30., "actual":0., "planned":30.}}}
+    double = {"allocation":allocation, "days":[{"date":"2026-01-01", "sessions":[session, session]}]}
+    spread = {"allocation":allocation, "days":[{"date":day, "sessions":[session]} for day in ("2026-01-01", "2026-01-02")]}
+    assert score(spread, set()) > score(double, set())
+
+
+def test_covered_targets_still_allow_one_trial_to_spread_requested_days():
+    from apps.api.planning_search import improve
+    session = {"zone":"Z1", "main_work_minutes":15.}
+    baseline = {"allocation":{"components":{"Z1":{"target":30., "actual":0., "planned":30.}}},
+        "days":[{"date":"2026-01-01", "sessions":[session, session]}, {"date":"2026-01-02", "sessions":[]}]}
+    calls = []
+    def replay(policy):
+        calls.append(policy)
+        plan = deepcopy(baseline)
+        plan["days"][1]["sessions"] = [plan["days"][0]["sessions"].pop()]
+        return plan
+    result = improve(baseline, {}, replay)
+    assert len(calls) == 1 and calls[0]["spread_recovery"]
+    assert all(len(d["sessions"]) == 1 for d in result["days"])
+
+
 def scenario(monkeypatch, *, readiness=100., actual_q=30., manual=False, rest=False, rolling=500., unloading=None):
     fixed_readiness(monkeypatch, readiness)
     body = configured(age_years=25, training_experience_years=5, available_minutes=[180]*7)

@@ -22,6 +22,8 @@ def approve(system, record, now):
 
 
 def test_fixed_week_same_tasks_are_fresh_without_reapproval_or_rolling(system):
+    # Keep the rolling historical time ceiling nonbinding in this identity test.
+    system.profiles.body.available_minutes = (30.,)*7
     initial = fixed(system)
     now = advance(system, 1)
     updated = lifecycle.refresh(system.repo, "athlete", automatic=True, now=now)

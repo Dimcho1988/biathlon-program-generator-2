@@ -21,6 +21,20 @@ const plan = () => ({ schema_version: "planning-draft-v1", status: "DRAFT", star
         Z1: {basis: "DIRECT_Q", target_q: 130, actual_q: 0, planned_q: 120}}}]},
 }) as unknown as PlanningDraft;
 
+it("shows the support reserve separately while preserving total Q and primary-component overshoot", () => {
+  const input = plan();
+  input.allocation!.segments![0].components.Z1!.target_q = 60;
+  input.days[0].sessions![0].dose_evidence = {continuity:{mode:"QUALITY_PREPARATION_RESERVE",
+    additional_q:{Z1:20, Z3:5}, support_q:{Z1:20}}} as never;
+  const rows = planQComparison(input)[0].rows;
+  expect(rows[0]).toMatchObject({target:60, planned:80, supportReserve:20});
+  expect(rows[2]).toMatchObject({planned:10, supportReserve:0});
+  const markup = renderToStaticMarkup(<PlanQComparison plan={input}/>);
+  expect(markup).toContain("100.0% от основната цел");
+  expect(markup).toContain("Вкл. поддържащ резерв: 0:20:00");
+  expect(markup).toContain("1:20:00");
+});
+
 it("uses exact microcycle windows, preserves genuine zeros and never substitutes E for missing Q", () => {
   const input = plan();
   const saved = structuredClone(input);

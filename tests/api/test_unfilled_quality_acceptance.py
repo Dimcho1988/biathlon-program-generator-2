@@ -84,6 +84,8 @@ def test_partial_quality_is_selected_before_easy_work_closes_preparation_budget(
 @pytest.mark.parametrize("readiness,preparation_q", [(30., 20.), (100., 5.)])
 def test_residual_priority_cannot_bypass_readiness_or_preparation_budget(monkeypatch, zone, readiness, preparation_q):
     repo, profile = residual_fixture(monkeypatch, zone, readiness=readiness, preparation_q=preparation_q)
+    # A manually fixed preparation budget cannot acquire the automatic easy reserve.
+    profile["component_targets_weekly"] = {"Z1":20.+preparation_q}
     plan = engine.generate_plan(repo, "athlete", profile, start_date=TODAY, now=NOW)
     assert not any(s["zone"] == zone for day in plan["days"] for s in day["sessions"])
     assert_rolling_budgets(plan)

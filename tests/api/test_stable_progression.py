@@ -147,7 +147,8 @@ def test_reference_trend_includes_recovery_without_compressing_annual_growth():
     ctx=policy.context(p,source,rows,TODAY,periodization=periodization)
     path=ctx['trajectory']
     assert 1<path[(TODAY+timedelta(days=20)).isoformat()]['Z3']<1.03
-    assert path[(TODAY+timedelta(days=27)).isoformat()]['Z3'] == pytest.approx((1+ctx['components']['Z3']['annual_rate_percent']/100)**(28/365.25))
+    assert 1 < path[(TODAY+timedelta(days=27)).isoformat()]['Z3'] <= (1+ctx['components']['Z3']['annual_rate_percent']/100)**(28/365.25)
+    assert path[(TODAY+timedelta(days=27)).isoformat()]['Z3'] > path[(TODAY+timedelta(days=20)).isoformat()]['Z3']
     assert all(v['STR']==1 for v in path.values())
     assert path[(TODAY+timedelta(days=20)).isoformat()]['Z5']==1  # Not this cycle's focus.
 
@@ -158,6 +159,47 @@ def test_direct_q_budget_counts_actual_and_multiple_proposals_once():
     assert policy.remaining_q(source,planned,TODAY,{'Z5':{'target_weekly_q':10}})=={'Z5':4}
     source['activities'][0]['zones'][0]['equivalent_time_min']=None
     assert policy.remaining_q(source,planned,TODAY,{'Z5':{'target_weekly_q':10}})=={'Z5':0}
+
+
+def test_completed_observed_cycle_slows_future_growth_without_rewriting_the_anchor():
+    p = configured()
+    _, source, rows = observed()
+    calendar = {'phases':[{'kind':'GENERAL_PREPARATION','start_date':TODAY.isoformat(),
+                          'end_date':p['program_end']}], 'taper_windows':[]}
+    first = policy.context(p, source, rows, TODAY, periodization=calendar)
+    later = TODAY+timedelta(days=28)
+    for i in range(28):
+        key = (TODAY+timedelta(days=i)).isoformat()
+        source['activities'].append({'date':key, 'sport':'Run', 'duration_min':60,
+            'zones':[{'zone':z, 'raw_time_min':10., 'equivalent_time_min':policy.WEEKLY_Q_BOUNDS[z][1]/7}
+                     for z in policy.WEEKLY_Q_BOUNDS]})
+        rows.extend({'date':key, 'zone':z, 'effective_load':10.} for z in engine.COMPONENTS)
+    updated = policy.context(p, source, rows, later, retained=first['anchor'], periodization=calendar)
+    assert updated['anchor']['components'] == first['anchor']['components']
+    assert updated['components']['Z3']['annual_rate_percent'] == 0
+    assert updated['components']['Z3']['growth_reference_date'] == later.isoformat()
+    assert all(updated['trajectory'][d] == values for d, values in first['trajectory'].items() if d < later.isoformat())
+    assert updated['trajectory'][later.isoformat()]['Z3'] == updated['trajectory'][(later-timedelta(days=1)).isoformat()]['Z3']
+    assert policy.context(p, source, rows, later, retained=updated['anchor'], periodization=calendar) == updated
+    for a in source['activities']:
+        for z in a['zones']:
+            z['equivalent_time_min'] *= .5
+    reopened = policy.context(p, source, rows, later, retained=updated['anchor'], periodization=calendar)
+    assert reopened['anchor']['rate_observations'] == updated['anchor']['rate_observations']
+
+
+def test_lower_expert_destination_does_not_replace_history_or_refill_unloading():
+    p = configured()
+    _, source, rows = observed()
+    for a in source['activities']:
+        for z in a['zones']:
+            z['equivalent_time_min'] = 1/7
+    ctx = policy.context(p, source, rows, TODAY, periodization=phases(p))
+    goals, _, _ = engine._goals(p,TODAY,'GENERAL_PREPARATION',False,{},None,0,4,rows,TODAY,False,1,ctx)
+    assert goals['Z3']['target_weekly_q'] < 2
+    assert goals['Z3']['desired_weekly_q'] > goals['Z3']['target_weekly_q']
+    goals, _, _ = engine._goals(p,TODAY,'PRECOMPETITION',True,{},None,0,4,rows,TODAY,False,.5,ctx)
+    assert goals['Z3']['desired_weekly_q'] == goals['Z3']['target_weekly_q']
 
 
 @pytest.mark.parametrize('hr,expected', [(180,5),(190,20/3),(200,25/3),(210,25/3)])

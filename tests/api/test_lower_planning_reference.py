@@ -50,7 +50,8 @@ def test_recorded_planning_reference_keeps_q_separate_from_e_and_preserves_histo
         assert after[z]["target"] >= before[z]["target"]
         assert after[z]["target_index"] <= 2.
         assert not after[z]["consistency"]["projection_is_limit"]
-        assert after[z]["target_weekly_q"] == after[z]["desired_weekly_q"]
+        assert after[z]["target_weekly_q"] <= after[z]["desired_weekly_q"]
+        assert after[z]["desired_weekly_q"] == pytest.approx(max(after[z]["target_weekly_q"], low*after[z]["progression"]["cycle_shape"]))
     assert source == original_source
     assert not context["reference_is_clamped"]
 

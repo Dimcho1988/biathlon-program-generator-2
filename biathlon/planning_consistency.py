@@ -29,7 +29,7 @@ def reconcile(goals, profile, state, reference, *, limited=False, taper=False,
                                     zone_tmax_minutes, capacity_sources=capacity_sources)
     demand = {z: load["effective"][z]*7 for z in COMPONENTS}
     for z,g in goals.items():
-        desired_q = g.get("target_weekly_q")
+        desired_q = g.get("desired_weekly_q", g.get("target_weekly_q"))
         if z in automatic:
             g["desired_weekly_q"] = desired_q
             if g.get("progression"):

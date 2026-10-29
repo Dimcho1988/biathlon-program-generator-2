@@ -133,7 +133,8 @@ def test_quality_balance_keeps_first_sport_method_and_curve_when_catalog_ids_rep
                     assert engine._minimum_dose_usage(parts, evidence, session["zone"],
                         primary_only=bool(session.get("mixed_component") or method.get("developmental_variant"))) >= evidence["min_dose_fraction"] - .001
                 else:
-                    assert session["purpose"] == "RECOVERY"
+                    assert session["purpose"] == "RECOVERY" or (session["purpose"] == "MAINTENANCE" and session["zone"] in {"Z1", "Z2"} and engine._absolute_minimum(method))
+                    assert primary >= evidence["minimum_primary_work_minutes"]-.001
                     assert work >= evidence["minimum_primary_work_minutes"]
             if method["structure"] in {"MODEL_INTERVALS", "METABOLIC_INTERVALS"}:
                 profile = evidence["effort_profile"]

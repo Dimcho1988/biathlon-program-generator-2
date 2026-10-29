@@ -58,7 +58,7 @@ def assert_segment_contract(plan, *, constant_q=None):
                 # includes the earlier dates of that same anchored cycle.
                 assert row["target"] >= target-.005
             ceiling = row["target"]*(1.1 if row["basis"] == "DIRECT_Q" else 1.)
-            assert row["planned"] <= max(0.,ceiling-row["actual"])+.005
+            assert row["planned"]-row.get("support_reserve_q", 0.) <= max(0.,ceiling-row["actual"])+.005
             if row["basis"] != "DIRECT_Q":
                 assert row["planned_effective"] <= max(0.,row["target_effective"]-row["actual_effective"])+.005
     for day in plan["days"]+plan.get("lookahead_days", []):

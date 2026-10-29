@@ -2,7 +2,7 @@ import { COMPONENTS, daySessions, type Component, type ComponentAllocation, type
 import { planDates, planWeekView } from "./plan-week-view";
 
 export interface QComparisonRow {
-  zone: Component; target: number | null; planned: number | null; actual: number | null;
+  supportReserve: number; zone: Component; target: number | null; planned: number | null; actual: number | null;
   scheduled: number | null; forecast: number | null; plannedCompleted: number | null; actualCompleted: number | null; actualEstimated: number | null;
   targetBasis: "DIRECT_Q" | "CANONICAL_E" | "UNKNOWN";
 }
@@ -60,7 +60,11 @@ export function planQComparison(plan: PlanningDraft, options: QComparisonOptions
         const completed = [...adherence.keys()].filter(d => d < today && d < asOf);
         const scheduled = sum([...schedule.values()]);
         const forecastQ = sum(forecast.map(d => dayQ(d, zone)));
-        return {zone, target: qValue(row, "target"), targetBasis: row?.basis ?? "UNKNOWN",
+        const supportReserve = view.days.filter(d => d.status !== "EXISTING_ACTIVITY").flatMap(daySessions).reduce((total, session) => {
+          const reserve = session.dose_evidence?.continuity;
+          return total + (quantity(reserve?.support_q?.[zone]) ?? 0);
+        }, 0);
+        return {zone, supportReserve, target: qValue(row, "target"), targetBasis: row?.basis ?? "UNKNOWN",
           planned: view.missingDates.length ? null : sum([scheduled,forecastQ]), scheduled, forecast:forecastQ,
           actual: execution ? sum(actualKeys.map(d => quantity(actualDays.get(d)?.q[zone]))) : qValue(row, "actual"),
           actualEstimated: execution ? sum(actualKeys.map(d => quantity(actualDays.get(d)?.estimated_q?.[zone] ?? 0))) : null,
