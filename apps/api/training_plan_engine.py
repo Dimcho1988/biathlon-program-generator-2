@@ -23,6 +23,7 @@ from biathlon import method_dosing, planning_continuity, planning_envelope, plan
 from biathlon.method_dosing import continuous_building_fraction, continuous_maintenance_fraction, recovery_factor, threshold_allowed
 from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION, DOWNWARD_FACTORS, effective_upper_bound
 from biathlon.equivalence import DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM, equivalence_slope
+from biathlon import speed_anchor_policy
 from biathlon.periodization import build_periodization, reentry_dose_active
 from biathlon.physiology import _causal_tref, effective_from_direct_vector, linear_equivalence_coefficient
 from biathlon.training_methods import METHODS, EXERCISES, VERSION as METHODS_VERSION, catalog, resolved_methods, method_family
@@ -37,8 +38,8 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v62-live-q-report"
-PARAMETER_VERSION = "management-parameters-v52"
+VERSION = "training-management-v63-interchangeable-speed-evidence"
+PARAMETER_VERSION = "management-parameters-v53"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -555,7 +556,18 @@ def _capacity_for_impl(method, settings, speed, context, today, allow_fallback=T
             and len(_accepted_tests(tests, speed.get("sport", "Run"))) == len(tests)
             and mapping_source in {"INITIAL_V50_V6_ESTIMATE", "TEST_CURVE_CONFLICT_FALLBACK"})
         recent = (speed.get("index_window") or {}).get("last_activity_date")
-        if not heuristic and not test_mapping and (not recent or (today - date.fromisoformat(recent)).days > 14):
+        index_reference_day = today
+        freshness = speed.get("index_freshness") or {}
+        if freshness.get("version") == speed_anchor_policy.VERSION:
+            try:
+                selected_on = date.fromisoformat(freshness.get("as_of") or "")
+            except ValueError:
+                selected_on = None
+            if selected_on is not None and selected_on <= today:
+                # Future prescriptions share the model selected at generation.
+                # A later generation reevaluates recency before selecting it.
+                index_reference_day = selected_on
+        if not heuristic and not test_mapping and (not recent or (index_reference_day - date.fromisoformat(recent)).days > speed_anchor_policy.MAX_INDEX_AGE_DAYS):
             reasons.append("STALE_HR_SPEED_INDEX")
         if not heuristic and (speed.get("index_summary", {}).get(zone) or {}).get("count", 0) < 3:
             reasons.append("INSUFFICIENT_COMPARABLE_INDEX_OBSERVATIONS")
@@ -1969,10 +1981,14 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                               and (controls or {}).get("weekly_target_hours") is None)
     if estimated_initial_time:
         weekly_ceiling = min(weekly_ceiling, weekly_minutes*((end_date-start_date).days+1)/7)
-        warnings.append(_warning("ESTIMATED_HISTORY_TIME_ENVELOPE", "Началният обем на проекта следва записаното средно седмично време. Това не е таван на възможностите; зададен от вас седмичен обем може да го замести при спазени Recovery и правила за дозата."))
+        warnings.append(_warning("ESTIMATED_HISTORY_TIME_ENVELOPE", "Началният обем за планирания период следва записаното средно седмично време. Изпълнените тренировки преди този период не изчерпват този ориентир. Зададен от вас седмичен лимит може да го замести при спазени Recovery и правила за дозата."))
     automatic_time = component_governed and availability_mode == "AUTO_HISTORY" and controls.get("weekly_target_hours") is None and not estimated_initial_time
+    # An inferred mean only bounds this prospective draft. Reusing it as a
+    # rolling cap would turn a recent above-average week into compulsory rest
+    # even when the coach set no time limit. Actual prior load is governed by
+    # the component 7/40 and Recovery checks; explicit time limits remain rolling.
     rolling_time_limit = (controls["weekly_target_hours"]*60 if controls and controls.get("weekly_target_hours") is not None
-                          else weekly_minutes if estimated_initial_time else None)
+                          else None)
     remaining = weekly_ceiling
     sport_spent = {s: sum(float(a.get("duration_min") or 0.) for a in source.get("activities", [])
                             if a.get("sport") == s and a["date"] == today.isoformat()) if start_date == today else 0.
@@ -2111,14 +2127,25 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         return count, keys
 
     def time_headroom(at_day, at_days):
-        if rolling_time_limit is None:
+        if estimated_initial_time:
+            # Whole-microcycle allocation may include provisional days after
+            # the visible draft. Keep its initial recorded-time envelope
+            # intact without charging completed work before the draft starts.
+            left = max(start_date, at_day-timedelta(days=6)).isoformat()
+            right = at_day.isoformat()
+            limit = weekly_minutes
+            if at_day <= display_end:
+                limit *= ((display_end-start_date).days+1)/7
+        elif rolling_time_limit is not None:
+            left, right = (at_day-timedelta(days=6)).isoformat(), at_day.isoformat()
+            limit = rolling_time_limit
+        else:
             return float("inf")
-        left, right = (at_day-timedelta(days=6)).isoformat(), at_day.isoformat()
         actual = sum(float(a.get("duration_min") or 0.) for a in source.get("activities", [])
                      if left <= a["date"] <= right)
         planned = sum(s["total_minutes"] for d in at_days if left <= d["date"] <= right
                       for s in planning_schedule.day_sessions(d))
-        return max(0., rolling_time_limit-actual-planned)
+        return max(0., limit-actual-planned)
     # Reserve scarce key-session slots before spending optional easy volume.
     # Actual Recovery is still checked chronologically, including easy days.
     key_slots = []
@@ -4155,10 +4182,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     actual_window_minutes = sum(float(a.get("duration_min") or 0.) for a in existing_in_draft)
     end_date = display_end
     if not automatic_time and component_governed:
+        # The visible-window report uses the same prospective envelope as the
+        # allocator, independently of the explicitly configured rolling cap.
+        visible_time_limit = weekly_minutes if estimated_initial_time else rolling_time_limit
         weekly_ceiling = min(sum(available[(start_date+timedelta(days=i)).weekday()]
                                  for i in range((end_date-start_date).days+1)),
-                             rolling_time_limit*((end_date-start_date).days+1)/7
-                             if rolling_time_limit is not None else float("inf"))
+                             visible_time_limit*((end_date-start_date).days+1)/7
+                             if visible_time_limit is not None else float("inf"))
         remaining = max(0., weekly_ceiling-actual_window_minutes-sum(s["total_minutes"] for s in planned_sessions))
     parameters = {"version": PARAMETER_VERSION, "method_library": method_library.provenance(), "method_registry_version": method_registry.VERSION,
                   "continuity_policy": {"version":planning_continuity.VERSION,
@@ -4223,7 +4253,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                   "targets_version": training_targets.VERSION, "reserved_key_dates": [d.isoformat() for d in key_slots],
                   "key_schedule_changes":key_schedule_changes,"consistency_version":planning_consistency.VERSION,
                   "taper_volume_factor": .7, "minimum_test_anchors": 2, "minimum_zone_index_activities": 3,
-                  "max_index_age_days": 14, "history_days_for_unrestricted_draft": planning_history.MINIMUM_DAYS,
+                  "max_index_age_days": speed_anchor_policy.MAX_INDEX_AGE_DAYS, "history_days_for_unrestricted_draft": planning_history.MINIMUM_DAYS,
                   "z1_working_band_width_bpm": Z1_WORKING_BAND_WIDTH_BPM,
                   "recovery_config_revision": configs["expected_revision"], "recovery_settings": configs["zones"],
                   "expert_continuous_capacity_upper_edge_min": {z: sum(r) / 120 for z, r in hr_speed.TMAX_RANGES_S.items()},

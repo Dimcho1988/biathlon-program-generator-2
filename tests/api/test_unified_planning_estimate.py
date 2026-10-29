@@ -11,12 +11,22 @@ from tests.api.test_load_progression import configured, observed
 from tests.api.test_training_plan_engine import TODAY, NOW, reference_speed
 
 
+def attach_selected_coverage(activity):
+    active = sum(z["raw_time_min"] for z in activity["zones"]) * 60
+    activity["load_source"] = {
+        "version": "unified-test", "recorded_seconds": active,
+        "active_seconds": active, "rest_seconds": 0., "unknown_seconds": 0.,
+        "source_seconds": {"HEART_RATE": active, "SPEED": 0.},
+        "fallback_seconds": 0., "leading_indicator": "HEART_RATE"}
+
+
 def selected_history(*, unknown=60., rest=120., fallback=180.):
     repo, source, _ = observed()
     # Real ledgers contain all five zones; use conserved raw time, independent
     # of Q. Moving duration and HR coverage deliberately disagree with elapsed.
     for a in source["activities"]:
         a["quality_status"] = "valid"
+        attach_selected_coverage(a)
     activity = source["activities"][-1]
     active = sum(z["raw_time_min"] for z in activity["zones"]) * 60
     activity.update(quality_status="limited" if unknown else "valid", hr_coverage_percent=0.)
@@ -86,6 +96,16 @@ def test_missing_provider_record_or_calendar_day_is_not_completed():
     assert not info["supported"] and activity["date"] in info["missing_calendar_days"]
 
 
+def test_valid_label_without_selected_interval_evidence_remains_unresolved():
+    repo, source, _ = selected_history()
+    activity = source["activities"][0]
+    assert activity["quality_status"] == "valid"
+    del activity["load_source"]
+    _, info = estimate.prepare(source, repo.envelope["activities"], configured(), TODAY)
+    assert not info["supported"]
+    assert info["unresolved_activity_refs"] == [activity["activity_ref"]]
+
+
 def test_unidentified_excluded_record_is_not_hidden_by_known_estimates():
     repo, source, _ = selected_history()
     source["quality"]["excluded_activities"] = 1
@@ -118,6 +138,8 @@ def test_fixed_to_adaptive_proposal_can_be_approved_with_separate_estimated_load
     _, selected, _ = selected_history()
     source = system.repo.envelope["snapshot_payload"]["load_history"]
     source["load_selection"] = deepcopy(selected["load_selection"])
+    for activity in source["activities"]:
+        attach_selected_coverage(activity)
     partial = source["activities"][-1]
     partial.update(quality_status="limited", load_source=deepcopy(selected["activities"][-1]["load_source"]))
     source["quality"]["limited_activities"] = 1

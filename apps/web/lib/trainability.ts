@@ -1,7 +1,7 @@
 import { durationSeconds } from "./duration-format";
 import { isCalendarDate, isRecord } from "./training-status";
 
-export const TRAINABILITY_MODEL_VERSION = "trainability_paired_raw_lag20_v3";
+export const TRAINABILITY_MODEL_VERSION = "trainability_paired_raw_lag20_v4_observed_validity";
 export const MINIMUM_SECONDS_BY_BAND: Record<string, number> = { Z1: 420, Z2: 420, Z3: 420, Z4: 420, Z5: 300, GENERAL: 420 };
 
 export interface IndexBand {

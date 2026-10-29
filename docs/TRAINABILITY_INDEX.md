@@ -1,7 +1,8 @@
 # Trainability index: paired raw HR and Vflat
 
-`trainability-index-v3` / `trainability_paired_raw_lag20_v3` replaces the rank-based
-v2 index. Old summaries are marked `REFRESH_REQUIRED`, never mixed into v3.
+`trainability-index-v3` / `trainability_paired_raw_lag20_v4_observed_validity`
+keeps the paired raw-HR definition and rejects explicitly invalid HR observations.
+Old model summaries are marked `REFRESH_REQUIRED`, never mixed into the new model.
 The model version participates in the shadow configuration fingerprint. Refresh
 staging's analysis generation after deploying API, worker and web together.
 
@@ -11,7 +12,11 @@ staging's analysis generation after deploying API, worker and web together.
 - For a speed interval's midpoint t, interpolate raw HR at t + 20 seconds.
   The lag is elapsed time, not a number of samples. No end extrapolation.
 - Require continuous HR coverage through the lag window: no missing/invalid
-  observation (outside 30–300 bpm) and no gap greater than 10 seconds. HRmax is
+  observation (outside 30–300 bpm or explicitly flagged HR artifact/dropout)
+  and no gap greater than 10 seconds. The same explicit HR validity check
+  governs fallback to speed in the unified load ledger, including when HR
+  cleaning metadata is absent. It retains the existing inclusive 30–300 bpm
+  plausibility range without clipping the original observations. HRmax is
   normalization, not a sensor-validity cutoff.
 - Exclude speed intervals with missing/invalid speed, missing actual grade,
   Vflat exclusion flags, dt > 10 s, or actual grade below −3%. Exactly −3% stays.
@@ -62,7 +67,13 @@ conditions remain an expert assumption within a source sport.
 
 ## HR–speed prediction
 
+Each zonal and GENERAL aggregate needs its own admitted observation no older
+than 14 days for current dosing. The 40-day diagnostic aggregation is retained;
+it does not extend anchor validity. Historical evaluation uses the calibration
+date, not the current wall clock. Stale support yields to current GENERAL,
+accepted maximal tests, or the documented initial estimate when eligible.
+
 See `RECOVERY_SPEED_MODELS.md`. One monotone HR–duration map is composed with the
 personal Vflat–duration curve for both forward and inverse predictions. Outputs
-identify index-based anchors versus expert midpoint fallbacks. No physiological
+identify observed index anchors versus test-derived/initial model mappings. No physiological
 validation or precise effort prescription is implied by numerical reversibility.

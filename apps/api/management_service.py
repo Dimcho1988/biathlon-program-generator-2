@@ -17,6 +17,7 @@ from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION
 from biathlon.zone_profile import VERSION as ZONE_PROFILE_VERSION
 from biathlon.speed_equivalence import VERSION as ZONE_EQUIVALENCE_VERSION
 from biathlon.unified_load import VERSION as UNIFIED_LOAD_VERSION
+from biathlon import speed_anchor_policy
 from .component_load_context import VERSION as COMPONENT_CAPACITY_VERSION
 
 from .management_schemas import ManagementProfile, normalize_building_profile
@@ -267,6 +268,8 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False,
             "dosing_curve": training_plan_engine.dosing_curve.VERSION,
             "preliminary_capacity": training_plan_engine.preliminary_capacity.VERSION,
             "hr_speed": training_plan_engine.hr_speed.VERSION,
+            "speed_anchor_policy": speed_anchor_policy.VERSION,
+            "historical_speed_policy": training_plan_engine.model_service.HISTORICAL_SPEED_POLICY,
             "zone_profile": ZONE_PROFILE_VERSION,
             "zone_equivalence": ZONE_EQUIVALENCE_VERSION,
             "unified_load": UNIFIED_LOAD_VERSION,

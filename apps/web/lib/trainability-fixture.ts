@@ -3,7 +3,7 @@ import type { TrainabilityHistory, TrainabilityIndex } from "./trainability";
 // Explicit local/test fixture only; never used in API data mode.
 const template: TrainabilityIndex = {
   "schema_version": "trainability-index-v3",
-  "model_version": "trainability_paired_raw_lag20_v3",
+  "model_version": "trainability_paired_raw_lag20_v4_observed_validity",
   "hr_source": "raw",
   "lag_seconds": 20,
   "signal_quality": {"status": "PASSED_SCREEN", "reason": null, "rapid_change_episodes": 0},

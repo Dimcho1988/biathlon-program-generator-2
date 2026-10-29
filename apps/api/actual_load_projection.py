@@ -11,6 +11,7 @@ from hashlib import sha256
 import json
 
 from biathlon import speed_equivalence, unified_load
+from .load_model_policy import identity as load_policy_identity
 from .speed_load_cache import SpeedLoadCache
 
 VERSION = unified_load.VERSION
@@ -39,6 +40,7 @@ def reconstruct_history(repository, alias, source, *, speed_inputs=None):
                 "calendar": calendar, "initial_profile": inputs.get("initial_profile"),
                 "source": original_identity, "tests": inputs["entries"],
                 "profile_policy": model_service.HISTORICAL_SPEED_POLICY,
+                "selection_policy": load_policy_identity(),
                 "evaluation_day": inputs["today"]}
     key = sha256(json.dumps(identity, sort_keys=True, allow_nan=False, default=str,
                            separators=(",", ":")).encode()).hexdigest()
@@ -106,6 +108,7 @@ def _reconstruct(repository, alias, source, inputs, settings, key, original_iden
         "snapshot_identity": original_identity,
         "leading_indicator": settings.leading_indicator, "equivalence_version": speed_equivalence.VERSION,
         "profile_policy": model_service.HISTORICAL_SPEED_POLICY,
+        "selection_policy": load_policy_identity(),
         "unknown_seconds": sum(r["unknown_seconds"] for r in records),
         "fallback_seconds": sum(r["fallback_seconds"] for r in records),
         "reconstructed_activities": len(records)}

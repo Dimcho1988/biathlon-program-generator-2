@@ -82,6 +82,36 @@ def test_estimated_automatic_history_starts_with_recorded_time_not_expert_q_tota
             assert_readiness_dose(session)
 
 
+@pytest.mark.parametrize("explicit_limit", [False, True])
+def test_initial_history_mean_does_not_retroactively_exhaust_future_time(monkeypatch, explicit_limit):
+    """Recent work above a 28-day mean is not an unrequested rolling ceiling."""
+    monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
+    repo, source = incomplete(30)
+    for n in range(1, 4):
+        day = (TODAY-timedelta(days=n)).isoformat()
+        activity = {"activity_ref": f"recent-{n}", "date": day, "sport": "Run",
+                    "duration_min": 180., "quality_status": "limited", "hr_coverage_percent": 0.,
+                    "zones": [{"zone": z, "raw_time_min": 0., "equivalent_time_min": 0.,
+                               "effective_load": 0.} for z in estimate.ZONES]}
+        source["activities"].append(activity)
+        repo.envelope["activities"].append({**deepcopy(activity), "local_date": day})
+    source["quality"]["limited_activities"] += 3
+    original = deepcopy(repo.envelope)
+    body = configured(availability_mode="AUTO_HISTORY")
+    if explicit_limit:
+        body["planning_controls"]["weekly_target_hours"] = 7.
+    result = engine.generate_plan(repo, "athlete", body, start_date=TODAY+timedelta(days=1), now=NOW)
+    first = result["days"][0]
+    budget = result["parameters"]["time_budget"]
+    assert sum(a["duration_min"] for a in source["activities"]
+               if (TODAY-timedelta(days=5)).isoformat() <= a["date"] <= TODAY.isoformat()) > budget["period_limit_minutes"]
+    assert first.get("time_limit_exhausted", False) is explicit_limit
+    assert any(r["code"] == "WEEKLY_TIME_LIMIT_EXHAUSTED" for r in first["rejected_alternatives"]) is explicit_limit
+    assert budget["actual_minutes"] == 0
+    assert result["summary"]["planned_minutes"] <= budget["period_limit_minutes"] + .002
+    assert repo.envelope == original
+
+
 @pytest.mark.parametrize("hours", [1., 10.])
 def test_explicit_weekly_target_replaces_estimated_history_time_envelope(monkeypatch, hours):
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)

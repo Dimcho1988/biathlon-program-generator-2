@@ -3,8 +3,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { RecoveryV2Section } from "../components/recovery-v2";
 import { RecoveryTimeline } from "../components/recovery-timeline";
 import { StatusOverview } from "../components/status-overview";
-import { MODEL_ZONES, type RecoveryV2 } from "../lib/models";
+import { MODEL_ZONES, parseRecoveryV2, type RecoveryV2 } from "../lib/models";
 import { ZONES, type TrainingStatus } from "../lib/training-status";
+import { Dashboard } from "../components/dashboard";
+import { recoveryDisplayState } from "../lib/recovery-display";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
@@ -29,6 +31,18 @@ const status: TrainingStatus = {
   data_quality: { history_reliability: 1, latest_activity_quality_score: 1, warnings: [] },
   zones: ZONES.map(zone => ({ zone, raw_time_min: 0, equivalent_time_min: 0, tref_min: 30, status_7_40: 1, recovery_readiness_percent: 100, recovery_days_to_full: 0 })),
 };
+
+function estimatedRecovery(): RecoveryV2 {
+  const history = recovery(false);
+  history.data_quality = {
+    complete: false, missing_days: 0, partial_activities: 3, expected_days: 40, covered_days: 40,
+    readiness_available: true, readiness_basis: "ESTIMATED_LOAD", estimated: true,
+    recorded_seconds: 72000, unknown_seconds: 3120, coverage_percent: 95.666667,
+    estimation: { policy: "UNIFIED_RECORDED_INDICATORS_WITH_PLANNING_ESTIMATES", version: "test-v1", supported: true,
+      estimated_minutes: 52, estimated_activity_count: 3, unresolved_activity_count: 0, missing_calendar_days: [] },
+  };
+  return history;
+}
 
 describe("incomplete recovery is not displayed as complete readiness", () => {
   it("keeps observed load while withholding readiness, recovery dates and the forecast", () => {
@@ -58,6 +72,26 @@ describe("incomplete recovery is not displayed as complete readiness", () => {
     expect(overview).not.toContain("достигнат ориентир");
   });
 
+  it("keeps incomplete recovery hidden in dashboard details", () => {
+    const html = renderToStaticMarkup(<Dashboard view="details" mode="api" data={status} recoveryHistory={recovery(false)} />);
+    expect(html).toContain("Недостатъчни данни за възстановяването");
+    expect(html).toContain("<dt>Готовност за натоварване</dt><dd>Неопределено</dd>");
+    expect(html).toContain("<dt>Дни до 90% готовност</dt><dd>Неопределено</dd>");
+    expect(html).not.toContain("<dt>Готовност за натоварване</dt><dd>100%</dd>");
+  });
+
+  it("does not substitute legacy readiness if API recovery is missing", () => {
+    const overview = renderToStaticMarkup(<Dashboard mode="api" data={status} recoveryHistory={null} />);
+    expect(overview).toContain("Възстановяването не е достъпно");
+    expect(overview).not.toContain("readiness-bar");
+    expect(overview).not.toContain("100<small>%");
+    const details = renderToStaticMarkup(<Dashboard view="details" mode="api" data={status} recoveryHistory={null} />);
+    expect(details).toContain("<dt>Готовност за натоварване</dt><dd>Неопределено</dd>");
+    expect(details).toContain("<dt>Дни до пълно възстановяване</dt><dd>Неопределено</dd>");
+    const fixture = renderToStaticMarkup(<Dashboard mode="fixture" data={status} />);
+    expect(fixture).toContain("100<small>%");
+  });
+
   it("keeps normal percentages, readiness labels and forecast for complete data", () => {
     const history = recovery(true);
     const html = renderToStaticMarkup(<RecoveryV2Section history={history} canEdit={false} />);
@@ -69,5 +103,74 @@ describe("incomplete recovery is not displayed as complete readiness", () => {
     expect(overview).toContain("readiness-bar");
     expect(overview).toContain("100<small>%");
     expect(overview).toContain("достигнат ориентир");
+  });
+
+  it("displays fully covered speed-only load even when the last HR coverage is zero", () => {
+    const history = recovery(true);
+    history.data_quality = { ...history.data_quality!, readiness_available: true, readiness_basis: "RECORDED_LOAD", estimated: false,
+      recorded_seconds: 72000, unknown_seconds: 0, coverage_percent: 100 };
+    const noHrStatus = { ...status, data_quality: { ...status.data_quality, latest_activity_quality_score: 0 } };
+    expect(parseRecoveryV2(history)).toBe(history);
+    const overview = renderToStaticMarkup(<StatusOverview data={noHrStatus} recovery={history} load={null} />);
+    expect(overview).toContain("100<small>%");
+    expect(overview).not.toContain("Недостатъчни данни");
+    expect(overview).not.toContain("Моделна оценка на възстановяването");
+    const dashboard = renderToStaticMarkup(<Dashboard mode="api" data={noHrStatus} recoveryHistory={history} />);
+    expect(dashboard).toContain("Покритие на товара 100%");
+    expect(dashboard).toContain("Пулсово покритие · последна активност 0%");
+  });
+
+  it("shows supported estimated recovery consistently and preserves its incomplete measured coverage", () => {
+    const history = estimatedRecovery();
+    expect(parseRecoveryV2(history)).toBe(history);
+    expect(recoveryDisplayState(history)).toEqual({ estimated: true, unavailable: false });
+    for (const html of [
+      renderToStaticMarkup(<RecoveryV2Section history={history} canEdit={false} />),
+      renderToStaticMarkup(<StatusOverview data={status} recovery={history} load={null} />),
+    ]) {
+      expect(html).toContain("Моделна оценка на възстановяването");
+      expect(html).toContain("95,7%");
+      expect(html).toContain("0:52:00");
+      expect(html).toContain("моделна оценка · достигнат ориентир");
+      expect(html).not.toContain("Недостатъчни данни");
+    }
+    const timeline = renderToStaticMarkup(<RecoveryTimeline history={history} />);
+    expect(timeline).toContain('data-recovery-zone="Z2"');
+    expect(timeline).toContain("История с оценен товар");
+    expect(history.data_quality!.complete).toBe(false);
+    expect(history.data_quality!.unknown_seconds).toBe(3120);
+  });
+
+  it("uses and labels the projected estimate in dashboard details", () => {
+    const history = estimatedRecovery();
+    history.current[0] = { ...history.current[0], readiness_percent: 37.5, residual_fatigue: 62.5, days_to_practical_recovery: 2 };
+    const html = renderToStaticMarkup(<Dashboard view="details" mode="api" data={status} recoveryHistory={history} />);
+    expect(html).toContain("Моделна оценка на възстановяването");
+    expect(html).toContain("<dt>Готовност за натоварване · моделна оценка</dt><dd>37,5%</dd>");
+    expect(html).toContain("<dt>Дни до 90% готовност · моделна оценка</dt><dd>2 дни</dd>");
+  });
+
+  it.each(["missing_day", "unresolved_activity", "unsupported_estimate", "explicitly_unavailable"])("keeps genuinely unresolved data blocked: %s", reason => {
+    const history = estimatedRecovery();
+    const quality = history.data_quality!;
+    if (reason === "missing_day") quality.missing_days = 1;
+    if (reason === "unresolved_activity") quality.estimation!.unresolved_activity_count = 1;
+    if (reason === "unsupported_estimate") quality.estimation!.supported = false;
+    if (reason === "explicitly_unavailable") quality.readiness_available = false;
+    expect(() => parseRecoveryV2(history)).toThrow();
+    expect(recoveryDisplayState(history).unavailable).toBe(true);
+    const html = renderToStaticMarkup(<RecoveryV2Section history={history} canEdit={false} />);
+    expect(html).toContain("Недостатъчни данни");
+    expect(html).not.toContain('data-recovery-zone="Z2"');
+    expect(html).not.toContain("Моделна оценка на възстановяването");
+  });
+
+  it("rejects a measured-source label over incomplete recorded load and impossible coverage", () => {
+    const history = estimatedRecovery();
+    history.data_quality!.readiness_basis = "RECORDED_LOAD";
+    history.data_quality!.estimated = false;
+    expect(() => parseRecoveryV2(history)).toThrow(/отчетен товар/);
+    history.data_quality!.unknown_seconds = 72001;
+    expect(() => parseRecoveryV2(history)).toThrow(/покритие/);
   });
 });

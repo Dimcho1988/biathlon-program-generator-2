@@ -14,7 +14,7 @@ from urllib.parse import quote
 from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 
-from biathlon import recovery_v2, speed_duration, preliminary_capacity, dosing_curve
+from biathlon import recovery_v2, speed_duration, preliminary_capacity, dosing_curve, speed_anchor_policy
 from biathlon.athlete_functional_profile import build_functional_profile
 from biathlon.sport_heart_rate import local_settings, reference_offset, policy as sport_hr_policy, is_cycling
 from .trainability_history import HISTORY_DAYS, history_from_calendar, robust_mean, read_calendar, window_start
@@ -24,7 +24,7 @@ from .speed_segments import segment_measurement
 
 SPEED_TEST_DAYS=90
 RETROSPECTIVE_TEST_DAYS = 14
-HISTORICAL_SPEED_POLICY = "PRIOR_DAY_INDEX_WITH_14_DAY_MAXIMAL_TEST_RETROSPECTIVE_V1"
+HISTORICAL_SPEED_POLICY = "PRIOR_DAY_FRESH_INDEX_WITH_14_DAY_MAXIMAL_TEST_RETROSPECTIVE_V2"
 
 
 def historical_speed_inputs(inputs, activity_day, *, evaluation_day=None):
@@ -141,14 +141,15 @@ def project_recovery(repository,alias,snapshot,*,now=None,config=None):
     if settings is None: raise ValueError("Athlete settings are required")
     today=(now or datetime.now(timezone.utc)).astimezone(ZoneInfo(settings.timezone)).date()
     source=snapshot["load_history"]
-    daily=[{"date":r["date"],"zone":r["zone"],"effective_load":r["effective_load"]} for r in source["daily"]]
+    from biathlon.planning_history import recovery_coverage
+    from .recovery_load_projection import prepare as prepare_recovery_load
+    recovery_source, coverage = prepare_recovery_load(repository, alias, source, today, recovery_coverage(source, today))
+    daily=[{"date":r["date"],"zone":r["zone"],"effective_load":r["effective_load"]} for r in recovery_source["daily"]]
     daily += [{"date":r["date"],"zone":"STR","effective_load":r["effective_load"]}
-              for r in (source.get("strength") or {}).get("daily",[])]
+              for r in (recovery_source.get("strength") or {}).get("daily",[])]
     if not daily: raise ValueError("Daily E history is required for Recovery v2")
     result=recovery_v2.simulate(daily,cfg["zones"],target=today)
     stale=date.fromisoformat(source["period_end"]) < today
-    from biathlon.planning_history import recovery_coverage
-    coverage = recovery_coverage(source, today)
     fingerprint=sha256(json.dumps({"model":recovery_v2.VERSION,"zones":cfg["zones"]},sort_keys=True,separators=(",",":")).encode()).hexdigest()
     history=RecoveryHistoryV2(**result,athlete_id=alias,
         period_start=source["period_start"],period_end=source["period_end"],
@@ -160,6 +161,7 @@ def project_recovery(repository,alias,snapshot,*,now=None,config=None):
         warnings=["EXPERT_MODEL", "DAILY_AGGREGATED_DOSES", "UNKNOWN_FATIGUE_BEFORE_HISTORY"]
             + (["SOURCE_STALE_NO_NEW_LOAD_ASSUMPTION"] if stale else [])
             + (["INCOMPLETE_LOAD_COVERAGE"] if not coverage["complete"] else [])
+            + (["ESTIMATED_LOAD_RECOVERY"] if coverage["estimated"] else [])
             + (["BASELINE_USES_PRIOR"] if any(r["baseline_source"]!="PERSONAL" for r in result["current"]) else []))
     out=deepcopy(snapshot)
     out["recovery_history"]=history.model_dump(mode="json")
@@ -362,18 +364,25 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
         compatible.append(activity)
     if incompatible or not tests_match_index:warnings.append("INCOMPARABLE_INDEX_CONFIGURATION")
     indices={}
-    used_dates=[]
-    for activity in compatible:
-        if any(b["valid"] for b in [*activity["index"]["zones"],activity["index"]["general"]]):
-            used_dates.append(activity["local_date"])
+    band_dates={}
     for zone in [*speed_duration.VOLUME_RANGES_MIN,"GENERAL"]:
-        values=[];weights=[]
+        values=[];weights=[];dates=[]
         for activity in compatible:
             index=activity["index"]
             for band in [*index["zones"],index["general"]]:
                 if band["name"]==zone and band["valid"]:
                     values.append(band["index"]);weights.append(band["hr_seconds"])
+                    dates.append(activity["local_date"])
         indices[zone]={"index":robust_mean(values,weights) if values else None,"count":len(values),"seconds":sum(weights)}
+        band_dates[zone]=dates
+    indices,index_freshness=speed_anchor_policy.select_current_indices(indices,band_dates,today)
+    used_dates=[a["local_date"] for a in compatible if any(
+        b["valid"] and index_freshness["bands"][b["name"]]["status"]=="CURRENT"
+        for b in [*a["index"]["zones"],a["index"]["general"]])]
+    index_window={"start":index_start.isoformat(),"end":today.isoformat(),"days":HISTORY_DAYS,
+                  "last_activity_date":index_freshness["last_current_observation_date"]}
+    if index_freshness["excluded_bands"]:
+        warnings.append("STALE_PAIRED_INDEX_EXCLUDED")
     admission={"activities":len(recent),"excluded":sum(a.get("index",{}).get("admission",{}).get("status")=="EXCLUDED" for a in recent if a.get("index")),
                "refresh_required":sum(a["unavailable_reason"]=="REFRESH_REQUIRED" for a in recent),
                "used":len(used_dates),"incompatible":incompatible}
@@ -472,6 +481,7 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
         # editor, functional profiles or critical-speed diagnostics.
         return {"sport": sport,
                 "status": model_status, **initial_metadata,
+                "index_summary": indices, "index_window": index_window, "index_freshness": index_freshness,
                 "tests": entries, "active_test_keys": [e["entry_key"] for e in entries if e["payload"] in tests],
                 "preliminary_capacity": preliminary_capacity.summary(prior),
                 "hr_model": hr_model,
@@ -549,8 +559,7 @@ def speed_view(repository,alias,sport=None,*,duration_s=None,distance_m=None,spe
         "speed_correction":{"model_version":vflat_version,"config_version":vflat_config},
         "test_window":{"start":start.isoformat(),"end":test_end.isoformat()},
         "historical_calibration": historical_calibration,
-        "index_window":{"start":index_start.isoformat(),"end":today.isoformat(),"days":HISTORY_DAYS,
-                        "last_activity_date":max(used_dates) if used_dates else None},
+        "index_window":index_window,"index_freshness":index_freshness,
         "activities":[{"activity_ref":a["activity_ref"],"name":a.get("name") or a["sport"],"day":a.get("local_date"),"sport":a["sport"],"elapsed_s":a.get("elapsed_time_s")} for a in activities],
         "status":model_status,
         "tests":entries,"active_test_count":len(tests),"exploratory_test_count":exploratory_count,

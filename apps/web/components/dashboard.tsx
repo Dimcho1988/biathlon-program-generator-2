@@ -22,6 +22,9 @@ import { equivalentWindow, latestTrainingDay, displayDate } from "../lib/dashboa
 import { VolumePeriodNote } from "./volume-period-note";
 import { TrefDetails } from "./tref-details";
 import { LoadSourceDetails } from "./load-source-details";
+import type { RecoveryV2 } from "../lib/models";
+import { recoveryDisplayState } from "../lib/recovery-display";
+import { RecoveryEstimateNotice } from "./recovery-estimate-notice";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
 const decimal = (value: number) => number.format(value);
@@ -90,8 +93,12 @@ export function Dashboard({
   const short = loadHistory ? equivalentWindow(loadHistory, 7) : null;
   const long = loadHistory ? equivalentWindow(loadHistory, 40) : null;
   const recoveryV2 = recoveryHistory?.schema_version === "recovery-history-v2" ? recoveryHistory : null;
+  const recoveryState = recoveryDisplayState(recoveryV2);
+  const recoveryUnavailable = recoveryState.unavailable || (mode === "api" && !recoveryHistory);
   const recoveryDate = recoveryV2?.as_of ?? recoveryHistory?.period_end ?? data.as_of;
   const qualityScore = data.data_quality.latest_activity_quality_score;
+  const loadCoverage = recoveryV2?.data_quality?.coverage_percent;
+  const qualityLabel = mode === "api" ? "Пулсово покритие · последна активност" : "Последна активност";
   const syncBusy = Boolean(syncState && syncInProgress(syncState));
   return (
     <main className="dashboard-page">
@@ -103,15 +110,17 @@ export function Dashboard({
       <section className="dashboard-content" aria-label="Тренировъчен анализ">
         {syncState && <SyncStatusPanel key={`${syncState.job_id ?? "idle"}:${syncState.state}:${generationId ?? "none"}`} initialState={syncState} renderedGenerationId={generationId ?? null} returnTo={dashboardHref(view, reportStart, reportEnd)} />}
         {notice && <p className="connection-notice">{notice}</p>}
-        {view === "overview" && <StatusOverview data={data} recovery={recoveryHistory} load={loadHistory} />}
+        {view === "overview" && <StatusOverview data={data} recovery={recoveryHistory} load={loadHistory} recoveryRequired={mode === "api"} />}
         {(view === "overview" || view === "details") && <details className="overview-quality">
-          <summary>Качество на данните{data.data_quality.warnings.length > 0 && <small className="quality-warning-count">{data.data_quality.warnings.length} {data.data_quality.warnings.length === 1 ? "бележка" : "бележки"}</small>} <span>История {decimal(data.data_quality.history_reliability * 100)}% · Последна активност {qualityScore === null ? "няма данни" : `${decimal(qualityScore * 100)}%`}</span><span aria-hidden="true">⌄</span></summary>
+          <summary>Качество на данните{data.data_quality.warnings.length > 0 && <small className="quality-warning-count">{data.data_quality.warnings.length} {data.data_quality.warnings.length === 1 ? "бележка" : "бележки"}</small>} <span>История {decimal(data.data_quality.history_reliability * 100)}%{loadCoverage != null && <> · Покритие на товара {decimal(loadCoverage)}%</>} · {qualityLabel} {qualityScore === null ? "няма данни" : `${decimal(qualityScore * 100)}%`}</span><span aria-hidden="true">⌄</span></summary>
           <section className="quality-panel" aria-labelledby="quality-title">
           <div><p className="section-kicker">Надеждност</p><h2 id="quality-title">Качество на данните</h2></div>
           <dl className="quality-values">
             <div><dt>История</dt><dd>{decimal(data.data_quality.history_reliability * 100)}%</dd></div>
-            <div><dt>Последна активност</dt><dd>{qualityScore === null ? "Няма данни" : `${decimal(qualityScore * 100)}%`}</dd></div>
+            {loadCoverage != null && <div><dt>Покритие на товара за Recovery</dt><dd>{decimal(loadCoverage)}%</dd></div>}
+            <div><dt>{qualityLabel}</dt><dd>{qualityScore === null ? "Няма данни" : `${decimal(qualityScore * 100)}%`}</dd></div>
           </dl>
+          {mode === "api" && <p>Пулсовото покритие описва наличния пулсов запис. При валидни данни за скоростта товарът може да бъде оценен и без пулсомер.</p>}
           {data.data_quality.warnings.length > 0 ? (
             <ul className="warnings" aria-label="Предупреждения">{data.data_quality.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
           ) : <p className="quality-ok"><span aria-hidden="true">✓</span> Няма предупреждения за качеството</p>}
@@ -125,7 +134,7 @@ export function Dashboard({
             {latest ? <>
               <div className="activity-table-wrap"><table><thead><tr><th>Зона</th><th>Реално време</th><th>Приравнено време</th></tr></thead><tbody>{latest.zones.map((z) => <tr key={z.zone}><th>{z.zone}</th><td>{durationHms(z.raw)}</td><td>{durationHms(z.equivalent)}</td></tr>)}</tbody></table></div>
               {latest.strength > 0 && <p>Силова тренировка STR: {durationHms(latest.strength)}; отделно от Z1–Z5.</p>}
-              {latest.limited && <p className="muted-copy">Има активност с ограничено пулсово покритие; минутите по зони може да са непълни.</p>}
+              {latest.limited && <p className="muted-copy">Има непълно оценена активност; минутите по зони може да са непълни след използването на наличния пулс и скорост.</p>}
             </> : <p className="history-unavailable">Няма история за показване на тренировъчния ден. Не приписваме недатирани стойности на днешната дата.</p>}
           </section>
           <section className="zones-section" aria-labelledby="zones-title">
@@ -133,8 +142,10 @@ export function Dashboard({
             <p className="muted-copy">Готовността отчита остатъчната умора от предходните тренировки. Срокът е прогноза без ново натоварване, с дневна точност; 0 дни означава достигнат праг, а не липса на умора.</p>
             {recoveryV2?.source_stale && <p className="history-unavailable">Тренировъчната история изостава от датата на прогнозата. Приема се, че след последните данни няма ново натоварване.</p>}
             {loadHistory ? <VolumePeriodNote history={loadHistory} /> : <p className="muted-copy">Историята за обема не е налична.</p>}
+            {recoveryUnavailable && <p role="status" className="integration-notice">Недостатъчни данни за възстановяването. Готовността и срокът за възстановяване остават неопределени.</p>}
+            {recoveryState.estimated && recoveryV2 && <RecoveryEstimateNotice history={recoveryV2} />}
             {data.zones.length === 0 ? <div className="empty"><h3>Няма зонални данни</h3><p>Няма зони за този анализ.</p></div> :
-              <div className="zone-list">{data.zones.map((zone) => <ZoneCard key={zone.zone} zone={zone} recoveryV2={Boolean(recoveryV2)} volume7={short?.totals?.[zone.zone]} volume40={long?.weekly?.[zone.zone]} />)}</div>}
+              <div className="zone-list">{data.zones.map((zone) => <ZoneCard key={zone.zone} zone={zone} recoveryV2={Boolean(recoveryV2)} recovery={recoveryV2?.current.find(row => row.zone === zone.zone)} recoveryUnavailable={recoveryUnavailable} recoveryEstimated={recoveryState.estimated} volume7={short?.totals?.[zone.zone]} volume40={long?.weekly?.[zone.zone]} />)}</div>}
             <p className="muted-copy">7/40 сравнява ефективния товар E със стабилизираща база. Приравненият обем е отделен показател.</p>
           </section>
         </>}
@@ -170,7 +181,7 @@ export function Dashboard({
   );
 }
 
-function ZoneCard({ zone, recoveryV2 = false, volume7, volume40 }: { zone: ZoneTrainingStatus; recoveryV2?: boolean; volume7?: number; volume40?: number }) {
+function ZoneCard({ zone, recoveryV2 = false, recovery, recoveryUnavailable = false, recoveryEstimated = false, volume7, volume40 }: { zone: ZoneTrainingStatus; recoveryV2?: boolean; recovery?: RecoveryV2["current"][number]; recoveryUnavailable?: boolean; recoveryEstimated?: boolean; volume7?: number; volume40?: number }) {
   const volume = (v: number | undefined) => v === undefined ? "Няма данни" : durationHms(v);
   return <article className={`zone-card current-zone-card ${zone.zone.toLowerCase()}`} aria-labelledby={`title-${zone.zone}`}>
     <div className="zone-id"><span className="zone-mark" aria-hidden="true" /><div><p>Зона</p><h3 id={`title-${zone.zone}`}>{zone.zone}</h3></div></div>
@@ -178,8 +189,8 @@ function ZoneCard({ zone, recoveryV2 = false, volume7, volume40 }: { zone: ZoneT
       <div><dt>Приравнено · 7 дни</dt><dd>{volume(volume7)}</dd></div>
       <div><dt>Приравнено · седмица от 40 дни</dt><dd>{volume(volume40)}</dd></div>
       <div><dt>7/40 · ефективен товар</dt><dd>{decimal(zone.status_7_40)}</dd></div>
-      <div><dt>Готовност за натоварване</dt><dd>{decimal(zone.recovery_readiness_percent)}%</dd></div>
-      <div><dt>{recoveryV2 ? "Дни до 90% готовност" : "Дни до пълно възстановяване"}</dt><dd>{decimal(zone.recovery_days_to_full)} дни</dd></div>
+      <div><dt>Готовност за натоварване{recoveryEstimated && " · моделна оценка"}</dt><dd>{recoveryUnavailable ? "Неопределено" : `${decimal(recovery?.readiness_percent ?? zone.recovery_readiness_percent)}%`}</dd></div>
+      <div><dt>{recoveryV2 ? "Дни до 90% готовност" : "Дни до пълно възстановяване"}{recoveryEstimated && " · моделна оценка"}</dt><dd>{recoveryUnavailable ? "Неопределено" : `${decimal(recovery?.days_to_practical_recovery ?? zone.recovery_days_to_full)} дни`}</dd></div>
     </dl>
   </article>;
 }

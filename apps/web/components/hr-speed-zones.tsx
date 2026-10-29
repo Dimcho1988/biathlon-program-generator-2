@@ -6,7 +6,7 @@ import type {HrModel,SpeedModel} from "../lib/models";
 const n=(v:number)=>new Intl.NumberFormat("bg-BG",{maximumFractionDigits:2}).format(v);
 const duration = (value:number|null) => value === null ? "Извън обхвата на кривата" : durationSeconds(value);
 type Zone=HrModel["zones"][number];
-const sourceLabel=(source:string)=>source==="INITIAL_HEURISTIC_V50_REFERENCE_SCALE"?"Начална оценка · V50 и нормативна форма":source==="INITIAL_V50_V6_ESTIMATE"?"Начална оценка по V50/V6":source.includes("GENERAL")?"Общ наблюдаван ТИ":source==="INDEX"?"Приет ТИ":source==="EXPERT_HISTORY"?"Експертен ориентир от историята":source==="EXPERT_MINIMUM"?"Експертен минимум":"Среда на експертния диапазон";
+const sourceLabel=(source:string)=>source==="INITIAL_HEURISTIC_V50_REFERENCE_SCALE"?"Начална оценка · V50 и нормативна форма":source==="INITIAL_V50_V6_ESTIMATE"?"Моделна връзка по V50/V6":source==="TEST_CURVE_CONFLICT_FALLBACK"?"Моделна връзка по тестовата крива":source.includes("GENERAL")?"Общ наблюдаван ТИ":source==="INDEX"?"Приет ТИ":source==="EXPERT_HISTORY"?"Експертен ориентир от историята":source==="EXPERT_MINIMUM"?"Експертен минимум":"Среда на експертния диапазон";
 function candidateExplanation(z:Zone){
   if(z.source==="INITIAL_HEURISTIC_V50_REFERENCE_SCALE")return "Границата е моделна оценка от прогнозната V50 и нормативната форма; няма индивидуално измерване.";
   switch(z.candidate_reason){
@@ -20,7 +20,7 @@ function candidateExplanation(z:Zone){
     default:return z.reason==="NO_VALID_INDEX"?"Няма валиден зонален ТИ.":z.source==="INDEX"?"В допустимия диапазон.":"Подробната причина още не е налична.";
   }
 }
-export function HrSpeedZones({model,admission,indexWindow,zoneSource,speedRole}:{model:HrModel;speedRole?:SpeedRole;admission?:SpeedModel["index_admission"];indexWindow?:SpeedModel["index_window"];zoneSource?:SpeedModel["hr_zone_source"]}){
+export function HrSpeedZones({model,admission,indexWindow,indexFreshness,zoneSource,speedRole}:{model:HrModel;speedRole?:SpeedRole;admission?:SpeedModel["index_admission"];indexWindow?:SpeedModel["index_window"];indexFreshness?:SpeedModel["index_freshness"];zoneSource?:SpeedModel["hr_zone_source"]}){
   const rawSpeed=isRawMovingSpeed({speed_role:speedRole??model.speed_role});
   const heuristic=rawSpeed&&model.zones.some(z=>z.source==="INITIAL_HEURISTIC_V50_REFERENCE_SCALE");
   const conflict=model.zones.some(z=>z.reason==="CONFLICTING_ZONE_ANCHORS");
@@ -28,7 +28,7 @@ export function HrSpeedZones({model,admission,indexWindow,zoneSource,speedRole}:
   return <section className="history-section">
     <h2>Връзка пулс–скорост по зони</h2>
     {zoneSource==="AUTOMATIC_HRMAX"&&<p>Пулсовите граници са автоматични по максималния пулс. <Link href="/?settings=edit">Прегледай зоните в настройките →</Link></p>}
-    {indexWindow&&<p>ТИ за избрания спорт: последните {indexWindow.days} календарни дни ({day(indexWindow.start)}–{day(indexWindow.end)}), включително днес. {indexWindow.last_activity_date?`Последна включена тренировка: ${day(indexWindow.last_activity_date)}.`:"Няма подходящ индекс в този период; използват се експертните ориентири."}</p>}
+    {indexWindow&&<p>ТИ за избрания спорт: последните {indexWindow.days} календарни дни ({day(indexWindow.start)}–{day(indexWindow.end)}), включително днес. {indexWindow.last_activity_date?`Последна тренировка с използван индекс: ${day(indexWindow.last_activity_date)}.`:"Няма актуален подходящ индекс; връзката с пулса се оценява по скоростната крива."} {indexFreshness&&`Всяка зонална връзка изисква валидно наблюдение през последните ${indexFreshness.max_age_days} дни.`}</p>}
     <p>Границите са за максимално непрекъснато усилие, не за продължителността на тренировката. Z1–Z4 са при горната пулсова граница; Z5 започва от общата граница със Z4.</p>
     <p>{heuristic?"Началните граници използват прогнозния праг като временна V50 опора и мащабирана нормативна форма. Връзката с пулса е моделна оценка, а не измерен индивидуален ТИ. Скоростта е в движение, без корекция за релефа.":"Наблюдаваният ТИ определя съответстващите пулсови и скоростни граници. При липса на ТИ използваме началната оценка от V(50 min) и V(6 min)."} Времевият капацитет се оценява отделно и не променя приетите граници.</p>
     {model.curve_duration_range_s && model.curve_speed_range_kmh && <p>Обхват на кривата: {n(model.curve_speed_range_kmh[0])}–{n(model.curve_speed_range_kmh[1])} км/ч · {duration(model.curve_duration_range_s[0])}–{duration(model.curve_duration_range_s[1])}. Извън него не екстраполираме време.</p>}
