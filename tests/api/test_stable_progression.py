@@ -188,6 +188,32 @@ def test_completed_observed_cycle_slows_future_growth_without_rewriting_the_anch
     assert reopened['anchor']['rate_observations'] == updated['anchor']['rate_observations']
 
 
+def test_lower_completed_cycle_caps_future_load_once_and_preserves_past_targets():
+    p=configured()
+    _,source,rows=observed()
+    calendar={'phases':[{'kind':'GENERAL_PREPARATION','start_date':TODAY.isoformat(),
+                        'end_date':p['program_end']}], 'taper_windows':[]}
+    first=policy.context(p,source,rows,TODAY,periodization=calendar)
+    lower={z:first['components'][z]['reference_q']/4 for z in policy.WEEKLY_Q_BOUNDS}
+    for i in range(28):
+        key=(TODAY+timedelta(days=i)).isoformat()
+        source['activities'].append({'date':key,'sport':'Run','duration_min':60.,
+            'zones':[{'zone':z,'raw_time_min':10.,'equivalent_time_min':lower[z]/7}
+                     for z in policy.WEEKLY_Q_BOUNDS]})
+        rows.extend({'date':key,'zone':z,'effective_load':10.} for z in engine.COMPONENTS)
+    later=TODAY+timedelta(days=28)
+    updated=policy.context(p,source,rows,later,retained=first['anchor'],periodization=calendar)
+    assert updated['anchor']['components'] == first['anchor']['components']
+    assert all(updated['trajectory'][day] == values for day,values in first['trajectory'].items()
+               if day < later.isoformat())
+    for z in policy.WEEKLY_Q_BOUNDS:
+        amount=updated['components'][z]['reference_q']*updated['trajectory'][later.isoformat()][z]
+        assert lower[z] <= amount <= lower[z]*1.001
+    reopened=policy.context(p,source,rows,later+timedelta(days=1),retained=updated['anchor'],periodization=calendar)
+    assert reopened['anchor']['load_observations'] == updated['anchor']['load_observations']
+    assert reopened['trajectory'] == updated['trajectory']
+
+
 def test_lower_expert_destination_does_not_replace_history_or_refill_unloading():
     p = configured()
     _, source, rows = observed()

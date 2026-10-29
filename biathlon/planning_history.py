@@ -8,6 +8,50 @@ DEFAULT_GAP_DAYS = 10  # Visible coaching rule, configurable in planning control
 LEGACY_AVAILABILITY = [60, 60, 60, 60, 60, 90, 0]
 
 
+def recorded_zone_minutes(activity, *, unified=False, require_complete=False):
+    """Recorded exposure is independent of the old HR-quality label.
+
+    Valid HR/speed intervals establish exposure even when another interval is
+    unknown. Duration-only estimates never establish it. Complete recordings
+    are required separately when deciding whether another daily slot is free.
+    This is planning evidence, not permission to learn from modelled HR zones.
+    """
+    from .unified_load import finite, recorded_coverage
+    if activity.get("quality_status") == "provider_missing":
+        return None
+    if activity.get("sport") == "WeightTraining":
+        return {} if activity.get("quality_status", "valid") == "valid" else None
+    original = {**activity, "zones": [{**row, "raw_time_min": row.get("planning_measured_time_min")}
+        for row in activity.get("zones", [])]} if activity.get("planning_estimated") else activity
+    ledger = recorded_coverage(original)
+    has_ledger = unified or any(k in (activity.get("load_source") or {})
+                               for k in ("recorded_seconds", "active_seconds", "unknown_seconds"))
+    if ledger is not None:
+        if require_complete and ledger["unknown_seconds"] > 1e-6:
+            return None
+    elif has_ledger or activity.get("planning_estimated") or activity.get("quality_status", "valid") != "valid":
+        return None
+    return {row["zone"]: row["raw_time_min"] for row in original.get("zones", [])
+            if row.get("zone") in COMPONENTS and finite(row.get("raw_time_min")) and row["raw_time_min"] >= 0}
+
+
+def component_exposure_dates(source, start, end):
+    """Dates with at least one recorded minute in each means and component."""
+    result = {}
+    for activity in source.get("activities", []):
+        if not start <= activity.get("date", "") <= end:
+            continue
+        times = recorded_zone_minutes(activity, unified=bool(source.get("load_selection")))
+        if times is None:
+            continue
+        zones = {z for z, minutes in times.items() if minutes >= 1.}
+        if activity.get("sport") == "WeightTraining":
+            zones.add("STR")
+        for z in zones:
+            result.setdefault((activity.get("sport"), z), set()).add(activity["date"])
+    return result
+
+
 def completed_day_lag(source, today):
     """Missing completed days; today's open calendar day is not a data gap.
 
