@@ -1414,8 +1414,8 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                     _inputs=model_service.historical_speed_inputs(historical_inputs, day,
                         evaluation_day=speed_inputs["today"]), _capacity_only=True)
                 value = context_from_speed_view(view)
-                from biathlon import speed_equivalence, unified_load
-                if speed_equivalence.supports_sport(sport):
+                from biathlon import load_evidence, unified_load
+                if load_evidence.supports_recording(sport):
                     value = {**value, "unified_load_version": unified_load.VERSION,
                         "selection_policy": load_policy_identity(),
                         "reference_bounds_bpm": list(context.zone_bounds_bpm),
@@ -1431,8 +1431,8 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                     # store. This is an explicit expert mode, not a catch for
                     # errors reading an existing model from persistence.
                     load_capacity_contexts[sport] = context_from_speed_view({"sport": sport})
-                from biathlon import speed_equivalence, unified_load
-                if speed_equivalence.supports_sport(sport):
+                from biathlon import load_evidence, unified_load
+                if load_evidence.supports_recording(sport):
                     load_capacity_contexts[sport].update(unified_load_version=unified_load.VERSION,
                         selection_policy=load_policy_identity(),
                         reference_bounds_bpm=list(context.zone_bounds_bpm),

@@ -1,6 +1,7 @@
 """Observed training is the starting point; calendar defaults are not limits."""
 from datetime import date, timedelta
 from .constants import COMPONENTS
+from . import load_evidence
 
 VERSION = "planning-history-v1"
 MINIMUM_DAYS = 10
@@ -16,21 +17,14 @@ def recorded_zone_minutes(activity, *, unified=False, require_complete=False):
     are required separately when deciding whether another daily slot is free.
     This is planning evidence, not permission to learn from modelled HR zones.
     """
-    from .unified_load import finite, recorded_coverage
-    if activity.get("quality_status") == "provider_missing":
+    from .unified_load import finite
+    evidence = load_evidence.assess(activity, unified=unified)
+    if not evidence["usable"] or require_complete and not evidence["recording_complete"]:
         return None
-    if activity.get("sport") == "WeightTraining":
-        return {} if activity.get("quality_status", "valid") == "valid" else None
+    if load_evidence.is_strength(activity):
+        return {}
     original = {**activity, "zones": [{**row, "raw_time_min": row.get("planning_measured_time_min")}
         for row in activity.get("zones", [])]} if activity.get("planning_estimated") else activity
-    ledger = recorded_coverage(original)
-    has_ledger = unified or any(k in (activity.get("load_source") or {})
-                               for k in ("recorded_seconds", "active_seconds", "unknown_seconds"))
-    if ledger is not None:
-        if require_complete and ledger["unknown_seconds"] > 1e-6:
-            return None
-    elif has_ledger or activity.get("planning_estimated") or activity.get("quality_status", "valid") != "valid":
-        return None
     return {row["zone"]: row["raw_time_min"] for row in original.get("zones", [])
             if row.get("zone") in COMPONENTS and finite(row.get("raw_time_min")) and row["raw_time_min"] >= 0}
 
@@ -141,7 +135,6 @@ def recovery_coverage(source, today):
     excluded/provider records still block it; they cannot be assigned a date.
     Today's observed doses also matter, although its open day is not a gap.
     """
-    from .unified_load import recorded_coverage
     start = today-timedelta(days=40)
     end = today-timedelta(days=1)
     expected = {(start+timedelta(days=i)).isoformat() for i in range(max(0,(end-start).days+1))}
@@ -158,26 +151,29 @@ def recovery_coverage(source, today):
     recorded = unknown = 0.
     known_durations = unified and not unidentified
     partial = unidentified
+    issues = []
     for activity in relevant:
-        status = activity.get("quality_status", "valid")
-        if status == "provider_missing" or not activity.get("date"):
-            known_durations = False
-        if activity.get("strength_time_min") or activity.get("sport") == "WeightTraining":
-            partial += status != "valid"
+        evidence = load_evidence.assess(activity, unified=unified)
+        complete = evidence["complete"] and bool(activity.get("date"))
+        partial += not complete
+        if not complete:
+            issues.append(load_evidence.issue(activity, evidence["reason"] or "ACTIVITY_DATE_MISSING"))
+        if load_evidence.is_strength(activity):
+            if not complete:
+                known_durations = False
             continue
-        ledger = recorded_coverage(activity) if unified else None
+        ledger = evidence["ledger"] if evidence["usable"] and activity.get("date") else None
         if ledger is not None:
             recorded += ledger["recorded_seconds"]
             unknown += ledger["unknown_seconds"]
-            partial += ledger["unknown_seconds"] > 1e-6 or status == "provider_missing" or not activity.get("date")
         else:
             known_durations = False
-            partial += unified or status != "valid"
     complete = bool(expected) and not missing and not partial
     return {"complete": bool(expected) and not missing and not partial,
             "missing_days": missing, "partial_activities": partial,
             "expected_days": len(expected), "covered_days": len(expected & covered),
             "unidentified_partial_activities": unidentified,
+            "evidence_version": load_evidence.VERSION, "issues": issues,
             "readiness_available": complete,
             "readiness_basis": "RECORDED_LOAD" if complete else "UNAVAILABLE", "estimated": False,
             "recorded_seconds": recorded if known_durations else None,

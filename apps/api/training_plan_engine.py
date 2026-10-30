@@ -38,7 +38,7 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v68-quality-first-weekly-doses"
+VERSION = "training-management-v69-activity-load-evidence"
 PARAMETER_VERSION = "management-parameters-v58"
 MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
@@ -278,7 +278,7 @@ def planning_source_details(repository, alias, profile, settings, envelope, toda
                       (envelope.get("generation_id"), envelope.get("revision"))}
         estimates, speed_diagnostics = prepare_history(repository, alias, measured, calendar, models, settings, today)
     source, evidence = planning_history_estimate.prepare(measured, calendar, profile, today, speed_estimates=estimates,
-        capacity_contexts_by_sport=contexts)
+        capacity_contexts_by_sport=contexts, required_coverage_start=today-timedelta(days=40))
     source = {**source, "component_load_model": {**(source.get("component_load_model") or {}),
         "version": COMPONENT_LOAD_VERSION, "scope": "ACTIVITY", "contexts_by_sport": contexts}}
     if speed_diagnostics is not None:

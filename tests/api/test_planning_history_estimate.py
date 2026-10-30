@@ -167,7 +167,10 @@ def test_estimated_history_preserves_lower_manual_availability(monkeypatch):
 def test_unknown_duration_provider_or_coverage_never_becomes_known(changes, monkeypatch):
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
     repo, source = incomplete(1)
-    source["activities"][0].update(changes)
+    # Exercise the active 40-day window; dated older omissions no longer
+    # invalidate current readiness merely because the import retains 90 days.
+    source["activities"][-1].update({"quality_status": "limited", "hr_coverage_percent": 25., **changes})
+    source["quality"]["limited_activities"] += 1
     result = engine.generate_plan(repo, "athlete", configured(), start_date=TODAY+timedelta(days=1), now=NOW)
     assert not result["activation_eligible"] and not _eligible(result)
     assert result["source"]["readiness_basis"] == "UNKNOWN"

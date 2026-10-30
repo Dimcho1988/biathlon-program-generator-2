@@ -8,12 +8,11 @@ from copy import deepcopy
 from datetime import date, timedelta
 import math
 
-from biathlon import load_progression, speed_equivalence
+from biathlon import load_progression, load_evidence
 from biathlon.constants import COMPONENTS
 from biathlon.component_load import calculate_component_load
-from biathlon.unified_load import recorded_coverage
 
-VERSION = "planning-history-estimate-v8-preserved-recorded-time"
+VERSION = "planning-history-estimate-v9-activity-evidence"
 POLICY = "RECORDED_DURATION_EXPERT_Q_WITH_RECOVERY"
 UNIFIED_POLICY = "UNIFIED_RECORDED_INDICATORS_WITH_PLANNING_ESTIMATES"
 ZONES = tuple(z for z in COMPONENTS if z != "STR")
@@ -48,8 +47,8 @@ def _unified_missing_minutes(activity):
     selected HR/speed fallback and retained the full elapsed recording.
     Known REST (including speeds below the individual floor) stays zero.
     """
-    evidence = recorded_coverage(activity)
-    if evidence is None or not speed_equivalence.supports_sport(activity.get("sport")):
+    evidence = load_evidence.assess(activity, unified=True)["ledger"]
+    if evidence is None or not load_evidence.supports_recording(activity.get("sport")):
         return None
     return evidence["unknown_seconds"] / 60
 
@@ -70,11 +69,11 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None,
     quality = source.get("quality") or {}
     activities = {a["activity_ref"]: deepcopy(a) for a in source.get("activities", [])}
     catalog = {a["activity_ref"]: a for a in normalized_calendar(calendar) if a.get("activity_ref")}
-    candidates, unresolved = [], []
+    candidates, unresolved, issues = [], [], []
     ignored_older = []
     identified_complete = 0
 
-    def unresolved_activity(ref, day):
+    def unresolved_activity(ref, day, reason):
         # Recovery certifies its bounded 40-day window. Keep older observed
         # loads and supported estimates, but dated older omissions do not block
         # that window. Undated/unidentified records always remain unresolved.
@@ -82,24 +81,31 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None,
             ignored_older.append(ref)
         else:
             unresolved.append(ref)
+            issues.append(load_evidence.issue({**catalog.get(ref, {}), **activities.get(ref, {}),
+                "activity_ref": ref, "date": day}, reason))
     for ref in sorted(set(activities) | set(catalog)):
         original, item = activities.get(ref), catalog.get(ref, {})
         day = (original or {}).get("date") or item.get("local_date") or item.get("date")
         if not day:
-            unresolved.append(ref)
+            unresolved_activity(ref, day, "ACTIVITY_DATE_MISSING")
             continue
         if day > today.isoformat() or day < source.get("period_start", day):
             continue
         status = (original or {}).get("quality_status") or item.get("quality_status", "valid")
-        missing = _unified_missing_minutes(original or {}) if unified else None
+        evidence = load_evidence.assess(original or item, unified=unified)
+        selected_recording = evidence["ledger"] is not None
+        requires_recording = load_evidence.requires_recording(original or {}, unified=unified)
+        missing = _unified_missing_minutes(original or {}) if requires_recording else None
         provider_missing = status == "provider_missing" or item.get("quality_status") == "provider_missing"
-        if (status == "valid" and not provider_missing
-                and ((original or {}).get("strength_time_min") or (original or {}).get("sport") == "WeightTraining")):
+        if evidence["basis"] == "STRENGTH" and evidence["complete"] and not provider_missing:
             continue
-        if unified and missing == 0 and not provider_missing:
+        if evidence["reason"] == "ACTIVITY_Q_INCOMPLETE":
+            unresolved_activity(ref, day, evidence["reason"])
+            continue
+        if selected_recording and missing == 0 and not provider_missing:
             identified_complete += status != "valid"
             continue
-        if status == "valid" and not unified and not provider_missing:
+        if evidence["complete"] and not requires_recording and not provider_missing:
             continue
         duration = _number((original or {}).get("duration_min", item.get("duration_min")))
         coverage = _number((original or {}).get("hr_coverage_percent", item.get("hr_coverage_percent")))
@@ -107,21 +113,21 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None,
         # A failed API request/unknown activity is not a missing-sensor interval.
         hr_reason = not reason or any(term in reason for term in ("hr", "пулс", "heart rate", "heartrate"))
         if (provider_missing
-                or duration is None or (not unified and (coverage is None or coverage > 100 or not hr_reason))):
-            unresolved_activity(ref, day)
+                or duration is None or (not requires_recording and (coverage is None or coverage > 100 or not hr_reason))):
+            unresolved_activity(ref, day, "PROVIDER_RECORD_MISSING" if provider_missing else "RECORDING_DURATION_MISSING" if duration is None else "LEGACY_HR_INCOMPLETE")
             continue
         sport = (original or {}).get("sport") or item.get("sport")
         if not sport or sport in {"Активност", "Unknown", "WeightTraining"}:
-            unresolved_activity(ref, day)
+            unresolved_activity(ref, day, "STRENGTH_LOAD_INCOMPLETE" if sport == "WeightTraining" else "ACTIVITY_SPORT_MISSING")
             continue
         known_time = sum(_number(z.get("raw_time_min")) or 0. for z in (original or {}).get("zones", []))
         # An excluded recording has no canonical contribution at all. Its
         # nominal HR coverage is not a measured Q ledger; account for its entire
         # duration, letting a timestamp-supported speed estimate cover a subset.
-        missing = (missing if unified else
+        missing = (missing if requires_recording else
                    duration if original is None else min(duration * (1. - coverage / 100.), max(0., duration - known_time)))
         if missing is None or missing <= 0:
-            unresolved_activity(ref, day)
+            unresolved_activity(ref, day, evidence["reason"] or "INVALID_RECORDING_LEDGER")
             continue
         activity = original or {"activity_ref": ref, "date": day, "sport": sport,
                                 "duration_min": duration, "quality_status": status,
@@ -149,6 +155,7 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None,
                    "q_convention": "COMMON_ZONE_REFERENCE" if unified else "ZONE_UPPER_EDGE_EQUIVALENT_MINUTES",
                    "is_measured_zone_distribution": False if candidates else True,
                    "activities": []}
+    diagnostics.update(evidence_version=load_evidence.VERSION, issues=issues)
     if required_coverage_start is not None:
         diagnostics.update(required_coverage_start=required_coverage_start.isoformat(),
                            older_unresolved_activity_count=len(ignored_older))
@@ -184,7 +191,7 @@ def prepare(source, calendar, profile, today, *, speed_estimates=None,
     for activity, missing in candidates:
         # The unified ledger already used both indicators. A legacy speed
         # estimate must never fill selected REST or count fallback twice.
-        speed = {} if unified else (speed_estimates or {}).get(activity["activity_ref"]) or {}
+        speed = {} if load_evidence.requires_recording(activity, unified=unified) else (speed_estimates or {}).get(activity["activity_ref"]) or {}
         speed_minutes = _number(speed.get("covered_missing_minutes")) or 0.
         rest_minutes = _number(speed.get("rest_missing_minutes", 0.))
         speed_zones = {r["zone"]: r for r in speed.get("zones", []) if r.get("zone") in ZONES}

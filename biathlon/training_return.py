@@ -11,6 +11,7 @@ from statistics import median
 import json
 
 from .constants import COMPONENTS
+from . import load_evidence
 
 VERSION = "linear-training-return-v1"
 DURATION_RATIO = 1.3
@@ -77,7 +78,7 @@ def _window(source, start, end):
     q = {z: 0. for z in COMPONENTS[:5]}
     by_sport = {}
     for a in activities:
-        if a.get("quality_status", "valid") != "valid" or a.get("planning_estimated"):
+        if not load_evidence.assess(a, unified=bool(source.get("load_selection")))["complete"] or a.get("planning_estimated"):
             return None
         for z in q:
             row = next((v for v in a.get("zones", []) if v["zone"] == z), {})

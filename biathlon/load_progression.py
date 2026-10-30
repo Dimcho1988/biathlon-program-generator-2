@@ -14,7 +14,7 @@ from .equivalence import EQUIVALENCE_VERSION
 from .speed_equivalence import VERSION as LOAD_EQUIVALENCE_VERSION
 
 from .constants import COMPONENTS
-from . import planning_controls, planning_history, mesocycle_focus, training_return
+from . import planning_controls, planning_history, mesocycle_focus, training_return, load_evidence
 
 VERSION = "load-progression-v14-observed-load-checkpoints"
 RECOVERY_RETAINED_FRACTION = .70
@@ -69,27 +69,23 @@ def _valid(value):
 def observed_window(source, rows, start, end):
     """Half-open window; uncovered days/unknown Q are not zero-load days."""
     from .learning_provenance import initial_heuristic_load
-    from .unified_load import recorded_coverage
     keys = [(start+timedelta(days=i)).isoformat() for i in range((end-start).days)]
     effective = {(r["date"], r["zone"]): r["effective_load"] for r in rows}
     complete = [d for d in keys if all((d, z) in effective for z in COMPONENTS)]
     activities = [a for a in source.get("activities", []) if a["date"] in complete]
-    ledgers, unified = {}, {}
+    ledgers, evidence = {}, {}
     duration = measured_duration = recorded_duration = 0.
     for a in activities:
         if a.get("sport") == "WeightTraining":
             continue
         # Validate the original ledger, before the separately labelled missing
         # interval estimate. Sensor coverage is independent of HR coverage.
-        original = {**a, "zones": [{**z, "raw_time_min": z.get("planning_measured_time_min")}
-                    for z in a.get("zones", [])]} if a.get("planning_estimated") else a
-        ledger = recorded_coverage(original)
+        evidence[id(a)] = load_evidence.assess(a, unified=bool(source.get("load_selection")))
+        ledger = evidence[id(a)]["ledger"]
         ledgers[id(a)] = ledger
-        unified[id(a)] = bool(source.get("load_selection") or any(k in (a.get("load_source") or {})
-                             for k in ("recorded_seconds", "active_seconds", "unknown_seconds")))
         minutes = ledger["recorded_seconds"]/60 if ledger else float(a.get("duration_min") or 0.)
         covered = (ledger["recorded_seconds"]-ledger["unknown_seconds"])/60 if ledger else (
-            0. if unified[id(a)] or initial_heuristic_load(a) else
+            0. if not evidence[id(a)]["usable"] or initial_heuristic_load(a) else
             minutes if a.get("quality_status", "valid") == "valid" else
             minutes*max(0., min(1., float(a.get("hr_coverage_percent") or 0.)/100)))
         duration += minutes
@@ -105,7 +101,7 @@ def observed_window(source, rows, start, end):
         for activity in activities:
             if activity.get("sport") == "WeightTraining":
                 continue
-            if activity.get("quality_status") == "provider_missing" or (unified[id(activity)] and ledgers[id(activity)] is None):
+            if not evidence[id(activity)]["usable"]:
                 known = False
             if activity.get("quality_status", "valid") != "valid" and not activity.get("planning_estimated") and ledgers[id(activity)] is None:
                 known = False
