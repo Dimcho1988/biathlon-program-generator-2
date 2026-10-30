@@ -59,7 +59,9 @@ def preparation_repair_policy(plan):
         for day in local:
             if day.get("locked") or day.get("status") == "EXISTING_ACTIVITY":
                 continue
-            if not any(d["date"] > day["date"] and any(s.get("zone") in short for s in d.get("sessions", [])) for d in local):
+            if not any(d["date"] > day["date"] and (
+                any(s.get("zone") in short for s in d.get("sessions", [])) or
+                any("Z1" in r.get("blocking_components", []) for r in d.get("rejected_alternatives", []))) for d in local):
                 continue
             for session in day.get("sessions", []):
                 z = session.get("zone")
@@ -78,8 +80,9 @@ def preparation_repair_policy(plan):
     if not choices:
         return None
     _, key, zone, minimum = max(choices)
-    return {**((plan.get("parameters") or {}).get("allocation_policy") or {}),
-            "easy_caps": {key: minimum}, "easy_cap_zones": [zone]}
+    policy = (plan.get("parameters") or {}).get("allocation_policy") or {}
+    return {**policy, "easy_caps": {**policy.get("easy_caps", {}), key: minimum},
+            "easy_cap_zones": sorted(set(policy.get("easy_cap_zones", [])) | {zone})}
 
 
 def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_trial_seconds=0.):
@@ -184,7 +187,7 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
                 trials += 1
                 if score(candidate, accents) > score(best, accents):
                     best = candidate
-    best["allocation"]["search"] = {"version": "bounded-causal-replay-v7-day-coverage", "alternatives": trials,
+    best["allocation"]["search"] = {"version": "bounded-causal-replay-v8-whole-quality-reservations", "alternatives": trials,
         "reservation_replays":refits,
         "improved": best is not baseline, "priority": ["WORST_COMPONENT_RANGE_GAP", "SUM_COMPONENT_RANGE_GAPS", "DISTANCE_TO_100_PERCENT", "TRAINING_DAYS", "ACCENT", "PREPARATION_EXCESS", "FEWER_SESSIONS", "STABILITY"],
         "conclusion": ("TARGETS_WITHIN_TOLERANCE" if planning_allocation.acceptance(best["allocation"])["within_tolerance"]

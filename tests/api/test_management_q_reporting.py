@@ -102,6 +102,17 @@ def test_preparation_repair_uses_candidate_dates_and_whole_minimum_without_mutat
     assert preparation_repair_policy(plan) is None
 
 
+def test_preparation_repair_also_releases_budget_for_an_entirely_rejected_quality():
+    plan = repair_plan()
+    plan["allocation"]["segments"][0]["components"]["Z4"].update(actual=0., planned=0.)
+    later = plan["lookahead_days"][0]
+    later["sessions"] = []
+    later["rejected_alternatives"] = [{"code":"DIRECT_Q_PROGRESSION_BUDGET", "blocking_components":["Z1"]}]
+    assert preparation_repair_policy(plan)["easy_caps"] == {"2026-11-04":14.}
+    later["rejected_alternatives"][0]["blocking_components"] = ["Z4"]
+    assert preparation_repair_policy(plan) is None
+
+
 def test_repair_cannot_borrow_from_another_cycle_or_an_unknown_or_short_component():
     for change in ("cycle", "unknown", "short"):
         plan = repair_plan()

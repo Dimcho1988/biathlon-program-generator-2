@@ -3,13 +3,37 @@
 The two-hour end-to-start gap is an explicit coaching convention, not a
 physiological recovery threshold. Unknown timing retains separate records.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 import math
 from zoneinfo import ZoneInfo
 
-VERSION = "recorded-training-sessions-v1-gap-120m"
+VERSION = "training-session-roles-v2-confirmed-dose"
 MAX_GAP_MINUTES = 120
+HIGH_ZONES = {"Z3", "Z4", "Z5"}
+
+
+def role_is_key(zone, purpose, *, post_target=False):
+    """The same resolved role governs a prescription and confirmed execution."""
+    return zone in HIGH_ZONES and (purpose == "BUILDING" or post_target)
+
+
+def with_confirmed_methods(sessions, observations):
+    """Attach only comparable, completed doses; never infer an activity/plan link.
+
+    A catalogue template's role is not the role of its reduced prescription.
+    New confirmed descriptors carry the resolved prescription role explicitly.
+    Legacy observations and unlabelled recordings retain the conservative
+    exposure fallback, clearly distinguished in the evidence.
+    """
+    known = {r["id"]: r["method"] for r in observations
+             if r.get("success") and r.get("planned_minutes", 0) > 0
+             and .95 <= r.get("actual_minutes", 0)/r["planned_minutes"] <= 1.05
+             and (r.get("speed_ratio") is None or .95 <= r["speed_ratio"] <= 1.05)
+             and r.get("method", {}).get("resolved_role") in
+                 {"BUILDING", "MAINTENANCE", "SUPPORTING", "RECOVERY", "ACTIVATION"}}
+    return [replace(s, confirmed_methods={a["activity_ref"]: known[a["activity_ref"]]
+                    for a in s.activities if a.get("activity_ref") in known}) for s in sessions]
 
 
 def _positive(value):
@@ -40,17 +64,32 @@ class RecordedSession:
     activities: tuple[dict, ...]
     start: datetime | None = None
     end: datetime | None = None
+    confirmed_methods: dict = field(default_factory=dict)
 
     @property
     def is_key(self):
+        return self.key_evidence["is_key"]
+
+    @property
+    def key_evidence(self):
         # Short interval files together may exceed the established five-minute
         # zone threshold, even when no individual file reaches it.
         totals = {z: 0. for z in ("Z3", "Z4", "Z5")}
+        confirmed = []
         for activity in self.activities:
+            method = self.confirmed_methods.get(activity.get("activity_ref"))
+            if method:
+                confirmed.append(role_is_key(method["zone"], method["resolved_role"],
+                    post_target=method.get("post_target_maintenance", False)))
+                continue
             for zone in activity.get("zones", []):
                 if zone.get("zone") in totals:
                     totals[zone["zone"]] += _positive(zone.get("raw_time_min")) or 0.
-        return any(v >= 5 for v in totals.values())
+        inferred = any(v >= 5 for v in totals.values())
+        return {"is_key": any(confirmed) or inferred,
+                "basis": "CONFIRMED_METHOD_ROLE" if len(confirmed) == len(self.activities)
+                         else "MIXED_CONFIRMED_AND_UNLABELLED" if confirmed else "UNLABELLED_EXPOSURE_FALLBACK",
+                "unlabelled_high_zone_minutes": totals}
 
 
 def group_recordings(activities, calendar, timezone_name):
