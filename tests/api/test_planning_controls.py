@@ -219,7 +219,8 @@ def test_high_target_cannot_override_recovery_and_incomplete_history_is_unknown(
     append_recorded_activities(source, [activity])
     repo.envelope['activities'].append({**activity, 'local_date':TODAY.isoformat()})
     r=engine.generate_plan(repo,'athlete',profile(planning_controls=controls(accent_mode='MANUAL',accents=['Z3'],accent_index=1.5)),start_date=TODAY+timedelta(days=1),now=NOW)
-    assert any(a['code'] in {'READINESS_DOSE_UNAVAILABLE','INSUFFICIENT_DOSE_BUDGET','ACTUAL_SPORT_SESSION_EXPOSURE'} for d in r['days'] for a in d['rejected_alternatives'])
+    assert r['days'][0]['readiness_before']['Z1'] < 50.
+    assert not r['days'][0]['sessions']
     for day in r['days']:
         for session in day['sessions']:
             assert_readiness_dose(session)

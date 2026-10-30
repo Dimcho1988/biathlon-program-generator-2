@@ -27,7 +27,7 @@ def test_minimum_preserves_three_exact_45_second_repetitions():
     from tests.api.test_load_progression import configured
     from tests.api.test_training_plan_engine import Repository
     method = next(m for m in engine.resolved_methods(configured()) if m['structure']=='MODEL_INTERVALS')
-    method.update(min_work_min=2.25, max_work_min=10.)
+    method.update(min_work_min=2.25, max_work_min=10., developmental_variant=True)
     method['interval_template'].update(work_seconds=45., min_repetitions=3)
     settings = Repository().settings
     evidence = engine.capacity_for(method, settings, None, (None, [], []), TODAY)

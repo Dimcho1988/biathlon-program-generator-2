@@ -1649,8 +1649,13 @@ def _minimum_work(method, evidence, settings):
         return r["minimum_work_seconds"] / 60
     primary_only = bool(method.get("mixed_component") or method.get("developmental_variant"))
     minimum = method.get("minimum_fraction", MIN_AEROBIC_DOSE_FRACTION) * evidence.get("readiness_dose_factor", 1.)
-    structural_minimum = max(method['min_work_min'],
-                             method.get('source_work_minutes', [method['min_work_min']])[0])
+    # Capacity-dosed native intervals already allow one whole effort; their
+    # original example repeat count is not a hard floor. Introductory,
+    # supporting and race recipes keep their declared complete structure.
+    native_interval = (method['structure'] in {'MODEL_INTERVALS', 'METABOLIC_INTERVALS'}
+        and not any(method.get(k) for k in ('developmental_variant', 'mixed_component', 'race_specific')))
+    structural_minimum = (method['min_work_min'] if native_interval else
+        max(method['min_work_min'], method.get('source_work_minutes', [method['min_work_min']])[0]))
     for work in _native_work_options(method, structural_minimum, method['max_work_min']):
         blocks = _blocks(method, work, evidence, settings)
         if blocks and _minimum_dose_usage(blocks, evidence, method["zone"], primary_only=primary_only) + 1e-9 >= minimum:

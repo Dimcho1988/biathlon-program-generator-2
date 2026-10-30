@@ -17,6 +17,8 @@ uses complete repetitions. Short introductory and supporting variants retain
 their own repetition counts; combinations must complete each constituent
 recipe. Published library standards and strength structures keep their own
 minima. No generic percentage of aerobic Tmax imposes an additional floor.
+Ordinary capacity-dosed native intervals retain their existing permission to
+use a single whole effort; an example repeat count is not a source protocol.
 The desired role dose and its upper limits remain separate from this minimum.
 Reduced work keeps its actual purpose, Q/E and reported coverage; preparation
 and prescribed pauses remain included.

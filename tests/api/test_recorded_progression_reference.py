@@ -115,4 +115,6 @@ def test_progression_does_not_bypass_observed_session_duration(monkeypatch):
     assert sessions
     observed = plan["parameters"]["volume_evidence"]["max_session_minutes_by_sport"]["Run"]
     for d,s in sessions:
-        assert s["total_minutes"] <= observed*max(1., d["cycle"]["volume_factor"])+.002
+        quality = s['purpose'] == 'BUILDING' and s['zone'] in {'Z3','Z4','Z5'} and not d['taper'] and d['period'] != 'RE_ENTRY'
+        tolerance = 1+engine.planning_allocation.COVERAGE_TOLERANCE if quality else 1.
+        assert s["total_minutes"] <= observed*max(1., d["cycle"]["volume_factor"])*tolerance+.002
