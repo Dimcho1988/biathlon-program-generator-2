@@ -244,6 +244,28 @@ def test_execution_metadata_roundtrips_for_ui_and_old_reports_remain_valid():
     assert SessionReport(activity_ref=entry["entry_key"], duration_minutes=40).method_confirmed is False
 
 
+@pytest.mark.parametrize("mismatch", [None, "duration", "ambiguous", "recipe"])
+def test_confirmed_execution_preserves_resolved_role_only_for_one_matching_dose(monkeypatch, mismatch):
+    from apps.api import learning_methods as service
+    method = METHODS[A]
+    frozen = {**method_descriptor(method, "Run"), "purpose":"MAINTENANCE", "resolved_role":"MAINTENANCE"}
+    approved = [{"method_id":A, "sport":"Run", "total_minutes":30., "execution_descriptor":frozen}]
+    if mismatch == "duration": approved[0]["total_minutes"] = 45.
+    if mismatch == "recipe": frozen["version"] = "obsolete-recipe"
+    if mismatch == "ambiguous": approved *= 2
+    monkeypatch.setattr(service, "_methods", lambda *a, **kw: [method])
+    monkeypatch.setattr(service, "planned_execution_methods", lambda *a, **kw: approved)
+    report = SessionReport(activity_ref=f"act_{1:032x}", executed_method_id=A, method_confirmed=True,
+                           duration_minutes=30., planned_duration_minutes=30.)
+    result = service.confirmed_descriptor(Repository(), "ath-test", report,
+        {"sport":"Run", "local_date":"2026-09-26"})
+    if mismatch:
+        assert "resolved_role" not in result
+    else:
+        assert result["resolved_role"] == result["purpose"] == "MAINTENANCE"
+        assert result["version"] == method_descriptor(method, "Run")["version"]
+
+
 @pytest.fixture
 def library_feedback(monkeypatch):
     from apps.api import management_store, model_service

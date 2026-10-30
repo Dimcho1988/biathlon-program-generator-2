@@ -116,7 +116,7 @@ def _methods(repository, alias, *, include_library=True, library_sport=None, lib
     return methods
 
 
-def planned_execution_methods(repository, alias, *, day=None):
+def planned_execution_methods(repository, alias, *, day=None, include_standalone=False):
     """Only server-frozen approved combinations enter the execution picker."""
     from .management_plan_store import PlanStore
     from biathlon.planning_schedule import day_sessions
@@ -126,7 +126,7 @@ def planned_execution_methods(repository, alias, *, day=None):
         if day and item.get("date") != day:
             continue
         for session in day_sessions(item):
-            if session["method_id"].startswith("COMBO-") and session.get("execution_descriptor"):
+            if (include_standalone or session["method_id"].startswith("COMBO-")) and session.get("execution_descriptor"):
                 result.append(session)
     return result
 
@@ -161,6 +161,21 @@ def confirmed_descriptor(repository, alias, report, activity):
     if method is None:
         raise HTTPException(422, "Choose an available method for the actual activity sport")
     descriptor = method_descriptor(method, sport)
+    # The explicit method confirmation can preserve an approved resolved role.
+    # Date/sport/id, complete planned duration and recipe version must all match;
+    # ambiguous sessions keep an unknown role rather than guessing a plan link.
+    day = activity.get("local_date") or activity.get("date")
+    approved = (planned_execution_methods(repository, alias, day=day, include_standalone=True)
+                if day and getattr(report, "planned_duration_minutes", None) is not None else [])
+    matches = [s for s in approved
+        if s["method_id"] == report.executed_method_id and s["sport"] == sport
+        and s["execution_descriptor"].get("version") == descriptor["version"]
+        and s["execution_descriptor"].get("resolved_role")
+        and abs(s["total_minutes"]-report.planned_duration_minutes) <= .5]
+    if len(matches) == 1:
+        frozen = matches[0]["execution_descriptor"]
+        descriptor.update(purpose=frozen["resolved_role"], resolved_role=frozen["resolved_role"],
+                          post_target_maintenance=frozen.get("post_target_maintenance", False))
     # Preserve the frame of this recorded execution when later calibrations
     # rebuild the activity's accounting profile. No plan/activity link is inferred.
     evidence = intensity_provenance(activity)
@@ -254,7 +269,8 @@ def _observation(entry, activity, excluded, today):
     speed_role = _speed_role(descriptor.get("speed_role") or intensity_provenance(activity).get("speed_role")) if planned_speed is not None else None
     return {"id": entry["entry_key"], "revision": entry["revision"], "payload_hash": _hash(p), "day": day,
             "method": dict(descriptor), "planned_minutes": planned, "actual_minutes": actual,
-            "planned_speed_kmh": planned_speed, "speed_role": speed_role, "rpe": rpe, "timing": p["timing"],
+            "planned_speed_kmh": planned_speed, "speed_ratio": speed_ratio,
+            "speed_role": speed_role, "rpe": rpe, "timing": p["timing"],
             "success": success, "execution_reason": reason}
 
 

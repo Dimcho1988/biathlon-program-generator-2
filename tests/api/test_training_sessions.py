@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 
-from apps.api.training_sessions import group_recordings
+from apps.api.training_sessions import group_recordings, role_is_key, with_confirmed_methods
 
 
 def activity(ref, minutes=10, day="2026-10-19", **extra):
@@ -93,3 +93,37 @@ def test_overlapping_and_long_chains_use_latest_end():
     aa = [activity("long", 180), activity("overlap", 10), activity("later", 120)]
     cc = [catalog(a, s) for a, s in zip(aa, ["08:00:00", "08:30:00", "12:50:00"])]
     assert len(group_recordings(aa, cc, "Europe/Sofia")) == 1
+
+
+@pytest.mark.parametrize("role", ["BUILDING", "MAINTENANCE", "SUPPORTING", "RECOVERY", "ACTIVATION"])
+@pytest.mark.parametrize("zone", ["Z2", "Z3", "Z4", "Z5"])
+def test_same_confirmed_dose_retains_its_planned_key_classification(role, zone):
+    a = activity("confirmed", 30., zones=[{"zone":zone, "raw_time_min":20.}])
+    sessions = group_recordings([a], [catalog(a, "08:00:00")], "Europe/Sofia")
+    observations = [{"id":"confirmed", "success":True, "planned_minutes":30., "actual_minutes":30.,
+                     "method":{"zone":zone, "resolved_role":role}}]
+    actual = with_confirmed_methods(sessions, observations)[0]
+    assert actual.is_key == role_is_key(zone, role)
+    assert actual.key_evidence["basis"] == "CONFIRMED_METHOD_ROLE"
+    assert sessions[0].confirmed_methods == {}  # Scientific history stays immutable.
+
+
+@pytest.mark.parametrize("changes", [{"success":False}, {"actual_minutes":45.}, {"speed_ratio":1.2},
+    {"method":{"zone":"Z4", "purpose":"MAINTENANCE"}}])
+def test_unknown_or_exceeded_dose_cannot_claim_a_reduced_role(changes):
+    a = activity("uncertain", 30., zones=[{"zone":"Z4", "raw_time_min":12.}])
+    observation = {"id":"uncertain", "success":True, "planned_minutes":30., "actual_minutes":30.,
+                   "method":{"zone":"Z4", "resolved_role":"MAINTENANCE"}, **changes}
+    actual = with_confirmed_methods(group_recordings([a], [], "UTC"), [observation])[0]
+    assert actual.is_key
+    assert actual.key_evidence["basis"] == "UNLABELLED_EXPOSURE_FALLBACK"
+
+
+def test_confirmed_easy_part_does_not_hide_unlabelled_intense_intervals():
+    aa = [activity("easy", 20., zones=[{"zone":"Z3", "raw_time_min":10.}]),
+          activity("intervals", 10., zones=[{"zone":"Z5", "raw_time_min":6.}])]
+    cc = [catalog(a, s) for a,s in zip(aa, ["08:00:00", "08:30:00"])]
+    groups = with_confirmed_methods(group_recordings(aa, cc, "UTC"), [{"id":"easy", "success":True,
+        "planned_minutes":20., "actual_minutes":20., "method":{"zone":"Z3", "resolved_role":"SUPPORTING"}}])
+    assert len(groups) == 1 and groups[0].is_key
+    assert groups[0].key_evidence["basis"] == "MIXED_CONFIRMED_AND_UNLABELLED"
