@@ -131,9 +131,6 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
         ]
         if not unmet:
             policies = [policies[1]]  # Only distribution needs another trial.
-        elif any(reservation_methods(baseline).values()):
-            policies.insert(0, {**((baseline.get("parameters") or {}).get("allocation_policy") or {}),
-                "reservation_methods":reservation_methods(baseline), "component_gap_first":True})
         for index, policy in enumerate(policies):
             if not planning_allocation.needs_search(best["allocation"]) and not empty_requested_day(best):
                 break
@@ -146,6 +143,19 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
             refits += int("reservation_methods" in policy)
             if score(candidate, accents) > score(best, accents):
                 best = candidate
+            # Reconcile the first quality-first schedule immediately. On a
+            # slower worker the budget may permit only two complete replays;
+            # broad easy-work variants must not displace this causal refit.
+            if (index == 0 and planning_allocation.needs_search(best["allocation"])
+                and any(reservation_methods(best).values()) and time_available()):
+                began = monotonic()
+                candidate = replay({**((best.get("parameters") or {}).get("allocation_policy") or policy),
+                    "reservation_methods":reservation_methods(best)})
+                estimated_trial_seconds = max(estimated_trial_seconds, monotonic()-began)
+                trials += 1
+                refits += 1
+                if score(candidate, accents) > score(best, accents):
+                    best = candidate
             # Give this targeted repair priority over broad optional-easy trials
             # when the bounded window permits only two full replays.
             repair = preparation_repair_policy(best) if index == 0 else None
