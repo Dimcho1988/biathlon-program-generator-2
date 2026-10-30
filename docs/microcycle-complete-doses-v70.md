@@ -27,6 +27,9 @@ The audit also covers these related cases:
 
 - Future reservations reduce a desired dose to an intermediate complete
   variant when time or observed session exposure prevents the full dose.
+- Preparation reservations try a complete smaller core if their desired dose
+  does not fit. First exposures take priority over extra work in components
+  already trained, so optional easy work cannot erase another quality.
 - Native repetition minima use their exact unit, so three 45-second efforts
   remain 2.25 minutes instead of an incompatible half-minute floor.
 - An upper whole variant that worsens the residual Q gap cannot discard a

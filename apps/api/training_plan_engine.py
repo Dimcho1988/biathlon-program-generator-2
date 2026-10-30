@@ -4012,6 +4012,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     same_cycle_keys = sum(segment_keys[d] == segment_keys[day] for d,_ in reserved_key_slots)
                     slots_left = min(len(future_slots), max(0, session_limit-sessions-current_cost-same_cycle_keys))
                     minimum_options = {}
+                    minimum_fallbacks = {}
                     def core_priority(option):
                         return (not reservation_preference(option[7], option[8]["method"].get("actual_sport", primary_sport),
                                                            [d for d,_ in option[5]]), *option[:2])
@@ -4063,8 +4064,6 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         core_minutes = sum(b["duration_min"] for b in core)
                         compatible = [(d,s) for d,s in future_slots if _phase(periodization, d)[0] in alternative_method["periods"]
                             and not (_phase(periodization, d)[1] and alternative_method["purpose"] == "SUPPORTING")
-                            and core_minutes <= (available[d.weekday()] if d > day else
-                                                 day_available-sum(b["duration_min"] for b in minimum_parts))+.001
                             and (component != "STR" or not previous or (d-previous).days >= 2)
                             ]
                         if not compatible:
@@ -4075,6 +4074,18 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                              "work":alternative_evidence["structure_work_budget_minutes"]})
                         if core and (component not in minimum_options or core_priority(option) < core_priority(minimum_options[component])):
                             minimum_options[component] = option
+                        if objective_work:
+                            # The desired dose is not a feasibility minimum.
+                            # Retain a complete smaller recipe before optional
+                            # work can consume this component's preparation.
+                            small, sq, se = minimum_cores[(alternative["sport"], alternative["method_id"])]
+                            small_minutes = sum(b["duration_min"] for b in small)
+                            fallback = (sq["Z1"], sum(se.values()), cost, sq, se, compatible, small_minutes, alternative["method_id"],
+                                {"method":alternative_method, "capacity":alternative_evidence, "blocks":small,
+                                 "purpose":alternative["purpose"], "objective_work":False,
+                                 "work":alternative_evidence["minimum_structure_work_minutes"]})
+                            if small and (component not in minimum_fallbacks or core_priority(fallback) < core_priority(minimum_fallbacks[component])):
+                                minimum_fallbacks[component] = fallback
                     used_future_slots = set()
                     used_future_minutes = {}
                     for record in reserved_keys:
@@ -4085,20 +4096,26 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     # dose of an already represented component. Otherwise a
                     # cheap repeat can displace the preparation promised to a
                     # still-untrained quality in the previous slot.
-                    for component, (_, _, cost, cq, ce, compatible, core_minutes, method_id, specification) in sorted(
-                        minimum_options.items(), key=lambda item: (
-                            not planning_allocation.quality_priority(item[0], period_objectives), *item[1][:2])):
-                        if cost > slots_left:
-                            continue
+                    for component, preferred in sorted(minimum_options.items(), key=lambda item: (
+                        not planning_allocation.quality_priority(item[0], period_objectives), *item[1][:2])):
                         placement, checked = None, None
-                        for d,s in compatible:
-                            if ((d,s) in used_future_slots or used_future_minutes.get(d, 0.)+core_minutes >
-                                (available[d.weekday()] if d > day else day_available-sum(b["duration_min"] for b in minimum_parts))+.001):
+                        options = [preferred]
+                        if component in minimum_fallbacks:
+                            options.append(minimum_fallbacks[component])
+                        for option in options:
+                            _, _, cost, cq, ce, compatible, core_minutes, method_id, specification = option
+                            if cost > slots_left:
                                 continue
-                            trial = {**specification, "date":d, "slot":s}
-                            checked = reservation_check(minimum_parts, protected_cores+[trial], capacity=selected_evidence)
-                            if checked is not None:
-                                placement = (d,s)
+                            for d,s in compatible:
+                                if ((d,s) in used_future_slots or used_future_minutes.get(d, 0.)+core_minutes >
+                                    (available[d.weekday()] if d > day else day_available-sum(b["duration_min"] for b in minimum_parts))+.001):
+                                    continue
+                                trial = {**specification, "date":d, "slot":s}
+                                checked = reservation_check(minimum_parts, protected_cores+[trial], capacity=selected_evidence)
+                                if checked is not None:
+                                    placement = (d,s)
+                                    break
+                            if placement is not None:
                                 break
                         if placement is None:
                             continue

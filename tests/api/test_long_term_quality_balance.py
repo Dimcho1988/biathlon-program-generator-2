@@ -131,41 +131,7 @@ def assert_complete_counterfactual_fits(repo, body, plan, now):
 
 def test_long_mixed_tails_and_easy_work_cannot_starve_executable_long_term_qualities(monkeypatch):
     repo, body, start, now = balanced_fixture(monkeypatch)
-    import sys
-    traces = set()
-    def trace(frame, event, result):
-        if event != "return" or frame.f_code.co_name not in {"reservation_check", "preparation_bundle"}:
-            return
-        local = frame.f_locals
-        if str(local.get("day")) not in {"2026-09-29", "2026-09-30", "2026-10-01"}:
-            return
-        if frame.f_code.co_name == "preparation_bundle":
-            traces.add(repr(("BUNDLE", str(local["day"]), local["session"]["method_id"],
-                result["components"], result["protected_q"])))
-            return
-        if result is not None or frame.f_back.f_code.co_name != "preparation_bundle":
-            return
-        outer = frame.f_back.f_locals
-        if outer.get("component") != "Z4":
-            return
-        r = local.get("record", {})
-        traces.add(repr(("FAIL_Z4", str(local["day"]), outer["session"]["method_id"],
-            frame.f_lineno, str(r.get("date")), r.get("method", {}).get("id"),
-            r.get("work"), r.get("purpose"), local.get("work"), local.get("nominal"),
-            [(c["method"]["zone"], c.get("work")) for c in local["protected_cores"]],
-            local.get("cq"), local.get("future_q"), local.get("ce"),
-            {z:v.get("deficit_effective") for z,v in local.get("future_budget", {}).items()})))
-    sys.setprofile(trace)
-    try:
-        plan = engine.generate_plan(repo, "athlete", body, start_date=start, now=now)
-    finally:
-        sys.setprofile(None)
-    for item in sorted(traces):
-        print(item)
-    for d in plan["days"]+plan.get("lookahead_days", []):
-        print("PLAN",d["date"],[(s["method_id"],s["direct_equivalent_minutes"],
-            [l for l in s["dose_evidence"]["limits"] if l["code"]=="LONG_TERM_QUALITY_PREPARATION"])
-            for s in d["sessions"]])
+    plan = engine.generate_plan(repo, "athlete", body, start_date=start, now=now)
     assert plan["allocation"] is not None
     assert [segment["days"] for segment in plan["allocation"]["segments"]] == [7,7]
     assert_complete_counterfactual_fits(repo, body, plan, now)
