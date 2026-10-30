@@ -183,7 +183,7 @@ def test_future_mixed_core_rebuilds_its_complete_minimum_when_recovery_improves(
     assert protected, "A legal future core must remain reservable when Recovery improves."
     for item in protected:
         assert item.get("readiness_dose_factor", .95) == 1.
-        assert abs(item.get("minutes", current_minimum)-future_minimum) <= .001
+        assert future_minimum-.001 <= item.get("minutes", current_minimum) <= 80.+.001
     next_day = next(day for day in plan["days"] if day["date"] == wednesday.isoformat())
     assert next_day["readiness_before"]["Z4"] == 100.
     actual = next(session for session in next_day["sessions"] if session["zone"] == "Z4")

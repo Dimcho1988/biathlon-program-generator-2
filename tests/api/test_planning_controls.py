@@ -87,7 +87,8 @@ def test_whole_training_budget_retains_means_specific_dosing_and_availability(mo
         if d['session']:
             assert d['session']['sport'] == 'Run'
             # Cycling's 600-minute sessions must not authorize such a run.
-            assert d['session']['total_minutes'] <= 60*max(1, d['load_budget']['mesocycle_factor'])+.002
+            tolerance = 1.1 if d['session']['purpose']=='BUILDING' and d['session']['zone'] in {'Z3','Z4','Z5'} else 1.
+            assert d['session']['total_minutes'] <= 60*max(1, d['load_budget']['mesocycle_factor'])*tolerance+.002
             assert any(l['code']=='ACTUAL_SPORT_SESSION_EXPOSURE' for l in d['session']['dose_evidence']['limits'])
     assert all(w['planned_minutes'] is None for w in result['history_comparison'])
 

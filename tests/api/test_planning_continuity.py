@@ -63,13 +63,13 @@ def test_overshoot_and_manual_components_cannot_borrow_another_components_allowa
     assert not policy.fits(q, q, allowed, ledger())
 
 
-def test_preparation_is_ten_percent_once_for_an_uncovered_quality_only():
+def test_quality_preparation_is_ten_percent_of_frozen_budget_once():
     rows = ledger(actual=0.)
     rows["Z1"].update(actual=102., actual_q=102., remaining=0.)
     allowed = headroom(rows, preparation=True)
-    assert allowed["q"]["Z1"] == 8.
+    assert allowed["q"]["Z1"] == 58.  # 10% of the six 100-Q targets, minus actual excess.
     rows["Z1"].update(planned=6., planned_q=6.)
-    assert headroom(rows, preparation=True)["q"]["Z1"] == 2.
+    assert headroom(rows, preparation=True)["q"]["Z1"] == 52.
     rows["Z3"]["remaining"] = 0.
     assert headroom(rows, preparation=True)["mode"] is None
 
@@ -94,9 +94,9 @@ def test_planned_easy_and_preparation_share_one_frozen_reserve():
     rows["Z1"].update(planned=110., planned_q=110.)
     rows["Z3"].update(planned=0., planned_q=0., remaining=100.)
     prep = headroom(rows, preparation=True, references=refs)
-    assert prep["q"]["Z1"] == 15  # 25 shared, not 25 plus 10% preparation.
+    assert prep["q"]["Z1"] == 79.5  # 25 shared + 10% of (600 goals + 45 easy reserve), minus 10 spent.
     rows["Z1"].update(actual=110., actual_q=110., planned=0., planned_q=0.)
-    assert headroom(rows, preparation=True, references=refs)["q"]["Z1"] == 15
+    assert headroom(rows, preparation=True, references=refs)["q"]["Z1"] == 79.5
     assert not headroom(rows, primary="Z1", maintenance=True, references=refs, rolling=0.)["e"]["Z1"]
     assert not policy.reserves(rows, refs, manual={"Z1", "Z2"})["references"]
     rows["Z1"]["actual_q"] = rows["Z2"]["actual_q"] = None
@@ -257,7 +257,8 @@ def test_empty_replay_day_does_not_erase_future_strength_preparation(monkeypatch
     plan = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)
     assert plan["days"][0]["sessions"][0]["zone"] == "Z1"
     assert any(s["zone"] == "STR" for s in plan["days"][4]["sessions"])
-    assert sum(s["direct_equivalent_minutes"]["Z1"] for d in plan["days"] for s in d["sessions"]) <= 110.005
+    assert sum(s["direct_equivalent_minutes"]["Z1"] - s["dose_evidence"].get("continuity", {}).get("support_q", {}).get("Z1", 0.)
+               for d in plan["days"] for s in d["sessions"]) <= 110.005
 
 
 def test_recovery_trial_spreads_complete_doses_across_training_days(monkeypatch):

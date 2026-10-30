@@ -26,7 +26,9 @@ def test_interval_uses_individual_tmax_method_coefficient_role_and_half_deficit(
     assert ceiling == pytest.approx(building*(1 if role == 'BUILDING' else .6))
     blocks = [{'kind':'WORK','zone':'Z4','duration_min':expected}]
     assert engine._dose_fits(blocks, evidence, 'Z4', ceiling*evidence['readiness_dose_factor'])
-    assert not engine._dose_fits([{**blocks[0], 'duration_min':expected+.1}], evidence, 'Z4', ceiling*evidence['readiness_dose_factor'])
+    rounded = evidence.get('whole_role_work_minutes', expected)
+    assert expected <= rounded <= expected*1.1 + 1e-9
+    assert not engine._dose_fits([{**blocks[0], 'duration_min':rounded+.1}], evidence, 'Z4', ceiling*evidence['readiness_dose_factor'])
 
 
 def test_library_source_counts_set_standard_dose_without_changing_physiological_tmax(monkeypatch):

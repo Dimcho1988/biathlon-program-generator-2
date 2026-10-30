@@ -184,7 +184,8 @@ def test_curve_supported_interval_building_scales_selected_fraction_once(
     assert evidence["base_fraction"] == pytest.approx(1.2*selected_fraction)
     assert evidence["fraction"] == pytest.approx(expected_fraction)
     assert evidence["requested_primary_work_minutes"] / evidence["capacity_minutes"] == pytest.approx(expected_fraction, abs=.0001)
-    assert session["main_work_minutes"] <= evidence["requested_primary_work_minutes"] + .001
+    assert session["main_work_minutes"] <= evidence["whole_role_work_minutes"] + .001
+    assert evidence["whole_role_work_minutes"] <= evidence["requested_primary_work_minutes"]*1.1 + .001
     assert evidence["approved_interval_work_capacity_ratio"] == 1.2
     work = [block for block in session["blocks"] if block["kind"] == "WORK"]
     assert work and all(block["duration_min"] == .5 for block in work)
