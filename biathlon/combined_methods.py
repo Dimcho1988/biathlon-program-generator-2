@@ -3,7 +3,7 @@ from copy import deepcopy
 from hashlib import sha256
 import math
 
-VERSION = 'combined-methods-v1-half-role-budgets'
+VERSION = 'combined-methods-v2-component-role-budgets'
 
 
 def shortage(remaining, nominal, available_slots, *, vectors=None, key_costs=None, available_key_slots=None):
@@ -62,7 +62,12 @@ def candidates(candidates, evidence):
             continue
         key = (sport, m['zone'])
         choices = groups.setdefault(key, [])
-        if len(choices) < 2 and not any(p['structure'] == m['structure'] for p in choices):
+        def shape(method):
+            recipe = (method.get('method_library') or {}).get('resolution') or {}
+            interval = method.get('interval_template') or method.get('interval_profile') or {}
+            return (method['structure'], recipe.get('cycle_work_seconds'), recipe.get('sets'),
+                    tuple(recipe.get('work_options_seconds') or ()), interval.get('work_seconds'), interval.get('recovery_seconds'))
+        if len(choices) < 3 and not any(shape(p) == shape(m) for p in choices):
             choices.append(m)
     result = []
     for (sport, zone), parents in groups.items():
@@ -79,11 +84,11 @@ def candidates(candidates, evidence):
                         'sports': (sport,), 'periods': tuple(sorted(common)), 'purpose': 'BUILDING',
                         'structure': 'COMBINED_METHODS', 'position': first['position'],
                         'combined_methods': deepcopy([first, second]), 'combination_shortage': deepcopy(evidence),
-                        'min_work_min': .5, 'max_work_min': first['max_work_min']/2,
+                        'min_work_min': .5, 'max_work_min': first['max_work_min'],
                         'minimum_fraction': first.get('minimum_fraction', .25)/2,
                         'warmup_min': max(first['warmup_min'], second['warmup_min']),
                         'cooldown_min': max(first['cooldown_min'], second['cooldown_min']),
                         'source_id': 'TWO_REGISTRY_METHODS', 'source_version': VERSION,
-                        'instructions': 'Две основни части, всяка с половината от собствения си ролеви бюджет. Запази отделните скорости, цели отсечки и почивки. Общата загрявка и разпускане се отчитат веднъж.',
+                        'instructions': 'Две основни части според остатъка до целта за всеки компонент, всяка в собствения си ролеви бюджет. Запази отделните скорости, цели отсечки и почивки. Общата загрявка и разпускане се отчитат веднъж.',
                         'adaptation': 'Комбинация поради недостиг на разрешени сесии. Recovery намалява всяка част веднъж; общият Q/E товар се проверява отделно.'}))
     return result

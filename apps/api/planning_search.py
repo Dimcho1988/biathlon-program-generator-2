@@ -140,8 +140,22 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
             candidate = replay(policy)
             estimated_trial_seconds = max(estimated_trial_seconds, monotonic()-began)
             trials += 1
+            refits += int("reservation_methods" in policy)
             if score(candidate, accents) > score(best, accents):
                 best = candidate
+            # Reconcile the first quality-first schedule immediately. On a
+            # slower worker the budget may permit only two complete replays;
+            # broad easy-work variants must not displace this causal refit.
+            if (index == 0 and planning_allocation.needs_search(best["allocation"])
+                and any(reservation_methods(best).values()) and time_available()):
+                began = monotonic()
+                candidate = replay({**((best.get("parameters") or {}).get("allocation_policy") or policy),
+                    "reservation_methods":reservation_methods(best)})
+                estimated_trial_seconds = max(estimated_trial_seconds, monotonic()-began)
+                trials += 1
+                refits += 1
+                if score(candidate, accents) > score(best, accents):
+                    best = candidate
             # Give this targeted repair priority over broad optional-easy trials
             # when the bounded window permits only two full replays.
             repair = preparation_repair_policy(best) if index == 0 else None
@@ -187,7 +201,7 @@ def improve(baseline, profile, replay, *, seconds_remaining=150., estimated_tria
                 trials += 1
                 if score(candidate, accents) > score(best, accents):
                     best = candidate
-    best["allocation"]["search"] = {"version": "bounded-causal-replay-v8-whole-quality-reservations", "alternatives": trials,
+    best["allocation"]["search"] = {"version": "bounded-causal-replay-v9-objective-quality-doses", "alternatives": trials,
         "reservation_replays":refits,
         "improved": best is not baseline, "priority": ["WORST_COMPONENT_RANGE_GAP", "SUM_COMPONENT_RANGE_GAPS", "DISTANCE_TO_100_PERCENT", "TRAINING_DAYS", "ACCENT", "PREPARATION_EXCESS", "FEWER_SESSIONS", "STABILITY"],
         "conclusion": ("TARGETS_WITHIN_TOLERANCE" if planning_allocation.acceptance(best["allocation"])["within_tolerance"]

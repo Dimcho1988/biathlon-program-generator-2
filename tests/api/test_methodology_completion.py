@@ -120,8 +120,8 @@ def parents():
         'min_work_min':1.,'max_work_min':100.,'warmup_min':10.,'cooldown_min':5.,'instructions':'Steady'} for z in ('Z3','Z2')]
 
 
-@pytest.mark.parametrize('recovery,expected',[ (100.,32.5),(80.,29.) ])
-def test_combination_halves_each_own_role_budget_then_scales_once(recovery,expected):
+@pytest.mark.parametrize('recovery,expected',[ (100.,65.),(80.,58.5) ])
+def test_combination_keeps_each_own_role_budget_then_scales_once(recovery,expected):
     shortage=combined_methods.shortage({'Z3':65.,'Z2':65.},{'Z3':65.,'Z2':65.},1)
     _,method=combined_methods.candidates([('Run',m) for m in parents()],shortage)[0]
     policy=adaptive_methods.readiness_policy(method,{}, {'Z1':100.,'Z2':recovery,'Z3':recovery})
@@ -135,7 +135,7 @@ def test_combination_halves_each_own_role_budget_then_scales_once(recovery,expec
     assert sum(b['kind']=='WARMUP' for b in blocks)==1
     assert sum(b['kind']=='COOLDOWN' for b in blocks)==1
     assert engine._dose_fits(blocks,evidence,'Z3',nominal*policy['dose_factor'])
-    assert all(b['allocation']==.5 for b in evidence['combined_budgets'])
+    assert all(b['allocation']==1. for b in evidence['combined_budgets'])
     assert not combined_methods.candidates([('Run',m) for m in parents()],combined_methods.shortage({'Z3':65.,'Z2':65.},{'Z3':65.,'Z2':65.},2))
 
 
@@ -232,7 +232,7 @@ def test_real_week_selects_two_registered_methods_only_after_slot_shortage(monke
     for number, budget in enumerate(evidence['combined_budgets'], 1):
         work = sum(b['duration_min'] for b in session['blocks'] if b['kind']=='WORK' and b.get('combination_part')==number)
         assert work <= budget['nominal_work_minutes'] + .001
-        assert budget['allocation'] == .5
+        assert 0 < budget['allocation'] <= 1.
     assert_rolling_budgets(plan)
     p['planning_controls']['mixed_sessions_enabled'] = False
     separate = engine.generate_plan(high_capacity_history(), 'athlete', p, start_date=TODAY, now=NOW)

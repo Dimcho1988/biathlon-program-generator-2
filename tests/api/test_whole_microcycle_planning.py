@@ -113,6 +113,30 @@ def test_search_does_not_credit_previous_cycle_overshoot_to_the_next_cycle():
     assert score(plan,{'Z5'}) > incomplete
 
 
+def test_two_replay_budget_reconciles_the_selected_quality_schedule_first(monkeypatch):
+    from apps.api import planning_search
+    elapsed = [0.]
+    monkeypatch.setattr(planning_search, 'monotonic', lambda: elapsed[0])
+    baseline = {'days':[{'date':'2026-10-20','sessions':[
+        {'method_id':'OLD','sport':'Run','zone':'Z5','slot':1,'main_work_minutes':5.}]}],
+        'allocation':{'components':{'Z5':{'target':10.,'actual':0.,'planned':5.}}}}
+    calls = []
+    def replay(policy):
+        elapsed[0] += 60.
+        calls.append(policy)
+        result = deepcopy(baseline)
+        result['days'][0]['sessions'][0]['method_id'] = 'COMPLETE'
+        result['allocation']['components']['Z5']['planned'] = 8.
+        if 'reservation_methods' in policy:
+            assert policy['reservation_methods']['2026-10-20'][0]['method_id'] == 'COMPLETE'
+            result['allocation']['components']['Z5']['planned'] = 10.
+        return result
+    result = improve(baseline, {}, replay, seconds_remaining=150., estimated_trial_seconds=60.)
+    assert len(calls) == 2
+    assert result['allocation']['components']['Z5']['planned'] == 10.
+    assert result['allocation']['search']['reservation_replays'] == 1
+
+
 def test_unmeasured_race_in_tail_blocks_later_forecast_without_invalidating_visible_week(monkeypatch):
     fixed_readiness(monkeypatch,100.)
     repo=Repository()

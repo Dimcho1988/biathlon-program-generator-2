@@ -60,7 +60,7 @@ def test_recovery_eighty_is_ten_percent_volume_reduction_no_speed_change(monkeyp
     assert len([b for b in blocks if b['kind']=='RECOVERY'])==8
 
 
-def test_combination_is_half_of_each_standard_then_recovery_once(monkeypatch):
+def test_combination_uses_each_standard_then_recovery_once(monkeypatch):
     m,e,s=prepare(monkeypatch,recovery=80)
     second=deepcopy(m); second['id']='SECOND'; second['zone']='Z3'
     caps=[deepcopy(e),deepcopy(e)]
@@ -69,11 +69,11 @@ def test_combination_is_half_of_each_standard_then_recovery_once(monkeypatch):
            'combination_shortage':{'shortage':True}}
     evidence={**deepcopy(e),'method_library':None,'combined_capacities':caps}
     fraction=engine._nominal_fraction(combo,'BUILDING',athlete(),'SPECIAL_PREPARATION',evidence,{})
-    assert [b['nominal_work_minutes'] for b in evidence['combined_budgets']]==pytest.approx([5,5])
+    assert [b['nominal_work_minutes'] for b in evidence['combined_budgets']]==pytest.approx([10,10])
     requested=evidence['capacity_minutes']*fraction*evidence['readiness_dose_factor']
-    assert requested==pytest.approx(4.5)
+    assert requested==pytest.approx(9.)
     blocks=engine._blocks(combo,requested,evidence,s)
-    assert [sum(b['duration_min'] for b in blocks if b['kind']=='WORK' and b['combination_part']==i) for i in (1,2)]==[4,4]
+    assert [sum(b['duration_min'] for b in blocks if b['kind']=='WORK' and b['combination_part']==i) for i in (1,2)]==[9,9]
     assert all(b['readiness_factor']==.9 for b in evidence['combined_budgets'])
     minimum=engine._minimum_work(combo,evidence,s)
     assert minimum==pytest.approx(1)
@@ -82,8 +82,10 @@ def test_combination_is_half_of_each_standard_then_recovery_once(monkeypatch):
     assert engine._minimum_dose_usage(minimum_blocks,evidence,combo['zone'])==pytest.approx(.1)
     ceiling=engine._dose_ceiling(combo,'BUILDING',athlete(),'SPECIAL_PREPARATION',evidence,{})*evidence['readiness_dose_factor']
     assert engine._dose_fits(blocks,evidence,combo['zone'],ceiling)
-    # A fifth complete repetition would exceed each 4.5-minute adjusted budget.
-    excess=engine._blocks(combo,5,evidence,s)
+    # Ten minutes exceed the nine-minute adjusted budget. The builder clips
+    # to that budget; the validator also rejects an independently altered dose.
+    excess=deepcopy(blocks)
+    excess.append(deepcopy(next(b for b in blocks if b['kind']=='WORK' and b['combination_part']==1)))
     assert not engine._dose_fits(excess,evidence,combo['zone'],ceiling)
 
 

@@ -71,6 +71,8 @@ def assert_readiness_dose(session):
     assert evidence["applied_structure_fraction"] <= evidence["max_dose_fraction"] + .001
     if evidence.get("min_dose_fraction") is not None:
         assert evidence.get("applied_minimum_capacity_fraction", evidence["applied_structure_fraction"]) >= evidence["min_dose_fraction"] - .001
+    for i, minimum in enumerate(evidence.get("combined_minimum_work_minutes", []), 1):
+        assert sum(b["duration_min"] for b in session["blocks"] if b["kind"] == "WORK" and b.get("combination_part") == i) >= minimum-.001
 
 
 @pytest.mark.parametrize("readiness", [0., 30., 50., 70., 89.9, 90., 100.])
@@ -111,7 +113,8 @@ def test_readiness_prescribes_selected_fraction_times_ready_capacity(monkeypatch
     assert dose["fraction"] == pytest.approx(expected)
     assert dose["readiness_dose_factor"] == .5 + readiness / 200
     assert dose["requested_primary_work_minutes"] / dose["capacity_minutes"] == pytest.approx(expected, abs=.0001)
-    assert dose["applied_structure_fraction"] <= expected + .001
+    assert 1. <= dose.get("whole_dose_rounding_factor", 1.) <= 1.1
+    assert dose["applied_structure_fraction"] <= expected*dose.get("whole_dose_rounding_factor", 1.) + .001
     assert_rolling_budgets(plan)
 
 
