@@ -2,7 +2,7 @@
 from copy import deepcopy
 from . import speed_duration, speed_zones, training_guidance, adaptive_methods, preliminary_capacity, dosing_curve
 
-VERSION = "race-specific-speed-methods-v4-time-ranges"
+VERSION = "race-specific-speed-methods-v5-complete-repetitions"
 PERIODS = ("SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION")
 
 
@@ -97,7 +97,7 @@ def methods(profile, reference, base_methods):
         minimum, maximum = 3,12
         m.update(id=f"ONFLOWS-RACE-{band['role']}-{zone}-V2",title=band["label"]+" · "+profile["discipline"],
             zone=zone,sports=(profile["sport"],),periods=PERIODS,purpose="BUILDING",
-            min_work_min=minimum*work/60,max_work_min=maximum*work/60,minimum_fraction=.1,
+            min_work_min=minimum*work/60,max_work_min=maximum*work/60,
             warmup_min=15.,cooldown_min=10.,race_specific={**band, "event_id": reference.get("event_id"), "race_duration_s": reference["duration_s"]},
             instructions="Следвай зададеното темпо на подходящ равен участък с резерв за още две качествени отсечки. Запази почивките. Лактатът се сравнява само с личен съпоставим протокол.",
             implementation_profile=VERSION,source_id="INDIVIDUAL_RACE_CURVE",source_version="1",

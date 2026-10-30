@@ -5,7 +5,7 @@ accounting. Recovery remains a daily model; no intraday exponent is inferred.
 """
 from copy import deepcopy
 
-VERSION = "adaptive-methods-v5-goal-roles-half-deficit"
+VERSION = "adaptive-methods-v6-complete-structures"
 
 
 def developmental(profile):
@@ -28,7 +28,7 @@ def short_variant(method):
              min_repetitions=4, max_repetitions=12, reserve_repetitions=max(2, p["reserve_repetitions"]))
     result.update(id=method["id"]+"-SHORT", title=method["title"]+" · кратък въвеждащ вариант",
                   min_work_min=4*work/60, max_work_min=12*work/60,
-                  developmental_variant=True, minimum_fraction=.05)
+                  developmental_variant=True)
     result["instructions"] = ("Контролирани кратки повторения, без отказ; поне 2 в резерв. Пълна почивка. "
         "Спри при болка или загуба на техника. Не гони пулса. "
         "Кратките отсечки не гарантират нисък лактат.")
@@ -50,7 +50,7 @@ def mixed_variants(methods):
             child = deepcopy(m)
             child.update(id=m["id"]+"-MIX-"+variant, variation_parent_id=m["id"], title=f"Лека аеробна работа + {m['zone']} · "+("равномерна част" if variant == "STEADY" else "отсечки"),
                          purpose="SUPPORTING", mixed_component=True, mixed_variant=variant,
-                         warmup_min=15., cooldown_min=5., minimum_fraction=.05,
+                         warmup_min=15., cooldown_min=5.,
                          periods=tuple(p for p in m["periods"] if p not in {"RE_ENTRY", "TRANSITION"}))
             if m["zone"] in {"Z2", "Z3"}:
                 child.update(structure="MIXED_AEROBIC", min_work_min=2., max_work_min=20.)
