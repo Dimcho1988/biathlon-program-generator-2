@@ -35,7 +35,9 @@ def inputs(kind):
         return repo, profile
     repo, source = incomplete(1 if kind in {"estimated", "unsupported"} else 0)
     if kind == "unsupported":
-        source["activities"][0]["hr_coverage_percent"] = None
+        # The unsupported record must fall in the current certification window.
+        source["activities"][-1].update(hr_coverage_percent=None, quality_status="limited")
+        source["quality"]["limited_activities"] += 1
     return repo, configured(discipline="5000 m")
 
 

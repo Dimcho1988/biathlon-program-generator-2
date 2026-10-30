@@ -45,6 +45,16 @@ function estimatedRecovery(): RecoveryV2 {
 }
 
 describe("incomplete recovery is not displayed as complete readiness", () => {
+  it("identifies the dated activity and reason while keeping readiness unavailable", () => {
+    const history=recovery(false);
+    history.data_quality!.issues=[{activity_ref:"recorded",date:"2026-10-05",sport:"Hike",reason:"Q_REANALYSIS_REQUIRED"}];
+    const html=renderToStaticMarkup(<RecoveryV2Section history={parseRecoveryV2(history)} canEdit={false}/>);
+    expect(html).toContain("2026-10-05");
+    expect(html).toContain("Hike");
+    expect(html).toContain("Товарът изисква преизчисляване от първичния запис");
+    expect(recoveryDisplayState(history).unavailable).toBe(true);
+    expect(html).not.toContain("Q_REANALYSIS_REQUIRED");
+  });
   it("keeps observed load while withholding readiness, recovery dates and the forecast", () => {
     const history = recovery(false);
     const html = renderToStaticMarkup(<RecoveryV2Section history={history} canEdit={false} />);

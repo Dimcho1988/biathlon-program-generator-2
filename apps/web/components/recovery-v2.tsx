@@ -4,7 +4,7 @@ import { MODEL_ZONES,type ModelZone,type RecoveryV2 } from "../lib/models";
 import { RecoveryTimeline } from "./recovery-timeline";
 import { RecoverySettingsEditor } from "./recovery-settings-editor";
 import { recoveryDisplayState } from "../lib/recovery-display";
-import { RecoveryEstimateNotice } from "./recovery-estimate-notice";
+import { RecoveryEstimateNotice, RecoveryCoverageIssues } from "./recovery-estimate-notice";
 const n=(v:number)=>new Intl.NumberFormat("bg-BG",{maximumFractionDigits:2}).format(v);
 const sourceLabels={PERSONAL:"Лична средна",SHORT_HISTORY:"Кратка история · смесена база",SPARSE_ZONE_HISTORY:"Малко товар в зоната · смесена база",NO_HISTORY:"Начална база · няма история",NO_ZONE_LOAD:"Начална база · няма товар в зоната"};
 const additiveSourceLabels={PERSONAL:"Лична средна + добавка",SHORT_HISTORY:"Кратка история + добавка",SPARSE_ZONE_HISTORY:"Малко товар в зоната + добавка",NO_HISTORY:"Базова добавка · няма история",NO_ZONE_LOAD:"Базова добавка · няма товар в зоната"};
@@ -19,6 +19,7 @@ export function RecoveryV2Section({history,canEdit}:{history:RecoveryV2;canEdit:
     {history.source_stale&&<p role="status" className="integration-notice">Последният товар е до {history.source_as_of}. Прогнозата допуска, че след това няма ново натоварване. Обновете активностите.</p>}
     {estimated&&<RecoveryEstimateNotice history={history}/>}
     {incomplete&&<p role="status" className="integration-notice">Недостатъчни данни за възстановяването: {history.data_quality!.partial_activities} непълно оценени активности и {history.data_quality!.missing_days} дни без пълни данни. Отчетеният товар е наличен, но готовността и срокът за възстановяване остават неопределени.</p>}
+    {incomplete&&<RecoveryCoverageIssues history={history}/>}
     {permanentBase&&<p>Базата за Recovery е постоянната добавка за зоната + личният среднодневен товар за предходните до 40 дни. Добавката участва винаги и сама по себе си не създава умора.</p>}
     <div className="load-summary recovery-summary">{history.current.map(c=><article key={c.zone} className="load-summary-card" style={{"--series":c.zone==="STR"?"var(--strength)":`var(--zone-${c.zone.slice(1)})`} as CSSProperties}>
       <div><span className="summary-zone">{c.zone}</span><strong>{incomplete?"—":`${n(c.readiness_percent)}%`}</strong><small>{incomplete?"Недостатъчни данни":`${estimated?"моделна оценка · ":""}${c.readiness_percent>=90?"достигнат ориентир":"в процес на възстановяване"}`}</small></div>

@@ -9,6 +9,7 @@ export interface RecoveryDataQuality {
   complete:boolean;missing_days:number;partial_activities:number;expected_days:number;covered_days:number;
   readiness_available?:boolean;readiness_basis?:"RECORDED_LOAD"|"ESTIMATED_LOAD"|"UNAVAILABLE";estimated?:boolean;
   recorded_seconds?:number|null;unknown_seconds?:number|null;coverage_percent?:number|null;
+  issues?:Array<{activity_ref:string|null;date:string|null;sport:string|null;reason:string}>;
   estimation?:{policy:string;version:string;supported:boolean;estimated_minutes:number;estimated_activity_count:number;unresolved_activity_count:number;missing_calendar_days:string[]}|null;
 }
 export interface RecoveryV2 {
@@ -46,6 +47,8 @@ export function parseRecoveryV2(value:unknown):RecoveryV2 {
   for(const d of r.daily) if(!MODEL_ZONES.includes(d.zone)||!/^\d{4}-\d{2}-\d{2}$/.test(d.date)||!finite(d.readiness_after_percent)||d.readiness_after_percent<0||d.readiness_after_percent>100)throw new Error("Невалидна история на възстановяването.");
   const quality=r.data_quality;
   if(quality!=null){
+    if(quality.issues!==undefined&&(!Array.isArray(quality.issues)||quality.issues.some(issue=>!issue||typeof issue.reason!=="string"
+      ||[issue.activity_ref,issue.date,issue.sport].some(value=>value!==null&&typeof value!=="string"))))throw new Error("Невалидно описание на липсващия товар.");
     if(typeof quality.complete!=="boolean"||![quality.missing_days,quality.partial_activities,quality.expected_days,quality.covered_days].every(v=>Number.isInteger(v)&&v>=0)
       ||quality.covered_days>quality.expected_days)throw new Error("Невалидно покритие за възстановяването.");
     for(const value of [quality.recorded_seconds,quality.unknown_seconds,quality.coverage_percent])if(value!=null&&(!finite(value)||value<0))throw new Error("Невалидно покритие за възстановяването.");

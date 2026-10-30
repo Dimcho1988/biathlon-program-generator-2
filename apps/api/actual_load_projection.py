@@ -10,7 +10,7 @@ from datetime import date
 from hashlib import sha256
 import json
 
-from biathlon import speed_equivalence, unified_load
+from biathlon import speed_equivalence, unified_load, load_evidence
 from .load_model_policy import identity as load_policy_identity
 from .speed_load_cache import SpeedLoadCache
 
@@ -57,15 +57,17 @@ def _reconstruct(repository, alias, source, inputs, settings, key, original_iden
     known = {a["activity_ref"] for a in activities}
     for ref, activity in calendar.items():
         if (ref not in known and source["period_start"] <= activity.get("local_date", "") <= source["period_end"]
-                and speed_equivalence.supports_sport(activity.get("sport")) and activity.get("latest_shadow_run_key")):
+                and load_evidence.supports_recording(activity.get("sport")) and activity.get("latest_shadow_run_key")):
             activities.append({"activity_ref": ref, "date": activity["local_date"], "sport": activity["sport"],
                 "duration_min": (activity.get("elapsed_time_s") or activity.get("moving_time_s") or 0.)/60.,
                 "strength_time_min": 0., "quality_status": "limited", "hr_coverage_percent": 0.,
                 "zones": [{"zone": z, "raw_time_min": 0., "equivalent_time_min": 0., "effective_load": 0.,
                            "mean_effective_hr_bpm": None, "average_minute_value_percent": None}
                           for z in speed_equivalence.ZONES]})
-    selected = [a for a in activities if speed_equivalence.supports_sport(a.get("sport"))
-                and not a.get("strength_time_min") and calendar.get(a["activity_ref"], {}).get("latest_shadow_run_key")]
+    selected = [a for a in activities if load_evidence.supports_recording(a.get("sport"))
+                and not load_evidence.is_strength(a) and a.get("quality_status") != "provider_missing"
+                and calendar.get(a["activity_ref"], {}).get("quality_status") != "provider_missing"
+                and calendar.get(a["activity_ref"], {}).get("latest_shadow_run_key")]
     models = {}
     records = []
     for offset in range(0, len(selected), 10):
@@ -80,8 +82,9 @@ def _reconstruct(repository, alias, source, inputs, settings, key, original_iden
             day = date.fromisoformat(activity["date"])
             identity = (activity["sport"], day)
             if identity not in models:
-                view = model_service.speed_view(repository, alias, activity["sport"],
+                view = (model_service.speed_view(repository, alias, activity["sport"],
                     _inputs=model_service.historical_speed_inputs(inputs, day), _capacity_only=True)
+                    if speed_equivalence.supports_sport(activity["sport"]) else {"sport": activity["sport"]})
                 from .component_load_context import context_from_speed_view
                 models[identity] = context_from_speed_view(view)
             recording_seconds = (max(calendar[ref].get("elapsed_time_s") or 0.,

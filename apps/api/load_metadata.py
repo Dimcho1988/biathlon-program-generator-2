@@ -2,11 +2,11 @@
 from copy import deepcopy
 import math
 
-from biathlon.speed_equivalence import supports_sport
+from biathlon.load_evidence import supports_recording, is_strength
 
 
 def selection_metadata(activities):
-    aerobic = [a for a in activities if supports_sport(a.get("sport")) and not a.get("strength_time_min")]
+    aerobic = [a for a in activities if supports_recording(a.get("sport")) and not is_strength(a)]
     ledgers = [a["load_source"] for a in aerobic
                if isinstance(a.get("load_source"), dict) and a["load_source"].get("version")
                and isinstance(a["load_source"].get("source_seconds"), dict)]

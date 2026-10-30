@@ -4,7 +4,7 @@ import math
 from . import raw_speed, speed_equivalence
 from .sport_heart_rate import reference_offset
 
-VERSION = "unified-leading-indicator-load-v6-valid-observed-hr"
+VERSION = "unified-leading-indicator-load-v7-all-sport-recordings"
 HR_INTERVAL_VERSION = "normalized-hr-recording-intervals-v1"
 HR_ZONE_TIME_VERSION = "shared-hr-zone-times-v1"
 HR_SIGNALS = {"MODEL", "hr_raw_bpm", "hr_clean_bpm", "hrmod_candidate_bpm", "hrmod_final_bpm"}
