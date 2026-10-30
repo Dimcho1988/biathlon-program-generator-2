@@ -131,7 +131,6 @@ def assert_complete_counterfactual_fits(repo, body, plan, now):
 
 def test_long_mixed_tails_and_easy_work_cannot_starve_executable_long_term_qualities(monkeypatch):
     repo, body, start, now = balanced_fixture(monkeypatch)
-    monkeypatch.setattr(engine, "compact_rejections", lambda items: items)
     plan = engine.generate_plan(repo, "athlete", body, start_date=start, now=now)
     assert plan["allocation"] is not None
     assert [segment["days"] for segment in plan["allocation"]["segments"]] == [7,7]
@@ -142,10 +141,7 @@ def test_long_mixed_tails_and_easy_work_cannot_starve_executable_long_term_quali
         for zone in ("Z2", "Z4", "STR"):
             work = sum(block["duration_min"] for day in days for session in day["sessions"]
                        for block in session["blocks"] if block["kind"] == "WORK" and block["zone"] == zone)
-            diagnostics = [{"date":d["date"], "selected":[(s["method_id"], s["direct_equivalent_minutes"]) for s in d["sessions"]],
-                "rejections":[r for r in d["rejected_alternatives"] if zone in r["method_id"]]}
-                for d in days]
-            assert work > 0, f"{zone} has executable whole-dose headroom in {segment['window_start']}; optional Z1 must leave its preparation. {diagnostics}"
+            assert work > 0, f"{zone} has executable whole-dose headroom in {segment['window_start']}; optional Z1 must leave its preparation."
         for day in days:
             for session in day["sessions"]:
                 assert session["dose_evidence"]["readiness_dose_factor"] == 1.

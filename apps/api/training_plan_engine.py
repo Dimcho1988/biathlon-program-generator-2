@@ -4081,7 +4081,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         used_future_minutes[record["date"]] = used_future_minutes.get(record["date"], 0.)+record["minutes"]
                     protected_methods = []
                     protected_cores = []
-                    for component, (_, _, cost, cq, ce, compatible, core_minutes, method_id, specification) in sorted(minimum_options.items(), key=lambda item: item[1][:2]):
+                    # Cover executable components before reserving another
+                    # dose of an already represented component. Otherwise a
+                    # cheap repeat can displace the preparation promised to a
+                    # still-untrained quality in the previous slot.
+                    for component, (_, _, cost, cq, ce, compatible, core_minutes, method_id, specification) in sorted(
+                        minimum_options.items(), key=lambda item: (
+                            not planning_allocation.quality_priority(item[0], period_objectives), *item[1][:2])):
                         if cost > slots_left:
                             continue
                         placement, checked = None, None
