@@ -148,7 +148,7 @@ def test_second_slot_can_use_a_reduced_mixed_dose_after_strength(monkeypatch):
     assert_rolling_budgets(plan)
 
 
-def test_interval_maintenance_nominal_retains_a_complete_relative_minimum_after_readiness_scale():
+def test_interval_maintenance_nominal_preserves_whole_efforts_without_generic_floor():
     body = configured(age_years=25, training_experience_years=5)
     method = next(method for method in engine.resolved_methods(body) if method["id"] == "ONFLOWS-CONTROLLED-Z4-V2")
     evidence = {"capacity_minutes":34., "target_hr_bpm":None, "target_speed_kmh":None,
@@ -157,7 +157,7 @@ def test_interval_maintenance_nominal_retains_a_complete_relative_minimum_after_
     work = math.floor(evidence["capacity_minutes"]*fraction*evidence["readiness_dose_factor"]*2)/2
     minimum = engine._minimum_work(method, evidence, Repository().settings)
     blocks = engine._blocks(method, work, evidence, Repository().settings)
-    assert minimum == 9.
+    assert minimum == 3.  # One whole native effort; no generic Tmax floor.
     assert fraction == .78  # 60% of the developmental method dose.
     assert work >= minimum
     assert [block["duration_min"] for block in blocks if block["kind"] == "WORK"] == [3.]*8

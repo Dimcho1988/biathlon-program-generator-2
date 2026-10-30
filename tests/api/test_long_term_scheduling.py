@@ -100,13 +100,12 @@ def test_supported_z5_target_includes_the_complete_minimums_canonical_direct_q()
     minimum = engine._minimum_work(method,evidence,repo.settings)
     blocks = engine._blocks(method,minimum,evidence,repo.settings)
     direct, _, _ = engine._canonical_load(blocks,repo.settings,rows,TODAY)
-    assert minimum == 2.
-    assert [block["duration_min"] for block in blocks if block["kind"] == "WORK" and block["zone"] == "Z5"] == [.25]*8
-    # Existing Z5 equivalence is 1+.05*(190-175), so 2 work min are 3.5 Q.
-    # A target of 5 with 2 actual Q cannot fit it; the executable fixture
-    # above deliberately gives 6−2=4 Q rather than bypassing this gate.
-    assert direct["Z5"] == pytest.approx(2*1.5*190/175)
-    assert 5.-2. < direct["Z5"] <= 6.-2.
+    assert minimum == .5  # The short recipe requires two complete 15-second efforts.
+    assert [block["duration_min"] for block in blocks if block["kind"] == "WORK" and block["zone"] == "Z5"] == [.25]*2
+    # Canonical Q still counts the complete work at its prescribed intensity.
+    # A 3 Q remainder can now admit this useful smaller recipe.
+    assert direct["Z5"] == pytest.approx(.5*1.5*190/175)
+    assert 0. < direct["Z5"] <= 5.-2.
 
 
 def test_short_current_microcycle_cannot_borrow_the_next_microcycle_q_budget(monkeypatch):

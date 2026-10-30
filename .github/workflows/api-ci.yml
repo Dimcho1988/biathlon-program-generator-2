@@ -21,6 +21,8 @@ jobs:
           python-version: "3.12"
       - name: Install API dependencies
         run: python -m pip install -r requirements-api.txt "pytest>=8.0,<10.0"
+      - name: Verify dose and preparation regressions
+        run: python -m pytest -q --tb=long tests/api/test_microcycle_complete_doses.py tests/api/test_long_term_quality_balance.py tests/api/test_long_term_scheduling.py tests/api/test_q_prescription_contract.py tests/api/test_quality_reservation_feasibility.py tests/api/test_feasible_quality_reservations.py
       - name: Run API tests
         run: python -m pytest -q tests/api
 

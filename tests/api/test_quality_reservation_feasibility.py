@@ -154,7 +154,7 @@ def test_future_mixed_core_is_not_protected_when_key_load_reduces_readiness_belo
     assert_segment_contract(plan)
 
 
-def test_future_mixed_core_rebuilds_its_complete_minimum_when_recovery_improves(monkeypatch):
+def test_future_mixed_core_rechecks_readiness_without_inflating_its_structure_minimum(monkeypatch):
     original = engine.recovery_v2.simulate
     tuesday, wednesday = TODAY+timedelta(days=1), TODAY+timedelta(days=2)
     def simulated(rows, *args, **kwargs):
@@ -174,7 +174,7 @@ def test_future_mixed_core_rebuilds_its_complete_minimum_when_recovery_improves(
     mixed = methods["END-VO2-TREF-01-Z4-MIX-REPETITIONS-SHORT"]
     current_minimum = core_minutes(repo, body, mixed, factor=.95)
     future_minimum = core_minutes(repo, body, mixed, factor=1.)
-    assert current_minimum < future_minimum <= 80.
+    assert current_minimum == future_minimum <= 80.  # Whole-recipe minimum is independent of Tmax percentage.
     plan = engine.generate_plan(repo, "athlete", body, start_date=tuesday, now=NOW)
     key = next(session for session in plan["days"][0]["sessions"] if session["is_key_session"])
     assert key["dose_evidence"]["readiness_dose_factor"] == .975
@@ -190,5 +190,5 @@ def test_future_mixed_core_rebuilds_its_complete_minimum_when_recovery_improves(
     assert actual["dose_evidence"]["readiness_dose_factor"] == 1.
     primary = sum(block["duration_min"] for block in actual["blocks"]
                   if block["zone"] == "Z4" and block["kind"] == "WORK")
-    assert primary >= 52.*.05-.001
+    assert primary >= mixed["min_work_min"]-.001
     assert_segment_contract(plan)
