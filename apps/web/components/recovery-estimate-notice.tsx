@@ -12,6 +12,8 @@ const reasons:Record<string,string> = {
   LEGACY_HR_INCOMPLETE:"Пулсовият запис не позволява пълна оценка на товара.",
   ACTIVITY_Q_INCOMPLETE:"Няма пълно разпределение на товара по компоненти.",
   ACTIVITY_DATE_MISSING:"Липсва дата на активността.",
+  RECORDING_DURATION_MISSING:"Липсва общата продължителност на записа.",
+  ACTIVITY_SPORT_MISSING:"Липсва разпознаваем вид спорт.",
 };
 
 export function RecoveryCoverageIssues({history}:{history:RecoveryV2}) {

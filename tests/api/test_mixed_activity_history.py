@@ -126,6 +126,26 @@ def test_dated_old_unreconstructible_q_does_not_block_recent_window():
     assert not evidence["supported"] and evidence["issues"][0]["reason"] == "ACTIVITY_DATE_MISSING"
 
 
+def test_pinned_samples_without_total_duration_do_not_certify_a_complete_recording(monkeypatch):
+    history = source(0.)
+    hike = add_recording(history, "Hike")
+    hike.pop("load_source")
+    hike["duration_min"] = None
+    settings = SimpleNamespace(zone_bounds_bpm=BOUNDS, hrmax_bpm=200, leading_indicator="HEART_RATE")
+    repo = SimpleNamespace(athlete_settings=lambda _:settings,
+        activity_speed_history_samples=lambda alias, keys:{"pinned": {
+            "activity_ref":"Hike", "shadow_payload":streams(150.,None,seconds=60)}})
+    inputs = {"alias":"test", "today":TODAY, "entries":[], "calendar":{"activities":[
+        {"activity_ref":"Hike", "sport":"Hike", "local_date":hike["date"], "latest_shadow_run_key":"pinned"}]}}
+    rebuilt = actual_load_projection.reconstruct_history(repo,"test",history,speed_inputs=inputs)
+    actual = next(a for a in rebuilt["activities"] if a["sport"] == "Hike")
+    assert "load_source" not in actual
+    assert not planning_history.recovery_coverage(rebuilt,TODAY)["complete"]
+    _, evidence = planning_history_estimate.prepare(rebuilt,inputs["calendar"]["activities"],configured(),TODAY)
+    assert not evidence["supported"]
+    assert evidence["issues"][-1]["reason"] == "RECORDING_DURATION_MISSING"
+
+
 def test_strength_uses_own_exposure_and_provider_gap_remains_unknown():
     history = source(0.)
     strength = add_recording(history,"WeightTraining",strength=True)
