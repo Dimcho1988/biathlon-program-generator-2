@@ -4171,7 +4171,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             c[2]["canonical_effective_load"], allowance, active_segment))
                     gap_priority = ()
                     unrepresented = 0
-                    if period_objectives and (profile.get("_allocation_policy") or {}).get("component_gap_first", component_governed):
+                    if period_objectives and (profile.get("_allocation_policy") or {}).get("component_gap_first"):
                         load = objective_load(c[2]["direct_equivalent_minutes"], c[2]["canonical_effective_load"])
                         # A complete first dose cannot lose all remaining
                         # slots to repeatedly filling an easier component.
@@ -4193,11 +4193,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                                      for z, row in period_objectives.items()]
                         gap_priority = tuple(-v for v in planning_allocation.gap_score(projected))
                     return (not c[2].get("double_threshold") if day.weekday() in double_days else False,
+                        bool(preferred) and not any(r["method_id"] == c[2]["method_id"] and r["sport"] == c[2]["sport"] for r in preferred),
+                        not c[2]["is_key_session"] if day.weekday() in set(threshold_days + double_days)
+                            and day in key_slots and slot_index == first_plannable_slot(day) else False,
                         unrepresented,
                         *gap_priority,
                         not c[2]["is_key_session"] if day in key_slots and slot_index == first_plannable_slot(day) else False,
                         bool(allowance.get("mode") in {"POST_TARGET_MAINTENANCE", "PLANNED_EASY_MAINTENANCE"} or extra_taper),
-                        bool(preferred) and not any(r["method_id"] == c[2]["method_id"] and r["sport"] == c[2]["sport"] for r in preferred),
                         c[2]["direct_equivalent_minutes"]["Z1"] if gap_priority and c[2]["zone"] != "Z1" else 0.,
                         not (c[2]["zone"] == "Z1" and c[2]["purpose"] != "RECOVERY"
                              and choice_methods[(c[2]["sport"], c[2]["method_id"])]["structure"] in {"CONTINUOUS", "TWO_REPETITIONS"})

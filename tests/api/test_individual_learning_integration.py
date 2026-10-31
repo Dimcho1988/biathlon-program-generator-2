@@ -353,7 +353,7 @@ def test_full_year_plan_has_one_bounded_replay_archive_and_stays_below_one_mebib
     import httpx
     encoded = httpx.Request("POST", "https://example.invalid/plan", json=result).content
     assert encoded.count(b'"episodes":') == 1
-    assert encoded.count(b'"observations": [') == 1
+    assert encoded.count(b'"observations":[') == 1
     assert len(result["long_term"]["weeks"]) == 48
     assert result["catalog"]["status"] == "PINNED_REGISTRY_PROVENANCE"
     assert len(result["catalog"]["resolved_profiles_sha256"]) == 64

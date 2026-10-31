@@ -149,7 +149,11 @@ def test_future_mixed_core_is_not_protected_when_key_load_reduces_readiness_belo
                            for protected in limit["protected_methods"])
     next_day = next(day for day in plan["days"] if day["date"] == wednesday.isoformat())
     assert next_day["readiness_before"]["Z4"] == 5.
-    assert not next_day["sessions"]
+    # Z4 is unavailable, but it cannot cancel a complete maintenance dose
+    # for the still-ready Z3 component.
+    assert next_day["sessions"]
+    assert all(s["zone"] == "Z3" and s["purpose"] == "MAINTENANCE" and not s["is_key_session"]
+               for s in next_day["sessions"])
     assert any(rejection["code"] == "RECOVERY_BELOW_50" for rejection in next_day["rejected_alternatives"])
     assert_segment_contract(plan)
 

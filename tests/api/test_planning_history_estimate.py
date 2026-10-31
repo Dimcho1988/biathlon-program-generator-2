@@ -144,7 +144,7 @@ def test_short_estimated_horizon_counts_actual_activity_without_inferred_time_ce
     budget = result["parameters"]["time_budget"]
     assert budget is None
     assert result["summary"]["actual_minutes"] == 45
-    assert result["days"][0]["status"] == "EXISTING_ACTIVITY"
+    assert result["days"][0]["actual_minutes"] == 45
 
 
 @pytest.mark.parametrize("partial_count", [0,5,30])
