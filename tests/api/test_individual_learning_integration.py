@@ -291,7 +291,7 @@ def test_only_control_lab_review_blocks_activation(monkeypatch):
     assert "LEARNING_REVIEW" not in {w["code"] for w in result["warnings"]}
 
 
-def test_full_year_plan_has_one_bounded_replay_archive_and_stays_below_one_mebibyte(monkeypatch):
+def test_full_year_plan_has_one_bounded_replay_archive_and_fits_draft_storage_limit(monkeypatch):
     import json
     from collections import Counter
     from apps.api import learning_service, learning_methods
@@ -347,13 +347,12 @@ def test_full_year_plan_has_one_bounded_replay_archive_and_stays_below_one_mebib
     copies = [result["parameters"]["load_progression"]["individual_learning"],
               result["long_term"]["individual_learning"], result["long_term"]["progression"]["individual_learning"]]
     assert all(not ({"memory", "current", "source", "exclusions", "model_summary"} & set(copy)) for copy in copies)
-    # Measure the actual httpx JSON encoding used by SupabasePilotRepository.
-    # ASCII escaping counts Bulgarian guidance several times larger than the
-    # transmitted UTF-8 payload when more complete methods fit the week.
-    import httpx
-    encoded = httpx.Request("POST", "https://example.invalid/plan", json=result).content
+    # PostgreSQL bounds the UTF-8 jsonb text, including separator spaces.
+    # The whole-microcycle migration raised drafts to 2 MiB on 2026-10-30;
+    # memory remains independently bounded and stored only once.
+    encoded = json.dumps(result, ensure_ascii=False).encode()
     assert encoded.count(b'"episodes":') == 1
-    assert encoded.count(b'"observations":[') == 1
+    assert encoded.count(b'"observations": [') == 1
     assert len(result["long_term"]["weeks"]) == 48
     assert result["catalog"]["status"] == "PINNED_REGISTRY_PROVENANCE"
     assert len(result["catalog"]["resolved_profiles_sha256"]) == 64
@@ -364,4 +363,4 @@ def test_full_year_plan_has_one_bounded_replay_archive_and_stays_below_one_mebib
             assert all(session["method_library"]["guidance"].get(key) for key in
                        ("purpose", "execution", "recovery", "success", "errors", "adjustment", "progression"))
             assert session["execution_descriptor"]["id"] == session["method_id"]
-    assert len(encoded) < 1024*1024
+    assert len(encoded) < 2*1024*1024
