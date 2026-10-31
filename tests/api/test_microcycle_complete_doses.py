@@ -29,6 +29,8 @@ def test_minimum_preserves_three_exact_45_second_repetitions():
     method = next(m for m in engine.resolved_methods(configured()) if m['structure']=='MODEL_INTERVALS')
     method.update(min_work_min=2.25, max_work_min=10., developmental_variant=True)
     method['interval_template'].update(work_seconds=45., min_repetitions=3)
+    method['execution_limits'] = dict(min_work_min=2.25, max_work_min=10.,
+                                     min_repetitions=3, max_repetitions=13)
     settings = Repository().settings
     evidence = engine.capacity_for(method, settings, None, (None, [], []), TODAY)
     engine._nominal_fraction(method, 'BUILDING', {'building_fraction':.65}, 'GENERAL_PREPARATION', evidence, {})

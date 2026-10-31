@@ -259,6 +259,8 @@ def test_precompetition_neighbor_can_receive_real_session_without_bypassing_capa
         plan = results[key]
         rejected_ids = {method_id for day in plan["days"] for item in day["rejected_alternatives"]
                         if item["code"] == "RACE_COMPONENT_PRIORITY" for method_id in item.get("method_ids", [item["method_id"]])}
-        assert neighbor_ids <= rejected_ids
+        # A neighboring Z3 recipe may now remain available at maintenance
+        # role. The race gate still forbids building work outside the band.
+        assert "ONFLOWS-CONTROLLED-Z5-V2" in rejected_ids
         assert not any(session["zone"] in {"Z3", "Z5"} and session["purpose"] == "BUILDING"
                        for day in plan["days"] for session in day["sessions"])

@@ -275,7 +275,10 @@ def test_full_planner_generates_whole_z5_dose_from_single_long_anchor_with_long_
                       # equivalence: six 30-s reps require 5.25 canonical min.
                       component_targets_weekly={"Z1": 100., "Z5": 6.})
     body["planning_controls"].update(accents=["Z5"], sessions_per_week=1,
-        sessions_by_day=[0, 1, 0, 0, 0, 0, 0], threshold_days=[1])
+        sessions_by_day=[0, 1, 0, 0, 0, 0, 0], threshold_days=[1],
+        # Isolate this standalone boundary recipe; complete combinations
+        # now participate even when separate slots would also be available.
+        mixed_sessions_enabled=False)
     fixed_readiness(monkeypatch, 95.)
     from biathlon import method_library
     body["method_library"]["enabled"] = True

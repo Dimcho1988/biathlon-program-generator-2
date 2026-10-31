@@ -212,7 +212,8 @@ def test_actual_sessions_and_time_still_close_a_full_or_unknown_day(monkeypatch,
 
 
 @pytest.mark.parametrize("slots", [2,3])
-def test_imported_easy_morning_keeps_the_remaining_threshold_slot_eligible(monkeypatch, slots):
+@pytest.mark.parametrize("gap_first", [False, True])
+def test_imported_easy_morning_keeps_the_remaining_threshold_slot_eligible(monkeypatch, slots, gap_first):
     # Isolate slot eligibility from fatigue in the synthetic high-Q history.
     fixed_readiness(monkeypatch, 100.)
     repo = high_capacity_history()
@@ -220,6 +221,7 @@ def test_imported_easy_morning_keeps_the_remaining_threshold_slot_eligible(monke
     p = body(sessions_per_week=13, sessions_by_day=[slots,2,2,2,2,1,1],
         threshold_days=[TODAY.weekday()], double_threshold_days=[TODAY.weekday()],
         threshold_method="INTERVALS", accent_mode="MANUAL", accents=["Z3"])
+    p["_allocation_policy"] = {"component_gap_first": gap_first}
     plan = run(monkeypatch, p, repo)
     sessions = plan["days"][0]["sessions"]
     assert len(sessions) == slots-1

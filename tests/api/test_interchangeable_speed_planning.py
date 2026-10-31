@@ -77,7 +77,8 @@ def test_stale_hr_then_no_hr_uses_the_available_speed_basis_for_a_bounded_draft(
     expected_capacity = "TEST_CURVE_INITIAL_HR_ESTIMATE" if test_count else "INITIAL_HEURISTIC"
     assert any(s["dose_evidence"]["capacity_source"] == expected_capacity for s in sessions)
     assert all("STALE_HR_SPEED_INDEX" not in s["dose_evidence"].get("fallback_reasons", []) for s in sessions)
-    assert 0 < plan["summary"]["planned_minutes"] <= plan["parameters"]["time_budget"]["period_limit_minutes"]+.002
+    assert plan["summary"]["planned_minutes"] > 0
+    assert plan["parameters"]["time_budget"] is None
     assert any(w["code"] == "ESTIMATED_LOAD_HISTORY" for w in plan["warnings"])
     assert_rolling_budgets(plan)
     for session in sessions:

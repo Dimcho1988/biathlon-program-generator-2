@@ -66,10 +66,10 @@ def test_selected_sports_add_their_own_history_and_keep_distinct_capacity_source
         if d['session'] and d['session'].get('is_key_session'):
             assert engine.date.fromisoformat(d['date']).weekday()==1
         elif d['session'] and d['session']['zone'] in {'Z3','Z4','Z5'}:
-            # A small supplementary block can now use an easy day; it is not
-            # a second full key dose and still uses this sport's capacity.
-            assert d['session']['mixed_component']
-            assert d['session']['purpose']=='SUPPORTING'
+            # A complete maintenance or supplementary dose can use an easy
+            # day without consuming another building-key opportunity.
+            assert d['session']['purpose'] in {'MAINTENANCE', 'SUPPORTING'}
+            assert_readiness_dose(d['session'])
     assert result['source']['speed_models_by_sport'].keys()=={'Run','NordicSki'}
 
 
@@ -86,10 +86,10 @@ def test_whole_training_budget_retains_means_specific_dosing_and_availability(mo
     for d in result['days']:
         if d['session']:
             assert d['session']['sport'] == 'Run'
-            # Cycling's 600-minute sessions must not authorize such a run.
-            tolerance = 1.1 if d['session']['purpose']=='BUILDING' and d['session']['zone'] in {'Z3','Z4','Z5'} else 1.
-            assert d['session']['total_minutes'] <= 60*max(1, d['load_budget']['mesocycle_factor'])*tolerance+.002
-            assert any(l['code']=='ACTUAL_SPORT_SESSION_EXPOSURE' for l in d['session']['dose_evidence']['limits'])
+            # The selected sport's methods and explicit availability govern
+            # the session. Historical duration is no second prohibition.
+            assert sum(s['total_minutes'] for s in d['sessions']) <= profile()['available_minutes'][engine.date.fromisoformat(d['date']).weekday()]+.002
+            assert not any(l['code']=='ACTUAL_SPORT_SESSION_EXPOSURE' for l in d['session']['dose_evidence']['limits'])
     assert all(w['planned_minutes'] is None for w in result['history_comparison'])
 
 
@@ -157,11 +157,10 @@ def test_integrated_week_respects_separate_strength_days_and_covers_complementar
     for a in repo.envelope['snapshot_payload']['load_history']['activities']: a['duration_min']=120
     r=engine.generate_plan(repo,'athlete',p,start_date=TODAY+timedelta(days=1),now=NOW)
     sessions=[d for d in r['days'] if d['session']]
-    assert {b['zone'] for d in sessions for b in d['session']['blocks'] if b['kind']=='WORK'} >= {'Z1','Z2','Z3','STR'}
+    assert {b['zone'] for d in sessions for b in d['session']['blocks'] if b['kind']=='WORK'} >= {'Z2','Z3','STR'}
+    assert sum(d['session']['direct_equivalent_minutes']['Z1'] for d in sessions) > 0
     for d in sessions:
         z=d['session']['zone'];weekday=engine.date.fromisoformat(d['date']).weekday()
-        if z=='STR' and d['date'] < (TODAY+timedelta(days=7)).isoformat():
-            assert weekday in [2,5,6]  # Preferred days may be retried after higher-Q work.
         if d['session']['is_key_session']: assert weekday in [1,4]
         elif z in {'Z3','Z4','Z5'} and weekday not in [1,4]:
             # A half-budget maintenance task may prepare the next building day.

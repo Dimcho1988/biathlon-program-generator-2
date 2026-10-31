@@ -63,13 +63,14 @@ def test_overshoot_and_manual_components_cannot_borrow_another_components_allowa
     assert not policy.fits(q, q, allowed, ledger())
 
 
-def test_quality_preparation_is_ten_percent_of_frozen_budget_once():
+def test_quality_preparation_uses_only_the_complete_candidates_load():
     rows = ledger(actual=0.)
     rows["Z1"].update(actual=102., actual_q=102., remaining=0.)
-    allowed = headroom(rows, preparation=True)
-    assert allowed["q"]["Z1"] == 58.  # 10% of the six 100-Q targets, minus actual excess.
+    allowed = headroom(rows, preparation=True, preparation_q=18., preparation_effective=18.)
+    assert allowed["q"]["Z1"] == 18.
     rows["Z1"].update(planned=6., planned_q=6.)
-    assert headroom(rows, preparation=True)["q"]["Z1"] == 52.
+    assert headroom(rows, preparation=True, preparation_q=18., preparation_effective=18.)["q"]["Z1"] == 18.
+    assert headroom(rows, preparation=True)["q"]["Z1"] == 0.
     rows["Z3"]["remaining"] = 0.
     assert headroom(rows, preparation=True)["mode"] is None
 
@@ -82,7 +83,7 @@ def test_rolling_effective_limit_is_not_relaxed_by_either_reserve():
     assert allowed["e"]["Z3"] == 0.
 
 
-def test_planned_easy_and_preparation_share_one_frozen_reserve():
+def test_structural_preparation_does_not_replenish_the_easy_work_reserve():
     rows = ledger(actual=0., planned=100.)
     refs = {"Z1": reference("Z1"), "Z2": reference("Z2"), "Z3": reference("Z3")}
     reserve = policy.reserves(rows, refs)
@@ -93,10 +94,11 @@ def test_planned_easy_and_preparation_share_one_frozen_reserve():
     assert first["q"]["Z1"] == 25
     rows["Z1"].update(planned=110., planned_q=110.)
     rows["Z3"].update(planned=0., planned_q=0., remaining=100.)
-    prep = headroom(rows, preparation=True, references=refs)
-    assert prep["q"]["Z1"] == 79.5  # 25 shared + 10% of (600 goals + 45 easy reserve), minus 10 spent.
+    prep = headroom(rows, preparation=True, preparation_q=18., references=refs)
+    assert prep["q"]["Z1"] == 18.
+    assert headroom(rows, primary="Z1", maintenance=True, references=refs)["q"]["Z1"] == 15.
     rows["Z1"].update(actual=110., actual_q=110., planned=0., planned_q=0.)
-    assert headroom(rows, preparation=True, references=refs)["q"]["Z1"] == 79.5
+    assert headroom(rows, preparation=True, preparation_q=18., references=refs)["q"]["Z1"] == 18.
     assert not headroom(rows, primary="Z1", maintenance=True, references=refs, rolling=0.)["e"]["Z1"]
     assert not policy.reserves(rows, refs, manual={"Z1", "Z2"})["references"]
     rows["Z1"]["actual_q"] = rows["Z2"]["actual_q"] = None
@@ -106,7 +108,7 @@ def test_planned_easy_and_preparation_share_one_frozen_reserve():
 def test_support_accounting_cannot_hide_overshoot_in_the_primary_component():
     rows = ledger(actual=0., planned=0.)
     rows["Z1"].update(planned=100., planned_q=100., remaining=0.)
-    allowance = headroom(rows, preparation=True, references={"Z1": reference("Z1")})
+    allowance = headroom(rows, preparation=True, preparation_q=10., references={"Z1": reference("Z1")})
     direct = {z: 10. if z == "Z1" else 105. if z == "Z3" else 0. for z in COMPONENTS}
     evidence = policy.evidence(direct, direct, allowance, {"components":rows, "window_start":"2026-01-01", "window_end":"2026-01-07"})
     assert evidence["additional_q"] == {"Z1":10., "Z3":5.}

@@ -3,6 +3,8 @@ from copy import deepcopy
 from collections import Counter
 from datetime import date, timedelta
 
+import pytest
+
 from apps.api import training_plan_engine as engine
 from biathlon import adaptive_methods
 from biathlon.constants import COMPONENTS
@@ -129,8 +131,10 @@ def assert_complete_counterfactual_fits(repo, body, plan, now):
             assert effective_total[zone] <= objective["target_effective"]+.005, (segment["window_start"], zone, effective_total[zone], objective["target_effective"])
 
 
-def test_long_mixed_tails_and_easy_work_cannot_starve_executable_long_term_qualities(monkeypatch):
+@pytest.mark.parametrize("gap_first", [False, True])
+def test_long_mixed_tails_and_easy_work_cannot_starve_executable_long_term_qualities(monkeypatch, gap_first):
     repo, body, start, now = balanced_fixture(monkeypatch)
+    body["_allocation_policy"] = {"component_gap_first": gap_first}
     plan = engine.generate_plan(repo, "athlete", body, start_date=start, now=now)
     assert plan["allocation"] is not None
     assert [segment["days"] for segment in plan["allocation"]["segments"]] == [7,7]

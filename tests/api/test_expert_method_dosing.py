@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from apps.api import training_plan_engine as engine
 from apps.api.management_schemas import IntervalDoseProfile
-from biathlon import adaptive_methods
+from biathlon import adaptive_methods, method_dosing
 from tests.api.test_training_plan_engine import Repository, TODAY
 
 
@@ -147,6 +147,35 @@ def test_short_variant_preserves_the_prescribed_curve_duration():
     original, altered = method['interval_profile'], short['interval_profile']
     assert altered['work_seconds'] < original['work_seconds']
     assert altered['work_seconds'] * altered['speed_time_duration_ratio'] == original['work_seconds'] * original['speed_time_duration_ratio']
+
+
+def test_short_structure_survives_capacity_recalculation_and_resolved_parent():
+    method = {**interval_method(), 'title': 'Example', 'purpose': 'BUILDING'}
+    method_dosing.prepare_native_budget(method, {'capacity_minutes': 100.}, {})
+    short = adaptive_methods.short_variant(method)
+    for capacity, expected_max in [(100., 12), (.5, 6), (100., 12)]:
+        evidence = {'capacity_minutes': capacity}
+        method_dosing.prepare_native_budget(short, evidence, {})
+        assert short['interval_profile']['min_repetitions'] == 4
+        assert short['interval_profile']['max_repetitions'] == expected_max
+        assert short['min_work_min'] == 1.
+        assert short['max_work_min'] == min(3., capacity*3)
+        evidence.update(target_speed_kmh=24., target_hr_bpm=None)
+        blocks = engine._blocks(short, short['max_work_min'], evidence, Repository().settings)
+        assert len([b for b in blocks if b['kind'] == 'WORK']) == expected_max
+
+
+def test_mixed_support_retains_its_own_work_bounds_without_capping_source_method():
+    source = dict(id='Z2', title='Example', zone='Z2', purpose='BUILDING', structure='CONTINUOUS',
+                  min_work_min=15., max_work_min=60., warmup_min=10., cooldown_min=5.,
+                  periods=('GENERAL_PREPARATION',))
+    mixed = adaptive_methods.mixed_variants([source])[0]
+    for capacity in (100., 10., 100.):
+        method_dosing.prepare_native_budget(mixed, {'capacity_minutes': capacity}, {})
+        assert mixed['min_work_min'] == 2.
+        assert mixed['max_work_min'] == min(20., capacity)
+    method_dosing.prepare_native_budget(source, {'capacity_minutes': 100.}, {})
+    assert source['max_work_min'] == 100.  # A source example is not an execution limit.
 
 
 def joint_evidence(recovery=1.):

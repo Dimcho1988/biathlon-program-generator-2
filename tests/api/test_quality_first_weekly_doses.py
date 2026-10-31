@@ -78,17 +78,19 @@ def test_combination_cannot_hide_an_undersized_second_component():
     assert engine._minimum_work(method, evidence, Repository().settings) is None
 
 
-def test_quality_extra_cannot_be_spent_on_easy_work_or_refilled_by_replanning():
+def test_exact_preparation_load_is_separate_from_the_frozen_easy_allowance():
     rows = ledger(actual=0., planned=100.)
     refs = {'Z1':reference('Z1'), 'Z2':reference('Z2')}
     rows['Z2'].update(planned=0., planned_q=0., remaining=100.)
     rows['Z3'].update(planned=0., planned_q=0., remaining=100.)
-    quality = headroom(rows, preparation=True, references=refs)
+    quality = headroom(rows, preparation=True, preparation_q=30., references=refs)
     easy = headroom(rows, primary='Z1', maintenance=True, references=refs)
-    endurance_prep = headroom(rows, primary='Z2', preparation=True, references=refs)
-    assert easy['q']['Z1'] == endurance_prep['q']['Z1'] == 25.
-    assert quality['q']['Z1'] == 89.5
+    endurance_prep = headroom(rows, primary='Z2', preparation=True, preparation_q=15., references=refs)
+    assert easy['q']['Z1'] == 25.
+    assert endurance_prep['q']['Z1'] == 15.
+    assert quality['q']['Z1'] == 30.
     rows['Z1'].update(planned=120., planned_q=120.)
-    assert headroom(rows, preparation=True, references=refs)['q']['Z1'] == 69.5
+    assert headroom(rows, primary='Z1', maintenance=True, references=refs)['q']['Z1'] == 5.
+    assert headroom(rows, preparation=True, preparation_q=30., references=refs)['q']['Z1'] == 30.
     rows['Z1'].update(actual=120., actual_q=120., planned=0., planned_q=0.)
-    assert headroom(rows, preparation=True, references=refs)['q']['Z1'] == 69.5
+    assert headroom(rows, preparation=True, preparation_q=30., references=refs)['q']['Z1'] == 30.

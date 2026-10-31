@@ -9,8 +9,24 @@ import math
 
 from .constants import COMPONENTS, DEFAULT_PARAMETERS
 
-VERSION = "planning-7-40-envelope-v1"
+VERSION = "planning-7-40-envelope-v2-exact-candidate"
 INDEX_CEILING = 2.
+
+
+def _index(window, extra):
+    e7, e40, e50 = [(s + extra) / n for s, n in zip(window["sums"], window["counts"])]
+    base = max(window["base"], .5 * e50)
+    return (base + e7) / max(base + e40, 1e-9)
+
+
+def permits(budget, extra):
+    """Check an exact candidate, independently of the Q search bound."""
+    if not math.isfinite(extra) or extra < 0:
+        return False
+    window = budget.get("index_window")
+    if window is None:
+        return extra <= budget["deficit_effective"] + .001
+    return _index(window, extra) <= INDEX_CEILING + 1e-12
 
 
 def headroom(rows, day, maximum_effective, *, parameters=DEFAULT_PARAMETERS):
@@ -40,16 +56,13 @@ def headroom(rows, day, maximum_effective, *, parameters=DEFAULT_PARAMETERS):
         daily.setdefault(upper, 0.)
         samples = [[v for d, v in daily.items() if d >= cutoff] for cutoff in cutoffs]
         sums, counts = [math.fsum(v) for v in samples], [len(v) for v in samples]
-        def index(extra):
-            e7, e40, e50 = [(s+extra)/n for s, n in zip(sums, counts)]
-            base = max(parameters["base_loads"][z], .5*e50)
-            return (base+e7)/max(base+e40, 1e-9)
+        window = {"sums": sums, "counts": counts, "base": parameters["base_loads"][z]}
         bound = float(maximum_effective[z])
         if not math.isfinite(bound):
             raise ValueError("7/40 search bound must be finite")
         bound = max(0., bound)
-        before = index(0.)
-        bound_fits = index(bound) <= INDEX_CEILING+1e-12
+        before = _index(window, 0.)
+        bound_fits = _index(window, bound) <= INDEX_CEILING+1e-12
         lo = 0.
         if before <= INDEX_CEILING+1e-12:
             if bound_fits:
@@ -58,11 +71,12 @@ def headroom(rows, day, maximum_effective, *, parameters=DEFAULT_PARAMETERS):
                 hi = bound
                 for _ in range(36):
                     mid = (lo+hi)/2
-                    if index(mid) <= INDEX_CEILING:
+                    if _index(window, mid) <= INDEX_CEILING:
                         lo = mid
                     else:
                         hi = mid
         result[z] = {"deficit_effective": math.floor(lo*1000)/1000,
+                     "index_window": window,
                      "index_7_40_before": round(before, 6), "index_7_40_limit": INDEX_CEILING,
                      "effective_limit_basis": "PROSPECTIVE_CANONICAL_7_40",
                      "index_limit_binding": not bound_fits or before > INDEX_CEILING}
