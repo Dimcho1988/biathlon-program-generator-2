@@ -2,6 +2,7 @@
 from copy import deepcopy
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -9,8 +10,9 @@ from fastapi.testclient import TestClient
 from apps.api import dependencies, management_lifecycle
 from apps.api.main import app
 from apps.api.management_plan_store import PlanStore
-from apps.api.oauth_store import PersistentStoreFailure
+from apps.api.oauth_store import PersistentStoreFailure, SupabasePilotRepository
 from apps.api.routes import management
+from tests.api.test_supabase_generation_rpc_contract import ENCRYPTION_KEY
 
 
 ACTOR = "11111111-1111-4111-8111-111111111111"
@@ -95,6 +97,33 @@ def test_compact_transport_failure_does_not_repeat_the_write_via_legacy_rpc():
     with pytest.raises(PersistentStoreFailure):
         PlanStore(repository).save("athlete", PAYLOAD, 7, ACTOR, "REVIEW", 2, {}, include_payload=False)
     assert calls == ["/rpc/save_onflows_management_plan_compact"]
+
+
+@pytest.mark.parametrize("include_payload", [True, False])
+@pytest.mark.parametrize("response_lost", [True, False])
+def test_publication_transport_outlives_sql_budget_without_retry_or_global_timeout_change(include_payload, response_lost):
+    requests = []
+    result = {**ACK, **({"payload": PAYLOAD} if include_payload else {})}
+    def handler(request):
+        requests.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json=[])
+        assert request.extensions["timeout"] == {"connect": 5., "read": 35., "write": 35., "pool": 35.}
+        if response_lost:
+            raise httpx.ReadTimeout("Publication outcome is unknown", request=request)
+        return httpx.Response(200, json=result)
+    with httpx.Client(transport=httpx.MockTransport(handler), timeout=httpx.Timeout(15., connect=5.)) as client:
+        repository = SupabasePilotRepository(supabase_url="https://plan-test.supabase.co",
+            secret_key="sb_secret_test-only", encryption_key=ENCRYPTION_KEY, client=client)
+        store = PlanStore(repository)
+        if response_lost:
+            with pytest.raises(PersistentStoreFailure):
+                store.save("athlete", PAYLOAD, 7, ACTOR, "REVIEW", 2, {}, include_payload=include_payload)
+        else:
+            assert store.save("athlete", PAYLOAD, 7, ACTOR, "REVIEW", 2, {}, include_payload=include_payload) == result
+        repository._request("GET", "/onflows_management_plan_state")
+    assert [request.method for request in requests] == ["POST", "GET"]
+    assert requests[-1].extensions["timeout"]["read"] == 15.
 
 
 @pytest.mark.parametrize("operation,route,body", [

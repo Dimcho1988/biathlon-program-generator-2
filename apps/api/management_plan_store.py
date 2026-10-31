@@ -3,6 +3,7 @@ from urllib.parse import quote
 from datetime import datetime
 from uuid import UUID, uuid4
 
+import httpx
 from fastapi import HTTPException
 from .oauth_store import HistoricalGenerationReferenceConflict, PersistentStoreFailure
 
@@ -154,7 +155,10 @@ class PlanStore:
                 "p_alias": alias, "p_payload": payload, "p_expected_revision": expected_revision,
                 "p_actor": str(actor), "p_operation": operation,
                 "p_expected_profile_revision": profile_revision, "p_checkpoint": checkpoint, "p_automatic": automatic,
-            })
+            # Whole-microcycle publication has a 30 s SQL budget. Allow its
+            # response to arrive before the transport gives up; never retry a
+            # write whose commit outcome could be unknown.
+            }, timeout=httpx.Timeout(35.0, connect=5.0))
         except HistoricalGenerationReferenceConflict as exc:
             raise HTTPException(409, "The plan or its inputs changed; reload and try again") from exc
         if not isinstance(result, dict):
