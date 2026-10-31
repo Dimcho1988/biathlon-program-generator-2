@@ -1,0 +1,944 @@
+// @vitest-environment jsdom
+import { act, type ReactNode } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { ManagementProfileEditor } from "../components/management-profile-editor";
+import { TrainingManagement } from "../components/training-management";
+import { ActiveTrainingPlan } from "../components/active-training-plan";
+import { PlanningProfileForm } from "../components/planning-profile-form";
+import { TrainingPlanReport } from "../components/training-plan-report";
+import { TrainingPlanSummary } from "../components/training-plan-summary";
+import { TimeAvailability, TimeLimitNotice } from "../components/planning-time-limit";
+import { RunningSpeedUnitControl, setRunningSpeedUnit } from "../components/running-speed-unit";
+import { changeActivePlan, newerActivePlan } from "../lib/active-plan-request";
+import type { ActivePlanResponse } from "../lib/training-management";
+import type { PlanningCalendarResponse } from "../lib/planning-calendar";
+import { defaultManagementProfile, defaultPlanningControls, parseManagementProfile, parseDraftRecord, COMPONENTS } from "../lib/training-management";
+import { planDates } from "../lib/plan-week-view";
+
+vi.mock("next/navigation", () => ({useRouter: () => ({refresh: vi.fn()})}));
+let root: Root, container: HTMLDivElement;
+beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+});
+afterEach(async () => {await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals();});
+const mount = async (ui: ReactNode) => {await act(async () => root.render(ui));};
+const button = (text: string) => [...container.querySelectorAll("button")].find(b => b.textContent === text)!;
+const click = async (element: HTMLElement) => {expect(element).toBeTruthy(); await act(async () => element.click());};
+const input = (label: string) => [...container.querySelectorAll("label")].find(l => l.textContent?.startsWith(label))!.querySelector("input")!;
+const select = (label: string) => [...container.querySelectorAll("label")].find(l => l.textContent?.startsWith(label))!.querySelector("select")!;
+async function enter(element: HTMLInputElement, value: string) {
+  await act(async () => {Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value")!.set!.call(element,value); element.dispatchEvent(new Event("input",{bubbles:true}));});
+}
+async function choose(element: HTMLSelectElement, value: string) {
+  await act(async () => {element.value=value; element.dispatchEvent(new Event("change",{bubbles:true}));});
+}
+
+it("defaults to today when the automatic race horizon ends today", async () => {
+  const today = "2026-09-21";
+  await mount(<TrainingManagement athleteName="Спортист" canEdit={true} today={today}
+    initialProfile={{ configured: true, revision: 1, profile: { ...defaultManagementProfile(today), discipline: "4000 m", horizon_mode: "AUTO_CALENDAR" } }}
+    initialDrafts={[]} initialOutlook={{ schema_version: "training-outlook-preview-v1", profile_revision: 1,
+      generated_at: today+"T09:00:00Z", volume_context: {}, long_term: { weeks: [] }, input_snapshot: { horizon: { effective_end: today } } }}/>
+  );
+  const start = container.querySelector<HTMLInputElement>('[aria-label="Начална дата на програмата"]')!;
+  expect(start.value).toBe(today); expect(start.min).toBe(today); expect(start.max).toBe(today);
+});
+
+it("preserves an existing past programme anchor while saving other settings", async () => {
+  const fetchMock = vi.fn(async (_url, init) => Response.json({ configured: true, revision: 2, profile: JSON.parse(init.body).profile }));
+  vi.stubGlobal("fetch", fetchMock);
+  const saved = { ...defaultManagementProfile("2026-09-19"), discipline: "4000 m" };
+  await mount(<ManagementProfileEditor today="2026-09-21" initialProfile={{ configured: true, revision: 1, profile: saved }}/>);
+  await enter(input("Дисциплина"), "5000 m"); await click(button("Запази промените"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).profile.program_start).toBe("2026-09-19");
+});
+const profile = {...defaultManagementProfile("2026-09-21"), discipline:"5000 m", age_years:30, training_experience_years:10};
+
+it("distinguishes continuous doses from expert interval budgets and applies readiness once", async () => {
+  const migrated = parseManagementProfile({ ...profile, building_fraction: .5 });
+  await mount(<ManagementProfileEditor initialProfile={{ configured: true, profile: migrated, revision: 1 }} today="2026-09-21"/>);
+  await click(button("4. Методи и дозиране"));
+  const dose = input("Други треньорски профили · изграждащ дял");
+  expect(container.textContent).toContain("65% от индивидуалното Tmax е фиксираният резервен вариант");
+  expect(dose.value).toBe("65");
+  expect(dose.min).toBe("60");
+  expect(dose.max).toBe("70");
+  expect(container.textContent).toContain("поддържащата работа е 65 × 60% = 39 минути");
+  expect(container.textContent).toContain("Recovery 80% тя е 65 × 90% = 58,5 минути");
+  expect(container.textContent).toContain("Изграждащата доза е 100% от този бюджет, поддържащата — 60%");
+  expect(container.textContent).toContain("Развиващата доза намалява с половината от дефицита на Recovery");
+  expect(container.textContent).toContain("Вработващата доза използва поддържащия бюджет");
+  expect(container.textContent).not.toContain("Доза при вработване, %");
+  expect(container.textContent).not.toContain("общият дял на профила е горна граница, а не начална доза");
+  expect(container.textContent).toContain("без да е задължително условие");
+  expect(container.textContent).not.toContain("Z5 изисква отделна скорошна максимална опора");
+  expect(container.textContent).not.toContain("Процентите за Z1–Z3 не се прилагат");
+});
+
+it("derives maintenance and reentry for other coach profiles without redefining the fixed continuous fallback", async () => {
+  const fetchMock=vi.fn(async (_url,init)=>Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile}));vi.stubGlobal("fetch",fetchMock);
+  await mount(<ManagementProfileEditor initialProfile={{configured:true,profile:{...profile,maintenance_fraction:.4,reentry_fraction:.5},revision:1}} today="2026-09-21"/>);
+  await click(button("4. Методи и дозиране"));
+  expect(input("Други треньорски профили · поддържащ дял").value).toBe("39");
+  expect(input("Други треньорски профили · поддържащ дял").readOnly).toBe(true);
+  await enter(input("Други треньорски профили · изграждащ дял"),"68");
+  expect(input("Други треньорски профили · поддържащ дял").value).toBe("40.8");
+  await click(button("Запази промените"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).profile).toMatchObject({building_fraction:.68,maintenance_fraction:.68*.6,reentry_fraction:.68*.6});
+});
+
+const intervalProfile={zone:"Z4" as const,sport:"Run" as const,continuous_capacity_min:4,assessed_on:"2026-09-21",effort:"Повторяемо индивидуално усилие",work_seconds:30,recovery_seconds:30,min_repetitions:3,max_repetitions:12,total_capacity_ratio:4.25,reserve_repetitions:2,target_speed_kmh:null};
+
+it("edits a work budget above 300 percent while preserving the separate curve coefficient and fallback", async () => {
+  const fetchMock=vi.fn(async (_url,init)=>Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile}));vi.stubGlobal("fetch",fetchMock);
+  await mount(<ManagementProfileEditor initialProfile={{configured:true,profile:{...profile,interval_profiles:[{...intervalProfile,speed_time_duration_ratio:2}]},revision:1}} today="2026-09-21"/>);
+  await click(button("4. Методи и дозиране"));
+  const budget=input("Изграждащ работен бюджет на метода");
+  expect(budget.max).toBe("");expect(budget.value).toBe("425");
+  expect(input("Коефициент за избор на скорост по кривата").value).toBe("2");
+  expect(container.textContent).toContain("30 × 2 = 60 секунди");
+  expect(input("Експертен Tmax при липса на използваема крива").value).toBe("4");
+  await enter(budget,"425.5");
+  await click(button("Запази промените"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).profile.interval_profiles).toEqual([{...intervalProfile,total_capacity_ratio:4.255,speed_time_duration_ratio:2}]);
+  expect(input("Коефициент за избор на скорост по кривата").value).toBe("2");
+});
+
+it("keeps legacy coefficients empty, validates a supplied coefficient and allows clearing it", async () => {
+  const fetchMock=vi.fn(async (_url,init)=>Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile}));vi.stubGlobal("fetch",fetchMock);
+  await mount(<ManagementProfileEditor initialProfile={{configured:true,profile:{...profile,interval_profiles:[intervalProfile]},revision:1}} today="2026-09-21"/>);
+  await click(button("4. Методи и дозиране"));
+  const coefficient=input("Коефициент за избор на скорост по кривата");
+  expect(coefficient.value).toBe("");
+  await click(button("Запази промените"));
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).profile.interval_profiles[0]).not.toHaveProperty("speed_time_duration_ratio");
+  await enter(coefficient,"1");
+  await click(button("Запази промените"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(container.textContent).toContain("Коефициентът за избор на скорост трябва да е число, по-голямо от 1");
+  await enter(coefficient,"2.5");
+  await click(button("Запази промените"));
+  expect(JSON.parse(fetchMock.mock.calls[1][1].body).profile.interval_profiles[0].speed_time_duration_ratio).toBe(2.5);
+  await enter(coefficient,"");
+  await click(button("Запази промените"));
+  expect(JSON.parse(fetchMock.mock.calls[2][1].body).profile.interval_profiles[0].speed_time_duration_ratio).toBeNull();
+});
+
+it("saves explicit learning controls without resetting the planning profile", async () => {
+  const fetchMock = vi.fn(async (_url, init) => Response.json({ configured: true, revision: 2, profile: JSON.parse(init.body).profile }));
+  vi.stubGlobal("fetch", fetchMock);
+  const savedProfile = { ...profile, available_minutes: [75, 90, 0, 60, 100, 120, 80], building_fraction: .7 };
+  await mount(<ManagementProfileEditor initialProfile={{ configured: true, profile: savedProfile, revision: 1 }} today="2026-09-21"/>);
+  await click(button("3. Мезоцикли и акценти"));
+  expect(select("Режим на самообучение").value).toBe("SHADOW");
+  await choose(select("Режим на самообучение"), "CONTROL");
+  await enter(input("Максимална стъпка на обема"), "4");
+  await enter(input("Максимална стъпка в зоната"), "1.5");
+  const exploration = [...container.querySelectorAll("label")].find(label => label.textContent?.includes("Допускай малки пробни промени"))!.querySelector("input")!;
+  await click(exploration);
+  await click(button("Запази промените"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const result = JSON.parse(fetchMock.mock.calls[0][1].body).profile;
+  expect(result.individual_learning).toEqual({ mode: "CONTROL", exploration_enabled: false, max_volume_step_percent: 4, max_intensity_step: .015 });
+  expect(result.available_minutes).toEqual(savedProfile.available_minutes);
+  expect(result.building_fraction).toBe(.7);
+  expect(result.load_progression).toEqual(savedProfile.load_progression);
+});
+
+it("shows component shortfalls separately from session counts and elapsed duration", async () => {
+  const draft=parseDraftRecord({entry_key:"test",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v6",status:"DRAFT",start_date:"2026-09-23",end_date:"2026-09-29",days:[],source:{},parameters:{},warnings:[],summary:{planned_minutes:0}}});
+  await mount(<TrainingPlanSummary plan={{...draft.payload,allocation:{window_start:"2026-09-23",window_end:"2026-09-29",scheduled_slots:9,weekly_session_limit:13,components:{Z1:{target_effective:700,actual_effective:100,planned_effective:400,unallocated_effective:200}},constraints:[{code:"THRESHOLD_DAY_RESERVED",reason:"Този ден е избран за прагова работа."}],dose_limits:["METHOD_CAPACITY_FRACTION"]}}}/>);
+  expect(container.textContent).toContain("Остава непланиран товар: Z1");
+  expect(container.textContent).toContain("0 предложени сесии от 9 възможни по дните");
+  expect(container.textContent).toContain("Седмичен максимум в профила: 13");
+  expect(container.textContent).toContain("Приравнен обем от предложените сесии");
+  expect(container.textContent).not.toContain("700100400200");
+  expect(container.textContent).toContain("0:00:00");
+});
+
+it("shows the full current microcycle including past completed days and labels the next partial one", async () => {
+  const draft=parseDraftRecord({entry_key:"test",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v32",status:"DRAFT",start_date:"2026-10-09",end_date:"2026-10-15",days:[],source:{},parameters:{},warnings:[],summary:{planned_minutes:463,volume_by_microcycle:[
+    {start_date:"2026-10-06",end_date:"2026-10-12",through_date:"2026-10-12",complete_microcycle:true,actual_minutes:545,planned_minutes:302,total_minutes:847},
+    {start_date:"2026-10-13",end_date:"2026-10-19",through_date:"2026-10-15",complete_microcycle:false,actual_minutes:0,planned_minutes:161,total_minutes:161}]}}});
+  await mount(<TrainingPlanSummary plan={draft.payload}/>);
+  expect(container.textContent).toContain("14:07:00");
+  expect(container.textContent).toContain("9:05:00 изпълнено + 5:02:00 предложено");
+  expect(container.textContent).toContain("непълен микроцикъл");
+});
+
+it("saves 16 sessions and double-threshold preferences directly from step two", async () => {
+  const fetchMock = vi.fn(async (_url, init) => Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile})); vi.stubGlobal("fetch",fetchMock);
+  const legacyProfile = {...profile, planning_controls:{...defaultPlanningControls(profile.actual_sport),mixed_min_readiness:75}};
+  await mount(<ManagementProfileEditor initialProfile={{configured:true,profile:legacyProfile,revision:1}} today="2026-09-21"/>);
+  await click(button("2. Дни и обем"));
+  const count=input("Максимум сесии за 7 дни"); expect(count.max).toBe("21");
+  await enter(count,"16");
+  await choose(select("Вид прагова тренировка"),"INTERVALS");
+  const double=[...container.querySelectorAll("details")].find(d=>d.querySelector("summary")?.textContent==="Двоен праг · по желание")!;
+  await click(double.querySelector<HTMLInputElement>('input[type="checkbox"]')!);
+  await enter(input("Дял от Tmax за всяка прагова сесия"), "55");
+  await enter(input("Пауза между праговите сесии"), "7");
+  await enter(input("Лактатен горен ориентир"), "3.2");
+  expect(container.textContent).not.toContain("Минимална готовност за допълващия компонент");
+  expect(container.textContent).toContain("65% × 60% = 39% от Tmax");
+  await click(button("Запази промените"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const saved=JSON.parse(fetchMock.mock.calls[0][1].body).profile;
+  expect(saved.planning_controls.sessions_per_week).toBe(16);
+  expect(saved.planning_controls.double_threshold_days).toEqual([0]);
+  expect(saved.planning_controls.threshold_method).toBe("INTERVALS");
+  expect(saved.planning_controls.double_threshold_fraction).toBe(.55);
+  expect(saved.planning_controls.double_threshold_gap_hours).toBe(7);
+  expect(saved.planning_controls.double_threshold_lactate_ceiling).toBe(3.2);
+  expect(saved.planning_controls.mixed_min_readiness).toBe(75);
+  expect(container.textContent).toContain("Профилът е запазен");
+});
+
+it("preserves a manual horizon and saves it without visiting all steps", async () => {
+  const fetchMock = vi.fn(async (_url, init) => Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile}));vi.stubGlobal("fetch",fetchMock);
+  await mount(<ManagementProfileEditor initialProfile={{configured:true,profile,revision:1}} today="2026-09-21"/>);
+  await choose(select("Край на подготовката"),"MANUAL");
+  await enter(input("Край · задължително"),"2027-02-12");
+  await click(button("Запази промените"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const saved=JSON.parse(fetchMock.mock.calls[0][1].body).profile;
+  expect(saved.horizon_mode).toBe("MANUAL");expect(saved.program_end).toBe("2027-02-12");
+});
+
+it("keeps the current step and save confirmation after the server refreshes its revision", async () => {
+  const fetchMock=vi.fn(async (_url,init)=>Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile}));vi.stubGlobal("fetch",fetchMock);
+  const calendar:PlanningCalendarResponse={configured:false,calendar:null,context:{schema_version:"planning-context-v1",as_of:"2026-09-21",ready_for_generation:false,generator_status:"NOT_ACTIVE",missing_inputs:[],next_main_race:null,methodology_version:"onflows-canonical-v1",recovery_basis:"LOAD_ONLY",wellness_integration:"DIAGNOSTIC_ONLY"}};
+  const renderForm=(revision:number,p=profile,athleteAlias="athlete-a")=><PlanningProfileForm athleteAlias={athleteAlias} profile={null} managementProfile={{configured:true,profile:p,revision}} planningCalendar={calendar}/>;
+  await mount(renderForm(1));
+  await click(button("4. Методи и дозиране"));
+  await enter(input("Максимум възстановителна работа, мин"),"25");
+  await click(button("Запази промените"));
+  const saved=JSON.parse(fetchMock.mock.calls[0][1].body).profile;
+  await mount(renderForm(2,saved));
+  expect(container.textContent).toContain("стъпка 4 от 4");
+  expect(container.textContent).toContain("Профилът е запазен");
+  expect(button("Запазено").disabled).toBe(true);
+  expect(input("Максимум възстановителна работа, мин").value).toBe("25");
+  await mount(renderForm(3,{...saved,recovery_session_cap_min:20}));
+  expect(input("Максимум възстановителна работа, мин").value).toBe("20");
+  await enter(input("Максимум възстановителна работа, мин"),"22");
+  await mount(renderForm(4,{...saved,recovery_session_cap_min:15}));
+  expect(input("Максимум възстановителна работа, мин").value).toBe("22");
+  await mount(renderForm(1,profile,"athlete-b"));
+  expect(container.textContent).toContain("стъпка 1 от 4");
+  expect(container.textContent).not.toContain("Профилът е запазен");
+});
+
+it("explains the actual daily session limit and restores automatic goals only after explicit editing and saving", async () => {
+  const fetchMock=vi.fn(async (_url,init)=>Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile}));vi.stubGlobal("fetch",fetchMock);
+  const p={...profile,component_targets_weekly:{Z1:5},planning_controls:{...defaultPlanningControls(profile.actual_sport),sessions_per_week:13,sessions_by_day:[2,2,1,1,2,1,0]}};
+  await mount(<ManagementProfileEditor initialProfile={{configured:true,profile:p,revision:1}} today="2026-09-21"/>);
+  expect(container.textContent).toContain("Z1: 0:05:00 приравнено време / 7 дни");
+  await click(button("2. Дни и обем"));
+  expect(container.textContent).toContain("ограниченията по дни позволяват само 9");
+  await click(button("Използвай автоматичните цели"));
+  expect(fetchMock).not.toHaveBeenCalled();
+  await click(button("Запази промените"));
+  const saved=JSON.parse(fetchMock.mock.calls[0][1].body).profile;
+  expect(saved.component_targets_weekly).toEqual({});
+  expect(saved.planning_controls.sessions_by_day).toEqual(p.planning_controls.sessions_by_day);
+  expect(saved.planning_controls.sessions_per_week).toBe(13);
+});
+
+const vector=Object.fromEntries(COMPONENTS.map(z=>[z,95]));
+const session=(title:string,minutes:number)=>({title,method_id:title,sport:"Run",zone:"Z1",purpose:"MAINTENANCE",main_work_minutes:minutes,total_minutes:minutes,canonical_effective_load:vector,direct_equivalent_minutes:vector,
+  blocks:[{kind:"WORK",label:title,zone:"Z1",duration_min:minutes,target_hr_bpm:null,target_speed_kmh:null,repetition:null,instructions:"Леко и равномерно."}],
+  dose_evidence:{capacity_source:"EXPERT_CONTINUOUS_TREF",capacity_minutes:120,target_hr_bpm:null,target_speed_kmh:null,fraction:.3,requested_work_minutes:minutes,prescribed_work_minutes:minutes,limits:[],fallback_reasons:[],model_version:"v5",explanation:"Общ дневен бюджет.",technical_spill_reference:vector}});
+const draft=parseDraftRecord({entry_key:"2026-09-22",revision:1,stale:true,payload:{schema_version:"planning-draft-v1",engine_version:"v5",status:"DRAFT",start_date:"2026-09-22",end_date:"2026-09-28",source:{},warnings:[],summary:{planned_minutes:75},
+  days:[{date:"2026-09-22",status:"TRAINING",period:"GENERAL_PREPARATION",taper:false,explanation:"Две сесии с общ бюджет.",session:session("Сутрешна работа",45),sessions:[session("Сутрешна работа",45),session("Следобедна работа",30)],readiness_before:vector,readiness_after:vector,rejected_alternatives:[],load_budget:{remaining_weekly_minutes:null,components:Object.fromEntries(COMPONENTS.map(z=>[z,{e7_daily:0,e40_daily:1,index_7_40:1,target_weekly_effective:100,rolling_7d_effective:0,deficit_effective:100}]))}}]}});
+
+it("shows a restrictive manual goal outside the collapsed explanations, including frozen v5 plans",async()=>{
+  await mount(<TrainingPlanSummary plan={{...draft.payload,input_snapshot:{management_profile:{component_targets_weekly:{Z1:5}}}}}/>);
+  const warning=container.querySelector<HTMLElement>('aside[role="status"]')!;
+  expect(warning.textContent).toContain("Z1: 0:05:00 приравнено време / 7 дни");
+  expect(warning.closest("details")).toBeNull();
+  expect(warning.querySelector("a")?.getAttribute("href")).toBe("/planning");
+});
+
+it("automatically replaces a stale draft and displays every session and their total", async () => {
+  const fetchMock=vi.fn<(url:string,init?:RequestInit)=>Promise<Response>>(async (url)=>Response.json(url.includes("drafts?")?{drafts:[draft]}:{...draft,revision:2,stale:false}));vi.stubGlobal("fetch",fetchMock);
+  await mount(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:2}} initialDrafts={[draft]} today="2026-09-21"/>);
+  await vi.waitFor(()=>expect(fetchMock).toHaveBeenCalledTimes(2));
+  expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body??"{}"))).toMatchObject({expected_profile_revision:2,expected_draft_revision:1});
+  expect(container.textContent).toContain("Следобедна работа");
+  expect(container.textContent).toContain("2 сесии");
+  expect(container.textContent).toContain("1:15:00");
+  expect(container.textContent).not.toContain("Запазени програми");
+  expect(container.textContent).not.toContain("Предишен проект");
+});
+
+it("previews race duration without saving and drops the preview when discipline changes", async()=>{
+  const fetchMock=vi.fn<(url: string, init: RequestInit) => Promise<Response>>(async ()=>Response.json({source:"SPEED_DURATION",duration_min:4.5}));vi.stubGlobal("fetch",fetchMock);
+  await mount(<ManagementProfileEditor initialProfile={{configured:true,profile,revision:1}} today="2026-09-21"/>);
+  await click(button("Провери приблизителното време"));
+  expect(fetchMock.mock.calls[0][0]).toBe("/api/athlete/management/race-duration");
+  expect(container.textContent).toContain("около 0:04:30");
+  expect(input("Продължителност на старта").value).toBe("");
+  await enter(input("Дисциплина"),"10 km");
+  expect(container.textContent).not.toContain("около 0:04:30");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+it("labels one hour as a total ceiling, preserves it on save and clears it only by explicit choice", async()=>{
+  const fetchMock=vi.fn(async (_url,init)=>Response.json({configured:true,revision:2,profile:JSON.parse(init.body).profile}));vi.stubGlobal("fetch",fetchMock);
+  const p={...profile,planning_controls:{...defaultPlanningControls(profile.actual_sport),weekly_target_hours:1}};
+  await mount(<ManagementProfileEditor initialProfile={{configured:true,profile:p,revision:1}} today="2026-09-21"/>);
+  await click(button("2. Дни и обем"));
+  expect(input("Максимум общо време за 7 дни").value).toBe("1");
+  expect(container.textContent).toContain("Стойност 1 означава максимум 1 час общо, не добавяне на 1 час");
+  await click(button("Премахни седмичния таван"));
+  expect(input("Максимум общо време за 7 дни").value).toBe("");
+  expect(fetchMock).not.toHaveBeenCalled();
+  await click(button("Запази промените"));
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).profile.planning_controls.weekly_target_hours).toBeNull();
+});
+
+it("shows a one-hour cap in automatic mode and explains actual time consuming it",async()=>{
+  const parameters={availability_mode:"AUTO_HISTORY",planning_controls:{weekly_target_hours:1},time_budget:{start_date:"2026-09-21",end_date:"2026-09-27",period_limit_minutes:60,actual_minutes:75,planned_minutes:0,remaining_minutes:0,actual_excess_minutes:15}};
+  await mount(<TrainingPlanSummary plan={{...draft.payload,days:[],summary:{planned_minutes:0},parameters}}/>);
+  expect(container.textContent).toContain("Лимит за време1:00:00максимум общо за 7 дни");
+  expect(container.textContent).not.toContain("Автоматично");
+  expect(container.textContent).toContain("изпълнено 1:15:00; предложено 0:00:00; оставащо време 0:00:00");
+  expect(container.textContent).toContain("Изпълненото вече надхвърля лимита");
+});
+
+it("shows the tighter time constraint and keeps long-term estimates distinct",async()=>{
+  const context={availability_mode:"MANUAL",weekly_time_limit_minutes:600,available_weekly_minutes:210};
+  await mount(<><TimeAvailability context={context}/><TimeLimitNotice context={context} forecast/></>);
+  expect(container.textContent).toContain("Лимит за време3:30:00");
+  expect(container.textContent).toContain("Записан седмичен таван: 10:00:00");
+  expect(container.textContent).toContain("еквивалент на компонентните цели преди ограниченията за време");
+});
+
+const activeResponse=(revision:number,stale=false):ActivePlanResponse=>({active:{revision,stale,actionable:false,payload:{schema_version:"active-plan-v2",status:"REVIEW_REQUIRED",mode:"AUTO",reason:"За преглед",plan:draft.payload,proposal:{...draft.payload,activation_eligible:true},changes:[],outcomes:[],decisions:{}}},history:[]});
+
+it.each(["AUTO", "REVIEW"] as const)("hides the draft-only warning for an approved %s plan and preserves its stored evidence", async mode => {
+  const value = activeResponse(31);
+  const warnings = [
+    { code: "DRAFT_REQUIRES_COACH_REVIEW", message: "Проект за треньорски преглед; не е активирана програма." },
+    { code: "ESTIMATED_LOAD_HISTORY", message: "Товарът за планиране включва оценка." },
+  ];
+  Object.assign(value.active!.payload, { status: "ACTIVE", mode, proposal: null,
+    plan: { ...value.active!.payload.plan, warnings } });
+  const before = JSON.stringify(value);
+  await mount(<ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>);
+  expect(container.textContent).toContain("Активна програма");
+  expect(container.textContent).not.toContain("не е активирана програма");
+  expect(container.textContent).toContain("Товарът за планиране включва оценка");
+  expect(JSON.stringify(value)).toBe(before);
+});
+
+it("retains the review warning while a proposal still awaits approval", async () => {
+  const value = activeResponse(32);
+  value.active!.payload.proposal = { ...value.active!.payload.proposal!, warnings: [
+    { code: "DRAFT_REQUIRES_COACH_REVIEW", message: "Проект за треньорски преглед; не е активирана програма." },
+  ] };
+  await mount(<ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>);
+  expect(container.textContent).toContain("Проект за треньорски преглед; не е активирана програма");
+  expect(button("Прегледай")).toBeTruthy();
+});
+
+const unchangedReceipt = { operation: "CHECK_NO_CHANGE" as const, check_id: "f7dfdc52-69a8-4a01-890d-36bfe2fb00b7", checked_revision: 6, recorded_at: "2026-10-19T09:42:13Z" };
+it.each([6, 7])("opts in only a supported manual refresh and reports the checked version against current version %s", async currentRevision => {
+  const initial = { ...activeResponse(6), capabilities: { unchanged_checks: true } };
+  const result = { ...activeResponse(currentRevision), capabilities: { unchanged_checks: true }, action_result: unchangedReceipt };
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json(result)); vi.stubGlobal("fetch", fetchMock);
+  const receive = vi.fn();
+  await mount(<ActiveTrainingPlan value={initial} onChange={receive} canEdit today="2026-09-21" renderDay={day => <p>{day.date}</p>}/>);
+  expect(fetchMock).not.toHaveBeenCalled();
+  await click(button("Обнови сега"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ action: "REFRESH", expected_revision: 6, record_unchanged_check: true });
+  expect(receive).toHaveBeenCalledWith({ ...activeResponse(currentRevision), capabilities: { unchanged_checks: true } });
+  expect(receive.mock.calls[0][0]).not.toHaveProperty("action_result");
+  expect(container.textContent).toContain(currentRevision === 6 ? "Проверката приключи. Утвърденият график остава без промяна; предложението още чака преглед и утвърждаване." : "Проверката на версия 6 приключи без промяна. Показана е текущата версия 7.");
+  expect(container.textContent).toContain("Предложението още не е приложено.");
+  expect(container.textContent).toContain("Проверки без промяна");
+  expect(container.querySelector("details:last-child")?.hasAttribute("open")).toBe(false);
+});
+
+it("keeps old API refresh bodies unchanged and does not infer an unchanged check from equal revisions", async () => {
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json(activeResponse(6))); vi.stubGlobal("fetch", fetchMock);
+  await mount(<ActiveTrainingPlan value={activeResponse(6)} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>);
+  await click(button("Обнови сега"));
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ action: "REFRESH", expected_revision: 6 });
+  expect(container.textContent).not.toContain("Проверката приключи");
+  expect(container.textContent).not.toContain("Проверки без промяна");
+});
+
+it("requires the explicit check receipt even when the capability is supported and the revision is equal", async () => {
+  const initial = { ...activeResponse(6), capabilities: { unchanged_checks: true } };
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json(initial)); vi.stubGlobal("fetch", fetchMock);
+  await mount(<ActiveTrainingPlan value={initial} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>);
+  await click(button("Обнови сега"));
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toMatchObject({ record_unchanged_check: true });
+  expect(container.textContent).not.toContain("Проверката приключи");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+it("does not describe the currently displayed newer revision as unchanged when a check response arrives late", async () => {
+  let resolve!: (response: Response) => void;
+  const fetchMock = vi.fn<typeof fetch>(() => new Promise(done => { resolve = done; })); vi.stubGlobal("fetch", fetchMock);
+  const render = (revision: number) => <ActiveTrainingPlan value={{ ...activeResponse(revision), capabilities: { unchanged_checks: true } }} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>;
+  await mount(render(6));
+  await click(button("Обнови сега"));
+  await mount(render(7));
+  await act(async () => resolve(Response.json({ ...activeResponse(6), capabilities: { unchanged_checks: true }, action_result: unchangedReceipt })));
+  expect(container.textContent).toContain("Текущ план · версия 7");
+  expect(container.textContent).toContain("Проверката на версия 6 приключи без промяна. Показана е текущата версия 7.");
+  expect(container.textContent).not.toContain("Проверката приключи. Програмата остава без промяна.");
+});
+
+it.each([
+  ["Пауза", "REVIEW_REQUIRED", "PAUSE"],
+  ["Продължи с текущите настройки", "PAUSED", "RESUME"],
+  ["Утвърди предложението", "REVIEW_REQUIRED", "APPROVE"],
+] as const)("never opts %s into a check event", async (label, status, action) => {
+  const initial = { ...activeResponse(6), capabilities: { unchanged_checks: true } };
+  initial.active!.payload.status = status;
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json(initial)); vi.stubGlobal("fetch", fetchMock);
+  await mount(<ActiveTrainingPlan value={initial} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>);
+  if (action === "APPROVE") await click(button("Прегледай"));
+  await click(button(label));
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ action, expected_revision: 6 });
+});
+
+it("keeps day decisions on the full plan revision without check opt-in", async () => {
+  const initial = { ...activeResponse(6), capabilities: { unchanged_checks: true } };
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json(initial)); vi.stubGlobal("fetch", fetchMock);
+  await mount(<ActiveTrainingPlan value={initial} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>);
+  const rest = [...container.querySelectorAll("button")].find(node => node.textContent?.startsWith("Почивка на "))!;
+  await click(rest);
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ date: "2026-09-22", action: "REST", note: "", expected_revision: 6 });
+});
+
+it("never replays a check refresh after conflict or labels the reloaded plan unchanged", async () => {
+  const initial = { ...activeResponse(6), capabilities: { unchanged_checks: true } };
+  const fetchMock = vi.fn(async (_url, init) => init?.method === "POST" ? Response.json({}, { status: 409 }) : Response.json({ ...activeResponse(7), capabilities: { unchanged_checks: true } }));
+  vi.stubGlobal("fetch", fetchMock);
+  await mount(<ActiveTrainingPlan value={initial} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={() => null}/>);
+  await click(button("Обнови сега"));
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  expect(container.textContent).toContain("Заредена е последната версия");
+  expect(container.textContent).not.toContain("Проверката приключи");
+});
+
+it("disables manual actions during automatic refresh and loads a concurrent newer version without replaying",async()=>{
+  let resolvePost!:(response:Response)=>void;
+  const fetchMock=vi.fn<(url:string,init?:RequestInit)=>Promise<Response>>((url)=>url.endsWith("/active")?Promise.resolve(Response.json(activeResponse(4))):new Promise(resolve=>{resolvePost=resolve;}));vi.stubGlobal("fetch",fetchMock);
+  await mount(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:2}} initialDrafts={[]} initialActive={{...activeResponse(3,true),capabilities:{unchanged_checks:true}}} today="2026-09-21"/>);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ action: "REFRESH", expected_revision: 3 });
+  expect(button("Обновяване…").disabled).toBe(true);
+  expect(button("Пауза").disabled).toBe(true);
+  await click(button("Прегледай"));
+  expect(button("Утвърди предложението").disabled).toBe(true);
+  await click(button("Обновяване…"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  await act(async()=>resolvePost(Response.json({error:"Conflict"},{status:409})));
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(container.textContent).toContain("Текущ план · версия 4");
+  expect(container.textContent).toContain("Заредена е последната версия");
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(button("Утвърди предложението")).toBeUndefined();
+  await click(button("Прегледай"));
+  expect(button("Утвърди предложението").disabled).toBe(false);
+});
+
+it("never automatically retries an approval after conflict or replaces a newer response with an older poll",async()=>{
+  const fetchMock=vi.fn<(url:string,init?:RequestInit)=>Promise<Response>>(async (_url,init)=>init?.method==="POST"?Response.json({error:"Conflict"},{status:409}):Response.json(activeResponse(8)));vi.stubGlobal("fetch",fetchMock);
+  const result=await changeActivePlan("action",{action:"APPROVE",expected_revision:7});
+  expect(result.conflict).toBe(true);
+  expect(result.value.active?.revision).toBe(8);
+  expect(fetchMock.mock.calls.filter(([,init])=>init?.method==="POST")).toHaveLength(1);
+  expect(newerActivePlan(result.value,activeResponse(7)).active?.revision).toBe(8);
+});
+
+
+it("compares direct period volume with actual plus planned without counting cascade as coverage", async () => {
+  const draft=parseDraftRecord({entry_key:"test",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v17",status:"DRAFT",start_date:"2026-09-23",end_date:"2026-09-29",days:[],source:{},parameters:{},warnings:[],summary:{planned_minutes:0}}});
+  await mount(<TrainingPlanSummary plan={{...draft.payload,allocation:{scheduled_slots:7,weekly_session_limit:7,components:{Z1:{basis:"DIRECT_Q",target:120,actual:20,planned:70,remaining:30,target_effective:500,actual_effective:100,planned_effective:400,unallocated_effective:0}},constraints:[],dose_limits:[]}}}/>);
+  expect(container.textContent).toContain("Остава непланиран товар: Z1");
+  const table=[...container.querySelectorAll("table")].find(t=>t.querySelector("caption")?.textContent?.startsWith("Покритие на целите за периода"))!;
+  expect(table.textContent).toContain("Изпълнено");
+  expect(table.textContent).toContain("Приравнен обем");
+  expect(table.textContent).toContain("2:00:00");
+  expect(table.textContent).toContain("0:30:00");
+  expect(table.textContent).toContain("75.0%");
+});
+
+it("keeps separate microcycle shortfalls visible when the whole-period totals cancel", async () => {
+  const draft=parseDraftRecord({entry_key:"segments",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v30",status:"DRAFT",start_date:"2026-09-23",end_date:"2026-09-29",days:[],source:{},parameters:{volume_governor:"COMPONENT_7_40"},warnings:[],summary:{planned_minutes:0}}});
+  await mount(<TrainingPlanSummary plan={{...draft.payload,allocation:{
+    status:"LONG_TERM_SEGMENT_OBJECTIVES_WITH_PHYSIOLOGICAL_GATES",scheduled_slots:7,weekly_session_limit:7,
+    components:{Z1:{basis:"DIRECT_Q",target:120,actual:100,planned:20,remaining:0,target_effective:600,actual_effective:500,planned_effective:100,unallocated_effective:0}},
+    segments:[
+      {window_start:"2026-09-23",window_end:"2026-09-25",days:3,components:{Z1:{basis:"DIRECT_Q",target:60,actual:0,planned:20,remaining:40,target_effective:300,actual_effective:0,planned_effective:100,remaining_effective:200}}},
+      {window_start:"2026-09-26",window_end:"2026-09-29",days:4,components:{Z1:{basis:"DIRECT_Q",target:60,actual:100,planned:0,remaining:0,target_effective:300,actual_effective:500,planned_effective:0,remaining_effective:0,actual_exceeds_target:true,actual_effective_exceeds_target:true}}},
+    ],constraints:[],dose_limits:["ROLLING_Q_AND_7_40_BUDGET"],
+  }}}/>);
+  expect(container.textContent).toContain("Цели на дългосрочната програма");
+  expect(container.textContent).toContain("Остава непланиран товар: Z1");
+  const tables=[...container.querySelectorAll("table")].filter(t=>t.querySelector("caption")?.textContent?.startsWith("Дългосрочна цел"));
+  expect(tables).toHaveLength(2);
+  expect(tables[0].querySelector("caption")?.textContent).toContain("23.09.2026 г. – 25.09.2026 г.");
+  expect(tables[1].querySelector("caption")?.textContent).toContain("26.09.2026 г. – 29.09.2026 г.");
+  const firstCells=[...tables[0].querySelectorAll("tbody td")].map(cell=>cell.textContent);
+  expect(firstCells[4]).toBe("0:40:00");
+  expect(firstCells[6]).toBe("3:20:00");
+  expect(tables[1].textContent).toContain("Изпълненото е над целта");
+  expect(container.textContent).toContain("Остатъкът не се прехвърля между микроцикли");
+  expect(container.textContent).not.toContain("LONG_TERM_SEGMENT_OBJECTIVES_WITH_PHYSIOLOGICAL_GATES");
+  expect(container.textContent).not.toContain("ROLLING_Q_AND_7_40_BUDGET");
+  expect(container.textContent).not.toContain("ограничението по 7/40");
+});
+
+it("reports the deficient strength cycle even when another cycle exceeds its target", async () => {
+  await mount(<TrainingPlanSummary plan={{...draft.payload,days:[],allocation:{components:{},constraints:[],dose_limits:[],
+    strength_feasibility:{desired_q:200,attainable_upper_bound_q:220,session_quota:4,quota_bound_below_target:true,
+      segments:[
+        {window_start:"2026-09-08",window_end:"2026-09-14",desired_q:100,attainable_upper_bound_q:160,session_quota:2,quota_bound_below_target:false},
+        {window_start:"2026-09-15",window_end:"2026-09-21",desired_q:100,attainable_upper_bound_q:60,session_quota:2,quota_bound_below_target:true},
+      ]}}}}/>);
+  expect(container.textContent).toContain("Силовата цел за 15.09.2026 г. – 21.09.2026 г.");
+  expect(container.textContent).toContain("лимит от 2 сесии");
+  expect(container.textContent).toContain("Горна граница за прекия силов товар: 1:00:00; желана цел: 1:40:00");
+  expect(container.textContent).not.toContain("Силовата цел за 8.09.2026");
+});
+
+it("keeps the strength explanation available for older saved reports", async () => {
+  await mount(<TrainingPlanSummary plan={{...draft.payload,days:[],allocation:{components:{},constraints:[],dose_limits:[],
+    strength_feasibility:{desired_q:100,attainable_upper_bound_q:60,session_quota:2,quota_bound_below_target:true}}}}/>);
+  expect(container.textContent).toContain("Горна граница за прекия силов товар: 1:00:00; желана цел: 1:40:00");
+});
+
+it("does not imply that alternative schedules were tested when no replay ran", async () => {
+  await mount(<TrainingPlanSummary plan={{...draft.payload,days:[],allocation:{components:{},constraints:[],dose_limits:[],
+    search:{conclusion:"SEARCH_BUDGET_EXHAUSTED",alternatives:0,improved:false,hard_limit_proven:false}}}}/>);
+  expect(container.textContent).toContain("не е проверено алтернативно разпределение");
+  expect(container.textContent).not.toContain("след проверените варианти");
+});
+
+it("distinguishes the visible week from the complete-cycle forecast and validates the tail", async () => {
+  const readiness=Object.fromEntries(COMPONENTS.map(z=>[z,100]));
+  const record={entry_key:"whole",revision:1,payload:{schema_version:"planning-draft-v1",engine_version:"v48",status:"DRAFT",start_date:"2026-10-17",end_date:"2026-10-23",days:[],source:{},parameters:{volume_governor:"COMPONENT_7_40"},warnings:[],summary:{planned_minutes:0},
+    lookahead_days:[{date:"2026-10-24",provisional:true,status:"REST",period:"GENERAL_PREPARATION",taper:false,session:null,sessions:[],explanation:"Почивка",readiness_before:readiness,readiness_after:readiness,load_budget:{components:{}},rejected_alternatives:[]}],
+    allocation:{scope:"WHOLE_MICROCYCLES",lookahead_end:"2026-10-26",components:{},constraints:[],dose_limits:[],segments:[{window_start:"2026-10-20",window_end:"2026-10-26",days:7,components:{Z5:{basis:"DIRECT_Q",target:9,actual:0,planned:8,remaining:1}}}]}}};
+  const draft=parseDraftRecord(record);
+  await mount(<TrainingPlanSummary plan={draft.payload}/>);
+  expect(container.textContent).toContain("Цел за микроцикъла");
+  expect(container.textContent).toContain("План и прогнозно продължение");
+  expect(container.textContent).toContain("Прогнозно продължение до 26.10.2026 г.");
+  expect(container.textContent).toContain("преразглеждат при следващото обновяване");
+  expect(container.textContent).not.toContain("непълната седмица получава съответния дял");
+  expect(draft.payload.days).toHaveLength(0);
+  expect(()=>parseDraftRecord({...record,payload:{...record.payload,lookahead_days:[{...record.payload.lookahead_days[0],date:"2026-10-23"}]}})).toThrow();
+  expect(()=>parseDraftRecord({...record,payload:{...record.payload,lookahead_days:[{...record.payload.lookahead_days[0],provisional:false}]}})).toThrow();
+});
+
+it("keeps the approved week alone until review and only renders detailed comparisons on demand", async () => {
+  const response = activeResponse(12);
+  const p = response.active!.payload;
+  p.mode = "REVIEW";
+  p.week_window = { start_date: "2026-09-22", end_date: "2026-09-28" };
+  p.plan = { ...draft.payload, days: draft.payload.days.map(d => ({ ...d, explanation: "Първоначално утвърдена задача" })) };
+  p.proposal = { ...draft.payload, activation_eligible: true, days: draft.payload.days.map(d => ({ ...d, explanation: "Предложена корекция след допълнителен товар" })) };
+  p.proposal_mode = "AUTO";
+  p.changes = [{ date: "2026-09-22", before: "Две сесии", after: "Коригирани сесии", before_minutes: 75, after_minutes: 60, reason: "Допълнителен товар" }];
+  p.monitoring = { evaluated_on: "2026-09-22", history_comparison: [], days: [{ date: "2026-09-22", status: "REVIEW_REQUIRED", reason: "Променено възстановяване" }] };
+  const renderDay = vi.fn((d: typeof draft.payload.days[number]) => <p>{d.explanation}</p>);
+  await mount(<ActiveTrainingPlan value={response} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={renderDay}/>);
+  const text = container.textContent!;
+  expect(text).toContain("Фиксирана седмица");
+  expect(text).toContain("2026-09-22 – 2026-09-28");
+  expect(text).toContain("Нужен е преглед на запазената задача");
+  expect(text).toContain("Предложена смяна към адаптивна седмица");
+  expect(text).toContain("Първоначално утвърдена задача");
+  expect(text).not.toContain("Предложена корекция след допълнителен товар");
+  expect(renderDay).toHaveBeenCalledTimes(1);
+  expect(button("Утвърди предложението")).toBeUndefined();
+  await click(button("Прегледай"));
+  const review = container.querySelector('[aria-label="Предложени промени"]')!;
+  expect(review.textContent).toContain("Засегнати дни: 1");
+  expect(review.textContent).toContain("Смяна на режима: фиксирана → адаптивна");
+  expect(review.querySelectorAll(".management-proposal-changes>li")).toHaveLength(1);
+  expect(container.querySelectorAll('[aria-label="Избери ден от програмата"]')).toHaveLength(1);
+  expect(review.textContent).not.toContain("Предложена корекция след допълнителен товар");
+  const detail = review.querySelector<HTMLDetailsElement>(".management-proposal-changes details")!;
+  await act(async () => { detail.open = true; detail.dispatchEvent(new Event("toggle")); });
+  expect(review.textContent).toContain("Първоначално утвърдена задача");
+  expect(review.textContent).toContain("Предложена корекция след допълнителен товар");
+  await click(button("Затвори прегледа"));
+  expect(review.textContent).not.toContain("Предложена корекция след допълнителен товар");
+});
+
+it("saves an explicit fixed-week choice through the existing profile revision", async () => {
+  const fetchMock = vi.fn(async (_url, init) => Response.json({ configured: true, revision: 2, profile: JSON.parse(init.body).profile }));
+  vi.stubGlobal("fetch", fetchMock);
+  await mount(<ManagementProfileEditor initialProfile={{ configured: true, profile, revision: 1 }} today="2026-09-21"/>);
+  await click(button("4. Методи и дозиране"));
+  const select = [...container.querySelectorAll("select")].find(s => s.parentElement?.textContent?.startsWith("Режим на седмицата"))!;
+  await choose(select, "REVIEW");
+  const help = container.querySelector("#week-mode-help")!;
+  expect(help.textContent).toContain("Записан избор в профила: Адаптивна седмица");
+  expect(help.textContent).toContain("Новият избор „Фиксирана седмица“ още не е записан.");
+  expect(fetchMock).not.toHaveBeenCalled();
+  await click(button("Запази промените"));
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ profile: { adaptation_mode: "REVIEW" }, expected_revision: 1 });
+  expect(help.textContent).toContain("Записан избор в профила: Фиксирана седмица");
+  expect(help.textContent).not.toContain("още не е записан");
+  expect(container.textContent).toContain("Записан избор: Фиксирана седмица. При вече започната програма смяната влиза в сила след „Прегледай“ и „Утвърди предложението“");
+  expect([...container.querySelectorAll("a")].find(a => a.textContent === "Отвори седмичната програма →")?.getAttribute("href")).toBe("/management");
+});
+
+it.each(["AUTO", "REVIEW"] as const)("keeps warnings visible while a %s proposal is closed", async mode => {
+  const value = activeResponse(12);
+  value.active!.payload.mode = mode;
+  value.active!.payload.proposal!.warnings = [{ code: "LIMITED_LOAD_HISTORY", message: "Има непълни активности." }];
+  await mount(<ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/>);
+  const warnings = container.querySelector('[aria-label="Предупреждения и условия"]')!;
+  expect(warnings.textContent).toContain("Има непълни активности.");
+  expect(warnings.closest("details, [hidden]")).toBeNull();
+  expect(button("Прегледай").getAttribute("aria-expanded")).toBe("false");
+  expect(button("Утвърди предложението")).toBeUndefined();
+});
+
+it.each(["AUTO", "REVIEW"] as const)("explains a saved mode change blocked by incomplete load before opening review (%s)", async mode => {
+  const requested = mode === "AUTO" ? "REVIEW" : "AUTO";
+  const value = activeResponse(12);
+  value.active!.payload.mode = mode;
+  value.active!.payload.proposal_mode = requested;
+  value.active!.payload.proposal!.activation_eligible = false;
+  value.active!.payload.proposal!.source = { ...value.active!.payload.proposal!.source,
+    planning_history: { policy: "UNIFIED_RECORDED_INDICATORS", supported: false } };
+  const fetchMock = vi.fn<typeof fetch>(); vi.stubGlobal("fetch", fetchMock);
+  await mount(<ActiveTrainingPlan value={value} profile={{ configured: true, revision: 2, profile: { ...profile, adaptation_mode: requested } }}
+    onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/>);
+  const modes = container.querySelector('[aria-label="Режим на седмицата"]')!;
+  expect(modes.textContent).toContain("Изборът е записан, но предложението не може да се утвърди заради непълна история");
+  expect(modes.closest("details, [hidden]")).toBeNull();
+  await click(button("Прегледай"));
+  expect(button("Утвърди предложението").disabled).toBe(true);
+  expect(container.querySelector('[aria-label="Предложени промени"]')!.textContent).toContain("допуска само леки предложения");
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(value.active!.payload.mode).toBe(mode);
+});
+
+it.each(["AUTO", "REVIEW"] as const)("separates the saved choice from approved %s mode until the exact proposal is approved", async mode => {
+  const requested = mode === "AUTO" ? "REVIEW" : "AUTO";
+  const label = mode === "AUTO" ? "Адаптивна седмица" : "Фиксирана седмица";
+  const requestedLabel = mode === "AUTO" ? "Фиксирана седмица" : "Адаптивна седмица";
+  const value = activeResponse(12);
+  value.active!.payload.mode = mode;
+  value.active!.payload.proposal_mode = requested;
+  const result = activeResponse(13);
+  Object.assign(result.active!.payload, { mode: requested, status: "ACTIVE", proposal: null });
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json(result)); vi.stubGlobal("fetch", fetchMock);
+  await mount(<TrainingManagement athleteName="Спортист" canEdit today="2026-09-22"
+    initialProfile={{ configured: true, revision: 2, profile: { ...profile, adaptation_mode: requested } }} initialDrafts={[]} initialActive={value}/>);
+  const modes = () => container.querySelector('[aria-label="Режим на седмицата"]')!;
+  expect(modes().textContent).toContain(`Режим на утвърдената програма${label}`);
+  expect(modes().textContent).toContain(`Записан избор в профила${requestedLabel}`);
+  expect(modes().textContent).toContain("Смяната още не е приложена");
+  expect(modes().textContent).not.toContain("задачи се адаптират автоматично");
+  expect(fetchMock).not.toHaveBeenCalled();
+  await click(button("Прегледай"));
+  expect(container.querySelector('[aria-label="Предложени промени"]')!.textContent).toContain(`Режим в предложението: ${requestedLabel}`);
+  await click(button("Утвърди предложението"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ action: "APPROVE", expected_revision: 12 });
+  expect(modes().textContent).toContain(`Режим на утвърдената програма${requestedLabel}`);
+  expect(modes().textContent).not.toContain("Смяната още не е приложена");
+});
+
+it("recovers a legacy proposal mode from its own frozen profile", async () => {
+  const value = activeResponse(12);
+  value.active!.payload.proposal!.input_snapshot = { management_profile: { adaptation_mode: "REVIEW" }, profile_revision: 2 };
+  await mount(<ActiveTrainingPlan value={value} profile={{ configured: true, revision: 2, profile: { ...profile, adaptation_mode: "REVIEW" } }}
+    onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/>);
+  expect(container.textContent).toContain("Предложена смяна към фиксирана седмица");
+  await click(button("Прегледай"));
+  const review = container.querySelector('[aria-label="Предложени промени"]')!;
+  expect(review.textContent).toContain("Режим в предложението: Фиксирана седмица");
+  expect(review.textContent).toContain("включително новия режим");
+});
+
+it.each([false, true])("shows a pending profile mode even without proposal mode metadata (proposal present: %s)", async present => {
+  const value = activeResponse(12);
+  if (!present) value.active!.payload.proposal = null;
+  await mount(<ActiveTrainingPlan value={value} profile={{ configured: true, revision: 2, profile: { ...profile, adaptation_mode: "REVIEW" } }}
+    onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/>);
+  const modes = container.querySelector('[aria-label="Режим на седмицата"]')!;
+  expect(modes.textContent).toContain("Режим на утвърдената програмаАдаптивна седмица");
+  expect(modes.textContent).toContain("Записан избор в профилаФиксирана седмица");
+  expect(modes.textContent).toContain("Избери „Обнови сега“");
+  expect(modes.textContent).not.toContain("Предложена смяна към");
+  if (present) {
+    await click(button("Прегледай"));
+    expect(container.querySelector('[aria-label="Предложени промени"]')!.textContent).not.toContain("Режим в предложението:");
+  }
+});
+
+it("does not relabel a stale proposal when the saved choice has changed again", async () => {
+  const value = activeResponse(12, true);
+  value.active!.payload.proposal_mode = "REVIEW";
+  value.active!.payload.proposal!.input_snapshot = { management_profile: { adaptation_mode: "REVIEW" }, profile_revision: 2 };
+  await mount(<ActiveTrainingPlan value={value} profile={{ configured: true, revision: 3, profile: { ...profile, adaptation_mode: "AUTO" } }}
+    onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/>);
+  const modes = container.querySelector('[aria-label="Режим на седмицата"]')!;
+  expect(modes.textContent).toContain("Записан избор в профилаАдаптивна седмица");
+  expect(modes.textContent).toContain("Това предложение не съвпада със записания избор.");
+  await click(button("Прегледай"));
+  expect(container.querySelector('[aria-label="Предложени промени"]')!.textContent).toContain("Режим в предложението: Фиксирана седмица");
+  expect(button("Утвърди предложението").disabled).toBe(true);
+});
+
+it("uses a newer saved profile carried by a polled plan without reverting to initial page props", async () => {
+  const value = activeResponse(12);
+  value.active!.payload.proposal_mode = "REVIEW";
+  value.active!.payload.proposal!.input_snapshot = { management_profile: { adaptation_mode: "REVIEW" }, profile_revision: 3 };
+  const props = { profile: { configured: true, revision: 2, profile: { ...profile, adaptation_mode: "AUTO" as const } }, onChange: vi.fn(), canEdit: true, today: "2026-09-22", renderDay: () => null };
+  await mount(<ActiveTrainingPlan {...props} value={value}/>);
+  expect(container.querySelector('[aria-label="Режим на седмицата"]')!.textContent).toContain("Записан избор в профилаФиксирана седмица");
+  const approved = activeResponse(13);
+  Object.assign(approved.active!.payload, { mode: "REVIEW", status: "ACTIVE", proposal: null, plan: value.active!.payload.proposal });
+  await mount(<ActiveTrainingPlan {...props} value={approved}/>);
+  expect(container.querySelector('[aria-label="Режим на седмицата"]')!.textContent).not.toContain("Смяната още не е приложена");
+});
+
+it.each(["PAUSED", "COMPLETED"] as const)("does not promise automatic adaptation while %s", async status => {
+  const value = activeResponse(12);
+  value.active!.payload.status = status;
+  await mount(<ActiveTrainingPlan value={value} profile={{ configured: true, revision: 2, profile: { ...profile, adaptation_mode: "REVIEW" } }}
+    onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/>);
+  const modes = container.querySelector('[aria-label="Режим на седмицата"]')!;
+  expect(modes.textContent).not.toContain("задачи се адаптират автоматично");
+  expect(modes.textContent).not.toContain("Избери „Обнови сега“");
+  expect(modes.textContent).toContain(status === "PAUSED" ? "Продължи с текущите настройки" : "при започване на нова програма");
+});
+
+it("shows only changed dates in review and keeps the whole exact proposal available on request", async () => {
+  const value = activeResponse(12);
+  const p = value.active!.payload;
+  const first = draft.payload.days[0];
+  const unchanged = { ...first, date: "2026-09-23", explanation: "Непроменена задача" };
+  p.plan = { ...draft.payload, days: [first, unchanged] };
+  const reduced = { ...first.sessions![0], title: "Нова доза", total_minutes: 25, main_work_minutes: 25,
+    blocks: first.sessions![0].blocks.map(block => ({ ...block, duration_min: 25 })) };
+  p.proposal = { ...draft.payload, activation_eligible: true, days: [{ ...first, sessions: [reduced] }, unchanged] };
+  p.changes = [{ date: first.date, before: "Две сесии", after: "Нова доза", before_minutes: 75, after_minutes: 25, reason: "Намален обем след изпълнението" }];
+  await mount(<ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={d => <p>{d.explanation}</p>}/>);
+  await click(button("Прегледай"));
+  const review = container.querySelector('[aria-label="Предложени промени"]')!;
+  const changes = review.querySelector(".management-proposal-changes")!;
+  expect(changes.textContent).toContain("0:45:00");
+  expect(changes.textContent).toContain("0:30:00");
+  expect(changes.textContent).toContain("0:25:00");
+  expect(changes.textContent).not.toContain("Непроменена задача");
+  expect(review.querySelector('[aria-label="Избери ден от програмата"]')).toBeNull();
+  const full = review.querySelector<HTMLDetailsElement>("details.management-detail")!;
+  await act(async () => { full.open = true; full.dispatchEvent(new Event("toggle")); });
+  expect(review.querySelectorAll(".management-workout-day")).toHaveLength(7);
+  expect(review.querySelectorAll(".management-workout-sessions")).toHaveLength(2);
+  expect(review.textContent).toContain("Няма изчислени задачи");
+});
+
+it("approves the reviewed revision once and confirms the accepted changes", async () => {
+  const value = activeResponse(12);
+  const result = activeResponse(13);
+  result.active!.payload.status = "ACTIVE";
+  result.active!.payload.proposal = null;
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json(result)); vi.stubGlobal("fetch", fetchMock);
+  const receive = vi.fn();
+  await mount(<ActiveTrainingPlan value={value} onChange={receive} canEdit today="2026-09-22" renderDay={() => null}/>);
+  await click(button("Прегледай"));
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("Няма отчетени промени в тренировъчните задачи.");
+  await click(button("Утвърди предложението"));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ action: "APPROVE", expected_revision: 12 });
+  expect(receive).toHaveBeenCalledWith(result);
+  expect(container.textContent).toContain("Предложението е утвърдено.");
+});
+
+it("shows an intensity-only change in review and shares the running speed unit preference", async () => {
+  const value = activeResponse(12);
+  const p = value.active!.payload;
+  const first = draft.payload.days[0];
+  const before = { ...first.sessions![0], blocks: [{ ...first.sessions![0].blocks[0], target_speed_kmh: 15, target_hr_bpm: 140 }] };
+  const after = { ...before, blocks: [{ ...before.blocks[0], target_speed_kmh: 18, target_hr_bpm: 152 }] };
+  p.plan = { ...draft.payload, days: [{ ...first, sessions: [before] }] };
+  p.proposal = { ...draft.payload, activation_eligible: true, days: [{ ...first, sessions: [after] }] };
+  p.changes = [{ date: first.date, before: before.title, after: after.title, before_minutes: 45, after_minutes: 45, reason: "Актуализирана скоростна опора" }];
+  await act(async () => setRunningSpeedUnit("pace"));
+  try {
+    await mount(<><RunningSpeedUnitControl/><ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/></>);
+    await click(button("Прегледай"));
+    const changes = container.querySelector(".management-proposal-changes")!;
+    expect(changes.textContent).toContain("4:00 мин/км");
+    expect(changes.textContent).toContain("3:20 мин/км");
+    expect(changes.textContent).toContain("140 уд./мин");
+    expect(changes.textContent).toContain("152 уд./мин");
+    await choose(select("Бягане · показване"), "kmh");
+    expect(changes.textContent).toContain("15 км/ч");
+    expect(changes.textContent).toContain("18 км/ч");
+    expect(changes.textContent).not.toContain("мин/км");
+  } finally { await act(async () => setRunningSpeedUnit("pace")); }
+});
+
+it("closes a previously opened review when a newer proposal arrives", async () => {
+  const render = (revision: number) => <ActiveTrainingPlan value={activeResponse(revision)} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/>;
+  await mount(render(12));
+  await click(button("Прегледай"));
+  expect(button("Утвърди предложението").disabled).toBe(false);
+  await mount(render(13));
+  expect(button("Утвърди предложението")).toBeUndefined();
+  expect(button("Прегледай").getAttribute("aria-expanded")).toBe("false");
+  await click(button("Прегледай"));
+  expect(button("Утвърди предложението").disabled).toBe(false);
+});
+
+it.each([
+  ["stale", "Данните са променени."],
+  ["read-only", "Имате достъп само за преглед."],
+  ["ineligible", "Утвърждаването е задържано."],
+  ["symptoms", "Първо запиши актуална сутрешна оценка"],
+  ["paused", "Програмата е на пауза."],
+  ["busy", "Изчакай текущото обновяване"],
+] as const)("explains blocked approval for %s and never sends a mutation", async (condition, message) => {
+  const value = activeResponse(12, condition === "stale");
+  const p = value.active!.payload;
+  if (condition === "ineligible") p.proposal!.activation_eligible = false;
+  if (condition === "paused") p.status = "PAUSED";
+  if (condition === "symptoms") p.proposal!.warnings = [{ code: "REPORTED_ILLNESS_OR_PAIN", message: "Отчетена болка" }];
+  const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
+  await mount(<ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit={condition !== "read-only"} externalBusy={condition === "busy"} today="2026-09-22" renderDay={() => null}/>);
+  if (condition === "symptoms") {
+    expect(container.textContent).toContain("има отметка за болка или заболяване");
+    expect(container.querySelector('a[href="/response#daily-report"]')?.closest("details, [hidden]")).toBeNull();
+  }
+  await click(button("Прегледай"));
+  const approve = button("Утвърди предложението");
+  expect(approve.disabled).toBe(true);
+  expect(document.getElementById(approve.getAttribute("aria-describedby")!)?.textContent).toContain(message);
+  await click(approve);
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it("distinguishes published adaptive corrections from pending proposals and retains warnings", async () => {
+  const value = activeResponse(12);
+  const p = value.active!.payload;
+  p.status = "ACTIVE"; p.proposal = null;
+  p.plan = { ...draft.payload, warnings: [{ code: "LIMITED_LOAD_HISTORY", message: "Историята е непълна." }] };
+  p.changes = [{ date: "2026-09-22", before: "Преди", after: "След", before_minutes: 75, after_minutes: 60, reason: "Допълнително изпълнение" }];
+  await mount(<ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/>);
+  expect(container.textContent).toContain("Приложени промени");
+  expect(container.textContent).not.toContain("Автоматично приложени промени");
+  expect(container.textContent).toContain("Не чакат утвърждаване.");
+  expect(container.querySelector('[aria-label="Предупреждения и условия"]')?.textContent).toContain("Историята е непълна.");
+  expect(button("Прегледай")).toBeUndefined();
+  expect(button("Утвърди предложението")).toBeUndefined();
+});
+
+
+it("switches the Q report between approved and proposed prescriptions without approving a plan", async () => {
+  const approved = structuredClone(draft.payload);
+  const proposed = structuredClone(draft.payload);
+  proposed.start_date = "2026-09-23";
+  const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
+  await mount(<TrainingPlanReport plan={approved} proposal={proposed} planKind="APPROVED" today="2026-09-22"/>);
+  const mainHeadings = () => container.querySelector(".plan-q-comparison table thead")!.textContent;
+  expect(mainHeadings()).toContain("Планирано · утвърдено");
+  await click(button("Ново предложение"));
+  expect(mainHeadings()).toContain("Планирано · предложение");
+  expect(container.textContent).toContain("То очаква утвърждаване");
+  await click(button("Утвърдена програма"));
+  expect(mainHeadings()).toContain("Планирано · утвърдено");
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(container.querySelector(".plan-q-comparison")!.closest("details")).toBeNull();
+});
+
+function twoWeekProgramme() {
+  const value = activeResponse(60);
+  value.active!.actionable = true;
+  const p = structuredClone(draft.payload);
+  p.start_date = "2026-10-28"; p.end_date = "2026-11-03";
+  const template = p.days[0];
+  const day = (date:string) => ({...structuredClone(template),date,status:"REST",session:null,sessions:[]});
+  p.days = planDates(p.start_date,p.end_date).map(day);
+  p.lookahead_days = planDates("2026-11-04","2026-11-09").map(day);
+  const setTask = (date:string,zone:typeof COMPONENTS[number],q:number,title:string) => {
+    const d = [...p.days,...p.lookahead_days!].find(d=>d.date===date)!;
+    const s = {...structuredClone(template.sessions![0]),title,zone,
+      direct_equivalent_minutes:{Z1:0,Z2:0,Z3:0,Z4:0,Z5:0,STR:0,[zone]:q}};
+    d.status="TRAINING"; d.sessions=[s]; d.session=s;
+  };
+  setTask("2026-11-03","Z2",100,"Утвърдена задача на 3 ноември");
+  setTask("2026-11-04","Z3",45,"Прогнозна Z3 на 4 ноември");
+  setTask("2026-11-06","Z3",55,"Прогнозна Z3 на 6 ноември");
+  setTask("2026-11-05","STR",30,"Прогнозна сила на 5 ноември");
+  setTask("2026-11-09","STR",30,"Прогнозна сила на 9 ноември");
+  const components = Object.fromEntries(COMPONENTS.map(z=>[z,{basis:"DIRECT_Q" as const,target_q:100,actual_q:0,planned_q:0}]));
+  p.allocation={constraints:[],dose_limits:[],components,segments:[
+    {window_start:"2026-10-27",window_end:"2026-11-02",days:7,components},
+    {window_start:"2026-11-03",window_end:"2026-11-09",days:7,components}]};
+  value.active!.payload.plan = p;
+  value.active!.payload.proposal = structuredClone(p);
+  const proposedDay = value.active!.payload.proposal.lookahead_days!.find(d=>d.date==="2026-11-04")!;
+  proposedDay.sessions![0].title="Предложена Z3 на 4 ноември";
+  proposedDay.sessions![0].direct_equivalent_minutes.Z3=20;
+  return value;
+}
+
+it("switches the full anchored week, Q totals and task variant together without applying changes", async () => {
+  const value = twoWeekProgramme();
+  const saved = structuredClone(value);
+  const fetchMock=vi.fn(); vi.stubGlobal("fetch",fetchMock);
+  await mount(<TrainingManagement athleteName="Спортист" canEdit today="2026-10-28" initialProfile={{configured:true,profile,revision:2}} initialDrafts={[]} initialActive={value}/>);
+  expect(select("Седмица").options[0].textContent).toBe("Текуща седмица · 27.10.2026 – 02.11.2026");
+  expect(select("Седмица").options[1].textContent).toBe("Следваща седмица · 03.11.2026 – 09.11.2026");
+  const row = (zone:string) => [...container.querySelectorAll(".q-primary-table tbody tr")].find(tr=>tr.querySelector("th")?.textContent===zone)!;
+  await choose(select("Седмица"),"2026-11-03");
+  expect(row("Z3").querySelector('[data-label="Планирано"]')?.textContent).toContain("1:40:00");
+  expect(row("Z3").textContent).toContain("100.0% от целта");
+  expect(row("Сила").querySelector('[data-label="Планирано"]')?.textContent).toContain("1:00:00");
+  expect(container.querySelectorAll(".management-days .management-workout-day")).toHaveLength(7);
+  expect(container.querySelector(".management-days")?.textContent).toContain("Прогнозна Z3 на 4 ноември");
+  const day4=()=>[...container.querySelectorAll<HTMLButtonElement>(".management-days .management-workout-day")].find(b=>b.textContent?.includes("4.11"))!;
+  await click(day4());
+  expect(container.querySelector(".management-selected-day")?.textContent).toContain("Прогнозна Z3 на 4 ноември");
+  expect(container.querySelector(".management-day-actions")).toBeNull();
+  await click(button("Ново предложение"));
+  expect(select("Седмица").value).toBe("2026-11-03");
+  expect(row("Z3").querySelector('[data-label="Планирано"]')?.textContent).toContain("1:15:00");
+  expect(container.querySelector(".management-selected-day")?.textContent).toContain("Предложена Z3 на 4 ноември");
+  expect(container.querySelector(".management-day-actions")).toBeNull();
+  await click(button("Утвърдена програма"));
+  expect(row("Z3").querySelector('[data-label="Планирано"]')?.textContent).toContain("1:40:00");
+  expect(value).toEqual(saved);
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it("shows missing future days explicitly instead of inventing rest or zero planned Q", async () => {
+  const value=twoWeekProgramme();
+  value.active!.payload.plan.lookahead_days=value.active!.payload.plan.lookahead_days!.filter(d=>d.date!=="2026-11-04");
+  await mount(<TrainingManagement athleteName="Спортист" canEdit={false} today="2026-10-28" initialProfile={{configured:true,profile,revision:2}} initialDrafts={[]} initialActive={value}/>);
+  await choose(select("Седмица"),"2026-11-03");
+  expect(container.querySelector(".plan-q-comparison")?.textContent).toContain("Непълен разчет");
+  const missing=[...container.querySelectorAll<HTMLButtonElement>(".management-days .management-workout-day")].find(b=>b.textContent?.includes("4.11"))!;
+  expect(missing.textContent).toContain("Няма изчислени задачи");
+  await click(missing);
+  expect(container.querySelector(".management-selected-day")?.textContent).toContain("Няма изчислени задачи");
+  expect(container.querySelector(".management-day-actions")).toBeNull();
+});

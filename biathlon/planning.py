@@ -21,6 +21,7 @@ from .mesocycles import (
     build_mesocycle_schedule,
     normalize_camp_prescriptions,
 )
+from .methodology import methodology_snapshot_metadata
 from .physiology import (
     apply_training_impulse,
     effective_from_direct_vector,
@@ -114,6 +115,13 @@ def _resolved_accent_components(
             COMPONENTS.index(component),
         ),
     )
+    hybrid = [*manual[:limit]]
+    hybrid.extend(
+        component
+        for component in automatic
+        if component not in hybrid
+    )
+    hybrid = hybrid[:limit]
 
     strategy = str(schedule_row.get("accent_strategy", "AUTO"))
     mode = str(schedule_row.get("accent_mode", "AUTO"))
@@ -121,6 +129,8 @@ def _resolved_accent_components(
         excluded = (
             manual[:limit]
             if mode == "MANUAL" and manual
+            else hybrid
+            if mode == "HYBRID" and manual
             else automatic[:limit]
         )
         candidates = [component for component in automatic if component not in excluded]
@@ -132,6 +142,8 @@ def _resolved_accent_components(
     if strategy == "CAMP" and mode == "MANUAL" and manual:
         accents = manual[:limit]
         return accents, [], manual_weights
+    if strategy == "CAMP" and mode == "HYBRID" and manual:
+        return hybrid, [], manual_weights
     return automatic[:limit], [], manual_weights
 
 
@@ -144,7 +156,11 @@ def _structured_component_factor(
     if component not in accents:
         return float(schedule_row.get("maintenance_factor", 1.0))
     weight = float(manual_weights.get(component, 0.0))
-    if str(schedule_row.get("accent_mode", "AUTO")) != "MANUAL" or weight <= 0.0:
+    if (
+        str(schedule_row.get("accent_mode", "AUTO"))
+        not in {"MANUAL", "HYBRID"}
+        or weight <= 0.0
+    ):
         weight = 1.0
     target = float(
         schedule_row.get(
@@ -1053,6 +1069,12 @@ def generate_week_plan(
     accent_summary = str(
         first_week.get("accent_components", pd.Series([""])).iloc[0]
     )
+    accent_mode = str(
+        first_week.get("accent_mode", pd.Series(["AUTO"])).iloc[0]
+    )
+    accent_strategy = str(
+        first_week.get("accent_strategy", pd.Series(["AUTO"])).iloc[0]
+    )
     mesocycle_reason = str(
         first_week.get("override_reason", pd.Series([""])).iloc[0]
     )
@@ -1438,7 +1460,10 @@ def generate_week_plan(
         "mesocycle_week": mesocycle_week,
         "mesocycle_length_weeks": mesocycle_length,
         "accent_components": accent_summary,
+        "accent_mode": accent_mode,
+        "accent_strategy": accent_strategy,
         "mesocycle_reason": mesocycle_reason,
+        "methodology": methodology_snapshot_metadata(),
         "target_indices": first_week["target_index"].to_dict(),
         "target_effective": target_e.to_dict(),
         "target_direct_q": target_q.to_dict(),

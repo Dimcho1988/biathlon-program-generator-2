@@ -1,9 +1,9 @@
-"""Canonical heart-rate input for the zonal physiology pipeline.
+"""Legacy measured-HR adapter for diagnostics and the original pipeline.
 
-The adapter is deliberately small: the current model uses the validated raw
-heart rate unchanged.  A future HR-modulation model can replace the body of
-``effective_hr`` without changing zone classification, equivalence, or any
-downstream aggregate.
+This adapter returns validated raw HR unchanged. Recorded shared Q selects
+HRmod/raw HR or speed per interval in ``biathlon.unified_load`` instead.
+Observed TI continues to use measured HR; changing this adapter's name or
+constant must never relabel that measurement as a derived HRmod signal.
 """
 
 from __future__ import annotations

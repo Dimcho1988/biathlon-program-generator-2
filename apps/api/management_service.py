@@ -1,0 +1,414 @@
+"""Freeze management inputs and append review-only plan revisions.
+
+Draft generation never changes the athlete's actual load, model coefficients,
+activity calendar, or an approved training prescription.
+"""
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta, timezone
+from hashlib import sha256
+import json
+from zoneinfo import ZoneInfo
+
+from fastapi import HTTPException
+from biathlon.periodization import ENGINE_VERSION as PERIODIZATION_VERSION
+from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION
+from biathlon.zone_profile import VERSION as ZONE_PROFILE_VERSION
+from biathlon.speed_equivalence import VERSION as ZONE_EQUIVALENCE_VERSION
+from biathlon.unified_load import VERSION as UNIFIED_LOAD_VERSION
+from biathlon import speed_anchor_policy
+from .component_load_context import VERSION as COMPONENT_CAPACITY_VERSION
+
+from .management_schemas import ManagementProfile, normalize_building_profile
+from .management_store import ManagementStore
+from .model_service import ModelStore
+from .oauth_store import PersistentStoreFailure
+from . import training_plan_engine, race_duration
+from .management_projection import public_learning
+from .read_session import ReadSession
+from .request_metrics import timed_stage
+from .planning_input_bundle import valid_analysis_hints
+
+
+def profile_view(repository, alias, *, now=None, include_history=True):
+    """Saved profile and its historical volume basis, without generating a plan."""
+    profile = ManagementStore(repository).profile(alias)
+    if profile.get("profile") is not None:
+        profile = {**profile, "profile": normalize_building_profile(profile["profile"])}
+    settings = repository.athlete_settings(alias)
+    athlete_timezone = settings.timezone if settings else "UTC"
+    today = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(athlete_timezone)).date()
+    history = None
+    if include_history and hasattr(repository, "active_analysis"):
+        from biathlon.planning_controls import volume_history
+        analysis = repository.active_analysis(alias) or {}
+        source = (analysis.get("snapshot_payload") or {}).get("load_history") or {}
+        covered = len({r["date"] for r in source.get("daily", [])
+                       if (today-timedelta(days=28)).isoformat() <= r["date"] < today.isoformat()})
+        history_controls = (profile.get("profile") or {}).get("planning_controls") or {}
+        history = {**volume_history(source, today, covered,
+                                   gap_days=history_controls.get("history_gap_days", 10)),
+                   "as_of": source.get("period_end")}
+    return {**profile, "timezone": athlete_timezone, "today": today.isoformat(), "history": history}
+
+
+def _planning_calendar_from_speed_inputs(inputs, alias, analysis, today):
+    """Reuse only a complete, immutable calendar captured for this local day.
+
+    The analysis remains authoritative. Legacy or inconsistent evidence goes
+    through the existing planning-calendar read and its validation instead.
+    """
+    if not isinstance(inputs, dict) or inputs.get("alias") != alias or inputs.get("today") != today:
+        return None
+    calendar = inputs.get("calendar")
+    if not isinstance(calendar, dict):
+        return None
+    generation, revision = calendar.get("generation_id"), calendar.get("revision")
+    if (not isinstance(generation, str) or not generation or type(revision) is not int
+            or revision < 1 or type(analysis.get("revision")) is not int
+            or (generation, revision) != (analysis.get("generation_id"), analysis.get("revision"))
+            or any(calendar.get(k) != analysis.get(k) for k in ("analysis_as_of", "activated_at"))):
+        return None
+    snapshot = calendar.get("snapshot_payload")
+    if not isinstance(snapshot, dict) or snapshot != analysis.get("snapshot_payload"):
+        return None
+    source = snapshot.get("load_history")
+    if not isinstance(source, dict):
+        return None
+    try:
+        first, last = (date.fromisoformat(source[k]) for k in ("period_start", "period_end"))
+        if (first > last or last > today or first.isoformat() != source["period_start"]
+                or last.isoformat() != source["period_end"]):
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    activities = calendar.get("activities")
+    if not isinstance(activities, list):
+        return None
+    start = today-timedelta(days=89)
+    selected = []
+    seen = set()
+    for activity in activities:
+        if not isinstance(activity, dict):
+            return None
+        reference = activity.get("activity_ref")
+        try:
+            day = date.fromisoformat(activity["local_date"])
+            if day.isoformat() != activity["local_date"] or day > today:
+                return None
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not isinstance(reference, str) or not reference or reference in seen:
+            return None
+        seen.add(reference)
+        if start <= day <= today:
+            selected.append(activity)
+    return {**calendar, "activities": selected}
+
+
+def outlook(repository, alias, *, now=None):
+    """Current saved goals, independent of any frozen draft or active plan.
+
+    Reads profile, calendar, actual history and the event's speed curve.
+    No future sessions, lifecycle refresh, or persistence.
+    """
+    stored = ManagementStore(repository).profile(alias)
+    if not stored["configured"]:
+        return {"configured": False, "outlook": None}
+    profile = ManagementProfile.model_validate(stored["profile"]).model_dump(mode="json")
+    settings = repository.athlete_settings(alias)
+    now = now or datetime.now(timezone.utc)
+    today = now.astimezone(ZoneInfo(settings.timezone) if settings else timezone.utc).date()
+    engine = training_plan_engine
+    calendar = engine._read_optional(repository, "athlete_planning_calendar", alias) or {"events": []}
+    profile = engine.race_course.apply_event(profile, calendar["events"], today)
+    from . import model_service
+    # Race duration and component capacity must share the same model read.
+    speed_inputs = None
+    if settings and getattr(repository, "speed_load_cache_namespace", None):
+        speed_inputs = model_service.speed_view_inputs(repository, alias)
+        speed = model_service.speed_view(repository, alias, profile["sport"], _inputs=speed_inputs)
+    else:
+        speed = model_service.speed_view(repository, alias, profile["sport"]) if settings else None
+    speed_by_sport = {profile["sport"]: speed}
+    event_duration = race_duration.preview(repository, alias, profile, speed_view=speed_by_sport[profile["sport"]])
+    analysis = repository.active_analysis(alias) or {}
+    if event_duration["source"] == "SPEED_DURATION" and (
+            event_duration.get("source_generation_id") != analysis.get("generation_id") or
+            event_duration.get("source_revision") != analysis.get("revision")):
+        event_duration = {**race_duration.resolve(profile), "reason": "MODEL_UPDATED"}
+    elif event_duration["source"] == "COURSE_EXPECTATION" and speed and (
+            speed.get("source_generation_id") != analysis.get("generation_id") or
+            speed.get("source_revision") != analysis.get("revision")):
+        event_duration = {**race_duration.resolve(profile), "reason": "MODEL_UPDATED"}
+    profile = race_duration.applied(profile, event_duration)
+    calendar_reader = getattr(repository, "active_planning_calendar", None) or getattr(repository, "active_activity_calendar", None)
+    activity_calendar = _planning_calendar_from_speed_inputs(speed_inputs, alias, analysis, today)
+    if activity_calendar is None:
+        activity_calendar = calendar_reader(alias, today-timedelta(days=89), today) if calendar_reader else None
+    if activity_calendar and (activity_calendar.get("generation_id"), activity_calendar.get("revision")) != (analysis.get("generation_id"), analysis.get("revision")):
+        activity_calendar = None
+    planning_envelope = {**analysis, "activities": (activity_calendar or {}).get("activities", [])}
+    prepared_source = engine.planning_source_details(repository, alias, profile, settings, planning_envelope, today,
+                                                    speed_by_sport=speed_by_sport)
+    source, planning_evidence = prepared_source.source, prepared_source.evidence
+    contexts = (source.get("component_load_model") or {}).get("contexts_by_sport") or {}
+    measured_source = prepared_source.measured_source
+    planning_envelope = {**planning_envelope, "snapshot_payload": {
+        **(planning_envelope.get("snapshot_payload") or {}), "load_history": measured_source}}
+    profile = {**profile, "_component_load_context": contexts.get(profile.get("actual_sport") or profile.get("sport")) or engine.context_from_speed_view(None)}
+    rows = engine._daily_rows(source, today)
+    profile, horizon = engine.planning_schedule.horizon(profile, calendar["events"])
+    preferences = engine._read_optional(repository, "athlete_planning_profile", alias) or {}
+    accents = engine._read_optional(repository, "athlete_mesocycle_accent_preferences", alias)
+    controls = profile.get("planning_controls")
+    if controls:
+        preferences = {"mesocycle_anchor_date": controls.get("mesocycle_anchor") or profile["program_start"],
+                       "mesocycle_length_weeks": len(controls["wave"])}
+    anchor = date.fromisoformat(str(preferences.get("mesocycle_anchor_date", profile["program_start"])))
+    length = preferences.get("mesocycle_length_weeks", 4)
+    reference = engine.training_targets.development_reference(rows, today, anchor, length)
+    quality = source.get("quality") or {}
+    history = engine.planning_controls.volume_history(source, today, 0, gap_days=(controls or {}).get("history_gap_days", engine.planning_history.DEFAULT_GAP_DAYS))
+    limited = (not history["history_policy"]["usable"] or any(not v["known"] for v in engine.planning_controls.reference(rows, today).values())
+               or not planning_evidence["supported"]
+               or engine.planning_history.completed_day_lag(source, today) != 0)
+    limited = limited or not engine.load_progression.history_matches(source, {"bounds": list(settings.zone_bounds_bpm), "hrmax": settings.hrmax_bpm} if settings else None)
+    volume = engine.planning_controls.volume_basis(profile, history)
+    reentry_days, reentry_reason = engine.planning_history.reentry(profile, history)
+    phases = engine.build_periodization(profile["program_start"], profile["program_end"], calendar["events"],
+                                       reentry_days_override=reentry_days,
+                                       taper_days=profile["taper_days"], transition_days=profile["transition_days"])
+    phases["entry_basis"] = {"days_override": reentry_days, "reason": reentry_reason}
+    progression = engine.progression_context(repository, alias, profile, source, rows, today, phases, envelope=planning_envelope, measured_source=measured_source)
+    if (engine.training_return.supported(progression) and planning_evidence["supported"]
+            and engine.planning_history.completed_day_lag(source,today) == 0
+            and all(v["known"] for v in engine.planning_controls.reference(rows,today).values())
+            and engine.load_progression.history_matches(source,{"bounds":list(settings.zone_bounds_bpm),"hrmax":settings.hrmax_bpm} if settings else None)):
+        limited = False
+        volume = {**volume, "missing_history": False, "reported_history_only": False,
+                  "weekly_volume_source": "CONFIRMED_RETURN_COMPONENT_Q"}
+    projection = engine._long_term_outlook(profile, phases, reference, accents, preferences, rows, today,
+                                         limited, volume=volume, events=calendar["events"], progression=progression, planning_evidence=planning_evidence)
+    return {"configured": True, "outlook": {
+        "schema_version": "training-outlook-preview-v1", "profile_revision": stored["revision"],
+        "race_duration": event_duration,
+        "generated_at": now.isoformat(), "engine_version": engine.VERSION,
+        "source": {"generation_id": analysis.get("generation_id"), "revision": analysis.get("revision"), "as_of": source.get("period_end"), "planning_history": planning_evidence},
+        "periodization": phases, "long_term": projection, "history_comparison": history["weeks"],
+        "component_history": engine.load_progression.history(measured_source, engine._daily_rows(measured_source, today), today),
+        "individual_learning": public_learning((progression or {}).get("individual_learning")),
+        "input_snapshot": {"calendar": calendar, "profile_revision": stored["revision"], "horizon": horizon,
+                           "planning_controls": controls},
+        "volume_context": {**volume, "available_weekly_minutes": sum(engine.planning_history.availability(profile)) if engine.planning_history.availability_mode(profile) == "MANUAL" else None,
+                           "weekly_time_limit_minutes": controls["weekly_target_hours"]*60 if controls and controls.get("weekly_target_hours") is not None else None,
+                           "availability_mode": engine.planning_history.availability_mode(profile), "history_policy": history["history_policy"], "volume_evidence": history},
+    }}
+
+
+def _hash(value):
+    return sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=False, allow_nan=False, default=str).encode()).hexdigest()
+
+
+def _payload(value):
+    return value.to_payload() if value is not None else None
+
+
+def _analysis_identity(repository, alias, hints=None):
+    """Reuse an exact saved digest only for an unchanged immutable generation.
+
+    This hint is supplied only by read-only state polling. Publication and its
+    final concurrency check always read/hash the live snapshot. Legacy snapshots
+    have no immutable generation ID and must also be read in full.
+    """
+    valid = valid_analysis_hints(hints)
+    metadata_reader = getattr(repository, "active_analysis_metadata", None)
+    if valid and callable(metadata_reader):
+        metadata = metadata_reader(alias) or {}
+        if metadata.get("generation_id"):
+            for hint in valid:
+                if (metadata["generation_id"] == hint["generation_id"]
+                        and type(metadata.get("revision")) is int
+                        and metadata["revision"] == hint["analysis_revision"]
+                        and metadata.get("analysis_as_of") == hint.get("analysis_as_of")):
+                    return metadata, hint["snapshot_fingerprint"]
+    # A new analysis may activate between the compact and full reads. Use the
+    # full read's own identity and digest together, never the earlier pointer.
+    analysis = repository.active_analysis(alias) or {}
+    return analysis, _hash(analysis.get("snapshot_payload"))
+
+
+def input_state(repository, alias, *, evaluated_at=None, include_response=False, analysis_hints=None):
+    """Capture settings and source identity; never store credentials or wellness."""
+    if isinstance(repository, ReadSession):
+        repository.capture_planning_inputs(alias,
+            analysis_hints=None if analysis_hints is None else valid_analysis_hints(analysis_hints))
+    settings = repository.athlete_settings(alias)
+    analysis, snapshot_fingerprint = _analysis_identity(repository, alias, analysis_hints)
+    entries = ModelStore(repository).entries(alias)
+    from . import learning_service, speed_zone_history
+    responses = sorted([
+        {"kind": e["kind"], "entry_key": e["entry_key"], "revision": e["revision"]}
+        for e in training_plan_engine.ResponseStore(repository).entries(alias)
+    ], key=lambda e: (e["kind"], e["entry_key"])) if include_response else None
+    evaluated_at = evaluated_at or datetime.now(timezone.utc)
+    return {
+        "evaluation_date": evaluated_at.astimezone(ZoneInfo(settings.timezone) if settings else timezone.utc).date().isoformat(),
+        "rule_versions": {
+            "component_load": COMPONENT_LOAD_VERSION,
+            "component_load_context": COMPONENT_CAPACITY_VERSION,
+            "engine": training_plan_engine.VERSION,
+            "parameters": training_plan_engine.PARAMETER_VERSION,
+            "methods": training_plan_engine.METHODS_VERSION,
+            "method_library": training_plan_engine.method_library.provenance(),
+            "periodization": PERIODIZATION_VERSION,
+            "speed_duration": training_plan_engine.speed_duration.VERSION,
+            "dosing_curve": training_plan_engine.dosing_curve.VERSION,
+            "preliminary_capacity": training_plan_engine.preliminary_capacity.VERSION,
+            "hr_speed": training_plan_engine.hr_speed.VERSION,
+            "speed_anchor_policy": speed_anchor_policy.VERSION,
+            "historical_speed_policy": training_plan_engine.model_service.HISTORICAL_SPEED_POLICY,
+            "zone_profile": ZONE_PROFILE_VERSION,
+            "zone_equivalence": ZONE_EQUIVALENCE_VERSION,
+            "unified_load": UNIFIED_LOAD_VERSION,
+            "planning_history_estimate": training_plan_engine.planning_history_estimate.VERSION,
+            "speed_zone_history": speed_zone_history.VERSION,
+            "load_progression": training_plan_engine.load_progression.VERSION,
+            "recovery": training_plan_engine.recovery_v2.VERSION,
+            "individual_learning": learning_service.VERSION,
+        },
+        "generation_id": analysis.get("generation_id"),
+        "analysis_revision": analysis.get("revision"),
+        "analysis_as_of": analysis.get("analysis_as_of"),
+        "snapshot_fingerprint": snapshot_fingerprint,
+        "response_fingerprint": _hash(responses) if responses is not None else None,
+        "response_revisions": responses,
+        "physiology": None if settings is None else {
+            "zone_bounds_bpm": list(settings.zone_bounds_bpm),
+            "hrmax_bpm": settings.hrmax_bpm,
+            "timezone": settings.timezone,
+            "leading_indicator": getattr(settings, "leading_indicator", "HEART_RATE"),
+            "age_years": getattr(settings, "age_years", None),
+            "hrmax_source": getattr(settings, "hrmax_source", "MANUAL"),
+        },
+        "calendar": _payload(repository.athlete_planning_calendar(alias)),
+        "planning_preferences": _payload(repository.athlete_planning_profile(alias)),
+        "accent_preferences": _payload(repository.athlete_mesocycle_accent_preferences(alias)),
+        "model_entries": sorted([
+            {"kind": e["kind"], "entry_key": e["entry_key"],
+             "revision": e["revision"], "payload": e["payload"]}
+            for e in entries
+        ], key=lambda e: (e["kind"], e["entry_key"])),
+    }
+
+
+def build_draft(repository, alias, start_date, expected_profile_revision, *, now=None, decisions=None, locked_day=None,
+                window_end=None, _initial_read_phase=None):
+    # Reuse inputs only during calculation. The final check below must observe
+    # edits/syncs made while the (potentially long) calculation was running.
+    live_repository = repository
+    repository = ReadSession.planning(repository, _initial_read_phase)
+    repository.capture_planning_inputs(alias)
+    store = ManagementStore(repository)
+    stored = store.profile(alias)
+    if not stored["configured"]:
+        raise HTTPException(409, "Complete the management profile first")
+    if stored["revision"] != expected_profile_revision:
+        raise HTTPException(409, "The management profile changed; reload before generating")
+    profile = ManagementProfile.model_validate(stored["profile"])
+    settings = repository.athlete_settings(alias)
+    if settings is None:
+        raise HTTPException(409, "Configure athlete HR zones and timezone before generating")
+    now = now or datetime.now(timezone.utc)
+    today = now.astimezone(ZoneInfo(settings.timezone)).date()
+    if not today <= start_date <= today + timedelta(days=7):
+        raise HTTPException(422, "Choose a start from today through the next seven days")
+    calendar = training_plan_engine._read_optional(repository, "athlete_planning_calendar", alias) or {"events": []}
+    resolved, _ = training_plan_engine.planning_schedule.horizon(profile.model_dump(mode="json"), calendar["events"])
+    if start_date < profile.program_start or start_date > date.fromisoformat(resolved["program_end"]):
+        raise HTTPException(422, "The draft must start within the planning period")
+    include_response = True
+    before = input_state(repository, alias, evaluated_at=now, include_response=include_response)
+    from .planning_computation import compute
+    computation_key = _hash({"athlete": alias, "inputs": before,
+        "profile": profile.model_dump(mode="json"), "profile_revision": stored["revision"],
+        "start_date": start_date.isoformat(), "decisions": decisions or {}, "locked_day": locked_day,
+        **({"window_end": window_end.isoformat()} if window_end else {})})
+    def calculate():
+        from .planning_search import improve
+        normalized = profile.model_dump(mode="json")
+        replay_count = 0
+        def replay(allocation_policy=None):
+            nonlocal replay_count
+            stage = "planning_baseline" if replay_count == 0 else "planning_search_replay"
+            replay_count += 1
+            with timed_stage(stage):
+                return training_plan_engine.generate_plan(repository, alias,
+                    {**normalized, **({"_allocation_policy": allocation_policy} if allocation_policy else {})},
+                    start_date=start_date, now=now, decisions=decisions, locked_day=locked_day,
+                    **({"window_end": window_end} if window_end else {}))
+        baseline = replay()
+        with timed_stage("planning_search"):
+            # Cold baseline work is not a replay estimate. Let search measure
+            # its own warmed alternatives instead of skipping all of them on
+            # a slower worker before the independent search window even starts.
+            return improve(baseline, normalized, replay, seconds_remaining=150.)
+    payload = compute(live_repository, alias, computation_key, calculate)
+    training_plan_engine.compact_plan_metadata(payload)
+    # Start a new read phase after calculation. Its single settings-row read is
+    # fresh; no value captured by the calculation's ReadSession is reused.
+    with timed_stage("input_after"):
+        after = input_state(ReadSession(live_repository, planning_settings_bundle=True), alias,
+                            evaluated_at=now, include_response=include_response)
+    if _hash(before) != _hash(after):
+        raise HTTPException(409, "Analysis or planning inputs changed; generate a new draft")
+    source_generation = (payload.get("source") or {}).get("generation_id")
+    if source_generation != before["generation_id"]:
+        raise HTTPException(409, "The draft used a different analysis generation; try again")
+    frozen = {**before, "management_profile": profile.model_dump(mode="json"),
+              "profile_revision": stored["revision"]}
+    payload.update({"input_snapshot": frozen, "input_fingerprint": _hash(frozen),
+                    "review_required": True, "automatically_published": False,
+                    "operational_context": {"decisions": decisions or {}, "locked_day": locked_day,
+                        **({"window_end": window_end.isoformat()} if window_end else {})}})
+    return payload
+
+
+def generate(repository, alias, body, actor, *, now=None):
+    payload = build_draft(repository, alias, body.start_date, body.expected_profile_revision, now=now)
+    return ManagementStore(repository).save_draft(
+        alias, payload, actor, body.expected_profile_revision, expected_revision=body.expected_draft_revision,
+        check_generation=True, expected_generation_id=payload["source"]["generation_id"],
+        expected_responses=(payload.get("input_snapshot") or {}).get("response_revisions"))
+
+
+def history(repository, alias, *, start_date=None):
+    """Retain historical evidence while clearly marking changed inputs.
+
+    These are drafts, not an atomically activated schedule. A sync can finish
+    after a draft was saved; that does not rewrite its frozen source context.
+    """
+    store = ManagementStore(repository)
+    rows = store.drafts(alias, start_date=start_date) if start_date is not None else store.drafts(alias)
+    if not rows:
+        return {"drafts": []}
+    try:
+        profile = store.profile(alias)
+        normalized = ManagementProfile.model_validate(profile["profile"]).model_dump(mode="json") if profile["profile"] else None
+        progression = training_plan_engine.load_progression.settings(normalized or {})
+        state = input_state(repository, alias, include_response=True)
+        fingerprint = _hash({**state, "management_profile": normalized,
+                             "profile_revision": profile["revision"]})
+    except PersistentStoreFailure:
+        return {"drafts": [{**row, "stale": None,
+                            "stale_reason": "Актуалността на входните данни не е потвърдена."}
+                           for row in rows]}
+    return {"current_input_fingerprint": fingerprint, "drafts": [{**row,
+                        "stale": row["payload"].get("input_fingerprint") != fingerprint,
+                        "stale_reason": (
+                            ("Календарът е променен. Обнови проекта, за да използва новите стартове и периоди."
+                             if (row["payload"].get("input_snapshot") or {}).get("calendar") != state.get("calendar")
+                             else "Данните, моделът или денят на оценката са променени — създай нов проект.")
+                            if row["payload"].get("input_fingerprint") != fingerprint else None),
+                        } for row in rows]}

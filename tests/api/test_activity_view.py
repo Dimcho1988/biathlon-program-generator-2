@@ -1,0 +1,233 @@
+from __future__ import annotations
+
+from copy import deepcopy
+import pytest
+from fastapi.testclient import TestClient
+
+from apps.api import dependencies
+from apps.api.main import app
+
+
+ACTIVITY_REF = "act_" + "1" * 32
+AUTH = {
+    "Authorization": "Bearer service-secret",
+    "X-OnFlows-Athlete-Alias": "ath-activity-view",
+}
+
+
+def _catalog() -> dict:
+    return {
+        "activity_ref": ACTIVITY_REF,
+        "start_at_utc": "2026-08-26T05:00:00+00:00",
+        "start_local": "2026-08-26T08:00:00",
+        "local_date": "2026-08-26",
+        "timezone": "Europe/Sofia",
+        "utc_offset_minutes": 180,
+        "sport": "Run",
+        "activity_type": "Run",
+        "activity_sub_type": None,
+        "name": "Pinned threshold",
+        "description": "Private note",
+        "moving_time_s": 600,
+        "elapsed_time_s": 620,
+        "recording_time_s": 610,
+        "distance_m": 2400.0,
+        "elevation_gain_m": 12.0,
+        "average_hr_bpm": 151.0,
+        "max_hr_bpm": 171.0,
+        "average_speed_mps": 4.0,
+        "max_speed_mps": 5.0,
+        "canonical_training_load": 14.0,
+        "quality_status": "valid",
+        "quality_reason": None,
+        "hr_coverage_percent": 100.0,
+        "canonical_summary": {
+            "duration_min": 10.0,
+            "zones": [
+                {
+                    "zone": "Z3",
+                    "raw_time_s": 600.0,
+                    "equivalent_time_s": 480.0,
+                    "effective_load": 14.0,
+                }
+            ],
+        },
+        "intervals": [],
+    }
+
+
+def _active_row() -> dict:
+    return {
+        "generation_id": "11111111-1111-4111-8111-111111111111",
+        "revision": 7,
+        "analysis_as_of": "2026-08-26",
+        "activated_at": "2026-08-26T18:00:00+00:00",
+        "catalog_payload": _catalog(),
+        "input_key": "a" * 64,
+        "canonical_run_key": "b" * 64,
+        "shadow_run_key": "c" * 64,
+        "previous_activity_ref": "act_" + "2" * 32,
+        "next_activity_ref": "act_" + "3" * 32,
+        "series_payload": {
+            "samples": [
+                {
+                    "timestamp": "2026-08-26T05:00:00+00:00",
+                    "elapsed_s": 0.0,
+                    "hr_raw_bpm": 151.0,
+                    "speed_raw_kmh": 14.4,
+                    "altitude_m": 600.0,
+                    "grade_raw_pct": 1.0,
+                    "quality_flags": [],
+                }
+            ]
+        },
+        "shadow_payload": {
+            "schema_version": "activity-shadow-derived-v2",
+            "experimental": True,
+            "zone_summary": [
+                {"zone_name": "Z3", "hrmod_final_seconds": 590.0}
+            ],
+        },
+    }
+
+
+def test_detail_and_comparison_use_the_same_intervals_without_mutating_pinned_data():
+    from apps.api.routes.activities import _activity_view_payload
+    from biathlon import unified_load
+    row = _active_row()
+    bounds = [80,120,140,160,180,200]
+    row["catalog_payload"].update(elapsed_time_s=4., moving_time_s=4.)
+    row["shadow_payload"] = {
+        "trainability_index": {"zone_bounds_bpm":bounds},
+        "zone_summary": [{"zone_name":f"Z{i+1}", "lower_bpm":bounds[i], "upper_bpm":bounds[i+1],
+                          "raw_seconds":999.,"hrmod_final_seconds":999.} for i in range(5)],
+        "timeseries": [
+            {"elapsed_s":0.,"hr_raw_bpm":150.,"hr_clean_bpm":150.,"hrmod_candidate_bpm":170.,"hrmod_final_bpm":170.,
+             "hr_interval_classification":"smart_recording","hr_interval_end_s":4.},
+            {"elapsed_s":4.,"hr_raw_bpm":170.,"hr_clean_bpm":170.,"hrmod_candidate_bpm":190.,"hrmod_final_bpm":190.}],
+    }
+    before = deepcopy(row)
+    result = _activity_view_payload(row, ACTIVITY_REF)
+    detail = result["activity"]["hr_zone_times"]
+    comparison = result["shadow"]["zone_summary"]
+    assert result["activity"]["hr_zone_time_method"] == unified_load.HR_ZONE_TIME_VERSION
+    assert [r["raw_time_s"] for r in detail] == pytest.approx([r["raw_seconds"] for r in comparison])
+    assert [r["hrmod_time_s"] for r in detail] == pytest.approx([0.,0.,0.,2.,2.])
+    assert result["activity"]["hrmod_zones"][-1]["final_time_s"] == pytest.approx(2.)
+    assert row == before
+
+
+def test_activity_view_is_one_generation_pinned_repository_read(monkeypatch):
+    class Repository:
+        def __init__(self):
+            self.calls: list[tuple[str, str]] = []
+
+        def active_activity_view(self, athlete_alias, activity_ref):
+            self.calls.append((athlete_alias, activity_ref))
+            return _active_row()
+
+    repository = Repository()
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
+    monkeypatch.setattr(dependencies, "repository", lambda: repository)
+
+    response = TestClient(app).get(
+        f"/api/v2/real/activities/{ACTIVITY_REF}/view", headers=AUTH
+    )
+
+    assert response.status_code == 200
+    assert repository.calls == [("ath-activity-view", ACTIVITY_REF)]
+    payload = response.json()
+    assert payload["schema_version"] == "activity-view-v1"
+    assert payload["generation_id"] == "11111111-1111-4111-8111-111111111111"
+    assert payload["revision"] == 7
+    assert payload["activity"]["activity_ref"] == ACTIVITY_REF
+    assert payload["activity"]["previous_activity_ref"] == "act_" + "2" * 32
+    assert payload["activity"]["hrmod_zones"] == [
+        {"zone": "Z3", "final_time_s": 590.0}
+    ]
+    assert payload["series"]["activity_ref"] == ACTIVITY_REF
+    assert payload["series"]["series"][0]["hr_bpm"] == 151.0
+    assert payload["shadow"]["schema_version"] == "activity-shadow-derived-v2"
+    assert "input_key" not in payload
+    assert "shadow_run_key" not in payload
+
+
+def test_activity_view_retains_revision_zero_rollout_compatibility(monkeypatch):
+    class Repository:
+        def active_activity_view(self, athlete_alias, activity_ref):
+            return {
+                **_active_row(),
+                "generation_id": None,
+                "revision": 0,
+                "analysis_as_of": None,
+                "activated_at": None,
+                "input_key": None,
+                "shadow_run_key": None,
+                "series_payload": None,
+                "shadow_payload": None,
+            }
+
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
+    monkeypatch.setattr(dependencies, "repository", lambda: Repository())
+
+    response = TestClient(app).get(
+        f"/api/v2/real/activities/{ACTIVITY_REF}/view", headers=AUTH
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["generation_id"] is None
+    assert payload["revision"] == 0
+    assert payload["series"] is None
+    assert payload["shadow"] is None
+    assert payload["activity"]["shadow_available"] is False
+
+
+def test_activity_view_fails_closed_when_a_pointer_payload_is_missing(monkeypatch):
+    class Repository:
+        def active_activity_view(self, athlete_alias, activity_ref):
+            return {**_active_row(), "series_payload": None}
+
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
+    monkeypatch.setattr(dependencies, "repository", lambda: Repository())
+
+    response = TestClient(app).get(
+        f"/api/v2/real/activities/{ACTIVITY_REF}/view", headers=AUTH
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Persistent server storage is unavailable"
+
+
+@pytest.mark.parametrize("endpoint", [f"/api/v2/real/activities/{ACTIVITY_REF}/shadow",
+                                       f"/api/v2/real/activity-shadow?activity_ref={ACTIVITY_REF}"])
+def test_standalone_shadow_uses_same_pinned_elapsed_window_as_activity_view(monkeypatch, endpoint):
+    from apps.api.hr_zone_times import synchronize_hr_zone_times
+    row = _active_row()
+    row["catalog_payload"].update(elapsed_time_s=3., moving_time_s=1.)
+    row["shadow_payload"].update({
+        "trainability_index": {"zone_bounds_bpm": [80,120,140,160,180,200], "activity_duration_s": 1.},
+        "zone_summary": [{"zone_name":f"Z{i+1}","raw_seconds":99.,"hrmod_final_seconds":99.} for i in range(5)],
+        "timeseries": [{"elapsed_s":float(t),"hr_raw_bpm":150.,"hrmod_final_bpm":170.} for t in (0,1)],
+    })
+    class Repository:
+        def active_activity_view(self, alias, ref):
+            return deepcopy(row)
+        def activity_shadow(self, alias, ref):
+            pytest.fail("Standalone detail must use its coherent pinned catalog window")
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
+    monkeypatch.setattr(dependencies, "repository", lambda: Repository())
+    client = TestClient(app)
+    main = client.get(f"/api/v2/real/activities/{ACTIVITY_REF}/view",headers=AUTH)
+    shadow = client.get(endpoint,headers=AUTH)
+    assert main.status_code == shadow.status_code == 200
+    assert shadow.json()["zone_summary"] == main.json()["shadow"]["zone_summary"]
+    assert shadow.json()["hr_zone_time_method"]["recorded_seconds"] == 3.
+    assert sum(r["hrmod_final_seconds"] for r in shadow.json()["zone_summary"]) == 2.
+    # Legacy standalone runs lack a catalog but retain a usable duration.
+    legacy = deepcopy(row["shadow_payload"])
+    legacy["trainability_index"]["activity_duration_s"] = 2.
+    assert synchronize_hr_zone_times(legacy)["hr_zone_time_method"]["recorded_seconds"] == 2.
+    # Stored moving time must never clip later elapsed samples.
+    legacy["trainability_index"]["activity_duration_s"] = .5
+    assert synchronize_hr_zone_times(legacy)["hr_zone_time_method"]["recorded_seconds"] == 1.

@@ -1,0 +1,140 @@
+name: Database CI
+
+on:
+  pull_request:
+    branches:
+      - codex/build-end-to-end-cloud-integration
+    paths:
+      - "supabase/**"
+      - "tests/database/**"
+      - "tests/api/test_account_access_migration.py"
+      - "scripts/audit_migration_alignment.py"
+      - "docs/migration-alignment-2026-10-19.json"
+      - "docs/migration-remote-before-2026-10-19.json"
+      - ".github/workflows/database-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.116.0
+      - name: Start local Supabase
+        run: supabase start
+      - name: Rebuild database from migrations
+        run: supabase db reset --local
+      - name: Verify local migration history
+        run: supabase migration list --local
+      - name: Capture clean application catalog before fixtures
+        run: |
+          python3 tests/database/test_migration_alignment.py
+          python3 scripts/audit_migration_alignment.py verify-files
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+            --no-psqlrc --set ON_ERROR_STOP=1 --tuples-only --no-align \
+            --file tests/database/migration_catalog_snapshot.sql > migration-catalog.json
+          python3 scripts/audit_migration_alignment.py validate-catalog migration-catalog.json
+      - name: Retain application catalog evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: onflows-migration-catalog-${{ github.sha }}
+          path: migration-catalog.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Verify response-aware plan publication
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/management_response_checkpoint.sql
+      - name: Verify coherent service-only planning input bundles
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/planning_inputs_bundle.sql
+      - name: Verify unified load preferences and sustained HRmax updates
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/unified_zone_load.sql
+      - name: Verify monotonic analysis revision publication checkpoints
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/management_checkpoint_analysis_revision.sql
+      - name: Verify real concurrent checkpoint and input-write boundaries
+        timeout-minutes: 3
+        run: python3 tests/database/management_checkpoint_concurrency.py
+      - name: Verify exact format recovery and atomic schema reconciliation guards
+        run: python3 tests/database/schema_reconciliation_roundtrip.py
+      - name: Verify immutable generation read contract
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/generation_read_contract.sql
+      - name: Verify immutable history generation references and cleanup boundaries
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/history_generation_protection.sql
+      - name: Verify real concurrent history publication and generation deletion
+        timeout-minutes: 3
+        run: python3 tests/database/history_generation_concurrency.py
+      - name: Verify historical run input activity protection and native writers
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/safe_retention_history.sql
+      - name: Verify bounded cleanup journals recovery expiry and progress
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/safe_retention_journal.sql
+      - name: Verify real concurrent history native publication and bounded cleanup
+        timeout-minutes: 5
+        run: python3 tests/database/safe_retention_concurrency.py
+      - name: Verify compact plan acknowledgements preserve publication checks
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/compact_management_save.sql
+      - name: Verify unified estimate approval through real save RPCs
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/unified_planning_approval.sql
+      - name: Verify complete draft capacity through save and approval RPCs
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/management_draft_capacity.sql
+      - name: Verify unchanged refresh audit without duplicate plan revisions
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/unchanged_management_checks.sql
+      - name: Verify service-only overview presentation without changing evidence
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/management_overview.sql
+      - name: Verify lossless storage maintenance boundaries
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/shadow_compaction.sql
+      - name: Verify private history archival and restoration
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/history_archive.sql
+      - name: Verify final audit eligibility and computation leases
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/final_audit_contract.sql
