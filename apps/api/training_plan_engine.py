@@ -38,7 +38,7 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v71-single-q-allocation"
+VERSION = "training-management-v72-measured-replay-budget"
 PARAMETER_VERSION = "management-parameters-v60"
 MIN_AEROBIC_DOSE_FRACTION = 0.  # Native recipes own their structural minimum; no generic Tmax floor.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
