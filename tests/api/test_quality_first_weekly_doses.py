@@ -63,7 +63,10 @@ def test_combination_meets_unequal_component_needs_without_halving_or_doubling_r
 
 
 def test_combination_cannot_hide_an_undersized_second_component():
-    _, method = combined_methods.candidates([('Run',m) for m in parents()],
+    complete = parents()
+    for part in complete:
+        part['min_work_min'] = 12.
+    _, method = combined_methods.candidates([('Run',m) for m in complete],
         {'shortage':True, 'sessions_by_component':{'Z2':1,'Z3':1}})[0]
     method['combined_work_targets'] = {'Z3':35., 'Z2':5.}
     method['combined_work_limits'] = {'Z3':40., 'Z2':5.5}

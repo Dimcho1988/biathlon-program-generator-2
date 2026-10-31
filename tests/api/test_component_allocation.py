@@ -153,11 +153,11 @@ def test_lower_future_target_does_not_force_filling_available_sessions(monkeypat
     p["component_targets_weekly"] = {z:40. if z == "Z1" else 0. for z in COMPONENTS}
     p["max_key_sessions_per_week"] = 0
     plan = run(monkeypatch, p, Repository())
-    # The target cannot fit a building dose. Recovery has its own absolute
-    # minimum and may use the remaining budget without filling all 21 slots.
+    # A smaller complete dose may retain its training role. The remaining
+    # objective must not force filling all 21 slots or unused E headroom.
     selected = [s for d in plan["days"] for s in d["sessions"]]
     assert selected and len(selected) < 21
-    assert all(s["purpose"] in {"RECOVERY", "MAINTENANCE"} and s["zone"] in {"Z1", "Z2"}
+    assert all(s["purpose"] in {"BUILDING", "RECOVERY", "MAINTENANCE"} and s["zone"] in {"Z1", "Z2"}
                and s["main_work_minutes"] >= s["dose_evidence"]["minimum_primary_work_minutes"] for s in selected)
     allocation = plan["allocation"]["components"]["Z1"]
     assert allocation["planned_effective"] <= allocation["target_effective"] + .01
@@ -294,7 +294,11 @@ def test_automatic_q_target_keeps_whole_session_minimum_without_filling_e_headro
         assert any(r["code"] == "DIRECT_Q_PROGRESSION_BUDGET" for d in plan["days"] for r in d.get("rejected_alternatives",[]))
     if long_day is not None:
         long = next(d for d in plan["days"] if (TODAY+timedelta(days=plan["days"].index(d))).weekday() == long_day)
-        assert any(s["zone"] == "Z1" and s["purpose"] != "RECOVERY" and s["main_work_minutes"] >= 60 for s in long["sessions"])
+        # The chosen day keeps an endurance recipe; a reduced complete dose
+        # need not meet the former generic 25%-Tmax (60-minute) floor.
+        assert any(s["zone"] == "Z1" and s["purpose"] != "RECOVERY"
+                   and s["main_work_minutes"] >= s["dose_evidence"]["minimum_primary_work_minutes"]
+                   for s in long["sessions"])
 
 
 def test_missing_actual_q_is_unknown_not_zero_coverage():

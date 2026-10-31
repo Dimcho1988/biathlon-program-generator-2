@@ -144,7 +144,7 @@ export interface DoseEvidence {
   supported_test_duration_s?: number[] | null; capacity_confidence?: string; capacity_reference?: string;
   base_fraction?: number; readiness_dose_factor?: number;
   dose_reduced?: boolean;
-  min_dose_fraction?: number | null; minimum_dose_scope?: string; applied_structure_fraction?: number; max_dose_fraction?: number; shared_day_structure_fraction?: number;
+  minimum_structure_work_minutes?: number; min_dose_fraction?: number | null; minimum_dose_scope?: string; applied_structure_fraction?: number; max_dose_fraction?: number; shared_day_structure_fraction?: number;
   capacity_source: string; capacity_minutes: number; target_hr_bpm: number | null; target_speed_kmh: number | null;
   fraction: number; requested_work_minutes: number; prescribed_work_minutes: number;
   limits: Array<{ code: string; limit_minutes: number }>; fallback_reasons: string[]; model_version: string;

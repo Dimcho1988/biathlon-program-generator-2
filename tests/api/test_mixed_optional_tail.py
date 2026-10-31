@@ -113,17 +113,15 @@ def test_positive_cap_only_trims_the_tail_from_realized_whole_repetitions(cap):
 
 
 @pytest.mark.parametrize("readiness_factor", [.5, 1.])
-def test_optional_tail_cannot_change_the_five_percent_primary_minimum(readiness_factor):
+def test_optional_tail_cannot_replace_the_complete_primary_structure(readiness_factor):
     method, evidence, repo = mixed_fixture("Z3", variant="STEADY")
     evidence.update(capacity_minutes=160., readiness_dose_factor=readiness_factor)
-    assert method["minimum_fraction"] == .05
-    required_primary = .05 * 160. * readiness_factor
+    required_primary = method['min_work_min']
     minima = [engine._minimum_work(method, {**evidence, "easy_work_cap_minutes": cap}, repo.settings)
               for cap in (None, 0., 2., 1000.)]
     assert minima == [required_primary] * len(minima)
     for cap in (None, 0., 2., 1000.):
         shaped = {**evidence, "easy_work_cap_minutes": cap}
         complete = engine._blocks(method, required_primary, shaped, repo.settings)
-        smaller = engine._blocks(method, required_primary - .5, shaped, repo.settings)
-        assert engine._minimum_dose_usage(complete, shaped, "Z3", primary_only=True) == pytest.approx(.05 * readiness_factor)
-        assert engine._minimum_dose_usage(smaller, shaped, "Z3", primary_only=True) < .05 * readiness_factor
+        assert primary_work(complete, 'Z3') == required_primary
+        assert engine._minimum_dose_usage(complete, shaped, "Z3", primary_only=True) < .05 * readiness_factor

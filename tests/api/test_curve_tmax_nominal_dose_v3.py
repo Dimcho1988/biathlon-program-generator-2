@@ -65,7 +65,7 @@ def test_large_interval_ceiling_cannot_raise_the_continuous_tmax_minimum(readine
     assert evidence["effort_profile"]["max_repetitions"] == 34
 
 
-def test_composite_minimum_uses_independent_secondary_tmax_without_mutating_its_ceiling():
+def test_composite_minimum_preserves_its_recipe_without_mutating_secondary_ceiling():
     body = configured(age_years=25, training_experience_years=5)
     method = next(method for method in engine.resolved_methods(body) if method["structure"] == "ALTERNATING")
     evidence = {"capacity_minutes": 100., "target_hr_bpm": 135., "target_speed_kmh": None,
@@ -74,13 +74,13 @@ def test_composite_minimum_uses_independent_secondary_tmax_without_mutating_its_
                     "effort_profile": {"total_capacity_ratio": 3.}}}
     original = deepcopy(evidence)
     minimum = engine._minimum_work(method, evidence, Repository().settings)
-    assert minimum == 25.
+    assert minimum == method['min_work_min'] == 20.
     assert evidence == original
     blocks = engine._blocks(method, minimum, evidence, Repository().settings)
     assert len([block for block in blocks if block["kind"] == "WORK"]) == 4
     # Published upper-dose accounting retains the approved secondary ceiling.
-    assert engine._dose_usage(blocks, evidence, method["zone"]) == pytest.approx(.125)
-    assert engine._minimum_dose_usage(blocks, evidence, method["zone"]) == .25
+    assert engine._dose_usage(blocks, evidence, method["zone"]) == pytest.approx(.1)
+    assert engine._minimum_dose_usage(blocks, evidence, method["zone"]) == .2
 
 
 def test_paired_minimum_reports_the_least_complete_independent_tmax_fraction():

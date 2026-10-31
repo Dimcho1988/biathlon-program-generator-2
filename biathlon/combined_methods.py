@@ -3,7 +3,7 @@ from copy import deepcopy
 from hashlib import sha256
 import math
 
-VERSION = 'combined-methods-v2-component-role-budgets'
+VERSION = 'combined-methods-v3-complete-part-minima'
 
 
 def shortage(remaining, nominal, available_slots, *, vectors=None, key_costs=None, available_key_slots=None):
@@ -85,7 +85,6 @@ def candidates(candidates, evidence):
                         'structure': 'COMBINED_METHODS', 'position': first['position'],
                         'combined_methods': deepcopy([first, second]), 'combination_shortage': deepcopy(evidence),
                         'min_work_min': .5, 'max_work_min': first['max_work_min'],
-                        'minimum_fraction': first.get('minimum_fraction', .25)/2,
                         'warmup_min': max(first['warmup_min'], second['warmup_min']),
                         'cooldown_min': max(first['cooldown_min'], second['cooldown_min']),
                         'source_id': 'TWO_REGISTRY_METHODS', 'source_version': VERSION,

@@ -113,7 +113,7 @@ def assert_complete_counterfactual_fits(repo, body, plan, now):
             blocks = [block for block in blocks if block["label"] != "Довършване на леката аеробна работа"]
             assert blocks and sum(block["duration_min"] for block in blocks) <= body["available_minutes"][day.weekday()]
             if method["zone"] != "STR":
-                lower = method.get("minimum_fraction", .25)
+                lower = method.get("minimum_fraction", engine.MIN_AEROBIC_DOSE_FRACTION)
                 assert engine._minimum_dose_usage(blocks, capacity, method["zone"], primary_only=bool(method.get("mixed_component"))) >= lower-1e-9
             ceiling = engine._dose_ceiling(method, purpose, body, "GENERAL_PREPARATION",
                 capacity, body["planning_controls"])

@@ -38,9 +38,9 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v69-activity-load-evidence"
-PARAMETER_VERSION = "management-parameters-v58"
-MIN_AEROBIC_DOSE_FRACTION = .25  # Explicit coach rule, not a physiological threshold.
+VERSION = "training-management-v70-microcycle-complete-doses"
+PARAMETER_VERSION = "management-parameters-v59"
+MIN_AEROBIC_DOSE_FRACTION = 0.  # Native recipes own their structural minimum; no generic Tmax floor.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
     "RE_ENTRY": ("Z1", "STR"),
@@ -1605,12 +1605,11 @@ def _absolute_minimum(method):
 
 
 def _minimum_work(method, evidence, settings):
-    """Smallest complete structure meeting the relative minimum on a .5-min grid.
+    """Smallest complete recipe, independently of its desired/maximum dose.
 
-    Relative minima use each effort's continuous Tmax. Approved interval
-    ratios define the method work budget independently of this lower gate.
-    Each threshold session meets its own minimum; supplements use a smaller one.
-    Strength keeps its separate circuit/profile minimum, without aerobic Tmax.
+    A generic fraction of Tmax must not turn a smaller executable dose into
+    rest. Preserve the recipe's declared minimum and whole blocks; published
+    source recipes and strength retain their own contracts.
     """
     if method.get("strength_profile"):
         return strength_methods.minimum_work(method, evidence)
@@ -1634,7 +1633,7 @@ def _minimum_work(method, evidence, settings):
         resolution = (primary.get("method_library") or {}).get("resolution") or {}
         options = ([v/60 for v in resolution["work_options_seconds"]] if resolution.get("work_options_seconds")
                    else [required] if resolution.get("structure") in {"CONTINUOUS", "SCALED_SEQUENCE", "PROGRESSIVE_CONTINUOUS"}
-                   else [math.ceil(required * 2 - 1e-9) / 2])
+                   else _native_work_options(primary, required, method['max_work_min']))
         for amount in options:
             if amount + 1e-9 >= required and amount <= method["max_work_min"] + 1e-9:
                 blocks = _blocks(method, amount, evidence, settings)
@@ -1650,12 +1649,37 @@ def _minimum_work(method, evidence, settings):
         return r["minimum_work_seconds"] / 60
     primary_only = bool(method.get("mixed_component") or method.get("developmental_variant"))
     minimum = method.get("minimum_fraction", MIN_AEROBIC_DOSE_FRACTION) * evidence.get("readiness_dose_factor", 1.)
-    for half_minutes in range(math.ceil(method['min_work_min']*2), math.floor(method['max_work_min']*2)+1):
-        work = half_minutes / 2
+    # Capacity-dosed native intervals already allow one whole effort; their
+    # original example repeat count is not a hard floor. Introductory,
+    # supporting and race recipes keep their declared complete structure.
+    native_interval = (method['structure'] in {'MODEL_INTERVALS', 'METABOLIC_INTERVALS'}
+        and not any(method.get(k) for k in ('developmental_variant', 'mixed_component', 'race_specific')))
+    structural_minimum = (method['min_work_min'] if native_interval else
+        max(method['min_work_min'], method.get('source_work_minutes', [method['min_work_min']])[0]))
+    for work in _native_work_options(method, structural_minimum, method['max_work_min']):
         blocks = _blocks(method, work, evidence, settings)
         if blocks and _minimum_dose_usage(blocks, evidence, method["zone"], primary_only=primary_only) + 1e-9 >= minimum:
             return work
     return None
+
+
+def _native_work_options(method, minimum, maximum):
+    """Keep a recipe's exact repetition unit, including sub-half-minute work."""
+    interval = method.get('interval_template') or method.get('interval_profile') or {}
+    step = (interval['work_seconds']/60
+            if method.get('structure') in {'MODEL_INTERVALS', 'METABOLIC_INTERVALS'} and interval.get('work_seconds')
+            else .5)
+    return (n*step for n in range(math.ceil(minimum/step-1e-9), math.floor(maximum/step+1e-9)+1))
+
+
+def _beneficial_q_variant(variants, remaining_q):
+    """Prefer an admissible upper whole dose only when it improves the gap.
+
+    A coarse upper repetition must not suppress a useful smaller variant.
+    Each record starts with (distance from target, above target, work minutes).
+    """
+    useful = [v for v in variants if v[0] < remaining_q-.001]
+    return min(useful, key=lambda v: (not v[1], v[0], v[2])) if useful else None
 
 
 def _volume_ceiling(profile, periodization, events, available, baseline, start, end, preferences, limited):
@@ -2198,7 +2222,11 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         strength_building += sum(v["zone"] == "STR" and v.get("purpose") not in {"MAINTENANCE", "ACTIVATION"} for v in locked_sessions)
     activation_eligible = planning_history_supported and not blocked
     def session_counts(at_day, extra=()):
-        """Real and proposed sessions in the same rolling seven-day window."""
+        """Frequency belongs to the target microcycle; key exposure stays rolling.
+
+        Past load and key-session spacing still constrain today's dose. A
+        previous cycle's ordinary sessions cannot consume this cycle's slots.
+        """
         left, right = (at_day-timedelta(days=6)).isoformat(), at_day.isoformat()
         actual = [s for s in recorded_sessions if left <= s.date <= right]
         planned = [s for d in result_days if left <= d["date"] <= right
@@ -2206,7 +2234,15 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         if (locked_day and left <= locked_day["date"] < right
             and not any(d.get("locked") for d in result_days)):
             planned += locked_sessions
-        count = len(actual)+len(planned)
+        cycle_left, cycle_right = planning_schedule.microcycle_bounds(
+            at_day, at_day, meso_anchor, program_start, program_end)
+        cycle_left, cycle_right = cycle_left.isoformat(), cycle_right.isoformat()
+        count = sum(cycle_left <= s.date <= cycle_right for s in recorded_sessions)
+        count += sum(len(planning_schedule.day_sessions(d)) for d in result_days
+                     if cycle_left <= d["date"] <= cycle_right)
+        if (locked_day and cycle_left <= locked_day["date"] < right
+            and not any(d.get("locked") for d in result_days)):
+            count += len(locked_sessions)
         keys = sum(s.is_key for s in actual)
         keys += sum(s.get("is_key_session", s["zone"] in {"Z3", "Z4", "Z5"}) for s in planned)
         keys += len({str(e["start_date"]) for e in events
@@ -2214,8 +2250,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                      and left <= str(e["start_date"]) <= right
                      and not any(s.date == str(e["start_date"]) for s in actual)})
         for d, n, is_key in extra:
-            if left <= d.isoformat() <= right:
+            if cycle_left <= d.isoformat() <= cycle_right:
                 count += n
+            if left <= d.isoformat() <= right:
                 keys += n if is_key else 0
         return count, keys
 
@@ -2772,8 +2809,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         session["dose_evidence"].pop("continuity", None)
                     shadow_rows = _add_forecast_session(shadow_rows, day, effective_part)
                     shadow_days.append({"date":key, "sessions":[session]})
+            # Old locks without a recorded dose contract retain their legacy
+            # review gate. Newly generated locks record the structural policy.
             below_minimum = any(s["zone"] != "STR" and
-                _minimum_dose_usage(s["blocks"], s["dose_evidence"], s["zone"], primary_only=bool(s.get("mixed_component") or s["dose_evidence"].get("developmental_variant"))) + 1e-9 < (s["dose_evidence"].get("min_dose_fraction", MIN_AEROBIC_DOSE_FRACTION) or 0.)
+                _minimum_dose_usage(s["blocks"], s["dose_evidence"], s["zone"], primary_only=bool(s.get("mixed_component") or s["dose_evidence"].get("developmental_variant"))) + 1e-9 < (s["dose_evidence"].get("min_dose_fraction", .25) or 0.)
                 for s in preserved)
             if below_minimum:
                 item.update(status="REVIEW_REQUIRED", explanation="Днешната утвърдена задача е под минималната относителна доза. Нужен е преглед; не се запазва автоматично кратката сесия.")
@@ -2802,7 +2841,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             item["rejected_alternatives"].append({"method_id": "TIME_BUDGET", "code": "WEEKLY_TIME_LIMIT_EXHAUSTED",
                                                    "reason": item["explanation"]})
         elif sessions >= session_limit:
-            item["explanation"] = f"Достигнат е максимумът от {session_limit} тренировъчни занимания за периода; отчетени са {sessions} изпълнени и планирани сесии."
+            item["explanation"] = f"Достигнат е максимумът от {session_limit} тренировъчни занимания за микроцикъла; отчетени са {sessions} изпълнени и планирани сесии."
         else:
             # Protect complete future quality doses before optional work uses
             # their preparation/cascade budget. These are local reservations,
@@ -2934,19 +2973,38 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         if segment_keys[future_day] == segment_keys[day]:
                             amounts.add(_quantized_work(fm, min(maximum, max(minimum, requested))))
                             amounts.add(_whole_work_at_most(fm, max(minimum, requested), maximum))
+                        cap_time = (observed_session_ceiling(future_sport, future_day,
+                            fm["warmup_min"]+fm["cooldown_min"]+fm.get("recovery_min", 0.),
+                            quality=future_purpose == "BUILDING" and fz in {"Z3", "Z4", "Z5"})
+                            if controls and fz != "STR" else float("inf"))
+                        def fits_future_structure(parts):
+                            return (bool(parts) and _dose_fits(parts, cap, fz, ceiling*cap["readiness_dose_factor"])
+                                and sum(b["duration_min"] for b in parts) <= available[future_day.weekday()]+.001
+                                and all(sum(b["duration_min"] for b in parts if b.get("session_index", 1) == slot) <= cap_time+.001
+                                        for slot in {b.get("session_index", 1) for b in parts}))
+                        admitted_work = set()
                         for future_work in sorted(amounts, reverse=True):
                             future_blocks = _blocks(fm, future_work, cap, settings)
-                            if (future_work < minimum or not future_blocks
-                                or not _dose_fits(future_blocks, cap, fz, ceiling*cap["readiness_dose_factor"])
-                                or sum(b["duration_min"] for b in future_blocks) > available[future_day.weekday()]):
+                            if future_work < minimum:
                                 continue
-                            if controls and fz != "STR":
-                                cap_time = observed_session_ceiling(future_sport, future_day,
-                                    fm["warmup_min"]+fm["cooldown_min"]+fm.get("recovery_min", 0.),
-                                    quality=future_purpose == "BUILDING" and fz in {"Z3", "Z4", "Z5"})
-                                if any(sum(b["duration_min"] for b in future_blocks if b.get("session_index", 1) == slot) > cap_time+.001
-                                       for slot in {b.get("session_index", 1) for b in future_blocks}):
+                            if not fits_future_structure(future_blocks):
+                                # A desired future dose exceeding time/exposure
+                                # does not restrict the choice to minimum or rest.
+                                # Reserve the largest complete variant that fits.
+                                lo, hi = minimum, future_work
+                                if not fits_future_structure(_blocks(fm, lo, cap, settings)):
                                     continue
+                                for _ in range(24):
+                                    mid = (lo+hi)/2
+                                    if fits_future_structure(_blocks(fm, mid, cap, settings)):
+                                        lo = mid
+                                    else:
+                                        hi = mid
+                                future_work = max(minimum, _quantized_work(fm, lo))
+                                future_blocks = _blocks(fm, future_work, cap, settings)
+                            if future_work in admitted_work or not fits_future_structure(future_blocks):
+                                continue
+                            admitted_work.add(future_work)
                             fq, fe, _ = _candidate_load(future_blocks, settings, forecast_rows, future_day, zone_tmax_minutes=cap.get("zone_tmax_minutes"))
                             options.append({"q": fq, "e": fe, "zone": fz, "double": bool(fm.get("double_threshold")),
                                 "method_id": fm["id"], "sport": future_sport,
@@ -3348,7 +3406,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                 minimum_work = _minimum_work(method, evidence, settings)
                 if minimum_work is None:
                     item["rejected_alternatives"].append({"method_id": method["id"], "code": "MINIMUM_CAPACITY_DOSE",
-                        "reason": f"Методният максимум не допуска минималните {method.get('minimum_fraction', MIN_AEROBIC_DOSE_FRACTION)*readiness_rule['dose_factor']*100:g}% от капацитета за този вариант."})
+                        "reason": "Методният бюджет не допуска минималната завършена структура за този вариант."})
                     continue
                 method["absolute_min_work_min"] = method["min_work_min"]
                 method["min_work_min"] = minimum_work
@@ -3571,12 +3629,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             and fits_component_budget(ce, cq)):
                             variants.append((abs(cq[z]-target_q), cq[z] > target_q, w, parts, cq, ce, ct))
                     if variants:
-                        distance, _, work, blocks, direct, effective, technical = min(variants, key=lambda v: (not v[1], v[0], v[2]))
-                        if distance >= target_q-.001:
+                        best_variant = _beneficial_q_variant(variants, target_q)
+                        if best_variant is None:
                             item["rejected_alternatives"].append({"method_id": method["id"],
                                 "code": "WHOLE_DOSE_WOULD_WORSEN_Q_GAP",
                                 "reason": "Минималната цяла доза отдалечава компонента от 100% повече от оставащия недостиг."})
                             continue
+                        _, _, work, blocks, direct, effective, technical = best_variant
                         limits.append({"code": "UPPER_WHOLE_Q_DOSE_IF_ADMISSIBLE", "limit_minutes": _round(work)})
                 after_rows = _add_forecast_session(forecast_rows, day, effective)
                 def recovery_conflict(candidate_rows, candidate_q, candidate_e, candidate_minutes, *, protect_future=True,
@@ -3688,8 +3747,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     evidence["explanation"] += f" Минималната работна част за тази лека задача е {method['absolute_min_work_min']:g} минути. Максималната доза запазва ограниченията на капацитета, Recovery и общия товар."
                 elif method.get("combined_methods"):
                     evidence["explanation"] += " Всяка част запазва собствената си минимална цяла доза."
-                elif z != "STR":
+                elif z != "STR" and method.get("minimum_fraction", MIN_AEROBIC_DOSE_FRACTION) > 0:
                     evidence["explanation"] += f" Дозовият дял е от {method.get('minimum_fraction', MIN_AEROBIC_DOSE_FRACTION)*readiness_rule['dose_factor']*100:g}% до {max_usage*100:g}% от съответния капацитет."
+                elif z != "STR":
+                    evidence["explanation"] += f" Минималната завършена работна структура е {minimum_work:g} минути. При по-малък остатък от желаната доза се избира допустим по-кратък вариант, който запазва повторенията, паузите и подготовката."
                 evidence["explanation"] += f" Основна доза: {base_fraction*primary_share*100:g}% × Recovery {readiness_rule['dose_factor']:.3f} = {fraction*primary_share*100:.1f}%. Запазват се цели повторения и подготовката."
                 if primary_share != 1:
                     evidence["explanation"] += " При този метод общият работен бюджет включва редуването на двата компонента; показаната основна доза е само делът на основния компонент."
@@ -3951,6 +4012,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     same_cycle_keys = sum(segment_keys[d] == segment_keys[day] for d,_ in reserved_key_slots)
                     slots_left = min(len(future_slots), max(0, session_limit-sessions-current_cost-same_cycle_keys))
                     minimum_options = {}
+                    minimum_fallbacks = {}
                     def core_priority(option):
                         return (not reservation_preference(option[7], option[8]["method"].get("actual_sport", primary_sport),
                                                            [d for d,_ in option[5]]), *option[:2])
@@ -4002,8 +4064,6 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         core_minutes = sum(b["duration_min"] for b in core)
                         compatible = [(d,s) for d,s in future_slots if _phase(periodization, d)[0] in alternative_method["periods"]
                             and not (_phase(periodization, d)[1] and alternative_method["purpose"] == "SUPPORTING")
-                            and core_minutes <= (available[d.weekday()] if d > day else
-                                                 day_available-sum(b["duration_min"] for b in minimum_parts))+.001
                             and (component != "STR" or not previous or (d-previous).days >= 2)
                             ]
                         if not compatible:
@@ -4014,24 +4074,48 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                              "work":alternative_evidence["structure_work_budget_minutes"]})
                         if core and (component not in minimum_options or core_priority(option) < core_priority(minimum_options[component])):
                             minimum_options[component] = option
+                        if objective_work:
+                            # The desired dose is not a feasibility minimum.
+                            # Retain a complete smaller recipe before optional
+                            # work can consume this component's preparation.
+                            small, sq, se = minimum_cores[(alternative["sport"], alternative["method_id"])]
+                            small_minutes = sum(b["duration_min"] for b in small)
+                            fallback = (sq["Z1"], sum(se.values()), cost, sq, se, compatible, small_minutes, alternative["method_id"],
+                                {"method":alternative_method, "capacity":alternative_evidence, "blocks":small,
+                                 "purpose":alternative["purpose"], "objective_work":False,
+                                 "work":alternative_evidence["minimum_structure_work_minutes"]})
+                            if small and (component not in minimum_fallbacks or core_priority(fallback) < core_priority(minimum_fallbacks[component])):
+                                minimum_fallbacks[component] = fallback
                     used_future_slots = set()
                     used_future_minutes = {}
                     for record in reserved_keys:
                         used_future_minutes[record["date"]] = used_future_minutes.get(record["date"], 0.)+record["minutes"]
                     protected_methods = []
                     protected_cores = []
-                    for component, (_, _, cost, cq, ce, compatible, core_minutes, method_id, specification) in sorted(minimum_options.items(), key=lambda item: item[1][:2]):
-                        if cost > slots_left:
-                            continue
+                    # Cover executable components before reserving another
+                    # dose of an already represented component. Otherwise a
+                    # cheap repeat can displace the preparation promised to a
+                    # still-untrained quality in the previous slot.
+                    for component, preferred in sorted(minimum_options.items(), key=lambda item: (
+                        not planning_allocation.quality_priority(item[0], period_objectives), *item[1][:2])):
                         placement, checked = None, None
-                        for d,s in compatible:
-                            if ((d,s) in used_future_slots or used_future_minutes.get(d, 0.)+core_minutes >
-                                (available[d.weekday()] if d > day else day_available-sum(b["duration_min"] for b in minimum_parts))+.001):
+                        options = [preferred]
+                        if component in minimum_fallbacks:
+                            options.append(minimum_fallbacks[component])
+                        for option in options:
+                            _, _, cost, cq, ce, compatible, core_minutes, method_id, specification = option
+                            if cost > slots_left:
                                 continue
-                            trial = {**specification, "date":d, "slot":s}
-                            checked = reservation_check(minimum_parts, protected_cores+[trial], capacity=selected_evidence)
-                            if checked is not None:
-                                placement = (d,s)
+                            for d,s in compatible:
+                                if ((d,s) in used_future_slots or used_future_minutes.get(d, 0.)+core_minutes >
+                                    (available[d.weekday()] if d > day else day_available-sum(b["duration_min"] for b in minimum_parts))+.001):
+                                    continue
+                                trial = {**specification, "date":d, "slot":s}
+                                checked = reservation_check(minimum_parts, protected_cores+[trial], capacity=selected_evidence)
+                                if checked is not None:
+                                    placement = (d,s)
+                                    break
+                            if placement is not None:
                                 break
                         if placement is None:
                             continue
@@ -4449,7 +4533,9 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                   "strength_method_version": strength_methods.VERSION,
                   "strength_reduced_fraction_per_session": profile.get("strength_maintenance_fraction", .6),
                   "minimum_aerobic_dose_fraction": MIN_AEROBIC_DOSE_FRACTION,
-                  "minimum_dose_policy": "NOMINAL_FRACTION_SCALED_BY_READINESS_WITH_COMPLETE_STRUCTURE",
+                  "minimum_dose_policy": "COMPLETE_METHOD_STRUCTURE_WITHOUT_GENERIC_TMAX_FLOOR",
+                  "session_quota_scope": "ANCHORED_MICROCYCLE_ACTUAL_AND_PLANNED",
+                  "key_session_quota_scope": "ROLLING_SEVEN_DAYS_ACTUAL_AND_PLANNED",
                   "adaptive_methods_version": adaptive_methods.VERSION,
                   "load_progression": public_management(load_progression.public_context(progression)),
                   "building_fraction": continuous_building_fraction(profile), "maintenance_fraction": continuous_maintenance_fraction(profile),

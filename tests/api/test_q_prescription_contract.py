@@ -148,7 +148,7 @@ def test_effective_search_bound_covers_different_doses_and_splits():
         assert bound["STR"] == q["STR"]
 
 
-@pytest.mark.parametrize("target,expect_supplement", [(3., True), (40., False)])
+@pytest.mark.parametrize("target,expect_supplement", [(1.5, True), (3., False), (40., False)])
 def test_free_slots_do_not_reject_a_supplement_without_a_legal_standalone(monkeypatch, target, expect_supplement):
     from tests.api.test_load_progression import configured, observed
     from tests.api.test_management_v2 import reference_speed
