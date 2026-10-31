@@ -347,7 +347,11 @@ def test_full_year_plan_has_one_bounded_replay_archive_and_stays_below_one_mebib
     copies = [result["parameters"]["load_progression"]["individual_learning"],
               result["long_term"]["individual_learning"], result["long_term"]["progression"]["individual_learning"]]
     assert all(not ({"memory", "current", "source", "exclusions", "model_summary"} & set(copy)) for copy in copies)
-    encoded = json.dumps(result).encode()  # Larger ASCII/space form bounds the ordinary compact UTF-8 RPC body too.
+    # Measure the actual httpx JSON encoding used by SupabasePilotRepository.
+    # ASCII escaping counts Bulgarian guidance several times larger than the
+    # transmitted UTF-8 payload when more complete methods fit the week.
+    import httpx
+    encoded = httpx.Request("POST", "https://example.invalid/plan", json=result).content
     assert encoded.count(b'"episodes":') == 1
     assert encoded.count(b'"observations": [') == 1
     assert len(result["long_term"]["weeks"]) == 48

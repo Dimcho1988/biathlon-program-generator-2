@@ -5,7 +5,7 @@ accounting. Recovery remains a daily model; no intraday exponent is inferred.
 """
 from copy import deepcopy
 
-VERSION = "adaptive-methods-v6-complete-structures"
+VERSION = "adaptive-methods-v7-preserved-execution-bounds"
 
 
 def developmental(profile):
@@ -29,6 +29,9 @@ def short_variant(method):
     result.update(id=method["id"]+"-SHORT", title=method["title"]+" · кратък въвеждащ вариант",
                   min_work_min=4*work/60, max_work_min=12*work/60,
                   developmental_variant=True)
+    result["execution_limits"] = {"min_work_min": 4*work/60, "max_work_min": 12*work/60,
+                                  "min_repetitions": 4, "max_repetitions": 12}
+    result.pop("_resolved_dose_key", None)
     result["instructions"] = ("Контролирани кратки повторения, без отказ; поне 2 в резерв. Пълна почивка. "
         "Спри при болка или загуба на техника. Не гони пулса. "
         "Кратките отсечки не гарантират нисък лактат.")
@@ -54,6 +57,7 @@ def mixed_variants(methods):
                          periods=tuple(p for p in m["periods"] if p not in {"RE_ENTRY", "TRANSITION"}))
             if m["zone"] in {"Z2", "Z3"}:
                 child.update(structure="MIXED_AEROBIC", min_work_min=2., max_work_min=20.)
+                child["execution_limits"] = {"min_work_min": 2., "max_work_min": 20.}
             else:
                 child = short_variant(child)
                 key = "interval_template" if child["structure"] == "MODEL_INTERVALS" else "interval_profile"
@@ -61,6 +65,7 @@ def mixed_variants(methods):
                 # quality repetitions can be complete without being a new workout.
                 child[key]["min_repetitions"] = 2
                 child["min_work_min"] = 2*child[key]["work_seconds"]/60
+                child["execution_limits"].update(min_repetitions=2, min_work_min=child["min_work_min"])
             child["adaptation"] = "Допълващ блок от оставащия Q/7–40 бюджет, след загрявка и упражнения, преди довършване на леката работа. Намалена доза според готовността; не е втора пълна развиваща сесия."
             result.append(child)
     return result

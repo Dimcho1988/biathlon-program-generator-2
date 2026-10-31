@@ -63,19 +63,19 @@ def test_dimitar_style_partial_history_produces_activatable_estimated_draft(monk
     assert repo.envelope == original
 
 
-def test_estimated_automatic_history_starts_with_recorded_time_not_expert_q_total(monkeypatch):
+def test_supported_estimated_history_uses_q_without_a_second_historical_time_ceiling(monkeypatch):
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
     repo, _ = incomplete(30)
     body = configured(availability_mode="AUTO_HISTORY")
     result = engine.generate_plan(repo, "athlete", body, start_date=TODAY+timedelta(days=1), now=NOW)
     parameters = result["parameters"]
     budget = parameters["time_budget"]
-    assert budget["basis"] == "RECORDED_HISTORY_INITIAL_ENVELOPE"
-    assert budget["period_limit_minutes"] == parameters["historical_training_weekly_minutes"]
-    assert 0 < result["summary"]["planned_minutes"] <= budget["period_limit_minutes"] + .002
+    assert budget is None
+    assert parameters["weekly_minutes_ceiling"] is None
+    assert result["summary"]["planned_minutes"] > 0
     assert parameters["volume_governor"] == "COMPONENT_7_40"
-    # Time is a scheduling envelope. Expert references and Recovery remain
-    # authoritative within it; no Q or capacity is rescaled to fit the clock.
+    # Estimated and measured supported history use the same Q contract.
+    # The model and method doses are not rescaled to an inferred clock limit.
     assert parameters["load_progression"]["components"]["Z1"]["reference_q"] >= load_progression.WEEKLY_Q_BOUNDS["Z1"][0]
     for day in result["days"]:
         for session in day["sessions"]:
@@ -104,11 +104,14 @@ def test_initial_history_mean_does_not_retroactively_exhaust_future_time(monkeyp
     first = result["days"][0]
     budget = result["parameters"]["time_budget"]
     assert sum(a["duration_min"] for a in source["activities"]
-               if (TODAY-timedelta(days=5)).isoformat() <= a["date"] <= TODAY.isoformat()) > budget["period_limit_minutes"]
+               if (TODAY-timedelta(days=5)).isoformat() <= a["date"] <= TODAY.isoformat()) > 7*60
     assert first.get("time_limit_exhausted", False) is explicit_limit
     assert any(r["code"] == "WEEKLY_TIME_LIMIT_EXHAUSTED" for r in first["rejected_alternatives"]) is explicit_limit
-    assert budget["actual_minutes"] == 0
-    assert result["summary"]["planned_minutes"] <= budget["period_limit_minutes"] + .002
+    if explicit_limit:
+        assert budget["actual_minutes"] == 0
+        assert result["summary"]["planned_minutes"] <= budget["period_limit_minutes"] + .002
+    else:
+        assert budget is None
     assert repo.envelope == original
 
 
@@ -126,7 +129,7 @@ def test_explicit_weekly_target_replaces_estimated_history_time_envelope(monkeyp
     assert explicit["parameters"]["load_progression"]["components"] == automatic["parameters"]["load_progression"]["components"]
 
 
-def test_initial_estimated_time_envelope_is_prorated_and_counts_actual_activity(monkeypatch):
+def test_short_estimated_horizon_counts_actual_activity_without_inferred_time_ceiling(monkeypatch):
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
     repo, source = incomplete(30)
     actual = {"activity_ref": "today", "date": TODAY.isoformat(), "sport": "Run", "duration_min": 45,
@@ -139,12 +142,12 @@ def test_initial_estimated_time_envelope_is_prorated_and_counts_actual_activity(
     body = configured(availability_mode="AUTO_HISTORY", horizon_mode="MANUAL", program_end=(TODAY+timedelta(days=2)).isoformat())
     result = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)
     budget = result["parameters"]["time_budget"]
-    assert budget["period_limit_minutes"] == pytest.approx(result["parameters"]["historical_training_weekly_minutes"]*3/7, abs=.001)
-    assert budget["actual_minutes"] == 45
-    assert budget["actual_minutes"] + budget["planned_minutes"] <= budget["period_limit_minutes"] + .002
+    assert budget is None
+    assert result["summary"]["actual_minutes"] == 45
+    assert result["days"][0]["status"] == "EXISTING_ACTIVITY"
 
 
-@pytest.mark.parametrize("partial_count", [0,5])
+@pytest.mark.parametrize("partial_count", [0,5,30])
 def test_measured_automatic_history_keeps_component_governance_without_time_envelope(monkeypatch, partial_count):
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
     repo, _ = incomplete(partial_count)

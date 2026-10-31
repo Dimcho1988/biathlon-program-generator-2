@@ -236,6 +236,9 @@ def test_automatic_q_targets_match_outlook_and_no_micro_sessions(monkeypatch):
         assert_readiness_dose(session)
         if evidence["min_dose_fraction"] is not None:
             assert evidence.get("applied_minimum_capacity_fraction", evidence["applied_structure_fraction"]) >= evidence["min_dose_fraction"] - .001
+        elif evidence.get("combined_minimum_work_minutes"):
+            assert len(evidence["combined_minimum_work_minutes"]) == 2
+            # assert_readiness_dose checks both complete parts independently.
         else:
             assert session["zone"] in {"Z1", "Z2"} and session["purpose"] == "MAINTENANCE"
             assert session["main_work_minutes"] >= evidence["minimum_primary_work_minutes"]

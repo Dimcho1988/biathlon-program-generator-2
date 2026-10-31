@@ -132,6 +132,36 @@ def test_future_load_cannot_raise_todays_allowed_envelope():
         planning_envelope.headroom(rows+later, DAY, dict.fromkeys(COMPONENTS, 500.)))
 
 
+def test_exact_preparation_can_exceed_the_search_bound_but_not_the_canonical_index():
+    rows = history()
+    narrow = planning_envelope.headroom(rows, DAY, dict.fromkeys(COMPONENTS, 0.))
+    full = planning_envelope.headroom(rows, DAY, dict.fromkeys(COMPONENTS, 10000.))
+    for z in COMPONENTS:
+        limit = full[z]['deficit_effective']
+        assert limit > narrow[z]['deficit_effective']
+        assert planning_envelope.permits(narrow[z], limit)
+        assert not planning_envelope.permits(narrow[z], limit+1.)
+        assert not planning_envelope.permits(narrow[z], float('nan'))
+
+
+def test_structural_preparation_uses_the_same_canonical_envelope_as_other_load():
+    from tests.api.test_planning_continuity import ledger
+    components = ledger(actual=0.)
+    components['Z1'].update(actual=120., actual_q=120., remaining=0.)
+    limits = planning_envelope.headroom(history(), DAY, dict.fromkeys(COMPONENTS, 0.))
+    q = {z: r['remaining'] for z, r in components.items()}
+    reserve = {'q': {}, 'e': {}, 'references': {}}
+    for preparation in (20., 10000.):
+        allowance = planning_continuity.limits(components, limits, q, reserve,
+            zone='Z3', preparation=True, preparation_q=preparation, preparation_effective=preparation)
+        assert allowance['q']['Z1'] == pytest.approx(preparation)
+        assert (allowance['e']['Z1'] >= preparation) == (preparation == 20.)
+    components['Z1']['actual_q'] = None
+    unknown = planning_continuity.limits(components, limits, q, reserve,
+        zone='Z3', preparation=True, preparation_q=20., preparation_effective=20.)
+    assert unknown['q']['Z1'] == 0.
+
+
 def test_effective_search_bound_covers_different_doses_and_splits():
     rng = random.Random(431)
     for _ in range(30):
@@ -148,7 +178,7 @@ def test_effective_search_bound_covers_different_doses_and_splits():
         assert bound["STR"] == q["STR"]
 
 
-@pytest.mark.parametrize("target,expect_supplement", [(1.5, True), (3., False), (40., False)])
+@pytest.mark.parametrize("target,expect_supplement", [(1.5, True), (3., False), (40., None)])
 def test_free_slots_do_not_reject_a_supplement_without_a_legal_standalone(monkeypatch, target, expect_supplement):
     from tests.api.test_load_progression import configured, observed
     from tests.api.test_management_v2 import reference_speed
@@ -163,7 +193,7 @@ def test_free_slots_do_not_reject_a_supplement_without_a_legal_standalone(monkey
     assert len(methods) == 2
     monkeypatch.setattr(engine, "resolved_methods", lambda _: deepcopy(methods))
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
-    monkeypatch.setattr(engine.combined_methods, "shortage", lambda *args, **kwargs: {
+    monkeypatch.setattr(engine.combined_methods, "opportunities", lambda *args, **kwargs: {
         "shortage":False, "sessions_by_component":{}, "available_sessions":7})
     original = engine._goals
     def goals(*args, **kwargs):
@@ -176,7 +206,12 @@ def test_free_slots_do_not_reject_a_supplement_without_a_legal_standalone(monkey
     repo, _, _ = observed()
     plan = engine.generate_plan(repo, "athlete", profile, start_date=TODAY, now=NOW)
     sessions = plan["days"][0]["sessions"]
-    assert sessions and bool(sessions[0]["mixed_component"]) == expect_supplement
-    if expect_supplement:
-        assert sessions[0]["dose_evidence"]["selection"]["supporting_basis"] == "NO_ADMISSIBLE_STANDALONE_IN_THIS_SLOT"
+    assert sessions
+    if expect_supplement is not None:
+        assert bool(sessions[0]["mixed_component"]) == expect_supplement
+    if sessions[0]["mixed_component"]:
+        assert sessions[0]["dose_evidence"]["selection"]["supporting_basis"] == "COMPLETE_METHOD_FOR_REMAINING_COMPONENT_Q"
+    for day in plan["days"]:
+        for session in day["sessions"]:
+            assert sum(b["kind"] == "WORK" and b["zone"] == "Z4" for b in session["blocks"]) <= 12
     assert plan["allocation"]["segments"][0]["components"]["Z4"]["planned_q"] <= target*1.1+.005

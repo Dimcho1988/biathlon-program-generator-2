@@ -16,7 +16,7 @@ from tests.api.test_readiness_adaptive_plan_v2 import fixed_readiness
 
 def proven_shortage(monkeypatch):
     """Isolate dosing/reservations; the real slot proof has acceptance tests."""
-    monkeypatch.setattr(engine.combined_methods, "shortage", lambda *args, **kwargs: {
+    monkeypatch.setattr(engine.combined_methods, "opportunities", lambda *args, **kwargs: {
         "shortage": True, "sessions_by_component": {}, "required_separate_sessions": 2,
         "available_sessions": 1, "basis": "TEST_PROVEN_SLOT_SHORTAGE"})
 
@@ -122,7 +122,7 @@ def parents():
 
 @pytest.mark.parametrize('recovery,expected',[ (100.,65.),(80.,58.5) ])
 def test_combination_keeps_each_own_role_budget_then_scales_once(recovery,expected):
-    shortage=combined_methods.shortage({'Z3':65.,'Z2':65.},{'Z3':65.,'Z2':65.},1)
+    shortage=combined_methods.opportunities({'Z3':65.,'Z2':65.},{'Z3':65.,'Z2':65.},1)
     _,method=combined_methods.candidates([('Run',m) for m in parents()],shortage)[0]
     policy=adaptive_methods.readiness_policy(method,{}, {'Z1':100.,'Z2':recovery,'Z3':recovery})
     caps=[{'capacity_minutes':100.,'target_speed_kmh':None,'target_hr_bpm':155. if p['zone']=='Z3' else 143.} for p in method['combined_methods']]
@@ -136,7 +136,7 @@ def test_combination_keeps_each_own_role_budget_then_scales_once(recovery,expect
     assert sum(b['kind']=='COOLDOWN' for b in blocks)==1
     assert engine._dose_fits(blocks,evidence,'Z3',nominal*policy['dose_factor'])
     assert all(b['allocation']==1. for b in evidence['combined_budgets'])
-    assert not combined_methods.candidates([('Run',m) for m in parents()],combined_methods.shortage({'Z3':65.,'Z2':65.},{'Z3':65.,'Z2':65.},2))
+    assert combined_methods.candidates([('Run',m) for m in parents()],combined_methods.opportunities({'Z3':65.,'Z2':65.},{'Z3':65.,'Z2':65.},2))
 
 
 def test_double_threshold_range_and_legacy_profile_migration():
@@ -198,17 +198,17 @@ def test_imported_confirmed_morning_preserves_remaining_pair_in_real_generator(m
     assert day['sessions'][0]['main_work_minutes']==second['main_work_minutes']
 
 
-def test_shortage_proof_counts_overlap_and_does_not_confuse_missing_capacity_with_slots():
-    # Both independent sessions already provide warmup/easy volume.
-    result=combined_methods.shortage({'Z1':30.,'Z3':60.},{'Z1':30.,'Z3':30.},2,
-        vectors=[{'Z1':15.,'Z3':30.}])
-    assert not result['shortage'] and result['required_separate_sessions']==2
-    assert combined_methods.shortage({'Z1':30.,'Z3':60.},{'Z1':30.,'Z3':30.},1,
-        vectors=[{'Z1':15.,'Z3':30.}])['shortage']
-    assert not combined_methods.shortage({'Z5':10.},{'Z1':30.},1,vectors=[{'Z1':30.}])['shortage']
+def test_combinations_follow_remaining_components_without_a_separate_slot_solver():
+    for slots in (1, 2, 7):
+        result = combined_methods.opportunities({'Z1':30.,'Z3':60.}, {'Z1':30.,'Z3':30.}, slots)
+        assert result['consider_combinations']
+        assert result['sessions_by_component'] == {'Z1': 1, 'Z3': 2}
+        assert 'PROVEN' not in result['basis']
+    assert not combined_methods.opportunities({'Z5':10.}, {'Z1':30.}, 1)['consider_combinations']
+    assert not combined_methods.opportunities({'Z1':30.,'Z3':0.}, {'Z1':30.,'Z3':30.}, 1)['consider_combinations']
 
 
-def test_real_week_selects_two_registered_methods_only_after_slot_shortage(monkeypatch):
+def test_real_week_can_cover_two_components_in_one_complete_combination(monkeypatch):
     from tests.api.test_training_plan_engine import reference_speed
     from tests.api.test_readiness_adaptive_plan_v2 import assert_rolling_budgets
     fixed_readiness(monkeypatch, 100.)

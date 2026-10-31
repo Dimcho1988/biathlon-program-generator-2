@@ -66,10 +66,10 @@ def test_selected_sports_add_their_own_history_and_keep_distinct_capacity_source
         if d['session'] and d['session'].get('is_key_session'):
             assert engine.date.fromisoformat(d['date']).weekday()==1
         elif d['session'] and d['session']['zone'] in {'Z3','Z4','Z5'}:
-            # A small supplementary block can now use an easy day; it is not
-            # a second full key dose and still uses this sport's capacity.
-            assert d['session']['mixed_component']
-            assert d['session']['purpose']=='SUPPORTING'
+            # A complete maintenance or supplementary dose can use an easy
+            # day without consuming another building-key opportunity.
+            assert d['session']['purpose'] in {'MAINTENANCE', 'SUPPORTING'}
+            assert_readiness_dose(d['session'])
     assert result['source']['speed_models_by_sport'].keys()=={'Run','NordicSki'}
 
 
@@ -86,10 +86,10 @@ def test_whole_training_budget_retains_means_specific_dosing_and_availability(mo
     for d in result['days']:
         if d['session']:
             assert d['session']['sport'] == 'Run'
-            # Cycling's 600-minute sessions must not authorize such a run.
-            tolerance = 1.1 if d['session']['purpose']=='BUILDING' and d['session']['zone'] in {'Z3','Z4','Z5'} else 1.
-            assert d['session']['total_minutes'] <= 60*max(1, d['load_budget']['mesocycle_factor'])*tolerance+.002
-            assert any(l['code']=='ACTUAL_SPORT_SESSION_EXPOSURE' for l in d['session']['dose_evidence']['limits'])
+            # The selected sport's methods and explicit availability govern
+            # the session. Historical duration is no second prohibition.
+            assert sum(s['total_minutes'] for s in d['sessions']) <= profile()['available_minutes'][engine.date.fromisoformat(d['date']).weekday()]+.002
+            assert not any(l['code']=='ACTUAL_SPORT_SESSION_EXPOSURE' for l in d['session']['dose_evidence']['limits'])
     assert all(w['planned_minutes'] is None for w in result['history_comparison'])
 
 

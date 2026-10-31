@@ -105,7 +105,7 @@ def test_upgrade_removes_old_floor_without_erasing_saved_observation():
     assert not ctx["reference_is_clamped"]
 
 
-def test_progression_does_not_bypass_observed_session_duration(monkeypatch):
+def test_observed_duration_guides_distribution_without_overriding_component_targets(monkeypatch):
     from tests.api.test_training_plan_engine import Repository, reference_speed
     monkeypatch.setattr(engine.model_service, "speed_view", reference_speed)
     repo = Repository()
@@ -113,8 +113,9 @@ def test_progression_does_not_bypass_observed_session_duration(monkeypatch):
                                 start_date=TODAY+timedelta(days=1), now=NOW)
     sessions = [(d,s) for d in plan["days"] for s in d["sessions"]]
     assert sessions
-    observed = plan["parameters"]["volume_evidence"]["max_session_minutes_by_sport"]["Run"]
+    assert plan["parameters"]["volume_evidence"]["max_session_minutes_by_sport"]["Run"] > 0
+    assert plan["parameters"]["time_budget"] is None
     for d,s in sessions:
-        quality = s['purpose'] == 'BUILDING' and s['zone'] in {'Z3','Z4','Z5'} and not d['taper'] and d['period'] != 'RE_ENTRY'
-        tolerance = 1+engine.planning_allocation.COVERAGE_TOLERANCE if quality else 1.
-        assert s["total_minutes"] <= observed*max(1., d["cycle"]["volume_factor"])*tolerance+.002
+        assert not any(limit['code'] == 'ACTUAL_SPORT_SESSION_EXPOSURE' for limit in s['dose_evidence']['limits'])
+        from tests.api.test_readiness_adaptive_plan_v2 import assert_readiness_dose
+        assert_readiness_dose(s)

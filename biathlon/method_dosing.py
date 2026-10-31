@@ -1,7 +1,7 @@
 """Shared method role budgets and role-specific Recovery adjustment."""
 import math
 
-VERSION = "source-standard-and-native-method-tmax-v2"
+VERSION = "source-standard-and-native-method-tmax-v3-execution-bounds"
 DEFAULT_SPEED_TOLERANCE = .02
 DEFAULT_HR_TOLERANCE = 3.
 DOSE_CONTROLS = {"total_capacity_ratio", "speed_tolerance_fraction", "hr_tolerance_bpm"}
@@ -57,7 +57,8 @@ def prepare_native_budget(method, evidence, profile):
     if "capacity_minutes" not in evidence or "max_work_min" not in method:
         return
     capacity = evidence["capacity_minutes"] * ratio
-    key = (method["structure"], evidence["capacity_minutes"], ratio)
+    bounds = method.get("execution_limits", {})
+    key = (method["structure"], evidence["capacity_minutes"], ratio, tuple(sorted(bounds.items())))
     if method.get("_resolved_dose_key") == key:
         return
     method["_resolved_dose_key"] = key
@@ -65,17 +66,22 @@ def prepare_native_budget(method, evidence, profile):
         if method.get(key) and method["structure"] != "THRESHOLD_HIGH":
             p = {**method[key], "total_capacity_ratio": ratio}
             if method["structure"] in {"MODEL_INTERVALS", "METABOLIC_INTERVALS"}:
-                p.update(min_repetitions=1, max_repetitions=max(1, math.floor(capacity*60/p["work_seconds"])))
+                maximum = max(1, math.floor(capacity*60/p["work_seconds"]))
+                # An introductory adaptation is an execution contract, not
+                # the source example whose counts native dosing replaces.
+                p.update(min_repetitions=bounds.get("min_repetitions", 1),
+                         max_repetitions=min(bounds.get("max_repetitions", maximum), maximum))
             method[key] = p
             evidence["effort_profile"] = {**evidence.get("effort_profile", {}), **p}
     if method.get("purpose") != "RECOVERY":
         method.setdefault("source_work_minutes", [method["min_work_min"], method["max_work_min"]])
-        method["max_work_min"] = capacity * (2 if method.get("double_threshold") else 1)
+        maximum = capacity * (2 if method.get("double_threshold") else 1)
+        method["max_work_min"] = min(bounds.get("max_work_min", maximum), maximum)
         interval = method.get("interval_template") or method.get("interval_profile")
         if interval and method["structure"] != "THRESHOLD_HIGH":
-            method["min_work_min"] = interval["work_seconds"] / 60
+            method["min_work_min"] = interval["min_repetitions"] * interval["work_seconds"] / 60
         else:
-            method["min_work_min"] = min(method["min_work_min"], .25*evidence["capacity_minutes"])
+            method["min_work_min"] = bounds.get("min_work_min", min(method["source_work_minutes"][0], .25*evidence["capacity_minutes"]))
 
 
 def target_ranges(speed, hr, zone, *, dosing=None, speed_range=None, hr_range=None,

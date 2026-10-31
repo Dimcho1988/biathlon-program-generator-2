@@ -6,9 +6,9 @@ rebased on current execution or replenished by generating another draft.
 """
 from .constants import COMPONENTS
 from .planning_allocation import prescription_headroom
+from . import planning_envelope
 
-VERSION = "planning-continuity-v5-quality-preparation"
-PREPARATION_FRACTION = .10
+VERSION = "planning-continuity-v6-structural-preparation"
 TAPER_FRACTION = .10  # Initial coach setting, not a physiological threshold.
 
 
@@ -34,22 +34,13 @@ def reserves(components, references, manual=()):
     for z in manual:
         q[z] = e[z] = 0.
     easy_q = {z: sum(r["q"][z] for key, r in selected.items() if key in {"Z1", "Z2"}) if z not in manual else 0. for z in COMPONENTS}
-    # A separate, frozen allowance for mandatory preparation of unfinished
-    # qualities. Easy work cannot spend it. All load still enters 7/40 and
-    # Recovery; this is a coaching allowance, not a physiological threshold.
-    quality_extra = (PREPARATION_FRACTION * sum(r["target"] + easy_q.get(z, 0.) for z, r in components.items()
-        if z not in manual and r["basis"] == "DIRECT_Q" and r.get("actual_q") is not None)
-        if "Z1" not in manual and any(z in {"Z3", "Z4", "Z5", "STR"} and r["target"] > 0
-                                     for z, r in components.items()) else 0.)
     return {"q": q, "e": e, "references": selected,
-            "quality_preparation_q": {"Z1": easy_q.get("Z1", 0.) + quality_extra},
-            "quality_extra_q": quality_extra,
             "easy_q": easy_q,
             "planned_easy": any(z in {"Z1", "Z2"} and not eligible(components[z]) for z in selected)}
 
 
 def limits(components, budgets, q_remaining, reserve, *, zone, maintenance=False,
-           preparation=False):
+           preparation=False, preparation_q=0., preparation_effective=0.):
     """Candidate-specific headroom; rolling E and unknown Q remain hard gates."""
     extra_q = {z: 0. for z in COMPONENTS}
     extra_e = dict(extra_q)
@@ -61,10 +52,12 @@ def limits(components, budgets, q_remaining, reserve, *, zone, maintenance=False
         extra_e = dict(reserve["e"])
     elif preparation and zone != "Z1" and (components[zone]["remaining"] or 0) > .005:
         mode = "QUALITY_PREPARATION_RESERVE"
-        extra_q["Z1"] = max(components["Z1"]["target"] * PREPARATION_FRACTION,
-                            reserve.get("easy_q", {}).get("Z1", 0.),
-                            reserve.get("quality_preparation_q", {}).get("Z1", 0.) if zone in {"Z3", "Z4", "Z5", "STR"} else 0.)
-        extra_e["Z1"] = extra_q["Z1"]
+        row = components["Z1"]
+        if row.get("actual") is not None and row.get("planned") is not None:
+            # Only the candidate's complete preparation may exceed the core
+            # target. There is no percentage pot to spend or replenish.
+            extra_q["Z1"] = max(0., row["actual"] + row["planned"] + preparation_q - row["target"])
+            extra_e["Z1"] = preparation_effective
     q_limits, e_limits, objective_limits, index_only = {}, {}, {}, []
     for z, row in components.items():
         q_policy = budgets[z].get("effective_limit_basis") == "PROSPECTIVE_CANONICAL_7_40"
@@ -73,9 +66,9 @@ def limits(components, budgets, q_remaining, reserve, *, zone, maintenance=False
         objective_limits[z] = (max(0., row["target"] + extra - row["actual"] - row["planned"])
                                if row.get("actual") is not None else None)
         if q_policy:
-            # Preparation and taper share 110%. The separately approved
-            # post-execution maintenance reserve remains one frozen dose,
-            # not another percentage or a resettable target.
+            # Main work uses the common Q band. Structural preparation owns
+            # only this candidate's exact load; post-target maintenance keeps
+            # its single frozen dose.
             objective_limits[z] = prescription_headroom(row,
                 maintenance_reserve=extra if mode in {"POST_TARGET_MAINTENANCE", "PLANNED_EASY_MAINTENANCE"}
                     or preparation and extra > 0 else 0.)
@@ -88,9 +81,14 @@ def limits(components, budgets, q_remaining, reserve, *, zone, maintenance=False
         e_limits[z] = (rolling if q_policy else min(rolling,
             max(0., row["target_effective"] + extra_e[z]
                 - row["actual_effective"] - row["planned_effective"])))
+        if (z == "Z1" and q_policy and mode == "QUALITY_PREPARATION_RESERVE"
+                and planning_envelope.permits(budgets[z], preparation_effective)):
+            # The old finite Q search bound omitted mandatory preparation.
+            # Extend it only to this exact load after checking the same index.
+            e_limits[z] = max(e_limits[z], preparation_effective)
     return {"mode": mode, "q": q_limits, "e": e_limits, "objective": objective_limits,
             "reserve_q": extra_q, "reserve_e": extra_e, "index_only_components": index_only,
-            "quality_extra_q": reserve.get("quality_extra_q", 0.) if mode == "QUALITY_PREPARATION_RESERVE" and zone in {"Z3", "Z4", "Z5", "STR"} else 0.,
+            "quality_extra_q": extra_q["Z1"] if mode == "QUALITY_PREPARATION_RESERVE" else 0.,
             "shared_easy_reserve": bool(mode and reserve.get("easy_q", {}).get("Z1", 0.) > 0 and
                 (preparation or zone in {"Z1", "Z2"}))}
 
@@ -147,7 +145,7 @@ def explanation(mode):
     return {
         "POST_TARGET_MAINTENANCE": "Използван е ограничен поддържащ резерв след реално изпълнена цел.",
         "PLANNED_EASY_MAINTENANCE": "Използван е общият седмичен резерв за лека работа след разпределената цел. Допълнителният товар участва в 7/40 и Recovery; ново преизчисление не възстановява резерва.",
-        "QUALITY_PREPARATION_RESERVE": "Подготовката и паузите използват резерва за Z1. Основните компоненти могат да използват допълнително до 10% от общия бюджет с поддържащия резерв, само за необходимата подготовка. Допълнителният товар участва в 7/40 и Recovery; преизчисляването не възстановява изразходвания резерв.",
+        "QUALITY_PREPARATION_RESERVE": "Необходимата загрявка, паузи и разпускане са изчислени от избрания метод. Частта над основната цел за Z1 е показана отделно. Целият товар участва в 7/40 и Recovery; не се добавя свободен обем за друга работа.",
         "TAPER_LIGHT_MAINTENANCE": "Използван е ограничен тейпър резерв до 10% от целта за лека работа в Z1–Z2. Реалният и планираният товар изчерпват същия резерв; Recovery и дневният тейпър лимит остават в сила.",
         "TAPER_QUALITY_PREPARATION": "Използван е ограничен тейпър резерв до 10% в Z1 само за подготовката на допустим основен компонент; основната работа не получава допълнителен бюджет.",
     }[mode]

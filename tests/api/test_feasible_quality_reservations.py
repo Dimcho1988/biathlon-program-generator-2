@@ -78,7 +78,9 @@ def test_last_microcycle_day_does_not_wait_for_next_microcycle_preferred_thresho
     session = plan["days"][0]["sessions"][0]
     assert session["is_key_session"]
     assert session["method_id"] == "END-THR-TIME-01"
-    assert not plan["days"][1]["sessions"], "The two-day key spacing still applies."
+    following = plan["days"][1]["sessions"]
+    assert following and all(s["purpose"] == "MAINTENANCE" and not s["is_key_session"] for s in following)
+    assert_readiness_dose(following[0])  # Key spacing need not discard a complete maintenance dose.
     assert_readiness_dose(session)
     assert_rolling_budgets(plan)
 
@@ -130,7 +132,7 @@ def test_future_reserved_key_still_suppresses_extra_catchup_in_its_cycle(monkeyp
     assert key_dates == [(TODAY+timedelta(days=1)).isoformat()]
 
 
-def test_second_slot_can_use_a_reduced_mixed_dose_after_strength(monkeypatch):
+def test_two_slots_can_fit_strength_and_a_reduced_mixed_dose(monkeypatch):
     from tests.api.test_methodology_completion import proven_shortage
     proven_shortage(monkeypatch)
     fixed_readiness(monkeypatch, 100.)
@@ -141,10 +143,10 @@ def test_second_slot_can_use_a_reduced_mixed_dose_after_strength(monkeypatch):
     plan = engine.generate_plan(repo, "athlete", body, start_date=TODAY, now=NOW)
     sessions = plan["days"][0]["sessions"]
     assert len(sessions) == 2
-    assert sessions[0]["zone"] == "STR"
-    assert sessions[1]["mixed_component"] and sessions[1]["purpose"] == "SUPPORTING"
-    assert not sessions[1]["is_key_session"]
-    assert_readiness_dose(sessions[1])
+    assert sum(s["zone"] == "STR" for s in sessions) == 1
+    supporting = next(s for s in sessions if s["mixed_component"])
+    assert supporting["purpose"] == "SUPPORTING" and not supporting["is_key_session"]
+    assert_readiness_dose(supporting)
     assert_rolling_budgets(plan)
 
 
