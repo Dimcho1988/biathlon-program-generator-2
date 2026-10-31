@@ -67,6 +67,23 @@ def test_slow_baseline_still_checks_a_useful_alternative_within_the_budget():
     assert result["allocation"]["search"]["hard_limit_proven"] is False
 
 
+def test_replay_budget_starts_after_cold_work_and_learns_the_actual_trial_cost(monkeypatch):
+    from apps.api import planning_search
+    elapsed = [200.]
+    monkeypatch.setattr(planning_search, "monotonic", lambda: elapsed[0])
+    baseline = plan({z: 50. for z in COMPONENTS})
+    calls = []
+    def replay(policy):
+        calls.append(policy)
+        elapsed[0] += 60.
+        return plan({z: 75. for z in COMPONENTS})
+    result = improve(baseline, {}, replay, seconds_remaining=150.)
+    assert len(calls) == 2
+    assert result["allocation"]["search"]["improved"]
+    assert result["allocation"]["search"]["conclusion"] == "SEARCH_BUDGET_EXHAUSTED"
+    assert elapsed[0] == 320.
+
+
 def test_accepted_95_percent_can_still_improve_toward_100():
     baseline = plan({z: 95. for z in COMPONENTS})
     result = improve(baseline, {}, lambda _: plan({z: 100. for z in COMPONENTS}))

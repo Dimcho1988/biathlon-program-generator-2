@@ -24,6 +24,7 @@ begin
  ] loop
    assert not (select prosecdef from pg_proc where oid=function_id), 'Public save RPC must remain security invoker';
    assert (select proconfig @> array['search_path=""'] from pg_proc where oid=function_id), 'Public RPC search path is not fixed';
+   assert (select proconfig @> array['statement_timeout=30s'] from pg_proc where oid=function_id), 'Whole-microcycle publication budget is missing';
    assert has_function_privilege('service_role',function_id,'EXECUTE'), 'Service cannot save';
    foreach role_name in array array['anon','authenticated'] loop
      assert not has_function_privilege(role_name,function_id,'EXECUTE'), 'Public role can save';

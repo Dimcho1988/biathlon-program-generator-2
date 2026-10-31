@@ -8,7 +8,6 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 import json
-from time import monotonic
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
@@ -349,14 +348,12 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
                     {**normalized, **({"_allocation_policy": allocation_policy} if allocation_policy else {})},
                     start_date=start_date, now=now, decisions=decisions, locked_day=locked_day,
                     **({"window_end": window_end} if window_end else {}))
-        started = monotonic()
         baseline = replay()
-        elapsed = monotonic()-started
         with timed_stage("planning_search"):
-            # The mandatory baseline is not an allocation alternative. On a
-            # slower worker it must not consume the search's entire window.
-            return improve(baseline, normalized, replay, seconds_remaining=150.,
-                           estimated_trial_seconds=elapsed)
+            # Cold baseline work is not a replay estimate. Let search measure
+            # its own warmed alternatives instead of skipping all of them on
+            # a slower worker before the independent search window even starts.
+            return improve(baseline, normalized, replay, seconds_remaining=150.)
     payload = compute(live_repository, alias, computation_key, calculate)
     training_plan_engine.compact_plan_metadata(payload)
     # Start a new read phase after calculation. Its single settings-row read is
