@@ -95,6 +95,7 @@ def process_next(repository):
     except Exception as exc:
         code = ('INPUT_CHANGED' if isinstance(exc, HistoricalGenerationReferenceConflict)
                 else 'TEMPORARILY_UNAVAILABLE' if isinstance(exc, PersistentStoreFailure)
+                    or isinstance(exc, HTTPException) and (exc.status_code >= 500 or exc.status_code == 429)
                 else 'INPUT_CHANGED' if isinstance(exc, HTTPException) and exc.status_code == 409
                 else 'ACCESS_CHANGED' if isinstance(exc, HTTPException) and exc.status_code in {401, 403}
                 else 'INVALID_INPUT' if isinstance(exc, (HTTPException, ValueError)) else 'COMPUTATION_FAILED')

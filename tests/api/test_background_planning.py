@@ -90,6 +90,9 @@ def test_worker_reuses_the_exact_generator_payload_and_only_publishes_through_fe
 
 @pytest.mark.parametrize('failure,code',[(HTTPException(409,'changed'),'INPUT_CHANGED'),
     (HTTPException(422,'invalid'),'INVALID_INPUT'),(PersistentStoreFailure('network'),'TEMPORARILY_UNAVAILABLE'),
+    (HTTPException(503,'capacity busy'),'TEMPORARILY_UNAVAILABLE'),
+    (HTTPException(504,'upstream timeout'),'TEMPORARILY_UNAVAILABLE'),
+    (HTTPException(429,'rate limited'),'TEMPORARILY_UNAVAILABLE'),
     (RuntimeError('private-value'),'COMPUTATION_FAILED')])
 def test_failed_calculation_is_not_published_and_uses_a_safe_retry_class(monkeypatch,failure,code,caplog):
     repository=WorkerRepository()
