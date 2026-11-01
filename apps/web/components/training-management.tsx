@@ -10,9 +10,9 @@ import Link from "next/link";
 import { changeActivePlan, newerActivePlan, PLAN_CHANGED_NOTICE } from "../lib/active-plan-request";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { durationHms } from "../lib/duration-format";
-import { blockDurationLabel, componentColor, sessionSummary, strengthDuration } from "../lib/training-visuals";
+import { blockDurationLabel, componentColor, strengthDuration } from "../lib/training-visuals";
 import { BlockExecutionRange } from "./block-execution-range";
-import { SessionAccent, WorkoutProfile } from "./workout-profile";
+import { AthleteWorkout } from "./athlete-workout";
 import { isCalendarDate, isRecord } from "../lib/training-status";
 import { ActiveTrainingPlan } from "./active-training-plan";
 import { TrainingPlanWeek } from "./training-plan-week";
@@ -22,7 +22,6 @@ import { TrainingPlanOverview } from "./training-plan-overview";
 import { IndividualLearningPanel } from "./individual-learning-panel";
 import { MesocyclePriorities } from "./mesocycle-priorities";
 import { SessionMethodGuidance } from "./session-method-guidance";
-import { SessionRole } from "./session-role";
 import { methodHrText } from "../lib/method-library";
 import { managementGuidance, hasProgramDays } from "../lib/management-guidance";
 import { planRangeLabel, planWeekView, selectedPlanWeek } from "../lib/plan-week-view";
@@ -59,7 +58,7 @@ function PeriodizationTable({ value }: { value: unknown }) {
     <details><summary>Защо са избрани тези периоди?</summary><ul>{phases.map((phase, index) => <li key={index}><strong>{PHASE_LABELS[String(phase.kind)] ?? String(phase.kind)}:</strong> {String(phase.reason ?? "")}</li>)}</ul></details></>;
 }
 
-function SingleSessionCard({ day, expanded = false }: { day: DraftDay; expanded?: boolean }) {
+function SessionCoachReport({ day }: { day: DraftDay }) {
   const session = day.session;
   const strength = session ? strengthDuration(session) : null;
   const evidence = session?.dose_evidence;
@@ -67,11 +66,8 @@ function SingleSessionCard({ day, expanded = false }: { day: DraftDay; expanded?
   const segmentBudget = COMPONENTS.map(zone => day.load_budget.components[zone]).find(budget =>
     budget?.prescription_basis === "LONG_TERM_MICROCYCLE_REMAINDER" || budget?.prescription_basis === "LONG_TERM_MICROCYCLE_Q");
   const qPrescription = COMPONENTS.some(zone => day.load_budget.components[zone]?.prescription_basis === "LONG_TERM_MICROCYCLE_Q");
-  return <article className={`management-day ${session ? "has-session" : ""}`} style={session ? { borderLeftColor: componentColor(session.zone) } : undefined}>
-    <header><div><p className="management-day-date">{dateLabel(day.date)}</p><h3>{session?.title ?? (day.time_limit_exhausted ? "Изчерпан лимит за време" : STATUS_LABELS[day.status]) ?? day.status}</h3></div>
-      <span className="management-badge">{PHASE_LABELS[day.period] ?? day.period}{day.taper ? " · тейпър" : ""}</span></header>
-    {session && <SessionRole session={session} day={day}/>}
-    {session && <div className="management-session-visual"><div className="management-session-total"><strong>{session.execution_range_policy ? "до " : ""}{durationHms(session.total_minutes)}</strong> общо · {session.execution_range_policy ? "до " : ""}{durationHms(session.main_work_minutes)} {strength ? "активна работа" : "основна работа"} <SessionAccent zone={session.zone}/></div><p className="workout-summary">{sessionSummary(session)}</p><WorkoutProfile session={session}/><p className="workout-profile-note">Ширина: продължителност{session.execution_range_policy ? " по горната граница" : ""} · височина: целева зона Z1–Z5. Сила и NMS се показват отделно.</p></div>}
+  return <section className="management-coach-session">
+    <h4>{session?.title ?? STATUS_LABELS[day.status] ?? day.status}</h4>
     {strength && <p className="management-notice">Силова част: {durationHms(strength.main)} = {durationHms(strength.work)} упражнения + {durationHms(strength.rest)} почивки и преходи. Загрявката и разпускането са извън този силов обем.</p>}
     <p>{day.explanation}</p>
     {session?.race_course_guidance && <p className="management-notice"><strong>{session.race_course_guidance.event_name}:</strong> {session.race_course_guidance.note}</p>}
@@ -81,7 +77,7 @@ function SingleSessionCard({ day, expanded = false }: { day: DraftDay; expanded?
     {evidence?.planned_gap_hours && <p className="management-notice">Планирай поне {durationHms(evidence.planned_gap_hours * 60)} между двете прагови сесии. Преди втората прецени реакцията към първата и контрола на усилието.</p>}
     {session?.neuromuscular_exposure && <p className="management-notice">{session.neuromuscular_exposure.repetitions} ускорения · {session.neuromuscular_exposure.work_seconds} s работа. {session.neuromuscular_exposure.note}</p>}
     <MesocyclePriorities cycle={isRecord(day.cycle) ? day.cycle : undefined}/>
-    {session && <details className="management-execution" open={expanded}><summary>Как да изпълня тренировката</summary>{execution.common.length > 0 && <div className="management-common-guidance"><h4>Общи указания за повтарящите се части</h4>{execution.common.map((group, index) => <p key={index}><strong>{group.zone}:</strong> {group.text}</p>)}</div>}<ol className="management-blocks">{session.blocks.map((block, index) => <li key={`${block.kind}-${index}`} style={{ borderLeft: `3px solid ${componentColor(block.zone)}` }}><div><strong>{block.label}</strong><span>{blockDurationLabel(block)} · {block.zone}</span></div>{execution.blocks[index].showInstructions && <p>{block.instructions}</p>}
+    {session && <details className="management-execution"><summary>Как да изпълня тренировката</summary>{execution.common.length > 0 && <div className="management-common-guidance"><h4>Общи указания за повтарящите се части</h4>{execution.common.map((group, index) => <p key={index}><strong>{group.zone}:</strong> {group.text}</p>)}</div>}<ol className="management-blocks">{session.blocks.map((block, index) => <li key={`${block.kind}-${index}`} style={{ borderLeft: `3px solid ${componentColor(block.zone)}` }}><div><strong>{block.label}</strong><span>{blockDurationLabel(block)} · {block.zone}</span></div>{execution.blocks[index].showInstructions && <p>{block.instructions}</p>}
       {(block.hr_reference_range_bpm || block.target_hr_bpm != null) && <small>{block.hr_reference_range_bpm ? `${block.hr_reference_range_bpm.map(v => number(v, 0)).join("–")} уд./мин` : `${number(block.target_hr_bpm, 0)} уд./мин`}</small>}
       {!block.target_speed_range_kmh && block.target_speed_kmh != null && <small><PreferredSpeed speed={block.target_speed_kmh} sport={session.sport}/> · {speedBasisLabel(block)}</small>}
       {block.lactate_reference && execution.blocks[index].showLactate && <p className="management-muted">Лактат за частите със същия ориентир: {lactateRangeText(block.lactate_reference)} · {block.lactate_reference.label}{block.lactate_reference.assessed_on ? ` · ${block.lactate_reference.assessed_on}` : ""}{block.lactate_reference.note ? `. ${block.lactate_reference.note}` : ""}</p>}
@@ -112,16 +108,30 @@ function SingleSessionCard({ day, expanded = false }: { day: DraftDay; expanded?
       })}</tbody></table></div><p className="management-muted">{qPrescription ? "Q е прекият приравнен обем. Запазените ръчни цели по E запазват своята единица. Остатъците са към момента на разпределяне на задачата." : <>* Приравнени минути товар с влияние от всички по-високи зони и добавки между съседи. {segmentBudget ? "** Преки приравнени минути в компонента. Остатъците са при разпределянето на задачите." : ""}</>} Тези величини се различават от продължителността на сесията и измереното време в зона.</p>
       {day.rejected_alternatives.length > 0 && <><h4>Защо не е избрана друга задача?</h4><ul>{day.rejected_alternatives.map((alternative, index) => <li key={index}>{alternative.reason} <small>({Array.from(new Set(rejectedMethodIds(alternative))).join(", ")})</small></li>)}</ul></>}
     </details>
-  </article>;
+  </section>;
 }
 
-function DayCard({ day, expanded = false }: { day: DraftDay; expanded?: boolean }) {
+function DayCard({ day }: { day: DraftDay }) {
   const sessions = daySessions(day);
-  if (sessions.length < 2) return <SingleSessionCard day={{...day, session: sessions[0] ?? null}} expanded={expanded}/>;
+  if (!sessions.length) return <article className="management-day"><p className="management-day-date">{dateLabel(day.date)}</p>
+    <h3>{day.time_limit_exhausted ? "Изчерпан лимит за време" : STATUS_LABELS[day.status] ?? day.status}</h3><p>{day.explanation}</p></article>;
   return <section aria-label="Тренировките за деня">{sessions.map((session, index) =>
-    <SingleSessionCard key={index} day={{...day, session, explanation: "Сесия "+(index+1)+" от "+sessions.length+". "+day.explanation}} expanded={expanded}/>)}</section>;
+    <AthleteWorkout key={day.date + "-" + index} day={day} session={session}
+      position={sessions.length > 1 ? "Тренировка " + (index + 1) + " от " + sessions.length : undefined}/>)}</section>;
 }
 
+function CoachWeekReport({days, today}: {days: DraftDay[]; today: string}) {
+  const [selectedDate, setSelectedDate] = useState("");
+  const day = days.find(item => item.date === selectedDate) ?? days.find(item => item.date >= today) ?? days[0];
+  if (!day) return null;
+  const sessions = daySessions(day);
+  return <details><summary>Подробен треньорски отчет</summary>
+    <label>Ден за отчета <select value={day.date} onChange={event => setSelectedDate(event.target.value)}>
+      {days.map(item => <option key={item.date} value={item.date}>{dateLabel(item.date)}</option>)}</select></label>
+    {sessions.length ? sessions.map((session, index) => <SessionCoachReport key={index} day={{...day,session}}/>)
+      : <SessionCoachReport day={day}/>}
+  </details>;
+}
 
 export function TrainingManagement({ initialView = "week", initialOutlook = null, athleteName, canEdit, initialProfile, initialDrafts, initialActive = { active: null, history: [] }, initialOverviewActive, initialSyncState = null, syncError = false, today }: {
   initialOutlook?: ManagementOutlook | null; initialOverviewActive?: ManagementOverviewActive; initialView?: "week" | "overview"; athleteName: string; canEdit: boolean; initialProfile: ManagementProfileResponse; initialDrafts: DraftRecord[]; initialActive?: ActivePlanResponse; initialSyncState?: SyncState | null; syncError?: boolean; today: string;
@@ -273,7 +283,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     {(view === "overview" || (!archivedDraft && (showDraft || active.active?.stale === false))) && <IndividualLearningPanel plan={view === "overview" ? initialOutlook : visibleWeekPlan} />}
 
     {view === "overview" ? <TrainingPlanOverview plan={initialOutlook ?? undefined} outcomes={compactOverview?.outcomes ?? active.active?.payload.outcomes ?? []} today={today} currentProfileRevision={initialOutlook?.profile_revision} volumeContext={initialOutlook?.volume_context} sessions={overviewSessionsCurrent ? overviewSessions : undefined} sessionStatus={sessionStatus} /> : <>
-      {active.active && !newDraft && <ActiveTrainingPlan value={active} profile={saved} onChange={receiveActive} externalBusy={busy !== null} onBegin={beginActiveChange} onEnd={endActiveChange} canEdit={canEdit} today={today} selectedWeek={selectedWeek} showProposal={showProposal} renderDay={day => <DayCard day={day} expanded={day.date === today} />} />}
+      {active.active && !newDraft && <ActiveTrainingPlan value={active} profile={saved} onChange={receiveActive} externalBusy={busy !== null} onBegin={beginActiveChange} onEnd={endActiveChange} canEdit={canEdit} today={today} selectedWeek={selectedWeek} showProposal={showProposal} renderDay={day => <DayCard day={day} />} />}
       {showDraft && <>
         <section className="management-panel management-next-step" aria-label="Следваща стъпка"><p className="eyebrow">{guidance.step === "REVIEW" ? "Преглед преди започване" : "Следваща стъпка"}</p><h2>{guidance.title}</h2><p>{guidance.description}</p>
           {archivedDraft && <p className="management-notice">{draft?.stale_reason ?? "Показваният досега проект е остарял."} Неговите часове и тренировки не отразяват текущите настройки. Новият проект се преизчислява с актуалните записани данни. Ако това не завърши, използвай „Подготви програма“.</p>}
@@ -283,11 +293,12 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
           {guidance.step === "CHECK" && <div className="management-actions"><a href="#plan-details">Виж конкретните причини ↓</a><Link href="/planning">Провери профила →</Link></div>}
           {guidance.step === "REVIEW" && <><p className="management-muted">{saved.profile?.adaptation_mode === "AUTO" ? "След започване следващите дни ще се адаптират автоматично според реалното изпълнение." : "Седмицата ще остане фиксирана до показания край. Промените и следващата седмица ще изискват утвърждаване."} Можеш да поставиш програмата на пауза.</p><button type="button" className="action-button" disabled={!canEdit || busy !== null || draft?.stale !== false || draft?.payload.activation_eligible !== true} onClick={activateDraft}>{busy === "activate" ? "Започване…" : "Започни програмата"}</button></>}
         </section>
-        {draft && !archivedDraft && draftWeek && draftSchedule && hasProgramDays(draft.payload) && <section className="management-plan" aria-label="Проект на тренировъчна програма"><h2>{planRangeLabel(draftWeek)}</h2><p className="management-muted">Предложение за преглед — още не е започната програма.</p><TrainingPlanWeek days={draftSchedule.days} period={draftWeek} forecastDates={draftSchedule.forecastDates} programmeLabel="Предложение" today={today} renderDay={day => <DayCard day={day} expanded={day.date === today} />} /></section>}
+        {draft && !archivedDraft && draftWeek && draftSchedule && hasProgramDays(draft.payload) && <section className="management-plan" aria-label="Проект на тренировъчна програма"><h2>{planRangeLabel(draftWeek)}</h2><p className="management-muted">Предложение за преглед — още не е започната програма.</p><TrainingPlanWeek days={draftSchedule.days} period={draftWeek} forecastDates={draftSchedule.forecastDates} programmeLabel="Предложение" today={today} renderDay={day => <DayCard day={day} />} /></section>}
       </>}
     </>}
     {view === "week" && !archivedDraft && <PlanComparison plan={visibleWeekPlan} outcomes={active.active?.payload.outcomes ?? []} speedSource={viewingProposal ? undefined : showDraft && draft && !archivedDraft ? {kind:"DRAFT",revision:draft.revision,start_date:draft.payload.start_date} : active.active?.stale === false ? {kind:"ACTIVE",revision:active.active.revision} : undefined} />}
     {view === "week" && <details className="management-panel" id="plan-details"><summary>Обяснения и отчет</summary>
+      {visibleWeekPlan && !archivedDraft && <CoachWeekReport days={planWeekView(visibleWeekPlan, selectedPlanWeek(visibleWeekPlan, today, selectedWeek)).days} today={today}/>}
       {active.active && <button type="button" className="action-button secondary" onClick={() => { setNewDraft(!newDraft); }}>{newDraft ? "Обратно към активната програма" : "Подготви друга програма"}</button>}
       {draft && !archivedDraft && <>
         <details><summary>Всички условия и пояснения · {draft.payload.warnings.length}</summary><ul>{draft.payload.warnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}</ul></details>

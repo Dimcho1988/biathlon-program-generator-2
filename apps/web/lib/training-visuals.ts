@@ -10,6 +10,15 @@ export const componentColor = (zone: string) => zone === "NMS" ? "#a855f7" : COM
 export const componentLabel = (zone: string) => zone === "STR" ? "Сила" : zone === "NMS" ? "Нервно-мускулна работа" : zone || "Без зададена зона";
 export const SPORT_LABELS: Record<string, string> = { Run: "Бягане", NordicSki: "Ски бягане", RollerSki: "Ролкови ски", Ride: "Колоездене", Walk: "Ходене", Hike: "Преход", Strength: "Сила" };
 
+/** Numeric catalogue titles describe a standard example; the saved blocks give today's dose. */
+export function workoutTitle(session: DraftSession): string {
+  if (!/(?:^|\+\s*)\d+\s*(?:[×xх]|повторения|отсечки|серии)/iu.test(session.title)) return session.title;
+  const work = session.blocks.filter(block => block.kind === "WORK" && block.duration_min > 0);
+  const zones = [...new Set(work.map(block => componentLabel(block.zone)))];
+  if (!zones.length) return session.title;
+  return (zones.length > 1 ? "Комбинирана работа в " : work.length > 1 ? "Отсечки в " : "Работа в ") + zones.join(" и ");
+}
+
 export function visibleBlocks(session: DraftSession): SessionBlock[] {
   return session.blocks.filter(b => Number.isFinite(b.duration_min) && b.duration_min > 0);
 }

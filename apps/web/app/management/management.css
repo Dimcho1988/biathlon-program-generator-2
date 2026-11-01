@@ -260,3 +260,14 @@
 .training-observation-settings { margin-block: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: 12px; }
 .training-observation-settings summary { cursor: pointer; font-weight: 600; }
 .training-observation-settings td input { width: 100%; min-width: 6rem; max-width: 12rem; }
+
+.workout-prescription { display: grid; gap: .65rem; list-style: none; padding: 0; margin: 1rem 0; }
+.workout-prescription > li { border-inline-start: 3px solid var(--border); padding-inline-start: .8rem; }
+.workout-phase-line, .workout-between { display: grid; gap: .15rem; }
+.workout-between { margin-top: .3rem; }
+.workout-prescription small { color: var(--text-secondary); line-height: 1.5; overflow-wrap: anywhere; }
+.athlete-workout-notes { border-top: 1px solid var(--border); padding-block: .65rem; }
+.athlete-workout-notes summary { cursor: pointer; font-weight: 650; }
+.athlete-workout-notes ul { padding-inline-start: 1.2rem; }
+.athlete-workout-notes li + li { margin-top: .4rem; }
+.athlete-workout-notes p, .athlete-workout-notes ul { margin-bottom: .25rem; line-height: 1.55; }
