@@ -230,23 +230,25 @@ def prepare_history(repository, alias, source, calendar, speed_by_sport, setting
     if reader is None:
         diagnostics["reason"] = "BATCH_SPEED_HISTORY_UNAVAILABLE"
         return estimates, diagnostics
+    from .recording_reads import iter_samples
+    original_skips = len(diagnostics["skipped"])
     try:
-        rows = reader(alias, tuple(sorted({row[1] for row in candidates})))
+        rows = iter_samples(repository, alias, tuple(row[1] for row in candidates))
+        for (ref, run_key, mapping, missing, coverage, elapsed), (_, row) in zip(candidates, rows, strict=True):
+            if row.get("activity_ref") != ref or not isinstance(row.get("shadow_payload"), dict):
+                diagnostics["skipped"].append({"activity_ref": ref, "reason": "PINNED_SPEED_ACTIVITY_MISMATCH"})
+                continue
+            estimate, reason = _estimate(row["shadow_payload"], mapping,
+                missing_minutes=missing, coverage=coverage, elapsed=elapsed)
+            if estimate is None:
+                diagnostics["skipped"].append({"activity_ref": ref, "reason": mapping.get("unavailable_reason") or reason})
+                continue
+            estimates[ref] = {**estimate, "activity_ref": ref, "source_run_key": run_key,
+                              "paired_index_last_activity_date": mapping["last_activity_date"]}
     except PersistentStoreFailure:
         diagnostics["reason"] = "PINNED_SPEED_HISTORY_UNAVAILABLE"
-        return estimates, diagnostics
-    for ref, run_key, mapping, missing, coverage, elapsed in candidates:
-        row = rows.get(run_key) or {}
-        if row.get("activity_ref") != ref or not isinstance(row.get("shadow_payload"), dict):
-            diagnostics["skipped"].append({"activity_ref": ref, "reason": "PINNED_SPEED_ACTIVITY_MISMATCH"})
-            continue
-        estimate, reason = _estimate(row["shadow_payload"], mapping,
-            missing_minutes=missing, coverage=coverage, elapsed=elapsed)
-        if estimate is None:
-            diagnostics["skipped"].append({"activity_ref": ref, "reason": mapping.get("unavailable_reason") or reason})
-            continue
-        estimates[ref] = {**estimate, "activity_ref": ref, "source_run_key": run_key,
-                          "paired_index_last_activity_date": mapping["last_activity_date"]}
+        del diagnostics["skipped"][original_skips:]
+        return {}, diagnostics
     diagnostics["estimated_activity_count"] = len(estimates)
     diagnostics["covered_missing_minutes"] = sum(row["covered_missing_minutes"] for row in estimates.values())
     return estimates, diagnostics

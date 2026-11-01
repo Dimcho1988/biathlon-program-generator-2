@@ -213,7 +213,8 @@ def real_dashboard_view(
 
     dependencies.authorize(authorization)
     try:
-        repository = dependencies.repository()
+        from ..read_session import ReadSession
+        repository = ReadSession(dependencies.repository())
         alias = dependencies.validated_alias(athlete_alias)
         envelope = repository.active_analysis(alias)
         if not isinstance(envelope, Mapping):

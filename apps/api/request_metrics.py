@@ -37,7 +37,7 @@ _STAGES = frozenset({
     "profile", "current", "overview_active", "drafts", "outlook", "projection", "input_after",
     "planning_claim", "planning_shared_wait", "planning_result_copy", "planning_slot_wait",
     "planning_calculate", "planning_complete", "planning_baseline", "planning_search",
-    "planning_search_replay",
+    "planning_search_replay", "recording_wait",
 })
 
 

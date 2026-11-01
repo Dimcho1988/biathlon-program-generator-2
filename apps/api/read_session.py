@@ -92,7 +92,8 @@ class ReadSession:
 
     def __getattr__(self, name):
         if name in {"speed_load_cache_namespace", "activity_speed_exposure_samples",
-                    "activity_speed_history_samples"}:
+                    "activity_speed_history_samples", "iter_activity_speed_history_samples",
+                    "iter_activity_speed_exposure_samples"}:
             # Raw streams must never accumulate in the request snapshot.
             # Planning's missing-HR estimates use the same immutable run keys;
             # hiding this reader silently replaces them with expert Q priors.

@@ -1513,11 +1513,22 @@ class SupabasePilotRepository(SnapshotRepository):
         """On-demand speed exposure does not download the full HR time series."""
         return self._activity_speed_samples(athlete_alias,run_keys,hr_mask=False)
 
+    def iter_activity_speed_history_samples(self, athlete_alias, run_keys):
+        """Keep a compressed ten-run batch, decoding only the current recording."""
+        return self._iter_activity_speed_samples(athlete_alias, run_keys, hr_mask=True)
+
+    def iter_activity_speed_exposure_samples(self, athlete_alias, run_keys):
+        return self._iter_activity_speed_samples(athlete_alias, run_keys, hr_mask=False)
+
     def _activity_speed_samples(self, athlete_alias, run_keys, *, hr_mask):
         if any(not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key) for key in run_keys):
             raise PersistentStoreFailure("Invalid speed history run key")
-        result = {}
-        keys = sorted(set(run_keys))
+        return dict(self._iter_activity_speed_samples(athlete_alias, tuple(sorted(set(run_keys))), hr_mask=hr_mask))
+
+    def _iter_activity_speed_samples(self, athlete_alias, run_keys, *, hr_mask):
+        if any(not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key) for key in run_keys):
+            raise PersistentStoreFailure("Invalid speed history run key")
+        keys = list(run_keys)
         fields = ("configuration_fingerprint", "vflat_model_version", "vflat_config_version", "trainability_index",
                   "speed_test_series", "speed_load_summary") + (("timeseries",) if hr_mask else ())
         selection = "run_key,activity_ref," + ",".join(f"{name}:result_payload->{name}" for name in fields)
@@ -1528,15 +1539,18 @@ class SupabasePilotRepository(SnapshotRepository):
                 f"&athlete_alias=eq.{quote(athlete_alias, safe='')}&run_key=in.({','.join(batch)})&limit=10"))
             if not isinstance(rows, list):
                 raise PersistentStoreFailure("Stored speed history samples are invalid")
+            indexed = {}
             for row in rows:
                 if (not isinstance(row, Mapping) or row.get("run_key") not in batch
-                        or not isinstance(row.get("activity_ref"), str) or row["run_key"] in result):
+                        or not isinstance(row.get("activity_ref"), str) or row["run_key"] in indexed):
                     raise PersistentStoreFailure("Stored speed history identity is invalid")
-                result[row["run_key"]] = {"run_key": row["run_key"], "activity_ref": row["activity_ref"],
-                    "shadow_payload": self._decode_shadow({name: row.get(name) for name in fields}, row["run_key"])}
-        if set(result) != set(keys):
-            raise PersistentStoreFailure("Pinned speed history samples are unavailable")
-        return result
+                indexed[row["run_key"]] = row
+            if set(indexed) != set(batch):
+                raise PersistentStoreFailure("Pinned speed history samples are unavailable")
+            for key in batch:
+                row = indexed[key]
+                yield key, {"run_key": key, "activity_ref": row["activity_ref"],
+                    "shadow_payload": self._decode_shadow({name: row.get(name) for name in fields}, key)}
 
     def trainability_summaries(
         self, athlete_alias: str, run_keys: tuple[str, ...]

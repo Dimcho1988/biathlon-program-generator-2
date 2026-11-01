@@ -160,11 +160,25 @@ def prior_indices(history, sport, day, settings):
 
 
 def activity_samples(repository, alias, activities, *, metrics=None, include_raw=False):
-    """Prefetch one ten-activity batch while integrating the preceding batch.
+    """Consume one recording at a time when the repository supports streaming.
 
-    At most twenty streams are live per report; a shared two-thread lane bounds
-    concurrent database reads. Results remain in the original activity order.
+    Legacy adapters retain their bounded prefetch. Persistent readers keep
+    only compressed batches between recordings, in the original activity order.
     """
+    streaming = getattr(repository, "iter_activity_speed_history_samples" if include_raw else
+                        "iter_activity_speed_exposure_samples", None)
+    if callable(streaming):
+        from .recording_reads import iter_samples
+        keyed = [a for a in activities if a.get("latest_shadow_run_key")]
+        rows = iter(iter_samples(repository, alias, tuple(a["latest_shadow_run_key"] for a in keyed),
+                                 include_raw=include_raw))
+        for activity in activities:
+            if activity.get("latest_shadow_run_key"):
+                _, row = next(rows)
+                yield activity, row
+            else:
+                yield activity, {}
+        return
     reader=(getattr(repository,"activity_speed_history_samples",None) if include_raw else None) or getattr(repository,"activity_speed_exposure_samples",None)
     batches = [activities[first:first+10] for first in range(0, len(activities), 10)]
     if not batches:

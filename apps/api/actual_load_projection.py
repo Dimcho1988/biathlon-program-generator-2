@@ -70,46 +70,43 @@ def _reconstruct(repository, alias, source, inputs, settings, key, original_iden
                 and calendar.get(a["activity_ref"], {}).get("latest_shadow_run_key")]
     models = {}
     records = []
-    for offset in range(0, len(selected), 10):
-        batch = selected[offset:offset+10]
-        keys = tuple(calendar[a["activity_ref"]]["latest_shadow_run_key"] for a in batch)
-        samples = repository.activity_speed_history_samples(alias, keys)
-        for activity in batch:
-            ref = activity["activity_ref"]
-            row = samples.get(calendar[ref]["latest_shadow_run_key"])
-            if not row or row.get("activity_ref") != ref:
-                raise ValueError("Pinned load activity mismatch")
-            recording_seconds = (max(calendar[ref].get("elapsed_time_s") or 0.,
-                                     calendar[ref].get("moving_time_s") or 0.)
-                or (activity.get("load_source") or {}).get("recorded_seconds")
-                or (activity.get("duration_min") or 0.)*60)
-            if not unified_load.finite(recording_seconds) or recording_seconds <= 0:
-                # A surviving sample does not certify the duration of a
-                # missing recording. Leave this activity unresolved.
-                continue
-            day = date.fromisoformat(activity["date"])
-            identity = (activity["sport"], day)
-            if identity not in models:
-                view = (model_service.speed_view(repository, alias, activity["sport"],
-                    _inputs=model_service.historical_speed_inputs(inputs, day), _capacity_only=True)
-                    if speed_equivalence.supports_sport(activity["sport"]) else {"sport": activity["sport"]})
-                from .component_load_context import context_from_speed_view
-                models[identity] = context_from_speed_view(view)
-            ledger = unified_load.integrate(row["shadow_payload"], bounds=settings.zone_bounds_bpm,
-                sport=activity["sport"], parameters=models[identity]["comparison_parameters"], leading_indicator=settings.leading_indicator,
-                duration_s=recording_seconds)
-            ledger["capacity_context"] = {k: models[identity][k] for k in ("minutes", "sources", "references", "fingerprint")}
-            zones = {z["zone"]: z for z in ledger["zones"]}
-            for zone in activity["zones"]:
-                zone.update(raw_time_min=zones[zone["zone"]]["raw_time_min"],
-                            equivalent_time_min=zones[zone["zone"]]["equivalent_time_min"])
-                # Existing HR-derived summary means do not describe speed fallback.
-                zone["mean_effective_hr_bpm"] = None
-                zone["average_minute_value_percent"] = None
-            evidence = {k: v for k,v in ledger.items() if k != "zones"}
-            activity["load_source"] = evidence
-            activity["quality_status"] = "limited" if ledger["unknown_seconds"] > 1e-6 else "valid"
-            records.append({"activity_ref": ref, **evidence})
+    from .recording_reads import iter_samples
+    keys = tuple(calendar[a["activity_ref"]]["latest_shadow_run_key"] for a in selected)
+    for activity, (_, row) in zip(selected, iter_samples(repository, alias, keys), strict=True):
+        ref = activity["activity_ref"]
+        if not row or row.get("activity_ref") != ref:
+            raise ValueError("Pinned load activity mismatch")
+        recording_seconds = (max(calendar[ref].get("elapsed_time_s") or 0.,
+                                 calendar[ref].get("moving_time_s") or 0.)
+            or (activity.get("load_source") or {}).get("recorded_seconds")
+            or (activity.get("duration_min") or 0.)*60)
+        if not unified_load.finite(recording_seconds) or recording_seconds <= 0:
+            # A surviving sample does not certify the duration of a
+            # missing recording. Leave this activity unresolved.
+            continue
+        day = date.fromisoformat(activity["date"])
+        identity = (activity["sport"], day)
+        if identity not in models:
+            view = (model_service.speed_view(repository, alias, activity["sport"],
+                _inputs=model_service.historical_speed_inputs(inputs, day), _capacity_only=True)
+                if speed_equivalence.supports_sport(activity["sport"]) else {"sport": activity["sport"]})
+            from .component_load_context import context_from_speed_view
+            models[identity] = context_from_speed_view(view)
+        ledger = unified_load.integrate(row["shadow_payload"], bounds=settings.zone_bounds_bpm,
+            sport=activity["sport"], parameters=models[identity]["comparison_parameters"], leading_indicator=settings.leading_indicator,
+            duration_s=recording_seconds)
+        ledger["capacity_context"] = {k: models[identity][k] for k in ("minutes", "sources", "references", "fingerprint")}
+        zones = {z["zone"]: z for z in ledger["zones"]}
+        for zone in activity["zones"]:
+            zone.update(raw_time_min=zones[zone["zone"]]["raw_time_min"],
+                        equivalent_time_min=zones[zone["zone"]]["equivalent_time_min"])
+            # Existing HR-derived summary means do not describe speed fallback.
+            zone["mean_effective_hr_bpm"] = None
+            zone["average_minute_value_percent"] = None
+        evidence = {k: v for k,v in ledger.items() if k != "zones"}
+        activity["load_source"] = evidence
+        activity["quality_status"] = "limited" if ledger["unknown_seconds"] > 1e-6 else "valid"
+        records.append({"activity_ref": ref, **evidence})
     out["activities"] = sorted(activities, key=lambda a: (a["date"], a["activity_ref"]))
     out["load_selection"] = {"version": VERSION, "fingerprint": key,
         "snapshot_identity": original_identity,
