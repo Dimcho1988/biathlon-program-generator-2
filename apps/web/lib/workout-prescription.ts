@@ -65,13 +65,15 @@ export function savedInstruction(block: SessionBlock, session: DraftSession) {
   return reference ? session.blocks[Number(reference[1]) - 1]?.instructions ?? "" : block.instructions;
 }
 
-function recoveryCue(block: SessionBlock, session: DraftSession) {
+export function recoveryCue(block: SessionBlock, session: DraftSession) {
   if (block.kind !== "RECOVERY" && block.kind !== "TRANSITION") return;
   // A target or HR range for active rest does not specify when to restart.
   // Retain a written restart condition verbatim, including its comparator.
-  return savedInstruction(block, session)?.split(/(?<=[.!?])\s+(?=[А-ЯA-Z])/u).find(sentence =>
+  const instruction = savedInstruction(block, session);
+  const hasRestart = instruction?.split(/(?<=[.!?])\s+(?=[А-ЯA-Z])/u).some(sentence =>
     /пулс|сърдечна честота/iu.test(sentence) && /когато|докато|щом|след като|при спад|до спад|изчакай|(?:поднови|следващата).{0,45}при/iu.test(sentence)
     && /спад|падне|пониж|слезе|достиг|върне|(?:под|до|≤|<)\s*\d/iu.test(sentence));
+  return hasRestart ? instruction : undefined;
 }
 
 export function phaseIntensity(block: SessionBlock, session: DraftSession, unit: RunningSpeedUnit): string[] {

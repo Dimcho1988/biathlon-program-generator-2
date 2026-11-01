@@ -3,7 +3,7 @@
 import { durationHms } from "../lib/duration-format";
 import { type DraftDay, type DraftSession, type SessionBlock } from "../lib/training-management";
 import { componentColor, componentLabel, workoutTitle } from "../lib/training-visuals";
-import { phaseDose, phaseHeading, phaseIntensity, phaseName, shortWork, workoutStructure, type WorkoutPhase } from "../lib/workout-prescription";
+import { phaseDose, phaseHeading, phaseIntensity, phaseName, recoveryCue, shortWork, workoutStructure, type WorkoutPhase } from "../lib/workout-prescription";
 import { useRunningSpeedUnit } from "./running-speed-unit";
 import { SessionRole } from "./session-role";
 import { SessionAccent, WorkoutProfile } from "./workout-profile";
@@ -13,7 +13,7 @@ function PhaseLine({phase, session, rest}: {phase: WorkoutPhase; session: DraftS
   const {block} = phase;
   const targets = phaseIntensity(block, session, unit);
   return <div className={rest ? "workout-between" : "workout-phase-line"}>
-    <span><strong>{rest ? phaseName(block) : phaseHeading(phase)}</strong> · {phaseDose(phase)}</span>
+    <span><strong>{rest ? phaseName(block) : phaseHeading(phase)}</strong> · {recoveryCue(block, session) && "планирано време "}{phaseDose(phase)}</span>
     {targets.length > 0 && <small>{targets.join(" · ")}</small>}
   </div>;
 }
@@ -110,6 +110,9 @@ export function AthleteWorkout({day, session, position}: {day: DraftDay; session
   const groups = workoutStructure(session);
   const phases = groups.flatMap(group => group.phases);
   const bank = session.dose_evidence?.strength_prescription;
+  const variedReserve = (block: SessionBlock) => typeof block.reserve_repetitions === "number" && session.blocks.some(other =>
+    other.kind === "WORK" && other.zone === block.zone && typeof other.reserve_repetitions === "number"
+    && other.reserve_repetitions !== block.reserve_repetitions);
   return <article className="management-day athlete-workout" style={{borderLeftColor:componentColor(session.zone)}}>
     <header><div><p className="management-day-date">{new Date(day.date + "T12:00:00Z").toLocaleDateString("bg-BG", {weekday:"long",day:"numeric",month:"long",timeZone:"UTC"})}{position && " · " + position}</p>
       <h3>{workoutTitle(session)}</h3></div><SessionAccent zone={session.zone}/></header>
@@ -120,6 +123,7 @@ export function AthleteWorkout({day, session, position}: {day: DraftDay; session
         {group.phases.map((phase, part) => <div className="workout-dose-part" key={part}>
           <PhaseLine phase={phase} session={session}/>
           {phase.block.zone === "STR" && typeof phase.block.reserve_repetitions === "number" && <small>Резерв от {phase.block.reserve_repetitions} {phase.block.reserve_repetitions === 1 ? "повторение" : "повторения"} със същата тежест.</small>}
+          {phase.block.zone !== "STR" && variedReserve(phase.block) && <small>Резерв за още {phase.block.reserve_repetitions} {phase.block.reserve_repetitions === 1 ? "отсечка" : "отсечки"} със същата скорост.</small>}
           {phase.between && <PhaseLine phase={{block:phase.between,count:1}} session={session} rest/>}
         </div>)}
       </li>)}</ol>}

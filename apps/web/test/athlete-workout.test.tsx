@@ -86,8 +86,10 @@ describe("the saved session as an athlete reads it", () => {
     expect(workoutStructure(interval)[0].phases[0].count).toBe(15);
     expect(html(interval)).toContain("15 × 1 мин");
     expect(html(interval)).not.toContain("уд./мин");
-    const gated = {...rest, passive_rest:true, instructions:"Започни следващата отсечка, когато пулсът спадне под 120 уд./мин."};
+    const gated = {...rest, passive_rest:true, instructions:"Почивай поне 30 секунди. Започни следващата отсечка, когато пулсът спадне под 120 уд./мин."};
     expect(phaseIntensity(gated,interval,"kmh")).toEqual([gated.instructions]);
+    expect(html(session([one,gated,{...one,reserve_repetitions:3}]))).toContain("планирано време 30 сек.");
+    expect(html(session([one,gated,{...one,reserve_repetitions:3}]))).toContain("още 3 отсечки");
     expect(phaseIntensity({...rest,primary_control:"HRMAX"},interval,"kmh").join(" ")).not.toContain("уд./мин");
     expect(phaseIntensity({...one,duration_min:4},interval,"kmh").join(" ")).toContain("162–170 уд./мин");
     expect(phaseIntensity({...warm,target_hr_bpm:130},interval,"kmh").join(" ")).toContain("130 уд./мин");
