@@ -3,7 +3,7 @@ import {act} from 'react';
 import {createRoot, type Root} from 'react-dom/client';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {TrainingManagement} from '../components/training-management';
-import {defaultManagementProfile} from '../lib/training-management';
+import {defaultManagementProfile,type DraftRecord} from '../lib/training-management';
 import {parsePlanningJob,planningPending,type PlanningJob} from '../lib/planning-job';
 
 const id='22222222-2222-4222-8222-222222222222';
@@ -20,10 +20,10 @@ afterEach(async()=>{
   await act(async()=>root.unmount());container.remove();
   vi.clearAllTimers();vi.useRealTimers();vi.restoreAllMocks();vi.unstubAllGlobals();
 });
-async function mount(canEdit=true){
+async function mount(canEdit=true,drafts:DraftRecord[]=[]){
   await act(async()=>root.render(<TrainingManagement athleteName="Fixture athlete" canEdit={canEdit} today="2026-11-01"
     initialProfile={{configured:true,revision:1,profile:{...defaultManagementProfile('2026-11-01'),discipline:'5000 m'}}}
-    initialDrafts={[]}/>));
+    initialDrafts={drafts}/>));
 }
 async function submit(){
   const form=container.querySelector('form.management-generate')!;
@@ -58,6 +58,31 @@ it('recovers an existing background job after reopening without a new mutation',
   expect(fetch).toHaveBeenCalledTimes(1);
   await act(async()=>root.unmount());root=createRoot(container);await mount();
   expect(fetch).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(fetch).mock.calls.every(([,init])=>init?.method==='GET')).toBe(true);
+});
+
+it('receives the exact result when preparation finished while the page was closed',async()=>{
+  const transport=vi.fn(async(url:string)=>Response.json(url.includes('drafts?')?{drafts:[record]}:{job:ready}));
+  vi.stubGlobal('fetch',transport);await mount();
+  expect(container.textContent).toContain('Програмата е подготвена. Прегледай я преди започване.');
+  expect(transport.mock.calls.some(([url])=>url.endsWith('/drafts?start_date=2026-11-02&revision=1'))).toBe(true);
+  expect(vi.mocked(fetch).mock.calls.every(([,init])=>init?.method==='GET')).toBe(true);
+});
+
+it('does not automatically prepare a stale draft when the saved job state is unknown',async()=>{
+  const transport=vi.fn(async()=>{throw new TypeError('temporarily offline');});
+  vi.stubGlobal('fetch',transport);await mount(true,[{...record,stale:true} as DraftRecord]);
+  await act(async()=>vi.advanceTimersByTimeAsync(15_000));
+  expect(transport).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(fetch).mock.calls.every(([,init])=>init?.method==='GET')).toBe(true);
+});
+
+it('shows a saved failure after reopening and requires an explicit new request',async()=>{
+  const transport=vi.fn(async()=>Response.json({job:{...queued,status:'FAILED',stage:'FAILED',error_code:'INPUT_CHANGED'}}));
+  vi.stubGlobal('fetch',transport);await mount(true,[{...record,stale:true} as DraftRecord]);
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain('променени по време на подготовката');
+  await act(async()=>vi.advanceTimersByTimeAsync(15_000));
+  expect(transport).toHaveBeenCalledTimes(1);
   expect(vi.mocked(fetch).mock.calls.every(([,init])=>init?.method==='GET')).toBe(true);
 });
 

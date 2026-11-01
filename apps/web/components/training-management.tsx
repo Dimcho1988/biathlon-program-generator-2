@@ -245,13 +245,21 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     if (!canEdit || initialView !== 'week') return;
     let cancelled = false;
     const controller = new AbortController();
-    void requestJson('generation-jobs', 'GET', undefined, controller.signal).then(value => {
+    void requestJson('generation-jobs', 'GET', undefined, controller.signal).then(async value => {
       const job = parsePlanningJob(value);
-      if (!cancelled && planningPending(job)) { setPlanningJob(job); setBusy('generate'); }
-    }).catch(() => { /* A failed resume read does not create or retry a mutation. */ })
-      .finally(() => { if (!cancelled) setGenerationChecked(true); });
+      if (cancelled) return;
+      if (planningPending(job)) { setPlanningJob(job); setBusy('generate'); }
+      else if (job?.status === 'SUCCEEDED' && !initialActive.active) {
+        await receiveGeneratedDraft(job, controller.signal);
+        if (!cancelled) setPlanningJob(job);
+      } else if (job?.status === 'FAILED') {
+        setPlanningJob(job); setError(planningFailure(job));
+        return;
+      }
+      if (!cancelled) setGenerationChecked(true);
+    }).catch(() => { /* Unknown saved state must not trigger automatic preparation. */ });
     return () => { cancelled = true; controller.abort(); };
-  }, [canEdit, initialView, requestJson]);
+  }, [canEdit, initialView, initialActive.active, requestJson, receiveGeneratedDraft]);
 
   const pendingGeneration = planningPending(planningJob);
   const pendingJobId = pendingGeneration ? planningJob?.job_id : null;
