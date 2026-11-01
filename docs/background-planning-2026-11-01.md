@@ -67,3 +67,34 @@ restart, plus worker/API memory and failure events.
 For rollback, deploy the preceding web/API/worker commits. The additive tables
 can remain in place; do not drop queued jobs or cached data during an incident.
 A worker using the new code is required to consume outstanding manual jobs.
+
+## Verified staging rollout
+
+On 2026-11-01 UTC, the worker and API reached Render `live` on `65cd06f`;
+the web reached `live` on `5c8d6f8` after the completion-resume fix. The database
+migrations are `20261101214334` and `20261101215206`. Service counts, compute
+plans and automatic deploy settings remain unchanged.
+
+- A manual request returned HTTP 202 in 322 ms. Reloading its page resumed
+  status reads without another acceptance POST.
+- A second request with the technical computation cache deliberately invalidated
+  completed on the worker in 185 seconds, including queueing and publication.
+  The exact input key matched the API baseline. All training outputs matched;
+  only `generated_at` and search diagnostic `allocation.search.alternatives`
+  differed (7 alternatives versus 6 inside the existing timed search window).
+- Both requests succeeded on their first attempt. The test program remained
+  unactivated and no manual jobs remained pending after verification.
+- After an API redeploy reset its in-process caches, the large athlete dashboard
+  returned in 5,537 ms, reading 2,299,848 bytes with zero shadow decoding.
+  Its preceding full reconstruction read 50,291,244 bytes. These are individual
+  observations, not concurrent-user capacity or an isolated CPU benchmark.
+- The manual worker run's highest available minute memory sample was about
+  263 MiB of its existing 512 MiB limit. CPU reached its existing 0.5 CPU limit.
+  Neither worker nor API recorded a `server_failed` event during the rollout.
+- Final web verification passed all 733 tests, lint, types and production build.
+  The worker retry contract passed 15 tests after adding 429/5xx cases; the
+  earlier 514-test backend suite and rolled-back SQL contracts also passed.
+
+The final resume behavior reads the exact completed draft if no program is
+active. An existing active program keeps its view. An unavailable saved state
+or a saved terminal failure cannot automatically submit a fresh draft request.
