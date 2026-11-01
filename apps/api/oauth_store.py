@@ -284,6 +284,39 @@ class TokenCipher:
 class SupabasePilotRepository(SnapshotRepository):
     """Minimal PostgREST client using a server-only Supabase secret key."""
 
+    def planning_job(self, operation, **arguments):
+        value = self._json(self._request('POST', '/rpc/onflows_planning_job',
+            json={'p_operation': operation, **{'p_'+key: value for key, value in arguments.items()}}))
+        if value is not None and not isinstance(value, dict):
+            raise PersistentStoreFailure('Invalid planning job response')
+        return value
+
+    def process_next_planning_job(self):
+        from .planning_jobs import process_next
+        return process_next(self)
+
+    def read_load_projection(self, alias, key):
+        value = self._json(self._request('POST', '/rpc/onflows_load_projection',
+            json={'p_alias': alias, 'p_key': key}))
+        if value is not None and not isinstance(value, dict):
+            raise PersistentStoreFailure('Invalid stored load projection')
+        return value
+
+    def write_load_projection(self, alias, key, payload):
+        return self._json(self._request('POST', '/rpc/onflows_load_projection',
+            json={'p_alias': alias, 'p_key': key, 'p_payload': payload}))
+
+    def warm_active_load_history(self, alias):
+        from .read_session import ReadSession
+        from .actual_load_projection import reconstruct_history
+        from .memory_budget import MODEL_WORK
+        with MODEL_WORK:
+            phase = ReadSession(self)
+            envelope = phase.active_analysis(alias)
+            history = (envelope.get('snapshot_payload') or {}).get('load_history') if envelope else None
+            if history:
+                reconstruct_history(phase, alias, history)
+
     def planning_computation(self, alias, key, token, operation, result=None):
         value = self._json(self._request("POST", "/rpc/onflows_planning_computation", json={
             "p_alias": alias, "p_key": key, "p_token": token,

@@ -4,6 +4,7 @@ import { SpeedEquivalenceComparison } from "./speed-equivalence-comparison";
 import { PreferredSpeed, RunningSpeedUnitControl } from "./running-speed-unit";
 import { executionGuidance } from "../lib/execution-guidance";
 import { useManagementFetch } from "./management-scope";
+import { parsePlanningJob, planningPending, planningStageLabel, planningFailure, type PlanningJob } from '../lib/planning-job';
 import { lactateRangeText } from "../lib/training-observations";
 
 import Link from "next/link";
@@ -30,13 +31,16 @@ import { SyncStatusPanel } from "./sync-status-panel";
 import type { SyncState } from "../lib/sync";
 import type { ManagementOverviewActive } from "../lib/management-overview";
 import {
-  daySessions, rejectedMethodIds, CAPACITY_LABELS, COMPONENTS, PHASE_LABELS, parseDraftRecord, parseDrafts,
+  daySessions, rejectedMethodIds, CAPACITY_LABELS, COMPONENTS, PHASE_LABELS, parseDrafts,
   parseActivePlanResponse, type ActivePlanResponse, type ManagementOutlook, type DraftDay, type DraftRecord, type ManagementProfileResponse,
 } from "../lib/training-management";
 
 const number = (value: unknown, digits = 1) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("bg-BG", { maximumFractionDigits: digits }) : "—";
 const dateLabel = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString("bg-BG", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 const datePlus = (day: string, days: number) => { const value = new Date(`${day}T12:00:00Z`); value.setUTCDate(value.getUTCDate() + days); return value.toISOString().slice(0, 10); };
+class ManagementRequestError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
 const STATUS_LABELS: Record<string, string> = { TRAINING: "Тренировка", REST: "Почивка", EXISTING_ACTIVITY: "Има изпълнена активност", UNAVAILABLE: "Няма свободно време", RACE: "Състезание", REVIEW_REQUIRED: "Нужен е преглед", SKIPPED: "Пропусната тренировка" };
 const LIMIT_LABELS: Record<string, string> = { ALTERNATIVE_EASY_ALLOCATION: "Преразпределение за покриване на акцентната цел", LONG_TERM_QUALITY_PREPARATION: "Запазен товар за следващите основни задачи", FUTURE_QUALITY_RESERVATION_WORK_CAP: "Резерв за бъдеща основна или силова тренировка", SUPPLEMENTARY_DOSE_CAP: "Дозов лимит на допълващия компонент според готовността", DEVELOPMENTAL_DOSE_CAP: "Дозов лимит на краткия въвеждащ вариант", CLOSEST_WHOLE_Q_DOSE: "Цяла методна доза най-близо до целта по Q", COMPLETE_DOSE_ALLOCATION: "Разпределение в цели сесии над минималната доза", ROLLING_Q_AND_7_40_BUDGET: "Оставащ обем и товар от дългосрочната цел", WHOLE_STRUCTURE_DOSE_FRACTION: "Общ дозов таван за всички работни части", COMPONENT_SLOT_ALLOCATION: "Разпределен товар за тази сесия", TECHNICAL_SESSION_CEILING: "Техническа граница на сесията, не оценка на свободното време", ACTUAL_SPORT_EXPOSURE: "Историческа поносимост за конкретното средство", ACTUAL_SPORT_SESSION_EXPOSURE: "Най-дълга скорошна сесия за това средство × вълна", RESERVE_LONG_SESSION_TIME: "Запазено време за дългата тренировка", METHOD_WORK_CAP: "Максимална основна работа за метода", DAILY_AVAILABLE_WORK: "Оставащо време след загрявка и разпускане", REMAINING_WEEKLY_WORK: "Оставащ седмичен обем за основна работа", LOW_ABSOLUTE_RECOVERY_CAP: "Лимит на възстановителната работа", TAPER_DAILY_WORK_CAP: "Лимит за предсъстезателно разтоварване", ROLLING_7_40_COMPONENT_BUDGET: "Оставащ товар за текущия микроцикъл", RACE_DURATION_WORK_CAP: "Граница според дисциплината", RESERVE_KEY_SESSION_TIME: "Запазено време за ключовите сесии" };
 const FALLBACK_LABELS: Record<string, string> = {
@@ -140,7 +144,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   const requestJson = useCallback(async (path: string, method: "GET" | "PUT" | "POST", body?: unknown, signal?: AbortSignal) => {
   const response = await scopedFetch(`/api/athlete/management/${path}`, { method, signal, cache: "no-store", headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const value: unknown = await response.json();
-  if (!response.ok) throw new Error(isRecord(value) && typeof value.error === "string" ? value.error : "Неуспешна заявка.");
+  if (!response.ok) throw new ManagementRequestError(isRecord(value) && typeof value.error === "string" ? value.error : "Неуспешна заявка.", response.status);
   return value;
 }, [scopedFetch]);
 
@@ -157,6 +161,8 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   const [busy, setBusy] = useState<"generate" | "activate" | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [planningJob, setPlanningJob] = useState<PlanningJob | null>(null);
+  const [generationChecked, setGenerationChecked] = useState(!canEdit || initialView !== 'week');
   const activeRequest = useRef(false);
   const receiveActive = useCallback((value: ActivePlanResponse) => setActive(current => newerActivePlan(current, value)), []);
   const beginActiveChange = useCallback(() => {
@@ -225,18 +231,94 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     finally { setBusy(null); }
   }
 
+  const receiveGeneratedDraft = useCallback(async (job: PlanningJob, signal?: AbortSignal) => {
+    const history = parseDrafts(await requestJson(`drafts?start_date=${encodeURIComponent(job.start_date)}&revision=${job.result_revision}`, 'GET', undefined, signal));
+    const record = history.find(row => row.revision === job.result_revision && row.entry_key === job.start_date);
+    if (!record) throw new ManagementRequestError('Готовата програма вече е променена. Презареди последната версия.', 404);
+    setDrafts(previous => [record, ...previous.filter(item => !(item.entry_key === record.entry_key && item.revision === record.revision))]);
+    setNewDraft(true);
+    setStartDate(job.start_date);
+    setNotice(record.payload.status === 'BLOCKED' ? 'Нужна е още една стъпка. Виж указанието по-долу.' : 'Програмата е подготвена. Прегледай я преди започване.');
+  }, [requestJson]);
+
+  useEffect(() => {
+    if (!canEdit || initialView !== 'week') return;
+    let cancelled = false;
+    const controller = new AbortController();
+    void requestJson('generation-jobs', 'GET', undefined, controller.signal).then(value => {
+      const job = parsePlanningJob(value);
+      if (!cancelled && planningPending(job)) { setPlanningJob(job); setBusy('generate'); }
+    }).catch(() => { /* A failed resume read does not create or retry a mutation. */ })
+      .finally(() => { if (!cancelled) setGenerationChecked(true); });
+    return () => { cancelled = true; controller.abort(); };
+  }, [canEdit, initialView, requestJson]);
+
+  const pendingGeneration = planningPending(planningJob);
+  const pendingJobId = pendingGeneration ? planningJob?.job_id : null;
+  useEffect(() => {
+    if (!pendingJobId) return;
+    const jobId = pendingJobId;
+    let cancelled = false, polling = false, delay = 5000;
+    let timer: ReturnType<typeof setTimeout>;
+    let controller: AbortController | null = null;
+    const poll = async () => {
+      if (cancelled || polling) return;
+      if (document.visibilityState === 'hidden') { timer = setTimeout(poll, 15_000); return; }
+      polling = true;
+      let again = true;
+      try {
+        controller = new AbortController();
+        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]);
+        const job = parsePlanningJob(await requestJson(`generation-jobs?job_id=${jobId}`, 'GET', undefined, signal));
+        if (cancelled) return;
+        if (!job) throw new Error('Заявката за подготовка не е намерена.');
+        if (job.status === 'SUCCEEDED') {
+          await receiveGeneratedDraft(job, signal);
+          if (!cancelled) { setBusy(null); setPlanningJob(job); }
+          again = false;
+        } else if (job.status === 'FAILED') {
+          setPlanningJob(job); setBusy(null); setError(planningFailure(job)); again = false;
+        } else { setPlanningJob(job); setNotice(''); }
+      } catch (caught) {
+        if (!cancelled) {
+          if (caught instanceof ManagementRequestError && [401, 403, 404, 409, 412, 422].includes(caught.status)) {
+            setPlanningJob(null); setBusy(null); setError(caught.message); again = false;
+          } else setNotice('Връзката с подготовката временно е прекъсната. Запазената заявка продължава във фонов режим.');
+        }
+      } finally {
+        polling = false;
+        if (!cancelled && again) { delay = Math.min(15_000, delay+2500); timer = setTimeout(poll, delay); }
+      }
+    };
+    const visible = () => { if (document.visibilityState === 'visible') { clearTimeout(timer); void poll(); } };
+    timer = setTimeout(poll, delay);
+    document.addEventListener('visibilitychange', visible);
+    return () => { cancelled = true; clearTimeout(timer); controller?.abort(); document.removeEventListener('visibilitychange', visible); };
+  }, [pendingJobId, requestJson, receiveGeneratedDraft]);
+
   const prepare = useCallback(async () => {
     setError(""); setNotice(""); setBusy("generate");
+    let queued = false;
     try {
-      const currentHistory = parseDrafts(await requestJson(`drafts?start_date=${encodeURIComponent(startDate)}`, "GET"));
-      const existing = currentHistory.filter(item => item.payload.start_date === startDate).reduce((maximum, item) => Math.max(maximum, item.revision), 0);
-      const generated = parseDraftRecord(await requestJson("generate", "POST", { start_date: startDate, expected_profile_revision: saved.revision, expected_draft_revision: existing }));
-      const record = { ...generated, stale: false };
-      setDrafts(previous => [record, ...previous.filter(item => !(item.entry_key === record.entry_key && item.revision === record.revision))]);
-      setNotice(record.payload.status === "BLOCKED" ? "Нужна е още една стъпка. Виж указанието по-долу." : "Програмата е подготвена. Прегледай я преди започване.");
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "Програмата не беше създадена."); }
-    finally { setBusy(null); }
-  }, [saved.revision, startDate, requestJson]);
+      const metadata = await requestJson(`draft-metadata?start_date=${encodeURIComponent(startDate)}`, 'GET');
+      if (!isRecord(metadata) || !Number.isSafeInteger(metadata.revision) || Number(metadata.revision)<0) throw new Error('Версията на програмата не е потвърдена. Презареди страницата.');
+      const job = parsePlanningJob(await requestJson('generation-jobs', 'POST', {start_date: startDate,
+        expected_profile_revision: saved.revision, expected_draft_revision: metadata.revision}));
+      if (!job) throw new Error('Заявката за подготовка не е потвърдена.');
+      if (planningPending(job)) { queued = true; setPlanningJob(job); }
+      else if (job.status === 'SUCCEEDED') await receiveGeneratedDraft(job);
+      else throw new Error(planningFailure(job));
+    } catch (caught) {
+      // An uncertain POST may already have committed. Read its durable state;
+      // never automatically send a second generation request.
+      try {
+        const job = parsePlanningJob(await requestJson('generation-jobs', 'GET'));
+        if (planningPending(job)) { queued = true; setPlanningJob(job); }
+      } catch { /* The user can resume the saved request by reopening the page. */ }
+      if (!queued) setError(caught instanceof Error ? caught.message : 'Заявката не е потвърдена. Презареди страницата.');
+    }
+    finally { if (!queued) setBusy(null); }
+  }, [saved.revision, startDate, requestJson, receiveGeneratedDraft]);
 
   async function generate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -244,7 +326,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   }
   const refreshed = useRef(false);
   useEffect(() => {
-    if (refreshed.current || initialView !== "week" || !canEdit || !saved.configured || busy) return;
+    if (refreshed.current || initialView !== "week" || !canEdit || !saved.configured || !generationChecked || busy) return;
     const current = active.active;
     if (current?.stale && !["PAUSED", "COMPLETED"].includes(current.payload.status)) {
       refreshed.current = true;
@@ -261,7 +343,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
       refreshed.current = true;
       void Promise.resolve().then(prepare);
     }
-  }, [active, busy, canEdit, draft, guidance.step, initialView, prepare, saved.configured, beginActiveChange, endActiveChange, receiveActive, scopedFetch]);
+  }, [active, busy, canEdit, draft, guidance.step, initialView, prepare, saved.configured, generationChecked, beginActiveChange, endActiveChange, receiveActive, scopedFetch]);
 
   function exportDraft() {
     if (!draft) return;
@@ -276,6 +358,10 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     <header className="activities-hero"><div className="activities-title"><div><p className="eyebrow">{athleteName}</p><h1>{view === "week" ? "Седмична програма" : "Дългосрочен план"}</h1><p>Подготовката в перспектива. Конкретната задача за всеки ден.</p></div></div><Link className="text-action" href="/planning">Профил за планиране →</Link></header>
     {!canEdit && <p className="management-notice">Имате достъп за преглед. Промените изискват право за редакция на плана.</p>}
     {error && <p className="management-error" role="alert">{error}</p>}{notice && <p className="management-notice" role="status">{notice}</p>}
+    {pendingGeneration && planningJob && <section className="management-notice" aria-label="Подготовка на програмата">
+      <p role="status">{planningStageLabel(planningJob)}</p>
+      <p>Начало: {dateLabel(planningJob.start_date)}. Можеш да отвориш друг раздел и да се върнеш по-късно. Заявката остава запазена.</p>
+    </section>}
     {syncError && <p className="management-error" role="alert">Обновяването не започна. Опитай отново или провери връзката с Intervals в настройките.</p>}
     {initialSyncState && <SyncStatusPanel initialState={initialSyncState} renderedGenerationId={initialSyncState.active_generation_id} returnTo="/management" compact timezone={saved.timezone} />}
     <nav className="management-view-switch" aria-label="Изглед на плана"><Link href="/management" aria-current={view === "week" ? "page" : undefined}>Седмична програма</Link><Link href="/management/outlook" aria-current={view === "overview" ? "page" : undefined}>Дългосрочен план</Link></nav>

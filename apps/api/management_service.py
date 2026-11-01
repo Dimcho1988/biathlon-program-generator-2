@@ -304,7 +304,7 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False,
 
 
 def build_draft(repository, alias, start_date, expected_profile_revision, *, now=None, decisions=None, locked_day=None,
-                window_end=None, _initial_read_phase=None):
+                window_end=None, _initial_read_phase=None, on_progress=None):
     # Reuse inputs only during calculation. The final check below must observe
     # edits/syncs made while the (potentially long) calculation was running.
     live_repository = repository
@@ -342,6 +342,8 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
         def replay(allocation_policy=None):
             nonlocal replay_count
             stage = "planning_baseline" if replay_count == 0 else "planning_search_replay"
+            if on_progress is not None:
+                on_progress('BASELINE' if replay_count == 0 else 'SEARCH')
             replay_count += 1
             with timed_stage(stage):
                 return training_plan_engine.generate_plan(repository, alias,
@@ -383,14 +385,15 @@ def generate(repository, alias, body, actor, *, now=None):
         expected_responses=(payload.get("input_snapshot") or {}).get("response_revisions"))
 
 
-def history(repository, alias, *, start_date=None):
+def history(repository, alias, *, start_date=None, revision=None):
     """Retain historical evidence while clearly marking changed inputs.
 
     These are drafts, not an atomically activated schedule. A sync can finish
     after a draft was saved; that does not rewrite its frozen source context.
     """
     store = ManagementStore(repository)
-    rows = store.drafts(alias, start_date=start_date) if start_date is not None else store.drafts(alias)
+    rows = (store.draft_revision(alias, start_date, revision) if revision is not None
+            else store.drafts(alias, start_date=start_date) if start_date is not None else store.drafts(alias))
     if not rows:
         return {"drafts": []}
     try:

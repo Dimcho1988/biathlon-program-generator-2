@@ -19,7 +19,7 @@ class ReadSession:
         "athlete_planning_profile", "athlete_mesocycle_accent_preferences",
         "athlete_planning_settings_bundle",
         "active_trainability_calendar", "active_planning_calendar", "active_activity_calendar",
-        "trainability_summaries", "sync_state",
+        "trainability_summaries", "sync_state", "read_load_projection",
     })
 
     def __init__(self, repository, *, planning_settings_bundle=False):
@@ -91,6 +91,10 @@ class ReadSession:
         return self._read(("json", id(value)), lambda: self._repository._json(value))
 
     def __getattr__(self, name):
+        if name == 'write_load_projection':
+            # The only allowed write is a reproducible, keyed technical cache.
+            # Model/settings/plan writes still cannot pass through a read phase.
+            return getattr(self._repository, name)
         if name in {"speed_load_cache_namespace", "activity_speed_exposure_samples",
                     "activity_speed_history_samples", "iter_activity_speed_history_samples",
                     "iter_activity_speed_exposure_samples"}:

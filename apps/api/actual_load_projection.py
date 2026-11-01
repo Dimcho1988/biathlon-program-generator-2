@@ -9,6 +9,7 @@ from copy import deepcopy
 from datetime import date
 from hashlib import sha256
 import json
+import logging
 
 from biathlon import speed_equivalence, unified_load, load_evidence
 from .load_model_policy import identity as load_policy_identity
@@ -17,6 +18,7 @@ from .speed_load_cache import SpeedLoadCache
 VERSION = unified_load.VERSION
 _cache = SpeedLoadCache(max_entries=12, ttl_seconds=300)
 _activity_cache = SpeedLoadCache(max_entries=2048, ttl_seconds=1800)
+logger = logging.getLogger(__name__)
 
 
 def reconstruct_history(repository, alias, source, *, speed_inputs=None):
@@ -47,7 +49,27 @@ def reconstruct_history(repository, alias, source, *, speed_inputs=None):
                            separators=(",", ":")).encode()).hexdigest()
     if (source.get("load_selection") or {}).get("fingerprint") == key:
         return source
-    return _cache.get_or_compute(key, lambda: _reconstruct(repository, alias, source, inputs, settings, key, original_identity))
+    def calculate():
+        from .oauth_store import PersistentStoreFailure
+        reader = getattr(repository, 'read_load_projection', None)
+        writer = getattr(repository, 'write_load_projection', None)
+        if identity['namespace'] and callable(reader):
+            try:
+                stored = reader(alias, key)
+                if isinstance(stored, dict) and (stored.get('load_selection') or {}).get('fingerprint') == key:
+                    logger.info('load_projection_cache state=hit')
+                    return stored
+            except PersistentStoreFailure:
+                logger.warning('load_projection_cache state=read_deferred')
+        result = _reconstruct(repository, alias, source, inputs, settings, key, original_identity)
+        if identity['namespace'] and callable(writer):
+            try:
+                saved = writer(alias, key, result)
+                logger.info('load_projection_cache state=%s', 'prepared' if isinstance(saved, dict) and saved.get('stored') else 'skipped')
+            except PersistentStoreFailure:
+                logger.warning('load_projection_cache state=write_deferred')
+        return result
+    return _cache.get_or_compute(key, calculate)
 
 
 def _reconstruct(repository, alias, source, inputs, settings, key, original_identity):

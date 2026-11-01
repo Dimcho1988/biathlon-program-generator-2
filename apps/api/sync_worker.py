@@ -851,6 +851,35 @@ def run_worker(
     clock: Callable[[], datetime] | None = None,
     monotonic_clock: Callable[[], float] = time.monotonic,
 ) -> int:
+    if lease_seconds < 30 or lease_seconds > 3600:
+        raise ValueError('lease_seconds must be between 30 and 3600')
+    if poll_seconds <= 0 or max_idle_seconds < poll_seconds:
+        raise ValueError('worker polling interval is invalid')
+    from .background_planning import start
+    stopping = stop_event or Event()
+    if once:
+        process_plan = getattr(repository, 'process_next_planning_job', None)
+        if callable(process_plan):
+            process_plan()
+    planner = None if once else start(repository, stopping)
+    try:
+        return _run_worker(repository, worker_id=worker_id, once=once,
+            lease_seconds=lease_seconds, poll_seconds=poll_seconds, max_idle_seconds=max_idle_seconds,
+            stop_event=stopping, pipelines=pipelines, clock=clock, monotonic_clock=monotonic_clock,
+            _background_planning=planner is not None)
+    finally:
+        if planner is not None:
+            stopping.set()
+            planner.join(timeout=290.)
+
+
+def _run_worker(
+    repository: SyncRepository, *, worker_id: str, once: bool = False,
+    lease_seconds: int = 300, poll_seconds: float = 2.0, max_idle_seconds: float = 10.0,
+    stop_event: Event | None = None, pipelines: SyncPipelines | None = None,
+    clock: Callable[[], datetime] | None = None, monotonic_clock: Callable[[], float] = time.monotonic,
+    _background_planning: bool = False,
+) -> int:
     """Poll and process durable jobs until shutdown or one ``--once`` pass."""
 
     if lease_seconds < 30 or lease_seconds > 3600:
@@ -866,7 +895,7 @@ def run_worker(
     next_cleanup_recovery_check = 0.
     while not stopping.is_set():
         management_tick = getattr(repository, "refresh_due_training_plans", None)
-        if callable(management_tick):
+        if callable(management_tick) and not _background_planning:
             management_now = monotonic_clock()
             if management_now >= next_management_check and (management_thread is None or not management_thread.is_alive()):
                 next_management_check = management_now + 60.
@@ -962,6 +991,12 @@ def run_worker(
                 # A valid imported generation remains successful even when
                 # replanning needs a retry, more data or renewed coach access.
                 logger.warning("management_after_sync_deferred error_type=%s", type(exc).__name__)
+        warm = getattr(repository, 'warm_active_load_history', None)
+        if result.outcome == 'ACTIVATED' and callable(warm):
+            try:
+                warm(claim['athlete_alias'])
+            except Exception as exc:
+                logger.warning('load_projection_after_sync_deferred error_type=%s', type(exc).__name__)
         if once:
             return 0
         athlete_alias = claim.get("athlete_alias")

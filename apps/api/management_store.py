@@ -90,6 +90,26 @@ class ManagementStore:
         return self._rows(alias, "DRAFT", max(1, min(limit, MAX_HISTORY)),
                           entry_key=start_date.isoformat() if start_date is not None else None)
 
+    def draft_metadata(self, alias, start_date):
+        rows = self.repository._json(self.repository._request('GET',
+            '/onflows_management_entries?select=revision'
+            f'&athlete_alias=eq.{quote(alias, safe="")}&kind=eq.DRAFT'
+            f'&entry_key=eq.{start_date.isoformat()}&order=revision.desc&limit=1'))
+        if (not isinstance(rows, list) or len(rows)>1
+                or any(not isinstance(row, dict) or type(row.get('revision')) is not int or row['revision']<1 for row in rows)):
+            raise PersistentStoreFailure('Invalid draft metadata')
+        return {'revision': rows[0]['revision'] if rows else 0}
+
+    def draft_revision(self, alias, start_date, revision):
+        if type(start_date) is not date or type(revision) is not int or revision<1:
+            raise ValueError('Exact draft date and revision required')
+        key = start_date.isoformat()
+        rows = self.repository._json(self.repository._request('GET',
+            f'/onflows_management_entries?select={_SELECT}'
+            f'&athlete_alias=eq.{quote(alias, safe="")}&kind=eq.DRAFT&entry_key=eq.{key}'
+            f'&revision=eq.{revision}&limit=1'))
+        return self._validated_rows(rows, 'DRAFT', 1, key)
+
     def learning_memory(self, alias):
         """Read compact cumulative observations, never a previous forecast as truth.
 

@@ -266,10 +266,15 @@ it("shows a restrictive manual goal outside the collapsed explanations, includin
 });
 
 it("automatically replaces a stale draft and displays every session and their total", async () => {
-  const fetchMock=vi.fn<(url:string,init?:RequestInit)=>Promise<Response>>(async (url)=>Response.json(url.includes("drafts?")?{drafts:[draft]}:{...draft,revision:2,stale:false}));vi.stubGlobal("fetch",fetchMock);
+  const ready={job_id:'22222222-2222-4222-8222-222222222222',status:'SUCCEEDED',stage:'READY',start_date:draft.entry_key,result_revision:2,error_code:null};
+  const fetchMock=vi.fn<(url:string,init?:RequestInit)=>Promise<Response>>(async (url,init)=>
+    Response.json(url.includes('draft-metadata?')?{revision:1}:url.includes('drafts?')?{drafts:[{...draft,revision:2,stale:false}]}:
+      {job:init?.method==='POST'?ready:null}, {status:init?.method==='POST'?202:200}));vi.stubGlobal("fetch",fetchMock);
   await mount(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:2}} initialDrafts={[draft]} today="2026-09-21"/>);
-  await vi.waitFor(()=>expect(fetchMock).toHaveBeenCalledTimes(2));
-  expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body??"{}"))).toMatchObject({expected_profile_revision:2,expected_draft_revision:1});
+  await vi.waitFor(()=>expect(fetchMock).toHaveBeenCalledTimes(4));
+  const writes=fetchMock.mock.calls.filter(([,init])=>init?.method==='POST');
+  expect(writes).toHaveLength(1);
+  expect(JSON.parse(String(writes[0][1]?.body??"{}"))).toMatchObject({expected_profile_revision:2,expected_draft_revision:1});
   expect(container.textContent).toContain("Следобедна работа");
   expect(container.textContent).toContain("2 сесии");
   expect(container.textContent).toContain("1:15:00");
@@ -436,18 +441,18 @@ it("never replays a check refresh after conflict or labels the reloaded plan unc
 
 it("disables manual actions during automatic refresh and loads a concurrent newer version without replaying",async()=>{
   let resolvePost!:(response:Response)=>void;
-  const fetchMock=vi.fn<(url:string,init?:RequestInit)=>Promise<Response>>((url)=>url.endsWith("/active")?Promise.resolve(Response.json(activeResponse(4))):new Promise(resolve=>{resolvePost=resolve;}));vi.stubGlobal("fetch",fetchMock);
+  const fetchMock=vi.fn<(url:string,init?:RequestInit)=>Promise<Response>>((url)=>url.endsWith('/generation-jobs')?Promise.resolve(Response.json({job:null})):url.endsWith("/active")?Promise.resolve(Response.json(activeResponse(4))):new Promise(resolve=>{resolvePost=resolve;}));vi.stubGlobal("fetch",fetchMock);
   await mount(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:2}} initialDrafts={[]} initialActive={{...activeResponse(3,true),capabilities:{unchanged_checks:true}}} today="2026-09-21"/>);
-  expect(fetchMock).toHaveBeenCalledTimes(1);
-  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string)).toEqual({ action: "REFRESH", expected_revision: 3 });
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(JSON.parse(fetchMock.mock.calls[1][1]!.body as string)).toEqual({ action: "REFRESH", expected_revision: 3 });
   expect(button("Обновяване…").disabled).toBe(true);
   expect(button("Пауза").disabled).toBe(true);
   await click(button("Прегледай"));
   expect(button("Утвърди предложението").disabled).toBe(true);
   await click(button("Обновяване…"));
-  expect(fetchMock).toHaveBeenCalledTimes(1);
-  await act(async()=>resolvePost(Response.json({error:"Conflict"},{status:409})));
   expect(fetchMock).toHaveBeenCalledTimes(2);
+  await act(async()=>resolvePost(Response.json({error:"Conflict"},{status:409})));
+  expect(fetchMock).toHaveBeenCalledTimes(3);
   expect(container.textContent).toContain("Текущ план · версия 4");
   expect(container.textContent).toContain("Заредена е последната версия");
   expect(container.querySelector('[role="alert"]')).toBeNull();
@@ -648,6 +653,7 @@ it.each(["AUTO", "REVIEW"] as const)("separates the saved choice from approved %
   await mount(<TrainingManagement athleteName="Спортист" canEdit today="2026-09-22"
     initialProfile={{ configured: true, revision: 2, profile: { ...profile, adaptation_mode: requested } }} initialDrafts={[]} initialActive={value}/>);
   const modes = () => container.querySelector('[aria-label="Режим на седмицата"]')!;
+  fetchMock.mockClear(); // Ignore the initial read-only background-job recovery check.
   expect(modes().textContent).toContain(`Режим на утвърдената програма${label}`);
   expect(modes().textContent).toContain(`Записан избор в профила${requestedLabel}`);
   expect(modes().textContent).toContain("Смяната още не е приложена");
@@ -906,6 +912,7 @@ it("switches the full anchored week, Q totals and task variant together without 
   const saved = structuredClone(value);
   const fetchMock=vi.fn(); vi.stubGlobal("fetch",fetchMock);
   await mount(<TrainingManagement athleteName="Спортист" canEdit today="2026-10-28" initialProfile={{configured:true,profile,revision:2}} initialDrafts={[]} initialActive={value}/>);
+  fetchMock.mockClear(); // Week selection must not submit a mutation or refetch a plan.
   expect(select("Седмица").options[0].textContent).toBe("Текуща седмица · 27.10.2026 – 02.11.2026");
   expect(select("Седмица").options[1].textContent).toBe("Следваща седмица · 03.11.2026 – 09.11.2026");
   const row = (zone:string) => [...container.querySelectorAll(".q-primary-table tbody tr")].find(tr=>tr.querySelector("th")?.textContent===zone)!;

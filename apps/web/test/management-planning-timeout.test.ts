@@ -73,6 +73,14 @@ it("retains the ordinary deadline for an action that does not calculate a plan",
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 
+it('bounds background acceptance to 15 seconds without replaying a possibly queued write', async () => {
+  delayedApi(20_000);
+  const pending=send('generation-jobs',{start_date:'2026-10-12',expected_profile_revision:1,expected_draft_revision:0});
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect((await pending).status).toBe(503);
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
 function scopedRequest(input: string | URL | Request, init?: RequestInit) {
   const headers = new Headers(init?.headers);
   headers.set("X-Onflows-Athlete", "test-athlete"); headers.set("X-Onflows-Actor", "test-actor");

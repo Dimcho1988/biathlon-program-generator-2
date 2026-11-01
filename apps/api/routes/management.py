@@ -192,14 +192,71 @@ def management_outlook(
 @router.get("/api/v2/athlete/management/drafts")
 def management_drafts(
     start_date: date | None = None,
+    revision: Annotated[int | None, Query(ge=1)] = None,
     authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
 ):
     alias = dependencies.model_alias(authorization, athlete_alias)
+    if revision is not None and start_date is None:
+        raise HTTPException(422, 'A draft revision requires its start date')
     try:
-        return public_management(management_service.history(dependencies.repository(), alias, start_date=start_date))
+        return public_management(management_service.history(dependencies.repository(), alias,
+            start_date=start_date, **({'revision': revision} if revision is not None else {})))
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "Management drafts are unavailable") from exc
+
+
+@router.get('/api/v2/athlete/management/draft-metadata')
+def management_draft_metadata(
+    start_date: date,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias='X-OnFlows-Athlete-Alias')] = None,
+):
+    alias = dependencies.model_alias(authorization, athlete_alias)
+    try:
+        return ManagementStore(dependencies.repository()).draft_metadata(alias, start_date)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, 'Draft metadata is unavailable') from exc
+
+
+@router.post('/api/v2/athlete/management/generation-jobs', status_code=202)
+def enqueue_management_draft(
+    body: ManagementGenerateRequest,
+    response: Response,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias='X-OnFlows-Athlete-Alias')] = None,
+    actor: Annotated[UUID | None, Header(alias='X-OnFlows-Actor-Id')] = None,
+):
+    alias = dependencies.model_alias(authorization, athlete_alias)
+    if actor is None:
+        raise HTTPException(401, 'Actor session is required')
+    from ..planning_jobs import enqueue
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['Retry-After'] = '5'
+    try:
+        return enqueue(dependencies.repository(), alias, body, actor)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, 'Planning request could not be saved') from exc
+
+
+@router.get('/api/v2/athlete/management/generation-jobs')
+def management_generation_status(
+    response: Response,
+    job_id: UUID | None = None,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias='X-OnFlows-Athlete-Alias')] = None,
+    actor: Annotated[UUID | None, Header(alias='X-OnFlows-Actor-Id')] = None,
+):
+    alias = dependencies.model_alias(authorization, athlete_alias)
+    if actor is None:
+        raise HTTPException(401, 'Actor session is required')
+    from ..planning_jobs import status
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['Retry-After'] = '5'
+    try:
+        return status(dependencies.repository(), alias, actor, job_id)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, 'Planning progress is temporarily unavailable') from exc
 
 
 @router.post("/api/v2/athlete/management/generate")

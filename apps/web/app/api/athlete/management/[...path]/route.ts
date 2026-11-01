@@ -16,10 +16,16 @@ async function proxy(request: Request, context: Context) {
   try {
     const { path } = await context.params;
     const endpoint = path.length === 1 ? path[0] : path.length === 2 && path[0] === "methods" && path[1] === "preferences" ? "methods/preferences" : "";
-    const permitted = request.method === "GET" ? ["profile", "drafts", "active", "state", "outlook", "methods", "checks", "speed-comparison"] : request.method === "PUT" ? ["profile", "methods/preferences"] : ["generate", "activate", "action", "day", "race-duration"];
+    const permitted = request.method === "GET" ? ["profile", "drafts", "draft-metadata", "generation-jobs", "active", "state", "outlook", "methods", "checks", "speed-comparison"] : request.method === "PUT" ? ["profile", "methods/preferences"] : ["generate", "generation-jobs", "activate", "action", "day", "race-duration"];
     if (!permitted.includes(endpoint)) return error("Адресът не е намерен.", 404);
-    const startDate = request.method === "GET" && endpoint === "drafts" ? new URL(request.url).searchParams.get("start_date") : null;
+    const startDate = request.method === "GET" && ["drafts", "draft-metadata"].includes(endpoint) ? new URL(request.url).searchParams.get("start_date") : null;
     if (startDate !== null && !isCalendarDate(startDate)) return error("Невалидна начална дата на програмата.", 422);
+    if (endpoint === "draft-metadata" && startDate === null) return error("Посочи началната дата.", 422);
+    const draftRevision = request.method === "GET" && endpoint === "drafts" ? new URL(request.url).searchParams.get("revision") : null;
+    if (draftRevision !== null && (!/^[1-9]\d*$/.test(draftRevision) || !Number.isSafeInteger(Number(draftRevision)) || startDate === null))
+      return error("Посочи точна версия на програмата.", 422);
+    const jobId = request.method === "GET" && endpoint === "generation-jobs" ? new URL(request.url).searchParams.get("job_id") : null;
+    if (jobId !== null && !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(jobId)) return error("Невалидна заявка за подготовка.", 422);
     const phase = request.method === "GET" && endpoint === "methods" ? new URL(request.url).searchParams.get("phase") : null;
     if (phase !== null && !Object.hasOwn(METHOD_PHASES, phase)) return error("Невалиден период на подготовката.", 422);
     const checksQuery = request.method === "GET" && endpoint === "checks" ? new URL(request.url).searchParams : null;
@@ -44,6 +50,7 @@ async function proxy(request: Request, context: Context) {
     if (!access.canViewPlan) return error("Този спортист не е споделил тренировъчния си план с вас.", 403);
     if (endpoint === "speed-comparison" && !access.canViewRecovery) return error("Скоростният отчет на този спортист не е споделен с вас.", 403);
     if (write && !access.canEditPlan) return error("Този профил е достъпен само за преглед.", 403);
+    if (endpoint === "generation-jobs" && !access.canEditPlan) return error("Нужно е право за редакция на плана.", 403);
     let body: string | undefined;
     let plansWeek = endpoint === "generate" || endpoint === "day";
     if (write) {
@@ -91,12 +98,15 @@ async function proxy(request: Request, context: Context) {
     await waitForApi(base);
     const url = new URL(`/api/v2/athlete/management/${endpoint}`, base);
     if (startDate !== null) url.searchParams.set("start_date", startDate);
+    if (draftRevision !== null) url.searchParams.set("revision", draftRevision);
+    if (jobId !== null) url.searchParams.set("job_id", jobId);
     if (phase !== null) url.searchParams.set("phase", phase);
     if (before !== null) url.searchParams.set("before", before);
     if (limit !== null) url.searchParams.set("limit", limit);
     if (comparisonQuery) for (const [key, value] of comparisonQuery) url.searchParams.set(key, value);
     const response = await fetch(url, {
-      method: request.method, cache: "no-store", signal: request.method === "GET"
+      method: request.method, cache: "no-store", signal: ["generation-jobs", "draft-metadata"].includes(endpoint)
+        ? AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]) : request.method === "GET"
         ? AbortSignal.any([request.signal, AbortSignal.timeout(75_000)])
         // Planning can finish after the ordinary read/write deadline on staging.
         // Keep one bounded mutation; never retry a potentially committed write.
@@ -108,13 +118,14 @@ async function proxy(request: Request, context: Context) {
       ? "Профилът, програмата или входните данни са променени. Презаредете и прегледайте последната версия."
       : response.status === 422 ? endpoint === "methods/preferences" ? "Провери диапазоните. Методът трябва да поддържа избраната корекция; комбинираните отсечки имат собствена структура. Настройките не бяха записани." : "Проверете профила, периода и календара. Програмата не беше записана."
         : "Управлението временно не е достъпно. Въведените стойности остават във формата.", [404, 409, 422].includes(response.status) ? response.status : 503);
-    if (request.method !== "GET" && endpoint !== "race-duration") {
+    if (request.method !== "GET" && endpoint !== "race-duration" && endpoint !== "generation-jobs") {
       revalidatePath("/planning");
       revalidatePath("/management");
       revalidatePath("/management/outlook");
       revalidatePath("/methods");
     }
-    return NextResponse.json(await response.json(), { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json(await response.json(), { status: response.status,
+      headers: { "Cache-Control": "no-store", ...(endpoint === "generation-jobs" ? { "Retry-After": "5" } : {}) } });
   } catch { return error("Управлението временно не е достъпно. Опитайте отново.", 503); }
 }
 
