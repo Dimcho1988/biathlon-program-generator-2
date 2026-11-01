@@ -115,7 +115,11 @@ export interface ManagementProfileResponse { configured: boolean; profile: Manag
 export interface DraftRecord { entry_key: string; revision: number; recorded_at?: string; stale?: boolean | null; stale_reason?: string | null; payload: PlanningDraft }
 export type Component = "Z1" | "Z2" | "Z3" | "Z4" | "Z5" | "STR";
 export const COMPONENTS: Component[] = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"];
-export interface SessionBlock { kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; speed_role?: string; lactate_reference?: LactateReference; method_library?: SessionMethod; parent_method_card?: SessionMethod; parent_method_card_ref?: string; hr_reference_range_bpm?: [number, number] | null; hr_reference_basis?: string; hr_role?: string; target_speed_range_kmh?: [number, number]; duration_range_seconds?: [number, number]; target_pace_range_seconds_km?: [number, number]; distance_range_m?: [number, number]; distance_basis?: "FLAT_EQUIVALENT" | "SPEED_REFERENCE" | "RAW_MOVING_SPEED" }
+export interface SessionBlock {
+  load_sport?: string; passive_rest?: boolean; recovery_type?: string; recovery_mode_hint?: string;
+  reserve_repetitions?: number; repetitions?: number; exercise_id?: string;
+  combination_part?: number; parent_method_id?: string;
+  kind: string; label: string; zone: string; duration_min: number; target_hr_bpm: number | null; target_speed_kmh: number | null; repetition: number | null; instructions: string; primary_control?: string; speed_basis?: string; speed_role?: string; lactate_reference?: LactateReference; method_library?: SessionMethod; parent_method_card?: SessionMethod; parent_method_card_ref?: string; hr_reference_range_bpm?: [number, number] | null; hr_reference_basis?: string; hr_role?: string; target_speed_range_kmh?: [number, number]; duration_range_seconds?: [number, number]; target_pace_range_seconds_km?: [number, number]; distance_range_m?: [number, number]; distance_basis?: "FLAT_EQUIVALENT" | "SPEED_REFERENCE" | "RAW_MOVING_SPEED" }
 export interface StrengthPrescription {
   exercise_bank_id: string; main_sport: string; method: string;
   exercises: Array<{id: string; name: string; muscle_groups: string; reps: number; sets: number}>;
@@ -130,6 +134,11 @@ export interface EffortAnchor {
   parts?: Array<{ zone: string; kind?: string; method_id?: string; anchor: EffortAnchor }>;
 }
 export interface DoseEvidence {
+  dosing_speed_zones?: { status?: string; sport?: string; speed_role?: string; speed_basis?: string;
+    hr_policy?: { offset_bpm?: number };
+    zones?: Array<{ zone: string; low_kmh: number; high_kmh: number; low_reference_hr_bpm?: number; high_reference_hr_bpm?: number }> } | null;
+  selection?: { accent?: boolean };
+  effort_profile?: { reserve_repetitions?: number; effort?: string } | null;
   continuity?: { mode: string; additional_q?: Partial<Record<Component, number>>; support_q?: Partial<Record<Component, number>>; shared_easy_reserve?: boolean };
   effort_anchor?: EffortAnchor;
   standard_method_work_minutes?: number; method_budget_role_fraction?: number; nominal_dose_policy?: string;

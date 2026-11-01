@@ -3,7 +3,7 @@
 import { useId, useState, type CSSProperties, type ReactNode } from "react";
 import { durationHms } from "../lib/duration-format";
 import { daySessions, type DraftDay } from "../lib/training-management";
-import { componentColor, sessionSummary, SPORT_LABELS } from "../lib/training-visuals";
+import { componentColor, sessionSummary, SPORT_LABELS, workoutTitle } from "../lib/training-visuals";
 import { ComponentLegend, SessionAccent, WorkoutProfile } from "./workout-profile";
 import { SessionRole } from "./session-role";
 import { planDates, type PlanWeekRange } from "../lib/plan-week-view";
@@ -30,7 +30,7 @@ export function TrainingPlanWeek({ days, today, renderDay, period, forecastDates
         <span className="management-workout-date"><strong>{day.date === today ? "Днес" : dayLabel(day.date)}</strong>{(provisional || programmeLabel) && <small className="management-day-source">{provisional ? "Прогноза" : programmeLabel}</small>}{sessions.length > 1 && <small>{sessions.length} сесии · {durationHms(sessions.reduce((total, session) => total + session.total_minutes, 0))} общо</small>}</span>
         <span className="management-workout-sessions">{sessions.length ? sessions.map((session, index) => <span className="management-workout-session" key={index} style={{ "--session-color": componentColor(session.zone) } as CSSProperties}>
           <span className="management-workout-meta"><span>{SPORT_LABELS[session.sport] ?? session.sport}{sessions.length > 1 ? ` · ${index + 1}` : ""}</span><strong>{durationHms(session.total_minutes)}</strong><SessionAccent zone={session.zone}/></span>
-          <span className="management-workout-shape"><strong>{session.title}</strong><SessionRole session={session} day={day}/><span className="workout-summary">{sessionSummary(session)}</span><WorkoutProfile session={session} compact/></span>
+          <span className="management-workout-shape"><strong>{workoutTitle(session)}</strong><SessionRole session={session} day={day}/><span className="workout-summary">{sessionSummary(session)}</span><WorkoutProfile session={session} compact/></span>
         </span>) : <span className="management-workout-rest">{(day.time_limit_exhausted ? "Изчерпан лимит за време" : REST_LABELS[day.status]) ?? "Ден от програмата"}</span>}</span>
         {!!day.actual_sessions && <small>Вече изпълнени: {day.actual_sessions} · {durationHms(day.actual_minutes ?? 0)}{sessions.length > 0 && `; предложени още: ${sessions.length}`}</small>}
         <span className="management-workout-open">{day.date === currentDate ? "Избран ден · подробности по-долу" : "Покажи подробности"}</span>
