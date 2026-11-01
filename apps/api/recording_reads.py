@@ -1,9 +1,8 @@
 """Consume pinned recordings without retaining decoded histories in a read phase."""
-from threading import RLock
-
+from .memory_budget import MODEL_WORK
 from .request_metrics import timed_stage
 
-_RECORDINGS = RLock()
+_RECORDINGS = MODEL_WORK
 
 
 def iter_samples(repository, alias, run_keys, *, include_raw=True):

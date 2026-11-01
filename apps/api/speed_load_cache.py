@@ -8,6 +8,7 @@ from concurrent.futures import Future
 from copy import deepcopy
 from threading import Lock
 from time import monotonic
+from .memory_budget import wait_for_model_result
 
 
 class SpeedLoadCache:
@@ -36,7 +37,7 @@ class SpeedLoadCache:
             if stats is not None:
                 stats["report_cache"] = "miss" if owner else "shared"
         if not owner:
-            return deepcopy(future.result())
+            return deepcopy(wait_for_model_result(future))
         try:
             result = compute()
             # Missing old/full-resolution runs may be repaired without a new
@@ -107,7 +108,7 @@ class SpeedLoadCache:
                         self._pending.pop(key, None)
                         futures[key].set_exception(error)
                 raise
-        values.update({key: future.result() for key, future in futures.items()})
+        values.update({key: wait_for_model_result(future) for key, future in futures.items()})
         return [deepcopy(values[key]) for key in keys]
 
 

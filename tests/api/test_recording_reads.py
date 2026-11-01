@@ -102,3 +102,28 @@ def test_parallel_reports_do_not_expand_recordings_together():
         barrier.wait()
         assert one.result() == two.result() == [('pinned',{'activity_ref':'pinned'})]
     assert maximum == 1
+
+
+def test_plan_waiting_for_a_recording_cache_owner_yields_the_shared_lane():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from apps.api.memory_budget import MODEL_WORK
+    from apps.api.speed_load_cache import SpeedLoadCache
+    cache=SpeedLoadCache()
+    claimed, plan_running = Event(), Event()
+    def record():
+        def calculate():
+            claimed.set()
+            assert plan_running.wait(2.)
+            with MODEL_WORK:
+                return {'value':42}
+        return cache.get_or_compute('shared',calculate)
+    def plan():
+        assert claimed.wait(2.)
+        with MODEL_WORK:
+            with MODEL_WORK:
+                plan_running.set()
+                return cache.get_or_compute('shared',lambda:pytest.fail('duplicate recording calculation'))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        one,two=pool.submit(record),pool.submit(plan)
+        assert one.result(timeout=3.)==two.result(timeout=3.)=={'value':42}

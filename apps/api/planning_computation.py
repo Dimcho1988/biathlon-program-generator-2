@@ -5,16 +5,17 @@ only reuses an exactly matching immutable input key. No user authorization is
 cached. Every caller must still perform the live input and publication checks.
 """
 from copy import deepcopy
-from threading import Event, Thread, BoundedSemaphore
+from threading import Event, Thread
 from time import monotonic
 from uuid import uuid4
 
 from fastapi import HTTPException
 from .oauth_store import PersistentStoreFailure
 from .request_metrics import timed_stage
+from .memory_budget import MODEL_WORK
 
 
-_SLOTS = BoundedSemaphore(1)  # Bound CPU/memory per API or worker process.
+_SLOTS = MODEL_WORK  # Also bound concurrent worker imports and recording reads.
 
 def compute(repository, alias, key, calculate, *, wait_seconds=300., poll_seconds=1.):
     rpc = getattr(repository, "planning_computation", None)

@@ -272,7 +272,7 @@ def planning_source_details(repository, alias, profile, settings, envelope, toda
                           if a.get("quality_status") in {"limited", "excluded"}}
         for sport in sorted(s for s in missing_sports if s and s != "Активност"):
             if sport not in models:
-                models[sport] = model_service.speed_view(repository, alias, sport)
+                models[sport] = _planning_speed_view(repository, alias, sport)
         models = {sport: model for sport, model in models.items() if model and model.get("sport") == sport
                   and (model.get("source_generation_id"), model.get("source_revision")) ==
                       (envelope.get("generation_id"), envelope.get("revision"))}
@@ -284,6 +284,15 @@ def planning_source_details(repository, alias, profile, settings, envelope, toda
     if speed_diagnostics is not None:
         evidence["speed_reconstruction"] = speed_diagnostics
     return PlanningSourceResult(source, evidence, projected_measured)
+
+
+def _planning_speed_view(repository, alias, sport):
+    """Reuse a full view only inside the caller's immutable calculation phase."""
+    from .read_session import ReadSession
+    calculate = lambda: model_service.speed_view(repository, alias, sport)
+    if isinstance(repository, ReadSession):
+        return repository.memoize(("planning_speed_view", alias, sport), calculate)
+    return calculate()
 
 
 def _phase(periodization, day):
@@ -320,6 +329,30 @@ def _candidate_load(blocks, settings, rows, day, *, technical_reference=None, zo
             direct[z] += d[z]
             effective[z] += e[z]
     return direct, effective, technical
+
+
+def _day_candidate_loads(settings, rows, day, technical_reference):
+    """Reuse identical dose arithmetic within this fixed day and physiological context.
+
+    These are precisely the scalar block fields read by _candidate_load and
+    _direct_q. Preserve absent fields and session boundaries. Calendar/Recovery
+    admission is still checked for every trial and is never cached here.
+    """
+    fields = ("session_index", "zone", "kind", "duration_min", "passive_rest", "target_hr_bpm",
+              "target_speed_kmh", "load_reference_hr_bpm", "sport_hr_offset_bpm", "load_sport")
+
+    @lru_cache(maxsize=2048)
+    def calculate(signature, capacities):
+        return _candidate_load([dict(row) for row in signature], settings, rows, day,
+            technical_reference=technical_reference, zone_tmax_minutes=dict(capacities))
+
+    def load(blocks, *, capacity):
+        signature = tuple(tuple((k, b[k]) for k in fields if k in b) for b in blocks)
+        capacities = tuple(sorted(capacity["zone_tmax_minutes"].items()))
+        direct, effective, technical = calculate(signature, capacities)
+        # Callers may edit their candidate vectors. Never expose retained maps.
+        return dict(direct), dict(effective), dict(technical)
+    return load
 
 
 def _session_parts(session, settings, rows, day, slot_index):
@@ -397,6 +430,8 @@ def _capacity_context(speed, settings):
     # Candidate methods reuse this immutable curve/HR context. Keep exact
     # speed-to-HR results on this predictor only, as the recipe resolver does.
     predictor.hr_for_speed = lru_cache(maxsize=2048)(predictor.hr_for_speed)
+    predictor.speed_for_hr = lru_cache(maxsize=512)(predictor.speed_for_hr)
+    predictor.duration = lru_cache(maxsize=512)(predictor.duration)
     capacity_view = dict(speed)
     if blend:
         capacity_view["dosing_model"] = {**(speed.get("dosing_model") or {}), "hr_model": predictor.summary()}
@@ -1872,7 +1907,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     calendar_reader = getattr(repository, "active_planning_calendar", None) or repository.active_activity_calendar
     envelope = calendar_reader(alias, today - timedelta(days=89), end_date) or {}
     snapshot = envelope.get("snapshot_payload") or {}
-    speed_by_sport = {s: model_service.speed_view(repository, alias, s) if envelope else None for s in dict.fromkeys([sport, *training_sports])}
+    speed_by_sport = {s: _planning_speed_view(repository, alias, s) if envelope else None for s in dict.fromkeys([sport, *training_sports])}
     prepared_source = planning_source_details(repository, alias, profile, settings, envelope, today, speed_by_sport=speed_by_sport)
     source, planning_evidence = prepared_source.source, prepared_source.evidence
     recorded_sessions = training_sessions.group_recordings(source.get("activities", []),
@@ -2693,11 +2728,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         # Dose trials on this day use the same causal spill reference. Compute
         # it once; it is not a dose capacity and never reads future proposals.
         technical_reference = _canonical_load([], settings, day_start_rows, day)[2]
-        def candidate_load(blocks, *, capacity):
-            # Freeze the actual means' denominator at every call site; the
-            # last candidate in a multi-sport loop must never own this load.
-            return _candidate_load(blocks, settings, day_start_rows, day, technical_reference=technical_reference,
-                zone_tmax_minutes=capacity["zone_tmax_minutes"])
+        candidate_load = _day_candidate_loads(settings, day_start_rows, day, technical_reference)
         recovery_policy_rows = ([r for r in day_start_rows if r["date"] != key]
                                 if locked_day and locked_day.get("double_threshold_continuation") and locked_day["date"] == key else day_start_rows)
         recovery_before = recovery_v2.simulate(recovery_policy_rows, configs["zones"], target=day, include_details=False, include_deadlines=False, calculation_cache=recovery_calculation_cache)
@@ -3040,7 +3071,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                                             not (option in pairs), option["e"]["Z1"], sum(option["e"].values())))))
 
             def executable_reservation(option, ready):
-                method, cap = option["method"], deepcopy(option["capacity"])
+                method, cap = option["method"], _copy_capacity_budget(option["capacity"])
                 policy = adaptive_methods.readiness_policy(method, profile, ready)
                 cap.update(readiness_policy=policy, readiness_dose_factor=policy["dose_factor"])
                 stage = ((method.get("method_library") or {}).get("resolution") or {}).get("progression") or {}

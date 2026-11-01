@@ -1,5 +1,6 @@
 """Integrate one HR/speed choice per supported interval, preserving unknown time."""
 import math
+from functools import lru_cache
 
 from . import raw_speed, speed_equivalence
 from .sport_heart_rate import reference_offset
@@ -97,6 +98,15 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
                          if finite(r.get("elapsed_s"))), key=lambda r: r["elapsed_s"])
     hr, speeds = [], []
     offset = reference_offset(sport)
+    # One immutable calibration per recording. Repeated sensor values and
+    # upper-bound saturation use exactly the same scalar evaluation.
+    @lru_cache(maxsize=512)
+    def evaluate_hr(value):
+        return speed_equivalence.evaluate_hr(parameters, value, bounds=bounds, offset_bpm=offset)
+
+    @lru_cache(maxsize=512)
+    def evaluate_speed(value):
+        return speed_equivalence.evaluate(parameters, value)
     calibrated_bounds = (shadow.get("trainability_index") or {}).get("zone_bounds_bpm")
     adjusted_hr_compatible = calibrated_bounds is None or list(calibrated_bounds) == list(bounds)
     previous = 0.
@@ -112,7 +122,7 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
         # Derived HR never makes a missing raw observation become measured.
         value = _hr_value(row, hr_signal, adjusted_hr_compatible)
         origin = _hr_origin(row, hr_signal, adjusted_hr_compatible)
-        estimate = speed_equivalence.evaluate_hr(parameters, value, bounds=bounds, offset_bpm=offset) if observed_hr_valid(row) else None
+        estimate = evaluate_hr(value) if observed_hr_valid(row) else None
         if estimate:
             estimate = {**estimate, "_hr_origin": origin}
         if (row.get("hr_interval_classification") not in {None, "original_1hz", "smart_recording"}
@@ -143,10 +153,10 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
             estimate = None
             if reason in {None, "REST"} and parameters:
                 estimate = ({"status": "REST", "zone": None, "coefficient": 0.} if value == 0 else
-                            speed_equivalence.evaluate(parameters, value))
+                            evaluate_speed(value))
                 if estimate.get("reason") == "ABOVE_V10_UPDATE_ANCHOR":
                     top = parameters["zones"][-1]["high_kmh"]
-                    estimate = {**speed_equivalence.evaluate(parameters, top), "saturated_above_v10": True}
+                    estimate = {**evaluate_speed(top), "saturated_above_v10": True}
             speeds.append((left, right, {**(estimate or {"status": "UNAVAILABLE"}),
                 "_speed_origin": raw_speed.ROLE,
                 "_speed_reason": reason or (estimate or {}).get("reason") or "INVALID_RAW_SPEED"}))
@@ -175,12 +185,12 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
             if value == 0:
                 estimate = {"status": "REST", "zone": None, "coefficient": 0.}
             else:
-                estimate = speed_equivalence.evaluate(parameters, value)
+                estimate = evaluate_speed(value)
                 if estimate.get("reason") == "ABOVE_V10_UPDATE_ANCHOR":
                     # Retain observed time. Saturation is explicit and never
                     # promoted to a measured maximum or calibration point.
                     top = parameters["zones"][-1]["high_kmh"]
-                    estimate = {**speed_equivalence.evaluate(parameters, top), "saturated_above_v10": True}
+                    estimate = {**evaluate_speed(top), "saturated_above_v10": True}
         # Preserve rejection provenance for coverage only. Rejected speeds
         # still cannot contribute Q or become calibration observations.
         estimate = {**(estimate or {"status": "UNAVAILABLE"}),
@@ -216,8 +226,7 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
         if h and "_linear_hr" in h:
             start, end = h["_linear_hr"]
             fraction = ((left+right)/2-hr[hi][0])/(hr[hi][1]-hr[hi][0])
-            h = {**speed_equivalence.evaluate_hr(parameters, start+fraction*(end-start),
-                bounds=bounds, offset_bpm=offset), "_hr_origin": h["_hr_origin"]}
+            h = {**evaluate_hr(start+fraction*(end-start)), "_hr_origin": h["_hr_origin"]}
         s = speeds[si][2] if si < len(speeds) and speeds[si][0] <= left < speeds[si][1] else None
         order = (("HEART_RATE", h), ("SPEED", s)) if leading_indicator == "HEART_RATE" else (("SPEED", s), ("HEART_RATE", h))
         chosen = next(((kind, value) for kind, value in order if value and value.get("status") in {"AVAILABLE", "REST"}), None)

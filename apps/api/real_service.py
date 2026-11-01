@@ -1295,6 +1295,9 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             if refresh_speed_evidence is not None:
                 refresh_speed_evidence.record(catalog_metadata[activity_ref])
 
+        from .memory_budget import serialized_model_work
+
+        @serialized_model_work
         def process_activity_shadow(
             activity_ref: str,
             detail: Mapping[str, Any],
