@@ -28,6 +28,7 @@ import { RecoveryEstimateNotice } from "./recovery-estimate-notice";
 
 const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
 const decimal = (value: number) => number.format(value);
+const coverageNumber = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 2 });
 const date = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "2-digit", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
 const timestamp = (value: string) => new Intl.DateTimeFormat("bg-BG", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC", timeZoneName: "short" }).format(new Date(value));
 
@@ -112,12 +113,12 @@ export function Dashboard({
         {notice && <p className="connection-notice">{notice}</p>}
         {view === "overview" && <StatusOverview data={data} recovery={recoveryHistory} load={loadHistory} recoveryRequired={mode === "api"} />}
         {(view === "overview" || view === "details") && <details className="overview-quality">
-          <summary>Качество на данните{data.data_quality.warnings.length > 0 && <small className="quality-warning-count">{data.data_quality.warnings.length} {data.data_quality.warnings.length === 1 ? "бележка" : "бележки"}</small>} <span>История {decimal(data.data_quality.history_reliability * 100)}%{loadCoverage != null && <> · Покритие на товара {decimal(loadCoverage)}%</>} · {qualityLabel} {qualityScore === null ? "няма данни" : `${decimal(qualityScore * 100)}%`}</span><span aria-hidden="true">⌄</span></summary>
+          <summary>Качество на данните{data.data_quality.warnings.length > 0 && <small className="quality-warning-count">{data.data_quality.warnings.length} {data.data_quality.warnings.length === 1 ? "бележка" : "бележки"}</small>} <span>История {decimal(data.data_quality.history_reliability * 100)}%{loadCoverage != null && <> · Покритие на товара {coverageNumber.format(loadCoverage)}%</>} · {qualityLabel} {qualityScore === null ? "няма данни" : `${decimal(qualityScore * 100)}%`}</span><span aria-hidden="true">⌄</span></summary>
           <section className="quality-panel" aria-labelledby="quality-title">
           <div><p className="section-kicker">Надеждност</p><h2 id="quality-title">Качество на данните</h2></div>
           <dl className="quality-values">
             <div><dt>История</dt><dd>{decimal(data.data_quality.history_reliability * 100)}%</dd></div>
-            {loadCoverage != null && <div><dt>Покритие на товара за Recovery</dt><dd>{decimal(loadCoverage)}%</dd></div>}
+            {loadCoverage != null && <div><dt>Покритие на товара за Recovery</dt><dd>{coverageNumber.format(loadCoverage)}%</dd></div>}
             <div><dt>{qualityLabel}</dt><dd>{qualityScore === null ? "Няма данни" : `${decimal(qualityScore * 100)}%`}</dd></div>
           </dl>
           {mode === "api" && <p>Пулсовото покритие описва наличния пулсов запис. При валидни данни за скоростта товарът може да бъде оценен и без пулсомер.</p>}

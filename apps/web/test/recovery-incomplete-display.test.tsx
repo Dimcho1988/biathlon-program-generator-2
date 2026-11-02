@@ -139,7 +139,7 @@ describe("incomplete recovery is not displayed as complete readiness", () => {
       renderToStaticMarkup(<StatusOverview data={status} recovery={history} load={null} />),
     ]) {
       expect(html).toContain("Моделна оценка на възстановяването");
-      expect(html).toContain("95,7%");
+      expect(html).toContain("95,67%");
       expect(html).toContain("0:52:00");
       expect(html).toContain("моделна оценка · достигнат ориентир");
       expect(html).not.toContain("Недостатъчни данни");
@@ -149,6 +149,17 @@ describe("incomplete recovery is not displayed as complete readiness", () => {
     expect(timeline).toContain("История с оценен товар");
     expect(history.data_quality!.complete).toBe(false);
     expect(history.data_quality!.unknown_seconds).toBe(3120);
+  });
+
+  it("keeps a small measured gap visible instead of rounding its coverage to 100%", () => {
+    const history = estimatedRecovery();
+    Object.assign(history.data_quality!, { recorded_seconds: 340000, unknown_seconds: 153,
+      coverage_percent: 100 * (1 - 153 / 340000), paused_seconds: 44316 });
+    const html = renderToStaticMarkup(<Dashboard mode="api" data={status} recoveryHistory={history} />);
+    expect(html).toContain("Покритие на товара 99,96%");
+    expect(html).toContain("0:02:33");
+    expect(html).toContain("12:18:36");
+    expect(html).not.toContain("Покритие на товара 100%");
   });
 
   it("uses and labels the projected estimate in dashboard details", () => {

@@ -1,7 +1,7 @@
 import { durationHms } from "../lib/duration-format";
 import type { RecoveryV2 } from "../lib/models";
 
-const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 1 });
+const number = new Intl.NumberFormat("bg-BG", { maximumFractionDigits: 2 });
 
 const reasons:Record<string,string> = {
   PROVIDER_RECORD_MISSING:"Активността не е извлечена изцяло. Обновете данните.",
