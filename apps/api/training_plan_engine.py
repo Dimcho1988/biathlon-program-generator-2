@@ -248,6 +248,29 @@ def planning_source(repository, alias, profile, settings, envelope, today, *, sp
 
 
 def planning_source_details(repository, alias, profile, settings, envelope, today, *, speed_by_sport=None):
+    """Reuse an identical measured history inside one immutable read phase.
+
+    Allocation alternatives change scheduling choices, not the historical
+    reconstruction. Every other input participates in the key. ReadSession
+    returns independent copies; final publication still reads live inputs.
+    """
+    from .read_session import ReadSession
+    if isinstance(repository, ReadSession):
+        identity = {
+            "alias": alias, "today": today,
+            "profile": {k: v for k, v in profile.items() if k != "_allocation_policy"},
+            "settings": {name: getattr(settings, name) for name in dir(settings)
+                         if not name.startswith("_") and not callable(getattr(settings, name))},
+            "envelope": envelope, "speed_by_sport": speed_by_sport,
+        }
+        return repository.memoize(("planning_source_details", _hash(identity)),
+            lambda: _planning_source_details(repository, alias, profile, settings, envelope, today,
+                                             speed_by_sport=speed_by_sport))
+    return _planning_source_details(repository, alias, profile, settings, envelope, today,
+                                    speed_by_sport=speed_by_sport)
+
+
+def _planning_source_details(repository, alias, profile, settings, envelope, today, *, speed_by_sport=None):
     """Project measured Q once, retaining it before declared rest or estimates."""
     measured = (envelope.get("snapshot_payload") or {}).get("load_history") or {}
     calendar = planning_history_estimate.normalized_calendar(envelope.get("activities", []))
@@ -1071,6 +1094,29 @@ def _canonical_load(blocks, settings, rows, day, *, technical_reference=None, zo
     return direct, dict(zip(COMPONENTS, map(float, vector))), technical
 
 
+def _technical_reference_reuse():
+    """Bound exact technical Tref arithmetic to this one plan's trials.
+
+    Dates select the same completed 40-day window as _canonical_load. Keep
+    dose order and missing days intact; these references are not capacity or
+    eligibility decisions. Every caller receives its own result dictionary.
+    """
+    @lru_cache(maxsize=256)
+    def calculate(doses, base_loads):
+        bases = dict(base_loads)
+        return tuple(_causal_tref(z, pd.Series([value for zone, value in doses if zone == z],
+                                               dtype=float), bases) for z in COMPONENTS)
+
+    def reference(rows, day):
+        lower, upper = (day-timedelta(days=40)).isoformat(), day.isoformat()
+        doses = tuple((row["zone"], row["effective_load"]) for row in rows
+                      if lower <= row["date"] < upper)
+        bases = tuple((z, DEFAULT_PARAMETERS["base_loads"][z]) for z in COMPONENTS)
+        return dict(zip(COMPONENTS, calculate(doses, bases)))
+
+    return reference
+
+
 def _q_accounting(blocks, settings):
     """Disclose any unmapped prescription time instead of calling it zero Q."""
     _, ledger = _direct_q(blocks, settings, details=True)
@@ -1856,12 +1902,14 @@ def _long_term_outlook(profile, periodization, reference, accents, preferences, 
 
 def generate_plan(repository, alias: str, profile: dict, *, start_date: date, now: datetime | None = None,
                   decisions: dict | None = None, locked_day: dict | None = None,
-                  window_end: date | None = None) -> dict:
+                  window_end: date | None = None, _recovery_calculation_cache: dict | None = None) -> dict:
     from .management_schemas import normalize_building_profile
     profile = normalize_building_profile(profile)
     # Candidate trials share immutable historical calculations only within
-    # this plan. Keys include doses, dates and configuration; no cross-user cache.
-    recovery_calculation_cache = {}
+    # this calculation. Exact dose/date/configuration keys also permit reuse
+    # by its alternative schedules; the caller never retains this across jobs.
+    recovery_calculation_cache = {} if _recovery_calculation_cache is None else _recovery_calculation_cache
+    technical_reference_for = _technical_reference_reuse()
     now = now or datetime.now(timezone.utc)
     settings = repository.athlete_settings(alias)
     if settings is None:
@@ -2425,7 +2473,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         blocks = _blocks(method, work, cap, settings) if work >= minimum else []
                     if not blocks:
                         continue
-                    q, e, _ = _candidate_load(blocks, settings, rows, reference_day, zone_tmax_minutes=cap["zone_tmax_minutes"])
+                    q, e, _ = _candidate_load(blocks, settings, rows, reference_day,
+                        technical_reference=technical_reference_for(rows, reference_day), zone_tmax_minutes=cap["zone_tmax_minutes"])
                     if q[z] <= .005:
                         continue
                     reference = {"method_id":method["id"], "sport":reference_sport, "q":q, "e":e,
@@ -2508,7 +2557,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             work = _quantized_work(parent, min(parent["max_work_min"], cap["capacity_minutes"]*fraction*policy["dose_factor"]))
             core = _blocks(parent, work, cap, settings) if work >= parent["min_work_min"] else []
             if core:
-                q, e, _ = _candidate_load(core, settings, forecast_rows, d, zone_tmax_minutes=cap.get("zone_tmax_minutes"))
+                q, e, _ = _candidate_load(core, settings, forecast_rows, d,
+                    technical_reference=technical_reference_for(forecast_rows, d), zone_tmax_minutes=cap.get("zone_tmax_minutes"))
                 vector = {z: q[z] if segment and segment["components"][z]["basis"] == "DIRECT_Q" else e[z] for z in COMPONENTS}
                 nominal[parent["zone"]] = max(nominal.get(parent["zone"], 0.), vector[parent["zone"]])
                 primary_work = sum(b["duration_min"] for b in core if b["kind"] == "WORK" and b["zone"] == parent["zone"])
@@ -2610,7 +2660,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     continue
                 if sum(b["duration_min"] for b in blocks) > available[d.weekday()]-sum(a.get("duration_min") or 0. for a in actual_by_day[d]) + .001:
                     continue
-                fq, fe, _ = _candidate_load(blocks, settings, forecast_rows, d, zone_tmax_minutes=cap.get("zone_tmax_minutes"))
+                fq, fe, _ = _candidate_load(blocks, settings, forecast_rows, d,
+                    technical_reference=technical_reference_for(forecast_rows, d), zone_tmax_minutes=cap.get("zone_tmax_minutes"))
                 if reservation_fits(d, fm, blocks, fq, fe, future_budget, future_q, future_segment):
                     return True
         return False
@@ -2727,7 +2778,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         day_start_rows = [r for r in forecast_rows if r["date"] != key] + [r for r in rows if r["date"] == key]
         # Dose trials on this day use the same causal spill reference. Compute
         # it once; it is not a dose capacity and never reads future proposals.
-        technical_reference = _canonical_load([], settings, day_start_rows, day)[2]
+        technical_reference = technical_reference_for(day_start_rows, day)
         candidate_load = _day_candidate_loads(settings, day_start_rows, day, technical_reference)
         recovery_policy_rows = ([r for r in day_start_rows if r["date"] != key]
                                 if locked_day and locked_day.get("double_threshold_continuation") and locked_day["date"] == key else day_start_rows)
@@ -2802,7 +2853,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             effective = {z: 0. for z in COMPONENTS}
             preserved_q = {z: 0. for z in COMPONENTS}
             for session in preserved:
-                direct_load, load, _ = _canonical_load(session["blocks"], settings, day_start_rows, day, zone_tmax_minutes=session.get("dose_evidence", {}).get("zone_tmax_minutes"))
+                direct_load, load, _ = _canonical_load(session["blocks"], settings, day_start_rows, day,
+                    technical_reference=technical_reference, zone_tmax_minutes=session.get("dose_evidence", {}).get("zone_tmax_minutes"))
                 session["direct_equivalent_minutes"] = {z: _round(v) for z, v in direct_load.items()}
                 session["canonical_effective_load"] = {z: _round(v) for z, v in load.items()}
                 session["total_minutes"] = _round(sum(b["duration_min"] for b in session["blocks"]))
@@ -3006,7 +3058,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         maximum = min(fm["max_work_min"], _role_work_limit(cap, cap["capacity_minutes"]*nominal*cap["readiness_dose_factor"]))
                         requested = cap["combined_budgets"][0]["requested_work_minutes"] if fm.get("combined_methods") else maximum
                         full_blocks = _blocks(fm, maximum, cap, settings)
-                        full_q, _, _ = _candidate_load(full_blocks, settings, forecast_rows, future_day, zone_tmax_minutes=cap.get("zone_tmax_minutes"))
+                        full_q, _, _ = _candidate_load(full_blocks, settings, forecast_rows, future_day,
+                            technical_reference=technical_reference_for(forecast_rows, future_day), zone_tmax_minutes=cap.get("zone_tmax_minutes"))
                         future_segment = component_budgets(forecast_rows, result_days, future_day)[2]
                         if not fm.get("combined_methods") and future_segment and future_segment["components"][fz]["basis"] == "DIRECT_Q" and full_q[fz] > 0:
                             requested = min(maximum, maximum*(future_segment["components"][fz]["remaining"] or 0.)/full_q[fz])
@@ -3049,7 +3102,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             if future_work in admitted_work or not fits_future_structure(future_blocks):
                                 continue
                             admitted_work.add(future_work)
-                            fq, fe, _ = _candidate_load(future_blocks, settings, forecast_rows, future_day, zone_tmax_minutes=cap.get("zone_tmax_minutes"))
+                            fq, fe, _ = _candidate_load(future_blocks, settings, forecast_rows, future_day,
+                                technical_reference=technical_reference_for(forecast_rows, future_day), zone_tmax_minutes=cap.get("zone_tmax_minutes"))
                             options.append({"q": fq, "e": fe, "zone": fz, "double": bool(fm.get("double_threshold")),
                                 "method_id": fm["id"], "sport": future_sport,
                                 "minutes": sum(b["duration_min"] for b in future_blocks),
@@ -3956,6 +4010,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         key=lambda r:(r["date"], min(r.get("slots", [r.get("slot", 0)]))))
                     for record in ledger:
                         placed_day = record["date"]
+                        placed_key = placed_day.isoformat()
                         method, cap = _copy_method_budget(record["method"]), _copy_capacity_budget(record["capacity"])
                         core = record["blocks"]
                         protected = record in protected_cores
@@ -3963,10 +4018,10 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             method["min_work_min"] = method.get("absolute_min_work_min", method["min_work_min"])
                         # All sessions on one day share causal day-start
                         # readiness; only earlier dates are intervening load.
-                        before = [r for r in shadow if r["date"] != placed_day.isoformat()] + [
-                            r for r in rows if r["date"] == placed_day.isoformat()]
+                        before = [r for r in shadow if r["date"] != placed_key] + [
+                            r for r in rows if r["date"] == placed_key]
                         readiness_key = (placed_day, tuple((r["date"],r["zone"],r["effective_load"])
-                            for r in before if r["date"] <= placed_day.isoformat()))
+                            for r in before if r["date"] <= placed_key))
                         if readiness_key not in placement_readiness_cache:
                             placement_readiness_cache[readiness_key] = {r["zone"]:r["readiness_percent"]
                                 for r in recovery_v2.simulate(before, configs["zones"],
@@ -4019,7 +4074,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         if minutes > time_headroom(placed_day, shadow_days)+.001:
                             return None
                         total_minutes += minutes
-                        cq, ce, _ = _candidate_load(core, settings, before, placed_day, zone_tmax_minutes=cap.get("zone_tmax_minutes"))
+                        cq, ce, _ = _candidate_load(core, settings, before, placed_day,
+                            technical_reference=technical_reference_for(before, placed_day), zone_tmax_minutes=cap.get("zone_tmax_minutes"))
                         future_budget, future_q, future_segment = component_budgets(shadow, shadow_days, placed_day)
                         if not reservation_fits(placed_day, method, core, cq, ce, future_budget, future_q, future_segment):
                             return None

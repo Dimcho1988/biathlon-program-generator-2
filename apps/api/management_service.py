@@ -339,6 +339,7 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
         from .planning_search import improve
         normalized = profile.model_dump(mode="json")
         replay_count = 0
+        recovery_calculations = {}
         def replay(allocation_policy=None):
             nonlocal replay_count
             stage = "planning_baseline" if replay_count == 0 else "planning_search_replay"
@@ -349,6 +350,7 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
                 return training_plan_engine.generate_plan(repository, alias,
                     {**normalized, **({"_allocation_policy": allocation_policy} if allocation_policy else {})},
                     start_date=start_date, now=now, decisions=decisions, locked_day=locked_day,
+                    _recovery_calculation_cache=recovery_calculations,
                     **({"window_end": window_end} if window_end else {}))
         baseline = replay()
         with timed_stage("planning_search"):
