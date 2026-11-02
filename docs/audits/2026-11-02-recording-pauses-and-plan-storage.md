@@ -36,7 +36,7 @@ not a reason to run the same expensive calculation three times.
 The weekly interface places the selected day's details immediately below its
 summary and before the next day. The summary also closes the expanded details.
 
-Verification includes the complete 733-test web suite, lint, TypeScript and a
+Verification includes the complete 734-test web suite, lint, TypeScript and a
 production build; 1017 canonical tests; storage/publication, coverage and model
 regressions. A private 50-recording replay exercises both leading indicators
 (100 comparisons), preserving measured zone times and Q. A captured failed plan
@@ -44,3 +44,23 @@ retains all 24 visible/lookahead sessions and roundtrips with identical serializ
 JSON values while shrinking from 2,310,237 to 1,739,076 bytes (24.72%) before
 persistence metadata. Two stored copies occupy 3,478,176 bytes before the active
 revision envelope. Private fixtures are excluded from the repository.
+
+## Staging verification
+
+API and worker were deployed at `8dd3389`; the web application was deployed at
+`24b05b9`, which additionally keeps 99.96% coverage visibly below 100%. A live
+athlete probe separates 44,316 seconds of confirmed recording pauses from 153
+seconds without measured intensity. The recovery view shows both quantities
+and 99.96% coverage.
+
+A fresh generation succeeded on its first attempt and persisted a reviewable
+draft of 1,447,470 bytes under the unchanged 2 MiB limit. Its 7 visible days
+contain 12 sessions, with another 9 sessions across 6 lookahead days. All 22
+computed root fields retain identical serialized values after database readback
+and lossless decoding. The draft was not activated.
+
+The generation took about 503 seconds including queue time: this verifies the
+capacity failure is resolved, not a generation-speed improvement. In the live
+weekly interface, the selected day's three sessions appear between its summary
+and the following day's summary; selecting it again closes the details. The
+saved draft remained visible after reloading the newly deployed web application.
