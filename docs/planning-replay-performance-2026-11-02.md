@@ -70,3 +70,45 @@ Coverage includes complete plan equality, copy isolation, changed profile,
 physiology, source, date and speed inputs; bounded Tref eviction; missing
 history; dose arithmetic; causal reservations; background publication and
 fresh final input checks. `git diff --check` passed.
+
+## Verified staging rollout
+
+API and worker run source commit
+`4efa6d23d35dcad8c4249b944a4dea30d5dc9f95`, whose complete tree matches the
+locally tested code. Render marked the worker live at 2026-11-02 14:11:04 UTC
+and API live at 14:12:18 UTC. The web service was unchanged.
+
+Two real queue-based requests completed on their first attempt on the new
+worker instance. Both saved review-required drafts and left the active program
+absent:
+
+| Probe | Total including queue/publication | Result |
+| --- | ---: | --- |
+| Existing exact computation, start 02.11 | 7.964 s | Draft revision 6; full stored payload equals preceding revision 5 |
+| New full computation, start 03.11 | 172.834 s | Draft revision 1; 8 searched alternatives, 7 training days |
+
+The new computation's `generated_at` is 2026-11-02 14:16:15 UTC and its job
+finished at 14:19:06 UTC. The first probe's older generation timestamp confirms
+reuse of a completed result; it is not a fresh calculation benchmark. The new
+probe uses a different start date from the preceding audit, so its time must
+not be converted into a before/after cloud speedup percentage.
+
+While the new calculation ran, five concurrent clients made two public
+`/health` requests each. All ten returned HTTP 200 with the expected body.
+On reused connections median latency was 0.136 s and maximum 0.170 s; first
+requests including connection setup took 4.839–5.027 s from this environment.
+This verifies liveness during calculation, not dashboard latency or capacity
+for a particular number of users. Raw observations are in
+`benchmarks/live-health-2026-11-02.json`.
+
+The highest available minute memory sample during the new calculation was
+266.6 MiB on the worker, within its existing 512 MiB limit. API samples were
+162.9 MiB. These discrete samples are not continuous memory peaks. Worker CPU
+reached its existing 0.5 CPU ceiling. Neither service recorded a `server_failed`
+event from deployment through completion of the probes.
+
+The full live calculation remains about three minutes for this case. The
+fixed-replay comparison establishes an 11.14% reduction in computation time;
+the existing 150-second outer search window and CPU ceiling remain relevant
+to live latency. Service counts, compute plans and automatic deployment
+settings are unchanged.
