@@ -351,7 +351,8 @@ class SupabasePilotRepository(SnapshotRepository):
         self._request("POST", "/rpc/request_onflows_management_check", json={"p_alias": athlete_alias})
 
     def refresh_due_training_plans(self):
-        from .prepared_models import process_training
+        from .prepared_models import process_training, queue_due_imports
+        queue_due_imports(self)
         return process_training(self)
 
     def __init__(

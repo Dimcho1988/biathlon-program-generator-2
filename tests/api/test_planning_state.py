@@ -9,6 +9,8 @@ from apps.api.oauth_store import PersistentStoreFailure
 
 def test_poll_reads_only_pinned_metadata_and_detects_same_revision_input_changes(monkeypatch):
     paths = []
+    frozen = {"evaluation_date": "2026-11-02", "test_revision": 1}
+    fingerprint = lifecycle._hash(frozen)
     def request(method, path):
         paths.append(path)
         assert method == "GET" and "athlete_alias=eq.ath%26one" in path
@@ -17,11 +19,12 @@ def test_poll_reads_only_pinned_metadata_and_detects_same_revision_input_changes
         assert "(revision,status:payload->status,fingerprint:payload->processed_input_fingerprint," in path
         assert "!inner" not in path and ",payload," not in path
         return [{"revision": 9, "record": {
-            "revision": 9, "status": "REVIEW_REQUIRED", "fingerprint": "old"}}]
+            "revision": 9, "status": "REVIEW_REQUIRED", "fingerprint": fingerprint}}]
     repo = SimpleNamespace(_request=request, _json=lambda v: v)
-    monkeypatch.setattr(lifecycle, "_context", lambda *a: (1, {}, {}, "old", "approval"))
+    monkeypatch.setattr(lifecycle, "_context", lambda *a: (1, {}, frozen, fingerprint, "approval"))
     assert lifecycle.state(repo, "ath&one") == {"revision": 9, "stale": False}
-    monkeypatch.setattr(lifecycle, "_context", lambda *a: (1, {}, {}, "new", "approval"))
+    updated = {**frozen, "test_revision": 2}
+    monkeypatch.setattr(lifecycle, "_context", lambda *a: (1, {}, updated, lifecycle._hash(updated), "approval"))
     assert lifecycle.state(repo, "ath&one") == {"revision": 9, "stale": True}
     assert len(paths) == 2
 

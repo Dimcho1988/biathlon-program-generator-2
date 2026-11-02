@@ -1,10 +1,10 @@
 # Prepared dashboards and training-triggered programs
 
-Status: implemented on `codex/precompute-athlete-views-20261102`; cloud migration
-and rollout are pending Supabase's required confirmation. Two migration calls
-expired without execution. The staging database was checked and still has
-neither new table. No new source has been deployed and no athlete data has
-been deleted by this change.
+Status: both migrations are applied to staging (`20261102172430` and
+`20261102174120`). The initial worker and API release `e956c0a` is live and six
+dashboards were prepared. Final runtime verification follows the configuration
+correction below; these initial envelopes used the worker's previous Recovery
+flag and do not establish a prepared hit for the API's Recovery v2 identity.
 
 ## Resulting behavior
 
@@ -34,6 +34,11 @@ task. An identical activity set, wellness-only generation, settings/test edit,
 or a new day does not create a program task. A provider-missing record becoming
 available counts as new training; duration may come from elapsed, moving or
 recording time. No artificial training events are created during migration.
+
+Existing opt-in provider imports remain separate from program calculation.
+The worker checks one due active/review program at a time and retains the SQL
+connection, grant and six-hour import cooldown checks. A periodic import with
+no new actual training does not regenerate a program.
 
 An existing program uses the unchanged lifecycle and dose calculation. A fixed
 program keeps its approved plan and receives a separate proposal; only the
@@ -74,8 +79,13 @@ row per athlete rather than accumulating an event log.
 
 ## Verification and limits
 
-The final selected backend regression suite passed all 534 tests in 62.74
-seconds, including expiry and concurrent cold reads. `git diff --check` passed.
+The original selected backend regression suite passed all 534 tests in 62.74
+seconds, including expiry and concurrent cold reads. The expanded 612-case
+run passed 611 cases in 164.95 seconds; its remaining poll fixture used a
+placeholder fingerprint instead of the actual frozen-input hash. After fixing
+that fixture, all 66 cases in the affected prepared-model, poll-state and
+Blueprint groups passed in 11.59 seconds. No runtime change was needed for
+that test correction. `git diff --check` passed.
 
 The migration and SQL contracts were executed on local PostgreSQL 18.6 through
 test-only PGlite 0.5.14. Contract fixtures roll back completely. Checks cover
@@ -86,17 +96,33 @@ imports, event coalescing, fixed-dose protection and protected history cleanup.
 
 The local runner loads core tables and the existing access/source readers from
 repository migrations. External account tables are minimal test dependencies;
-the unchanged authoritative plan writer is intentionally unreachable in guard
-tests. This is not a completed Supabase integration test or staging rollout.
+the unchanged authoritative plan writer is intentionally unreachable in local
+guard tests. The same guard contract also passed against the staging Supabase
+database. `tests/database/prepared_program_publication.sql` additionally passed
+against its real authoritative writer: an owned training lease published a
+separate proposal, explicit approval selected it, the original prescription
+remained immutable, and a completed lease could not publish again. Assertions
+are enabled and both cloud test transactions roll back their fixtures.
 
-Run the SQL contracts again against staging after applying the migration. No
-latency improvement percentage or new user-capacity limit is established by
-these functional tests. A real prepared-read probe and resource measurements
-are required after rollout.
+The initial cleanup exceeded the eight-second request limit for one athlete.
+The additive draft-origin expression index eliminated the repeated full plan
+scan. Retrying under `service_role` with the same eight-second statement limit
+succeeded and removed four obsolete unapproved drafts. Approved program and
+proposal hashes remained unchanged. The measured 1.701 ms index lookup is a
+database lookup measurement, not dashboard or whole-cleanup latency.
+
+Initial rollout also exposed a missing worker Recovery v2 flag. The worker
+Blueprint and service setting now explicitly match the existing API flag.
+The following runtime release must use the same commit in both services so
+its build/Recovery cache identity matches. Service plans and counts are intact.
+
+No latency improvement percentage or new user-capacity limit is established
+by these functional tests. Authenticated dashboard HTTP latency still requires
+a real signed-in request; database cache readiness alone is not that benchmark.
 
 ## Release order
 
-1. Confirm and apply `prepared_dashboard_and_training_events` to onflows-staging.
+1. Apply `prepared_dashboard_and_training_events` to onflows-staging.
 2. Run `tests/database/prepared_dashboard_and_training_events.sql`; it rolls back.
 3. Deploy the existing staging worker, then API, from the same tested commit.
 4. Verify background preparation, prepared hits, unchanged programs without a

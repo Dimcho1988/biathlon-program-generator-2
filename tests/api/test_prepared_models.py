@@ -250,3 +250,35 @@ def test_feature_flag_and_build_changes_do_not_reuse_a_prepared_view(monkeypatch
     monkeypatch.setenv("ONFLOWS_RECOVERY_V2_ENABLED", "true")
     monkeypatch.setenv("RENDER_GIT_COMMIT", "release-two")
     assert prepared.model_key() != first
+
+
+def test_periodic_import_check_enqueues_only_one_sync_and_does_not_plan(monkeypatch):
+    now = datetime(2026,11,2,tzinfo=timezone.utc)
+    store = SimpleNamespace(due=Mock(return_value=[{"athlete_alias": ALIAS,"revision": 7},
+        {"athlete_alias": "another-athlete","revision": 8}]),
+        queue_import=Mock(return_value={"queued": False,"reason": "AUTOMATIC_IMPORT_COOLDOWN"}),defer_check=Mock())
+    monkeypatch.setattr(management_plan_store,"PlanStore",lambda repo:store)
+    refresh = Mock()
+    monkeypatch.setattr(management_lifecycle,"refresh",refresh)
+    assert prepared.queue_due_imports(SimpleNamespace(),now=now)==1
+    store.due.assert_called_once_with(now)
+    store.queue_import.assert_called_once_with(ALIAS)
+    store.defer_check.assert_called_once_with(ALIAS,7)
+    refresh.assert_not_called()
+
+
+def test_disabled_or_completed_import_queue_does_not_touch_a_program(monkeypatch):
+    store=SimpleNamespace(due=Mock(return_value=[]),queue_import=Mock(),defer_check=Mock())
+    monkeypatch.setattr(management_plan_store,"PlanStore",lambda repo:store)
+    assert prepared.queue_due_imports(SimpleNamespace())==0
+    store.queue_import.assert_not_called()
+    store.defer_check.assert_not_called()
+
+
+def test_provider_import_failure_is_deferred_without_exposing_error_details(monkeypatch,caplog):
+    store=SimpleNamespace(due=Mock(return_value=[{"athlete_alias": ALIAS,"revision":7}]),
+        queue_import=Mock(side_effect=PersistentStoreFailure("private-value")),defer_check=Mock())
+    monkeypatch.setattr(management_plan_store,"PlanStore",lambda repo:store)
+    assert prepared.queue_due_imports(SimpleNamespace())==1
+    store.defer_check.assert_called_once_with(ALIAS,7)
+    assert "private-value" not in caplog.text

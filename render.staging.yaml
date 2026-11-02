@@ -95,6 +95,10 @@ services:
       - key: ONFLOWS_HISTORY_DAYS
         value: "90"
 
+      # Background read models must use the same Recovery projection as API.
+      - key: ONFLOWS_RECOVERY_V2_ENABLED
+        value: "true"
+
   - type: web
     name: onflows-web-staging
     plan: starter

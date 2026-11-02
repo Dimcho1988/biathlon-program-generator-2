@@ -195,3 +195,22 @@ def process_training(repository):
                 pass
             logger.warning("training_plan_update state=deferred error_type=%s", type(exc).__name__)
     return True
+
+
+def queue_due_imports(repository, *, now=None):
+    """Keep existing opt-in provider polling separate from plan calculation.
+
+    The SQL import RPC retains its connection, grant and six-hour cooldown
+    checks. Enqueueing a sync never directly regenerates a program.
+    """
+    from .management_plan_store import PlanStore
+    store = PlanStore(repository)
+    rows = store.due(now or datetime.now(timezone.utc))[:1]
+    for row in rows:
+        try:
+            store.queue_import(row["athlete_alias"])
+        except Exception as exc:
+            logger.warning("training_import state=deferred error_type=%s", type(exc).__name__)
+        finally:
+            store.defer_check(row["athlete_alias"], row["revision"])
+    return len(rows)

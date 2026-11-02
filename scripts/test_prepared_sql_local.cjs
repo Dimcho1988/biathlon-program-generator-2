@@ -64,7 +64,7 @@ function routine(name) {
     await db.exec(routine("onflows_private.can_prepare_plan"));
     await db.exec(`create function public.save_onflows_management_plan_compact(text,jsonb,integer,uuid,text,integer,jsonb,boolean)
       returns jsonb language plpgsql as $$ begin raise exception 'Unexpected authoritative writer invocation in guard tests'; end $$;`);
-    await db.exec(fs.readFileSync(path.join(migrations, "20261102155014_prepared_dashboard_and_training_events.sql"), "utf8"));
+    await db.exec(fs.readFileSync(path.join(migrations, "20261102172430_prepared_dashboard_and_training_events.sql"), "utf8"));
     await db.exec(fs.readFileSync(path.join(root, "tests/database/prepared_dashboard_and_training_events.sql"), "utf8"));
     const clean = await db.query("select count(*)::integer as remaining from public.onflows_intervals_connections");
     if (clean.rows[0].remaining !== 0) throw new Error("Contract fixtures did not roll back");
