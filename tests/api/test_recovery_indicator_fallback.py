@@ -56,6 +56,22 @@ def test_full_speed_coverage_overrides_hr_only_quality_without_estimating():
     assert estimated["activities"] == history["activities"]
 
 
+def test_confirmed_timer_pause_needs_no_imputed_load_or_planning_profile():
+    history = source(0.)
+    activity = history["activities"][0]
+    activity["load_source"].update(paused_seconds=3600., elapsed_seconds=3660.)
+    # The conserved measured interval stays 60 s; the pause is not sensor loss.
+    repository = Repository(history)
+    repository.planning_profile_rows = lambda _: []
+    quality = planning_history.recovery_coverage(history, TODAY)
+    prepared, quality = recovery_load_projection.prepare(repository, "test", history, TODAY, quality)
+    assert prepared is history
+    assert quality["complete"] and quality["readiness_available"] and not quality["estimated"]
+    assert quality["coverage_percent"] == 100. and quality["paused_seconds"] == 3600.
+    activity["load_source"]["elapsed_seconds"] += 1
+    assert not planning_history.recovery_coverage(history, TODAY)["readiness_available"]
+
+
 def test_old_identified_quality_is_outside_recovery_window_but_unidentified_is_not():
     history = source(0.)
     old = deepcopy(history["activities"][0])

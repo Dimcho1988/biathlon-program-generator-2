@@ -27,6 +27,7 @@ export interface LoadSelectionMetadata {
   activity_count: number; total_aerobic_activities: number;
   recorded_seconds: number; active_seconds: number; rest_seconds: number;
   unknown_seconds: number; fallback_seconds: number;
+  paused_seconds?: number; elapsed_seconds?: number;
   source_seconds: { HEART_RATE: number; SPEED: number };
   hr_source_seconds: Record<string, number> | null;
   speed_status_seconds: Record<string, number> | null;
@@ -81,6 +82,9 @@ export function isLoadSelectionMetadata(value: unknown): value is LoadSelectionM
   const seconds = value.source_seconds;
   const recorded = Number(value.recorded_seconds);
   const tolerance = Math.max(.001, recorded * 1e-9);
+  if ((value.paused_seconds !== undefined || value.elapsed_seconds !== undefined)
+    && (!nonnegative(value.paused_seconds) || !nonnegative(value.elapsed_seconds)
+      || Math.abs(value.elapsed_seconds - recorded - value.paused_seconds) > tolerance)) return false;
   const sum = (items: Record<string, unknown>) => Object.values(items).reduce<number>((total, item) => total + Number(item), 0);
   if (isRecord(value.hr_source_seconds) && Math.abs(sum(value.hr_source_seconds) - Number(seconds.HEART_RATE)) > tolerance) return false;
   if (isRecord(value.speed_status_seconds)

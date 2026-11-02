@@ -5,7 +5,7 @@ from functools import lru_cache
 from . import raw_speed, speed_equivalence
 from .sport_heart_rate import reference_offset
 
-VERSION = "unified-leading-indicator-load-v7-all-sport-recordings"
+VERSION = "unified-leading-indicator-load-v8-recording-pauses"
 HR_INTERVAL_VERSION = "normalized-hr-recording-intervals-v1"
 HR_ZONE_TIME_VERSION = "shared-hr-zone-times-v1"
 HR_SIGNALS = {"MODEL", "hr_raw_bpm", "hr_clean_bpm", "hrmod_candidate_bpm", "hrmod_final_bpm"}
@@ -33,6 +33,12 @@ def recorded_coverage(activity):
             or not math.isclose(active, sum(r["raw_time_min"] for r in zones)*60,
                                 abs_tol=1e-4, rel_tol=1e-6)):
         return None
+    if "paused_seconds" in evidence or "elapsed_seconds" in evidence:
+        if (any(not finite(evidence.get(k)) or evidence[k] < 0
+                for k in ("paused_seconds", "elapsed_seconds"))
+                or not math.isclose(evidence["elapsed_seconds"], recorded+evidence["paused_seconds"],
+                                    abs_tol=1e-4, rel_tol=1e-6)):
+            return None
     return {k: float(evidence[k]) for k in keys}
 
 
@@ -96,7 +102,7 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
     speed_rows = shadow.get("speed_test_series")
     speed_rows = sorted((r for r in (speed_rows if speed_rows is not None else hr_rows)
                          if finite(r.get("elapsed_s"))), key=lambda r: r["elapsed_s"])
-    hr, speeds = [], []
+    hr, speeds, pauses = [], [], []
     offset = reference_offset(sport)
     # One immutable calibration per recording. Repeated sensor values and
     # upper-bound saturation use exactly the same scalar evaluation.
@@ -112,6 +118,12 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
     previous = 0.
     for i, row in enumerate(hr_rows):
         following = hr_rows[i+1] if i+1 < len(hr_rows) else None
+        # Only an interval explicitly matched to a provider timer-stop marker
+        # can be separated from sensor loss. Unexplained gaps stay unknown.
+        if (following is not None and row.get("hr_interval_classification") == "recording_stop"
+                and row.get("hr_interval_end_s") == following["elapsed_s"]
+                and following["elapsed_s"] > max(0., row["elapsed_s"])):
+            pauses.append((max(0., row["elapsed_s"]), following["elapsed_s"]))
         left = max(0., row["elapsed_s"], previous)
         smart = _smart_span(row, following)
         right = row["elapsed_s"]+1.
@@ -199,6 +211,8 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
         speeds.append((left, right, estimate))
         previous = right
     endpoints = {0.}
+    for left, right in pauses:
+        endpoints.update((left, right))
     for left, right, _ in (*hr, *speeds):
         endpoints.update((left, right))
     if finite(duration_s) and duration_s > 0:
@@ -213,8 +227,8 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
     speed_status = {"ACTIVE": 0., "REST": 0., "UNAVAILABLE": 0.}
     unavailable_reasons = {}
     unavailable_speed_hr = estimated_descent = 0.
-    fallback = rest = unknown = saturated = 0.
-    hi = si = 0
+    fallback = rest = unknown = saturated = paused = 0.
+    hi = si = pi = 0
     for left, right in zip(points, points[1:]):
         if right <= left:
             continue
@@ -231,6 +245,13 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
         order = (("HEART_RATE", h), ("SPEED", s)) if leading_indicator == "HEART_RATE" else (("SPEED", s), ("HEART_RATE", h))
         chosen = next(((kind, value) for kind, value in order if value and value.get("status") in {"AVAILABLE", "REST"}), None)
         dt = right-left
+        while pi < len(pauses) and pauses[pi][1] <= left:
+            pi += 1
+        if not chosen and pi < len(pauses) and pauses[pi][0] <= left < pauses[pi][1]:
+            # This is an unobserved timer pause, not measured physiological
+            # rest and not an inferred training dose. Keep elapsed time intact.
+            paused += dt
+            continue
         speed_state = "ACTIVE" if s and s.get("status") == "AVAILABLE" else "REST" if s and s.get("status") == "REST" else "UNAVAILABLE"
         speed_status[speed_state] += dt
         if speed_state == "UNAVAILABLE":
@@ -258,11 +279,13 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
             row["equivalent_time_min"] += dt/60.*value["coefficient"]
             if value.get("saturated_above_v10"):
                 saturated += dt
-    recorded = points[-1] if points else 0.
+    elapsed = points[-1] if points else 0.
+    recorded = elapsed-paused
     active = math.fsum(r["raw_time_min"]*60 for r in totals.values())
     return {"version": VERSION, "equivalence_version": speed_equivalence.VERSION,
             "leading_indicator": leading_indicator, "zones": list(totals.values()),
             "recorded_seconds": recorded, "active_seconds": active,
+            "elapsed_seconds": elapsed, "paused_seconds": paused,
             "rest_seconds": rest, "unknown_seconds": unknown, "fallback_seconds": fallback,
             "source_seconds": sources, "saturated_above_v10_seconds": saturated,
             "hr_source_seconds": hr_sources, "speed_status_seconds": speed_status,

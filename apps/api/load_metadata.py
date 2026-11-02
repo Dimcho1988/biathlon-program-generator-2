@@ -5,6 +5,15 @@ import math
 from biathlon.load_evidence import supports_recording, is_strength
 
 
+def coverage_warnings(warnings, limited):
+    """Replace obsolete HR-only counts after the common ledger is rebuilt."""
+    prefixes = ("Активности с ограничено HR покритие:", "Активности с непокрита интензивност:")
+    result = [w for w in warnings if not any(w.startswith(prefix) for prefix in prefixes)]
+    if limited:
+        result.append(f"Активности с непокрита интензивност: {limited}.")
+    return result
+
+
 def selection_metadata(activities):
     aerobic = [a for a in activities if supports_recording(a.get("sport")) and not is_strength(a)]
     ledgers = [a["load_source"] for a in aerobic
@@ -30,6 +39,8 @@ def selection_metadata(activities):
             "hr_coordinate_policies": sorted({s["hr_coordinate"] for s in ledgers if s.get("hr_coordinate")}),
             "activity_count": len(ledgers), "total_aerobic_activities": len(aerobic),
             **{k: total(k) for k in ("recorded_seconds", "active_seconds", "rest_seconds", "unknown_seconds", "fallback_seconds")},
+            "paused_seconds": total("paused_seconds"),
+            "elapsed_seconds": math.fsum(float(s.get("elapsed_seconds", s["recorded_seconds"])) for s in ledgers),
             "source_seconds": breakdown("source_seconds"),
             "hr_source_seconds": breakdown("hr_source_seconds"),
             "speed_status_seconds": breakdown("speed_status_seconds"),

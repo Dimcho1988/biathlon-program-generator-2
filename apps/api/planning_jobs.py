@@ -11,7 +11,7 @@ from fastapi import HTTPException
 
 from . import management_service
 from .management_schemas import ManagementGenerateRequest
-from .oauth_store import PersistentStoreFailure, HistoricalGenerationReferenceConflict
+from .oauth_store import PersistentStoreFailure, HistoricalGenerationReferenceConflict, PlanStorageCapacityExceeded
 
 logger = logging.getLogger(__name__)
 STATUSES = frozenset({'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED'})
@@ -94,6 +94,7 @@ def process_next(repository):
         logger.info('planning_job_finished job_id=%s status=%s', job_id, state['status'])
     except Exception as exc:
         code = ('INPUT_CHANGED' if isinstance(exc, HistoricalGenerationReferenceConflict)
+                else 'COMPUTATION_FAILED' if isinstance(exc, PlanStorageCapacityExceeded)
                 else 'TEMPORARILY_UNAVAILABLE' if isinstance(exc, PersistentStoreFailure)
                     or isinstance(exc, HTTPException) and (exc.status_code >= 500 or exc.status_code == 429)
                 else 'INPUT_CHANGED' if isinstance(exc, HTTPException) and exc.status_code == 409

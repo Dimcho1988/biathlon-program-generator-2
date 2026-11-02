@@ -79,6 +79,8 @@ describe("saved workout visualization", () => {
     expect(html).toContain("Основна цел: Z2");
     expect(html).toContain("Почивка");
     expect(html.match(/class="management-workout-session"/g)).toHaveLength(2);
+    expect(html.indexOf('management-selected-day')).toBeLessThan(html.indexOf('27.09'));
+    expect(html).toContain('aria-expanded="true"');
   });
   it("keeps the imported morning visible beside the remaining proposed session", () => {
     const next = session([block("WORK", "Z1", 30)], "Z1");

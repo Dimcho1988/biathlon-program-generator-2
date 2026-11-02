@@ -134,7 +134,7 @@ def project_history(source, contexts_by_sport):
 def project_snapshot(repository, alias, snapshot, *, contexts_by_sport=None, speed_by_sport=None):
     if not snapshot or not snapshot.get("load_history"):
         return snapshot
-    from .actual_load_projection import reconstruct_history
+    from .actual_load_projection import reconstruct_history, VERSION as LOAD_SELECTION_VERSION
     source = reconstruct_history(repository, alias, snapshot["load_history"])
     sports = list(dict.fromkeys(a["sport"] for a in source.get("activities", [])))
     if contexts_by_sport is None:
@@ -153,6 +153,12 @@ def project_snapshot(repository, alias, snapshot, *, contexts_by_sport=None, spe
         return snapshot
     out = deepcopy(snapshot)
     out["load_history"] = projected
+    if (projected.get("load_selection") or {}).get("version") == LOAD_SELECTION_VERSION:
+        from .load_metadata import coverage_warnings
+        quality = (out.get("training_status") or {}).get("data_quality")
+        if quality is not None:
+            quality["warnings"] = coverage_warnings(quality.get("warnings", []),
+                (projected.get("quality") or {}).get("limited_activities", 0))
     if metadata is not None:
         out["training_status"]["model"] = metadata
     summaries = {row["zone"]: row for row in projected.get("zones", [])}

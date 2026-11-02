@@ -254,7 +254,40 @@ def test_recording_stops_are_not_filled_as_smart_hr_intervals():
     result = unified_load.integrate({"timeseries": rows, "speed_test_series": []},
         bounds=BOUNDS, sport="Run", parameters=speed_equivalence.prepare(profile()), duration_s=45.)
     assert result["active_seconds"] == 10.
-    assert result["unknown_seconds"] == 35.
+    assert result["unknown_seconds"] == 0.
+    assert result["paused_seconds"] == 35.
+    assert result["recorded_seconds"] == 10.
+    assert result["elapsed_seconds"] == 45.
+
+
+@pytest.mark.parametrize("leading", ["HEART_RATE", "SPEED"])
+@pytest.mark.parametrize("classification", [None, "uncertain_gap", "probable_pause", "technical_or_unexplained_gap"])
+def test_only_confirmed_timer_stops_are_removed_from_coverage(classification, leading):
+    rows = [{"elapsed_s": 0., "hr_raw_bpm": 160.,
+             "hr_interval_classification": classification, "hr_interval_end_s": 30.},
+            {"elapsed_s": 30., "hr_raw_bpm": 160.}]
+    result = unified_load.integrate({"timeseries": rows, "speed_test_series": []},
+        bounds=BOUNDS, sport="Run", duration_s=30., leading_indicator=leading)
+    assert result["paused_seconds"] == 0.
+    assert result["unknown_seconds"] > 0.
+    assert result["recorded_seconds"] == result["elapsed_seconds"] == 30.
+
+
+def test_timer_stop_requires_matching_end_and_never_discards_available_speed():
+    rows = [{"elapsed_s": 0., "hr_raw_bpm": 160.,
+             "hr_interval_classification": "recording_stop", "hr_interval_end_s": 30.},
+            {"elapsed_s": 30., "hr_raw_bpm": 160.}]
+    shadow = {"timeseries": rows, "speed_test_series": streams(None, 16., seconds=10)["speed_test_series"]}
+    parameters = speed_equivalence.prepare(profile())
+    result = unified_load.integrate(shadow, bounds=BOUNDS, sport="Run", parameters=parameters, duration_s=20.)
+    assert result["source_seconds"]["SPEED"] == 10.
+    assert result["paused_seconds"] == 10.
+    assert result["recorded_seconds"] == 10.
+    rows[0]["hr_interval_end_s"] = 29.
+    rejected = unified_load.integrate({"timeseries": rows, "speed_test_series": []},
+        bounds=BOUNDS, sport="Run", duration_s=30.)
+    assert rejected["paused_seconds"] == 0.
+    assert rejected["unknown_seconds"] == 30.
 
 
 @pytest.mark.parametrize("rejected_vflat", [0., 16., 30.])

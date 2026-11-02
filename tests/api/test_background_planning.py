@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from apps.api import dependencies, main, management_service, planning_jobs, background_planning
 from apps.api.management_store import ManagementStore
-from apps.api.oauth_store import SupabasePilotRepository, PersistentStoreFailure
+from apps.api.oauth_store import SupabasePilotRepository, PersistentStoreFailure, PlanStorageCapacityExceeded
 
 ACTOR = '11111111-1111-4111-8111-111111111111'
 JOB = '22222222-2222-4222-8222-222222222222'
@@ -93,6 +93,7 @@ def test_worker_reuses_the_exact_generator_payload_and_only_publishes_through_fe
     (HTTPException(503,'capacity busy'),'TEMPORARILY_UNAVAILABLE'),
     (HTTPException(504,'upstream timeout'),'TEMPORARILY_UNAVAILABLE'),
     (HTTPException(429,'rate limited'),'TEMPORARILY_UNAVAILABLE'),
+    (PlanStorageCapacityExceeded('size limit'),'COMPUTATION_FAILED'),
     (RuntimeError('private-value'),'COMPUTATION_FAILED')])
 def test_failed_calculation_is_not_published_and_uses_a_safe_retry_class(monkeypatch,failure,code,caplog):
     repository=WorkerRepository()

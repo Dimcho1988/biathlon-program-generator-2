@@ -148,7 +148,7 @@ def recovery_coverage(source, today):
     unidentified = max(0, counted-identified)
     relevant = [a for a in activities if not a.get("date") or start.isoformat() <= a["date"] <= today.isoformat()]
     unified = bool(source.get("load_selection"))
-    recorded = unknown = 0.
+    recorded = unknown = paused = 0.
     known_durations = unified and not unidentified
     partial = unidentified
     issues = []
@@ -166,6 +166,7 @@ def recovery_coverage(source, today):
         if ledger is not None:
             recorded += ledger["recorded_seconds"]
             unknown += ledger["unknown_seconds"]
+            paused += (activity.get("load_source") or {}).get("paused_seconds", 0.)
         else:
             known_durations = False
     complete = bool(expected) and not missing and not partial
@@ -178,4 +179,5 @@ def recovery_coverage(source, today):
             "readiness_basis": "RECORDED_LOAD" if complete else "UNAVAILABLE", "estimated": False,
             "recorded_seconds": recorded if known_durations else None,
             "unknown_seconds": unknown if known_durations else None,
+            "paused_seconds": paused if known_durations else None,
             "coverage_percent": (100.*(recorded-unknown)/recorded if recorded else 100.) if known_durations else None}

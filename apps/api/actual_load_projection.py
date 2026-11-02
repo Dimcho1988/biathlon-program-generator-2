@@ -182,6 +182,8 @@ def _reconstruct(repository, alias, source, inputs, settings, key, original_iden
     out["hrmax_bpm"] = settings.hrmax_bpm
     quality = out.get("quality") or {}
     quality["limited_activities"] = sum(a.get("quality_status") == "limited" for a in activities)
+    from .load_metadata import coverage_warnings
+    quality["warnings"] = coverage_warnings(quality.get("warnings", []), quality["limited_activities"])
     # Recovered speed-only activities no longer remain counted as excluded.
     recovered = len(activities)-len(source.get("activities", ()))
     quality["excluded_activities"] = max(0, quality.get("excluded_activities", 0)-recovered)

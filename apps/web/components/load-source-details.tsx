@@ -16,6 +16,7 @@ export function LoadSourceDetails({ value }: { value: LoadSelectionMetadata }) {
       <div><dt>Резервен източник</dt><dd>{time(value.fallback_seconds)}</dd></div>
       <div><dt>Активно време</dt><dd>{time(value.active_seconds)}</dd></div>
       <div><dt>Отчетена почивка</dt><dd>{time(value.rest_seconds)}</dd></div>
+      {(value.paused_seconds ?? 0) > 0 && <div><dt>Потвърдени паузи на записа</dt><dd>{time(value.paused_seconds!)}</dd></div>}
       <div><dt>Време без допустим източник</dt><dd>{time(value.unknown_seconds)}</dd></div>
       {value.speed_status_seconds && <div><dt>Време без допустима скорост</dt><dd>{time(value.speed_status_seconds.UNAVAILABLE ?? 0)}</dd></div>}
       {value.unavailable_speed_hr_seconds !== null && <div><dt>От него покрито чрез пулса</dt><dd>{time(value.unavailable_speed_hr_seconds)}</dd></div>}
@@ -23,6 +24,7 @@ export function LoadSourceDetails({ value }: { value: LoadSelectionMetadata }) {
       {value.estimated_descent_seconds !== null && <div><dt>Балансово оценени спускания</dt><dd>{time(value.estimated_descent_seconds)}</dd></div>}
       <div><dt>Наблюдаван ИТ</dt><dd>Суров измерен пулс</dd></div>
     </dl>
+    {(value.paused_seconds ?? 0) > 0 && <p>Паузите на таймера са отделени от времето с липсващи измервания. За тях не се добавя предполагаем тренировъчен товар.</p>}
     {value.hr_source_seconds === null && <p>Запазената версия различава пулс и скорост. Разбивката на пулса по HRmod и суров сигнал се появява след пълно обновяване.</p>}
   </div>;
 }

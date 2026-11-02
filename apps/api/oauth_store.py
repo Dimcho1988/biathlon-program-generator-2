@@ -124,6 +124,10 @@ class HistoricalGenerationReferenceConflict(PersistentStoreFailure):
     reason = "ANALYSIS_CHANGED"
 
 
+class PlanStorageCapacityExceeded(PersistentStoreFailure):
+    """A deterministic plan size rejection must not repeat the calculation."""
+
+
 class _PlanningSettingsBundle:
     """Parse one captured settings row lazily, preserving per-field validation."""
 
@@ -285,6 +289,9 @@ class SupabasePilotRepository(SnapshotRepository):
     """Minimal PostgREST client using a server-only Supabase secret key."""
 
     def planning_job(self, operation, **arguments):
+        if operation == 'COMPLETE' and 'payload' in arguments:
+            from .plan_storage import pack
+            arguments = {**arguments, 'payload': pack(arguments['payload'])}
         value = self._json(self._request('POST', '/rpc/onflows_planning_job',
             json={'p_operation': operation, **{'p_'+key: value for key, value in arguments.items()}}))
         if value is not None and not isinstance(value, dict):
@@ -434,6 +441,9 @@ class SupabasePilotRepository(SnapshotRepository):
             )
             if _history_reference_write_conflict(response, method, resource, kwargs.get("json")):
                 raise HistoricalGenerationReferenceConflict("Historical analysis references changed")
+            if (method == "POST" and resource in {"/rpc/onflows_planning_job", "/rpc/save_onflows_management_entry"}
+                    and diagnostic == "code=23514 category=check target=onflows_management_entries_check"):
+                raise PlanStorageCapacityExceeded("Planning result exceeds its storage envelope")
             raise PersistentStoreFailure(
                 "Persistent store request failed "
                 f"for {method} {resource} ({response.status_code}; {diagnostic})"

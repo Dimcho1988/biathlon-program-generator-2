@@ -33,6 +33,7 @@ export function RecoveryEstimateNotice({ history }: { history: RecoveryV2 }) {
     Използвани са наличните данни за пулс и скорост. Непокритата част от записаното време е оценена по същите правила като в програмата.
     {quality?.coverage_percent != null && <> Покритие на товара с наличните показатели: {number.format(quality.coverage_percent)}%.</>}
     {quality?.unknown_seconds != null && quality.unknown_seconds > 0 && <> Време без измерена интензивност: {durationHms(quality.unknown_seconds / 60)}.</>}
+    {(quality?.paused_seconds ?? 0) > 0 && <> Потвърдени паузи на записа, извън оценявания товар: {durationHms(quality!.paused_seconds! / 60)}.</>}
     {" "}Оценката не променя отчетените активности и не е измерено възстановяване.
   </p>;
 }

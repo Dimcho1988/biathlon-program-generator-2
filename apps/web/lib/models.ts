@@ -8,7 +8,7 @@ interface Baseline {baseline_daily_min:number;baseline_raw_daily_min:number|null
 export interface RecoveryDataQuality {
   complete:boolean;missing_days:number;partial_activities:number;expected_days:number;covered_days:number;
   readiness_available?:boolean;readiness_basis?:"RECORDED_LOAD"|"ESTIMATED_LOAD"|"UNAVAILABLE";estimated?:boolean;
-  recorded_seconds?:number|null;unknown_seconds?:number|null;coverage_percent?:number|null;
+  recorded_seconds?:number|null;unknown_seconds?:number|null;paused_seconds?:number|null;coverage_percent?:number|null;
   issues?:Array<{activity_ref:string|null;date:string|null;sport:string|null;reason:string}>;
   estimation?:{policy:string;version:string;supported:boolean;estimated_minutes:number;estimated_activity_count:number;unresolved_activity_count:number;missing_calendar_days:string[]}|null;
 }
@@ -51,7 +51,7 @@ export function parseRecoveryV2(value:unknown):RecoveryV2 {
       ||[issue.activity_ref,issue.date,issue.sport].some(value=>value!==null&&typeof value!=="string"))))throw new Error("Невалидно описание на липсващия товар.");
     if(typeof quality.complete!=="boolean"||![quality.missing_days,quality.partial_activities,quality.expected_days,quality.covered_days].every(v=>Number.isInteger(v)&&v>=0)
       ||quality.covered_days>quality.expected_days)throw new Error("Невалидно покритие за възстановяването.");
-    for(const value of [quality.recorded_seconds,quality.unknown_seconds,quality.coverage_percent])if(value!=null&&(!finite(value)||value<0))throw new Error("Невалидно покритие за възстановяването.");
+    for(const value of [quality.recorded_seconds,quality.unknown_seconds,quality.paused_seconds,quality.coverage_percent])if(value!=null&&(!finite(value)||value<0))throw new Error("Невалидно покритие за възстановяването.");
     if((quality.coverage_percent??0)>100||(quality.recorded_seconds!=null&&quality.unknown_seconds!=null&&quality.unknown_seconds>quality.recorded_seconds+.001))throw new Error("Несъгласувано покритие за възстановяването.");
     if(quality.readiness_available!==undefined||quality.readiness_basis!==undefined||quality.estimated!==undefined){
       if(typeof quality.readiness_available!=="boolean"||typeof quality.estimated!=="boolean"||!["RECORDED_LOAD","ESTIMATED_LOAD","UNAVAILABLE"].includes(quality.readiness_basis??""))throw new Error("Невалиден произход на възстановяването.");

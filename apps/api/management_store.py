@@ -37,6 +37,8 @@ class ManagementStore:
 
     @staticmethod
     def _validated_rows(result, kind, limit, selected_key):
+        from .plan_storage import unpack
+        result = unpack(result)
         if not isinstance(result, list) or len(result) > limit:
             raise PersistentStoreFailure("Invalid management history")
         for row in result:
@@ -158,11 +160,12 @@ class ManagementStore:
     def _save(self, alias, kind, key, payload, revision, actor, *,
               profile_revision=None, expected_generation_id=None, check_generation=False,
               expected_responses=None):
+        from .plan_storage import pack, unpack
         response_check = {"p_expected_responses": expected_responses} if expected_responses is not None else {}
         try:
             result = self.repository._json(self.repository._request(
                 "POST", "/rpc/save_onflows_management_entry", json={
-                    "p_alias": alias, "p_kind": kind, "p_key": key, "p_payload": payload,
+                    "p_alias": alias, "p_kind": kind, "p_key": key, "p_payload": pack(payload) if kind == "DRAFT" else payload,
                     "p_expected_revision": revision, "p_actor": str(actor),
                     "p_expected_profile_revision": profile_revision,
                     "p_expected_generation_id": str(expected_generation_id) if expected_generation_id is not None else None,
@@ -190,7 +193,7 @@ class ManagementStore:
                 or not isinstance(result.get("payload"), dict)
                 or not isinstance(result.get("recorded_at"), str)):
             raise PersistentStoreFailure("Invalid management save result")
-        return result
+        return unpack(result)
 
     def save_profile(self, alias, payload, expected_revision, actor):
         return self._save(alias, "PROFILE", PROFILE_KEY, payload, expected_revision, actor)

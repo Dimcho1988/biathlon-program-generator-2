@@ -1,11 +1,18 @@
 from copy import deepcopy
-
 import pytest
 
 from apps.api.load_metadata import selection_metadata, with_load_metadata
 from apps.api.schemas import ModelMetadata
 from biathlon import speed_equivalence, unified_load
 from tests.test_unified_zone_load import BOUNDS, profile, streams
+
+
+def test_rebuilt_coverage_warning_keeps_unrelated_notes_and_replaces_stale_hr_count():
+    from apps.api.load_metadata import coverage_warnings
+    original = ["Друга бележка.", "Активности с ограничено HR покритие: 106."]
+    assert coverage_warnings(original, 3) == ["Друга бележка.", "Активности с непокрита интензивност: 3."]
+    assert coverage_warnings(original, 0) == ["Друга бележка."]
+    assert original[-1].endswith("106.")
 
 
 def mixed_stream():

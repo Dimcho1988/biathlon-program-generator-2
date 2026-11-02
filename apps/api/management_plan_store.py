@@ -31,7 +31,8 @@ class PlanStore:
         self.repository = repository
 
     def request(self, method, path, **kwargs):
-        return self.repository._json(self.repository._request(method, path, **kwargs))
+        from .plan_storage import unpack
+        return unpack(self.repository._json(self.repository._request(method, path, **kwargs)))
 
     def checkpoint(self, alias):
         result = self.request("POST", "/rpc/onflows_management_checkpoint", json={"p_alias": alias})
@@ -147,12 +148,13 @@ class PlanStore:
 
     def save(self, alias, payload, expected_revision, actor, operation, profile_revision, checkpoint, *, automatic=False,
              include_payload=True):
+        from .plan_storage import pack
         # Only callers that discard the saved record opt out of its echo. The
         # immutable revision and publication checks are identical in both RPCs.
         rpc = "save_onflows_management_plan" if include_payload else "save_onflows_management_plan_compact"
         try:
             result = self.request("POST", f"/rpc/{rpc}", json={
-                "p_alias": alias, "p_payload": payload, "p_expected_revision": expected_revision,
+                "p_alias": alias, "p_payload": pack(payload), "p_expected_revision": expected_revision,
                 "p_actor": str(actor), "p_operation": operation,
                 "p_expected_profile_revision": profile_revision, "p_checkpoint": checkpoint, "p_automatic": automatic,
             # Whole-microcycle publication has a 30 s SQL budget. Allow its

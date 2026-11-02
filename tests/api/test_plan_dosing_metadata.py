@@ -95,6 +95,7 @@ def test_combined_parent_references_preserve_every_frozen_value_and_both_json_al
 
 
 def test_cached_plan_publishes_below_four_mib_without_rewriting_approved_evidence(monkeypatch):
+    from apps.api.plan_storage import unpack
     from tests.api.test_management_final_read_phase import PublicationHTTP
     from biathlon.constants import COMPONENTS
 
@@ -114,10 +115,11 @@ def test_cached_plan_publishes_below_four_mib_without_rewriting_approved_evidenc
     assert size(approved) < 4*1024*1024 < 2*size(approved)
     response = transport.run(monkeypatch)
     assert response.status_code == 200
-    payload = transport.record["payload"]
+    stored = transport.record["payload"]
+    payload = unpack(stored)
     assert payload["plan"] == approved
     assert transport.raw_plan == approved  # The durable READY result is not mutated.
-    assert size(payload) < 4*1024*1024
+    assert size(stored) < 4*1024*1024
     for saved_day in [payload["proposal"]["days"][1], *payload["proposal"]["lookahead_days"]]:
         for candidate in [saved_day["session"], *saved_day["sessions"]]:
             assert candidate["method_library"]["components"][0] == parent
