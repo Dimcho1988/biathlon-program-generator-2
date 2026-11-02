@@ -213,16 +213,15 @@ def real_dashboard_view(
 
     dependencies.authorize(authorization)
     try:
-        from ..read_session import ReadSession
-        repository = ReadSession(dependencies.repository())
+        from ..prepared_models import dashboard_envelope
+        repository = dependencies.repository()
         alias = dependencies.validated_alias(athlete_alias)
-        envelope = repository.active_analysis(alias)
+        envelope = dashboard_envelope(repository, alias)
         if not isinstance(envelope, Mapping):
             raise ValueError("No active analysis is available")
         payload = envelope.get("snapshot_payload")
         if not isinstance(payload, Mapping):
             raise ValueError("Active analysis payload is invalid")
-        payload = model_service.project_recovery(repository,alias,payload)
         snapshot = AthleteSnapshot.model_validate(payload)
         revision = int(envelope.get("revision") or 0)
         if revision < 0:

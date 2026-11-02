@@ -314,15 +314,29 @@ class SupabasePilotRepository(SnapshotRepository):
             json={'p_alias': alias, 'p_key': key, 'p_payload': payload}))
 
     def warm_active_load_history(self, alias):
-        from .read_session import ReadSession
-        from .actual_load_projection import reconstruct_history
-        from .memory_budget import MODEL_WORK
-        with MODEL_WORK:
-            phase = ReadSession(self)
-            envelope = phase.active_analysis(alias)
-            history = (envelope.get('snapshot_payload') or {}).get('load_history') if envelope else None
-            if history:
-                reconstruct_history(phase, alias, history)
+        from .prepared_models import process_dashboard
+        return process_dashboard(self, alias)
+
+    def dashboard_preparation(self, operation, **arguments):
+        value = self._json(self._request('POST', '/rpc/onflows_dashboard_preparation',
+            json={'p_operation': operation, **{'p_'+key: value for key, value in arguments.items()}}))
+        if value is not None and not isinstance(value, dict):
+            raise PersistentStoreFailure('Invalid dashboard preparation response')
+        return value
+
+    def process_next_prepared_dashboard(self):
+        from .prepared_models import process_dashboard
+        return process_dashboard(self)
+
+    def cleanup_prepared_data(self, alias):
+        return self._json(self._request('POST', '/rpc/cleanup_onflows_prepared_data', json={'p_alias': alias}))
+
+    def training_plan_update(self, operation, **arguments):
+        value = self._json(self._request('POST', '/rpc/onflows_training_plan_update',
+            json={'p_operation': operation, **{'p_'+key: value for key, value in arguments.items()}}))
+        if value is not None and not isinstance(value, dict):
+            raise PersistentStoreFailure('Invalid training plan update response')
+        return value
 
     def planning_computation(self, alias, key, token, operation, result=None):
         value = self._json(self._request("POST", "/rpc/onflows_planning_computation", json={
@@ -337,8 +351,8 @@ class SupabasePilotRepository(SnapshotRepository):
         self._request("POST", "/rpc/request_onflows_management_check", json={"p_alias": athlete_alias})
 
     def refresh_due_training_plans(self):
-        from .management_lifecycle import run_due
-        return run_due(self)
+        from .prepared_models import process_training
+        return process_training(self)
 
     def __init__(
         self,

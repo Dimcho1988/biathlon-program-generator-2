@@ -12,7 +12,7 @@ def start(repository, stopping):
         return None
 
     def run():
-        next_automatic = 0.
+        next_automatic, next_dashboard = 0., 0.
         while not stopping.is_set():
             try:
                 worked = processor()
@@ -21,12 +21,19 @@ def start(repository, stopping):
                 logger.warning('planning_queue_deferred error_type=%s', type(exc).__name__)
             if stopping.is_set():
                 break
-            if monotonic() >= next_automatic:
-                next_automatic = monotonic()+60.
+            if not worked and monotonic() >= next_automatic:
+                next_automatic = monotonic()+15.
                 try:
                     repository.refresh_due_training_plans()
                 except Exception as exc:
                     logger.warning('management_tick_deferred error_type=%s', type(exc).__name__)
+            warmer = getattr(repository, 'process_next_prepared_dashboard', None)
+            if not stopping.is_set() and not worked and callable(warmer) and monotonic() >= next_dashboard:
+                next_dashboard = monotonic()+15.
+                try:
+                    warmer()
+                except Exception as exc:
+                    logger.warning('dashboard_tick_deferred error_type=%s', type(exc).__name__)
             stopping.wait(0.1 if worked else 3.)
 
     # Non-daemon: SIGTERM stops new claims while a fenced in-flight draft drains.

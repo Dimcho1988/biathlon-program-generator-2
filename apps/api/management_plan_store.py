@@ -27,8 +27,9 @@ def _uuid(value):
 
 
 class PlanStore:
-    def __init__(self, repository):
+    def __init__(self, repository, *, background_claim=None):
         self.repository = repository
+        self.background_claim = background_claim
 
     def request(self, method, path, **kwargs):
         from .plan_storage import unpack
@@ -42,7 +43,8 @@ class PlanStore:
 
     def current(self, alias, *, metadata_only=False):
         select = (
-            "revision,status:payload->status,fingerprint:payload->processed_input_fingerprint,"
+            "revision,status:payload->status,fingerprint:payload->processed_input_fingerprint,evaluated_on:payload->evaluated_on,"
+            "plan_end_date:payload->plan->end_date,proposal_end_date:payload->proposal->end_date,"
             "plan_generation_id:payload->plan->input_snapshot->generation_id,"
             "plan_analysis_revision:payload->plan->input_snapshot->analysis_revision,"
             "plan_analysis_as_of:payload->plan->input_snapshot->analysis_as_of,"
@@ -152,11 +154,17 @@ class PlanStore:
         # Only callers that discard the saved record opt out of its echo. The
         # immutable revision and publication checks are identical in both RPCs.
         rpc = "save_onflows_management_plan" if include_payload else "save_onflows_management_plan_compact"
+        if self.background_claim:
+            if not automatic or include_payload:
+                raise ValueError("Background training writes require an automatic compact publication")
+            rpc = "save_onflows_management_plan_after_training"
         try:
             result = self.request("POST", f"/rpc/{rpc}", json={
                 "p_alias": alias, "p_payload": pack(payload), "p_expected_revision": expected_revision,
                 "p_actor": str(actor), "p_operation": operation,
                 "p_expected_profile_revision": profile_revision, "p_checkpoint": checkpoint, "p_automatic": automatic,
+                **({"p_training_token": self.background_claim["token"],
+                    "p_training_revision": self.background_claim["revision"]} if self.background_claim else {}),
             # Whole-microcycle publication has a 30 s SQL budget. Allow its
             # response to arrive before the transport gives up; never retry a
             # write whose commit outcome could be unknown.

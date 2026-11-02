@@ -55,19 +55,51 @@ def _eligible(plan):
     return plan.get("activation_eligible") is True and (source.get("readiness_known") is True or supported_estimate)
 
 
+def _inputs_current(frozen, stored_fingerprint, evaluated_on=None):
+    """A new day alone does not invalidate an already prepared prescription.
+
+    All source, profile, test, response and rule identities still match. Daily
+    Recovery is a separate read model; explicit generation keeps today's gates.
+    """
+    if _hash(frozen) == stored_fingerprint:
+        return True
+    try:
+        day = date.fromisoformat(evaluated_on)
+        if day.isoformat() != evaluated_on or evaluated_on > frozen["evaluation_date"]:
+            return False
+    except (TypeError, ValueError):
+        return False
+    return _hash({**frozen, "evaluation_date": evaluated_on}) == stored_fingerprint
+
+
+def _window_expired(end, today):
+    if end is None:
+        return False
+    try:
+        return date.fromisoformat(end) < date.fromisoformat(today)
+    except (TypeError, ValueError):
+        return True
+
+
 def current(repository, alias, *, now=None):
     store = PlanStore(repository)
     record = store.current(alias)
     if record is None:
         return {"active": None, "history": []}
     now = now or datetime.now(timezone.utc)
-    _, profile, _, fingerprint, _ = _context(repository, alias, now)
-    stale = record["payload"].get("processed_input_fingerprint") != fingerprint
+    _, profile, frozen, _, _ = _context(repository, alias, now)
+    stale = not _inputs_current(frozen, record["payload"].get("processed_input_fingerprint"),
+        record["payload"].get("evaluated_on"))
+    selected = record["payload"].get("proposal") or record["payload"].get("plan") or {}
+    expired = _window_expired(selected.get("end_date"), frozen["evaluation_date"])
+    stale = stale or expired
     extended_completed = (record["payload"]["status"] == "COMPLETED"
         and date.fromisoformat(profile["program_end"]) > date.fromisoformat(record["payload"].get("evaluated_on", profile["program_end"])))
     return {"active": {**record, "stale": stale,
                        "actionable": record["payload"]["status"] == "ACTIVE" and not stale,
-                       "stale_reason": "Календарът продължава след приключения план. Прегледайте и създайте нов проект; планът не се активира автоматично." if extended_completed else "Нови данни очакват преизчисление. Изчакайте обновяването или изберете „Обнови сега“." if stale else None},
+                       "stale_reason": "Показаната програма е приключила. Създайте или утвърдете проект за следващия период." if expired else
+                       "Календарът продължава след приключения план. Прегледайте и създайте нов проект; планът не се активира автоматично." if extended_completed else
+                       "Данните са променени. При нова тренировка програмата се обновява във фонов режим; при друга промяна изберете „Обнови сега“." if stale else None},
             "history": store.history(alias)}
 
 
@@ -79,8 +111,9 @@ def state(repository, alias, *, now=None):
     hints = [{k: record.get(f"{prefix}_{k}") for k in
               ("generation_id", "analysis_revision", "analysis_as_of", "snapshot_fingerprint")}
              for prefix in ("proposal", "plan")]
-    _, _, _, fingerprint, _ = _context(repository, alias, now or datetime.now(timezone.utc), hints)
-    return {"revision": record["revision"], "stale": record["fingerprint"] != fingerprint}
+    _, _, frozen, _, _ = _context(repository, alias, now or datetime.now(timezone.utc), hints)
+    return {"revision": record["revision"], "stale": not _inputs_current(frozen, record["fingerprint"], record.get("evaluated_on"))
+        or _window_expired(record.get("proposal_end_date") or record.get("plan_end_date"), frozen["evaluation_date"])}
 
 
 def current_overview(repository, alias, *, now=None):
@@ -89,9 +122,10 @@ def current_overview(repository, alias, *, now=None):
     record = PlanStore(repository).current_overview(alias)
     if record is None:
         return empty_overview()
-    _, _, _, fingerprint, _ = _context(repository, alias, now or datetime.now(timezone.utc))
+    _, _, frozen, _, _ = _context(repository, alias, now or datetime.now(timezone.utc))
     return {**{key: record[key] for key in PUBLIC_FIELDS},
-            "stale": record.get("stored_fingerprint") != fingerprint}
+            "stale": not _inputs_current(frozen, record.get("stored_fingerprint"), record.get("stored_evaluated_on"))
+                or _window_expired(record.get("end_date"), frozen["evaluation_date"])}
 
 
 def activate(repository, alias, body, actor, *, now=None, include_saved_payload=True):
@@ -106,7 +140,8 @@ def activate(repository, alias, body, actor, *, now=None, include_saved_payload=
     if not draft or rows[0]["revision"] != body.draft_revision:
         raise HTTPException(409, "Select the latest saved draft for this start date")
     plan = deepcopy(draft["payload"])
-    if plan.get("input_fingerprint") != fingerprint or not _eligible(plan):
+    if (not _inputs_current(frozen, plan.get("input_fingerprint"), (plan.get("input_snapshot") or {}).get("evaluation_date"))
+            or not _eligible(plan) or plan.get("end_date", "") < frozen["evaluation_date"]):
         raise HTTPException(409, "Regenerate and review a current plan with sufficient data")
     plan.update(review_required=False, automatically_published=False)
     payload = {"schema_version": "active-plan-v2", "status": "ACTIVE", "mode": profile["adaptation_mode"],
@@ -257,9 +292,10 @@ def _reconciliation_analysis(repository, alias, today, frozen, initial_read_phas
 
 
 def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, automatic=False,
-            force=False, resume=False, day_action=None, include_saved_payload=True, record_unchanged_check=False):
+            force=False, resume=False, day_action=None, include_saved_payload=True, record_unchanged_check=False,
+            _background_claim=None):
     now = now or datetime.now(timezone.utc)
-    store = PlanStore(repository)
+    store = PlanStore(repository, background_claim=_background_claim) if _background_claim else PlanStore(repository)
     record = store.current(alias)
     if record is None:
         return None
@@ -396,7 +432,9 @@ def approve_proposal(repository, alias, body, actor, *, now, include_saved_paylo
     profile_revision, profile, frozen, fingerprint, approval_hash = _context(repository, alias, now)
     payload = deepcopy(record["payload"])
     proposal = payload.get("proposal")
-    if not proposal or proposal.get("input_fingerprint") != fingerprint or not _eligible(proposal):
+    if (not proposal or not _inputs_current(frozen, proposal.get("input_fingerprint"),
+            (proposal.get("input_snapshot") or {}).get("evaluation_date"))
+            or not _eligible(proposal) or proposal.get("end_date", "") < frozen["evaluation_date"]):
         raise HTTPException(409, "Refresh and review the current proposal before approval")
     proposal.update(review_required=False, automatically_published=False)
     # Past prescriptions remain in immutable revisions and reconciled outcomes.

@@ -116,6 +116,38 @@ def test_review_preserves_plan_until_explicit_approval(system):
     approved = lifecycle.action(system.repo, "athlete", ManagementPlanAction(action="APPROVE", expected_revision=2), ACTOR, now=now)
     assert approved["payload"]["status"] == "ACTIVE" and approved["payload"]["proposal"] is None
 
+
+def test_opening_on_the_next_day_keeps_the_saved_program_without_a_new_revision(system):
+    before = activate(system)
+    current = lifecycle.current(system.repo, "athlete", now=NOW+timedelta(days=1))
+    assert current["active"]["stale"] is False and current["active"]["actionable"] is True
+    assert current["active"]["payload"] == before["payload"]
+    assert len(system.plans.records) == 1
+
+
+def test_expired_program_is_not_actionable_and_opening_does_not_generate_another(system):
+    before = activate(system)
+    current = lifecycle.current(system.repo, "athlete", now=NOW+timedelta(days=10))
+    assert current["active"]["stale"] is True and current["active"]["actionable"] is False
+    assert current["active"]["payload"] == before["payload"]
+    assert len(system.plans.records) == 1
+
+
+def test_fixed_proposal_can_be_reviewed_the_next_day_without_recomputing(system, monkeypatch):
+    system.profiles.body.adaptation_mode = "REVIEW"
+    original = activate(system)["payload"]["plan"]
+    system.profiles.body.progression_percent = 7
+    system.profiles.revision = 2
+    now = advance(system, 1)
+    updated = lifecycle.refresh(system.repo, "athlete", automatic=True, now=now)
+    proposal = deepcopy(updated["payload"]["proposal"])
+    assert updated["payload"]["plan"] == original
+    monkeypatch.setattr(management_service, "build_draft", lambda *a, **kw: pytest.fail("Approval recomputed the proposal"))
+    approved = lifecycle.action(system.repo, "athlete", ManagementPlanAction(action="APPROVE", expected_revision=2),
+        ACTOR, now=now+timedelta(days=1))
+    assert approved["payload"]["plan"] == {**proposal, "review_required": False, "automatically_published": False}
+    assert system.plans.records[0]["payload"]["plan"] == original
+
 def test_changed_profile_requires_approval_in_auto_mode(system):
     activate(system)
     system.profiles.body.progression_percent = 7
