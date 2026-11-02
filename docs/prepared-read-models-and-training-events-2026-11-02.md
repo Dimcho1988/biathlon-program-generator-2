@@ -1,10 +1,10 @@
 # Prepared dashboards and training-triggered programs
 
-Status: both migrations are applied to staging (`20261102172430` and
-`20261102174120`). The initial worker and API release `e956c0a` is live and six
-dashboards were prepared. Final runtime verification follows the configuration
-correction below; these initial envelopes used the worker's previous Recovery
-flag and do not establish a prepared hit for the API's Recovery v2 identity.
+Status: deployed and verified in staging. Both migrations are applied
+(`20261102172430` and `20261102174120`). Worker and API run the same source
+`c554f030caa98691d9eb2ef1582251c8ae796c26`, with Recovery v2 enabled in both.
+All six active athletes have current prepared dashboards and the real
+service-role RPC returned a ready, source-matched Recovery v2 envelope for each.
 
 ## Resulting behavior
 
@@ -113,22 +113,47 @@ database lookup measurement, not dashboard or whole-cleanup latency.
 
 Initial rollout also exposed a missing worker Recovery v2 flag. The worker
 Blueprint and service setting now explicitly match the existing API flag.
-The following runtime release must use the same commit in both services so
-its build/Recovery cache identity matches. Service plans and counts are intact.
+The final runtime uses the same commit in both services and its build/Recovery
+cache identity matches. Service plans and counts are intact.
 
 No latency improvement percentage or new user-capacity limit is established
 by these functional tests. Authenticated dashboard HTTP latency still requires
 a real signed-in request; database cache readiness alone is not that benchmark.
 
-## Release order
+## Verified staging rollout
 
-1. Apply `prepared_dashboard_and_training_events` to onflows-staging.
-2. Run `tests/database/prepared_dashboard_and_training_events.sql`; it rolls back.
-3. Deploy the existing staging worker, then API, from the same tested commit.
-4. Verify background preparation, prepared hits, unchanged programs without a
-   training event and fixed-program proposals without automatic approval.
-5. Check current grants, worker memory, service errors and the before/after
-   dashboard payload. Record measured latency separately from calculation time.
+| Service | Deployment | Live at (UTC, 2026-11-02) |
+| --- | --- | --- |
+| Worker | `dep-dbkd1a08v5cc73b2r540` | 18:05:16 |
+| API | `dep-dbkd24m1egvs739qpa6g` | 18:07:21 |
+
+At 18:10:31 UTC, all six rows matched their requested revision and the current
+runtime identity, contained Recovery v2, had completed today's cleanup, and
+had no preparation error. Their final preparations completed between 18:07:11
+and 18:08:32 UTC; the largest envelope was 1,287,013 bytes. The real service-role
+READ contract additionally checked the source generation, revision, activation
+timestamp and both athlete identifiers, with assertions enabled. This proves
+database prepared hits; it does not measure signed-in dashboard HTTP latency.
+
+The two existing programs retained revisions 776 and 40 and the exact same
+approved-plan and proposal hashes. There were zero training events and zero
+synthetic fixture users remaining. New-versus-unchanged training scheduling
+and the real fixed-program publication/approval path passed the rolled-back
+cloud contracts. The live migration did not manufacture training events.
+
+Minute-resolution samples during the final release recorded current-worker
+memory of approximately 187–194 MiB and current-API memory of 170–174 MiB,
+within their unchanged 512 MiB limits. Each service remains at 0.5 CPU and one
+configured instance. These short samples are not continuous peak measurements
+or a concurrency/load test. The final services had no warning/error log entries
+in the checked 18:07:30–18:09:41 UTC interval; `/health` returned HTTP 200.
+
+Render briefly ran the preceding worker while replacing it. Different build
+keys caused temporary cache replacement during that overlap. Its shutdown was
+observed at 18:07:16 UTC; the six envelopes then converged on the final identity.
+The deployed tree exactly matched the locally tested tree
+`bec8002c35a5597ae17a584bafdadd65734b753c`. Later documentation-only commits do
+not require deploying another runtime or rewarming all six views.
 
 Service plans, instance counts, deployment settings and training formulas do
 not change. The additive schema can remain if application code is rolled back.
