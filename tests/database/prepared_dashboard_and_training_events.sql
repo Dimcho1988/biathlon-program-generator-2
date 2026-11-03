@@ -21,8 +21,10 @@ insert into public.onflows_training_snapshots(athlete_alias,payload,activated_at
 
 do $$ declare f regprocedure; r text;
 begin
- assert exists(select 1 from onflows_private.prepared_dashboards where athlete_alias='prepared-contract-athlete'),
+ assert exists(select 1 from onflows_private.dashboard_dirty_events where athlete_alias='prepared-contract-athlete'),
   'New source was not queued before the first application read';
+ assert not exists(select 1 from onflows_private.prepared_dashboards where athlete_alias='prepared-contract-athlete'),
+  'Input publication touched the shared dashboard cache';
  assert onflows_private.fixed_plan_identity('{"days":[{"sessions":[{"dose":30}],"session":{"dose":30}}]}')=
   onflows_private.fixed_plan_identity('{"_storage":"primary-session-reference-v1","days":[{"sessions":[{"dose":30}],"session":{"$session_ref":0}}]}'),
   'Storage compaction changed fixed-plan identity';
@@ -41,9 +43,13 @@ begin
  foreach r in array array['anon','authenticated','service_role'] loop
   assert not has_table_privilege(r,'onflows_private.prepared_dashboards','SELECT');
   assert not has_table_privilege(r,'onflows_private.training_plan_updates','SELECT');
+  assert not has_table_privilege(r,'onflows_private.dashboard_dirty_events','SELECT');
+  assert not has_function_privilege(r,'onflows_private.flush_dashboard_invalidations(text)','EXECUTE');
+  assert not has_function_privilege(r,'onflows_private.dashboard_preparation_core_v1(text,text,uuid,bigint,date,text,jsonb)','EXECUTE');
  end loop;
  assert (select relrowsecurity from pg_class where oid='onflows_private.prepared_dashboards'::regclass);
  assert (select relrowsecurity from pg_class where oid='onflows_private.training_plan_updates'::regclass);
+ assert (select relrowsecurity from pg_class where oid='onflows_private.dashboard_dirty_events'::regclass);
 end $$;
 
 do $$ declare a constant text:='prepared-contract-athlete'; key1 text:=repeat('a',64); key2 text:=repeat('b',64);
@@ -55,6 +61,25 @@ begin
  assert public.onflows_dashboard_preparation('STORE',a,p_revision=>(state->>'revision')::bigint,
   p_day=>(state->>'day')::date,p_model_key=>key1,p_envelope=>payload)->>'stored'='true';
  assert public.onflows_dashboard_preparation('READ',p_alias=>a,p_model_key=>key1)->'envelope'=payload;
+ -- Repeated input writes append one private event per transaction without
+ -- changing a ready queue row. The next consumer advances its revision once.
+ old_revision:=(state->>'revision')::bigint;
+ update public.onflows_athlete_settings set hrmax_bpm=hrmax_bpm+1 where athlete_alias=a;
+ update public.onflows_athlete_settings set hrmax_bpm=hrmax_bpm+1 where athlete_alias=a;
+ assert (select requested_revision from onflows_private.prepared_dashboards where athlete_alias=a)=old_revision,
+  'Input writer changed the shared dashboard queue';
+ assert (select count(*) from onflows_private.dashboard_dirty_events where athlete_alias=a)=1,
+  'One transaction did not coalesce its dashboard events';
+ state:=public.onflows_dashboard_preparation('READ',p_alias=>a,p_model_key=>key1);
+ assert state->>'ready'='false' and (state->>'revision')::bigint<>old_revision,
+  'Dirty dashboard remained readable';
+ assert not exists(select 1 from onflows_private.dashboard_dirty_events where athlete_alias=a),
+  'Captured dashboard events were not consumed';
+ assert public.onflows_dashboard_preparation('STORE',a,p_revision=>old_revision,
+  p_day=>(state->>'day')::date,p_model_key=>key1,p_envelope=>payload)->>'stored'='false',
+  'Consumed dirty events did not fence the old calculation';
+ assert public.onflows_dashboard_preparation('STORE',a,p_revision=>(state->>'revision')::bigint,
+  p_day=>(state->>'day')::date,p_model_key=>key1,p_envelope=>payload)->>'stored'='true';
  old_revision:=(state->>'revision')::bigint;
  delete from public.onflows_training_snapshots where athlete_alias=a;
  assert public.onflows_dashboard_preparation('READ',p_alias=>a,p_model_key=>key1) is null,'Deleted source remained readable';

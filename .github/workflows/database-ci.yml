@@ -118,6 +118,16 @@ jobs:
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
           --no-psqlrc --set ON_ERROR_STOP=1
           --file tests/database/unchanged_management_checks.sql
+      - name: Verify prepared dashboards invalidation leases and training events
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/prepared_dashboard_and_training_events.sql
+      - name: Verify prepared learning revision source model and day fences
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/prepared_learning_view.sql
       - name: Verify service-only overview presentation without changing evidence
         run: >-
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
@@ -138,3 +148,11 @@ jobs:
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
           --no-psqlrc --set ON_ERROR_STOP=1
           --file tests/database/final_audit_contract.sql
+      - name: Verify private learning invalidation through real table triggers
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/prepared_learning_triggers.sql
+      - name: Verify learning events across out-of-order transaction commits
+        timeout-minutes: 3
+        run: python3 tests/database/prepared_learning_concurrency.py
