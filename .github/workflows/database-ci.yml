@@ -143,3 +143,6 @@ jobs:
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
           --no-psqlrc --set ON_ERROR_STOP=1
           --file tests/database/prepared_learning_triggers.sql
+      - name: Verify learning events across out-of-order transaction commits
+        timeout-minutes: 3
+        run: python3 tests/database/prepared_learning_concurrency.py

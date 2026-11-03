@@ -22,7 +22,9 @@ begin
  payload:=jsonb_build_object('athlete_alias',alias,'report',jsonb_build_object(
   'schema_version','recovery-learning-view-v1','as_of',claim->>'day','series','[]'::jsonb));
  -- A response/profile/analysis event between read and write supersedes the lease.
- perform onflows_private.request_learning_preparation(alias);
+ -- Simulate a separate input transaction (this rollback script has one txid).
+ insert into onflows_private.learning_dirty_events(athlete_alias,transaction_id)
+  values(alias,txid_current()+1000000000);
  stored:=public.onflows_learning_preparation('STORE',alias,token,(claim->>'revision')::bigint,
   (claim->>'day')::date,key1,payload);
  if stored->>'stored'<>'false' then raise exception 'Superseded input was published'; end if;
