@@ -8,10 +8,10 @@ vi.mock("next/navigation", () => ({ usePathname: () => pathname, useRouter: () =
 
 describe("navigation between analysis pages", () => {
   it("keeps the global menu and athlete visible on the index, detail, loading and error screens", () => {
-    for (const route of ["/trainability", "/activities/activity-1", "/response", "/speed", "/"]) {
+    for (const route of ["/trainability", "/activities/activity-1", "/response", "/learning", "/speed", "/"]) {
       pathname = route;
       const html = renderToStaticMarkup(<AppShell athlete={<p>Избран спортист</p>}><main>Зареждаме данните…</main></AppShell>);
-      for (const href of ["/", "/activities", "/trainability", "/response", "/speed", "/account", "/methods"]) expect(html).toContain(`href="${href}"`);
+      for (const href of ["/", "/activities", "/trainability", "/response", "/learning", "/speed", "/account", "/methods"]) expect(html).toContain(`href="${href}"`);
       expect(html).toContain("Избран спортист");
       expect(html).toContain('aria-controls="workspace-navigation"');
       expect(html).toContain('aria-label="Превключи светла или тъмна тема"');
@@ -22,6 +22,8 @@ describe("navigation between analysis pages", () => {
     expect(dashboardHref("recovery", "2026-09-01", "2026-09-14")).toBe("/?view=recovery&report_start=2026-09-01&report_end=2026-09-14");
     expect(rememberedNavigationHref("/", "/?view=report&report_start=2026-09-01&report_end=2026-09-14&wake=ready&sync=queued&athlete_alias=private")).toBe("/?view=report&report_start=2026-09-01&report_end=2026-09-14");
     expect(rememberedNavigationHref("/trainability", "/trainability?start=2026-09-01&end=2026-09-14")).toBe("/trainability?start=2026-09-01&end=2026-09-14");
+    expect(rememberedNavigationHref("/learning", "/learning?days=30&athlete_alias=private")).toBe("/learning?days=30");
+    expect(rememberedNavigationHref("/learning", "/learning?days=180")).toBe("/learning");
   });
   it("rejects external and different-page destinations from browser storage", () => {
     for (const saved of ["//example.com/trainability?start=2026-09-01", "https://example.com/trainability", "/api/session/logout", "javascript:alert(1)", "/trainability?start=invalid&end=invalid"]) {

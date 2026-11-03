@@ -18,8 +18,10 @@ import numpy as np
 
 from .constants import COMPONENTS
 
-VERSION = "individual-response-bayes-v2"
-FEATURES = tuple([f"volume:{z}" for z in COMPONENTS] + [f"intensity:{z}" for z in COMPONENTS if z != "STR"])
+VERSION = "individual-response-bayes-v3-observed-blocks"
+INTERVENTION_FEATURES = tuple([f"volume:{z}" for z in COMPONENTS] + [f"intensity:{z}" for z in COMPONENTS if z != "STR"])
+CONTEXT_FEATURES = ("context:loading_duration", "context:followup_load")
+FEATURES = INTERVENTION_FEATURES + CONTEXT_FEATURES
 VOLUME_SCALE = math.log(1.05)
 INTENSITY_SCALE = math.log(1.02)
 MIN_FIT = 4
@@ -72,7 +74,8 @@ def _number(value):
 
 def features(episode):
     return [1.] + [float(episode.get("dose_change", {}).get(z, 0.)) / VOLUME_SCALE for z in COMPONENTS] + [
-        float(episode.get("intensity_change", {}).get(z, 0.)) / INTENSITY_SCALE for z in COMPONENTS if z != "STR"]
+        float(episode.get("intensity_change", {}).get(z, 0.)) / INTENSITY_SCALE for z in COMPONENTS if z != "STR"] + [
+        float((episode.get("model_context") or {}).get(key.split(":",1)[1], 0.)) for key in CONTEXT_FEATURES]
 
 
 def _samples(episodes, outcome, scope="GLOBAL"):
@@ -185,7 +188,7 @@ def _fit_cached(serialized, day):
 
 def fit(episodes, today):
     # No reference to athlete names/raw measurements in cached fitting inputs.
-    compact = [{k: e[k] for k in ("id", "start", "end", "observed_on", "quality", "dose_change", "intensity_change", "response", "outcomes", "confounded") if k in e}
+    compact = [{k: e[k] for k in ("id", "start", "end", "observed_on", "quality", "dose_change", "intensity_change", "response", "outcomes", "confounded", "model_context") if k in e}
                for e in sorted(episodes, key=lambda e: (e["end"], e["id"]))
                if e["end"] < today.isoformat() and e.get("observed_on", e["end"]) <= today.isoformat()]
     return deepcopy(_fit_cached(json.dumps(compact, sort_keys=True, separators=(",", ":"), allow_nan=False), today.isoformat()))
@@ -194,7 +197,7 @@ def fit(episodes, today):
 def _identified(samples, feature_index):
     """Count materially isolated changes, preserving mixed-accent uncertainty."""
     return sum(abs(s["x"][feature_index]) >= .4 and
-               all(abs(x) <= .35 for j, x in enumerate(s["x"][1:], 1) if j != feature_index) for s in samples)
+               all(abs(x) <= .35 for j, x in enumerate(s["x"][1:], 1) if j != feature_index and j <= len(INTERVENTION_FEATURES)) for s in samples)
 
 
 def _admissible(model, index, step, current, burden, recovery, base_burden, base_recovery):
@@ -295,7 +298,7 @@ def decide(*, models, episodes, current, today, config, allowed_components, phas
             choice.update(gain=gain, burden=burden, recovery=recovery, validation=model["validation"])
     else:
         candidates = []
-        maximum = min(.10, max(0., config.get("max_volume_step_percent", 5)/100))
+        maximum = min(.20, max(0., config.get("max_volume_step_percent", 20)/100))
         intensity_maximum = min(.05, max(0., config.get("max_intensity_step", .02)))
         for z in eligible:
             scoped = models.get(z, models["GLOBAL"])

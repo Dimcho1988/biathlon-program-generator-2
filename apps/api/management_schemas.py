@@ -230,7 +230,7 @@ class IndividualLearning(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     mode: Literal["OFF", "SHADOW", "CONTROL"] = "SHADOW"
     exploration_enabled: bool = True
-    max_volume_step_percent: float = Field(default=5., ge=0, le=10)
+    max_volume_step_percent: float = Field(default=20., ge=0, le=20)
     max_intensity_step: float = Field(default=.02, ge=0, le=.05)
 
 

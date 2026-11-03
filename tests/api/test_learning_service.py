@@ -70,3 +70,39 @@ def test_oversized_episode_cannot_break_persistence():
     e = episode()
     e["oversized"] = "я" * service.EPISODE_MEMORY_BYTES
     assert service.bounded_episodes([e]) == []
+
+
+def test_service_persists_expired_episode_marker_across_neutral_refreshes(monkeypatch):
+    """Exercise the real service memory writeback, not a test-only fallback."""
+    from apps.api import learning_methods
+    from apps.api.management_store import ManagementStore
+    from tests.api.test_component_load_learning import projected_fixture
+    from tests.api.test_load_progression import configured
+    from tests.api.test_recovery_policy import fixture
+    repo,_,_,_=projected_fixture()
+    data=fixture(returned=None,follow_days=25)
+    source=data['source']
+    # The recovery dose is lower than loading but locally comparable to base.
+    for a in source['activities']:
+        if a['date']>str(data['today']-timedelta(days=25)):
+            for z in a['zones']:
+                z.update(equivalent_time_min=10.,raw_time_min=10.)
+    envelope={'generation_id':'pinned','revision':1,'activities':[], 'snapshot_payload':{'load_history':source}}
+    monkeypatch.setattr(service,'build_history',lambda **kwargs:deepcopy(data['history']))
+    memory={}
+    monkeypatch.setattr(ManagementStore,'learning_memory',lambda *args:deepcopy(memory))
+    monkeypatch.setattr(learning_methods,'assess_methods',lambda **kwargs:{'preferences':[],'memory':{},'summary':{}})
+    profile=configured(individual_learning={'mode':'CONTROL','max_volume_step_percent':20.,'max_intensity_step':.02,'exploration_enabled':True})
+    phase={'phases':[{'kind':'GENERAL_PREPARATION','start_date':'2026-01-01','end_date':'2026-12-31'}]}
+    first=service.context(repo,'athlete',profile,source,data['rows'],data['today'],envelope=envelope,entries=[],periodization=phase)
+    memory.update(first['memory'])
+    # A completed prior decision is an immutable consumed-exposure marker.
+    episode=first['memory']['episodes'][-1]
+    closed={'source_episode_id':episode['id'],'component':'Z3','mode':'CONTROL','config':profile['individual_learning'],'expires_on':str(data['today']-timedelta(days=1))}
+    memory['decision']=deepcopy(closed)
+    for _ in range(2):
+        report=service.context(repo,'athlete',profile,source,data['rows'],data['today'],envelope=envelope,entries=[],periodization=phase)
+        assert report.get('decision') is None
+        assert report['memory']['decision']==closed
+        memory.clear()
+        memory.update(report['memory'])

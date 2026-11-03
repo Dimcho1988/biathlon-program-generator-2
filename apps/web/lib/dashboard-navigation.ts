@@ -26,6 +26,7 @@ export function rememberedNavigationHref(path: string, saved: string | null): st
   try {
     const url = new URL(saved, "https://onflows.invalid");
     if (url.origin !== "https://onflows.invalid" || url.pathname !== path) return path;
+    if (path === "/learning") return ["30", "90"].includes(url.searchParams.get("days") ?? "") ? `${path}?days=${url.searchParams.get("days")}` : path;
     const keys = path === "/" ? ["view", "report_start", "report_end"] : ["start", "end"];
     if (!["/", "/activities", "/trainability", "/response"].includes(path)) return path;
     const query = new URLSearchParams();

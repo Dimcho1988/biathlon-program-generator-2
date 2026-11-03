@@ -1,6 +1,8 @@
 """Causal, disjoint observations for the individualized planning controller.
 
-Fourteen-day calendar episodes describe associations, not controlled trials.
+Legacy fourteen-day extraction is retained for archive compatibility tests.
+The active learning_service uses recovery_policy measured variable blocks.
+Both describe associations, not controlled trials.
 The first seven days are exposure and the next seven are response/outcome.
 Direct Q identifies component dose; canonical E remains separate context.
 The cutoffs/coverage floors below are explicit conservative pilot parameters.

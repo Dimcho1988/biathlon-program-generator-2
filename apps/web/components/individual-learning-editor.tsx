@@ -24,7 +24,7 @@ export function IndividualLearningEditor({ profile, onChange }: {
         onChange={event => update({ exploration_enabled: event.target.checked })}/>Допускай малки пробни промени</label>
       <p className="management-muted">След наблюдавано възстановяване малка пробна промяна може да помогне за натрупване на данни. Тя се отбелязва отделно и остава в избраните граници. При „Наблюдение“ се показва само като предложение.</p>
       <div className="management-form-grid">
-        <label>Максимална стъпка на обема, %<input type="number" min="0" max="10" step=".5"
+        <label>Максимална стъпка на обема (Q), %<input type="number" min="0" max="20" step=".5"
           value={value.max_volume_step_percent} onChange={event => update({ max_volume_step_percent: Number(event.target.value) })}/></label>
         <label>Максимална стъпка в зоната, п.п.<input type="number" min="0" max="5" step=".5"
           value={Number((value.max_intensity_step * 100).toFixed(2))} onChange={event => update({ max_intensity_step: Number(event.target.value) / 100 })}/></label>

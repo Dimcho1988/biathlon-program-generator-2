@@ -28,7 +28,13 @@ describe("individual learning presentation", () => {
     expect(parsed.building_fraction).toBe(.6);
     expect(parseManagementProfile({ ...legacy, individual_learning: { ...defaultIndividualLearning(), mode: "OFF" } }).individual_learning?.mode).toBe("OFF");
   });
-  it.each([{ mode: "AUTO" }, { max_volume_step_percent: 11 }, { max_intensity_step: .06 }, { exploration_enabled: "yes" }, { max_volume_step_percent: NaN }])("rejects invalid learning configuration %s", patch => {
+  it("accepts the approved 20 percent ceiling while retaining observation defaults", () => {
+    expect(parseIndividualLearningConfig({ ...defaultIndividualLearning(), max_volume_step_percent: 20 }).max_volume_step_percent).toBe(20);
+    expect(defaultIndividualLearning().mode).toBe("SHADOW");
+    expect(defaultIndividualLearning().max_volume_step_percent).toBe(20);
+    expect(parseIndividualLearningConfig({ ...defaultIndividualLearning(), max_volume_step_percent: 5 }).max_volume_step_percent).toBe(5);
+  });
+  it.each([{ mode: "AUTO" }, { max_volume_step_percent: 21 }, { max_intensity_step: .06 }, { exploration_enabled: "yes" }, { max_volume_step_percent: NaN }])("rejects invalid learning configuration %s", patch => {
     expect(() => parseIndividualLearningConfig({ ...defaultIndividualLearning(), ...patch })).toThrow();
   });
   it("handles old saved plans and malformed reports without breaking the programme", () => {

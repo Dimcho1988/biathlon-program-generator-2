@@ -482,7 +482,7 @@ def individual_adjustment(context, profile, zone, day, period, state, *, taper=F
     volume, intensity = decision.get("volume_factor", 1.), decision.get("intensity_delta", 0.)
     if not all(isinstance(v, (float, int)) and not isinstance(v, bool) and isfinite(v) for v in (volume, intensity)):
         return neutral
-    volume_limit = min(10., max(0., policy.get("max_volume_step_percent", 5.))) / 100
+    volume_limit = min(20., max(0., policy.get("max_volume_step_percent", 20.))) / 100
     intensity_limit = min(.05, max(0., policy.get("max_intensity_step", .02)))
     volume = max(1-volume_limit, min(1+volume_limit, volume))
     intensity = max(-intensity_limit, min(intensity_limit, intensity))
@@ -497,7 +497,9 @@ def individual_adjustment(context, profile, zone, day, period, state, *, taper=F
             "applied": volume != 1. or intensity != 0.,
             "reason": decision.get("reason"), "confidence": decision.get("confidence"),
             "action": decision.get("action"), "effective_from": report["effective_from"],
-            "expires_on": report["expires_on"]}
+            "expires_on": report["expires_on"],
+            "baseline_actual_weekly_q": decision.get("baseline_actual_weekly_q"),
+            "execution_weekly_q_ceiling": decision.get("execution_weekly_q_ceiling")}
 
 
 def apply(goals, profile, state, context, day, period, taper, limited, taper_factor, actual_base):
@@ -565,14 +567,22 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
                              "RECORDED_Q_TARGET_WITH_ESTIMATED_7_40_GATE" if context.get("estimated_history_supported") else "STABLE_Q_TARGET_WITH_7_40_GATE")
         individual = individual_adjustment(context, profile, z, day, period, state, taper=taper, limited=limited)
         correction = individual["volume_factor"]
-        if correction != 1.:
+        if correction != 1. or individual.get("baseline_actual_weekly_q") is not None:
             # Q is corrected once for both the outlook and composed sessions.
             # Its independent E/7–40 gate does not expand for a positive trial.
             baseline_q = goal.get("target_weekly_q")
             if baseline_q is not None and z != "STR":
                 # A currently supported, bounded individual decision can exceed
                 # the generic envelope. Do not turn a prior into a potential cap.
+                observed_q = individual.get("baseline_actual_weekly_q")
+                # A recovery-policy decision is anchored once to the actual
+                # comparable block, not compounded with the calendar trend.
+                if isinstance(observed_q, (int,float)) and not isinstance(observed_q,bool) and isfinite(observed_q) and observed_q > 0:
+                    baseline_q = observed_q*component_shape*taper_factor
                 goal["target_weekly_q"] = baseline_q*correction
+                current_ceiling=individual.get("execution_weekly_q_ceiling")
+                if isinstance(current_ceiling,(int,float)) and not isinstance(current_ceiling,bool) and isfinite(current_ceiling) and current_ceiling>=0:
+                    goal["target_weekly_q"]=min(goal["target_weekly_q"],current_ceiling)
                 individual["baseline_weekly_q"] = baseline_q
                 individual["applied_volume_factor"] = goal["target_weekly_q"]/baseline_q if baseline_q else 1.
                 individual["normative_reference_exceeded"] = goal["target_weekly_q"] > WEEKLY_Q_BOUNDS[z][1]*config["ceiling_ratio"]*component_shape*taper_factor
@@ -580,8 +590,12 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
                 # Strength's existing E is its own exposure budget, not an
                 # aerobic Q target or an invented endurance capacity.
                 ceiling = max(0., 7*(2*actual_base[z]["c40"]+actual_base[z]["b50"]))
-                baseline_e = goal["target"]
+                observed_q = individual.get("baseline_actual_weekly_q")
+                baseline_e = observed_q*component_shape*taper_factor if isinstance(observed_q,(int,float)) and not isinstance(observed_q,bool) and isfinite(observed_q) and observed_q>0 else goal["target"]
                 goal["target"] = min(baseline_e*correction, max(baseline_e, ceiling))
+                current_ceiling=individual.get("execution_weekly_q_ceiling")
+                if isinstance(current_ceiling,(int,float)) and not isinstance(current_ceiling,bool) and isfinite(current_ceiling) and current_ceiling>=0:
+                    goal["target"]=min(goal["target"],current_ceiling)
                 individual["baseline_weekly_effective"] = baseline_e
                 individual["applied_volume_factor"] = goal["target"]/baseline_e if baseline_e else 1.
             elif correction < 1.:
@@ -610,7 +624,9 @@ def apply(goals, profile, state, context, day, period, taper, limited, taper_fac
             desired = (max(target, WEEKLY_Q_BOUNDS[z][0]*component_shape)
                        if period in {"GENERAL_PREPARATION", "SPECIAL_PREPARATION"}
                        and not limited and not taper and not return_active and state["kind"] not in {"RECOVERY", "RE_ENTRY"}
-                       and exposure is not None and exposure > 0 else target)
+                       and exposure is not None and exposure > 0
+                       and individual.get("baseline_actual_weekly_q") is None
+                       and individual.get("execution_weekly_q_ceiling") is None else target)
             goal["desired_weekly_q"] = desired
             goal["progression"]["lower_reference_transition"] = desired > target+.001
     return goals
