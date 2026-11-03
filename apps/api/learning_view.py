@@ -3,11 +3,13 @@
 Only the dedicated recovery-authorized page transports these observations.
 Ordinary plan projections continue to omit replay/health evidence.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from biathlon.constants import COMPONENTS
+from biathlon import load_evidence
+from biathlon.learning_provenance import initial_heuristic_load
 
 from .component_load_context import ComponentCapacityUnavailable
 from .component_load_projection import ComponentLoadRefreshRequired, project_snapshot
@@ -15,7 +17,7 @@ from .management_schemas import ManagementProfile
 from .management_store import ManagementStore
 from .oauth_store import PersistentStoreFailure
 from .read_session import ReadSession
-from .response_monitoring import build_history
+from .response_monitoring import build_history, number
 from .response_service import ResponseStore
 from . import learning_service, training_plan_engine
 
@@ -42,11 +44,103 @@ CHANNEL_LABELS = {"hrv": "HRV", "resting_hr": "Пулс в покой", "sleep_d
     "competition_motivation": "Състезателна мотивация", "morning_weight": "Сутрешна телесна маса"}
 
 
-def _series_row(row):
+def _accounting_series(source, catalog=(), *, refresh_required=False):
+    """Transport the existing 7/40 ledger, separately from learner admission.
+
+    A rejected learning observation does not erase its recorded activity or
+    replace an existing canonical index with zero. No index is reconstructed
+    from Q: the authoritative aerobic and strength daily values are reused.
+    """
+    daily = {}
+    for row in source.get("daily", []):
+        if row.get("zone") in COMPONENTS:
+            daily.setdefault(row["date"], {})[row["zone"]] = row
+    strength = {row["date"]: row for row in (source.get("strength") or {}).get("daily", [])}
+    for day, row in strength.items():
+        daily.setdefault(day, {})["STR"] = row
+    activities = {}
+    for activity in source.get("activities", []):
+        day = activity.get("date") or activity.get("local_date")
+        if day:
+            activities.setdefault(day, []).append(activity)
+    omitted = {}
+    provider_missing_dates = set()
+    known = {a.get("activity_ref") for a in source.get("activities", [])}
+    for activity in catalog:
+        day = activity.get("local_date") or activity.get("date")
+        if day and activity.get("quality_status") == "provider_missing":
+            provider_missing_dates.add(day)
+        if day and activity.get("activity_ref") not in known:
+            omitted.setdefault(day, []).append(activity)
+    dated_exclusions = {issue.get("date") or issue.get("local_date")
+        for issue in (source.get("quality") or {}).get("exclusions", []) if isinstance(issue, dict)}
+    unidentified = learning_service.recovery_policy.unidentified_activity_count(source)
+    result = {}
+    for day, values in sorted(daily.items()):
+        recorded = activities.get(day, [])
+        proofs = [load_evidence.assess(a, unified=bool(source.get("load_selection"))) for a in recorded]
+        complete = set(values) == set(COMPONENTS) and all(number(r.get("effective_load")) is not None for r in values.values())
+        partial = (not complete or bool(omitted.get(day)) or day in provider_missing_dates or day in dated_exclusions or bool(unidentified)
+                   or any(not proof["complete"] or a.get("planning_estimated")
+                          for a, proof in zip(recorded, proofs)))
+        modelled = any(initial_heuristic_load(a) for a in recorded)
+        positive_without_activity = not recorded and any((number(r.get("effective_load")) or 0) > 0 for r in values.values())
+        partial = partial or positive_without_activity
+        if not complete:
+            status, reason = "UNAVAILABLE", "Липсва пълна дневна история по компоненти."
+        elif partial:
+            status, reason = "PARTIAL", "Има отчетена активност с непълни данни за натоварването. Показаният 7/40 е по наличните данни; денят не участва в самообучението."
+            if unidentified:
+                reason = "Има изключени активности без установена дата. Пълнотата на дневното натоварване не е потвърдена."
+        elif modelled:
+            status, reason = "MODELLED", "Активността е отчетена, но част от интензивността използва начална оценка по скорост. Денят не участва в самообучението."
+        elif not recorded and all(r["effective_load"] == 0 for r in values.values()):
+            status, reason = "REST", "В покрития календар няма отчетена тренировка."
+        else:
+            status, reason = "COMPLETE", None
+        if refresh_required:
+            status, reason = "PARTIAL", "Показаният 7/40 е от последната записана обработка. Нужно е обновяване на реалните данни; стойностите не са потвърдени с текущата проекция."
+        q = {z: 0. for z in COMPONENTS}
+        for activity in recorded:
+            if load_evidence.is_strength(activity):
+                continue
+            zones = {r.get("zone"): r for r in activity.get("zones", [])}
+            for z in COMPONENTS[:-1]:
+                value = number(zones.get(z, {}).get("equivalent_time_min"))
+                q[z] = q[z]+value if value is not None and q[z] is not None else None
+        q["STR"] = number(strength.get(day, {}).get("equivalent_time_min"))
+        if not complete or positive_without_activity or (not recorded and (omitted.get(day) or unidentified)):
+            q = {z: None for z in COMPONENTS}
+        unknown = [proof["ledger"]["unknown_seconds"]/60 for proof in proofs if proof.get("ledger") is not None]
+        unknown_minutes = sum(unknown) if len(unknown) == sum(not load_evidence.is_strength(a) for a in recorded) and not omitted.get(day) and day not in provider_missing_dates and not unidentified else None
+        result[day] = {"index_7_40_by_component": {z: number(values.get(z, {}).get("status_7_40")) for z in COMPONENTS},
+            "recorded_q_by_component": q, "load_status": status, "load_reason": reason,
+            "load_activity_count": len(recorded)+len(omitted.get(day, [])),
+            "load_unknown_minutes": unknown_minutes}
+    # E7/E40 and the stabilizer B=max(B0, .5*E50) depend on this window.
+    # A clean current recording does not erase missing earlier observations.
+    first = date.fromisoformat(min(daily)) if daily else None
+    for day, row in result.items():
+        last = date.fromisoformat(day)
+        start = max(first, last-timedelta(days=49))
+        window = [(start+timedelta(days=i)).isoformat() for i in range((last-start).days+1)]
+        statuses = [result.get(key, {}).get("load_status", "UNAVAILABLE") for key in window]
+        row["index_history_days"] = sum(key in result for key in window)
+        row["index_load_status"] = ("PARTIAL" if any(s in {"PARTIAL", "UNAVAILABLE"} for s in statuses)
+                                    else "MODELLED" if "MODELLED" in statuses else "COMPLETE")
+    return result
+
+
+def _series_row(row, accounting=None):
     """Allowlist nested metadata as well as the public row's scalar fields."""
     result=_fields(row,SERIES_FIELDS)
     result["actual_q_by_component"]=_fields(row.get("actual_q_by_component") or {},COMPONENTS)
     result["stress_weights"]={key:value for key,value in (row.get("stress_weights") or {}).items() if key in CHANNEL_LABELS}
+    result.update(accounting or {"index_7_40_by_component": {z: None for z in COMPONENTS},
+        "recorded_q_by_component": {z: None for z in COMPONENTS}, "load_status": "UNAVAILABLE",
+        "load_reason": "Няма дневни данни за натоварването.", "load_activity_count": 0,
+        "load_unknown_minutes": None, "index_history_days": 0, "index_load_status": "UNAVAILABLE"})
+    result["learning_load_eligible"] = row.get("actual_q") is not None
     return result
 
 
@@ -66,11 +160,15 @@ def view(repository, alias, *, days=90, now=None):
         raise PersistentStoreFailure("Learning inputs changed during read")
     snapshot = envelope.get("snapshot_payload") or {}
     source = snapshot.get("load_history") or {}
+    accounting_source = source
     notices = []
+    refresh_required = False
     try:
         source = (project_snapshot(phase, alias, {"load_history": source}) or {}).get("load_history") or {}
+        accounting_source = source
     except (ComponentLoadRefreshRequired, ComponentCapacityUnavailable):
         source = {}
+        refresh_required = True
         notices.append("Натоварването изисква обновяване на реалните данни. Наличните наблюдения за състоянието са запазени.")
     rows = training_plan_engine._daily_rows(source, today)
     pinned = {**envelope, "snapshot_payload": {**snapshot, "load_history": source}}
@@ -116,15 +214,26 @@ def view(repository, alias, *, days=90, now=None):
     observation_map = {"load_days": "measured_days", "accepted_episodes": "accepted_blocks",
                        "reaction_episodes": "reaction_only_blocks", "performance_observations": "performance_blocks"}
     observations = {**observations, **{public: observations[private] for public, private in observation_map.items() if private in observations}}
+    accounting = _accounting_series(accounting_source, envelope.get("activities") or [], refresh_required=refresh_required)
+    learner_series = {row["day"]: row for row in detail.get("series", [])}
+    series_days = sorted(day for day in set(learner_series) | set(accounting) if start <= day <= today.isoformat())
+    series = []
+    for day in series_days:
+        row = learner_series.get(day) or {"day": day}
+        # The current day is still in progress: existing 7/40 is visible, but
+        # an incomplete daily dose is never admitted as a learning outcome.
+        if day == today.isoformat():
+            row = {"day": day}
+        series.append(_series_row(row, accounting.get(day)))
     return {
         "schema_version": "recovery-learning-view-v1", "as_of": today.isoformat(),
-        "timezone": settings.timezone, "source_date": source.get("period_end"),
+        "timezone": settings.timezone, "source_date": accounting_source.get("period_end"),
         "mode": (report or {}).get("mode", configured_mode),
         "status": (report or {}).get("status", "OFF" if profile else "NOT_CONFIGURED"),
         "summary": (report or {}).get("summary") or ("Самообучението е изключено. Наблюденията остават видими." if profile else "Настройте програмата, за да включите самообучението."),
         "evidence_count": (report or {}).get("evidence_count", 0),
         "validation": _fields((report or {}).get("validation") or {"status": "WARMUP", "evaluated": 0}, ("status", "evaluated")),
-        "series": [_series_row(row) for row in detail.get("series", []) if row.get("day", "") >= start],
+        "series": series,
         "episodes": [_fields(row, EPISODE_FIELDS) for row in detail.get("episodes", [])][-30:],
         "decision": _fields(decision, DECISION_FIELDS),
         "observations": {key: value for key, value in observations.items()

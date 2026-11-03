@@ -83,7 +83,8 @@ def test_view_transports_only_dedicated_observation_fields_and_never_publishes(m
     result = learning_view.view(repo, "ath-test", now=NOW)
     assert result["schema_version"] == "recovery-learning-view-v1"
     assert result["mode"] == "SHADOW" and result["decision"]["applied_change_percent"] == 0
-    scored, gap = result["series"]
+    by_day = {row["day"]: row for row in result["series"]}
+    scored, gap = by_day["2026-11-02"], by_day["2026-11-01"]
     assert scored["stress"] == 55.
     assert scored["actual_q_by_component"] == {"Z1": 4., "Z2": 3., "Z3": 2., "Z4": 1., "Z5": 0., "STR": 0.}
     assert sum(scored["actual_q_by_component"].values()) == scored["actual_q"]
@@ -169,3 +170,152 @@ def test_learning_http_requires_service_and_explicit_athlete_and_no_store(monkey
         assert response.status_code == 200 and response.json()["days"] == 30
         assert response.headers["cache-control"] == "no-store"
         assert client.get("/api/v2/athlete/learning?days=365", headers=headers).status_code == 422
+
+
+def accounting_source():
+    days = ["2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02"]
+    source = {"period_start": days[0], "period_end": days[-1], "activities": [],
+        "daily": [{"date": day, "zone": z, "effective_load": 0., "status_7_40": 1.234+offset/10}
+                  for offset, day in enumerate(days) for z in COMPONENTS[:-1]],
+        "strength": {"daily": [{"date": day, "effective_load": 0., "equivalent_time_min": 0.,
+            "status_7_40": .873+offset/10} for offset, day in enumerate(days)]}}
+    return source
+
+
+def add_recording(source, *, day="2026-10-31", unknown=0., modelled=False):
+    source["load_selection"] = {"version": "unified"}
+    source["activities"].append({"activity_ref": "act-known", "date": day, "sport": "Run",
+        "quality_status": "limited" if unknown else "valid",
+        "zones": [{"zone": z, "raw_time_min": 1., "equivalent_time_min": 2.} for z in COMPONENTS[:-1]],
+        "load_source": {"recorded_seconds": 300.+unknown, "active_seconds": 300.,
+            "rest_seconds": 0., "unknown_seconds": unknown, "initial_heuristic": modelled}})
+    for row in source["daily"]:
+        if row["date"] == day:
+            row["effective_load"] = 3.
+
+
+def test_existing_7_40_is_transported_exactly_even_when_learning_rejects_recording():
+    source = accounting_source()
+    add_recording(source, unknown=90.)
+    original = deepcopy(source)
+    accounting = learning_view._accounting_series(source)
+    partial = accounting["2026-10-31"]
+    assert partial["load_status"] == "PARTIAL"
+    assert partial["load_unknown_minutes"] == 1.5
+    assert partial["load_activity_count"] == 1
+    assert partial["index_7_40_by_component"]["Z1"] == source["daily"][5]["status_7_40"]
+    assert partial["index_7_40_by_component"]["STR"] == source["strength"]["daily"][1]["status_7_40"]
+    assert partial["recorded_q_by_component"] == {**dict.fromkeys(COMPONENTS[:-1], 2.), "STR": 0.}
+    row = learning_view._series_row({"day": "2026-10-31", "actual_q": None}, partial)
+    assert row["learning_load_eligible"] is False
+    assert row["actual_q"] is None
+    assert row["index_7_40_by_component"] == partial["index_7_40_by_component"]
+    assert "непълни" in row["load_reason"]
+    assert accounting["2026-11-02"]["load_status"] == "REST"
+    assert accounting["2026-11-02"]["index_load_status"] == "PARTIAL"
+    assert source == original
+
+
+def test_initial_speed_mapping_remains_visible_with_its_modelled_basis():
+    source = accounting_source()
+    add_recording(source, modelled=True)
+    accounting = learning_view._accounting_series(source)
+    assert accounting["2026-10-31"]["load_status"] == "MODELLED"
+    assert accounting["2026-10-31"]["load_unknown_minutes"] == 0.
+    assert accounting["2026-10-31"]["index_7_40_by_component"]["Z2"] == 1.334
+    assert accounting["2026-11-02"]["index_load_status"] == "MODELLED"
+    assert "скорост" in accounting["2026-10-31"]["load_reason"]
+
+
+def test_missing_canonical_day_never_becomes_a_rest_or_zero_index():
+    source = accounting_source()
+    source["daily"] = [r for r in source["daily"] if r["date"] != "2026-10-31"]
+    source["strength"]["daily"] = [r for r in source["strength"]["daily"] if r["date"] != "2026-10-31"]
+    accounting = learning_view._accounting_series(source)
+    row = learning_view._series_row({"day": "2026-10-31", "actual_q": None}, accounting.get("2026-10-31"))
+    assert row["load_status"] == "UNAVAILABLE"
+    assert all(value is None for value in row["index_7_40_by_component"].values())
+    assert all(value is None for value in row["recorded_q_by_component"].values())
+    assert accounting["2026-11-01"]["index_load_status"] == "PARTIAL"
+    assert accounting["2026-11-02"]["index_history_days"] == 3
+
+
+def test_missing_catalog_activity_does_not_certify_a_rest_day():
+    source = accounting_source()
+    accounting = learning_view._accounting_series(source, [{"activity_ref": "omitted", "local_date": "2026-11-02"}])
+    assert accounting["2026-11-02"]["load_status"] == "PARTIAL"
+    assert accounting["2026-11-02"]["load_activity_count"] == 1
+    assert accounting["2026-11-02"]["load_unknown_minutes"] is None
+    assert all(q is None for q in accounting["2026-11-02"]["recorded_q_by_component"].values())
+    # It remains the already recorded canonical index, not an invented zero.
+    assert accounting["2026-11-02"]["index_7_40_by_component"]["Z1"] == 1.534
+
+
+def test_missing_provider_record_cannot_certify_complete_load_from_old_ledger():
+    source = accounting_source()
+    add_recording(source)
+    accounting = learning_view._accounting_series(source, [{"activity_ref": "act-known",
+        "local_date": "2026-10-31", "quality_status": "provider_missing"}])
+    assert accounting["2026-10-31"]["load_status"] == "PARTIAL"
+    assert accounting["2026-10-31"]["load_unknown_minutes"] is None
+
+
+@pytest.mark.parametrize("projection_unavailable", [False, True])
+def test_private_view_keeps_existing_7_40_separate_from_learner_eligibility(monkeypatch, projection_unavailable):
+    repo = Repository()
+    source = accounting_source()
+    add_recording(source, day="2026-11-02", unknown=90.)
+    repo.active_planning_calendar = lambda *args: {"generation_id": "g", "revision": 1,
+        "activities": [], "snapshot_payload": {"load_history": source}}
+    original = report()
+    original["recovery_policy"]["series"][0]["actual_q"] = None
+    original["recovery_policy"]["series"][0]["actual_q_by_component"] = dict.fromkeys(COMPONENTS)
+    monkeypatch.setattr(learning_view.ReadSession, "planning", lambda _: repo)
+    monkeypatch.setattr(learning_view, "ManagementStore", lambda _: SimpleNamespace(profile=lambda alias: {
+        "configured": True, "profile": configured(discipline="5000 m")}))
+    def project(*args):
+        if projection_unavailable:
+            raise learning_view.ComponentLoadRefreshRequired("Missing reconstructible Q")
+        return args[-1]
+    monkeypatch.setattr(learning_view, "project_snapshot", project)
+    monkeypatch.setattr(learning_view.learning_service, "context", lambda *args, **kwargs: deepcopy(original))
+    result = learning_view.view(repo, "ath-test", now=NOW)
+    scored = next(row for row in result["series"] if row["day"] == "2026-11-02")
+    assert scored["actual_q"] is None and scored["learning_load_eligible"] is False
+    assert scored["index_7_40_by_component"]["Z1"] == 1.534
+    assert scored["index_7_40_by_component"]["STR"] == pytest.approx(1.173)
+    assert scored["recorded_q_by_component"]["Z1"] == 2.
+    assert scored["load_status"] == "PARTIAL" and scored["load_activity_count"] == 1
+    assert scored["stress"] == 55. and scored["stress_basis"] == "FROZEN_BLOCK"
+    assert result["source_date"] == source["period_end"]
+    assert bool(result["limitations"]) is projection_unavailable
+    if projection_unavailable:
+        assert "последната записана обработка" in scored["load_reason"]
+        assert "текущата проекция" in scored["load_reason"]
+        assert all(row["index_load_status"] == "PARTIAL" for row in result["series"])
+
+
+def test_current_canonical_date_is_visible_without_inventing_completed_daily_learning(monkeypatch):
+    repo = Repository()
+    source = accounting_source()
+    for day in ("2026-11-03", "2026-11-04"):
+        source["daily"].extend({**row, "date": day, "status_7_40": 4.567}
+            for row in list(source["daily"]) if row["date"] == "2026-11-02")
+        source["strength"]["daily"].append({**source["strength"]["daily"][-1], "date": day, "status_7_40": 2.345})
+    repo.active_planning_calendar = lambda *args: {"generation_id": "g", "revision": 1,
+        "activities": [], "snapshot_payload": {"load_history": source}}
+    original = report()
+    original["recovery_policy"]["series"].append({"day": "2026-11-03", "actual_q": 99.,
+        "stress": 99., "actual_q_by_component": dict.fromkeys(COMPONENTS, 99.)})
+    monkeypatch.setattr(learning_view.ReadSession, "planning", lambda _: repo)
+    monkeypatch.setattr(learning_view, "ManagementStore", lambda _: SimpleNamespace(profile=lambda alias: {
+        "configured": True, "profile": configured(discipline="5000 m")}))
+    monkeypatch.setattr(learning_view, "project_snapshot", lambda *args: args[-1])
+    monkeypatch.setattr(learning_view.learning_service, "context", lambda *args, **kwargs: deepcopy(original))
+    result = learning_view.view(repo, "ath-test", now=NOW)
+    assert [row["day"] for row in result["series"]] == ["2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02", "2026-11-03"]
+    current = result["series"][-1]
+    assert current["index_7_40_by_component"] == {**dict.fromkeys(COMPONENTS[:-1], 4.567), "STR": 2.345}
+    assert current["actual_q"] is None and current["stress"] is None
+    assert current["learning_load_eligible"] is False
+    assert all(q is None for q in current["actual_q_by_component"].values())

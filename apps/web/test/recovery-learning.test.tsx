@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { learningLoadSegments, learningPaths, RecoveryLearning } from "../components/recovery-learning-view";
+import { learningIndexPaths, learningLoadSegments, learningPaths, RecoveryLearning } from "../components/recovery-learning-view";
 import { LEARNING_COMPONENTS, LEARNING_PREPARING_MESSAGE, LearningPreparingError, parseRecoveryLearningView, unknownComponentQ, type RecoveryLearningView } from "../lib/recovery-learning";
 import { currentAuthorizedAthlete } from "../lib/account-access";
 import { getLearningView } from "../lib/api";
@@ -30,6 +30,11 @@ const legacy = {
 };
 const view: RecoveryLearningView = parseRecoveryLearningView({ ...legacy,
   series:legacy.series.map((row,index)=>({...row,actual_q_by_component:index===0?{Z1:40,Z2:25,Z3:15,Z4:10,Z5:6,STR:4}:index===1?unknownComponentQ():{Z1:0,Z2:0,Z3:0,Z4:0,Z5:0,STR:0},
+    index_7_40_by_component:Object.fromEntries(LEARNING_COMPONENTS.map((key,componentIndex)=>[key,1+componentIndex*.1+index*.1])),
+    recorded_q_by_component:index===0?{Z1:40,Z2:25,Z3:15,Z4:10,Z5:6,STR:4}:index===1?{Z1:12,Z2:8,Z3:0,Z4:0,Z5:0,STR:0}:{Z1:0,Z2:0,Z3:0,Z4:0,Z5:0,STR:0},
+    load_status:index===1?"PARTIAL":index===2?"REST":"COMPLETE",load_reason:index===1?"Има активност с непълна разбивка.":null,
+    load_activity_count:index===2?0:1,load_unknown_minutes:index===1?30:0,learning_load_eligible:index!==1,
+    index_load_status:index===0?"COMPLETE":"PARTIAL",index_history_days:50,
     stress_weights:index===1?{}:{hrv:60,resting_hr:40},stress_basis:index===1?null:"FROZEN_BLOCK",stress_reference:index===1?null:"actual:block-1"})),
   components:LEARNING_COMPONENTS.map((component,index)=>({component,recent_weekly_q:140-index*20,reference_weekly_q:100-index*10,
     recent_observed_days:7,reference_observed_days:40,accent_ratio:(140-index*20)/(100-index*10),evidence_count:0,isolated_changes:0,
@@ -54,6 +59,9 @@ describe("dedicated recovery learning presentation", () => {
     expect(parsed).not.toHaveProperty("memory");
     const old=parseRecoveryLearningView(legacy);
     expect(old.series[0].actual_q_by_component).toEqual(unknownComponentQ());
+    expect(old.series[0].index_7_40_by_component).toEqual(unknownComponentQ());
+    expect(old.series[0].load_status).toBe("UNAVAILABLE");
+    expect(old.series[0].learning_load_eligible).toBe(false);
     expect(old.components).toHaveLength(6);
     expect(old.components.every(item=>item.recent_weekly_q===null&&item.proposed_change_percent===null)).toBe(true);
     const partial=parseRecoveryLearningView({...legacy,series:[{...legacy.series[0],actual_q_by_component:{Z1:0}}]});
@@ -68,6 +76,10 @@ describe("dedicated recovery learning presentation", () => {
       {series:[{...view.series[0],day:"2026-11-04"}]},
       {series:[{...view.series[0],actual_q_by_component:{...view.series[0].actual_q_by_component,Z1:Infinity}}]},
       {series:[{...view.series[0],stress_weights:{hrv:60,resting_hr:30}}]},
+      {series:[{...view.series[0],index_7_40_by_component:{Z1:Infinity}}]},
+      {series:[{...view.series[0],index_load_status:"UNKNOWN"}]},
+      {series:[{...view.series[0],load_status:"NO_TRAINING_ASSUMED"}]},
+      {series:[{...view.series[0],load_unknown_minutes:-1}]},
       {components:[view.components[0],...view.components.slice(0,5)]},
       {components:view.components.slice(1)},
       {components:view.components.map((item,index)=>index===1?{...item,action_status:"SELECTED",proposed_change_percent:3,applied_change_percent:0}:item)},
@@ -98,40 +110,66 @@ describe("dedicated recovery learning presentation", () => {
       for(const kind of ["stress","baseline"] as const) expect(learningPaths([view.series[0],next],kind,index=>index,value=>value)).toHaveLength(2);
     }
   });
-  it("stacks the six exact Q values and keeps partial maps explicit", () => {
+  it("keeps known daily Q distinct from canonical 7/40 and incomplete coverage", () => {
     const segments=learningLoadSegments(view.series[0]);
-    expect(segments.map(item=>item.value)).toEqual([40,25,15,10,6,4]);
     expect(segments.map(item=>item.end)).toEqual([40,65,80,90,96,100]);
-    expect(learningLoadSegments(view.series[0],"STR")).toEqual([{component:"STR",value:4,start:0,end:4}]);
     expect(learningLoadSegments(view.series[1])).toEqual([]);
+    expect(view.series[1].recorded_q_by_component.Z1).toBe(12);
+    expect(view.series[1].actual_q_by_component.Z1).toBeNull();
+    expect(view.series[1].index_7_40_by_component.Z1).toBe(1.1);
+    expect(learningIndexPaths(view.series,"Z1",false,index=>index,value=>value)).toEqual(["M0,1 "]);
+    expect(learningIndexPaths(view.series,"Z1",true,index=>index,value=>value)).toEqual(["M1,1.1 L2,1.2 "]);
+    const missing={...view.series[1],index_7_40_by_component:unknownComponentQ()};
+    expect(learningIndexPaths([view.series[0],missing,view.series[2]],"Z1",true,index=>index,value=>value)).toEqual(["M2,1.2 "]);
     const html=renderToStaticMarkup(<RecoveryLearning view={view}/>);
     for(const component of LEARNING_COMPONENTS) expect(html).toContain(`data-component="${component}"`);
-    for(const color of ["--zone-1","--zone-2","--zone-3","--zone-4","--zone-5","--strength"]) expect(html).toContain(color);
-    expect(html).toContain('aria-label="Компоненти в графиката"');
-    expect(html).toContain("Липсваща разбивка не е нулево натоварване");
+    expect(html.match(/<svg/g)).toHaveLength(1);
+    expect(html).toContain("Една времева ос · две отделни скали");
+    expect(html).toContain("Липсваща стойност не е нулево натоварване");
+    expect(html).toContain("7/40 по наличните данни");
+    expect(html).toContain("Потвърден ден без натоварване");
+    expect(html).toContain("Следваща промяна · Z1");
+    expect(html).toContain('href="#component-Z1"');
   });
-  it("isolates a component through the accessible legend and restores the full stack",async()=> {
+  it("isolates a canonical component while retaining stress and inspects both at the same date",async()=> {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);
     const container=document.createElement("div");document.body.append(container);
     const root=createRoot(container);
     try {
       await act(async()=>root.render(<RecoveryLearning view={view}/>));
+      const z1=container.querySelector('[aria-labelledby="component-Z1"]')!;
+      expect(z1.querySelectorAll("dd")[2].textContent).toContain("1,2×");
+      expect(z1.querySelectorAll("dd")[2].textContent).toContain("непълна база");
       const group=container.querySelector('[aria-label="Компоненти в графиката"]')!;
       const strength=[...group.querySelectorAll("button")].find(button=>button.textContent==="Сила")!;
-      expect(container.querySelector('svg rect[data-component="STR"]')?.getAttribute("height")).toBe("6");
+      expect(container.querySelectorAll('svg g[data-component]')).toHaveLength(6);
       await act(async()=>strength.click());
       expect(strength.getAttribute("aria-pressed")).toBe("true");
-      expect(container.querySelector('svg rect[data-component="Z1"]')).toBeNull();
-      expect(container.querySelector('svg rect[data-component="STR"]')?.getAttribute("height")).toBe("150");
-      expect(container.textContent).toContain("Показан е само Сила");
+      expect(container.querySelector('svg g[data-component="Z1"]')).toBeNull();
+      expect(container.querySelector('svg g[data-component="STR"]')).not.toBeNull();
+      expect(container.querySelector('svg .learning-stress-line')).not.toBeNull();
+      const svg=container.querySelector("svg")!;
+      vi.spyOn(svg,"getBoundingClientRect").mockReturnValue({left:0,right:600,width:600,height:266,top:0,bottom:266,x:0,y:0,toJSON:()=>({})});
+      await act(async()=>{svg.dispatchEvent(new MouseEvent("pointerdown",{clientX:0,bubbles:true}));});
+      const inspection=container.querySelector(".learning-chart-inspection")!;
+      expect(inspection.textContent).toContain("01.11.2026");
+      expect(inspection.textContent).toContain("Стрес 65");
+      expect(inspection.textContent).toContain("Сила 1,5×");
+      expect(inspection.textContent).toContain("Пълно отчетено натоварване");
       await act(async()=>group.querySelector("button")!.click());
-      expect(container.querySelector('svg rect[data-component="Z1"]')).not.toBeNull();
+      expect(container.querySelectorAll('svg g[data-component]')).toHaveLength(6);
       expect(strength.getAttribute("aria-pressed")).toBe("false");
+      await act(async()=>{svg.dispatchEvent(new MouseEvent("pointerdown",{clientX:300,bubbles:true}));});
+      expect(inspection.textContent).toContain("02.11.2026");
+      expect(inspection.textContent).toContain("Частично отчетено натоварване");
+      expect(inspection.textContent).toContain("Z1 12");
+      expect(inspection.textContent).toContain("30 мин без разпределение");
+      expect(inspection.textContent).not.toContain("Потвърден ден без натоварване");
     } finally {await act(async()=>root.unmount());container.remove();vi.unstubAllGlobals();}
   });
   it("shows one integral stress panel, six honest assessments and only the selected proposed dose", () => {
     const html=renderToStaticMarkup(<RecoveryLearning view={view}/>);
-    for(const text of ["Наблюдение","Q · еквивалентни минути за деня","Стрес · точки от 0 до 100","Предложена промяна","+4%","Допуснато от модела","0%","Недостатъчни наблюдения","Няма съпоставим резултат",'href="/response"',"Проучване","База на съпоставимия блок: 100 Q/седм.","цел 104 Q/седм."]) expect(html).toContain(text);
+    for(const text of ["Наблюдение","Индекс 7/40 · ×","Стрес · 0–100","Предложена промяна","+4%","Допуснато от модела","0%","Недостатъчни наблюдения","Няма съпоставим резултат",'href="/response"',"Проучване","База на съпоставимия блок: 100 Q/седм.","цел 104 Q/седм."]) expect(html).toContain(text);
     expect(html.match(/class="learning-component(?: is-selected)?"/g)).toHaveLength(6);
     expect(html.match(/class="learning-response-label">Събира данни/g)).toHaveLength(6);
     expect(html.match(/Предложена промяна/g)).toHaveLength(1);
