@@ -44,7 +44,7 @@ describe("dedicated recovery learning presentation", () => {
   });
   it("shows independent scales and separates proposal from permitted dose", () => {
     const html = renderToStaticMarkup(<RecoveryLearning view={view}/>);
-    for (const text of ["Наблюдение", "Q · еквивалентни минути за деня", "Стрес · точки от 0 до 100", "Предложена промяна", "+4%", "Допуснато от модела", "0%", "Непотвърдено", "Няма съпоставим резултат", "Няма данни", 'href="/response"']) expect(html).toContain(text);
+    for (const text of ["Наблюдение", "Q · еквивалентни минути за деня", "Стрес · точки от 0 до 100", "Предложена промяна", "+4%", "Допуснато от модела", "0%", "Недостатъчни наблюдения", "Няма съпоставим резултат", "Няма данни", 'href="/response"']) expect(html).toContain(text);
     expect(html).not.toContain("NaN");
     expect(html).not.toContain(' open=""');
   });
@@ -59,6 +59,18 @@ describe("dedicated recovery learning presentation", () => {
     const html=renderToStaticMarkup(<RecoveryLearning view={{...view,evidence_count:2,observations:{reaction_episodes:2,performance_observations:0}}}/>);
     expect(html).toContain("Наблюдаваната реакция се отчита");
     expect(html).toContain("Още няма съпоставим резултат за оценка на тренировъчния ефект");
+  });
+  it("distinguishes absent stress elevation from delayed recovery in both the chart and table", () => {
+    const summary="Основанието за текущото решение се показва веднъж.";
+    const labels={NO_ELEVATED_RESPONSE:"Няма отчетено повишение на стреса",DELAYED:"Няма потвърдено връщане в експертния срок"};
+    for(const [status,label] of Object.entries(labels)) {
+      const html=renderToStaticMarkup(<RecoveryLearning view={{...view,summary,decision:{...view.decision,reason:summary},
+        episodes:[{...view.episodes[0],status,reason:"Описание на наблюдението."}]}}/>);
+      expect(html.split(label)).toHaveLength(3);
+      expect(html).not.toContain(labels[status==="DELAYED"?"NO_ELEVATED_RESPONSE":"DELAYED"]);
+      expect(html).not.toContain("Връщането още не е потвърдено");
+      expect(html.split(summary)).toHaveLength(2);
+    }
   });
 });
 

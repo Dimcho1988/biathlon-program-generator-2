@@ -59,6 +59,17 @@ function Timeline({ rows, kind }: { rows: LearningDay[]; kind: "load" | "stress"
 
 const validationLabel:Record<string,string> = { WARMUP:"Натрупване на наблюдения",PASSED:"Проверени прогнози",FAILED:"Нужна е допълнителна проверка" };
 
+function recoveryObservationLabel(status: string) {
+  const labels: Record<string,string> = {
+    NO_ELEVATED_RESPONSE: "Няма отчетено повишение на стреса",
+    INSUFFICIENT_DATA: "Недостатъчни наблюдения",
+    CONTEXT_REVIEW: "Контекст за отделен преглед",
+    DELAYED: "Няма потвърдено връщане в експертния срок",
+    OBSERVING: "Проследяването продължава",
+  };
+  return labels[status] ?? "Няма оценка на връщането";
+}
+
 export function RecoveryLearning({ view }: { view: RecoveryLearningView }) {
   const { decision } = view;
   const episodes = [...view.episodes].sort((a,b)=>b.start.localeCompare(a.start));
@@ -70,7 +81,7 @@ export function RecoveryLearning({ view }: { view: RecoveryLearningView }) {
       <p className="learning-summary">{view.summary}</p>
       {Number(view.observations.reaction_episodes)>0 && view.observations.performance_observations===0 && <p className="learning-caption">Наблюдаваната реакция се отчита. Още няма съпоставим резултат за оценка на тренировъчния ефект.</p>}
       <div className="learning-decision"><div><span>Предложена промяна{decision.component ? ` · ${decision.component==="STR"?"сила":decision.component}` : ""}</span><strong>{learningChange(decision.proposed_change_percent)}</strong></div><div><span>Допуснато от модела</span><strong>{learningChange(decision.applied_change_percent)}</strong></div></div>
-      <p>{decision.reason}</p>
+      {decision.reason.trim()!==view.summary.trim()&&<p>{decision.reason}</p>}
       {view.mode === "SHADOW" && <p className="learning-caption">Предложенията се проследяват в „Наблюдение“. Те още не променят тренировъчната доза.</p>}
       {view.mode === "CONTROL" && <p className="learning-caption">Генераторът може да намали допуснатата корекция според периода, готовността и метода. Фиксираната програма изисква одобрение.</p>}
       {view.evidence_count===0&&<Link className="learning-observation-link" href="/response">Към наблюденията за стрес и възстановяване →</Link>}
@@ -81,13 +92,13 @@ export function RecoveryLearning({ view }: { view: RecoveryLearningView }) {
     </section>
     <section className="learning-panel" aria-labelledby="learning-recovery-heading"><h2 id="learning-recovery-heading">Време за възстановяване</h2>
       {recent.length ? <><div className="learning-recovery-key"><span><i className="learning-reference-swatch"/>Експертен срок</span><span><i className="learning-observed-swatch"/>Наблюдавано връщане</span><span>Дни</span></div>
-        <div className="learning-recovery-bars">{recent.map(item=><div className="learning-recovery-row" key={item.id}><span>{learningDate(item.start)}<small>{item.loading_days} дни натоварване</small></span><div><div className="learning-recovery-track"><span className="learning-reference-bar" style={{width:`${100*item.recovery_limit_days/recoveryMax}%`}}/><span>{learningNumber(item.recovery_limit_days)} дни</span></div><div className="learning-recovery-track">{item.recovery_days!==null?<><span className="learning-observed-bar" style={{width:`${100*item.recovery_days/recoveryMax}%`}}/><span>{learningNumber(item.recovery_days)} дни</span></>:<span className="learning-caption">{item.status==="INSUFFICIENT_DATA"?"Недостатъчни наблюдения":"Връщането още не е потвърдено"}</span>}</div></div></div>)}</div>
+        <div className="learning-recovery-bars">{recent.map(item=><div className="learning-recovery-row" key={item.id}><span>{learningDate(item.start)}<small>{item.loading_days} дни натоварване</small></span><div><div className="learning-recovery-track"><span className="learning-reference-bar" style={{width:`${100*item.recovery_limit_days/recoveryMax}%`}}/><span>{learningNumber(item.recovery_limit_days)} дни</span></div><div className="learning-recovery-track">{item.recovery_days!==null?<><span className="learning-observed-bar" style={{width:`${100*item.recovery_days/recoveryMax}%`}}/><span>{learningNumber(item.recovery_days)} дни</span></>:<span className="learning-caption">{recoveryObservationLabel(item.status)}</span>}</div></div></div>)}</div>
       </> : <p className="learning-empty">Няма завършен съпоставим блок с достатъчно данни за възстановяването.</p>}
     </section>
     <details className="learning-panel learning-details"><summary>Наблюдения и основания</summary>
       <p>{validationLabel[view.validation.status]??"Оценка на прогнозите"} · {view.validation.evaluated} проверки върху последващи данни.</p>
       <ul className="learning-channels">{view.channels.map(item=><li key={item.key}><span>{item.label}</span><span>{item.observed_days} дни с данни</span></li>)}</ul>
-      {episodes.length>0&&<div className="learning-table-wrap"><table><caption>Проследени блокове</caption><thead><tr><th>Блок</th><th>Връщане / срок</th><th>Работоспособност</th><th>Основание</th></tr></thead><tbody>{episodes.map(item=><tr key={item.id}><td>{learningDate(item.start)} – {learningDate(item.load_end)}</td><td>{item.recovery_days===null?"Непотвърдено":`${learningNumber(item.recovery_days)} дни`} / {learningNumber(item.recovery_limit_days)} дни</td><td>{item.performance_change_percent===null?"Няма съпоставим резултат":learningChange(item.performance_change_percent)}</td><td>{item.reason}</td></tr>)}</tbody></table></div>}
+      {episodes.length>0&&<div className="learning-table-wrap"><table><caption>Проследени блокове</caption><thead><tr><th>Блок</th><th>Връщане / срок</th><th>Работоспособност</th><th>Основание</th></tr></thead><tbody>{episodes.map(item=><tr key={item.id}><td>{learningDate(item.start)} – {learningDate(item.load_end)}</td><td>{item.recovery_days===null?recoveryObservationLabel(item.status):`${learningNumber(item.recovery_days)} дни`} / {learningNumber(item.recovery_limit_days)} дни</td><td>{item.performance_change_percent===null?"Няма съпоставим резултат":learningChange(item.performance_change_percent)}</td><td>{item.reason}</td></tr>)}</tbody></table></div>}
       <details><summary>Числови данни от графиките</summary><div className="learning-table-wrap"><table><thead><tr><th>Дата</th><th>Реално Q</th><th>Наблюдаван стрес</th><th>Лична база</th></tr></thead><tbody>{view.series.map(row=><tr key={row.day}><td>{learningDate(row.day)}</td><td>{row.actual_q===null?"Няма данни":learningNumber(row.actual_q)}</td><td>{row.stress===null?"Няма данни":learningNumber(row.stress)}</td><td>{row.baseline===null?"Няма данни":learningNumber(row.baseline)}</td></tr>)}</tbody></table></div></details>
     </details>
     <details className="learning-panel learning-details"><summary>Как се взема решението</summary><p>Моделът използва изпълненото натоварване, независимите наблюдения и съпоставими резултати. При 7, 14 и 21 дни натоварване експертният срок е съответно 3, 5 и 7 дни; междинните стойности се изчисляват плавно.</p><p>Предложението може да увеличи, запази или намали компонентното Q с до 20% спрямо реалната база на следващ съпоставим блок. Разтоварването се определя отделно. Една промяна се проследява без повторно натрупване при обновяване.</p><p>Сроковете са експертни настройки за управление и не определят медицинска диагноза. Бързото възстановяване само по себе си не доказва тренировъчно подобрение.</p>{view.limitations.length>0&&<ul>{view.limitations.map((item,index)=><li key={index}>{item}</li>)}</ul>}<Link href="/planning">Настройки на планирането →</Link></details>
