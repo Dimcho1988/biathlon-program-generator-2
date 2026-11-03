@@ -75,7 +75,7 @@ def test_oversized_episode_cannot_break_persistence():
 
 @pytest.mark.parametrize("component,expiry_offset",[("Z3",-1),("Z1",11)])
 def test_service_persists_expired_or_now_ineligible_episode_marker_across_neutral_refreshes(monkeypatch,component,expiry_offset):
-    """Exercise the real service memory writeback, not a test-only fallback."""
+    """Preserve expired and active-but-ineligible markers in real service writeback."""
     from apps.api import learning_methods
     from apps.api.management_store import ManagementStore
     from tests.api.test_component_load_learning import projected_fixture
@@ -98,7 +98,7 @@ def test_service_persists_expired_or_now_ineligible_episode_marker_across_neutra
     phase={'phases':[{'kind':'GENERAL_PREPARATION','start_date':'2026-01-01','end_date':'2026-12-31'}]}
     first=service.context(repo,'athlete',profile,source,data['rows'],data['today'],envelope=envelope,entries=[],periodization=phase)
     memory.update(first['memory'])
-    # A completed prior decision is an immutable consumed-exposure marker.
+    # Expired and active-but-ineligible decisions retain their original source/window.
     episode=first['memory']['episodes'][-1]
     closed={'source_episode_id':episode['id'],'component':component,'mode':'CONTROL','config':profile['individual_learning'],'effective_from':str(data['today']-timedelta(days=2)),'expires_on':str(data['today']+timedelta(days=expiry_offset)),'baseline_actual_weekly_q':140.,'step':-.2}
     memory['decision']=deepcopy(closed)
