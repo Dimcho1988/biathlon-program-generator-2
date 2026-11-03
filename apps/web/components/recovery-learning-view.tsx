@@ -49,7 +49,7 @@ export function learningIndexPaths(rows: LearningDay[], component: LearningCompo
 
 const loadStatusLabel:Record<LearningDay["load_status"],string> = {
   COMPLETE:"Пълно отчетено натоварване", MODELLED:"Натоварване с начална моделна оценка", PARTIAL:"Частично отчетено натоварване",
-  UNAVAILABLE:"Няма потвърдено покритие на натоварването", REST:"Потвърден ден без натоварване",
+  UNAVAILABLE:"Няма потвърдено покритие на натоварването", REST:"Покрит ден без отчетена тренировка",
 };
 
 function Timeline({ rows, decision, decisionReason }: { rows: LearningDay[]; decision: ComponentLearning | undefined; decisionReason: string }) {

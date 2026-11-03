@@ -127,7 +127,7 @@ describe("dedicated recovery learning presentation", () => {
     expect(html).toContain("Една времева ос · две отделни скали");
     expect(html).toContain("Липсваща стойност не е нулево натоварване");
     expect(html).toContain("7/40 по наличните данни");
-    expect(html).toContain("Потвърден ден без натоварване");
+    expect(html).toContain("Покрит ден без отчетена тренировка");
     expect(html).toContain("Следваща промяна · Z1");
     expect(html).toContain('href="#component-Z1"');
   });
@@ -164,7 +164,7 @@ describe("dedicated recovery learning presentation", () => {
       expect(inspection.textContent).toContain("Частично отчетено натоварване");
       expect(inspection.textContent).toContain("Z1 12");
       expect(inspection.textContent).toContain("30 мин без разпределение");
-      expect(inspection.textContent).not.toContain("Потвърден ден без натоварване");
+      expect(inspection.textContent).not.toContain("Покрит ден без отчетена тренировка");
     } finally {await act(async()=>root.unmount());container.remove();vi.unstubAllGlobals();}
   });
   it("shows one integral stress panel, six honest assessments and only the selected proposed dose", () => {
