@@ -255,6 +255,9 @@ def context(repository, alias, profile, source, rows, today, *, periodization=No
         retained=memory, intensity_scale=intensity_scale, dose_reference=recent["components"])
     report = recovery_policy.apply_decision(report, evidence, models, config=config,
         allowed_components=allowed, phase=phase, taper=taper, today=today, retained=memory, supported_episodes=supported)
+    report["recovery_policy"]["component_assessments"] = recovery_policy.build_component_assessments(
+        evidence, today=today, models=models, report=report, allowed_components=allowed,
+        phase=phase, taper=taper, retained=memory)
     from .learning_methods import assess_methods
     method_source = {**source, "calendar": {"activities": envelope.get("activities") or []}}
     method_result = assess_methods(entries=entries, source=method_source, today=today,

@@ -253,3 +253,137 @@ def test_active_component_change_cannot_start_second_experiment_from_same_episod
     assert report['decision']['effective_from']==previous['effective_from']
     assert report['decision']['expires_on']==previous['expires_on']
     assert report['decision']['baseline_actual_weekly_q']==140.
+
+
+def test_daily_component_q_sums_to_actual_total_and_shares_measured_gaps():
+    data=fixture()
+    bad=str(START+timedelta(days=2))
+    next(a for a in data['source']['activities'] if a['date']==bad)['quality_status']='limited'
+    evidence=policy.build_view_data(**data)
+    for row in evidence['recovery_policy']['series']:
+        assert set(row['actual_q_by_component'])==set(COMPONENTS)
+        if row['day']==bad:
+            assert row['actual_q'] is None
+            assert all(v is None for v in row['actual_q_by_component'].values())
+        else:
+            assert sum(row['actual_q_by_component'].values())==pytest.approx(row['actual_q'])
+
+
+def test_displayed_stress_weights_retain_the_exact_frozen_or_fixed_panel():
+    evidence=build()
+    graph=evidence['recovery_policy']['series']
+    frozen=next(r for r in graph if r['day']==str(START))
+    assert frozen['stress_basis']=='FROZEN_BLOCK'
+    assert frozen['stress_reference']==evidence['episodes'][0]['id']
+    assert frozen['stress_weights']==pytest.approx({'hrv':100*8/15,'resting_hr':100*7/15})
+    fallback=graph[0]
+    assert fallback['stress_basis']=='FIXED_PANEL'
+    assert fallback['stress_reference'].startswith('fixed:')
+    assert fallback['stress_weights']==pytest.approx(frozen['stress_weights'])
+    assert all(sum(r['stress_weights'].values())==pytest.approx(100) for r in graph if r['stress'] is not None)
+    nominal={c['key']:c['nominal_weight'] for c in evidence['recovery_policy']['channels']}
+    assert nominal['hrv']==8 and nominal['resting_hr']==7
+
+
+def test_unscorable_fixed_panel_has_no_effective_weight_or_reference():
+    data=fixture()
+    for a in data['source']['activities']:
+        for z in a['zones']:
+            z.update(equivalent_time_min=10.,raw_time_min=10.)
+    day=data['history']['days'][-2]
+    day['channels']=[c for c in day['channels'] if c['key']!='hrv']
+    evidence=policy.build_view_data(**data)
+    row=next(r for r in evidence['recovery_policy']['series'] if r['day']==day['day'])
+    assert row['stress'] is None
+    assert row['stress_weights']=={}
+    assert row['stress_basis'] is None and row['stress_reference'] is None
+
+
+def assessment_models(component='Z1', *, isolated=True, count=8, validation='PASSED', slope=2.):
+    """A fitted posterior with independently controlled evidence-support gates."""
+    dimension=len(learning.FEATURES)+1
+    index=learning.FEATURES.index(f'volume:{component}')+1
+    samples=[]
+    for i in range(count):
+        x=[0.]*dimension
+        x[0]=1.
+        x[index]=1. if i%2 else -1.
+        if not isolated:
+            x[learning.FEATURES.index('volume:Z2')+1]=1.
+        samples.append({'x':x})
+    mean=[0.]*dimension
+    mean[index]=slope
+    posterior={'count':count,'mean':mean,'covariance':[[.0001 if i==j else 0. for j in range(dimension)] for i in range(dimension)],'noise':2.}
+    return {'GLOBAL':{'posterior':posterior,'validation':{'status':validation},'samples':samples}}
+
+
+def test_component_assessments_describe_actual_seven_and_forty_day_dose():
+    data=fixture()
+    evidence=policy.build_view_data(**data)
+    components=evidence['recovery_policy']['component_assessments']
+    assert [r['component'] for r in components]==list(COMPONENTS)
+    z1=components[0]
+    assert z1['recent_weekly_q']==35.
+    assert z1['reference_weekly_q']==pytest.approx((16*10+14*20+10*5)*7/40)
+    assert z1['accent_ratio']==pytest.approx(z1['recent_weekly_q']/z1['reference_weekly_q'])
+    assert z1['recent_observed_days']==7 and z1['reference_observed_days']==40
+    assert all(r['response_status']=='INSUFFICIENT_DATA' and r['predicted_performance_percent'] is None for r in components)
+    assert all(r['proposed_change_percent'] is None and r['applied_change_percent'] is None for r in components)
+
+
+@pytest.mark.parametrize('isolated,count,validation',[(False,8,'PASSED'),(True,7,'PASSED'),(True,8,'WARMUP'),(True,8,'FAILED')])
+def test_shared_performance_or_inadequate_validation_cannot_label_a_component(isolated,count,validation):
+    data=fixture()
+    evidence=policy.build_view_data(**data)
+    rows=policy.build_component_assessments(evidence,today=data['today'],models=assessment_models(isolated=isolated,count=count,validation=validation))
+    assert all(r['response_status']=='INSUFFICIENT_DATA' for r in rows)
+    assert all(r['predicted_performance_percent'] is None and r['predicted_performance_low'] is None and r['predicted_performance_high'] is None for r in rows)
+
+
+@pytest.mark.parametrize('slope,status',[(2.,'SUPPORTED_POSITIVE'),(-2.,'SUPPORTED_NEGATIVE'),(0.,'UNCERTAIN')])
+def test_supported_component_contrast_uses_actual_recent_dose_without_selecting_actions(slope,status):
+    data=fixture()
+    evidence=policy.build_view_data(**data)
+    models=assessment_models(slope=slope)
+    rows=policy.build_component_assessments(evidence,today=data['today'],models=models)
+    row=rows[0]
+    contrast=learning.action_contrast('Z1','volume',.05,evidence['_recent_window']['components'])
+    expected=learning.predict(models['GLOBAL']['posterior'],contrast,observation=False)
+    assert row['response_status']==status and row['model_scope']=='GLOBAL'
+    assert row['predicted_performance_percent']==expected['mean']
+    assert row['predicted_performance_low']==expected['low'] and row['predicted_performance_high']==expected['high']
+    assert all(r['proposed_change_percent'] is None for r in rows)
+    assert all(r['response_status']=='INSUFFICIENT_DATA' for r in rows[1:])
+
+
+def test_incomplete_actual_week_does_not_extrapolate_component_dose_or_response():
+    data=fixture()
+    bad=data['source']['activities'][-2]['date']
+    data['source']['activities'][-2]['quality_status']='limited'
+    evidence=policy.build_view_data(**data)
+    rows=policy.build_component_assessments(evidence,today=data['today'],models=assessment_models())
+    for row in rows:
+        assert row['recent_weekly_q'] is None and row['reference_weekly_q'] is None
+        assert row['recent_observed_days']==6 and row['reference_observed_days']==39
+        assert row['accent_ratio'] is None and row['predicted_performance_percent'] is None
+
+
+def test_reduction_is_one_actual_policy_proposal_not_a_learned_weakness():
+    data,evidence,models,report=decision_data(returned=None)
+    policy.apply_decision(report,evidence,models,config={'mode':'SHADOW','max_volume_step_percent':20},allowed_components=['Z1'],phase='GENERAL_PREPARATION',taper=False,today=data['today'])
+    rows=policy.build_component_assessments(evidence,today=data['today'],models=models,report=report,allowed_components=['Z1','Z2'],phase='GENERAL_PREPARATION')
+    selected=[r for r in rows if r['action_status']=='SELECTED']
+    assert len(selected)==1
+    assert selected[0]['component']=='Z1' and selected[0]['proposed_change_percent']==-20.
+    assert selected[0]['applied_change_percent']==0. and selected[0]['management_basis']=='POLICY_REDUCTION'
+    assert selected[0]['response_status']=='INSUFFICIENT_DATA'
+    assert rows[1]['action_status']=='WAITING'
+    assert all(r['proposed_change_percent'] is None and r['management_basis']=='HOLD' for r in rows[1:])
+
+
+def test_blocked_increase_does_not_appear_as_a_component_proposal():
+    data,evidence,models,report=decision_data(performance=95)
+    policy.apply_decision(report,evidence,models,config={'mode':'CONTROL','max_volume_step_percent':20},allowed_components=['Z1'],phase='GENERAL_PREPARATION',taper=False,today=data['today'])
+    rows=policy.build_component_assessments(evidence,today=data['today'],models=models,report=report,allowed_components=['Z1'],phase='GENERAL_PREPARATION')
+    assert not any(r['action_status']=='SELECTED' for r in rows)
+    assert all(r['proposed_change_percent'] is None and r['applied_change_percent'] is None for r in rows)

@@ -1,15 +1,19 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { learningPaths, RecoveryLearning } from "../components/recovery-learning-view";
-import { parseRecoveryLearningView, type RecoveryLearningView } from "../lib/recovery-learning";
+import { learningLoadSegments, learningPaths, RecoveryLearning } from "../components/recovery-learning-view";
+import { LEARNING_COMPONENTS, LEARNING_PREPARING_MESSAGE, LearningPreparingError, parseRecoveryLearningView, unknownComponentQ, type RecoveryLearningView } from "../lib/recovery-learning";
 import { currentAuthorizedAthlete } from "../lib/account-access";
 import { getLearningView } from "../lib/api";
 import LearningPage from "../app/learning/page";
 
 vi.mock("../lib/account-access", () => ({ currentAuthorizedAthlete: vi.fn() }));
 vi.mock("../lib/api", () => ({ getLearningView: vi.fn() }));
+vi.mock("../lib/api-readiness",()=>({waitForApi:vi.fn().mockResolvedValue(undefined),markApiUnavailable:vi.fn()}));
 
-const view: RecoveryLearningView = {
+const legacy = {
   schema_version: "recovery-learning-view-v1", as_of: "2026-11-03", source_date: "2026-11-02", timezone: "Europe/Sofia",
   mode: "SHADOW", status: "COLLECTING", summary: "Нужни са още съпоставими реакции.", evidence_count: 0,
   validation: { status: "WARMUP", evaluated: 0 },
@@ -22,50 +26,155 @@ const view: RecoveryLearningView = {
     recovery_limit_days: 5, recovery_days: null, recovered: false, ratio: null, status: "INSUFFICIENT_DATA",
     proposed_change_percent: 0, reason: "Липсват последователни наблюдения.", performance_change_percent: null }],
   decision: { component: "Z1", status: "HOLD", proposed_change_percent: 4, applied_change_percent: 0, reason: "Следим предложението преди приложение." },
-  observations: { load_days: 2, stress_days: 2 }, channels: [{ key: "hrv", label: "HRV", observed_days: 2 }], limitations: [],
+  observations: { load_days: 2, stress_days: 2 }, channels: [{ key: "hrv", label: "HRV", observed_days: 2 },{key:"resting_hr",label:"Пулс в покой",observed_days:2}], limitations: [],
 };
+const view: RecoveryLearningView = parseRecoveryLearningView({ ...legacy,
+  series:legacy.series.map((row,index)=>({...row,actual_q_by_component:index===0?{Z1:40,Z2:25,Z3:15,Z4:10,Z5:6,STR:4}:index===1?unknownComponentQ():{Z1:0,Z2:0,Z3:0,Z4:0,Z5:0,STR:0},
+    stress_weights:index===1?{}:{hrv:60,resting_hr:40},stress_basis:index===1?null:"FROZEN_BLOCK",stress_reference:index===1?null:"actual:block-1"})),
+  components:LEARNING_COMPONENTS.map((component,index)=>({component,recent_weekly_q:140-index*20,reference_weekly_q:100-index*10,
+    recent_observed_days:7,reference_observed_days:40,accent_ratio:(140-index*20)/(100-index*10),evidence_count:0,isolated_changes:0,
+    validation_status:"WARMUP",response_status:"INSUFFICIENT_DATA",model_scope:null,test_step_percent:5,predicted_performance_percent:null,predicted_performance_low:null,predicted_performance_high:null,
+    proposed_change_percent:index===0?4:null,applied_change_percent:index===0?0:null,action_status:index===0?"SELECTED":"COLLECTING",management_basis:index===0?"EXPLORATION":"HOLD",
+    baseline_actual_weekly_q:index===0?100:null,target_weekly_q:index===0?104:null,execution_weekly_q_ceiling:null,effective_from:index===0?"2026-11-04":null,expires_on:index===0?"2026-11-17":null,
+    reason:"Нужни са още наблюдения за отделима реакция."})),
+  channels:legacy.channels.map((channel,index)=>({...channel,nominal_weight:index===0?18:12})),
+});
 
 describe("dedicated recovery learning presentation", () => {
-  it("retains missing values and rejects impossible or misleading report values", () => {
+  it("preserves additive transport fields and keeps legacy unknown components unknown", () => {
     const parsed = parseRecoveryLearningView({ ...view, memory: { private_data: "private replay" } });
+    expect(parsed.series[0].actual_q_by_component).toEqual({Z1:40,Z2:25,Z3:15,Z4:10,Z5:6,STR:4});
+    expect(parsed.series[0].stress_weights).toEqual({hrv:60,resting_hr:40});
+    expect(parsed.series[0].stress_reference).toBe("actual:block-1");
+    expect(parsed.channels[0].nominal_weight).toBe(18);
+    expect(parsed.components[0]).toMatchObject({target_weekly_q:104,management_basis:"EXPLORATION",predicted_performance_percent:null});
     expect(parsed.series[1].stress).toBeNull();
     expect(parsed.series[1].actual_q).toBeNull();
     expect(parsed.source_date).toBe("2026-11-02");
     expect(parsed).not.toHaveProperty("memory");
-    expect(() => parseRecoveryLearningView({ ...view, decision: { ...view.decision, applied_change_percent: 4 } })).toThrow();
-    expect(() => parseRecoveryLearningView({ ...view, decision: { ...view.decision, proposed_change_percent: 20.1 } })).toThrow();
-    expect(() => parseRecoveryLearningView({ ...view, series: [...view.series, view.series[0]] })).toThrow();
-    expect(() => parseRecoveryLearningView({ ...view, series: [{ ...view.series[0], stress: NaN }] })).toThrow();
-    expect(() => parseRecoveryLearningView({ ...view, series: [{ ...view.series[0], day: "2026-11-04" }] })).toThrow();
+    const old=parseRecoveryLearningView(legacy);
+    expect(old.series[0].actual_q_by_component).toEqual(unknownComponentQ());
+    expect(old.components).toHaveLength(6);
+    expect(old.components.every(item=>item.recent_weekly_q===null&&item.proposed_change_percent===null)).toBe(true);
+    const partial=parseRecoveryLearningView({...legacy,series:[{...legacy.series[0],actual_q_by_component:{Z1:0}}]});
+    expect(partial.series[0].actual_q_by_component).toEqual({...unknownComponentQ(),Z1:0});
   });
-  it("breaks the observed stress line across missing values and absent calendar days", () => {
+  it("rejects impossible report values, invalid panels and multiple simultaneous choices", () => {
+    for(const patch of [
+      {decision:{...view.decision,applied_change_percent:4}},
+      {decision:{...view.decision,proposed_change_percent:20.1}},
+      {series:[...view.series,view.series[0]]},
+      {series:[{...view.series[0],stress:NaN}]},
+      {series:[{...view.series[0],day:"2026-11-04"}]},
+      {series:[{...view.series[0],actual_q_by_component:{...view.series[0].actual_q_by_component,Z1:Infinity}}]},
+      {series:[{...view.series[0],stress_weights:{hrv:60,resting_hr:30}}]},
+      {components:[view.components[0],...view.components.slice(0,5)]},
+      {components:view.components.slice(1)},
+      {components:view.components.map((item,index)=>index===1?{...item,action_status:"SELECTED",proposed_change_percent:3,applied_change_percent:0}:item)},
+      {components:view.components.map((item,index)=>index===0?{...item,recent_observed_days:6}:item)},
+    ]) expect(()=>parseRecoveryLearningView({...view,...patch})).toThrow();
+  });
+  it("only transports supported finite model intervals and keeps their contrast distinct from actions", () => {
+    const predicted={...view.components[1],evidence_count:8,isolated_changes:2,validation_status:"PASSED",model_scope:"GLOBAL",response_status:"SUPPORTED_POSITIVE",
+      predicted_performance_percent:25,predicted_performance_low:10,predicted_performance_high:30};
+    const report={...view,components:view.components.map(item=>item.component==="Z2"?predicted:item)};
+    const parsed=parseRecoveryLearningView(report);
+    expect(parsed.components[1].predicted_performance_percent).toBe(25);
+    const html=renderToStaticMarkup(<RecoveryLearning view={parsed}/>);
+    expect(html).toContain("Сравнение при +5% Q");
+    expect(html).toContain("+25%");
+    expect(html).toContain("обща работоспособност");
+    expect(html).toContain("Моделен интервал");
+    expect(html.match(/Предложена промяна/g)).toHaveLength(1);
+    for(const invalid of [{evidence_count:7},{isolated_changes:1},{validation_status:"WARMUP"},{predicted_performance_high:20},{predicted_performance_low:null}]) {
+      expect(()=>parseRecoveryLearningView({...report,components:report.components.map(item=>item.component==="Z2"?{...item,...invalid}:item)})).toThrow();
+    }
+  });
+  it("breaks stress and baseline paths across missing days or different measurement references", () => {
     expect(learningPaths(view.series,"stress",index=>index,value=>value)).toEqual(["M0,65 ","M2,45 "]);
     expect(learningPaths([view.series[0],view.series[2]],"stress",index=>index,value=>value)).toEqual(["M0,65 ","M1,45 "]);
+    for(const patch of [{stress_reference:"other:block"},{stress_basis:"FIXED_PANEL" as const},{stress_weights:{hrv:50,resting_hr:50}}]) {
+      const next={...view.series[0],day:"2026-11-02",...patch};
+      for(const kind of ["stress","baseline"] as const) expect(learningPaths([view.series[0],next],kind,index=>index,value=>value)).toHaveLength(2);
+    }
   });
-  it("shows independent scales and separates proposal from permitted dose", () => {
-    const html = renderToStaticMarkup(<RecoveryLearning view={view}/>);
-    for (const text of ["Наблюдение", "Q · еквивалентни минути за деня", "Стрес · точки от 0 до 100", "Предложена промяна", "+4%", "Допуснато от модела", "0%", "Недостатъчни наблюдения", "Няма съпоставим резултат", "Няма данни", 'href="/response"']) expect(html).toContain(text);
+  it("stacks the six exact Q values and keeps partial maps explicit", () => {
+    const segments=learningLoadSegments(view.series[0]);
+    expect(segments.map(item=>item.value)).toEqual([40,25,15,10,6,4]);
+    expect(segments.map(item=>item.end)).toEqual([40,65,80,90,96,100]);
+    expect(learningLoadSegments(view.series[0],"STR")).toEqual([{component:"STR",value:4,start:0,end:4}]);
+    expect(learningLoadSegments(view.series[1])).toEqual([]);
+    const html=renderToStaticMarkup(<RecoveryLearning view={view}/>);
+    for(const component of LEARNING_COMPONENTS) expect(html).toContain(`data-component="${component}"`);
+    for(const color of ["--zone-1","--zone-2","--zone-3","--zone-4","--zone-5","--strength"]) expect(html).toContain(color);
+    expect(html).toContain('aria-label="Компоненти в графиката"');
+    expect(html).toContain("Липсваща разбивка не е нулево натоварване");
+  });
+  it("isolates a component through the accessible legend and restores the full stack",async()=> {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);
+    const container=document.createElement("div");document.body.append(container);
+    const root=createRoot(container);
+    try {
+      await act(async()=>root.render(<RecoveryLearning view={view}/>));
+      const group=container.querySelector('[aria-label="Компоненти в графиката"]')!;
+      const strength=[...group.querySelectorAll("button")].find(button=>button.textContent==="Сила")!;
+      expect(container.querySelector('svg rect[data-component="STR"]')?.getAttribute("height")).toBe("6");
+      await act(async()=>strength.click());
+      expect(strength.getAttribute("aria-pressed")).toBe("true");
+      expect(container.querySelector('svg rect[data-component="Z1"]')).toBeNull();
+      expect(container.querySelector('svg rect[data-component="STR"]')?.getAttribute("height")).toBe("150");
+      expect(container.textContent).toContain("Показан е само Сила");
+      await act(async()=>group.querySelector("button")!.click());
+      expect(container.querySelector('svg rect[data-component="Z1"]')).not.toBeNull();
+      expect(strength.getAttribute("aria-pressed")).toBe("false");
+    } finally {await act(async()=>root.unmount());container.remove();vi.unstubAllGlobals();}
+  });
+  it("shows one integral stress panel, six honest assessments and only the selected proposed dose", () => {
+    const html=renderToStaticMarkup(<RecoveryLearning view={view}/>);
+    for(const text of ["Наблюдение","Q · еквивалентни минути за деня","Стрес · точки от 0 до 100","Предложена промяна","+4%","Допуснато от модела","0%","Недостатъчни наблюдения","Няма съпоставим резултат",'href="/response"',"Проучване","База на съпоставимия блок: 100 Q/седм.","цел 104 Q/седм."]) expect(html).toContain(text);
+    expect(html.match(/class="learning-component(?: is-selected)?"/g)).toHaveLength(6);
+    expect(html.match(/class="learning-response-label">Събира данни/g)).toHaveLength(6);
+    expect(html.match(/Предложена промяна/g)).toHaveLength(1);
+    expect(html.match(/Допуснато от модела/g)).toHaveLength(1);
+    expect(html.match(/class="learning-stress-line"/g)).toHaveLength(2);
     expect(html).not.toContain("NaN");
     expect(html).not.toContain(' open=""');
+    expect(html).not.toContain("Слаб отговор");
   });
-  it("shows an honest empty state with a route to observations", () => {
-    const html = renderToStaticMarkup(<RecoveryLearning view={{ ...view, series: [], episodes: [], channels: [] }}/>);
-    expect(html).toContain("Няма годни измерени данни");
-    expect(html).toContain("Няма достатъчно независими наблюдения");
-    expect(html).toContain("Няма завършен съпоставим блок");
+  it("dates weights to the latest observed stress assessment even when the final graph day is missing", () => {
+    const html=renderToStaticMarkup(<RecoveryLearning view={view}/>);
+    for(const text of ["18 т.","60%","Един и същ набор за проследения блок","Показатели и тегла за 03.11.2026","не са процент увереност"]) expect(html).toContain(text);
+    const missing={...view,series:[view.series[0],{...view.series[2],stress:null,stress_weights:{},stress_basis:null,stress_reference:null}]};
+    const prior=renderToStaticMarkup(<RecoveryLearning view={missing}/>);
+    expect(prior).toContain("Последна оценка на стреса · 01.11.2026");
+    expect(prior).toContain("Показатели и тегла за 01.11.2026");
+    expect(prior).toContain(">60%<");
+    expect(prior).not.toContain("Последна оценка на стреса · 03.11.2026");
+    const empty=renderToStaticMarkup(<RecoveryLearning view={{...missing,series:[missing.series[1]]}}/>);
+    expect(empty).toContain("За този ден липсва пълен набор");
+    expect(empty).toContain("Няма наличен набор показатели");
+    expect(empty).not.toContain(">60%<");
+    expect(empty).not.toContain("Последна оценка на стреса");
+  });
+  it("shows an honest empty state and keeps missing component values as dashes", () => {
+    const parsed=parseRecoveryLearningView({...legacy,series:[],episodes:[],channels:[]});
+    const html=renderToStaticMarkup(<RecoveryLearning view={parsed}/>);
+    for(const text of ["Няма годни измерени данни","Няма достатъчно независими наблюдения","Няма завършен съпоставим блок","Събира данни","—"]) expect(html).toContain(text);
     expect(html).not.toContain("<svg");
+    expect(html).not.toContain("Предложена промяна");
   });
-  it("does not equate reaction episodes with observed training benefit", () => {
-    const html=renderToStaticMarkup(<RecoveryLearning view={{...view,evidence_count:2,observations:{reaction_episodes:2,performance_observations:0}}}/>);
-    expect(html).toContain("Наблюдаваната реакция се отчита");
+  it("does not equate recovery-policy reduction with weak performance response", () => {
+    const reduced={...view,mode:"CONTROL" as const,decision:{...view.decision,proposed_change_percent:-10,applied_change_percent:-10},components:view.components.map((item,index)=>index===0?{...item,proposed_change_percent:-10,applied_change_percent:-10,management_basis:"POLICY_REDUCTION" as const}:item),evidence_count:2,observations:{reaction_episodes:2,performance_observations:0}};
+    const html=renderToStaticMarkup(<RecoveryLearning view={reduced}/>);
+    expect(html).toContain("Правило за намаляване");
     expect(html).toContain("Още няма съпоставим резултат за оценка на тренировъчния ефект");
+    expect(html).not.toContain("Отрицателна връзка");
   });
-  it("distinguishes absent stress elevation from delayed recovery in both the chart and table", () => {
+  it("distinguishes no stress elevation from delayed recovery in both recovery views", () => {
     const summary="Основанието за текущото решение се показва веднъж.";
     const labels={NO_ELEVATED_RESPONSE:"Няма отчетено повишение на стреса",DELAYED:"Няма потвърдено връщане в експертния срок"};
     for(const [status,label] of Object.entries(labels)) {
-      const html=renderToStaticMarkup(<RecoveryLearning view={{...view,summary,decision:{...view.decision,reason:summary},
-        episodes:[{...view.episodes[0],status,reason:"Описание на наблюдението."}]}}/>);
+      const html=renderToStaticMarkup(<RecoveryLearning view={{...view,summary,decision:{...view.decision,reason:summary},episodes:[{...view.episodes[0],status,reason:"Описание на наблюдението."}]}}/>);
       expect(html.split(label)).toHaveLength(3);
       expect(html).not.toContain(labels[status==="DELAYED"?"NO_ELEVATED_RESPONSE":"DELAYED"]);
       expect(html).not.toContain("Връщането още не е потвърдено");
@@ -74,22 +183,53 @@ describe("dedicated recovery learning presentation", () => {
   });
 });
 
+describe("learning API transport",()=> {
+  it("passes the private alias and preserves new fields from the prepared response",async()=> {
+    const actual=await vi.importActual<typeof import("../lib/api")>("../lib/api");
+    vi.stubEnv("ONFLOWS_API_BASE_URL","https://api.example.test");
+    const fetch=vi.fn().mockResolvedValue(new Response(JSON.stringify(view),{headers:{"content-type":"application/json"}}));
+    vi.stubGlobal("fetch",fetch);
+    try {
+      const result=await actual.getLearningView("private-athlete",30);
+      expect(String(fetch.mock.calls[0][0])).toBe("https://api.example.test/api/v2/athlete/learning?days=30");
+      expect(fetch.mock.calls[0][1].headers["X-OnFlows-Athlete-Alias"]).toBe("private-athlete");
+      expect(result.components[0].target_weekly_q).toBe(104);
+      expect(result.series[0].actual_q_by_component.STR).toBe(4);
+    } finally {vi.unstubAllGlobals();vi.unstubAllEnvs();}
+  });
+  it("recognizes the preparing response before infrastructure retries",async()=> {
+    const actual=await vi.importActual<typeof import("../lib/api")>("../lib/api");
+    vi.stubEnv("ONFLOWS_API_BASE_URL","https://api.example.test");
+    const fetch=vi.fn().mockResolvedValue(new Response(JSON.stringify({detail:LEARNING_PREPARING_MESSAGE}),{status:503,headers:{"content-type":"application/json","Retry-After":"15"}}));
+    vi.stubGlobal("fetch",fetch);
+    try {await expect(actual.getLearningView("private-athlete")).rejects.toBeInstanceOf(LearningPreparingError);expect(fetch).toHaveBeenCalledTimes(1);}
+    finally {vi.unstubAllGlobals();vi.unstubAllEnvs();}
+  });
+});
+
 describe("private learning page", () => {
-  const access = { userId: "owner", actorUserId: "coach", athleteAlias: "ath-private", displayName: "Избран спортист", isOwner: false, canEditPlan: true, canViewRecovery: true };
-  beforeEach(() => { vi.clearAllMocks(); vi.mocked(currentAuthorizedAthlete).mockResolvedValue(access); vi.mocked(getLearningView).mockResolvedValue(view); });
-  it("blocks a plan-only coach before fetching any private observations", async () => {
-    vi.mocked(currentAuthorizedAthlete).mockResolvedValue({ ...access, canViewRecovery: false });
-    const html = renderToStaticMarkup(await LearningPage({ searchParams: Promise.resolve({}) }));
+  const access = { userId:"owner",actorUserId:"coach",athleteAlias:"ath-private",displayName:"Избран спортист",isOwner:false,canEditPlan:true,canViewRecovery:true };
+  beforeEach(()=>{vi.clearAllMocks();vi.mocked(currentAuthorizedAthlete).mockResolvedValue(access);vi.mocked(getLearningView).mockResolvedValue(view);});
+  it("blocks a plan-only coach before fetching private observations",async()=> {
+    vi.mocked(currentAuthorizedAthlete).mockResolvedValue({...access,canViewRecovery:false});
+    const html=renderToStaticMarkup(await LearningPage({searchParams:Promise.resolve({})}));
     expect(getLearningView).not.toHaveBeenCalled();
     expect(html).toContain("не е споделил данните си за възстановяване");
     expect(html).not.toContain("block-1");
-    expect(html).not.toContain("Наблюдавана реакция");
+    expect(html).not.toContain("Интегрален стрес");
   });
-  it("keeps the calculation date separate from the imported history cutoff", async () => {
-    const html = renderToStaticMarkup(await LearningPage({ searchParams: Promise.resolve({ days: "180" }) }));
+  it("keeps the calculation date separate from the imported history cutoff",async()=> {
+    const html=renderToStaticMarkup(await LearningPage({searchParams:Promise.resolve({days:"180"})}));
     expect(getLearningView).toHaveBeenCalledWith("ath-private",90);
     expect(html).toContain("оценка към 03.11.2026");
     expect(html).toContain("Натоварване до 02.11.2026");
     expect(html).not.toContain("Последни 180 дни");
+  });
+  it("shows neutral preparation with a manual retry and no fabricated empty assessment",async()=> {
+    vi.mocked(getLearningView).mockRejectedValue(new LearningPreparingError());
+    const html=renderToStaticMarkup(await LearningPage({searchParams:Promise.resolve({days:"30"})}));
+    expect(html).toContain("Подготвяме оценката във фонов режим");
+    expect(html).toContain('href="/learning?days=30"');
+    for(const text of ['role="alert"',"Не можем да покажем","0%","Събира данни","Няма данни"]) expect(html).not.toContain(text);
   });
 });

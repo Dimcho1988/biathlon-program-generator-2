@@ -328,6 +328,17 @@ class SupabasePilotRepository(SnapshotRepository):
         from .prepared_models import process_dashboard
         return process_dashboard(self)
 
+    def learning_preparation(self, operation, **arguments):
+        value = self._json(self._request('POST', '/rpc/onflows_learning_preparation',
+            json={'p_operation': operation, **{'p_'+key: value for key, value in arguments.items()}}))
+        if value is not None and not isinstance(value, dict):
+            raise PersistentStoreFailure('Invalid learning preparation response')
+        return value
+
+    def process_next_prepared_learning(self):
+        from .prepared_learning import process_learning
+        return process_learning(self)
+
     def cleanup_prepared_data(self, alias):
         return self._json(self._request('POST', '/rpc/cleanup_onflows_prepared_data', json={'p_alias': alias}))
 
