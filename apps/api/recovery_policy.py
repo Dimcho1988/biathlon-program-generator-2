@@ -418,6 +418,10 @@ def apply_decision(report, evidence, models, *, config, allowed_components, phas
     eligible=[z for z in COMPONENTS if z in allowed_components and number((episode.get("dose",{}).get(z) or {}).get("actual_q")) is not None and episode["dose"][z]["actual_q"]>0]
     if not eligible:
         return hold("За текущите компоненти няма положителна измерена доза за сравнение.")
+    # Changing an accent cannot turn one still-open observation into another
+    # component experiment. The service retains the original decision marker.
+    if previous.get("source_episode_id") and previous.get("expires_on", "") >= today.isoformat() and previous.get("component") not in eligible:
+        return hold("Изчакваме наблюдението на предходния компонент; новият акцент не започва втори експеримент.", "SHADOW" if mode=="SHADOW" else "READY")
     previous_component=previous.get("component") if previous.get("source_episode_id")==episode["id"] else None
     component=previous_component if previous_component in eligible else max(eligible,key=lambda z:(episode["dose"][z]["actual_q"]/(episode["dose"][z]["baseline_q"]+1),-COMPONENTS.index(z)))
     execution_ceiling=None

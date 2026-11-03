@@ -1,4 +1,5 @@
 from copy import deepcopy
+import pytest
 from datetime import date, timedelta
 import json
 
@@ -72,7 +73,8 @@ def test_oversized_episode_cannot_break_persistence():
     assert service.bounded_episodes([e]) == []
 
 
-def test_service_persists_expired_episode_marker_across_neutral_refreshes(monkeypatch):
+@pytest.mark.parametrize("component,expiry_offset",[("Z3",-1),("Z1",11)])
+def test_service_persists_expired_or_now_ineligible_episode_marker_across_neutral_refreshes(monkeypatch,component,expiry_offset):
     """Exercise the real service memory writeback, not a test-only fallback."""
     from apps.api import learning_methods
     from apps.api.management_store import ManagementStore
@@ -98,7 +100,7 @@ def test_service_persists_expired_episode_marker_across_neutral_refreshes(monkey
     memory.update(first['memory'])
     # A completed prior decision is an immutable consumed-exposure marker.
     episode=first['memory']['episodes'][-1]
-    closed={'source_episode_id':episode['id'],'component':'Z3','mode':'CONTROL','config':profile['individual_learning'],'expires_on':str(data['today']-timedelta(days=1))}
+    closed={'source_episode_id':episode['id'],'component':component,'mode':'CONTROL','config':profile['individual_learning'],'effective_from':str(data['today']-timedelta(days=2)),'expires_on':str(data['today']+timedelta(days=expiry_offset)),'baseline_actual_weekly_q':140.,'step':-.2}
     memory['decision']=deepcopy(closed)
     for _ in range(2):
         report=service.context(repo,'athlete',profile,source,data['rows'],data['today'],envelope=envelope,entries=[],periodization=phase)

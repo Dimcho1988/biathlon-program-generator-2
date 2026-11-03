@@ -228,3 +228,28 @@ def test_unreturned_policy_abstains_when_current_unloading_dose_is_unknown():
     evidence['_recent_window']['complete']=False
     policy.apply_decision(report,evidence,models,config={'mode':'CONTROL','max_volume_step_percent':20},allowed_components=['Z1'],phase='GENERAL_PREPARATION',taper=False,today=data['today'])
     assert report['decision'] is None
+
+
+def test_active_component_change_cannot_start_second_experiment_from_same_episode():
+    data,evidence,models,report=decision_data(returned=None)
+    config={'mode':'CONTROL','max_volume_step_percent':20}
+    previous={'source_episode_id':evidence['episodes'][0]['id'],'component':'Z1',
+              'kind':'volume','mode':'CONTROL','config':deepcopy(config),
+              'effective_from':str(data['today']-timedelta(days=2)),
+              'expires_on':str(data['today']+timedelta(days=11)),
+              'baseline_actual_weekly_q':140.,'step':-.2}
+    original=deepcopy(previous)
+    policy.apply_decision(report,evidence,models,config=config,allowed_components=['Z3'],
+                          phase='GENERAL_PREPARATION',taper=False,today=data['today'],retained={'decision':previous})
+    assert report['decision'] is None
+    assert all(c['volume_factor']==1. and c['proposed_volume_factor']==1. for c in report['components'].values())
+    assert report['recovery_policy']['decision']['component'] is None
+    assert report['recovery_policy']['decision']['proposed_change_percent']==0
+    assert previous==original
+    # Restoring the original eligible component keeps its old observation window.
+    policy.apply_decision(report,evidence,models,config=config,allowed_components=['Z1'],
+                          phase='GENERAL_PREPARATION',taper=False,today=data['today'],retained={'decision':previous})
+    assert report['decision']['component']=='Z1'
+    assert report['decision']['effective_from']==previous['effective_from']
+    assert report['decision']['expires_on']==previous['expires_on']
+    assert report['decision']['baseline_actual_weekly_q']==140.
