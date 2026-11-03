@@ -18,7 +18,7 @@ from .oauth_store import PersistentStoreFailure
 from .prepared_models import _lease
 
 logger = logging.getLogger(__name__)
-VERSION = "prepared-learning-v1-components-weighted-stress"
+VERSION = "prepared-learning-v2-canonical-740-linked-stress"
 PREPARING = "Оценката на самообучението се подготвя във фонов режим. Опитай отново след малко."
 
 

@@ -11,6 +11,10 @@ export type LearningComponent = typeof LEARNING_COMPONENTS[number];
 export type ComponentQ = Record<LearningComponent, number | null>;
 export interface LearningDay {
   day: string; actual_q: number | null; actual_q_by_component: ComponentQ;
+  index_7_40_by_component: ComponentQ; recorded_q_by_component: ComponentQ;
+  index_load_status: "COMPLETE" | "MODELLED" | "PARTIAL" | "UNAVAILABLE"; index_history_days: number;
+  load_status: "COMPLETE" | "MODELLED" | "PARTIAL" | "UNAVAILABLE" | "REST";
+  load_reason: string | null; load_activity_count: number | null; load_unknown_minutes: number | null; learning_load_eligible: boolean;
   stress: number | null; baseline: number | null; stress_weights: Record<string, number>;
   stress_basis: "FROZEN_BLOCK" | "FIXED_PANEL" | null; stress_reference: string | null;
 }
@@ -87,6 +91,29 @@ export function parseRecoveryLearningView(value: unknown): RecoveryLearningView 
         actualQ[key as LearningComponent] = item as number | null;
       }
     }
+    const index740 = unknownComponentQ();
+    if (row.index_7_40_by_component != null) {
+      if (!isRecord(row.index_7_40_by_component)) throw fail();
+      for (const [key,item] of Object.entries(row.index_7_40_by_component)) {
+        if (!LEARNING_COMPONENTS.includes(key as LearningComponent) || !optional(item,nonnegative)) throw fail();
+        index740[key as LearningComponent] = item as number | null;
+      }
+    }
+    const recordedQ = unknownComponentQ();
+    if (row.recorded_q_by_component != null) {
+      if (!isRecord(row.recorded_q_by_component)) throw fail();
+      for (const [key,item] of Object.entries(row.recorded_q_by_component)) {
+        if (!LEARNING_COMPONENTS.includes(key as LearningComponent) || !optional(item,nonnegative)) throw fail();
+        recordedQ[key as LearningComponent] = item as number | null;
+      }
+    }
+    if (!(row.index_load_status == null || ["COMPLETE","MODELLED","PARTIAL","UNAVAILABLE"].includes(String(row.index_load_status)))
+      || !(row.index_history_days == null || (count(row.index_history_days) && row.index_history_days<=50))
+      || !(row.load_status == null || ["COMPLETE","MODELLED","PARTIAL","UNAVAILABLE","REST"].includes(String(row.load_status)))
+      || !(row.load_reason == null || typeof row.load_reason === "string")
+      || !(row.load_activity_count == null || count(row.load_activity_count))
+      || !(row.load_unknown_minutes == null || nonnegative(row.load_unknown_minutes))
+      || !(row.learning_load_eligible == null || typeof row.learning_load_eligible === "boolean")) throw fail();
     const stressWeights: Record<string,number> = {};
     if (row.stress_weights != null) {
       if (!isRecord(row.stress_weights)) throw fail();
@@ -99,6 +126,11 @@ export function parseRecoveryLearningView(value: unknown): RecoveryLearningView 
     if (!(row.stress_basis == null || ["FROZEN_BLOCK","FIXED_PANEL"].includes(String(row.stress_basis)))
       || !(row.stress_reference == null || typeof row.stress_reference === "string")) throw fail();
     return { day: row.day, actual_q: row.actual_q as number | null, actual_q_by_component:actualQ,
+      index_7_40_by_component:index740, recorded_q_by_component:recordedQ,
+      index_load_status:(row.index_load_status ?? "UNAVAILABLE") as LearningDay["index_load_status"], index_history_days:row.index_history_days as number ?? 0,
+      load_status:(row.load_status ?? "UNAVAILABLE") as LearningDay["load_status"],
+      load_reason:row.load_reason as string | null ?? null, load_activity_count:row.load_activity_count as number | null ?? null,
+      load_unknown_minutes:row.load_unknown_minutes as number | null ?? null, learning_load_eligible:row.learning_load_eligible===true,
       stress: row.stress as number | null, baseline: row.baseline as number | null, stress_weights:stressWeights,
       stress_basis:row.stress_basis as LearningDay["stress_basis"] ?? null, stress_reference:row.stress_reference as string | null ?? null };
   }).sort((a,b) => a.day.localeCompare(b.day));
