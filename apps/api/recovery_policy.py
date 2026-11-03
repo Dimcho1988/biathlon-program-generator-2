@@ -38,6 +38,12 @@ def proposed_step(loading_days, recovery_days, confidence=1.):
     return .20*max(0., min(1., confidence))*max(0., min(1., 1-ratio)) if ratio < 1 else -.20*max(0., min(1., 2*(ratio-1))) or 0.
 
 
+def _effective_weights(panel):
+    """Percent contribution of the exact observed panel, not nominal coverage."""
+    total=sum(CHANNELS[k][1] for k in panel)
+    return {key:100.*CHANNELS[key][1]/total for key in panel} if total else {}
+
+
 def unidentified_activity_count(source):
     quality=source.get("quality") or {}
     counted=sum(int(quality.get(key) or 0) for key in ("limited_activities","excluded_activities"))
@@ -276,7 +282,10 @@ def build_view_data(*, source, rows, history, entries, trainability, today, peri
     for old in previous.values():
         if old.get("end", "9999")<first.isoformat():
             episodes.append(deepcopy(old))
-    graph={d:{"day":d,"actual_q":v,"stress":None,"baseline":None} for d,v in daily.items()}
+    graph={d:{"day":d,"actual_q":v,
+              "actual_q_by_component":{z:component_daily[z].get(d) if v is not None else None for z in COMPONENTS},
+              "stress":None,"baseline":None,"stress_weights":{},"stress_basis":None,"stress_reference":None}
+           for d,v in daily.items()}
     for block in blocks:
         start,load_end,end=(block[k] for k in ("start","load_end","end"))
         identifier=f"actual:{start}:{load_end}"
@@ -289,7 +298,10 @@ def build_view_data(*, source, rows, history, entries, trainability, today, peri
             outcomes=legacy._ti_outcomes(trainability,start,response["returned_on"],end)+legacy._test_outcomes(selected,start,response["returned_on"],end)
             for d,v in response.pop("series").items():
                 if d in graph and start.isoformat()<=d<=end.isoformat():
-                    graph[d].update(stress=v,baseline=response["baseline_score"])
+                    graph[d].update(stress=v,baseline=response["baseline_score"],
+                        stress_weights=_effective_weights(response["channels"]) if v is not None else {},
+                        stress_basis="FROZEN_BLOCK" if v is not None else None,
+                        stress_reference=identifier if v is not None else None)
         reason=reason or ("INSUFFICIENT_INDEPENDENT_RESPONSE" if response is None else None)
         if reason:
             exclusions.append({"id":identifier,"start":start.isoformat(),"end":end.isoformat(),"reason":reason})
@@ -318,10 +330,13 @@ def build_view_data(*, source, rows, history, entries, trainability, today, peri
     # A fixed panel makes disappearance a GAP, never apparent improvement.
     fallback_panel=sorted(k for k in CORE if sum(any(c.get("key")==k and number(c.get("score")) is not None for c in r.get("channels",[])) for r in days.values())>=3)
     fallback_weight=sum(CHANNELS[k][1] for k in fallback_panel)
+    fallback_reference="fixed:"+sha256(json.dumps(fallback_panel).encode()).hexdigest()[:12]
     for d,row in graph.items():
         if row["stress"] is None:
             vals={c["key"]:c["score"] for c in days.get(d,{}).get("channels",[]) if c.get("key") in fallback_panel and number(c.get("score")) is not None}
             row["stress"]=round(sum(vals[k]*CHANNELS[k][1] for k in fallback_panel)/fallback_weight,4) if fallback_weight and all(k in vals for k in fallback_panel) else None
+            if row["stress"] is not None:
+                row.update(stress_weights=_effective_weights(fallback_panel),stress_basis="FIXED_PANEL",stress_reference=fallback_reference)
     if excluded_dates:
         exclusions.append({"id":None,"reason":"INCOMPLETE_MEASURED_DATES","dates":excluded_dates})
     current=legacy._current(days,selected,source,rows,history,today,bool(rows))
@@ -347,13 +362,88 @@ def build_view_data(*, source, rows, history, entries, trainability, today, peri
     channel_info=[]
     for key in sorted(CORE):
         available=sum(any(c.get("key")==key and number(c.get("score")) is not None for c in row.get("channels",[])) for row in days.values())
-        channel_info.append({"key":key,"family":CHANNELS[key][0],"observed_days":available,"used_for":"INDEPENDENT_STRESS"})
+        channel_info.append({"key":key,"family":CHANNELS[key][0],"observed_days":available,"used_for":"INDEPENDENT_STRESS","nominal_weight":CHANNELS[key][1]})
     detail={"version":VERSION,"as_of":today.isoformat(),"series":list(graph.values()),"episodes":view_episodes[-24:],
             "decision":{"component":None,"status":"COLLECTING","proposed_change_percent":0.,"applied_change_percent":0.,"reason":"Нужни са съпоставими натоварващи блокове и независими наблюдения."},
             "observations":{"measured_days":sum(v is not None for v in daily.values()),"excluded_days":len(excluded_dates),"unidentified_activities":unidentified_activity_count(source),"accepted_blocks":sum(not e["confounded"] for e in episodes),"reaction_only_blocks":sum(not e["outcomes"] for e in episodes),"performance_blocks":sum(bool(e["outcomes"]) for e in episodes)},"channels":channel_info,
             "settings":{"maximum_change_percent":20.,"loading_days_min":7,"loading_days_max":21,"recovery_days_min":3.,"recovery_days_max":7.,"increase_sensitivity":1.,"decrease_sensitivity":2.},
             "diagnostic":False,"independent_stress":True,"comparison_panel":fallback_panel}
-    return {"episodes":episodes[-78:],"current":current,"exclusions":exclusions,"recovery_policy":detail,"_response_days":days,"_recent_window":observed_window(source,rows,today-timedelta(days=7),today)}
+    evidence={"episodes":episodes[-78:],"current":current,"exclusions":exclusions,"recovery_policy":detail,"_response_days":days,"_recent_window":observed_window(source,rows,today-timedelta(days=7),today)}
+    detail["component_assessments"]=build_component_assessments(evidence,today=today)
+    return evidence
+
+
+def build_component_assessments(evidence, *, today, models=None, report=None,
+                                allowed_components=None, phase=None, taper=False, retained=None):
+    """Describe six actual doses and supported +5% contrasts without choosing six actions.
+
+    Fits are supplied by the one existing service pass. A global performance
+    outcome supports a component association only after materially isolated
+    changes in that component; one shared outcome never creates six labels.
+    """
+    detail=evidence["recovery_policy"]
+    series={r["day"]:r for r in detail["series"]}
+    decision=detail.get("decision") or {}
+    selected=decision.get("component") if (report or {}).get("decision") else None
+    previous=(retained or {}).get("decision") or {}
+    active=previous.get("component") if previous.get("expires_on", "")>=today.isoformat() else None
+    recent=evidence.get("_recent_window") or {}
+    result=[]
+    for component in COMPONENTS:
+        def observed(days):
+            values=[number((series.get((today-timedelta(days=i)).isoformat(),{}).get("actual_q_by_component") or {}).get(component)) for i in range(1,days+1)]
+            count=sum(v is not None for v in values)
+            return (sum(values)*7/days if count==days else None),count
+        recent_q,recent_days=observed(7)
+        reference_q,reference_days=observed(40)
+        scope=component
+        model=(models or {}).get(component)
+        if model is None or model.get("validation",{}).get("status")!="PASSED":
+            scope="GLOBAL"
+            model=(models or {}).get("GLOBAL")
+        count=(model or {}).get("posterior",{}).get("count",0)
+        validation=(model or {}).get("validation",{}).get("status","WARMUP")
+        isolated=individual_learning._identified(model.get("samples",[]),individual_learning.FEATURES.index(f"volume:{component}")+1) if model else 0
+        prediction=None
+        if count>=8 and validation=="PASSED" and isolated>=2 and recent_q is not None and recent.get("complete"):
+            contrast=individual_learning.action_contrast(component,"volume",.05,recent.get("components"))
+            if contrast:
+                prediction=individual_learning.predict(model["posterior"],contrast,observation=False)
+        response_status=("SUPPORTED_POSITIVE" if prediction["low"]>0 else "SUPPORTED_NEGATIVE" if prediction["high"]<0 else "UNCERTAIN") if prediction else "INSUFFICIENT_DATA"
+        if component==selected:
+            action_status="SELECTED"
+            reason=decision.get("reason") or "Избрана е една промяна за наблюдение."
+        elif allowed_components is not None and (component not in allowed_components or phase not in individual_learning.PREPARATION or taper or (report or {}).get("mode")=="OFF"):
+            action_status="NOT_ELIGIBLE"
+            reason="Текущият период, акцент или ръчна цел не допуска промяна в този компонент."
+        elif selected or active:
+            action_status="WAITING"
+            reason="Наблюдаваме избрания компонент; едновременно не започва втори експеримент."
+        elif not prediction:
+            action_status="COLLECTING"
+            reason="Нужни са пълна измерена седмица и поне 8 проверени резултата с 2 отделими промени в този компонент."
+        else:
+            action_status="WAITING"
+            reason="Оценката за +5% е наблюдавана връзка; действието изчаква общите условия за възстановяване и избор."
+        step=(report or {}).get("decision",{}).get("step") if component==selected else None
+        basis=("POLICY_REDUCTION" if step<0 else "EXPLORATION" if (report or {}).get("decision",{}).get("experimental") else "MODEL_SUPPORTED") if number(step) is not None and step!=0 else "HOLD"
+        result.append({"component":component,"recent_weekly_q":recent_q,"reference_weekly_q":reference_q,
+            "recent_observed_days":recent_days,"reference_observed_days":reference_days,
+            "accent_ratio":recent_q/reference_q if recent_q is not None and reference_q is not None and reference_q>0 else None,
+            "evidence_count":count,"isolated_changes":isolated,"validation_status":validation,"model_scope":scope if count else None,
+            "response_status":response_status,"test_step_percent":5.,
+            "predicted_performance_percent":prediction["mean"] if prediction else None,
+            "predicted_performance_low":prediction["low"] if prediction else None,
+            "predicted_performance_high":prediction["high"] if prediction else None,
+            "proposed_change_percent":decision.get("proposed_change_percent") if component==selected else None,
+            "applied_change_percent":decision.get("applied_change_percent") if component==selected else None,
+            "baseline_actual_weekly_q":decision.get("baseline_actual_weekly_q") if component==selected else None,
+            "target_weekly_q":decision.get("target_weekly_q") if component==selected else None,
+            "execution_weekly_q_ceiling":decision.get("execution_weekly_q_ceiling") if component==selected else None,
+            "effective_from":(report or {}).get("decision",{}).get("effective_from") if component==selected else None,
+            "expires_on":(report or {}).get("decision",{}).get("expires_on") if component==selected else None,
+            "action_status":action_status,"management_basis":basis,"reason":reason})
+    return result
 
 
 def apply_decision(report, evidence, models, *, config, allowed_components, phase, taper, today, retained=None, supported_episodes=None):

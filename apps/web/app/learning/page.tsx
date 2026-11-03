@@ -2,7 +2,7 @@ import { currentAuthorizedAthlete } from "../../lib/account-access";
 import { getLearningView } from "../../lib/api";
 import { ErrorState } from "../../components/error-state";
 import { RecoveryLearning } from "../../components/recovery-learning-view";
-import { learningDate } from "../../lib/recovery-learning";
+import { LearningPreparingError, learningDate } from "../../lib/recovery-learning";
 import "./learning.css";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +16,10 @@ export default async function LearningPage({ searchParams }: { searchParams: Pro
   let view: Awaited<ReturnType<typeof getLearningView>>;
   try {
     view = await getLearningView(access.athleteAlias, days);
-  } catch (error) { return <ErrorState message={error instanceof Error ? error.message : "Самообучението временно не е достъпно."} retryAvailable retryHref="/learning"/>; }
+  } catch (error) {
+    if (error instanceof LearningPreparingError) return <main className="state-page learning-page"><p className="eyebrow">Самообучение · {access.displayName}</p><h1>Подготвяме оценката във фонов режим</h1><p className="muted" role="status">Реалните наблюдения се обработват. Оценката ще се появи, когато е готова.</p><div className="integration-actions"><a className="action-button" href={`/learning?days=${days}`}>Провери отново</a></div></main>;
+    return <ErrorState message={error instanceof Error ? error.message : "Самообучението временно не е достъпно."} retryAvailable retryHref="/learning"/>;
+  }
   return <main className="activities-page learning-page"><header className="activities-hero"><div className="activities-title"><div><p className="eyebrow">Индивидуална реакция към тренировките</p><h1>Самообучение</h1><p>{access.displayName} · оценка към {learningDate(view.as_of)}</p><p>{view.source_date?`Натоварване до ${learningDate(view.source_date)}`:"Няма актуална измерена товарна история"}{view.timezone?` · ${view.timezone}`:""}</p></div></div></header>
       <form className="learning-period" method="get"><label>Период на графиките<select name="days" defaultValue={days}><option value="30">Последни 30 дни</option><option value="90">Последни 90 дни</option></select></label><button className="action-button secondary" type="submit">Покажи</button></form>
       <RecoveryLearning view={view}/>

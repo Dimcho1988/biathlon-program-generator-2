@@ -170,6 +170,13 @@ export async function fetchApiResource(
       response = null;
       requestError = error;
     }
+    // A prepared learning report can be pending without an infrastructure failure.
+    // Preserve that state before the generic 5xx retry cancels the response body.
+    if (response?.status === 503 && path.split("?")[0] === "/api/v2/athlete/learning") {
+      const payload = await response.clone().json().catch(() => null) as { detail?: unknown } | null;
+      const { LEARNING_PREPARING_MESSAGE, LearningPreparingError } = await import("./recovery-learning");
+      if (payload?.detail === LEARNING_PREPARING_MESSAGE) throw new LearningPreparingError();
+    }
     const retryableResponse = response !== null && (
       response.status === 502 || response.status === 503 || response.status === 504 ||
       (response.ok && !(response.headers.get("content-type") ?? "").toLowerCase().includes("application/json"))

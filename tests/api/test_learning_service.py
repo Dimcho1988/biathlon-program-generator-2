@@ -91,6 +91,12 @@ def test_service_persists_expired_or_now_ineligible_episode_marker_across_neutra
                 z.update(equivalent_time_min=10.,raw_time_min=10.)
     envelope={'generation_id':'pinned','revision':1,'activities':[], 'snapshot_payload':{'load_history':source}}
     monkeypatch.setattr(service,'build_history',lambda **kwargs:deepcopy(data['history']))
+    fit_calls=[]
+    original_fit=service.individual_learning.fit
+    def tracked_fit(*args,**kwargs):
+        fit_calls.append(1)
+        return original_fit(*args,**kwargs)
+    monkeypatch.setattr(service.individual_learning,'fit',tracked_fit)
     memory={}
     monkeypatch.setattr(ManagementStore,'learning_memory',lambda *args:deepcopy(memory))
     monkeypatch.setattr(learning_methods,'assess_methods',lambda **kwargs:{'preferences':[],'memory':{},'summary':{}})
@@ -108,3 +114,5 @@ def test_service_persists_expired_or_now_ineligible_episode_marker_across_neutra
         assert report['memory']['decision']==closed
         memory.clear()
         memory.update(report['memory'])
+        assert len(report['recovery_policy']['component_assessments'])==6
+    assert len(fit_calls)==3  # One existing fit per context; six readouts reuse it.

@@ -12,7 +12,7 @@ def start(repository, stopping):
         return None
 
     def run():
-        next_automatic, next_dashboard = 0., 0.
+        next_automatic, next_dashboard, next_learning = 0., 0., 0.
         while not stopping.is_set():
             try:
                 worked = processor()
@@ -34,6 +34,15 @@ def start(repository, stopping):
                     warmer()
                 except Exception as exc:
                     logger.warning('dashboard_tick_deferred error_type=%s', type(exc).__name__)
+            learner = getattr(repository, 'process_next_prepared_learning', None)
+            if not stopping.is_set() and callable(learner) and monotonic() >= next_learning:
+                # Give read-model preparation a bounded turn even with a busy
+                # planning queue; the same memory lane serializes the work.
+                next_learning = monotonic()+15.
+                try:
+                    learner()
+                except Exception as exc:
+                    logger.warning('learning_tick_deferred error_type=%s', type(exc).__name__)
             stopping.wait(0.1 if worked else 3.)
 
     # Non-daemon: SIGTERM stops new claims while a fenced in-flight draft drains.

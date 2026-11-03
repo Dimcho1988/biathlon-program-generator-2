@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
+from biathlon.constants import COMPONENTS
 
 from .component_load_context import ComponentCapacityUnavailable
 from .component_load_projection import ComponentLoadRefreshRequired, project_snapshot
@@ -23,16 +24,30 @@ def _fields(value, names):
     return {key: value.get(key) for key in names} if isinstance(value, dict) else {}
 
 
-SERIES_FIELDS = ("day", "actual_q", "stress", "baseline")
+SERIES_FIELDS = ("day", "actual_q", "stress", "baseline", "stress_basis", "stress_reference")
 EPISODE_FIELDS = ("id", "start", "load_end", "end", "loading_days", "recovery_limit_days",
                   "recovery_days", "recovered", "ratio", "status", "proposed_change_percent",
                   "reason", "performance_change_percent")
 DECISION_FIELDS = ("component", "status", "proposed_change_percent", "applied_change_percent", "reason")
-CHANNEL_FIELDS = ("key", "label", "observed_days")
+CHANNEL_FIELDS = ("key", "label", "observed_days", "nominal_weight")
+COMPONENT_FIELDS = ("component", "recent_weekly_q", "reference_weekly_q", "recent_observed_days",
+    "reference_observed_days", "accent_ratio", "evidence_count", "isolated_changes", "validation_status",
+    "model_scope", "response_status", "test_step_percent", "predicted_performance_percent",
+    "predicted_performance_low", "predicted_performance_high", "proposed_change_percent",
+    "applied_change_percent", "baseline_actual_weekly_q", "target_weekly_q", "execution_weekly_q_ceiling",
+    "effective_from", "expires_on", "action_status", "management_basis", "reason")
 CHANNEL_LABELS = {"hrv": "HRV", "resting_hr": "Пулс в покой", "sleep_duration": "Продължителност на съня",
     "fatigue": "Умора", "sleep_quality": "Качество на съня", "stress": "Субективен стрес",
     "soreness": "Мускулна болезненост", "motivation": "Мотивация",
     "competition_motivation": "Състезателна мотивация", "morning_weight": "Сутрешна телесна маса"}
+
+
+def _series_row(row):
+    """Allowlist nested metadata as well as the public row's scalar fields."""
+    result=_fields(row,SERIES_FIELDS)
+    result["actual_q_by_component"]=_fields(row.get("actual_q_by_component") or {},COMPONENTS)
+    result["stress_weights"]={key:value for key,value in (row.get("stress_weights") or {}).items() if key in CHANNEL_LABELS}
+    return result
 
 
 def view(repository, alias, *, days=90, now=None):
@@ -109,7 +124,7 @@ def view(repository, alias, *, days=90, now=None):
         "summary": (report or {}).get("summary") or ("Самообучението е изключено. Наблюденията остават видими." if profile else "Настройте програмата, за да включите самообучението."),
         "evidence_count": (report or {}).get("evidence_count", 0),
         "validation": _fields((report or {}).get("validation") or {"status": "WARMUP", "evaluated": 0}, ("status", "evaluated")),
-        "series": [_fields(row, SERIES_FIELDS) for row in detail.get("series", []) if row.get("day", "") >= start],
+        "series": [_series_row(row) for row in detail.get("series", []) if row.get("day", "") >= start],
         "episodes": [_fields(row, EPISODE_FIELDS) for row in detail.get("episodes", [])][-30:],
         "decision": _fields(decision, DECISION_FIELDS),
         "observations": {key: value for key, value in observations.items()
@@ -117,5 +132,6 @@ def view(repository, alias, *, days=90, now=None):
                          and type(value) in {int, float}},
         "channels": [{**_fields(row, CHANNEL_FIELDS), "label": row.get("label") or CHANNEL_LABELS.get(row.get("key"), "Друг показател")}
                      for row in detail.get("channels", [])],
+        "components": [_fields(row, COMPONENT_FIELDS) for row in detail.get("component_assessments", []) if row.get("component") in COMPONENTS],
         "limitations": [*notices, *(report or {}).get("limitations", [])],
     }
