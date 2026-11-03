@@ -36,8 +36,8 @@ def goals(profile, rows, context, day=TODAY, period="GENERAL_PREPARATION", **kwa
 def test_old_profiles_default_to_shadow_and_validate_bounded_controls():
     body = ManagementProfile.model_validate(configured(discipline="5000 m"))
     assert body.individual_learning.mode == "SHADOW"
-    assert body.individual_learning.max_volume_step_percent == 5
-    for values in ({"mode": "AUTO"}, {"max_volume_step_percent": 11}, {"max_intensity_step": .051},
+    assert body.individual_learning.max_volume_step_percent == 20
+    for values in ({"mode": "AUTO"}, {"max_volume_step_percent": 21}, {"max_intensity_step": .051},
                    {"max_volume_step_percent": float("nan")}):
         with pytest.raises(ValidationError):
             IndividualLearning(**values)
@@ -364,3 +364,35 @@ def test_full_year_plan_has_one_bounded_replay_archive_and_fits_draft_storage_li
                        ("purpose", "execution", "recovery", "success", "errors", "adjustment", "progression"))
             assert session["execution_descriptor"]["id"] == session["method_id"]
     assert len(encoded) < 2*1024*1024
+
+
+@pytest.mark.parametrize("actual_q",[1.,42.])
+def test_observed_block_hold_anchors_actual_q_without_calendar_growth_or_refresh_compounding(actual_q):
+    profile, _, _, rows, context = setup_context(factor=1.,intensity=0.)
+    context['trajectory']={TODAY.isoformat():{z:1.5 for z in policy.COMPONENTS}}
+    context['individual_learning']['components']['Z3'].update(baseline_actual_weekly_q=actual_q,action='HOLD')
+    first=goals(profile,rows,context)['Z3']
+    second=goals(profile,rows,context)['Z3']
+    learned=first['progression']['individual_learning']
+    shape=first['progression']['cycle_shape']
+    assert learned['baseline_weekly_q']==pytest.approx(actual_q*shape)
+    assert first['desired_weekly_q']==pytest.approx(actual_q*shape)
+    assert learned['applied_volume_factor']==1.
+    assert first==second
+
+
+def test_observed_block_twenty_percent_reduction_is_applied_once_to_actual_basis():
+    profile, _, _, rows, context = setup_context(factor=.8,intensity=0.)
+    context['individual_learning']['components']['Z3'].update(baseline_actual_weekly_q=42.,action='DECREASE')
+    result=goals(profile,rows,context)['Z3']
+    learned=result['progression']['individual_learning']
+    assert result['desired_weekly_q']==pytest.approx(42.*result['progression']['cycle_shape']*.8)
+    assert learned['applied_volume_factor']==pytest.approx(.8)
+
+
+def test_independent_unreturned_state_cannot_reload_from_old_peak_even_after_macro_reduction():
+    profile, _, _, rows, context = setup_context(factor=.8,intensity=0.)
+    context['individual_learning']['components']['Z3'].update(baseline_actual_weekly_q=200.,execution_weekly_q_ceiling=1.,action='DECREASE')
+    result=goals(profile,rows,context)['Z3']
+    assert result['desired_weekly_q']<=1.
+    assert result['target_weekly_q']<=1.

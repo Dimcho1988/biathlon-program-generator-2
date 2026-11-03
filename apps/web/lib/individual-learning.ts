@@ -58,13 +58,13 @@ const mode = (value: unknown): value is LearningMode =>
   typeof value === "string" && ["OFF", "SHADOW", "CONTROL"].includes(value);
 
 export function defaultIndividualLearning(): IndividualLearningConfig {
-  return { mode: "SHADOW", exploration_enabled: true, max_volume_step_percent: 5, max_intensity_step: .02 };
+  return { mode: "SHADOW", exploration_enabled: true, max_volume_step_percent: 20, max_intensity_step: .02 };
 }
 
 export function parseIndividualLearningConfig(value: unknown): IndividualLearningConfig {
   if (value == null) return defaultIndividualLearning();
   if (!isRecord(value) || !mode(value.mode) || typeof value.exploration_enabled !== "boolean"
-    || !range(value.max_volume_step_percent, 0, 10) || !range(value.max_intensity_step, 0, .05))
+    || !range(value.max_volume_step_percent, 0, 20) || !range(value.max_intensity_step, 0, .05))
     throw new Error("Провери режима на самообучение и границите на промяната.");
   return { mode: value.mode, exploration_enabled: value.exploration_enabled,
     max_volume_step_percent: value.max_volume_step_percent, max_intensity_step: value.max_intensity_step };

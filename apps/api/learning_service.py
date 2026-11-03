@@ -17,7 +17,7 @@ from biathlon.equivalence import EQUIVALENCE_VERSION, equivalence_slope
 from biathlon.component_load import VERSION as COMPONENT_LOAD_VERSION
 from .component_load_context import VERSION as COMPONENT_CAPACITY_VERSION
 
-from . import learning_evidence
+from . import learning_evidence, recovery_policy
 from .management_store import ManagementStore
 from .oauth_store import PersistentStoreFailure
 from .response_service import ResponseStore
@@ -28,7 +28,7 @@ from .stress_model import CHANNELS
 
 VERSION = individual_learning.VERSION
 DEFAULTS = {"mode": "SHADOW", "exploration_enabled": True,
-            "max_volume_step_percent": 5., "max_intensity_step": .02}
+            "max_volume_step_percent": 20., "max_intensity_step": .02}
 EPISODE_MEMORY_BYTES = 64*1024
 
 
@@ -177,7 +177,7 @@ def context(repository, alias, profile, source, rows, today, *, periodization=No
     if not enabled(profile):
         return None
     from biathlon.learning_provenance import eligible_load_rows
-    rows = eligible_load_rows(source, rows)
+    rows, _ = recovery_policy.measured_rows(source, rows)
     settings = repository.athlete_settings(alias)
     physiology = {"bounds": list(settings.zone_bounds_bpm), "hrmax": settings.hrmax_bpm} if settings else None
     context_key = _digest({"version": VERSION, "sport": profile["sport"], "physiology": physiology,
@@ -212,7 +212,7 @@ def context(repository, alias, profile, source, rows, today, *, periodization=No
     history.update(generation_id=envelope.get("generation_id"), revision=envelope.get("revision"))
     calendar = repository.athlete_planning_calendar(alias)
     calendar = calendar.to_payload() if hasattr(calendar, "to_payload") else calendar or {}
-    evidence = learning_evidence.build_evidence(source=source, rows=rows, entries=entries, history=history,
+    evidence = recovery_policy.build_view_data(source=source, rows=rows, entries=entries, history=history,
         trainability=ti, today=today, retained=memory, context_key=context_key,
         periodization=periodization, events=calendar.get("events", []))
     original_count = len(evidence["episodes"])
@@ -222,7 +222,6 @@ def context(repository, alias, profile, source, rows, today, *, periodization=No
         current["families"] = len(current["families"])
     quality = source.get("quality") or {}
     current["history_usable"] = bool(current.get("history_usable") and load_progression.history_matches(source, physiology)
-        and not quality.get("limited_activities") and not quality.get("excluded_activities")
         and source.get("period_end") == today.isoformat())
     phase, taper = _current_phase(periodization, today)
     fallback = load_progression.accents(profile, phase, ["Z1"])
@@ -254,6 +253,8 @@ def context(repository, alias, profile, source, rows, today, *, periodization=No
     report = individual_learning.decide(models=models, episodes=supported, current=current,
         today=today, config=config, allowed_components=allowed, phase=phase, taper=taper,
         retained=memory, intensity_scale=intensity_scale, dose_reference=recent["components"])
+    report = recovery_policy.apply_decision(report, evidence, models, config=config,
+        allowed_components=allowed, phase=phase, taper=taper, today=today, retained=memory, supported_episodes=supported)
     from .learning_methods import assess_methods
     method_source = {**source, "calendar": {"activities": envelope.get("activities") or []}}
     method_result = assess_methods(entries=entries, source=method_source, today=today,
@@ -281,7 +282,7 @@ def context(repository, alias, profile, source, rows, today, *, periodization=No
                         "context_key": context_key, "component_load_context_key": component_load_context_key(source)}
     report["model_summary"] = {k: {"observations": v["posterior"]["count"], "validation": v["validation"]} for k, v in models.items()}
     report["memory"] = {"version": VERSION, "context_key": context_key, "as_of": today.isoformat(),
-                        "episodes": deepcopy(evidence["episodes"]), "decision": deepcopy(report.get("decision")),
+                        "episodes": deepcopy(evidence["episodes"]), "decision": deepcopy(report.get("decision") or memory.get("decision")),
                         "methods": method_result.get("memory", {}),
                         "cooldown_until": (report.get("decision") or {}).get("expires_on") or memory.get("cooldown_until"),
                         "cooldown_mode": (report.get("decision") or {}).get("mode") or memory.get("cooldown_mode")}

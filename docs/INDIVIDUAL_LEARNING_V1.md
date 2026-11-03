@@ -1,5 +1,7 @@
 # Individual learning v1 — staging pilot
 
+Current observed-block policy: see [RECOVERY_LEARNING_V3.md](RECOVERY_LEARNING_V3.md). The fixed 7+7 calendar extraction and older step limits described below document the preceding pilot and do not describe the current controller.
+
 Version: `individual-response-bayes-v2`. This is an observational individual
 response model with a bounded planning policy. Its coefficients, thresholds and
 utility weights are explicit pilot settings, not validated physiological limits

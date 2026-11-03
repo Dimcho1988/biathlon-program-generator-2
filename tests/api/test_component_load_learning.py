@@ -53,11 +53,11 @@ def test_actual_learner_accepts_projected_pinned_source_and_resets_old_memory(mo
     monkeypatch.setattr(ManagementStore, "learning_memory", lambda *args: {
         "version": learning_service.VERSION, "context_key": "pre-adjacent-rule", "episodes": [{"id": "obsolete"}]})
     seen = []
-    original = learning_service.learning_evidence.build_evidence
+    original = learning_service.recovery_policy.build_view_data
     def inspect(**kwargs):
         seen.append(kwargs["retained"])
         return original(**kwargs)
-    monkeypatch.setattr(learning_service.learning_evidence, "build_evidence", inspect)
+    monkeypatch.setattr(learning_service.recovery_policy, "build_view_data", inspect)
     report = learning_service.context(repo, "athlete", configured(), source, rows, TODAY, envelope=envelope)
     assert seen == [{}]
     assert report["source"]["component_load_context_key"] == learning_service.component_load_context_key(source)

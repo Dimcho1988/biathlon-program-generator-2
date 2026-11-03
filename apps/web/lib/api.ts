@@ -83,6 +83,11 @@ export async function getResponseHistory(athleteAlias:string,start?:string,end?:
   if (end) params.set("period_end",end);
   return parseResponseHistory(await fetchApiResource(`/api/v2/athlete/response?${params}`,process.env.ONFLOWS_SERVICE_TOKEN,athleteAlias));
 }
+
+export async function getLearningView(athleteAlias: string, days = 90) {
+  const { parseRecoveryLearningView } = await import("./recovery-learning");
+  return parseRecoveryLearningView(await fetchApiResource(`/api/v2/athlete/learning?${new URLSearchParams({ days: String(days) })}`, process.env.ONFLOWS_SERVICE_TOKEN, athleteAlias));
+}
 export interface TrainingStatusResult { data: TrainingStatus; mode: DataMode }
 export interface AthleteSettings {
   age_years?: number | null;

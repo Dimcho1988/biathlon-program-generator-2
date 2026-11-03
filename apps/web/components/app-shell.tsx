@@ -14,6 +14,7 @@ const sections = [
   { href: "/trainability", label: "Индекс на тренираност", icon: "trend" },
   { href: "/speed", label: "Скорост и време", icon: "speed" },
   { href: "/response", label: "Стрес и възстановяване", icon: "response" },
+  { href: "/learning", label: "Самообучение", icon: "trend" },
   { href: "/planning", label: "Профил за планиране", icon: "overview" },
   { href: "/management", label: "Седмична програма", icon: "calendar" },
   { href: "/management/outlook", label: "Дългосрочен план", icon: "trend" },
@@ -81,7 +82,7 @@ export function AppShell({ children, athlete }: { children: ReactNode; athlete: 
       {children}
     </div>
     <nav className="mobile-navigation" aria-label="Бърза навигация">
-      {[sections[0], sections[1], sections[2], sections[6]].map(({href,label,icon},i) => <Link key={href} href={href} prefetch={false} aria-current={pathname === href || (href !== "/" && pathname.startsWith(`${href}/`)) ? "page" : undefined} onNavigate={event => navigate(href,label,event)}><NavIcon name={icon} /><span>{["Статус","Активности","Индекс","Програма"][i]}</span></Link>)}
+      {sections.filter(section => ["/", "/activities", "/trainability", "/management"].includes(section.href)).map(({href,label,icon},i) => <Link key={href} href={href} prefetch={false} aria-current={pathname === href || (href !== "/" && pathname.startsWith(`${href}/`)) ? "page" : undefined} onNavigate={event => navigate(href,label,event)}><NavIcon name={icon} /><span>{["Статус","Активности","Индекс","Програма"][i]}</span></Link>)}
     </nav>
   </div>;
 }
