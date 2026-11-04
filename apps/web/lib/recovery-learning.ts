@@ -10,7 +10,7 @@ export const LEARNING_COMPONENTS = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"] as cons
 export type LearningComponent = typeof LEARNING_COMPONENTS[number];
 export type ComponentQ = Record<LearningComponent, number | null>;
 export interface LearningDay {
-  day: string; actual_q: number | null; actual_q_by_component: ComponentQ;
+  day: string; q3: number | null; q3_by_component: ComponentQ; q3_observed_days: ComponentQ; q3_partial: boolean; actual_q: number | null; actual_q_by_component: ComponentQ;
   index_7_40_by_component: ComponentQ; recorded_q_by_component: ComponentQ;
   index_load_status: "COMPLETE" | "MODELLED" | "PARTIAL" | "UNAVAILABLE"; index_history_days: number;
   load_status: "COMPLETE" | "MODELLED" | "PARTIAL" | "UNAVAILABLE" | "REST";
@@ -19,8 +19,9 @@ export interface LearningDay {
   stress_basis: "FROZEN_BLOCK" | "FIXED_PANEL" | null; stress_reference: string | null;
 }
 export interface ComponentLearning {
-  component: LearningComponent; recent_weekly_q: number | null; reference_weekly_q: number | null;
+  component: LearningComponent; q3: number | null; q3_observed_days: number; recent_weekly_q: number | null; reference_weekly_q: number | null;
   recent_observed_days: number; reference_observed_days: number; accent_ratio: number | null;
+  stress_evidence_count: number; predicted_stress_points: number | null; predicted_stress_low: number | null; predicted_stress_high: number | null;
   evidence_count: number; isolated_changes: number; validation_status: string;
   response_status: "SUPPORTED_POSITIVE" | "SUPPORTED_NEGATIVE" | "UNCERTAIN" | "INSUFFICIENT_DATA";
   test_step_percent: number; predicted_performance_percent: number | null;
@@ -57,8 +58,8 @@ const component = (value: unknown) => value === null || LEARNING_COMPONENTS.incl
 export const unknownComponentQ = (): ComponentQ => ({ Z1:null, Z2:null, Z3:null, Z4:null, Z5:null, STR:null });
 
 function unknownComponentModel(component: LearningComponent): ComponentLearning {
-  return { component, recent_weekly_q:null, reference_weekly_q:null, recent_observed_days:0, reference_observed_days:0,
-    accent_ratio:null, evidence_count:0, isolated_changes:0, validation_status:"WARMUP", response_status:"INSUFFICIENT_DATA",
+  return { component, q3:null, q3_observed_days:0, recent_weekly_q:null, reference_weekly_q:null, recent_observed_days:0, reference_observed_days:0,
+    accent_ratio:null, stress_evidence_count:0,predicted_stress_points:null,predicted_stress_low:null,predicted_stress_high:null,evidence_count:0, isolated_changes:0, validation_status:"WARMUP", response_status:"INSUFFICIENT_DATA",
     test_step_percent:5, predicted_performance_percent:null, predicted_performance_low:null, predicted_performance_high:null,
     proposed_change_percent:null, applied_change_percent:null, action_status:"COLLECTING", model_scope:null, management_basis:"HOLD",
     baseline_actual_weekly_q:null, target_weekly_q:null, execution_weekly_q_ceiling:null, effective_from:null, expires_on:null,
@@ -114,6 +115,17 @@ export function parseRecoveryLearningView(value: unknown): RecoveryLearningView 
       || !(row.load_activity_count == null || count(row.load_activity_count))
       || !(row.load_unknown_minutes == null || nonnegative(row.load_unknown_minutes))
       || !(row.learning_load_eligible == null || typeof row.learning_load_eligible === "boolean")) throw fail();
+    const q3 = unknownComponentQ(), q3Days = unknownComponentQ();
+    for (const [field,target] of [["q3_by_component",q3],["q3_observed_days",q3Days]] as const) {
+      if (row[field] != null) {
+        if (!isRecord(row[field])) throw fail();
+        for (const [key,item] of Object.entries(row[field])) {
+          if (!LEARNING_COMPONENTS.includes(key as LearningComponent) || !optional(item,field==="q3_observed_days"?(v)=>count(v)&&Number(v)<=3:nonnegative)) throw fail();
+          target[key as LearningComponent]=item as number|null;
+        }
+      }
+    }
+    if (!(row.q3==null||nonnegative(row.q3)) || !(row.q3_partial==null||typeof row.q3_partial==="boolean")) throw fail();
     const stressWeights: Record<string,number> = {};
     if (row.stress_weights != null) {
       if (!isRecord(row.stress_weights)) throw fail();
@@ -125,7 +137,7 @@ export function parseRecoveryLearningView(value: unknown): RecoveryLearningView 
     }
     if (!(row.stress_basis == null || ["FROZEN_BLOCK","FIXED_PANEL"].includes(String(row.stress_basis)))
       || !(row.stress_reference == null || typeof row.stress_reference === "string")) throw fail();
-    return { day: row.day, actual_q: row.actual_q as number | null, actual_q_by_component:actualQ,
+    return { day: row.day, q3:row.q3 as number|null ?? null, q3_by_component:q3, q3_observed_days:q3Days, q3_partial:row.q3_partial===true, actual_q: row.actual_q as number | null, actual_q_by_component:actualQ,
       index_7_40_by_component:index740, recorded_q_by_component:recordedQ,
       index_load_status:(row.index_load_status ?? "UNAVAILABLE") as LearningDay["index_load_status"], index_history_days:row.index_history_days as number ?? 0,
       load_status:(row.load_status ?? "UNAVAILABLE") as LearningDay["load_status"],
@@ -169,21 +181,26 @@ export function parseRecoveryLearningView(value: unknown): RecoveryLearningView 
         || ![row.baseline_actual_weekly_q,row.target_weekly_q,row.execution_weekly_q_ceiling].every(item=>item==null||nonnegative(item))
         || ![row.effective_from,row.expires_on].every(item=>item==null||isCalendarDate(item))) throw fail();
       const predicted = [row.predicted_performance_low,row.predicted_performance_percent,row.predicted_performance_high];
-      if (predicted.some(item=>item!==null) && (!predicted.every(finite) || row.validation_status!=="PASSED" || row.evidence_count<8 || row.isolated_changes<2
+      if (predicted.some(item=>item!==null) && (!predicted.every(finite)
         || Number(predicted[0])>Number(predicted[1]) || Number(predicted[1])>Number(predicted[2]) || row.model_scope==null
         || row.response_status==="INSUFFICIENT_DATA" || (row.response_status==="SUPPORTED_POSITIVE" && Number(predicted[0])<=0)
         || (row.response_status==="SUPPORTED_NEGATIVE" && Number(predicted[2])>=0)
-        || (row.response_status==="UNCERTAIN" && (Number(predicted[0])>0 || Number(predicted[2])<0)))) throw fail();
-      if ((row.recent_weekly_q!==null && row.recent_observed_days!==7) || (row.reference_weekly_q!==null && row.reference_observed_days!==40)
+        )) throw fail();
+      if ((row.recent_weekly_q!==null && row.recent_observed_days===0) || (row.reference_weekly_q!==null && row.reference_observed_days===0)
         || (row.accent_ratio!==null && (row.recent_weekly_q===null || row.reference_weekly_q===null || row.reference_weekly_q===0))
         || (row.response_status!=="INSUFFICIENT_DATA" && row.predicted_performance_percent===null)
         || (row.action_status==="SELECTED" ? row.proposed_change_percent===null || row.applied_change_percent===null : row.proposed_change_percent!==null || row.applied_change_percent!==null)
         || (row.action_status!=="SELECTED" && [row.baseline_actual_weekly_q,row.target_weekly_q,row.execution_weekly_q_ceiling,row.effective_from,row.expires_on].some(item=>item!=null))
         || (row.effective_from!=null && row.expires_on!=null && String(row.effective_from)>String(row.expires_on))
         || (value.mode!=="CONTROL" && row.applied_change_percent!==null && row.applied_change_percent!==0)) throw fail();
+      if (!(row.q3==null||nonnegative(row.q3)) || !(row.q3_observed_days==null||(count(row.q3_observed_days)&&row.q3_observed_days<=3))) throw fail();
+      if (["SUPPORTED_POSITIVE","SUPPORTED_NEGATIVE"].includes(String(row.response_status)) && (row.validation_status!=="PASSED"||row.isolated_changes<2)) throw fail();
+      const stressPrediction=[row.predicted_stress_low??null,row.predicted_stress_points??null,row.predicted_stress_high??null];
+      if (!(row.stress_evidence_count==null||count(row.stress_evidence_count)) || (stressPrediction.some(v=>v!==null) && (!stressPrediction.every(finite)||Number(stressPrediction[0])>Number(stressPrediction[1])||Number(stressPrediction[1])>Number(stressPrediction[2])||!row.stress_evidence_count))) throw fail();
       componentNames.add(String(row.component));
-      return { component:row.component, recent_weekly_q:row.recent_weekly_q, reference_weekly_q:row.reference_weekly_q,
+      return { component:row.component, q3:row.q3 ?? null,q3_observed_days:row.q3_observed_days ?? 0, recent_weekly_q:row.recent_weekly_q, reference_weekly_q:row.reference_weekly_q,
         recent_observed_days:row.recent_observed_days, reference_observed_days:row.reference_observed_days, accent_ratio:row.accent_ratio,
+        stress_evidence_count:row.stress_evidence_count??0,predicted_stress_points:row.predicted_stress_points??null,predicted_stress_low:row.predicted_stress_low??null,predicted_stress_high:row.predicted_stress_high??null,
         evidence_count:row.evidence_count, isolated_changes:row.isolated_changes, validation_status:row.validation_status,
         response_status:row.response_status, test_step_percent:row.test_step_percent, predicted_performance_percent:row.predicted_performance_percent,
         predicted_performance_low:row.predicted_performance_low, predicted_performance_high:row.predicted_performance_high,

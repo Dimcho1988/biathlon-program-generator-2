@@ -8,8 +8,6 @@ from copy import deepcopy
 from datetime import date, timedelta
 from hashlib import sha256
 import json
-from statistics import median
-from math import isfinite
 
 from biathlon import individual_learning, load_progression, planning_controls
 from biathlon.constants import COMPONENTS
@@ -114,69 +112,11 @@ def _current_phase(periodization, today):
     return phase, taper
 
 
-def local_evidence(episodes, recent, ti, today):
-    """Retain support at comparable current dose/effort and observed fitness.
-
-    A +5% association at 200 Q is not extrapolated to 800 Q with artificial
-    certainty. This local-support policy is an explicit pilot setting.
-    """
-    index = {}
-    cutoff = (today-timedelta(days=14)).isoformat()
-    for row in ti:
-        observation = row.get("index") or {}
-        band = observation.get("general") or {}
-        value = band.get("index")
-        if (cutoff <= row.get("local_date", "") < today.isoformat() and
-                observation.get("admission", {}).get("status") == "ACCEPTED" and band.get("valid") and
-                isinstance(value, (int, float)) and value > 0):
-            key = f"{row.get('sport')}:{observation.get('comparison_key')}:GLOBAL"
-            index.setdefault(key, {}).setdefault(row["local_date"], []).append(value)
-    selected = []
-    for episode in episodes:
-        present = [recent["components"][z].get("weekly_q") for z in COMPONENTS]
-        baseline = [(episode.get("dose", {}).get(z) or {}).get("baseline_q") for z in COMPONENTS]
-        if any(not isinstance(q, (int, float)) or isinstance(q, bool) or not isfinite(q) or q < 0 for q in present+baseline):
-            continue
-        now_total, then_total = sum(present), sum(baseline)
-        if min(now_total, then_total) <= 0 or not .67 <= now_total/then_total <= 1.5:
-            continue
-        # Compare small components on the scale of the whole week. A known
-        # 0→small exposure is support, not missingness; it is still a covariate.
-        small = .05*min(now_total, then_total)
-        supported = True
-        for z in COMPONENTS:
-            now = recent["components"][z]
-            then = episode.get("dose", {}).get(z) or {}
-            q, base = now.get("weekly_q"), then.get("baseline_q")
-            offset = individual_learning.DOSE_OFFSET
-            if max(q, base) > small and not .67 <= (q+offset)/(base+offset) <= 1.5:
-                supported = False
-                break
-            minutes, old_minutes = now.get("weekly_minutes"), then.get("baseline_minutes")
-            if (any(not isinstance(t, (int, float)) or isinstance(t, bool) or not isfinite(t) or t < 0 for t in (minutes, old_minutes))
-                    or (q == 0) != (minutes == 0) or (base == 0) != (old_minutes == 0)):
-                supported = False
-                break
-            if z != "STR" and q and base and minutes and old_minutes and not .85 <= (q/minutes)/(base/old_minutes) <= 1.15:
-                supported = False
-                break
-        for o in episode.get("outcomes", []):
-            if o.get("source") != "TI" or o.get("scope") != "GLOBAL":
-                continue
-            candidates = [median(v) for v in index.get(o.get("comparison_key"), {}).values()]
-            prior = o.get("before_value")
-            if candidates and prior and not .85 <= median(candidates)/prior <= 1.15:
-                supported = False
-        if supported:
-            selected.append(episode)
-    return selected
-
 
 def context(repository, alias, profile, source, rows, today, *, periodization=None, envelope=None, entries=None):
     config = {**DEFAULTS, **(profile.get("individual_learning") or {})}
     if not enabled(profile):
         return None
-    from biathlon.learning_provenance import eligible_load_rows
     rows, _ = recovery_policy.measured_rows(source, rows)
     settings = repository.athlete_settings(alias)
     physiology = {"bounds": list(settings.zone_bounds_bpm), "hrmax": settings.hrmax_bpm} if settings else None
@@ -226,10 +166,10 @@ def context(repository, alias, profile, source, rows, today, *, periodization=No
     phase, taper = _current_phase(periodization, today)
     fallback = load_progression.accents(profile, phase, ["Z1"])
     state = planning_controls.resolve(profile, today, phase, fallback, periodization=periodization)
-    recent = load_progression.observed_window(source, rows, today-timedelta(days=14), today)
+    recent = evidence["_recent_window"]
     allowed = [z for z in (state or {}).get("accents", fallback)
                if z not in profile.get("component_targets_weekly", {}) and
-               recent["complete"] and (recent["components"][z].get("weekly_q") or 0) > 0]
+               (recent["components"][z].get("weekly_q") or 0) > 0]
     if not state or state.get("explicit") or state.get("kind") not in {"BUILD", "MAINTAIN"}:
         allowed = []
     # Predict Q/time change from the SAME linear equivalence as canonical load.
@@ -246,7 +186,7 @@ def context(repository, alias, profile, source, rows, today, *, periodization=No
                 width = min(20., width)
             if q and minutes:
                 intensity_scale[z] = equivalence_slope(z)/100*width/(q/minutes)
-    supported = local_evidence(evidence["episodes"], recent, ti, today)
+    supported = evidence["episodes"]
     current["unresolved_recovery"] = any(not e.get("response", {}).get("recovered")
         and e["end"] >= (today-timedelta(days=42)).isoformat() for e in supported)
     models = individual_learning.fit(supported, today)

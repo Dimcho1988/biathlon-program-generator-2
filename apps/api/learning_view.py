@@ -26,14 +26,14 @@ def _fields(value, names):
     return {key: value.get(key) for key in names} if isinstance(value, dict) else {}
 
 
-SERIES_FIELDS = ("day", "actual_q", "stress", "baseline", "stress_basis", "stress_reference")
+SERIES_FIELDS = ("day", "actual_q", "stress", "baseline", "stress_basis", "stress_reference", "q3", "q3_partial")
 EPISODE_FIELDS = ("id", "start", "load_end", "end", "loading_days", "recovery_limit_days",
                   "recovery_days", "recovered", "ratio", "status", "proposed_change_percent",
                   "reason", "performance_change_percent")
 DECISION_FIELDS = ("component", "status", "proposed_change_percent", "applied_change_percent", "reason")
 CHANNEL_FIELDS = ("key", "label", "observed_days", "nominal_weight")
-COMPONENT_FIELDS = ("component", "recent_weekly_q", "reference_weekly_q", "recent_observed_days",
-    "reference_observed_days", "accent_ratio", "evidence_count", "isolated_changes", "validation_status",
+COMPONENT_FIELDS = ("component", "q3", "q3_observed_days", "recent_weekly_q", "reference_weekly_q", "recent_observed_days",
+    "reference_observed_days", "accent_ratio", "stress_evidence_count", "predicted_stress_points", "predicted_stress_low", "predicted_stress_high", "evidence_count", "isolated_changes", "validation_status",
     "model_scope", "response_status", "test_step_percent", "predicted_performance_percent",
     "predicted_performance_low", "predicted_performance_high", "proposed_change_percent",
     "applied_change_percent", "baseline_actual_weekly_q", "target_weekly_q", "execution_weekly_q_ceiling",
@@ -89,11 +89,11 @@ def _accounting_series(source, catalog=(), *, refresh_required=False):
         if not complete:
             status, reason = "UNAVAILABLE", "Липсва пълна дневна история по компоненти."
         elif partial:
-            status, reason = "PARTIAL", "Има отчетена активност с непълни данни за натоварването. Показаният 7/40 е по наличните данни; денят не участва в самообучението."
+            status, reason = "PARTIAL", "Има отчетена активност с непълни данни за натоварването. Наличната част участва в самообучението с отбелязана неопределеност."
             if unidentified:
                 reason = "Има изключени активности без установена дата. Пълнотата на дневното натоварване не е потвърдена."
         elif modelled:
-            status, reason = "MODELLED", "Активността е отчетена, но част от интензивността използва начална оценка по скорост. Денят не участва в самообучението."
+            status, reason = "MODELLED", "Активността е отчетена, но част от интензивността използва начална оценка по скорост. Оценката участва с отбелязан произход и по-ниска тежест."
         elif not recorded and all(r["effective_load"] == 0 for r in values.values()):
             status, reason = "REST", "В покрития календар няма отчетена тренировка."
         else:
@@ -135,6 +135,8 @@ def _series_row(row, accounting=None):
     """Allowlist nested metadata as well as the public row's scalar fields."""
     result=_fields(row,SERIES_FIELDS)
     result["actual_q_by_component"]=_fields(row.get("actual_q_by_component") or {},COMPONENTS)
+    result["q3_by_component"]=_fields(row.get("q3_by_component") or {},COMPONENTS)
+    result["q3_observed_days"]=_fields(row.get("q3_observed_days") or {},COMPONENTS)
     result["stress_weights"]={key:value for key,value in (row.get("stress_weights") or {}).items() if key in CHANNEL_LABELS}
     result.update(accounting or {"index_7_40_by_component": {z: None for z in COMPONENTS},
         "recorded_q_by_component": {z: None for z in COMPONENTS}, "load_status": "UNAVAILABLE",

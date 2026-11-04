@@ -82,6 +82,29 @@ def test_generator_pins_projected_history_for_learning_without_rewriting_reposit
     assert "component_load_model" not in original
 
 
+def test_planner_and_learning_page_use_the_same_initially_mapped_rows(monkeypatch):
+    repo, source, rows, envelope = projected_fixture()
+    for activity in source["activities"]:
+        activity["load_source"] = {**(activity.get("load_source") or {}), "initial_heuristic": True}
+    envelope["snapshot_payload"]["load_history"] = source
+    original = deepcopy(source)
+    seen, adaptation = [], []
+    def inspect(repository, alias, profile, actual, supplied_rows, today, **kwargs):
+        seen.append(deepcopy(supplied_rows))
+        assert actual == kwargs["envelope"]["snapshot_payload"]["load_history"]
+        return {"version": "q3-sentinel"}
+    def assess(entries, today, *, rows):
+        adaptation.append(rows)
+        return None
+    monkeypatch.setattr(learning_service, "context", inspect)
+    monkeypatch.setattr(engine.load_adaptation, "assess", assess)
+    result = engine.progression_context(repo, "athlete", configured(), source, rows, TODAY, envelope=envelope)
+    assert result["individual_learning"] == {"version": "q3-sentinel"}
+    assert seen == [rows]
+    assert adaptation and len(adaptation[0]) < len(rows)
+    assert source == original
+
+
 def test_outlook_passes_the_same_projected_activity_envelope_to_learning(monkeypatch):
     repo, _, _ = observed()
     repo.active_analysis = lambda alias: deepcopy(repo.envelope)
