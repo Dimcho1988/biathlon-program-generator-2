@@ -18,7 +18,7 @@ begin
  update public.onflows_analysis_generation_activities set local_date=d,start_at_utc=d::timestamptz where generation_id=g;
  update public.onflows_analysis_generations set period_start=d,period_end=d+89,as_of=d+89,
   snapshot_payload=jsonb_build_object('schema_version','athlete-snapshot-v1',
-   'load_history',jsonb_build_object('period_start',d,'period_end',d+89,
+   'load_history',jsonb_build_object('period_start',d,'period_end',d+89,'quality',jsonb_build_object('limited_activities',2,'excluded_activities',1),
     'daily',jsonb_build_array(jsonb_build_object('date',d,'zone','Z1','effective_load',42.)),
     'activities',jsonb_build_array(jsonb_build_object('date',d,'sport','Run','zones',jsonb_build_array(jsonb_build_object('zone','Z1','equivalent_time_min',42.))))),
    'wellness_calendar',jsonb_build_array(jsonb_build_object('date',d,'metrics',jsonb_build_object('hrv',jsonb_build_object('value',60)))))
@@ -28,6 +28,7 @@ begin
  if onflows_private.capture_lifetime_generation(g)<>0 then raise exception 'Replay duplicated day inputs';end if;
  data:=public.read_onflows_history_day_inputs(a,d,d+2);
  if jsonb_array_length(data)<>3 or data#>>'{0,payload,activities,0,zones,0,equivalent_time_min}'<>'42'
+  or data#>>'{0,payload,source_quality_counts,limited_activities}'<>'2' or data#>>'{0,payload,unidentified_activities}'<>'2'
   or jsonb_array_length(data#>'{1,payload,daily}')<>0 then raise exception 'Original facts changed or unknown days invented';end if;
  -- Technical generations may disappear; permanent scientific roots remain.
  delete from public.onflows_analysis_generation_activities where generation_id=g;
@@ -68,6 +69,18 @@ begin
  result:=public.onflows_history_window('STORE',a,token,model,
   jsonb_build_object('history_version','lifetime-timeline-v1','series',jsonb_build_array(jsonb_build_object('day',d+1))));
  if result->>'stored'<>'false' then raise exception 'Changed historical inputs were published';end if;
+ -- Correcting an old independent observation dirties and requeues its curve.
+ claim:=public.onflows_history_window('CLAIM',a,token,model);
+ insert into public.onflows_response_entries(athlete_alias,kind,entry_key,revision,observed_date,payload,actor_id)
+  values(a,'DAILY',d::text,1,d,jsonb_build_object('day',d,'stress',4),(f->>'actor')::uuid);
+ if not exists(select 1 from onflows_private.learning_timeline_days where athlete_alias=a and day=d and needs_refresh) then raise exception 'Old response correction stayed fresh';end if;
+ result:=public.onflows_history_window('STORE',a,token,model,jsonb_build_object('history_version','lifetime-timeline-v1','series','[]'::jsonb));
+ if result->>'stored'<>'false' then raise exception 'Changed response was published';end if;
+ claim:=public.onflows_history_window('CLAIM',a,token,model);
+ if (claim->>'first_day')::date<>d then raise exception 'Dirty historical point not requeued';end if;
+ result:=public.onflows_history_window('STORE',a,token,model,jsonb_build_object('history_version','lifetime-timeline-v1',
+  'series',jsonb_build_array(jsonb_build_object('day',d,'actual_q',42,'stress',55))));
+ if result->>'stored'<>'true' or not exists(select 1 from onflows_private.learning_timeline_days where athlete_alias=a and day=d and not needs_refresh and payload->>'stress'='55') then raise exception 'Corrected historical point not replaced';end if;
  -- Account removal retains its existing explicit cascade.
  delete from public.onflows_intervals_connections where athlete_alias=a;
  set constraints all immediate;

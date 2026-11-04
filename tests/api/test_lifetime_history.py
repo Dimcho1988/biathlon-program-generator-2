@@ -83,6 +83,18 @@ def test_duplicate_dates_and_unsupported_payloads_are_not_published():
         lifetime_history.source_from_days(stored)
 
 
+def test_missing_catalog_activity_cannot_be_a_confirmed_rest_day():
+    from apps.api.learning_loads import ledger
+    _, stored = records()
+    day = stored[0]["day"]
+    stored[0]["payload"]["activities"] = []
+    stored[0]["payload"]["catalog"] = [{"activity_ref":"missing", "local_date":day,"sport":"Run","quality_status":"provider_missing"}]
+    source, _, _, _ = lifetime_history.source_from_days(stored[:1])
+    rows = [{**r,"effective_load":0.} for r in stored[0]["payload"]["daily"]]
+    rows.append({"date":day,"zone":"STR","effective_load":0.})
+    assert all(v is None for v in ledger(source, rows)[day]["q"].values())
+
+
 def test_historical_selection_is_a_bounded_read_without_model_work():
     report = {"schema_version": "recovery-learning-view-v1", "as_of": "2026-11-04", "series": [
         {"day": "2026-01-01", "actual_q": 100}, {"day": "2026-01-14", "actual_q": 50}]}
@@ -94,3 +106,14 @@ def test_historical_selection_is_a_bounded_read_without_model_work():
     assert len(result["series"]) == 2
     history_reader.assert_called_once_with("athlete", days=14, end=date(2026, 1, 14), model_key=prepared_learning.model_key())
     operational.assert_not_called()
+
+
+def test_unidentified_counts_preserve_empty_day_uncertainty():
+    from apps.api.learning_loads import ledger
+    _, stored = records()
+    row = stored[0]
+    row["payload"]["unidentified_activities"] = 2
+    row["payload"]["activities"] = []
+    source, _, _, _ = lifetime_history.source_from_days(stored[:1])
+    raw = [{**r,"effective_load":0.} for r in row["payload"]["daily"]]+[{"date":row["day"],"zone":"STR","effective_load":0.}]
+    assert all(v is None for v in ledger(source,raw)[row["day"]]["q"].values())

@@ -17,7 +17,7 @@ create table onflows_private.history_day_inputs (
 create table onflows_private.learning_timeline_days (
  athlete_alias text not null references public.onflows_intervals_connections(athlete_alias) on update cascade on delete cascade,
  day date not null, model_key text not null, model_version text not null,
- source_revision bigint not null, payload jsonb not null,
+ source_revision bigint not null, needs_refresh boolean not null default false, payload jsonb not null,
  prepared_at timestamptz not null default clock_timestamp(),
  primary key(athlete_alias,day),
  check(jsonb_typeof(payload)='object' and payload->>'day'=day::text and octet_length(payload::text)<=16384)
@@ -30,7 +30,7 @@ revoke all on onflows_private.history_activity_sources,onflows_private.history_d
 create function onflows_private.capture_lifetime_generation(p_generation uuid,p_first date default null,p_last date default null)
 returns integer language plpgsql security definer set search_path='' as $$
 declare g public.onflows_analysis_generations%rowtype; source jsonb; first_day date;last_day date;d date;
- activity_set uuid; doc jsonb; refs jsonb; updated integer:=0; n integer;
+ activity_set uuid; doc jsonb; refs jsonb; updated integer:=0; n integer; unidentified integer; quality_counts jsonb;
 begin
  select * into g from public.onflows_analysis_generations where generation_id=p_generation for key share;
  if not found or g.activated_revision is null or g.snapshot_payload is null then return 0;end if;
@@ -41,6 +41,10 @@ begin
  if last_day<first_day then return 0;end if;
  if last_day-first_day>366 then raise exception 'Lifetime capture is bounded';end if;
  activity_set:=coalesce(g.activity_set_generation_id,g.generation_id);
+ quality_counts:=jsonb_build_object('limited_activities',coalesce(source#>'{quality,limited_activities}','0'::jsonb),'excluded_activities',coalesce(source#>'{quality,excluded_activities}','0'::jsonb));
+ select greatest(coalesce((source#>>'{quality,excluded_activities}')::integer,0)+coalesce((source#>>'{quality,limited_activities}')::integer,0)-count(*),0)::integer into unidentified
+ from public.onflows_analysis_generation_activities a where a.generation_id=activity_set and a.athlete_alias=g.athlete_alias and
+ (coalesce(a.catalog_payload->>'quality_status','valid')<>'valid' or not exists(select 1 from jsonb_array_elements(coalesce(source->'activities','[]')) x where x->>'activity_ref'=a.activity_ref));
  -- Reuse the existing native pin closure. Unused technical generations remain
  -- eligible for cleanup; actual published inputs/results remain reproducible.
  select jsonb_build_object(
@@ -68,6 +72,7 @@ begin
    'catalog',coalesce((select jsonb_agg(a.catalog_payload||jsonb_build_object('activity_ref',a.activity_ref,'local_date',a.local_date,'start_at_utc',a.start_at_utc))
      from public.onflows_analysis_generation_activities a where a.generation_id=activity_set and a.athlete_alias=g.athlete_alias and a.local_date=d),'[]'::jsonb),
    'wellness',(select x from jsonb_array_elements(coalesce(g.snapshot_payload->'wellness_calendar','[]')) x where x->>'date'=d::text limit 1),
+   'source_quality_counts',quality_counts,'unidentified_activities',unidentified,
    'exclusions',coalesce((select jsonb_agg(x) from jsonb_array_elements(coalesce(source#>'{quality,exclusions}','[]')) x
      where coalesce(x->>'date',x->>'local_date',d::text)=d::text),'[]'::jsonb));
   insert into onflows_private.history_day_inputs(athlete_alias,day,source_revision,source_generation_id,payload)
@@ -144,8 +149,8 @@ begin
   insert into onflows_private.learning_timeline_days(athlete_alias,day,model_key,model_version,source_revision,payload)
    values(new.athlete_alias,(point->>'day')::date,new.model_key,new.payload#>>'{report,history_version}',new.prepared_revision,point)
   on conflict(athlete_alias,day) do update set model_key=excluded.model_key,model_version=excluded.model_version,
-   source_revision=excluded.source_revision,payload=excluded.payload,prepared_at=clock_timestamp()
-  where excluded.source_revision>=learning_timeline_days.source_revision and (excluded.payload is distinct from learning_timeline_days.payload or excluded.model_key is distinct from learning_timeline_days.model_key);
+   source_revision=excluded.source_revision,payload=excluded.payload,needs_refresh=false,prepared_at=clock_timestamp()
+  where excluded.source_revision>=learning_timeline_days.source_revision and (learning_timeline_days.needs_refresh or excluded.payload is distinct from learning_timeline_days.payload or excluded.model_key is distinct from learning_timeline_days.model_key);
  end loop;
  return new;
 end $$;
@@ -165,10 +170,10 @@ begin
  first_day:=last_day-(p_days-1);
  select min(day),max(day) into available_first,available_last from onflows_private.learning_timeline_days where athlete_alias=p_alias;
  select coalesce(jsonb_agg(h.payload order by h.day),'[]'::jsonb) into points
-  from onflows_private.learning_timeline_days h where h.athlete_alias=p_alias and h.day between first_day and last_day;
+  from onflows_private.learning_timeline_days h where h.athlete_alias=p_alias and h.day between first_day and last_day and not h.needs_refresh;
  report:=jsonb_set(report,'{series}',points);
  report:=report||jsonb_build_object('history',jsonb_build_object('available_start',available_first,'available_end',available_last,
-  'display_start',first_day,'display_end',last_day,'requested_days',p_days,'limited',available_first is null or available_first>first_day or available_last<last_day));
+  'display_start',first_day,'display_end',last_day,'requested_days',p_days,'preparing',exists(select 1 from onflows_private.learning_timeline_days h where h.athlete_alias=p_alias and h.day between first_day and last_day and h.needs_refresh),'limited',available_first is null or available_first>first_day or available_last<last_day));
  return jsonb_set(state,'{payload,report}',report);
 end $$;
 revoke all on function public.read_onflows_learning_history(text,integer,date,text) from public,anon,authenticated;
@@ -176,6 +181,22 @@ grant execute on function public.read_onflows_learning_history(text,integer,date
 
 -- A bounded idle pass also prepares older years restored/backfilled later.
 -- One lease per athlete prevents duplicate work across rolling worker deploys.
+create table onflows_private.history_projection_queue (
+ athlete_alias text primary key references public.onflows_intervals_connections(athlete_alias) on update cascade on delete cascade,
+ requested_at timestamptz not null default clock_timestamp()
+);
+alter table onflows_private.history_projection_queue enable row level security;
+revoke all on onflows_private.history_projection_queue from public,anon,authenticated,service_role;
+create function onflows_private.queue_old_history_projection() returns trigger language plpgsql security definer set search_path='' as $$
+begin
+ if new.day<current_date-365 then
+  update onflows_private.learning_timeline_days set needs_refresh=true where athlete_alias=new.athlete_alias and day between new.day and new.day+84 and day<current_date-365;
+  insert into onflows_private.history_projection_queue(athlete_alias) values(new.athlete_alias) on conflict do nothing;
+ end if;
+ return new;
+end $$;
+revoke all on function onflows_private.queue_old_history_projection() from public,anon,authenticated,service_role;
+create trigger queue_old_history_projection after insert or update of payload on onflows_private.history_day_inputs for each row execute function onflows_private.queue_old_history_projection();
 create table onflows_private.history_window_jobs (
  athlete_alias text primary key references public.onflows_intervals_connections(athlete_alias) on update cascade on delete cascade,
  token uuid not null, first_day date not null,last_day date not null,
@@ -198,12 +219,13 @@ begin
  if p_operation='CLAIM' then
   if p_token is null or p_model_key is null then raise exception 'Invalid history claim';end if;
   select h.athlete_alias,min(h.day) as first_day,(clock_timestamp() at time zone s.timezone)::date as today
-   into candidate from onflows_private.history_day_inputs h
+   into candidate from onflows_private.history_projection_queue q
+   join onflows_private.history_day_inputs h using(athlete_alias)
    join public.onflows_athlete_settings s using(athlete_alias)
    join public.onflows_intervals_connections c using(athlete_alias)
    where c.status='CONNECTED' and (p_alias is null or h.athlete_alias=p_alias)
     and h.day<(clock_timestamp() at time zone s.timezone)::date-365
-    and not exists(select 1 from onflows_private.learning_timeline_days t where t.athlete_alias=h.athlete_alias and t.day=h.day)
+    and not exists(select 1 from onflows_private.learning_timeline_days t where t.athlete_alias=h.athlete_alias and t.day=h.day and not t.needs_refresh)
     and not exists(select 1 from onflows_private.history_window_jobs j where j.athlete_alias=h.athlete_alias and j.lease_until>clock_timestamp())
    group by h.athlete_alias,s.timezone order by min(h.day),h.athlete_alias limit 1;
   if not found then return null;end if;
@@ -227,14 +249,33 @@ begin
   for point in select value from jsonb_array_elements(p_payload->'series') loop
    if (point->>'day')::date between job.first_day and job.last_day then
     insert into onflows_private.learning_timeline_days(athlete_alias,day,model_key,model_version,source_revision,payload)
-     values(p_alias,(point->>'day')::date,p_model_key,'lifetime-timeline-v1',0,point) on conflict(athlete_alias,day) do nothing;
+     values(p_alias,(point->>'day')::date,p_model_key,'lifetime-timeline-v1',0,point)
+    on conflict(athlete_alias,day) do update set model_key=excluded.model_key,model_version=excluded.model_version,
+     source_revision=excluded.source_revision,payload=excluded.payload,needs_refresh=false,prepared_at=clock_timestamp()
+    where learning_timeline_days.needs_refresh;
     n:=n+1;
    end if;
   end loop;
   delete from onflows_private.history_window_jobs where athlete_alias=p_alias;
+  delete from onflows_private.history_projection_queue q where q.athlete_alias=p_alias and not exists(
+   select 1 from onflows_private.history_day_inputs h where h.athlete_alias=p_alias and h.day<current_date-365
+   and not exists(select 1 from onflows_private.learning_timeline_days t where t.athlete_alias=h.athlete_alias and t.day=h.day and not t.needs_refresh));
   return jsonb_build_object('stored',true,'days',n);
  end if;
  raise exception 'Unsupported history operation';
 end $$;
 revoke all on function public.onflows_history_window(text,text,uuid,text,jsonb) from public,anon,authenticated;
 grant execute on function public.onflows_history_window(text,text,uuid,text,jsonb) to service_role;
+
+create function onflows_private.invalidate_old_response_history() returns trigger language plpgsql security definer set search_path='' as $$
+declare d date;
+begin
+ d:=coalesce(new.observed_date,(new.payload->>'day')::date,(new.payload->>'start')::date);
+ if d<current_date-365 then
+  update onflows_private.learning_timeline_days set needs_refresh=true where athlete_alias=new.athlete_alias and day between d and d+84 and day<current_date-365;
+  insert into onflows_private.history_projection_queue(athlete_alias) values(new.athlete_alias) on conflict do nothing;
+ end if;
+ return new;
+end $$;
+revoke all on function onflows_private.invalidate_old_response_history() from public,anon,authenticated,service_role;
+create trigger invalidate_old_response_history after insert on public.onflows_response_entries for each row execute function onflows_private.invalidate_old_response_history();

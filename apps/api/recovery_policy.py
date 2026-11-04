@@ -266,9 +266,9 @@ def _dose(recorded, start, load_end, end):
     return {"dose":dose,"dose_change":changes,"intensity_change":intensity,"load_precision":sum(precision)/len(precision)},None
 
 
-def build_view_data(*, source, rows, history, entries, trainability, today, periodization=None, events=(), retained=None, context_key=""):
-    selected=legacy._available_entries(entries,today)
-    days=legacy._response_days(history,selected,entries,today)
+def build_view_data(*, source, rows, history, entries, trainability, today, periodization=None, events=(), retained=None, context_key="", observations_as_of=None):
+    selected=legacy._available_entries(entries,observations_as_of or today)
+    days=legacy._response_days(history,selected,entries,observations_as_of or today)
     rows,excluded_dates=measured_rows(source,[r for r in rows if r.get("date","")<today.isoformat()])
     first=date.fromisoformat(source.get("period_start") or min((r["date"] for r in rows),default=min((d.get("day") for d in history.get("days",[]) if d.get("day")),default=today.isoformat())))
     recorded=learning_loads.ledger(source,rows)

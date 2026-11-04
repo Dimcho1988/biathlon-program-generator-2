@@ -39,7 +39,7 @@ export interface RecoveryLearningEpisode {
   performance_change_percent: number | null;
 }
 export interface LearningHistoryRange {
-  available_start: string | null; available_end: string | null; display_start: string; display_end: string; requested_days: number; limited: boolean;
+  available_start: string | null; available_end: string | null; display_start: string; display_end: string; requested_days: number; limited: boolean; preparing?:boolean;
 }
 export interface RecoveryLearningView {
   active_components: LearningComponent[]; history: LearningHistoryRange | null;
@@ -230,7 +230,7 @@ export function parseRecoveryLearningView(value: unknown): RecoveryLearningView 
   let history:LearningHistoryRange|null=null;
   if(value.history!=null){
     const h=value.history;
-    if(!isRecord(h)||![h.available_start,h.available_end].every(d=>d===null||isCalendarDate(d))||!isCalendarDate(h.display_start)||!isCalendarDate(h.display_end)||h.display_start>h.display_end||h.display_end>asOf||![14,30,60,90,366].includes(Number(h.requested_days))||typeof h.limited!=="boolean")throw fail();
+    if(!isRecord(h)||![h.available_start,h.available_end].every(d=>d===null||isCalendarDate(d))||!isCalendarDate(h.display_start)||!isCalendarDate(h.display_end)||h.display_start>h.display_end||h.display_end>asOf||![14,30,60,90,366].includes(Number(h.requested_days))||typeof h.limited!=="boolean"||!(h.preparing==null||typeof h.preparing==="boolean"))throw fail();
     history=h as unknown as LearningHistoryRange;
   }
   const active=value.active_components??[];

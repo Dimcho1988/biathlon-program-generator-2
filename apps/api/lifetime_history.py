@@ -6,6 +6,7 @@ loads raw streams, fits a model or changes an already approved programme.
 from datetime import date, timedelta
 
 from . import recovery_policy
+from biathlon import load_evidence
 from .learning_view import _accounting_series, _series_row
 from .oauth_store import PersistentStoreFailure
 from .response_monitoring import build_history
@@ -32,8 +33,18 @@ def source_from_days(records):
             raise PersistentStoreFailure("Invalid lifetime history day")
         previous = day
         source["daily"].extend(payload.get("daily") or [])
-        source["activities"].extend(payload.get("activities") or [])
-        catalog.extend(payload.get("catalog") or [])
+        activities = payload.get("activities") or []
+        daily_catalog = payload.get("catalog") or []
+        source["activities"].extend(activities)
+        catalog.extend(daily_catalog)
+        known = {a.get("activity_ref") for a in activities if a.get("activity_ref")}
+        for activity in daily_catalog:
+            if (activity.get("activity_ref") not in known and load_evidence.is_strength(activity)
+                    and payload.get("strength") and activity.get("quality_status")!="provider_missing"):
+                source["activities"].append({**activity, "date": day})
+        omitted = [a for a in daily_catalog if a.get("activity_ref") not in known and not load_evidence.is_strength(a)]
+        if omitted or (payload.get("unidentified_activities",0)>0 or payload.get("unlocated_exclusions")) or any(a.get("quality_status")=="provider_missing" for a in daily_catalog):
+            source["history_uncertain_days"].append(day)
         if payload.get("strength"):
             source["strength"]["daily"].append(payload["strength"])
         if payload.get("wellness"):
@@ -52,7 +63,7 @@ def source_from_days(records):
     return source, wellness, catalog, revisions
 
 
-def extend_report(repository, alias, report):
+def extend_report(repository, alias, report, *, observations_as_of=None):
     reader = getattr(repository, "history_day_inputs", None)
     if not callable(reader):
         return report
@@ -66,9 +77,9 @@ def extend_report(repository, alias, report):
         source, wellness, catalog, revisions = source_from_days(records)
         entries = ResponseStore(repository).entries(alias)
         history = build_history(entries=entries, wellness=wellness, activities=catalog,
-            start=date.fromisoformat(records[0]["day"]), end=today, today=today)
+            start=date.fromisoformat(records[0]["day"]), end=today, today=observations_as_of or today)
         evidence = recovery_policy.build_view_data(source=source, rows=_daily_rows(source, today),
-            history=history, entries=entries, trainability=[], today=today)
+            history=history, entries=entries, trainability=[], today=today, observations_as_of=observations_as_of)
         accounting = _accounting_series(source, catalog)
         older = {}
         for row in evidence["recovery_policy"]["series"]:
@@ -104,7 +115,11 @@ def process_older_window(repository, model_key):
     alias = claim["athlete_alias"]
     try:
         end = date.fromisoformat(claim["last_day"])
-        report = extend_report(repository, alias, {"as_of": (end+timedelta(days=1)).isoformat(), "series": []})
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        settings = repository.athlete_settings(alias)
+        observed_today = datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
+        report = extend_report(repository, alias, {"as_of": (end+timedelta(days=1)).isoformat(), "series": []}, observations_as_of=observed_today)
         operation("STORE", alias=alias, token=token, model_key=model_key, payload=report)
     except Exception:
         operation("FAIL", alias=alias, token=token)
