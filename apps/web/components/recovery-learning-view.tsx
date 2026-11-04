@@ -80,7 +80,7 @@ function Timeline({ rows, decision, decisionReason }: { rows: LearningDay[]; dec
   const start=rows[0]?Date.parse(`${rows[0].day}T00:00:00Z`):0;
   const span=Math.max(86_400_000,rows.length?Date.parse(`${rows.at(-1)!.day}T00:00:00Z`)-start:0);
   const x=(index:number)=>left+4+(Date.parse(`${rows[index].day}T00:00:00Z`)-start)/span*(right-left-8);
-  const maximum=Math.max(1,Math.ceil(Math.max(0,...rows.flatMap(row=>components.map(key=>row.q3_by_component[key]??0)),...rows.map(row=>row.q3??0))/10)*10);
+  const maximum=Math.max(1,Math.ceil(Math.max(0,...rows.flatMap(row=>components.map(key=>row.q3_by_component[key]??0)),...(selected===null?rows.map(row=>row.q3??0):[]))/10)*10);
   const indexY=(value:number)=>bottom-value/maximum*(bottom-top);
   const stressY=(value:number)=>bottom-value/100*(bottom-top);
   const ticks=rows.length?[...new Set([0,Math.floor((rows.length-1)/2),rows.length-1])]:[];

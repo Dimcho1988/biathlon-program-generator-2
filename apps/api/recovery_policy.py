@@ -12,15 +12,12 @@ from statistics import median
 
 from biathlon import load_evidence, individual_learning
 from biathlon.constants import COMPONENTS
-from biathlon.learning_provenance import eligible_load_rows, heuristic_load_dates
-from biathlon.load_progression import observed_window
 from . import learning_evidence as legacy
 from . import learning_loads
 from .response_monitoring import number, relative_score
 from .stress_model import CHANNELS
 
 VERSION = "observed-q3-recovery-v2"
-INDEPENDENT = {k for k, (family, _) in CHANNELS.items() if family != "functional"}
 CORE = {"hrv", "resting_hr", "sleep_duration", "fatigue", "sleep_quality", "stress", "soreness", "motivation", "competition_motivation", "morning_weight"}
 
 
