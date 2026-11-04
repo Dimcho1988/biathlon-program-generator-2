@@ -10,7 +10,7 @@ export const LEARNING_COMPONENTS = ["Z1", "Z2", "Z3", "Z4", "Z5", "STR"] as cons
 export type LearningComponent = typeof LEARNING_COMPONENTS[number];
 export type ComponentQ = Record<LearningComponent, number | null>;
 export interface LearningDay {
-  day: string; q3: number | null; q3_by_component: ComponentQ; q3_observed_days: ComponentQ; q3_partial: boolean; actual_q: number | null; actual_q_by_component: ComponentQ;
+  day: string; history_model_version: string | null; q3: number | null; q3_by_component: ComponentQ; q3_observed_days: ComponentQ; q3_partial: boolean; actual_q: number | null; actual_q_by_component: ComponentQ;
   index_7_40_by_component: ComponentQ; recorded_q_by_component: ComponentQ;
   index_load_status: "COMPLETE" | "MODELLED" | "PARTIAL" | "UNAVAILABLE"; index_history_days: number;
   load_status: "COMPLETE" | "MODELLED" | "PARTIAL" | "UNAVAILABLE" | "REST";
@@ -38,7 +38,11 @@ export interface RecoveryLearningEpisode {
   ratio: number | null; status: string; proposed_change_percent: number; reason: string;
   performance_change_percent: number | null;
 }
+export interface LearningHistoryRange {
+  available_start: string | null; available_end: string | null; display_start: string; display_end: string; requested_days: number; limited: boolean; preparing?:boolean;
+}
 export interface RecoveryLearningView {
+  active_components: LearningComponent[]; history: LearningHistoryRange | null;
   schema_version: "recovery-learning-view-v1"; as_of: string; source_date: string | null; timezone: string | null; mode: LearningMode; status: string;
   summary: string; evidence_count: number; validation: { status: string; evaluated: number };
   series: LearningDay[]; episodes: RecoveryLearningEpisode[]; components: ComponentLearning[];
@@ -137,7 +141,7 @@ export function parseRecoveryLearningView(value: unknown): RecoveryLearningView 
     }
     if (!(row.stress_basis == null || ["FROZEN_BLOCK","FIXED_PANEL"].includes(String(row.stress_basis)))
       || !(row.stress_reference == null || typeof row.stress_reference === "string")) throw fail();
-    return { day: row.day, q3:row.q3 as number|null ?? null, q3_by_component:q3, q3_observed_days:q3Days, q3_partial:row.q3_partial===true, actual_q: row.actual_q as number | null, actual_q_by_component:actualQ,
+    return { day: row.day, history_model_version:typeof row.history_model_version==="string"?row.history_model_version:null, q3:row.q3 as number|null ?? null, q3_by_component:q3, q3_observed_days:q3Days, q3_partial:row.q3_partial===true, actual_q: row.actual_q as number | null, actual_q_by_component:actualQ,
       index_7_40_by_component:index740, recorded_q_by_component:recordedQ,
       index_load_status:(row.index_load_status ?? "UNAVAILABLE") as LearningDay["index_load_status"], index_history_days:row.index_history_days as number ?? 0,
       load_status:(row.load_status ?? "UNAVAILABLE") as LearningDay["load_status"],
@@ -223,7 +227,15 @@ export function parseRecoveryLearningView(value: unknown): RecoveryLearningView 
       || !(row.nominal_weight == null || score(row.nominal_weight))) throw fail();
     return { key: row.key, label: row.label, observed_days: row.observed_days, nominal_weight:row.nominal_weight as number | null ?? null };
   });
-  return { schema_version: value.schema_version, as_of: value.as_of, source_date: value.source_date as string | null ?? null,
+  let history:LearningHistoryRange|null=null;
+  if(value.history!=null){
+    const h=value.history;
+    if(!isRecord(h)||![h.available_start,h.available_end].every(d=>d===null||isCalendarDate(d))||!isCalendarDate(h.display_start)||!isCalendarDate(h.display_end)||h.display_start>h.display_end||h.display_end>asOf||![14,30,60,90,366].includes(Number(h.requested_days))||typeof h.limited!=="boolean"||!(h.preparing==null||typeof h.preparing==="boolean"))throw fail();
+    history=h as unknown as LearningHistoryRange;
+  }
+  const active=value.active_components??[];
+  if(!Array.isArray(active)||active.some(k=>!LEARNING_COMPONENTS.includes(k))||new Set(active).size!==active.length)throw fail();
+  return { active_components:active,history,schema_version: value.schema_version, as_of: value.as_of, source_date: value.source_date as string | null ?? null,
     timezone: value.timezone as string | null ?? null, mode: value.mode as LearningMode,
     status: value.status, summary: value.summary, evidence_count: value.evidence_count,
     validation: { status: value.validation.status, evaluated: value.validation.evaluated }, series, episodes, components,

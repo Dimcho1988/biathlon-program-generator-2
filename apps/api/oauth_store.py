@@ -1538,6 +1538,20 @@ class SupabasePilotRepository(SnapshotRepository):
         except ValueError as exc:
             raise PersistentStoreFailure("Stored history archive is unavailable or invalid") from exc
 
+    def history_window(self, operation, *, alias=None, token=None, model_key=None, payload=None):
+        return self._json(self._request("POST", "/rpc/onflows_history_window", json={
+            "p_operation": operation, "p_alias": alias, "p_token": token,
+            "p_model_key": model_key, "p_payload": payload}))
+
+    def history_day_inputs(self, alias, first, last):
+        return self._json(self._request("POST", "/rpc/read_onflows_history_day_inputs", json={
+            "p_alias": alias, "p_first": first.isoformat(), "p_last": last.isoformat()}))
+
+    def learning_history_view(self, alias, *, days, end, model_key):
+        return self._json(self._request("POST", "/rpc/read_onflows_learning_history", json={
+            "p_alias": alias, "p_days": days, "p_end": end.isoformat() if end else None,
+            "p_model_key": model_key}))
+
     def archive_due_history(self):
         from .history_archive import run
         policy = self._json(self._request("GET", "/onflows_history_archive_policy?select=enabled,batch_rows&id=eq.true&limit=1"))

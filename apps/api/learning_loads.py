@@ -34,14 +34,15 @@ def ledger(source, rows):
     result = {}
     for day in sorted({d for d, _ in counts if d}):
         recorded = activities[day]
+        uncertain = day in source.get("history_uncertain_days", [])
         refs = [a["activity_ref"] for a in recorded if a.get("activity_ref")]
         duplicate = len(refs) != len(set(refs))
-        partial = bool(unidentified) or day in excluded or any(a.get("quality_status", "valid") != "valid" or a.get("planning_estimated") or not load_evidence.assess(a, unified=bool(source.get("load_selection")))["complete"] for a in recorded)
+        partial = bool(unidentified) or uncertain or day in excluded or any(a.get("quality_status", "valid") != "valid" or a.get("planning_estimated") or not load_evidence.assess(a, unified=bool(source.get("load_selection")))["complete"] for a in recorded)
         modelled = any(initial_heuristic_load(a) for a in recorded)
         q, minutes, e = {}, {}, {}
         for z in COMPONENTS:
             e[z] = effective.get((day, z))
-            if e[z] is None or duplicate or (not recorded and (unidentified or day in excluded)):
+            if e[z] is None or duplicate or (not recorded and (unidentified or uncertain or day in excluded)):
                 q[z] = minutes[z] = None
             elif z == "STR":
                 s = strength.get(day, {})

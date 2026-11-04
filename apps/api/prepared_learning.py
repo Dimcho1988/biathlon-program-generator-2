@@ -18,7 +18,7 @@ from .oauth_store import PersistentStoreFailure
 from .prepared_models import _lease
 
 logger = logging.getLogger(__name__)
-VERSION = "prepared-learning-v3-q3-linked-stress"
+VERSION = "prepared-learning-v4-lifetime-history"
 PREPARING = "Оценката на самообучението се подготвя във фонов режим. Опитай отново след малко."
 
 
@@ -47,20 +47,27 @@ def _validate(value, alias):
     return report
 
 
-def read_view(repository, alias, *, days=90):
+def read_view(repository, alias, *, days=90, end=None):
     """One small projection read, including on misses; no model lane on HTTP."""
     operation = getattr(repository, "learning_preparation", None)
     if not callable(operation):
         raise HTTPException(503, PREPARING, headers={"Retry-After": "15", "Cache-Control": "no-store"})
     try:
-        state = operation("READ", alias=alias, model_key=model_key())
+        history_reader = getattr(repository, "learning_history_view", None)
+        if callable(history_reader):
+            state = history_reader(alias, days=days, end=end, model_key=model_key())
+        else:
+            state = operation("READ", alias=alias, model_key=model_key())
+        if isinstance(state, dict) and state.get("invalid_period"):
+            raise HTTPException(422, "Избраният период е извън наличния календар.")
         if not isinstance(state, dict) or state.get("ready") is not True:
             raise HTTPException(503, PREPARING, headers={"Retry-After": "15", "Cache-Control": "no-store"})
         report = deepcopy(_validate(state.get("payload"), alias))
         if report["as_of"] != state.get("day"):
             raise ValueError("Prepared learning day differs")
-        first = (date.fromisoformat(report["as_of"])-timedelta(days=days-1)).isoformat()
-        report["series"] = [row for row in report["series"] if row["day"] >= first]
+        last = end or date.fromisoformat(report["as_of"])
+        first = (last-timedelta(days=days-1)).isoformat()
+        report["series"] = [row for row in report["series"] if first <= row["day"] <= last.isoformat()]
         report["preparation"] = {"status": "READY", "prepared_at": state.get("prepared_at")}
         logger.info("prepared_learning state=hit")
         return report
@@ -77,7 +84,8 @@ def process_learning(repository, alias=None):
     with MODEL_WORK:
         claim = operation("CLAIM", model_key=key, token=token, **({"alias": alias} if alias else {}))
         if claim is None:
-            return False
+            from .lifetime_history import process_older_window
+            return process_older_window(repository, key)
         if (not isinstance(claim, dict) or not isinstance(claim.get("athlete_alias"), str)
                 or type(claim.get("revision")) is not int or not isinstance(claim.get("day"), str)):
             raise PersistentStoreFailure("Invalid learning preparation claim")
@@ -85,6 +93,8 @@ def process_learning(repository, alias=None):
         try:
             with _lease(operation, alias, token) as lost:
                 report = learning_view.view(repository, alias, days=90)
+                from .lifetime_history import extend_report
+                report = extend_report(repository, alias, report)
                 payload = {"athlete_alias": alias, "report": report}
                 _validate(payload, alias)
                 if lost.is_set() or report["as_of"] != claim["day"]:
