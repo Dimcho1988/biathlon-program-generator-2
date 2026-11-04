@@ -48,6 +48,34 @@ const view: RecoveryLearningView = parseRecoveryLearningView({ ...legacy,
 });
 
 describe("dedicated recovery learning presentation", () => {
+  it("keeps chosen components and total in every period submission with an explicit history boundary",async()=> {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);
+    const container=document.createElement("div");document.body.append(container);
+    const root=createRoot(container);
+    const historical={...view,active_components:["Z1","Z3"] as const,history:{available_start:"2026-08-07",available_end:"2026-11-03",display_start:"2025-11-04",display_end:"2026-11-03",requested_days:366,limited:true}};
+    try{
+      await act(async()=>root.render(<RecoveryLearning view={{...historical,active_components:[...historical.active_components]}} period={{days:366,end:"2026-11-03",total:false}}/>));
+      expect(container.querySelectorAll('svg g[data-component]')).toHaveLength(2);
+      const form=container.querySelector('form[aria-label="Период на графиката"]')!;
+      const presets=form.querySelector('[aria-label="Бърз избор на период"]')!;
+      expect([...presets.querySelectorAll('button')].map(b=>[b.textContent,b.getAttribute('value')])).toEqual([["14 дни","14"],["1 месец","30"],["2 месеца","60"],["3 месеца","90"],["1 година","366"]]);
+      expect(form.textContent).toContain("Наличната история е 07.08.2026 – 03.11.2026");
+      expect(form.textContent).toContain("Текущата оценка и предложението са към 03.11.2026");
+      const z2=[...container.querySelectorAll('.learning-zone-key button')].find(b=>b.textContent==='Z2') as HTMLButtonElement;
+      await act(async()=>z2.click());
+      expect((form.querySelector('input[name=components]') as HTMLInputElement).value).toBe('Z2');
+      const total=container.querySelector('.learning-total-toggle input') as HTMLInputElement;
+      await act(async()=>total.click());
+      expect((form.querySelector('input[name=total]') as HTMLInputElement).value).toBe('1');
+      expect((form.querySelector('input[type=date]') as HTMLInputElement).max).toBe(view.as_of);
+    }finally{await act(async()=>root.unmount());container.remove();vi.unstubAllGlobals();}
+  });
+  it("reduces yearly point markers without changing the daily Q3 curve",()=>{
+    const rows=Array.from({length:365},(_,i)=>({...view.series[0],day:new Date(Date.UTC(2025,10,4+i)).toISOString().slice(0,10)}));
+    const html=renderToStaticMarkup(<RecoveryLearning view={{...view,series:rows}}/>);
+    expect((html.match(/<circle/g)??[]).length).toBeLessThanOrEqual(7);
+    expect(html).toContain('learning-index-line');
+  });
   it("preserves additive transport fields and keeps legacy unknown components unknown", () => {
     const parsed = parseRecoveryLearningView({ ...view, memory: { private_data: "private replay" } });
     expect(parsed.series[0].actual_q_by_component).toEqual({Z1:40,Z2:25,Z3:15,Z4:10,Z5:6,STR:4});
@@ -168,7 +196,7 @@ describe("dedicated recovery learning presentation", () => {
       expect(inspection.textContent).toContain("Пълно отчетено натоварване");
       await act(async()=>group.querySelector("button")!.click());
       expect(container.querySelectorAll('svg g[data-component]')).toHaveLength(6);
-      expect(strength.getAttribute("aria-pressed")).toBe("false");
+      expect(strength.getAttribute("aria-pressed")).toBe("true");
       await act(async()=>{svg.dispatchEvent(new MouseEvent("pointerdown",{clientX:300,bubbles:true}));});
       expect(inspection.textContent).toContain("02.11.2026");
       expect(inspection.textContent).toContain("Частично отчетено натоварване");
@@ -268,7 +296,7 @@ describe("private learning page", () => {
   });
   it("keeps the calculation date separate from the imported history cutoff",async()=> {
     const html=renderToStaticMarkup(await LearningPage({searchParams:Promise.resolve({days:"180"})}));
-    expect(getLearningView).toHaveBeenCalledWith("ath-private",90);
+    expect(getLearningView).toHaveBeenCalledWith("ath-private",30,undefined);
     expect(html).toContain("оценка към 03.11.2026");
     expect(html).toContain("Натоварване до 02.11.2026");
     expect(html).not.toContain("Последни 180 дни");

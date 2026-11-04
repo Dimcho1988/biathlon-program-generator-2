@@ -80,7 +80,7 @@ def _accounting_series(source, catalog=(), *, refresh_required=False):
         recorded = activities.get(day, [])
         proofs = [load_evidence.assess(a, unified=bool(source.get("load_selection"))) for a in recorded]
         complete = set(values) == set(COMPONENTS) and all(number(r.get("effective_load")) is not None for r in values.values())
-        partial = (not complete or bool(omitted.get(day)) or day in provider_missing_dates or day in dated_exclusions or bool(unidentified)
+        partial = (day in source.get("history_uncertain_days", []) or not complete or bool(omitted.get(day)) or day in provider_missing_dates or day in dated_exclusions or bool(unidentified)
                    or any(not proof["complete"] or a.get("planning_estimated")
                           for a, proof in zip(recorded, proofs)))
         modelled = any(initial_heuristic_load(a) for a in recorded)
@@ -109,7 +109,7 @@ def _accounting_series(source, catalog=(), *, refresh_required=False):
                 value = number(zones.get(z, {}).get("equivalent_time_min"))
                 q[z] = q[z]+value if value is not None and q[z] is not None else None
         q["STR"] = number(strength.get(day, {}).get("equivalent_time_min"))
-        if not complete or positive_without_activity or (not recorded and (omitted.get(day) or unidentified)):
+        if not complete or positive_without_activity or (not recorded and (omitted.get(day) or unidentified or day in source.get("history_uncertain_days", []))):
             q = {z: None for z in COMPONENTS}
         unknown = [proof["ledger"]["unknown_seconds"]/60 for proof in proofs if proof.get("ledger") is not None]
         unknown_minutes = sum(unknown) if len(unknown) == sum(not load_evidence.is_strength(a) for a in recorded) and not omitted.get(day) and day not in provider_missing_dates and not unidentified else None
@@ -229,6 +229,7 @@ def view(repository, alias, *, days=90, now=None):
         series.append(_series_row(row, accounting.get(day)))
     return {
         "schema_version": "recovery-learning-view-v1", "as_of": today.isoformat(),
+        "active_components": (report or {}).get("active_components", []),
         "timezone": settings.timezone, "source_date": accounting_source.get("period_end"),
         "mode": (report or {}).get("mode", configured_mode),
         "status": (report or {}).get("status", "OFF" if profile else "NOT_CONFIGURED"),

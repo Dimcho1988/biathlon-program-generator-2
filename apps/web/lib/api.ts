@@ -84,9 +84,11 @@ export async function getResponseHistory(athleteAlias:string,start?:string,end?:
   return parseResponseHistory(await fetchApiResource(`/api/v2/athlete/response?${params}`,process.env.ONFLOWS_SERVICE_TOKEN,athleteAlias));
 }
 
-export async function getLearningView(athleteAlias: string, days = 90) {
+export async function getLearningView(athleteAlias: string, days = 30, end?: string) {
   const { parseRecoveryLearningView } = await import("./recovery-learning");
-  return parseRecoveryLearningView(await fetchApiResource(`/api/v2/athlete/learning?${new URLSearchParams({ days: String(days) })}`, process.env.ONFLOWS_SERVICE_TOKEN, athleteAlias));
+  const params = new URLSearchParams({days:String(days)});
+  if (end) params.set("end",end);
+  return parseRecoveryLearningView(await fetchApiResource(`/api/v2/athlete/learning?${params}`, process.env.ONFLOWS_SERVICE_TOKEN, athleteAlias));
 }
 export interface TrainingStatusResult { data: TrainingStatus; mode: DataMode }
 export interface AthleteSettings {

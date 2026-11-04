@@ -208,6 +208,7 @@ def context(repository, alias, profile, source, rows, today, *, periodization=No
     if (report.get("decision") or {}).get("experimental") or report["status"] in {"COLLECTING", "CAUTION", "OFF"}:
         preferences = []
     report["method_preferences"] = preferences
+    report["active_components"] = list((state or {}).get("accents", fallback))
     report["current"] = current
     report["method_summary"] = method_result.get("summary")
     report["limitations"] = ["Наблюдавана индивидуална връзка; не доказва причинност.",
