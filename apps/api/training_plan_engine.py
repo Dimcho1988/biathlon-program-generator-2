@@ -1242,12 +1242,12 @@ def progression_context(repository, alias, profile, source, rows, today, periodi
     learning_source = measured_source if measured_source is not None else source
     learning_rows = _daily_rows(learning_source, today) if measured_source is not None else rows
     from biathlon.learning_provenance import eligible_load_rows
-    learning_rows = eligible_load_rows(learning_source, learning_rows)
+    adaptation_rows = eligible_load_rows(learning_source, learning_rows)
     if config["feedback_enabled"]:
         from .learning_service import compatible_load_observations
         entries = compatible_load_observations(entries, learning_source)
     adaptation = (load_adaptation.symptom_context(entries, today) if control else
-                  load_adaptation.assess(entries, today, rows=learning_rows)) if config["feedback_enabled"] else None
+                  load_adaptation.assess(entries, today, rows=adaptation_rows)) if config["feedback_enabled"] else None
     from .management_store import ManagementStore
     retained = ManagementStore(repository).progression_reference(alias)
     settings = repository.athlete_settings(alias)
