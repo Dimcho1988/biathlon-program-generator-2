@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { learningIndexPaths, learningLoadSegments, learningPaths, RecoveryLearning } from "../components/recovery-learning-view";
+import { learningIndexPaths, learningQ3Paths, learningLoadSegments, learningPaths, RecoveryLearning } from "../components/recovery-learning-view";
 import { LEARNING_COMPONENTS, LEARNING_PREPARING_MESSAGE, LearningPreparingError, parseRecoveryLearningView, unknownComponentQ, type RecoveryLearningView } from "../lib/recovery-learning";
 import { currentAuthorizedAthlete } from "../lib/account-access";
 import { getLearningView } from "../lib/api";
@@ -29,14 +29,16 @@ const legacy = {
   observations: { load_days: 2, stress_days: 2 }, channels: [{ key: "hrv", label: "HRV", observed_days: 2 },{key:"resting_hr",label:"Пулс в покой",observed_days:2}], limitations: [],
 };
 const view: RecoveryLearningView = parseRecoveryLearningView({ ...legacy,
-  series:legacy.series.map((row,index)=>({...row,actual_q_by_component:index===0?{Z1:40,Z2:25,Z3:15,Z4:10,Z5:6,STR:4}:index===1?unknownComponentQ():{Z1:0,Z2:0,Z3:0,Z4:0,Z5:0,STR:0},
+  series:legacy.series.map((row,index)=>({...row,
+    q3:[100,60,40][index],q3_by_component:Object.fromEntries(LEARNING_COMPONENTS.map((key,i)=>[key,[[40,25,15,10,6,4],[26,16.5,7.5,5,3,2],[17.333,11,5,3.333,2,1.333]][index][i]])),q3_observed_days:Object.fromEntries(LEARNING_COMPONENTS.map(key=>[key,index+1])),q3_partial:index!==0,
+    actual_q_by_component:index===0?{Z1:40,Z2:25,Z3:15,Z4:10,Z5:6,STR:4}:index===1?unknownComponentQ():{Z1:0,Z2:0,Z3:0,Z4:0,Z5:0,STR:0},
     index_7_40_by_component:Object.fromEntries(LEARNING_COMPONENTS.map((key,componentIndex)=>[key,1+componentIndex*.1+index*.1])),
     recorded_q_by_component:index===0?{Z1:40,Z2:25,Z3:15,Z4:10,Z5:6,STR:4}:index===1?{Z1:12,Z2:8,Z3:0,Z4:0,Z5:0,STR:0}:{Z1:0,Z2:0,Z3:0,Z4:0,Z5:0,STR:0},
     load_status:index===1?"PARTIAL":index===2?"REST":"COMPLETE",load_reason:index===1?"Има активност с непълна разбивка.":null,
     load_activity_count:index===2?0:1,load_unknown_minutes:index===1?30:0,learning_load_eligible:index!==1,
     index_load_status:index===0?"COMPLETE":"PARTIAL",index_history_days:50,
     stress_weights:index===1?{}:{hrv:60,resting_hr:40},stress_basis:index===1?null:"FROZEN_BLOCK",stress_reference:index===1?null:"actual:block-1"})),
-  components:LEARNING_COMPONENTS.map((component,index)=>({component,recent_weekly_q:140-index*20,reference_weekly_q:100-index*10,
+  components:LEARNING_COMPONENTS.map((component,index)=>({component,q3:20-index*3,q3_observed_days:3,recent_weekly_q:140-index*20,reference_weekly_q:100-index*10,
     recent_observed_days:7,reference_observed_days:40,accent_ratio:(140-index*20)/(100-index*10),evidence_count:0,isolated_changes:0,
     validation_status:"WARMUP",response_status:"INSUFFICIENT_DATA",model_scope:null,test_step_percent:5,predicted_performance_percent:null,predicted_performance_low:null,predicted_performance_high:null,
     proposed_change_percent:index===0?4:null,applied_change_percent:index===0?0:null,action_status:index===0?"SELECTED":"COLLECTING",management_basis:index===0?"EXPLORATION":"HOLD",
@@ -83,8 +85,16 @@ describe("dedicated recovery learning presentation", () => {
       {components:[view.components[0],...view.components.slice(0,5)]},
       {components:view.components.slice(1)},
       {components:view.components.map((item,index)=>index===1?{...item,action_status:"SELECTED",proposed_change_percent:3,applied_change_percent:0}:item)},
-      {components:view.components.map((item,index)=>index===0?{...item,recent_observed_days:6}:item)},
+      {components:view.components.map((item,index)=>index===0?{...item,recent_observed_days:0}:item)},
     ]) expect(()=>parseRecoveryLearningView({...view,...patch})).toThrow();
+  });
+  it("shows prepared three-day values and accepts preliminary intervals without eight-result gating",()=>{
+    expect(view.series[1].q3_by_component.Z1).toBe(26);
+    expect(learningQ3Paths(view.series,"Z1",true,i=>i,v=>v)).toEqual(["M0,40 L1,26 L2,17.333 "]);
+    const preliminary={...view.components[0],evidence_count:1,isolated_changes:0,validation_status:"WARMUP",model_scope:"GLOBAL",response_status:"UNCERTAIN",predicted_performance_low:-2,predicted_performance_percent:1,predicted_performance_high:4,recent_observed_days:5};
+    const parsed=parseRecoveryLearningView({...view,components:[preliminary,...view.components.slice(1)]});
+    expect(parsed.components[0].predicted_performance_percent).toBe(1);
+    for(const patch of [{q3:-1},{q3_by_component:{Z1:Infinity}},{q3_observed_days:{Z1:4}}]) expect(()=>parseRecoveryLearningView({...view,series:[{...view.series[0],...patch}]})).toThrow();
   });
   it("only transports supported finite model intervals and keeps their contrast distinct from actions", () => {
     const predicted={...view.components[1],evidence_count:8,isolated_changes:2,validation_status:"PASSED",model_scope:"GLOBAL",response_status:"SUPPORTED_POSITIVE",
@@ -98,7 +108,7 @@ describe("dedicated recovery learning presentation", () => {
     expect(html).toContain("обща работоспособност");
     expect(html).toContain("Моделен интервал");
     expect(html.match(/Предложена промяна/g)).toHaveLength(1);
-    for(const invalid of [{evidence_count:7},{isolated_changes:1},{validation_status:"WARMUP"},{predicted_performance_high:20},{predicted_performance_low:null}]) {
+    for(const invalid of [{isolated_changes:1},{validation_status:"WARMUP"},{predicted_performance_high:20},{predicted_performance_low:null}]) {
       expect(()=>parseRecoveryLearningView({...report,components:report.components.map(item=>item.component==="Z2"?{...item,...invalid}:item)})).toThrow();
     }
   });
@@ -126,7 +136,7 @@ describe("dedicated recovery learning presentation", () => {
     expect(html.match(/<svg/g)).toHaveLength(1);
     expect(html).toContain("Една времева ос · две отделни скали");
     expect(html).toContain("Липсваща стойност не е нулево натоварване");
-    expect(html).toContain("7/40 по наличните данни");
+    expect(html).toContain("Тридневно натоварване и интегрален стрес");
     expect(html).toContain("Покрит ден без отчетена тренировка");
     expect(html).toContain("Следваща промяна · Z1");
     expect(html).toContain('href="#component-Z1"');
@@ -138,8 +148,8 @@ describe("dedicated recovery learning presentation", () => {
     try {
       await act(async()=>root.render(<RecoveryLearning view={view}/>));
       const z1=container.querySelector('[aria-labelledby="component-Z1"]')!;
-      expect(z1.querySelectorAll("dd")[2].textContent).toContain("1,2×");
-      expect(z1.querySelectorAll("dd")[2].textContent).toContain("непълна база");
+      expect(z1.querySelectorAll("dd")[2].textContent).toContain("20");
+      expect(z1.querySelectorAll("dd")[2].textContent).toContain("3/3 дни");
       const group=container.querySelector('[aria-label="Компоненти в графиката"]')!;
       const strength=[...group.querySelectorAll("button")].find(button=>button.textContent==="Сила")!;
       expect(container.querySelectorAll('svg g[data-component]')).toHaveLength(6);
@@ -154,7 +164,7 @@ describe("dedicated recovery learning presentation", () => {
       const inspection=container.querySelector(".learning-chart-inspection")!;
       expect(inspection.textContent).toContain("01.11.2026");
       expect(inspection.textContent).toContain("Стрес 65");
-      expect(inspection.textContent).toContain("Сила 1,5×");
+      expect(inspection.textContent).toContain("Сила 4 Q/ден");
       expect(inspection.textContent).toContain("Пълно отчетено натоварване");
       await act(async()=>group.querySelector("button")!.click());
       expect(container.querySelectorAll('svg g[data-component]')).toHaveLength(6);
@@ -169,7 +179,7 @@ describe("dedicated recovery learning presentation", () => {
   });
   it("shows one integral stress panel, six honest assessments and only the selected proposed dose", () => {
     const html=renderToStaticMarkup(<RecoveryLearning view={view}/>);
-    for(const text of ["Наблюдение","Индекс 7/40 · ×","Стрес · 0–100","Предложена промяна","+4%","Допуснато от модела","0%","Недостатъчни наблюдения","Няма съпоставим резултат",'href="/response"',"Проучване","База на съпоставимия блок: 100 Q/седм.","цел 104 Q/седм."]) expect(html).toContain(text);
+    for(const text of ["Наблюдение","Q/ден · 3 дни","Стрес · 0–100","Предложена промяна","+4%","Допуснато от модела","0%","Недостатъчни наблюдения","Няма съпоставим резултат",'href="/response"',"Проучване","База на съпоставимия блок: 100 Q/седм.","цел 104 Q/седм."]) expect(html).toContain(text);
     expect(html.match(/class="learning-component(?: is-selected)?"/g)).toHaveLength(6);
     expect(html.match(/class="learning-response-label">Събира данни/g)).toHaveLength(6);
     expect(html.match(/Предложена промяна/g)).toHaveLength(1);

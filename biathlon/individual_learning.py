@@ -18,7 +18,7 @@ import numpy as np
 
 from .constants import COMPONENTS
 
-VERSION = "individual-response-bayes-v3-observed-blocks"
+VERSION = "individual-response-bayes-v4-q3"
 INTERVENTION_FEATURES = tuple([f"volume:{z}" for z in COMPONENTS] + [f"intensity:{z}" for z in COMPONENTS if z != "STR"])
 CONTEXT_FEATURES = ("context:loading_duration", "context:followup_load")
 FEATURES = INTERVENTION_FEATURES + CONTEXT_FEATURES

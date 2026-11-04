@@ -102,11 +102,12 @@ def test_old_limited_activity_does_not_veto_valid_later_block():
     activity['quality_status']='limited'
     evidence=policy.build_view_data(**data)
     assert len(evidence['episodes'])==1
-    assert evidence['recovery_policy']['observations']['excluded_days']==1
-    # The same incomplete record inside the relevant exposure invalidates it.
+    assert evidence['recovery_policy']['observations']['excluded_days']==0
+    assert evidence['episodes'][0]['load_precision']==1
+    # A partial record inside the exposure remains available with lower precision.
     data=fixture()
     next(a for a in data['source']['activities'] if a['date']==str(START+timedelta(days=3)))['quality_status']='limited'
-    assert policy.build_view_data(**data)['episodes']==[]
+    assert len(policy.build_view_data(**data)['episodes'])==1
 
 
 def test_manual_block_also_requires_actual_downshift():
@@ -140,11 +141,11 @@ def test_delayed_recovery_can_reduce_and_shadow_does_not_apply():
     assert report['components']['Z1']['proposed_volume_factor']==.8
     assert report['components']['Z1']['volume_factor']==1
     assert report['recovery_policy']['decision']['applied_change_percent']==0
-    assert report['decision']['baseline_actual_weekly_q']==140
+    assert report['decision']['baseline_actual_weekly_q']==pytest.approx(135.)
     saved=deepcopy(report['decision'])
     data2,evidence2,models2,report2=decision_data(returned=None)
     policy.apply_decision(report2,evidence2,models2,config={'mode':'SHADOW','max_volume_step_percent':20},allowed_components=['Z1'],phase='GENERAL_PREPARATION',taper=False,today=data['today'],retained={'decision':saved})
-    assert report2['decision']['baseline_actual_weekly_q']==140
+    assert report2['decision']['baseline_actual_weekly_q']==pytest.approx(135.)
     assert report2['components']['Z1']['proposed_volume_factor']==.8
 
 
@@ -153,7 +154,7 @@ def test_supported_boundary_hold_has_actual_baseline_and_no_percentage():
     policy.apply_decision(report,evidence,models,config={'mode':'CONTROL','max_volume_step_percent':20},allowed_components=['Z1'],phase='GENERAL_PREPARATION',taper=False,today=data['today'])
     assert report['decision']['step']==0
     assert report['components']['Z1']['action']=='HOLD'
-    assert report['components']['Z1']['baseline_actual_weekly_q']==140
+    assert report['components']['Z1']['baseline_actual_weekly_q']==pytest.approx(135.)
 
 
 def test_out_of_local_support_cannot_anchor_next_target():
@@ -210,9 +211,10 @@ def test_unidentified_exclusion_cannot_be_invented_as_a_covered_rest_day():
     data=fixture()
     data['source']['quality']['excluded_activities']=1
     result=policy.build_view_data(**data)
-    assert result['episodes']==[]
+    assert len(result['episodes'])==1
+    assert result['episodes'][0]['load_precision']<1
     assert any(e['reason']=='UNKNOWN_EXCLUDED_DATES' for e in result['exclusions'])
-    assert all(r['actual_q'] is None for r in result['recovery_policy']['series'])
+    assert all(r['actual_q'] is not None for r in result['recovery_policy']['series'])
 
 
 def test_unreturned_policy_keeps_current_unloading_ceiling_separate_from_macro_change():
@@ -220,12 +222,12 @@ def test_unreturned_policy_keeps_current_unloading_ceiling_separate_from_macro_c
     policy.apply_decision(report,evidence,models,config={'mode':'CONTROL','max_volume_step_percent':20},allowed_components=['Z1'],phase='GENERAL_PREPARATION',taper=False,today=data['today'])
     assert report['decision']['step']==-.20
     assert report['decision']['execution_weekly_q_ceiling']==35.
-    assert report['components']['Z1']['baseline_actual_weekly_q']==140.
+    assert report['components']['Z1']['baseline_actual_weekly_q']==pytest.approx(135.)
 
 
 def test_unreturned_policy_abstains_when_current_unloading_dose_is_unknown():
     data,evidence,models,report=decision_data(returned=None)
-    evidence['_recent_window']['complete']=False
+    evidence['_recent_window']['components']['Z1']['weekly_q']=None
     policy.apply_decision(report,evidence,models,config={'mode':'CONTROL','max_volume_step_percent':20},allowed_components=['Z1'],phase='GENERAL_PREPARATION',taper=False,today=data['today'])
     assert report['decision'] is None
 
@@ -255,7 +257,7 @@ def test_active_component_change_cannot_start_second_experiment_from_same_episod
     assert report['decision']['baseline_actual_weekly_q']==140.
 
 
-def test_daily_component_q_sums_to_actual_total_and_shares_measured_gaps():
+def test_partial_daily_component_q_is_retained_and_sums_to_actual_total():
     data=fixture()
     bad=str(START+timedelta(days=2))
     next(a for a in data['source']['activities'] if a['date']==bad)['quality_status']='limited'
@@ -263,8 +265,8 @@ def test_daily_component_q_sums_to_actual_total_and_shares_measured_gaps():
     for row in evidence['recovery_policy']['series']:
         assert set(row['actual_q_by_component'])==set(COMPONENTS)
         if row['day']==bad:
-            assert row['actual_q'] is None
-            assert all(v is None for v in row['actual_q_by_component'].values())
+            assert row['actual_q']==100.
+            assert row['q3_partial']
         else:
             assert sum(row['actual_q_by_component'].values())==pytest.approx(row['actual_q'])
 
@@ -332,12 +334,14 @@ def test_component_assessments_describe_actual_seven_and_forty_day_dose():
 
 
 @pytest.mark.parametrize('isolated,count,validation',[(False,8,'PASSED'),(True,7,'PASSED'),(True,8,'WARMUP'),(True,8,'FAILED')])
-def test_shared_performance_or_inadequate_validation_cannot_label_a_component(isolated,count,validation):
+def test_sparse_or_correlated_models_show_preliminary_predictions(isolated,count,validation):
     data=fixture()
     evidence=policy.build_view_data(**data)
     rows=policy.build_component_assessments(evidence,today=data['today'],models=assessment_models(isolated=isolated,count=count,validation=validation))
-    assert all(r['response_status']=='INSUFFICIENT_DATA' for r in rows)
-    assert all(r['predicted_performance_percent'] is None and r['predicted_performance_low'] is None and r['predicted_performance_high'] is None for r in rows)
+    assert rows[0]['predicted_performance_percent'] is not None
+    if not isolated or validation!='PASSED':
+        assert rows[0]['response_status']=='UNCERTAIN'
+    assert all(r['proposed_change_percent'] is None for r in rows)
 
 
 @pytest.mark.parametrize('slope,status',[(2.,'SUPPORTED_POSITIVE'),(-2.,'SUPPORTED_NEGATIVE'),(0.,'UNCERTAIN')])
@@ -353,19 +357,21 @@ def test_supported_component_contrast_uses_actual_recent_dose_without_selecting_
     assert row['predicted_performance_percent']==expected['mean']
     assert row['predicted_performance_low']==expected['low'] and row['predicted_performance_high']==expected['high']
     assert all(r['proposed_change_percent'] is None for r in rows)
-    assert all(r['response_status']=='INSUFFICIENT_DATA' for r in rows[1:])
+    assert all(r['response_status']=='UNCERTAIN' for r in rows[1:5])
+    assert rows[-1]['response_status']=='INSUFFICIENT_DATA'
 
 
-def test_incomplete_actual_week_does_not_extrapolate_component_dose_or_response():
+def test_partial_record_keeps_dose_and_preliminary_response():
     data=fixture()
     bad=data['source']['activities'][-2]['date']
     data['source']['activities'][-2]['quality_status']='limited'
     evidence=policy.build_view_data(**data)
     rows=policy.build_component_assessments(evidence,today=data['today'],models=assessment_models())
     for row in rows:
-        assert row['recent_weekly_q'] is None and row['reference_weekly_q'] is None
-        assert row['recent_observed_days']==6 and row['reference_observed_days']==39
-        assert row['accent_ratio'] is None and row['predicted_performance_percent'] is None
+        assert row['recent_weekly_q'] is not None and row['reference_weekly_q'] is not None
+        assert row['recent_observed_days']==7 and row['reference_observed_days']==40
+        assert row['accent_ratio'] is not None or row['reference_weekly_q']==0
+    assert rows[0]['predicted_performance_percent'] is not None
 
 
 def test_reduction_is_one_actual_policy_proposal_not_a_learned_weakness():
