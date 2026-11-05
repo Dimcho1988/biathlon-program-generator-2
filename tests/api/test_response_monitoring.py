@@ -95,14 +95,48 @@ def test_sdnn_and_invalid_device_values_do_not_replace_rmssd():
     assert d["total"] == 50 and d["assessment_quality"] == "PARTIAL"
 
 
-def test_rpe_manual_overrides_provider_and_unknown_duration_is_not_srpe():
+def test_rpe_manual_overrides_provider_and_unknown_timing_does_not_manufacture_comparability():
     a = activity(TODAY)
     a["provider_rpe"] = 8
-    assert session_rows([a],{})[0]["srpe_load"] is None
+    imported = session_rows([a],{})[0]
+    assert imported["srpe_load"] == 480.
+    assert imported["duration_source"] == "ACTIVITY"
+    assert imported["timing"] == "UNKNOWN" and imported["deviation_score"] is None
+    assert session_rows([{**a,"elapsed_time_s":None}],{})[0]["srpe_load"] is None
     selected = latest_entries([entry("SESSION",a["activity_ref"],{"rpe":0,"duration_minutes":60,"timing":"DELAYED"})])
     r = session_rows([a],selected)[0]
     assert r["rpe"] == 0 and r["provider_rpe"] == 8 and r["srpe_load"] == 0
     assert r["source"] == "ONFLOWS"
+
+
+def test_session_feel_and_effort_keep_separate_sources_and_manual_override_survives_import():
+    a={**activity(TODAY),'provider_rpe':8,'provider_feel':4}
+    imported=session_rows([a],{})[0]
+    assert imported['feel']==4 and imported['feel_source']=='INTERVALS'
+    selected=latest_entries([entry('SESSION',a['activity_ref'],{'rpe':None,'feel':2,'duration_minutes':60,'timing':'UNKNOWN'})])
+    row=session_rows([a],selected)[0]
+    assert row['rpe']==8 and row['rpe_source']=='INTERVALS'
+    assert row['feel']==2 and row['feel_source']=='ONFLOWS'
+    assert row['timing']=='UNKNOWN' and row['expected_rpe'] is None
+    refreshed=session_rows([{**a,'provider_feel':5,'provider_rpe':7}],selected)[0]
+    assert refreshed['feel']==2 and refreshed['rpe']==7
+
+
+def test_unknown_import_timing_cannot_become_a_comparable_rpe_baseline():
+    activities=[{**activity(TODAY-timedelta(days=i),i+1),'provider_rpe':5} for i in range(4)]
+    rows=session_rows(activities,{})
+    assert all(row['comparable_count']==0 and row['deviation_score'] is None for row in rows)
+
+
+def test_same_report_contract_accepts_confirmed_chat_answers_and_rejects_unscaled_feel():
+    daily=DailyReport(**report(TODAY),input_method='CHAT')
+    assert daily.input_method=='CHAT'
+    with pytest.raises(ValidationError):
+        SessionReport(activity_ref=activity(TODAY)['activity_ref'],feel=6,duration_minutes=60)
+    with pytest.raises(ValidationError):
+        SessionReport(activity_ref=activity(TODAY)['activity_ref'],rpe=5,duration_minutes=60)
+    imported=SessionReport(activity_ref=activity(TODAY)['activity_ref'],rpe=5,rpe_source='INTERVALS',duration_minutes=60)
+    assert imported.timing=='UNKNOWN'
 
 
 @pytest.mark.parametrize("mismatch", ["sport","duration","timing","zones","future"])

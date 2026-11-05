@@ -114,6 +114,10 @@ def save_report(repository, alias, kind, body, actor, now=None):
         activity = repository.activity_detail(alias,body.activity_ref)
         if activity is None:
             raise HTTPException(404,"Activity is unavailable for this athlete")
+        for field in ("rpe", "feel"):
+            if getattr(body, f"{field}_source") == "INTERVALS" and getattr(body, field) != activity.get(f"provider_{field}"):
+                raise HTTPException(422, "Imported response changed; reload the activity before saving")
+        payload["scale_version"] = "session-rpe-0-10-feel-1-5-higher-worse-v1"
         day = activity["local_date"]
         if not (today-timedelta(days=90)).isoformat()<=day<=today.isoformat():
             raise HTTPException(422,"Activity date is outside the editable period")

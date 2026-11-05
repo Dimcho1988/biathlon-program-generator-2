@@ -14,15 +14,18 @@ export function StressOverview({history,selected,onSelect}:{history:ResponseHist
   const [indicator,setIndicator]=useState("");
   const day=history.days[selected];
   if(!day)return <section className="response-card"><h2>Все още няма наблюдения</h2></section>;
+  const available = day.channels.filter(channel=>channel.score!==null);
+  const single = available.length===1;
+  const needsBaseline = day.channels.some(channel=>channel.status==="NEEDS_BASELINE");
   const series=["total","trend",...visible,...(indicator?[indicator]:[])];
-  const value=(i:number,key:string)=>key==="total"?history.days[i].total:key==="trend"?history.days[i].trend_3d:GROUPS.includes(key as Group)?history.days[i].groups.find(g=>g.key===key)?.score??null:history.days[i].channels.find(c=>c.key===key)?.score??null;
+  const value=(i:number,key:string)=>key==="total"?(history.days[i].channels.filter(c=>c.score!==null).length>=2?history.days[i].total:null):key==="trend"?history.days[i].trend_3d:GROUPS.includes(key as Group)?history.days[i].groups.find(g=>g.key===key)?.score??null:history.days[i].channels.find(c=>c.key===key)?.score??null;
   const color=(key:string)=>colors[key]||colors[day.channels.find(c=>c.key===key)?.group??"functional"];
 
   return <>
     <section className="response-card stress-summary" aria-label="Обща оценка на стреса">
       <div className="response-heading"><div><p className="eyebrow">{dateLabel(day.day)} · {STATES[day.state]||day.state}</p><h2>Стрес и отзвучаване</h2></div><span className="response-badge">Пилотна оценка</span></div>
-      <div className="stress-kpis"><div><strong>{fmt(day.total)}<small> / 100</small></strong><span>{day.assessment_quality==="PARTIAL"?"Частична оценка":day.total==null?"Няма оценка":"Обща оценка"}</span></div><div><strong>{fmt(day.coverage,0)}<small>%</small></strong><span>Покритие на показателите</span><meter min="0" max="100" value={day.coverage} aria-label="Покритие на показателите"/></div><div><strong>{fmt(day.trend_3d)}</strong><span>Средно за 3 дни · общи показатели</span></div></div>
-      {day.assessment_quality==="PARTIAL"&&<p className="stress-inline-note">Оценката е частична: нужни са поне 40% покритие и два компонента. Липсващите измервания не означават нисък стрес.</p>}
+      <div className="stress-kpis"><div><strong>{fmt(single?null:day.total)}<small> / 100</small></strong><span>{single?"Един наличен показател":day.assessment_quality==="PARTIAL"?"Частична оценка":day.total==null?"Няма оценка":"Обща оценка"}</span></div><div><strong>{fmt(day.coverage,0)}<small>%</small></strong><span>Покритие на показателите</span><meter min="0" max="100" value={day.coverage} aria-label="Покритие на показателите"/></div><div><strong>{fmt(day.trend_3d)}</strong><span>Средно за 3 дни · общи показатели</span></div></div>
+      {single?<p className="stress-inline-note">{CHANNEL_LABELS[available[0].key]}: {fmt(available[0].raw)} {units[available[0].unit??""]??available[0].unit}. Един показател не определя общото ниво на стреса.</p>:day.assessment_quality==="PARTIAL"?<p className="stress-inline-note">Частична оценка по {available.length} показателя. Липсващите измервания не означават нисък стрес или възстановяване.</p>:day.total===null&&<p className="stress-inline-note">{needsBaseline?"Има измервания, но още няма достатъчна лична база за сравнение.":"Няма измервания или попълнена оценка за този ден."}</p>}
       {day.mix_changed&&<p className="stress-inline-note">Съставът на данните е променен.{day.comparison_previous?.delta!=null?` Промяна по същите показатели: ${day.comparison_previous.delta>0?"+":""}${fmt(day.comparison_previous.delta)} точки.`:" Няма достатъчно общи показатели за сравнение с предишния ден."}</p>}
       {day.body_observations?.context_status==="REVIEW_LAB_REFERENCE"&&<p className="body-observation-notice">Има лабораторно отклонение за този ден. Вижте „Тегло и изследвания“; общата оценка не отменя сигнала.</p>}
     </section>
@@ -36,7 +39,7 @@ export function StressOverview({history,selected,onSelect}:{history:ResponseHist
         <label className="stress-indicator">Отделен показател в графиката<select value={indicator} onChange={e=>setIndicator(e.target.value)}><option value="">Без допълнителен показател</option>{GROUPS.map(g=><optgroup key={g} label={GROUP_LABELS[g]}>{day.channels.filter(c=>c.group===g).map(c=><option key={c.key} value={c.key}>{CHANNEL_LABELS[c.key]}</option>)}</optgroup>)}</select></label>
         <div className="response-table"><table><thead><tr><th>Компонент</th><th>Оценка</th><th>Базово тегло</th><th>Дял днес</th><th>Принос, т.</th></tr></thead><tbody>{day.groups.map(g=><tr key={g.key}><th>{GROUP_LABELS[g.key]}</th><td>{fmt(g.score)}</td><td>{fmt(g.weight*100,0)}%</td><td>{fmt(g.effective_weight*100)}%</td><td>{fmt(g.contribution)}</td></tr>)}</tbody></table></div>
         {GROUPS.map(g=><details key={g}><summary>{GROUP_LABELS[g]} · показатели</summary><div className="response-table"><table><thead><tr><th>Показател</th><th>Измерване</th><th>Оценка / 100</th><th>Тегло</th><th>Основание</th></tr></thead><tbody>{day.channels.filter(c=>c.group===g).map(c=><tr key={c.key}><th><button className="stress-text-button" type="button" onClick={()=>setIndicator(c.key)}>{CHANNEL_LABELS[c.key]}</button></th><td>{fmt(c.raw,c.unit==="ratio"||c.unit==="TI"?4:1)} {units[c.unit??""]??c.unit}</td><td>{fmt(c.score)}</td><td>{fmt(c.weight*100,0)}%</td><td>{c.status==="MISSING"?"Няма съпоставимо измерване":c.status==="NEEDS_BASELINE"?"Натрупваме лична база":c.baseline?`${c.baseline.count} предишни наблюдения`:sources[c.source??""]||"Работна скала"}</td></tr>)}</tbody></table></div></details>)}
-        <p>По-високо означава по-неблагоприятна реакция по работната скала. При личните сравнения 50 точки е базовото ниво. Това са условни точки, а не процент физиологичен стрес.</p>
+        <p>По-високо означава по-неблагоприятна реакция по работната скала. При личните сравнения 50 точки е базовото ниво. Това са условни точки, а не процент физиологичен стрес. Общата оценка изисква поне 40% покритие и две групи показатели; останалите оценки са частични.</p>
       </details>
     </section>
   </>;

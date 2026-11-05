@@ -6,3 +6,5 @@
 
 .training-sample { margin: 1rem 0; padding: 1rem; border: 1px solid var(--border); border-radius: 10px; }
 .training-observation-summary { margin-block: 1rem; padding: 1rem; background: var(--surface); border-radius: 10px; }
+
+.response-daily-fields{grid-template-columns:repeat(5,minmax(0,1fr))}@media(max-width:1000px){.response-daily-fields{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:480px){.response-daily-fields{grid-template-columns:1fr}}

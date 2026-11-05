@@ -37,6 +37,7 @@ class DailyReport(InputModel):
     sleep_hours: float | None = Field(default=None, ge=0, le=24, allow_inf_nan=False)
     pain_or_illness: bool = False
     note: str = Field(default="", max_length=500)
+    input_method: Literal["FORM", "CHAT"] = "FORM"
 
     @model_validator(mode="after")
     def has_observation(self):
@@ -48,6 +49,10 @@ class DailyReport(InputModel):
 class SessionReport(InputModel):
     activity_ref: str = Field(pattern=r"^(?:act_|shadow-)[a-f0-9]{32}$")
     rpe: int | None = Field(default=None, ge=0, le=10, strict=True)
+    feel: int | None = Field(default=None, ge=1, le=5, strict=True)
+    rpe_source: Literal["ONFLOWS", "INTERVALS"] = "ONFLOWS"
+    feel_source: Literal["ONFLOWS", "INTERVALS"] = "ONFLOWS"
+    input_method: Literal["FORM", "CHAT"] = "FORM"
     timing: Literal["IMMEDIATE", "DELAYED", "NEXT_DAY", "UNKNOWN"] = "UNKNOWN"
     duration_minutes: float = Field(gt=0, le=1440, allow_inf_nan=False)
     note: str = Field(default="", max_length=500)
@@ -64,7 +69,7 @@ class SessionReport(InputModel):
 
     @model_validator(mode="after")
     def rpe_timing(self):
-        if self.rpe is not None and self.timing == "UNKNOWN":
+        if self.rpe is not None and self.timing == "UNKNOWN" and self.rpe_source != "INTERVALS":
             raise ValueError("RPE needs its observation timing")
         if self.method_confirmed and not self.executed_method_id:
             raise ValueError("Confirm the actually executed method by its catalog identifier")
@@ -198,12 +203,23 @@ def session_rows(activities, entries):
         imported = number(a.get("provider_rpe"))
         if imported is not None and not 0<=imported<=10:
             imported = None
-        rpe = m["rpe"] if m else imported
-        duration = m["duration_minutes"] if m else None
+        imported_feel = number(a.get("provider_feel"))
+        if imported_feel is not None and (not 1 <= imported_feel <= 5 or not imported_feel.is_integer()):
+            imported_feel = None
+        manual_rpe = number((m or {}).get("rpe"))
+        manual_feel = number((m or {}).get("feel"))
+        rpe = manual_rpe if manual_rpe is not None else imported
+        feel = manual_feel if manual_feel is not None else imported_feel
+        elapsed = number(a.get("elapsed_time_s"))
+        suggested = elapsed/60 if elapsed is not None and 0 < elapsed <= 86400 else None
+        duration = m["duration_minutes"] if m else suggested
+        rpe_source = (m or {}).get("rpe_source", "ONFLOWS") if manual_rpe is not None else "INTERVALS" if imported is not None else None
+        feel_source = (m or {}).get("feel_source", "ONFLOWS") if manual_feel is not None else "INTERVALS" if imported_feel is not None else None
         rows.append({"activity_ref":a["activity_ref"],"day":a["local_date"],"name":a.get("name") or a.get("sport"),"sport":a.get("sport"),
-            "rpe":rpe,"duration_minutes":duration,"suggested_duration_minutes":(a.get("elapsed_time_s") or 0)/60 or None,
-            "timing":m["timing"] if m else "UNKNOWN","source":"ONFLOWS" if m else "INTERVALS" if rpe is not None else None,
-            "provider_rpe":imported,"revision":e["revision"] if e else 0,"note":m.get("note","") if m else "",
+            "rpe":rpe,"feel":feel,"duration_minutes":duration,"suggested_duration_minutes":suggested,
+            "timing":m["timing"] if m else "UNKNOWN","source":rpe_source or feel_source,
+            "rpe_source":rpe_source,"feel_source":feel_source,"duration_source":"ONFLOWS" if m else "ACTIVITY",
+            "provider_rpe":imported,"provider_feel":imported_feel,"revision":e["revision"] if e else 0,"note":m.get("note","") if m else "",
             "execution":{k:(m or {}).get(k) for k in ("planned_duration_minutes","planned_speed_kmh","executed_speed_kmh","execution_comparable","execution_reason", "executed_method_id", "method_confirmed", "executed_method")},
             "lactate_samples": lactate_comparisons((m or {}).get("lactate_samples", [])),
             "lactate_device": (m or {}).get("lactate_device", ""),
@@ -212,7 +228,7 @@ def session_rows(activities, entries):
             "expected_rpe":None,"deviation_score":None,"comparable_count":0,"zone_vector":zone_vector(a)})
     rows.sort(key=lambda r:(r["day"],r["activity_ref"]))
     for r in rows:
-        if r["rpe"] is None or not r["duration_minutes"] or r["zone_vector"] is None:
+        if r["rpe"] is None or not r["duration_minutes"] or r["zone_vector"] is None or r["timing"] == "UNKNOWN":
             continue
         start = (date.fromisoformat(r["day"])-timedelta(days=60)).isoformat()
         peers = [p for p in rows if start<=p["day"]<r["day"] and p["sport"]==r["sport"] and p["rpe"] is not None

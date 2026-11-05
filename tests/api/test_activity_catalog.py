@@ -136,6 +136,12 @@ def test_provider_identity_is_stable_opaque_and_athlete_scoped():
     assert "athlete" not in first and "activity" not in first
 
 
+@pytest.mark.parametrize('feel,expected',[(1,1),(5,5),(0,None),(6,None),(2.5,None),(True,None),(None,None)])
+def test_imported_session_feel_keeps_the_provider_scale(feel,expected):
+    metadata=extract_activity_metadata('act_'+'a'*32,{'feel':feel})
+    assert metadata['provider_feel']==expected
+
+
 def test_refresh_persists_provider_key_but_calendar_contract_keeps_it_private():
     repository = InMemorySnapshotRepository()
     refresh(

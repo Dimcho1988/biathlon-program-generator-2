@@ -1803,7 +1803,7 @@ class SupabasePilotRepository(SnapshotRepository):
         selected = quote(
             "activity_ref,start_at_utc,start_local,local_date,timezone,utc_offset_minutes,"
             "sport,activity_type,activity_sub_type,name,moving_time_s,elapsed_time_s,"
-            "recording_time_s,distance_m,elevation_gain_m,average_hr_bpm,max_hr_bpm,"
+            "recording_time_s,distance_m,elevation_gain_m,average_hr_bpm,max_hr_bpm,provider_rpe,provider_feel,"
             "average_speed_mps,max_speed_mps,canonical_training_load,quality_status,"
             "quality_reason,hr_coverage_percent,canonical_summary,latest_shadow_run_key",
             safe=",",
