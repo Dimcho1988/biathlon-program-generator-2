@@ -8,3 +8,5 @@
 
 .learning-component dd>small{display:block;font-size:10px;font-weight:400;color:var(--text-muted);line-height:1.5;margin-top:3px}
 .learning-period{display:flex;gap:12px;flex-wrap:wrap;align-items:end}.learning-period-presets{display:flex;gap:7px;flex-wrap:wrap;flex:1 1 100%}.learning-period-presets button{min-height:42px;padding:9px 13px;border:1px solid var(--border-strong);border-radius:9px;background:var(--surface);color:var(--text-primary);font:inherit;cursor:pointer}.learning-period-presets button[aria-pressed=true]{border-color:var(--accent);background:var(--surface-secondary);font-weight:600}.learning-period>p{flex:1 1 100%;margin:0}.learning-period input[type=date]{min-height:42px;padding:8px;border:1px solid var(--border-strong);border-radius:8px;background:var(--surface);color:var(--text-primary);font:inherit}.learning-total-toggle{display:inline-flex;align-items:center;gap:7px;font-size:12px;min-height:42px;padding:0 8px;cursor:pointer}.learning-total-toggle input{accent-color:var(--accent)}
+
+.learning-stress-line.is-partial{stroke-dasharray:5 4}

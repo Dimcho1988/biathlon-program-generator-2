@@ -16,7 +16,9 @@ export interface LearningDay {
   load_status: "COMPLETE" | "MODELLED" | "PARTIAL" | "UNAVAILABLE" | "REST";
   load_reason: string | null; load_activity_count: number | null; load_unknown_minutes: number | null; learning_load_eligible: boolean;
   stress: number | null; baseline: number | null; stress_weights: Record<string, number>;
-  stress_basis: "FROZEN_BLOCK" | "FIXED_PANEL" | null; stress_reference: string | null;
+  stress_basis: "FROZEN_BLOCK" | "FIXED_PANEL" | "AVAILABLE_PANEL" | null; stress_reference: string | null;
+  stress_quality?: "NO_DATA" | "NEEDS_BASELINE" | "SINGLE_INDICATOR" | "PARTIAL" | "SUFFICIENT" | null;
+  stress_reason?: string | null; stress_channels?: string[];
 }
 export interface ComponentLearning {
   component: LearningComponent; q3: number | null; q3_observed_days: number; recent_weekly_q: number | null; reference_weekly_q: number | null;
@@ -139,7 +141,10 @@ export function parseRecoveryLearningView(value: unknown): RecoveryLearningView 
       }
       if (Object.keys(stressWeights).length && Math.abs(Object.values(stressWeights).reduce((a,b)=>a+b,0)-100)>.05) throw fail();
     }
-    if (!(row.stress_basis == null || ["FROZEN_BLOCK","FIXED_PANEL"].includes(String(row.stress_basis)))
+    if (!(row.stress_quality == null || ["NO_DATA","NEEDS_BASELINE","SINGLE_INDICATOR","PARTIAL","SUFFICIENT"].includes(String(row.stress_quality)))
+      || !(row.stress_reason == null || typeof row.stress_reason === "string")
+      || !(row.stress_channels == null || Array.isArray(row.stress_channels) && row.stress_channels.every(key=>typeof key==="string"))) throw fail();
+    if (!(row.stress_basis == null || ["FROZEN_BLOCK","FIXED_PANEL","AVAILABLE_PANEL"].includes(String(row.stress_basis)))
       || !(row.stress_reference == null || typeof row.stress_reference === "string")) throw fail();
     return { day: row.day, history_model_version:typeof row.history_model_version==="string"?row.history_model_version:null, q3:row.q3 as number|null ?? null, q3_by_component:q3, q3_observed_days:q3Days, q3_partial:row.q3_partial===true, actual_q: row.actual_q as number | null, actual_q_by_component:actualQ,
       index_7_40_by_component:index740, recorded_q_by_component:recordedQ,
@@ -148,6 +153,7 @@ export function parseRecoveryLearningView(value: unknown): RecoveryLearningView 
       load_reason:row.load_reason as string | null ?? null, load_activity_count:row.load_activity_count as number | null ?? null,
       load_unknown_minutes:row.load_unknown_minutes as number | null ?? null, learning_load_eligible:row.learning_load_eligible===true,
       stress: row.stress as number | null, baseline: row.baseline as number | null, stress_weights:stressWeights,
+      stress_quality:row.stress_quality as LearningDay["stress_quality"] ?? null, stress_reason:row.stress_reason as string|null ?? null, stress_channels:row.stress_channels as string[] ?? [],
       stress_basis:row.stress_basis as LearningDay["stress_basis"] ?? null, stress_reference:row.stress_reference as string | null ?? null };
   }).sort((a,b) => a.day.localeCompare(b.day));
   const episodes = value.episodes.map(row => {

@@ -78,6 +78,63 @@ def test_device_panel_works_without_functional_or_subjective_fill():
     assert evidence['current']['coverage']==100
 
 
+def test_single_resting_heart_rate_is_visible_as_evidence_but_never_total_stress_or_a_decision():
+    data=fixture(returned=None)
+    for day in data['history']['days']:
+        day['channels']=[c for c in day['channels'] if c['key']=='resting_hr']
+    evidence=policy.build_view_data(**data)
+    assert evidence['episodes']==[]
+    assert all(row['stress'] is None and row['stress_quality']=='SINGLE_INDICATOR'
+               and row['stress_channels']==['resting_hr'] for row in evidence['recovery_policy']['series'])
+    models=learning.fit([],data['today'])
+    report={}
+    policy.apply_decision(report,evidence,models,config={'mode':'CONTROL'},allowed_components=['Z1'],
+        phase='GENERAL_PREPARATION',taper=False,today=data['today'])
+    assert report['decision'] is None
+    assert report['components']['Z1']['volume_factor']==1
+
+
+def test_missing_followup_is_not_evidence_of_delayed_recovery_or_reduced_load():
+    data=fixture(returned=None)
+    for day in data['history']['days'][-2:]:
+        day['channels']=[]
+    evidence=policy.build_view_data(**data)
+    assert evidence['episodes'][0]['response']['right_censored']
+    assert not evidence['episodes'][0]['response']['delay_supported']
+    assert evidence['recovery_policy']['episodes'][0]['status']=='INSUFFICIENT_FOLLOWUP'
+    models=learning.fit(evidence['episodes'],data['today'])
+    report={}
+    policy.apply_decision(report,evidence,models,config={'mode':'CONTROL'},allowed_components=['Z1'],
+        phase='GENERAL_PREPARATION',taper=False,today=data['today'])
+    assert report['decision'] is None
+    assert report['components']['Z1']['proposed_volume_factor']==1
+
+
+def test_missing_loading_response_cannot_be_credited_as_tolerance():
+    data=fixture(elevated=False)
+    for row in data['history']['days']:
+        if str(START)<=row['day']<=str(START+timedelta(days=13)):
+            row['channels']=[]
+    evidence=policy.build_view_data(**data)
+    assert evidence['episodes']==[]
+    assert all(e['status']!='NO_ELEVATED_RESPONSE' for e in evidence['recovery_policy']['episodes'])
+
+
+def test_changing_display_panel_retains_two_available_signals_without_claiming_recovery():
+    data=fixture()
+    for a in data['source']['activities']:
+        for z in a['zones']:
+            z.update(equivalent_time_min=10.,raw_time_min=10.)
+    for row in data['history']['days'][:-1]:
+        row['channels'].append({'key':'sleep_duration','raw':8.,'score':25.})
+    evidence=policy.build_view_data(**data)
+    before,after=evidence['recovery_policy']['series'][-2:]
+    assert before['stress'] is not None and after['stress'] is not None
+    assert before['stress_reference']!=after['stress_reference']
+    assert after['stress_quality']=='PARTIAL'
+    assert after['stress_channels']==['hrv','resting_hr']
+
+
 def test_delayed_return_is_censored_not_assigned_fake_recovery_time():
     evidence=build(returned=None)
     e=evidence['episodes'][0]
@@ -279,8 +336,8 @@ def test_displayed_stress_weights_retain_the_exact_frozen_or_fixed_panel():
     assert frozen['stress_reference']==evidence['episodes'][0]['id']
     assert frozen['stress_weights']==pytest.approx({'hrv':100*8/15,'resting_hr':100*7/15})
     fallback=graph[0]
-    assert fallback['stress_basis']=='FIXED_PANEL'
-    assert fallback['stress_reference'].startswith('fixed:')
+    assert fallback['stress_basis']=='AVAILABLE_PANEL'
+    assert fallback['stress_reference'].startswith('available:')
     assert fallback['stress_weights']==pytest.approx(frozen['stress_weights'])
     assert all(sum(r['stress_weights'].values())==pytest.approx(100) for r in graph if r['stress'] is not None)
     nominal={c['key']:c['nominal_weight'] for c in evidence['recovery_policy']['channels']}

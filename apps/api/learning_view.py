@@ -26,7 +26,7 @@ def _fields(value, names):
     return {key: value.get(key) for key in names} if isinstance(value, dict) else {}
 
 
-SERIES_FIELDS = ("day", "actual_q", "stress", "baseline", "stress_basis", "stress_reference", "q3", "q3_partial")
+SERIES_FIELDS = ("day", "actual_q", "stress", "baseline", "stress_basis", "stress_reference", "q3", "q3_partial", "stress_quality", "stress_reason")
 EPISODE_FIELDS = ("id", "start", "load_end", "end", "loading_days", "recovery_limit_days",
                   "recovery_days", "recovered", "ratio", "status", "proposed_change_percent",
                   "reason", "performance_change_percent")
@@ -138,6 +138,7 @@ def _series_row(row, accounting=None):
     result["q3_by_component"]=_fields(row.get("q3_by_component") or {},COMPONENTS)
     result["q3_observed_days"]=_fields(row.get("q3_observed_days") or {},COMPONENTS)
     result["stress_weights"]={key:value for key,value in (row.get("stress_weights") or {}).items() if key in CHANNEL_LABELS}
+    result["stress_channels"]=[key for key in row.get("stress_channels", []) if key in CHANNEL_LABELS]
     result.update(accounting or {"index_7_40_by_component": {z: None for z in COMPONENTS},
         "recorded_q_by_component": {z: None for z in COMPONENTS}, "load_status": "UNAVAILABLE",
         "load_reason": "Няма дневни данни за натоварването.", "load_activity_count": 0,
@@ -218,15 +219,18 @@ def view(repository, alias, *, days=90, now=None):
     observations = {**observations, **{public: observations[private] for public, private in observation_map.items() if private in observations}}
     accounting = _accounting_series(accounting_source, envelope.get("activities") or [], refresh_required=refresh_required)
     learner_series = {row["day"]: row for row in detail.get("series", [])}
-    series_days = sorted(day for day in set(learner_series) | set(accounting) if start <= day <= today.isoformat())
+    series_days = sorted(day for day in set(learner_series) | set(accounting) | {today.isoformat()} if start <= day <= today.isoformat())
     series = []
     for day in series_days:
         row = learner_series.get(day) or {"day": day}
-        # The current day is still in progress: existing 7/40 is visible, but
-        # an incomplete daily dose is never admitted as a learning outcome.
+        # Show today's independent observations without admitting its still
+        # unfinished dose as a learning outcome.
         if day == today.isoformat():
-            row = {"day": day}
-        series.append(_series_row(row, accounting.get(day)))
+            row = detail.get("current_observation") or {"day": day}
+        point = _series_row(row, accounting.get(day))
+        if day == today.isoformat():
+            point["load_reason"] = "Днешното натоварване още не участва в самообучението. Показателите за състоянието се показват отделно."
+        series.append(point)
     return {
         "schema_version": "recovery-learning-view-v1", "as_of": today.isoformat(),
         "active_components": (report or {}).get("active_components", []),

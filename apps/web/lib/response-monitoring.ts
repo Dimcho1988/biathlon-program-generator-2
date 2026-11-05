@@ -8,6 +8,13 @@ export type Group = typeof GROUPS[number];
 export const WEIGHTS:Record<Group,number> = {subjective:.35,functional:.25,physiology:.15,weight:.15,biochemistry:.10};
 export const GROUP_LABELS:Record<Group,string> = {subjective:"Субективно състояние",functional:"Работоспособност",physiology:"Пулс и HRV",weight:"Динамика на теглото",biochemistry:"Биохимия"};
 export const FIELD_LABELS:Record<string,string> = {sleep_quality:"Качество на съня",fatigue:"Умора",soreness:"Мускулна болезненост",stress:"Психически стрес",motivation:"Желание за тренировка",competition_motivation:"Желание за състезание"};
+export const DAILY_MAIN_FIELDS = ["sleep_quality", "fatigue", "soreness", "stress", "motivation"] as const;
+// The form and future conversational entry use the same anchored scales.
+export const DAILY_SCALES:Record<string,string[]> = {
+  sleep_quality:["Много добър","Добър","Среден","Лош","Много лош"],fatigue:["Без умора","Лека","Умерена","Силна","Много силна"],
+  soreness:["Няма","Лека","Умерена","Силна","Много силна"],stress:["Много нисък","Нисък","Умерен","Висок","Много висок"],
+  motivation:["Много силно желание","Силно","Средно","Слабо","Липсва"],competition_motivation:["Много силно","Силно","Средно","Слабо","Липсва"]};
+export const FEEL_LABELS = ["Много добре", "Добре", "Средно", "Зле", "Много зле"];
 export const CHANNEL_LABELS:Record<string,string> = {...FIELD_LABELS,sleep_duration:"Продължителност на съня",performance:"Скорост–пулс / ТИ и изпълнение",rpe:"Усилие при сходна работа",volume:"Изпълнение на обема",control_test:"Контролни тестове",hrv:"HRV · RMSSD",resting_hr:"Пулс в покой",morning_weight:"Сутрешен индекс",session_weight:"Индекс след / преди",CK:"Креатинкиназа",UREA:"Урея",TC_RATIO:"Тестостерон / кортизол",HEMOGLOBIN:"Хемоглобин",FERRITIN:"Феритин",TSAT:"Трансферинова сатурация",CRP:"CRP"};
 export const PHASES:Record<string,string> = {BUILD:"Натрупване",MAINTAIN:"Поддържане",RECOVERY:"Разтоварване",TAPER:"Тейпър",UNSPECIFIED:"Не е зададена"};
 export const STATES:Record<string,string> = {PARTIAL:"Частична оценка",INSUFFICIENT_DATA:"Недостатъчно данни",WITHIN_USUAL:"В обичайния диапазон",EXPECTED_ELEVATION:"Покачване в натоварващ блок",ELEVATED:"Повишена реакция",REVIEW:"Нужен е преглед",REVIEW_AFTER_RECOVERY:"Задържане след разтоварване"};
@@ -15,7 +22,7 @@ export const REASONS:Record<string,string> = {UNKNOWN:"Не е уточнено"
 export interface Baseline {median:number;spread:number;count:number}
 export interface ExecutionMethod {id:string;title:string;zone:string;sports:string[]}
 export interface Execution {planned_duration_minutes:number|null;planned_speed_kmh:number|null;executed_speed_kmh:number|null;execution_comparable:boolean|null;execution_reason:string|null;executed_method_id?:string|null;method_confirmed?:boolean|null;executed_method?:Record<string,unknown>|null}
-export interface Session {lactate_samples?:LactateSample[];lactate_device?:string;neuromuscular?:NeuromuscularReport|null;activity_ref:string;day:string;name:string;sport:string;rpe:number|null;duration_minutes:number|null;suggested_duration_minutes:number|null;timing:string;source:string|null;provider_rpe:number|null;revision:number;note:string;srpe_load:number|null;expected_rpe:number|null;deviation_score:number|null;comparable_count:number;execution?:Execution}
+export interface Session {feel?:number|null;provider_feel?:number|null;rpe_source?:string|null;feel_source?:string|null;duration_source?:string;lactate_samples?:LactateSample[];lactate_device?:string;neuromuscular?:NeuromuscularReport|null;activity_ref:string;day:string;name:string;sport:string;rpe:number|null;duration_minutes:number|null;suggested_duration_minutes:number|null;timing:string;source:string|null;provider_rpe:number|null;revision:number;note:string;srpe_load:number|null;expected_rpe:number|null;deviation_score:number|null;comparable_count:number;execution?:Execution}
 export interface DailyReport {day:string;observed_at:string|null;sleep_quality:number|null;fatigue:number|null;soreness:number|null;stress:number|null;motivation:number|null;competition_motivation?:number|null;sleep_hours?:number|null;pain_or_illness:boolean;note:string}
 export interface Channel {key:string;group:Group;weight:number;effective_weight:number;contribution:number|null;score:number|null;raw:number|null;unit:string|null;source:string|null;observed_on:string|null;baseline:Baseline|null;status:string}
 export interface GroupScore {key:Group;score:number|null;weight:number;available_weight:number;effective_weight:number;contribution:number|null}
@@ -30,6 +37,10 @@ export function parseResponseHistory(value:unknown):ResponseHistory {
   if(r.execution_methods !== undefined && (!Array.isArray(r.execution_methods) || r.execution_methods.some(method =>
     !isRecord(method) || typeof method.id !== "string" || typeof method.title !== "string" || typeof method.zone !== "string"
     || !Array.isArray(method.sports) || !method.sports.every(sport => typeof sport === "string")))) throw new Error("Невалиден списък на тренировъчните методи.");
+  for (const session of r.sessions) {
+    if (session.feel != null && (!Number.isInteger(session.feel) || session.feel < 1 || session.feel > 5)) throw new Error("Невалидна оценка след тренировка.");
+    for (const source of [session.rpe_source, session.feel_source]) if (source != null && !["ONFLOWS","INTERVALS"].includes(source)) throw new Error("Невалиден източник на оценката.");
+  }
   for(const d of r.days){
     if(!/^\d{4}-\d{2}-\d{2}$/.test(d.day)||!nullable(d.total)||!finite(d.coverage)||d.coverage<0||d.coverage>100||d.automatic_action!=="NONE"||!Array.isArray(d.groups)||d.groups.length!==5||new Set(d.groups.map(g=>g.key)).size!==5||!Array.isArray(d.channels)||d.channels.length!==22||new Set(d.channels.map(c=>c.key)).size!==22)throw new Error("Невалидна дневна оценка.");
     let available=0,sum=0;

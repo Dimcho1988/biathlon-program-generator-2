@@ -227,15 +227,14 @@ describe("dedicated recovery learning presentation", () => {
     expect(prior).toContain(">60%<");
     expect(prior).not.toContain("Последна оценка на стреса · 03.11.2026");
     const empty=renderToStaticMarkup(<RecoveryLearning view={{...missing,series:[missing.series[1]]}}/>);
-    expect(empty).toContain("За този ден липсва пълен набор");
-    expect(empty).toContain("Няма наличен набор показатели");
+    expect(empty).toContain("Няма достатъчно съпоставими показатели");
     expect(empty).not.toContain(">60%<");
     expect(empty).not.toContain("Последна оценка на стреса");
   });
   it("shows an honest empty state and keeps missing component values as dashes", () => {
     const parsed=parseRecoveryLearningView({...legacy,series:[],episodes:[],channels:[]});
     const html=renderToStaticMarkup(<RecoveryLearning view={parsed}/>);
-    for(const text of ["Няма годни измерени данни","Няма достатъчно независими наблюдения","Няма завършен съпоставим блок","Събира данни","—"]) expect(html).toContain(text);
+    for(const text of ["Няма годни измерени данни","Няма достатъчно съпоставими показатели","Няма завършен съпоставим блок","Събира данни","—"]) expect(html).toContain(text);
     expect(html).not.toContain("<svg");
     expect(html).not.toContain("Предложена промяна");
   });
@@ -248,7 +247,7 @@ describe("dedicated recovery learning presentation", () => {
   });
   it("distinguishes no stress elevation from delayed recovery in both recovery views", () => {
     const summary="Основанието за текущото решение се показва веднъж.";
-    const labels={NO_ELEVATED_RESPONSE:"Няма отчетено повишение на стреса",DELAYED:"Няма потвърдено връщане в експертния срок"};
+    const labels={NO_ELEVATED_RESPONSE:"Няма отчетено повишение на стреса",DELAYED:"Наблюдавана повишена реакция след срока"};
     for(const [status,label] of Object.entries(labels)) {
       const html=renderToStaticMarkup(<RecoveryLearning view={{...view,summary,decision:{...view.decision,reason:summary},episodes:[{...view.episodes[0],status,reason:"Описание на наблюдението."}]}}/>);
       expect(html.split(label)).toHaveLength(3);

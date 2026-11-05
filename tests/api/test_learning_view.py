@@ -48,6 +48,10 @@ def report():
             "decision": {"component": None, "status": "COLLECTING", "proposed_change_percent": 0.,
                          "applied_change_percent": 0., "reason": "Нужни са данни.", "raw_lab": 99},
             "observations": {"stress_days": 0, "load_days": 1, "private_raw": 99},
+            "current_observation": {"day": "2026-11-03", "stress": 52., "baseline": None,
+                "stress_quality": "PARTIAL", "stress_reason": "Частична оценка по наличните показатели.",
+                "stress_channels": ["hrv", "resting_hr"], "stress_weights": {"hrv": 100*8/15, "resting_hr": 100*7/15},
+                "stress_basis": "AVAILABLE_PANEL", "stress_reference": "available:today", "private_source": "hidden"},
             "channels": [{"key": "hrv", "label": "HRV", "observed_days": 0, "nominal_weight": 8, "raw_values": [1, 2]}],
             "component_assessments": [component_assessment(z) for z in COMPONENTS],
             "model_summary": {"private": "not for transport"},
@@ -109,6 +113,11 @@ def test_view_transports_only_dedicated_observation_fields_and_never_publishes(m
     assert "memory" not in result
     assert "model_summary" not in result
     assert original == report()
+    current=by_day["2026-11-03"]
+    assert current["stress"]==52. and current["stress_quality"]=="PARTIAL"
+    assert current["actual_q"] is None and not current["learning_load_eligible"]
+    assert current["stress_channels"]==["hrv","resting_hr"]
+    assert "private_source" not in current
 
 
 def test_view_keeps_hypothetical_response_separate_from_one_gated_proposal(monkeypatch):
@@ -292,7 +301,7 @@ def test_private_view_keeps_existing_7_40_separate_from_learner_eligibility(monk
     if projection_unavailable:
         assert "последната записана обработка" in scored["load_reason"]
         assert "текущата проекция" in scored["load_reason"]
-        assert all(row["index_load_status"] == "PARTIAL" for row in result["series"])
+        assert all(row["index_load_status"] == "PARTIAL" for row in result["series"] if row["index_history_days"])
 
 
 def test_current_canonical_date_is_visible_without_inventing_completed_daily_learning(monkeypatch):
@@ -316,6 +325,7 @@ def test_current_canonical_date_is_visible_without_inventing_completed_daily_lea
     assert [row["day"] for row in result["series"]] == ["2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02", "2026-11-03"]
     current = result["series"][-1]
     assert current["index_7_40_by_component"] == {**dict.fromkeys(COMPONENTS[:-1], 4.567), "STR": 2.345}
-    assert current["actual_q"] is None and current["stress"] is None
+    assert current["actual_q"] is None and current["stress"] == 52.
+    assert current["stress_quality"] == "PARTIAL"
     assert current["learning_load_eligible"] is False
     assert all(q is None for q in current["actual_q_by_component"].values())

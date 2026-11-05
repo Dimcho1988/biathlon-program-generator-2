@@ -15,10 +15,40 @@ from biathlon.constants import COMPONENTS
 from . import learning_evidence as legacy
 from . import learning_loads
 from .response_monitoring import number, relative_score
-from .stress_model import CHANNELS
+from .stress_model import CHANNELS, MIN_COVERAGE, MIN_GROUPS
 
-VERSION = "observed-q3-recovery-v2"
+VERSION = "observed-q3-recovery-v3-observed-followup"
 CORE = {"hrv", "resting_hr", "sleep_duration", "fatigue", "sleep_quality", "stress", "soreness", "motivation", "competition_motivation", "morning_weight"}
+MIN_RESPONSE_CHANNELS = 2
+
+
+def stress_observation(row, scores=None):
+    """Describe available evidence without calling a single signal total stress.
+
+    A displayed changing panel is not a recovery comparison. Block comparisons
+    below keep their frozen panel and references throughout.
+    """
+    channels = [c for c in row.get("channels", []) if c.get("key") in CORE]
+    values = scores if scores is not None else {c["key"]: c["score"] for c in channels if number(c.get("score")) is not None}
+    keys = sorted(values)
+    weight = sum(CHANNELS[k][1] for k in keys)
+    groups = {CHANNELS[k][0] for k in keys}
+    measured = any(number(c.get("raw")) is not None or number(c.get("score")) is not None for c in channels)
+    if not measured and not keys:
+        quality, reason = "NO_DATA", "Няма измервания за състоянието през този ден."
+    elif not keys:
+        quality, reason = "NEEDS_BASELINE", "Има измервания, но още няма достатъчна лична база за сравнение."
+    elif len(keys) < MIN_RESPONSE_CHANNELS:
+        quality, reason = "SINGLE_INDICATOR", "Наличен е един оценим показател. Той не определя общото ниво на стреса."
+    elif weight < MIN_COVERAGE or len(groups) < MIN_GROUPS:
+        quality, reason = "PARTIAL", "Частична оценка по наличните показатели. Липсващите данни не означават възстановяване."
+    else:
+        quality, reason = "SUFFICIENT", None
+    score = round(sum(values[k]*CHANNELS[k][1] for k in keys)/weight, 4) if len(keys) >= MIN_RESPONSE_CHANNELS else None
+    return {"stress": score, "baseline": None, "stress_quality": quality, "stress_reason": reason,
+            "stress_channels": keys, "stress_weights": _effective_weights(keys) if score is not None else {},
+            "stress_basis": "AVAILABLE_PANEL" if score is not None else None,
+            "stress_reference": "available:"+sha256(json.dumps(keys).encode()).hexdigest()[:12] if score is not None else None}
 
 
 def recovery_limit(loading_days):
@@ -206,7 +236,7 @@ def _response(days, start, load_end, end):
     base={d:scores(days.get(d,{})) for d in base_keys}
     follow={d:scores(days.get(d,{})) for d in follow_keys}
     panel=sorted(k for k in CORE if sum(k in row for row in base.values())>=3 and sum(k in row for row in follow.values())>=2)
-    if not panel:
+    if len(panel) < MIN_RESPONSE_CHANNELS:
         return None
     weight=sum(CHANNELS[k][1] for k in panel)
     def total(values):
@@ -216,6 +246,11 @@ def _response(days, start, load_end, end):
         return None
     center=median(before)
     series={d:total(scores(row)) for d,row in days.items()}
+    loading_observed=sum(number(series.get(d)) is not None for d in legacy._dates(start,load_end))
+    if loading_observed < 3:
+        # Before/after measurements alone cannot establish whether the loading
+        # phase was tolerated. Keep the daily observations, not a learned label.
+        return None
     returned=None
     previous=None
     elevated=False
@@ -237,12 +272,19 @@ def _response(days, start, load_end, end):
         returned=None
     observed=[v for d,v in series.items() if start.isoformat()<=d<=end.isoformat() and number(v) is not None]
     recovery_days=(date.fromisoformat(returned)-load_end).days if returned else None
+    last_pair = legacy._dates(end-timedelta(days=1), end)
+    # Elapsed time with no observations is not evidence of delayed recovery.
+    delay_supported = bool(elevated and returned is None and
+        (end-load_end).days > recovery_limit((load_end-start).days+1) and
+        all(number(series.get(d)) is not None and series[d] > center+5 for d in last_pair))
     return {"burden_delta":round(sum(observed)/len(observed)-center,6) if observed else 0.,"baseline_score":round(center,6),
             "recovery_days":recovery_days,"recovered":returned is not None,"returned_on":returned,
             "coverage":weight/100,"nominal_coverage_percent":weight,"channels":panel,"references":refs,
             "baseline_days":len(before),"followup_days":sum(number(series.get(d)) is not None for d in follow_keys),
+            "loading_observed_days":loading_observed,
             "observed_days":len(observed),"tracked_days":(end-start).days+1,"stress_elevated":elevated,
             "right_censored":elevated and returned is None,"followup_elapsed_days":(end-load_end).days,
+            "delay_supported":delay_supported,
             "series":series}
 
 
@@ -289,7 +331,7 @@ def build_view_data(*, source, rows, history, entries, trainability, today, peri
               "q3":v,"q3_by_component":{z:component_daily[z].get(d) for z in COMPONENTS},
               "q3_observed_days":{z:learning_loads.rolling(recorded,date.fromisoformat(d),z)[1] for z in COMPONENTS},
               "q3_partial":any(recorded.get((date.fromisoformat(d)-timedelta(days=i)).isoformat(),{}).get("status") not in {"COMPLETE","REST"} for i in range(3)),
-              "stress":None,"baseline":None,"stress_weights":{},"stress_basis":None,"stress_reference":None}
+              **stress_observation(days.get(d, {}))}
            for d,v in daily.items()}
     for block in blocks:
         start,load_end,end=(block[k] for k in ("start","load_end","end"))
@@ -302,7 +344,10 @@ def build_view_data(*, source, rows, history, entries, trainability, today, peri
         if response:
             outcomes=legacy._ti_outcomes(trainability,start,response["returned_on"],end)+legacy._test_outcomes(selected,start,response["returned_on"],end)
             for d,v in response.pop("series").items():
-                if d in graph and start.isoformat()<=d<=end.isoformat():
+                if d in graph and start.isoformat()<=d<=end.isoformat() and v is not None:
+                    # The block's frozen references can score raw observations
+                    # even when the rolling daily baseline is still unavailable.
+                    graph[d].update(**stress_observation(days.get(d, {}), {k: v for k in response["channels"]}))
                     graph[d].update(stress=v,baseline=response["baseline_score"],
                         stress_weights=_effective_weights(response["channels"]) if v is not None else {},
                         stress_basis="FROZEN_BLOCK" if v is not None else None,
@@ -319,8 +364,8 @@ def build_view_data(*, source, rows, history, entries, trainability, today, peri
             reasons.append("CONFLICTING_OUTCOMES")
             outcomes=[]
             performance=None
-        status="INSUFFICIENT_DATA" if reason else "CONTEXT_REVIEW" if reasons else "NO_ELEVATED_RESPONSE" if not response.get("stress_elevated") else "RECOVERED" if response.get("recovered") else "DELAYED" if response.get("followup_elapsed_days",0)>recovery_limit(duration) else "OBSERVING"
-        description={"INSUFFICIENT_DATA":"Недостатъчни съпоставими измервания.","CONTEXT_REVIEW":"Периодът има контекст за преглед; отразен е в тежестта или отделното разглеждане на наблюдението.","NO_ELEVATED_RESPONSE":"Не е наблюдавано повишение на стреса; време за връщане не се измисля.","RECOVERED":"Наблюдавано връщане в два последователни дни.","DELAYED":"Връщането е след експертния срок; наблюдението продължава.","OBSERVING":"Проследяваме независимите показатели."}[status]
+        status="INSUFFICIENT_DATA" if reason else "CONTEXT_REVIEW" if reasons else "NO_ELEVATED_RESPONSE" if not response.get("stress_elevated") else "RECOVERED" if response.get("recovered") else "DELAYED" if response.get("delay_supported") else "INSUFFICIENT_FOLLOWUP" if response.get("followup_elapsed_days",0)>recovery_limit(duration) else "OBSERVING"
+        description={"INSUFFICIENT_DATA":"Недостатъчни съпоставими измервания.","CONTEXT_REVIEW":"Периодът има контекст за преглед; отразен е в тежестта или отделното разглеждане на наблюдението.","NO_ELEVATED_RESPONSE":"Не е наблюдавано повишение на стреса; време за връщане не се измисля.","RECOVERED":"Наблюдавано връщане в два последователни дни.","DELAYED":"Има последователни повишени наблюдения след експертния срок.","INSUFFICIENT_FOLLOWUP":"Липсват последователни съпоставими наблюдения за връщането.","OBSERVING":"Проследяваме независимите показатели."}[status]
         view_episodes.append({"id":identifier,"start":start.isoformat(),"load_end":load_end.isoformat(),"end":end.isoformat(),"loading_days":duration,"recovery_limit_days":round(recovery_limit(duration),4),"recovery_days":observed,"recovered":bool(response.get("recovered")),"ratio":round(ratio,4) if ratio is not None else None,"status":status,"proposed_change_percent":round(change*100,3) if change is not None else 0.,"reason":description,"performance_change_percent":round(performance,4) if performance is not None else None,"boundary_source":block["boundary_source"],"boundary_component":block.get("boundary_component"),"right_censored":response.get("right_censored",False)})
         if reason:
             continue
@@ -332,16 +377,6 @@ def build_view_data(*, source, rows, history, entries, trainability, today, peri
         if identifier in previous and previous[identifier].get("provenance",{}).get("evidence_fingerprint")==fingerprint:
             ep["observed_on"]=previous[identifier]["observed_on"]
         episodes.append(ep)
-    # A fixed panel makes disappearance a GAP, never apparent improvement.
-    fallback_panel=sorted(k for k in CORE if sum(any(c.get("key")==k and number(c.get("score")) is not None for c in r.get("channels",[])) for r in days.values())>=3)
-    fallback_weight=sum(CHANNELS[k][1] for k in fallback_panel)
-    fallback_reference="fixed:"+sha256(json.dumps(fallback_panel).encode()).hexdigest()[:12]
-    for d,row in graph.items():
-        if row["stress"] is None:
-            vals={c["key"]:c["score"] for c in days.get(d,{}).get("channels",[]) if c.get("key") in fallback_panel and number(c.get("score")) is not None}
-            row["stress"]=round(sum(vals[k]*CHANNELS[k][1] for k in fallback_panel)/fallback_weight,4) if fallback_weight and all(k in vals for k in fallback_panel) else None
-            if row["stress"] is not None:
-                row.update(stress_weights=_effective_weights(fallback_panel),stress_basis="FIXED_PANEL",stress_reference=fallback_reference)
     if excluded_dates:
         exclusions.append({"id":None,"reason":"INCOMPLETE_MEASURED_DATES","dates":excluded_dates})
     current=legacy._current(days,selected,source,rows,history,today,bool(rows))
@@ -372,7 +407,8 @@ def build_view_data(*, source, rows, history, entries, trainability, today, peri
             "decision":{"component":None,"status":"COLLECTING","proposed_change_percent":0.,"applied_change_percent":0.,"reason":"Проследяват се тридневното натоварване и независимите наблюдения."},
             "observations":{"measured_days":sum(v is not None for v in daily.values()),"excluded_days":len(excluded_dates),"unidentified_activities":unidentified_activity_count(source),"accepted_blocks":sum(not e["confounded"] for e in episodes),"reaction_only_blocks":sum(not e["outcomes"] for e in episodes),"performance_blocks":sum(bool(e["outcomes"]) for e in episodes)},"channels":channel_info,
             "settings":{"smoothing_days":3,"maximum_change_percent":20.,"loading_days_min":7,"loading_days_max":21,"recovery_days_min":3.,"recovery_days_max":7.,"increase_sensitivity":1.,"decrease_sensitivity":2.},
-            "diagnostic":False,"independent_stress":True,"comparison_panel":fallback_panel}
+            "diagnostic":False,"independent_stress":True,
+            "current_observation":{"day":today.isoformat(), **stress_observation(days.get(today.isoformat(), {}))}}
     evidence={"episodes":episodes[-78:],"current":current,"exclusions":exclusions,"recovery_policy":detail,"_response_days":days,"_recent_window":learning_loads.window(recorded,today-timedelta(days=3),today)}
     detail["component_assessments"]=build_component_assessments(evidence,today=today)
     return evidence
@@ -486,8 +522,10 @@ def apply_decision(report, evidence, models, *, config, allowed_components, phas
     fresh=bool(latest and 0 <= (today-date.fromisoformat(latest)).days <= 2)
     if current.get("illness_hold") or current.get("lab_review") or current.get("execution_caution"):
         return hold("Има наблюдение за преглед на състоянието; индивидуална промяна е задържана.","CAUTION")
+    # Sufficiency is checked against the selected block's frozen references
+    # below, not against a different rolling display baseline.
     if not fresh or current.get("independent_channel_count",0)<1 or not current.get("history_usable"):
-        return hold("Нужни са актуален независим показател и отчетено натоварване.")
+        return hold("Нужни са актуални съпоставими показатели за състоянието и отчетено натоварване.")
     if phase not in individual_learning.PREPARATION or taper or not allowed_components:
         return hold("Текущият период или ръчните цели не допускат нова промяна.","SHADOW" if mode=="SHADOW" else "READY")
     usable=[e for e in (evidence["episodes"] if supported_episodes is None else supported_episodes) if not e.get("confounded") and (today-date.fromisoformat(e["load_end"])).days <= 42]
@@ -501,6 +539,8 @@ def apply_decision(report, evidence, models, *, config, allowed_components, phas
     pair=legacy._dates(date.fromisoformat(latest)-timedelta(days=1),date.fromisoformat(latest))
     values=[scorer(evidence.get("_response_days",{}).get(d,{})) for d in pair]
     weight=sum(CHANNELS[k][1] for k in panel)
+    if len(panel) < MIN_RESPONSE_CHANNELS or not all(all(k in v for k in panel) for v in values):
+        return hold("Липсват две последователни съпоставими оценки за реакцията към блока.")
     current["recovered"]=bool(weight and all(all(k in v for k in panel) and sum(v[k]*CHANNELS[k][1] for k in panel)/weight<=response["baseline_score"]+5 for v in values))
 
     previous=(retained or {}).get("decision") or {}
@@ -515,8 +555,9 @@ def apply_decision(report, evidence, models, *, config, allowed_components, phas
     tolerated=not response.get("stress_elevated") and current.get("recovered")
     censored=observed is None and not tolerated
     elapsed=response.get("followup_elapsed_days",0)
-    if censored and (not response.get("right_censored") or elapsed<=limit or response.get("followup_days",0)<1):
-        return hold("Проследяването продължава; липсва потвърдено време за връщане.")
+    current_high = bool(weight and all(sum(v[k]*CHANNELS[k][1] for k in panel)/weight > response["baseline_score"]+5 for v in values))
+    if censored and (not response.get("delay_supported") or not current_high):
+        return hold("Проследяването продължава; липсва потвърждение за забавено възстановяване.")
     days=elapsed if censored else observed
     if days is None and not tolerated:
         return hold("Проследяването продължава; липсват съпоставими наблюдения.")

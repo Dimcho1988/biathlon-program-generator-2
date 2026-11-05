@@ -122,7 +122,7 @@ def context(repository, alias, profile, source, rows, today, *, periodization=No
     physiology = {"bounds": list(settings.zone_bounds_bpm), "hrmax": settings.hrmax_bpm} if settings else None
     context_key = _digest({"version": VERSION, "sport": profile["sport"], "physiology": physiology,
                            "equivalence": EQUIVALENCE_VERSION, "ti": TI_VERSION, "stress": STRESS_VERSION,
-                           "channels": CHANNELS, "component_load_version": COMPONENT_LOAD_VERSION,
+                           "channels": CHANNELS, "recovery_policy": recovery_policy.VERSION, "component_load_version": COMPONENT_LOAD_VERSION,
                            "component_capacity_version": COMPONENT_CAPACITY_VERSION,
                            "component_load_context_key": component_load_context_key(source)})
     memory = ManagementStore(repository).learning_memory(alias) or {}
