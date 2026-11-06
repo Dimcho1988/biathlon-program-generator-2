@@ -55,6 +55,7 @@ class ProjectionRepository(Repository):
         if "fingerprint:payload->processed_input_fingerprint" in path:
             import httpx
             row = response.json()[0]
+            row["record"]["evaluated_on"] = self.record["payload"].get("evaluated_on")
             for prefix in ("proposal", "plan"):
                 frozen = (self.record["payload"].get(prefix) or {}).get("input_snapshot", {})
                 row["record"].update({f"{prefix}_{k}": frozen.get(k) for k in
@@ -83,6 +84,17 @@ def test_unchanged_generation_reuses_exact_saved_digest_without_full_snapshot(pr
     assert service.input_state(repo, "ath-test", evaluated_at=NOW, include_response=True,
                                analysis_hints=[frozen]) == service.input_state(
                                    repo, "ath-test", evaluated_at=NOW, include_response=True)
+
+
+def test_newer_identical_generation_reads_current_data_and_keeps_the_saved_plan_current():
+    repo = saved_repository()
+    frozen = repo.record["payload"]["proposal"]["input_snapshot"]
+    repo.record["payload"]["evaluated_on"] = frozen["evaluation_date"]
+    repo.envelope.update(generation_id="identical-reimport",revision=repo.envelope["revision"]+1)
+    assert lifecycle.state(repo,"ath-test",now=NOW)=={"revision":1,"stale":False}
+    assert repo.calls["analysis"]==1  # Reuse requires a real full-snapshot digest.
+    repo.envelope["snapshot_payload"]["wellness_calendar"]=[{"date":"2026-09-21","resting_hr":80}]
+    assert lifecycle.state(repo,"ath-test",now=NOW)=={"revision":1,"stale":True}
 
 
 @pytest.mark.parametrize("change", ["date", "physiology", "profile", "model", "response", "calendar", "preferences", "accents"])

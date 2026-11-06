@@ -1,5 +1,16 @@
 # Prepared pages and rolling adaptive schedule
 
+The late-day browser check also found a real source transition: the active
+proposal's recordings and run keys were unchanged, but its wellness observations
+had changed. Material changes to executed load or wellness now queue background
+preparation for an active programme. Identical reimports do not queue or rebuild
+it. Freshness may inherit a newer immutable generation only when the current
+full snapshot digest is equal, its source day is equal, its revision increased,
+and the complete input hash still matches after substituting only the saved
+generation and revision. Rules, settings and observations remain part of that
+hash. Final publication still verifies the live checkpoint. Daily preparation
+and explicit refresh continue to calculate normally.
+
 Opening a production model/page must not calculate its scientific result or
 submit a programme refresh. The Supabase adapter reads a durable projection;
 only the background worker calls the original scientific implementations. A
