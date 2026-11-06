@@ -1,4 +1,4 @@
-import type { PlanningDraft } from "./training-management";
+import type { ActivePlanRecord, PlanningDraft } from "./training-management";
 import { isRecord } from "./training-status";
 
 export interface PlanWeekRange { start: string; end: string }
@@ -64,4 +64,25 @@ export function planWeekView(plan: PlanningDraft, week: PlanWeekRange) {
     missingDates:dates.filter(date => date >= plan.start_date && !primary.has(date) && !forecast.has(date)),
     historyDates:dates.filter(date => date < plan.start_date && !primary.has(date)),
     programmeDates:[...primary.keys()]};
+}
+
+/** Keep the approved schedule authoritative and fill only its uncovered future dates. */
+export function activeScheduleView(record: ActivePlanRecord, week: PlanWeekRange, showProposal: boolean) {
+  const { plan, proposal, mode, status, proposal_mode } = record.payload;
+  const schedule = planWeekView(showProposal && proposal ? proposal : plan, week);
+  if (showProposal || record.stale || mode !== "AUTO" || status !== "REVIEW_REQUIRED"
+    || !proposal || proposal.status === "BLOCKED" || proposal_mode === "REVIEW"
+    || !isAdaptivePlan(plan) || !isAdaptivePlan(proposal) || !schedule.missingDates.length) {
+    return { ...schedule, proposalDates: [] as string[] };
+  }
+  const extension = planWeekView(proposal, week).days.filter(day =>
+    day.date > plan.end_date && schedule.missingDates.includes(day.date));
+  const proposalDates = extension.map(day => day.date);
+  return {
+    ...schedule,
+    days: [...schedule.days, ...extension].sort((a, b) => a.date.localeCompare(b.date)),
+    forecastDates: [...schedule.forecastDates, ...proposalDates],
+    missingDates: schedule.missingDates.filter(date => !proposalDates.includes(date)),
+    proposalDates,
+  };
 }

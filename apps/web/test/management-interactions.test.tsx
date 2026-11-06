@@ -961,3 +961,50 @@ it("shows missing future days explicitly instead of inventing rest or zero plann
   expect(container.querySelector(".management-selected-day")?.textContent).toContain("Няма изчислени задачи");
   expect(container.querySelector(".management-day-actions")).toBeNull();
 });
+
+it("displays prepared adaptive proposal dates in an uncovered week, without applying them", async () => {
+  const value = twoWeekProgramme();
+  const { plan, proposal } = value.active!.payload;
+  for (const variant of [plan, proposal!]) {
+    variant.input_snapshot = { management_profile: { adaptation_mode: "AUTO" } };
+  }
+  plan.lookahead_days = plan.lookahead_days!.filter(d => d.date === "2026-11-05");
+  const before = structuredClone(value);
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  await mount(<TrainingManagement athleteName="Спортист" canEdit today="2026-10-28"
+    initialProfile={{ configured: true, profile, revision: 2 }} initialDrafts={[]} initialActive={value}/>);
+  fetchMock.mockClear();
+  const period = container.querySelector<HTMLSelectElement>('select[aria-label="Период на адаптивната програма"]')!;
+  await choose(period, "2026-11-04");
+  const days = [...container.querySelectorAll<HTMLButtonElement>(".management-days .management-workout-day")];
+  expect(days).toHaveLength(7);
+  expect(days[0].textContent).toContain("Предложена Z3 на 4 ноември");
+  expect(days[0].querySelector("small")?.textContent).toBe("Прогноза от предложението");
+  expect(days[1].querySelector("small")?.textContent).toBe("Прогноза");
+  expect(days[6].textContent).toContain("Няма изчислени задачи");
+  expect(container.querySelector(".management-selected-day .management-day-actions")).toBeNull();
+  expect(container.textContent).toContain("Прогнозен график");
+  expect(value).toEqual(before);
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it.each(["stale", "paused", "fixed proposal", "fixed plan", "blocked"] as const)(
+  "keeps the approved calendar separate from a %s proposal", async condition => {
+    const value = twoWeekProgramme();
+    const record = value.active!;
+    const { plan, proposal } = record.payload;
+    plan.input_snapshot = { management_profile: { adaptation_mode: "AUTO" } };
+    proposal!.input_snapshot = plan.input_snapshot;
+    plan.lookahead_days = [];
+    if (condition === "stale") record.stale = true;
+    if (condition === "paused") record.payload.status = "PAUSED";
+    if (condition === "fixed proposal") record.payload.proposal_mode = "REVIEW";
+    if (condition === "fixed plan") record.payload.mode = "REVIEW";
+    if (condition === "blocked") proposal!.status = "BLOCKED";
+    await mount(<ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit today="2026-10-28"
+      selectedWeek="2026-11-04" renderDay={() => null}/>);
+    const days = container.querySelector(".management-days")!;
+    expect(days.textContent).toContain("Няма изчислени задачи");
+    expect(days.textContent).not.toContain("Прогноза от предложението");
+  });

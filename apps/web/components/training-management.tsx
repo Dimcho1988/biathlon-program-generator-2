@@ -26,7 +26,7 @@ import { MesocyclePriorities } from "./mesocycle-priorities";
 import { SessionMethodGuidance } from "./session-method-guidance";
 import { methodHrText } from "../lib/method-library";
 import { managementGuidance, hasProgramDays } from "../lib/management-guidance";
-import { availableScheduleWindows, isAdaptivePlan, planRangeLabel, planWeekView, selectedScheduleWindow } from "../lib/plan-week-view";
+import { activeScheduleView, availableScheduleWindows, isAdaptivePlan, planRangeLabel, planWeekView, selectedScheduleWindow } from "../lib/plan-week-view";
 import { SyncActionForm } from "./sync-action-form";
 import { SyncStatusPanel } from "./sync-status-panel";
 import type { SyncState } from "../lib/sync";
@@ -125,14 +125,14 @@ function DayCard({ day }: { day: DraftDay }) {
       position={sessions.length > 1 ? "Тренировка " + (index + 1) + " от " + sessions.length : undefined}/>)}</section>;
 }
 
-function CoachWeekReport({days, today}: {days: DraftDay[]; today: string}) {
+function CoachWeekReport({days, today, proposalDates = []}: {days: DraftDay[]; today: string; proposalDates?: string[]}) {
   const [selectedDate, setSelectedDate] = useState("");
   const day = days.find(item => item.date === selectedDate) ?? days.find(item => item.date >= today) ?? days[0];
   if (!day) return null;
   const sessions = daySessions(day);
   return <details><summary>Подробен треньорски отчет</summary>
     <label>Ден за отчета <select value={day.date} onChange={event => setSelectedDate(event.target.value)}>
-      {days.map(item => <option key={item.date} value={item.date}>{dateLabel(item.date)}</option>)}</select></label>
+      {days.map(item => <option key={item.date} value={item.date}>{dateLabel(item.date)}{proposalDates.includes(item.date) ? " · прогноза от предложението" : ""}</option>)}</select></label>
     {sessions.length ? sessions.map((session, index) => <SessionCoachReport key={index} day={{...day,session}}/>)
       : <SessionCoachReport day={day}/>}
   </details>;
@@ -190,6 +190,9 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   const archivedDraft = showDraft && !!draft && draft.stale !== false;
   const draftWeek = draft ? selectedScheduleWindow(draft.payload,today,selectedWeek) : undefined;
   const draftSchedule = draft && draftWeek ? planWeekView(draft.payload,draftWeek) : undefined;
+  const reportSchedule = !showDraft && view === "week" && active.active && visibleWeekPlan
+    ? activeScheduleView(active.active, selectedScheduleWindow(visibleWeekPlan, today, selectedWeek), viewingProposal)
+    : draftSchedule && { ...draftSchedule, proposalDates: [] };
   const sessionsCurrent = overviewPlan && (showDraft ? !archivedDraft : active.active?.stale === false)
     && (!initialOutlook?.engine_version || overviewPlan.engine_version === initialOutlook.engine_version);
   const compactOverview = view === "overview" ? initialOverviewActive : undefined;
@@ -384,7 +387,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     </>}
     {view === "week" && !archivedDraft && <PlanComparison plan={visibleWeekPlan} outcomes={active.active?.payload.outcomes ?? []} speedSource={viewingProposal ? undefined : showDraft && draft && !archivedDraft ? {kind:"DRAFT",revision:draft.revision,start_date:draft.payload.start_date} : active.active?.stale === false ? {kind:"ACTIVE",revision:active.active.revision} : undefined} />}
     {view === "week" && <details className="management-panel" id="plan-details"><summary>Обяснения и отчет</summary>
-      {visibleWeekPlan && !archivedDraft && <CoachWeekReport days={planWeekView(visibleWeekPlan, selectedScheduleWindow(visibleWeekPlan, today, selectedWeek)).days} today={today}/>}
+      {reportSchedule && !archivedDraft && <CoachWeekReport days={reportSchedule.days} proposalDates={reportSchedule.proposalDates} today={today}/>}
       {active.active && <button type="button" className="action-button secondary" onClick={() => { setNewDraft(!newDraft); }}>{newDraft ? "Обратно към активната програма" : "Подготви друга програма"}</button>}
       {draft && !archivedDraft && <>
         <details><summary>Всички условия и пояснения · {draft.payload.warnings.length}</summary><ul>{draft.payload.warnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}</ul></details>
