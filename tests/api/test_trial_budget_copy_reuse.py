@@ -165,7 +165,7 @@ def test_reserved_bundle_reuse_preserves_the_entire_plan_and_inputs(monkeypatch,
     repo, profile, locked = _planning_inputs(mode)
     original = deepcopy((repo.envelope, profile, locked))
     cached = engine.lru_cache
-    monkeypatch.setattr(engine, "lru_cache", lambda **kwargs: lambda function: function)
+    monkeypatch.setattr(engine, "lru_cache", lambda **kwargs: cached(maxsize=0))
     expected = engine.generate_plan(repo, "athlete", profile, start_date=TODAY, now=NOW, locked_day=locked)
     monkeypatch.setattr(engine, "lru_cache", cached)
     result = engine.generate_plan(repo, "athlete", profile, start_date=TODAY, now=NOW, locked_day=locked)

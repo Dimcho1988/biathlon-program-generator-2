@@ -101,7 +101,7 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
       <ul>{displayedWarnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}</ul></details>
     </aside>}
     {p.proposal && <PlanProposalReview key={record.revision} record={record} canEdit={canEdit} busy={busy || externalBusy}
-      symptomHold={symptomHold} onApprove={() => mutate("action", { action: "APPROVE" })} renderDay={renderDay} today={today}/>}
+      symptomHold={symptomHold} onApprove={() => mutate("action", { action: "APPROVE" })} renderDay={renderDay} today={today} scheduleStart={selectedWeek}/>}
     {fixed && p.monitoring && <details className="management-panel"><summary>Актуална проверка на Recovery · {p.monitoring.evaluated_on}</summary>
       <p>Готовност в началото на деня, %. Бъдещите стойности са прогноза за предложения вариант, а не потвърждение на запазените дози. При липсващо покритие стойността остава неизвестна.</p>
       <div className="management-table-wrap"><table><thead><tr><th>Ден</th>{COMPONENTS.map(z => <th key={z}>{z}</th>)}</tr></thead><tbody>{p.monitoring.days.map(d => <tr key={d.date}><th>{d.date}</th>{COMPONENTS.map(z => <td key={z}>{typeof d.readiness_before?.[z] === "number" ? d.readiness_before[z]!.toFixed(0) : "—"}</td>)}</tr>)}</tbody></table></div>

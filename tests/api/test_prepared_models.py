@@ -173,10 +173,12 @@ def test_no_new_training_does_not_refresh_or_queue_an_import(monkeypatch):
 
 def test_new_training_passes_a_claim_into_the_existing_approval_aware_lifecycle(monkeypatch):
     repo = training_repository()
-    monkeypatch.setattr(management_plan_store, "PlanStore", lambda repo: SimpleNamespace(current=lambda alias: {"revision": 6}))
+    current = Mock(return_value={"revision": 6})
+    monkeypatch.setattr(management_plan_store, "PlanStore", lambda repo: SimpleNamespace(current=current))
     refresh = Mock()
     monkeypatch.setattr(management_lifecycle, "refresh", refresh)
     assert prepared.process_training(repo)
+    current.assert_called_once_with(ALIAS, metadata_only=True)
     kwargs = refresh.call_args.kwargs
     assert kwargs["automatic"] is True and kwargs["include_saved_payload"] is False
     assert kwargs["expected_revision"] == 6
@@ -188,7 +190,7 @@ def test_configured_athlete_without_active_plan_gets_a_reviewable_draft_job(monk
     repo = training_repository()
     today = date.today()
     repo.athlete_settings = lambda alias: SimpleNamespace(timezone="UTC")
-    monkeypatch.setattr(management_plan_store, "PlanStore", lambda repo: SimpleNamespace(current=lambda alias: None))
+    monkeypatch.setattr(management_plan_store, "PlanStore", lambda repo: SimpleNamespace(current=Mock(return_value=None)))
     store = SimpleNamespace(profile=lambda alias: {"configured": True, "revision": 2,
         "profile": {"program_start": today.isoformat(), "program_end": (today+timedelta(days=30)).isoformat()}},
         draft_metadata=lambda alias, start: {"revision": 5})
@@ -203,7 +205,8 @@ def test_configured_athlete_without_active_plan_gets_a_reviewable_draft_job(monk
 
 def test_failed_training_update_stays_retryable(monkeypatch):
     repo = training_repository()
-    monkeypatch.setattr(management_plan_store, "PlanStore", lambda repo: SimpleNamespace(current=lambda alias: {"revision": 6}))
+    current = Mock(return_value={"revision": 6})
+    monkeypatch.setattr(management_plan_store, "PlanStore", lambda repo: SimpleNamespace(current=current))
     monkeypatch.setattr(management_lifecycle, "refresh", Mock(side_effect=PersistentStoreFailure("private-value")))
     assert prepared.process_training(repo)
     assert [c.args[0] for c in repo.training_plan_update.call_args_list] == ["CLAIM", "FAIL"]

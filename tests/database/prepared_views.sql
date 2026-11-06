@@ -27,6 +27,17 @@ do $$ declare a constant text:='prepared-views-contract'; role_name text; key1 t
  token uuid:=gen_random_uuid(); claim jsonb; state jsonb; payload jsonb:='{"value":12.345,"unchanged":true}'; d date; r bigint;
 begin
  assert (select count(*) from onflows_private.prepared_views where athlete_alias=a)=12,'Default views were not queued before opening';
+ -- The stable catalog row can have no date or sport metadata. The active
+ -- recording is authoritative, including a corrected classification.
+ insert into public.onflows_activity_catalog(activity_ref,athlete_alias,provider_activity_key)
+  values('act_99006000000000000000000000000001',a,repeat('9',64));
+ insert into public.onflows_analysis_generation_activities(generation_id,athlete_alias,activity_ref,local_date,catalog_payload,payload_hash)
+  values('99006000-0000-0000-0000-000000000003',a,'act_99006000000000000000000000000001',
+  (now() at time zone 'Europe/Sofia')::date,'{"sport":"NordicSki","activity_type":"Walk"}',repeat('8',64));
+ perform onflows_private.seed_prepared_views(a);
+ assert (select count(*) from onflows_private.prepared_views where athlete_alias=a and is_default
+    and parameters='{"sport":"NordicSki"}' and kind in ('speed','speed-history','speed-load'))=3,
+  'A sport tab waited for its first visit despite an active recording';
  foreach role_name in array array['anon','authenticated','service_role'] loop
   assert not has_table_privilege(role_name,'onflows_private.prepared_views','SELECT');
   assert not has_table_privilege(role_name,'onflows_private.prepared_view_sources','UPDATE');
@@ -38,6 +49,7 @@ begin
   assert not has_function_privilege(role_name,'public.onflows_activity_derivations(text,text,text[],jsonb)','EXECUTE');
  end loop;
  assert not (select prosecdef from pg_proc where oid='public.onflows_prepared_view(text,text,text,jsonb,uuid,bigint,date,text,jsonb)'::regprocedure);
+ delete from public.onflows_analysis_generation_activities where athlete_alias=a;
  delete from onflows_private.prepared_views where athlete_alias=a;
  state:=public.onflows_prepared_view('READ',a,'trainability',p_model_key=>key1);
  assert state->>'ready'='false';

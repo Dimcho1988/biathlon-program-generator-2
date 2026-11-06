@@ -147,7 +147,7 @@ def process_training(repository):
         alias = claim["athlete_alias"]
         try:
             with _lease(operation, alias, token) as lost:
-                record = PlanStore(repository).current(alias)
+                record = PlanStore(repository).current(alias, metadata_only=True)
                 if record is not None:
                     manual = claim.get("manual") is True
                     if manual and claim.get("expected_plan_revision") != record["revision"]:

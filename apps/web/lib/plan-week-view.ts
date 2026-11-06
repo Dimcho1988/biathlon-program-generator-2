@@ -32,7 +32,7 @@ export function selectedPlanWeek(plan: PlanningDraft, today: string, selected?: 
   return weeks.find(w => w.start === selected) ?? weeks[0];
 }
 
-export function isAdaptivePlan(plan: PlanningDraft) {
+export function isAdaptivePlan(plan: { input_snapshot?: unknown }) {
   const snapshot = plan.input_snapshot;
   return isRecord(snapshot) && isRecord(snapshot.management_profile) && snapshot.management_profile.adaptation_mode === "AUTO";
 }

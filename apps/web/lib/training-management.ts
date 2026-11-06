@@ -1,3 +1,4 @@
+import { isAdaptivePlan } from "./plan-week-view";
 import { hydrateSessionSpeedEquivalence, isSpeedEquivalenceComparison, isPlanSpeedComparison, type SpeedEquivalenceComparison, type PlanSpeedComparison } from "./speed-equivalence";
 import { parseTrainingObservations, defaultNeuromuscular, type LactateProfile, type NeuromuscularProfile, type LactateReference, type NeuromuscularExposure } from "./training-observations";
 import { isCalendarDate, isRecord } from "./training-status";
@@ -459,14 +460,16 @@ export function parseDraftRecord(value: unknown): DraftRecord {
     || !Array.isArray(draft.days) || draft.days.length > 7) throw new Error("Неподдържана структура на тренировъчната програма.");
   if (draft.speed_equivalence_comparison !== undefined && !isPlanSpeedComparison(draft.speed_equivalence_comparison)) throw new Error("Несъпоставим скоростен отчет на плана.");
   const lookahead = draft.lookahead_days ?? [];
-  if (!Array.isArray(lookahead) || lookahead.length > 6) throw new Error("Невалидно прогнозно продължение.");
+  // The rolling second week can finish up to six days before its accounting cycle.
+  const maxForecastDays = isAdaptivePlan({input_snapshot: draft.input_snapshot}) ? 13 : 6;
+  if (!Array.isArray(lookahead) || lookahead.length > maxForecastDays) throw new Error("Невалидно прогнозно продължение.");
   const speedPlan = draft.speed_equivalence_comparison as PlanSpeedComparison | undefined;
   const hydrateSession = (session: unknown) => !isRecord(session) || session.speed_equivalence_comparison === undefined ? session
     : {...session, speed_equivalence_comparison: hydrateSessionSpeedEquivalence(session.speed_equivalence_comparison, speedPlan)};
   const normalizedDays = [...draft.days, ...lookahead].map(day => !isRecord(day) ? day : {...day,
     ...(day.session !== undefined ? {session: hydrateSession(day.session)} : {}),
     ...(Array.isArray(day.sessions) ? {sessions: day.sessions.map(hydrateSession)} : {})});
-  const lastLookahead = new Date(Date.parse(draft.end_date)+6*86400000).toISOString().slice(0,10);
+  const lastLookahead = new Date(Date.parse(draft.end_date)+maxForecastDays*86400000).toISOString().slice(0,10);
   for (const [index, day] of normalizedDays.entries()) {
     const provisional = index >= draft.days.length;
     if (!isRecord(day) || !isCalendarDate(day.date)

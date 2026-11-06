@@ -131,7 +131,7 @@ def management_view(
         with timed_stage("overview_active" if compact else "current"):
             active = management_lifecycle.current_overview(repository, alias) if compact else management_lifecycle.current(repository, alias)
         with timed_stage("drafts"):
-            drafts = management_service.history(repository, alias) if view == "week" else {"drafts": []}
+            drafts = management_service.history(repository, alias, latest_only=True) if view == "week" else {"drafts": []}
         with timed_stage("outlook"):
             outlook = management_service.outlook(repository, alias) if view == "overview" else None
         try:
