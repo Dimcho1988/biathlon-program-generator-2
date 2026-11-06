@@ -74,7 +74,7 @@ def _eligible(plan):
     return plan.get("activation_eligible") is True and (source.get("readiness_known") is True or supported_estimate)
 
 
-def _inputs_current(frozen, stored_fingerprint, evaluated_on=None):
+def _inputs_current(frozen, stored_fingerprint, evaluated_on=None, *, analysis_hints=()):
     """A new day alone does not invalidate an already prepared prescription.
 
     All source, profile, test, response and rule identities still match. Daily
@@ -88,7 +88,30 @@ def _inputs_current(frozen, stored_fingerprint, evaluated_on=None):
             return False
     except (TypeError, ValueError):
         return False
-    return _hash({**frozen, "evaluation_date": evaluated_on}) == stored_fingerprint
+    dated = {**frozen, "evaluation_date": evaluated_on}
+    if _hash(dated) == stored_fingerprint:
+        return True
+    # A newly activated immutable generation can contain byte-identical input
+    # data. Verify the real current snapshot digest first, then change only its
+    # two lineage fields back while checking the complete saved input hash.
+    # Never accept a rollback, changed source day, physiology, profile, tests,
+    # response observations or a changed rule through this equivalence check.
+    for hint in management_service.valid_analysis_hints(analysis_hints):
+        if (not isinstance(frozen.get("generation_id"), str)
+                or frozen["generation_id"] == hint["generation_id"]
+                or type(frozen.get("analysis_revision")) is not int
+                or frozen["analysis_revision"] <= hint["analysis_revision"]
+                or frozen.get("analysis_as_of") != hint.get("analysis_as_of")
+                or frozen.get("snapshot_fingerprint") != hint["snapshot_fingerprint"]):
+            continue
+        if _hash({**dated, "generation_id": hint["generation_id"],
+                  "analysis_revision": hint["analysis_revision"]}) == stored_fingerprint:
+            return True
+    return False
+
+
+def _plan_hints(payload):
+    return [(payload.get(kind) or {}).get("input_snapshot") for kind in ("proposal", "plan")]
 
 
 def _window_expired(end, today):
@@ -108,7 +131,7 @@ def current(repository, alias, *, now=None):
     now = now or datetime.now(timezone.utc)
     _, profile, frozen, _, _ = _context(repository, alias, now)
     stale = not _inputs_current(frozen, record["payload"].get("processed_input_fingerprint"),
-        record["payload"].get("evaluated_on"))
+        record["payload"].get("evaluated_on"), analysis_hints=_plan_hints(record["payload"]))
     selected = record["payload"].get("proposal") or record["payload"].get("plan") or {}
     expired = _window_expired(selected.get("end_date"), frozen["evaluation_date"])
     stale = stale or expired
@@ -131,7 +154,7 @@ def state(repository, alias, *, now=None):
               ("generation_id", "analysis_revision", "analysis_as_of", "snapshot_fingerprint")}
              for prefix in ("proposal", "plan")]
     _, _, frozen, _, _ = _context(repository, alias, now or datetime.now(timezone.utc), hints)
-    return {"revision": record["revision"], "stale": not _inputs_current(frozen, record["fingerprint"], record.get("evaluated_on"))
+    return {"revision": record["revision"], "stale": not _inputs_current(frozen, record["fingerprint"], record.get("evaluated_on"), analysis_hints=hints)
         or _window_expired(record.get("proposal_end_date") or record.get("plan_end_date"), frozen["evaluation_date"])}
 
 
@@ -143,7 +166,7 @@ def current_overview(repository, alias, *, now=None):
         return empty_overview()
     _, _, frozen, _, _ = _context(repository, alias, now or datetime.now(timezone.utc))
     return {**{key: record[key] for key in PUBLIC_FIELDS},
-            "stale": not _inputs_current(frozen, record.get("stored_fingerprint"), record.get("stored_evaluated_on"))
+            "stale": not _inputs_current(frozen, record.get("stored_fingerprint"), record.get("stored_evaluated_on"), analysis_hints=record.get("analysis_hints", []))
                 or _window_expired(record.get("end_date"), frozen["evaluation_date"])}
 
 
@@ -159,7 +182,7 @@ def activate(repository, alias, body, actor, *, now=None, include_saved_payload=
     if not draft or rows[0]["revision"] != body.draft_revision:
         raise HTTPException(409, "Select the latest saved draft for this start date")
     plan = deepcopy(draft["payload"])
-    if (not _inputs_current(frozen, plan.get("input_fingerprint"), (plan.get("input_snapshot") or {}).get("evaluation_date"))
+    if (not _inputs_current(frozen, plan.get("input_fingerprint"), (plan.get("input_snapshot") or {}).get("evaluation_date"), analysis_hints=[plan.get("input_snapshot")])
             or not _eligible(plan) or plan.get("end_date", "") < frozen["evaluation_date"]):
         raise HTTPException(409, "Regenerate and review a current plan with sufficient data")
     plan.update(review_required=False, automatically_published=False)
@@ -332,7 +355,9 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
     initial_read_phase = ReadSession(repository, planning_settings_bundle=True)
     profile_revision, profile, frozen, fingerprint, approval_hash = _context(
         repository, alias, now, _initial_read_phase=initial_read_phase)
-    if not force and not day_action and old.get("processed_input_fingerprint") == fingerprint:
+    if not force and not day_action and (old.get("processed_input_fingerprint") == fingerprint
+            or old.get("evaluated_on") == frozen["evaluation_date"] and _inputs_current(
+                frozen, old.get("processed_input_fingerprint"), old.get("evaluated_on"), analysis_hints=_plan_hints(old))):
         store.defer_check(alias, record["revision"])
         return record
     today = date.fromisoformat(frozen["evaluation_date"])
@@ -454,7 +479,7 @@ def approve_proposal(repository, alias, body, actor, *, now, include_saved_paylo
     payload = deepcopy(record["payload"])
     proposal = payload.get("proposal")
     if (not proposal or not _inputs_current(frozen, proposal.get("input_fingerprint"),
-            (proposal.get("input_snapshot") or {}).get("evaluation_date"))
+            (proposal.get("input_snapshot") or {}).get("evaluation_date"), analysis_hints=[proposal.get("input_snapshot")])
             or not _eligible(proposal) or proposal.get("end_date", "") < frozen["evaluation_date"]):
         raise HTTPException(409, "Refresh and review the current proposal before approval")
     proposal.update(review_required=False, automatically_published=False)

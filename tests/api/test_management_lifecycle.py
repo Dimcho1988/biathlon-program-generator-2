@@ -216,7 +216,51 @@ def test_approval_cannot_silently_regenerate_after_new_inputs(system):
     now = advance(system, 1)
     updated = lifecycle.refresh(system.repo, "athlete", automatic=True, now=now)
     system.repo.envelope.update(generation_id="another-generation", revision=99)
+    system.repo.envelope["snapshot_payload"]["wellness_calendar"] = [{"date": now.date().isoformat(), "resting_hr": 80}]
     with pytest.raises(HTTPException) as exc:
         lifecycle.action(system.repo, "athlete", ManagementPlanAction(action="APPROVE", expected_revision=2), ACTOR, now=now)
     assert exc.value.status_code == 409
     assert system.plans.records[-1] == updated
+
+
+def test_identical_reimport_keeps_the_plan_current_without_building_or_new_revision(system, monkeypatch):
+    activate(system)
+    before = deepcopy(system.plans.records[-1])
+    system.repo.envelope.update(generation_id="identical-reimport", revision=99)
+    monkeypatch.setattr(management_service, "build_draft", lambda *a, **kw: pytest.fail("Identical source regenerated a programme"))
+    assert lifecycle.current(system.repo, "athlete", now=NOW)["active"]["stale"] is False
+    assert lifecycle.refresh(system.repo, "athlete", automatic=True, now=NOW) == before
+    assert system.plans.records == [before]
+
+
+def test_unchanged_reimport_preserves_review_of_the_exact_saved_proposal(system, monkeypatch):
+    system.profiles.body.adaptation_mode = "REVIEW"
+    activate(system)
+    now = advance(system, 1)
+    updated = lifecycle.refresh(system.repo, "athlete", automatic=True, now=now)
+    proposal = deepcopy(updated["payload"]["proposal"])
+    system.repo.envelope.update(generation_id="identical-reimport", revision=99)
+    monkeypatch.setattr(management_service, "build_draft", lambda *a, **kw: pytest.fail("Approval regenerated a proposal"))
+    result = lifecycle.action(system.repo, "athlete", ManagementPlanAction(action="APPROVE", expected_revision=2), ACTOR, now=now)
+    assert result["payload"]["plan"]["days"] == proposal["days"]
+    assert result["payload"]["plan"]["input_snapshot"] == proposal["input_snapshot"]
+
+
+@pytest.mark.parametrize("changed", ["snapshot_fingerprint", "analysis_as_of", "physiology", "profile_revision", "rule_versions", "response_fingerprint"])
+def test_identity_equivalence_cannot_hide_changed_scientific_inputs(system, changed):
+    activate(system)
+    old = deepcopy(system.plans.records[-1]["payload"]["plan"]["input_snapshot"])
+    fresh = {**old, "generation_id": "another-generation", "analysis_revision": old["analysis_revision"]+1}
+    assert lifecycle._inputs_current(fresh, lifecycle._hash(old), old["evaluation_date"], analysis_hints=[old])
+    fresh[changed] = "changed"
+    assert not lifecycle._inputs_current(fresh, lifecycle._hash(old), old["evaluation_date"], analysis_hints=[old])
+
+
+def test_new_day_still_prepares_daily_doses_when_source_data_is_identical(system, monkeypatch):
+    activate(system)
+    system.repo.envelope.update(generation_id="identical-reimport", revision=99)
+    def daily(*args, **kwargs):
+        raise RuntimeError("daily preparation reached")
+    monkeypatch.setattr(management_service, "build_draft", daily)
+    with pytest.raises(RuntimeError, match="daily preparation reached"):
+        lifecycle.refresh(system.repo, "athlete", automatic=True, now=NOW+timedelta(days=1))
