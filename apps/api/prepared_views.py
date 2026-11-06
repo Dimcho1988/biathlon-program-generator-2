@@ -20,6 +20,7 @@ from fastapi import HTTPException, Response
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 
+from . import prepared_view_storage
 from .oauth_store import PersistentStoreFailure
 
 VERSION = "prepared-pages-v1"
@@ -61,13 +62,14 @@ def read(repository, alias, kind, parameters=None):
         payload = state.get("payload")
         if not isinstance(payload, dict):
             raise ValueError("Invalid prepared view payload")
+        payload = prepared_view_storage.unpack(payload)
         error = payload.get("prepared_error")
         if isinstance(error, dict):
             status = error.get("status")
             if type(status) is not int or not 400 <= status < 500:
                 raise ValueError("Invalid prepared view error")
             raise HTTPException(status, error.get("detail", "Данните изискват преглед."))
-        return deepcopy(payload)
+        return payload
     except (PersistentStoreFailure, TypeError, ValueError) as exc:
         logger.warning("prepared_view state=read_deferred error_type=%s", type(exc).__name__)
         raise pending() from exc
@@ -179,7 +181,7 @@ def process_next(repository):
                 if lost.is_set():
                     raise HTTPException(409, "Prepared view lease changed")
                 saved = operation("STORE", alias=alias, kind=kind, parameters=parameters,
-                    token=token, revision=claim["revision"], day=claim["day"], model_key=key, payload=payload)
+                    token=token, revision=claim["revision"], day=claim["day"], model_key=key, payload=prepared_view_storage.pack(kind, payload))
                 logger.info("prepared_view kind=%s state=%s", kind,
                     "prepared" if isinstance(saved, dict) and saved.get("stored") is True else "superseded")
         except Exception as exc:
