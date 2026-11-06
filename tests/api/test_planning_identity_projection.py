@@ -55,6 +55,7 @@ class ProjectionRepository(Repository):
         if "fingerprint:payload->processed_input_fingerprint" in path:
             import httpx
             row = response.json()[0]
+            row["record"]["evaluated_on"] = self.record["payload"].get("evaluated_on")
             for prefix in ("proposal", "plan"):
                 frozen = (self.record["payload"].get(prefix) or {}).get("input_snapshot", {})
                 row["record"].update({f"{prefix}_{k}": frozen.get(k) for k in

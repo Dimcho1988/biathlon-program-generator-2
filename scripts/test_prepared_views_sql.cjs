@@ -72,12 +72,16 @@ function routine(name) {
     await db.exec(fs.readFileSync(path.join(migrations, "20261106104859_seed_prepared_sports_from_active_recordings.sql"), "utf8"));
     const validationMigration=fs.readdirSync(migrations).find(name=>name.endsWith("_revalidate_adaptive_inputs_after_analysis.sql"));
     if(validationMigration) await db.exec(fs.readFileSync(path.join(migrations,validationMigration),"utf8"));
+    const overviewMigration=fs.readdirSync(migrations).find(name=>name.endsWith("_preserve_approved_overview_with_input_hints.sql"));
+    if(overviewMigration) await db.exec(fs.readFileSync(path.join(migrations,overviewMigration),"utf8"));
+    await db.exec("grant select on public.onflows_management_plan_state,public.onflows_management_plan_revisions to service_role;");
     // Re-run the prior contract against the upgraded queue/publication guards.
     try { await db.exec(fs.readFileSync(path.join(root, "tests/database/prepared_dashboard_and_training_events.sql"), "utf8")); }
     catch (error) { error.message="Upgraded dashboard contract: "+error.message; throw error; }
     try { await db.exec(fs.readFileSync(path.join(root, "tests/database/prepared_views.sql"), "utf8")); }
     catch (error) { error.message="Prepared view contract: "+error.message; throw error; }
     await db.exec(fs.readFileSync(path.join(root,"tests/database/prepared_planning_source_changes.sql"),"utf8"));
+    await db.exec(fs.readFileSync(path.join(root,"tests/database/management_overview.sql"),"utf8"));
     const clean = await db.query("select count(*)::integer as remaining from public.onflows_intervals_connections");
     if (clean.rows[0].remaining !== 0) throw new Error("Contract fixtures did not roll back");
     console.log(JSON.stringify({engine: (await db.query("select version() as version")).rows[0].version,
