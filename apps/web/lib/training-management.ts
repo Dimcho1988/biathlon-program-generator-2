@@ -573,6 +573,8 @@ export interface ActivePlanRecord {
     changes: PlanChange[]; outcomes: PlanOutcome[]; decisions: Record<string, { action: string; note: string }> };
 }
 export interface ActivePlanResponse {
+  today?: string;
+  background_update?: {status: "QUEUED" | "RUNNING" | "FAILED" | "READY"; error_code?: string | null};
   active: ActivePlanRecord | null;
   history: Array<{ revision: number; operation: string; recorded_at: string; reason: string; changes: PlanChange[] }>;
   capabilities?: { unchanged_checks?: boolean };
@@ -583,10 +585,13 @@ export function parseActivePlanResponse(value: unknown): ActivePlanResponse {
   if (value.capabilities !== undefined && (!isRecord(value.capabilities)
     || (value.capabilities.unchanged_checks !== undefined && typeof value.capabilities.unchanged_checks !== "boolean")))
     throw new Error("Невалидни възможности на активния план.");
+  if (value.background_update !== undefined && (!isRecord(value.background_update)
+    || !["QUEUED","RUNNING","FAILED","READY"].includes(String(value.background_update.status))))
+    throw new Error("Невалидно състояние на фоновата подготовка.");
   const actionResult = value.action_result === undefined ? undefined : parsePlanCheckReceipt(value.action_result);
   if (value.active === null) {
     if (actionResult) throw new Error("Проверката няма свързана активна програма.");
-    return { active: null, history: [], ...(value.capabilities === undefined ? {} : { capabilities: value.capabilities }) } as ActivePlanResponse;
+    return { active: null, history: [], ...(value.background_update === undefined ? {} : {background_update:value.background_update}), ...(value.capabilities === undefined ? {} : { capabilities: value.capabilities }) } as ActivePlanResponse;
   }
   const row = value.active;
   if (!isRecord(row) || !integer(row.revision, 1, Number.MAX_SAFE_INTEGER) || typeof row.stale !== "boolean" || typeof row.actionable !== "boolean" || !isRecord(row.payload)) throw new Error("Невалидна активна програма.");

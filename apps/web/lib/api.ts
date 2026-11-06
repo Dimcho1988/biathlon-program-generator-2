@@ -32,6 +32,7 @@ import {
   type ActivityView,
 } from "./activities";
 import { parseDashboardView, type DashboardView } from "./dashboard-view";
+import { PreparedViewPending } from "./prepared-view";
 import { parseSyncState, type SyncState } from "./sync";
 import { parseTrainabilityHistory, type TrainabilityHistory } from "./trainability";
 
@@ -172,6 +173,8 @@ export async function fetchApiResource(
       response = null;
       requestError = error;
     }
+    if (response?.status === 503 && response.headers.get("X-OnFlows-Preparation") === "pending")
+      throw new PreparedViewPending();
     // A prepared learning report can be pending without an infrastructure failure.
     // Preserve that state before the generic 5xx retry cancels the response body.
     if (response?.status === 503 && path.split("?")[0] === "/api/v2/athlete/learning") {

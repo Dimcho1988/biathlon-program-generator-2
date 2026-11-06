@@ -1,9 +1,10 @@
 "use client";
+import {fetchPrepared} from "../lib/prepared-view";
 import { isRawMovingSpeed, type SpeedRole } from "../lib/speed-basis";
 import { speedRangeText, speedText, speedUnitLabel } from "../lib/speed-format";
 import { useRunningSpeedUnit } from "./running-speed-unit";
 import { durationHms } from "../lib/duration-format";
-import {useState} from "react";
+import {useEffect,useRef,useState} from "react";
 import type {SpeedZoneProfile,StandardizedCS} from "../lib/models";
 import {isRecord} from "../lib/training-status";
 import {componentColor} from "../lib/training-visuals";
@@ -19,16 +20,20 @@ export function SpeedZonesSummary({profile,sport,generation,revision,speedRole}:
   const unit = useRunningSpeedUnit();
   const rawSpeed=isRawMovingSpeed({speed_role:speedRole??profile?.speed_role});
   const [history,setHistory]=useState<Record<string,unknown>|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  const request=useRef<AbortController|null>(null);
+  useEffect(()=>()=>request.current?.abort(),[]);
   if(profile?.status!=="AVAILABLE")return null;
   async function read() {
+    request.current?.abort();
+    const controller=new AbortController();request.current=controller;
     setBusy(true);setError("");
     try {
-      const r=await fetch(`/api/athlete/models/speed-history?${new URLSearchParams({sport})}`);
+      const r=await fetchPrepared(`/api/athlete/models/speed-history?${new URLSearchParams({sport})}`,{signal:controller.signal});
       const data:unknown=await r.json();
       if(!r.ok||!isRecord(data)||data.status!=="AVAILABLE"||!Array.isArray(data.zones))throw new Error("Историята не е достъпна или моделът е обновен. Опитай отново.");
       if(data.source_generation_id!==generation||data.source_revision!==revision)throw new Error("Моделът е обновен. Презареди страницата, за да сравним историята с текущите зони.");
       setHistory(data);
-    }catch(e){setError(e instanceof Error?e.message:"Историята не е достъпна.");}
+    }catch(e){if(!controller.signal.aborted)setError(e instanceof Error?e.message:"Историята не е достъпна.");}
     finally{setBusy(false);}
   }
   const totals=Array.isArray(history?.zones)?history.zones.filter(isRecord):[];

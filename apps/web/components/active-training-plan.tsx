@@ -13,7 +13,7 @@ import { durationHms } from "../lib/duration-format";
 import { COMPONENTS, type ActivePlanResponse, type DraftDay, type ManagementProfileResponse } from "../lib/training-management";
 import { changeActivePlan, PLAN_CHANGED_NOTICE } from "../lib/active-plan-request";
 import { PlanCheckHistory } from "./plan-check-history";
-import { planRangeLabel, planWeekView, selectedPlanWeek } from "../lib/plan-week-view";
+import { planRangeLabel, planWeekView, selectedScheduleWindow } from "../lib/plan-week-view";
 
 const STATE: Record<string, string> = { ACTIVE: "Активна програма", PAUSED: "Програмата е на пауза", REVIEW_REQUIRED: "Промяна за преглед", COMPLETED: "Завършена програма" };
 const OUTCOME: Record<string, string> = { RECORDED: "Има реално изпълнение", DIFFERENT_ACTIVITY: "Изпълнено е друго средство", MISSED: "Без изпълнена сесия", SKIPPED: "Пропусната", REST: "Почивка", UNKNOWN: "Липсват данни" };
@@ -40,7 +40,7 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
   const display = p.plan;
   const showingProposal = showProposal && !!p.proposal;
   const schedulePlan = showingProposal ? p.proposal! : display;
-  const scheduleWeek = selectedPlanWeek(schedulePlan,today,selectedWeek);
+  const scheduleWeek = selectedScheduleWindow(schedulePlan,today,selectedWeek);
   const schedule = planWeekView(schedulePlan,scheduleWeek);
   const checked = p.proposal ?? p.plan;
   const week = p.week_window ?? { start_date: display.start_date, end_date: display.end_date };
@@ -60,7 +60,9 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
         ...(recordCheck ? { record_unchanged_check: true } : {}) }, scopedFetch);
       const { action_result: receipt, ...current } = result.value;
       onChange(current);
-      if (result.conflict) setNotice(PLAN_CHANGED_NOTICE);
+      if (current.background_update?.status === "QUEUED" || current.background_update?.status === "RUNNING")
+        setNotice("Програмата се обновява във фонов режим. Готовият резултат се показва автоматично.");
+      else if (result.conflict) setNotice(PLAN_CHANGED_NOTICE);
       else if (endpoint === "action" && body.action === "APPROVE") setNotice("Предложението е утвърдено. Графикът по-долу съдържа приетите промени.");
       else if (recordCheck && receipt) {
         const displayedRevision = Math.max(latestRevision.current, current.active?.revision ?? 0);
@@ -78,23 +80,25 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
     finally { inFlight.current = false; setBusy(false); onEnd?.(); }
   }
   const actionsDisabled = !canEdit || busy || externalBusy;
+  const preparing = value.background_update?.status === "QUEUED" || value.background_update?.status === "RUNNING";
   return <section className="management-active" aria-label="Активна тренировъчна програма">
     <div className="management-panel management-current-heading"><div><p className="eyebrow">Текущ план · версия {record.revision}</p><h2>{STATE[p.status]}</h2>
       <WeekModeStatus record={record} profile={profile}/>{!symptomHold && !p.proposal && <p>{p.reason}</p>}
-      <p>Утвърден период: {week.start_date} – {week.end_date}. <Link href="/planning">Смени режима в профила</Link></p>
+      <p>{fixed ? `Утвърден период: ${week.start_date} – ${week.end_date}` : `Период: ${planRangeLabel(scheduleWeek)}`}. <Link href="/planning">Профил за планиране</Link></p>
       </div>
       <div className="management-actions">
         {p.status !== "COMPLETED" && <button type="button" className="action-button secondary" disabled={actionsDisabled} onClick={() => mutate("action", { action: p.status === "PAUSED" ? "RESUME" : "PAUSE" })}>{p.status === "PAUSED" ? "Продължи с текущите настройки" : "Пауза"}</button>}
-        {p.status !== "PAUSED" && p.status !== "COMPLETED" && <button type="button" className="action-button" disabled={actionsDisabled} onClick={() => mutate("action", { action: "REFRESH" })}>{busy || externalBusy ? "Обновяване…" : "Обнови сега"}</button>}
+        {p.status !== "PAUSED" && p.status !== "COMPLETED" && <button type="button" className="action-button" disabled={actionsDisabled || preparing} onClick={() => mutate("action", { action: "REFRESH" })}>{preparing ? "Подготовка…" : busy || externalBusy ? "Обновяване…" : "Обнови сега"}</button>}
       </div>
     </div>
     {error?.revision === record.revision && <p className="management-error" role="alert">{error.message}</p>}
     {notice && <p className="management-notice" role="status">{notice}</p>}
+    {value.background_update?.status === "FAILED" && <p className="management-notice" role="status">Фоновото обновяване не завърши. Запазената програма е показана за справка. Избери „Обнови сега“, за да опиташ отново.</p>}
     {record.stale && <p className="management-notice" role="status">{record.stale_reason} Последната версия е показана само за справка.</p>}
     {symptomHold && <SymptomNotice day={feedback.latest_report_day}/>}
     {displayedWarnings.length > 0 && <aside className="management-notice" aria-label="Предупреждения и условия">
-      <h3>Предупреждения и условия {p.proposal ? "за предложението" : "към текущия график"}</h3>
-      <ul>{displayedWarnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}</ul>
+      <details><summary>Условия и бележки {p.proposal ? "към предложението" : "към програмата"}</summary>
+      <ul>{displayedWarnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}</ul></details>
     </aside>}
     {p.proposal && <PlanProposalReview key={record.revision} record={record} canEdit={canEdit} busy={busy || externalBusy}
       symptomHold={symptomHold} onApprove={() => mutate("action", { action: "APPROVE" })} renderDay={renderDay} today={today}/>}

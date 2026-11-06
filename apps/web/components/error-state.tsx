@@ -2,6 +2,8 @@ import Link from "next/link";
 import { ApiWakeRetry } from "./api-wake-retry";
 import { SyncActionForm } from "./sync-action-form";
 import { API_RATE_LIMIT_MESSAGE, renderWakeHref } from "../lib/api-wake";
+import { PREPARED_VIEW_MESSAGE } from "../lib/prepared-view";
+import { PreparedViewRetry } from "./prepared-view-retry";
 
 export function ErrorState({ message, integrationActions = false, connectAvailable = true, profileSelectionAvailable = false, retryAvailable = false, retryHref = "/", refreshAvailable = true, notice }: {
   message: string;
@@ -13,6 +15,9 @@ export function ErrorState({ message, integrationActions = false, connectAvailab
   refreshAvailable?: boolean;
   notice?: string;
 }) {
+  if (message === PREPARED_VIEW_MESSAGE) return <main className="state-page" role="status">
+    <h1>Подготвяме данните</h1><p className="muted">{message}</p><PreparedViewRetry/>
+  </main>;
   const apiWakeTimedOut = message === "API услугата не се събуди навреме.";
   const apiRateLimited = message === API_RATE_LIMIT_MESSAGE;
   const needsWake = apiWakeTimedOut || apiRateLimited;

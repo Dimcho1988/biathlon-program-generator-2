@@ -39,6 +39,10 @@ class PublicationHTTP:
             supabase_url="https://project.supabase.co", secret_key="sb_secret_server-key",
             encryption_key=ENCRYPTION_KEY, client=httpx.Client(transport=httpx.MockTransport(self.handler)),
             generation_reads=True)
+        # Keep this fixture focused on final scientific publication checks.
+        # Production manual refresh now enqueues first (test_prepared_views);
+        # the worker calls this same lifecycle/publication implementation.
+        actual.queue_plan_refresh = None
         if bundle_supported:
             self.repository = actual
         else:

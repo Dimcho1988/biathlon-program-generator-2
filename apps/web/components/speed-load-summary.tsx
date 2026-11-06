@@ -37,7 +37,7 @@ function SpeedLoadSummaryView({generation,revision,cacheScope}:Props) {
     <h2>Натоварване по скорост · 40 дни</h2>
     <RunningSpeedUnitControl/>
     <p>Скоростта се превръща в зона чрез приложимия профил за датата на тренировката. Индивидуалните опори използват Vflat; при липсващи тестове и валиден индекс началният модел използва скоростта в движение без корекция за релефа. Бягане, ролки/ски и колело се събират по общата интензивност. Отчетът показва скоростната сметка. Водещият показател за основното натоварване се избира от настройките на профила.</p>
-    <button type="button" className="action-button secondary" disabled={busy} onClick={()=>read(sport,Boolean(data))}>{busy?"Изчисляване…":data?"Обнови отчета по скорост":"Изчисли товара по скорост"}</button>
+    <button type="button" className="action-button secondary" disabled={busy} onClick={()=>read(sport,Boolean(data))}>{busy?"Зареждане…":data?"Обнови отчета по скорост":"Покажи товара по скорост"}</button>
     <div role="status">{error&&<p>{error}</p>}</div>
     {data&&<>
       {data.activities.some(a=>a.initial_heuristic||isRawMovingSpeed(a))&&<p>Част от товара е изчислена по начални моделни зони и скорост в движение. Тази част е оценка от историята, без индивидуална тестова опора.</p>}

@@ -1,4 +1,5 @@
 "use client";
+import {fetchPrepared} from "../lib/prepared-view";
 import { speedBasisLabel } from "../lib/speed-basis";
 import { SpeedEquivalenceComparison } from "./speed-equivalence-comparison";
 import { PreferredSpeed, RunningSpeedUnitControl } from "./running-speed-unit";
@@ -25,7 +26,7 @@ import { MesocyclePriorities } from "./mesocycle-priorities";
 import { SessionMethodGuidance } from "./session-method-guidance";
 import { methodHrText } from "../lib/method-library";
 import { managementGuidance, hasProgramDays } from "../lib/management-guidance";
-import { planRangeLabel, planWeekView, selectedPlanWeek } from "../lib/plan-week-view";
+import { availableScheduleWindows, isAdaptivePlan, planRangeLabel, planWeekView, selectedScheduleWindow } from "../lib/plan-week-view";
 import { SyncActionForm } from "./sync-action-form";
 import { SyncStatusPanel } from "./sync-status-panel";
 import type { SyncState } from "../lib/sync";
@@ -137,12 +138,13 @@ function CoachWeekReport({days, today}: {days: DraftDay[]; today: string}) {
   </details>;
 }
 
-export function TrainingManagement({ initialView = "week", initialOutlook = null, athleteName, canEdit, initialProfile, initialDrafts, initialActive = { active: null, history: [] }, initialOverviewActive, initialSyncState = null, syncError = false, today }: {
+export function TrainingManagement({ initialView = "week", initialOutlook = null, athleteName, canEdit, initialProfile, initialDrafts, initialActive = { active: null, history: [] }, initialOverviewActive, initialSyncState = null, syncError = false, today: initialToday }: {
   initialOutlook?: ManagementOutlook | null; initialOverviewActive?: ManagementOverviewActive; initialView?: "week" | "overview"; athleteName: string; canEdit: boolean; initialProfile: ManagementProfileResponse; initialDrafts: DraftRecord[]; initialActive?: ActivePlanResponse; initialSyncState?: SyncState | null; syncError?: boolean; today: string;
 }) {
+  const [today, setToday] = useState(initialToday);
   const scopedFetch = useManagementFetch();
   const requestJson = useCallback(async (path: string, method: "GET" | "PUT" | "POST", body?: unknown, signal?: AbortSignal) => {
-  const response = await scopedFetch(`/api/athlete/management/${path}`, { method, signal, cache: "no-store", headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const response = await fetchPrepared(`/api/athlete/management/${path}`, { method, signal, cache: "no-store", headers: { "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, scopedFetch);
   const value: unknown = await response.json();
   if (!response.ok) throw new ManagementRequestError(isRecord(value) && typeof value.error === "string" ? value.error : "Неуспешна заявка.", response.status);
   return value;
@@ -162,9 +164,11 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [planningJob, setPlanningJob] = useState<PlanningJob | null>(null);
-  const [generationChecked, setGenerationChecked] = useState(!canEdit || initialView !== 'week');
   const activeRequest = useRef(false);
-  const receiveActive = useCallback((value: ActivePlanResponse) => setActive(current => newerActivePlan(current, value)), []);
+  const receiveActive = useCallback((value: ActivePlanResponse) => {
+    if (isCalendarDate(value.today)) setToday(value.today);
+    setActive(current => newerActivePlan(current, value));
+  }, []);
   const beginActiveChange = useCallback(() => {
     if (activeRequest.current) return false;
     activeRequest.current = true; setBusy("generate"); setNotice(""); setError(""); return true;
@@ -184,7 +188,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   const viewingProposal = !showDraft && showProposal && !!active.active?.payload.proposal;
   const visibleWeekPlan = viewingProposal ? active.active!.payload.proposal! : overviewPlan;
   const archivedDraft = showDraft && !!draft && draft.stale !== false;
-  const draftWeek = draft ? selectedPlanWeek(draft.payload,today,selectedWeek) : undefined;
+  const draftWeek = draft ? selectedScheduleWindow(draft.payload,today,selectedWeek) : undefined;
   const draftSchedule = draft && draftWeek ? planWeekView(draft.payload,draftWeek) : undefined;
   const sessionsCurrent = overviewPlan && (showDraft ? !archivedDraft : active.active?.stale === false)
     && (!initialOutlook?.engine_version || overviewPlan.engine_version === initialOutlook.engine_version);
@@ -211,15 +215,17 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
         request = new AbortController();
         const signal = AbortSignal.any([request.signal, AbortSignal.timeout(75_000)]);
         const state = await requestJson("state", "GET", undefined, signal);
-        if (isRecord(state) && state.revision === (active.active?.revision ?? 0) && state.stale === (active.active?.stale ?? false)) return;
+        if (isRecord(state) && isCalendarDate(state.today) && state.today !== today) setToday(state.today);
+        if (isRecord(state) && (!isCalendarDate(state.today) || state.today === today) && state.revision === (active.active?.revision ?? 0) && state.stale === (active.active?.stale ?? false)
+          && JSON.stringify(state.background_update ?? null) === JSON.stringify(active.background_update ?? null)) return;
         const latest = parseActivePlanResponse(await requestJson("active", "GET", undefined, signal));
         if (!cancelled && !activeRequest.current) receiveActive(latest);
       } catch { /* Keep the last known state; writes still enforce current revisions. */ }
-      finally { if (!cancelled) timer = setTimeout(refresh, 60_000); }
+      finally { if (!cancelled) timer = setTimeout(refresh, active.active?.stale || ["QUEUED","RUNNING"].includes(active.background_update?.status ?? "") ? 5000 : 60_000); }
     };
-    timer = setTimeout(refresh, 60_000);
+    timer = setTimeout(refresh, active.active?.stale || ["QUEUED","RUNNING"].includes(active.background_update?.status ?? "") ? 5000 : 60_000);
     return () => { cancelled = true; clearTimeout(timer); request?.abort(); };
-  }, [initialView, receiveActive, active.active?.revision, active.active?.stale, requestJson]);
+  }, [initialView, receiveActive, active.active?.revision, active.active?.stale, active.background_update, today, requestJson]);
 
   async function activateDraft() {
     if (!draft) return;
@@ -256,7 +262,6 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
         setPlanningJob(job); setError(planningFailure(job));
         return;
       }
-      if (!cancelled) setGenerationChecked(true);
     }).catch(() => { /* Unknown saved state must not trigger automatic preparation. */ });
     return () => { cancelled = true; controller.abort(); };
   }, [canEdit, initialView, initialActive.active, requestJson, receiveGeneratedDraft]);
@@ -332,26 +337,6 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     event.preventDefault();
     await prepare();
   }
-  const refreshed = useRef(false);
-  useEffect(() => {
-    if (refreshed.current || initialView !== "week" || !canEdit || !saved.configured || !generationChecked || busy) return;
-    const current = active.active;
-    if (current?.stale && !["PAUSED", "COMPLETED"].includes(current.payload.status)) {
-      refreshed.current = true;
-      void Promise.resolve().then(async () => {
-        if (!beginActiveChange()) return;
-        try {
-          const result = await changeActivePlan("action", {action: "REFRESH", expected_revision: current.revision}, scopedFetch);
-          receiveActive(result.value);
-          setNotice(result.conflict ? PLAN_CHANGED_NOTICE : "Програмата е преизчислена. Прегледай предложението и ограниченията по-долу.");
-        } catch (caught) { setError(caught instanceof Error ? caught.message : "Обновяването не завърши."); }
-        finally { endActiveChange(); }
-      });
-    } else if (!current && draft?.stale === true && ["GENERATE", "START_DATE"].includes(guidance.step)) {
-      refreshed.current = true;
-      void Promise.resolve().then(prepare);
-    }
-  }, [active, busy, canEdit, draft, guidance.step, initialView, prepare, saved.configured, generationChecked, beginActiveChange, endActiveChange, receiveActive, scopedFetch]);
 
   function exportDraft() {
     if (!draft) return;
@@ -373,14 +358,21 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     {syncError && <p className="management-error" role="alert">Обновяването не започна. Опитай отново или провери връзката с Intervals в настройките.</p>}
     {initialSyncState && <SyncStatusPanel initialState={initialSyncState} renderedGenerationId={initialSyncState.active_generation_id} returnTo="/management" compact timezone={saved.timezone} />}
     <nav className="management-view-switch" aria-label="Изглед на плана"><Link href="/management" aria-current={view === "week" ? "page" : undefined}>Седмична програма</Link><Link href="/management/outlook" aria-current={view === "overview" ? "page" : undefined}>Дългосрочен план</Link></nav>
-    {view === "week" && overviewPlan && !archivedDraft && (showDraft || active.active?.stale === false) && <TrainingPlanReport plan={overviewPlan} planKind={showDraft ? "DRAFT" : "APPROVED"} today={today} selectedWeek={selectedWeek} onWeekChange={setSelectedWeek} showProposal={!showDraft && showProposal} onShowProposalChange={setShowProposal} proposal={showDraft ? null : active.active?.payload.proposal} qExecution={showDraft ? undefined : active.active?.payload.q_execution} outcomes={showDraft ? [] : active.active?.payload.outcomes}/>}
+    {view === "week" && visibleWeekPlan && isAdaptivePlan(visibleWeekPlan) && <div className="management-panel">
+      <label>Период<select aria-label="Период на адаптивната програма" value={selectedScheduleWindow(visibleWeekPlan,today,selectedWeek).start} onChange={event => setSelectedWeek(event.target.value)}>
+        {availableScheduleWindows(visibleWeekPlan,today).map((window,index) => <option key={window.start} value={window.start}>{index === 0 ? "Следващите 7 дни" : "Следващата седмица"} · {planRangeLabel(window)}</option>)}
+      </select></label>
+    </div>}
+    {view === "week" && overviewPlan && <details className="management-panel"><summary>Цели и изпълнение по микроцикъл</summary>
+    {view === "week" && overviewPlan && !archivedDraft && (showDraft || active.active?.stale === false) && <TrainingPlanReport plan={overviewPlan} planKind={showDraft ? "DRAFT" : "APPROVED"} today={today} selectedWeek={isAdaptivePlan(overviewPlan) ? undefined : selectedWeek} onWeekChange={isAdaptivePlan(overviewPlan) ? undefined : setSelectedWeek} showProposal={!showDraft && showProposal} onShowProposalChange={setShowProposal} proposal={showDraft ? null : active.active?.payload.proposal} qExecution={showDraft ? undefined : active.active?.payload.q_execution} outcomes={showDraft ? [] : active.active?.payload.outcomes}/>}
+    </details>}
     {(view === "overview" || (!archivedDraft && (showDraft || active.active?.stale === false))) && <IndividualLearningPanel plan={view === "overview" ? initialOutlook : visibleWeekPlan} />}
 
     {view === "overview" ? <TrainingPlanOverview plan={initialOutlook ?? undefined} outcomes={compactOverview?.outcomes ?? active.active?.payload.outcomes ?? []} today={today} currentProfileRevision={initialOutlook?.profile_revision} volumeContext={initialOutlook?.volume_context} sessions={overviewSessionsCurrent ? overviewSessions : undefined} sessionStatus={sessionStatus} /> : <>
       {active.active && !newDraft && <ActiveTrainingPlan value={active} profile={saved} onChange={receiveActive} externalBusy={busy !== null} onBegin={beginActiveChange} onEnd={endActiveChange} canEdit={canEdit} today={today} selectedWeek={selectedWeek} showProposal={showProposal} renderDay={day => <DayCard day={day} />} />}
       {showDraft && <>
         <section className="management-panel management-next-step" aria-label="Следваща стъпка"><p className="eyebrow">{guidance.step === "REVIEW" ? "Преглед преди започване" : "Следваща стъпка"}</p><h2>{guidance.title}</h2><p>{guidance.description}</p>
-          {archivedDraft && <p className="management-notice">{draft?.stale_reason ?? "Показваният досега проект е остарял."} Неговите часове и тренировки не отразяват текущите настройки. Новият проект се преизчислява с актуалните записани данни. Ако това не завърши, използвай „Подготви програма“.</p>}
+          {archivedDraft && <p className="management-notice">{draft?.stale_reason ?? "Показваният досега проект е остарял."} Избери „Подготви програма“, за да получиш проект с актуалните данни.</p>}
           {guidance.step === "PROFILE" && <Link className="action-button" href="/planning#basic-profile">Попълни профила →</Link>}
           {guidance.step === "SYNC" && canEdit && <SyncActionForm scope="FULL" returnTo="/management" label="Обнови тренировките" />}
           {["GENERATE", "START_DATE"].includes(guidance.step) && generateForm}
@@ -392,7 +384,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     </>}
     {view === "week" && !archivedDraft && <PlanComparison plan={visibleWeekPlan} outcomes={active.active?.payload.outcomes ?? []} speedSource={viewingProposal ? undefined : showDraft && draft && !archivedDraft ? {kind:"DRAFT",revision:draft.revision,start_date:draft.payload.start_date} : active.active?.stale === false ? {kind:"ACTIVE",revision:active.active.revision} : undefined} />}
     {view === "week" && <details className="management-panel" id="plan-details"><summary>Обяснения и отчет</summary>
-      {visibleWeekPlan && !archivedDraft && <CoachWeekReport days={planWeekView(visibleWeekPlan, selectedPlanWeek(visibleWeekPlan, today, selectedWeek)).days} today={today}/>}
+      {visibleWeekPlan && !archivedDraft && <CoachWeekReport days={planWeekView(visibleWeekPlan, selectedScheduleWindow(visibleWeekPlan, today, selectedWeek)).days} today={today}/>}
       {active.active && <button type="button" className="action-button secondary" onClick={() => { setNewDraft(!newDraft); }}>{newDraft ? "Обратно към активната програма" : "Подготви друга програма"}</button>}
       {draft && !archivedDraft && <>
         <details><summary>Всички условия и пояснения · {draft.payload.warnings.length}</summary><ul>{draft.payload.warnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}</ul></details>

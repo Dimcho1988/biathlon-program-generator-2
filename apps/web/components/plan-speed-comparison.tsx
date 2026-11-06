@@ -1,4 +1,5 @@
 "use client";
+import {fetchPrepared} from "../lib/prepared-view";
 import { useEffect, useRef, useState } from "react";
 import { durationHms } from "../lib/duration-format";
 import { isPlanSpeedComparison, planSpeedReason, type PlanSpeedSource, type PlanSpeedComparison as Comparison } from "../lib/speed-equivalence";
@@ -28,7 +29,7 @@ function PlanSpeedComparisonView({ initial, source }: { initial?: Comparison; so
     try {
       const query = new URLSearchParams({kind: source.kind, revision: String(source.revision)});
       if (source.kind === "DRAFT" && source.start_date) query.set("start_date", source.start_date);
-      const response = await scopedFetch(`/api/athlete/management/speed-comparison?${query}`, {cache: "no-store", signal: controller.signal});
+      const response = await fetchPrepared(`/api/athlete/management/speed-comparison?${query}`, {cache: "no-store", signal: controller.signal}, scopedFetch);
       const result: unknown = await response.json();
       if (!response.ok) throw new Error(isRecord(result) && typeof result.error === "string" ? result.error : "Сравнението временно не е достъпно.");
       if (!isPlanSpeedComparison(result) || result.stored_plan_unchanged !== true || result.source_plan?.kind !== source.kind
@@ -42,7 +43,7 @@ function PlanSpeedComparisonView({ initial, source }: { initial?: Comparison; so
   return <section className="management-panel" aria-label="План и изпълнение по скорост">
     <h3>Допълнителна съпоставка по скорост</h3>
     <p>Основният товар следва избрания в профила водещ показател — пулс или скорост — с допустим резервен източник за отделните участъци. Тук сравняваме плана и изпълнението само по скорост при еднакви индивидуални опори. Коефициентите 1; 1; 1; 1,2; 1,5 важат за поддържаните спортове.</p>
-    {source && <><button type="button" className="action-button secondary" disabled={busy} onClick={refresh}>{busy ? "Обновяване на сравнението…" : "Обнови сравнението по скорост"}</button><p className="management-muted">Изчислява отчета при поискване с текущите индивидуални опори. Запазените тренировки и водещият товар не се променят.</p></>}
+    {source && <><button type="button" className="action-button secondary" disabled={busy} onClick={refresh}>{busy ? "Обновяване на сравнението…" : "Обнови сравнението по скорост"}</button><p className="management-muted">Зарежда подготвения отчет с текущите индивидуални опори. Запазените тренировки и водещият товар не се променят.</p></>}
     {error && <p role="alert">{error}</p>}
     {value?.actual_through && <p>Изпълнение до {value.actual_through} · запазена програма, версия {value.source_plan?.revision}.</p>}
     {value?.sports.map(report => <div key={report.sport}>

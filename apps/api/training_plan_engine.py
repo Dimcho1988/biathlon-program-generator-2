@@ -38,7 +38,7 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v72-measured-replay-budget"
+VERSION = "training-management-v73-rolling-adaptive-window"
 PARAMETER_VERSION = "management-parameters-v60"
 MIN_AEROBIC_DOSE_FRACTION = 0.  # Native recipes own their structural minimum; no generic Tmax floor.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
@@ -2137,6 +2137,13 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     if component_governed:
         allocation_start, end_date = planning_schedule.microcycle_bounds(
             start_date, display_end, meso_anchor, program_start, program_end)
+        if profile.get("adaptation_mode") == "AUTO" and window_end is None:
+            # Prepare both rolling seven-day views. Complete the touched model
+            # cycles in the worker so a partial tail never concentrates a full
+            # cycle target into only its first days. Only the primary seven
+            # days are published as prescriptions; the tail remains a forecast.
+            _, end_date = planning_schedule.microcycle_bounds(start_date,
+                min(program_end, start_date+timedelta(days=13)), meso_anchor, program_start, program_end)
         horizon = (end_date-start_date).days+1
     session_limit = min(21, preferences.get("sessions_per_week", 7))
     schedule = planning_schedule.slots(profile, available, start_date, end_date)

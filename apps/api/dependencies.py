@@ -34,6 +34,9 @@ def web_base_url() -> str:
 
 
 def authorize(authorization: str | None) -> None:
+    from .prepared_views import worker_repository
+    if worker_repository() is not None:
+        return
     expected = os.environ.get("ONFLOWS_SERVICE_TOKEN", "")
     provided = authorization[7:] if authorization and authorization.startswith("Bearer ") else None
     if not service_token_valid(provided, expected):
@@ -45,6 +48,9 @@ def authorize(authorization: str | None) -> None:
 
 
 def repository() -> SupabasePilotRepository:
+    from .prepared_views import worker_repository
+    if worker_repository() is not None:
+        return worker_repository()
     try:
         return SupabasePilotRepository.from_environment(client=store_client())
     except PersistentStoreConfigurationError as exc:

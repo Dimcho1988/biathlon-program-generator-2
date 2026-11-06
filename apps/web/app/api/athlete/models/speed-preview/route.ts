@@ -1,3 +1,4 @@
+import { PreparedViewPending, PREPARED_VIEW_MESSAGE } from "../../../../../lib/prepared-view";
 import {NextResponse} from "next/server";
 import {currentAuthorizedAthlete} from "../../../../../lib/account-access";
 import {getSpeedPreview} from "../../../../../lib/api";
@@ -18,7 +19,9 @@ export async function GET(request:Request) {
     if(mode!==null)query.test_mode=mode;
     if(start!==null&&duration!==null)Object.assign(query,{start_s:start,duration_s:duration});
     return NextResponse.json(await getSpeedPreview(access.athleteAlias,query),{headers:{"Cache-Control":"private, no-store"}});
-  } catch {
+  } catch (caught) {
+    if (caught instanceof PreparedViewPending) return NextResponse.json({error:PREPARED_VIEW_MESSAGE},
+      {status:503,headers:{"Cache-Control":"private, no-store","X-OnFlows-Preparation":"pending","Retry-After":"3"}});
     return NextResponse.json({error:"Прегледът временно не е достъпен. Опитайте отново; изборът ви остава запазен във формата."},{status:503});
   }
 }

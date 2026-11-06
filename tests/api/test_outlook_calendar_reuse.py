@@ -69,6 +69,9 @@ class PlanningHTTP:
             encryption_key=ENCRYPTION_KEY,
             client=httpx.Client(transport=httpx.MockTransport(self.handle)), generation_reads=True,
         )
+        # Isolate calendar/input capture from the independent queue-status RPC,
+        # whose public read/claim behavior has dedicated prepared-view tests.
+        self.repo.training_plan_status = lambda alias: None
 
     def handle(self, request):
         self.requests.append(request)
@@ -133,11 +136,10 @@ def fixed_clocks(monkeypatch):
 
 
 def read_page(monkeypatch, harness):
-    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
-    monkeypatch.setattr(dependencies, "repository", lambda: harness.repo)
-    response = TestClient(main.app).get("/api/v2/athlete/management/view?view=overview", headers=HEADERS)
-    assert response.status_code == 200, response.text
-    return response.json()
+    # Scientific input/capture contracts now exercise the worker; HTTP only
+    # reads the resulting prepared view (covered in test_prepared_views).
+    from apps.api.prepared_views import calculate
+    return calculate(harness.repo, "ath-test", "management-view", {"view": "overview"})
 
 
 def test_full_overview_is_identical_with_seventeen_instead_of_twenty_store_reads(monkeypatch):

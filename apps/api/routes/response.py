@@ -11,10 +11,13 @@ from .. import response_service
 from fastapi import APIRouter
 from .. import dependencies
 
+from ..prepared_views import endpoint as prepared_endpoint
+
 router = APIRouter()
 
 
 @router.get("/api/v2/athlete/response")
+@prepared_endpoint("response")
 def response_history(period_start: date | None = None, period_end: date | None = None,
     authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None):

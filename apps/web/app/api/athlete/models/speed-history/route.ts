@@ -1,3 +1,4 @@
+import { PreparedViewPending, PREPARED_VIEW_MESSAGE } from "../../../../../lib/prepared-view";
 import {NextResponse} from "next/server";
 import {currentAuthorizedAthlete} from "../../../../../lib/account-access";
 import {getSpeedExposure} from "../../../../../lib/api";
@@ -10,7 +11,9 @@ export async function GET(request:Request) {
     const sport=new URL(request.url).searchParams.get("sport")||"Run";
     if(!/^[A-Za-z]{2,40}$/.test(sport))return NextResponse.json({error:"Невалидно средство."},{status:422});
     return NextResponse.json(await getSpeedExposure(access.athleteAlias,sport),{headers:{"Cache-Control":"private, no-store"}});
-  } catch {
+  } catch (caught) {
+    if (caught instanceof PreparedViewPending) return NextResponse.json({error:PREPARED_VIEW_MESSAGE},
+      {status:503,headers:{"Cache-Control":"private, no-store","X-OnFlows-Preparation":"pending","Retry-After":"3"}});
     return NextResponse.json({error:"Скоростната история временно не е достъпна."},{status:503});
   }
 }

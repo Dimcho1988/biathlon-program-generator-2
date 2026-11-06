@@ -11,10 +11,13 @@ from ..model_schemas import RecoveryConfigInput, SpeedTestInput, ManualSpeedTest
 from fastapi import APIRouter
 from .. import dependencies
 
+from ..prepared_views import endpoint as prepared_endpoint
+
 router = APIRouter()
 
 
 @router.get("/api/v2/athlete/models/speed-load")
+@prepared_endpoint("speed-load")
 def speed_load_history(sport: str | None = None,
     as_of: date | None = None,
     period_start: date | None = None, period_end: date | None = None,
@@ -32,6 +35,7 @@ def speed_load_history(sport: str | None = None,
 
 
 @router.get("/api/v2/athlete/models/speed-history")
+@prepared_endpoint("speed-history")
 def speed_history(sport: str | None = None,
     authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None):
@@ -70,6 +74,7 @@ def save_recovery_configuration(body: RecoveryConfigInput,
 
 
 @router.get("/api/v2/athlete/models/speed")
+@prepared_endpoint("speed")
 def speed_model(sport: str | None = None, duration_s: float | None = None,
     distance_m: float | None = None, speed_kmh: float | None = None, hr_bpm: float | None = None,
     initial_history_days: Annotated[int | None, Query(ge=7, le=28)] = None,
@@ -110,6 +115,7 @@ def save_manual_speed_test(body: ManualSpeedTestInput,
 
 
 @router.get("/api/v2/athlete/models/speed-preview")
+@prepared_endpoint("speed-preview")
 def speed_test_preview(activity_ref: str, start_s: int | None = None, duration_s: int | None = None, test_mode: str = "STRICT",
     authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None):

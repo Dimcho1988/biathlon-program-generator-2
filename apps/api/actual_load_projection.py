@@ -148,7 +148,9 @@ def _reconstruct(repository, alias, source, inputs, settings, key, original_iden
     keys = [spec[0] for spec in specs]
     # Only persistent, immutable run namespaces may reuse results across reads.
     if namespace:
-        ledgers = _activity_cache.get_or_compute_many(keys, calculate)
+        from .activity_derivations import reuse
+        ledgers = _activity_cache.get_or_compute_many(keys,
+            lambda missing: reuse(repository, alias, "UNIFIED_Q", missing, calculate))
     else:
         uncached = calculate(keys) if keys else {}
         ledgers = [uncached[key] for key in keys]

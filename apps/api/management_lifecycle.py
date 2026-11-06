@@ -20,6 +20,27 @@ from .read_session import ReadSession
 _hash = management_service._hash
 
 
+def _approval_inputs(frozen):
+    critical = {k: deepcopy(frozen[k]) for k in ("physiology", "rule_versions", "management_profile", "profile_revision")}
+    critical["recovery"] = [e for e in frozen["model_entries"] if e["kind"] == "RECOVERY"]
+    return critical
+
+
+def _compatible_horizon_extension(old, frozen):
+    """Only the v72→v73 display horizon may inherit an existing AUTO consent.
+
+    Match the exact previously approved hash after substituting that one engine
+    identity. Any physiology, dosing rule, profile, Recovery or mode change
+    retains the existing proposal/approval boundary.
+    """
+    critical = _approval_inputs(frozen)
+    if (old.get("mode") != "AUTO" or critical["management_profile"].get("adaptation_mode") != "AUTO"
+            or critical["rule_versions"].get("engine") != "training-management-v73-rolling-adaptive-window"):
+        return False
+    critical["rule_versions"]["engine"] = "training-management-v72-measured-replay-budget"
+    return _hash(critical) == old.get("approved_settings_fingerprint")
+
+
 def _context(repository, alias, now, analysis_hints=None, *, _initial_read_phase=None):
     repository = ReadSession.planning(repository, _initial_read_phase)
     repository.capture_planning_inputs(alias,
@@ -33,10 +54,8 @@ def _context(repository, alias, now, analysis_hints=None, *, _initial_read_phase
     frozen = {**state, "management_profile": profile, "profile_revision": stored["revision"]}
     # Calendar/preferences edits and new speed observations are ordinary input
     # changes. New dosing rules, physiology or Recovery settings need approval.
-    critical = {k: frozen[k] for k in ("physiology", "rule_versions", "management_profile", "profile_revision")}
-    critical["recovery"] = [e for e in frozen["model_entries"] if e["kind"] == "RECOVERY"]
     resolved, _ = horizon(profile, (state.get("calendar") or {}).get("events", []))
-    return stored["revision"], resolved, frozen, _hash(frozen), _hash(critical)
+    return stored["revision"], resolved, frozen, _hash(frozen), _hash(_approval_inputs(frozen))
 
 
 def _require_revision(record, expected):
@@ -378,7 +397,9 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
                    proposal_mode=profile["adaptation_mode"],
                    proposal_week_window=candidate_window or _window(plan),
                    monitoring=_monitoring(plan, payload["changes"], source, today))
-    needs_rule_approval = approval_hash != old["approved_settings_fingerprint"] or profile_revision != old["approved_profile_revision"]
+    if _compatible_horizon_extension(old, frozen):
+        payload["approved_settings_fingerprint"] = approval_hash
+    needs_rule_approval = approval_hash != payload["approved_settings_fingerprint"] or profile_revision != old["approved_profile_revision"]
     if fixed and _eligible(plan) and not needs_rule_approval and not next_week and not payload["changes"]:
         # Monitoring freshness advances while every approved dose stays identical.
         payload.update(status="ACTIVE", proposal=None,

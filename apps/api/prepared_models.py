@@ -52,40 +52,20 @@ def compute_dashboard(repository, alias):
 
 
 def dashboard_envelope(repository, alias):
-    """One prepared read on a hit; preserve the current calculation on a miss."""
+    """Only read the worker-prepared result; a cold HTTP read never simulates."""
     operation = getattr(repository, "dashboard_preparation", None)
-    state = None
-    key = model_key()
-    if callable(operation):
-        try:
-            state = operation("READ", alias=alias, model_key=key)
-            if isinstance(state, dict) and state.get("ready") is True:
-                envelope = _validate_envelope(state.get("envelope"), alias)
-                logger.info("prepared_dashboard state=hit")
-                return deepcopy(envelope)
-        except (PersistentStoreFailure, TypeError, ValueError):
-            logger.warning("prepared_dashboard state=read_deferred")
-            state = None
-    from .memory_budget import MODEL_WORK
-    with MODEL_WORK:
-        # Another request/worker may have finished while this request waited
-        # for the bounded memory lane. Never expand the same cold view twice.
-        if callable(operation) and isinstance(state, dict):
-            try:
-                state = operation("READ", alias=alias, model_key=key)
-                if isinstance(state, dict) and state.get("ready") is True:
-                    return deepcopy(_validate_envelope(state.get("envelope"), alias))
-            except (PersistentStoreFailure, TypeError, ValueError):
-                state = None
-        envelope = compute_dashboard(repository, alias)
-        if callable(operation) and isinstance(state, dict) and state.get("ready") is False:
-            if type(state.get("revision")) is int and isinstance(state.get("day"), str):
-                try:
-                    operation("STORE", alias=alias, revision=state["revision"], day=state["day"],
-                        model_key=key, envelope=envelope)
-                except PersistentStoreFailure:
-                    logger.warning("prepared_dashboard state=write_deferred")
-        return envelope
+    if not callable(operation):
+        # Offline adapters have no worker. Persistent repositories always expose
+        # this operation, including when its database transport is unavailable.
+        return compute_dashboard(repository, alias)
+    from .prepared_views import pending
+    try:
+        state = operation("READ", alias=alias, model_key=model_key())
+        if isinstance(state, dict) and state.get("ready") is True:
+            return deepcopy(_validate_envelope(state.get("envelope"), alias))
+    except (PersistentStoreFailure, TypeError, ValueError) as exc:
+        logger.warning("prepared_dashboard state=read_deferred error_type=%s", type(exc).__name__)
+    raise pending()
 
 
 @contextmanager
@@ -149,7 +129,7 @@ def process_dashboard(repository, alias=None):
 
 
 def process_training(repository):
-    """Only an activated generation with new training can create this task."""
+    """Coalesced new-training, local-day and explicit manual preparation."""
     from . import management_lifecycle, planning_jobs
     from .management_plan_store import PlanStore
     from .management_store import ManagementStore
@@ -169,9 +149,13 @@ def process_training(repository):
             with _lease(operation, alias, token) as lost:
                 record = PlanStore(repository).current(alias)
                 if record is not None:
+                    manual = claim.get("manual") is True
+                    if manual and claim.get("expected_plan_revision") != record["revision"]:
+                        raise HTTPException(409, "The queued plan revision changed")
                     management_lifecycle.refresh(repository, alias, claim["actor_id"],
-                        expected_revision=record["revision"], automatic=True, include_saved_payload=False,
-                        _background_claim={"token": token, "revision": claim["revision"]})
+                        expected_revision=record["revision"], automatic=not manual, force=manual,
+                        include_saved_payload=False, record_unchanged_check=claim.get("record_unchanged_check") is True,
+                        _background_claim={"token": token, "revision": claim["revision"], **({"manual":True} if manual else {})})
                 else:
                     stored = ManagementStore(repository).profile(alias)
                     if stored["configured"]:
@@ -190,7 +174,7 @@ def process_training(repository):
                 logger.info("training_plan_update state=prepared")
         except Exception as exc:
             try:
-                operation("FAIL", alias=alias, token=token)
+                operation("REJECT" if claim.get("manual") and isinstance(exc, HTTPException) and exc.status_code == 409 else "FAIL", alias=alias, token=token)
             except Exception:
                 pass
             logger.warning("training_plan_update state=deferred error_type=%s", type(exc).__name__)

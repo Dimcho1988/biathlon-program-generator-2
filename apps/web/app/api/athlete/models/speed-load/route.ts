@@ -1,3 +1,4 @@
+import { PreparedViewPending, PREPARED_VIEW_MESSAGE } from "../../../../../lib/prepared-view";
 import {isCalendarDate} from "../../../../../lib/training-status";
 import {NextResponse} from "next/server";
 import {currentAuthorizedAthlete} from "../../../../../lib/account-access";
@@ -42,7 +43,9 @@ export async function GET(request:Request) {
       "Server-Timing":`authorization;dur=${timing.auth.toFixed(1)}, api;dur=${timing.api.toFixed(1)}, serialize;dur=${timing.serialize.toFixed(1)}`};
     if(unchanged) return new NextResponse(null,{status:304,headers});
     return new NextResponse(body,{headers});
-  } catch {
+  } catch (caught) {
+    if (caught instanceof PreparedViewPending) return NextResponse.json({error:PREPARED_VIEW_MESSAGE},
+      {status:503,headers:{"Cache-Control":"private, no-store","X-OnFlows-Preparation":"pending","Retry-After":"3"}});
     return NextResponse.json({error:"Отчетът по скорост временно не е достъпен."},{status:503});
   }
 }

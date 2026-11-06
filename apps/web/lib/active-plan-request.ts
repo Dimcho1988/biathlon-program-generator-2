@@ -4,6 +4,8 @@ import { isRecord } from "./training-status";
 export const PLAN_CHANGED_NOTICE = "Програмата е обновена междувременно. Заредена е последната версия; прегледай я преди следващо действие.";
 
 export function newerActivePlan(current: ActivePlanResponse, next: ActivePlanResponse): ActivePlanResponse {
+  if (current.active && !next.active && next.background_update)
+    return {...current,background_update:next.background_update};
   return current.active && (!next.active || next.active.revision < current.active.revision) ? current : next;
 }
 

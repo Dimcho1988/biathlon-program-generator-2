@@ -1,3 +1,4 @@
+import { PREPARED_VIEW_MESSAGE } from "../../../../../lib/prepared-view";
 import { matchesManagementScope } from "../../../../../lib/management-scope";
 import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
@@ -114,6 +115,9 @@ async function proxy(request: Request, context: Context) {
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-OnFlows-Athlete-Alias": access.athleteAlias, "X-OnFlows-Actor-Id": access.actorUserId },
       ...(body ? { body } : {}),
     });
+    if (response.status === 503 && response.headers.get("X-OnFlows-Preparation") === "pending")
+      return NextResponse.json({error:PREPARED_VIEW_MESSAGE}, {status:503,
+        headers:{"Cache-Control":"no-store","X-OnFlows-Preparation":"pending","Retry-After":"3"}});
     if (!response.ok) return error(response.status === 409
       ? "Профилът, програмата или входните данни са променени. Презаредете и прегледайте последната версия."
       : response.status === 422 ? endpoint === "methods/preferences" ? "Провери диапазоните. Методът трябва да поддържа избраната корекция; комбинираните отсечки имат собствена структура. Настройките не бяха записани." : "Проверете профила, периода и календара. Програмата не беше записана."
