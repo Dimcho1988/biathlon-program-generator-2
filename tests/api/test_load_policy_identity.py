@@ -89,6 +89,11 @@ def test_automatic_adaptation_reconsiders_legacy_empty_plan_once(monkeypatch, sy
         monkeypatch.setattr(speed_anchor_policy, "VERSION", speed_anchor_policy.VERSION+"-revised")
     else:
         system.repo.envelope.update(generation_id="updated-generation", revision=2)
+        # Exercise new recorded input, rather than a byte-identical reimport
+        # whose lineage alone no longer invalidates a prepared prescription.
+        system.repo.envelope["snapshot_payload"]["wellness_calendar"] = [
+            {"date": NOW.date().isoformat(), "resting_hr": 80}
+        ]
     after = lifecycle.refresh(system.repo, "athlete", automatic=True, now=NOW)
     assert after["revision"] == 2
     if change == "policy":
