@@ -131,3 +131,30 @@ def test_manual_refresh_accepts_without_running_the_generator(monkeypatch):
     assert result.status_code==202 and result.json()["background_update"]["status"]=="QUEUED"
     enqueue.assert_called_once_with("ath-prepared",actor,3,False)
     management_service.build_draft.assert_not_called()
+
+
+def test_large_week_crosses_the_store_as_one_compressed_value_and_round_trips(monkeypatch):
+    payload = {"days": [{"title": "Двойна тренировка", "q": [1, 2.125, True, None]}] * 4000}
+    calls = {}
+
+    def operation(op, **args):
+        if op == "CLAIM":
+            return {"athlete_alias": "ath-prepared", "kind": "management-view",
+                    "parameters": {}, "revision": 5, "day": "2026-11-06"}
+        if op == "STORE":
+            calls.update(args)
+            return {"stored": True}
+        assert op == "READ"
+        return {"ready": True, "athlete_alias": args["alias"], "kind": args["kind"], "payload": calls["payload"]}
+
+    monkeypatch.setattr(prepared_views, "calculate", lambda *args, **kwargs: payload)
+    repo = SimpleNamespace(prepared_view=operation)
+    assert prepared_views.process_next(repo)
+    encoded = calls["payload"]
+    assert len(encoded["data"]) < encoded["raw_bytes"] // 4
+    assert prepared_views.read(repo, "ath-prepared", "management-view") == payload
+    for changes in ({"raw_bytes": 1}, {"raw_bytes": 9 * 1024 * 1024}, {"data": "broken"}):
+        calls["payload"] = {**encoded, **changes}
+        with pytest.raises(HTTPException) as pending:
+            prepared_views.read(repo, "ath-prepared", "management-view")
+        assert pending.value.status_code == 503
