@@ -80,7 +80,7 @@ export function PlanProposalReview({ record, canEdit, busy, symptomHold, onAppro
   return <section className="management-panel management-proposal" aria-label="Предложени промени">
     <div className="management-proposal-heading">
       <div><h3>Има предложени промени</h3><p>{p.reason}</p>
-        <p className="management-muted">Предложението още не е приложено. Утвърденият график е показан по-долу.</p>
+        <p className="management-muted">Предложението още не е приложено.</p>
       </div>
       <button type="button" className="action-button secondary" aria-expanded={expanded} aria-controls={id}
         onClick={() => { setExpanded(!expanded); setFullPlan(false); }}>{expanded ? "Затвори прегледа" : "Прегледай"}</button>

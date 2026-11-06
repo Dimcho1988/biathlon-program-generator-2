@@ -11,7 +11,7 @@ import { planDates, type PlanWeekRange } from "../lib/plan-week-view";
 const dayLabel = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString("bg-BG", { weekday: "short", day: "numeric", month: "numeric", timeZone: "UTC" });
 const REST_LABELS: Record<string, string> = { REST: "Почивка", SKIPPED: "Пропусната", UNAVAILABLE: "Свободен ден", EXISTING_ACTIVITY: "Изпълнена активност", RACE: "Състезание", REVIEW_REQUIRED: "Ще се уточни" };
 
-export function TrainingPlanWeek({ days, today, renderDay, period, forecastDates = [], programmeLabel }: { days: DraftDay[]; today: string; renderDay: (day: DraftDay) => ReactNode; period?: PlanWeekRange; forecastDates?: string[]; programmeLabel?: string }) {
+export function TrainingPlanWeek({ days, today, renderDay, period, forecastDates = [], proposalDates = [], programmeLabel }: { days: DraftDay[]; today: string; renderDay: (day: DraftDay) => ReactNode; period?: PlanWeekRange; forecastDates?: string[]; proposalDates?: string[]; programmeLabel?: string }) {
   const [selected, setSelected] = useState<string | null>(today);
   const detailId = useId();
   const dates = period ? planDates(period.start,period.end) : days.map(d => d.date);
@@ -28,10 +28,11 @@ export function TrainingPlanWeek({ days, today, renderDay, period, forecastDates
     <div className="management-workout-list" role="group" aria-label="Избери ден от програмата">{dates.map(date => {
       const day = days.find(d => d.date === date);
       const provisional = forecastDates.includes(date);
+      const source = proposalDates.includes(date) ? "Прогноза от предложението" : provisional ? "Прогноза" : programmeLabel;
       if (!day) return <Fragment key={date}><button type="button" className="management-workout-day" aria-pressed={date === currentDate} aria-expanded={date === currentDate} aria-controls={date === currentDate ? detailId : undefined} onClick={() => toggle(date)}><span className="management-workout-date"><strong>{dayLabel(date)}</strong></span><span className="management-workout-rest">{missingText(date)}</span></button>{details(date)}</Fragment>;
       const sessions = daySessions(day);
       return <Fragment key={day.date}><button type="button" className={`management-workout-day${provisional ? " management-forecast-day" : ""}`} aria-pressed={day.date === currentDate} aria-expanded={day.date === currentDate} aria-controls={day.date === currentDate ? detailId : undefined} onClick={() => toggle(day.date)}>
-        <span className="management-workout-date"><strong>{day.date === today ? "Днес" : dayLabel(day.date)}</strong>{(provisional || programmeLabel) && <small className="management-day-source">{provisional ? "Прогноза" : programmeLabel}</small>}{sessions.length > 1 && <small>{sessions.length} сесии · {durationHms(sessions.reduce((total, session) => total + session.total_minutes, 0))} общо</small>}</span>
+        <span className="management-workout-date"><strong>{day.date === today ? "Днес" : dayLabel(day.date)}</strong>{source && <small className="management-day-source">{source}</small>}{sessions.length > 1 && <small>{sessions.length} сесии · {durationHms(sessions.reduce((total, session) => total + session.total_minutes, 0))} общо</small>}</span>
         <span className="management-workout-sessions">{sessions.length ? sessions.map((session, index) => <span className="management-workout-session" key={index} style={{ "--session-color": componentColor(session.zone) } as CSSProperties}>
           <span className="management-workout-meta"><span>{SPORT_LABELS[session.sport] ?? session.sport}{sessions.length > 1 ? ` · ${index + 1}` : ""}</span><strong>{durationHms(session.total_minutes)}</strong><SessionAccent zone={session.zone}/></span>
           <span className="management-workout-shape"><strong>{workoutTitle(session)}</strong><SessionRole session={session} day={day}/><span className="workout-summary">{sessionSummary(session)}</span><WorkoutProfile session={session} compact/></span>

@@ -13,7 +13,7 @@ import { durationHms } from "../lib/duration-format";
 import { COMPONENTS, type ActivePlanResponse, type DraftDay, type ManagementProfileResponse } from "../lib/training-management";
 import { changeActivePlan, PLAN_CHANGED_NOTICE } from "../lib/active-plan-request";
 import { PlanCheckHistory } from "./plan-check-history";
-import { planRangeLabel, planWeekView, selectedScheduleWindow } from "../lib/plan-week-view";
+import { activeScheduleView, planRangeLabel, selectedScheduleWindow } from "../lib/plan-week-view";
 
 const STATE: Record<string, string> = { ACTIVE: "Активна програма", PAUSED: "Програмата е на пауза", REVIEW_REQUIRED: "Промяна за преглед", COMPLETED: "Завършена програма" };
 const OUTCOME: Record<string, string> = { RECORDED: "Има реално изпълнение", DIFFERENT_ACTIVITY: "Изпълнено е друго средство", MISSED: "Без изпълнена сесия", SKIPPED: "Пропусната", REST: "Почивка", UNKNOWN: "Липсват данни" };
@@ -41,7 +41,10 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
   const showingProposal = showProposal && !!p.proposal;
   const schedulePlan = showingProposal ? p.proposal! : display;
   const scheduleWeek = selectedScheduleWindow(schedulePlan,today,selectedWeek);
-  const schedule = planWeekView(schedulePlan,scheduleWeek);
+  const schedule = activeScheduleView(record, scheduleWeek, showingProposal);
+  const scheduleTitle = showingProposal ? "Предложен график"
+    : !schedule.forecastDates.length ? "Утвърден график"
+    : schedule.programmeDates.length ? "График · утвърдено и прогноза" : "Прогнозен график";
   const checked = p.proposal ?? p.plan;
   const week = p.week_window ?? { start_date: display.start_date, end_date: display.end_date };
   const fixed = p.mode === "REVIEW";
@@ -110,10 +113,10 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
       <p>Тези корекции вече са включени в текущия график. Не чакат утвърждаване.</p>
       <ul>{p.changes.map(change => <li key={change.date}><strong>{change.date}:</strong> {change.before ? `${change.before} (${durationHms(change.before_minutes)}) → ` : ""}{change.after} ({durationHms(change.after_minutes)})<p>{change.reason}</p></li>)}</ul>
     </details>}
-    <h3>{showingProposal ? "Предложен график" : schedule.forecastDates.length ? "График · утвърдено и прогноза" : "Утвърден график"} · {planRangeLabel(scheduleWeek)}</h3>
-    {schedule.forecastDates.length > 0 && <p className="management-notice">Част от избраната седмица е прогнозно продължение. Тези дни са обозначени с „Прогноза“ и още не са утвърдени.</p>}
+    <h3>{scheduleTitle} · {planRangeLabel(scheduleWeek)}</h3>
+    {schedule.forecastDates.length > 0 && <p className="management-notice">{schedule.proposalDates.length ? "Дните с „Прогноза от предложението“ са подготвени за преглед и очакват утвърждаване." : "Прогнозните дни се уточняват според изпълнението и възстановяването."}</p>}
     {fixed && !showingProposal && <p className="management-muted">Оценките в запазените задачи са от утвърждаването. Новото изпълнение се отчита отделно и не променя автоматично тези дози. {p.monitoring ? `Последна проверка: ${p.monitoring.evaluated_on}.` : ""}</p>}
-    {p.status !== "COMPLETED" && hasProgramDays(schedulePlan) && <div className={`management-days ${record.actionable ? "" : "management-reference"}`}><TrainingPlanWeek days={schedule.days} period={scheduleWeek} forecastDates={schedule.forecastDates} programmeLabel={showingProposal ? "Предложение" : "Утвърдено"} today={today} renderDay={day => <div key={day.date}>
+    {p.status !== "COMPLETED" && (hasProgramDays(schedulePlan) || schedule.proposalDates.length > 0) && <div className={`management-days ${record.actionable ? "" : "management-reference"}`}><TrainingPlanWeek days={schedule.days} period={scheduleWeek} forecastDates={schedule.forecastDates} proposalDates={schedule.proposalDates} programmeLabel={showingProposal ? "Предложение" : "Утвърдено"} today={today} renderDay={day => <div key={day.date}>
       {!showingProposal && !schedule.forecastDates.includes(day.date) && p.monitoring?.days.find(d => d.date === day.date)?.status === "REVIEW_REQUIRED" && <p className="management-notice" role="status">Нужен е преглед на запазената задача. {p.monitoring.days.find(d => d.date === day.date)?.reason}</p>}
       {!showingProposal && !schedule.forecastDates.includes(day.date) && p.outcomes.some(o => o.date === day.date && ["RECORDED", "DIFFERENT_ACTIVITY"].includes(o.status)) && <p className="management-muted">Има отчетена активност за този ден. Запазената задача е показана за съпоставка, не като допълнителна тренировка.</p>}
       {renderDay(day)}
