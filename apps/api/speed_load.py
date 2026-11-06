@@ -380,7 +380,9 @@ def _activity_records(repository, alias, selected, admitted, settings, namespace
             _, mapping, reason = keyed[key]
             results[key] = integrate(activity, row, mapping, reason)
         return results
-    cached = dict(zip(keyed, speed_activity_cache.get_or_compute_many(list(keyed), compute, stats=metrics)))
+    from .activity_derivations import reuse
+    cached = dict(zip(keyed, speed_activity_cache.get_or_compute_many(list(keyed),
+        lambda missing: reuse(repository, alias, "SPEED_Q", missing, compute), stats=metrics)))
     return [cached[key] if key is not None else unpinned[position] for position, key in enumerate(record_keys)]
 
 

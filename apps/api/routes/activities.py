@@ -23,6 +23,8 @@ from .. import dependencies
 from ..sync_service import optional_iso
 from ..hr_zone_times import synchronize_hr_zone_times
 
+from ..prepared_views import endpoint as prepared_endpoint
+
 router = APIRouter()
 ACTIVITY_SHADOW_REF_PATTERN = re.compile(r"^(?:shadow-|act_)[a-f0-9]{32}$")
 
@@ -45,6 +47,7 @@ def real_activity_shadow_index(
 
 
 @router.get("/api/v2/real/trainability")
+@prepared_endpoint("trainability")
 def real_trainability_history(
     period_start: date | None = None,
     period_end: date | None = None,

@@ -20,7 +20,7 @@ export function WeekModeStatus({ record, profile }: { record: ActivePlanRecord; 
   return <div aria-label="Режим на седмицата">
     <dl className="management-week-modes">
       <div><dt>{p.status === "COMPLETED" ? "Режим на завършената програма" : "Режим на утвърдената програма"}</dt><dd>{WEEK_MODE_LABEL[p.mode]}</dd></div>
-      {saved && <div className={pending ? "management-mode-pending" : undefined}><dt>Записан избор в профила</dt><dd>{WEEK_MODE_LABEL[saved]}{pending && <span>Смяната още не е приложена</span>}</dd></div>}
+      {saved && saved !== p.mode && <div className={pending ? "management-mode-pending" : undefined}><dt>Записан избор в профила</dt><dd>{WEEK_MODE_LABEL[saved]}{pending && <span>Смяната още не е приложена</span>}</dd></div>}
     </dl>
     <p>{behavior}</p>
     {pending && <p className="management-mode-next" role="status">Запазването в профила не сменя режима на вече утвърдената програма. {nextStep}</p>}

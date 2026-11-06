@@ -31,6 +31,23 @@ from ..sync_service import optional_iso
 router = APIRouter()
 
 
+def _prepared_snapshot(repository, alias):
+    if callable(getattr(repository, "dashboard_preparation", None)):
+        from ..prepared_models import dashboard_envelope
+        return dashboard_envelope(repository, alias)["snapshot_payload"]
+    return repository.latest(alias)  # Offline pilot only.
+
+
+def _project_if_offline(repository, alias, snapshot, *, recovery=False):
+    if callable(getattr(repository, "dashboard_preparation", None)):
+        return snapshot
+    if recovery:
+        return model_service.project_recovery(repository, alias, snapshot)
+    from ..component_load_projection import project_snapshot
+    return project_snapshot(repository, alias, snapshot)
+
+
+
 @router.get("/api/v2/real/training-status", response_model=TrainingStatusResponse)
 def real_training_status(
     authorization: Annotated[str | None, Header()] = None,
@@ -40,7 +57,7 @@ def real_training_status(
 ):
     dependencies.authorize(authorization)
     try:
-        snapshot = dependencies.repository().latest(dependencies.validated_alias(athlete_alias))
+        snapshot = _prepared_snapshot(dependencies.repository(), dependencies.validated_alias(athlete_alias))
     except PersistentStoreFailure as exc:
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
@@ -50,7 +67,7 @@ def real_training_status(
             status_code=503, detail="No valid real-data snapshot is available"
         )
     try:
-        snapshot = model_service.project_recovery(dependencies.repository(),dependencies.validated_alias(athlete_alias),snapshot)
+        snapshot = _project_if_offline(dependencies.repository(), dependencies.validated_alias(athlete_alias), snapshot, recovery=True)
         return training_status_from_persisted(snapshot)
     except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
         raise HTTPException(409, exc.user_message) from exc
@@ -71,7 +88,7 @@ def real_load_history(
 ):
     dependencies.authorize(authorization)
     try:
-        snapshot = dependencies.repository().latest(dependencies.validated_alias(athlete_alias))
+        snapshot = _prepared_snapshot(dependencies.repository(), dependencies.validated_alias(athlete_alias))
     except PersistentStoreFailure as exc:
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
@@ -81,8 +98,7 @@ def real_load_history(
             status_code=503, detail="No valid real-data snapshot is available"
         )
     try:
-        from ..component_load_projection import project_snapshot
-        snapshot = project_snapshot(dependencies.repository(), dependencies.validated_alias(athlete_alias), snapshot)
+        snapshot = _project_if_offline(dependencies.repository(), dependencies.validated_alias(athlete_alias), snapshot)
         return load_history_from_persisted(snapshot)
     except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
         raise HTTPException(409, exc.user_message) from exc
@@ -106,7 +122,7 @@ def real_completed_work(
 ):
     dependencies.authorize(authorization)
     try:
-        snapshot = dependencies.repository().latest(dependencies.validated_alias(athlete_alias))
+        snapshot = _prepared_snapshot(dependencies.repository(), dependencies.validated_alias(athlete_alias))
     except PersistentStoreFailure as exc:
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
@@ -116,8 +132,7 @@ def real_completed_work(
             status_code=503, detail="No valid real-data snapshot is available"
         )
     try:
-        from ..component_load_projection import project_snapshot
-        snapshot = project_snapshot(dependencies.repository(), dependencies.validated_alias(athlete_alias), snapshot)
+        snapshot = _project_if_offline(dependencies.repository(), dependencies.validated_alias(athlete_alias), snapshot)
         history = load_history_from_persisted(snapshot)
     except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
         raise HTTPException(409, exc.user_message) from exc
@@ -146,7 +161,7 @@ def real_volume_history(
 ):
     dependencies.authorize(authorization)
     try:
-        snapshot = dependencies.repository().latest(dependencies.validated_alias(athlete_alias))
+        snapshot = _prepared_snapshot(dependencies.repository(), dependencies.validated_alias(athlete_alias))
     except PersistentStoreFailure as exc:
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
@@ -174,7 +189,7 @@ def real_recovery_history(
 ):
     dependencies.authorize(authorization)
     try:
-        snapshot = dependencies.repository().latest(dependencies.validated_alias(athlete_alias))
+        snapshot = _prepared_snapshot(dependencies.repository(), dependencies.validated_alias(athlete_alias))
     except PersistentStoreFailure as exc:
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
@@ -184,7 +199,7 @@ def real_recovery_history(
             status_code=503, detail="No valid real-data snapshot is available"
         )
     try:
-        snapshot = model_service.project_recovery(dependencies.repository(),dependencies.validated_alias(athlete_alias),snapshot)
+        snapshot = _project_if_offline(dependencies.repository(), dependencies.validated_alias(athlete_alias), snapshot, recovery=True)
         return recovery_history_from_persisted(snapshot)
     except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
         raise HTTPException(409, exc.user_message) from exc

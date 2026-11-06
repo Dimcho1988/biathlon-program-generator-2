@@ -265,16 +265,19 @@ it("shows a restrictive manual goal outside the collapsed explanations, includin
   expect(warning.querySelector("a")?.getAttribute("href")).toBe("/planning");
 });
 
-it("automatically replaces a stale draft and displays every session and their total", async () => {
+it("opens a stale draft without launching computation and preserves every session and their total", async () => {
   const ready={job_id:'22222222-2222-4222-8222-222222222222',status:'SUCCEEDED',stage:'READY',start_date:draft.entry_key,result_revision:2,error_code:null};
   const fetchMock=vi.fn<(url:string,init?:RequestInit)=>Promise<Response>>(async (url,init)=>
     Response.json(url.includes('draft-metadata?')?{revision:1}:url.includes('drafts?')?{drafts:[{...draft,revision:2,stale:false}]}:
       {job:init?.method==='POST'?ready:null}, {status:init?.method==='POST'?202:200}));vi.stubGlobal("fetch",fetchMock);
   await mount(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:2}} initialDrafts={[draft]} today="2026-09-21"/>);
-  await vi.waitFor(()=>expect(fetchMock).toHaveBeenCalledTimes(4));
+  await vi.waitFor(()=>expect(fetchMock).toHaveBeenCalledTimes(1));
   const writes=fetchMock.mock.calls.filter(([,init])=>init?.method==='POST');
-  expect(writes).toHaveLength(1);
-  expect(JSON.parse(String(writes[0][1]?.body??"{}"))).toMatchObject({expected_profile_revision:2,expected_draft_revision:1});
+  expect(writes).toHaveLength(0);
+  expect(container.textContent).toContain("Подготви актуална програма");
+  await click(button("Подготви програма"));
+  await vi.waitFor(()=>expect(fetchMock).toHaveBeenCalledTimes(4));
+  expect(fetchMock.mock.calls.filter(([,init])=>init?.method==='POST')).toHaveLength(1);
   expect(container.textContent).toContain("Следобедна работа");
   expect(container.textContent).toContain("2 сесии");
   expect(container.textContent).toContain("1:15:00");
@@ -439,12 +442,15 @@ it("never replays a check refresh after conflict or labels the reloaded plan unc
   expect(container.textContent).not.toContain("Проверката приключи");
 });
 
-it("disables manual actions during automatic refresh and loads a concurrent newer version without replaying",async()=>{
+it("disables conflicting actions during an explicit refresh and loads a concurrent newer version without replaying",async()=>{
   let resolvePost!:(response:Response)=>void;
   const fetchMock=vi.fn<(url:string,init?:RequestInit)=>Promise<Response>>((url)=>url.endsWith('/generation-jobs')?Promise.resolve(Response.json({job:null})):url.endsWith("/active")?Promise.resolve(Response.json(activeResponse(4))):new Promise(resolve=>{resolvePost=resolve;}));vi.stubGlobal("fetch",fetchMock);
   await mount(<TrainingManagement athleteName="Спортист" canEdit initialProfile={{configured:true,profile,revision:2}} initialDrafts={[]} initialActive={{...activeResponse(3,true),capabilities:{unchanged_checks:true}}} today="2026-09-21"/>);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(fetchMock.mock.calls[0][1]?.method).not.toBe("POST");
+  await click(button("Обнови сега"));
   expect(fetchMock).toHaveBeenCalledTimes(2);
-  expect(JSON.parse(fetchMock.mock.calls[1][1]!.body as string)).toEqual({ action: "REFRESH", expected_revision: 3 });
+  expect(JSON.parse(fetchMock.mock.calls[1][1]!.body as string)).toEqual({ action: "REFRESH", expected_revision: 3, record_unchanged_check: true });
   expect(button("Обновяване…").disabled).toBe(true);
   expect(button("Пауза").disabled).toBe(true);
   await click(button("Прегледай"));
@@ -703,7 +709,8 @@ it("does not relabel a stale proposal when the saved choice has changed again", 
   await mount(<ActiveTrainingPlan value={value} profile={{ configured: true, revision: 3, profile: { ...profile, adaptation_mode: "AUTO" } }}
     onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/>);
   const modes = container.querySelector('[aria-label="Режим на седмицата"]')!;
-  expect(modes.textContent).toContain("Записан избор в профилаАдаптивна седмица");
+  expect(modes.textContent).toContain("Режим на утвърдената програмаАдаптивна седмица");
+  expect(modes.textContent).not.toContain("Записан избор в профила");
   expect(modes.textContent).toContain("Това предложение не съвпада със записания избор.");
   await click(button("Прегледай"));
   expect(container.querySelector('[aria-label="Предложени промени"]')!.textContent).toContain("Режим в предложението: Фиксирана седмица");

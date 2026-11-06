@@ -157,6 +157,23 @@ def test_changed_profile_requires_approval_in_auto_mode(system):
     assert updated["payload"]["approved_profile_revision"] == 1
     assert updated["payload"]["proposal"]["input_snapshot"]["profile_revision"] == 2
 
+
+def test_only_rolling_horizon_version_can_inherit_the_exact_approved_auto_settings(system):
+    activate(system)
+    _, _, frozen, _, _ = lifecycle._context(system.repo, "athlete", NOW)
+    approved = lifecycle._approval_inputs(frozen)
+    approved["rule_versions"]["engine"] = "training-management-v72-measured-replay-budget"
+    old = {"mode": "AUTO", "approved_settings_fingerprint": lifecycle._hash(approved)}
+    assert lifecycle._compatible_horizon_extension(old, frozen)
+    assert not lifecycle._compatible_horizon_extension({**old, "mode": "REVIEW"}, frozen)
+    for key in ("physiology", "management_profile", "rule_versions"):
+        changed = deepcopy(frozen)
+        changed[key]["changed_for_test"] = True
+        assert not lifecycle._compatible_horizon_extension(old, changed)
+    changed = deepcopy(frozen)
+    changed["model_entries"].append({"kind": "RECOVERY", "revision": 2})
+    assert not lifecycle._compatible_horizon_extension(old, changed)
+
 def test_skip_does_not_invent_activity_and_stale_revision_conflicts(system):
     activate(system)
     before = deepcopy(system.repo.envelope)

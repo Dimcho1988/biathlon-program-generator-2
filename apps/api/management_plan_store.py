@@ -155,7 +155,7 @@ class PlanStore:
         # immutable revision and publication checks are identical in both RPCs.
         rpc = "save_onflows_management_plan" if include_payload else "save_onflows_management_plan_compact"
         if self.background_claim:
-            if not automatic or include_payload:
+            if (not automatic and not self.background_claim.get("manual")) or include_payload:
                 raise ValueError("Background training writes require an automatic compact publication")
             rpc = "save_onflows_management_plan_after_training"
         try:

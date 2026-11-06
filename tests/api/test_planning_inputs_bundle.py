@@ -35,6 +35,9 @@ class BundleHTTP(InitialPhaseHTTP):
             secret_key="sb_secret_server-key", encryption_key=ENCRYPTION_KEY,
             client=httpx.Client(transport=httpx.MockTransport(self.handler)), generation_reads=True,
             planning_inputs_reads=inputs_enabled)
+        # This fixture tests scientific worker read phases after queue handoff.
+        self.repository.queue_plan_refresh = None
+        self.repository.training_plan_status = None
 
     def checkpoint(self):
         return {**super().checkpoint(), "analysis_revision": self.envelope["revision"]}
@@ -87,6 +90,7 @@ class BundleHTTP(InitialPhaseHTTP):
         return super().handler(request)
 
     def poll(self, monkeypatch):
+        from apps.api.prepared_views import _worker_repository
         class Clock(datetime):
             @classmethod
             def now(cls, tz=None):
@@ -95,7 +99,11 @@ class BundleHTTP(InitialPhaseHTTP):
             context.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
             context.setattr(dependencies, "repository", lambda: self.repository)
             context.setattr(lifecycle, "datetime", Clock)
-            return TestClient(app).get("/api/v2/athlete/management/state", headers=HEADERS)
+            token = _worker_repository.set(self.repository)
+            try:
+                return TestClient(app).get("/api/v2/athlete/management/state", headers=HEADERS)
+            finally:
+                _worker_repository.reset(token)
 
 
 @pytest.mark.parametrize("shared_state", ["READY", "OWNED"])

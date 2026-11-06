@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from apps.api import dependencies, main, model_service, prepared_models as prepared
@@ -46,59 +47,51 @@ def repository(monkeypatch):
 
 
 def test_prepared_read_survives_a_new_reader_without_recalculating_or_rereading_source(repository):
+    assert prepared.process_dashboard(repository)
     first = prepared.dashboard_envelope(repository, ALIAS)
     second = prepared.dashboard_envelope(repository, ALIAS)
     assert first == second and repository.project.call_count == repository.active_analysis.call_count == 1
     second["snapshot_payload"]["load_history"]["zones"][0]["tref_min"] = 999
     assert prepared.dashboard_envelope(repository, ALIAS) == first
     operations = [call.args[0] for call in repository.dashboard_preparation.call_args_list]
-    assert operations == ["READ", "READ", "STORE", "READ", "READ"]
+    assert operations == ["CLAIM", "STORE", "READ", "READ", "READ"]
 
 
-def test_concurrent_cold_reads_expand_only_one_dashboard(repository):
-    entered, second_read, release = Event(), Event(), Event()
-    owner = []
-    operation = repository.dashboard_preparation.side_effect
-    def read(op, **kw):
-        if op == "READ" and entered.is_set() and get_ident() != owner[0]:
-            second_read.set()
-        return operation(op, **kw)
-    def project(repo, alias, snapshot):
-        owner.append(get_ident()); entered.set()
-        assert release.wait(3)
-        return deepcopy(snapshot)
-    repository.dashboard_preparation.side_effect = read
-    repository.project.side_effect = project
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        first = pool.submit(prepared.dashboard_envelope, repository, ALIAS)
-        assert entered.wait(2)
-        second = pool.submit(prepared.dashboard_envelope, repository, ALIAS)
-        try:
-            assert second_read.wait(2)
-        finally:
-            release.set()
-        assert first.result(timeout=3) == second.result(timeout=3)
-    assert repository.project.call_count == repository.active_analysis.call_count == 1
+def test_concurrent_cold_reads_do_no_model_work(repository):
+    def read():
+        with pytest.raises(HTTPException) as error:
+            prepared.dashboard_envelope(repository, ALIAS)
+        return error.value.status_code
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        assert list(pool.map(lambda _: read(), range(32))) == [503]*32
+    repository.project.assert_not_called()
+    repository.active_analysis.assert_not_called()
+    assert all(call.args[0] == "READ" for call in repository.dashboard_preparation.call_args_list)
 
 
 @pytest.mark.parametrize("failure_at", ["READ", "STORE"])
-def test_optional_store_failure_keeps_the_authoritative_result(repository, failure_at):
+def test_store_failures_never_turn_cold_http_into_a_calculation(repository, failure_at):
     original = repository.dashboard_preparation.side_effect
     def operation(op, **kw):
         if op == failure_at:
             raise PersistentStoreFailure("private-value")
         return original(op, **kw)
     repository.dashboard_preparation.side_effect = operation
-    assert prepared.dashboard_envelope(repository, ALIAS) == envelope()
-    assert repository.project.call_count == 1
+    with pytest.raises(HTTPException) as error:
+        prepared.dashboard_envelope(repository, ALIAS)
+    assert error.value.status_code == 503
+    repository.project.assert_not_called()
+    repository.active_analysis.assert_not_called()
 
 
 def test_cache_for_another_athlete_cannot_escape_validation(repository):
     wrong = envelope()
     wrong["snapshot_payload"]["training_status"]["athlete_id"] = "other-athlete"
     repository.saved["value"] = wrong
-    assert prepared.dashboard_envelope(repository, ALIAS) == envelope()
-    assert repository.active_analysis.call_count == 1
+    with pytest.raises(HTTPException) as error:
+        prepared.dashboard_envelope(repository, ALIAS)
+    assert error.value.status_code == 503
+    repository.project.assert_not_called()
 
 
 def test_authorization_runs_before_any_prepared_read(monkeypatch, repository):

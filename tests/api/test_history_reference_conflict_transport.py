@@ -194,6 +194,9 @@ def test_real_http_routes_preserve_authentication_and_expose_only_the_trusted_co
 ):
     repository, requests = transport((409, {**ERROR,
         "hint": ERROR["hint"] if exact_signal else "unrelated-conflict"}))
+    # Exercise the publication error boundary after queue handoff. Queue-only
+    # refresh HTTP behavior is covered independently in test_prepared_views.
+    repository.queue_plan_refresh = None
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "test-service-token")
     monkeypatch.setattr(dependencies, "repository", lambda: repository)
 

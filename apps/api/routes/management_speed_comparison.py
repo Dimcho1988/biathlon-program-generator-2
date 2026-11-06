@@ -9,10 +9,13 @@ from ..component_load_context import ComponentCapacityUnavailable
 from ..management_projection import public_management
 from ..oauth_store import PersistentStoreFailure
 
+from ..prepared_views import endpoint as prepared_endpoint
+
 router = APIRouter()
 
 
 @router.get("/api/v2/athlete/management/speed-comparison")
+@prepared_endpoint("management-speed-comparison")
 def speed_comparison(
     response: Response,
     kind: Literal["DRAFT", "ACTIVE"],

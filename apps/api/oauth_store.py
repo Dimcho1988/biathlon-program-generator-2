@@ -324,6 +324,28 @@ class SupabasePilotRepository(SnapshotRepository):
             raise PersistentStoreFailure('Invalid dashboard preparation response')
         return value
 
+    def read_activity_derivations(self, alias, kind, keys):
+        value = self._json(self._request('POST', '/rpc/onflows_activity_derivations',
+            json={'p_alias': alias, 'p_kind': kind, 'p_keys': keys}))
+        if not isinstance(value, dict):
+            raise PersistentStoreFailure('Invalid activity derivation cache')
+        return value
+
+    def write_activity_derivations(self, alias, kind, values):
+        return self._json(self._request('POST', '/rpc/onflows_activity_derivations',
+            json={'p_alias': alias, 'p_kind': kind, 'p_values': values}))
+
+    def prepared_view(self, operation, **arguments):
+        value = self._json(self._request('POST', '/rpc/onflows_prepared_view',
+            json={'p_operation': operation, **{'p_'+key: value for key, value in arguments.items()}}))
+        if value is not None and not isinstance(value, dict):
+            raise PersistentStoreFailure('Invalid prepared view response')
+        return value
+
+    def process_next_prepared_view(self):
+        from .prepared_views import process_next
+        return process_next(self)
+
     def process_next_prepared_dashboard(self):
         from .prepared_models import process_dashboard
         return process_dashboard(self)
@@ -341,6 +363,14 @@ class SupabasePilotRepository(SnapshotRepository):
 
     def cleanup_prepared_data(self, alias):
         return self._json(self._request('POST', '/rpc/cleanup_onflows_prepared_data', json={'p_alias': alias}))
+
+    def queue_plan_refresh(self, alias, actor, expected_revision, record_unchanged_check=False):
+        return self._json(self._request('POST', '/rpc/queue_onflows_plan_refresh', json={
+            'p_alias':alias, 'p_actor':actor, 'p_expected_revision':expected_revision,
+            'p_record_unchanged_check':record_unchanged_check}))
+
+    def training_plan_status(self, alias):
+        return self._json(self._request('POST', '/rpc/read_onflows_plan_preparation', json={'p_alias':alias}))
 
     def training_plan_update(self, operation, **arguments):
         value = self._json(self._request('POST', '/rpc/onflows_training_plan_update',

@@ -72,6 +72,7 @@ def test_malformed_learning_extensions_fail_closed_and_rule_version_strings_surv
     ("POST", "/day", {"date": "2026-09-27", "action": "REST", "expected_revision": 1}),
 ])
 def test_every_management_http_transport_projects_private_learning(monkeypatch, method, path, body):
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "projection-service")
     payload = private_payload()
     monkeypatch.setattr(dependencies, "model_alias", lambda *args: "athlete")
     monkeypatch.setattr(dependencies, "repository", lambda: object())
@@ -86,7 +87,8 @@ def test_every_management_http_transport_projects_private_learning(monkeypatch, 
         def sync_state(self, alias): return None
     monkeypatch.setattr(dependencies, "repository", lambda: Repo())
     response = TestClient(main.app).request(method, "/api/v2/athlete/management"+path, json=body,
-        headers={"X-OnFlows-Actor-Id": "11111111-1111-4111-8111-111111111111"})
+        headers={"X-OnFlows-Actor-Id": "11111111-1111-4111-8111-111111111111",
+                 "Authorization": "Bearer projection-service", "X-OnFlows-Athlete-Alias": "athlete"})
     assert response.status_code == 200, response.text
     assert "SECRET" not in response.text
     assert "SECRET" in json.dumps(payload)

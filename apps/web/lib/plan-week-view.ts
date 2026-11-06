@@ -1,4 +1,5 @@
 import type { PlanningDraft } from "./training-management";
+import { isRecord } from "./training-status";
 
 export interface PlanWeekRange { start: string; end: string }
 
@@ -29,6 +30,27 @@ export function availablePlanWeeks(plan: PlanningDraft, today: string) {
 export function selectedPlanWeek(plan: PlanningDraft, today: string, selected?: string | null) {
   const weeks = availablePlanWeeks(plan, today);
   return weeks.find(w => w.start === selected) ?? weeks[0];
+}
+
+export function isAdaptivePlan(plan: PlanningDraft) {
+  const snapshot = plan.input_snapshot;
+  return isRecord(snapshot) && isRecord(snapshot.management_profile) && snapshot.management_profile.adaptation_mode === "AUTO";
+}
+
+/** Schedule windows are separate from the model's anchored accounting cycles. */
+export function availableScheduleWindows(plan: PlanningDraft, today: string): PlanWeekRange[] {
+  if (!isAdaptivePlan(plan)) return availablePlanWeeks(plan, today);
+  const first = plan.start_date > today ? plan.start_date : today;
+  const add = (day: string, n: number) => new Date(Date.parse(`${day}T12:00:00Z`)+n*86400000).toISOString().slice(0,10);
+  const horizon = plan.parameters?.horizon;
+  const end = isRecord(horizon) && typeof horizon.effective_end === "string" ? horizon.effective_end : add(first,13);
+  if (end < first) return [{start:first,end:first}];
+  return [0,7].filter(n => add(first,n) <= end).map(n => ({start:add(first,n),end:add(first,n+6) < end ? add(first,n+6) : end}));
+}
+
+export function selectedScheduleWindow(plan: PlanningDraft, today: string, selected?: string | null) {
+  const windows = availableScheduleWindows(plan, today);
+  return windows.find(w => w.start === selected) ?? windows[0];
 }
 
 /** Primary days win over aliases or overlapping lookahead records. Missing days stay missing. */

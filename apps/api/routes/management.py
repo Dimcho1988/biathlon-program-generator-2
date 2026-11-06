@@ -1,5 +1,6 @@
 """Management HTTP routes."""
 
+import json
 from datetime import date, datetime, timezone
 from typing import Annotated, Literal
 from uuid import UUID
@@ -30,6 +31,8 @@ from ..sync_service import public_sync_state
 from ..management_projection import public_management
 from ..request_metrics import timed_stage
 
+from ..prepared_views import endpoint as prepared_endpoint
+
 router = APIRouter()
 
 
@@ -41,7 +44,18 @@ def _active_response(value, check=None):
     return result
 
 
+def _with_preparation(repository, alias, value):
+    reader = getattr(repository, "training_plan_status", None)
+    if not callable(reader):
+        return value
+    state = reader(alias)
+    settings = repository.athlete_settings(alias)
+    today = datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone if settings else "UTC")).date().isoformat()
+    return {**value, "today": today, **({"background_update": state} if isinstance(state, dict) else {})}
+
+
 @router.get("/api/v2/athlete/management/methods")
+@prepared_endpoint("management-methods")
 def management_methods(
     phase: Literal["GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION", "RE_ENTRY", "TRANSITION"] | None = None,
     authorization: Annotated[str | None, Header()] = None,
@@ -84,6 +98,7 @@ def management_race_duration(
 
 
 @router.get("/api/v2/athlete/management/profile")
+@prepared_endpoint("management-profile")
 def management_profile(
     authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
@@ -96,6 +111,7 @@ def management_profile(
 
 
 @router.get("/api/v2/athlete/management/view")
+@prepared_endpoint("management-view")
 def management_view(
     view: Literal["week", "overview"] = "week",
     projection: Literal["overview-v1"] | None = None,
@@ -124,7 +140,7 @@ def management_view(
             sync = None
         with timed_stage("projection"):
             result = {"profile": profile, "drafts": drafts, "outlook": outlook, "sync": sync}
-            result.update({"schema_version": "management-overview-v1", "overview_active": active} if compact else {"active": _active_response(active)})
+            result.update({"schema_version": "management-overview-v1", "overview_active": active} if compact else {"active": _with_preparation(repository, alias, _active_response(active))})
             return public_management(result)
     except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
         raise HTTPException(409, exc.user_message) from exc
@@ -176,6 +192,7 @@ def save_management_profile(
 
 
 @router.get("/api/v2/athlete/management/outlook")
+@prepared_endpoint("management-outlook")
 def management_outlook(
     authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
@@ -278,14 +295,16 @@ def generate_management_draft(
 
 
 @router.get("/api/v2/athlete/management/active")
+@prepared_endpoint("management-active")
 def management_active(
     authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
 ):
     alias = dependencies.model_alias(authorization, athlete_alias)
     try:
-        return public_management(_active_response(management_lifecycle.current(
-            ReadSession(dependencies.repository(), planning_settings_bundle=True), alias)))
+        repository = ReadSession(dependencies.repository(), planning_settings_bundle=True)
+        return public_management(_with_preparation(repository, alias,
+            _active_response(management_lifecycle.current(repository, alias))))
     except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
         raise HTTPException(409, exc.user_message) from exc
     except PersistentStoreFailure as exc:
@@ -309,14 +328,15 @@ def management_checks(
 
 
 @router.get("/api/v2/athlete/management/state")
+@prepared_endpoint("management-state")
 def management_state(
     authorization: Annotated[str | None, Header()] = None,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
 ):
     alias = dependencies.model_alias(authorization, athlete_alias)
     try:
-        return management_lifecycle.state(
-            ReadSession(dependencies.repository(), planning_settings_bundle=True), alias)
+        repository = ReadSession(dependencies.repository(), planning_settings_bundle=True)
+        return _with_preparation(repository, alias, management_lifecycle.state(repository, alias))
     except PersistentStoreFailure as exc:
         raise HTTPException(503, "Planning status is temporarily unavailable") from exc
 
@@ -327,6 +347,16 @@ def _management_action(operation, body, authorization, athlete_alias, actor):
         raise HTTPException(401, "Actor session is required")
     try:
         repository = dependencies.repository()
+        enqueue = getattr(repository, "queue_plan_refresh", None)
+        if operation == "action" and body.action == "REFRESH" and callable(enqueue):
+            receipt = enqueue(alias, str(actor), body.expected_revision, body.record_unchanged_check)
+            if isinstance(receipt, dict) and receipt.get("conflict"):
+                raise HTTPException(409, "The active plan changed; reload before editing")
+            if not isinstance(receipt, dict) or receipt.get("queued") is not True:
+                raise PersistentStoreFailure("Planning acceptance could not be confirmed")
+            return Response(content=json.dumps({"active": None,"history": [],
+                "background_update": {"status":"QUEUED"}}), status_code=202, media_type="application/json",
+                headers={"Cache-Control":"no-store","Retry-After":"5"})
         if operation == "activate":
             saved = management_lifecycle.activate(repository, alias, body, actor, include_saved_payload=False)
         elif operation == "day":

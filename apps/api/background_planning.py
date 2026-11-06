@@ -43,6 +43,12 @@ def start(repository, stopping):
                     learner()
                 except Exception as exc:
                     logger.warning('learning_tick_deferred error_type=%s', type(exc).__name__)
+            viewer = getattr(repository, 'process_next_prepared_view', None)
+            if not stopping.is_set() and not worked and callable(viewer):
+                try:
+                    worked = viewer()
+                except Exception as exc:
+                    logger.warning('prepared_view_tick_deferred error_type=%s', type(exc).__name__)
             stopping.wait(0.1 if worked else 3.)
 
     # Non-daemon: SIGTERM stops new claims while a fenced in-flight draft drains.

@@ -1,4 +1,5 @@
 "use client";
+import {fetchPrepared} from "../lib/prepared-view";
 import { useChartLayout } from "./chart-layout";
 import Link from "next/link";
 import {useEffect, useState, type FormEvent, type MouseEvent} from "react";
@@ -50,7 +51,7 @@ function SpeedSegmentEditor({activityRef,model,canEdit}:{activityRef:string;mode
     const controller=new AbortController();
     const params=new URLSearchParams({activity_ref:activityRef,test_mode:request.mode});
     if(request.start!==undefined&&request.duration!==undefined){params.set("start_s",String(request.start));params.set("duration_s",String(request.duration));}
-    fetch(`/api/athlete/models/speed-preview?${params}`,{cache:"no-store",signal:controller.signal})
+    fetchPrepared(`/api/athlete/models/speed-preview?${params}`,{cache:"no-store",signal:controller.signal})
       .then(async response=>{const body=await response.json();if(!response.ok)throw new Error(body.error||"Прегледът не е достъпен.");return parseSpeedPreview(body);})
       .then(data=>{if(controller.signal.aborted)return;setPreview(data);setEndText(old=>old||clockTime(Math.min(720,data.elapsed_s)));})
       .catch(e=>{if(!controller.signal.aborted)setError(e instanceof Error?e.message:"Прегледът не е достъпен.");})

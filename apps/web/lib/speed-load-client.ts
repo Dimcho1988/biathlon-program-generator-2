@@ -1,3 +1,4 @@
+import {fetchPrepared} from "./prepared-view";
 import { parseSpeedLoad, type SpeedLoad } from "./speed-load";
 
 const STORAGE_KEY = "onflows.speed-load-cache.v1";
@@ -80,7 +81,7 @@ async function fetchReport(request: SpeedLoadRequest, signal: AbortSignal, cache
   if (request.end) query.set("period_end", request.end);
   if (request.asOf) query.set("as_of", request.asOf);
   if (request.cacheScope) query.set("cache_scope", request.cacheScope);
-  const response = await fetch(`/api/athlete/models/speed-load${query.size ? `?${query}` : ""}`, {
+  const response = await fetchPrepared(`/api/athlete/models/speed-load${query.size ? `?${query}` : ""}`, {
     signal, cache: "no-store", ...(cached ? { headers: { "If-None-Match": cached.etag } } : {}),
   });
   if (response.status === 304 && cached) return { data: validate(cached.data, request), etag: cached.etag, reused: true };

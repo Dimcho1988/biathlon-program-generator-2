@@ -50,9 +50,16 @@ def fixed_lifecycle_clock(monkeypatch, fixed_clocks):
 
 
 def request_overview(monkeypatch, harness, query="view=overview&projection=overview-v1"):
+    from apps.api.prepared_views import _worker_repository
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "service-secret")
     monkeypatch.setattr(dependencies, "repository", lambda: harness.repo)
-    return TestClient(main.app).get(f"/api/v2/athlete/management/view?{query}", headers=HEADERS)
+    # Run the original projection in its private worker context. Public HTTP
+    # prepared-read behavior is checked independently in test_prepared_views.
+    token = _worker_repository.set(harness.repo)
+    try:
+        return TestClient(main.app).get(f"/api/v2/athlete/management/view?{query}", headers=HEADERS)
+    finally:
+        _worker_repository.reset(token)
 
 
 def test_opt_in_overview_uses_sixteen_reads_and_preserves_all_other_resources(monkeypatch):
