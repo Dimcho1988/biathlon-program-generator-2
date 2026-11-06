@@ -105,6 +105,8 @@ class ReadSession:
         if name not in self._READS:
             raise AttributeError(name)
         reader = getattr(self._repository, name)
+        if not callable(reader):
+            raise AttributeError(name)
 
         @wraps(reader)
         def read(*args):

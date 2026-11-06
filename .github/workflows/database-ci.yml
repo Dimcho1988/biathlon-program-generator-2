@@ -128,6 +128,14 @@ jobs:
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
           --no-psqlrc --set ON_ERROR_STOP=1
           --file tests/database/prepared_learning_view.sql
+      - name: Verify prepared pages and daily adaptive horizon
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/prepared_views.sql
+      - name: Verify prepared-page events across concurrent input commits
+        timeout-minutes: 3
+        run: python3 tests/database/prepared_views_concurrency.py
       - name: Verify service-only overview presentation without changing evidence
         run: >-
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"

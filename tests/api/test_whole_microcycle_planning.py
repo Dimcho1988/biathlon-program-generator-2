@@ -31,6 +31,21 @@ def test_lookahead_repeats_slots_without_increasing_any_rolling_week():
         assert counts[d] <= p['planning_controls']['sessions_by_day'][d.weekday()]
 
 
+def test_adaptive_worker_prepares_both_rolling_windows_and_completes_their_cycles(monkeypatch):
+    fixed_readiness(monkeypatch, 100.)
+    p = body(sessions_per_week=7, sessions_by_day=[1]*7,
+             mesocycle_anchor=(TODAY-timedelta(days=3)).isoformat(),
+             accent_mode='MANUAL', accents=['Z1'], weekly_target_hours=4.)
+    p['adaptation_mode'] = 'AUTO'
+    p['component_targets_weekly'] = {z:180. if z=='Z1' else 0. for z in COMPONENTS}
+    plan = run(monkeypatch, p)
+    dates = [d['date'] for d in plan['days']+plan['lookahead_days']]
+    assert dates[:14] == [(TODAY+timedelta(days=n)).isoformat() for n in range(14)]
+    assert len(plan['days']) == 7
+    assert plan['allocation']['segments'][-1]['window_end'] == dates[-1]
+    assert all(s['days']==7 for s in plan['allocation']['segments'])
+
+
 def test_full_cycle_counts_execution_before_visible_start_and_keeps_other_cycle_separate():
     start = TODAY-timedelta(days=3)
     windows = {start+timedelta(days=i):{z:{'target':70., 'target_weekly_q':7.} for z in COMPONENTS}

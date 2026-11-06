@@ -69,7 +69,11 @@ function routine(name) {
     await db.exec(fs.readFileSync(path.join(root, "tests/database/prepared_dashboard_and_training_events.sql"), "utf8"));
     await db.exec(table("public.onflows_response_entries"));
     await db.exec(fs.readFileSync(path.join(migrations, "20261106080500_prepared_page_views_and_daily_adaptive_horizon.sql"), "utf8"));
-    await db.exec(fs.readFileSync(path.join(root, "tests/database/prepared_views.sql"), "utf8"));
+    // Re-run the prior contract against the upgraded queue/publication guards.
+    try { await db.exec(fs.readFileSync(path.join(root, "tests/database/prepared_dashboard_and_training_events.sql"), "utf8")); }
+    catch (error) { error.message="Upgraded dashboard contract: "+error.message; throw error; }
+    try { await db.exec(fs.readFileSync(path.join(root, "tests/database/prepared_views.sql"), "utf8")); }
+    catch (error) { error.message="Prepared view contract: "+error.message; throw error; }
     const clean = await db.query("select count(*)::integer as remaining from public.onflows_intervals_connections");
     if (clean.rows[0].remaining !== 0) throw new Error("Contract fixtures did not roll back");
     console.log(JSON.stringify({engine: (await db.query("select version() as version")).rows[0].version,

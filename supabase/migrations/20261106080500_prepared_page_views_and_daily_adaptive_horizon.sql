@@ -39,6 +39,20 @@ alter table onflows_private.prepared_view_sources enable row level security;
 alter table onflows_private.prepared_views enable row level security;
 revoke all on onflows_private.prepared_view_sources,onflows_private.prepared_views from public,anon,authenticated,service_role;
 
+-- Input transactions append independent events. They never update/lock the
+-- shared source epoch or queue rows used by other history publishers.
+create table onflows_private.prepared_view_events (
+ id bigint generated always as identity primary key,
+ athlete_alias text not null references public.onflows_athlete_settings(athlete_alias) on delete cascade,
+ models boolean not null,
+ transaction_id bigint not null default txid_current(),
+ unique(athlete_alias,transaction_id,models)
+);
+create index prepared_view_events_athlete on onflows_private.prepared_view_events(athlete_alias,id);
+alter table onflows_private.prepared_view_events enable row level security;
+revoke all on onflows_private.prepared_view_events from public,anon,authenticated,service_role;
+revoke all on sequence onflows_private.prepared_view_events_id_seq from public,anon,authenticated,service_role;
+
 create function onflows_private.prepared_view_revision(p_kind text,p_model bigint,p_context bigint)
 returns bigint language sql immutable security invoker set search_path='' as $$
  select case when p_kind in ('speed','speed-history','speed-load','speed-preview','trainability') then p_model else p_context end
@@ -76,13 +90,35 @@ returns void language plpgsql security definer set search_path='' as $$
 declare r bigint;
 begin
  if p_alias is null or not exists(select 1 from public.onflows_athlete_settings where athlete_alias=p_alias) then return; end if;
- r:=nextval('onflows_private.prepared_view_revision_seq');
- insert into onflows_private.prepared_view_sources values(p_alias,r,r)
- on conflict(athlete_alias) do update set context_revision=r,
-  model_revision=case when p_models then r else onflows_private.prepared_view_sources.model_revision end;
- perform onflows_private.seed_prepared_views(p_alias);
+ if not exists(select 1 from onflows_private.prepared_view_sources where athlete_alias=p_alias) then
+  r:=nextval('onflows_private.prepared_view_revision_seq');
+  insert into onflows_private.prepared_view_sources values(p_alias,r,r) on conflict do nothing;
+  perform onflows_private.seed_prepared_views(p_alias);
+ end if;
+ insert into onflows_private.prepared_view_events(athlete_alias,models) values(p_alias,p_models)
+ on conflict(athlete_alias,transaction_id,models) do nothing;
+exception when foreign_key_violation then
+ if exists(select 1 from public.onflows_athlete_settings where athlete_alias=p_alias) then raise; end if;
 end $$;
 revoke all on function onflows_private.request_prepared_views(text,boolean) from public,anon,authenticated,service_role;
+
+create function onflows_private.flush_prepared_view_events(p_alias text default null)
+returns void language plpgsql security definer set search_path='' as $$
+declare pending record; r bigint;
+begin
+ for pending in select athlete_alias,array_agg(id order by id) as ids,bool_or(models) as models
+  from onflows_private.prepared_view_events where p_alias is null or athlete_alias=p_alias
+  group by athlete_alias order by athlete_alias limit 32 loop
+  r:=nextval('onflows_private.prepared_view_revision_seq');
+  insert into onflows_private.prepared_view_sources values(pending.athlete_alias,r,r)
+  on conflict(athlete_alias) do update set context_revision=r,
+   model_revision=case when pending.models then r else onflows_private.prepared_view_sources.model_revision end;
+  perform onflows_private.seed_prepared_views(pending.athlete_alias);
+  -- Identity allocation is not commit order. Consume only captured IDs.
+  delete from onflows_private.prepared_view_events where athlete_alias=pending.athlete_alias and id=any(pending.ids);
+ end loop;
+end $$;
+revoke all on function onflows_private.flush_prepared_view_events(text) from public,anon,authenticated,service_role;
 
 create function onflows_private.invalidate_prepared_views() returns trigger
 language plpgsql security definer set search_path='' as $$
@@ -135,12 +171,15 @@ create function onflows_private.prepared_view(
  p_model_key text default null,p_payload jsonb default null
 ) returns jsonb language plpgsql security definer set search_path='' as $$
 declare j onflows_private.prepared_views%rowtype; src onflows_private.prepared_view_sources%rowtype;
- today_local date; zone text; params jsonb; k text; r bigint; generation uuid;
+ today_local date; zone text; params jsonb; k text; r bigint; generation uuid; read_state record;
 begin
  if p_operation is null or p_operation not in ('READ','CLAIM','RENEW','STORE','FAIL') then
   raise exception 'Invalid prepared view operation' using errcode='22023'; end if;
  if p_operation in ('READ','CLAIM','STORE') and (p_model_key is null or p_model_key!~'^[a-f0-9]{64}$') then
   raise exception 'Invalid prepared view model' using errcode='22023'; end if;
+ if p_operation in ('READ','CLAIM','STORE') then
+  perform onflows_private.flush_prepared_view_events(p_alias);
+ end if;
  if p_operation='CLAIM' then
   if p_token is null then raise exception 'Worker token required' using errcode='22023'; end if;
   select v.* into j from onflows_private.prepared_views v
@@ -195,16 +234,21 @@ begin
    insert into onflows_private.prepared_views(athlete_alias,kind,parameter_key,parameters)
     values(p_alias,p_kind,k,params) on conflict do nothing;
   end if;
-  select * into j from onflows_private.prepared_views where athlete_alias=p_alias and kind=p_kind and parameter_key=k and parameters=params;
-  select * into src from onflows_private.prepared_view_sources where athlete_alias=p_alias;
-  r:=onflows_private.prepared_view_revision(p_kind,src.model_revision,src.context_revision);
-  if j.payload is not null and j.prepared_revision=r and j.evaluated_on=today_local and j.model_key=p_model_key then
-   return jsonb_build_object('ready',true,'athlete_alias',p_alias,'kind',p_kind,'payload',j.payload,'prepared_at',j.prepared_at);
+  -- Observe payload, source epoch and absence of pending inputs in one snapshot.
+  select v.payload,v.prepared_at,(v.payload is not null and v.prepared_revision=
+   onflows_private.prepared_view_revision(v.kind,s.model_revision,s.context_revision)
+   and v.evaluated_on=today_local and v.model_key=p_model_key
+   and not exists(select 1 from onflows_private.prepared_view_events e where e.athlete_alias=p_alias
+    and (e.models or onflows_private.prepared_view_revision(p_kind,0,1)=1))) as ready
+   into read_state from onflows_private.prepared_views v join onflows_private.prepared_view_sources s using(athlete_alias)
+   where v.athlete_alias=p_alias and v.kind=p_kind and v.parameter_key=k and v.parameters=params;
+  if read_state.ready then
+   return jsonb_build_object('ready',true,'athlete_alias',p_alias,'kind',p_kind,'payload',read_state.payload,'prepared_at',read_state.prepared_at);
   end if;
   return jsonb_build_object('ready',false,'day',today_local);
  end if;
- -- Lock the small source epoch before the queue row. Input writers only touch
- -- the epoch; no plan/input locks or source JSON are needed for publication.
+ -- Lock the small source epoch before the queue row. Input writers append
+ -- events independently; no plan/input locks are needed for publication.
  select * into src from onflows_private.prepared_view_sources where athlete_alias=p_alias for share;
  select * into j from onflows_private.prepared_views where athlete_alias=p_alias and kind=p_kind and parameter_key=k
   and parameters=params for update;
@@ -233,7 +277,14 @@ begin
  update onflows_private.prepared_views set prepared_revision=r,evaluated_on=p_day,model_key=p_model_key,payload=p_payload,
   prepared_at=clock_timestamp(),available_at=((today_local+1)::timestamp at time zone zone),
   lease_token=null,lease_until=null,error_code=null
-  where athlete_alias=p_alias and kind=p_kind and parameter_key=k;
+  where athlete_alias=p_alias and kind=p_kind and parameter_key=k
+   and not exists(select 1 from onflows_private.prepared_view_events e where e.athlete_alias=p_alias
+    and (e.models or onflows_private.prepared_view_revision(p_kind,0,1)=1));
+ if not found then
+  update onflows_private.prepared_views set lease_token=null,lease_until=null,available_at=clock_timestamp()
+   where athlete_alias=p_alias and kind=p_kind and parameter_key=k;
+  return jsonb_build_object('stored',false);
+ end if;
  return jsonb_build_object('stored',true);
 end $$;
 revoke all on function onflows_private.prepared_view(text,text,text,jsonb,uuid,bigint,date,text,jsonb) from public,anon,authenticated;
@@ -249,7 +300,7 @@ revoke all on function public.onflows_prepared_view(text,text,text,jsonb,uuid,bi
 grant execute on function public.onflows_prepared_view(text,text,text,jsonb,uuid,bigint,date,text,jsonb) to service_role;
 
 do $$ declare a text; begin
- for a in select athlete_alias from public.onflows_athlete_analysis_state where active_generation_id is not null loop
+ for a in select athlete_alias from public.onflows_athlete_settings loop
   perform onflows_private.request_prepared_views(a);
  end loop;
 end $$;

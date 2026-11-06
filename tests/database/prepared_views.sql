@@ -30,6 +30,7 @@ begin
  foreach role_name in array array['anon','authenticated','service_role'] loop
   assert not has_table_privilege(role_name,'onflows_private.prepared_views','SELECT');
   assert not has_table_privilege(role_name,'onflows_private.prepared_view_sources','UPDATE');
+  assert not has_table_privilege(role_name,'onflows_private.prepared_view_events','SELECT');
   assert not has_table_privilege(role_name,'onflows_private.activity_derivations','SELECT');
  end loop;
  foreach role_name in array array['anon','authenticated'] loop
@@ -40,6 +41,7 @@ begin
  delete from onflows_private.prepared_views where athlete_alias=a;
  state:=public.onflows_prepared_view('READ',a,'trainability',p_model_key=>key1);
  assert state->>'ready'='false';
+ delete from onflows_private.prepared_views where athlete_alias=a and kind<>'trainability';
  claim:=public.onflows_prepared_view('CLAIM',p_alias=>a,p_token=>token,p_model_key=>key1);
  assert claim->>'kind'='trainability';
  d:=(claim->>'day')::date; r:=(claim->>'revision')::bigint;
