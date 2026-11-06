@@ -4496,6 +4496,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             after_day = recovery_v2.simulate(forecast_rows, configs["zones"], target=day, include_details=False, include_deadlines=False, calculation_cache=recovery_calculation_cache)
             item["readiness_after"] = {r["zone"]: _round(r["readiness_percent"]) if forecast_known else None for r in after_day["current"]}
         result_days.append(item)
+        # The new ledger revision makes every previously cached catalog unreachable.
+        cached_candidate_catalog.cache_clear()
         if item["session"] is None and item["status"] in {"REST", "UNAVAILABLE"} and not day_spent and not known_actual_load:
             forecast_rows = _with_forecast_day(forecast_rows, day, {})
         if slot_index+1 >= slots_today and day in key_slots:
