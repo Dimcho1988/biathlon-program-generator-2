@@ -387,15 +387,21 @@ def generate(repository, alias, body, actor, *, now=None):
         expected_responses=(payload.get("input_snapshot") or {}).get("response_revisions"))
 
 
-def history(repository, alias, *, start_date=None, revision=None):
+def history(repository, alias, *, start_date=None, revision=None, latest_only=False):
     """Retain historical evidence while clearly marking changed inputs.
 
     These are drafts, not an atomically activated schedule. A sync can finish
     after a draft was saved; that does not rewrite its frozen source context.
     """
     store = ManagementStore(repository)
-    rows = (store.draft_revision(alias, start_date, revision) if revision is not None
-            else store.drafts(alias, start_date=start_date) if start_date is not None else store.drafts(alias))
+    if revision is not None:
+        rows = store.draft_revision(alias, start_date, revision)
+    elif start_date is not None:
+        rows = store.drafts(alias, start_date=start_date)
+    elif latest_only:
+        rows = store.drafts(alias, limit=1)
+    else:
+        rows = store.drafts(alias)
     if not rows:
         return {"drafts": []}
     try:

@@ -10,7 +10,7 @@ import { SyncActionForm } from "./sync-action-form";
 import { TrainingPlanSummary } from "./training-plan-summary";
 import { TrainingPlanWeek } from "./training-plan-week";
 import { proposalHasIncompleteLoad, proposedWeekMode, WEEK_MODE_LABEL } from "../lib/week-mode";
-import { planWeekView, selectedPlanWeek } from "../lib/plan-week-view";
+import { isAdaptivePlan, planWeekView, selectedScheduleWindow } from "../lib/plan-week-view";
 
 const dateLabel = (date: string) => new Date(`${date}T12:00:00Z`).toLocaleDateString("bg-BG", { day: "numeric", month: "long", timeZone: "UTC" });
 
@@ -55,9 +55,9 @@ function ChangedDay({ change, before, after, renderDay }: {
 }
 
 /** Mounted with the record revision as its key: a new proposal needs a new review. */
-export function PlanProposalReview({ record, canEdit, busy, symptomHold, onApprove, renderDay, today }: {
+export function PlanProposalReview({ record, canEdit, busy, symptomHold, onApprove, renderDay, today, scheduleStart }: {
   record: ActivePlanRecord; canEdit: boolean; busy: boolean; symptomHold: boolean;
-  onApprove: () => void; renderDay: (day: DraftDay) => ReactNode; today: string;
+  onApprove: () => void; renderDay: (day: DraftDay) => ReactNode; today: string; scheduleStart?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [fullPlan, setFullPlan] = useState(false);
@@ -66,7 +66,7 @@ export function PlanProposalReview({ record, canEdit, busy, symptomHold, onAppro
   const p = record.payload;
   const proposal = p.proposal;
   if (!proposal) return null;
-  const week = selectedPlanWeek(proposal,today,selectedWeek);
+  const week = selectedScheduleWindow(proposal, today, isAdaptivePlan(proposal) ? scheduleStart : selectedWeek);
   const schedule = planWeekView(proposal,week);
   const proposalMode = proposedWeekMode(record);
   const blocked = !canEdit ? "Имате достъп само за преглед. Утвърждаването изисква право за редакция на плана."

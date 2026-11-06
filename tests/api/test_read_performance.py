@@ -115,6 +115,9 @@ def test_management_batch_equals_individual_resources_and_removes_repeat_reads(m
     response = TestClient(main.app).get(f'/api/v2/athlete/management/view?view={view}', headers=HEADERS)
     assert response.status_code == 200, response.text
     assert response.json() == expected
+    if view == 'week':
+        assert any('kind=eq.DRAFT' in path and path.endswith('&limit=1') for path in batched.calls)
+        assert any('kind=eq.DRAFT' in path and path.endswith('&limit=10') for path in plain.calls)
     assert plain.calls['analysis'] >= 2 and plain.calls['settings'] >= 3
     assert batched.calls['analysis'] == batched.calls['settings'] == 1
     assert sum(batched.calls.values()) < sum(plain.calls.values())
