@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import {readFileSync} from "node:fs";
+import {resolve} from "node:path";
 import {act} from "react";
 import {createRoot,type Root} from "react-dom/client";
 import {afterEach,beforeEach,expect,it,vi} from "vitest";
@@ -13,6 +15,33 @@ const dose:DosingModel={model_version:"dosing-index-test-30-70-v1",status:"AVAIL
   points:[{duration_s:60,speed_kmh:20.8,index_speed_kmh:18,test_speed_kmh:22,distance_m:20.8*60/3.6,estimated_hr_bpm:null},
     {duration_s:1200,speed_kmh:15.4,index_speed_kmh:14,test_speed_kmh:16,distance_m:15.4*1200/3.6,estimated_hr_bpm:180}],
   zone_comparison:[{zone:"Z4",hr_bpm:180,duration_s:1200,index_speed_kmh:14,test_speed_kmh:16,speed_kmh:15.4}]};
+
+// Follow the producing backend so a version bump cannot silently break the
+// real parser while component tests keep rendering an obsolete fixture.
+const backendSource=readFileSync(resolve(process.cwd(),"../../biathlon/dosing_curve.py"),"utf8");
+const backendVersion=backendSource.match(/^VERSION\s*=\s*"([^"]+)"/m)![1];
+
+it.each(["dosing-index-test-30-70-v1","dosing-index-test-30-70-v2-common-profile",backendVersion])(
+  "accepts available and unavailable curves from %s",model_version=>{
+    for(const status of ["AVAILABLE","UNAVAILABLE"] as const){
+      const dosing_model={...dose,model_version,status,points:status==="AVAILABLE"?dose.points:[]};
+      expect(parseSpeedModel({schema_version:"speed-model-v1",points:[],tests:[],dosing_model}).dosing_model).toBe(dosing_model);
+    }
+  });
+
+it("renders the current backend curve after passing the real model parser",async()=>{
+  const model=parseSpeedModel({schema_version:"speed-model-v1",points:[],tests:[],
+    dosing_model:{...dose,model_version:backendVersion}});
+  await act(async()=>root.render(<DosingCurvePanel model={model.dosing_model!}/>));
+  expect(container.querySelectorAll("polyline")).toHaveLength(3);
+  expect(container.querySelector('[data-curve="speed_kmh"]')).not.toBeNull();
+  expect(container.textContent).toContain("Обща скорост 15,4 км/ч");
+});
+
+it("still rejects an unrecognized dosing model version",()=>{
+  expect(()=>parseSpeedModel({schema_version:"speed-model-v1",points:[],tests:[],
+    dosing_model:{...dose,model_version:"unknown-dosing-model"}})).toThrow(/обща крива/);
+});
 
 it("shows all three curves and makes the shared dosing value explicit",async()=>{
   await act(async()=>root.render(<DosingCurvePanel model={dose}/>));
