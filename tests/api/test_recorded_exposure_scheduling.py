@@ -12,7 +12,9 @@ def test_speed_exposure_selects_the_same_whole_intervals_as_hr_exposure(monkeypa
     body=configured(age_years=25,training_experience_years=5,available_minutes=[180]*7)
     body['planning_controls'].update(accents=['Z4'],sessions_per_week=3,
         sessions_by_day=[1,0,1,0,1,0,0],mixed_sessions_enabled=False)
-    selected_methods(monkeypatch,body,{'ONFLOWS-CONTROLLED-Z4-V2','END-CROSS-TRAIN-01-Z2','RUN-REC-EASY-01'})
+    from tests.api.test_management_v2 import interval
+    body['interval_profiles'] = [interval()]
+    selected_methods(monkeypatch,body,{'END-VO2-TREF-01-Z4','END-CROSS-TRAIN-01-Z2','RUN-REC-EASY-01'})
     repo,_,_=observed()
     baseline=engine.generate_plan(repo,'athlete',body,start_date=TODAY,now=NOW)
     prepare=engine.planning_source_details
@@ -31,5 +33,5 @@ def test_speed_exposure_selects_the_same_whole_intervals_as_hr_exposure(monkeypa
     def schedule(p):
         return [(d['date'],[(s['method_id'],s['total_minutes'],s['direct_equivalent_minutes'])
                            for s in d['sessions']]) for d in [*p['days'],*p.get('lookahead_days',[])]]
-    assert any(s['method_id']=='ONFLOWS-CONTROLLED-Z4-V2' for d in baseline['days'] for s in d['sessions'])
+    assert any(s['method_id']=='END-VO2-TREF-01-Z4' for d in baseline['days'] for s in d['sessions'])
     assert schedule(alternative) == schedule(baseline)

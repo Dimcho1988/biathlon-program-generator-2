@@ -10,7 +10,8 @@ import math
 
 from . import hr_speed, preliminary_capacity, speed_duration, speed_zones
 
-VERSION = "dosing-index-test-30-70-v2-common-profile"
+VERSION = "dosing-index-test-30-70-v3-shared-selection"
+SELECTION_VERSION = "working-speed-curve-v1"
 INDEX_WEIGHT, TEST_WEIGHT = .3, .7
 
 
@@ -72,6 +73,62 @@ def from_view(view):
                                        or t.get("generated") or t.get("is_estimated") for t in tests):
         return None
     return Curve(prior, speed_duration.calibrated(tests))
+
+
+def selected(view):
+    """One continuous working curve for recipes, planning and load capacity.
+
+    Only the admitted, sport-specific inputs can select a curve. Missing
+    components never become a fabricated 30/70 blend or a normative athlete.
+    Recorded tests and the separate performance curve remain unchanged.
+    """
+    view = view or {}
+    if view.get("status") == "INITIAL_HEURISTIC":
+        from .initial_speed_profile import curve_from_view
+        curve = curve_from_view(view)
+        if curve is None:
+            raise ValueError("INVALID_INITIAL_HEURISTIC_PROFILE")
+        return curve, [], "INITIAL_HEURISTIC"
+    if view.get("status") not in {"CALIBRATED", "PRELIMINARY"}:
+        return None, [], None
+    keys = set(view.get("active_test_keys") or ())
+    tests = [row["payload"] for row in view.get("tests", ()) if row.get("entry_key") in keys]
+    generated = {"MODEL", "MODEL_GENERATED", "GENERATED", "ESTIMATED", "REFERENCE"}
+    if any(t.get("maximal") is not True or t.get("test_mode", "STRICT") != "STRICT"
+           or t.get("comparable") is False or t.get("enabled") is False
+           or t.get("sport", view.get("sport")) != view.get("sport")
+           or t.get("generated") or t.get("is_estimated") or t.get("is_maximal_test") is False
+           or str(t.get("source", "")).upper() in generated
+           or str(t.get("kind", "")).upper() in {"MODEL_POINT", "ESTIMATE"} for t in tests):
+        raise ValueError("EXPLORATORY_OR_NONMAXIMAL_TESTS")
+    blend = from_view(view)
+    if blend is not None:
+        return blend, tests, "BLENDED_DOSING_CURVE"
+    if (view.get("dosing_model") or {}).get("status") == "AVAILABLE":
+        raise ValueError("INVALID_WORKING_CURVE_PROVENANCE")
+    prior = preliminary_capacity.curve_from_summary(view.get("preliminary_capacity"))
+    if not tests and prior is None:
+        raise ValueError("NO_INDIVIDUAL_SPEED_CURVE")
+    curve = speed_duration.with_ten_second_tail(speed_duration.calibrated(tests, prior=prior))
+    return curve, tests, "INDIVIDUAL_TEST_CURVE" if tests else "INDIVIDUAL_PRIOR_CURVE"
+
+
+def selected_zones(view, curve, tests, *, sport=None):
+    """Reuse the published profile, including the legacy compact-view form."""
+    view = view or {}
+    dosing = view.get("dosing_model") or {}
+    profile = dosing.get("speed_zones") or view.get("speed_zones")
+    if profile is not None:
+        return profile
+    model = dosing.get("hr_model") or view.get("hr_model") or {}
+    rows, limits = model.get("zones", [])[:4], model.get("hr_range_bpm", [])
+    if len(rows) != 4 or len(limits) != 2:
+        return None
+    from . import zone_profile
+    offset = model.get("hr_reference_offset_bpm", 0.)
+    bounds = [limits[0], *[r["hr_bpm"] for r in rows], limits[-1]]
+    return zone_profile.build(curve, tuple(h+offset for h in bounds), limits[-1]+offset,
+        view.get("index_summary"), sport=sport or view.get("sport") or "Run", tests=tests)
 
 
 def describe(index_curve, test_curve, tests, bounds, hrmax, indices, anchors, *, normalization_offset_bpm=0., include_points=True, sport="Run"):

@@ -96,7 +96,7 @@ def target_ranges(speed, hr, zone, *, dosing=None, speed_range=None, hr_range=No
         # Preserve already agreed explicit method ranges. Clip new tolerances.
         if not explicit:
             band = next((b for b in (speed_zones or {}).get("zones", []) if b["zone"] == zone), None)
-            if band:
+            if band and band["low_kmh"] <= speed <= (band.get("high_kmh") or float("inf")):
                 low = max(low, band["low_kmh"])
                 high = min(high, band.get("high_kmh") or high)
         result["target_speed_range_kmh"] = [low, high]

@@ -74,26 +74,10 @@ def validate_overrides(config):
 
 
 def selected_curve(view):
-    if view and view.get("status") == "INITIAL_HEURISTIC":
-        from .initial_speed_profile import curve_from_view
-        curve = curve_from_view(view)
-        if curve is None:
-            raise ValueError("INVALID_INITIAL_HEURISTIC_PROFILE")
-        return curve, [], "INITIAL_HEURISTIC"
-    if not view or view.get("status") not in {"CALIBRATED", "PRELIMINARY"}:
+    curve, tests, source = dosing_curve.selected(view)
+    if curve is None:
         raise ValueError("NO_INDIVIDUAL_SPEED_CURVE")
-    keys = set(view.get("active_test_keys", []))
-    tests = [r["payload"] for r in view.get("tests", []) if r.get("entry_key") in keys]
-    if any(not t.get("maximal") or t.get("test_mode", "STRICT") != "STRICT"
-           or t.get("generated") or t.get("is_estimated") for t in tests):
-        raise ValueError("EXPLORATORY_OR_NONMAXIMAL_TESTS")
-    blend = dosing_curve.from_view(view)
-    if blend:
-        return blend, tests, "BLENDED_DOSING_CURVE"
-    prior = preliminary_capacity.curve_from_summary(view.get("preliminary_capacity") or {})
-    if not tests and prior is None:
-        raise ValueError("NO_INDIVIDUAL_SPEED_CURVE")
-    return speed_duration.calibrated(tests, prior=prior), tests, "INDIVIDUAL_TEST_CURVE" if tests else "INDIVIDUAL_PRIOR_CURVE"
+    return curve, tests, source
 
 
 class _CachedCurve:
@@ -112,9 +96,10 @@ def _prepare(view):
     policy = (view or {}).get("sport_hr_policy") or {}
     predictor = None
     try:
-        predictor_type = dosing_curve.Predictor if source == "BLENDED_DOSING_CURVE" else hr_speed.ZonalPredictor if source == "INITIAL_HEURISTIC" else hr_speed.Predictor
+        predictor_type = dosing_curve.Predictor if source == "BLENDED_DOSING_CURVE" else hr_speed.ZonalPredictor
         durations = {a["zone"]: a["duration_s"] for a in (view.get("preliminary_capacity") or {}).get("anchors", [])}
-        kwargs = {"profile": view.get("speed_zones"), "sport": view.get("sport", "Run"), "tests": ()} if source == "INITIAL_HEURISTIC" else {}
+        kwargs = {"profile": dosing_curve.selected_zones(view, curve, tests),
+                  "sport": view.get("sport", "Run"), "tests": tests}
         predictor = predictor_type(curve, policy["sport_zone_bounds_bpm"], policy["sport_hrmax_bpm"], view.get("index_summary", {}),
             expert_durations=durations or None, normalization_offset_bpm=policy.get("offset_bpm", 0), **kwargs)
         predictor.hr_for_speed = lru_cache(maxsize=2048)(predictor.hr_for_speed)

@@ -115,10 +115,7 @@ def test_automatic_subdivision_does_not_invent_z5_capacity_or_raise_model_ratio(
         assert child["interval_template"]["total_capacity_ratio"] == parent["interval_template"]["total_capacity_ratio"]
         parent_cap = engine.capacity_for(parent, settings, None, (None, [], []), TODAY)
         child_cap = engine.capacity_for(child, settings, None, (None, [], []), TODAY)
-        if zone == "Z5":
-            assert parent_cap is child_cap is None
-        else:
-            assert child_cap["capacity_minutes"] == parent_cap["capacity_minutes"]
+        assert parent_cap is child_cap is None  # Neither automatic speed recipe invents a curve.
 
 
 def test_families_follow_execution_and_developmental_transform_not_variant_names():

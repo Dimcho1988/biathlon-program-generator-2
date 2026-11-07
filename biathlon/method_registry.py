@@ -8,7 +8,7 @@ from hashlib import sha256
 import json
 from . import method_anchors, method_dosing, method_library, training_methods, race_specific
 
-VERSION = 'method-registry-v6-explicit-anchors'
+VERSION = 'method-registry-v7-working-curve-efforts'
 COMBINED_STRUCTURES = {'ALTERNATING', 'CRUISE_ALTERNATING', 'THRESHOLD_HIGH', 'AEROBIC_STRENGTH', 'AEROBIC_SUPPORT', 'MIXED_AEROBIC'}
 
 
@@ -61,15 +61,35 @@ def executable_methods(profile, speed_by_sport, *, legacy_methods=None, race_ref
     if race_reference:
         legacy.extend(race_specific.methods(profile, race_reference, legacy))
     result = []
+    selections = {}
     mixed = (profile.get('planning_controls') or {}).get('mixed_sessions_enabled', True)
     for m in legacy:
         if not enabled(profile, m) or (not mixed and (m.get('mixed_component') or m['structure'] in COMBINED_STRUCTURES)):
             continue
         if m['zone'] != 'STR':
             m['dosing'] = method_dosing.parameters(m, profile)
-        m['method_card'] = coach_card(m)
-        m['registry_version'] = VERSION
-        result.append(m)
+        interval = m.get('interval_template') or m.get('interval_profile') or {}
+        if (interval.get('anchor') and interval.get('speed_time_duration_ratio') is None
+                and not m.get('race_specific') and speed_by_sport):
+            for sport, view in speed_by_sport.items():
+                if sport not in m['sports'] or not view:
+                    continue
+                try:
+                    if sport not in selections:
+                        selections[sport] = method_library.selected_curve(view)
+                    bound = method_anchors.bind_native(m, {**profile, 'actual_sport': sport}, view,
+                        selection=selections[sport])
+                except ValueError:
+                    continue
+                if bound is not None:
+                    bound.update(sports=(sport,), actual_sport=sport)
+                    bound['method_card'] = coach_card(bound)
+                    bound['registry_version'] = VERSION
+                    result.append(bound)
+        else:
+            m['method_card'] = coach_card(m)
+            m['registry_version'] = VERSION
+            result.append(m)
     for sport, speed in speed_by_sport.items():
         for m in method_library.executable_methods({**profile, 'actual_sport': sport}, speed):
             m['registry_version'] = VERSION
@@ -88,6 +108,15 @@ def catalog(profile, speed_view=None, *, phase=None, today=None):
         ref = race_specific.reference(profile, speed_view, event, today)
         methods += race_specific.methods(profile, ref, methods)
     for m in methods:
+        anchor_unavailable = False
+        if speed_view and sport in m['sports']:
+            try:
+                bound = method_anchors.bind_native(m, {**profile, 'actual_sport': sport}, speed_view)
+            except ValueError:
+                bound = None
+            anchor_unavailable = bound is None
+            if bound is not None:
+                m = bound
         if m['zone'] != 'STR':
             m['dosing'] = method_dosing.parameters(m, profile)
         card = coach_card(m)
@@ -95,10 +124,10 @@ def catalog(profile, speed_view=None, *, phase=None, today=None):
         mixed_off = not (profile.get('planning_controls') or {}).get('mixed_sessions_enabled', True) and (m.get('mixed_component') or m['structure'] in COMBINED_STRUCTURES)
         compatible = sport in m['sports'] and (phase is None or phase in m['periods'])
         anchor = method_anchors.definition(m)
-        unresolved = anchor['type'] == 'UNRESOLVED'
+        unresolved = anchor['type'] == 'UNRESOLVED' or anchor_unavailable
         card['resolution'] = {'status': 'DISABLED' if not allowed or mixed_off else 'UNAVAILABLE' if unresolved else 'READY' if compatible else 'INCOMPATIBLE',
             'anchor': anchor,
-            'reason': 'DISABLED_BY_PROFILE' if not allowed or mixed_off else anchor['reason'] if unresolved else None if compatible else 'SPORT_OR_PERIOD_NOT_SUPPORTED',
+            'reason': 'DISABLED_BY_PROFILE' if not allowed or mixed_off else anchor.get('reason', 'INDIVIDUAL_CURVE_ANCHOR_REQUIRED') if unresolved else None if compatible else 'SPORT_OR_PERIOD_NOT_SUPPORTED',
             'phase': phase, 'zone': m['zone'], 'automatic_selection_enabled': allowed and not mixed_off,
             'selection_basis': 'COACH_PROFILE_RECHECKED_AGAINST_CAPACITY_RECOVERY_AND_WEEKLY_BUDGET',
             'message': 'Личната доза се изчислява в седмичния план. Числовият профил се настройва в „Управление“.'}

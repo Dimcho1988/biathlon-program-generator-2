@@ -161,10 +161,15 @@ def test_changed_profile_requires_approval_in_auto_mode(system):
 def test_only_rolling_horizon_version_can_inherit_the_exact_approved_auto_settings(system):
     activate(system)
     _, _, frozen, _, _ = lifecycle._context(system.repo, "athlete", NOW)
+    # The dosing change must retain the approval boundary. The earlier
+    # display-only v72→v73 exception still applies only to those identities.
+    current = deepcopy(frozen)
+    frozen["rule_versions"]["engine"] = "training-management-v73-rolling-adaptive-window"
     approved = lifecycle._approval_inputs(frozen)
     approved["rule_versions"]["engine"] = "training-management-v72-measured-replay-budget"
     old = {"mode": "AUTO", "approved_settings_fingerprint": lifecycle._hash(approved)}
     assert lifecycle._compatible_horizon_extension(old, frozen)
+    assert not lifecycle._compatible_horizon_extension(old, current)
     assert not lifecycle._compatible_horizon_extension({**old, "mode": "REVIEW"}, frozen)
     for key in ("physiology", "management_profile", "rule_versions"):
         changed = deepcopy(frozen)
