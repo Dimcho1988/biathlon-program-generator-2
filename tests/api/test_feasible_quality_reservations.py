@@ -159,7 +159,7 @@ def test_interval_maintenance_nominal_preserves_whole_efforts_without_generic_fl
     work = math.floor(evidence["capacity_minutes"]*fraction*evidence["readiness_dose_factor"]*2)/2
     minimum = engine._minimum_work(method, evidence, Repository().settings)
     blocks = engine._blocks(method, work, evidence, Repository().settings)
-    assert minimum == 3.  # One whole native effort; no generic Tmax floor.
+    assert minimum == 6.  # Two whole V5-protocol repetitions; no generic Tmax floor.
     assert fraction == .78  # 60% of the developmental method dose.
     assert work >= minimum
     assert [block["duration_min"] for block in blocks if block["kind"] == "WORK"] == [3.]*8

@@ -54,23 +54,12 @@ def _tests(view):
 
 def _selected_curve(view):
     """Use the exact continuous curve selected for method dosing, not chart samples."""
-    if view.get("status") == "INITIAL_HEURISTIC":
-        curve = initial_speed_profile.curve_from_view(view)
-        if curve is None:
-            raise ValueError("Initial component curve requires explicit heuristic provenance")
-        return curve, view.get("hr_model"), "INITIAL_HEURISTIC"
-    if view.get("status") not in {"CALIBRATED", "PRELIMINARY"}:
-        return None, None, None
-    tests = _tests(view)
-    blend = dosing_curve.from_view(view)
-    if blend is not None:
-        return blend, view["dosing_model"].get("hr_model"), "BLENDED_DOSING_CURVE"
-    prior = preliminary_capacity.curve_from_summary(view.get("preliminary_capacity"))
-    if not tests and prior is None:
-        # Do not manufacture an individual curve by calibrating an empty list.
-        raise ValueError("Available component curve has no individual evidence")
-    curve = speed_duration.calibrated(tests, prior=prior)
-    return curve, view.get("hr_model"), "SPEED_DURATION" if tests else "SPEED_DURATION_PRIOR"
+    curve, _, source = dosing_curve.selected(view)
+    hr_model = ((view.get("dosing_model") or {}).get("hr_model")
+                if source == "BLENDED_DOSING_CURVE" else view.get("hr_model"))
+    source = {"INDIVIDUAL_TEST_CURVE": "SPEED_DURATION",
+              "INDIVIDUAL_PRIOR_CURVE": "SPEED_DURATION_PRIOR"}.get(source, source)
+    return curve, hr_model, source
 
 
 def context_from_speed_view(view=None):

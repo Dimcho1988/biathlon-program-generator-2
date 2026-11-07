@@ -77,5 +77,5 @@ def test_component_capacity_rejects_corrupted_initial_provenance(mutation):
         model["initial_threshold"]["used_for_zones"] = False
     else:
         model["initial_speed_profile"]["zone_policy_version"] = "future"
-    with pytest.raises(ValueError, match="explicit heuristic provenance"):
+    with pytest.raises(ValueError, match="INVALID_INITIAL_HEURISTIC_PROFILE"):
         capacity.context_from_speed_view(model)

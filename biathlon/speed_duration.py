@@ -286,9 +286,10 @@ def critical_speed(tests):
         "max_speed_residual_kmh":max(abs(s-cs*t-d)/t*3.6 for t,s in chosen)}
 
 
-def prescription_critical_speed(tests, curve, *, allow_model_estimate=True):
-    """Prefer eligible real-test CS; otherwise label the current V3/V12 estimate.
+def prescription_critical_speed(tests, curve, *, allow_model_estimate=True, prefer_curve=False):
+    """Resolve legacy test CS or an explicitly selected working-curve V3/V12.
 
+    Prescription callers select the current curve with ``prefer_curve``.
     Model points never enter the test registry or acquire measured status.
     The observed-only policy can explicitly forbid the fallback.
     """
@@ -302,10 +303,12 @@ def prescription_critical_speed(tests, curve, *, allow_model_estimate=True):
     supported = (any(120 <= t["duration_s"] <= 300 for t in accepted)
                  and any(480 <= t["duration_s"] <= 1200 for t in accepted))
     direct = critical_speed(accepted) if supported else {}
-    if direct.get("speed_kmh"):
+    if direct.get("speed_kmh") and not prefer_curve:
         return {**direct, "source": "DIRECT_ACCEPTED_TEST_CS", "measured": False,
                 "basis": "FIT_TO_MEASURED_MAXIMAL_TESTS", "is_estimate": True}
-    if not allow_model_estimate:
+    if not allow_model_estimate and (not prefer_curve or not supported
+            or min(t["duration_s"] for t in accepted) > 180.
+            or max(t["duration_s"] for t in accepted) < 720.):
         raise ValueError("CV_REQUIRES_ACCEPTED_SHORT_AND_LONG_TESTS")
     points = [{"duration_s": seconds, "speed_kmh": curve.speed(seconds)*3.6,
                "distance_m": curve.speed(seconds)*seconds, "evidence": "MODEL_ESTIMATE"}
@@ -315,7 +318,7 @@ def prescription_critical_speed(tests, curve, *, allow_model_estimate=True):
     if cs <= 0 or reserve <= 0 or cs*3.6 >= points[1]["speed_kmh"]:
         raise ValueError("INCONSISTENT_MODEL_CS")
     return {"status": "MODEL_ESTIMATE", "source": "CURRENT_CURVE_V3_V12",
-            "version": "cs-prescription-v2", "speed_kmh": cs*3.6, "d_prime_m": reserve,
+            "version": "cs-prescription-v3-working-curve", "speed_kmh": cs*3.6, "d_prime_m": reserve,
             "points": points, "measured": False, "is_estimate": True,
             "uncertainty": "NOT_QUANTIFIED", "count": len(accepted)}
 

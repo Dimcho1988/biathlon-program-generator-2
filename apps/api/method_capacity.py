@@ -8,7 +8,7 @@ by a method's interval-work budget.
 from copy import deepcopy
 import math
 
-from biathlon import dosing_curve
+from biathlon import dosing_curve, method_anchors, speed_zones
 
 
 Z5_ANCHOR_REFERENCE_S = 180.  # Existing preferred measured anchor, not a test requirement.
@@ -29,6 +29,56 @@ def observed_curve_support(tests, duration_seconds):
                  and not t.get("generated") and not t.get("is_estimated")
                  and _positive(t.get("duration_s")) and _positive(t.get("speed_kmh"))}
     return (len(durations) >= 2 and min(durations)-1e-7 <= duration_seconds <= max(durations)+1e-7)
+
+
+def anchored_interval_curve_capacity(method, speed, context, *, use_model_prior=False):
+    """Resolve a declared effort before using its inverse as continuous Tmax."""
+    predictor, tests, reasons = context
+    interval = method.get("interval_template") or method.get("interval_profile") or {}
+    if (predictor is None or not interval.get("anchor")
+            or any(r != "INSUFFICIENT_INDEPENDENT_TEST_DURATIONS" for r in reasons)):
+        return None
+    curve = predictor.curve
+    try:
+        anchor = method_anchors.resolve_speed(interval["anchor"], {}, speed, curve, tests)
+        target = anchor["speed_kmh"] * interval.get("speed_multiplier", 1.)
+        duration = curve.inverse(target / 3.6)
+    except (ValueError, ArithmeticError):
+        return None
+    profile = dosing_curve.selected_zones(speed, curve, tests, sport=method.get("actual_sport"))
+    zone = speed_zones.classify(profile, target)
+    # Registry binding precedes scheduling and all component-budget checks.
+    # An unbound caller cannot charge this effort to a different nominal zone.
+    if zone != method["zone"]:
+        return None
+    if not use_model_prior and not observed_curve_support(tests, duration):
+        return None
+    if not _positive(duration) or interval["work_seconds"] >= duration:
+        return None
+    heuristic = speed.get("status") == "INITIAL_HEURISTIC"
+    blended = isinstance(predictor, dosing_curve.Predictor)
+    source = ("INITIAL_HEURISTIC" if heuristic else "BLENDED_DOSING_CURVE" if blended
+              else "SPEED_DURATION" if tests else "SPEED_DURATION_PRIOR")
+    anchor.update(speed_multiplier=interval.get("speed_multiplier", 1.), target_speed_kmh=target,
+                  source="EXPLICIT_COACH_ANCHOR_ON_WORKING_CURVE")
+    resolved = {**deepcopy(interval), "continuous_capacity_min": duration / 60,
+                "target_speed_kmh": target,
+                "sport": method.get("actual_sport") or speed.get("sport", "Run"),
+                "speed_basis": "RAW_MOVING_SPEED" if heuristic else "FLAT_EQUIVALENT"}
+    observed = [t["duration_s"] for t in tests]
+    measured = next((t for t in tests if math.isclose(t["duration_s"], anchor.get("duration_seconds", -1))), None)
+    return {"capacity_source": source, "capacity_minutes": duration / 60,
+            **({"test_anchor": deepcopy(measured)} if measured else {}),
+            "target_hr_bpm": None, "target_speed_kmh": target, "effort_profile": resolved,
+            "curve_anchor": anchor, "capacity_reference": "CURVE_INVERSE_AT_DECLARED_METHOD_ANCHOR",
+            "model_version": getattr(curve, "model_version", speed.get("model_version")),
+            "capacity_confidence": "COACH_30_70_ESTIMATE" if blended else "INDIVIDUAL_CURVE_ESTIMATE",
+            "capacity_is_estimate": True, "fallback_reasons": list(reasons),
+            "supported_test_duration_s": [min(observed), max(observed)] if observed else None,
+            "hr_role": "OBSERVATION_ONLY", "initial_heuristic": heuristic,
+            "speed_role": "RAW_MOVING_SPEED" if heuristic else "FLAT_EQUIVALENT_REFERENCE_NOT_TERRAIN_PACE",
+            "working_curve_selection_version": dosing_curve.SELECTION_VERSION,
+            "protocol_zone": method.get("protocol_zone", method["zone"])}
 
 
 def model_interval_curve_capacity(method, settings, speed, context, *, use_model_prior=False):

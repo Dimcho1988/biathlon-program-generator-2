@@ -32,7 +32,8 @@ def test_minimum_preserves_three_exact_45_second_repetitions():
     method['execution_limits'] = dict(min_work_min=2.25, max_work_min=10.,
                                      min_repetitions=3, max_repetitions=13)
     settings = Repository().settings
-    evidence = engine.capacity_for(method, settings, None, (None, [], []), TODAY)
+    evidence = {"capacity_minutes": 20., "target_hr_bpm": None, "target_speed_kmh": None,
+        "effort_profile": {**method['interval_template'], "continuous_capacity_min": 20., "target_speed_kmh": None}}
     engine._nominal_fraction(method, 'BUILDING', {'building_fraction':.65}, 'GENERAL_PREPARATION', evidence, {})
     minimum = engine._minimum_work(method, evidence, settings)
     assert minimum == 2.25

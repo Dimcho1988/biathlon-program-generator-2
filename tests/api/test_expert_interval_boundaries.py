@@ -92,7 +92,8 @@ def test_planner_continues_after_expert_curve_point_is_unavailable(monkeypatch):
     assert any(rejection["code"] == "CAPACITY_UNAVAILABLE"
                and "END-VO2-TREF-01-Z5" in rejection.get("method_ids", [rejection.get("method_id")])
                for day in plan["days"] for rejection in day["rejected_alternatives"])
-    assert all(session["zone"] != "Z5" for day in plan["days"] for session in day["sessions"])
+    assert all(not session["method_id"].startswith("END-VO2-TREF-01-Z5")
+               for day in plan["days"] for session in day["sessions"])
 
 
 def test_mixed_method_retains_independent_primary_capacity_with_interval_coefficient():

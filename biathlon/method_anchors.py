@@ -9,7 +9,7 @@ import re
 
 from . import speed_duration
 
-VERSION = "method-anchors-v1"
+VERSION = "method-anchors-v2-working-curve"
 
 
 def _positive(value):
@@ -59,7 +59,8 @@ def resolve_speed(spec, profile, view, curve, tests):
                     "source": "INITIAL_HEURISTIC_THRESHOLD", "is_measured_lactate_threshold": False,
                     "label": "AnT · начална моделна оценка, условно V50"}
         descriptor = speed_duration.prescription_critical_speed(tests, curve,
-            allow_model_estimate=(profile.get("planning_controls") or {}).get("capacity_policy", "MODEL_WITH_PRIOR") == "MODEL_WITH_PRIOR")
+            allow_model_estimate=(profile.get("planning_controls") or {}).get("capacity_policy", "MODEL_WITH_PRIOR") == "MODEL_WITH_PRIOR",
+            prefer_curve=True)
         velocity = descriptor["speed_kmh"]
         result["evidence"] = descriptor
         if kind in {"AnT", "ANT"}:
@@ -102,6 +103,9 @@ def definition(method):
         return {"type": "STRENGTH_PROFILE", "method_id": method["id"],
                 "basis": "WHOLE_SETS_REPETITIONS_RESERVE_AND_INTERNAL_RESTS"}
     interval = method.get("interval_template") or method.get("interval_profile") or {}
+    if interval.get("anchor") and interval.get("speed_time_duration_ratio") is None:
+        return {**deepcopy(interval["anchor"]), "speed_multiplier": interval.get("speed_multiplier", 1.),
+                "source": "EXPLICIT_COACH_ANCHOR_ON_WORKING_CURVE"}
     if interval.get("speed_time_duration_ratio") is not None:
         duration = interval["work_seconds"]*interval["speed_time_duration_ratio"]
         if not _positive(duration):
@@ -137,6 +141,8 @@ def describe(method, capacity):
                 "standard_work_seconds": resolution.get("standard_work_seconds")}
     if method["zone"] == "STR":
         return definition(method)
+    if capacity.get("curve_anchor"):
+        return deepcopy(capacity["curve_anchor"])
     reference = capacity.get("capacity_reference")
     if capacity.get("target_hr_bpm") is not None:
         return {"type": "HR_ZONE_POSITION", "zone": method["zone"],
@@ -151,5 +157,41 @@ def describe(method, capacity):
                 "source": reference, "speed_role": capacity.get("speed_role")}
     return {"type": "COACH_EFFORT", "method_id": method["id"],
             "source": capacity["capacity_source"], "is_estimate": True}
+
+
+def bind_native(method, profile, view, *, selection=None):
+    """Resolve a native speed recipe before the planner allocates by zone.
+
+    The protocol selects effort; the accounting profile classifies that
+    effort. A nominal Z4 label must never clip V5 into a slower HR band.
+    """
+    interval = method.get("interval_template") or method.get("interval_profile") or {}
+    if (not interval.get("anchor") or interval.get("speed_time_duration_ratio") is not None
+            or method.get("race_specific")):
+        return deepcopy(method)
+    from . import dosing_curve, speed_zones
+    curve, tests, _ = selection if selection is not None else dosing_curve.selected(view)
+    if curve is None:
+        return None
+    anchor = resolve_speed(interval["anchor"], profile, view, curve, tests)
+    multiplier = interval.get("speed_multiplier", 1.)
+    if not _positive(multiplier):
+        raise ValueError("INVALID_NATIVE_SPEED_MULTIPLIER")
+    speed = anchor["speed_kmh"] * multiplier
+    zones = dosing_curve.selected_zones(view, curve, tests,
+        sport=profile.get("actual_sport") or profile.get("sport"))
+    zone = speed_zones.classify(zones, speed)
+    if zone is None:
+        return None
+    result = deepcopy(method)
+    original = result.get("protocol_zone", result["zone"])
+    result.update(zone=zone, protocol_zone=original)
+    result["title"] = result["title"].replace(method["zone"], zone)
+    for key in ("interval_template", "interval_profile"):
+        if result.get(key):
+            result[key].update(zone=zone, protocol_zone=original)
+    if zone != method["zone"]:
+        result.pop("method_family", None)
+    return result
 
 

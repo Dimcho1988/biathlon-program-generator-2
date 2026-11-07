@@ -38,8 +38,8 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v73-rolling-adaptive-window"
-PARAMETER_VERSION = "management-parameters-v60"
+VERSION = "training-management-v74-shared-working-curve"
+PARAMETER_VERSION = "management-parameters-v61"
 MIN_AEROBIC_DOSE_FRACTION = 0.  # Native recipes own their structural minimum; no generic Tmax floor.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
 PRIORITIES = {
@@ -430,18 +430,14 @@ def _capacity_context(speed, settings):
     if any(r != "INSUFFICIENT_INDEPENDENT_TEST_DURATIONS" for r in reasons):
         return None, tests, reasons
     prior_summary = speed.get("preliminary_capacity") or {}
-    prior = preliminary_capacity.curve_from_summary(prior_summary)
     heuristic = speed.get("status") == "INITIAL_HEURISTIC"
-    if not tests and prior is None and not heuristic:
+    try:
+        curve, tests, curve_source = dosing_curve.selected(speed)
+    except ValueError as exc:
+        return None, tests, [str(exc)]
+    if curve is None:
         return None, tests, ["NO_INDIVIDUAL_SPEED_CURVE"]
-    blend = dosing_curve.from_view(speed)
-    if heuristic:
-        from biathlon.initial_speed_profile import curve_from_view
-        curve = curve_from_view(speed)
-        if curve is None:
-            return None, [], ["INVALID_INITIAL_HEURISTIC_PROFILE"]
-    else:
-        curve = blend or speed_duration.calibrated(tests, prior=prior)
+    blend = curve_source == "BLENDED_DOSING_CURVE"
     durations = {a["zone"]: a["duration_s"] for a in prior_summary.get("anchors", [])}
     predictor_type = dosing_curve.Predictor if blend else hr_speed.ZonalPredictor
     try:
@@ -482,7 +478,8 @@ def capacity_for(method, settings, speed, context, today, allow_fallback=True, *
     basis = (getattr(context[0], "component_load_context", None) if context[0] is not None else None)
     basis = basis or context_from_speed_view(speed)
     predictor = context[0]
-    result["dosing_speed_zones"] = ((speed or {}).get("dosing_model") or {}).get("speed_zones") or (speed or {}).get("speed_zones")
+    result["dosing_speed_zones"] = (getattr(predictor, "profile", None)
+        or ((speed or {}).get("dosing_model") or {}).get("speed_zones") or (speed or {}).get("speed_zones"))
     if method.get("method_library"):
         resolved = method["method_library"]["resolution"]
         ranges = {key: deepcopy(resolved.get(key)) for key in
@@ -520,6 +517,10 @@ def _capacity_for_impl(method, settings, speed, context, today, allow_fallback=T
         return library_curve_capacity(method, speed, context, use_model_prior=use_model_prior)
     from .method_capacity import expert_interval_curve_capacity
     interval_profile = method.get("interval_template" if method.get("structure") == "MODEL_INTERVALS" else "interval_profile") or {}
+    if (interval_profile.get("anchor") and interval_profile.get("speed_time_duration_ratio") is None
+            and not method.get("race_specific")):
+        from .method_capacity import anchored_interval_curve_capacity
+        return anchored_interval_curve_capacity(method, speed, context, use_model_prior=use_model_prior)
     if (method["structure"] in {"MODEL_INTERVALS", "METABOLIC_INTERVALS"}
             and interval_profile.get("speed_time_duration_ratio") is not None and context[0] is not None):
         return expert_interval_curve_capacity(method, speed, context, use_model_prior=use_model_prior)
@@ -556,14 +557,11 @@ def _capacity_for_impl(method, settings, speed, context, today, allow_fallback=T
             anchors = [e["payload"] for e in speed.get("tests", []) if e.get("entry_key") in keys]
             if all(t.get("maximal") and t.get("test_mode", "STRICT") == "STRICT" for t in anchors):
                 try:
-                    blend = dosing_curve.from_view(speed)
-                    prior = preliminary_capacity.curve_from_summary(speed.get("preliminary_capacity"))
                     # An available individual curve can estimate capacity
                     # outside its measured window; never create a reference
                     # curve from an empty set of tests and no paired prior.
-                    curve = blend
-                    if curve is None and (anchors or prior):
-                        curve = speed_duration.calibrated(anchors, prior=prior)
+                    curve, anchors, curve_source = dosing_curve.selected(speed)
+                    blend = curve_source == "BLENDED_DOSING_CURVE"
                     if curve is not None:
                         seconds = curve.inverse(p["target_speed_kmh"] / 3.6)
                         observed = [t["duration_s"] for t in anchors]

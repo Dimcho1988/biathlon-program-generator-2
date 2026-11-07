@@ -19,7 +19,7 @@ def short_variant(method):
     result = deepcopy(method)
     key = "interval_template" if method["structure"] == "MODEL_INTERVALS" else "interval_profile"
     p = result[key]
-    work = min(p["work_seconds"], 30 if p["zone"] == "Z4" else 15)
+    work = min(p["work_seconds"], 30 if p.get("protocol_zone", p["zone"]) == "Z4" else 15)
     if p.get("work_seconds_range"):
         p["work_seconds_range"] = [work*p["work_seconds_range"][0]/p["work_seconds"], work]
     if p.get("speed_time_duration_ratio") is not None:

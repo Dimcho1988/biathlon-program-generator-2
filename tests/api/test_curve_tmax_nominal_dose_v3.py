@@ -56,7 +56,7 @@ def test_large_interval_ceiling_cannot_raise_the_continuous_tmax_minimum(readine
                                         "GENERAL_PREPARATION", evidence, None)
     requested = 34.*fraction*readiness_factor
     blocks = engine._blocks(method, requested, evidence, Repository().settings)
-    assert minimum == 9.
+    assert minimum == 6.  # Two complete 3-min repetitions in the V5 protocol.
     assert minimum <= requested
     assert blocks and sum(block["duration_min"] for block in blocks if block["kind"] == "WORK") <= requested
     assert engine._dose_usage(blocks, evidence, "Z4") <= readiness_factor

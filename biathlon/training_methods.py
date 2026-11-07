@@ -13,7 +13,7 @@ from pathlib import Path
 from . import adaptive_methods, strength_methods
 from .method_dosing import continuous_building_fraction, continuous_maintenance_fraction
 
-VERSION = "training-methods-v14-sport-strength"
+VERSION = "training-methods-v15-curve-effort-anchors"
 VARIETY_VERSION = "onflows-bounded-method-variety-v1"
 COMMON = ("RE_ENTRY", "GENERAL_PREPARATION", "SPECIAL_PREPARATION", "COMPETITION")
 METHODS = (
@@ -131,6 +131,10 @@ def _bounded_variants(methods):
                 "validation": "COACH_STRUCTURE_NOT_EQUIVALENT_PHYSIOLOGICAL_RESPONSE"},
             instructions="По-кратки, повторяеми отсечки при същото зададено усилие. Използвай цялата предписана активна почивка. Запази поне две качествени повторения в резерв; не ускорявай заради по-кратката отсечка или за да достигнеш пулсово число.",
             adaptation="Треньорски вариант v1: работната отсечка е разделена на две, броят е удвоен до максимум 24, а всяка почивка запазва продължителността от родителския профил. Общата работа и множителят за капацитета не нарастват. Това не твърди еднакъв физиологичен отговор; всички сесийни и компонентни бюджети се проверяват отново.")
+        if child.get("execution_limits"):
+            child["execution_limits"]["min_repetitions"] = cp["min_repetitions"]
+            if "max_repetitions" in child["execution_limits"]:
+                child["execution_limits"]["max_repetitions"] = cp["max_repetitions"]
         result.append(child)
     return result
 
@@ -246,7 +250,9 @@ def resolved_methods(profile):
             "adaptation": "До половината Z3 доза и половината интервален бюджет. Минималният интервален вариант остава задължителен; иначе комбинацията отпада."})
     controls = profile.get("planning_controls")
     if controls and controls.get("automatic_intervals", True):
-        for zone, work, rest, minimum, maximum, ratio in (("Z4", 180, 180, 3, 6, 2.), ("Z5", 30, 30, 6, 20, 2.5)):
+        # V5 with the unchanged 200% method budget gives 6.5 min at a 65%
+        # building dose. Two whole 3-min repetitions are its complete minimum.
+        for zone, work, rest, minimum, maximum, ratio in (("Z4", 180, 180, 2, 6, 2.), ("Z5", 30, 30, 6, 20, 2.5)):
             if any(p["zone"] == zone for p in profile.get("interval_profiles", [])):
                 continue
             methods.append({"id": f"ONFLOWS-CONTROLLED-{zone}-V2", "title": f"Повторяеми интервали в {zone}",
@@ -255,12 +261,14 @@ def resolved_methods(profile):
                 "min_work_min": minimum*work/60, "max_work_min": maximum*work/60, "warmup_min": 15., "cooldown_min": 10.,
                 "source_id": "END-VO2-TREF-01", "source_version": "0.3",
                 "implementation_profile": "onflows-metabolic-intervals-v2",
+                **({"execution_limits": {"min_repetitions": 2, "min_work_min": 6.}} if zone == "Z4" else {}),
                 "interval_template": {"zone": zone, "work_seconds": work, "recovery_seconds": rest,
+                                      **({"anchor": {"type": "V5"}, "speed_multiplier": 1.} if zone == "Z4" else {}),
                                       "min_repetitions": minimum, "max_repetitions": maximum, "reserve_repetitions": 2,
                                       "total_capacity_ratio": ratio, "rest_type": "ACTIVE_Z1",
                                       "dose_status": "VERSIONED_COACH_DEFAULT_NOT_VALIDATED_NORM"},
                 "instructions": "Силно, но повторяемо усилие; без спринт или финал до отказ. Остави резерв за още две качествени отсечки. Запази ритъма и техниката; прекрати при разпадането им. Не ускорявай, за да достигнеш пулсово число.",
-                "adaptation": "Отделни onFlows профили v2: Z4 — отсечки 3 min / 3 min с общ работен капацитет 200% от личния Tmax; Z5 — 30 s / 30 s с капацитет 250%. Броят повторения се изчислява индивидуално. Това са конкретни начални треньорски настройки, не универсални множители или научно валидирани норми. Изграждането използва избрания процент (начално 65%) от този бюджет, поддържането — 60% от изграждащата доза без Recovery множител. Развиващата доза намалява с половината от дефицита на Recovery. Цели повторения, почивки, резерв и всички бюджети се проверяват съвместно. Индивидуалният профил замества тези настройки."})
+                "adaptation": "Версиониран треньорски профил: триминутният протокол използва V5 от работната крива; съкратените му варианти запазват котвата. Действителната зона се определя от получената скорост. Краткият Z5 протокол запазва допустимата кратка тестова продължителност или моделната опора над границата Z4/Z5 на същата крива. Общият работен капацитет е съответно 200% и 250% от Tmax при избраното усилие; това са начални onFlows настройки, не научно валидирани норми. Броят повторения, Recovery и бюджетите се проверяват отделно. Индивидуалният профил замества тези настройки."})
     methods.extend(_bounded_variants(methods))
     if adaptive_methods.developmental(profile):
         methods = [adaptive_methods.short_variant(m) if m["structure"] in {"MODEL_INTERVALS", "METABOLIC_INTERVALS"}

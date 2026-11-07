@@ -327,9 +327,10 @@ def test_second_session_changes_are_visible_in_reconciliation_and_adaptation():
 
 def test_metabolic_total_can_exceed_continuous_capacity_only_through_profile():
     method = next(m for m in resolved_methods(body()) if m["zone"] == "Z4")
-    cap = engine.capacity_for(method, Repository().settings, None, (None,[],[]), TODAY)
-    cap["capacity_minutes"] = 10
-    cap["effort_profile"]["continuous_capacity_min"] = 10
+    # Isolate structure/budget arithmetic; absent speed evidence no longer
+    # turns an automatic V5 prescription into an HR-derived capacity.
+    cap = {"capacity_minutes": 10., "target_hr_bpm": None, "target_speed_kmh": None,
+        "effort_profile": {**method["interval_template"], "continuous_capacity_min": 10., "target_speed_kmh": None}}
     work = min(method["max_work_min"], 10*method["interval_template"]["total_capacity_ratio"])
     blocks = engine._blocks(method, work, cap, Repository().settings)
     assert sum(b["duration_min"] for b in blocks if b["kind"] == "WORK") == 18

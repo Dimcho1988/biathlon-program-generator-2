@@ -59,6 +59,8 @@ def test_race_distance_uses_the_same_blended_curve_for_distance_and_speed():
 def test_ski_discipline_uses_rollerski_curve_and_never_calendar_fitness_uplift():
     view = example()
     view["sport"] = "RollerSki"
+    for test in view["tests"]:
+        test["payload"]["sport"] = "RollerSki"
     profile = athlete(sport="NordicSki", actual_sport="RollerSki", discipline="10 km")
     # This coaching template has no published count; an explicit standard is
     # required instead of manufacturing repetitions from Tmax.

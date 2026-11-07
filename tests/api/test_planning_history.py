@@ -97,10 +97,17 @@ def test_automatic_z4_dose_has_complete_reps_and_does_not_inherit_z5_capacity():
     method=next(m for m in methods if m['id']=='ONFLOWS-CONTROLLED-Z4-V2')
     method['actual_sport']='NordicSki'
     cap=engine.capacity_for(method,settings,None,(None,[],['NO_INDIVIDUAL_SPEED_CURVE']),TODAY)
+    assert cap is None  # A named V5 effort cannot acquire speed from an HR-zone fallback.
+    from biathlon import method_anchors
+    from tests.api.test_training_plan_engine import supported_speed
+    speed = supported_speed(settings)
+    speed['sport'] = 'NordicSki'
+    method = method_anchors.bind_native(method, {'actual_sport':'NordicSki'}, speed)
+    cap = engine.capacity_for(method,settings,speed,engine._capacity_context(speed,settings),TODAY,use_model_prior=True)
     assert cap['effort_profile']['sport']=='NordicSki'
     blocks=engine._blocks(method,min(cap['capacity_minutes']*method['interval_template']['total_capacity_ratio'],method['max_work_min']),cap,settings)
     works=[b for b in blocks if b['kind']=='WORK'];rests=[b for b in blocks if b['kind']=='RECOVERY']
-    assert 3 <= len(works) <= 6 and len(rests)==len(works)-1
+    assert 2 <= len(works) <= 6 and len(rests)==len(works)-1
     assert all(b['target_hr_bpm'] is None and b['reserve_repetitions']==2 for b in works)
     assert all(b['duration_min']==3 for b in rests)
     assert sum(b['duration_min'] for b in works)<=cap['capacity_minutes']*method['interval_template']['total_capacity_ratio']

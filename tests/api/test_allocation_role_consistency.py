@@ -32,7 +32,12 @@ def test_background_development_receives_a_key_slot_after_the_main_accent_is_cov
     body = configured(age_years=25, training_experience_years=5, available_minutes=[180]*7)
     body['planning_controls'].update(sessions_per_week=1, sessions_by_day=[1,0,0,0,0,0,0],
         mixed_sessions_enabled=False, threshold_method='AUTO')
-    selected_methods(monkeypatch, body, {'ONFLOWS-CONTROLLED-Z4-V2'})
+    # This checks allocation roles with no individual speed curve. An explicit
+    # coach Z4 assessment supplies that effort; automatic V5 needs a curve and
+    # is classified by its resolved speed, rather than by its historical ID.
+    from tests.api.test_management_v2 import interval
+    body['interval_profiles'] = [interval(continuous_capacity_min=20.)]
+    selected_methods(monkeypatch, body, {'END-VO2-TREF-01-Z4'})
     original = engine._goals
     def goals(*args, **kwargs):
         values, accents, state = original(*args, **kwargs)

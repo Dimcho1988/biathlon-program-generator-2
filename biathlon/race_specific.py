@@ -21,7 +21,8 @@ def reference(profile, view, event, today):
     try:
         curve = speed_duration.calibrated(tests, prior=preliminary_capacity.curve_from_summary(view.get("preliminary_capacity")))
         seconds = event["duration_min"]*60 if event.get("source") == "COURSE_EXPECTATION" else curve.inverse(event["distance_m"],distance=True)
-        blend = dosing_curve.from_view(view)
+        working, _, working_source = dosing_curve.selected(view)
+        blend = working if working_source == "BLENDED_DOSING_CURVE" else None
         dosing_seconds = blend.inverse(event["distance_m"], distance=True) if blend and event.get("source") != "COURSE_EXPECTATION" else seconds
         bands = []
         dosing_bands = []

@@ -188,7 +188,11 @@ def test_free_slots_do_not_reject_a_supplement_without_a_legal_standalone(monkey
     profile = configured(age_years=30, training_experience_years=10, available_minutes=[180]*7)
     profile["planning_controls"].update(accent_mode="MANUAL", accents=["Z4"], threshold_days=[0, 4],
         sessions_per_week=7, sessions_by_day=[1]*7, mixed_sessions_enabled=True)
-    ids = {"ONFLOWS-CONTROLLED-Z4-V2", "ONFLOWS-CONTROLLED-Z4-V2-MIX-REPETITIONS-SHORT"}
+    # Isolate Q/slot allocation with an explicitly assessed coach effort.
+    # The automatic V5 method correctly requires an individual speed curve.
+    from tests.api.test_management_v2 import interval
+    profile["interval_profiles"] = [interval()]
+    ids = {"END-VO2-TREF-01-Z4", "END-VO2-TREF-01-Z4-MIX-REPETITIONS-SHORT"}
     methods = [m for m in engine.resolved_methods(profile) if m["id"] in ids]
     assert len(methods) == 2
     monkeypatch.setattr(engine, "resolved_methods", lambda _: deepcopy(methods))
