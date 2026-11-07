@@ -29,8 +29,7 @@ def test_default_profile_exactly_matches_linear_equivalence_configuration() -> N
     assert len(profile.zones) == 5
     assert all(
         zone.equivalence_slope_pp_per_bpm
-        == DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM
-        == 3.0
+        == (5.0 if zone.zone == "Z5" else DEFAULT_EQUIVALENCE_SLOPE_PP_PER_BPM)
         for zone in profile.zones
     )
     assert all(

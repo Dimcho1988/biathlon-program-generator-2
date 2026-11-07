@@ -1,0 +1,32 @@
+.editor {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.editor label { display: grid; gap: 6px; }
+.editor > label:has(input[type="checkbox"]) {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.editor input[type="checkbox"] {
+  width: 18px;
+  min-height: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin: 1px 0 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+.editor .main { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.editor .range { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.editor fieldset { margin: 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.editor p { margin: 0; line-height: 1.6; }
+.editor > label > input[type="number"] { max-width: 10rem; }
+@media (max-width: 700px) {
+  .editor .main { grid-template-columns: 1fr; }
+}

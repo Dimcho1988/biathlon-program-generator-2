@@ -254,7 +254,7 @@ def test_selected_activity_normalizer_keeps_only_aggregate_summary(
     assert onflows["algorithm_version"] == (
         "onflows-equivalent-time-interval-aware-v3-linear"
     )
-    assert onflows["equivalence_version"] == "intra_zone_linear_v1"
+    assert onflows["equivalence_version"] == "intra_zone_linear_v2_z5_5pp"
     assert onflows["effective_hr_adapter_version"] == (
         "effective-hr-raw-pass-through-v1"
     )
@@ -275,17 +275,17 @@ def test_selected_activity_normalizer_keeps_only_aggregate_summary(
     assert z1["mean_raw_hr_bpm"] == pytest.approx(121.0)
     assert z1["average_minute_value_percent"] == pytest.approx(88.0)
     assert all(
-        row["equivalence_slope_pp_per_bpm"] == 3.0
+        row["equivalence_slope_pp_per_bpm"] == (5.0 if row["zone"] == "Z5" else 3.0)
         for row in onflows["zones"]
     )
     safe_profile = summary["onflows_zone_profile"]
     assert safe_profile["schema_version"] == (
         "onflows-zone-profile-v2-linear-equivalence"
     )
-    assert safe_profile["equivalence_version"] == "intra_zone_linear_v1"
+    assert safe_profile["equivalence_version"] == "intra_zone_linear_v2_z5_5pp"
     assert len(safe_profile["fingerprint"]) == 64
     assert all(
-        row["equivalence_slope_pp_per_bpm"] == 3.0
+        row["equivalence_slope_pp_per_bpm"] == (5.0 if row["zone"] == "Z5" else 3.0)
         for row in safe_profile["zones"]
     )
     rendered = repr(summary)
