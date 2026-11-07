@@ -149,7 +149,7 @@ export function parseSpeedModel(value:unknown):SpeedModel {
     z.zone!==`Z${i+1}`||!finite(z.low_kmh)||z.low_kmh<0||(i<4? !finite(z.high_kmh)||z.high_kmh<=z.low_kmh : z.high_kmh!==null&&(!finite(z.high_kmh)||z.high_kmh<=z.low_kmh))
     ||i>0&&z.low_kmh!==zones.zones[i-1].high_kmh)))throw new Error("Невалидни скоростни зони.");
   const dose=r.dosing_model;
-  if(dose&&(!["dosing-index-test-30-70-v1","dosing-index-test-30-70-v2-common-profile"].includes(dose.model_version)||!["AVAILABLE","UNAVAILABLE"].includes(dose.status)
+  if(dose&&(!["dosing-index-test-30-70-v1","dosing-index-test-30-70-v2-common-profile","dosing-index-test-30-70-v3-shared-selection"].includes(dose.model_version)||!["AVAILABLE","UNAVAILABLE"].includes(dose.status)
     ||dose.weights?.index!==.3||dose.weights?.tests!==.7||dose.is_maximal_test!==false||dose.use!=="METHOD_DOSING"
     ||!Array.isArray(dose.points)||dose.status==="AVAILABLE"&&dose.points.length<2
     ||dose.points.some((p,i)=>![p.duration_s,p.speed_kmh,p.distance_m,p.index_speed_kmh,p.test_speed_kmh].every(v=>finite(v)&&v>0)
