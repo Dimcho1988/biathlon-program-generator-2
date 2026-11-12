@@ -42,7 +42,7 @@ def input_contract(kind):
         "required_for_new_record": [k for k in schema.get("required", []) if k != "expected_revision"],
         **({"$defs": schema["$defs"]} if "$defs" in schema else {}),
         "patch_rule": ("Explicit data refresh can enqueue directly after this read; completion happens in the worker."
-            if kind == "SYNC_DATA" else "Retain omitted fields; use the revision and entry_key from this read. Show one exact preview before applying."),
+            if kind == "SYNC_DATA" else "Retain omitted fields; use the revision and entry_key from this read. Clear reversible planning requests can execute directly; scientific settings and archived-plan selection use one exact preview."),
         **({"purpose": "Edits the /planning form record. For current managed-program controls use MANAGEMENT_PROFILE.planning_controls; these are separate app records."} if kind in LEGACY_KEYS else {}),
         **({"draft_selector": "To inspect a particular draft before activation, query inputs with date=start_date and revision=draft_revision. Omitting revision selects the latest saved draft for that date. The returned outer revision belongs to the active-plan pointer; keep it as command.expected_revision."} if kind == "PLAN_ACTIVATE" else {}),
     }

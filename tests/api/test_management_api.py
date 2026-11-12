@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from apps.api import main, model_service, management_service as service
+from apps.api import main, model_service, management_service as service, management_lifecycle
 from apps.api.management_schemas import ManagementProfile, ManagementGenerateRequest
 from apps.api.oauth_store import PersistentStoreFailure
 
@@ -45,11 +45,12 @@ class Store:
         assert alias == "ath-test"
         return []
 
-    def save_draft(self, alias, payload, actor, expected_profile_revision, **kwargs):
+    def save_generated_plan(self, alias, prepared, actor, expected_profile_revision, expected_revision=0):
         assert alias == "ath-test" and actor == ACTOR
-        self.saved.append({"payload": deepcopy(payload), "expected_profile_revision": expected_profile_revision, **kwargs})
-        return {"saved": True, "entry_key": payload["start_date"], "revision": 1,
-                "recorded_at": NOW.isoformat(), "payload": payload}
+        self.saved.append({"prepared": deepcopy(prepared), "expected_profile_revision": expected_profile_revision,
+            "expected_revision": expected_revision})
+        return {"saved": True, "entry_key": prepared["draft"]["start_date"], "revision": expected_revision+1,
+                "recorded_at": NOW.isoformat(), "payload": prepared["draft"]}
 
 
 @pytest.fixture
@@ -61,6 +62,8 @@ def api(monkeypatch):
     monkeypatch.setattr(model_service, "speed_view", lambda *args, **kwargs: {"status":"REFERENCE_ONLY"})
     monkeypatch.setattr(management, "ManagementStore", lambda repo: store)
     monkeypatch.setattr(service, "ManagementStore", lambda repo: store)
+    monkeypatch.setattr(management_lifecycle, "PlanStore", lambda repo: SimpleNamespace(
+        current=lambda alias: None, checkpoint=lambda alias: {"generation_id": "generation-a"}))
     return TestClient(main.app), store, repository
 
 
@@ -250,12 +253,13 @@ def test_saved_draft_freezes_profile_source_and_checks_generation(api, monkeypat
     result = service.generate(repository, "ath-test", request(expected_draft_revision=3), ACTOR, now=NOW)
     saved = store.saved[0]
     assert state == original
-    assert saved["check_generation"] is True and saved["expected_generation_id"] == "generation-a"
+    assert saved["prepared"]["draft"]["source"]["generation_id"] == "generation-a"
+    assert saved["prepared"]["publication"] is None  # An incomplete fixture is never published.
     assert saved["expected_revision"] == 3
     payload = result["payload"]
     assert payload["input_snapshot"]["management_profile"]["building_fraction"] == .65
     assert len(payload["input_fingerprint"]) == 64
-    assert payload["review_required"] and not payload["automatically_published"]
+    assert not payload["review_required"] and not payload["automatically_published"]
 
 
 def test_changed_profile_is_rejected_before_running_engine(api, monkeypatch):

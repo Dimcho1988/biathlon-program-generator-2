@@ -12,9 +12,9 @@ export function TrainingPlanReport({plan, proposal, showProposal: controlledProp
   return <>
     {proposal && <div className="management-panel"><p>Има ново предложение. Изборът сменя едновременно отчета и показаните тренировки.</p>
       <div className="management-actions" role="group" aria-label="Вариант за отчета">
-        <button type="button" className="action-button secondary" aria-pressed={!showingProposal} onClick={() => setShowProposal(false)}>Утвърдена програма</button>
+        <button type="button" className="action-button secondary" aria-pressed={!showingProposal} onClick={() => setShowProposal(false)}>{options.automaticPublication ? "Текуща програма" : "Утвърдена програма"}</button>
         <button type="button" className="action-button secondary" aria-pressed={showingProposal} onClick={() => setShowProposal(true)}>Ново предложение</button>
-      </div>{showingProposal && <p>Преглеждаш предложението. То очаква утвърждаване; тренировките по-долу са от предложения вариант.</p>}
+      </div>{showingProposal && <p>{options.automaticPublication ? "Преглеждаш вариант, който още не е приложен. Причината е показана при програмата." : "Преглеждаш предложението. То очаква утвърждаване; тренировките по-долу са от предложения вариант."}</p>}
     </div>}
     <TrainingPlanSummary {...options} plan={showingProposal ? proposal! : plan} planKind={showingProposal ? "DRAFT" : options.planKind}/>
   </>;

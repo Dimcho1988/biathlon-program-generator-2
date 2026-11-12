@@ -74,6 +74,8 @@ function routine(name) {
     if(validationMigration) await db.exec(fs.readFileSync(path.join(migrations,validationMigration),"utf8"));
     const overviewMigration=fs.readdirSync(migrations).find(name=>name.endsWith("_preserve_approved_overview_with_input_hints.sql"));
     if(overviewMigration) await db.exec(fs.readFileSync(path.join(migrations,overviewMigration),"utf8"));
+    const recoveryMigration=fs.readdirSync(migrations).find(name=>name.endsWith("_prepared_management_page_recovery.sql"));
+    if(recoveryMigration) await db.exec(fs.readFileSync(path.join(migrations,recoveryMigration),"utf8"));
     await db.exec("grant select on public.onflows_management_plan_state,public.onflows_management_plan_revisions to service_role;");
     // Re-run the prior contract against the upgraded queue/publication guards.
     try { await db.exec(fs.readFileSync(path.join(root, "tests/database/prepared_dashboard_and_training_events.sql"), "utf8")); }

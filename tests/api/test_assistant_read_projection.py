@@ -97,3 +97,13 @@ def test_metadata_and_pending_response_survive_projection():
 def test_compact_catalog_does_not_infer_a_missing_recipe_or_missing_sources():
     summary = {"id": "M1", "title": "Метод", "registry_kind": "SOURCE_RECIPE"}
     assert project_methods({"methods": [summary]})["methods"] == [summary]
+
+
+@pytest.mark.parametrize('view', ['overview', 'active', 'week', 'outlook'])
+def test_preparing_management_view_retains_safe_provenance_with_saved_content(view):
+    preparation = {'status': 'UPDATING', 'prepared_at': '2026-11-12T12:00:00Z',
+        'evaluated_on': '2026-11-12', 'reason': 'INPUTS_CHANGED', 'private_observation': PRIVATE}
+    payload = {'preparation': preparation, 'revision': 7, 'plan': draft(), 'outlook': draft()}
+    result = project_management(payload, view)
+    assert result['preparation'] == {k: v for k, v in preparation.items() if k != 'private_observation'}
+    assert PRIVATE not in json.dumps(result)

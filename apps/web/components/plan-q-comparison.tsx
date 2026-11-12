@@ -18,13 +18,13 @@ export function PlanQComparison({plan, planKind = "DRAFT", ...options}: {plan: P
   const weeks = availablePlanWeeks(plan,today);
   const week = selectedPlanWeek(plan,today,options.selectedWeek ?? selected);
   const period = periods.find(p => p.start === week.start)!;
-  const plannedLabel = `${planKind === "APPROVED" ? "утвърдено" : "предложение"}${period.includesForecast ? " + прогноза" : ""}`;
+  const plannedLabel = `${planKind === "APPROVED" ? options.automaticPublication ? "програма" : "утвърдено" : "предложение"}${period.includesForecast ? " + прогноза" : ""}`;
   const strength = plan.allocation?.strength_feasibility?.segments?.find(s => s.window_start === period.start && s.window_end === period.end);
   return <section className="plan-q-comparison" aria-label="Цел, програма и изпълнение Q">
     <h3>Цел → планирано → изпълнено</h3>
     {weeks.length > 1 && <label>Седмица<select value={period.start} onChange={e => {setSelected(e.target.value); options.onWeekChange?.(e.target.value);}}>{weeks.map((p,i) => <option key={p.start} value={p.start}>{i > 0 ? "Следваща седмица" : p.end < today ? "Запазена седмица" : p.start > today ? "Предстояща седмица" : "Текуща седмица"} · {planRangeLabel(p)}</option>)}</select></label>}
-    <p><strong>{planRangeLabel(period)}</strong> · {planKind === "APPROVED" ? "утвърдена програма" : "предложение"}{period.includesForecast ? " с прогнозно продължение" : ""}.</p>
-    {period.includesForecast && <p className="management-notice">Прогнозни дни: {day(period.forecastDates[0])} – {day(period.forecastDates[period.forecastDates.length-1])}. Задачите им са включени в „Планирано“ и в графика по-долу, с обозначение „Прогноза“. Те се преразглеждат при обновяване и още не са утвърдени.</p>}
+    <p><strong>{planRangeLabel(period)}</strong> · {planKind === "APPROVED" ? options.automaticPublication ? "текуща програма" : "утвърдена програма" : "предложение"}{period.includesForecast ? " с прогнозно продължение" : ""}.</p>
+    {period.includesForecast && <p className="management-notice">Прогнозни дни: {day(period.forecastDates[0])} – {day(period.forecastDates[period.forecastDates.length-1])}. Задачите им са включени в „Планирано“ и в графика по-долу, с обозначение „Прогноза“. {options.automaticPublication ? "Те се уточняват при обновяване според изпълнението и възстановяването." : "Те се преразглеждат при обновяване и още не са утвърдени."}</p>}
     {period.missingDates.length > 0 && <p className="management-notice">Непълен разчет: липсват задачи за {period.missingDates.map(day).join(", ")}. Общото планирано Q остава неизвестно до обновяване.</p>}
     <p>Приравнен обем Q в ч:мм:сс. Целта от дългосрочната програма е 100% за целия избран микроцикъл.</p>
     <div className="management-table-wrap"><table className="q-primary-table"><caption>Q по компоненти · {day(period.start)} – {day(period.end)}</caption>

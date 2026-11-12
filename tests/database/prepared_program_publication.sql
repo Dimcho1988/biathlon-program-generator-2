@@ -1,4 +1,4 @@
--- Exercise the real approval-aware writer behind the training lease fence.
+-- Exercise the real automatic-current writer behind the training lease fence.
 -- Synthetic fixtures only; no worker can see these uncommitted tasks.
 begin;
 set local plpgsql.check_asserts='on';
@@ -31,22 +31,18 @@ begin
  claim:=public.onflows_training_plan_update('CLAIM',a,token);
  assert claim->>'revision'='1';
  candidate:=(fixed->'plan')||'{"contract_variant":"new-training-proposal"}'::jsonb;
- pending:=fixed||jsonb_build_object('status','REVIEW_REQUIRED','proposal',candidate,'proposal_mode','REVIEW');
- result:=public.save_onflows_management_plan_after_training(a,pending,1,actor,'REVIEW',1,checkpoint,true,token,1);
- assert result->>'saved'='true' and result->>'revision'='2','Fenced proposal publication failed';
+ approved:=fixed||jsonb_build_object('status','ACTIVE','plan',candidate,'proposal',null);
+ result:=public.save_onflows_management_plan_after_training(a,approved,1,actor,'ADAPT',1,checkpoint,true,token,1);
+ assert result->>'saved'='true' and result->>'revision'='2','Fenced current publication failed';
  assert not result ? 'payload','Compact response echoed a full plan';
- assert (select payload->'plan'=fixed->'plan' and payload->'proposal'=candidate
+ assert (select payload->'plan'=candidate and payload->>'status'='ACTIVE'
   from public.onflows_management_plan_revisions where athlete_alias=a and revision=2),
-  'Background publication replaced the fixed prescription';
+  'Valid generated replacement required another approval';
  perform public.onflows_training_plan_update('COMPLETE',a,token);
 
- approved:=pending||jsonb_build_object('status','ACTIVE','plan',candidate,'proposal',null);
- result:=public.save_onflows_management_plan_compact(a,approved,2,actor,'APPROVE',1,checkpoint,false);
- assert result->>'saved'='true' and result->>'revision'='3';
- assert (select payload->'plan'=candidate from public.onflows_management_plan_revisions where athlete_alias=a and revision=3);
  assert (select payload=fixed from public.onflows_management_plan_revisions where athlete_alias=a and revision=1),
   'Original prescription was rewritten';
- assert public.save_onflows_management_plan_after_training(a,approved,3,actor,'REVIEW',1,checkpoint,true,token,1)->>'conflict'='true',
+ assert public.save_onflows_management_plan_after_training(a,approved,2,actor,'REVIEW',1,checkpoint,true,token,1)->>'conflict'='true',
   'Completed lease published again';
 end $$;
 reset role;

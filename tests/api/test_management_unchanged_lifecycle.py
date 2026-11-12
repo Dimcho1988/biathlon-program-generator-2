@@ -69,7 +69,8 @@ def test_two_real_manual_recalculations_write_once_then_only_record_the_check(mo
     if mode == "REVIEW":
         assert second["payload"]["status"] == "ACTIVE"
         assert second["payload"]["proposal"] is None
-        assert second["payload"]["plan"] == approved
+        assert second["payload"]["plan"]["days"] == approved["days"]
+        assert second["payload"]["plan"]["automatically_published"] is True
         assert second["payload"]["approved_by"] == ACTOR
     else:
         assert second["payload"]["status"] == "ACTIVE"

@@ -108,7 +108,7 @@ def test_management_batch_equals_individual_resources_and_removes_repeat_reads(m
         'sync': sync_service.public_sync_state(plain.sync_state('ath-test')).model_dump(mode='json'),
     }
     # Capabilities are HTTP metadata; advertising the lazy reader adds no read.
-    expected['active']['capabilities'] = {'unchanged_checks': True}
+    expected['active']['capabilities'] = {'unchanged_checks': True, 'automatic_publication': True}
     batched = Repository()
     monkeypatch.setenv('ONFLOWS_SERVICE_TOKEN', 'service-secret')
     monkeypatch.setattr(dependencies, 'repository', lambda: batched)

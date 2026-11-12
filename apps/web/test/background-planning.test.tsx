@@ -3,7 +3,7 @@ import {act} from 'react';
 import {createRoot, type Root} from 'react-dom/client';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {TrainingManagement} from '../components/training-management';
-import {defaultManagementProfile,type DraftRecord} from '../lib/training-management';
+import {defaultManagementProfile,type DraftRecord,type ActivePlanResponse,type PlanningDraft} from '../lib/training-management';
 import {parsePlanningJob,planningPending,type PlanningJob} from '../lib/planning-job';
 
 const id='22222222-2222-4222-8222-222222222222';
@@ -20,10 +20,10 @@ afterEach(async()=>{
   await act(async()=>root.unmount());container.remove();
   vi.clearAllTimers();vi.useRealTimers();vi.restoreAllMocks();vi.unstubAllGlobals();
 });
-async function mount(canEdit=true,drafts:DraftRecord[]=[]){
+async function mount(canEdit=true,drafts:DraftRecord[]=[],active?:ActivePlanResponse){
   await act(async()=>root.render(<TrainingManagement athleteName="Fixture athlete" canEdit={canEdit} today="2026-11-01"
     initialProfile={{configured:true,revision:1,profile:{...defaultManagementProfile('2026-11-01'),discipline:'5000 m'}}}
-    initialDrafts={drafts}/>));
+    initialDrafts={drafts} initialActive={active}/>));
 }
 async function submit(){
   const form=container.querySelector('form.management-generate')!;
@@ -31,6 +31,55 @@ async function submit(){
   await act(async()=>form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
 }
 const ready:PlanningJob={...queued,status:'SUCCEEDED',stage:'READY',result_revision:1};
+const automaticEmpty:ActivePlanResponse={active:null,history:[],capabilities:{automatic_publication:true}};
+const published=(revision:number,originRevision=1,status:'ACTIVE'|'PAUSED'='ACTIVE'):ActivePlanResponse=>({
+  ...automaticEmpty,active:{revision,stale:false,actionable:status==='ACTIVE',payload:{schema_version:'active-plan-v2',status,
+    mode:'REVIEW',reason:'Проверена програма.',origin:{start_date:record.entry_key,draft_revision:originRevision},
+    plan:record.payload as PlanningDraft,proposal:null,changes:[],outcomes:[],decisions:{}}},
+});
+
+it('opens the automatically published result without a second activate request',async()=>{
+  const transport=vi.fn(async(url:string)=>Response.json(url.endsWith('/active')?published(5):{job:{...ready,result_active_revision:5}}));
+  vi.stubGlobal('fetch',transport);await mount(true,[],automaticEmpty);
+  expect(container.textContent).toContain('Програмата е готова и е приложена.');
+  expect(container.textContent).toContain('Текущ план · версия 5');
+  expect(container.textContent).not.toContain('Започни програмата');
+  expect(transport.mock.calls.some(([url])=>url.includes('drafts?'))).toBe(false);
+  expect(transport.mock.calls.some(([url])=>url.endsWith('/activate'))).toBe(false);
+});
+
+it('waits for the publication receipt instead of mistaking an old same-date plan for the result',async()=>{
+  let current=published(4,1);
+  const transport=vi.fn(async(url:string)=>Response.json(url.endsWith('/active')?current:{job:{...ready,result_revision:2,result_active_revision:5}}));
+  vi.stubGlobal('fetch',transport);await mount(true,[],automaticEmpty);
+  expect(container.textContent).toContain('Зареждаме актуалния график');
+  expect(container.textContent).not.toContain('Програмата е готова и е приложена.');
+  current=published(5,2);
+  await act(async()=>vi.advanceTimersByTimeAsync(5000));
+  expect(container.textContent).toContain('Текущ план · версия 5');
+  expect(container.textContent).toContain('Програмата е готова и е приложена.');
+  expect(transport.mock.calls.some(([url])=>url.includes('drafts?'))).toBe(false);
+});
+
+it('keeps pause and its resume action visible when a generated variant is not published',async()=>{
+  const transport=vi.fn(async(url:string)=>Response.json(url.endsWith('/active')?published(5,1,'PAUSED'):
+    url.includes('drafts?')?{drafts:[record]}:{job:{...ready,result_active_revision:null}}));
+  vi.stubGlobal('fetch',transport);await mount(true,[],automaticEmpty);
+  expect(container.textContent).toContain('Програмата е на пауза');
+  expect([...container.querySelectorAll('button')].some(button=>button.textContent==='Продължи с текущите настройки')).toBe(true);
+  expect(container.textContent).not.toContain('Започни програмата');
+});
+
+it('finishes loading when a newer revision was paused after publication',async()=>{
+  const transport=vi.fn(async(url:string)=>Response.json(url.endsWith('/active')?published(6,1,'PAUSED'):
+    {job:{...ready,result_active_revision:5}}));
+  vi.stubGlobal('fetch',transport);await mount(true,[],automaticEmpty);
+  expect(container.textContent).toContain('Програмата е записана и в момента е на пауза');
+  const resume=[...container.querySelectorAll('button')].find(button=>button.textContent==='Продължи с текущите настройки');
+  expect(resume?.disabled).toBe(false);
+  expect(container.textContent).not.toContain('Зареждаме актуалния график');
+  expect(transport.mock.calls.some(([url])=>url.includes('drafts?'))).toBe(false);
+});
 
 it('accepts one short request and receives only the exact completed draft',async()=>{
   let state=queued;

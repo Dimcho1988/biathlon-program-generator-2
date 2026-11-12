@@ -2,7 +2,7 @@ import type { ActivePlanRecord, ManagementProfile, ManagementProfileResponse, Pl
 import { isRecord } from "./training-status";
 
 export type WeekMode = ManagementProfile["adaptation_mode"];
-export const WEEK_MODE_LABEL: Record<WeekMode, string> = { AUTO: "Адаптивна седмица", REVIEW: "Фиксирана седмица" };
+export const WEEK_MODE_LABEL: Record<WeekMode, string> = { AUTO: "Подвижни 7 дни", REVIEW: "Седмица с фиксиран край" };
 
 export function proposalHasIncompleteLoad(plan: PlanningDraft | null): boolean {
   const history = plan?.source.planning_history;

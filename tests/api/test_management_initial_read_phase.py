@@ -78,7 +78,7 @@ def test_warm_refresh_reuses_five_reads_with_identical_full_json_and_computation
         return [body["p_key"] for _, path, _, body in harness.requests
                 if path == "/rpc/onflows_planning_computation" and body["p_operation"] == "CLAIM"]
     assert computation_keys(previous) == computation_keys(current) == [current.key]
-    saved_profile = actual.json()["active"]["payload"]["proposal"]["input_snapshot"]["management_profile"]
+    saved_profile = actual.json()["active"]["payload"]["plan"]["input_snapshot"]["management_profile"]
     assert saved_profile == current.profile
     assert saved_profile["program_end"] == current.profile["program_end"]
 

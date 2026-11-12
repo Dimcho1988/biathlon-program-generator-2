@@ -86,7 +86,7 @@ def input_contract(kind):
             "properties": {key: value for key, value in schema.get("properties", {}).items() if key in PROFILE_FIELDS},
             "required_for_new_record": schema.get("required", []), "$defs": schema.get("$defs", {}),
             "reset_rule": "planning_controls:null restores the canonical default controls. method_library.overrides:{} clears all overrides; {method_id:null} removes only the named override. Non-empty partial overrides preserve unspecified controls.",
-            "plan_change": "Updates inputs; does not approve or replace the saved programme."}
+            "plan_change": "Updates saved planning inputs. The worker recomputes and automatically publishes an eligible programme; do not claim completion while it is still preparing."}
     if kind == "CALENDAR_EVENT":
         from .schemas import PlanningCalendarEvent
         model = PlanningCalendarEvent
@@ -310,28 +310,28 @@ def _plan_day(repository, alias, access, selected, today):
     day_reader = getattr(store, "assistant_day", None)
     record = day_reader(alias, selected) if callable(day_reader) else store.current(alias)
     if record is None:
-        return {"availability": "UNAVAILABLE", "reason": "NO_APPROVED_PLAN", "date": selected.isoformat(), "sessions": []}
+        return {"availability": "UNAVAILABLE", "reason": "NO_SAVED_PLAN", "date": selected.isoformat(), "sessions": []}
     payload = record["payload"]
     plan = payload.get("plan")
     common = {"plan_revision": record["revision"], "recorded_at": record.get("recorded_at"),
-        "plan_status": payload.get("status"), "proposal_available": isinstance(payload.get("proposal"), dict)}
+        "plan_status": payload.get("status"), "plan_status_detail": payload.get("reason"),
+        "proposal_available": isinstance(payload.get("proposal"), dict)}
     if not isinstance(plan, dict):
-        return {**common, "availability": "UNAVAILABLE", "reason": "NO_APPROVED_PLAN", "date": selected.isoformat(), "sessions": []}
+        return {**common, "availability": "UNAVAILABLE", "reason": "NO_SAVED_PLAN", "date": selected.isoformat(), "sessions": []}
     common.update({"engine_version": plan.get("engine_version"), "plan_fingerprint": plan.get("fingerprint"),
         "input_snapshot": _pick(plan.get("input_snapshot"), SNAPSHOT_FIELDS), "generated_at": plan.get("generated_at"),
         "start_date": plan.get("start_date"), "end_date": plan.get("end_date"),
-        "source": _pick(plan.get("source"), SNAPSHOT_FIELDS), "kind": "HISTORICAL_APPROVED" if selected < today else "APPROVED"})
+        "source": _pick(plan.get("source"), SNAPSHOT_FIELDS), "kind": "HISTORICAL_PLAN" if selected < today else "SAVED_PLAN"})
     day = next((d for d in plan.get("days", []) if isinstance(d, dict) and d.get("date") == selected.isoformat()), None)
     if day is None:
-        return {**common, "availability": "UNAVAILABLE", "reason": "DATE_NOT_IN_APPROVED_PLAN", "date": selected.isoformat(), "sessions": []}
+        return {**common, "availability": "UNAVAILABLE", "reason": "DATE_NOT_IN_SAVED_PLAN", "date": selected.isoformat(), "sessions": []}
     result = {**common, "availability": "AVAILABLE", "date": selected.isoformat(), "day_status": day.get("status"),
         "sessions": [_session(s, f"{selected.isoformat()}:{index + 1}", access) for index, s in enumerate(day_sessions(day)) if isinstance(s, dict)]}
     if access.get("can_view_recovery") is True:
         result["day_explanation"] = day.get("explanation")
-    if payload.get("status") == "PAUSED":
-        result["prescription_active"] = False
-    else:
-        result["prescription_active"] = payload.get("status") in {"ACTIVE", "REVIEW_REQUIRED"}
+    # A held result remains readable. It is not made executable by approving
+    # it: the canonical engine must resolve its data/eligibility condition.
+    result["prescription_active"] = payload.get("status") == "ACTIVE"
     return result
 
 

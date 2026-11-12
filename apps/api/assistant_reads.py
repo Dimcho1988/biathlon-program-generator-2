@@ -157,7 +157,7 @@ def _management(repository, alias, access, query, today, parse_date, actor):
     if view not in {"overview", "strategy", "week", "profile", "outlook", "active", "drafts", "draft-metadata", "state", "checks", "speed-comparison", "generation-jobs", "race-duration", "sync-state"}:
         raise HTTPException(422, "Неподдържан изглед на програмата.")
     if view == "strategy":
-        from .assistant_strategy import compact_management, _events, _profile
+        from .assistant_strategy import compact_management, current_calendar_plan, _events, _profile
         from .assistant_read_projection import project_management, project_profile
         from .management_store import ManagementStore
         from .management_schemas import normalize_building_profile
@@ -195,12 +195,16 @@ def _management(repository, alias, access, query, today, parse_date, actor):
         prepared_profile_revision = stored_outlook.get("profile_revision")
         profile_matches = prepared_profile_revision == current_profile.get("revision") if prepared_profile_revision is not None else None
         calendar_matches = prepared_calendar == calendar if isinstance(prepared_calendar, dict) else None
+        calendar_plan = current_calendar_plan(current_profile.get("profile"), events,
+            prepared_entry=(stored_outlook.get("periodization") or {}).get("entry_basis")
+                if profile_matches and calendar_matches else None)
         if access.get("can_view_recovery") is not True:
             prepared = project_management(prepared, "overview")
         result = compact_management(prepared, "overview")
         if result.get("availability") in {"PENDING", "UNAVAILABLE"}:
             result = {"prepared_availability": result["availability"], "prepared_reason": result.get("reason")}
         result.update(profile=_profile(project_profile(current_profile)), profile_basis="CURRENT_SAVED_INPUTS",
+            current_calendar_plan=calendar_plan,
             current_calendar={"revision": calendar_snapshot.get("revision"),
                 "main_races": _events([event for event in ordered_events if event.get("event_type") == "MAIN_RACE"]),
                 "next_main_race": _events([next_main])["events"][0] if next_main else None,
@@ -275,7 +279,7 @@ def _management(repository, alias, access, query, today, parse_date, actor):
                 continue
             result[name] = {**_pick(plan, {"start_date", "end_date", "generated_at", "fingerprint", "engine_version"}),
                 "input_snapshot": _pick(plan.get("input_snapshot"), SNAPSHOT_FIELDS),
-                "is_approved": name == "plan", "days": []}
+                "plan_role": "CURRENT" if name == "plan" else "CANDIDATE", "days": []}
             for day in plan.get("days", []):
                 if not isinstance(day, dict):
                     continue
@@ -283,7 +287,7 @@ def _management(repository, alias, access, query, today, parse_date, actor):
                     _pick(_session(session, f"{day.get('date')}:{index + 1}", access),
                         {"session_id", "method_id", "title", "sport", "zone", "purpose", "total_minutes", "main_work_minutes", "double_threshold"})
                     for index, session in enumerate(day_sessions(day)) if isinstance(session, dict)]})
-        result["detail_query"] = "Use day with the selected date for full approved session blocks and execution guidance. proposal is not an approved prescription."
+        result["detail_query"] = "Use day with the selected date for full current session blocks and execution guidance. A remaining candidate is a computed alternative, not the current published plan; generation and refresh publish eligible results automatically."
         return result
     prepared_kind = "management-view" if view == "overview" else f"management-{view}"
     parameters = {"view": "overview", "projection": "overview-v1"} if view == "overview" else {}

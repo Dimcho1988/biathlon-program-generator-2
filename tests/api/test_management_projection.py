@@ -92,3 +92,19 @@ def test_every_management_http_transport_projects_private_learning(monkeypatch, 
     assert response.status_code == 200, response.text
     assert "SECRET" not in response.text
     assert "SECRET" in json.dumps(payload)
+
+
+def test_legacy_coach_approval_reminder_is_hidden_without_hiding_algorithm_blocks():
+    from copy import deepcopy
+    source = {'plan': {'warnings': [
+        {'code': 'DRAFT_REQUIRES_COACH_REVIEW', 'message': 'Проект за треньорски преглед; не е активирана програма.'},
+        {'code': 'READINESS_UNAVAILABLE', 'message': 'Липсват данни за разчета.'},
+    ]}, 'proposal': {'activation_eligible': False, 'warnings': [
+        {'code': 'DRAFT_REQUIRES_COACH_REVIEW'}, {'code': 'ILLNESS_HOLD'},
+    ]}}
+    original = deepcopy(source)
+    result = public_management(source)
+    assert [warning['code'] for warning in result['plan']['warnings']] == ['READINESS_UNAVAILABLE']
+    assert [warning['code'] for warning in result['proposal']['warnings']] == ['ILLNESS_HOLD']
+    assert result['proposal']['activation_eligible'] is False
+    assert source == original

@@ -37,7 +37,7 @@ router = APIRouter()
 
 
 def _active_response(value, check=None):
-    result = {**value, "capabilities": {"unchanged_checks": True}}
+    result = {**value, "capabilities": {"unchanged_checks": True, "automatic_publication": True}}
     if check is not None:
         result["action_result"] = {"operation": "CHECK_NO_CHANGE", "check_id": check["check_id"],
             "checked_revision": check["checked_revision"], "recorded_at": check["recorded_at"]}
@@ -140,7 +140,8 @@ def management_view(
             sync = None
         with timed_stage("projection"):
             result = {"profile": profile, "drafts": drafts, "outlook": outlook, "sync": sync}
-            result.update({"schema_version": "management-overview-v1", "overview_active": active} if compact else {"active": _with_preparation(repository, alias, _active_response(active))})
+            result.update({"schema_version": "management-overview-v1", "overview_active": active,
+                           "capabilities": {"automatic_publication": True}} if compact else {"active": _with_preparation(repository, alias, _active_response(active))})
             return public_management(result)
     except (ComponentCapacityUnavailable, ComponentLoadRefreshRequired) as exc:
         raise HTTPException(409, exc.user_message) from exc

@@ -12,6 +12,7 @@ export interface QComparisonPeriod {
   forecastDates: string[]; programmeDates: string[]; missingDates: string[];
 }
 export interface QComparisonOptions {
+  automaticPublication?: boolean;
   planKind?: "DRAFT" | "APPROVED"; qExecution?: QExecution | null; outcomes?: PlanOutcome[]; today?: string;
   selectedWeek?: string; onWeekChange?: (start: string) => void;
 }

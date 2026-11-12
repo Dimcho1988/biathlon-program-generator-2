@@ -12,7 +12,7 @@ def start(repository, stopping):
         return None
 
     def run():
-        next_automatic, next_dashboard, next_learning = 0., 0., 0.
+        next_automatic, next_dashboard, next_learning, next_view = 0., 0., 0., 0.
         while not stopping.is_set():
             try:
                 worked = processor()
@@ -44,9 +44,12 @@ def start(repository, stopping):
                 except Exception as exc:
                     logger.warning('learning_tick_deferred error_type=%s', type(exc).__name__)
             viewer = getattr(repository, 'process_next_prepared_view', None)
-            if not stopping.is_set() and not worked and callable(viewer):
+            if not stopping.is_set() and callable(viewer) and (not worked or monotonic() >= next_view):
+                # A busy generation queue must not starve the pages needed to
+                # read its results. One bounded view shares the same model lane.
+                next_view = monotonic()+15.
                 try:
-                    worked = viewer()
+                    worked = bool(viewer()) or worked
                 except Exception as exc:
                     logger.warning('prepared_view_tick_deferred error_type=%s', type(exc).__name__)
             stopping.wait(0.1 if worked else 3.)

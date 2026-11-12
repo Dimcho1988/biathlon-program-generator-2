@@ -1,12 +1,20 @@
 import type { ActivePlanRecord, ManagementProfileResponse } from "../lib/training-management";
 import { proposalHasIncompleteLoad, proposedWeekMode, savedWeekMode, WEEK_MODE_LABEL } from "../lib/week-mode";
 
-export function WeekModeStatus({ record, profile }: { record: ActivePlanRecord; profile?: ManagementProfileResponse }) {
+export function WeekModeStatus({ record, profile, automaticPublication = false }: { record: ActivePlanRecord; profile?: ManagementProfileResponse; automaticPublication?: boolean }) {
   const p = record.payload;
   const saved = savedWeekMode(record, profile);
   const proposed = proposedWeekMode(record);
   const pending = saved !== undefined && saved !== p.mode;
   const obsolete = proposed !== undefined && saved !== undefined && proposed !== saved;
+  if (automaticPublication) return <div aria-label="Режим на седмицата">
+    <dl className="management-week-modes"><div><dt>Режим на програмата</dt><dd>{WEEK_MODE_LABEL[p.mode]}</dd></div>
+      {pending && <div><dt>Записан избор в профила</dt><dd>{WEEK_MODE_LABEL[saved!]} · обновяването предстои</dd></div>}
+    </dl>
+    <p>{p.status === "PAUSED" ? "Програмата е на пауза. Продължи я, когато си готов." : p.status === "COMPLETED" ? "Периодът на тази програма е завършен."
+      : "Готовите промени се прилагат автоматично след проверка по правилата на алгоритъма. Можеш да предложиш корекция чрез асистента или профила за планиране."}</p>
+    {(pending || record.stale || p.status === "REVIEW_REQUIRED") && <p role="status">Последният запазен график остава видим. {proposalHasIncompleteLoad(p.proposal) ? "Новият вариант изисква изясняване на липсващите тренировъчни данни." : "Обновяването използва текущите настройки и наличните данни."}</p>}
+  </div>;
   const behavior = p.status === "PAUSED" ? "Програмата е на пауза. Автоматични промени не се прилагат."
     : p.status === "COMPLETED" ? "Периодът на тази програма е завършен."
     : record.stale || p.status === "REVIEW_REQUIRED" || pending ? "Утвърденият график е запазен. Промените изискват актуална проверка и преглед преди прилагане."

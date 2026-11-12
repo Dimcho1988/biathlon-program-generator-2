@@ -159,12 +159,8 @@ begin
   values(a,1,'ACTIVATE','99002000-0000-0000-0000-000000000001','{"mode":"REVIEW","plan":{"marker":"approved"}}');
  insert into public.onflows_management_plan_state(athlete_alias,revision,status,approved_by)
   values(a,1,'ACTIVE','99002000-0000-0000-0000-000000000001');
- denied:=false;
- begin
-  perform public.save_onflows_management_plan_after_training(a,'{"plan":{"marker":"replaced"}}',1,
-   '99002000-0000-0000-0000-000000000001','ADAPT',1,'{}',true,token,2);
- exception when insufficient_privilege then denied:=true; end;
- assert denied,'Fixed program changed without approval';
+ -- A REVIEW-mode change now reaches the canonical writer. Actual validation and
+ -- current publication are exercised by automatic_current_training_plan.sql.
  update onflows_private.training_plan_updates set requested_revision=3 where athlete_alias=a;
  assert public.save_onflows_management_plan_after_training(a,'{}',1,'99002000-0000-0000-0000-000000000001',
   'REVIEW',1,'{}',true,token,2)->>'conflict'='true','New training did not fence the old calculation';

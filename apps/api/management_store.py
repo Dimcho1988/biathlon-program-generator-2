@@ -2,7 +2,7 @@
 
 Only the trusted API calls this store. The SQL RPC independently checks the
 actor's planning access and rejects inputs changed during draft generation.
-There is deliberately no activation, calendar publication or update operation.
+Generated programs and their current pointer are saved in one checked transaction.
 """
 from __future__ import annotations
 
@@ -197,6 +197,34 @@ class ManagementStore:
 
     def save_profile(self, alias, payload, expected_revision, actor):
         return self._save(alias, "PROFILE", PROFILE_KEY, payload, expected_revision, actor)
+
+    def save_generated_plan(self, alias, prepared, actor, expected_profile_revision, expected_revision=0):
+        from .plan_storage import pack, unpack
+        import httpx
+        draft = prepared["draft"]
+        publication = prepared.get("publication")
+        try:
+            response = self.repository._request("POST", "/rpc/save_onflows_generated_plan", json={
+                "p_alias": alias, "p_draft": pack(draft),
+                "p_expected_draft_revision": expected_revision, "p_actor": str(actor),
+                "p_expected_profile_revision": expected_profile_revision,
+                "p_publication": ({**publication, "payload": pack(publication["payload"])}
+                                  if publication is not None else None),
+            }, timeout=httpx.Timeout(35.0, connect=5.0))
+            result = unpack(self.repository._json(response))
+        except HistoricalGenerationReferenceConflict as exc:
+            raise HTTPException(409, "Planning inputs changed during generation; try again") from exc
+        if isinstance(result, dict) and result.get("conflict"):
+            raise HTTPException(409, "The program or its inputs changed during generation; try again")
+        if (not isinstance(result, dict) or result.get("saved") is not True
+                or type(result.get("revision")) is not int or result["revision"] != expected_revision + 1
+                or result.get("entry_key") != draft.get("start_date")
+                or not isinstance(result.get("payload"), dict)
+                or not isinstance(result.get("recorded_at"), str)
+                or (publication is not None and (type(result.get("active_revision")) is not int
+                    or result["active_revision"] != publication["expected_revision"] + 1))):
+            raise PersistentStoreFailure("Invalid generated program publication")
+        return result
 
     def save_draft(self, alias, payload, actor, expected_profile_revision, expected_revision=0, *,
                    expected_generation_id=None, check_generation=False, expected_responses=None):

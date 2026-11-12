@@ -75,6 +75,13 @@ async function sessionMarkup(initialActive: ActivePlanResponse, initialOverviewA
 }
 
 describe("compact management overview contract", () => {
+  it("retains the saved-snapshot notice and automatic publication capability", () => {
+    const preparation={status:"UPDATING",prepared_at:"2026-09-20T22:00:00Z",evaluated_on:"2026-09-20",reason:"DAY_CHANGED"};
+    const parsed=parseManagementView({schema_version:"management-overview-v1",profile,overview_active:compactActive(activeResponse("ACTIVE")),
+      drafts:{drafts:[]},outlook:{configured:true,outlook},sync:null,preparation,capabilities:{automatic_publication:true}});
+    expect(parsed.preparation).toEqual(preparation);
+    expect(parsed.active.capabilities?.automatic_publication).toBe(true);
+  });
   it("parses only the compact read model without pretending it is an executable plan", () => {
     const compact = compactActive(activeResponse("REVIEW_REQUIRED", true));
     const parsed = parseManagementView({ schema_version: "management-overview-v1", profile, overview_active: compact,
@@ -147,8 +154,8 @@ describe("full and compact overview rendering parity", () => {
     expect(projected).toContain(stale ? "2026-08-24" : "2026-08-17");
     expect(projected).not.toContain(stale ? "2026-08-17" : "2026-08-24");
     if (stale) expect(projected).toContain("Няма актуални съставени сесии");
-    else if (proposal) expect(projected).toContain("Има отделно предложение за промяна");
-    else if (status === "ACTIVE") expect(projected).toContain("текущата утвърдена програма");
+    else if (proposal) expect(projected).toContain("Има отделен вариант, който още не е приложен");
+    else if (status === "ACTIVE") expect(projected).toContain("текущата програма");
     else expect(projected).toContain("запазена програма, която в момента не е активна");
   });
 

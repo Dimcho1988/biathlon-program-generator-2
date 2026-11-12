@@ -25,6 +25,7 @@ from .oauth_store import PersistentStoreFailure
 
 VERSION = "prepared-pages-v1"
 PREPARING = "Данните се подготвят във фонов режим. Показването се обновява автоматично."
+SAVED_MANAGEMENT_VIEWS = frozenset({"management-view", "management-active"})
 _worker_repository = ContextVar("prepared_view_worker_repository", default=None)
 _registry = {}
 logger = logging.getLogger(__name__)
@@ -55,7 +56,9 @@ def read(repository, alias, kind, parameters=None):
             parameters=parameters or {}, model_key=model_key())
         if isinstance(state, dict) and state.get("limited") is True:
             raise HTTPException(429, "Подготвят се много изгледи. Опитай отново след малко.", headers={"Retry-After":"15"})
-        if not isinstance(state, dict) or state.get("ready") is not True:
+        saved = (isinstance(state, dict) and state.get("saved") is True
+                 and kind in SAVED_MANAGEMENT_VIEWS)
+        if not isinstance(state, dict) or (state.get("ready") is not True and not saved):
             raise pending()
         if state.get("athlete_alias") != alias or state.get("kind") != kind:
             raise ValueError("Prepared view scope differs")
@@ -65,10 +68,38 @@ def read(repository, alias, kind, parameters=None):
         payload = prepared_view_storage.unpack(payload)
         error = payload.get("prepared_error")
         if isinstance(error, dict):
+            # An older failure is not a usable saved program. Keep the worker
+            # refresh visible rather than presenting that failure as current.
+            if saved:
+                raise pending()
             status = error.get("status")
             if type(status) is not int or not 400 <= status < 500:
                 raise ValueError("Invalid prepared view error")
             raise HTTPException(status, error.get("detail", "Данните изискват преглед."))
+        if kind in SAVED_MANAGEMENT_VIEWS:
+            from .management_projection import public_management
+            # Apply today's presentation policy even to ready cached pages. Their
+            # immutable scientific evidence stays in storage; obsolete workflow
+            # hints must not resurrect approval controls during a refresh.
+            payload = public_management(payload)
+            if kind == "management-active":
+                payload["capabilities"] = {**(payload.get("capabilities") or {}), "automatic_publication": True}
+            elif isinstance(payload.get("active"), dict):
+                active = payload["active"]
+                active["capabilities"] = {**(active.get("capabilities") or {}), "automatic_publication": True}
+            elif payload.get("schema_version") == "management-overview-v1":
+                payload["capabilities"] = {**(payload.get("capabilities") or {}), "automatic_publication": True}
+        if saved:
+            preparation = state.get("preparation")
+            if (not isinstance(preparation, dict) or preparation.get("status") != "UPDATING"
+                    or preparation.get("reason") not in {"INPUTS_CHANGED", "DAY_CHANGED", "MODEL_CHANGED", "PREPARATION_PENDING"}
+                    or not isinstance(preparation.get("prepared_at"), str)
+                    or not isinstance(preparation.get("evaluated_on"), str)):
+                raise ValueError("Invalid saved preparation state")
+            # This is the previous immutable page, not a new prediction. Its
+            # freshness is carried to every consumer, including the assistant.
+            payload["preparation"] = {key: preparation[key] for key in
+                                      ("status", "prepared_at", "evaluated_on", "reason")}
         return payload
     except (PersistentStoreFailure, TypeError, ValueError) as exc:
         logger.warning("prepared_view state=read_deferred error_type=%s", type(exc).__name__)

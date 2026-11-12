@@ -109,7 +109,7 @@ class PlanStore:
         index = next((i for i, day in enumerate(dates) if day.get("date") == selected.isoformat()), None)
         metadata = ("generation_id", "analysis_revision", "analysis_as_of", "settings_fingerprint",
                     "snapshot_fingerprint", "evaluation_date", "profile_revision", "engine_version", "speed_model_version")
-        fields = ["revision", "recorded_at", "status:payload->status"]
+        fields = ["revision", "recorded_at", "status:payload->status", "reason:payload->reason"]
         fields.extend(f"plan_{name}:payload->plan->{name}" for name in
                       ("schema_version", "_storage", "engine_version", "fingerprint", "generated_at", "start_date", "end_date"))
         for name in metadata:
@@ -140,7 +140,7 @@ class PlanStore:
                 raise PersistentStoreFailure("Pinned assistant plan day differs")
             plan["days"] = [day] if index is not None else []
         return unpack({"revision": row["revision"], "recorded_at": row.get("recorded_at"), "payload": {
-            "status": row.get("status"), "plan": plan,
+            "status": row.get("status"), "reason": row.get("reason"), "plan": plan,
             "proposal": {} if overview["has_proposal"] else None}})
 
     def history(self, alias):

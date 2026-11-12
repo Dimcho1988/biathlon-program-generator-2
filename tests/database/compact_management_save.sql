@@ -87,12 +87,8 @@ begin
    perform public.save_onflows_management_plan_compact(athlete,review_payload,2,outsider,'REVIEW',1,checkpoint);
  exception when insufficient_privilege then denied := true; end;
  assert denied, 'Unauthorized actor used the compact wrapper';
- denied := false;
- begin
-   perform public.save_onflows_management_plan_compact(athlete,
-     jsonb_set(review_payload,'{approved_settings_fingerprint}','"changed-rules"'),2,actor,'REVIEW',1,checkpoint,true);
- exception when insufficient_privilege then denied := true; end;
- assert denied, 'Automatic compact publication changed approved rules';
+ -- Saved profile/rule changes now publish automatically after the same input checks.
+ -- The generated-current contract covers the positive adaptation case.
  denied := false;
  begin
    perform public.save_onflows_management_plan_compact(athlete,

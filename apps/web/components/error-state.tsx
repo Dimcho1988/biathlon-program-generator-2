@@ -16,7 +16,9 @@ export function ErrorState({ message, integrationActions = false, connectAvailab
   notice?: string;
 }) {
   if (message === PREPARED_VIEW_MESSAGE) return <main className="state-page" role="status">
-    <h1>Подготвяме данните</h1><p className="muted">{message}</p><PreparedViewRetry/>
+    <h1>Подготвяме данните</h1><p className="muted">{message}</p>
+    <p className="state-help">Можеш да продължиш в друг раздел. Не е необходимо да стоиш на този екран.</p><PreparedViewRetry/>
+    {retryHref.startsWith("/management") && <div className="integration-actions"><Link className="text-action" href="/assistant">Към асистента</Link><Link className="text-action" href="/planning">Цели и настройки</Link></div>}
   </main>;
   const apiWakeTimedOut = message === "API услугата не се събуди навреме.";
   const apiRateLimited = message === API_RATE_LIMIT_MESSAGE;

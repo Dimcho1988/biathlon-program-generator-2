@@ -66,7 +66,7 @@ def test_two_exact_sessions_are_read_from_approved_revision_in_athlete_timezone(
     assert result["timezone"] == "Europe/Sofia" and result["plan_revision"] == 7
     assert [s["total_minutes"] for s in result["sessions"]] == [21, 22]
     assert [s["session_id"] for s in result["sessions"]] == ["2026-11-11:1", "2026-11-11:2"]
-    assert result["proposal_available"] and result["prescription_active"]
+    assert result["proposal_available"] and result["prescription_active"] is False
     assert "Неприето предложение" not in json.dumps(result, ensure_ascii=False)
     repository.active_analysis.assert_not_called()
     repository._request.assert_not_called()
@@ -126,12 +126,12 @@ def test_plan_only_access_is_rejected_before_loading_private_records(repository,
 def test_no_approved_plan_never_invents_a_workout(repository):
     repository.plan_read.side_effect = lambda _: None
     result = context.read(repository, ALIAS, FULL, {"kind": "day"}, now=NOW)
-    assert result["availability"] == "UNAVAILABLE" and result["reason"] == "NO_APPROVED_PLAN" and result["sessions"] == []
+    assert result["availability"] == "UNAVAILABLE" and result["reason"] == "NO_SAVED_PLAN" and result["sessions"] == []
 
 
 def test_missing_date_does_not_mean_rest(repository):
     result = context.read(repository, ALIAS, FULL, {"kind": "day", "date": "2026-11-12"}, now=NOW)
-    assert result["reason"] == "DATE_NOT_IN_APPROVED_PLAN" and result["sessions"] == []
+    assert result["reason"] == "DATE_NOT_IN_SAVED_PLAN" and result["sessions"] == []
     assert result.get("day_status") != "REST"
 
 
@@ -491,7 +491,7 @@ def test_management_week_distinguishes_proposal_from_approved_plan(repository):
     result = context.read(repository, ALIAS, PLAN, {"kind": "management", "view": "week"}, now=NOW)
     data = result["data"]
     assert data["revision"] == 7 and data["plan_status"] == "REVIEW_REQUIRED"
-    assert data["plan"]["is_approved"] is True and data["proposal"]["is_approved"] is False
+    assert data["plan"]["plan_role"] == "CURRENT" and data["proposal"]["plan_role"] == "CANDIDATE"
     assert data["proposal"]["days"][0]["sessions"][0]["title"] == "Неприето предложение"
     assert "dose_evidence" not in json.dumps(data) and "private detail" not in json.dumps(data)
 
@@ -854,3 +854,16 @@ def test_sync_state_read_applies_same_permissions_as_app_without_requiring_plan_
         assert error.value.status_code == 403
         reader.assert_not_called()
         repository.athlete_settings.assert_not_called()
+
+
+@pytest.mark.parametrize('status,active', [('ACTIVE', True), ('REVIEW_REQUIRED', False), ('PAUSED', False), ('COMPLETED', False)])
+def test_saved_day_stays_readable_while_current_execution_status_is_truthful(repository, status, active):
+    saved = plan()
+    saved['payload']['status'] = status
+    saved['payload']['reason'] = 'Изчаква се актуална оценка на възстановяването.'
+    repository.plan_read.side_effect = lambda _: saved
+    result = context.read(repository, ALIAS, FULL, {'kind': 'day'}, now=NOW)
+    assert result['availability'] == 'AVAILABLE' and len(result['sessions']) == 2
+    assert result['prescription_active'] is active
+    assert result['plan_status_detail'] == saved['payload']['reason']
+    assert result['kind'] == 'SAVED_PLAN'

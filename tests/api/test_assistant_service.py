@@ -1073,7 +1073,7 @@ def test_activation_preview_selects_exact_draft_revision():
 
 def test_queued_plan_refresh_receipt_does_not_claim_ready_or_approved_program():
     text=service._receipt_message({"status":"SAVED","kind":"PLAN_ACTION","queued":True,"refresh_state":"QUEUED"})
-    assert "подготвя във фонов режим" in text and "остава активна" in text
+    assert "подготвя във фонов режим" in text and "остава достъпна" in text
     assert "е утвърдено" not in text and "Входът е записан" not in text
 
 
@@ -1411,3 +1411,139 @@ def test_context_recovery_rechecks_permissions_before_read_synthesis(repo):
     with pytest.raises(HTTPException) as error:
         service.turn(repo,ALIAS,ACTOR,body("Обясни подготовката"),provider)
     assert error.value.status_code==403 and provider.calls==2 and not repo.writes
+
+
+@pytest.mark.parametrize('kind,message,patch,payload', [
+    ('PLAN_ACTION', 'Обнови програмата.', {'action': 'REFRESH'}, {}),
+    ('PLAN_ACTION', 'Спри програмата.', {'action': 'PAUSE'}, {}),
+    ('PLAN_ACTION', 'Възобнови програмата.', {'action': 'RESUME'}, {}),
+    ('PLAN_DAY', 'Направи утре почивка.', {'action': 'REST', 'date': '2026-11-12'}, {}),
+    ('PLAN_DAY', 'Пропусни тренировката на 12 ноември.', {'action': 'SKIP', 'date': '2026-11-12'}, {}),
+    ('PLAN_GENERATE', 'Генерирай програмата от утре.', {'start_date': '2026-11-12'},
+        {'start_date': '2026-11-12', 'expected_profile_revision': 3, 'expected_draft_revision': 0}),
+    ('MANAGEMENT_PROFILE', 'Промени праговата работа на интервали в профила.',
+        {'planning_controls': {'threshold_method': 'INTERVALS'}}, {}),
+])
+def test_explicit_reversible_planning_requests_do_not_require_second_approval(repo, kind, message, patch, payload):
+    key = '2026-11-12' if kind == 'PLAN_GENERATE' else 'management-profile-v1' if kind == 'MANAGEMENT_PROFILE' else 'active-plan'
+    repo.read_result = {'query_kind': 'inputs', 'kind': kind, 'entry_key': key, 'revision': 3, 'today': DAY, 'payload': payload}
+    provider = ScriptedAssistantProvider([
+        {'text': '', 'query': query('inputs', input_kind=kind, key=key)},
+        {'text': '', 'command': command(kind, key=key, revision=3, patch=patch)},
+    ])
+    result = service.turn(repo, ALIAS, ACTOR, body(message), provider)
+    assert len(repo.writes) == 1
+    assert result['receipt']['status'] == 'SAVED'
+    assert not repo.conversations[result['conversation_id']]['state'].get('pending_command')
+    assert 'приемане на ново предложение' not in result['message']
+
+
+@pytest.mark.parametrize('message', ['Какво ще стане, ако направя утре почивка?', 'Не променяй тренировката утре.'])
+def test_planning_question_or_negation_does_not_authorize_a_plan_change(repo, message):
+    repo.read_result = {'query_kind': 'inputs', 'kind': 'PLAN_DAY', 'entry_key': 'active-plan', 'revision': 3,
+        'today': DAY, 'payload': {}}
+    provider = ScriptedAssistantProvider([
+        {'text': '', 'query': query('inputs', input_kind='PLAN_DAY', key='active-plan')},
+        {'text': '', 'command': command('PLAN_DAY', key='active-plan', revision=3, patch={'action': 'REST', 'date': '2026-11-12'})},
+    ])
+    result = service.turn(repo, ALIAS, ACTOR, body(message), provider)
+    assert not repo.writes and result['error_code'] == 422
+
+
+def test_plan_day_direct_execution_cannot_silently_change_the_requested_date():
+    change = {'kind': 'PLAN_DAY', 'patch': {'action': 'REST', 'date': '2026-11-13'}}
+    assert not service._direct_request(change, {'today': DAY}, None, 'Направи утре почивка.')
+
+
+def test_catalog_form_preference_runs_through_current_input_command_without_second_approval(repo):
+    card = {'id': 'R04', 'title': 'Прагова интервална работа',
+        'prescription': {'work': {'unit': 'seconds'}, 'repetitions': [2, 6]}}
+    def read(requested):
+        if requested['kind'] == 'methods':
+            return {'query_kind': 'methods', 'today': DAY, 'data': {'method': card}}
+        return {'query_kind': 'inputs', 'kind': 'MANAGEMENT_PROFILE', 'entry_key': 'management-profile-v1',
+            'revision': 3, 'today': DAY, 'payload': {}}
+    repo.read_result = read
+    patch = {'method_library': {'overrides': {'R04': {'work_range': [120, 120], 'repetitions': [6, 6]}}}}
+    result = service.turn(repo, ALIAS, ACTOR, body('Промени в профила метода Прагова интервална работа на 6 отсечки по 2 минути.'),
+        ScriptedAssistantProvider([
+            {'text': '', 'query': query('methods', method_id='R04')},
+            {'text': '', 'query': query('inputs', input_kind='MANAGEMENT_PROFILE', key='management-profile-v1')},
+            {'text': '', 'command': command('MANAGEMENT_PROFILE', key='management-profile-v1', revision=3, patch=patch)},
+        ]))
+    assert len(repo.writes) == 1 and repo.writes[0]['patch'] == patch
+    assert result['receipt']['status'] == 'SAVED'
+    assert 'прилага автоматично' in result['message']
+
+
+@pytest.mark.parametrize('message,card,controls', [
+    ('Промени днешната тренировка на 6 отсечки.', {'id': 'R04', 'title': 'Прагова работа'}, {'repetitions': [6, 6]}),
+    ('Промени в профила Прагова работа на 6 отсечки.', {'id': 'R05', 'title': 'Друг метод'}, {'repetitions': [6, 6]}),
+    ('Промени в профила Прагова работа на 6 отсечки.', {'id': 'R04', 'title': 'Прагова работа'}, {'repetitions': [8, 8]}),
+    ('Промени в профила Прагова работа на 6 отсечки.', {'id': 'R04', 'title': 'Прагова работа'}, {'total_capacity_ratio': 2}),
+])
+def test_method_preference_cannot_expand_scope_change_values_or_modify_scientific_coefficients(message, card, controls):
+    assert not service._direct_method_preferences({'overrides': {'R04': controls}}, {'catalog_methods': [card]}, message)
+
+
+def test_request_for_more_intervals_reaches_model_instead_of_hardcoded_refusal(repo):
+    provider = ScriptedAssistantProvider([{'text': 'Промяната само за тази тренировка ли е, или предпочитание за метода в профила?'}])
+    result = service.turn(repo, ALIAS, ACTOR, body('Добави още интервали.'), provider)
+    assert len(provider.calls) == 1 and 'само за тази тренировка' in result['message']
+    assert not repo.writes
+
+
+def test_catalog_discovery_and_detail_reads_can_finish_authorized_write_on_fourth_call(repo):
+    card = {'id': 'R04', 'title': 'Прагова интервална работа',
+        'prescription': {'work': {'unit': 'seconds'}, 'repetitions': [2, 6]}}
+    def read(requested):
+        if requested['kind'] == 'methods':
+            return {'query_kind': 'methods', 'today': DAY,
+                'data': {'method': card} if requested.get('method_id') else {'methods': [{'id': 'R04', 'title': card['title']}]}}
+        return {'query_kind': 'inputs', 'kind': 'MANAGEMENT_PROFILE', 'entry_key': 'management-profile-v1',
+            'revision': 3, 'today': DAY, 'payload': {}}
+    repo.read_result = read
+    patch = {'method_library': {'overrides': {'R04': {'repetitions': [6, 6]}}}}
+    provider = ScriptedAssistantProvider([
+        {'text': '', 'query': query('methods')},
+        {'text': '', 'query': query('methods', method_id='R04')},
+        {'text': '', 'query': query('inputs', input_kind='MANAGEMENT_PROFILE', key='management-profile-v1')},
+        {'text': '', 'command': command('MANAGEMENT_PROFILE', key='management-profile-v1', revision=3, patch=patch)},
+    ])
+    result = service.turn(repo, ALIAS, ACTOR, body('Промени в профила Прагова интервална работа на 6 отсечки.'), provider)
+    assert len(provider.calls) == 4 and len(repo.reads) == 3 and len(repo.writes) == 1
+    assert provider.calls[-1]['context']['final_command_allowed'] is True
+    assert provider.calls[-1]['context']['final_answer_only'] is False
+    assert provider.calls[-1]['capabilities']['read'] == []
+    assert provider.calls[-1]['capabilities']['write'] == ['MANAGEMENT_PROFILE']
+    assert result['receipt']['status'] == 'SAVED'
+
+
+def test_final_write_call_cannot_bypass_missing_current_input_revision(repo):
+    repo.read_result = {'query_kind': 'methods', 'data': {'methods': []}}
+    provider = ScriptedAssistantProvider([
+        {'text': '', 'query': query('methods')}, {'text': '', 'query': query('management', view='profile')},
+        {'text': '', 'query': query('management', view='week')},
+        {'text': '', 'command': command('MANAGEMENT_PROFILE', key='management-profile-v1', revision=3,
+            patch={'planning_controls': {'threshold_method': 'INTERVALS'}})},
+    ])
+    service.turn(repo, ALIAS, ACTOR, body('Промени праговата работа на интервали в профила.'), provider)
+    assert not repo.writes
+    assert provider.calls[-1]['context']['final_answer_only'] is True
+
+
+@pytest.mark.parametrize('job,published', [
+    ({'status': 'SUCCEEDED', 'published': True, 'result_active_revision': 12}, True),
+    ({'status': 'SUCCEEDED', 'published': False, 'result_active_revision': None}, False),
+    ({'status': 'SUCCEEDED'}, False),
+])
+def test_generation_receipt_claims_current_programme_only_for_confirmed_publication(job, published):
+    text = service._receipt_message({'status': 'SAVED', 'kind': 'PLAN_GENERATE', 'job': job})
+    assert ('вече е текущата програма' in text) is published
+    assert ('не е приложена' in text) is not published
+
+
+def test_new_plan_date_clarification_does_not_authorize_the_old_date():
+    text = 'Направи 12 ноември почивка.\nПромени датата на 13 ноември.'
+    assert not service._requested_plan_date('2026-11-12', text, DAY)
+    assert service._requested_plan_date('2026-11-13', text, DAY)

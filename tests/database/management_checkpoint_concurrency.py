@@ -23,7 +23,7 @@ def state(case):
                              + literal(case.a) + ";")
 
 
-def publication(case, frozen, *, operation="ADAPT", revision=1, variant="full"):
+def publication(case, frozen, *, operation="ADAPT", revision=1, variant="full", training=None):
     args = (literal(case.a) + "," + str(revision) + "," + literal(case.fixture["actor"])
             + "::uuid,1," + literal(json.dumps(frozen)) + "::jsonb,")
     if variant == "check":
@@ -35,10 +35,15 @@ def publication(case, frozen, *, operation="ADAPT", revision=1, variant="full"):
                         "input_snapshot": {"generation_id": frozen["generation_id"],
                                            "analysis_revision": frozen["analysis_revision"]}}}
     function = "save_onflows_management_plan_compact" if variant == "compact" else "save_onflows_management_plan"
+    suffix = ",false"
+    if training is not None:
+        token, training_revision = training
+        function = "save_onflows_management_plan_after_training"
+        suffix = ",true," + literal(token) + "::uuid," + str(training_revision)
     return ("select public." + function + "(" + literal(case.a) + ",(" + literal(json.dumps(payload))
             + "::jsonb || jsonb_build_object('evaluated_on',(clock_timestamp() at time zone 'UTC')::date::text)),"
             + str(revision) + "," + literal(case.fixture["actor"]) + "::uuid," + literal(operation)
-            + ",1," + literal(json.dumps(frozen)) + "::jsonb,false);")
+            + ",1," + literal(json.dumps(frozen)) + "::jsonb" + suffix + ");")
 
 
 def as_service(sql):
@@ -146,6 +151,57 @@ def publication_first(dsn, kind):
         case.close()
 
 
+def input_before_training_publication(dsn, kind):
+    case = Case(dsn, "training-input-first-" + kind)
+    try:
+        frozen = initialize(case)
+        original_state = state(case)
+        token = str(uuid.uuid4())
+        # Seed one synthetic background event, then claim its real worker lease.
+        case.control.run(
+            "insert into onflows_private.training_plan_updates(athlete_alias,generation_id) values("
+            + literal(case.a) + "," + literal(frozen["generation_id"]) + "::uuid) "
+            "on conflict(athlete_alias) do update set "
+            "requested_revision=onflows_private.training_plan_updates.requested_revision+1,"
+            "available_at=clock_timestamp(),attempts=0,lease_token=null,lease_until=null;")
+        claim = case.control.json(as_service(
+            "select public.onflows_training_plan_update('CLAIM'," + literal(case.a)
+            + "," + literal(token) + "::uuid);"))
+        assert claim and claim["actor_id"] == case.fixture["actor"], claim
+        writer, publisher = case.session("input-writer"), case.session("publisher")
+        if kind == "settings":
+            source_lock = ("select 1 from public.onflows_athlete_settings where athlete_alias="
+                           + literal(case.a) + " for update;")
+        else:
+            assert kind == "model"
+            source_lock = "lock table public.onflows_model_entries in row exclusive mode;"
+        writer.run("begin; " + source_lock + " set local role service_role;")
+        publisher.start(as_service(publication(case, frozen, training=(token, claim["revision"]))))
+        case.wait_blocked(publisher, writer)
+        # The publisher must wait for this source before taking the event row.
+        # The real input trigger can therefore enqueue while we retain its
+        # source lock. Queue-before-source ordering deadlocks at this mutation.
+        changed = writer.run(mutation(case, kind))
+        if kind == "model":
+            assert len(changed) == 1 and json.loads(changed[0]).get("saved") is True, changed
+        writer.run("commit;")
+        rows = publisher.finish()
+        assert len(rows) == 1 and json.loads(rows[0]) == {"conflict": True}, rows
+        assert state(case) == original_state, "Stale background publication changed the current plan"
+        assert checkpoint(case) != frozen, "The concurrent input edit did not commit"
+        # Releasing the old lease must preserve the newer input event for work.
+        rejected = case.control.json(as_service(
+            "select public.onflows_training_plan_update('REJECT'," + literal(case.a)
+            + "," + literal(token) + "::uuid);"))
+        assert rejected == {"state": "REJECTED"}, rejected
+        next_claim = case.control.json(as_service(
+            "select public.onflows_training_plan_update('CLAIM'," + literal(case.a)
+            + "," + literal(str(uuid.uuid4())) + "::uuid);"))
+        assert next_claim and next_claim["revision"] > claim["revision"], next_claim
+    finally:
+        case.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dsn", type=local_dsn, default=LOCAL_DSN)
@@ -156,6 +212,9 @@ def main():
     tests += [("publication serializes " + kind,
                lambda kind=kind: publication_first(args.dsn, kind))
               for kind in ("settings", "model", "other_model", "profile", "response", "rollback")]
+    tests += [("input trigger precedes training publication for " + kind,
+               lambda kind=kind: input_before_training_publication(args.dsn, kind))
+              for kind in ("settings", "model")]
     for name, test in tests:
         test()
         print("PASS " + name, flush=True)
