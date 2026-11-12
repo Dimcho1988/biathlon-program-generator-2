@@ -209,7 +209,9 @@ def _session(value, identity, access):
 
 
 def _plan_day(repository, alias, access, selected, today):
-    record = PlanStore(repository).current(alias)
+    store = PlanStore(repository)
+    day_reader = getattr(store, "assistant_day", None)
+    record = day_reader(alias, selected) if callable(day_reader) else store.current(alias)
     if record is None:
         return {"availability": "UNAVAILABLE", "reason": "NO_APPROVED_PLAN", "date": selected.isoformat(), "sessions": []}
     payload = record["payload"]
@@ -423,6 +425,11 @@ def read(repository, alias, access, query, now=None, *, actor=None):
     allowed = {"kind", "date", "start", "end", "session_id", "method_id", "input_kind", "key", "entry_key"} | assistant_reads.PARAMETERS
     if any(key not in allowed for key in query):
         raise HTTPException(422, "Неподдържани параметри на справката.")
+    # Strict provider schemas include every optional query field as null. Reads
+    # treat those as omitted so canonical defaults apply (pagination, period,
+    # interval start). This normalization must never touch command patches,
+    # where null is an explicit request to clear a nullable input.
+    query = {key: value for key, value in query.items() if value is not None}
     from .assistant_app_actions import PLAN_KINDS
     if query["kind"] == "navigation":
         if not (access.get("can_view_plan") or access.get("can_view_recovery")):

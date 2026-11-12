@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from math import isfinite
 import json
 import logging
 import os
@@ -741,6 +742,22 @@ def _render_status(context):
     return "\n".join(lines)
 
 
+def _duration_label(value, *, seconds=False):
+    """Render stored durations to the nearest second, not float artifacts."""
+    unit="сек" if seconds else "мин"
+    if type(value) not in {int,float} or not isfinite(value):
+        return str(value)+" "+unit
+    total_seconds=round(value if seconds else value*60)
+    if total_seconds<0:
+        return f"{value:g} {unit}"
+    minutes,remainder=divmod(total_seconds,60)
+    if not remainder:
+        return f"{minutes} мин"
+    if seconds and minutes==0:
+        return f"{remainder} сек"
+    return f"{minutes}:{remainder:02d} мин"
+
+
 def _render_day(context):
     # Also useful during provider outage; do not manufacture a workout.
     if context.get("availability") in {"UNAVAILABLE","PENDING"}:
@@ -753,12 +770,12 @@ def _render_day(context):
         lines.append("Почивка според запазения план." if context.get("day_status") in {"REST","SKIPPED"} else "В запазения ден няма сесии. Това не установява изпълнена почивка.")
     for index,session in enumerate(sessions,1):
         duration=session.get("total_minutes")
-        lines.append(f"\n{index}. {session.get('title') or session.get('method_id') or 'Тренировъчна сесия'}"+(f" · {duration:g} мин" if isinstance(duration,(int,float)) else ""))
+        lines.append(f"\n{index}. {session.get('title') or session.get('method_id') or 'Тренировъчна сесия'}"+(" · "+_duration_label(duration) if isinstance(duration,(int,float)) else ""))
         for block in session.get("blocks",[]):
             title=block.get("label") or block.get("kind") or "Част от тренировката"
             details=[]
-            if block.get("duration_min") is not None: details.append(f"{block['duration_min']} мин")
-            elif block.get("duration_s") is not None: details.append(f"{block['duration_s']} сек")
+            if block.get("duration_min") is not None: details.append(_duration_label(block["duration_min"]))
+            elif block.get("duration_s") is not None: details.append(_duration_label(block["duration_s"],seconds=True))
             if block.get("zone"): details.append(str(block["zone"]))
             if block.get("target_speed_kmh") is not None: details.append(f"{block['target_speed_kmh']} км/ч")
             if block.get("target_hr_bpm") is not None: details.append(f"{block['target_hr_bpm']} уд/мин")
@@ -843,6 +860,7 @@ def turn(repository,alias,actor,body,provider=None):
     result["provider_available"]=_provider_available(provider)
     context=None
     contexts=[]
+    totals=None
     now=datetime.now(timezone.utc)
     state["preferences"]=[p for p in state.get("preferences",[]) if isinstance(p,dict) and isinstance(p.get("expires_at"),str)
         and p["expires_at"]>now.isoformat()]
@@ -938,18 +956,19 @@ def turn(repository,alias,actor,body,provider=None):
             athlete_timezone=settings.timezone if settings else "UTC"
             local_today=datetime.now(timezone.utc).astimezone(ZoneInfo(athlete_timezone)).date().isoformat()
             totals={"model_calls":0,"input_tokens":0,"output_tokens":0,"estimated_cost_usd":0.0}
+            force_synthesis=False
             for step in range(4):
                 timeout=getattr(getattr(provider,"config",None),"timeout_seconds",20)
                 if step and monotonic()-started+timeout+5>90:
                     result["message"]=_resolved_answer(contexts,input_request)
                     break
-                synthesis_only=step==3
+                synthesis_only=force_synthesis or step==3
                 capabilities=_capabilities(_permissions(repository,alias,actor))
                 if synthesis_only:
                     capabilities={**capabilities,"read":[],"write":[]}
                 reply=provider.complete(messages, {"results":contexts,"confirmed_context":state.get("preferences",[]),
-                    "completed_queries":completed_queries,"remaining_model_calls":max(1,3-step),
-                    "final_answer_only":synthesis_only,"read_targets":state.get("read_targets",[]),
+                    "completed_queries":completed_queries,"remaining_model_calls":1 if synthesis_only else max(1,3-step),
+                    "final_answer_only":synthesis_only,"synthesis_reason":"REPEATED_READ" if force_synthesis else "READ_BUDGET" if synthesis_only else None,"read_targets":state.get("read_targets",[]),
                     "pending_change":pending_change if input_request else None,"now":datetime.now(timezone.utc).isoformat(),
                     "active_input_request":input_request,
                     "athlete_timezone":athlete_timezone,"today":local_today,
@@ -970,9 +989,10 @@ def turn(repository,alias,actor,body,provider=None):
                         # cannot consume the whole dialogue or duplicate data.
                         _permissions(repository,alias,actor)
                         context=contexts[query_keys.index(query_key)]
-                        if step==2:
-                            result["message"]=_resolved_answer(contexts,input_request)
-                            break
+                        # One duplicate is enough evidence of a tool loop.
+                        # Reserve the next call for explaining the data already
+                        # read, even when the duplicate was the third call.
+                        force_synthesis=True
                         continue
                     context=_read(repository,alias,actor,requested)
                     contexts.append(context)
@@ -1067,6 +1087,10 @@ def turn(repository,alias,actor,body,provider=None):
             raise
         result["message"]=str(exc.detail)
         result["error_code"]=exc.status_code
+    if totals is not None:
+        # Retain measured usage from completed calls if a later tool/provider
+        # fails; do not invent token counts for an unsuccessful provider call.
+        result["usage"]=totals
     # Final authorization + persisted scope check prevent cached grants leaking
     # data after provider latency. Never invent success on a storage timeout.
     _permissions(repository,alias,actor)

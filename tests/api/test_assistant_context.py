@@ -623,3 +623,57 @@ def test_plan_activate_input_forwards_exact_draft_selector_without_changing_acti
         draft_date="2026-11-01", draft_revision=2)
     assert result["entry_key"] == "active-plan" and result["revision"] == 7
     assert result["preview_summary"]["drafts"] == [{"start_date": "2026-11-01", "draft_revision": 2}]
+
+
+def strict_provider_query(**values):
+    """The real strict reply includes all optional fields, with null defaults."""
+    from apps.api.assistant_provider import _REPLY_TOOL
+    fields = _REPLY_TOOL["parameters"]["properties"]["query"]["properties"]
+    return {**dict.fromkeys(fields), **values}
+
+
+def test_strict_nullable_settings_query_uses_pagination_defaults(repository, monkeypatch):
+    from apps.api.routes import settings
+    canonical = {"configured": True, "hrmax_bpm": 200, "timezone": "Europe/Sofia"}
+    monkeypatch.setattr(settings, "_settings_response", lambda _: SimpleNamespace(model_dump=lambda **_: deepcopy(canonical)))
+    query = strict_provider_query(kind="settings")
+    result = context.read(repository, ALIAS, FULL, query, now=NOW)
+    assert result["data"] == canonical and result["pagination"] == []
+    assert query["offset"] is None and query["limit"] is None  # caller input is not mutated
+
+
+def test_strict_nullable_learning_query_uses_default_days(repository):
+    repository.learning_preparation = Mock()
+    repository.learning_history_view = Mock(return_value={"ready": True, "day": "2026-11-11",
+        "payload": {"athlete_alias": ALIAS, "report": {"schema_version": "recovery-learning-view-v1",
+            "as_of": "2026-11-11", "series": [{"day": "2026-11-11", "stress_index": 0.2}]}}})
+    result = context.read(repository, ALIAS, FULL, strict_provider_query(kind="learning"), now=NOW)
+    assert result["data"]["series"] == [{"day": "2026-11-11", "stress_index": 0.2}]
+    assert repository.learning_history_view.call_args.kwargs["days"] == 30
+
+
+def test_strict_nullable_management_checks_query_uses_default_page(repository, monkeypatch):
+    from apps.api.management_plan_store import PlanStore
+    checks = Mock(return_value={"checks": [], "next_before": None})
+    monkeypatch.setattr(PlanStore, "checks", checks)
+    result = context.read(repository, ALIAS, FULL, strict_provider_query(kind="management", view="checks"), now=NOW)
+    assert result["data"] == {"checks": [], "next_before": None}
+    checks.assert_called_once_with(ALIAS, before=None, limit=30)
+
+
+def test_strict_nullable_activity_segment_query_uses_zero_start_and_open_duration(repository, monkeypatch):
+    from apps.api.routes import activities
+    key = "act_" + "c" * 32
+    repository.active_activity_view = Mock(return_value={})
+    series = [{"elapsed_s": 0, "speed_kmh": 12}, {"elapsed_s": 30, "speed_kmh": 18}]
+    monkeypatch.setattr(activities, "_activity_view_payload", lambda *_: {
+        "activity": {"activity_ref": key}, "series": {"series": deepcopy(series)}, "shadow": None})
+    result = context.read(repository, ALIAS, FULL, strict_provider_query(kind="activity", view="series", activity_ref=key), now=NOW)
+    assert result["data"]["series"]["series"] == series
+
+
+def test_strict_nullable_speed_query_uses_same_default_cache_key(repository):
+    prepared_repository(repository, {"status": "READY", "speed_zones": {"zones": []}}, "speed")
+    result = context.read(repository, ALIAS, FULL, strict_provider_query(kind="speed"), now=NOW)
+    assert result["data"]["status"] == "READY"
+    assert repository.prepared_view.call_args.kwargs["parameters"] == {}

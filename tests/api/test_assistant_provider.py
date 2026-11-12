@@ -555,6 +555,10 @@ def test_coaching_answer_can_use_the_larger_budget_without_changing_pilot_reserv
     assert len(budget.settlements) == 1
     prompt = seen[0]["instructions"]
     assert "Използвай общите си знания" in prompt
+    assert "Основният текст е изцяло на естествен български" in prompt
+    assert "не транслитерирай руски изрази" in prompt
+    assert "кратки свързани абзаци" in prompt
+    assert "Между абзаците оставяй празен ред" in prompt
     assert "не са промяна на утвърдения план" in prompt
     assert "dose_evidence" in prompt
     assert "Не измисляй автори" in prompt
@@ -659,3 +663,56 @@ def test_complete_plan_preview_with_several_drafts_fits_without_losing_doses(kin
     assert packed["format"] == "onflows-shared-values-v1"
     assert expand_shared_context(packed) == context
     assert not p._budget.events
+
+
+def test_final_answer_schema_forbids_more_reads_and_commands_without_mutating_normal_tool():
+    seen = []
+    answer = "Основната част е 17 × 30 с работа / 30 с активна почивка. Запази зададеното равномерно усилие."
+    p = provider(lambda request: seen.append(json.loads(request.content)) or
+                 httpx.Response(200, json=response(reply(message=answer))))
+    day = {"query_kind": "day", "availability": "AVAILABLE", "date": "2026-11-13",
+           "sessions": [{"title": "Интервали", "blocks": [
+               {"kind": "WORK", "duration_s": 30, "target_speed_kmh": 18},
+               {"kind": "RECOVERY", "duration_s": 30, "target_speed_kmh": 9}]
+               * 17}]}
+    context = {"final_answer_only": True, "synthesis_reason": "REPEATED_READ", "results": [day],
+               "completed_queries": [{"kind": "day", "date": "2026-11-13"}]}
+    capabilities = {"read": ["day", "method"], "write": ["DAILY"]}
+    original = deepcopy((context, capabilities))
+    current = {"role": "user", "content": "Как точно да изпълня интервалите?"}
+    result = p.complete([{"role": "assistant", "content": "Ще проверя тренировката."}, current], context, capabilities)
+    assert result["text"] == answer
+    payload = seen[0]
+    schema = payload["tools"][0]["parameters"]
+    assert schema["properties"]["query"] == {"type": "null"}
+    assert schema["properties"]["command"] == {"type": "null"}
+    assert schema["required"] == ["message", "query", "command"]
+    assert schema["additionalProperties"] is False and payload["tools"][0]["strict"] is True
+    assert "Това е окончателната стъпка" in payload["instructions"]
+    assert "17 × 30 с работа / 30 с активна почивка" in payload["instructions"]
+    assert "1,5 мин = 1 мин 30 с" in payload["instructions"]
+    assert json.loads(payload["input"][-2]["content"])["onflows_context"] == context
+    assert payload["input"][-1] == current
+    assert (context, capabilities) == original
+    # Final-only narrowing is local to this request, not the shared schema or
+    # caller's grants; a later user request can legitimately read again.
+    normal = p._payload([current], {}, capabilities)
+    assert normal["tools"][0]["parameters"]["properties"]["query"]["type"] == ["object", "null"]
+    assert normal["tools"][0]["parameters"]["properties"]["command"]["type"] == ["object", "null"]
+    assert "Това е окончателната стъпка" not in normal["instructions"]
+
+
+@pytest.mark.parametrize("operation", [
+    {"query": {"kind": "day", "date": "2026-11-13", "start": None, "end": None, "session_id": None}},
+    {"command": {"kind": "DAILY", "key": "2026-11-13", "expected_revision": 1,
+                 "patch_json": '{"fatigue": 3}'}},
+])
+def test_final_answer_rejects_nonconforming_provider_operation_without_retry(operation):
+    budget = FakeBudget()
+    calls = []
+    p = provider(lambda request: calls.append(request) or
+                 httpx.Response(200, json=response(reply(**operation))), budget=budget)
+    with pytest.raises(AssistantProviderError, match="invalid_response"):
+        p.complete([{"role": "user", "content": "Обясни тренировката."}],
+                   {"final_answer_only": True, "results": []}, {"read": [], "write": []})
+    assert len(calls) == 1 and len(budget.settlements) == 1
