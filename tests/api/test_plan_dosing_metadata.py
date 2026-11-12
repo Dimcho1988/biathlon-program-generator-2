@@ -111,16 +111,24 @@ def test_cached_plan_publishes_below_four_mib_without_rewriting_approved_evidenc
     day.update(status="TRAINING", session=session, sessions=[session])
     transport.raw_plan["lookahead_days"] = [deepcopy(day)]
     approved = deepcopy(transport.raw_plan)
+    previous = []
+    transport.on_save = lambda state: previous.append(deepcopy(state.record))
     size = lambda value: len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode())
     assert size(approved) < 4*1024*1024 < 2*size(approved)
     response = transport.run(monkeypatch)
     assert response.status_code == 200
     stored = transport.record["payload"]
     payload = unpack(stored)
-    assert payload["plan"] == approved
+    assert previous[0]["payload"]["plan"] == approved
+    assert payload["status"] == "ACTIVE" and payload["proposal"] is None
     assert transport.raw_plan == approved  # The durable READY result is not mutated.
     assert size(stored) < 4*1024*1024
-    for saved_day in [payload["proposal"]["days"][1], *payload["proposal"]["lookahead_days"]]:
+    for saved_day in [payload["plan"]["days"][1], *payload["plan"]["lookahead_days"]]:
         for candidate in [saved_day["session"], *saved_day["sessions"]]:
             assert candidate["method_library"]["components"][0] == parent
             assert all(block.get("parent_method_card_ref") == "method_library.components[0]" for block in candidate["blocks"])
+            restored = deepcopy(candidate)
+            for block in restored["blocks"]:
+                block.pop("parent_method_card_ref")
+                block["parent_method_card"] = deepcopy(restored["method_library"]["components"][0])
+            assert restored == session  # Every original frozen dose/guidance value survives.

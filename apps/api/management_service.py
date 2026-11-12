@@ -1,10 +1,11 @@
-"""Freeze management inputs and append review-only plan revisions.
+"""Freeze management inputs and publish validated plan revisions.
 
 Draft generation never changes the athlete's actual load, model coefficients,
-activity calendar, or an approved training prescription.
+activity calendar. Eligible generated programs become the current prescription.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 import json
@@ -360,6 +361,10 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
             return improve(baseline, normalized, replay, seconds_remaining=150.)
     payload = compute(live_repository, alias, computation_key, calculate)
     training_plan_engine.compact_plan_metadata(payload)
+    # Approval is no longer a workflow step. Keep all scientific/data warnings,
+    # but do not present the legacy draft-workflow note as a training constraint.
+    payload["warnings"] = [warning for warning in payload.get("warnings", [])
+                           if warning.get("code") != "DRAFT_REQUIRES_COACH_REVIEW"]
     # Start a new read phase after calculation. Its single settings-row read is
     # fresh; no value captured by the calculation's ReadSession is reused.
     with timed_stage("input_after"):
@@ -373,25 +378,70 @@ def build_draft(repository, alias, start_date, expected_profile_revision, *, now
     frozen = {**before, "management_profile": profile.model_dump(mode="json"),
               "profile_revision": stored["revision"]}
     payload.update({"input_snapshot": frozen, "input_fingerprint": _hash(frozen),
-                    "review_required": True, "automatically_published": False,
+                    "review_required": False, "automatically_published": False,
                     "operational_context": {"decisions": decisions or {}, "locked_day": locked_day,
                         **({"window_end": window_end.isoformat()} if window_end else {})}})
     return payload
 
 
+def build_generated_plan(repository, alias, body, actor, *, now=None, on_progress=None):
+    """Prepare one fenced draft/current-plan publication without writing it.
+
+    The captured plan revision protects a coach's concurrent edits. Saved day
+    decisions survive regeneration, and generating a preview never resumes a
+    paused program. Explicit generation can start a new period after completion.
+    SQL saves the artifact and current pointer in
+    one transaction after repeating input and authorization checks.
+    """
+    from . import management_lifecycle as lifecycle
+    now = now or datetime.now(timezone.utc)
+    plans = lifecycle.PlanStore(repository)
+    previous = plans.current(alias)
+    checkpoint = plans.checkpoint(alias)
+    old = previous["payload"] if previous else {}
+    decisions = deepcopy(old.get("decisions") or {})
+    payload = build_draft(repository, alias, body.start_date, body.expected_profile_revision,
+        now=now, decisions=decisions, on_progress=on_progress)
+    if not lifecycle._eligible(payload) or old.get("status") == "PAUSED":
+        return {"draft": payload, "publication": None}
+    profile_revision, profile, frozen, fingerprint, settings_fingerprint = lifecycle._context(repository, alias, now)
+    if (profile_revision != body.expected_profile_revision
+            or not lifecycle._inputs_current(frozen, payload.get("input_fingerprint"),
+                (payload.get("input_snapshot") or {}).get("evaluation_date"),
+                analysis_hints=[payload.get("input_snapshot")])
+            or payload.get("source", {}).get("generation_id") != checkpoint.get("generation_id")):
+        raise HTTPException(409, "Planning inputs changed during generation; try again")
+    payload.update(review_required=False, automatically_published=True)
+    q_execution = deepcopy(payload.get("q_execution") or old.get("q_execution"))
+    if q_execution and old.get("q_execution"):
+        prior_q = {row["date"]: deepcopy(row) for row in old["q_execution"].get("days", [])}
+        prior_q.update({row["date"]: row for row in q_execution.get("days", [])})
+        q_execution["days"] = [prior_q[key] for key in sorted(prior_q)][-366:]
+    active = {"schema_version": "active-plan-v2", "status": "ACTIVE", "mode": profile["adaptation_mode"],
+        "approved_by": str(actor), "approved_profile_revision": profile_revision,
+        "approved_settings_fingerprint": settings_fingerprint, "processed_input_fingerprint": fingerprint,
+        "evaluated_on": frozen["evaluation_date"], "plan": payload, "proposal": None,
+        "origin": {"start_date": body.start_date.isoformat(), "draft_revision": body.expected_draft_revision + 1},
+        "week_window": lifecycle._window(payload), "week_policy": "fixed-or-adaptive-v1",
+        "decisions": decisions, "outcomes": deepcopy(old.get("outcomes") or []),
+        "changes": lifecycle.changes_between(old["plan"], payload) if old.get("plan") else [],
+        "q_execution": q_execution,
+        "reason": "Програмата е готова и е приложена според актуалните данни и правилата на алгоритъма."}
+    return {"draft": payload, "publication": {"payload": active,
+        "expected_revision": previous["revision"] if previous else 0, "checkpoint": checkpoint}}
+
+
 def generate(repository, alias, body, actor, *, now=None):
-    payload = build_draft(repository, alias, body.start_date, body.expected_profile_revision, now=now)
-    return ManagementStore(repository).save_draft(
-        alias, payload, actor, body.expected_profile_revision, expected_revision=body.expected_draft_revision,
-        check_generation=True, expected_generation_id=payload["source"]["generation_id"],
-        expected_responses=(payload.get("input_snapshot") or {}).get("response_revisions"))
+    prepared = build_generated_plan(repository, alias, body, actor, now=now)
+    return ManagementStore(repository).save_generated_plan(alias, prepared, actor,
+        body.expected_profile_revision, body.expected_draft_revision)
 
 
 def history(repository, alias, *, start_date=None, revision=None, latest_only=False):
     """Retain historical evidence while clearly marking changed inputs.
 
-    These are drafts, not an atomically activated schedule. A sync can finish
-    after a draft was saved; that does not rewrite its frozen source context.
+    Artifacts retain their frozen source context after publication and later
+    syncs. The current-plan pointer identifies which program is in use.
     """
     store = ManagementStore(repository)
     if revision is not None:

@@ -330,6 +330,34 @@ it("shows the tighter time constraint and keeps long-term estimates distinct",as
 
 const activeResponse=(revision:number,stale=false):ActivePlanResponse=>({active:{revision,stale,actionable:false,payload:{schema_version:"active-plan-v2",status:"REVIEW_REQUIRED",mode:"AUTO",reason:"За преглед",plan:draft.payload,proposal:{...draft.payload,activation_eligible:true},changes:[],outcomes:[],decisions:{}}},history:[]});
 
+it("shows the saved automatic plan during refresh and reconciles the completed server snapshot", async () => {
+  vi.stubGlobal("fetch",vi.fn(async()=>Response.json({job:null})));
+  const initial=activeResponse(31,true); initial.capabilities={automatic_publication:true};
+  Object.assign(initial.active!.payload,{status:"ACTIVE",proposal:null,mode:"REVIEW"});
+  const props={athleteName:"Спортист",canEdit:true,today:"2026-09-21",initialProfile:{configured:true,revision:1,profile},initialDrafts:[]};
+  await mount(<TrainingManagement {...props} initialActive={initial} preparation={{status:"UPDATING",prepared_at:null,evaluated_on:"2026-09-20",reason:"DAY_CHANGED"}}/>);
+  expect(container.textContent).toContain("Показана е последната налична програма");
+  expect(container.querySelector('[aria-label="Цел, програма и изпълнение Q"]')).toBeTruthy();
+  expect(container.textContent).toContain("Текущ план · версия 31");
+  expect(container.textContent).not.toContain("Утвърди предложението");
+  const fresh=structuredClone(initial); fresh.active!.revision=32;fresh.active!.stale=false;
+  await mount(<TrainingManagement {...props} initialActive={fresh}/>);
+  expect(container.textContent).toContain("Текущ план · версия 32");
+  expect(container.textContent).not.toContain("Показана е последната налична програма");
+});
+
+it("keeps an invalid automatic variant readable without an approval button or approval prerequisite", async () => {
+  const value=activeResponse(33);value.capabilities={automatic_publication:true};
+  value.active!.payload.proposal!.activation_eligible=false;
+  value.active!.payload.proposal!.warnings=[{code:"MISSING_DATA",message:"Липсват нужните тренировъчни данни."}];
+  await mount(<ActiveTrainingPlan value={value} onChange={vi.fn()} canEdit today="2026-09-21" renderDay={()=>null}/>);
+  expect(container.textContent).toContain("Липсват нужните тренировъчни данни");
+  await click(button("Прегледай"));
+  expect(container.textContent).toContain("Вариантът се прилага автоматично, когато покрива условията на алгоритъма");
+  expect(button("Утвърди предложението")).toBeUndefined();
+  expect(button("Обнови сега")).toBeTruthy();
+});
+
 it.each(["AUTO", "REVIEW"] as const)("hides the draft-only warning for an approved %s plan and preserves its stored evidence", async mode => {
   const value = activeResponse(31);
   const warnings = [
@@ -576,7 +604,7 @@ it("keeps the approved week alone until review and only renders detailed compari
   const renderDay = vi.fn((d: typeof draft.payload.days[number]) => <p>{d.explanation}</p>);
   await mount(<ActiveTrainingPlan value={response} onChange={vi.fn()} canEdit today="2026-09-22" renderDay={renderDay}/>);
   const text = container.textContent!;
-  expect(text).toContain("Фиксирана седмица");
+  expect(text).toContain("Седмица с фиксиран край");
   expect(text).toContain("2026-09-22 – 2026-09-28");
   expect(text).toContain("Нужен е преглед на запазената задача");
   expect(text).toContain("Предложена смяна към адаптивна седмица");
@@ -607,14 +635,14 @@ it("saves an explicit fixed-week choice through the existing profile revision", 
   const select = [...container.querySelectorAll("select")].find(s => s.parentElement?.textContent?.startsWith("Режим на седмицата"))!;
   await choose(select, "REVIEW");
   const help = container.querySelector("#week-mode-help")!;
-  expect(help.textContent).toContain("Записан избор в профила: Адаптивна седмица");
-  expect(help.textContent).toContain("Новият избор „Фиксирана седмица“ още не е записан.");
+  expect(help.textContent).toContain("Записан избор в профила: Подвижни 7 дни");
+  expect(help.textContent).toContain("Новият избор „Седмица с фиксиран край“ още не е записан.");
   expect(fetchMock).not.toHaveBeenCalled();
   await click(button("Запази промените"));
   expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ profile: { adaptation_mode: "REVIEW" }, expected_revision: 1 });
-  expect(help.textContent).toContain("Записан избор в профила: Фиксирана седмица");
+  expect(help.textContent).toContain("Записан избор в профила: Седмица с фиксиран край");
   expect(help.textContent).not.toContain("още не е записан");
-  expect(container.textContent).toContain("Записан избор: Фиксирана седмица. При вече започната програма смяната влиза в сила след „Прегледай“ и „Утвърди предложението“");
+  expect(container.textContent).toContain("Записан избор: Седмица с фиксиран край. Промяната се прилага автоматично след проверка с актуалните данни.");
   expect([...container.querySelectorAll("a")].find(a => a.textContent === "Отвори седмичната програма →")?.getAttribute("href")).toBe("/management");
 });
 
@@ -653,8 +681,8 @@ it.each(["AUTO", "REVIEW"] as const)("explains a saved mode change blocked by in
 
 it.each(["AUTO", "REVIEW"] as const)("separates the saved choice from approved %s mode until the exact proposal is approved", async mode => {
   const requested = mode === "AUTO" ? "REVIEW" : "AUTO";
-  const label = mode === "AUTO" ? "Адаптивна седмица" : "Фиксирана седмица";
-  const requestedLabel = mode === "AUTO" ? "Фиксирана седмица" : "Адаптивна седмица";
+  const label = mode === "AUTO" ? "Подвижни 7 дни" : "Седмица с фиксиран край";
+  const requestedLabel = mode === "AUTO" ? "Седмица с фиксиран край" : "Подвижни 7 дни";
   const value = activeResponse(12);
   value.active!.payload.mode = mode;
   value.active!.payload.proposal_mode = requested;
@@ -687,7 +715,7 @@ it("recovers a legacy proposal mode from its own frozen profile", async () => {
   expect(container.textContent).toContain("Предложена смяна към фиксирана седмица");
   await click(button("Прегледай"));
   const review = container.querySelector('[aria-label="Предложени промени"]')!;
-  expect(review.textContent).toContain("Режим в предложението: Фиксирана седмица");
+  expect(review.textContent).toContain("Режим в предложението: Седмица с фиксиран край");
   expect(review.textContent).toContain("включително новия режим");
 });
 
@@ -697,8 +725,8 @@ it.each([false, true])("shows a pending profile mode even without proposal mode 
   await mount(<ActiveTrainingPlan value={value} profile={{ configured: true, revision: 2, profile: { ...profile, adaptation_mode: "REVIEW" } }}
     onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/>);
   const modes = container.querySelector('[aria-label="Режим на седмицата"]')!;
-  expect(modes.textContent).toContain("Режим на утвърдената програмаАдаптивна седмица");
-  expect(modes.textContent).toContain("Записан избор в профилаФиксирана седмица");
+  expect(modes.textContent).toContain("Режим на утвърдената програмаПодвижни 7 дни");
+  expect(modes.textContent).toContain("Записан избор в профилаСедмица с фиксиран край");
   expect(modes.textContent).toContain("Избери „Обнови сега“");
   expect(modes.textContent).not.toContain("Предложена смяна към");
   if (present) {
@@ -714,11 +742,11 @@ it("does not relabel a stale proposal when the saved choice has changed again", 
   await mount(<ActiveTrainingPlan value={value} profile={{ configured: true, revision: 3, profile: { ...profile, adaptation_mode: "AUTO" } }}
     onChange={vi.fn()} canEdit today="2026-09-22" renderDay={() => null}/>);
   const modes = container.querySelector('[aria-label="Режим на седмицата"]')!;
-  expect(modes.textContent).toContain("Режим на утвърдената програмаАдаптивна седмица");
+  expect(modes.textContent).toContain("Режим на утвърдената програмаПодвижни 7 дни");
   expect(modes.textContent).not.toContain("Записан избор в профила");
   expect(modes.textContent).toContain("Това предложение не съвпада със записания избор.");
   await click(button("Прегледай"));
-  expect(container.querySelector('[aria-label="Предложени промени"]')!.textContent).toContain("Режим в предложението: Фиксирана седмица");
+  expect(container.querySelector('[aria-label="Предложени промени"]')!.textContent).toContain("Режим в предложението: Седмица с фиксиран край");
   expect(button("Утвърди предложението").disabled).toBe(true);
 });
 
@@ -728,7 +756,7 @@ it("uses a newer saved profile carried by a polled plan without reverting to ini
   value.active!.payload.proposal!.input_snapshot = { management_profile: { adaptation_mode: "REVIEW" }, profile_revision: 3 };
   const props = { profile: { configured: true, revision: 2, profile: { ...profile, adaptation_mode: "AUTO" as const } }, onChange: vi.fn(), canEdit: true, today: "2026-09-22", renderDay: () => null };
   await mount(<ActiveTrainingPlan {...props} value={value}/>);
-  expect(container.querySelector('[aria-label="Режим на седмицата"]')!.textContent).toContain("Записан избор в профилаФиксирана седмица");
+  expect(container.querySelector('[aria-label="Режим на седмицата"]')!.textContent).toContain("Записан избор в профилаСедмица с фиксиран край");
   const approved = activeResponse(13);
   Object.assign(approved.active!.payload, { mode: "REVIEW", status: "ACTIVE", proposal: null, plan: value.active!.payload.proposal });
   await mount(<ActiveTrainingPlan {...props} value={approved}/>);

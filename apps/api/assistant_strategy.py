@@ -141,7 +141,8 @@ def _periodization(value):
         "event_name", "reason", "note_bg", "volume_factor", "load_factor", "prevent_deficit_refill",
         "planned_days", "requested_days"}
     for name in ("phases", "taper_windows", "reentry_windows", "warnings"):
-        result[name] = [_pick(row, fields | {"code", "message"}) for row in _rows(value.get(name))]
+        result[name] = [_pick(row, fields | {"code", "message"}) for row in _rows(value.get(name))
+            if row.get("code") != "DRAFT_REQUIRES_COACH_REVIEW"]
     events = _rows(value.get("calendar_context"))
     # Prioritize every primary race over lower-priority calendar context.
     result["main_races"] = deepcopy(value["main_races"]) if isinstance(value.get("main_races"), dict) else _events([row for row in events if row.get("event_type") == "MAIN_RACE"])
@@ -151,12 +152,41 @@ def _periodization(value):
     return result
 
 
+def current_calendar_plan(profile, events, *, prepared_entry=None):
+    """Resolve the real calendar horizon without reading physiology or dosing.
+
+    This uses the same pure calendar functions as the planner. History-dependent
+    entry length is reused only by a caller that verified matching saved inputs;
+    otherwise the canonical calendar template is labelled as such.
+    """
+    from biathlon.planning_schedule import horizon
+    from biathlon.periodization import build_periodization
+    if not isinstance(profile, dict) or not profile.get("program_start") or not profile.get("program_end"):
+        return {"availability": "UNAVAILABLE", "reason": "PROGRAMME_DATES_NOT_CONFIGURED"}
+    try:
+        scheduled, horizon_info = horizon(profile, events)
+        reentry = profile.get("reentry_days")
+        entry_basis = "EXPLICIT_PROFILE" if reentry is not None else "CALENDAR_TEMPLATE_HISTORY_NOT_RESOLVED"
+        if reentry is None and isinstance(prepared_entry, dict) and type(prepared_entry.get("days_override")) is int:
+            reentry, entry_basis = prepared_entry["days_override"], "MATCHING_PREPARED_HISTORY"
+        periods = build_periodization(scheduled["program_start"], scheduled["program_end"], events,
+            reentry_days_override=reentry, taper_days=profile.get("taper_days", 7), transition_days=profile.get("transition_days", 0))
+    except (KeyError, ValueError, TypeError):
+        return {"availability": "UNAVAILABLE", "reason": "CALENDAR_INPUTS_INCOMPLETE"}
+    return {"availability": "AVAILABLE", "basis": "CURRENT_SAVED_PROFILE_AND_CALENDAR",
+        "start_date": scheduled["program_start"], "end_date": scheduled["program_end"],
+        "horizon": {**_pick(horizon_info, {"mode", "requested_end", "effective_end", "version"}),
+            "outside_main_races": _events(horizon_info.get("outside_main_races"))},
+        "periodization": _periodization(periods), "entry_basis": entry_basis,
+        "interpretation": "The effective horizon follows the canonical calendar rule; raw profile.program_end is only the requested fallback in AUTO_CALENDAR mode. This calendar structure does not compute daily doses, weekly load or readiness. When entry_basis is CALENDAR_TEMPLATE_HISTORY_NOT_RESOLVED, phase dates are a calendar template; the prepared engine may adjust the initial entry length using training history."}
+
+
 def _outlook(value):
     if not isinstance(value, dict):
         return None
     if "outlook" in value:
-        return {**_pick(value, {"configured", "availability", "reason", "view_kind"}), "outlook": _outlook(value["outlook"])}
-    result = _pick(value, {"schema_version", "profile_revision", "generated_at", "engine_version", "start_date", "end_date"})
+        return {**_pick(value, {"configured", "availability", "reason", "view_kind", "preparation"}), "outlook": _outlook(value["outlook"])}
+    result = _pick(value, {"schema_version", "profile_revision", "generated_at", "engine_version", "start_date", "end_date", "preparation"})
     if isinstance(value.get("periodization"), dict):
         result["periodization"] = _periodization(value["periodization"])
     if isinstance(value.get("long_term"), dict):
@@ -173,17 +203,18 @@ def _outlook(value):
         result["recent_actual_weeks"] = [_pick(row, {"start_date", "end_date", "covered_days", "actual_minutes", "training_days"}) for row in history[-4:]]
         result["actual_history_coverage"] = {"total_weeks": len(history), "returned_weeks": min(4, len(history)),
             "interpretation": "Recorded actual clock minutes. Missing totals remain unknown; these are not the future targets."}
-    result["interpretation"] = "Prepared goals from the shown profile/source revision, not an approved daily prescription or a future recovery forecast. Weekly Q and effective load are not necessarily clock minutes. HISTORICAL_MIX_EQUIVALENT_NOT_TIME_LIMIT is a historical-mix volume equivalent, not a prescribed duration or time allowance."
+    result["interpretation"] = "Prepared goals from the shown profile/source revision, not an exact daily prescription or a future recovery forecast. Weekly Q and effective load are not necessarily clock minutes. HISTORICAL_MIX_EQUIVALENT_NOT_TIME_LIMIT is a historical-mix volume equivalent, not a prescribed duration or time allowance."
     return result
 
 
 def _record(value, *, days_basis=None):
     if not isinstance(value, dict):
         return None
-    result = _pick(value, {"revision", "status", "plan_status", "has_proposal", "engine_version", "recorded_at", "stale", "stale_reason", "days_basis", "is_approved"})
+    result = _pick(value, {"revision", "status", "plan_status", "has_proposal", "engine_version", "recorded_at", "stale", "stale_reason", "days_basis", "plan_role", "preparation"})
     for name in ("plan", "proposal", "payload"):
         if isinstance(value.get(name), dict):
-            result[name] = {**_record(value[name]), **_pick(value[name], {"start_date", "end_date", "generated_at"}), "is_approved": name == "plan"}
+            result[name] = {**_record(value[name]), **_pick(value[name], {"start_date", "end_date", "generated_at"}),
+                **({"plan_role": "CURRENT" if name == "plan" else "CANDIDATE"} if name != "payload" else {})}
     days = []
     for day in _rows(value.get("days")):
         from biathlon.planning_schedule import day_sessions
@@ -205,7 +236,7 @@ def compact_management(payload, view="overview"):
         return deepcopy(payload)
     result = _pick(payload, {"availability", "reason", "view_kind", "schema_version", "configured", "revision",
         "source_revision", "source_generation_id", "generation_id", "as_of", "today", "timezone", "stale", "status",
-        "current_calendar", "profile_basis", "prepared_basis", "prepared_availability", "prepared_reason"})
+        "current_calendar", "current_calendar_plan", "profile_basis", "prepared_basis", "prepared_availability", "prepared_reason", "preparation"})
     if view == "outlook":
         result.update(_outlook(payload))
     elif view in {"week", "active"}:
@@ -216,7 +247,7 @@ def compact_management(payload, view="overview"):
         for name in ("overview_active", "active"):
             if name in payload:
                 record = payload[name]
-                basis = ("PROPOSAL_NOT_APPROVED" if record.get("has_proposal") else "APPROVED_PLAN") if name == "overview_active" and isinstance(record, dict) else None
+                basis = ("GENERATED_CANDIDATE" if record.get("has_proposal") else "CURRENT_PLAN") if name == "overview_active" and isinstance(record, dict) else None
                 result[name] = _record(record, days_basis=basis)
         if "outlook" in payload:
             result["outlook"] = _outlook(payload["outlook"])
@@ -225,8 +256,8 @@ def compact_management(payload, view="overview"):
         {"kind": "management", "view": "profile", "purpose": "Full editable planning controls and method preferences"},
         {"kind": "management", "view": "outlook", "section": "outlook.long_term.weeks", "purpose": "Exact weekly targets; use offset/limit for more rows"},
         {"kind": "management", "view": "outlook", "section": "outlook.periodization", "purpose": "Complete phase, taper and calendar rationale"},
-        {"kind": "day", "purpose": "Exact approved session blocks for a selected date"}]
-    result["summary_limits"] = "Excludes detailed session blocks, raw history, repeated evidence and unapproved draft bodies. Retains current plan status and saved goals separately. Exact omitted fields remain available through the detail queries."
+        {"kind": "day", "purpose": "Exact current session blocks for a selected date"}]
+    result["summary_limits"] = "Excludes detailed session blocks, raw history, repeated evidence and full candidate bodies. Retains current plan status and saved goals separately. Exact omitted fields remain available through the detail queries."
     return result
 
 

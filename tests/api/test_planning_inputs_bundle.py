@@ -177,7 +177,7 @@ def test_new_final_phase_observes_edit_after_publication_without_reusing_the_sav
     response = harness.run(monkeypatch)
     assert response.status_code == 200 and response.json()["active"]["stale"] is True
     assert harness.record["revision"] == 2
-    assert harness.record["payload"]["proposal"]["input_snapshot"]["physiology"]["hrmax_bpm"] != 201
+    assert harness.record["payload"]["plan"]["input_snapshot"]["physiology"]["hrmax_bpm"] != 201
 
 
 @pytest.mark.parametrize("section", ["model", "response"])

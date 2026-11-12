@@ -1,4 +1,4 @@
-"""Explicit, revisioned inputs for the coach-reviewed training management pilot."""
+"""Explicit, revisioned inputs for algorithm-validated training management."""
 from __future__ import annotations
 
 from datetime import date, timedelta
@@ -315,9 +315,8 @@ class ManagementProfile(BaseModel):
         description="Derived as 60% of building_fraction, identical to the maintenance role.")
     recovery_session_cap_min: float = Field(default=30, ge=5, le=45)
     allow_expert_fallback: bool = True
-    # New optional fields preserve stored v1 profiles. The activation freezes
-    # these rules; editing them subsequently requires a fresh approval.
-    # REVIEW retains its stored value and now means a fixed, explicitly approved week.
+    # Both modes publish validated algorithm results without a second approval.
+    # REVIEW retains its stored value as a fixed-week horizon; AUTO rolls daily.
     adaptation_mode: Literal["AUTO", "REVIEW"] = "AUTO"
     auto_import_enabled: bool = True
     progression_percent: float = Field(default=5, ge=0, le=10)

@@ -13,6 +13,13 @@ export interface ManagementOverviewActive extends SessionVolumePlan {
   outcomes: PlanComparisonOutcome[];
 }
 
+export interface ManagementPreparation {
+  status: "UPDATING";
+  prepared_at: string | null;
+  evaluated_on: string | null;
+  reason: string;
+}
+
 const nonnegative = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
 const nullableMinutes = (value: unknown) => value === null || nonnegative(value);
 const invalidOverview = () => new Error("Невалиден преглед на тренировъчната програма.");
@@ -46,7 +53,8 @@ export function parseManagementView(value: unknown) {
   if (value.schema_version !== undefined && value.schema_version !== "management-overview-v1") throw invalidOverview();
   const overviewActive = value.schema_version === "management-overview-v1"
     ? parseManagementOverviewActive(value.overview_active) : undefined;
-  const emptyActive: ActivePlanResponse = { active: null, history: [] };
+  const emptyActive: ActivePlanResponse = parseActivePlanResponse({active: null, history: [],
+    ...(value.capabilities === undefined ? {} : {capabilities: value.capabilities})});
   return {
     profile: parseManagementProfileResponse(value.profile),
     active: overviewActive ? emptyActive : parseActivePlanResponse(value.active),
@@ -54,6 +62,10 @@ export function parseManagementView(value: unknown) {
     drafts: parseDrafts(value.drafts),
     outlook: value.outlook == null ? null : parseManagementOutlook(value.outlook),
     sync: value.sync == null ? null : parseSyncState(value.sync),
+    preparation: isRecord(value.preparation) && value.preparation.status === "UPDATING"
+      ? {status: "UPDATING" as const, prepared_at: typeof value.preparation.prepared_at === "string" ? value.preparation.prepared_at : null,
+        evaluated_on: isCalendarDate(value.preparation.evaluated_on) ? value.preparation.evaluated_on : null,
+        reason: typeof value.preparation.reason === "string" ? value.preparation.reason : "PREPARATION_PENDING"} : null,
     inputFingerprint: isRecord(value.drafts) && typeof value.drafts.current_input_fingerprint === "string"
       ? value.drafts.current_input_fingerprint : "",
   };

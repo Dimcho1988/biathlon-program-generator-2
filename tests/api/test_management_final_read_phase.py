@@ -169,7 +169,7 @@ def test_fresh_final_settings_row_removes_three_requests_with_identical_complete
     assert [request[1] for request in final] == ["/onflows_athlete_settings", "/rpc/active_onflows_analysis",
         "/rpc/read_onflows_latest_model_entries", "/rpc/read_onflows_latest_response_entries"]
     assert set(final[0][2]["select"].split(",")) == set(settings_row())
-    assert current.record["payload"]["status"] == "REVIEW_REQUIRED"
+    assert current.record["payload"]["status"] == "ACTIVE"
     assert actual.json()["active"]["revision"] == 2
 
 

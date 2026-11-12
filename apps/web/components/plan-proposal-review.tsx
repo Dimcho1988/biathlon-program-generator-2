@@ -55,8 +55,9 @@ function ChangedDay({ change, before, after, renderDay }: {
 }
 
 /** Mounted with the record revision as its key: a new proposal needs a new review. */
-export function PlanProposalReview({ record, canEdit, busy, symptomHold, onApprove, renderDay, today, scheduleStart }: {
+export function PlanProposalReview({ record, canEdit, busy, symptomHold, onApprove, renderDay, today, scheduleStart, automaticPublication = false }: {
   record: ActivePlanRecord; canEdit: boolean; busy: boolean; symptomHold: boolean;
+  automaticPublication?: boolean;
   onApprove: () => void; renderDay: (day: DraftDay) => ReactNode; today: string; scheduleStart?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -79,7 +80,7 @@ export function PlanProposalReview({ record, canEdit, busy, symptomHold, onAppro
     : busy ? "Изчакай текущото обновяване, преди да утвърдиш предложението." : null;
   return <section className="management-panel management-proposal" aria-label="Предложени промени">
     <div className="management-proposal-heading">
-      <div><h3>Има предложени промени</h3><p>{p.reason}</p>
+      <div><h3>{automaticPublication ? "Вариантът още не е приложен" : "Има предложени промени"}</h3><p>{p.reason}</p>
         <p className="management-muted">Предложението още не е приложено.</p>
       </div>
       <button type="button" className="action-button secondary" aria-expanded={expanded} aria-controls={id}
@@ -99,12 +100,17 @@ export function PlanProposalReview({ record, canEdit, busy, symptomHold, onAppro
           <TrainingPlanSummary plan={proposal} qExecution={p.q_execution} today={today} selectedWeek={selectedWeek} onWeekChange={setSelectedWeek}/><TrainingPlanWeek days={schedule.days} period={week} forecastDates={schedule.forecastDates} programmeLabel="Предложение" today={today} renderDay={renderDay}/></>}
       </details>
       <div className="management-proposal-decision">
-        <p>С „Утвърди предложението“ прилагаш целия прегледан вариант за посочения период{proposalMode && proposalMode !== p.mode ? ", включително новия режим" : ""}.</p>
+        {automaticPublication ? <>
+          <p>Вариантът се прилага автоматично, когато покрива условията на алгоритъма. „Обнови сега“ проверява последните данни.</p>
+          {symptomHold && <p role="status">Първо запиши актуална сутрешна оценка.</p>}
+          {proposalHasIncompleteLoad(proposal) && <p role="status">Има непълна история на натоварването. Обнови тренировките или уточни липсващите данни.</p>}
+          {canEdit && !busy && !symptomHold && proposal.activation_eligible !== true && <SyncActionForm scope="FULL" returnTo="/management" label="Обнови тренировките"/>}
+        </> : <><p>С „Утвърди предложението“ прилагаш целия прегледан вариант за посочения период{proposalMode && proposalMode !== p.mode ? ", включително новия режим" : ""}.</p>
         {blocked && <p id={`${id}-blocked`} role="status">{blocked}</p>}
         <div className="management-actions">
           <button type="button" className="action-button" disabled={blocked !== null} aria-describedby={blocked ? `${id}-blocked` : undefined} onClick={onApprove}>Утвърди предложението</button>
           {canEdit && !busy && !symptomHold && p.status === "REVIEW_REQUIRED" && proposal.activation_eligible !== true && <SyncActionForm scope="FULL" returnTo="/management" label="Обнови тренировките"/>}
-        </div>
+        </div></>}
       </div>
     </>}</div>
   </section>;

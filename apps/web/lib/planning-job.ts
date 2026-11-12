@@ -6,6 +6,7 @@ export type PlanningJob = {
   stage: 'QUEUED' | 'PREPARING' | 'BASELINE' | 'SEARCH' | 'SAVING' | 'READY' | 'FAILED';
   start_date: string;
   result_revision: number | null;
+  result_active_revision?: number | null;
   error_code: string | null;
 };
 
@@ -19,6 +20,7 @@ export function parsePlanningJob(value: unknown): PlanningJob | null {
     || !['QUEUED', 'PREPARING', 'BASELINE', 'SEARCH', 'SAVING', 'READY', 'FAILED'].includes(String(job.stage))
     || !isCalendarDate(job.start_date)
     || !(job.result_revision === null || Number.isSafeInteger(job.result_revision) && Number(job.result_revision) > 0)
+    || !(job.result_active_revision === undefined || job.result_active_revision === null || Number.isSafeInteger(job.result_active_revision) && Number(job.result_active_revision) > 0)
     || !(job.error_code === null || typeof job.error_code === 'string')
     || job.status === 'SUCCEEDED' && job.result_revision === null) throw new Error('Невалидно състояние на подготовката.');
   return job as PlanningJob;
@@ -30,8 +32,8 @@ export const planningStageLabel = (job: PlanningJob) => ({
   PREPARING: 'Подготвяме входните данни.',
   BASELINE: 'Съставяме тренировъчната програма.',
   SEARCH: 'Проверяваме разпределението на тренировките.',
-  SAVING: 'Запазваме програмата за преглед.',
-  READY: 'Програмата е готова за преглед.',
+  SAVING: 'Запазваме проверената програма.',
+  READY: 'Програмата е подготвена.',
   FAILED: 'Подготовката не завърши.',
 }[job.stage]);
 

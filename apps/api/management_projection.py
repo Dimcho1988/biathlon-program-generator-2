@@ -3,7 +3,7 @@
 Viewing a plan does not grant access to recovery questionnaires or laboratory
 records. Apply this projection at the HTTP boundary, including archived plans
 and nested copies used by diagnostics/JSON export. Internal lifecycle services
-keep the complete immutable payload for replay and approval.
+keep the complete immutable payload for replay and publication.
 """
 from biathlon.constants import COMPONENTS
 
@@ -53,7 +53,12 @@ def public_learning(value):
 def public_management(value, *, _parent=None):
     """Return an isolated JSON projection without changing the saved evidence."""
     if isinstance(value, list):
-        return [public_management(item, _parent=_parent) for item in value]
+        # This was a presentation reminder, never an algorithmic eligibility
+        # check. Legacy saved/cached plans retain it for audit, but automatic
+        # publication no longer requires a separate coach approval.
+        return [public_management(item, _parent=_parent) for item in value
+                if not (_parent == "warnings" and isinstance(item, dict)
+                        and item.get("code") == "DRAFT_REQUIRES_COACH_REVIEW")]
     if not isinstance(value, dict):
         return value
     result = {}

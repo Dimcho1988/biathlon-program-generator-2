@@ -37,14 +37,15 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
   const record = value.active;
   if (!record) return null;
   const p = record.payload;
+  const automaticPublication = value.capabilities?.automatic_publication === true;
   const display = p.plan;
   const showingProposal = showProposal && !!p.proposal;
   const schedulePlan = showingProposal ? p.proposal! : display;
   const scheduleWeek = selectedScheduleWindow(schedulePlan,today,selectedWeek);
   const schedule = activeScheduleView(record, scheduleWeek, showingProposal);
   const scheduleTitle = showingProposal ? "Предложен график"
-    : !schedule.forecastDates.length ? "Утвърден график"
-    : schedule.programmeDates.length ? "График · утвърдено и прогноза" : "Прогнозен график";
+    : !schedule.forecastDates.length ? automaticPublication ? "Текущ график" : "Утвърден график"
+    : schedule.programmeDates.length ? automaticPublication ? "График и прогноза" : "График · утвърдено и прогноза" : "Прогнозен график";
   const checked = p.proposal ?? p.plan;
   const week = p.week_window ?? { start_date: display.start_date, end_date: display.end_date };
   const fixed = p.mode === "REVIEW";
@@ -52,7 +53,7 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
   const feedback = isRecord(progression.adaptation) ? progression.adaptation : {};
   const symptomHold = checked.warnings.some(w => w.code === "REPORTED_ILLNESS_OR_PAIN");
   const displayedWarnings = checked.warnings.filter(w => w.code !== "REPORTED_ILLNESS_OR_PAIN"
-    && (w.code !== "DRAFT_REQUIRES_COACH_REVIEW" || !!p.proposal));
+    && (w.code !== "DRAFT_REQUIRES_COACH_REVIEW" || (!automaticPublication && !!p.proposal)));
   async function mutate(endpoint: string, body: Record<string, unknown>) {
     if (!canEdit || inFlight.current || externalBusy || (onBegin && !onBegin())) return;
     inFlight.current = true;
@@ -71,7 +72,7 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
         const displayedRevision = Math.max(latestRevision.current, current.active?.revision ?? 0);
         setNotice(receipt.checked_revision === displayedRevision
           ? current.active?.payload.proposal
-            ? "Проверката приключи. Утвърденият график остава без промяна; предложението още чака преглед и утвърждаване."
+            ? automaticPublication ? "Проверката приключи. Текущият график остава без промяна. Новият вариант още не покрива условията за прилагане." : "Проверката приключи. Утвърденият график остава без промяна; предложението още чака преглед и утвърждаване."
             : "Проверката приключи. Програмата остава без промяна."
           : `Проверката на версия ${receipt.checked_revision} приключи без промяна. Показана е текущата версия ${displayedRevision}.`);
         if (lastCheckId.current !== receipt.check_id) {
@@ -85,9 +86,9 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
   const actionsDisabled = !canEdit || busy || externalBusy;
   const preparing = value.background_update?.status === "QUEUED" || value.background_update?.status === "RUNNING";
   return <section className="management-active" aria-label="Активна тренировъчна програма">
-    <div className="management-panel management-current-heading"><div><p className="eyebrow">Текущ план · версия {record.revision}</p><h2>{STATE[p.status]}</h2>
-      <WeekModeStatus record={record} profile={profile}/>{!symptomHold && !p.proposal && <p>{p.reason}</p>}
-      <p>{fixed ? `Утвърден период: ${week.start_date} – ${week.end_date}` : `Период: ${planRangeLabel(scheduleWeek)}`}. <Link href="/planning">Профил за планиране</Link></p>
+    <div className="management-panel management-current-heading"><div><p className="eyebrow">Текущ план · версия {record.revision}</p><h2>{automaticPublication && p.status === "REVIEW_REQUIRED" ? "Нужни са актуални данни" : STATE[p.status]}</h2>
+      <WeekModeStatus record={record} profile={profile} automaticPublication={automaticPublication}/>{!symptomHold && !p.proposal && <p>{p.reason}</p>}
+      <p>{fixed ? `${automaticPublication ? "Период" : "Утвърден период"}: ${week.start_date} – ${week.end_date}` : `Период: ${planRangeLabel(scheduleWeek)}`}. <Link href="/planning">Профил за планиране</Link></p>
       </div>
       <div className="management-actions">
         {p.status !== "COMPLETED" && <button type="button" className="action-button secondary" disabled={actionsDisabled} onClick={() => mutate("action", { action: p.status === "PAUSED" ? "RESUME" : "PAUSE" })}>{p.status === "PAUSED" ? "Продължи с текущите настройки" : "Пауза"}</button>}
@@ -103,20 +104,20 @@ export function ActiveTrainingPlan({ value, onChange, canEdit, today, renderDay,
       <details><summary>Условия и бележки {p.proposal ? "към предложението" : "към програмата"}</summary>
       <ul>{displayedWarnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}</ul></details>
     </aside>}
-    {p.proposal && <PlanProposalReview key={record.revision} record={record} canEdit={canEdit} busy={busy || externalBusy}
+    {p.proposal && <PlanProposalReview key={record.revision} record={record} canEdit={canEdit} busy={busy || externalBusy} automaticPublication={automaticPublication}
       symptomHold={symptomHold} onApprove={() => mutate("action", { action: "APPROVE" })} renderDay={renderDay} today={today} scheduleStart={selectedWeek}/>}
     {fixed && p.monitoring && <details className="management-panel"><summary>Актуална проверка на Recovery · {p.monitoring.evaluated_on}</summary>
       <p>Готовност в началото на деня, %. Бъдещите стойности са прогноза за предложения вариант, а не потвърждение на запазените дози. При липсващо покритие стойността остава неизвестна.</p>
       <div className="management-table-wrap"><table><thead><tr><th>Ден</th>{COMPONENTS.map(z => <th key={z}>{z}</th>)}</tr></thead><tbody>{p.monitoring.days.map(d => <tr key={d.date}><th>{d.date}</th>{COMPONENTS.map(z => <td key={z}>{typeof d.readiness_before?.[z] === "number" ? d.readiness_before[z]!.toFixed(0) : "—"}</td>)}</tr>)}</tbody></table></div>
     </details>}
     {!p.proposal && p.mode === "AUTO" && p.status === "ACTIVE" && p.changes.length > 0 && <details className="management-panel"><summary>Приложени промени · {p.changes.length} дни</summary>
-      <p>Тези корекции вече са включени в текущия график. Не чакат утвърждаване.</p>
+      <p>{automaticPublication ? "Тези корекции вече са включени в текущия график." : "Тези корекции вече са включени в текущия график. Не чакат утвърждаване."}</p>
       <ul>{p.changes.map(change => <li key={change.date}><strong>{change.date}:</strong> {change.before ? `${change.before} (${durationHms(change.before_minutes)}) → ` : ""}{change.after} ({durationHms(change.after_minutes)})<p>{change.reason}</p></li>)}</ul>
     </details>}
     <h3>{scheduleTitle} · {planRangeLabel(scheduleWeek)}</h3>
-    {schedule.forecastDates.length > 0 && <p className="management-notice">{schedule.proposalDates.length ? "Дните с „Прогноза от предложението“ са подготвени за преглед и очакват утвърждаване." : "Прогнозните дни се уточняват според изпълнението и възстановяването."}</p>}
-    {fixed && !showingProposal && <p className="management-muted">Оценките в запазените задачи са от утвърждаването. Новото изпълнение се отчита отделно и не променя автоматично тези дози. {p.monitoring ? `Последна проверка: ${p.monitoring.evaluated_on}.` : ""}</p>}
-    {p.status !== "COMPLETED" && (hasProgramDays(schedulePlan) || schedule.proposalDates.length > 0) && <div className={`management-days ${record.actionable ? "" : "management-reference"}`}><TrainingPlanWeek days={schedule.days} period={scheduleWeek} forecastDates={schedule.forecastDates} proposalDates={schedule.proposalDates} programmeLabel={showingProposal ? "Предложение" : "Утвърдено"} today={today} renderDay={day => <div key={day.date}>
+    {schedule.forecastDates.length > 0 && <p className="management-notice">{schedule.proposalDates.length ? automaticPublication ? "Дните с „Прогноза от предложението“ още не са приложени. Причината е показана по-горе." : "Дните с „Прогноза от предложението“ са подготвени за преглед и очакват утвърждаване." : "Прогнозните дни се уточняват според изпълнението и възстановяването."}</p>}
+    {fixed && !showingProposal && <p className="management-muted">{automaticPublication ? "Дозите са от последното съставяне на програмата. Актуалното изпълнение и възстановяване се отчитат при следващото обновяване." : "Оценките в запазените задачи са от утвърждаването. Новото изпълнение се отчита отделно и не променя автоматично тези дози."} {p.monitoring ? `Последна проверка: ${p.monitoring.evaluated_on}.` : ""}</p>}
+    {p.status !== "COMPLETED" && (hasProgramDays(schedulePlan) || schedule.proposalDates.length > 0) && <div className={`management-days ${record.actionable ? "" : "management-reference"}`}><TrainingPlanWeek days={schedule.days} period={scheduleWeek} forecastDates={schedule.forecastDates} proposalDates={schedule.proposalDates} programmeLabel={showingProposal ? "Предложение" : automaticPublication ? "Програма" : "Утвърдено"} today={today} renderDay={day => <div key={day.date}>
       {!showingProposal && !schedule.forecastDates.includes(day.date) && p.monitoring?.days.find(d => d.date === day.date)?.status === "REVIEW_REQUIRED" && <p className="management-notice" role="status">Нужен е преглед на запазената задача. {p.monitoring.days.find(d => d.date === day.date)?.reason}</p>}
       {!showingProposal && !schedule.forecastDates.includes(day.date) && p.outcomes.some(o => o.date === day.date && ["RECORDED", "DIFFERENT_ACTIVITY"].includes(o.status)) && <p className="management-muted">Има отчетена активност за този ден. Запазената задача е показана за съпоставка, не като допълнителна тренировка.</p>}
       {renderDay(day)}

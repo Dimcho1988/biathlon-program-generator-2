@@ -1,7 +1,7 @@
-"""Durable manual drafts: short HTTP acceptance, fenced worker publication.
+"""Durable program generation: short HTTP acceptance, fenced publication.
 
 The existing generator and authoritative draft writer remain responsible for
-training rules and input freshness. A job never activates a program.
+training rules and input freshness. Valid results become current atomically.
 """
 import logging
 from threading import Event, Thread
@@ -23,7 +23,7 @@ def public_job(value):
             or value.get('stage') not in STAGES or not isinstance(value.get('job_id'), str)):
         raise PersistentStoreFailure('Invalid planning job state')
     fields = ('job_id', 'status', 'stage', 'start_date', 'requested_at', 'updated_at',
-              'attempts', 'result_revision', 'error_code')
+              'attempts', 'result_revision', 'result_active_revision', 'published', 'error_code')
     return {key: value.get(key) for key in fields}
 
 
@@ -46,6 +46,9 @@ def status(repository, alias, actor, job_id=None):
 
 def process_next(repository):
     """Process at most one job. SQL owns retries, leases and final publication."""
+    queue_unpublished = getattr(repository, 'queue_unpublished_plans', None)
+    if callable(queue_unpublished):
+        queue_unpublished()
     token = str(uuid4())
     job = repository.planning_job('CLAIM', token=token)
     if job is None:
@@ -83,8 +86,8 @@ def process_next(repository):
     thread.start()
     try:
         body = ManagementGenerateRequest.model_validate(job['request'])
-        payload = management_service.build_draft(repository, job['athlete_alias'], body.start_date,
-            body.expected_profile_revision, on_progress=progress)
+        payload = management_service.build_generated_plan(repository, job['athlete_alias'], body,
+            job['actor_id'], on_progress=progress)
         if lost.is_set():
             raise HTTPException(409, 'Planning job ownership changed')
         renew('SAVING')

@@ -178,3 +178,17 @@ def test_unknown_method_override_rejected_by_canonical_catalog():
         prepare(Repository(), "athlete", "MANAGEMENT_PROFILE", "management-profile-v1",
             {"method_library": {"overrides": {"invented-method": {"enabled": False}}}}, 3)
     assert exc.value.status_code == 422
+
+
+@pytest.mark.parametrize('override', [
+    {'repetitions': [0, 0]}, {'repetitions': [101, 101]}, {'work_range': [120, 60]},
+    {'work_range': [0, 30]}, {'speed_multiplier': [float('inf'), float('inf')]},
+])
+def test_catalog_form_proposals_still_require_canonical_numeric_validation(override):
+    repo = Repository()
+    original = deepcopy(repo.profile)
+    with pytest.raises(HTTPException) as error:
+        prepare(repo, 'athlete', 'MANAGEMENT_PROFILE', 'management-profile-v1',
+            {'method_library': {'overrides': {'R03': override}}}, 3)
+    assert error.value.status_code == 422
+    assert repo.profile == original

@@ -643,7 +643,7 @@ def test_coaching_answer_can_use_the_larger_budget_without_changing_pilot_reserv
     assert "не транслитерирай руски изрази" in prompt
     assert "кратки свързани абзаци" in prompt
     assert "Между абзаците оставяй празен ред" in prompt
-    assert "не са промяна на утвърдения план" in prompt
+    assert "не са промяна на запазения план" in prompt
     assert "dose_evidence" in prompt
     assert "Не измисляй автори" in prompt
     assert "Не създавай тренировъчна програма, формули" not in prompt
@@ -882,3 +882,15 @@ def test_history_budget_preserves_user_constraints_before_old_assistant_explanat
     assert all(message in payload["input"] for message in latest)
     assert restored_payload_context(payload) == context
     assert "Не искай повторение само защото стар текст е пропуснат" in payload["input"][0]["content"]
+
+
+def test_final_explicit_action_can_use_read_input_contract_but_cannot_read_again():
+    from apps.api.assistant_service import _capabilities
+    p = provider(lambda request: httpx.Response(200))
+    payload = p._payload([{'role': 'user', 'content': 'Промени праговата работа на интервали.'}],
+        {'final_command_allowed': True, 'remaining_read_calls': 0},
+        {**_capabilities({'can_view_plan': True, 'can_edit_plan': True}), 'read': [], 'write': ['MANAGEMENT_PROFILE']})
+    properties = payload['tools'][0]['parameters']['properties']
+    assert properties['query'] == {'type': 'null'}
+    assert properties['command']['type'] != 'null'
+    assert 'MANAGEMENT_PROFILE' in payload['input'][0]['content']

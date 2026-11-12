@@ -567,6 +567,7 @@ export interface PlanOutcome extends PlanComparisonOutcome {
 export interface ActivePlanRecord {
   revision: number; stale: boolean; actionable: boolean; stale_reason?: string | null;
   payload: { schema_version: "active-plan-v2"; status: "ACTIVE" | "PAUSED" | "REVIEW_REQUIRED" | "COMPLETED";
+    origin?: {start_date: string; draft_revision: number};
     q_execution?: QExecution | null;
     week_window?: { start_date: string; end_date: string };
     proposal_mode?: "AUTO" | "REVIEW";
@@ -580,13 +581,14 @@ export interface ActivePlanResponse {
   background_update?: {status: "QUEUED" | "RUNNING" | "FAILED" | "READY"; error_code?: string | null};
   active: ActivePlanRecord | null;
   history: Array<{ revision: number; operation: string; recorded_at: string; reason: string; changes: PlanChange[] }>;
-  capabilities?: { unchanged_checks?: boolean };
+  capabilities?: { unchanged_checks?: boolean; automatic_publication?: boolean };
   action_result?: PlanCheckReceipt;
 }
 export function parseActivePlanResponse(value: unknown): ActivePlanResponse {
   if (!isRecord(value) || !Array.isArray(value.history)) throw new Error("Невалидна история на активния план.");
   if (value.capabilities !== undefined && (!isRecord(value.capabilities)
-    || (value.capabilities.unchanged_checks !== undefined && typeof value.capabilities.unchanged_checks !== "boolean")))
+    || (value.capabilities.unchanged_checks !== undefined && typeof value.capabilities.unchanged_checks !== "boolean")
+    || (value.capabilities.automatic_publication !== undefined && typeof value.capabilities.automatic_publication !== "boolean")))
     throw new Error("Невалидни възможности на активния план.");
   if (value.background_update !== undefined && (!isRecord(value.background_update)
     || !["QUEUED","RUNNING","FAILED","READY"].includes(String(value.background_update.status))))
@@ -599,6 +601,8 @@ export function parseActivePlanResponse(value: unknown): ActivePlanResponse {
   const row = value.active;
   if (!isRecord(row) || !integer(row.revision, 1, Number.MAX_SAFE_INTEGER) || typeof row.stale !== "boolean" || typeof row.actionable !== "boolean" || !isRecord(row.payload)) throw new Error("Невалидна активна програма.");
   const p = row.payload;
+  if (p.origin !== undefined && (!isRecord(p.origin) || !isCalendarDate(p.origin.start_date)
+    || !integer(p.origin.draft_revision, 1, Number.MAX_SAFE_INTEGER))) throw new Error("Невалиден източник на активната програма.");
   validateQExecution(p.q_execution);
   if (p.schema_version !== "active-plan-v2" || !["ACTIVE", "PAUSED", "REVIEW_REQUIRED", "COMPLETED"].includes(String(p.status))
     || !["AUTO", "REVIEW"].includes(String(p.mode)) || typeof p.reason !== "string" || !Array.isArray(p.changes)

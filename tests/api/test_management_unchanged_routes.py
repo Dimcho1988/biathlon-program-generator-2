@@ -42,7 +42,7 @@ def test_manual_check_receipt_is_separate_from_fresh_current_and_not_saved(clien
     value = response.json()
     assert value["active"]["revision"] == revision and value["active"]["payload"]["status"] == "REVIEW_REQUIRED"
     assert value["action_result"] == {"operation": "CHECK_NO_CHANGE", **{k: CHECK[k] for k in ("checked_revision", "check_id", "recorded_at")}}
-    assert value["capabilities"] == {"unchanged_checks": True}
+    assert value["capabilities"] == {"unchanged_checks": True, "automatic_publication": True}
     assert calls == ["check", "fresh"]
     assert "unchanged_check" not in old and "action_result" not in value["active"]
 
@@ -74,7 +74,7 @@ def test_no_check_history_query_on_active_or_state(client, monkeypatch):
     monkeypatch.setattr(management.management_lifecycle, "current", lambda *a, **kw: {"active": None, "history": []})
     monkeypatch.setattr(management.management_lifecycle, "state", lambda *a, **kw: {"revision": 0, "stale": False})
     response = client.get("/api/v2/athlete/management/active", headers=HEADERS)
-    assert response.json() == {"active": None, "history": [], "capabilities": {"unchanged_checks": True}}
+    assert response.json() == {"active": None, "history": [], "capabilities": {"unchanged_checks": True, "automatic_publication": True}}
     assert client.get("/api/v2/athlete/management/state", headers=HEADERS).json() == {"revision": 0, "stale": False}
 
 

@@ -122,7 +122,7 @@ def _periodization(value):
 def _plan(value):
     if not isinstance(value, dict):
         return None
-    result = _scalars(value, {"schema_version", "status", "start_date", "end_date", "generated_at", "engine_version", "profile_revision", "is_approved", "fingerprint"})
+    result = _scalars(value, {"schema_version", "status", "start_date", "end_date", "generated_at", "engine_version", "profile_revision", "plan_role", "fingerprint"})
     if isinstance(value.get("input_snapshot"), dict):
         result["input_snapshot"] = _scalars(value["input_snapshot"], {"evaluation_date", "profile_revision", "engine_version"})
     for name in ("days", "lookahead_days"):
@@ -141,6 +141,8 @@ def _plan(value):
 
 def _record(value):
     result = _scalars(value, {"revision", "recorded_at", "entry_key", "operation", "stale", "stale_reason", "status", "plan_status", "has_proposal", "engine_version", "detail_query"})
+    if isinstance(value.get("preparation"), dict):
+        result["preparation"] = _scalars(value["preparation"], {"status", "prepared_at", "evaluated_on", "reason"})
     for name in ("plan", "proposal", "payload"):
         if name in value:
             result[name] = _plan(value[name])
@@ -153,8 +155,10 @@ def project_management(payload, view):
     if not isinstance(payload, dict):
         return {}
     result = _scalars(payload, {"availability", "reason", "view_kind", "schema_version", "configured", "revision", "latest_revision", "start_date", "stale", "today", "timezone", "detail_query"})
+    if isinstance(payload.get("preparation"), dict):
+        result["preparation"] = _scalars(payload["preparation"], {"status", "prepared_at", "evaluated_on", "reason"})
     if view == "profile":
-        return project_profile(payload)
+        return {**result, **project_profile(payload)}
     if view in {"active", "week"}:
         return {**result, **_record(payload)}
     if view == "outlook":

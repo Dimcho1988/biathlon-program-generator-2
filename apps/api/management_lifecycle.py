@@ -1,4 +1,4 @@
-"""Approve once, reconcile actual work, and adapt only unexecuted future days.
+"""Publish validated programs, reconcile actual work and adapt future days.
 
 The daily worker and post-sync hook share this idempotent service. A paused plan
 cannot be restarted by a worker. Missing load coverage never means a rest day.
@@ -26,20 +26,6 @@ def _approval_inputs(frozen):
     return critical
 
 
-def _compatible_horizon_extension(old, frozen):
-    """Only the v72→v73 display horizon may inherit an existing AUTO consent.
-
-    Match the exact previously approved hash after substituting that one engine
-    identity. Any physiology, dosing rule, profile, Recovery or mode change
-    retains the existing proposal/approval boundary.
-    """
-    critical = _approval_inputs(frozen)
-    if (old.get("mode") != "AUTO" or critical["management_profile"].get("adaptation_mode") != "AUTO"
-            or critical["rule_versions"].get("engine") != "training-management-v73-rolling-adaptive-window"):
-        return False
-    critical["rule_versions"]["engine"] = "training-management-v72-measured-replay-budget"
-    return _hash(critical) == old.get("approved_settings_fingerprint")
-
 
 def _context(repository, alias, now, analysis_hints=None, *, _initial_read_phase=None):
     repository = ReadSession.planning(repository, _initial_read_phase)
@@ -52,8 +38,8 @@ def _context(repository, alias, now, analysis_hints=None, *, _initial_read_phase
     state = management_service.input_state(repository, alias, evaluated_at=now,
         include_response=True, analysis_hints=analysis_hints)
     frozen = {**state, "management_profile": profile, "profile_revision": stored["revision"]}
-    # Calendar/preferences edits and new speed observations are ordinary input
-    # changes. New dosing rules, physiology or Recovery settings need approval.
+    # All saved settings are inputs to the canonical algorithm. Their identity
+    # is retained for provenance; a second approval is not a publication gate.
     resolved, _ = horizon(profile, (state.get("calendar") or {}).get("events", []))
     return stored["revision"], resolved, frozen, _hash(frozen), _hash(_approval_inputs(frozen))
 
@@ -139,9 +125,11 @@ def current(repository, alias, *, now=None):
         and date.fromisoformat(profile["program_end"]) > date.fromisoformat(record["payload"].get("evaluated_on", profile["program_end"])))
     return {"active": {**record, "stale": stale,
                        "actionable": record["payload"]["status"] == "ACTIVE" and not stale,
-                       "stale_reason": "Показаната програма е приключила. Създайте или утвърдете проект за следващия период." if expired else
-                       "Календарът продължава след приключения план. Прегледайте и създайте нов проект; планът не се активира автоматично." if extended_completed else
-                       "Данните са променени. При нова тренировка програмата се обновява във фонов режим; при друга промяна изберете „Обнови сега“." if stale else None},
+                       "stale_reason": "Календарът продължава след приключения план. Създайте програма за новия период." if extended_completed else
+                       "Периодът е завършен. За нова подготовка задайте следващия период и създайте програма." if expired and record["payload"]["status"] == "COMPLETED" else
+                       "Програмата е на пауза. Подновете я, за да се подготви актуалният период." if expired and record["payload"]["status"] == "PAUSED" else
+                       "Показаният период е приключил. Следващата програма се подготвя според актуалните данни." if expired else
+                       "Данните са променени. Програмата се обновява във фонов режим според актуалните настройки." if stale else None},
             "history": store.history(alias)}
 
 
@@ -194,8 +182,7 @@ def activate(repository, alias, body, actor, *, now=None, include_saved_payload=
                "week_window": _window(plan), "week_policy": "fixed-or-adaptive-v1",
                "decisions": {}, "outcomes": [], "changes": [],
                "q_execution": deepcopy(plan.get("q_execution")),
-               "reason": "Седмицата е фиксирана. Изпълнението се отчита ежедневно; промени се прилагат след утвърждаване." if profile["adaptation_mode"] == "REVIEW" else
-                         "Програмата е утвърдена. Следващите дни се адаптират автоматично."}
+               "reason": "Програмата е готова. Промените се проверяват и прилагат според правилата на алгоритъма."}
     return store.save(alias, payload, body.expected_revision, actor, "ACTIVATE", profile_revision, checkpoint,
                       include_payload=include_saved_payload)
 
@@ -284,7 +271,7 @@ def _window(plan):
 
 
 def _next_window(window, today, program_end):
-    """Keep seven-day boundaries anchored to the approved end, even after a pause."""
+    """Keep seven-day boundaries anchored to the saved end, even after a pause."""
     start = date.fromisoformat(window["end_date"]) + timedelta(days=1)
     start += timedelta(days=max(0, (today-start).days // 7) * 7)
     return {"start_date": start.isoformat(), "end_date": min(start+timedelta(days=6), program_end).isoformat()}
@@ -306,7 +293,7 @@ def _monitoring(plan, changes, source, today):
 
 
 def _published_monitoring(payload):
-    """A reviewed proposal becomes the approved forecast, not a pending warning."""
+    """Mark the published forecast as current instead of a pending warning."""
     monitoring = payload.get("monitoring")
     if monitoring:
         monitoring["forecast_basis"] = "APPROVED_SCHEDULE"
@@ -355,7 +342,8 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
     initial_read_phase = ReadSession(repository, planning_settings_bundle=True)
     profile_revision, profile, frozen, fingerprint, approval_hash = _context(
         repository, alias, now, _initial_read_phase=initial_read_phase)
-    if not force and not day_action and (old.get("processed_input_fingerprint") == fingerprint
+    pending_valid = old.get("status") == "REVIEW_REQUIRED" and _eligible(old.get("proposal") or {})
+    if not force and not day_action and not pending_valid and (old.get("processed_input_fingerprint") == fingerprint
             or old.get("evaluated_on") == frozen["evaluation_date"] and _inputs_current(
                 frozen, old.get("processed_input_fingerprint"), old.get("evaluated_on"), analysis_hints=_plan_hints(old))):
         store.defer_check(alias, record["revision"])
@@ -386,8 +374,8 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
     start = max(today, date.fromisoformat(old["origin"]["start_date"]), date.fromisoformat(profile["program_start"]))
     if start > today + timedelta(days=7):
         raise HTTPException(409, "The new program start requires a separate draft")
-    # REVIEW is the backwards-compatible fixed-week mode. Saving a different
-    # mode is a rules change: it creates a preview and never switches the plan.
+    # REVIEW remains a backwards-compatible fixed-week horizon, not a second
+    # user approval. Both horizons publish only canonical eligible results.
     fixed = profile["adaptation_mode"] == "REVIEW"
     approved_window = old.get("week_window") or _window(old["plan"])
     next_week = fixed and today.isoformat() > approved_window["end_date"]
@@ -422,19 +410,11 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
                    proposal_mode=profile["adaptation_mode"],
                    proposal_week_window=candidate_window or _window(plan),
                    monitoring=_monitoring(plan, payload["changes"], source, today))
-    if _compatible_horizon_extension(old, frozen):
-        payload["approved_settings_fingerprint"] = approval_hash
-    needs_rule_approval = approval_hash != payload["approved_settings_fingerprint"] or profile_revision != old["approved_profile_revision"]
-    if fixed and _eligible(plan) and not needs_rule_approval and not next_week and not payload["changes"]:
-        # Monitoring freshness advances while every approved dose stays identical.
-        payload.update(status="ACTIVE", proposal=None,
-                       reason="Фиксираната седмица е запазена. Актуалната проверка не предлага промяна на оставащите задачи.")
-        operation = "RESUME" if resume else "REVIEW"
-        if resume:
-            payload["approved_by"] = str(actor)
-    elif _eligible(plan) and old["mode"] == "AUTO" and not needs_rule_approval:
-        plan.update(review_required=False, automatically_published=automatic)
-        payload.update(status="ACTIVE", plan=plan, proposal=None, week_window=_window(plan),
+    if _eligible(plan):
+        plan.update(review_required=False, automatically_published=True)
+        payload.update(status="ACTIVE", plan=plan, proposal=None, week_window=candidate_window or _window(plan),
+                       mode=profile["adaptation_mode"], approved_profile_revision=profile_revision,
+                       approved_settings_fingerprint=approval_hash,
                        reason="Следващите дни са адаптирани към реалното изпълнение. Пропуснатото не се наваксва автоматично.")
         _published_monitoring(payload)
         operation = "RESUME" if resume else "DAY" if day_action else "ADAPT"
@@ -444,12 +424,12 @@ def refresh(repository, alias, actor=None, *, expected_revision=None, now=None, 
         illness_hold = next((w for w in plan.get("warnings", []) if w["code"] in {"REPORTED_ILLNESS_OR_PAIN", "LEARNING_REVIEW"}), None)
         payload.update(status="REVIEW_REQUIRED", proposal=plan,
                        reason=illness_hold["message"] if illness_hold else
-                       "Новият режим или променените правила очакват утвърждаване." if needs_rule_approval else
-                       "Фиксираната седмица приключи. Следващата е предложена според актуалното изпълнение и очаква утвърждаване." if next_week else
-                       "Нужен е преглед. Фиксираните задачи са запазени; предложените корекции не са приложени." if fixed else
-                       "Предложената адаптация очаква утвърждаване." if _eligible(plan) else
                        "Липсват достатъчно актуални данни за следващата доза. Обновете активностите и прегледайте причините.")
         operation = "REVIEW"
+    if not automatic:
+        # A deliberate edit is owned by the currently authorized coach. A
+        # revoked previous editor must not strand future background updates.
+        payload["approved_by"] = str(actor)
     payload["q_execution"] = deepcopy(plan.get("q_execution")) or execution_report(source, today,
         [payload["plan"], payload.get("proposal")], old.get("q_execution"))
     _attach_execution_q(payload["outcomes"], payload["q_execution"])
@@ -489,7 +469,7 @@ def approve_proposal(repository, alias, body, actor, *, now, include_saved_paylo
     payload.update(status="ACTIVE", plan=proposal, proposal=None, approved_by=str(actor),
                    approved_profile_revision=profile_revision, approved_settings_fingerprint=approval_hash,
                    mode=profile["adaptation_mode"], week_window=window, evaluated_on=frozen["evaluation_date"],
-                   processed_input_fingerprint=fingerprint, reason="Показаната адаптация е утвърдена без промяна на прегледаните задачи.")
+                   processed_input_fingerprint=fingerprint, reason="Показаната адаптация е приложена без промяна на задачите.")
     _published_monitoring(payload)
     return store.save(alias, payload, record["revision"], actor, "APPROVE", profile_revision, checkpoint,
                       include_payload=include_saved_payload)

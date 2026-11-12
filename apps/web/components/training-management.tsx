@@ -1,5 +1,6 @@
 "use client";
 import {fetchPrepared} from "../lib/prepared-view";
+import {PreparedViewRetry} from "./prepared-view-retry";
 import { speedBasisLabel } from "../lib/speed-basis";
 import { SpeedEquivalenceComparison } from "./speed-equivalence-comparison";
 import { PreferredSpeed, RunningSpeedUnitControl } from "./running-speed-unit";
@@ -9,7 +10,7 @@ import { parsePlanningJob, planningPending, planningStageLabel, planningFailure,
 import { lactateRangeText } from "../lib/training-observations";
 
 import Link from "next/link";
-import { changeActivePlan, newerActivePlan, PLAN_CHANGED_NOTICE } from "../lib/active-plan-request";
+import { newerActivePlan } from "../lib/active-plan-request";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { durationHms } from "../lib/duration-format";
 import { blockDurationLabel, componentColor, strengthDuration } from "../lib/training-visuals";
@@ -30,13 +31,14 @@ import { activeScheduleView, availableScheduleWindows, isAdaptivePlan, planRange
 import { SyncActionForm } from "./sync-action-form";
 import { SyncStatusPanel } from "./sync-status-panel";
 import type { SyncState } from "../lib/sync";
-import type { ManagementOverviewActive } from "../lib/management-overview";
+import type { ManagementOverviewActive, ManagementPreparation } from "../lib/management-overview";
 import {
   daySessions, rejectedMethodIds, CAPACITY_LABELS, COMPONENTS, PHASE_LABELS, parseDrafts,
   parseActivePlanResponse, type ActivePlanResponse, type ManagementOutlook, type DraftDay, type DraftRecord, type ManagementProfileResponse,
 } from "../lib/training-management";
 
 const number = (value: unknown, digits = 1) => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("bg-BG", { maximumFractionDigits: digits }) : "—";
+const EMPTY_ACTIVE: ActivePlanResponse = {active: null, history: []};
 const dateLabel = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString("bg-BG", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 const datePlus = (day: string, days: number) => { const value = new Date(`${day}T12:00:00Z`); value.setUTCDate(value.getUTCDate() + days); return value.toISOString().slice(0, 10); };
 class ManagementRequestError extends Error {
@@ -138,8 +140,8 @@ function CoachWeekReport({days, today, proposalDates = []}: {days: DraftDay[]; t
   </details>;
 }
 
-export function TrainingManagement({ initialView = "week", initialOutlook = null, athleteName, canEdit, initialProfile, initialDrafts, initialActive = { active: null, history: [] }, initialOverviewActive, initialSyncState = null, syncError = false, today: initialToday }: {
-  initialOutlook?: ManagementOutlook | null; initialOverviewActive?: ManagementOverviewActive; initialView?: "week" | "overview"; athleteName: string; canEdit: boolean; initialProfile: ManagementProfileResponse; initialDrafts: DraftRecord[]; initialActive?: ActivePlanResponse; initialSyncState?: SyncState | null; syncError?: boolean; today: string;
+export function TrainingManagement({ initialView = "week", initialOutlook = null, athleteName, canEdit, initialProfile, initialDrafts, initialActive = EMPTY_ACTIVE, initialOverviewActive, initialSyncState = null, syncError = false, preparation = null, today: initialToday }: {
+  preparation?: ManagementPreparation | null; initialOutlook?: ManagementOutlook | null; initialOverviewActive?: ManagementOverviewActive; initialView?: "week" | "overview"; athleteName: string; canEdit: boolean; initialProfile: ManagementProfileResponse; initialDrafts: DraftRecord[]; initialActive?: ActivePlanResponse; initialSyncState?: SyncState | null; syncError?: boolean; today: string;
 }) {
   const [today, setToday] = useState(initialToday);
   const scopedFetch = useManagementFetch();
@@ -151,6 +153,13 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
 }, [scopedFetch]);
 
   const [active, setActive] = useState(initialActive);
+  const [serverActive, setServerActive] = useState(initialActive);
+  if (serverActive !== initialActive) {
+    setServerActive(initialActive);
+    setActive(current => newerActivePlan(current, initialActive));
+    if (isCalendarDate(initialActive.today)) setToday(initialActive.today);
+  }
+  const automaticPublication = active.capabilities?.automatic_publication === true;
   const saved = initialProfile;
   const [drafts, setDrafts] = useState(initialDrafts);
   const snapshot = isRecord(initialOutlook?.input_snapshot) ? initialOutlook.input_snapshot : {};
@@ -164,6 +173,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [planningJob, setPlanningJob] = useState<PlanningJob | null>(null);
+  const [awaitingPublication, setAwaitingPublication] = useState(false);
   const activeRequest = useRef(false);
   const receiveActive = useCallback((value: ActivePlanResponse) => {
     if (isCalendarDate(value.today)) setToday(value.today);
@@ -176,7 +186,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   const endActiveChange = useCallback(() => { activeRequest.current = false; setBusy(null); }, []);
 
   const draft = drafts[0];
-  const guidance = effectiveEnd && effectiveEnd < today ? { step: "PROFILE", title: "Периодът на подготовката е приключил", description: "Задай следващия период в профила, за да подготвим нова програма." } : saved.profile && saved.profile.program_start > datePlus(today, 7) ? { step: "WAIT", title: "Подготовката започва по-късно", description: "Седмичната програма може да бъде подготвена до седем дни преди началото. При нужда промени датите в профила." } : managementGuidance({ configured: saved.configured, dirty: false, draft, sync: initialSyncState, today });
+  const guidance = effectiveEnd && effectiveEnd < today ? { step: "PROFILE", title: "Периодът на подготовката е приключил", description: "Задай следващия период в профила, за да подготвим нова програма." } : saved.profile && saved.profile.program_start > datePlus(today, 7) ? { step: "WAIT", title: "Подготовката започва по-късно", description: "Седмичната програма може да бъде подготвена до седем дни преди началото. При нужда промени датите в профила." } : managementGuidance({ configured: saved.configured, dirty: false, draft, sync: initialSyncState, today, automaticPublication });
   const view = initialView;
   const [newDraft, setNewDraft] = useState(false);
   const [selectedWeek, setSelectedWeek] = useState<string>();
@@ -202,9 +212,9 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
       && (!initialOutlook?.engine_version || compactOverview.engine_version === initialOutlook.engine_version)
     : sessionsCurrent;
   const sessionStatus = !overviewSessionsCurrent ? "Няма актуални съставени сесии. Подготви или обнови седмичната програма."
-    : !compactOverview && showDraft ? "Времето е от проект за преглед; тренировките още не са утвърдени."
-    : (compactOverview ? compactOverview.has_proposal : active.active?.payload.proposal) ? "Времето е от утвърдения график. Има отделно предложение за промяна; запазените задачи изискват преглед."
-    : (compactOverview?.status ?? active.active?.payload.status) === "ACTIVE" ? "Времето е от текущата утвърдена програма."
+    : !compactOverview && showDraft ? "Времето е от подготвения вариант; той още не е приложен."
+    : (compactOverview ? compactOverview.has_proposal : active.active?.payload.proposal) ? "Времето е от текущия график. Има отделен вариант, който още не е приложен."
+    : (compactOverview?.status ?? active.active?.payload.status) === "ACTIVE" ? "Времето е от текущата програма."
     : "Времето е от запазена програма, която в момента не е активна.";
 
   useEffect(() => {
@@ -241,14 +251,42 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
   }
 
   const receiveGeneratedDraft = useCallback(async (job: PlanningJob, signal?: AbortSignal) => {
+    let paused = false;
+    if (automaticPublication) {
+      const latest = parseActivePlanResponse(await requestJson("active", "GET", undefined, signal));
+      receiveActive(latest);
+      paused = latest.active?.payload.status === "PAUSED";
+      const matchesOrigin = latest.active?.payload.origin?.start_date === job.start_date
+        && latest.active?.payload.origin?.draft_revision === job.result_revision;
+      const matchesReceipt = typeof job.result_active_revision === "number"
+        && (latest.active?.revision ?? 0) >= job.result_active_revision;
+      if (latest.active && (matchesReceipt || matchesOrigin && latest.active.stale === false)) {
+        setNewDraft(false); setStartDate(job.start_date);
+        setAwaitingPublication(false);
+        setNotice(latest.active.payload.status === "PAUSED" ? "Програмата е записана и в момента е на пауза."
+          : latest.active.payload.status === "COMPLETED" ? "Програмата е записана. Показаният период вече е завършен."
+          : latest.active.stale ? "Програмата е записана. Показана е последната версия; новите данни още се обработват."
+          : latest.active.payload.status !== "ACTIVE" ? "Програмата е записана. Последната проверка изисква уточняване на данните."
+          : "Програмата е готова и е приложена. Избери ден, за да видиш тренировката.");
+        return true;
+      }
+      if (typeof job.result_active_revision === "number") {
+        setAwaitingPublication(true); setBusy("generate"); setPlanningJob(job);
+        setNotice("Програмата е записана. Зареждаме актуалния график…");
+        return false;
+      }
+    }
     const history = parseDrafts(await requestJson(`drafts?start_date=${encodeURIComponent(job.start_date)}&revision=${job.result_revision}`, 'GET', undefined, signal));
     const record = history.find(row => row.revision === job.result_revision && row.entry_key === job.start_date);
     if (!record) throw new ManagementRequestError('Готовата програма вече е променена. Презареди последната версия.', 404);
     setDrafts(previous => [record, ...previous.filter(item => !(item.entry_key === record.entry_key && item.revision === record.revision))]);
-    setNewDraft(true);
+    setNewDraft(!paused);
     setStartDate(job.start_date);
-    setNotice(record.payload.status === 'BLOCKED' ? 'Нужна е още една стъпка. Виж указанието по-долу.' : 'Програмата е подготвена. Прегледай я преди започване.');
-  }, [requestJson]);
+    setNotice(paused ? 'Вариантът е запазен. Програмата е на пауза; избери „Продължи с текущите настройки“, когато си готов.'
+      : record.payload.status === 'BLOCKED' || automaticPublication ? 'Програмата още не е приложена. Виж конкретната причина по-долу.' : 'Програмата е подготвена. Прегледай я преди започване.');
+    setAwaitingPublication(false);
+    return true;
+  }, [requestJson, receiveActive, automaticPublication]);
 
   useEffect(() => {
     if (!canEdit || initialView !== 'week') return;
@@ -269,7 +307,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     return () => { cancelled = true; controller.abort(); };
   }, [canEdit, initialView, initialActive.active, requestJson, receiveGeneratedDraft]);
 
-  const pendingGeneration = planningPending(planningJob);
+  const pendingGeneration = planningPending(planningJob) || awaitingPublication;
   const pendingJobId = pendingGeneration ? planningJob?.job_id : null;
   useEffect(() => {
     if (!pendingJobId) return;
@@ -289,16 +327,16 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
         if (cancelled) return;
         if (!job) throw new Error('Заявката за подготовка не е намерена.');
         if (job.status === 'SUCCEEDED') {
-          await receiveGeneratedDraft(job, signal);
-          if (!cancelled) { setBusy(null); setPlanningJob(job); }
-          again = false;
+          const received = await receiveGeneratedDraft(job, signal);
+          if (!cancelled) { if (received) setBusy(null); setPlanningJob(job); }
+          again = !received;
         } else if (job.status === 'FAILED') {
-          setPlanningJob(job); setBusy(null); setError(planningFailure(job)); again = false;
+          setPlanningJob(job); setAwaitingPublication(false); setBusy(null); setError(planningFailure(job)); again = false;
         } else { setPlanningJob(job); setNotice(''); }
       } catch (caught) {
         if (!cancelled) {
           if (caught instanceof ManagementRequestError && [401, 403, 404, 409, 412, 422].includes(caught.status)) {
-            setPlanningJob(null); setBusy(null); setError(caught.message); again = false;
+            setPlanningJob(null); setAwaitingPublication(false); setBusy(null); setError(caught.message); again = false;
           } else setNotice('Връзката с подготовката временно е прекъсната. Запазената заявка продължава във фонов режим.');
         }
       } finally {
@@ -322,7 +360,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
         expected_profile_revision: saved.revision, expected_draft_revision: metadata.revision}));
       if (!job) throw new Error('Заявката за подготовка не е потвърдена.');
       if (planningPending(job)) { queued = true; setPlanningJob(job); }
-      else if (job.status === 'SUCCEEDED') await receiveGeneratedDraft(job);
+      else if (job.status === 'SUCCEEDED') queued = !await receiveGeneratedDraft(job);
       else throw new Error(planningFailure(job));
     } catch (caught) {
       // An uncertain POST may already have committed. Read its durable state;
@@ -353,6 +391,10 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     <RunningSpeedUnitControl/>
     <header className="activities-hero"><div className="activities-title"><div><p className="eyebrow">{athleteName}</p><h1>{view === "week" ? "Седмична програма" : "Дългосрочен план"}</h1><p>Подготовката в перспектива. Конкретната задача за всеки ден.</p></div></div><Link className="text-action" href="/planning">Профил за планиране →</Link></header>
     {!canEdit && <p className="management-notice">Имате достъп за преглед. Промените изискват право за редакция на плана.</p>}
+    {preparation && <section className="management-notice" aria-label="Обновяване на програмата">
+      <p role="status">Показана е последната налична програма{preparation.evaluated_on ? ` към ${dateLabel(preparation.evaluated_on)}` : ""}. Обновяването продължава във фонов режим. Дозите може да не отразяват последните промени.</p>
+      <PreparedViewRetry compact/>
+    </section>}
     {error && <p className="management-error" role="alert">{error}</p>}{notice && <p className="management-notice" role="status">{notice}</p>}
     {pendingGeneration && planningJob && <section className="management-notice" aria-label="Подготовка на програмата">
       <p role="status">{planningStageLabel(planningJob)}</p>
@@ -367,7 +409,8 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
       </select></label>
     </div>}
     {view === "week" && overviewPlan && <details className="management-panel"><summary>Цели и изпълнение по микроцикъл</summary>
-    {view === "week" && overviewPlan && !archivedDraft && (showDraft || active.active?.stale === false) && <TrainingPlanReport plan={overviewPlan} planKind={showDraft ? "DRAFT" : "APPROVED"} today={today} selectedWeek={isAdaptivePlan(overviewPlan) ? undefined : selectedWeek} onWeekChange={isAdaptivePlan(overviewPlan) ? undefined : setSelectedWeek} showProposal={!showDraft && showProposal} onShowProposalChange={setShowProposal} proposal={showDraft ? null : active.active?.payload.proposal} qExecution={showDraft ? undefined : active.active?.payload.q_execution} outcomes={showDraft ? [] : active.active?.payload.outcomes}/>}
+    {!showDraft && active.active?.stale && <p className="management-notice">Отчетът е от последната запазена програма. Новите данни още не са отразени в дозите.</p>}
+    {view === "week" && overviewPlan && !archivedDraft && <TrainingPlanReport automaticPublication={automaticPublication} plan={overviewPlan} planKind={showDraft ? "DRAFT" : "APPROVED"} today={today} selectedWeek={isAdaptivePlan(overviewPlan) ? undefined : selectedWeek} onWeekChange={isAdaptivePlan(overviewPlan) ? undefined : setSelectedWeek} showProposal={!showDraft && showProposal} onShowProposalChange={setShowProposal} proposal={showDraft ? null : active.active?.payload.proposal} qExecution={showDraft ? undefined : active.active?.payload.q_execution} outcomes={showDraft ? [] : active.active?.payload.outcomes}/>}
     </details>}
     {(view === "overview" || (!archivedDraft && (showDraft || active.active?.stale === false))) && <IndividualLearningPanel plan={view === "overview" ? initialOutlook : visibleWeekPlan} />}
 
@@ -382,7 +425,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
           {guidance.step === "CHECK" && <div className="management-actions"><a href="#plan-details">Виж конкретните причини ↓</a><Link href="/planning">Провери профила →</Link></div>}
           {guidance.step === "REVIEW" && <><p className="management-muted">{saved.profile?.adaptation_mode === "AUTO" ? "След започване следващите дни ще се адаптират автоматично според реалното изпълнение." : "Седмицата ще остане фиксирана до показания край. Промените и следващата седмица ще изискват утвърждаване."} Можеш да поставиш програмата на пауза.</p><button type="button" className="action-button" disabled={!canEdit || busy !== null || draft?.stale !== false || draft?.payload.activation_eligible !== true} onClick={activateDraft}>{busy === "activate" ? "Започване…" : "Започни програмата"}</button></>}
         </section>
-        {draft && !archivedDraft && draftWeek && draftSchedule && hasProgramDays(draft.payload) && <section className="management-plan" aria-label="Проект на тренировъчна програма"><h2>{planRangeLabel(draftWeek)}</h2><p className="management-muted">Предложение за преглед — още не е започната програма.</p><TrainingPlanWeek days={draftSchedule.days} period={draftWeek} forecastDates={draftSchedule.forecastDates} programmeLabel="Предложение" today={today} renderDay={day => <DayCard day={day} />} /></section>}
+        {draft && !archivedDraft && draftWeek && draftSchedule && hasProgramDays(draft.payload) && <section className="management-plan" aria-label="Проект на тренировъчна програма"><h2>{planRangeLabel(draftWeek)}</h2><p className="management-muted">{automaticPublication ? "Подготвен вариант — още не е приложен. Причината и следващата стъпка са показани по-горе." : "Предложение за преглед — още не е започната програма."}</p><TrainingPlanWeek days={draftSchedule.days} period={draftWeek} forecastDates={draftSchedule.forecastDates} programmeLabel="Предложение" today={today} renderDay={day => <DayCard day={day} />} /></section>}
       </>}
     </>}
     {view === "week" && !archivedDraft && <PlanComparison plan={visibleWeekPlan} outcomes={active.active?.payload.outcomes ?? []} speedSource={viewingProposal ? undefined : showDraft && draft && !archivedDraft ? {kind:"DRAFT",revision:draft.revision,start_date:draft.payload.start_date} : active.active?.stale === false ? {kind:"ACTIVE",revision:active.active.revision} : undefined} />}

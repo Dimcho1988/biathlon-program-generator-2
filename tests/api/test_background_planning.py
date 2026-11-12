@@ -76,11 +76,11 @@ class WorkerRepository:
 
 def test_worker_reuses_the_exact_generator_payload_and_only_publishes_through_fencing(monkeypatch):
     repository=WorkerRepository();payload={'start_date':BODY['start_date'],'q':{'Z4':3.125},'blocks':[{'seconds':180}]}
-    def build(repo,alias,start,revision,*,on_progress):
-        assert repo is repository and alias=='ath-job' and start==date(2026,11,2) and revision==1
+    def build(repo,alias,body,actor,*,on_progress):
+        assert repo is repository and alias=='ath-job' and body.start_date==date(2026,11,2) and body.expected_profile_revision==1 and actor==ACTOR
         on_progress('BASELINE');on_progress('SEARCH');on_progress('SEARCH')
         return deepcopy(payload)
-    monkeypatch.setattr(management_service,'build_draft',build)
+    monkeypatch.setattr(management_service,'build_generated_plan',build)
     assert planning_jobs.process_next(repository)
     assert [op for op,_ in repository.calls]==['CLAIM','RENEW','RENEW','RENEW','COMPLETE']
     assert [args['stage'] for op,args in repository.calls if op=='RENEW']==['BASELINE','SEARCH','SAVING']
@@ -98,7 +98,7 @@ def test_worker_reuses_the_exact_generator_payload_and_only_publishes_through_fe
 def test_failed_calculation_is_not_published_and_uses_a_safe_retry_class(monkeypatch,failure,code,caplog):
     repository=WorkerRepository()
     def build(*a,**kw):raise failure
-    monkeypatch.setattr(management_service,'build_draft',build)
+    monkeypatch.setattr(management_service,'build_generated_plan',build)
     assert planning_jobs.process_next(repository)
     assert [op for op,_ in repository.calls]==['CLAIM','FAIL']
     assert repository.calls[-1][1]['stage']==code
@@ -108,7 +108,7 @@ def test_failed_calculation_is_not_published_and_uses_a_safe_retry_class(monkeyp
 def test_lost_job_lease_never_reaches_publication(monkeypatch):
     repository=WorkerRepository();repository.lost=True
     def build(*a,on_progress,**k):on_progress('BASELINE');pytest.fail('Lost owner continued calculation')
-    monkeypatch.setattr(management_service,'build_draft',build)
+    monkeypatch.setattr(management_service,'build_generated_plan',build)
     planning_jobs.process_next(repository)
     assert not any(op=='COMPLETE' for op,_ in repository.calls)
 
@@ -125,6 +125,23 @@ def test_shutdown_drains_the_inflight_job_without_accepting_another():
     finally:
         release.set();thread.join(2)
     assert not thread.is_alive() and calls==['job']
+
+
+def test_page_preparation_gets_a_turn_even_with_a_busy_generation_queue():
+    stopping = Event()
+    calls = []
+    def job():
+        calls.append('job')
+        return True
+    def page():
+        calls.append('page')
+        stopping.set()
+        return True
+    worker = background_planning.start(SimpleNamespace(process_next_planning_job=job,
+        process_next_prepared_view=page), stopping)
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert calls == ['job', 'page']
 
 
 def test_metadata_and_exact_revision_reads_are_small_and_athlete_scoped():

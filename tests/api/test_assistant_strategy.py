@@ -67,7 +67,7 @@ def test_default_owner_overview_is_semantically_bounded_and_retains_all_horizon_
     assert [row["week_count"] for row in outlook["long_term"]["phase_ranges"]] == [10, 42]
     assert outlook["long_term"]["phase_ranges"][-1]["end_date"] == source["outlook"]["outlook"]["long_term"]["weeks"][-1]["end_date"]
     assert result["data"]["overview_active"]["has_proposal"] is True
-    assert result["data"]["overview_active"]["days_basis"] == "PROPOSAL_NOT_APPROVED"
+    assert result["data"]["overview_active"]["days_basis"] == "GENERATED_CANDIDATE"
     assert result["data"]["overview_active"]["days"][0]["sessions"][0]["total_minutes"] == 90
     assert outlook["recent_actual_weeks"][0]["actual_minutes"] == 630
     assert len(json.dumps(result, ensure_ascii=False).encode()) < 16000
@@ -241,3 +241,50 @@ def test_current_strategy_prioritizes_next_goal_over_large_past_archive(monkeypa
     assert calendar["next_main_race"] == future
     assert calendar["main_races"]["events"][0] == future
     assert calendar["main_races"]["omitted_events"] == 11
+
+
+def test_strategy_summary_preserves_pending_refresh_without_requiring_approval():
+    payload = sample()
+    payload['preparation'] = {'status': 'UPDATING', 'prepared_at': '2026-11-12T12:00:00Z',
+        'evaluated_on': '2026-11-12', 'reason': 'INPUTS_CHANGED'}
+    result = assistant_strategy.compact_management(payload)
+    assert result['preparation'] == payload['preparation']
+    assert result['outlook']['outlook']['periodization']['phases']
+    assert 'approved' not in json.dumps(result)
+
+
+@pytest.mark.parametrize('access', [FULL, PLAN])
+def test_cold_strategy_uses_calendar_horizon_beyond_raw_profile_end(monkeypatch, access):
+    repository = repo()
+    monkeypatch.setattr(assistant_reads, '_prepared', lambda *_: {'availability': 'PENDING', 'reason': 'PREPARED_VIEW_PENDING'})
+    profile = {'program_start': '2026-09-22', 'program_end': '2026-12-14', 'horizon_mode': 'AUTO_CALENDAR',
+        'sport': 'NordicSki', 'discipline': 'Biathlon', 'reentry_days': 0, 'taper_days': 7}
+    monkeypatch.setattr('apps.api.management_store.ManagementStore.profile', lambda *_: {'configured': True, 'revision': 6, 'profile': profile})
+    event = {'event_id': 'main', 'event_type': 'MAIN_RACE', 'name': 'Main goal',
+        'start_date': '2027-01-09', 'end_date': '2027-01-10'}
+    repository.athlete_planning_calendar_snapshot = Mock(return_value={'revision': 7, 'calendar': {'events': [event]}})
+    result = assistant_context.read(repository, 'test-athlete', access, {'kind': 'management', 'view': 'strategy'}, now=NOW)
+    current = result['data']['current_calendar_plan']
+    assert current['end_date'] == '2027-01-10'
+    assert current['horizon']['requested_end'] == '2026-12-14'
+    assert current['entry_basis'] == 'EXPLICIT_PROFILE'
+    assert current['periodization']['taper_windows'][0]['start_date'] == '2027-01-02'
+    assert current['periodization']['phases'][-1]['kind'] == 'COMPETITION'
+    assert result['data']['prepared_availability'] == 'PENDING'
+    repository.active_analysis.assert_not_called()
+
+
+def test_manual_horizon_is_not_automatically_extended_and_unknown_entry_is_labelled():
+    result = assistant_strategy.current_calendar_plan({'program_start': '2026-09-22', 'program_end': '2026-12-14',
+        'horizon_mode': 'MANUAL'}, [{'event_id': 'a', 'name': 'Goal', 'event_type': 'MAIN_RACE',
+        'start_date': '2027-01-09', 'end_date': '2027-01-10'}])
+    assert result['end_date'] == '2026-12-14'
+    assert result['horizon']['outside_main_races']['total_events'] == 1
+    assert result['entry_basis'] == 'CALENDAR_TEMPLATE_HISTORY_NOT_RESOLVED'
+
+
+def test_saved_history_entry_length_is_reused_only_when_provided_by_matching_source():
+    profile = {'program_start': '2026-09-22', 'program_end': '2027-01-10'}
+    result = assistant_strategy.current_calendar_plan(profile, [], prepared_entry={'days_override': 0})
+    assert result['entry_basis'] == 'MATCHING_PREPARED_HISTORY'
+    assert all(phase['kind'] != 'RE_ENTRY' for phase in result['periodization']['phases'])

@@ -104,17 +104,19 @@ def test_pause_survives_worker_and_manual_refresh(system):
     assert len(system.plans.records) == 2
     assert system.plans.records[-1]["payload"]["status"] == "PAUSED"
 
-def test_review_preserves_plan_until_explicit_approval(system):
+def test_fixed_week_publishes_valid_changes_without_approval(system):
     system.profiles.body.adaptation_mode = "REVIEW"
     original = activate(system)["payload"]["plan"]
     system.profiles.body.progression_percent = 7
     system.profiles.revision = 2
     now = advance(system, 1)
     updated = lifecycle.refresh(system.repo, "athlete", automatic=True, now=now)
-    assert updated["payload"]["status"] == "REVIEW_REQUIRED"
-    assert updated["payload"]["plan"] == original and updated["payload"]["proposal"] is not None
-    approved = lifecycle.action(system.repo, "athlete", ManagementPlanAction(action="APPROVE", expected_revision=2), ACTOR, now=now)
-    assert approved["payload"]["status"] == "ACTIVE" and approved["payload"]["proposal"] is None
+    assert updated["payload"]["status"] == "ACTIVE"
+    assert updated["payload"]["proposal"] is None
+    assert updated["payload"]["approved_profile_revision"] == 2
+    assert updated["payload"]["week_window"]["end_date"] == original["end_date"]
+    assert updated["payload"]["plan"]["automatically_published"] is True
+    assert system.plans.records[0]["payload"]["plan"] == original
 
 
 def test_opening_on_the_next_day_keeps_the_saved_program_without_a_new_revision(system):
@@ -133,51 +135,39 @@ def test_expired_program_is_not_actionable_and_opening_does_not_generate_another
     assert len(system.plans.records) == 1
 
 
-def test_fixed_proposal_can_be_reviewed_the_next_day_without_recomputing(system, monkeypatch):
+def test_legacy_pending_valid_proposal_is_revalidated_and_published_without_new_input(system):
     system.profiles.body.adaptation_mode = "REVIEW"
-    original = activate(system)["payload"]["plan"]
-    system.profiles.body.progression_percent = 7
-    system.profiles.revision = 2
-    now = advance(system, 1)
-    updated = lifecycle.refresh(system.repo, "athlete", automatic=True, now=now)
-    proposal = deepcopy(updated["payload"]["proposal"])
-    assert updated["payload"]["plan"] == original
-    monkeypatch.setattr(management_service, "build_draft", lambda *a, **kw: pytest.fail("Approval recomputed the proposal"))
-    approved = lifecycle.action(system.repo, "athlete", ManagementPlanAction(action="APPROVE", expected_revision=2),
-        ACTOR, now=now+timedelta(days=1))
-    assert approved["payload"]["plan"] == {**proposal, "review_required": False, "automatically_published": False}
-    assert system.plans.records[0]["payload"]["plan"] == original
+    activate(system)
+    old = system.plans.records[-1]["payload"]
+    old.update(status="REVIEW_REQUIRED", proposal=deepcopy(old["plan"]))
+    result = lifecycle.refresh(system.repo, "athlete", automatic=True, now=NOW)
+    assert result["revision"] == 2
+    assert result["payload"]["status"] == "ACTIVE"
+    assert result["payload"]["proposal"] is None
+    assert result["payload"]["plan"]["automatically_published"] is True
 
-def test_changed_profile_requires_approval_in_auto_mode(system):
+
+def test_changed_profile_is_revalidated_and_published_in_auto_mode(system):
     activate(system)
     system.profiles.body.progression_percent = 7
     system.profiles.revision = 2
     updated = lifecycle.refresh(system.repo, "athlete", automatic=True, now=NOW)
-    assert updated["payload"]["status"] == "REVIEW_REQUIRED"
-    assert updated["payload"]["approved_profile_revision"] == 1
-    assert updated["payload"]["proposal"]["input_snapshot"]["profile_revision"] == 2
+    assert updated["payload"]["status"] == "ACTIVE"
+    assert updated["payload"]["approved_profile_revision"] == 2
+    assert updated["payload"]["plan"]["input_snapshot"]["profile_revision"] == 2
+    assert updated["payload"]["proposal"] is None
 
 
-def test_only_rolling_horizon_version_can_inherit_the_exact_approved_auto_settings(system):
+def test_changed_rule_identity_is_revalidated_without_a_separate_approval(system):
     activate(system)
-    _, _, frozen, _, _ = lifecycle._context(system.repo, "athlete", NOW)
-    # The dosing change must retain the approval boundary. The earlier
-    # display-only v72→v73 exception still applies only to those identities.
-    current = deepcopy(frozen)
-    frozen["rule_versions"]["engine"] = "training-management-v73-rolling-adaptive-window"
-    approved = lifecycle._approval_inputs(frozen)
-    approved["rule_versions"]["engine"] = "training-management-v72-measured-replay-budget"
-    old = {"mode": "AUTO", "approved_settings_fingerprint": lifecycle._hash(approved)}
-    assert lifecycle._compatible_horizon_extension(old, frozen)
-    assert not lifecycle._compatible_horizon_extension(old, current)
-    assert not lifecycle._compatible_horizon_extension({**old, "mode": "REVIEW"}, frozen)
-    for key in ("physiology", "management_profile", "rule_versions"):
-        changed = deepcopy(frozen)
-        changed[key]["changed_for_test"] = True
-        assert not lifecycle._compatible_horizon_extension(old, changed)
-    changed = deepcopy(frozen)
-    changed["model_entries"].append({"kind": "RECOVERY", "revision": 2})
-    assert not lifecycle._compatible_horizon_extension(old, changed)
+    system.plans.records[-1]["payload"]["approved_settings_fingerprint"] = "legacy-rule-identity"
+    system.plans.records[-1]["payload"]["processed_input_fingerprint"] = "legacy-inputs"
+    result = lifecycle.refresh(system.repo, "athlete", automatic=True, now=NOW)
+    _, _, _, _, current_rules = lifecycle._context(system.repo, "athlete", NOW)
+    assert result["payload"]["status"] == "ACTIVE"
+    assert result["payload"]["approved_settings_fingerprint"] == current_rules
+    assert result["payload"]["plan"]["source"]["generation_id"] == system.repo.envelope["generation_id"]
+
 
 def test_skip_does_not_invent_activity_and_stale_revision_conflicts(system):
     activate(system)
@@ -238,17 +228,16 @@ def test_identical_reimport_keeps_the_plan_current_without_building_or_new_revis
     assert system.plans.records == [before]
 
 
-def test_unchanged_reimport_preserves_review_of_the_exact_saved_proposal(system, monkeypatch):
+def test_unchanged_reimport_preserves_published_fixed_program_without_another_revision(system, monkeypatch):
     system.profiles.body.adaptation_mode = "REVIEW"
     activate(system)
     now = advance(system, 1)
     updated = lifecycle.refresh(system.repo, "athlete", automatic=True, now=now)
-    proposal = deepcopy(updated["payload"]["proposal"])
     system.repo.envelope.update(generation_id="identical-reimport", revision=99)
-    monkeypatch.setattr(management_service, "build_draft", lambda *a, **kw: pytest.fail("Approval regenerated a proposal"))
-    result = lifecycle.action(system.repo, "athlete", ManagementPlanAction(action="APPROVE", expected_revision=2), ACTOR, now=now)
-    assert result["payload"]["plan"]["days"] == proposal["days"]
-    assert result["payload"]["plan"]["input_snapshot"] == proposal["input_snapshot"]
+    monkeypatch.setattr(management_service, "build_draft", lambda *a, **kw: pytest.fail("Identical data regenerated a program"))
+    result = lifecycle.refresh(system.repo, "athlete", automatic=True, now=now)
+    assert result == updated
+    assert len(system.plans.records) == 2
 
 
 @pytest.mark.parametrize("changed", ["snapshot_fingerprint", "analysis_as_of", "physiology", "profile_revision", "rule_versions", "response_fingerprint"])

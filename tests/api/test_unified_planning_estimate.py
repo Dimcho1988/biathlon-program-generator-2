@@ -129,7 +129,7 @@ def test_unified_partial_history_supports_reviewable_plan_in_both_week_modes(mon
     assert source == original
 
 
-def test_fixed_to_adaptive_proposal_can_be_approved_with_separate_estimated_load(system):
+def test_fixed_to_adaptive_change_is_published_with_separate_estimated_load(system):
     from apps.api import management_lifecycle as lifecycle
     from apps.api.management_schemas import ManagementPlanAction
 
@@ -147,14 +147,9 @@ def test_fixed_to_adaptive_proposal_can_be_approved_with_separate_estimated_load
     system.profiles.body.adaptation_mode = "AUTO"
     system.profiles.revision = 2
 
-    pending = lifecycle.refresh(system.repo, "athlete", automatic=True, now=NOW)
-    assert pending["payload"]["status"] == "REVIEW_REQUIRED"
-    assert pending["payload"]["mode"] == "REVIEW"
-    assert pending["payload"]["proposal_mode"] == "AUTO"
-    assert pending["payload"]["plan"] == approved_before
-    assert _eligible(pending["payload"]["proposal"])
-    result = lifecycle.action(system.repo, "athlete",
-        ManagementPlanAction(action="APPROVE", expected_revision=pending["revision"]), ACTOR, now=NOW)
+    result = lifecycle.refresh(system.repo, "athlete", automatic=True, now=NOW)
+    assert _eligible(result["payload"]["plan"])
+    assert system.plans.records[0]["payload"]["plan"] == approved_before
     assert result["payload"]["status"] == "ACTIVE"
     assert result["payload"]["mode"] == "AUTO"
     assert result["payload"]["proposal"] is None

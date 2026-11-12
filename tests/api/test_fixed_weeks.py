@@ -1,4 +1,4 @@
-"""A frozen prescription and a fresh monitoring record are separate contracts."""
+"""Fixed-week boundaries survive automatic validated program updates."""
 from copy import deepcopy
 from datetime import timedelta
 
@@ -28,7 +28,8 @@ def test_fixed_week_same_tasks_are_fresh_without_reapproval_or_rolling(system):
     now = advance(system, 1)
     updated = lifecycle.refresh(system.repo, "athlete", automatic=True, now=now)
     p = updated["payload"]
-    assert p["plan"] == initial["payload"]["plan"]
+    assert lifecycle.changes_between(initial["payload"]["plan"], p["plan"]) == []
+    assert p["plan"]["source"]["generation_id"] == system.repo.envelope["generation_id"]
     assert p["week_window"] == initial["payload"]["week_window"]
     assert p["status"] == "ACTIVE" and p["proposal"] is None
     assert p["monitoring"]["evaluated_on"] == now.date().isoformat()
@@ -37,7 +38,7 @@ def test_fixed_week_same_tasks_are_fresh_without_reapproval_or_rolling(system):
     assert lifecycle.refresh(system.repo, "athlete", automatic=True, now=now)["revision"] == updated["revision"]
 
 
-def test_extra_unplanned_load_changes_monitoring_and_proposal_not_fixed_doses(system):
+def test_extra_unplanned_load_adapts_remaining_fixed_week_and_preserves_execution(system):
     initial = fixed(system)
     now = advance(system, 2)
     source = system.repo.envelope["snapshot_payload"]["load_history"]
@@ -49,54 +50,47 @@ def test_extra_unplanned_load_changes_monitoring_and_proposal_not_fixed_doses(sy
     append_complete_activity(source, activity)
     changed = lifecycle.refresh(system.repo, "athlete", automatic=True, now=now)
     p = changed["payload"]
-    assert p["plan"] == initial["payload"]["plan"]
-    assert p["status"] == "REVIEW_REQUIRED" and p["changes"]
-    assert p["proposal"]["end_date"] == initial["payload"]["plan"]["end_date"]
-    assert all(d["date"] <= p["week_window"]["end_date"] for d in p["proposal"]["days"])
+    assert p["status"] == "ACTIVE" and p["changes"] and p["proposal"] is None
+    assert p["plan"]["end_date"] == initial["payload"]["plan"]["end_date"]
+    assert all(d["date"] <= p["week_window"]["end_date"] for d in p["plan"]["days"])
+    assert system.plans.records[0] == initial
     outcome = next(o for o in p["outcomes"] if o["date"] == day)
     assert outcome["actual_minutes"] == 180 and outcome["actual_load"]["Z3"] == 240
     assert outcome["load_source"] == "IMPORTED_ACTUAL_ONLY" and not outcome["catchup_required"]
-    assert any(d["status"] == "REVIEW_REQUIRED" for d in p["monitoring"]["days"])
+    assert all(d["status"] != "REVIEW_REQUIRED" for d in p["monitoring"]["days"])
 
 
-def test_fixed_day_decision_requires_approval_and_does_not_roll_week(system):
+def test_fixed_day_decision_applies_without_approval_and_does_not_roll_week(system):
     initial = fixed(system)
     day = TODAY+timedelta(days=2)
     changed = lifecycle.refresh(system.repo, "athlete", ACTOR, now=NOW, expected_revision=1,
         day_action=ManagementDayAction(date=day, action="REST", expected_revision=1))
-    assert changed["payload"]["plan"] == initial["payload"]["plan"]
-    assert changed["payload"]["proposal"] is not None
-    approved = approve(system, changed, NOW)
-    expected = deepcopy(changed["payload"]["proposal"])
-    expected.update(review_required=False, automatically_published=False)
-    assert approved["payload"]["plan"] == expected
-    assert all(d["status"] != "REVIEW_REQUIRED" for d in approved["payload"]["monitoring"]["days"])
-    assert approved["payload"]["week_window"] == initial["payload"]["week_window"]
-    assert next(d for d in expected["days"] if d["date"] == day.isoformat())["session"] is None
+    assert changed["payload"]["status"] == "ACTIVE" and changed["payload"]["proposal"] is None
+    assert all(d["status"] != "REVIEW_REQUIRED" for d in changed["payload"]["monitoring"]["days"])
+    assert changed["payload"]["week_window"] == initial["payload"]["week_window"]
+    assert next(d for d in changed["payload"]["plan"]["days"] if d["date"] == day.isoformat())["session"] is None
+    assert system.plans.records[0] == initial
 
 
 @pytest.mark.parametrize("before,after", [("AUTO", "REVIEW"), ("REVIEW", "AUTO")])
-def test_mode_switch_previews_before_replacing_future_prescriptions(system, before, after):
+def test_mode_switch_revalidates_and_applies_future_prescriptions(system, before, after):
     system.profiles.body.adaptation_mode = before
     initial = activate(system)
     system.profiles.body.adaptation_mode = after
     system.profiles.revision += 1
     now = advance(system, 2)
     changed = lifecycle.refresh(system.repo, "athlete", automatic=True, now=now)
-    assert changed["payload"]["mode"] == before
-    assert changed["payload"]["proposal_mode"] == after
-    assert changed["payload"]["plan"] == initial["payload"]["plan"]
-    assert changed["payload"]["status"] == "REVIEW_REQUIRED"
-    assert all(d["date"] >= now.date().isoformat() for d in changed["payload"]["proposal"]["days"])
-    approved = approve(system, changed, now)
-    assert approved["payload"]["mode"] == after
+    assert changed["payload"]["mode"] == after
+    assert changed["payload"]["status"] == "ACTIVE" and changed["payload"]["proposal"] is None
+    assert all(d["date"] >= now.date().isoformat() for d in changed["payload"]["plan"]["days"])
+    assert system.plans.records[0] == initial
     if after == "REVIEW":
-        assert approved["payload"]["week_window"] == initial["payload"]["week_window"]
+        assert changed["payload"]["week_window"] == initial["payload"]["week_window"]
     else:
-        assert approved["payload"]["plan"]["end_date"] == (now.date()+timedelta(days=6)).isoformat()
+        assert changed["payload"]["plan"]["end_date"] == (now.date()+timedelta(days=6)).isoformat()
 
 
-def test_next_fixed_week_is_anchored_and_waits_for_approval(system):
+def test_next_fixed_week_is_anchored_and_applied_automatically(system):
     initial = fixed(system)
     now = advance(system, 8)
     source = system.repo.envelope["snapshot_payload"]["load_history"]
@@ -107,17 +101,15 @@ def test_next_fixed_week_is_anchored_and_waits_for_approval(system):
             row["equivalent_time_min"] = 20. if row["zone"] == "Z1" else 0.
         append_complete_activity(source, activity)
     changed = lifecycle.refresh(system.repo, "athlete", automatic=True, now=now)
-    assert changed["payload"]["plan"] == initial["payload"]["plan"]
-    assert changed["payload"]["status"] == "REVIEW_REQUIRED"
-    assert changed["payload"]["proposal_week_window"] == {
+    assert changed["payload"]["status"] == "ACTIVE" and changed["payload"]["proposal"] is None
+    assert changed["payload"]["week_window"] == {
         "start_date": (TODAY+timedelta(days=8)).isoformat(), "end_date": (TODAY+timedelta(days=14)).isoformat()}
     now = advance(system, 9)
     later = lifecycle.refresh(system.repo, "athlete", automatic=True, now=now)
-    assert later["payload"]["proposal_week_window"] == changed["payload"]["proposal_week_window"]
-    assert later["payload"]["proposal"]["end_date"] == (TODAY+timedelta(days=14)).isoformat()
-    approved = approve(system, later, now)
-    assert approved["payload"]["week_window"] == later["payload"]["proposal_week_window"]
-    assert approved["payload"]["plan"]["start_date"] == now.date().isoformat()
+    assert later["payload"]["week_window"] == changed["payload"]["week_window"]
+    assert later["payload"]["plan"]["end_date"] == (TODAY+timedelta(days=14)).isoformat()
+    assert later["payload"]["plan"]["start_date"] == now.date().isoformat()
+    assert system.plans.records[0] == initial
 
 
 def test_missing_history_does_not_validate_the_frozen_week(system):

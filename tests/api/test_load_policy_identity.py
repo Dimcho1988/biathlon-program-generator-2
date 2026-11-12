@@ -96,16 +96,10 @@ def test_automatic_adaptation_reconsiders_legacy_empty_plan_once(monkeypatch, sy
         ]
     after = lifecycle.refresh(system.repo, "athlete", automatic=True, now=NOW)
     assert after["revision"] == 2
-    if change == "policy":
-        # Scientific rule changes preserve the existing approval boundary.
-        assert after["operation"] == "REVIEW" and after["payload"]["status"] == "REVIEW_REQUIRED"
-        assert after["payload"]["plan"] == before["payload"]["plan"]
-        candidate = after["payload"]["proposal"]
-    else:
-        assert after["operation"] == "ADAPT" and after["payload"]["status"] == "ACTIVE"
-        assert after["payload"]["proposal"] is None
-        candidate = after["payload"]["plan"]
-        assert candidate["automatically_published"] is True
+    assert after["operation"] == "ADAPT" and after["payload"]["status"] == "ACTIVE"
+    assert after["payload"]["proposal"] is None
+    candidate = after["payload"]["plan"]
+    assert candidate["automatically_published"] is True
     assert any(lifecycle.day_sessions(d) for d in candidate["days"])
     assert after["payload"]["processed_input_fingerprint"] != before["payload"]["processed_input_fingerprint"]
     assert system.plans.records[0] == before

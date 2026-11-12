@@ -36,7 +36,10 @@ def test_http_is_one_prepared_read_with_no_scientific_inputs(monkeypatch,kind,ur
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN","prepared-test")
     monkeypatch.setattr(dependencies,"repository",lambda:repo)
     response=TestClient(main.app).get(url,headers=HEADERS)
-    assert response.status_code==200 and response.json()=={"unchanged":12.345}
+    expected = {"unchanged": 12.345}
+    if kind == 'management-active':
+        expected['capabilities'] = {'automatic_publication': True}
+    assert response.status_code==200 and response.json()==expected
     assert len(calls)==1 and calls[0][0]=="READ"
     assert calls[0][1]["parameters"]==parameters
     assert calls[0][1]["alias"]=="ath-prepared" and calls[0][1]["kind"]==kind
@@ -70,6 +73,75 @@ def test_store_failure_never_falls_through_to_calculation():
     repo=SimpleNamespace(prepared_view=Mock(side_effect=PersistentStoreFailure("private")))
     with pytest.raises(HTTPException) as error: prepared_views.read(repo,"ath-prepared","speed")
     assert error.value.status_code==503 and "private" not in error.value.detail
+
+
+@pytest.mark.parametrize('kind', ['management-view', 'management-active'])
+def test_saved_program_remains_visible_with_explicit_refresh_provenance(kind):
+    payload = {'active': {'revision': 7, 'plan': {'days': [{'date': '2026-11-13'}]}}}
+    preparation = {'status': 'UPDATING', 'prepared_at': '2026-11-12T20:00:00+00:00',
+                   'evaluated_on': '2026-11-12', 'reason': 'INPUTS_CHANGED'}
+    state = {'ready': False, 'saved': True, 'athlete_alias': 'ath-prepared', 'kind': kind,
+             'payload': payload, 'preparation': preparation}
+    repo = SimpleNamespace(prepared_view=Mock(return_value=state))
+    result = prepared_views.read(repo, 'ath-prepared', kind)
+    expected = deepcopy(payload)
+    capabilities_target = expected if kind == 'management-active' else expected['active']
+    capabilities_target['capabilities'] = {'automatic_publication': True}
+    assert result == {**expected, 'preparation': preparation}
+    assert 'preparation' not in payload
+    repo.prepared_view.assert_called_once()
+
+
+@pytest.mark.parametrize('kind,overview', [('management-view', False), ('management-view', True), ('management-active', False)])
+@pytest.mark.parametrize('saved', [True, False])
+def test_legacy_pages_use_current_workflow_capabilities_without_changing_evidence(kind, overview, saved):
+    plan = {'days': [{'date': '2026-11-13', 'seconds': 1800}], 'warnings': [
+        {'code': 'DRAFT_REQUIRES_COACH_REVIEW', 'message': 'old approval instruction'},
+        {'code': 'ILLNESS_HOLD', 'message': 'Retain this training constraint'},
+    ]}
+    active = {'revision': 7, 'plan': plan, 'capabilities': {'unchanged_checks': True}}
+    payload = ({'schema_version': 'management-overview-v1', 'overview_active': active} if overview else
+               {'active': active} if kind == 'management-view' else active)
+    original = deepcopy(payload)
+    preparation = {'status': 'UPDATING', 'prepared_at': '2026-11-12T20:00:00+00:00',
+                   'evaluated_on': '2026-11-12', 'reason': 'MODEL_CHANGED'}
+    repo = SimpleNamespace(prepared_view=Mock(return_value={'ready': not saved, 'saved': saved,
+        'athlete_alias': 'ath-prepared', 'kind': kind, 'payload': payload, 'preparation': preparation}))
+    result = prepared_views.read(repo, 'ath-prepared', kind)
+    returned_active = result['overview_active'] if overview else result['active'] if kind == 'management-view' else result
+    capabilities_target = result if overview or kind == 'management-active' else returned_active
+    assert capabilities_target['capabilities']['automatic_publication'] is True
+    assert returned_active['capabilities']['unchanged_checks'] is True
+    assert returned_active['plan']['days'] == plan['days']
+    assert returned_active['plan']['warnings'] == [plan['warnings'][1]]
+    if saved:
+        assert result['preparation'] == preparation
+    else:
+        assert 'preparation' not in result
+    assert payload == original
+
+
+@pytest.mark.parametrize('changes', [
+    {'kind': 'speed'}, {'athlete_alias': 'other'}, {'preparation': None},
+    {'payload': {'prepared_error': {'status': 409, 'detail': 'old failure'}}},
+])
+def test_saved_program_never_substitutes_wrong_scope_or_old_errors(changes):
+    state = {'ready': False, 'saved': True, 'athlete_alias': 'ath-prepared', 'kind': 'management-view',
+             'payload': {'active': {}}, 'preparation': {'status': 'UPDATING',
+              'prepared_at': '2026-11-12T20:00:00+00:00', 'evaluated_on': '2026-11-12', 'reason': 'MODEL_CHANGED'}}
+    state.update(changes)
+    repo = SimpleNamespace(prepared_view=Mock(return_value=state))
+    with pytest.raises(HTTPException) as error:
+        prepared_views.read(repo, 'ath-prepared', 'management-view')
+    assert error.value.status_code == 503
+
+
+def test_stale_scientific_projection_stays_unavailable():
+    repo = SimpleNamespace(prepared_view=Mock(return_value={'ready': False, 'saved': True,
+        'athlete_alias': 'ath-prepared', 'kind': 'speed', 'payload': {'speed': 20}}))
+    with pytest.raises(HTTPException) as error:
+        prepared_views.read(repo, 'ath-prepared', 'speed')
+    assert error.value.status_code == 503
 
 
 def test_worker_uses_original_view_and_resets_its_private_context(monkeypatch):

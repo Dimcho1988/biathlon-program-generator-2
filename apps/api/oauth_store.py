@@ -291,11 +291,33 @@ class SupabasePilotRepository(SnapshotRepository):
     def planning_job(self, operation, **arguments):
         if operation == 'COMPLETE' and 'payload' in arguments:
             from .plan_storage import pack
-            arguments = {**arguments, 'payload': pack(arguments['payload'])}
+            payload = arguments['payload']
+            if isinstance(payload, dict) and 'draft' in payload:
+                publication = payload.get('publication')
+                payload = {**payload, 'draft': pack(payload['draft']),
+                    'publication': ({**publication, 'payload': pack(publication['payload'])}
+                                    if publication is not None else None)}
+            else:
+                payload = pack(payload)
+            arguments = {**arguments, 'payload': payload}
         value = self._json(self._request('POST', '/rpc/onflows_planning_job',
             json={'p_operation': operation, **{'p_'+key: value for key, value in arguments.items()}}))
         if value is not None and not isinstance(value, dict):
             raise PersistentStoreFailure('Invalid planning job response')
+        return value
+
+    def queue_unpublished_plans(self):
+        # This discovery query scans configured profiles. Page preparation can
+        # keep the shared worker busy at subsecond intervals; scan once a
+        # minute, including after a transient failure, instead of per job.
+        current = perf_counter()
+        previous = getattr(self, '_last_unpublished_plan_queue', None)
+        if previous is not None and current - previous < 60:
+            return {'queued': 0, 'deferred': True}
+        self._last_unpublished_plan_queue = current
+        value = self._json(self._request('POST', '/rpc/queue_onflows_unpublished_plans', json={'p_limit': 10}))
+        if not isinstance(value, dict):
+            raise PersistentStoreFailure('Invalid program preparation receipt')
         return value
 
     def process_next_planning_job(self):

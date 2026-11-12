@@ -22,7 +22,6 @@ CONFIRM = {"запиши промяната", "потвърждавам пром
 CANCEL = {"откажи промяната", "отказ", "отмени"}
 WRITE_KINDS = assistant_commands.COMMAND_KINDS
 READ_KINDS = assistant_context.QUERY_KINDS
-UNAVAILABLE_SESSION_CHANGE = "Промяната на броя отсечки още няма надеждна проверка през тренировъчния двигател. Не мога да потвърдя допълнителна доза. Отвори седмичната програма и обсъди промяната с треньора."
 logger=logging.getLogger(__name__)
 
 
@@ -122,10 +121,10 @@ def _capabilities(access):
     if access.get("can_view_recovery") or access.get("can_view_plan") and access.get("can_edit_plan"):
         writes.append("SYNC_DATA")
     return {"read": sorted(reads), "read_views":read_views,"write": [kind for kind in writes if kind in WRITE_KINDS],
-        "plan_approval": "Read the current proposal and show its exact revision before explicit approval.",
-        "session_dose_change": "UNAVAILABLE_NO_CANONICAL_PREVIEW",
+        "plan_publication": "Eligible generated plans are published automatically. No separate coach approval is required. Read current inputs before any change.",
+        "session_dose_change": "Use canonical planning controls or catalog method preferences. These affect the profile and future calculations; arbitrary rewrites of one session are not available.",
         "input_contract": "Read inputs first. command key=entry_key, expected_revision=current revision; patch only requested fields. "
-                          "Explicit reversible input requests can be saved directly; deletion, scientific settings and plan approval need one preview.",
+                          "Explicit reversible input and planning requests can be saved directly; deletion, scientific coefficients and selecting an archived plan need one preview.",
         "scales": {"daily": "1–5, higher=worse; motivation 1=high, 5=low", "rpe": "0–10, timing required", "feel": "1–5, higher=worse"}}
 
 
@@ -224,7 +223,7 @@ def _explicit_write_request(message):
         return False
     if re.search(r"^(?:а\s+)?(?:какво|каква|какви|какъв|защо|колко|кога|къде|дали|обясни|покажи|виж|как\b)", text):
         return False
-    return bool(re.search(r"\b(?:въвед\w*|запиш\w*|записвай|промен\w*|премест\w*|създа\w*|добав\w*|задай|отмени|изтрий|премахни|утвърди|одобри|приеми|активирай|спри|възобнови|генерирай|обнови(?:ш|те|м)?|синхронизира(?:й|ш|те|ме))\b", text)
+    return bool(re.search(r"\b(?:въвед\w*|запиш\w*|записвай|промен\w*|премест\w*|създа\w*|добав\w*|задай|направи|пропусн\w*|отмени|изтрий|премахни|утвърди|одобри|приеми|активирай|спри|възобнови|генерирай|преизчисли|обнови(?:ш|те|м)?|синхронизира(?:й|ш|те|ме))\b", text)
                 or re.search(r"\bискам\s+(?:да\s+)?(?:почив\w*|тренирам|разреш\w*|забран\w*|обновя|синхронизирам)", text))
 
 
@@ -259,6 +258,72 @@ def _request_text(request, message):
     return "\n".join([request.get("request", ""), *request.get("answers", [])])
 
 
+def _requested_plan_date(selected, text, today):
+    """Ground a reversible day/start selection in the user's actual words."""
+    try:
+        day = date.fromisoformat(selected)
+        current = date.fromisoformat(today)
+    except (ValueError, TypeError):
+        return False
+    # A later date clarification replaces earlier dates in the same request.
+    # Do not authorize the stale date merely because it remains in its history.
+    date_parts=[part for part in text.splitlines() if re.search(
+        r"\b(?:днес|утре|вдругиден)\b|\d{1,4}[./-]\d{1,2}|\d+\s+(?:януари|февруари|март|април|май|юни|юли|август|септември|октомври|ноември|декември)",part.lower())]
+    text=date_parts[-1] if date_parts else text
+    if selected in text:
+        return True
+    lowered = text.lower()
+    relative = {"днес": 0, "утре": 1, "вдругиден": 2}
+    offsets = [offset for label, offset in relative.items() if re.search(r"\b" + label + r"\b", lowered)]
+    if offsets:
+        return len(set(offsets)) == 1 and day == current + timedelta(days=offsets[0])
+    months = ["януари", "февруари", "март", "април", "май", "юни", "юли", "август", "септември", "октомври", "ноември", "декември"]
+    year_known = str(day.year) in text or day.year == current.year
+    return bool(year_known and ((months[day.month - 1] in lowered and re.search(r"(?<!\d)" + str(day.day) + r"(?!\d)", text))
+        or re.search(r"(?<!\d)0?" + str(day.day) + r"[./]0?" + str(day.month) + r"(?!\d)", text)))
+
+
+def _direct_method_preferences(preferences, entry, text):
+    """Only explicit profile-wide, catalog-resolved form choices bypass preview."""
+    lowered = text.lower()
+    if not re.search(r"профил|за всички|занапред|по принцип|каталог|предпочитани", lowered):
+        return False
+    if set(preferences) != {"overrides"} or not isinstance(preferences["overrides"], dict) or len(preferences["overrides"]) != 1:
+        return False
+    identifier, controls = next(iter(preferences["overrides"].items()))
+    card = next((card for card in reversed(entry.get("catalog_methods", [])) if card.get("id") == identifier), None)
+    if not card or not isinstance(controls, dict) or not controls or set(controls) - {"enabled", "work_range", "repetitions"}:
+        return False
+    title = str(card.get("title") or "").lower()
+    if identifier.lower() not in lowered and (not title or title not in lowered):
+        return False
+    if "enabled" in controls:
+        pattern = r"включи|разреши|използвай" if controls["enabled"] is True else r"изключи|забрани|премахни"
+        if type(controls["enabled"]) is not bool or not re.search(pattern, lowered):
+            return False
+    for field, pattern in (("repetitions", r"(\d+)\s*(?:повторени\w*|отсеч\w*|интервал\w*)"),
+                           ("work_range", r"(\d+(?:[.,]\d+)?)\s*(секунд\w*|сек\b|минут\w*|мин\b|метр\w*|м\b)")):
+        if field not in controls:
+            continue
+        values = controls[field]
+        if not isinstance(values, (list, tuple)) or len(values) != 2 or values[0] != values[1]:
+            return False
+        if field == "repetitions":
+            grounded = [int(value) for value in re.findall(pattern, lowered)]
+        else:
+            unit = ((card.get("prescription") or {}).get("work") or {}).get("unit")
+            grounded = []
+            for number, label in re.findall(pattern, lowered):
+                value = float(number.replace(",", "."))
+                if unit == "seconds" and label.startswith(("сек", "мин")):
+                    grounded.append(value * (60 if label.startswith("мин") else 1))
+                elif unit == "meters" and label.startswith("м") and not label.startswith("мин"):
+                    grounded.append(value)
+        if values[0] not in grounded:
+            return False
+    return True
+
+
 def _direct_request(command, entry, request, message):
     """A concrete reversible request is its authorization; a suggestion is not."""
     text = _request_text(request, message)
@@ -267,10 +332,30 @@ def _direct_request(command, entry, request, message):
     patch = command["patch"]
     if request and request.get("kind") != command["kind"]:
         return False
-    if command["kind"] not in {"DAILY", "WEIGHT", "SESSION", "MANAGEMENT_PROFILE", "CALENDAR_EVENT", "SYNC_DATA"}:
+    if command["kind"] not in {"DAILY", "WEIGHT", "SESSION", "MANAGEMENT_PROFILE", "CALENDAR_EVENT", "SYNC_DATA", "PLAN_ACTION", "PLAN_DAY", "PLAN_GENERATE"}:
         return False
     if any(value is None for value in patch.values()) or patch.get("delete") or patch.get("include_identical_copies"):
         return False
+    if command["kind"] == "PLAN_ACTION":
+        patterns = {"REFRESH": r"обнов|преизчисл", "PAUSE": r"спри|пауза", "RESUME": r"възобнов|продължи"}
+        if set(patch) != {"action"} or not re.search(patterns.get(patch.get("action"), r"(?!)"), text.lower()):
+            return False
+    if command["kind"] == "PLAN_DAY":
+        patterns = {"REST": r"почив", "SKIP": r"пропус", "CLEAR": r"премахни|отмени|върни"}
+        if set(patch) - {"action", "date", "note"} or not re.search(patterns.get(patch.get("action"), r"(?!)"), text.lower()):
+            return False
+        if not _requested_plan_date(patch.get("date"), text, entry.get("today")):
+            return False
+        if patch.get("note") and patch["note"].lower() not in text.lower():
+            return False
+    if command["kind"] == "PLAN_GENERATE":
+        if set(patch) - {"start_date", "expected_profile_revision", "expected_draft_revision"}:
+            return False
+        current = entry.get("payload") or {}
+        if not _requested_plan_date(patch.get("start_date", current.get("start_date")), text, entry.get("today")):
+            return False
+        if any(patch.get(field, current.get(field)) != current.get(field) for field in ("expected_profile_revision", "expected_draft_revision")):
+            return False
     if command["kind"]=="SYNC_DATA":
         if set(patch)!={"scope"}:
             return False
@@ -337,10 +422,12 @@ def _direct_request(command, entry, request, message):
         for field in ("event_type","race_course","note"):
             if field in patch and patch[field]!=(entry.get("payload") or {}).get(field):
                 return False
-    # These settings alter planning policy or learned scientific controls, and
-    # need the exact before/after preview even when the user asks to change them.
+    # Explicit training-form preferences use the canonical engine. Scientific
+    # coefficients still retain their exact before/after preview.
     if command["kind"] == "MANAGEMENT_PROFILE":
-        if set(patch)-{"planning_controls", "program_start", "program_end"}:
+        if set(patch)-{"planning_controls", "program_start", "program_end", "method_library"}:
+            return False
+        if "method_library" in patch and not _direct_method_preferences(patch["method_library"], entry, text):
             return False
         lowered=text.lower()
         for field in ("program_start","program_end"):
@@ -361,6 +448,10 @@ def _direct_request(command, entry, request, message):
             elif field=="sessions_per_week":
                 counts=re.findall(r"(?<![\d-])(\d+)\s*(?:трениров\w*|заниман\w*|сеси\w*)",lowered)
                 if not any(int(v)==value for v in counts):
+                    return False
+            elif field == "threshold_method":
+                patterns = {"AUTO": r"автоматич", "CONTINUOUS": r"непрекъснат|равномерен", "INTERVALS": r"интервал|отсеч"}
+                if not re.search(r"праг", lowered) or not re.search(patterns.get(value, r"(?!)"), lowered):
                     return False
             elif field in day_fields:
                 expected=requested_days
@@ -395,6 +486,12 @@ def _input_request(state, message, now):
     if action:
         if re.search(r"обнов|синхрон",text) and re.search(r"данн|активност|възстанов|благосъстоян|wellness|recovery|intervals",text):
             kind="SYNC_DATA"
+        elif re.search(r"генерирай|създай", text) and re.search(r"план|програм", text):
+            kind="PLAN_GENERATE"
+        elif re.search(r"почив|пропус|промяната за", text) and re.search(r"\b(?:днес|утре|вдругиден)\b|\d{1,4}[./-]\d{1,2}|\d+\s+(?:януари|февруари|март|април|май|юни|юли|август|септември|октомври|ноември|декември)", text):
+            kind="PLAN_DAY"
+        elif re.search(r"обнов|преизчисл|спри|пауза|възобнов", text) and re.search(r"план|програм", text):
+            kind="PLAN_ACTION"
         elif re.search(r"мезоцикл|акцент",text):
             kind="MESOCYCLE_PREFERENCES"
         elif re.search(r"периодизац|сезон|седмичен профил",text):
@@ -407,7 +504,7 @@ def _input_request(state, message, now):
             kind = "SESSION"
         elif re.search(r"умор|сън|стрес|болезнен|мотивац|болк|болен|оценк", text):
             kind = "DAILY"
-        elif re.search(r"почив|тренировъчни дни|седмич|планира", text):
+        elif re.search(r"почив|тренировъчни дни|седмич|планира|метод|праг", text):
             kind = "MANAGEMENT_PROFILE"
         elif re.search(r"hrmax|максимал.{0,10}пулс|границ.{0,10}зон|часов.{0,10}зон", text):
             kind = "ATHLETE_SETTINGS"
@@ -555,7 +652,7 @@ def _plan_preview(command, entry):
     patch=command["patch"]
     action=patch.get("action")
     title={"APPROVE":"Утвърждаване на предложената програма", "PAUSE":"Пауза на програмата",
-           "RESUME":"Възобновяване на програмата", "REFRESH":"Обновяване на предложението",
+           "RESUME":"Възобновяване на програмата", "REFRESH":"Обновяване на програмата",
            "REST":"Почивка за избрания ден", "SKIP":"Пропускане на избрания ден", "CLEAR":"Премахване на промяната за деня"}.get(action)
     plan=summary.get("approved_plan")
     if command["kind"]=="PLAN_ACTIVATE":
@@ -598,7 +695,7 @@ def _plan_preview(command, entry):
     if patch.get("note"):
         lines.append("Бележка: "+str(patch["note"]))
     if action=="REFRESH":
-        lines.append("Подготовката се изпълнява във фонов режим; това действие не приема ново предложение.")
+        lines.append("Подготовката се изпълнява във фонов режим; валидният резултат се прилага автоматично.")
     lines.append("Избери „Запиши промяната“ или „Откажи промяната“.")
     return "\n".join(lines)
 
@@ -609,7 +706,7 @@ def _preview(command, entry=None):
         if not start_date or command["entry_key"]!=start_date:
             raise HTTPException(422,"Посочи началната дата на новата програма.")
         return (f"Предложена промяна: подготовка на програма от {start_date}.\n"
-                "Изчислението се изпълнява във фонов режим и създава чернова за преглед. Активирането е отделно действие.\n"
+                "Изчислението се изпълнява във фонов режим. Програмата става текуща автоматично след проверките на алгоритъма.\n"
                 "Избери „Запиши промяната“ или „Откажи промяната“.")
     if command["kind"] in {"PLAN_ACTION","PLAN_DAY","PLAN_ACTIVATE"}:
         return _plan_preview(command,entry)
@@ -646,6 +743,7 @@ def _preview(command, entry=None):
         if key=="timing":
             return {"IMMEDIATE":"непосредствено след края", "DELAYED":"10–60 минути след края", "NEXT_DAY":"на следващия ден", "UNKNOWN":"неуточнено"}.get(item,str(item))
         if key=="scope": return {"FULL":"всички данни", "WELLNESS":"данни за благосъстоянието", "RECOVERY":"данни за възстановяването"}.get(item,str(item))
+        if key=="threshold_method": return {"AUTO":"автоматичен избор", "CONTINUOUS":"непрекъсната работа", "INTERVALS":"интервална работа"}.get(item,str(item))
         if key=="rpe_source": return {"ONFLOWS":"ваша оценка", "INTERVALS":"Intervals"}.get(item,str(item))
         if key=="duration_minutes" and type(item) is float: return f"{item:.2f}".rstrip("0").rstrip(".")
         if isinstance(item,list) and (key.endswith("_days") or key=="training_days"):
@@ -656,6 +754,26 @@ def _preview(command, entry=None):
         lines=[]
         for key,item in patch.items():
             if key=="planning_controls" and isinstance(item,dict): lines.extend(fields(item))
+            elif key=="method_library" and isinstance(item,dict) and isinstance(item.get("overrides"),dict):
+                cards={card.get("id"):card for card in (entry or {}).get("catalog_methods",[])}
+                control_names={"repetitions":"повторения", "work_range":"дължина на работата", "speed_multiplier":"скоростен множител",
+                    "total_capacity_ratio":"дял от индивидуалния капацитет", "speed_tolerance_fraction":"допуск на скоростта", "hr_tolerance_bpm":"пулсов допуск"}
+                for identifier,controls in item["overrides"].items():
+                    card=cards.get(identifier,{})
+                    label=card.get("title") or identifier
+                    parts=[]
+                    for control,setting in (controls or {}).items():
+                        if control=="enabled":
+                            parts.append("включен" if setting else "изключен")
+                        elif isinstance(setting,(list,tuple)) and len(setting)==2:
+                            shown=str(setting[0]) if setting[0]==setting[1] else f"{setting[0]}–{setting[1]}"
+                            unit=((card.get("prescription") or {}).get("work") or {}).get("unit") if control=="work_range" else None
+                            parts.append(control_names.get(control,control)+": "+shown+({"seconds":" сек", "meters":" м"}.get(unit,"")))
+                        else:
+                            parts.append(control_names.get(control,control)+": "+str(setting))
+                    lines.append("• Метод "+str(label)+": "+(", ".join(parts) if controls else "възстановени стандартни настройки"))
+                if "enabled" in item:
+                    lines.append("• Каталог на методите: "+("включен" if item["enabled"] else "изключен"))
             else: lines.append("• "+names.get(key,key.replace("_"," "))+": "+value(key,item))
         return lines
     activity=(entry or {}).get("activity") or {}
@@ -685,14 +803,17 @@ def _receipt_message(receipt, command=None, entry=None):
         label={"WELLNESS":"данните за благосъстоянието", "RECOVERY":"данните за възстановяването"}.get(scope,"данните")
         return f"Синхронизирането на {label} е заявено. Данните се обновяват във фонов режим; заявката не означава, че обработката вече е приключила."
     if kind=="PLAN_GENERATE":
-        status=(receipt.get("job") or {}).get("status")
+        job=receipt.get("job") or {}
+        status=job.get("status")
         if status=="SUCCEEDED":
-            return "Черновата за този период вече е подготвена. Тя може да бъде прегледана и активирана."
+            if job.get("published") is True and type(job.get("result_active_revision")) is int:
+                return "Програмата за този период е изчислена и вече е текущата програма."
+            return "Програмата е изчислена, но не е приложена. Провери посоченото състояние в „Седмична програма“; при пауза или липсващи данни отделно утвърждаване не решава причината."
         if status in {"FAILED","CANCELLED"}:
-            return "Подготовката на черновата не е завършила успешно. Нова програма не е активирана."
-        return "Подготовката на новата програма е заявена. Черновата се изчислява във фонов режим и предстои да бъде прегледана и активирана."
+            return "Подготовката на програмата не е завършила успешно. Предишната запазена програма не е заменена."
+        return "Подготовката на новата програма е заявена. Тя се изчислява във фонов режим и се прилага автоматично след проверките на алгоритъма."
     if receipt.get("queued") or receipt.get("refresh_state")=="QUEUED":
-        return "Обновяването е заявено. Предложението се подготвя във фонов режим; текущата утвърдена програма остава активна."
+        return "Обновяването е заявено. Програмата се подготвя във фонов режим; текущата запазена версия остава достъпна, докато валидният резултат се приложи автоматично."
     if kind in {"PLAN_ACTION","PLAN_DAY","PLAN_ACTIVATE"}:
         messages={"APPROVE":"Предложението за тренировъчна програма е утвърдено.","PAUSE":"Програмата е поставена на пауза.",
             "RESUME":"Програмата е възобновена.","REST":"За избрания ден е зададена почивка.",
@@ -709,7 +830,7 @@ def _receipt_message(receipt, command=None, entry=None):
         if details:
             message += "\n" + "\n".join(details)
         if command["kind"] in {"MANAGEMENT_PROFILE", "CALENDAR_EVENT", "ATHLETE_SETTINGS", "RECOVERY_CONFIG", "SPEED_TEST", "MANUAL_SPEED_TEST", "PLANNING_PROFILE", "MESOCYCLE_PREFERENCES"}:
-            message += "\nПромяната е във входните данни. Текущата утвърдена програма остава активна до приемане на ново предложение."
+            message += "\nНастройката е записана. Програмата се преизчислява във фонов режим и валидният резултат се прилага автоматично; отделно утвърждаване не е необходимо."
     return message
 
 
@@ -839,10 +960,14 @@ def _render_blocks(blocks, prefix="• "):
 def _render_day(context):
     # Also useful during provider outage; do not manufacture a workout.
     if context.get("availability") in {"UNAVAILABLE","PENDING"}:
-        return "Няма налична утвърдена програма за тази дата. Отвори „Седмична програма“, за да провериш текущия план и предложенията."
+        return "За тази дата още няма запазена програма. Провери състоянието на подготовката в „Седмична програма“; не е необходимо отделно утвърждаване."
     lines=[f"Програма за {context.get('date',context.get('today','днес'))} · версия {context.get('plan_revision','неизвестна')}"]
     if context.get("prescription_active") is False:
-        lines.append("Програмата е спряна. Показаните сесии са запазени за справка.")
+        states={"PAUSED":"Програмата е на пауза.", "COMPLETED":"Периодът на програмата е завършен.",
+            "REVIEW_REQUIRED":"Новият разчет не е приложен, защото има условие за изясняване в данните."}
+        lines.append(states.get(context.get("plan_status"),"Показана е запазената версия на програмата.")+" Сесиите остават достъпни за справка.")
+        if context.get("plan_status_detail"):
+            lines.append(str(context["plan_status_detail"]))
     sessions=context.get("sessions") or []
     if not sessions:
         lines.append("Почивка според запазения план." if context.get("day_status") in {"REST","SKIPPED"} else "В запазения ден няма сесии. Това не установява изпълнена почивка.")
@@ -993,8 +1118,6 @@ def turn(repository,alias,actor,body,provider=None):
                 receipt=assistant_commands.execute(repository,alias,actor,operation,pending)
                 result.update(receipt=receipt,message=_receipt_message(receipt,pending))
             state.pop("input_request",None)
-        elif re.search(r"(още|добави).{0,25}(отсеч|интервал|повторени)",normalized):
-            result["message"]=UNAVAILABLE_SESSION_CHANGE
         elif _provider_available(provider) and (session_entry:=_session_rating_entry(repository,alias,actor,state,input_request,message)):
             context=session_entry.pop("context")
             direct_command=session_entry.pop("command", None)
@@ -1034,13 +1157,19 @@ def turn(repository,alias,actor,body,provider=None):
                     break
                 synthesis_only=step==3
                 capabilities=_capabilities(_permissions(repository,alias,actor))
+                read_input_kinds={item.get("input_kind") or item.get("kind") for item in contexts
+                    if item.get("query_kind")=="inputs" and type(item.get("revision")) is int}
+                final_command_allowed=bool(synthesis_only and input_request
+                    and input_request.get("kind") in read_input_kinds
+                    and _explicit_write_request(_request_text(input_request,message)))
                 if synthesis_only:
-                    capabilities={**capabilities,"read":[],"write":[]}
+                    capabilities={**capabilities,"read":[],"write":[kind for kind in capabilities["write"] if kind in read_input_kinds] if final_command_allowed else []}
                 model_context={"results":contexts,"confirmed_context":state.get("preferences",[]),
                     "read_only_turn":not input_request and _read_request(message),
                     "completed_queries":completed_queries,"remaining_model_calls":4-step,"remaining_read_calls":max(0,3-step),
                     "query_feedback":query_feedback,
-                    "final_answer_only":synthesis_only,"synthesis_reason":"REPEATED_READ" if synthesis_only and query_feedback else "READ_BUDGET" if synthesis_only else None,"read_targets":state.get("read_targets",[]),
+                    "final_answer_only":synthesis_only and not final_command_allowed,"final_command_allowed":final_command_allowed,
+                    "synthesis_reason":"REPEATED_READ" if synthesis_only and query_feedback else "READ_BUDGET" if synthesis_only else None,"read_targets":state.get("read_targets",[]),
                     "pending_change":pending_change if input_request else None,"now":datetime.now(timezone.utc).isoformat(),
                     "active_input_request":input_request,
                     "athlete_timezone":athlete_timezone,"today":local_today,
@@ -1072,7 +1201,7 @@ def turn(repository,alias,actor,body,provider=None):
                 for key in totals:
                     value=reply.get("usage",{}).get(key,0)
                     totals[key]=None if key=="estimated_cost_usd" and (totals[key] is None or value is None) else totals[key]+(value or 0)
-                if synthesis_only and (reply.get("query") or reply.get("command")):
+                if synthesis_only and (reply.get("query") or reply.get("command") and not final_command_allowed):
                     result["message"]=_resolved_answer(contexts,input_request)
                     break
                 if reply.get("query"):
@@ -1127,7 +1256,12 @@ def turn(repository,alias,actor,body,provider=None):
                         raise HTTPException(422,"В текущото съобщение няма изрично искане за тази промяна. Опиши стойността, която искаш да запишеш.")
                     if input_request and input_request["kind"]=="SESSION" and command["kind"]=="DAILY":
                         raise HTTPException(422,"Оценката след тренировката е усилие RPE по скала 0–10. Тя се записва към изпълнената активност, без преобразуване в дневна умора 1–5.")
-                    entry={**entry,"today":contexts[-1].get("today")}
+                    catalog_methods=[]
+                    for item in contexts:
+                        if item.get("query_kind")=="methods":
+                            data=item.get("data") or {}
+                            catalog_methods.extend(row for row in [data.get("method"), *(data.get("methods") or [])] if isinstance(row,dict))
+                    entry={**entry,"today":contexts[-1].get("today"),"catalog_methods":catalog_methods}
                     if _automatic_observation(command,entry,message) or _direct_request(command,entry,input_request,message):
                         receipt=assistant_commands.execute(repository,alias,actor,operation,command)
                         result.update(receipt=receipt,message=_receipt_message(receipt,command,entry))

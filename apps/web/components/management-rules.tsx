@@ -11,10 +11,10 @@ export function ManagementRules({ profile, onChange, today, hideAutomation = fal
   return <>
     <AnTReferenceEditor value={profile.ant_references} onChange={refs => update("ant_references", refs)} today={today}/>
     <div className="management-form-grid">
-      {!hideAutomation && <label>Режим на седмицата<select value={profile.adaptation_mode} onChange={e => update("adaptation_mode", e.target.value as "AUTO" | "REVIEW")}><option value="AUTO">Адаптивна седмица</option><option value="REVIEW">Фиксирана седмица</option></select></label>}
+      {!hideAutomation && <label>Режим на седмицата<select value={profile.adaptation_mode} onChange={e => update("adaptation_mode", e.target.value as "AUTO" | "REVIEW")}><option value="AUTO">Подвижни 7 дни</option><option value="REVIEW">Седмица с фиксиран край</option></select></label>}
       <label>Преход след последния основен старт, дни<input type="number" min="0" max="28" value={profile.transition_days} onChange={e => update("transition_days", Number(e.target.value))} /></label>
     </div>
-    <p className="management-muted">Фиксираната седмица запазва датите, методите и дозите до края на утвърдения период. Изпълнението, 7/40 и Recovery се обновяват; корекциите и следващата седмица изискват утвърждаване. Адаптивната седмица променя оставащите задачи автоматично. Смяната на режима за действаща програма първо се показва за преглед.</p>
+    <p className="management-muted">Седмицата с фиксиран край запазва крайната си дата, а подвижните 7 дни следват текущия ден. И в двата режима програмата се обновява автоматично според изпълнението, възстановяването и правилата на алгоритъма.</p>
     {!hideAutomation && <label className="management-check"><input type="checkbox" checked={profile.auto_import_enabled} onChange={e => update("auto_import_enabled", e.target.checked)} />Обновявай свързаните активности автоматично — до веднъж на час, докато програмата работи</label>}
     <p className="management-muted">Целите и вълната са в стъпка 3. Тук се задават методът и началната доза. Поддържащата работа използва 60% от методния бюджет без допълнителен Recovery множител; развиващата доза намалява с половината от дефицита на Recovery.</p>
     <details className="management-detail" open={Object.keys(profile.component_targets_weekly).length>0}><summary>Индивидуални цели по компоненти · приравнени минути</summary>

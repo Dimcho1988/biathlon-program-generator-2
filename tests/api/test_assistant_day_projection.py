@@ -117,7 +117,7 @@ def test_missing_plan_preserves_unavailable_metadata(monkeypatch):
     repo, _, _ = projected_repository(full)
     monkeypatch.setattr(context, "PlanStore", PlanStore)
     result = context._plan_day(repo, ALIAS, ACCESS, SELECTED, date(2026, 11, 12))
-    assert result["reason"] == "NO_APPROVED_PLAN" and result["sessions"] == []
+    assert result["reason"] == "NO_SAVED_PLAN" and result["sessions"] == []
     assert result["plan_revision"] == 7 and result["recorded_at"] == full["recorded_at"]
 
 

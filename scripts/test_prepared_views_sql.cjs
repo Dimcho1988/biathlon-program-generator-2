@@ -74,6 +74,19 @@ function routine(name) {
     if(validationMigration) await db.exec(fs.readFileSync(path.join(migrations,validationMigration),"utf8"));
     const overviewMigration=fs.readdirSync(migrations).find(name=>name.endsWith("_preserve_approved_overview_with_input_hints.sql"));
     if(overviewMigration) await db.exec(fs.readFileSync(path.join(migrations,overviewMigration),"utf8"));
+    const recoveryMigration=fs.readdirSync(migrations).find(name=>name.endsWith("_prepared_management_page_recovery.sql"));
+    if(recoveryMigration) await db.exec(fs.readFileSync(path.join(migrations,recoveryMigration),"utf8"));
+    // Use the current scheduler contract, including daily input checks in both
+    // planning modes. The authoritative publication routines from this same
+    // migration run separately in test_automatic_current_plan_sql.cjs.
+    const automaticMigration=fs.readdirSync(migrations).find(name=>name.endsWith("_automatic_current_training_plan.sql"));
+    if(automaticMigration) {
+      const source=fs.readFileSync(path.join(migrations,automaticMigration),"utf8");
+      const start=source.indexOf("create or replace function onflows_private.training_plan_update(");
+      const end=source.indexOf("$$;",start);
+      if(start<0||end<0) throw new Error("Missing current training plan scheduler");
+      await db.exec(source.slice(start,end+3));
+    }
     await db.exec("grant select on public.onflows_management_plan_state,public.onflows_management_plan_revisions to service_role;");
     // Re-run the prior contract against the upgraded queue/publication guards.
     try { await db.exec(fs.readFileSync(path.join(root, "tests/database/prepared_dashboard_and_training_events.sql"), "utf8")); }
