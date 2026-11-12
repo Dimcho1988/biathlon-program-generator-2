@@ -55,6 +55,11 @@ EVIDENCE_FIELDS = frozenset({"explanation", "limits", "fallback_reasons", "capac
     "initial_heuristic", "calibration_source", "target_speed_source", "target_speed_model_version"})
 SNAPSHOT_FIELDS = frozenset({"generation_id", "analysis_revision", "analysis_as_of", "settings_fingerprint",
     "snapshot_fingerprint", "evaluation_date", "profile_revision", "engine_version", "speed_model_version"})
+# Same display names as web/lib/training-visuals.ts and planning-controls-editor.tsx.
+# The stored sport remains the identity; labels never infer another modality.
+SPORT_LABELS_BG = {"Run": "Бягане", "NordicSki": "Ски бягане", "RollerSki": "Ролкови ски",
+    "Ride": "Колоездене", "Walk": "Ходене", "Hike": "Преход", "Strength": "Сила",
+    "WeightTraining": "Сила", "TrailRun": "Планинско бягане", "VirtualRun": "Бягаща пътека"}
 
 
 DAILY_SCALES = {
@@ -273,6 +278,9 @@ def expand_blocks(blocks):
 
 def _session(value, identity, access):
     result = {**_pick(value, SESSION_FIELDS), "session_id": identity}
+    sport = result.get("sport")
+    if isinstance(sport, str) and sport in SPORT_LABELS_BG:
+        result["sport_label_bg"] = SPORT_LABELS_BG[sport]
     result["blocks"] = []
     for block in value.get("blocks", []):
         if not isinstance(block, dict):

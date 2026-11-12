@@ -90,6 +90,29 @@ def test_saved_dose_evidence_keeps_historical_reason_without_using_new_snapshot(
     repository.active_analysis.assert_not_called()
 
 
+@pytest.mark.parametrize("kind", ["day", "method"])
+def test_saved_ski_modality_has_exact_app_label_without_changing_prescription(repository, kind):
+    saved = plan()
+    sessions = saved["payload"]["plan"]["days"][0]["sessions"]
+    sessions[0]["sport"], sessions[1]["sport"] = "NordicSki", "RollerSki"
+    original = deepcopy(saved)
+    repository.plan_read.side_effect = lambda _: saved
+    result = context.read(repository, ALIAS, FULL, {"kind": kind}, now=NOW)
+    assert [(s["sport"], s["sport_label_bg"]) for s in result["sessions"]] == [
+        ("NordicSki", "Ски бягане"), ("RollerSki", "Ролкови ски")]
+    for shown, source in zip(result["sessions"], sessions):
+        assert shown["total_minutes"] == source["total_minutes"]
+        assert shown["blocks"][0]["target_speed_kmh"] == source["blocks"][0]["target_speed_kmh"]
+    assert saved == original
+
+
+def test_unknown_or_absent_sport_is_not_given_an_invented_label():
+    for sport in ("UnknownDiscipline", None):
+        saved = {"sport": sport, "blocks": []}
+        result = context._session(saved, "2026-11-11:1", FULL)
+        assert result["sport"] == sport and "sport_label_bg" not in result
+
+
 @pytest.mark.parametrize("query", [{"kind": "status"}, {"kind": "history"}, {"kind": "inputs", "input_kind": "LAB", "key": "lab"}])
 def test_plan_only_access_is_rejected_before_loading_private_records(repository, query):
     with pytest.raises(HTTPException) as error:
