@@ -674,6 +674,15 @@ def test_model_failure_does_not_claim_saved_input_or_expose_private_error(repo):
     assert "private-provider-detail" not in result["message"] and "receipt" not in result and not repo.writes
 
 
+def test_model_failure_during_explanation_does_not_mention_an_unrequested_write(repo):
+    class FailingProvider:
+        def complete(self,*args):
+            raise AssistantProviderError("private-provider-detail")
+    result=service.turn(repo,ALIAS,ACTOR,body("Може ли да ми обясниш подготовката?"),FailingProvider())
+    assert "временно не отговаря" in result["message"]
+    assert "запис" not in result["message"] and "потвърд" not in result["message"] and not repo.writes
+
+
 @pytest.mark.parametrize("claim", ["Записах теглото.", "Входът е записан.", "Промяната е запазена."])
 def test_model_text_without_durable_receipt_cannot_claim_a_completed_write(repo, claim):
     result = service.turn(repo, ALIAS, ACTOR, body("Сутринта тежах 72,4 кг."),
@@ -888,8 +897,8 @@ def test_oversized_context_has_an_actionable_saved_reply_without_writes_or_retry
     request = body("Обясни всички тренировки.")
     result = service.turn(repo, ALIAS, ACTOR, request, provider)
     assert result["error_code"] == "input_too_large"
-    assert "конкретна дата или сесия" in result["message"]
-    assert "Не е потвърден нов запис" in result["message"]
+    assert "повториш същия въпрос" in result["message"]
+    assert "запис" not in result["message"]
     assert not repo.writes
     assert service.turn(repo, ALIAS, ACTOR, request, provider) == result
     assert provider.calls == 1
@@ -1327,3 +1336,78 @@ def test_sync_receipt_describes_effective_scope_when_canonical_queue_upgrades_to
     text=service._receipt_message(receipt,{"kind":"SYNC_DATA","patch":{"scope":"RECOVERY"}})
     assert "Синхронизирането на данните е заявено" in text
     assert "данните за възстановяването" not in text
+
+
+@pytest.mark.parametrize("message", [
+    "Може ли да ми кажеш каква е общата философия на подготовката ни за основните стартове?",
+    "Можеш ли да ми обясниш периодизацията?", "Би ли ми показал програмата?",
+])
+def test_polite_explanations_do_not_continue_an_earlier_write(repo, message):
+    state={"input_request":{"kind":"CALENDAR_EVENT","request":"Премести основния старт",
+        "answers":[],"followups":0,"expires_at":(datetime.now(timezone.utc)+timedelta(minutes=10)).isoformat()}}
+    provider=ScriptedAssistantProvider([{"text":"Подготовката свързва основните стартове с периодите и натоварването."}])
+    result=service.turn(repo,ALIAS,ACTOR,body(message,repo.seed(state)),provider)
+    assert provider.calls[0]["context"]["read_only_turn"] is True
+    assert provider.calls[0]["context"]["active_input_request"] is None
+    assert not repo.conversations[result["conversation_id"]]["state"].get("input_request")
+    assert not repo.writes and "запис" not in result["message"]
+
+
+@pytest.mark.parametrize("message", ["Може ли да запишеш умора 3 от 5?", "Можеш ли да преместиш основния старт на 15 февруари?"])
+def test_polite_change_requests_keep_their_write_intent(message):
+    assert not service._read_request(message)
+    assert service._explicit_write_request(message)
+
+
+def test_broad_question_automatically_summarizes_oversized_saved_management_context(repo):
+    from apps.api.assistant_provider import OpenAIAssistantProvider, OpenAIProviderConfig
+    main_race={"event_id":"race_a","event_type":"MAIN_RACE","name":"Основен старт",
+        "start_date":"2027-02-02","end_date":"2027-02-02"}
+    repo.read_result={"query_kind":"management","availability":"AVAILABLE","source":"SAVED_APPLICATION_VIEW",
+        "revision":12,"data":{"profile":{"sport":"Run","program_end":"2027-02-02",
+            "method_library":{"overrides":{f"method_{i}":{"description":f"Уникален метод {i}: "+str(i)*2500} for i in range(45)}}},
+            "outlook":{"periodization":{"calendar_context":[main_race],"phases":[
+                {"kind":"PRECOMPETITION","start_date":"2027-01-20","end_date":"2027-02-01"}]}}}}
+    class PayloadCheckedProvider:
+        def __init__(self):
+            self.calls=[]
+            self.real=OpenAIAssistantProvider(OpenAIProviderConfig(api_key="test-not-a-live-key"))
+            self.config=self.real.config
+        def complete(self,messages,context,capabilities):
+            self.calls.append(deepcopy(context))
+            self.real._payload(messages,context,capabilities)
+            if len(self.calls)==1:
+                return {"query":query("management"),"text":"",
+                    "usage":{"model_calls":1,"input_tokens":500,"output_tokens":40,"estimated_cost_usd":0.001}}
+            # This fixture tests actual payload fitting and orchestration. The
+            # model's explanatory quality is checked separately in the live UI.
+            assert context["final_answer_only"] is True
+            assert capabilities["write"]==[] and capabilities["read"]==[]
+            compact=context["results"][0]
+            assert compact["revision"]==12
+            assert compact["data"]["outlook"]["periodization"]["main_races"]["events"][0]==main_race
+            return {"text":"Основният старт е на 2 февруари; предсъстезателният период е от 20 януари до 1 февруари.",
+                "usage":{"model_calls":1,"input_tokens":800,"output_tokens":90,"estimated_cost_usd":0.002}}
+    provider=PayloadCheckedProvider()
+    request=body("Може ли да ми кажеш каква е общата философия на подготовката ни за основните стартове?")
+    result=service.turn(repo,ALIAS,ACTOR,request,provider)
+    assert "2 февруари" in result["message"] and "error_code" not in result
+    assert len(provider.calls)==3 and len(repo.reads)==1 and not repo.writes
+    assert result["usage"]["model_calls"]==2 and result["usage"]["input_tokens"]==1300
+    assert result["sources"][0]["revision"]==12
+    assert service.turn(repo,ALIAS,ACTOR,request,provider)==result and len(provider.calls)==3
+
+
+def test_context_recovery_rechecks_permissions_before_read_synthesis(repo):
+    class RevokedAfterRead:
+        calls=0
+        def complete(self,*args):
+            self.calls+=1
+            if self.calls==1:
+                return {"text":"","query":query("management")}
+            repo.permissions={}
+            raise AssistantProviderError("input_too_large")
+    provider=RevokedAfterRead()
+    with pytest.raises(HTTPException) as error:
+        service.turn(repo,ALIAS,ACTOR,body("Обясни подготовката"),provider)
+    assert error.value.status_code==403 and provider.calls==2 and not repo.writes

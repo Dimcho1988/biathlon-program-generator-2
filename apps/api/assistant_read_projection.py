@@ -106,7 +106,11 @@ def _periodization(value):
     result = _scalars(value, {"engine_version"})
     for name in ("phases", "taper_windows", "reentry_windows"):
         result[name] = _rows(value.get(name), lambda row: _scalars(row, {
-            "kind", "label_bg", "start_date", "end_date", "days", "event_id", "event_name", "taper_days", "load_factor", "note_bg"}))
+            "kind", "label_bg", "start_date", "end_date", "days", "event_id", "event_name", "taper_days", "load_factor", "note_bg",
+            "main_race_event_id", "reason", "volume_factor", "prevent_deficit_refill", "planned_days", "requested_days"}))
+    result["warnings"] = _rows(value.get("warnings"), lambda row: _scalars(row, {"code", "message"}))
+    if isinstance(value.get("parameters"), dict):
+        result["parameters"] = _scalars(value["parameters"], {"source", "date_ranges", "taper_is_overlay"})
     schema = PlanningCalendarEvent.model_json_schema()
     for name in ("calendar_context",):
         result[name] = _rows(value.get(name), lambda row: _schema_value(row, schema, schema.get("$defs", {})))

@@ -154,8 +154,53 @@ def _activities(repository, alias, query, today, parse_date):
 
 def _management(repository, alias, access, query, today, parse_date, actor):
     view = query.get("view") or "overview"
-    if view not in {"overview", "week", "profile", "outlook", "active", "drafts", "draft-metadata", "state", "checks", "speed-comparison", "generation-jobs", "race-duration", "sync-state"}:
+    if view not in {"overview", "strategy", "week", "profile", "outlook", "active", "drafts", "draft-metadata", "state", "checks", "speed-comparison", "generation-jobs", "race-duration", "sync-state"}:
         raise HTTPException(422, "Неподдържан изглед на програмата.")
+    if view == "strategy":
+        from .assistant_strategy import compact_management, _events, _profile
+        from .assistant_read_projection import project_management, project_profile
+        from .management_store import ManagementStore
+        from .management_schemas import normalize_building_profile
+        # The overview cache owns all scientific calculation. Read the current
+        # editable inputs separately so a just-saved race is not hidden behind
+        # an older prepared outlook or a newly deployed worker's cold cache.
+        prepared = public_management(_prepared(repository, alias, "management-view", {"view": "overview", "projection": "overview-v1"}))
+        current_profile = ManagementStore(repository).profile(alias)
+        if isinstance(current_profile.get("profile"), dict):
+            current_profile = {**current_profile, "profile": normalize_building_profile(current_profile["profile"])}
+        calendar_reader = getattr(repository, "athlete_planning_calendar_snapshot", None)
+        calendar_snapshot = calendar_reader(alias) if callable(calendar_reader) else {"calendar": None, "revision": None}
+        calendar = calendar_snapshot.get("calendar")
+        if hasattr(calendar, "to_payload"):
+            calendar = calendar.to_payload()
+        calendar = calendar if isinstance(calendar, dict) else {"events": []}
+        events = calendar.get("events") or []
+        if not isinstance(events, list) or any(not isinstance(row, dict) for row in events):
+            raise PersistentStoreFailure("Invalid assistant planning calendar")
+        # A growing archive must not push the next main goal out of a bounded
+        # strategy summary. The original calendar stays intact for comparison.
+        ordered_events = sorted(events, key=lambda event: (str(event.get("end_date", "")) < today.isoformat(), str(event.get("start_date", ""))))
+        next_main = next((event for event in ordered_events if event.get("event_type") == "MAIN_RACE" and str(event.get("end_date", "")) >= today.isoformat()), None)
+        stored_outlook = ((prepared.get("outlook") or {}).get("outlook") or {})
+        prepared_calendar = (stored_outlook.get("input_snapshot") or {}).get("calendar")
+        prepared_profile_revision = stored_outlook.get("profile_revision")
+        profile_matches = prepared_profile_revision == current_profile.get("revision") if prepared_profile_revision is not None else None
+        calendar_matches = prepared_calendar == calendar if isinstance(prepared_calendar, dict) else None
+        if access.get("can_view_recovery") is not True:
+            prepared = project_management(prepared, "overview")
+        result = compact_management(prepared, "overview")
+        if result.get("availability") in {"PENDING", "UNAVAILABLE"}:
+            result = {"prepared_availability": result["availability"], "prepared_reason": result.get("reason")}
+        result.update(profile=_profile(project_profile(current_profile)), profile_basis="CURRENT_SAVED_INPUTS",
+            current_calendar={"revision": calendar_snapshot.get("revision"),
+                "main_races": _events([event for event in ordered_events if event.get("event_type") == "MAIN_RACE"]),
+                "next_main_race": _events([next_main])["events"][0] if next_main else None,
+                "other_events": _events([event for event in ordered_events if event.get("event_type") != "MAIN_RACE"], 16),
+                "order": "Current/future events first, then past events; dates in ascending order within each group."},
+            prepared_basis={"profile_revision": prepared_profile_revision,
+                "matches_current_profile": profile_matches, "matches_current_calendar": calendar_matches,
+                "interpretation": "Current saved inputs are authoritative. Prepared phase dates and targets describe their own source; if a match is false or unknown, do not present the outlook as recalculated for the current calendar."})
+        return result
     if view == "sync-state":
         if not (access.get("can_view_recovery") is True or (access.get("can_view_plan") is True and access.get("can_edit_plan") is True)):
             raise HTTPException(403, "Нямаш достъп до обновяването на данните.")
@@ -354,12 +399,15 @@ def read(repository, alias, access, query, settings, today, parse_date, *, actor
         raise HTTPException(422, "Неподдържана справка.")
     if access.get("can_view_recovery") is not True:
         from .assistant_read_projection import project_management, project_methods
-        if kind == "management" and query.get("view") not in {"race-duration", "sync-state"}:
+        if kind == "management" and query.get("view") not in {"race-duration", "sync-state", "strategy"}:
             payload = project_management(payload, query.get("view") or "overview")
         elif kind == "methods":
             payload = project_methods(payload)
     if payload.get("availability") in {"PENDING", "UNAVAILABLE"}:
         return payload
+    if kind == "management" and (query.get("view") or "overview") in {"overview", "outlook"} and not query.get("section"):
+        from .assistant_strategy import compact_management
+        payload = compact_management(payload, query.get("view") or "overview")
     return {"availability": "AVAILABLE", "source": "CANONICAL_WHAT_IF_PREVIEW" if kind == "management" and query.get("view") == "race-duration" else "SAVED_APPLICATION_VIEW",
         **{key: payload[key] for key in ("as_of", "revision", "source_revision", "source_generation_id", "generation_id") if key in payload},
         **_page(payload, query)}
