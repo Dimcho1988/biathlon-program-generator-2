@@ -260,7 +260,10 @@ def _session_rating_entry(repository, alias, actor, state, request, message):
     if message!=anchor and len(correction)==1 and 0<=int(correction[0])<=10 and not re.search(r"\?|\b(?:не|ако|пример)\b",message.lower()):
         score=int(correction[0])
         request["rpe_value"]=score
-    selected,clarification=_fallback_day_query(repository,alias,anchor)
+    if "SESSION" not in _capabilities(_permissions(repository,alias,actor))["write"]:
+        return None
+    date_text=re.sub(r"(?<![\d-])\d{1,2}\s*/\s*10\b","",anchor)
+    selected,clarification=_fallback_day_query(repository,alias,date_text)
     if clarification:
         return None
     requested={"kind":"inputs","input_kind":"SESSION","date":selected.get("date")}

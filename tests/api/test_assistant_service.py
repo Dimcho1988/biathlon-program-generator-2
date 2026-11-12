@@ -552,13 +552,14 @@ def test_post_workout_rating_continues_with_timing_and_never_becomes_daily_fatig
 
 
 @pytest.mark.parametrize("timing_answer,timing", [("Веднага след края", "IMMEDIATE"), ("Около 30 минути", "DELAYED"), ("На следващия ден", "NEXT_DAY")])
-def test_single_completed_activity_rating_asks_only_timing_without_paid_model(repo, timing_answer, timing):
+@pytest.mark.parametrize("rating", ["3 от 10", "3/10"])
+def test_single_completed_activity_rating_asks_only_timing_without_paid_model(repo, timing_answer, timing, rating):
     ref = "act_" + "a" * 32
     repo.read_result = {"query_kind": "inputs", "kind": "SESSION", "activity_count": 1, "date": DAY, "entries": [
         {"kind": "SESSION", "entry_key": ref, "revision": 0, "payload": None, "suggested_duration_minutes": 117.75,
             "activity": {"local_date": DAY, "name": "Ски"}}]}
     provider = ScriptedAssistantProvider([])
-    first = service.turn(repo, ALIAS, ACTOR, body("Искам да въведа умората от днес след тренировката тя беше 3 от 10."), provider)
+    first = service.turn(repo, ALIAS, ACTOR, body(f"Искам да въведа умората от днес след тренировката тя беше {rating}."), provider)
     assert "Кога направи оценката" in first["message"] and "1–5" not in first["message"]
     assert not repo.writes and not provider.calls
     # Both duration and revision must be read again after the clarification.
@@ -595,6 +596,14 @@ def test_multiple_activities_are_not_automatically_selected_for_session_rating(r
     provider = ScriptedAssistantProvider([{"text": "Коя от двете тренировки имаш предвид?"}])
     result = service.turn(repo, ALIAS, ACTOR, body("Искам да въведа умора след тренировката 3 от 10"), provider)
     assert "Коя от двете" in result["message"] and len(provider.calls) == 1 and not repo.writes
+
+
+def test_direct_rating_path_does_not_offer_owner_input_to_a_coach(repo):
+    repo.permissions["is_owner"] = False
+    provider = ScriptedAssistantProvider([{"text": "Оценката след тренировка се въвежда от спортиста."}])
+    result = service.turn(repo, ALIAS, ACTOR, body("Искам да въведа умора след тренировката 3 от 10, веднага след края"), provider)
+    assert not repo.reads and not repo.writes
+    assert not repo.conversations[result["conversation_id"]]["state"].get("pending_command")
 
 
 def test_post_workout_ten_point_rating_cannot_be_saved_as_daily_even_if_model_misroutes(repo):
