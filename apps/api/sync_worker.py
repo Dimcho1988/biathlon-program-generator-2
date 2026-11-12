@@ -1019,6 +1019,15 @@ def _run_optional_housekeeping(
     repository: SyncRepository,
     athlete_alias: str,
 ) -> None:
+    assistant_cleanup = getattr(repository, "cleanup_assistant_conversations", None)
+    if callable(assistant_cleanup):
+        try:
+            removed = assistant_cleanup()
+            if type(removed) is not int or removed < 0:
+                raise SyncContractError("Invalid assistant cleanup result")
+            logger.info("assistant_cleanup_finished removed_conversations=%d", removed)
+        except Exception as exc:
+            logger.warning("assistant_cleanup_failed error_type=%s", type(exc).__name__)
     maintenance = getattr(repository, "maintain_analysis_history", None)
     fixed_policy = callable(maintenance)
     if not fixed_policy:

@@ -67,6 +67,14 @@ class PublicationHTTP:
             data = [{"kind": "PROFILE", "entry_key": "management-profile-v1", "revision": 1, "payload": self.profile}]
         elif path in {"/onflows_model_entries", "/onflows_response_entries"}:
             data = deepcopy(self.models if path == "/onflows_model_entries" else self.responses)
+        elif path in {"/rpc/read_onflows_latest_model_entries", "/rpc/read_onflows_latest_response_entries"}:
+            assert request.method == "POST" and set(body) == {"p_alias"}
+            assert body["p_alias"] in {"ath-test", "ath-other"}
+            source = self.models if path.endswith("model_entries") else self.responses
+            latest = {}
+            for row in sorted(source, key=lambda r: (r["kind"], r["entry_key"], -r["revision"])):
+                latest.setdefault((row["kind"], row["entry_key"]), deepcopy(row))
+            data = list(latest.values())
         elif path == "/rpc/active_onflows_analysis":
             data = [deepcopy(self.envelope)]
         elif path == "/rpc/onflows_management_checkpoint":
@@ -159,7 +167,7 @@ def test_fresh_final_settings_row_removes_three_requests_with_identical_complete
     assert len(former.requests) == 23 and len(current.requests) == 20
     final = current.requests[8:12]
     assert [request[1] for request in final] == ["/onflows_athlete_settings", "/rpc/active_onflows_analysis",
-        "/onflows_model_entries", "/onflows_response_entries"]
+        "/rpc/read_onflows_latest_model_entries", "/rpc/read_onflows_latest_response_entries"]
     assert set(final[0][2]["select"].split(",")) == set(settings_row())
     assert current.record["payload"]["status"] == "REVIEW_REQUIRED"
     assert actual.json()["active"]["revision"] == 2

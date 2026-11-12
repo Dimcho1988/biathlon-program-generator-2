@@ -14,8 +14,10 @@ const validDate = (value?: string) => value && /^\d{4}-\d{2}-\d{2}$/.test(value)
 
 export default async function ActivitiesPage({ searchParams }: { searchParams: Promise<{ start?: string; end?: string; sync?: string }> }) {
   const query = await searchParams;
-  const athleteAlias = multiProfileMode() ? (await currentAuthorizedAthlete())?.athleteAlias : undefined;
+  const access = multiProfileMode() ? await currentAuthorizedAthlete() : null;
+  const athleteAlias = access?.athleteAlias;
   if (multiProfileMode() && !athleteAlias) return <ErrorState message="Няма активна защитена сесия за спортист." integrationActions refreshAvailable={false} />;
+  if (multiProfileMode() && access?.canViewRecovery !== true) return <ErrorState message="Този спортист не е споделил физиологичните си данни с вас." refreshAvailable={false} />;
   const today = new Date();
   const end = validDate(query.end) ?? iso(today);
   const start = validDate(query.start) ?? shifted(end, -41);

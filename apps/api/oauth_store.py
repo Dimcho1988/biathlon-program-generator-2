@@ -364,6 +364,9 @@ class SupabasePilotRepository(SnapshotRepository):
     def cleanup_prepared_data(self, alias):
         return self._json(self._request('POST', '/rpc/cleanup_onflows_prepared_data', json={'p_alias': alias}))
 
+    def cleanup_assistant_conversations(self):
+        return self._json(self._request('POST', '/rpc/cleanup_onflows_assistant_conversations', json={'p_limit': 200}))
+
     def queue_plan_refresh(self, alias, actor, expected_revision, record_unchanged_check=False):
         return self._json(self._request('POST', '/rpc/queue_onflows_plan_refresh', json={
             'p_alias':alias, 'p_actor':actor, 'p_expected_revision':expected_revision,
@@ -799,6 +802,14 @@ class SupabasePilotRepository(SnapshotRepository):
             raise PersistentStoreFailure("Invalid observed HRmax update result")
         return result
 
+    def latest_response_entries(self, athlete_alias: str):
+        return self._json(self._request("POST", "/rpc/read_onflows_latest_response_entries",
+            json={"p_alias": athlete_alias}))
+
+    def latest_model_entries(self, athlete_alias: str):
+        return self._json(self._request("POST", "/rpc/read_onflows_latest_model_entries",
+            json={"p_alias": athlete_alias}))
+
     def athlete_planning_profile(
         self, athlete_alias: str
     ) -> AthletePlanningProfile | None:
@@ -875,6 +886,30 @@ class SupabasePilotRepository(SnapshotRepository):
             },
             headers={"Prefer": "return=minimal"},
         )
+
+    def athlete_planning_calendar_revision(self, athlete_alias: str) -> int:
+        rows = self._json(self._request(
+            "GET", "/onflows_athlete_settings?select=calendar_revision"
+            f"&athlete_alias=eq.{quote(athlete_alias, safe='')}&limit=1",
+        ))
+        if (not isinstance(rows, list) or len(rows) != 1
+                or type(rows[0].get("calendar_revision")) is not int
+                or rows[0]["calendar_revision"] < 0):
+            raise PersistentStoreFailure("Planning calendar revision is unavailable")
+        return rows[0]["calendar_revision"]
+
+    def athlete_planning_calendar_snapshot(self, athlete_alias: str) -> dict:
+        """Read calendar and its CAS revision from the same database row."""
+        rows = self._json(self._request(
+            "GET", "/onflows_athlete_settings?select=planning_calendar,calendar_revision"
+            f"&athlete_alias=eq.{quote(athlete_alias, safe='')}&limit=1",
+        ))
+        if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
+                or type(rows[0].get("calendar_revision")) is not int
+                or rows[0]["calendar_revision"] < 0):
+            raise PersistentStoreFailure("Planning calendar snapshot is unavailable")
+        return {"calendar": _PlanningSettingsBundle(rows).athlete_planning_calendar(),
+                "revision": rows[0]["calendar_revision"]}
 
     def latest(self, athlete_alias: str) -> Mapping[str, Any] | None:
         if self._generation_reads:

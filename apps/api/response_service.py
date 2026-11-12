@@ -19,6 +19,12 @@ class ResponseStore:
         captured = reader(alias) if callable(reader) else None
         if captured is not None:
             return captured
+        latest_reader = getattr(self.repository, "latest_response_entries", None)
+        if callable(latest_reader):
+            latest = latest_reader(alias)
+            if not isinstance(latest, list):
+                raise PersistentStoreFailure("Invalid latest response history")
+            return latest
         rows = []
         for offset in range(0, 10000, 1000):
             response = self.repository._request("GET", "/onflows_response_entries?select=kind,entry_key,observed_date,revision,payload,recorded_at"

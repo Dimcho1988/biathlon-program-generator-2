@@ -45,19 +45,44 @@ def test_calendar_old_shape_and_optional_course_roundtrip():
 
 def test_calendar_http_saves_and_reads_course_with_existing_envelope(monkeypatch):
     saved = {}
+    version = {"revision": 0}
     repo = SimpleNamespace(athlete_settings=lambda _: AthleteModelSettings((100, 120, 140, 160, 180, 200), "Europe/Sofia"),
         athlete_planning_profile=lambda _: None, athlete_mesocycle_accent_preferences=lambda _: None,
         athlete_planning_calendar=lambda alias: saved.get(alias), latest=lambda _: None,
-        save_athlete_planning_calendar=lambda alias, calendar: saved.update({alias: calendar}))
+        athlete_planning_calendar_snapshot=lambda alias: {"calendar": saved.get(alias), "revision": version["revision"]},
+        _request=lambda method, path, **kwargs: [{"planning_calendar": saved["athlete"].to_payload() if "athlete" in saved else None,
+                                                "calendar_revision": version["revision"]}],
+        _json=lambda value: value)
+    from apps.api import assistant_commands
+    def save_prepared(repository, alias, actor, operation_id, prepared, request_hash, **kwargs):
+        assert prepared["expected_revision"] == version["revision"]
+        assert kwargs["origin"] == "FORM"
+        assert actor == "11111111-1111-4111-8111-111111111111"
+        saved[alias] = AthletePlanningCalendar.from_mapping(prepared["payload"])
+        version["revision"] += 1
+        return {"saved": True, "revision": version["revision"]}
+    monkeypatch.setattr(assistant_commands, "apply_prepared", save_prepared)
     monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "test-token")
     monkeypatch.setattr(dependencies, "repository", lambda: repo)
     client = TestClient(app)
-    headers = {"Authorization": "Bearer test-token", "X-OnFlows-Athlete-Alias": "athlete"}
+    headers = {"Authorization": "Bearer test-token", "X-OnFlows-Athlete-Alias": "athlete",
+               "X-OnFlows-Actor-Id": "11111111-1111-4111-8111-111111111111", "X-OnFlows-Expected-Revision": "0"}
     payload = {"schema_version": "planning-calendar-v1", "events": [event((date.today()+timedelta(days=10)).isoformat())]}
     response = client.put("/api/v2/athlete/planning-calendar", headers=headers, json=payload)
     assert response.status_code == 200, response.text
     loaded = client.get("/api/v2/athlete/planning-calendar", headers=headers)
     assert loaded.json()["calendar"] == response.json()["calendar"] == payload
+    assert loaded.json()["revision"] == 1
+
+
+def test_calendar_http_requires_actor_and_current_revision(monkeypatch):
+    monkeypatch.setenv("ONFLOWS_SERVICE_TOKEN", "test-token")
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer test-token", "X-OnFlows-Athlete-Alias": "athlete"}
+    payload = {"schema_version": "planning-calendar-v1", "events": []}
+    assert client.put("/api/v2/athlete/planning-calendar", headers=headers, json=payload).status_code == 401
+    headers["X-OnFlows-Actor-Id"] = "11111111-1111-4111-8111-111111111111"
+    assert client.put("/api/v2/athlete/planning-calendar", headers=headers, json=payload).status_code == 422
 
 
 def test_next_main_race_owns_distance_and_switches_after_it_without_mutating_profile():

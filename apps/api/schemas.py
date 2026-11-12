@@ -229,6 +229,14 @@ class PlanningCalendarResponse(StrictModel):
     configured: bool
     calendar: PlanningCalendarInput | None = None
     context: PlanningGenerationContext
+    revision: int | None = Field(default=None, ge=0)
+
+    @model_serializer(mode="wrap")
+    def serialize_revision(self, handler):
+        result = handler(self)
+        if self.revision is None:
+            result.pop("revision", None)
+        return result
 
 
 class ModelMetadata(StrictModel):

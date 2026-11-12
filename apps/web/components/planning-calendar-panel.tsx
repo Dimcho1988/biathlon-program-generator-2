@@ -50,8 +50,10 @@ export function PlanningCalendarPanel({
   const [displayPlan, setDisplayPlan] = useState(plan), [observedPlan, setObservedPlan] = useState(plan);
   if (plan !== observedPlan) { setObservedPlan(plan); setDisplayPlan(plan); }
   const [kind, setKind] = useState<string>("CAMP");
-  const [observedCalendar, setObservedCalendar] = useState(JSON.stringify(response.calendar?.events ?? []));
+  const [observedCalendar, setObservedCalendar] = useState(JSON.stringify({ events: response.calendar?.events ?? [], revision: response.revision }));
   const [savedEvents, setSavedEvents] = useState(response.calendar?.events ?? []);
+  const [calendarRevision, setCalendarRevision] = useState(response.revision);
+  const calendarOperation = useRef<{ payload: string; revision: number; id: string } | null>(null);
   const [events, setEvents] = useState<PlanningCalendarEvent[]>(
     response.calendar?.events ?? [],
   );
@@ -73,9 +75,10 @@ export function PlanningCalendarPanel({
 
   const eventsDirty = JSON.stringify(canonicalEvents) !== JSON.stringify(savedEvents);
   const incoming = response.calendar?.events ?? [];
-  if (!busy && JSON.stringify(incoming) !== observedCalendar) {
-    setObservedCalendar(JSON.stringify(incoming));
-    if (!eventsDirty) { setEvents(incoming); setSavedEvents(incoming); }
+  const incomingVersion = JSON.stringify({ events: incoming, revision: response.revision });
+  if (!busy && incomingVersion !== observedCalendar) {
+    setObservedCalendar(incomingVersion);
+    if (!eventsDirty) { setEvents(incoming); setSavedEvents(incoming); setCalendarRevision(response.revision); }
   }
   const pending = eventsDirty || profileDirty || needsRefresh || busy;
   useEffect(() => { onPendingChange?.(pending); }, [pending, onPendingChange]);
@@ -115,11 +118,18 @@ export function PlanningCalendarPanel({
         savedProfile = true;
       }
       if (eventsDirty) {
-        const body = new FormData(); body.set("schema_version", "planning-calendar-v1"); body.set("events_json", JSON.stringify(canonicalEvents));
+        if (calendarRevision === undefined) throw new Error("Презареди календара, за да получиш текущата му версия.");
+        const payload = JSON.stringify(canonicalEvents);
+        if (!calendarOperation.current || calendarOperation.current.payload !== payload || calendarOperation.current.revision !== calendarRevision)
+          calendarOperation.current = { payload, revision: calendarRevision, id: crypto.randomUUID() };
+        const body = new FormData(); body.set("schema_version", "planning-calendar-v1"); body.set("events_json", payload);
+        body.set("expected_revision", String(calendarRevision)); body.set("operation_id", calendarOperation.current.id);
         const result = await scopedFetch("/api/athlete/planning-calendar", { method: "POST", headers: { Accept: "application/json" }, body });
-        if (!result.ok || !result.headers.get("content-type")?.includes("application/json") || !(await result.json()).saved) throw new Error("Събитията не бяха записани. Провери достъпа и датите и опитай отново.");
+        const received = result.headers.get("content-type")?.includes("application/json") ? await result.json() : null;
+        if (!result.ok || !received?.saved || !Number.isSafeInteger(received.revision)) throw new Error(received?.error ?? "Записът не е потвърден. Провери последната версия, преди да опиташ отново.");
         if (!mounted.current) return;
         setSavedEvents(canonicalEvents);
+        setCalendarRevision(received.revision); calendarOperation.current = null;
       }
       if (profile?.discipline.trim()) {
         setNeedsRefresh(true);

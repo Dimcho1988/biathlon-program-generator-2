@@ -200,7 +200,7 @@ begin
    'Unavailable nonnull pointer incorrectly fell back to legacy data';
  execute 'reset role';
 
- -- Bound raw revisions, even when every revision collapses to one identity.
+ -- Repeated chat corrections retain all history while returning one latest identity.
  insert into public.onflows_model_entries(athlete_alias,kind,entry_key,revision,payload,actor_id)
    select other_a,'SPEED_TEST','other-model',n,'{}'::jsonb,actor from generate_series(2,9999) n;
  insert into public.onflows_response_entries(athlete_alias,kind,entry_key,observed_date,revision,payload,actor_id)
@@ -217,18 +217,38 @@ begin
    values(other_a,'SPEED_TEST','other-model',10000,'{}',actor);
  execute 'set local role service_role';
  bundle := public.read_onflows_planning_inputs(other_a);
- assert bundle->'model_history_exhausted'='true'::jsonb
+ assert bundle->'model_history_exhausted'='false'::jsonb
    and bundle->'response_history_exhausted'='false'::jsonb
-   and bundle->'model_entries'='[]'::jsonb and bundle#>'{response_entries,0,revision}'='9999'::jsonb,
-   'One exhausted history invalidated another lazy section';
+   and bundle#>'{model_entries,0,revision}'='10000'::jsonb and bundle#>'{response_entries,0,revision}'='9999'::jsonb,
+   '10,000 model revisions incorrectly exhausted one current identity';
  execute 'reset role';
  insert into public.onflows_response_entries(athlete_alias,kind,entry_key,observed_date,revision,payload,actor_id)
    values(other_a,'DAILY','other-response','2026-01-01',10000,'{}',actor);
  execute 'set local role service_role';
  bundle := public.read_onflows_planning_inputs(other_a);
+ assert bundle->'model_history_exhausted'='false'::jsonb and bundle->'response_history_exhausted'='false'::jsonb
+   and bundle#>'{model_entries,0,revision}'='10000'::jsonb and bundle#>'{response_entries,0,revision}'='10000'::jsonb,
+   '10,000 response revisions incorrectly exhausted one current identity';
+ assert (select count(*) from public.onflows_model_entries where athlete_alias=other_a)=10000
+   and (select count(*) from public.onflows_response_entries where athlete_alias=other_a)=10000,
+   'Latest reads removed historical observations';
+ execute 'reset role';
+ -- The response-size bound still applies independently to distinct identities.
+ insert into public.onflows_model_entries(athlete_alias,kind,entry_key,revision,payload,actor_id)
+   select other_a,'SPEED_TEST','distinct-model-'||n,1,'{}'::jsonb,actor from generate_series(1,9999) n;
+ execute 'set local role service_role';
+ bundle := public.read_onflows_planning_inputs(other_a);
+ assert bundle->'model_history_exhausted'='true'::jsonb and bundle->'response_history_exhausted'='false'::jsonb
+   and bundle->'model_entries'='[]'::jsonb and bundle#>'{response_entries,0,revision}'='10000'::jsonb,
+   'A distinct-identity bound affected the independent response section';
+ execute 'reset role';
+ insert into public.onflows_response_entries(athlete_alias,kind,entry_key,observed_date,revision,payload,actor_id)
+   select other_a,'DAILY','distinct-response-'||n,'2026-01-01'::date,1,'{}'::jsonb,actor from generate_series(1,9999) n;
+ execute 'set local role service_role';
+ bundle := public.read_onflows_planning_inputs(other_a);
  assert bundle->'model_history_exhausted'='true'::jsonb and bundle->'response_history_exhausted'='true'::jsonb
    and bundle->'model_entries'='[]'::jsonb and bundle->'response_entries'='[]'::jsonb,
-   'Exactly 10,000 raw revisions did not signal lazy bounded-history failure';
+   '10,000 distinct identities did not retain the lazy response-size bound';
  execute 'reset role';
 end $$;
 

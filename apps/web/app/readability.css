@@ -79,7 +79,7 @@
   .workspace-links a { min-height: 48px; font-size: 14px; }
   .menu-toggle { min-height: 44px; font-size: 14px; }
   .workspace-menu-backdrop { display: block; position: fixed; inset: 60px 0 0; z-index: 40; border: 0; background: #07111d42; }
-  .mobile-navigation { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); position: fixed; inset: auto 0 0; z-index: 35; min-height: 64px; padding: 6px max(8px,env(safe-area-inset-left)) max(6px,env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: var(--surface); box-shadow: 0 -4px 20px #07111d08; }
+  .mobile-navigation { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); position: fixed; inset: auto 0 0; z-index: 35; min-height: 64px; padding: 6px max(8px,env(safe-area-inset-left)) max(6px,env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: var(--surface); box-shadow: 0 -4px 20px #07111d08; }
   .mobile-navigation a { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 5px; min-height: 50px; border-radius: 8px; color: var(--text-secondary); text-decoration: none; font-size: 11px; font-weight: 650; }
   .mobile-navigation svg { width: 22px; height: 22px; }
   .mobile-navigation a[aria-current="page"] { color: var(--accent); background: color-mix(in srgb,var(--accent) 9%,var(--surface)); }

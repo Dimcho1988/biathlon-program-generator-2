@@ -606,7 +606,7 @@ describe("integration route redirects behind a reverse proxy", () => {
     vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: session }) } as never);
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(Response.json({ status: "ok" }))
-      .mockResolvedValueOnce(Response.json({ configured: true }));
+      .mockResolvedValueOnce(Response.json({ configured: true, revision: 1 }));
     vi.stubGlobal("fetch", fetchMock);
     const events = [
       {
@@ -619,18 +619,23 @@ describe("integration route redirects behind a reverse proxy", () => {
     ];
     const form = new FormData();
     form.set("schema_version", "planning-calendar-v1");
+    form.set("expected_revision", "0");
+    form.set("operation_id", "11111111-1111-4111-8111-111111111111");
     form.set("events_json", JSON.stringify(events));
 
     const response = await savePlanningCalendar(new Request(
       "https://web.example.test/api/athlete/planning-calendar",
-      { method: "POST", body: form, headers: { "X-Onflows-Athlete": "ath-test-profile", "X-Onflows-Actor": "auth-user-1", ...(json ? { Accept: "application/json" } : {}) } },
+      { method: "POST", body: form, headers: { Origin: "https://web.example.test", "X-Onflows-Athlete": "ath-test-profile", "X-Onflows-Actor": "auth-user-1", ...(json ? { Accept: "application/json" } : {}) } },
     ));
 
-    if (json) { expect(response.status).toBe(200); expect(await response.json()).toEqual({ saved: true }); }
+    if (json) { expect(response.status).toBe(200); expect(await response.json()).toEqual({ saved: true, revision: 1 }); }
     else expect(response.headers.get("location")).toBe("/planning?planning=calendar-saved");
     for (const path of ["/planning", "/management", "/management/outlook"]) expect(revalidatePath).toHaveBeenCalledWith(path);
     const [, init] = fetchMock.mock.calls[1];
     expect(init.headers["X-OnFlows-Athlete-Alias"]).toBe("ath-test-profile");
+    expect(init.headers["X-OnFlows-Actor-Id"]).toBe("auth-user-1");
+    expect(init.headers["X-OnFlows-Expected-Revision"]).toBe("0");
+    expect(init.headers["X-OnFlows-Operation-Id"]).toBe("11111111-1111-4111-8111-111111111111");
     expect(JSON.parse(init.body)).toEqual({
       schema_version: "planning-calendar-v1",
       events,

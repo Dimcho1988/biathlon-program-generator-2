@@ -8,8 +8,11 @@ import { ThemeToggle } from "./theme-toggle";
 import { InstallApp } from "./install-app";
 import { rememberedNavigationHref } from "../lib/dashboard-navigation";
 
+const mobileLabels: Record<string, string> = { "/": "Статус", "/assistant": "Асистент", "/activities": "Активности", "/trainability": "Индекс", "/management": "Програма" };
+
 const sections = [
   { href: "/", label: "Общ статус", icon: "overview" },
+  { href: "/assistant", label: "ИИ асистент", icon: "assistant" },
   { href: "/activities", label: "Активности", icon: "calendar" },
   { href: "/trainability", label: "Индекс на тренираност", icon: "trend" },
   { href: "/speed", label: "Скорост и време", icon: "speed" },
@@ -23,6 +26,7 @@ const sections = [
 
 function NavIcon({ name }: { name: string }) {
   const paths: Record<string, ReactNode> = {
+    assistant: <><path d="M21 11a8 8 0 0 1-8 8H6l-4 3V11a9 9 0 0 1 19 0Z" /><path d="M7 10h10M7 14h6" /></>,
     overview: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>,
     calendar: <><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M7 3v4m10-4v4M3 11h18m-13 4h2m4 0h2" /></>,
     trend: <><path d="M3 4v16h18M6 15l5-5 4 3 6-8m-5 0h5v5" /></>,
@@ -69,7 +73,7 @@ export function AppShell({ children, athlete }: { children: ReactNode; athlete: 
       <div id="workspace-navigation" className={`workspace-navigation${menuOpen ? " is-open" : ""}`}>
         <p className="workspace-label">Тренировъчен дневник</p>
         <nav className="workspace-links" aria-label="Основна навигация">
-          {sections.map(({ href, label, icon }) => <Link key={href} href={href} prefetch={false} aria-current={pathname === href || (href !== "/" && href !== "/management" && pathname.startsWith(`${href}/`)) ? "page" : undefined} onNavigate={(event) => navigate(href, label, event)}><NavIcon name={icon} /><span>{label}</span></Link>)}
+          {sections.map(({ href, label, icon }) => <Link key={href} href={href} prefetch={false} className={href === "/assistant" ? "workspace-assistant-link" : undefined} aria-current={pathname === href || (href !== "/" && href !== "/management" && pathname.startsWith(`${href}/`)) ? "page" : undefined} onNavigate={(event) => navigate(href, label, event)}><NavIcon name={icon} /><span>{label}</span></Link>)}
         </nav>
         <div className="workspace-athlete" onClick={(event) => { if ((event.target as HTMLElement).closest("a")) closeMenu(); }}>{athlete}</div>
         <div className="workspace-tools"><Link href="/account" prefetch={false} onClick={closeMenu} aria-current={pathname === "/account" ? "page" : undefined}>Акаунт и спортисти</Link><ThemeToggle /></div>
@@ -82,7 +86,7 @@ export function AppShell({ children, athlete }: { children: ReactNode; athlete: 
       {children}
     </div>
     <nav className="mobile-navigation" aria-label="Бърза навигация">
-      {sections.filter(section => ["/", "/activities", "/trainability", "/management"].includes(section.href)).map(({href,label,icon},i) => <Link key={href} href={href} prefetch={false} aria-current={pathname === href || (href !== "/" && pathname.startsWith(`${href}/`)) ? "page" : undefined} onNavigate={event => navigate(href,label,event)}><NavIcon name={icon} /><span>{["Статус","Активности","Индекс","Програма"][i]}</span></Link>)}
+      {sections.filter(section => ["/", "/assistant", "/activities", "/trainability", "/management"].includes(section.href)).map(({href,label,icon}) => <Link key={href} href={href} prefetch={false} className={href === "/assistant" ? "workspace-assistant-link" : undefined} aria-current={pathname === href || (href !== "/" && pathname.startsWith(`${href}/`)) ? "page" : undefined} onNavigate={event => navigate(href,label,event)}><NavIcon name={icon} /><span>{mobileLabels[href]}</span></Link>)}
     </nav>
   </div>;
 }

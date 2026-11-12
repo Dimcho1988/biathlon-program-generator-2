@@ -18,6 +18,7 @@ class ReadSession:
         "athlete_settings", "active_analysis", "active_analysis_metadata", "athlete_planning_calendar",
         "athlete_planning_profile", "athlete_mesocycle_accent_preferences",
         "athlete_planning_settings_bundle",
+        "latest_model_entries", "latest_response_entries",
         "active_trainability_calendar", "active_planning_calendar", "active_activity_calendar",
         "trainability_summaries", "sync_state", "read_load_projection", "read_activity_derivations", "training_plan_status",
     })

@@ -52,6 +52,8 @@ describe("planning-calendar-v1 contract", () => {
 
   it("accepts canonical athlete events and rejects inferred or malformed data", () => {
     expect(parsePlanningCalendarResponse(response)).toEqual(response);
+    expect(parsePlanningCalendarResponse({ ...response, revision: 7 }).revision).toBe(7);
+    expect(() => parsePlanningCalendarResponse({ ...response, revision: -1 })).toThrow();
     expect(() => parsePlanningCalendarInput({
       schema_version: "planning-calendar-v1",
       events: [{ ...response.calendar?.events[0], event_type: "VIRTUAL_RACE" }],

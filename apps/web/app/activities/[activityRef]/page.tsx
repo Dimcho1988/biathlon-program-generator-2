@@ -11,6 +11,7 @@ export default async function ActivityPage({ params }: { params: Promise<{ activ
   const access = multiProfileMode() ? await currentAuthorizedAthlete() : null;
   const athleteAlias = access?.athleteAlias;
   if (multiProfileMode() && !athleteAlias) return <ErrorState message="Няма активна защитена сесия за спортист." integrationActions refreshAvailable={false} />;
+  if (multiProfileMode() && access?.canViewRecovery !== true) return <ErrorState message="Този спортист не е споделил физиологичните си данни с вас." refreshAvailable={false} />;
   let view: ActivityView;
   try {
     view = await getActivityView(activityRef, athleteAlias ?? undefined);

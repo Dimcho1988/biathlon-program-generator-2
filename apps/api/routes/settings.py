@@ -1,9 +1,12 @@
 """Settings HTTP routes."""
 
 from datetime import date
+from hashlib import sha256
+import json
 import logging
 import os
 from typing import Annotated
+from uuid import UUID, uuid4
 from fastapi import Header, HTTPException
 from biathlon.methodology import CANONICAL_METHODOLOGY_VERSION, canonical_methodology
 from biathlon.hr_zones import bounds_from_hrmax, validate_percentages
@@ -332,6 +335,7 @@ def _planning_calendar_response(
     repository: SupabasePilotRepository,
     athlete_alias: str,
     calendar: AthletePlanningCalendar | None,
+    revision: int | None = None,
 ) -> PlanningCalendarResponse:
     context = planning_generation_context(
         calendar=calendar,
@@ -351,6 +355,7 @@ def _planning_calendar_response(
             else None
         ),
         context=PlanningGenerationContext.model_validate(context),
+        revision=revision,
     )
 
 
@@ -368,6 +373,12 @@ def athlete_planning_calendar(
     resolved_alias = dependencies.validated_alias(athlete_alias)
     try:
         repository = dependencies.repository()
+        snapshot_reader = getattr(repository, "athlete_planning_calendar_snapshot", None)
+        if callable(snapshot_reader):
+            snapshot = snapshot_reader(resolved_alias)
+            return _planning_calendar_response(repository, resolved_alias, snapshot["calendar"], snapshot["revision"])
+        # Repository test doubles and immutable legacy projections do not expose
+        # a mutable calendar revision; forms cannot save without that revision.
         calendar = repository.athlete_planning_calendar(resolved_alias)
         return _planning_calendar_response(repository, resolved_alias, calendar)
     except PersistentStoreFailure as exc:
@@ -386,9 +397,16 @@ def update_athlete_planning_calendar(
     athlete_alias: Annotated[
         str | None, Header(alias="X-OnFlows-Athlete-Alias")
     ] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None,
+    expected_revision: Annotated[int | None, Header(alias="X-OnFlows-Expected-Revision", ge=0)] = None,
+    operation_id: Annotated[UUID | None, Header(alias="X-OnFlows-Operation-Id")] = None,
 ):
     dependencies.authorize(authorization)
     resolved_alias = dependencies.validated_alias(athlete_alias)
+    if actor is None:
+        raise HTTPException(401, "An authenticated actor is required")
+    if expected_revision is None:
+        raise HTTPException(422, "A current calendar revision is required")
     try:
         calendar = AthletePlanningCalendar(
             schema_version=body.schema_version,
@@ -415,8 +433,22 @@ def update_athlete_planning_calendar(
                 status_code=409,
                 detail="Athlete HR zones and timezone must be configured first",
             )
-        repository.save_athlete_planning_calendar(resolved_alias, calendar)
-        return _planning_calendar_response(repository, resolved_alias, calendar)
+        from ..assistant_planning_commands import prepare
+        from ..assistant_commands import apply_prepared
+        command = {"kind": "CALENDAR_REPLACE", "entry_key": "planning-calendar-v1",
+                   "expected_revision": expected_revision, "patch": calendar.to_payload()}
+        prepared = prepare(repository, resolved_alias, command["kind"], command["entry_key"],
+                           command["patch"], expected_revision, actor)
+        request_hash = sha256(json.dumps(command, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        receipt = apply_prepared(repository, resolved_alias, str(actor), str(operation_id or uuid4()),
+                                 prepared, request_hash, origin="FORM")
+        if receipt.get("saved") is not True:
+            raise HTTPException(409, "The calendar changed; reload before saving")
+        snapshot = repository.athlete_planning_calendar_snapshot(resolved_alias)
+        result = _planning_calendar_response(repository, resolved_alias, snapshot["calendar"], snapshot["revision"])
+        if result.revision != receipt.get("revision"):
+            raise HTTPException(409, "The operation was saved but the calendar has since changed; reload")
+        return result
     except PersistentStoreFailure as exc:
         raise HTTPException(
             status_code=503, detail="Persistent server storage is unavailable"
