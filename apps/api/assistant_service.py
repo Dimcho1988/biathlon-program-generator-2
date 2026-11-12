@@ -72,9 +72,9 @@ def _provider_available(provider):
     return provider is not None and not isinstance(provider, DisabledAssistantProvider)
 
 
-def _configured_provider():
+def _configured_provider(repository):
     try:
-        return get_assistant_provider()
+        return get_assistant_provider(repository=repository)
     except AssistantProviderError:
         return DisabledAssistantProvider()
 
@@ -360,7 +360,7 @@ def _render_day(context):
 
 def overview(repository,alias,actor,conversation_id=None,operation_id=None,provider=None):
     _permissions(repository,alias,actor)
-    provider=_configured_provider() if provider is None else provider
+    provider=_configured_provider(repository) if provider is None else provider
     base={"provider_available":_provider_available(provider),"retention_days":retention_days(),"suggestions":SUGGESTIONS}
     if operation_id:
         operation=_uuid(operation_id)
@@ -414,7 +414,7 @@ def turn(repository,alias,actor,body,provider=None):
         return start.get("response") or {"conversation_id":conversation,"operation_id":operation,"pending":True,"message":"Предишната заявка още се обработва. Провери статуса ѝ."}
     state=dict(start.get("state") or {})
     result={"conversation_id":conversation,"operation_id":operation,"message":"","sources":[],"suggestions":SUGGESTIONS}
-    provider=_configured_provider() if provider is None else provider
+    provider=_configured_provider(repository) if provider is None else provider
     result["provider_available"]=_provider_available(provider)
     context=None
     now=datetime.now(timezone.utc)
@@ -531,8 +531,21 @@ def turn(repository,alias,actor,body,provider=None):
                     result["message"]+="\n\nЛипсва днешна оценка на умората. Каква е тя от 1 (без умора) до 5 (много силна)?"
                     result["suggestions"]=["Умората ми е 2 от 5","Умората ми е 4 от 5","Отложи за утре","Не ме подсещай"]
                     state["last_nudge_day"]=local.date().isoformat()
-    except AssistantProviderError:
-        result["message"]="Разговорният модел временно не отговаря. Не е потвърден нов запис. Можеш да използваш формулярите и запазената програма."
+    except AssistantProviderError as exc:
+        if exc.code == "budget_exhausted":
+            result["message"]="Тестовият бюджет на ИИ асистента е изчерпан или спрян. Платените заявки са прекратени до изрично добавяне на нов кредит. Запазената програма и формулярите остават достъпни."
+            result["error_code"]="budget_exhausted"
+        elif exc.code in {"budget_unavailable", "invalid_budget", "budget_usage_unknown", "budget_model_not_allowed"}:
+            result["message"]="Не може да се провери остатъкът от тестовия бюджет. Платените заявки са спрени. Можеш да използваш запазената програма и формулярите."
+            result["error_code"]="budget_unavailable"
+        elif exc.code == "credit_balance_exhausted":
+            result["message"]="Кредитът при доставчика на ИИ услугата е изчерпан. Платените заявки са спрени до ново зареждане. Запазената програма и формулярите остават достъпни."
+            result["error_code"]="credit_balance_exhausted"
+        elif exc.code == "provider_limit_exhausted":
+            result["message"]="Достигнат е лимитът при доставчика на ИИ услугата. Платените заявки са спрени до промяна на разрешения лимит. Запазената програма и формулярите остават достъпни."
+            result["error_code"]="provider_limit_exhausted"
+        else:
+            result["message"]="Разговорният модел временно не отговаря. Не е потвърден нов запис. Можеш да използваш формулярите и запазената програма."
     except HTTPException as exc:
         # 403/412 never return previously read data after access changed.
         if exc.status_code in {401,403,412}:

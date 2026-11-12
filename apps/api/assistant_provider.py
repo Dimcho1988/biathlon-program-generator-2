@@ -18,8 +18,11 @@ import re
 import threading
 import time
 from typing import Any, Protocol
+from uuid import uuid4
 
 import httpx
+
+from .assistant_budget import AssistantBudgetError, PersistentAssistantBudget
 
 
 _LOG = logging.getLogger(__name__)
@@ -27,6 +30,13 @@ _PAID_REQUEST_SLOT = threading.BoundedSemaphore(1)
 _RESPONSES_URL = "https://api.openai.com/v1/responses"
 _MAX_RESPONSE_BYTES = 96 * 1024
 _MAX_HISTORY_MESSAGES = 16
+# A single, standard Luna request is authorized only after this full amount is
+# held in the shared ledger. Unknown bills keep their hold; there is no refund
+# or timeout cleanup that could spend the same money twice.
+_REQUEST_RESERVATION_NANO_USD = 25_000_000
+_MAX_PILOT_INPUT_TOKENS = 70_000
+_PILOT_TARIFF = (0.10, 0.50, 0.01)
+_DEFAULT_BUDGET_ID = "onflows-staging-luna-pilot-v1"
 
 _INSTRUCTIONS = """Ти си ИИ асистентът на onFlows. Пиши на ясен книжовен български.
 Помагаш за работа с приложението и обясняваш изпълнението на запазената тренировка.
@@ -120,6 +130,11 @@ class AssistantProvider(Protocol):
     def complete(
         self, messages: list[dict], context: dict, capabilities: dict
     ) -> dict: ...
+
+
+class AssistantBudget(Protocol):
+    def reserve(self, request_id: str, amount_nano_usd: int) -> None: ...
+    def settle(self, request_id: str, amount_nano_usd: int) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -250,9 +265,11 @@ class ScriptedAssistantProvider:
 
 
 class OpenAIAssistantProvider:
-    def __init__(self, config: OpenAIProviderConfig, *, client: httpx.Client | None = None):
+    def __init__(self, config: OpenAIProviderConfig, *, client: httpx.Client | None = None,
+                 budget: AssistantBudget | None = None):
         self.config = config
         self._client = client
+        self._budget = budget
 
     def _payload(self, messages: list[dict], context: dict, capabilities: dict) -> dict:
         if not isinstance(messages, list) or not isinstance(context, dict) or not isinstance(capabilities, dict):
@@ -273,6 +290,10 @@ class OpenAIAssistantProvider:
                 *history,
             ],
             "reasoning": {"effort": "low"},
+            "service_tier": "default",
+            # Explicit caching without breakpoints disables cache reads/writes;
+            # none of the string inputs or the function schema has a breakpoint.
+            "prompt_cache_options": {"mode": "explicit"},
             "max_output_tokens": self.config.max_output_tokens,
             "store": False,
             "parallel_tool_calls": False,
@@ -285,12 +306,29 @@ class OpenAIAssistantProvider:
 
     def complete(self, messages: list[dict], context: dict, capabilities: dict) -> dict:
         payload = self._payload(messages, context, capabilities)
+        # This funded pilot permits one exact model/tier/tariff. Selecting a
+        # different model cannot silently reuse Luna's reservation or credit.
+        if self.config.model != "gpt-6-luna":
+            raise AssistantProviderError("budget_model_not_allowed")
+        prices = (self.config.input_usd_per_million, self.config.output_usd_per_million,
+                  self.config.cached_input_usd_per_million)
+        if prices[0] is not None and prices != _PILOT_TARIFF:
+            raise AssistantProviderError("invalid_budget")
+        if self._budget is None:
+            raise AssistantProviderError("budget_unavailable")
         if not _PAID_REQUEST_SLOT.acquire(blocking=False):
             raise AssistantProviderError("busy")
         started = time.monotonic()
         owned_client = self._client is None
         client = self._client
         try:
+            request_id = str(uuid4())
+            try:
+                self._budget.reserve(request_id, _REQUEST_RESERVATION_NANO_USD)
+            except AssistantBudgetError as exc:
+                raise AssistantProviderError(exc.code) from None
+            except Exception:
+                raise AssistantProviderError("budget_unavailable") from None
             if client is None:
                 client = httpx.Client(follow_redirects=False)
             with client.stream(
@@ -299,11 +337,9 @@ class OpenAIAssistantProvider:
                 timeout=httpx.Timeout(self.config.timeout_seconds),
                 follow_redirects=False,
             ) as response:
-                if response.status_code == 429:
-                    raise AssistantProviderError("rate_limited")
                 if response.status_code in {401, 403}:
                     raise AssistantProviderError("not_configured")
-                if response.status_code != 200:
+                if response.status_code not in {200, 429}:
                     raise AssistantProviderError("unavailable")
                 body = bytearray()
                 for chunk in response.iter_bytes():
@@ -312,13 +348,26 @@ class OpenAIAssistantProvider:
                         raise AssistantProviderError("timeout")
                     if len(body) > _MAX_RESPONSE_BYTES:
                         raise AssistantProviderError("invalid_response")
+                status = response.status_code
+            if status == 429:
+                # Only a small enumerated code is used; provider error bodies
+                # never enter public messages or operational logs.
+                raise AssistantProviderError(self._quota_error(body))
             try:
                 result = json.loads(body)
             except (ValueError, UnicodeError, RecursionError):
                 raise AssistantProviderError("invalid_response") from None
-            reply = self._parse(result)
             duration_ms = round((time.monotonic() - started) * 1000)
+            # Settle even an unusable model reply when its token usage is
+            # trustworthy. Unknown/partial responses retain the entire hold.
+            amount = self._budget_charge(result)
+            try:
+                self._budget.settle(request_id, amount)
+            except Exception:
+                raise AssistantProviderError("budget_unavailable") from None
+            reply = self._parse(result)
             usage = self._usage(result.get("usage"), duration_ms)
+            usage["budget_charge_usd"] = amount / 1_000_000_000
             _LOG.info("assistant_model_call model=%s input_tokens=%d output_tokens=%d cached_input_tokens=%d duration_ms=%d model_calls=1 estimated_cost_usd=%s price_basis=%s",
                       self.config.model, usage["input_tokens"], usage["output_tokens"], usage["cached_input_tokens"], duration_ms,
                       usage["estimated_cost_usd"], usage["price_basis"])
@@ -331,6 +380,56 @@ class OpenAIAssistantProvider:
             if owned_client and client is not None:
                 client.close()
             _PAID_REQUEST_SLOT.release()
+
+    @staticmethod
+    def _quota_error(body: bytes | bytearray) -> str:
+        try:
+            value = json.loads(body)
+        except (ValueError, UnicodeError, RecursionError):
+            return "rate_limited"
+        error = value.get("error") if isinstance(value, dict) else None
+        code = error.get("code") if isinstance(error, dict) else None
+        if not isinstance(code, str):
+            return "rate_limited"
+        if code in {"credit_balance_exhausted", "insufficient_quota"}:
+            return "credit_balance_exhausted"
+        if code in {"project_spend_limit_exceeded", "organization_spend_limit_exceeded",
+                    "organization_usage_limit_exceeded"}:
+            return "provider_limit_exhausted"
+        return "rate_limited"
+
+    def _budget_charge(self, result: Any) -> int:
+        """Upper-bound the bill in integer nano-USD, never treating absent usage as zero.
+
+        All input is charged internally at Luna's most expensive cache-write
+        rate (12h: $0.25/MTok); output includes reasoning at $0.50/MTok. A 10%
+        uplift covers regional processing. This deliberately conservative pilot
+        accounting is separate from the provider invoice estimate.
+        """
+        # Only a completed synchronous response has a bill that can be settled.
+        # A queued/in-progress or partial response may accrue further usage.
+        if not isinstance(result, dict) or result.get("status") != "completed" or result.get("error"):
+            raise AssistantProviderError("budget_usage_unknown")
+        source = result.get("usage")
+        if not isinstance(source, dict):
+            raise AssistantProviderError("budget_usage_unknown")
+        input_tokens, output_tokens = source.get("input_tokens"), source.get("output_tokens")
+        if (type(input_tokens) is not int or not 1 <= input_tokens <= _MAX_PILOT_INPUT_TOKENS
+            or type(output_tokens) is not int or not 0 <= output_tokens <= self.config.max_output_tokens):
+            raise AssistantProviderError("budget_usage_unknown")
+        details = source.get("input_tokens_details")
+        if details is not None:
+            if not isinstance(details, dict):
+                raise AssistantProviderError("budget_usage_unknown")
+            cached = details.get("cached_tokens", 0)
+            if type(cached) is not int or not 0 <= cached <= input_tokens:
+                raise AssistantProviderError("budget_usage_unknown")
+        # $0.25/MTok = 250 nanoUSD/token; $0.50/MTok = 500.
+        # Integer ceil avoids losing sub-nano charges through floating point.
+        amount = ((input_tokens * 250 + output_tokens * 500) * 11 + 9) // 10
+        if amount > _REQUEST_RESERVATION_NANO_USD:
+            raise AssistantProviderError("budget_usage_unknown")
+        return amount
 
     @staticmethod
     def _parse(result: Any) -> dict:
@@ -369,7 +468,7 @@ class OpenAIAssistantProvider:
                 "price_basis": "CONFIGURED" if configured else "REFERENCE_2026_11_11" if prices else "UNKNOWN"}
 
 
-def get_assistant_provider() -> AssistantProvider:
+def get_assistant_provider(repository=None) -> AssistantProvider:
     provider = os.environ.get("ONFLOWS_ASSISTANT_PROVIDER", "none").strip().lower()
     if provider in {"", "none", "disabled"}:
         return DisabledAssistantProvider()
@@ -392,4 +491,8 @@ def get_assistant_provider() -> AssistantProvider:
         )
     except (ValueError, TypeError, OverflowError):
         raise AssistantProviderError("invalid_configuration") from None
-    return OpenAIAssistantProvider(config)
+    try:
+        budget = PersistentAssistantBudget(repository, os.environ.get("ONFLOWS_ASSISTANT_BUDGET_ID", _DEFAULT_BUDGET_ID)) if repository is not None else None
+    except AssistantBudgetError as exc:
+        raise AssistantProviderError(exc.code) from None
+    return OpenAIAssistantProvider(config, budget=budget)
