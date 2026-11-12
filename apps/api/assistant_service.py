@@ -102,6 +102,14 @@ def _capabilities(access):
             writes.extend(["TEST", "LAB", "BLOCK", "MANUAL_SPEED_TEST", "RECOVERY_CONFIG", "SPEED_TEST"])
     if access.get("can_view_plan"):
         reads.update({"day", "method", "management", "methods"})
+        read_views["management"]=["overview", "strategy", "week", "profile", "outlook", "active", "drafts",
+            "draft-metadata", "state", "checks"]
+        if access.get("can_view_recovery"):
+            read_views["management"].append("speed-comparison")
+        if access.get("can_edit_plan"):
+            read_views["management"].extend(["generation-jobs", "race-duration"])
+        if access.get("can_view_recovery") or access.get("can_edit_plan"):
+            read_views["management"].append("sync-state")
     if access.get("can_view_recovery"):
         reads.add("settings")
         if not access.get("can_view_plan"):
@@ -179,6 +187,11 @@ def _read_request(message):
     text=message.lower().strip()
     # Polite/discourse prefixes do not turn an explanation into an action.
     text=re.sub(r"^(?:(?:а|сега|моля(?: те)?)\b[\s,.:]*)+", "", text)
+    # A polite request to explain is still a question, including when a prior
+    # change was awaiting clarification. Do not strip action verbs such as
+    # "може ли да запишеш", which express an actual write request.
+    if re.search(r"^(?:може(?:ш)? ли|би ли|ще ми)\s+(?:да\s+)?(?:ми\s+)?(?:кажеш|казал|обясниш|обяснил|покажеш|показал|разкажеш|разказал)\b",text):
+        return True
     return bool(re.search(r"^(?:покажи|обясни|разкажи|виж|кажи|какво|каква|какви|какъв|как\b|защо|колко|кога|къде|дали|интересува ме|искам да (?:разбера|видя|знам)|ще ми обясниш)",text)
                 or re.search(r"\bкак\s+(?:да|мога|можем)\b",text))
 
@@ -1013,6 +1026,7 @@ def turn(repository,alias,actor,body,provider=None):
             local_today=datetime.now(timezone.utc).astimezone(ZoneInfo(athlete_timezone)).date().isoformat()
             totals={"model_calls":0,"input_tokens":0,"output_tokens":0,"estimated_cost_usd":0.0}
             query_feedback=None
+            context_reduced=False
             for step in range(4):
                 timeout=getattr(getattr(provider,"config",None),"timeout_seconds",20)
                 if step and monotonic()-started+timeout+5>90:
@@ -1022,7 +1036,8 @@ def turn(repository,alias,actor,body,provider=None):
                 capabilities=_capabilities(_permissions(repository,alias,actor))
                 if synthesis_only:
                     capabilities={**capabilities,"read":[],"write":[]}
-                reply=provider.complete(messages, {"results":contexts,"confirmed_context":state.get("preferences",[]),
+                model_context={"results":contexts,"confirmed_context":state.get("preferences",[]),
+                    "read_only_turn":not input_request and _read_request(message),
                     "completed_queries":completed_queries,"remaining_model_calls":4-step,"remaining_read_calls":max(0,3-step),
                     "query_feedback":query_feedback,
                     "final_answer_only":synthesis_only,"synthesis_reason":"REPEATED_READ" if synthesis_only and query_feedback else "READ_BUDGET" if synthesis_only else None,"read_targets":state.get("read_targets",[]),
@@ -1030,7 +1045,30 @@ def turn(repository,alias,actor,body,provider=None):
                     "active_input_request":input_request,
                     "athlete_timezone":athlete_timezone,"today":local_today,
                     "new_input_keys":{"CALENDAR_EVENT":"event_"+UUID(operation).hex,
-                        "LAB":UUID(operation).hex,"MANUAL_SPEED_TEST":"manual_"+UUID(operation).hex}},capabilities)
+                        "LAB":UUID(operation).hex,"MANUAL_SPEED_TEST":"manual_"+UUID(operation).hex}}
+                try:
+                    reply=provider.complete(messages,model_context,capabilities)
+                except AssistantProviderError as exc:
+                    # A broad explanation must not make the user manually
+                    # split application data. Retry once with semantic summaries
+                    # of already authorized reads, never with truncated write
+                    # inputs, a new permission scope or a fresh model loop.
+                    if (exc.code!="input_too_large" or context_reduced or not model_context["read_only_turn"]
+                            or monotonic()-started+timeout+5>90):
+                        raise
+                    from .assistant_strategy import compact_management_context
+                    _permissions(repository,alias,actor)
+                    reduced=[compact_management_context(item) if item.get("query_kind")=="management" else item
+                        for item in contexts]
+                    if len(json.dumps(reduced,ensure_ascii=False))>=len(json.dumps(contexts,ensure_ascii=False)):
+                        raise
+                    contexts=reduced
+                    context=contexts[-1] if contexts else None
+                    context_reduced=True
+                    synthesis_only=True
+                    model_context={**model_context,"results":contexts,"final_answer_only":True,
+                        "synthesis_reason":"SEMANTIC_CONTEXT_SUMMARY","remaining_read_calls":0}
+                    reply=provider.complete(messages,model_context,{**capabilities,"read":[],"write":[]})
                 for key in totals:
                     value=reply.get("usage",{}).get(key,0)
                     totals[key]=None if key=="estimated_cost_usd" and (totals[key] is None or value is None) else totals[key]+(value or 0)
@@ -1146,17 +1184,25 @@ def turn(repository,alias,actor,body,provider=None):
             result["error_code"]="provider_limit_exhausted"
         elif exc.code == "input_too_large":
             available=contexts or ([context] if context else [])
+            write_requested=bool(input_request or _explicit_write_request(message))
             renderable=not input_request and any(item.get("query_kind")=="status" or
                 item.get("query_kind") in {"day","method"} and "sessions" in item and "date" in item for item in available)
             if renderable:
                 result["message"]=_resolved_answer(available)+"\n\nПодробното обяснение от ИИ не е добавено, защото общият контекст е твърде обемен. По-горе е наличната справка от приложението."
-            elif available:
+            elif available and write_requested:
                 result["message"]="Данните са прочетени, но общият контекст е твърде обемен за подробен отговор. Нов запис не е потвърден. Раздели искането на по-малки части."
+            elif available:
+                result["message"]="Прочетох данните, но не успях да подготвя обяснението поради проблем с обработката на контекста. Можеш да повториш същия въпрос; не е нужно да го разделяш."
+            elif not write_requested:
+                result["message"]="Не успях да подготвя обяснението поради проблем с обработката на контекста. Можеш да повториш същия въпрос."
             else:
                 result["message"]="Справката е твърде обемна за една заявка. Посочи конкретна дата или сесия, за да я разгледаме подробно. Не е потвърден нов запис."
             result["error_code"]="input_too_large"
         else:
-            result["message"]="Разговорният модел временно не отговаря. Не е потвърден нов запис. Можеш да използваш формулярите и запазената програма."
+            if not input_request and _read_request(message):
+                result["message"]="Разговорният модел временно не отговаря. Можеш да повториш същия въпрос или да прегледаш запазената програма."
+            else:
+                result["message"]="Разговорният модел временно не отговаря. Не е потвърден нов запис. Можеш да използваш формулярите и запазената програма."
     except HTTPException as exc:
         # 403/412 never return previously read data after access changed.
         if exc.status_code in {401,403,412}:

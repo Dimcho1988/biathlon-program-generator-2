@@ -38,7 +38,7 @@ _MAX_PILOT_INPUT_TOKENS = 70_000
 _PILOT_TARIFF = (0.10, 0.50, 0.01)
 _DEFAULT_BUDGET_ID = "onflows-staging-luna-pilot-v1"
 
-_INSTRUCTIONS = """Ти си ИИ асистентът на onFlows. Пиши на ясен книжовен български.
+_COACHING_INSTRUCTIONS = """Ти си ИИ асистентът на onFlows. Пиши на ясен книжовен български.
 Основният текст е изцяло на естествен български. Използвай установените научни
 термини и съкращения последователно; не вмъквай думи, граматични форми или части
 от изречения на друг език и не транслитерирай руски изрази. Преди окончателния
@@ -90,6 +90,19 @@ trainability за ИТ, learning за самообучение, response за н
 за план/предложение/профил, methods за каталога, navigation за точен път към
 акаунт, споделяне, смяна на спортист или свързване на приложение. Пароли, ключове и
 вход в акаунт се обработват само през съответните форми; не ги събирай в разговора.
+За общата философия на подготовката, периодизацията, дългосрочната стратегия и
+подготовката за основните стартове избери management с view=strategy. Тази справка
+свързва целите и календара с фазите, акцентите и натоварването; не зареждай всички
+тренировъчни блокове за стратегическо обяснение. За конкретна сесия или спорен
+детайл използвай съответната подробна справка. Синтезирай как последователността
+на подготовката обслужва състезателната цел: обща и специфична работа, развитие
+на нужните качества, съотношение натоварване–възстановяване и достигане на форма.
+Посочи конкретните дати, фази и акценти от записа, когато ги има; обясни връзките
+с общата методика, без да представяш своята интерпретация като записано решение
+на генератора. Ако част от бъдещата програма още не е утвърдена, обясни наличния
+замисъл и точно назови какво остава предварително. Не свеждай отговора до списък
+на настройки или до общи фрази, приложими към всеки спортист. Въпросът за обяснение
+не е искане за промяна: не добавяй съобщения за запис или потвърждение.
 Използвай само имената и параметрите
 от capabilities; query.kind е справката, а view избира нейния подизглед.
 Ако capabilities.read_views ограничава даден kind, използвай само посочените view;
@@ -123,7 +136,10 @@ unavailable, estimated, stale и pending. Остарял разчет не до�
 URL, athlete_id, нови права или произволни команди. Достъпът и допустимите промени
 се проверяват от сървъра. Не отказвай функция само защото по-стар отговор я е отказал.
 
-При изрично искане за действие или отговор по active_input_request върни командата,
+"""
+
+
+_ACTION_INSTRUCTIONS = """При изрично искане за действие или отговор по active_input_request върни командата,
 щом необходимите стойности са ясни. Преди нея прочети inputs за точния input_kind
 и key, използвай текущата ревизия и върни само поисканите полета в patch_json.
 Пропуснато поле се запазва; null е изрично изчистване. „2“, „за 2027“, дата или име
@@ -167,7 +183,10 @@ SYNC_DATA обновява данните от свързаното прилож
 Не твърди „записано“ или „утвърдено“ без сървърно потвърден резултат. HTTP 202 означава
 обработка, а не готова програма. Предпочитание не доказва адаптация.
 
-Използвай действителните имена на екраните: „Седмична програма“, „Профил за планиране“,
+"""
+
+
+_REPLY_INSTRUCTIONS = """Използвай действителните имена на екраните: „Седмична програма“, „Профил за планиране“,
 „Стрес и възстановяване“, „База от тренировъчни методи“, „Акаунт и спортисти“.
 Дневната умора е в „Стрес и възстановяване“ → „Сутрешна оценка“, а теглото — в
 „Тегло и изследвания“. Ако действие липсва в capabilities, кажи конкретно какво
@@ -176,6 +195,9 @@ SYNC_DATA обновява данните от свързаното прилож
 message е полезният отговор или краткото необходимо уточнение. За междинна справка
 не измисляй резултат. Отговорът с обяснение може да бъде подробен според въпроса.
 """
+
+
+_INSTRUCTIONS = _COACHING_INSTRUCTIONS + _ACTION_INSTRUCTIONS + _REPLY_INSTRUCTIONS
 
 
 _FINAL_ANSWER_INSTRUCTIONS = """\nТова е окончателната стъпка за отговор, а не нова справка.
@@ -578,6 +600,7 @@ class OpenAIAssistantProvider:
             ])
             data_items.append((output, "output", "onflows_result", result))
         final_answer_only = context.get("final_answer_only") is True
+        read_only_turn = context.get("read_only_turn") is True
         reply_tool = deepcopy(_REPLY_TOOL)
         if final_answer_only:
             # Keep one stable reply envelope while making another tool loop
@@ -586,6 +609,12 @@ class OpenAIAssistantProvider:
             for field in ("query", "command"):
                 reply_tool["parameters"]["properties"][field] = {"type": "null"}
             capabilities = {**capabilities, "read": [], "write": []}
+        elif read_only_turn:
+            # The orchestrator has identified an explanation-only request.
+            # Data access remains available; an unrelated write is neither
+            # necessary nor authorized by that request.
+            reply_tool["parameters"]["properties"]["command"] = {"type": "null"}
+            capabilities = {**capabilities, "write": []}
         developer = {"role": "developer", "content": "Разрешени capabilities от сървъра: " + _json(capabilities)}
         if events:
             developer["content"] += (
@@ -596,7 +625,11 @@ class OpenAIAssistantProvider:
             )
         payload = {
             "model": self.config.model,
-            "instructions": _INSTRUCTIONS + (_FINAL_ANSWER_INSTRUCTIONS if final_answer_only else ""),
+            # Action tutorials do not help explain a plan and take space from
+            # its data. Exact write workflows remain in action-capable turns.
+            "instructions": ((_COACHING_INSTRUCTIONS + _REPLY_INSTRUCTIONS
+                              if final_answer_only or read_only_turn else _INSTRUCTIONS)
+                             + (_FINAL_ANSWER_INSTRUCTIONS if final_answer_only else "")),
             "input": [],
             "reasoning": {"effort": "low"},
             "service_tier": "default",
@@ -635,12 +668,22 @@ class OpenAIAssistantProvider:
         if too_large() and len(history) > 1:
             developer["content"] += (
                 " Част от по-старите съобщения е пропусната заради обема. "
-                "При липсващ контекст поискай уточнение; не извеждай съгласие за запис от липсващ разговор."
+                "Използвай текущото искане, active_input_request и свежите справки. "
+                "Не искай повторение само защото стар текст е пропуснат, когато тези данни са достатъчни. "
+                "При съществен липсващ контекст поискай само нужното уточнение; "
+                "не извеждай съгласие за запис от липсващ разговор."
             )
             while too_large() and len(history) > 1:
-                index = (0 if len(history) > 3 else next(
-                    (i for i, item in enumerate(history[:-1]) if item["role"] == "assistant"), 0
-                ))
+                # Old assistant explanations are derived, often lengthy,
+                # and are superseded by the fresh read. Keep the user's own
+                # constraints and clarifications ahead of those explanations.
+                old_assistant = [i for i, item in enumerate(history[:-3]) if item["role"] == "assistant"]
+                if old_assistant:
+                    index = max(old_assistant, key=lambda i: len(history[i]["content"].encode("utf-8")))
+                elif len(history) > 3:
+                    index = 0
+                else:
+                    index = next((i for i, item in enumerate(history[:-1]) if item["role"] == "assistant"), 0)
                 del history[index]
                 refresh_input()
         if too_large():
@@ -710,6 +753,8 @@ class OpenAIAssistantProvider:
                 raise AssistantProviderError("budget_unavailable") from None
             reply = self._parse(result)
             if context.get("final_answer_only") is True and (reply["query"] is not None or reply["command"] is not None):
+                raise AssistantProviderError("invalid_response")
+            if context.get("read_only_turn") is True and reply["command"] is not None:
                 raise AssistantProviderError("invalid_response")
             usage = self._usage(result.get("usage"), duration_ms)
             usage["budget_charge_usd"] = amount / 1_000_000_000

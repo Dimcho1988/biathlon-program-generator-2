@@ -810,3 +810,75 @@ def test_final_answer_rejects_nonconforming_provider_operation_without_retry(ope
         p.complete([{"role": "user", "content": "Обясни тренировката."}],
                    {"final_answer_only": True, "results": []}, {"read": [], "write": []})
     assert len(calls) == 1 and len(budget.settlements) == 1
+
+
+def test_strategy_question_can_read_and_explain_without_write_tutorials_or_command():
+    seen = []
+    query = {"kind": "management", "view": "strategy", "date": None, "start": None, "end": None, "session_id": None}
+    p = provider(lambda request: seen.append(json.loads(request.content)) or httpx.Response(
+        200, json=response(reply(query=query))))
+    context = {"read_only_turn": True, "active_input_request": None, "results": []}
+    capabilities = {"read": ["management"], "read_views": {"management": ["strategy"]}, "write": ["DAILY"]}
+    original = deepcopy(capabilities)
+    result = p.complete([{"role": "user", "content": "Каква е общата философия на подготовката ни за основните стартове?"}],
+                        context, capabilities)
+    assert result["query"] == query
+    payload = seen[0]
+    assert payload["tools"][0]["parameters"]["properties"]["command"] == {"type": "null"}
+    assert payload["tools"][0]["parameters"]["properties"]["query"]["type"] == ["object", "null"]
+    assert restored_payload_context(payload) == context
+    assert capabilities == original
+    assert '"read":["management"]' in payload["input"][0]["content"]
+    assert '"write":[]' in payload["input"][0]["content"]
+    assert "management с view=strategy" in payload["instructions"]
+    assert "не добавяй съобщения за запис или потвърждение" in payload["instructions"]
+    assert "Не създавай SQL" in payload["instructions"]
+    assert "SESSION.rpe=3" not in payload["instructions"]
+
+
+def test_read_only_turn_rejects_an_unexpected_command_even_from_a_noncompliant_provider():
+    budget = FakeBudget()
+    p = provider(lambda _: httpx.Response(200, json=response(reply(command={
+        "kind": "DAILY", "key": "2026-11-12", "expected_revision": 1, "patch_json": '{"fatigue":3}'
+    }))), budget=budget)
+    with pytest.raises(AssistantProviderError, match="invalid_response"):
+        p.complete([{"role": "user", "content": "Обясни подготовката."}], {"read_only_turn": True},
+                   {"read": ["management"], "write": ["DAILY"]})
+    assert len(budget.reservations) == len(budget.settlements) == 1
+
+
+def test_final_synthesis_makes_room_for_data_without_truncating_the_strategy():
+    p = provider(lambda _: pytest.fail("payload construction only"), max_input_bytes=48 * 1024)
+    current = [{"role": "user", "content": "Обясни философията на подготовката ни."}]
+    strategy = {"query_kind": "management", "view": "strategy", "availability": "AVAILABLE",
+                "phases": [{"phase": "PRE_COMPETITION", "start_date": "2027-01-18", "target_minutes": 420}],
+                "calendar": [{"date": "2027-02-02", "priority": "A"}], "individual_explanation": ""}
+    context = {"results": [strategy], "completed_queries": [{"kind": "management", "view": "strategy"}],
+               "final_answer_only": True}
+    empty = p._payload(current, context, {"read": ["management"], "write": ["DAILY"]})
+    room = p.config.max_input_bytes - len(json.dumps(empty, ensure_ascii=False, separators=(",", ":")).encode()) - 500
+    strategy["individual_explanation"] = "a" * room
+    payload = p._payload(current, context, {"read": ["management"], "write": ["DAILY"]})
+    assert len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()) <= p.config.max_input_bytes
+    assert restored_payload_context(payload) == context
+    assert payload["tools"][0]["parameters"]["properties"]["query"] == {"type": "null"}
+    assert payload["tools"][0]["parameters"]["properties"]["command"] == {"type": "null"}
+    with pytest.raises(AssistantProviderError, match="input_too_large"):
+        p._payload(current, {**context, "final_answer_only": False}, {"read": ["management"], "write": ["DAILY"]})
+    assert not p._budget.events
+
+
+def test_history_budget_preserves_user_constraints_before_old_assistant_explanations():
+    p = provider(lambda _: pytest.fail("payload construction only"), max_input_bytes=48 * 1024)
+    constraint = {"role": "user", "content": "Събота е почивка. Не променяй това, само обясни плана."}
+    old = {"role": "assistant", "content": "Старо подробно обяснение. " * 1700}
+    latest = [{"role": "user", "content": "Основният старт е на 2 февруари."},
+              {"role": "assistant", "content": "Разглеждаме подготовката за 2 февруари."},
+              {"role": "user", "content": "Каква е общата философия на тази подготовка?"}]
+    context = {"read_only_turn": True, "active_input_request": None,
+               "results": [{"query_kind": "management", "view": "strategy", "rest_day": "SATURDAY"}]}
+    payload = p._payload([constraint, old, *latest], context, {"read": ["management"], "write": []})
+    assert constraint in payload["input"] and old not in payload["input"]
+    assert all(message in payload["input"] for message in latest)
+    assert restored_payload_context(payload) == context
+    assert "Не искай повторение само защото стар текст е пропуснат" in payload["input"][0]["content"]

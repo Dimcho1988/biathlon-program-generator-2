@@ -29,7 +29,9 @@
 | `inputs` | Според вида запис | Актуален вход, ключ, ревизия и канонична JSON схема. Плановите входове изискват `canViewPlan`, наблюденията и моделните входове — `canViewRecovery`, а `ATHLETE_SETTINGS`, `PLANNING_PROFILE` и `MESOCYCLE_PREFERENCES` — `canEditPlan`. `SYNC_DATA` следва правата за обновяване на данните. |
 | `navigation` | Достъп до разговора | Точни връзки и инструкции за съществуващите защитени форми. Връща `performed:false`; не изпълнява действието. |
 
-`management` поддържа `overview`, `week`, `profile`, `outlook`, `active`, `drafts`, `draft-metadata`, `state`, `checks`, `speed-comparison`, `generation-jobs`, `race-duration` и `sync-state`. `speed` поддържа `overview`, `curve`, `tests`, `zones`, `history`, `load` и `preview`. Точната версия на план се избира чрез `revision`, `plan_kind` и начална дата, когато е необходима.
+`management` поддържа `overview`, `strategy`, `week`, `profile`, `outlook`, `active`, `drafts`, `draft-metadata`, `state`, `checks`, `speed-comparison`, `generation-jobs`, `race-duration` и `sync-state`. `speed` поддържа `overview`, `curve`, `tests`, `zones`, `history`, `load` и `preview`. Точната версия на план се избира чрез `revision`, `plan_kind` и начална дата, когато е необходима.
+
+За общата философия, периодизацията и основните стартове `strategy` събира актуалните цели и календар с обобщение на подготвените фази и седмични цели. Проверява дали подготвеният изглед съответства на текущия профил и календар. `overview` и `outlook` също използват семантично обобщение по подразбиране за всички роли; точните подробности остават достъпни чрез `section`. Диапазоните описват запазените цели и не са нова дневна дозировка. Обобщаването се прилага след проверките за достъп.
 
 `race-duration` приема `sport`, `discipline` и незадължителна резервна `race_duration_min`. Използва съществуващия каноничен изчислител и подготвената скоростна крива. Връща незапазена оценка с `preview_only:true` и `saved:false`; не променя профила и не генерира програма. При липсваща готова крива връща `PENDING`, без да стартира скоростния модел в разговора.
 
