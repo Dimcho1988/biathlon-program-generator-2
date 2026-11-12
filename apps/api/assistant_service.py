@@ -255,7 +255,7 @@ def _preview(command, entry=None):
         "double_threshold_days":"Дни с двойна прагова тренировка","double_threshold_components":"Компоненти на двойната прагова тренировка",
         "threshold_method":"Прагов метод","intensity_days":"Интензивни дни","strength_days":"Дни за сила","long_session_day":"Ден за продължителна тренировка",
         "mixed_sessions_enabled":"Комбинирани сесии","weekly_target_hours":"Седмична цел (часове)","training_sports":"Видове спорт",
-        "event_type":"Вид събитие","name":"Име","start_date":"Начална дата","end_date":"Крайна дата","race_course":"Състезателно трасе","delete":"Изтриване",
+        "event_type":"Вид събитие","name":"Име","start_date":"Начална дата","end_date":"Крайна дата","race_course":"Състезателно трасе","delete":"Изтриване", "include_identical_copies":"Включително еднаквите копия на събитието",
         "program_start":"Начало на програмата","program_end":"Край на програмата","sport":"Спорт","actual_sport":"Реален спорт","discipline":"Дисциплина",
         "duration_s":"Време (сек)","distance_m":"Дистанция (м)","speed_kmh":"Скорост (км/ч)","maximal":"Максимално усилие","flat":"Равен терен",
         "conditions":"Условия","protocol":"Протокол","protocol_version":"Версия на протокола","value":"Стойност","unit":"Мерна единица",
@@ -278,6 +278,11 @@ def _preview(command, entry=None):
         return lines
     activity=(entry or {}).get("activity") or {}
     target=" · ".join(str(activity[k]) for k in ("local_date","name") if activity.get(k))
+    if command["kind"]=="CALENDAR_EVENT" and command["patch"].get("include_identical_copies"):
+        count=(entry or {}).get("identical_copy_count",0)
+        if type(count) is not int or count<2:
+            raise HTTPException(409,"Прочети отново събитието и еднаквите му копия преди общата промяна.")
+        target=f"Обхват: {count} еднакви записа на същото събитие."
     return (f"Предложена промяна: {labels.get(command['kind'],'тренировъчен блок')} · версия {command['expected_revision']}.\n"
             +(target+"\n" if target else "")
             +"\n".join(fields(command["patch"]))
@@ -577,9 +582,10 @@ def turn(repository,alias,actor,body,provider=None):
                         result.update(receipt=receipt,message=_receipt_message(receipt))
                         state.pop("input_request",None)
                     else:
+                        preview=_preview(command,entry)
                         state["pending_command"]=command
                         state["pending_command_at"]=datetime.now(timezone.utc).isoformat()
-                        result.update(message=_preview(command,entry),suggestions=["Запиши промяната","Откажи промяната"])
+                        result.update(message=preview,suggestions=["Запиши промяната","Откажи промяната"])
                     break
                 result["message"]=str(reply.get("text") or "Липсва отговор. Опитай с по-конкретен въпрос.")[:18000]
                 if re.search(r"\b(записах|запазих|утвърдих|одобрих)\b|(?:входът|промяната|стойността|оценката|теглото|данните|резултатът)\s+(?:е|са)\s+(?:записан[аои]?|запазен[аои]?)\b|^(?:записан[аои]?|запазен[аои]?)\b",result["message"].lower()):

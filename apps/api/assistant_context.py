@@ -73,6 +73,7 @@ def input_contract(kind):
     if kind == "CALENDAR_EVENT":
         from .schemas import PlanningCalendarEvent
         model = PlanningCalendarEvent
+        result["extra_patch_fields"] = {"include_identical_copies": "true includes only exact duplicate entries of the selected existing event in the shown preview; omit to edit only its entry_key"}
     else:
         model = ManualSpeedTestInput if kind == "MANUAL_SPEED_TEST" else INPUT_MODELS.get(kind)
     if model is None:
@@ -331,7 +332,7 @@ def _inputs(repository, alias, access, query, today):
         return {"availability": "AVAILABLE", "kind": kind, "entry_key": "management-profile-v1", "revision": profile["revision"], "payload": shown}
     if kind == "CALENDAR_EVENT":
         _require(access, "can_view_plan")
-        from .assistant_planning_commands import calendar_state
+        from .assistant_planning_commands import calendar_state, identical_event_ids
         state = calendar_state(repository, alias)
         events = state["payload"].get("events", [])
         if key is not None and (not isinstance(key, str) or len(key) > 128):
@@ -339,9 +340,10 @@ def _inputs(repository, alias, access, query, today):
         event = next((e for e in events if e.get("event_id") == key), None) if key else None
         return {"availability": "AVAILABLE", "kind": kind, "entry_key": key, "revision": state["revision"],
             "calendar_revision": state["revision"], "payload": deepcopy(event) if key else None,
+            "identical_copy_count": len(identical_event_ids(events, event)) if key else None,
             "events": deepcopy(events) if not key else None,
             "entries": [{"kind": kind, "entry_key": e["event_id"], "revision": state["revision"],
-                "payload": deepcopy(e)} for e in events] if not key else None}
+                "payload": deepcopy(e), "identical_copy_count": len(identical_event_ids(events, e))} for e in events] if not key else None}
     if kind == "MANUAL_SPEED_TEST":
         _require(access, "can_view_recovery")
         if key in (None, ""):

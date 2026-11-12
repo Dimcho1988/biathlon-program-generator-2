@@ -30,6 +30,14 @@ CONTROL_FIELDS = frozenset({
 EVENT_FIELDS = frozenset({"event_type", "name", "start_date", "end_date", "race_course"})
 
 
+def identical_event_ids(events, event):
+    """Exact copies only; matching dates alone never merge separate races."""
+    if not event:
+        return []
+    content = {k: v for k, v in event.items() if k != "event_id"}
+    return [e["event_id"] for e in events if {k: v for k, v in e.items() if k != "event_id"} == content]
+
+
 def _merge(current, patch):
     result = deepcopy(current)
     for key, value in patch.items():
@@ -101,8 +109,10 @@ def prepare(repository, alias, kind, entry_key, patch, expected_revision, actor=
         if not isinstance(entry_key, str) or not entry_key:
             raise HTTPException(422, "Choose the calendar event identifier")
         deletion = patch.get("delete") is True
-        if set(patch) - EVENT_FIELDS - {"delete"} or ("delete" in patch and not deletion):
+        if set(patch) - EVENT_FIELDS - {"delete", "include_identical_copies"} or ("delete" in patch and not deletion):
             raise HTTPException(422, "Unknown calendar event change")
+        if "include_identical_copies" in patch and patch["include_identical_copies"] is not True:
+            raise HTTPException(422, "Identical copies must be explicitly included")
         if deletion and set(patch) != {"delete"}:
             raise HTTPException(422, "A deletion cannot include event edits")
         current = calendar_state(repository, alias)
@@ -114,9 +124,17 @@ def prepare(repository, alias, kind, entry_key, patch, expected_revision, actor=
         existing = next((e for e in events if e.get("event_id") == entry_key), None)
         if deletion and existing is None:
             raise HTTPException(404, "The selected calendar event is unavailable")
-        updated = [e for e in events if e.get("event_id") != entry_key]
+        group = identical_event_ids(events, existing) if patch.get("include_identical_copies") else [entry_key]
+        if patch.get("include_identical_copies") and (not existing or len(group) < 2):
+            raise HTTPException(409, "The identical calendar copies changed; reload before editing")
+        updated = [e for e in events if e.get("event_id") not in group]
         if not deletion:
-            updated.append(_merge(existing or {"event_id": entry_key}, patch))
+            fields = {k: v for k, v in patch.items() if k in EVENT_FIELDS}
+            if not fields:
+                raise HTTPException(422, "Provide the event fields to change")
+            for identifier in group:
+                original = next((e for e in events if e.get("event_id") == identifier), {"event_id": identifier})
+                updated.append(_merge(original, fields))
         payload["events"] = updated
         return {"kind": kind, "key": entry_key, "payload": _calendar(payload),
                 "expected_revision": expected_revision}

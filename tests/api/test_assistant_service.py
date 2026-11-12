@@ -545,6 +545,15 @@ def test_related_question_about_post_workout_form_preserves_clarification_thread
     assert not repo.writes
 
 
+def test_identical_calendar_copies_have_explicit_count_in_preview(repo):
+    repo.read_result = {"query_kind": "inputs", "kind": "CALENDAR_EVENT", "entry_key": "race-a", "revision": 7, "identical_copy_count": 2}
+    result = service.turn(repo, ALIAS, ACTOR, body("Премести основния старт на 9 и 10 януари 2027"), ScriptedAssistantProvider([
+        {"text": "", "query": query("inputs", input_kind="CALENDAR_EVENT", key="race-a")},
+        {"text": "", "command": command("CALENDAR_EVENT", key="race-a", revision=7,
+            patch={"start_date": "2027-01-09", "end_date": "2027-01-10", "include_identical_copies": True})}]))
+    assert "Обхват: 2 еднакви записа" in result["message"] and not repo.writes
+
+
 @pytest.mark.parametrize("interruption", ["Покажи тренировката утре", "Откажи промяната"])
 def test_unrelated_question_or_cancel_clears_old_preview_and_write_thread(repo, interruption):
     pending = {"kind": "CALENDAR_EVENT", "entry_key": "race-a", "expected_revision": 7, "patch": {"name": "Старт"}}

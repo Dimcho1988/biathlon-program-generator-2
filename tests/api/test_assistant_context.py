@@ -277,7 +277,7 @@ def test_calendar_list_supplies_existing_event_keys_and_revision_for_update(repo
     event = {"event_id": "race-one", "event_type": "MAIN_RACE", "name": "Основен старт", "start_date": "2027-01-09", "end_date": "2027-01-10"}
     repository._request.return_value = [{"planning_calendar": {"schema_version": "planning-calendar-v1", "events": [event]}, "calendar_revision": 9}]
     result = context.read(repository, ALIAS, FULL, {"kind": "inputs", "input_kind": "CALENDAR_EVENT"}, now=NOW)
-    assert result["entries"] == [{"kind": "CALENDAR_EVENT", "entry_key": "race-one", "revision": 9, "payload": event}]
+    assert result["entries"] == [{"kind": "CALENDAR_EVENT", "entry_key": "race-one", "revision": 9, "payload": event, "identical_copy_count": 1}]
 
 
 def test_session_discovery_uses_completed_activity_date_duration_and_current_input_revision(repository):
