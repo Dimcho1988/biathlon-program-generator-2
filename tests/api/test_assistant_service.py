@@ -1137,3 +1137,12 @@ def test_session_direct_save_cannot_invent_timing_duration_or_source(repo,patch)
         {"text":"","query":query("inputs",input_kind="SESSION",key=ref)},
         {"text":"","command":command("SESSION",key=ref,revision=3,patch=patch)}]))
     assert not repo.writes and "Предложена промяна" in result["message"]
+
+
+def test_calendar_direct_request_uses_latest_date_correction():
+    request={"kind":"CALENDAR_EVENT","request":"Премести основния старт на 9 януари 2027",
+        "answers":["Поправка: на 10 януари 2027"]}
+    proposed={"kind":"CALENDAR_EVENT","entry_key":"race-a","expected_revision":7,"patch":{"start_date":"2027-01-09"}}
+    assert not service._direct_request(proposed,{},request,request["answers"][-1])
+    proposed["patch"]["start_date"]="2027-01-10"
+    assert service._direct_request(proposed,{},request,request["answers"][-1])

@@ -329,7 +329,8 @@ def _inputs(repository, alias, access, query, today):
     from .assistant_app_actions import APP_COMMAND_KINDS, PLAN_KINDS, read_input
     if kind in APP_COMMAND_KINDS:
         _require(access, "can_edit_plan" if kind == "ATHLETE_SETTINGS" else "can_view_plan" if kind in PLAN_KINDS else "can_view_recovery")
-        return read_input(repository, alias, kind, key)
+        selectors = {"draft_date": query.get("date") or query.get("start"), "draft_revision": query.get("revision")} if kind == "PLAN_ACTIVATE" else {}
+        return read_input(repository, alias, kind, key, **selectors)
     if kind is None:
         _require(access, "can_view_recovery")
         key = key or today.isoformat()

@@ -264,6 +264,13 @@ def _direct_request(command, entry, request, message):
         if set(patch)-{"name","start_date","end_date","event_type","race_course","note"}:
             return False
         months=["януари","февруари","март","април","май","юни","юли","август","септември","октомври","ноември","декември"]
+        date_text=text
+        if request:
+            # A later date correction supersedes the initial dates. Keep the
+            # separately supplied year/name, but never authorize the old day.
+            date_answers=[answer for answer in request.get("answers",[]) if re.search(r"\d{1,4}[./-]\d{1,2}|"+"|".join(months),answer.lower())]
+            if date_answers:
+                date_text=date_answers[-1]
         for field in ("start_date","end_date"):
             if field not in patch:
                 continue
@@ -273,9 +280,9 @@ def _direct_request(command, entry, request, message):
                 return False
             existing=(entry.get("payload") or {}).get(field, "")
             year_grounded=str(selected.year) in text or existing.startswith(str(selected.year)+"-")
-            named=(months[selected.month-1] in text.lower() and re.search(r"(?<!\d)"+str(selected.day)+r"(?!\d)",text))
-            dotted=re.search(r"(?<!\d)0?"+str(selected.day)+r"[./]0?"+str(selected.month)+r"(?!\d)",text)
-            if patch[field] not in text and not (year_grounded and (named or dotted)):
+            named=(months[selected.month-1] in date_text.lower() and re.search(r"(?<!\d)"+str(selected.day)+r"(?!\d)",date_text))
+            dotted=re.search(r"(?<!\d)0?"+str(selected.day)+r"[./]0?"+str(selected.month)+r"(?!\d)",date_text)
+            if patch[field] not in date_text and not (year_grounded and (named or dotted)):
                 return False
         if "name" in patch and str(patch["name"]).lower() not in text.lower():
             return False
@@ -880,7 +887,10 @@ def turn(repository,alias,actor,body,provider=None):
             if not isinstance(pending,dict):
                 result["message"]="Няма показана промяна за запис. Опиши какво искаш да промениш."
             elif expired:
-                context=_read(repository,alias,actor,{"kind":"inputs","input_kind":pending["kind"],"key":pending["entry_key"]})
+                refresh_query={"kind":"inputs","input_kind":pending["kind"],"key":pending["entry_key"]}
+                if pending["kind"]=="PLAN_ACTIVATE":
+                    refresh_query.update(date=pending["patch"].get("start_date"),revision=pending["patch"].get("draft_revision"))
+                context=_read(repository,alias,actor,refresh_query)
                 entries=context.get("entries") or [context]
                 entry=next((row for row in entries if (row.get("input_kind") or row.get("kind"))==pending["kind"]
                     and row.get("entry_key", "")==pending["entry_key"] and type(row.get("revision")) is int),None)

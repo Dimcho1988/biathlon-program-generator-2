@@ -608,3 +608,18 @@ def test_plan_only_management_projection_blocks_private_evidence_and_section_byp
     with pytest.raises(HTTPException) as error:
         context.read(repository, ALIAS, PLAN, {"kind": "management", "view": view, "section": "unrecognized_private_observation"}, now=NOW)
     assert error.value.status_code == 422
+
+
+@pytest.mark.parametrize("date_field", ["date", "start"])
+def test_plan_activate_input_forwards_exact_draft_selector_without_changing_active_identity(repository, monkeypatch, date_field):
+    from apps.api import assistant_app_actions
+    exact = {"availability": "AVAILABLE", "kind": "PLAN_ACTIVATE", "entry_key": "active-plan", "revision": 7,
+        "payload": {"status": "ACTIVE"}, "preview_summary": {"drafts": [{"start_date": "2026-11-01", "draft_revision": 2}]}}
+    read_input = Mock(return_value=exact)
+    monkeypatch.setattr(assistant_app_actions, "read_input", read_input)
+    result = context.read(repository, ALIAS, PLAN, {"kind": "inputs", "input_kind": "PLAN_ACTIVATE",
+        "key": "active-plan", date_field: "2026-11-01", "revision": 2}, now=NOW)
+    read_input.assert_called_once_with(repository, ALIAS, "PLAN_ACTIVATE", "active-plan",
+        draft_date="2026-11-01", draft_revision=2)
+    assert result["entry_key"] == "active-plan" and result["revision"] == 7
+    assert result["preview_summary"]["drafts"] == [{"start_date": "2026-11-01", "draft_revision": 2}]
