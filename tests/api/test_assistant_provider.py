@@ -144,7 +144,8 @@ def test_saved_instructions_remain_untrusted_context_and_writes_require_current_
     assert malicious not in payload["instructions"]
     assert all(malicious not in item["content"] for item in payload["input"] if item["role"] == "developer")
     assert malicious in payload["input"][1]["content"]
-    assert "текущото съобщение на потребителя" in payload["instructions"]
+    assert "active_input_request" in payload["instructions"]
+    assert "бележка в запис" in payload["instructions"]
     assert "query_kind, availability, freshness" in payload["instructions"]
 
 

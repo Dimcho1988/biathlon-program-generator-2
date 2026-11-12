@@ -273,6 +273,48 @@ def test_calendar_reads_exact_event_and_whole_calendar_revision(repository):
     assert repository._request.call_args.args[0] == "GET"
 
 
+def test_calendar_list_supplies_existing_event_keys_and_revision_for_update(repository):
+    event = {"event_id": "race-one", "event_type": "MAIN_RACE", "name": "Основен старт", "start_date": "2027-01-09", "end_date": "2027-01-10"}
+    repository._request.return_value = [{"planning_calendar": {"schema_version": "planning-calendar-v1", "events": [event]}, "calendar_revision": 9}]
+    result = context.read(repository, ALIAS, FULL, {"kind": "inputs", "input_kind": "CALENDAR_EVENT"}, now=NOW)
+    assert result["entries"] == [{"kind": "CALENDAR_EVENT", "entry_key": "race-one", "revision": 9, "payload": event, "identical_copy_count": 1}]
+
+
+def test_session_discovery_uses_completed_activity_date_duration_and_current_input_revision(repository):
+    ref = "act_" + "a" * 32
+    repository.active_activity_calendar = Mock(return_value={"activities": [
+        {"activity_ref": ref, "local_date": "2026-11-11", "name": "Бягане", "sport": "Run", "elapsed_time_s": 3600, "private": "hidden"},
+        {"activity_ref": "act_" + "b" * 32, "local_date": "2026-11-10", "elapsed_time_s": 1800}]})
+    repository._request.return_value = [{"kind": "SESSION", "entry_key": ref, "revision": 2,
+        "payload": {"activity_ref": ref, "rpe": 5, "duration_minutes": 55, "timing": "DELAYED"}}]
+    result = context.read(repository, ALIAS, FULL, {"kind": "inputs", "input_kind": "SESSION"}, now=NOW)
+    assert result["date"] == "2026-11-11" and result["activity_count"] == 1
+    entry = result["entries"][0]
+    assert entry["revision"] == 2 and entry["entry_key"] == ref
+    assert entry["suggested_duration_minutes"] == 60 and entry["payload"]["duration_minutes"] == 55
+    assert "private" not in json.dumps(result) and "plan_revision" not in result
+    repository.plan_read.assert_not_called()
+    repository.active_analysis.assert_not_called()
+
+
+def test_session_discovery_does_not_invent_activity_when_none_and_rejects_future(repository):
+    repository.active_activity_calendar = Mock(return_value={"activities": []})
+    result = context.read(repository, ALIAS, FULL, {"kind": "inputs", "input_kind": "SESSION"}, now=NOW)
+    assert result["entries"] == [] and result["activity_count"] == 0
+    with pytest.raises(HTTPException) as error:
+        context.read(repository, ALIAS, FULL, {"kind": "inputs", "input_kind": "SESSION", "date": "2026-11-12"}, now=NOW)
+    assert error.value.status_code == 422
+    repository._request.assert_not_called()
+
+
+def test_session_discovery_checks_recovery_permission_before_reading_activity(repository):
+    repository.active_activity_calendar = Mock()
+    with pytest.raises(HTTPException) as error:
+        context.read(repository, ALIAS, PLAN, {"kind": "inputs", "input_kind": "SESSION"}, now=NOW)
+    assert error.value.status_code == 403
+    repository.active_activity_calendar.assert_not_called()
+
+
 def test_effective_profile_controls_exclude_scientific_and_approval_settings(repository, monkeypatch):
     monkeypatch.setattr(context, "ManagementStore", lambda _: SimpleNamespace(profile=lambda _: {"revision": 5, "profile": {
         "sport": "Run", "planning_controls": {"double_threshold_days": [2], "capacity_policy": "MODEL_WITH_PRIOR"},

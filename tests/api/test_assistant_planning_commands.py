@@ -50,6 +50,39 @@ def test_calendar_delete_is_exact_and_does_not_remove_other_events():
     assert exc.value.status_code == 404
 
 
+def test_explicit_group_update_moves_only_exact_copies_and_preserves_their_ids():
+    repo = Repository()
+    duplicate = {**deepcopy(repo.calendar["events"][0]), "event_id": "race-copy-0003"}
+    other = {**deepcopy(duplicate), "event_id": "race-other-0004", "name": "Друг старт"}
+    repo.calendar["events"].extend([duplicate, other])
+    original = deepcopy(repo.calendar)
+    patch = {"start_date": "2027-01-09", "end_date": "2027-01-10", "include_identical_copies": True}
+    result = prepare(repo, "athlete", "CALENDAR_EVENT", "race-main-0001", patch, 4)
+    by_id = {e["event_id"]: e for e in result["payload"]["events"]}
+    assert len(by_id) == 4
+    for identifier in ("race-main-0001", "race-copy-0003"):
+        assert by_id[identifier]["start_date"] == "2027-01-09" and by_id[identifier]["end_date"] == "2027-01-10"
+        assert "include_identical_copies" not in by_id[identifier]
+    assert by_id["race-other-0004"] == other
+    assert by_id["camp-main-0002"] == original["events"][1]
+    assert repo.calendar == original
+    # Omitting the group flag retains exact single-record semantics.
+    single = prepare(repo, "athlete", "CALENDAR_EVENT", "race-main-0001", {"name": "Промяна"}, 4)
+    assert next(e for e in single["payload"]["events"] if e["event_id"] == duplicate["event_id"]) == duplicate
+
+
+@pytest.mark.parametrize("key,patch,status", [
+    ("new-event", {"include_identical_copies": True, "name": "Старт"}, 409),
+    ("race-main-0001", {"include_identical_copies": True, "name": "Старт"}, 409),
+    ("race-main-0001", {"include_identical_copies": False, "name": "Старт"}, 422),
+    ("race-main-0001", {"include_identical_copies": True, "delete": True}, 422),
+])
+def test_group_update_requires_current_exact_copies_and_cannot_expand_deletion(key, patch, status):
+    with pytest.raises(HTTPException) as error:
+        prepare(Repository(), "athlete", "CALENDAR_EVENT", key, patch, 4)
+    assert error.value.status_code == status
+
+
 @pytest.mark.parametrize("patch", [{"start_date": "2027-02-10"}, {"unknown": 1},
                                       {"delete": True, "name": "x"}, {"delete": False}])
 def test_invalid_calendar_change_cannot_prepare_a_write(patch):
