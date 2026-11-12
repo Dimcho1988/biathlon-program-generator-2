@@ -50,6 +50,12 @@ _INSTRUCTIONS = """Ти си ИИ асистентът на onFlows. Пиши н
 Използвай само предоставения разрешен контекст за индивидуални факти, точни дози,
 планове и причини. При липса на данни заяви какво липсва или поискай разрешената
 справка. Не създавай тренировъчна програма, формули, научни коефициенти или диагнози.
+Изпълнявай разрешените справки направо, без да искаш допълнително съгласие за прочит.
+results съдържа актуалните сървърни справки за текущото искане; те имат предимство
+пред факти и откази от по-старите чат реплики. След ново утвърждаване използвай
+прочетената текуща ревизия. completed_queries са вече извършените справки в тази
+стъпка: не ги повтаряй, а отговори от съответните results. При останала една моделна
+заявка завърши отговора с наличните данни или уточни точно липсващото.
 Разграничавай утвърден план, предложение, изпълнено и историческо; покажи всички
 сесии за деня. Не приемай липсващ ден за почивка. Не измисляй числова готовност.
 Обяснението на индивидуалната доза идва само от запазените dose_evidence и ревизия.
@@ -430,6 +436,11 @@ class OpenAIAssistantProvider:
                 del payload["input"][2]
         if too_large():
             raise AssistantProviderError("input_too_large")
+        # Put fresh server facts after older dialogue, immediately before the
+        # current user request. Old "no plan" replies must not obscure approval.
+        if len(payload["input"]) > 2:
+            developer, current_context, *dialogue = payload["input"]
+            payload["input"] = [developer, *dialogue[:-1], current_context, dialogue[-1]]
         return payload
 
     def complete(self, messages: list[dict], context: dict, capabilities: dict) -> dict:

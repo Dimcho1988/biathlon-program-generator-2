@@ -354,7 +354,7 @@ def _render_day(context):
             if isinstance(block.get("instructions"),str): lines.append(block["instructions"])
         evidence=session.get("dose_evidence") or {}
         if isinstance(evidence.get("explanation"),str): lines.append("Основание за дозата: "+evidence["explanation"])
-    lines.append("\nЗа разговорно обяснение на методиката е необходимо включване на езиковия модел. Точната структура остава достъпна в „Седмична програма“.")
+    lines.append("\nТочната структура остава достъпна и в „Седмична програма“.")
     return "\n".join(lines)[:18000]
 
 
@@ -463,13 +463,16 @@ def turn(repository,alias,actor,body,provider=None):
         else:
             messages=_messages(start.get("messages",[]))+[{"role":"user","content":message}]
             contexts=[]
+            completed_queries=[]
+            query_keys=[]
             settings_reader=getattr(repository,"athlete_settings",None)
             settings=settings_reader(alias) if callable(settings_reader) else None
             athlete_timezone=settings.timezone if settings else "UTC"
             local_today=datetime.now(timezone.utc).astimezone(ZoneInfo(athlete_timezone)).date().isoformat()
             totals={"model_calls":0,"input_tokens":0,"output_tokens":0,"estimated_cost_usd":0.0}
-            for _ in range(3):
+            for step in range(3):
                 reply=provider.complete(messages, {"results":contexts,"confirmed_context":state.get("preferences",[]),
+                    "completed_queries":completed_queries,"remaining_model_calls":3-step,
                     "pending_change":state.get("pending_command"),"now":datetime.now(timezone.utc).isoformat(),
                     "athlete_timezone":athlete_timezone,"today":local_today,
                     "new_input_keys":{"CALENDAR_EVENT":"event_"+UUID(operation).hex,
@@ -478,8 +481,19 @@ def turn(repository,alias,actor,body,provider=None):
                     value=reply.get("usage",{}).get(key,0)
                     totals[key]=None if key=="estimated_cost_usd" and (totals[key] is None or value is None) else totals[key]+(value or 0)
                 if reply.get("query"):
-                    context=_read(repository,alias,actor,reply["query"])
+                    requested=reply["query"]
+                    query_key=json.dumps({k:v for k,v in requested.items() if v is not None}
+                        if isinstance(requested,dict) else requested,sort_keys=True)
+                    if query_key in query_keys:
+                        # Results are current to this turn. Repeating a read
+                        # cannot consume the whole dialogue or duplicate data.
+                        _permissions(repository,alias,actor)
+                        context=contexts[query_keys.index(query_key)]
+                        continue
+                    context=_read(repository,alias,actor,requested)
                     contexts.append(context)
+                    completed_queries.append(requested)
+                    query_keys.append(query_key)
                     continue
                 if reply.get("command"):
                     command=_command(reply)
@@ -507,7 +521,12 @@ def turn(repository,alias,actor,body,provider=None):
                     result["message"]="Няма потвърден нов запис от тази заявка. Опиши конкретната промяна или използвай съответния формуляр."
                 break
             else:
-                result["message"]="Справката изисква още уточнение. Посочи конкретна дата, тренировка или стойност."
+                # A model read loop is not an ambiguous user request. Preserve
+                # an already resolved day and all its sessions, with its source.
+                if context and context.get("query_kind") in {"day","method"} and "sessions" in context and "date" in context:
+                    result["message"]=_render_day(context)
+                else:
+                    result["message"]="Справката изисква още уточнение. Посочи конкретна дата, тренировка или стойност."
             result["usage"]=totals
         result["sources"]=_sources(context)
         # One in-app prompt per local day, only after a plan read. The current
