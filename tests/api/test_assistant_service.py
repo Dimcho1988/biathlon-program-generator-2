@@ -511,6 +511,28 @@ def test_calendar_clarifications_keep_request_until_preview_and_natural_confirma
     assert not repo.conversations[conversation]["state"].get("input_request")
 
 
+@pytest.mark.parametrize("message,kept", [
+    ('2027-01-09 – 2027-01-10, „Състезание“.', True),
+    ('2027-01-09 – 2027-01-11, „Състезание“.', False),
+    ('Не 2027-01-09 – 2027-01-10, „Състезание“.', False),
+])
+def test_repeating_preview_literals_keeps_exact_proposal_but_changes_and_negation_do_not(repo, message, kept):
+    pending = {"kind": "CALENDAR_EVENT", "entry_key": "race-a", "expected_revision": 7,
+        "patch": {"start_date": "2027-01-09", "end_date": "2027-01-10", "name": "Състезание"}}
+    repo.read_result = {"query_kind": "inputs", "kind": "CALENDAR_EVENT", "entry_key": "race-a", "revision": 7}
+    conversation = repo.seed({"pending_command": pending, "input_request": {"kind": "CALENDAR_EVENT",
+        "request": "Премести основния старт", "expires_at": (datetime.now(timezone.utc)+timedelta(minutes=15)).isoformat()}})
+    provider = ScriptedAssistantProvider([] if kept else [{"text": "Уточни новите дати."}])
+    result = service.turn(repo, ALIAS, ACTOR, body(message, conversation), provider)
+    assert not repo.writes
+    if kept:
+        assert result["suggestions"] == ["Запиши промяната", "Откажи промяната"]
+        assert repo.conversations[conversation]["state"]["pending_command"] == pending
+        assert not provider.calls
+    else:
+        assert not repo.conversations[conversation]["state"].get("pending_command")
+
+
 def test_post_workout_rating_continues_with_timing_and_never_becomes_daily_fatigue(repo):
     ref = "act_" + "a" * 32
     repo.read_result = {"query_kind": "inputs", "kind": "SESSION", "entries": [

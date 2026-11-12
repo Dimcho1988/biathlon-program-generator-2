@@ -303,6 +303,22 @@ def _session_rating_entry(repository, alias, actor, state, request, message):
     return {"context":context,"message":preview,"suggestions":["Запиши промяната","Откажи промяната"]}
 
 
+def _calendar_restatement(command, message):
+    """A literal repetition of shown dates/name is still the same preview."""
+    if not command or command.get("kind")!="CALENDAR_EVENT":
+        return False
+    patch=command.get("patch") or {}
+    if set(patch)-{"name","start_date","end_date","include_identical_copies"}:
+        return False
+    values=[str(v) for k,v in patch.items() if k!="include_identical_copies"]
+    if not values or any(value not in message for value in values):
+        return False
+    remainder=message
+    for value in sorted(set(values),key=len,reverse=True):
+        remainder=remainder.replace(value,"")
+    return not re.sub(r'[\s,.;:!„“"\'–—-]',"",remainder)
+
+
 def _preview(command, entry=None):
     # A compact literal preview is independent of a model's description.
     labels={"DAILY":"дневна оценка","WEIGHT":"тегло","SESSION":"оценка на тренировка","TEST":"мониторингов тест", "LAB":"лабораторен резултат",
@@ -593,6 +609,14 @@ def turn(repository,alias,actor,body,provider=None):
         elif _provider_available(provider) and (session_entry:=_session_rating_entry(repository,alias,actor,state,input_request,message)):
             context=session_entry.pop("context")
             result.update(session_entry)
+        elif input_request and _calendar_restatement(pending_change,message):
+            context=_read(repository,alias,actor,{"kind":"inputs","input_kind":"CALENDAR_EVENT","key":pending_change["entry_key"]})
+            if context.get("revision")!=pending_change["expected_revision"]:
+                raise HTTPException(409,"Календарът е променен. Прочети актуалното събитие преди новото предложение.")
+            preview=_preview(pending_change,context)
+            state["pending_command"]=pending_change
+            state["pending_command_at"]=datetime.now(timezone.utc).isoformat()
+            result.update(message=preview,suggestions=["Запиши промяната","Откажи промяната"])
         elif not _provider_available(provider):
             result["message"],context=_fallback(repository,alias,actor,message)
         else:
