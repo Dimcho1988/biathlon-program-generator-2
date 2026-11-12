@@ -315,13 +315,14 @@ def test_session_discovery_checks_recovery_permission_before_reading_activity(re
     repository.active_activity_calendar.assert_not_called()
 
 
-def test_effective_profile_controls_exclude_scientific_and_approval_settings(repository, monkeypatch):
+def test_effective_profile_read_matches_editable_application_configuration(repository, monkeypatch):
     monkeypatch.setattr(context, "ManagementStore", lambda _: SimpleNamespace(profile=lambda _: {"revision": 5, "profile": {
         "sport": "Run", "planning_controls": {"double_threshold_days": [2], "capacity_policy": "MODEL_WITH_PRIOR"},
-        "individual_learning": {"mode": "CONTROL"}, "approval_mode": "AUTO", "building_fraction": 0.5}}))
+        "individual_learning": {"mode": "CONTROL"}, "adaptation_mode": "AUTO", "building_fraction": 0.65}}))
     result = context.read(repository, ALIAS, PLAN, {"kind": "inputs", "input_kind": "MANAGEMENT_PROFILE"}, now=NOW)
-    assert result["revision"] == 5 and result["payload"]["planning_controls"] == {"double_threshold_days": [2]}
-    assert "individual_learning" not in result["payload"] and "approval_mode" not in result["payload"] and "building_fraction" not in result["payload"]
+    assert result["revision"] == 5 and result["payload"]["planning_controls"] == {"double_threshold_days": [2], "capacity_policy": "MODEL_WITH_PRIOR"}
+    assert result["payload"]["individual_learning"] == {"mode": "CONTROL"}
+    assert result["payload"]["adaptation_mode"] == "AUTO" and result["payload"]["building_fraction"] == 0.65
 
 
 @pytest.mark.parametrize("quality", [{"complete": True, "estimated": True, "readiness_basis": "RECORDED_LOAD"},
@@ -330,3 +331,295 @@ def test_effective_profile_controls_exclude_scientific_and_approval_settings(rep
 def test_contradictory_or_unknown_explicit_quality_does_not_admit_raw_numbers(quality):
     result = context.present_recovery({"data_quality": quality, "current": [{"zone": "Z1", "readiness_percent": 92}]})
     assert result["availability"] == "UNAVAILABLE" and "readiness_percent" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("kind", ["settings", "activities", "activity", "speed", "trainability", "learning", "response"])
+def test_new_private_read_surfaces_reject_plan_only_before_any_read(repository, kind):
+    repository.prepared_view = Mock()
+    with pytest.raises(HTTPException) as error:
+        context.read(repository, ALIAS, PLAN, {"kind": kind}, now=NOW)
+    assert error.value.status_code == 403
+    repository.athlete_settings.assert_not_called()
+    repository.prepared_view.assert_not_called()
+
+
+def prepared_repository(repository, payload, kind):
+    repository.prepared_view = Mock(return_value={"ready": True, "athlete_alias": ALIAS,
+        "kind": kind, "payload": payload})
+    return repository
+
+
+@pytest.mark.parametrize("query,cache_kind,parameters", [
+    ({"kind": "speed"}, "speed", {}),
+    ({"kind": "speed", "sport": "Run", "duration_s": 300}, "speed", {"sport": "Run", "duration_s": 300}),
+    ({"kind": "speed", "view": "history", "sport": "NordicSki"}, "speed-history", {"sport": "NordicSki"}),
+    ({"kind": "speed", "view": "load", "start": "2026-11-01", "end": "2026-11-10"}, "speed-load", {"period_start": "2026-11-01", "period_end": "2026-11-10"}),
+    ({"kind": "response"}, "response", {}),
+    ({"kind": "trainability"}, "trainability", {}),
+    ({"kind": "management"}, "management-view", {"view": "overview", "projection": "overview-v1"}),
+    ({"kind": "management", "view": "state"}, "management-state", {}),
+    ({"kind": "management", "view": "outlook"}, "management-outlook", {}),
+    ({"kind": "methods", "phase": "COMPETITION"}, "management-methods", {"phase": "COMPETITION"}),
+])
+def test_new_views_use_exact_canonical_prepared_cache_keys(repository, monkeypatch, query, cache_kind, parameters):
+    from apps.api import prepared_views
+    monkeypatch.setattr(prepared_views, "calculate", Mock(side_effect=AssertionError("No model calculation on assistant read")))
+    prepared_repository(repository, {"status": "AVAILABLE", "revision": 4}, cache_kind)
+    result = context.read(repository, ALIAS, FULL, query, now=NOW)
+    assert result["availability"] == "AVAILABLE" and result["data"]["revision"] == 4
+    assert repository.prepared_view.call_args.args == ("READ",)
+    assert repository.prepared_view.call_args.kwargs["parameters"] == parameters
+    repository.active_analysis.assert_not_called()
+    prepared_views.calculate.assert_not_called()
+
+
+@pytest.mark.parametrize("kind", ["speed", "trainability", "response", "management", "methods"])
+def test_cold_new_views_remain_pending_without_calculation(repository, kind):
+    repository.prepared_view = Mock(return_value={"ready": False})
+    result = context.read(repository, ALIAS, FULL, {"kind": kind}, now=NOW)
+    assert result["availability"] == "PENDING"
+    repository.active_analysis.assert_not_called()
+
+
+def test_prepared_read_wrong_scope_does_not_reach_assistant(repository):
+    repository.prepared_view = Mock(return_value={"ready": True, "athlete_alias": "other", "kind": "speed",
+        "payload": {"private": "other-athlete"}})
+    result = context.read(repository, ALIAS, FULL, {"kind": "speed"}, now=NOW)
+    assert result["availability"] == "PENDING" and "other-athlete" not in json.dumps(result)
+
+
+def test_speed_curve_and_dosing_are_paginated_without_losing_exact_samples(repository):
+    points = [{"duration_s": n + 1, "speed_kmh": 30 - n / 10} for n in range(65)]
+    payload = {"status": "READY", "points": points, "dosing_model": {"points": deepcopy(points)},
+        "hr_bounds": [100, 120, 140, 160, 180, 200], "tests": [{"entry_key": "test-a"}]}
+    prepared_repository(repository, payload, "speed")
+    first = context.read(repository, ALIAS, FULL, {"kind": "speed", "view": "curve"}, now=NOW)
+    assert len(first["data"]["points"]) == 30
+    page = next(row for row in first["pagination"] if row["section"] == "points")
+    assert page == {"section": "points", "total": 65, "offset": 0, "returned": 30, "next_offset": 30}
+    seen = first["data"]["points"]
+    for offset in (30, 60):
+        result = context.read(repository, ALIAS, FULL, {"kind": "speed", "section": "points", "offset": offset}, now=NOW)
+        seen += result["data"]
+    assert seen == points
+    # Copy semantics: paging or summaries cannot mutate the shared saved view.
+    assert payload["points"] == points and len(payload["dosing_model"]["points"]) == 65
+
+
+def test_page_offset_never_slices_short_zone_vectors(repository):
+    prepared_repository(repository, {"points": list(range(65)), "zone_bounds": [100, 120, 140, 160, 180, 200]}, "speed")
+    result = context.read(repository, ALIAS, FULL, {"kind": "speed", "view": "curve", "offset": 30}, now=NOW)
+    assert result["data"]["points"] == list(range(30, 60))
+    assert result["data"]["zone_bounds"] == [100, 120, 140, 160, 180, 200]
+
+
+def test_speed_summary_offers_full_curve_and_test_reads(repository):
+    prepared_repository(repository, {"status": "READY", "points": [1, 2], "tests": [{"entry_key": "t"}],
+        "dosing_model": {"points": [1, 2], "source": "BLENDED"}, "speed_zones": {"zones": [{"zone": "Z1"}]}}, "speed")
+    overview = context.read(repository, ALIAS, FULL, {"kind": "speed"}, now=NOW)
+    assert "points" not in overview["data"] and "tests" not in overview["data"]
+    assert overview["data"]["dosing_model"] == {"source": "BLENDED"}
+    tests = context.read(repository, ALIAS, FULL, {"kind": "speed", "view": "tests"}, now=NOW)
+    assert tests["data"]["tests"] == [{"entry_key": "t"}]
+    points = context.read(repository, ALIAS, FULL, {"kind": "speed", "section": "dosing_model.points"}, now=NOW)
+    assert points["data"] == [1, 2]
+
+
+@pytest.mark.parametrize("query", [
+    {"kind": "speed", "duration_s": float("nan")}, {"kind": "speed", "duration_s": True},
+    {"kind": "speed", "duration_s": 300, "speed_kmh": 20},
+    {"kind": "speed", "view": "arbitrary-route"}, {"kind": "learning", "days": 1000},
+    {"kind": "trainability", "start": "2026-11-12", "end": "2026-11-10"},
+    {"kind": "response", "start": "2025-01-01", "end": "2026-11-10"},
+])
+def test_invalid_new_query_never_requests_prepared_view(repository, query):
+    repository.prepared_view = Mock()
+    with pytest.raises(HTTPException) as error:
+        context.read(repository, ALIAS, FULL, query, now=NOW)
+    assert error.value.status_code == 422
+    repository.prepared_view.assert_not_called()
+
+
+def test_learning_reads_historical_year_from_shared_prepared_history(repository):
+    repository.learning_preparation = Mock(side_effect=AssertionError("Use archived prepared reader"))
+    repository.learning_history_view = Mock(return_value={"ready": True, "day": "2025-12-31",
+        "payload": {"athlete_alias": ALIAS, "report": {"schema_version": "recovery-learning-view-v1", "as_of": "2025-12-31",
+            "series": [{"day": "2025-01-01", "stress_index": 0.2}, {"day": "2025-12-31", "stress_index": 0.1}]}}})
+    result = context.read(repository, ALIAS, FULL, {"kind": "learning", "days": 366, "end": "2025-12-31"}, now=NOW)
+    assert result["data"]["series"][0]["day"] == "2025-01-01"
+    assert repository.learning_history_view.call_args.kwargs["days"] == 366
+    assert repository.learning_history_view.call_args.kwargs["end"].isoformat() == "2025-12-31"
+    repository.active_analysis.assert_not_called()
+
+
+def test_methods_catalog_summary_selects_complete_current_card_without_frozen_plan(repository):
+    card = {"id": "tempo", "title": "Темпово бягане", "guidance": {"execution": "Пълен текст"},
+        "source": {"authors": "Example author"}, "resolution": {"target_speed_kmh": 16}}
+    prepared_repository(repository, {"methods": [card], "revision": 4}, "management-methods")
+    summary = context.read(repository, ALIAS, PLAN, {"kind": "methods"}, now=NOW)
+    assert summary["data"]["methods"][0]["id"] == "tempo"
+    assert summary["data"]["methods"][0]["title"] == "Темпово бягане"
+    detail = context.read(repository, ALIAS, PLAN, {"kind": "methods", "method_id": "tempo"}, now=NOW)
+    assert all(detail["data"]["method"][key] == value for key, value in card.items())
+    repository.plan_read.assert_not_called()
+
+
+def test_management_week_distinguishes_proposal_from_approved_plan(repository):
+    result = context.read(repository, ALIAS, PLAN, {"kind": "management", "view": "week"}, now=NOW)
+    data = result["data"]
+    assert data["revision"] == 7 and data["plan_status"] == "REVIEW_REQUIRED"
+    assert data["plan"]["is_approved"] is True and data["proposal"]["is_approved"] is False
+    assert data["proposal"]["days"][0]["sessions"][0]["title"] == "Неприето предложение"
+    assert "dose_evidence" not in json.dumps(data) and "private detail" not in json.dumps(data)
+
+
+def test_navigation_does_not_load_training_settings(repository):
+    result = context.read(repository, ALIAS, PLAN, {"kind": "navigation", "key": "athletes"}, now=NOW)
+    assert result["performed"] is False and result["links"][0]["href"] == "/account#athletes-title"
+    repository.athlete_settings.assert_not_called()
+
+
+def test_speed_comparison_requires_recovery_before_prepared_read(repository):
+    repository.prepared_view = Mock()
+    with pytest.raises(HTTPException) as error:
+        context.read(repository, ALIAS, PLAN, {"kind": "management", "view": "speed-comparison", "plan_kind": "ACTIVE", "revision": 7}, now=NOW)
+    assert error.value.status_code == 403
+    repository.prepared_view.assert_not_called()
+
+
+def test_speed_comparison_is_pinned_to_exact_kind_and_revision(repository):
+    prepared_repository(repository, {"revision": 7, "comparison": []}, "management-speed-comparison")
+    context.read(repository, ALIAS, FULL, {"kind": "management", "view": "speed-comparison", "plan_kind": "DRAFT", "revision": 7, "date": "2026-11-09"}, now=NOW)
+    assert repository.prepared_view.call_args.kwargs["parameters"] == {"kind": "DRAFT", "revision": 7, "start_date": "2026-11-09"}
+
+
+def test_speed_segment_preview_uses_saved_prepared_selection(repository):
+    key = "act_" + "a" * 32
+    prepared_repository(repository, {"activity_ref": key, "selection": {"speed_kmh": 18}}, "speed-preview")
+    result = context.read(repository, ALIAS, FULL, {"kind": "speed", "view": "preview", "activity_ref": key, "start_s": 30, "duration_s": 300}, now=NOW)
+    assert result["data"]["selection"]["speed_kmh"] == 18
+    assert repository.prepared_view.call_args.kwargs["parameters"] == {"activity_ref": key, "start_s": 30, "duration_s": 300}
+
+
+def test_planning_job_status_uses_authenticated_actor_not_model_scope(repository):
+    repository.planning_job = Mock(return_value={"job": None})
+    actor = "12345678-1234-1234-1234-123456789abc"
+    result = context.read(repository, ALIAS, FULL, {"kind": "management", "view": "generation-jobs"}, now=NOW, actor=actor)
+    assert result["data"]["job"] is None
+    assert repository.planning_job.call_args.kwargs == {"alias": ALIAS, "actor": actor}
+    with pytest.raises(HTTPException) as error:
+        context.read(repository, ALIAS, PLAN, {"kind": "management", "view": "generation-jobs"}, now=NOW, actor=actor)
+    assert error.value.status_code == 403
+
+
+def test_session_entry_fetches_compact_generation_calendar_without_snapshot(repository):
+    key = "act_" + "a" * 32
+    repository._rpc_row = Mock(return_value={"generation_id": "generation", "revision": 4,
+        "activities": [{"activity_ref": key, "local_date": "2026-11-11", "sport": "Run", "elapsed_time_s": 3600}]})
+    repository._request.return_value = []
+    repository.active_activity_calendar = Mock(side_effect=AssertionError("Large snapshot path must not be used"))
+    result = context.read(repository, ALIAS, FULL, {"kind": "inputs", "input_kind": "SESSION"}, now=NOW)
+    assert result["entries"][0]["entry_key"] == key and result["entries"][0]["suggested_duration_minutes"] == 60
+    assert repository._rpc_row.call_args.args == (
+        "active_onflows_activity_calendar?select=generation_id,revision,activities",
+        {"p_athlete_alias": ALIAS, "p_period_start": "2026-11-11", "p_period_end": "2026-11-11"})
+    repository.active_activity_calendar.assert_not_called()
+
+
+def test_full_management_input_contract_exposes_nested_app_controls():
+    contract = context.input_contract("MANAGEMENT_PROFILE")
+    assert "individual_learning" in contract["properties"] and "method_library" in contract["properties"]
+    assert "planning_controls" in contract["properties"]
+    assert "IndividualLearning" in contract["$defs"] and "MethodLibraryPreferences" in contract["$defs"]
+    assert "maintenance_fraction" not in contract["properties"]
+
+
+def test_nested_array_pages_have_exact_retrievable_paths(repository):
+    prepared_repository(repository, {"tests": [{"entry_key": "t", "samples": list(range(35))}]}, "speed")
+    result = context.read(repository, ALIAS, FULL, {"kind": "speed", "view": "tests"}, now=NOW)
+    page = next(row for row in result["pagination"] if row["section"] == "tests.0.samples")
+    assert page["next_offset"] == 30
+    rest = context.read(repository, ALIAS, FULL, {"kind": "speed", "section": page["section"], "offset": page["next_offset"]}, now=NOW)
+    assert rest["data"] == [30, 31, 32, 33, 34]
+
+
+def test_activity_view_uses_canonical_pinned_detail_without_leaking_raw_catalog(repository, monkeypatch):
+    from apps.api.routes import activities
+    key = "act_" + "b" * 32
+    raw = {"catalog_payload": {"private_provider_identity": "not-a-display-field"}}
+    repository.active_activity_view = Mock(return_value=raw)
+    canonical = {"revision": 3, "generation_id": "g", "activity": {"activity_ref": key, "name": "Intervals", "intervals": [{"duration_s": 30}]},
+        "series": {"series": [{"elapsed_s": 0, "speed_kmh": 12}, {"elapsed_s": 30, "speed_kmh": 18}, {"elapsed_s": 60, "speed_kmh": 10}]},
+        "shadow": {"trainability_index": {"general": {"index": 1.1}}, "summary": {"duration_s": 60}, "samples": [{"hrmod": 160}]}}
+    projected = Mock(return_value=canonical)
+    monkeypatch.setattr(activities, "_activity_view_payload", projected)
+    result = context.read(repository, ALIAS, FULL, {"kind": "activity", "activity_ref": key}, now=NOW)
+    assert result["data"]["activity"]["name"] == "Intervals"
+    assert result["data"]["analysis"]["trainability_index"]["general"]["index"] == 1.1
+    assert "private_provider_identity" not in json.dumps(result) and "samples" not in result["data"]["analysis"]
+    projected.assert_called_once_with(raw, key)
+    series = context.read(repository, ALIAS, FULL, {"kind": "activity", "activity_ref": key, "view": "series", "start_s": 15, "duration_s": 30}, now=NOW)
+    assert series["data"]["series"]["series"] == [{"elapsed_s": 30, "speed_kmh": 18}]
+    assert len(canonical["series"]["series"]) == 3
+
+
+def test_athlete_settings_input_requires_edit_grant_but_not_recovery(repository, monkeypatch):
+    from apps.api import assistant_app_actions
+    read_input = Mock(return_value={"availability": "AVAILABLE", "kind": "ATHLETE_SETTINGS", "entry_key": "athlete-settings", "revision": 1, "payload": {"hrmax_bpm": 200}})
+    monkeypatch.setattr(assistant_app_actions, "read_input", read_input)
+    access = {**PLAN, "can_edit_plan": True}
+    result = context.read(repository, ALIAS, access, {"kind": "inputs", "input_kind": "ATHLETE_SETTINGS"}, now=NOW)
+    assert result["payload"]["hrmax_bpm"] == 200
+    with pytest.raises(HTTPException) as error:
+        context.read(repository, ALIAS, PLAN, {"kind": "inputs", "input_kind": "ATHLETE_SETTINGS"}, now=NOW)
+    assert error.value.status_code == 403
+
+
+def test_speed_exposure_period_filter_does_not_mislabel_full_window_totals(repository):
+    prepared_repository(repository, {"start_date": "2026-10-02", "end_date": "2026-11-10", "recorded_minutes": 200,
+        "zones": [{"zone": "Z1", "minutes": 200}], "activities": [
+            {"date": "2026-10-15", "recorded_minutes": 100}, {"date": "2026-11-09", "recorded_minutes": 100}]}, "speed-history")
+    result = context.read(repository, ALIAS, FULL, {"kind": "speed", "view": "history", "start": "2026-11-01", "end": "2026-11-10"}, now=NOW)["data"]
+    assert result["activities"] == [{"date": "2026-11-09", "recorded_minutes": 100}]
+    assert "recorded_minutes" not in result
+    assert result["full_window_summary"]["recorded_minutes"] == 200
+    assert result["full_window_summary"]["start"] == "2026-10-02"
+
+
+@pytest.mark.parametrize("view", ["overview", "outlook", "profile"])
+def test_plan_only_management_projection_blocks_private_evidence_and_section_bypass(repository, view):
+    profile = {"sport": "Run", "planning_controls": {"sessions_per_week": 8}, "individual_learning": {"mode": "CONTROL"},
+        "unrecognized_private_observation": {"score": "private-sentinel"}}
+    outlook = {"profile_revision": 4, "long_term": {"weeks": [{"start_date": "2026-11-11", "end_date": "2026-11-17", "components": {"Z1": {"target_weekly_q": 200}}}],
+        "baseline": {"private-sentinel": True}}, "component_history": {"private-sentinel": True}}
+    payload = {"profile": {"configured": True, "revision": 4, "profile": profile}, "outlook": {"outlook": outlook},
+        "unrecognized_private_observation": {"score": "private-sentinel"}}
+    if view == "profile":
+        payload = {"configured": True, "revision": 4, "profile": profile, "history": [{"score": "private-sentinel"}]}
+    if view == "outlook":
+        payload = {"outlook": outlook}
+    prepared_repository(repository, payload, "management-view" if view == "overview" else "management-" + view)
+    result = context.read(repository, ALIAS, PLAN, {"kind": "management", "view": view}, now=NOW)
+    assert "private-sentinel" not in json.dumps(result)
+    if view == "outlook":
+        assert result["data"]["outlook"]["long_term"]["weeks"][0]["components"]["Z1"]["target_weekly_q"] == 200
+    if view == "profile":
+        assert result["data"]["profile"]["individual_learning"]["mode"] == "CONTROL"
+    with pytest.raises(HTTPException) as error:
+        context.read(repository, ALIAS, PLAN, {"kind": "management", "view": view, "section": "unrecognized_private_observation"}, now=NOW)
+    assert error.value.status_code == 422
+
+
+@pytest.mark.parametrize("date_field", ["date", "start"])
+def test_plan_activate_input_forwards_exact_draft_selector_without_changing_active_identity(repository, monkeypatch, date_field):
+    from apps.api import assistant_app_actions
+    exact = {"availability": "AVAILABLE", "kind": "PLAN_ACTIVATE", "entry_key": "active-plan", "revision": 7,
+        "payload": {"status": "ACTIVE"}, "preview_summary": {"drafts": [{"start_date": "2026-11-01", "draft_revision": 2}]}}
+    read_input = Mock(return_value=exact)
+    monkeypatch.setattr(assistant_app_actions, "read_input", read_input)
+    result = context.read(repository, ALIAS, PLAN, {"kind": "inputs", "input_kind": "PLAN_ACTIVATE",
+        "key": "active-plan", date_field: "2026-11-01", "revision": 2}, now=NOW)
+    read_input.assert_called_once_with(repository, ALIAS, "PLAN_ACTIVATE", "active-plan",
+        draft_date="2026-11-01", draft_revision=2)
+    assert result["entry_key"] == "active-plan" and result["revision"] == 7
+    assert result["preview_summary"]["drafts"] == [{"start_date": "2026-11-01", "draft_revision": 2}]

@@ -34,6 +34,20 @@ it("allows a plan-only viewer and derives downstream athlete and actor exclusive
   expect(await result.text()).not.toContain("server-secret");
 });
 
+it("allows canonical plan actions to finish while keeping status reads bounded", async () => {
+  const timeout = vi.spyOn(AbortSignal, "timeout");
+  try {
+    await POST(request());
+    expect(timeout).toHaveBeenLastCalledWith(360_000);
+    const postSignal = vi.mocked(fetch).mock.calls[0][1]?.signal;
+    expect(postSignal).toBe(timeout.mock.results[0].value);
+    await GET(request("GET", null, {}, `?operation_id=${operation}`));
+    expect(timeout).toHaveBeenLastCalledWith(20_000);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string).operation_id).toBe(operation);
+  } finally { timeout.mockRestore(); }
+});
+
 it.each(["https://hostile.test", "null", ""])("rejects a POST from another or absent origin: %s", async origin => {
   const result = await POST(request("POST", input, { origin }));
   expect(result.status).toBe(403); expect(currentAuthorizedAthlete).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();

@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from .body_observations import LabReport, WeightReport
+from .assistant_app_actions import APP_COMMAND_KINDS, PLAN_KINDS
 from .model_schemas import ManualSpeedTestInput
 from .oauth_store import PersistentStoreFailure
 from .response_monitoring import DailyReport, OptionalTest, ResponseBlock, SessionReport
@@ -24,7 +25,7 @@ OBSERVATION_MODELS = {"DAILY": DailyReport, "WEIGHT": WeightReport,
     "SESSION": SessionReport, "TEST": OptionalTest, "LAB": LabReport, "BLOCK": ResponseBlock}
 OWNER_KINDS = frozenset({"DAILY", "WEIGHT", "SESSION"})
 PLANNING_KINDS = frozenset({"MANAGEMENT_PROFILE", "CALENDAR_EVENT"})
-COMMAND_KINDS = frozenset(OBSERVATION_MODELS) | PLANNING_KINDS | {"MANUAL_SPEED_TEST"}
+COMMAND_KINDS = frozenset(OBSERVATION_MODELS) | PLANNING_KINDS | {"MANUAL_SPEED_TEST"} | APP_COMMAND_KINDS
 
 
 def _rpc(repository, name, body):
@@ -152,11 +153,11 @@ def execute(repository, alias, actor, operation_id, command):
         raise HTTPException(422, "Липсва актуалната версия на записа.")
     operation_id = UUID(str(operation_id))
     permissions = access(repository, alias, actor)
-    if kind not in PLANNING_KINDS and not permissions["can_view_recovery"]:
+    if kind not in PLANNING_KINDS | PLAN_KINDS | {"ATHLETE_SETTINGS"} and not permissions["can_view_recovery"]:
         raise HTTPException(403, "Нямате достъп до наблюденията на този спортист.")
     if (kind in OWNER_KINDS and not permissions["is_owner"]
             or kind not in OWNER_KINDS and not permissions["can_edit_plan"]
-            or kind in PLANNING_KINDS and not permissions["can_view_plan"]):
+            or kind in PLANNING_KINDS | PLAN_KINDS and not permissions["can_view_plan"]):
         raise HTTPException(403, "Нямате право да променяте тези данни.")
     digest = request_hash(command)
     previous_receipt = operation_status(repository, alias, actor, operation_id)
@@ -164,6 +165,9 @@ def execute(repository, alias, actor, operation_id, command):
         if previous_receipt.get("request_hash") != digest:
             raise HTTPException(409, "Тази операция вече е използвана за друга промяна.")
         return previous_receipt
+    if kind in APP_COMMAND_KINDS:
+        from .assistant_app_actions import execute as execute_app
+        return execute_app(repository, alias, actor, operation_id, command, digest)
     if kind in PLANNING_KINDS:
         from .assistant_planning_commands import prepare
         prepared = prepare(repository, alias, kind, key, patch, revision, actor)
