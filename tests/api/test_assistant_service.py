@@ -511,6 +511,28 @@ def test_calendar_clarifications_keep_request_until_preview_and_natural_confirma
     assert not repo.conversations[conversation]["state"].get("input_request")
 
 
+@pytest.mark.parametrize("message,kept", [
+    ('2027-01-09 – 2027-01-10, „Състезание“.', True),
+    ('2027-01-09 – 2027-01-11, „Състезание“.', False),
+    ('Не 2027-01-09 – 2027-01-10, „Състезание“.', False),
+])
+def test_repeating_preview_literals_keeps_exact_proposal_but_changes_and_negation_do_not(repo, message, kept):
+    pending = {"kind": "CALENDAR_EVENT", "entry_key": "race-a", "expected_revision": 7,
+        "patch": {"start_date": "2027-01-09", "end_date": "2027-01-10", "name": "Състезание"}}
+    repo.read_result = {"query_kind": "inputs", "kind": "CALENDAR_EVENT", "entry_key": "race-a", "revision": 7}
+    conversation = repo.seed({"pending_command": pending, "input_request": {"kind": "CALENDAR_EVENT",
+        "request": "Премести основния старт", "expires_at": (datetime.now(timezone.utc)+timedelta(minutes=15)).isoformat()}})
+    provider = ScriptedAssistantProvider([] if kept else [{"text": "Уточни новите дати."}])
+    result = service.turn(repo, ALIAS, ACTOR, body(message, conversation), provider)
+    assert not repo.writes
+    if kept:
+        assert result["suggestions"] == ["Запиши промяната", "Откажи промяната"]
+        assert repo.conversations[conversation]["state"]["pending_command"] == pending
+        assert not provider.calls
+    else:
+        assert not repo.conversations[conversation]["state"].get("pending_command")
+
+
 def test_post_workout_rating_continues_with_timing_and_never_becomes_daily_fatigue(repo):
     ref = "act_" + "a" * 32
     repo.read_result = {"query_kind": "inputs", "kind": "SESSION", "entries": [
@@ -527,6 +549,61 @@ def test_post_workout_rating_continues_with_timing_and_never_becomes_daily_fatig
     service.turn(repo, ALIAS, ACTOR, body("Да", first["conversation_id"]), provider)
     assert len(repo.writes) == 1 and repo.writes[0]["kind"] == "SESSION"
     assert "fatigue" not in repo.writes[0]["patch"]
+
+
+@pytest.mark.parametrize("timing_answer,timing", [("Веднага след края", "IMMEDIATE"), ("Около 30 минути", "DELAYED"), ("На следващия ден", "NEXT_DAY")])
+@pytest.mark.parametrize("rating", ["3 от 10", "3/10"])
+def test_single_completed_activity_rating_asks_only_timing_without_paid_model(repo, timing_answer, timing, rating):
+    ref = "act_" + "a" * 32
+    repo.read_result = {"query_kind": "inputs", "kind": "SESSION", "activity_count": 1, "date": DAY, "entries": [
+        {"kind": "SESSION", "entry_key": ref, "revision": 0, "payload": None, "suggested_duration_minutes": 117.75,
+            "activity": {"local_date": DAY, "name": "Ски"}}]}
+    provider = ScriptedAssistantProvider([])
+    first = service.turn(repo, ALIAS, ACTOR, body(f"Искам да въведа умората от днес след тренировката тя беше {rating}."), provider)
+    assert "Кога направи оценката" in first["message"] and "1–5" not in first["message"]
+    assert not repo.writes and not provider.calls
+    # Both duration and revision must be read again after the clarification.
+    repo.read_result["entries"][0].update(revision=1, suggested_duration_minutes=118)
+    preview = service.turn(repo, ALIAS, ACTOR, body(timing_answer, first["conversation_id"]), provider)
+    assert "Усилие RPE (0–10): 3" in preview["message"] and "Продължителност (мин): 118" in preview["message"]
+    assert not provider.calls and not repo.writes
+    service.turn(repo, ALIAS, ACTOR, body("Да", first["conversation_id"]), provider)
+    assert len(repo.writes) == 1 and repo.writes[0]["expected_revision"] == 1
+    assert repo.writes[0]["patch"] == {"rpe": 3, "rpe_source": "ONFLOWS", "timing": timing, "duration_minutes": 118}
+
+
+def test_session_duration_is_not_mistaken_for_rating_delay(repo):
+    repo.read_result = {"query_kind": "inputs", "kind": "SESSION", "activity_count": 1, "entries": [
+        {"kind": "SESSION", "entry_key": "act_"+"a"*32, "revision": 0, "payload": None, "suggested_duration_minutes": 60}]}
+    result = service.turn(repo, ALIAS, ACTOR, body("Искам да запиша умора след тренировката 3 от 10, тренировката беше 60 минути."), ScriptedAssistantProvider([]))
+    assert "Кога направи оценката" in result["message"] and not repo.writes
+    assert not repo.conversations[result["conversation_id"]]["state"].get("pending_command")
+
+
+def test_correction_of_rating_is_retained_until_timing_answer(repo):
+    repo.read_result = {"query_kind": "inputs", "kind": "SESSION", "activity_count": 1, "entries": [
+        {"kind": "SESSION", "entry_key": "act_"+"a"*32, "revision": 0, "payload": None, "suggested_duration_minutes": 60}]}
+    provider = ScriptedAssistantProvider([{"text": "Оценката е 2/10; кога е направена?"}])
+    first = service.turn(repo, ALIAS, ACTOR, body("Искам да въведа умора след тренировката 3 от 10"), provider)
+    service.turn(repo, ALIAS, ACTOR, body("Поправка: 2 от 10", first["conversation_id"]), provider)
+    preview = service.turn(repo, ALIAS, ACTOR, body("Веднага след края", first["conversation_id"]), provider)
+    assert "Усилие RPE (0–10): 2" in preview["message"] and not repo.writes
+
+
+def test_multiple_activities_are_not_automatically_selected_for_session_rating(repo):
+    repo.read_result = {"query_kind": "inputs", "kind": "SESSION", "activity_count": 2, "entries": [
+        {"entry_key": "act_"+"a"*32}, {"entry_key": "act_"+"b"*32}]}
+    provider = ScriptedAssistantProvider([{"text": "Коя от двете тренировки имаш предвид?"}])
+    result = service.turn(repo, ALIAS, ACTOR, body("Искам да въведа умора след тренировката 3 от 10"), provider)
+    assert "Коя от двете" in result["message"] and len(provider.calls) == 1 and not repo.writes
+
+
+def test_direct_rating_path_does_not_offer_owner_input_to_a_coach(repo):
+    repo.permissions["is_owner"] = False
+    provider = ScriptedAssistantProvider([{"text": "Оценката след тренировка се въвежда от спортиста."}])
+    result = service.turn(repo, ALIAS, ACTOR, body("Искам да въведа умора след тренировката 3 от 10, веднага след края"), provider)
+    assert not repo.reads and not repo.writes
+    assert not repo.conversations[result["conversation_id"]]["state"].get("pending_command")
 
 
 def test_post_workout_ten_point_rating_cannot_be_saved_as_daily_even_if_model_misroutes(repo):

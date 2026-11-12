@@ -238,6 +238,90 @@ def _automatic_observation(command, entry, message):
     return True
 
 
+def _session_rating_entry(repository, alias, actor, state, request, message):
+    """Resolve an explicit post-workout x/10 without another model decision.
+
+    Only a fresh activity read supplies identity, duration and revision. The
+    supplied rating is retained while asking for its missing observation time;
+    the resulting command still needs the ordinary shown-preview confirmation.
+    """
+    if not request or request.get("kind")!="SESSION":
+        return None
+    if request.get("model_clarification"):
+        return None
+    anchor=request.get("request", "")
+    if re.search(r"\b(?:пример|ако|не)\b", anchor.lower()):
+        return None
+    scores=re.findall(r"(?<![\d-])(\d{1,2})\s*(?:от|/)\s*10\b",anchor.lower())
+    if len(scores)!=1 or not 0<=int(scores[0])<=10:
+        return None
+    score=request.get("rpe_value",int(scores[0]))
+    correction=re.findall(r"(?<![\d-])(\d{1,2})\s*(?:от|/)\s*10\b",message.lower())
+    if message!=anchor and len(correction)==1 and 0<=int(correction[0])<=10 and not re.search(r"\?|\b(?:не|ако|пример)\b",message.lower()):
+        score=int(correction[0])
+        request["rpe_value"]=score
+    if "SESSION" not in _capabilities(_permissions(repository,alias,actor))["write"]:
+        return None
+    date_text=re.sub(r"(?<![\d-])\d{1,2}\s*/\s*10\b","",anchor)
+    selected,clarification=_fallback_day_query(repository,alias,date_text)
+    if clarification:
+        return None
+    requested={"kind":"inputs","input_kind":"SESSION","date":selected.get("date")}
+    context=_read(repository,alias,actor,requested)
+    entries=context.get("entries") or []
+    if context.get("activity_count")!=1 or len(entries)!=1:
+        return None
+    entry=entries[0]
+    if entry.get("kind")!="SESSION" or not isinstance(entry.get("entry_key"),str) or type(entry.get("revision")) is not int:
+        return None
+    payload=entry.get("payload") or {}
+    duration=payload.get("duration_minutes") or entry.get("suggested_duration_minutes")
+    if type(duration) not in {int,float} or not 0<duration<=1440:
+        return None
+    # A follow-up answers timing only; a previous assistant suggestion or a
+    # record note can never supply a measurement context.
+    timing=None
+    text=message.lower()
+    if not re.search(r"\?|\b(?:не|ако|пример)\b",text):
+        if re.search(r"веднага|непосредствено",text):
+            timing="IMMEDIATE"
+        elif re.search(r"на следващия ден",text):
+            timing="NEXT_DAY"
+        elif (re.fullmatch(r"(?:около\s+)?(?:10\s*[–-]\s*60|[1-5]\d|60)\s*мин(?:ути)?[.! ]*",text)
+                or re.search(r"(?:10\s*[–-]\s*60|\b(?:[1-5]\d|60))\s*мин(?:ути)?\s*(?:по-късно|след края)",text)
+                or re.search(r"\bслед\s+(?:[1-5]\d|60)\s*мин",text)):
+            timing="DELAYED"
+    timing=timing or payload.get("timing")
+    if timing not in {"IMMEDIATE","DELAYED","NEXT_DAY"}:
+        if message!=anchor:
+            if not correction:
+                request["model_clarification"]=True
+            return None
+        return {"context":context,"message":f"Усилието след тренировката е {score}/10. Кога направи оценката: веднага след края, 10–60 минути по-късно или на следващия ден?"}
+    command={"kind":"SESSION","entry_key":entry["entry_key"],"expected_revision":entry["revision"],
+        "patch":{"rpe":score,"rpe_source":"ONFLOWS","timing":timing,"duration_minutes":duration}}
+    preview=_preview(command,entry)
+    state["pending_command"]=command
+    state["pending_command_at"]=datetime.now(timezone.utc).isoformat()
+    return {"context":context,"message":preview,"suggestions":["Запиши промяната","Откажи промяната"]}
+
+
+def _calendar_restatement(command, message):
+    """A literal repetition of shown dates/name is still the same preview."""
+    if not command or command.get("kind")!="CALENDAR_EVENT":
+        return False
+    patch=command.get("patch") or {}
+    if set(patch)-{"name","start_date","end_date","include_identical_copies"}:
+        return False
+    values=[str(v) for k,v in patch.items() if k!="include_identical_copies"]
+    if not values or any(value not in message for value in values):
+        return False
+    remainder=message
+    for value in sorted(set(values),key=len,reverse=True):
+        remainder=remainder.replace(value,"")
+    return not re.sub(r'[\s,.;:!„“"\'–—-]',"",remainder)
+
+
 def _preview(command, entry=None):
     # A compact literal preview is independent of a model's description.
     labels={"DAILY":"дневна оценка","WEIGHT":"тегло","SESSION":"оценка на тренировка","TEST":"мониторингов тест", "LAB":"лабораторен резултат",
@@ -247,7 +331,7 @@ def _preview(command, entry=None):
         "stress":"Стрес (1–5)","motivation":"Мотивация (1–5)","competition_motivation":"Състезателна мотивация (1–5)",
         "pain_or_illness":"Болка или заболяване","note":"Бележка","sessions":"Измервания при сесиите","session":"Номер на сесия",
         "before_kg":"Преди тренировка (кг)","after_kg":"След тренировка (кг)","comparable":"Сравними условия","fluid_l":"Приети течности (л)","urine_l":"Урина (л)",
-        "rpe":"Усилие RPE (0–10)","feel":"Усещане (1–5)","timing":"Време на оценката","duration_minutes":"Продължителност (мин)",
+        "rpe":"Усилие RPE (0–10)","rpe_source":"Източник на оценката","feel":"Усещане (1–5)","timing":"Време на оценката","duration_minutes":"Продължителност (мин)",
         "execution_reason":"Причина за отклонение","method_confirmed":"Потвърден изпълнен метод","executed_method_id":"Изпълнен метод",
         "lactate_samples":"Лактатни измервания","lactate_device":"Уред за лактат","neuromuscular":"Невромускулни наблюдения",
         "planning_controls":"Условия за планиране","available_minutes":"Налични минути по дни","training_days":"Тренировъчни дни",
@@ -266,6 +350,8 @@ def _preview(command, entry=None):
         if isinstance(item,bool): return "да" if item else "не"
         if key=="timing":
             return {"IMMEDIATE":"непосредствено след края", "DELAYED":"10–60 минути след края", "NEXT_DAY":"на следващия ден", "UNKNOWN":"неуточнено"}.get(item,str(item))
+        if key=="rpe_source": return {"ONFLOWS":"ваша оценка", "INTERVALS":"Intervals"}.get(item,str(item))
+        if key=="duration_minutes" and type(item) is float: return f"{item:.2f}".rstrip("0").rstrip(".")
         if isinstance(item,list) and (key.endswith("_days") or key=="training_days"):
             return ", ".join(days[v] if type(v) is int and 0<=v<=6 else str(v) for v in item) or "няма"
         if isinstance(item,(dict,list)): return json.dumps(item,ensure_ascii=False)
@@ -523,6 +609,17 @@ def turn(repository,alias,actor,body,provider=None):
             state.pop("input_request",None)
         elif re.search(r"(още|добави).{0,25}(отсеч|интервал|повторени)",normalized):
             result["message"]=UNAVAILABLE_SESSION_CHANGE
+        elif _provider_available(provider) and (session_entry:=_session_rating_entry(repository,alias,actor,state,input_request,message)):
+            context=session_entry.pop("context")
+            result.update(session_entry)
+        elif input_request and _calendar_restatement(pending_change,message):
+            context=_read(repository,alias,actor,{"kind":"inputs","input_kind":"CALENDAR_EVENT","key":pending_change["entry_key"]})
+            if context.get("revision")!=pending_change["expected_revision"]:
+                raise HTTPException(409,"Календарът е променен. Прочети актуалното събитие преди новото предложение.")
+            preview=_preview(pending_change,context)
+            state["pending_command"]=pending_change
+            state["pending_command_at"]=datetime.now(timezone.utc).isoformat()
+            result.update(message=preview,suggestions=["Запиши промяната","Откажи промяната"])
         elif not _provider_available(provider):
             result["message"],context=_fallback(repository,alias,actor,message)
         else:
