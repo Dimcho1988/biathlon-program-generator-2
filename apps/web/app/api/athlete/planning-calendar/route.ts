@@ -5,6 +5,7 @@ import { currentAuthorizedAthlete } from "../../../../lib/account-access";
 import { multiProfileMode } from "../../../../lib/athlete-session";
 import { waitForApi } from "../../../../lib/api-readiness";
 import { parsePlanningCalendarInput } from "../../../../lib/planning-calendar";
+import { isSameOrigin } from "../../../../lib/account-route";
 
 const redirect = (state: "calendar-saved" | "calendar-invalid" | "calendar-error") =>
   new NextResponse(null, {
@@ -15,6 +16,7 @@ const redirect = (state: "calendar-saved" | "calendar-invalid" | "calendar-error
 export async function POST(request: Request) {
   let stage = "session";
   try {
+    if (!isSameOrigin(request)) return NextResponse.json({ error: "Невалиден източник на заявката." }, { status: 403 });
     const athlete = await currentAuthorizedAthlete();
     const athleteAlias = athlete?.athleteAlias;
     if (!multiProfileMode() || !athleteAlias)
@@ -31,6 +33,11 @@ export async function POST(request: Request) {
 
     stage = "form";
     const form = await request.formData();
+    const expectedRevision = form.get("expected_revision");
+    const operationId = form.get("operation_id");
+    if (typeof expectedRevision !== "string" || !/^\d+$/.test(expectedRevision) || !Number.isSafeInteger(Number(expectedRevision))
+      || typeof operationId !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(operationId))
+      return NextResponse.json({ error: "Презареди календара, за да получиш текущата му версия." }, { status: 409 });
     if (form.get("schema_version") !== "planning-calendar-v1")
       return redirect("calendar-invalid");
     const eventsJson = form.get("events_json");
@@ -64,6 +71,9 @@ export async function POST(request: Request) {
           Accept: "application/json",
           "Content-Type": "application/json",
           "X-OnFlows-Athlete-Alias": athleteAlias,
+          "X-OnFlows-Actor-Id": athlete.actorUserId,
+          "X-OnFlows-Expected-Revision": expectedRevision,
+          "X-OnFlows-Operation-Id": operationId,
         },
         body: JSON.stringify(calendar),
         signal: AbortSignal.timeout(75_000),
@@ -71,13 +81,13 @@ export async function POST(request: Request) {
     );
     stage = `api-response-${response.status}`;
     if (response.status === 409 || response.status === 422)
-      return redirect("calendar-invalid");
+      return NextResponse.json({ error: response.status === 409 ? "Календарът е променен. Презареди и съпостави въведеното с последната версия." : "Провери календарните събития и версията." }, { status: response.status });
     if (!response.ok) throw new Error("Planning calendar update failed");
     revalidatePath("/planning");
     revalidatePath("/management");
     revalidatePath("/management/outlook");
     if (request.headers.get("accept")?.includes("application/json"))
-      return NextResponse.json({ saved: true }, { headers: { "Cache-Control": "no-store" } });
+      return NextResponse.json({ saved: true, revision: (await response.json()).revision }, { headers: { "Cache-Control": "no-store" } });
     return redirect("calendar-saved");
   } catch {
     console.error(`Planning calendar update failed [${stage}]`);

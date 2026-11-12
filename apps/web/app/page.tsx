@@ -80,6 +80,12 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ v
     />;
   }
 
+  // The dashboard includes physiological results inside training status as
+  // well as recovery history. Gate the complete aggregate before any fetch.
+  if (multiProfile && !athleteAccess?.canViewRecovery) {
+    return <ErrorState message="Нямате достъп до физиологичните данни на този профил. Споделената програма е достъпна от „Седмична програма“." refreshAvailable={false} />;
+  }
+
   if (query.settings === "edit" && multiProfile && athleteAlias) {
     if (!athleteAccess?.canEditPlan) return <ErrorState
       message="Нямаш право да променяш зоните и HRmax на този спортист."

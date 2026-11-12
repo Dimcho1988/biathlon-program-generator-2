@@ -2,6 +2,7 @@
 from collections import Counter
 from copy import deepcopy
 from datetime import date, datetime, timedelta
+import json
 
 import httpx
 import pytest
@@ -96,6 +97,9 @@ class PlanningHTTP:
             if "proposal_anchor:" in query["select"] or "proposal_memory:" in query["select"]:
                 rows = []
         elif path in ("/onflows_model_entries", "/onflows_response_entries"):
+            rows = []
+        elif path in ("/rpc/read_onflows_latest_model_entries", "/rpc/read_onflows_latest_response_entries"):
+            assert json.loads(request.content) == {"p_alias": "ath-test"}
             rows = []
         elif path == "/onflows_analysis_generations":
             rows = [{"activity_count": len(self.catalog), "activity_set_generation_id": GENERATION_ID}]

@@ -11,12 +11,21 @@ describe("navigation between analysis pages", () => {
     for (const route of ["/trainability", "/activities/activity-1", "/response", "/learning", "/speed", "/"]) {
       pathname = route;
       const html = renderToStaticMarkup(<AppShell athlete={<p>Избран спортист</p>}><main>Зареждаме данните…</main></AppShell>);
-      for (const href of ["/", "/activities", "/trainability", "/response", "/learning", "/speed", "/account", "/methods"]) expect(html).toContain(`href="${href}"`);
+      for (const href of ["/", "/assistant", "/activities", "/trainability", "/response", "/learning", "/speed", "/account", "/methods"]) expect(html).toContain(`href="${href}"`);
       expect(html).toContain("Избран спортист");
       expect(html).toContain('aria-controls="workspace-navigation"');
       expect(html).toContain('aria-label="Превключи светла или тъмна тема"');
       expect(html).toContain('aria-current="page"');
     }
+  });
+  it("keeps the assistant beside the main pages in desktop and mobile navigation", () => {
+    pathname = "/assistant";
+    const html = renderToStaticMarkup(<AppShell athlete={<p>Избран спортист</p>}><main>Разговор</main></AppShell>);
+    const mobile = html.match(/<nav class="mobile-navigation"[\s\S]*?<\/nav>/)?.[0] ?? "";
+    expect(mobile).toContain('href="/assistant"');
+    expect(mobile).toContain("Асистент");
+    expect(mobile.match(/<a /g)).toHaveLength(5);
+    expect(html).toContain('class="workspace-assistant-link" aria-current="page"');
   });
   it("retains report dates when switching views and strips transient or private query values", () => {
     expect(dashboardHref("recovery", "2026-09-01", "2026-09-14")).toBe("/?view=recovery&report_start=2026-09-01&report_end=2026-09-14");

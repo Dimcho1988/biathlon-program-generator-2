@@ -20,7 +20,7 @@ const day = (date: string) => box.querySelector<HTMLButtonElement>(`button[aria-
 const click = async (b: HTMLElement) => { expect(b).toBeTruthy(); await act(async () => b.click()); };
 const select = (label: string) => [...box.querySelectorAll("label")].find(l => l.textContent?.startsWith(label))!.querySelector("select")!;
 const choose = async (label: string, value: string) => { await act(async () => { const s = select(label); s.value = value; s.dispatchEvent(new Event("change", { bubbles: true })); }); };
-const calendar: PlanningCalendarResponse = { configured: false, calendar: null, context: { schema_version: "planning-context-v1", as_of: "2026-09-23", ready_for_generation: false, generator_status: "NOT_ACTIVE", missing_inputs: [], next_main_race: null, methodology_version: "onflows-canonical-v1", recovery_basis: "LOAD_ONLY", wellness_integration: "DIAGNOSTIC_ONLY" } };
+const calendar: PlanningCalendarResponse = { revision: 0, configured: false, calendar: null, context: { schema_version: "planning-context-v1", as_of: "2026-09-23", ready_for_generation: false, generator_status: "NOT_ACTIVE", missing_inputs: [], next_main_race: null, methodology_version: "onflows-canonical-v1", recovery_basis: "LOAD_ONLY", wellness_integration: "DIAGNOSTIC_ONLY" } };
 const profile = { ...defaultManagementProfile("2026-09-23"), discipline: "1500 m", planning_controls: defaultPlanningControls("Run") };
 const outlookResponse = () => Response.json({ configured: true, outlook: {
   schema_version: "training-outlook-preview-v1", profile_revision: 5, generated_at: "2026-09-23T09:00:00Z",
@@ -72,7 +72,7 @@ it("retains saved events after a failed recalculation and retries the read witho
   let failOutlook = true;
   const fetchMock = vi.fn(async (url: string) => url.endsWith("/outlook")
     ? failOutlook ? Response.json({}, { status: 503 }) : outlookResponse()
-    : Response.json({ saved: true }));
+    : Response.json({ saved: true, revision: 1 }));
   vi.stubGlobal("fetch", fetchMock);
   await mount(editor());
   await choose("Какво добавям?", "MAIN_RACE");
@@ -90,7 +90,7 @@ it("retains saved events after a failed recalculation and retries the read witho
 });
 
 it("hides the obsolete overview while a new race is edited and replaces it after saving", async () => {
-  stubWrites(vi.fn(async () => Response.json({ saved: true })));
+  stubWrites(vi.fn(async () => Response.json({ saved: true, revision: 1 })));
   const old = (await outlookResponse().json()).outlook;
   old.periodization.phases[0].kind = "GENERAL_PREPARATION";
   await mount(<PlanningProfileForm athleteAlias="ath-test" profile={null}
@@ -164,7 +164,7 @@ it("keeps calendar edits visible after a failed write and reports when only the 
 });
 
 it("retains newly saved events while waiting for refreshed server props", async () => {
-  const fetchMock = vi.fn(async (url: string) => Response.json({ saved: url === "/api/athlete/planning-calendar" })); stubWrites(fetchMock);
+  const fetchMock = vi.fn(async (url: string) => Response.json({ saved: url === "/api/athlete/planning-calendar", revision: 1 })); stubWrites(fetchMock);
   await mount(editor()); await click(day("2026-11-01")); await click(day("2026-11-05")); await click(button("Добави избрания период")); await click(button("Запази и обнови периодите"));
   expect(fetchMock).toHaveBeenCalledTimes(1); expect(box.querySelector<HTMLInputElement>('input[name="events_json"]')?.value).toContain("2026-11-01");
   expect(button("Запази и обнови периодите").disabled).toBe(true);
@@ -173,10 +173,40 @@ it("retains newly saved events while waiting for refreshed server props", async 
 
 
 it("saves standalone events before a new athlete has completed the planning profile", async () => {
-  const fetchMock = vi.fn(async (url: string) => Response.json({ saved: url === "/api/athlete/planning-calendar" })); stubWrites(fetchMock);
+  const fetchMock = vi.fn(async (url: string) => Response.json({ saved: url === "/api/athlete/planning-calendar", revision: 1 })); stubWrites(fetchMock);
   await mount(<ManagementProfileEditor initialProfile={{ configured: false, profile: null, revision: 0 }} today="2026-09-23" calendar={calendar}/>);
   await click(day("2026-11-01")); await click(day("2026-11-05")); await click(button("Добави избрания период")); await click(button("Запази и обнови периодите"));
   expect(fetchMock).toHaveBeenCalledTimes(1); expect(fetchMock.mock.calls[0][0]).toBe("/api/athlete/planning-calendar");
+});
+
+it("reuses the same scoped operation after an unconfirmed calendar write", async () => {
+  const operations: FormData[] = [];
+  let attempts = 0;
+  const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+    operations.push(init.body as FormData);
+    return ++attempts === 1 ? Response.json({ error: "Непотвърден запис" }, { status: 503 })
+      : Response.json({ saved: true, revision: 1 });
+  });
+  stubWrites(fetchMock);
+  await mount(editor());
+  await click(day("2026-11-01")); await click(day("2026-11-05")); await click(button("Добави избрания период"));
+  await click(button("Запази и обнови периодите"));
+  expect(box.textContent).toContain("Непотвърден запис");
+  await click(button("Запази и обнови периодите"));
+  expect(operations).toHaveLength(2);
+  expect(operations[0].get("operation_id")).toBe(operations[1].get("operation_id"));
+  expect(operations[0].get("expected_revision")).toBe("0");
+  expect(operations[1].get("expected_revision")).toBe("0");
+});
+
+it("requires a loaded calendar revision before a form can replace the calendar", async () => {
+  const fetchMock = vi.fn(); stubWrites(fetchMock);
+  await mount(<ManagementProfileEditor initialProfile={{ configured: false, profile: null, revision: 0 }}
+    today="2026-09-23" calendar={{ ...calendar, revision: undefined }}/>);
+  await click(day("2026-11-01")); await click(day("2026-11-05")); await click(button("Добави избрания период"));
+  await click(button("Запази и обнови периодите"));
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(box.textContent).toContain("Презареди календара");
 });
 
 it("distinguishes mesocycle loading focus from conditional support during unloading", () => {

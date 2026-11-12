@@ -72,7 +72,8 @@ def test_warm_refresh_reuses_five_reads_with_identical_full_json_and_computation
     after = Counter(path for _, path, _, _ in current.requests)
     assert before-after == Counter({
         "/onflows_management_entries": 1, "/onflows_athlete_settings": 1,
-        "/rpc/active_onflows_analysis": 1, "/onflows_model_entries": 1, "/onflows_response_entries": 1})
+        "/rpc/active_onflows_analysis": 1, "/rpc/read_onflows_latest_model_entries": 1,
+        "/rpc/read_onflows_latest_response_entries": 1})
     def computation_keys(harness):
         return [body["p_key"] for _, path, _, body in harness.requests
                 if path == "/rpc/onflows_planning_computation" and body["p_operation"] == "CLAIM"]

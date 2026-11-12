@@ -686,6 +686,7 @@ def test_planning_calendar_is_scoped_and_reports_generation_readiness(monkeypatc
     class Repository:
         def __init__(self):
             self.calendars = {}
+            self.revisions = {}
 
         def athlete_settings(self, athlete_alias):
             return AthleteModelSettings(
@@ -701,14 +702,38 @@ def test_planning_calendar_is_scoped_and_reports_generation_readiness(monkeypatc
         def athlete_planning_calendar(self, athlete_alias):
             return self.calendars.get(athlete_alias)
 
-        def save_athlete_planning_calendar(self, athlete_alias, calendar):
-            self.calendars[athlete_alias] = calendar
+        def athlete_planning_calendar_snapshot(self, athlete_alias):
+            return {"calendar": self.calendars.get(athlete_alias),
+                    "revision": self.revisions.get(athlete_alias, 0)}
+
+        def _request(self, method, path, **kwargs):
+            assert method == "GET"
+            assert path == ("/onflows_athlete_settings?select=planning_calendar,calendar_revision"
+                            "&athlete_alias=eq.ath-second-profile&limit=1")
+            calendar = self.calendars.get("ath-second-profile")
+            return [{"planning_calendar": calendar.to_payload() if calendar else None,
+                     "calendar_revision": self.revisions.get("ath-second-profile", 0)}]
+
+        def _json(self, value):
+            return value
 
         def latest(self, athlete_alias):
             return {"training_status": {"athlete_id": athlete_alias}}
 
     repository = Repository()
-    from apps.api import model_service
+    from apps.api import assistant_commands, model_service
+    def save_prepared(repo, alias, actor, operation_id, prepared, request_hash, **kwargs):
+        assert repo is repository
+        assert alias == "ath-second-profile"
+        assert actor == "11111111-1111-4111-8111-111111111111"
+        assert operation_id == "22222222-2222-4222-8222-222222222222"
+        assert prepared["kind"] == "CALENDAR_REPLACE"
+        assert prepared["expected_revision"] == repository.revisions.get(alias, 0)
+        assert kwargs["origin"] == "FORM"
+        repository.calendars[alias] = AthletePlanningCalendar.from_mapping(prepared["payload"])
+        repository.revisions[alias] = prepared["expected_revision"] + 1
+        return {"saved": True, "revision": repository.revisions[alias]}
+    monkeypatch.setattr(assistant_commands, "apply_prepared", save_prepared)
     def no_recovery_projection(*args, **kwargs):
         raise AssertionError("Calendar metadata must not project Recovery")
     monkeypatch.setattr(model_service, "project_recovery", no_recovery_projection)
@@ -718,6 +743,9 @@ def test_planning_calendar_is_scoped_and_reports_generation_readiness(monkeypatc
     headers = {
         "Authorization": "Bearer secret-value",
         "X-OnFlows-Athlete-Alias": "ath-second-profile",
+        "X-OnFlows-Actor-Id": "11111111-1111-4111-8111-111111111111",
+        "X-OnFlows-Expected-Revision": "0",
+        "X-OnFlows-Operation-Id": "22222222-2222-4222-8222-222222222222",
     }
     main_date = date.today() + timedelta(days=60)
     body = {
@@ -743,6 +771,7 @@ def test_planning_calendar_is_scoped_and_reports_generation_readiness(monkeypatc
     assert loaded.json() == saved.json()
     assert saved.json()["configured"] is True
     assert saved.json()["calendar"] == body
+    assert saved.json()["revision"] == 1
     assert saved.json()["context"]["ready_for_generation"] is True
     assert saved.json()["context"]["generator_status"] == "NOT_ACTIVE"
     assert saved.json()["context"]["next_main_race"]["event_id"] == "event-main-0001"

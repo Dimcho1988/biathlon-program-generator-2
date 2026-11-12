@@ -8,8 +8,10 @@ import type { ActivityView } from "../../../../lib/activities";
 
 export default async function ActivityShadowPage({ params }: { params: Promise<{ activityRef: string }> }) {
   const { activityRef } = await params;
-  const athleteAlias = multiProfileMode() ? (await currentAuthorizedAthlete())?.athleteAlias : undefined;
+  const access = multiProfileMode() ? await currentAuthorizedAthlete() : null;
+  const athleteAlias = access?.athleteAlias;
   if (multiProfileMode() && !athleteAlias) return <ErrorState message="Няма активна защитена сесия за спортист." integrationActions refreshAvailable={false} />;
+  if (multiProfileMode() && access?.canViewRecovery !== true) return <ErrorState message="Този спортист не е споделил физиологичните си данни с вас." refreshAvailable={false} />;
   let view: ActivityView;
   let profileHrRange: readonly [number, number] | null = null;
   try {

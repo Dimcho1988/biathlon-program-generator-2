@@ -6,6 +6,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from .http_runtime import lifespan
 from .request_metrics import RequestMetricsMiddleware
 from .routes import (
+    assistant,
     learning,
     management,
     management_speed_comparison,
@@ -24,6 +25,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=3)
 app.add_middleware(RequestMetricsMiddleware)
 
 ROUTE_MODULES = (
+    assistant,
     learning,
     management,
     management_speed_comparison,

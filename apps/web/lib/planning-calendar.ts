@@ -57,6 +57,7 @@ export interface PlanningCalendarResponse {
   configured: boolean;
   calendar: PlanningCalendar | null;
   context: PlanningGenerationContext;
+  revision?: number;
 }
 
 const calendarKeys = ["schema_version", "events"];
@@ -144,7 +145,8 @@ export function parsePlanningCalendarInput(value: unknown): PlanningCalendar {
 export function parsePlanningCalendarResponse(value: unknown): PlanningCalendarResponse {
   if (
     !isRecord(value)
-    || !exactKeys(value, responseKeys)
+    || !exactKeys(value, "revision" in value ? [...responseKeys, "revision"] : responseKeys)
+    || ("revision" in value && (!Number.isSafeInteger(value.revision) || Number(value.revision) < 0))
     || typeof value.configured !== "boolean"
     || (value.configured ? value.calendar === null : value.calendar !== null)
     || !isRecord(value.context)
@@ -177,6 +179,7 @@ export function parsePlanningCalendarResponse(value: unknown): PlanningCalendarR
   return {
     configured: value.configured,
     calendar,
+    ...("revision" in value ? { revision: Number(value.revision) } : {}),
     context: {
       ...context,
       missing_inputs: missingInputs as PlanningMissingInput[],

@@ -12,8 +12,10 @@ import { syncInProgress } from "../../lib/sync";
 
 export default async function TrainabilityPage({ searchParams }: { searchParams: Promise<{ start?: string; end?: string }> }) {
   const query = await searchParams;
-  const athleteAlias = multiProfileMode() ? (await currentAuthorizedAthlete())?.athleteAlias : undefined;
+  const access = multiProfileMode() ? await currentAuthorizedAthlete() : null;
+  const athleteAlias = access?.athleteAlias;
   if (multiProfileMode() && !athleteAlias) return <ErrorState message="Няма активна защитена сесия за спортист." integrationActions refreshAvailable={false} />;
+  if (multiProfileMode() && access?.canViewRecovery !== true) return <ErrorState message="Този спортист не е споделил физиологичните си данни с вас." refreshAvailable={false} />;
   const end = isCalendarDate(query.end) ? query.end! : new Date().toISOString().slice(0, 10);
   const shifted = new Date(`${end}T12:00:00Z`); shifted.setUTCDate(shifted.getUTCDate() - 89);
   const start = isCalendarDate(query.start) ? query.start! : shifted.toISOString().slice(0, 10);
