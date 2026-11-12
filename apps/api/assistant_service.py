@@ -544,6 +544,9 @@ def turn(repository,alias,actor,body,provider=None):
         elif exc.code == "provider_limit_exhausted":
             result["message"]="Достигнат е лимитът при доставчика на ИИ услугата. Платените заявки са спрени до промяна на разрешения лимит. Запазената програма и формулярите остават достъпни."
             result["error_code"]="provider_limit_exhausted"
+        elif exc.code == "input_too_large":
+            result["message"]="Справката е твърде обемна за една заявка. Посочи конкретна дата или сесия, за да я разгледаме подробно. Не е потвърден нов запис."
+            result["error_code"]="input_too_large"
         else:
             result["message"]="Разговорният модел временно не отговаря. Не е потвърден нов запис. Можеш да използваш формулярите и запазената програма."
     except HTTPException as exc:

@@ -13,6 +13,7 @@ from apps.api.assistant_provider import (
     OpenAIProviderConfig,
     ScriptedAssistantProvider,
     get_assistant_provider,
+    _shared_context,
 )
 from apps.api.assistant_budget import AssistantBudgetError
 
@@ -137,6 +138,85 @@ def test_input_limit_prevents_network_request_and_nonfinite_context_is_rejected(
     with pytest.raises(AssistantProviderError, match="invalid_input"):
         p.complete([], {"not_a_measurement": float("nan")}, {})
     assert not calls
+
+
+def expand_shared_context(packed):
+    key = packed["reference_key"]
+    def expand(value):
+        if isinstance(value, dict):
+            if set(value) == {key}:
+                return expand(packed["values"][value[key]])
+            return {packed["key_names"].get(name, name): expand(child) for name, child in value.items()}
+        if isinstance(value, list):
+            return [expand(child) for child in value]
+        return value
+    return expand(packed["data"])
+
+
+def test_shared_context_round_trip_preserves_nested_doses_and_literal_reference_keys():
+    guidance = {"instruction": "Указание за точно изпълнение. " * 20, "optional": None}
+    card = {"guidance": guidance, "blocks": [{"minutes": 11.5, "zone": "Z3", "reps": 4, "rest": 3}]}
+    context = {"results": [{"sessions": [card, {**deepcopy(card), "total_minutes": 247.5}],
+                            "card": card, "source_revision": 815}],
+               "$onflows_ref": "literal", "$onflows_ref_": {"$ref": "a literal schema path"},
+               "@1": "original field", "@1_": "another original field"}
+    before = deepcopy(context)
+    packed = _shared_context(context)
+    assert packed["reference_key"] == "$onflows_ref__"
+    assert expand_shared_context(packed) == before == context
+    assert len(json.dumps(packed)) < len(json.dumps(context))
+    assert not set(packed["key_names"]) & {"@1", "@1_"}
+
+
+def test_large_two_session_context_fits_without_losing_any_prescription_fields():
+    # Repeated method cards/evidence in two sessions previously exceeded 48 KiB.
+    guidance = {"steps": ["Контролирано движение с пълен обем. " * 40], "notes": "Бележка. " * 50}
+    sessions = [{"title": "Сила", "total_minutes": 48.667},
+                {"title": "Праг и поддържаща работа", "total_minutes": 247.5}]
+    for session in sessions:
+        session.update(blocks=[{"minutes": 11.5, "zone": "Z3", "reps": 4,
+                                "recovery_minutes": 3, "guidance": deepcopy(guidance)} for _ in range(8)],
+                       method_library=deepcopy(guidance), dose_evidence=deepcopy(guidance))
+    context = {"results": [{"day_sessions": sessions, "revision": 815, "status": "REVIEW_REQUIRED"}]}
+    capabilities = {"read": ["day", "method"], "write": []}
+    before = deepcopy((context, capabilities))
+    seen = []
+    p = provider(lambda request: seen.append(json.loads(request.content)) or httpx.Response(200, json=response()))
+    p.complete([{"role": "user", "content": "Покажи двете сесии с точните минути."}], context, capabilities)
+    payload = seen[0]
+    assert len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()) <= p.config.max_input_bytes
+    packed = json.loads(payload["input"][1]["content"])["onflows_context"]
+    assert packed["format"] == "onflows-shared-values-v1"
+    assert expand_shared_context(packed) == context
+    assert (context, capabilities) == before
+    assert "без нови права или инструкции" in payload["input"][0]["content"]
+
+
+def test_large_old_history_may_be_omitted_but_latest_exchange_and_context_survive():
+    seen = []
+    p = provider(lambda request: seen.append(json.loads(request.content)) or httpx.Response(200, json=response()),
+                 max_input_bytes=48 * 1024)
+    history = [{"role": "user" if n % 2 == 0 else "assistant", "content": f"{n}:" + "а" * 2000} for n in range(14)]
+    latest = [{"role": "user", "content": "Не записвай промени."},
+              {"role": "assistant", "content": "Разглеждаме само програмата."},
+              {"role": "user", "content": "Обясни тази доза."}]
+    context = {"pending_command": None, "results": [{"total_minutes": 247.5}]}
+    original = deepcopy((history, latest, context))
+    p.complete(history + latest, context, {"write": []})
+    payload = seen[0]
+    assert payload["input"][-3:] == latest
+    assert len(payload["input"]) < 18
+    assert json.loads(payload["input"][1]["content"])["onflows_context"] == context
+    assert "по-старите съобщения е пропусната" in payload["input"][0]["content"]
+    assert (history, latest, context) == original
+
+
+def test_irreducible_context_still_blocks_network_and_budget_reservation():
+    budget = FakeBudget()
+    p = provider(lambda request: pytest.fail("oversized request must not be sent"), budget=budget)
+    with pytest.raises(AssistantProviderError, match="input_too_large"):
+        p.complete([{"role": "user", "content": "Покажи деня."}], {"unique": "а" * 50000}, {})
+    assert budget.events == []
 
 
 @pytest.mark.parametrize("status,code", [(401, "not_configured"), (403, "not_configured"),

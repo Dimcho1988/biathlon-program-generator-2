@@ -646,6 +646,25 @@ def test_budget_stop_is_saved_and_replayed_without_write_or_paid_retry(repo, cod
     assert provider.calls == 1
 
 
+def test_oversized_context_has_an_actionable_saved_reply_without_writes_or_retry(repo):
+    class OversizedProvider:
+        calls = 0
+
+        def complete(self, *args):
+            self.calls += 1
+            raise AssistantProviderError("input_too_large")
+
+    provider = OversizedProvider()
+    request = body("Обясни всички тренировки.")
+    result = service.turn(repo, ALIAS, ACTOR, request, provider)
+    assert result["error_code"] == "input_too_large"
+    assert "конкретна дата или сесия" in result["message"]
+    assert "Не е потвърден нов запис" in result["message"]
+    assert not repo.writes
+    assert service.turn(repo, ALIAS, ACTOR, request, provider) == result
+    assert provider.calls == 1
+
+
 def test_default_provider_receives_the_same_authorized_repository(repo, monkeypatch):
     seen = []
 
