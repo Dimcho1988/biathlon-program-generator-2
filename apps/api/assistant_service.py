@@ -1145,7 +1145,15 @@ def turn(repository,alias,actor,body,provider=None):
             result["message"]="Достигнат е лимитът при доставчика на ИИ услугата. Платените заявки са спрени до промяна на разрешения лимит. Запазената програма и формулярите остават достъпни."
             result["error_code"]="provider_limit_exhausted"
         elif exc.code == "input_too_large":
-            result["message"]="Справката е твърде обемна за една заявка. Посочи конкретна дата или сесия, за да я разгледаме подробно. Не е потвърден нов запис."
+            available=contexts or ([context] if context else [])
+            renderable=not input_request and any(item.get("query_kind")=="status" or
+                item.get("query_kind") in {"day","method"} and "sessions" in item and "date" in item for item in available)
+            if renderable:
+                result["message"]=_resolved_answer(available)+"\n\nПодробното обяснение от ИИ не е добавено, защото общият контекст е твърде обемен. По-горе е наличната справка от приложението."
+            elif available:
+                result["message"]="Данните са прочетени, но общият контекст е твърде обемен за подробен отговор. Нов запис не е потвърден. Раздели искането на по-малки части."
+            else:
+                result["message"]="Справката е твърде обемна за една заявка. Посочи конкретна дата или сесия, за да я разгледаме подробно. Не е потвърден нов запис."
             result["error_code"]="input_too_large"
         else:
             result["message"]="Разговорният модел временно не отговаря. Не е потвърден нов запис. Можеш да използваш формулярите и запазената програма."
@@ -1155,6 +1163,7 @@ def turn(repository,alias,actor,body,provider=None):
             raise
         result["message"]=str(exc.detail)
         result["error_code"]=exc.status_code
+    result["sources"]=[source for item in (contexts or [context]) for source in _sources(item)]
     if totals is not None:
         # Retain measured usage from completed calls if a later tool/provider
         # fails; do not invent token counts for an unsuccessful provider call.

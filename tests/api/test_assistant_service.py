@@ -1282,3 +1282,48 @@ def test_canonical_planning_form_read_keeps_clarification_authorization(repo):
     assert "Предложена промяна" in result["message"] and "2026-12-01" in result["message"]
     assert not repo.writes
     assert provider.calls[-1]["context"]["active_input_request"]["kind"]=="PLANNING_PROFILE"
+
+
+def test_context_budget_failure_after_exact_day_read_still_returns_saved_training(repo):
+    repo.read_result={"query_kind":"day","availability":"AVAILABLE","date":"2026-11-13","plan_revision":819,
+        "sessions":[{"title":"Леко бягане","total_minutes":45}]}
+    class LargeAfterRead:
+        calls=0
+        def complete(self,*args):
+            self.calls+=1
+            if self.calls==2:
+                raise AssistantProviderError("input_too_large")
+            return {"text":"","query":query("day",date="2026-11-13"),
+                "usage":{"model_calls":1,"input_tokens":500,"output_tokens":30,"estimated_cost_usd":0.001}}
+    provider=LargeAfterRead()
+    request=body("Каква е тренировката ми утре, 13 ноември? Обясни изпълнението подробно.",repo.seed({"nudges_enabled":False}))
+    result=service.turn(repo,ALIAS,ACTOR,request,provider)
+    assert "2026-11-13" in result["message"] and "Леко бягане · 45 мин" in result["message"]
+    assert "Подробното обяснение от ИИ не е добавено" in result["message"]
+    assert "Посочи конкретна дата" not in result["message"] and "Няма налична" not in result["message"]
+    assert result["error_code"]=="input_too_large" and result["sources"][0]["revision"]==819
+    assert result["usage"]["input_tokens"]==500 and not repo.writes
+    assert service.turn(repo,ALIAS,ACTOR,request,provider)==result
+    assert provider.calls==2 and len(repo.reads)==1
+
+
+def test_context_budget_failure_during_write_never_substitutes_an_unrelated_plan(repo):
+    repo.read_result={"query_kind":"day","availability":"AVAILABLE","date":DAY,"sessions":[{"title":"Леко бягане"}]}
+    class LargeAfterRead:
+        calls=0
+        def complete(self,*args):
+            self.calls+=1
+            if self.calls==2:
+                raise AssistantProviderError("input_too_large")
+            return {"text":"","query":query("day",date=DAY)}
+    result=service.turn(repo,ALIAS,ACTOR,body("Искам да запиша дневната умора"),LargeAfterRead())
+    assert "Данните са прочетени" in result["message"] and "Нов запис не е потвърден" in result["message"]
+    assert "Леко бягане" not in result["message"] and "Посочи конкретна дата" not in result["message"]
+    assert not repo.writes
+
+
+def test_sync_receipt_describes_effective_scope_when_canonical_queue_upgrades_to_full():
+    receipt={"saved":True,"status":"SAVED","kind":"SYNC_DATA","sync":{"scope":"FULL"}}
+    text=service._receipt_message(receipt,{"kind":"SYNC_DATA","patch":{"scope":"RECOVERY"}})
+    assert "Синхронизирането на данните е заявено" in text
+    assert "данните за възстановяването" not in text
