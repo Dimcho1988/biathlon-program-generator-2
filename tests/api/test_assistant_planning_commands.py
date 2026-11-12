@@ -104,13 +104,25 @@ def test_profile_patch_changes_effective_controls_and_preserves_mode_and_science
     assert repo.profile == original
 
 
-@pytest.mark.parametrize("patch", [{"adaptation_mode": "AUTO"}, {"individual_learning": {"mode": "CONTROL"}},
-                                      {"planning_controls": {"double_threshold_fraction": .6}},
-                                      {"planning_controls": None}, {"building_fraction": .7}])
-def test_scientific_and_approval_policy_fields_are_not_chat_inputs(patch):
+@pytest.mark.parametrize("patch", [{"planning_controls": {"unknown_fraction": .6}},
+                                      {"maintenance_fraction": .7}])
+def test_unknown_or_derived_fields_are_not_chat_inputs(patch):
     with pytest.raises(HTTPException) as exc:
         prepare(Repository(), "athlete", "MANAGEMENT_PROFILE", "management-profile-v1", patch, 3)
     assert exc.value.status_code == 422
+
+
+@pytest.mark.parametrize("patch", [{"adaptation_mode": "AUTO"}, {"individual_learning": {"mode": "CONTROL"}},
+                                      {"building_fraction": .7}, {"planning_controls": None}, {"taper_days": 10}, {"strength_enabled": True}])
+def test_form_profile_controls_use_same_validator_in_chat(patch):
+    repo = Repository()
+    result = prepare(repo, "athlete", "MANAGEMENT_PROFILE", "management-profile-v1", patch, 3)
+    assert result["expected_revision"] == 3
+    for key, value in patch.items():
+        if isinstance(value, dict):
+            assert all(result["payload"][key][field] == changed for field, changed in value.items())
+        else:
+            assert result["payload"][key] == value
 
 
 def test_double_threshold_keeps_canonical_age_and_key_session_validation():
@@ -146,3 +158,23 @@ def test_calendar_snapshot_without_revision_cannot_enable_a_form_write():
     repo, _ = repository({"athlete": settings_row()})
     with pytest.raises(PersistentStoreFailure):
         repo.athlete_planning_calendar_snapshot("athlete")
+
+
+def test_method_override_edits_preserve_others_and_explicit_reset_clears():
+    from biathlon import method_library
+    identifiers = [row["id"] for row in method_library.entries()][:2]
+    repo = Repository()
+    repo.profile["method_library"] = {"enabled": True, "overrides": {key: {"enabled": False} for key in identifiers}}
+    result = prepare(repo, "athlete", "MANAGEMENT_PROFILE", "management-profile-v1",
+        {"method_library": {"overrides": {identifiers[0]: None}}}, 3)
+    assert result["payload"]["method_library"]["overrides"] == {identifiers[1]: {"enabled": False}}
+    reset = prepare(repo, "athlete", "MANAGEMENT_PROFILE", "management-profile-v1",
+        {"method_library": {"overrides": {}}}, 3)
+    assert reset["payload"]["method_library"]["overrides"] == {}
+
+
+def test_unknown_method_override_rejected_by_canonical_catalog():
+    with pytest.raises(HTTPException) as exc:
+        prepare(Repository(), "athlete", "MANAGEMENT_PROFILE", "management-profile-v1",
+            {"method_library": {"overrides": {"invented-method": {"enabled": False}}}}, 3)
+    assert exc.value.status_code == 422

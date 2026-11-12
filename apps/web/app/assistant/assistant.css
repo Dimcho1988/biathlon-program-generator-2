@@ -24,6 +24,17 @@
 .assistant-message:last-of-type { padding-bottom: 0; }
 .assistant-message-role { display: block; color: var(--accent); font-size: 10px; font-weight: 700; margin-bottom: 9px; }
 .assistant-message-content { color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.85; }
+.assistant-message-assistant .assistant-message-content { white-space: normal; }
+.assistant-message-content p { margin: 0 0 12px; white-space: pre-line; }
+.assistant-message-content p:last-child, .assistant-message-content ul:last-child, .assistant-message-content ol:last-child { margin-bottom: 0; }
+.assistant-message-content ul, .assistant-message-content ol { margin: 0 0 14px; padding-left: 24px; }
+.assistant-message-content li { padding-left: 3px; margin: 5px 0; }
+.assistant-message-content .assistant-text-heading { font-weight: 700; margin-top: 18px; margin-bottom: 8px; }
+.assistant-message-content .assistant-text-heading:first-child { margin-top: 0; }
+.assistant-message-content code { font-size: .9em; background: var(--surface-secondary); border-radius: 4px; padding: 1px 4px; }
+.assistant-message-content pre { max-width: 100%; overflow-x: auto; white-space: pre; background: var(--surface-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.assistant-message-content pre code { background: transparent; padding: 0; }
+.assistant-message-content a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .assistant-message-user { margin-left: 12%; }
 .assistant-message-user .assistant-message-role { text-align: right; color: var(--text-muted); }
 .assistant-message-user .assistant-message-content { padding: 13px 18px; border: 1px solid var(--border); border-radius: 13px 13px 3px 13px; background: var(--surface-secondary); }
@@ -33,6 +44,8 @@
 .assistant-receipt { display: grid; gap: 5px; border-left: 2px solid var(--accent); margin-top: 13px; padding: 9px 12px; font-size: 11px; background: color-mix(in srgb, var(--accent) 5%, var(--surface)); color: var(--text-secondary); line-height: 1.6; }
 .assistant-receipt strong { color: var(--text); font-size: 11px; }
 .assistant-receipt small { font-size: 10px; color: var(--text-muted); }
+.assistant-receipt summary { cursor: pointer; width: fit-content; color: var(--text-muted); }
+.assistant-receipt details small { display: block; margin-top: 5px; }
 .assistant-processing { margin: 10px 0 0; font-size: 11px; line-height: 1.7; color: var(--text-muted); }
 .assistant-working { display: flex; align-items: center; gap: 10px; color: var(--text-secondary); font-size: 12px; line-height: 1.7; margin: 22px 0 0; }
 .assistant-thinking { flex: 0 0 13px; width: 13px; height: 13px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: assistant-spin 1s linear infinite; }

@@ -19,8 +19,8 @@ from .assistant_provider import AssistantProviderError, DisabledAssistantProvide
 SUGGESTIONS = ["Какво тренирам днес?", "Защо е тази доза?", "Как да изпълня тренировката?", "Искам да запиша умората си"]
 CONFIRM = {"запиши промяната", "потвърждавам промяната", "потвърждавам", "да", "да, запиши", "запиши", "създай събитието"}
 CANCEL = {"откажи промяната", "отказ", "отмени"}
-WRITE_KINDS = {"DAILY", "WEIGHT", "SESSION", "TEST", "LAB", "BLOCK", "MANAGEMENT_PROFILE", "CALENDAR_EVENT", "MANUAL_SPEED_TEST"}
-READ_KINDS = {"day", "status", "history", "method", "inputs"}
+WRITE_KINDS = assistant_commands.COMMAND_KINDS
+READ_KINDS = assistant_context.QUERY_KINDS
 UNAVAILABLE_SESSION_CHANGE = "Промяната на броя отсечки още няма надеждна проверка през тренировъчния двигател. Не мога да потвърдя допълнителна доза. Отвори седмичната програма и обсъди промяната с треньора."
 logger=logging.getLogger(__name__)
 
@@ -91,18 +91,27 @@ def _messages(rows):
 
 def _capabilities(access):
     writes = []
+    reads = {"inputs", "navigation"}
     if access.get("can_view_recovery"):
+        reads.update({"status", "history", "activities", "activity", "speed", "trainability", "learning", "response"})
         if access.get("is_owner"):
-            writes.extend(["DAILY","WEIGHT","SESSION"])
+            writes.extend(["DAILY", "WEIGHT", "SESSION"])
         if access.get("can_edit_plan"):
-            writes.extend(["TEST","LAB","BLOCK","MANUAL_SPEED_TEST"])
-    if access.get("can_edit_plan") and access.get("can_view_plan"):
-        writes.extend(["MANAGEMENT_PROFILE","CALENDAR_EVENT"])
-    return {"read": sorted(READ_KINDS), "write": writes,
-        "plan_approval":"Only the explicit existing /management interface accepts a shown proposal/revision.",
-        "session_dose_change":"UNAVAILABLE_NO_CANONICAL_PREVIEW",
-        "input_contract":"Read inputs first. command key=entry_key, expected_revision=current revision; patch only supplied fields. No approval_mode or scientific settings.",
-        "scales":{"daily":"1–5, higher=worse; motivation 1=high, 5=low", "rpe":"0–10, timing required", "feel":"1–5, higher=worse"}}
+            writes.extend(["TEST", "LAB", "BLOCK", "MANUAL_SPEED_TEST", "RECOVERY_CONFIG", "SPEED_TEST"])
+    if access.get("can_view_plan"):
+        reads.update({"day", "method", "management", "methods"})
+    if access.get("can_view_recovery"):
+        reads.add("settings")
+    if access.get("can_edit_plan"):
+        writes.append("ATHLETE_SETTINGS")
+        if access.get("can_view_plan"):
+            writes.extend(["MANAGEMENT_PROFILE", "CALENDAR_EVENT", "PLAN_ACTION", "PLAN_DAY", "PLAN_ACTIVATE", "PLAN_GENERATE"])
+    return {"read": sorted(reads), "write": [kind for kind in writes if kind in WRITE_KINDS],
+        "plan_approval": "Read the current proposal and show its exact revision before explicit approval.",
+        "session_dose_change": "UNAVAILABLE_NO_CANONICAL_PREVIEW",
+        "input_contract": "Read inputs first. command key=entry_key, expected_revision=current revision; patch only requested fields. "
+                          "Explicit reversible input requests can be saved directly; deletion, scientific settings and plan approval need one preview.",
+        "scales": {"daily": "1–5, higher=worse; motivation 1=high, 5=low", "rpe": "0–10, timing required", "feel": "1–5, higher=worse"}}
 
 
 def _sources(context):
@@ -118,7 +127,7 @@ def _read(repository, alias, actor, query):
     access = _permissions(repository,alias,actor)
     if not isinstance(query,dict) or query.get("kind") not in READ_KINDS:
         raise HTTPException(422,"Неподдържана справка.")
-    return assistant_context.read(repository,alias,access,query)
+    return assistant_context.read(repository,alias,access,query,actor=actor)
 
 
 def _command(reply):
@@ -129,7 +138,7 @@ def _command(reply):
         patch = json.loads(raw["patch_json"]) if isinstance(raw.get("patch_json"),str) else raw.get("patch")
     except (ValueError,TypeError) as exc:
         raise HTTPException(422,"Невалидна частична промяна.") from exc
-    if not isinstance(patch,dict) or not patch or len(json.dumps(patch,ensure_ascii=False))>12000:
+    if not isinstance(patch,dict) or not patch or len(json.dumps(patch,ensure_ascii=False))>12000 or len(json.dumps(patch,ensure_ascii=False).encode("utf-8"))>24576:
         raise HTTPException(422,"Невалидна частична промяна.")
     revision=raw.get("expected_revision")
     if type(revision) is not int or revision<0:
@@ -149,28 +158,184 @@ def _matching_input(command, contexts):
     return None
 
 
+def _read_request(message):
+    text=message.lower().strip()
+    # Polite/discourse prefixes do not turn an explanation into an action.
+    text=re.sub(r"^(?:(?:а|сега|моля(?: те)?)\b[\s,.:]*)+", "", text)
+    return bool(re.search(r"^(?:покажи|обясни|разкажи|виж|кажи|какво|каква|какви|какъв|как\b|защо|колко|кога|къде|дали|интересува ме|искам да (?:разбера|видя|знам)|ще ми обясниш)",text)
+                or re.search(r"\bкак\s+(?:да|мога|можем)\b",text))
+
+
+def _rating_timing(text):
+    text=text.lower()
+    if re.search(r"веднага|непосредствено",text):
+        return "IMMEDIATE"
+    if re.search(r"на следващия ден",text):
+        return "NEXT_DAY"
+    if (re.fullmatch(r"(?:около\s+)?(?:10\s*[–-]\s*60|[1-5]\d|60)\s*мин(?:ути)?[.! ]*",text)
+            or re.search(r"(?:10\s*[–-]\s*60|\b(?:[1-5]\d|60))\s*мин(?:ути)?\s*(?:по-късно|след края)",text)
+            or re.search(r"\bслед\s+(?:[1-5]\d|60)\s*мин",text)):
+        return "DELAYED"
+    return None
+
+
+def _write_disallowed(message):
+    text=message.lower().strip()
+    return bool(re.search(r"\b(?:ако|пример|примерно|представи си|цитат|само обсъждаме|само обсъждам|без запис|без промяна)\b"
+                         r"|\bне\s+(?:искам|прав\w*|запис\w*|запиш\w*|запаз\w*|промен\w*|създа\w*|премест\w*|добав\w*|отмен\w*|изтри\w*|премах\w*)"
+                         r"|(?:искам|искал|искала)\s+да\s+(?:знам|разбера|обсъдим|науча)"
+                         r"|^(?:[„“«\"']|отказвам|отказах|нека да не)",text))
+
+
+def _explicit_write_request(message):
+    """Use the user's action request, never a noun or a retrieved instruction."""
+    text = message.lower().strip()
+    if _write_disallowed(message) or _read_request(message):
+        return False
+    if re.search(r"^(?:а\s+)?(?:какво|каква|какви|какъв|защо|колко|кога|къде|дали|обясни|покажи|виж|как\b)", text):
+        return False
+    return bool(re.search(r"\b(?:въвед\w*|запиш\w*|записвай|промен\w*|премест\w*|създа\w*|добав\w*|задай|отмени|изтрий|премахни|утвърди|одобри|приеми|активирай|спри|възобнови|генерирай|обнови)\b", text)
+                or re.search(r"\bискам\s+(?:да\s+)?(?:почив\w*|тренирам|разреш\w*|забран\w*)", text))
+
+
 def _write_intent(command, message):
-    # Retrieved notes can never supply the current user's intention to write.
-    patterns = {"DAILY":r"умор|сън|спах|стрес|болезнен|мотивац|болк|болен|оценк",
-        "WEIGHT":r"тегл|теж|килограм|\bкг\b", "SESSION":r"rpe|усили|оценк|лактат|трениров|изпълн",
-        "TEST":r"тест|измер", "BLOCK":r"блок|натовар|период", "LAB":r"лаборатор|феритин|хемоглобин|кортизол|изследван",
-        "MANUAL_SPEED_TEST":r"тест|максимал", "MANAGEMENT_PROFILE":r"искам|промени|разреш|почива|тренирам|планира|задай",
-        "CALENDAR_EVENT":r"премест|лагер|старт|страт|състезан|събити|отмени|недостъп|добави"}
-    return re.search(patterns.get(command["kind"],r"(?!)"),message.lower()) is not None
+    domains = {"DAILY": r"умор|сън|спах|стрес|болезнен|мотивац|болк|болен|оценк",
+        "WEIGHT": r"тегл|теж|килограм|\bкг\b", "SESSION": r"rpe|усили|оценк|лактат|трениров|изпълн",
+        "TEST": r"тест|измер", "LAB": r"лаборатор|феритин|хемоглобин|изследван", "BLOCK": r"блок|период",
+        "MANUAL_SPEED_TEST": r"тест|максимал", "MANAGEMENT_PROFILE": r"почив|тренир|седмич|планира|профил|метод|обучен|спорт|програм",
+        "CALENDAR_EVENT": r"старт|страт|състезан|лагер|събити|календар|недостъп",
+        "ATHLETE_SETTINGS": r"пулс|hrmax|зон|настрой|профил|показател|часов", "RECOVERY_CONFIG": r"възстанов|recovery|умор|настрой",
+        "SPEED_TEST": r"тест|скорост|участък", "PLAN_ACTION": r"план|програм|предлож|седмиц",
+        "PLAN_DAY": r"почив|тренир|ден|сесия", "PLAN_ACTIVATE": r"план|програм", "PLAN_GENERATE": r"план|програм|чернов"}
+    if _write_disallowed(message) or _read_request(message):
+        return False
+    if _explicit_write_request(message):
+        return bool(re.search(domains.get(command["kind"], r"(?!)"), message.lower()))
+    # Self-reported numeric observations are already literal user instructions
+    # in this interface. Questions and hypothetical examples never become writes.
+    if re.search(r"\?|\b(?:ако|пример|примерно|не|как|какво|каква|какъв|какви|колко|дали|защо|кога|ли)\b", message.lower()):
+        return False
+    patterns = {"DAILY": r"умор|сън|спах|стрес|болезнен|мотивац|болк|болен|оценк",
+                "WEIGHT": r"тегл|теж|килограм|\bкг\b", "SESSION": r"rpe|усили|оценк|лактат|трениров|изпълн"}
+    return bool(re.search(patterns.get(command["kind"], r"(?!)"), message.lower()))
+
+
+def _request_text(request, message):
+    if not request:
+        return message
+    return "\n".join([request.get("request", ""), *request.get("answers", [])])
+
+
+def _direct_request(command, entry, request, message):
+    """A concrete reversible request is its authorization; a suggestion is not."""
+    text = _request_text(request, message)
+    if _read_request(message) or not _explicit_write_request(text) or not _write_intent(command, message) and not request:
+        return False
+    patch = command["patch"]
+    if request and request.get("kind") != command["kind"]:
+        return False
+    if command["kind"] not in {"DAILY", "WEIGHT", "SESSION", "MANAGEMENT_PROFILE", "CALENDAR_EVENT"}:
+        return False
+    if any(value is None for value in patch.values()) or patch.get("delete") or patch.get("include_identical_copies"):
+        return False
+    if command["kind"] in {"DAILY", "WEIGHT"}:
+        # Strip only the polite request wrapper, keeping the user's exact
+        # observation labels and values. A rating's denominator is not its value.
+        literal=re.sub(r"(?:може ли|моля|\?)", "", text.lower())
+        if not _automatic_observation(command,entry,literal):
+            return False
+    if command["kind"] == "SESSION":
+        if set(patch)-{"rpe","rpe_source","timing","duration_minutes","feel"}:
+            return False
+        if "rpe" in patch:
+            ratings=re.findall(r"(?<![\d-])(\d{1,2})\s*(?:от|/)\s*10\b",text.lower())
+            if not ratings or int(ratings[-1])!=patch["rpe"]:
+                return False
+        current=entry.get("payload") or {}
+        if patch.get("rpe_source","ONFLOWS")!="ONFLOWS":
+            return False
+        if "timing" in patch and patch["timing"] not in {current.get("timing"), *(_rating_timing(part) for part in text.splitlines())}:
+            return False
+        if "duration_minutes" in patch and patch["duration_minutes"]!=(current.get("duration_minutes") or entry.get("suggested_duration_minutes")):
+            return False
+        if "feel" in patch and not re.search(r"(?:усещан|състояни)[^\d]{0,20}"+re.escape(str(patch["feel"])),text.lower()):
+            return False
+    if command["kind"] == "CALENDAR_EVENT":
+        if set(patch)-{"name","start_date","end_date","event_type","race_course","note"}:
+            return False
+        months=["януари","февруари","март","април","май","юни","юли","август","септември","октомври","ноември","декември"]
+        for field in ("start_date","end_date"):
+            if field not in patch:
+                continue
+            try:
+                selected=date.fromisoformat(patch[field])
+            except (ValueError,TypeError):
+                return False
+            existing=(entry.get("payload") or {}).get(field, "")
+            year_grounded=str(selected.year) in text or existing.startswith(str(selected.year)+"-")
+            named=(months[selected.month-1] in text.lower() and re.search(r"(?<!\d)"+str(selected.day)+r"(?!\d)",text))
+            dotted=re.search(r"(?<!\d)0?"+str(selected.day)+r"[./]0?"+str(selected.month)+r"(?!\d)",text)
+            if patch[field] not in text and not (year_grounded and (named or dotted)):
+                return False
+        if "name" in patch and str(patch["name"]).lower() not in text.lower():
+            return False
+        # Creation/type/terrain have additional semantic choices. A date/name
+        # edit preserves them; changes to them receive one explicit preview.
+        for field in ("event_type","race_course","note"):
+            if field in patch and patch[field]!=(entry.get("payload") or {}).get(field):
+                return False
+    # These settings alter planning policy or learned scientific controls, and
+    # need the exact before/after preview even when the user asks to change them.
+    if command["kind"] == "MANAGEMENT_PROFILE":
+        if set(patch)-{"planning_controls", "program_start", "program_end"}:
+            return False
+        lowered=text.lower()
+        for field in ("program_start","program_end"):
+            if field in patch and patch[field] not in text:
+                return False
+        controls=patch.get("planning_controls",{})
+        if not isinstance(controls,dict):
+            return False
+        day_labels=["понеделник","вторник","сряда","четвъртък","петък","събота","неделя"]
+        requested_days=[index for index,label in enumerate(day_labels) if label in lowered]
+        day_fields={"training_days":r"трени|почив", "threshold_days":r"праг", "double_threshold_days":r"двойн.{0,12}праг",
+                    "intensity_days":r"интензив", "strength_days":r"сил", "long_session_day":r"продълж|дълг"}
+        for field,value in controls.items():
+            if field=="weekly_target_hours":
+                hours=re.findall(r"(\d+(?:[.,]\d+)?)\s*(?:час\w*|ч\b)",lowered)
+                if not any(float(v.replace(",","."))==value for v in hours):
+                    return False
+            elif field=="sessions_per_week":
+                counts=re.findall(r"(?<![\d-])(\d+)\s*(?:трениров\w*|заниман\w*|сеси\w*)",lowered)
+                if not any(int(v)==value for v in counts):
+                    return False
+            elif field in day_fields:
+                expected=requested_days
+                if field=="training_days" and re.search(r"почив",lowered):
+                    expected=[day for day in range(7) if day not in requested_days]
+                actual=[value] if type(value) is int else value
+                if not requested_days or not re.search(day_fields[field],lowered) or actual!=expected:
+                    return False
+            else:
+                return False
+    # Do not silently turn "show a proposal" into a stored change.
+    if re.search(r"предлож\w*|първо\s+(?:покажи|преглед)|без\s+(?:запис|запаз)|не\s+(?:записвай|запазвай)", text.lower()):
+        return False
+    return True
 
 
 def _input_request(state, message, now):
     """Keep a short clarification thread, sourced only from the user's words.
 
-    This permits a *preview*, never an automatic write from a previous turn.
+    Answers complete the original explicit request; they do not authorize unrelated changes.
     The conversation RPC already binds state to actor, athlete and exact grants.
     """
     text = message.lower()
     pending = state.get("input_request")
     if not isinstance(pending, dict) or pending.get("expires_at", "") <= now.isoformat():
         pending = None
-    action = re.search(r"искам|въвед|запиш|промен|промян|премест|създа|добав|задай|отмени", text)
-    if re.search(r"\bне\s+(?:искам|записвай|променяй|създавай)\b", text):
+    action = _explicit_write_request(message)
+    if _write_disallowed(message):
         state.pop("input_request", None)
         return None
     kind = None
@@ -185,18 +350,28 @@ def _input_request(state, message, now):
             kind = "DAILY"
         elif re.search(r"почив|тренировъчни дни|седмич|планира", text):
             kind = "MANAGEMENT_PROFILE"
+        elif re.search(r"hrmax|максимал.{0,10}пулс|границ.{0,10}зон|часов.{0,10}зон", text):
+            kind = "ATHLETE_SETTINGS"
+        elif re.search(r"тест",text):
+            kind = "SPEED_TEST" if re.search(r"скорост|максимал",text) else "TEST"
     if kind:
-        pending = {"kind": kind, "request": message, "expires_at": (now + timedelta(minutes=15)).isoformat(), "followups": 0}
+        if pending and pending.get("kind") == kind:
+            pending = {**pending, "answers": [*pending.get("answers", []), message][-8:],
+                       "followups": pending.get("followups", 0) + 1}
+        else:
+            pending = {"kind": kind, "request": message, "answers": [], "expires_at": (now + timedelta(minutes=15)).isoformat(), "followups": 0}
     elif pending:
         # An unrelated read/question ends the write thread. A short answer,
         # date, name, number, or corrected scale can complete its missing fields.
-        related = pending.get("kind")=="SESSION" and re.search(r"rpe|усили|скал|оценк|след.{0,30}трениров|стрес и възстанов", text)
-        if ((not related and re.search(r"^(?:а\s+)?(?:покажи|обясни|виж|какво|каква|какви|защо|колко|как\b|дали\b|кога\b|искам да (?:разбера|видя))", text))
+        related = pending.get("kind")=="SESSION" and re.search(r"rpe|усили|скал|оценк|състояни|след.{0,30}трениров|стрес и възстанов|(?:от|до)\s*10", text)
+        if ((not related and _read_request(message))
                 or text.strip() in CANCEL or pending.get("followups", 0) >= 8):
             pending = None
         else:
-            pending = {**pending, "followups": pending.get("followups", 0) + 1}
+            pending = {**pending, "answers": [*pending.get("answers", []), message][-8:], "followups": pending.get("followups", 0) + 1}
     if pending:
+        if len(json.dumps(pending,ensure_ascii=False).encode("utf-8"))>32768:
+            raise HTTPException(422,"Уточнението е твърде дълго. Изпрати по-кратко само липсващите стойности; предишните уточнения са запазени.")
         state["input_request"] = pending
     else:
         state.pop("input_request", None)
@@ -243,11 +418,13 @@ def _session_rating_entry(repository, alias, actor, state, request, message):
 
     Only a fresh activity read supplies identity, duration and revision. The
     supplied rating is retained while asking for its missing observation time;
-    the resulting command still needs the ordinary shown-preview confirmation.
+    answering the missing field completes the user's original write request.
     """
     if not request or request.get("kind")!="SESSION":
         return None
     if request.get("model_clarification"):
+        return None
+    if _read_request(message) or re.search(r"\?|\b(?:ако|пример|не)\b",message.lower()) and not _explicit_write_request(message):
         return None
     anchor=request.get("request", "")
     if re.search(r"\b(?:пример|ако|не)\b", anchor.lower()):
@@ -283,14 +460,7 @@ def _session_rating_entry(repository, alias, actor, state, request, message):
     timing=None
     text=message.lower()
     if not re.search(r"\?|\b(?:не|ако|пример)\b",text):
-        if re.search(r"веднага|непосредствено",text):
-            timing="IMMEDIATE"
-        elif re.search(r"на следващия ден",text):
-            timing="NEXT_DAY"
-        elif (re.fullmatch(r"(?:около\s+)?(?:10\s*[–-]\s*60|[1-5]\d|60)\s*мин(?:ути)?[.! ]*",text)
-                or re.search(r"(?:10\s*[–-]\s*60|\b(?:[1-5]\d|60))\s*мин(?:ути)?\s*(?:по-късно|след края)",text)
-                or re.search(r"\bслед\s+(?:[1-5]\d|60)\s*мин",text)):
-            timing="DELAYED"
+        timing=_rating_timing(text)
     timing=timing or payload.get("timing")
     if timing not in {"IMMEDIATE","DELAYED","NEXT_DAY"}:
         if message!=anchor:
@@ -300,10 +470,7 @@ def _session_rating_entry(repository, alias, actor, state, request, message):
         return {"context":context,"message":f"Усилието след тренировката е {score}/10. Кога направи оценката: веднага след края, 10–60 минути по-късно или на следващия ден?"}
     command={"kind":"SESSION","entry_key":entry["entry_key"],"expected_revision":entry["revision"],
         "patch":{"rpe":score,"rpe_source":"ONFLOWS","timing":timing,"duration_minutes":duration}}
-    preview=_preview(command,entry)
-    state["pending_command"]=command
-    state["pending_command_at"]=datetime.now(timezone.utc).isoformat()
-    return {"context":context,"message":preview,"suggestions":["Запиши промяната","Откажи промяната"]}
+    return {"context":context,"command":command,"entry":entry}
 
 
 def _calendar_restatement(command, message):
@@ -322,10 +489,75 @@ def _calendar_restatement(command, message):
     return not re.sub(r'[\s,.;:!„“"\'–—-]',"",remainder)
 
 
+def _plan_preview(command, entry):
+    summary=(entry or {}).get("preview_summary") or {}
+    if summary.get("revision")!=command["expected_revision"]:
+        raise HTTPException(409,"Прочети актуалната програма, преди да предложиш действието.")
+    patch=command["patch"]
+    action=patch.get("action")
+    title={"APPROVE":"Утвърждаване на предложената програма", "PAUSE":"Пауза на програмата",
+           "RESUME":"Възобновяване на програмата", "REFRESH":"Обновяване на предложението",
+           "REST":"Почивка за избрания ден", "SKIP":"Пропускане на избрания ден", "CLEAR":"Премахване на промяната за деня"}.get(action)
+    plan=summary.get("approved_plan")
+    if command["kind"]=="PLAN_ACTIVATE":
+        title="Активиране на избраната програма"
+        draft=next((row for row in summary.get("drafts",[]) if row.get("start_date")==patch.get("start_date")
+                    and row.get("draft_revision")==patch.get("draft_revision")),None)
+        if draft is None:
+            raise HTTPException(409,"Прочети точната чернова и нейната версия, преди да я активираш.")
+        plan=draft.get("plan")
+    elif action=="APPROVE":
+        plan=summary.get("proposal")
+    if not title:
+        raise HTTPException(422,"Посочи конкретното действие за програмата.")
+    if (action=="APPROVE" or command["kind"]=="PLAN_ACTIVATE") and (not plan or not plan.get("start_date")
+            or not plan.get("end_date") or not plan.get("days")):
+        raise HTTPException(409,"Няма пълно прочетено предложение за утвърждаване.")
+    lines=[f"Предложена промяна: {title.lower()} · версия {command['expected_revision']}."]
+    if command["kind"]=="PLAN_ACTIVATE":
+        lines.append(f"Чернова: {patch['start_date']} · версия {patch['draft_revision']}.")
+    if plan:
+        lines.append(f"Период: {plan.get('start_date')} – {plan.get('end_date')}.")
+        for day in plan.get("days",[]):
+            if command["kind"]=="PLAN_DAY" and day.get("date")!=patch.get("date"):
+                continue
+            sessions=day.get("sessions") or []
+            if sessions:
+                descriptions=[]
+                for session in sessions:
+                    description=str(session.get("title") or session.get("sport") or "Тренировка")
+                    if session.get("total_minutes") is not None:
+                        description+=f" · {session['total_minutes']} мин"
+                    if session.get("zone"):
+                        description+=f" · {session['zone']}"
+                    descriptions.append(description)
+                lines.append(str(day.get("date"))+": "+"; ".join(descriptions))
+            else:
+                lines.append(str(day.get("date"))+": "+{"REST":"почивка","SKIP":"пропуснат ден"}.get(day.get("status"),"няма назначена сесия"))
+    if command["kind"]=="PLAN_DAY":
+        lines.append("Дата на промяната: "+str(patch.get("date")))
+    if patch.get("note"):
+        lines.append("Бележка: "+str(patch["note"]))
+    if action=="REFRESH":
+        lines.append("Подготовката се изпълнява във фонов режим; това действие не приема ново предложение.")
+    lines.append("Избери „Запиши промяната“ или „Откажи промяната“.")
+    return "\n".join(lines)
+
+
 def _preview(command, entry=None):
+    if command["kind"]=="PLAN_GENERATE":
+        start_date=command["patch"].get("start_date") or (entry or {}).get("payload",{}).get("start_date")
+        if not start_date or command["entry_key"]!=start_date:
+            raise HTTPException(422,"Посочи началната дата на новата програма.")
+        return (f"Предложена промяна: подготовка на програма от {start_date}.\n"
+                "Изчислението се изпълнява във фонов режим и създава чернова за преглед. Активирането е отделно действие.\n"
+                "Избери „Запиши промяната“ или „Откажи промяната“.")
+    if command["kind"] in {"PLAN_ACTION","PLAN_DAY","PLAN_ACTIVATE"}:
+        return _plan_preview(command,entry)
     # A compact literal preview is independent of a model's description.
     labels={"DAILY":"дневна оценка","WEIGHT":"тегло","SESSION":"оценка на тренировка","TEST":"мониторингов тест", "LAB":"лабораторен резултат",
-            "MANAGEMENT_PROFILE":"настройки за планиране","CALENDAR_EVENT":"календарно събитие","MANUAL_SPEED_TEST":"максимален скоростен тест"}
+            "MANAGEMENT_PROFILE":"настройки за планиране","CALENDAR_EVENT":"календарно събитие","MANUAL_SPEED_TEST":"максимален скоростен тест",
+            "ATHLETE_SETTINGS":"настройки на спортиста","RECOVERY_CONFIG":"настройки за възстановяване","SPEED_TEST":"скоростен тест от записана активност"}
     names={"day":"Дата","morning_kg":"Сутрешно тегло (кг)","morning_standardized":"Стандартизирано сутрешно измерване",
         "fatigue":"Умора (1–5)","sleep_quality":"Качество на съня (1–5)","sleep_hours":"Сън (часове)","soreness":"Болезненост (1–5)",
         "stress":"Стрес (1–5)","motivation":"Мотивация (1–5)","competition_motivation":"Състезателна мотивация (1–5)",
@@ -343,7 +575,10 @@ def _preview(command, entry=None):
         "program_start":"Начало на програмата","program_end":"Край на програмата","sport":"Спорт","actual_sport":"Реален спорт","discipline":"Дисциплина",
         "duration_s":"Време (сек)","distance_m":"Дистанция (м)","speed_kmh":"Скорост (км/ч)","maximal":"Максимално усилие","flat":"Равен терен",
         "conditions":"Условия","protocol":"Протокол","protocol_version":"Версия на протокола","value":"Стойност","unit":"Мерна единица",
-        "laboratory":"Лаборатория","results":"Резултати","sample_id":"Проба","collection_time":"Час на пробата"}
+        "laboratory":"Лаборатория","results":"Резултати","sample_id":"Проба","collection_time":"Час на пробата",
+        "hrmax_bpm":"Максимална сърдечна честота (уд/мин)","hr_zone_bounds":"Граници на пулсовите зони (уд/мин)",
+        "timezone":"Часова зона","activity_ref":"Избрана активност","start_s":"Начало на участъка (сек)",
+        "adaptation_mode":"Режим на адаптация","individual_learning":"Самообучение","method_library":"Настройки на методите"}
     days=["понеделник","вторник","сряда","четвъртък","петък","събота","неделя"]
     def value(key,item):
         if item is None: return "изчистване"
@@ -369,20 +604,48 @@ def _preview(command, entry=None):
         if type(count) is not int or count<2:
             raise HTTPException(409,"Прочети отново събитието и еднаквите му копия преди общата промяна.")
         target=f"Обхват: {count} еднакви записа на същото събитие."
-    return (f"Предложена промяна: {labels.get(command['kind'],'тренировъчен блок')} · версия {command['expected_revision']}.\n"
+    if not target and re.fullmatch(r"\d{4}-\d{2}-\d{2}",command.get("entry_key", "")):
+        target="Дата: "+command["entry_key"]
+    return (f"Предложена промяна: {labels.get(command['kind'],'настройки на профила')}.\n"
             +(target+"\n" if target else "")
             +"\n".join(fields(command["patch"]))
-            +"\nЗа този показан обхват избери „Запиши промяната“ или „Откажи промяната“. Утвърждаването на нова програма остава в „Седмична програма“.")
+            +"\nИзбери „Запиши промяната“ или „Откажи промяната“.")
 
 
-def _receipt_message(receipt):
+def _receipt_message(receipt, command=None, entry=None):
     if receipt.get("conflict") is True or receipt.get("status")=="CONFLICT":
         return "Записът е променен от друга редакция. Тази промяна не е приложена. Зареди актуалната версия и опиши отново искането."
     if receipt.get("saved") is not True and receipt.get("status") not in {"SAVED","SUCCEEDED","COMMITTED"}:
         return "Резултатът от записа още не е потвърден. Провери статуса на същата заявка."
-    revision=receipt.get("revision")
-    return ("Входът е записан"+(f" като версия {revision}" if revision is not None else "")+". "
-            "Производните изгледи се обновяват по съществуващите правила. Това потвърждение не означава, че нова тренировъчна програма е готова или приета.")
+    kind=(command or {}).get("kind") or receipt.get("kind")
+    action=((command or {}).get("patch") or {}).get("action") or receipt.get("plan_operation")
+    if kind=="PLAN_GENERATE":
+        status=(receipt.get("job") or {}).get("status")
+        if status=="SUCCEEDED":
+            return "Черновата за този период вече е подготвена. Тя може да бъде прегледана и активирана."
+        if status in {"FAILED","CANCELLED"}:
+            return "Подготовката на черновата не е завършила успешно. Нова програма не е активирана."
+        return "Подготовката на новата програма е заявена. Черновата се изчислява във фонов режим и предстои да бъде прегледана и активирана."
+    if receipt.get("queued") or receipt.get("refresh_state")=="QUEUED":
+        return "Обновяването е заявено. Предложението се подготвя във фонов режим; текущата утвърдена програма остава активна."
+    if kind in {"PLAN_ACTION","PLAN_DAY","PLAN_ACTIVATE"}:
+        messages={"APPROVE":"Предложението за тренировъчна програма е утвърдено.","PAUSE":"Програмата е поставена на пауза.",
+            "RESUME":"Програмата е възобновена.","REST":"За избрания ден е зададена почивка.",
+            "SKIP":"Избраният ден е отбелязан като пропуснат.","CLEAR":"Промяната за избрания ден е премахната."}
+        if kind=="PLAN_ACTIVATE":
+            return "Избраната програма е активирана."
+        return messages.get(action,"Действието за програмата е изпълнено.")
+    message="Входът е записан."
+    if command:
+        summary_command=command
+        if command["patch"].get("include_identical_copies") and not entry:
+            summary_command={**command,"patch":{k:v for k,v in command["patch"].items() if k!="include_identical_copies"}}
+        details=_preview(summary_command,entry).splitlines()[1:-1]
+        if details:
+            message += "\n" + "\n".join(details)
+        if command["kind"] in {"MANAGEMENT_PROFILE", "CALENDAR_EVENT", "ATHLETE_SETTINGS", "RECOVERY_CONFIG", "SPEED_TEST", "MANUAL_SPEED_TEST"}:
+            message += "\nПромяната е във входните данни. Текущата утвърдена програма остава активна до приемане на ново предложение."
+    return message
 
 
 def _fallback_day_query(repository, alias, message):
@@ -500,6 +763,18 @@ def _render_day(context):
     return "\n".join(lines)[:18000]
 
 
+def _resolved_answer(contexts, input_request=None):
+    """A tool budget limit does not mean the user's question was ambiguous."""
+    if not input_request:
+        for item in reversed(contexts):
+            if item.get("query_kind") in {"day", "method"} and "sessions" in item and "date" in item:
+                return _render_day(item)
+        for item in reversed(contexts):
+            if item.get("query_kind")=="status":
+                return _render_status(item)
+    return "Не успях да завърша обработката на тази заявка. Данните не са променени. Можеш да продължиш със същото искане."
+
+
 def overview(repository,alias,actor,conversation_id=None,operation_id=None,provider=None):
     _permissions(repository,alias,actor)
     provider=_configured_provider(repository) if provider is None else provider
@@ -555,10 +830,12 @@ def turn(repository,alias,actor,body,provider=None):
     if start.get("replayed"):
         return start.get("response") or {"conversation_id":conversation,"operation_id":operation,"pending":True,"message":"Предишната заявка още се обработва. Провери статуса ѝ."}
     state=dict(start.get("state") or {})
+    original_state=json.loads(json.dumps(state))
     result={"conversation_id":conversation,"operation_id":operation,"message":"","sources":[],"suggestions":SUGGESTIONS}
     provider=_configured_provider(repository) if provider is None else provider
     result["provider_available"]=_provider_available(provider)
     context=None
+    contexts=[]
     now=datetime.now(timezone.utc)
     state["preferences"]=[p for p in state.get("preferences",[]) if isinstance(p,dict) and isinstance(p.get("expires_at"),str)
         and p["expires_at"]>now.isoformat()]
@@ -599,19 +876,38 @@ def turn(repository,alias,actor,body,provider=None):
         elif normalized in CONFIRM and (state.get("pending_command") or normalized in {"запиши промяната", "потвърждавам промяната"}):
             pending=state.pop("pending_command",None)
             created=state.pop("pending_command_at",None)
-            if created and datetime.now(timezone.utc)-datetime.fromisoformat(created)>timedelta(minutes=15):
-                pending=None
+            expired=bool(created and datetime.now(timezone.utc)-datetime.fromisoformat(created)>timedelta(minutes=15))
             if not isinstance(pending,dict):
                 result["message"]="Няма показана промяна за запис. Опиши какво искаш да промениш."
+            elif expired:
+                context=_read(repository,alias,actor,{"kind":"inputs","input_kind":pending["kind"],"key":pending["entry_key"]})
+                entries=context.get("entries") or [context]
+                entry=next((row for row in entries if (row.get("input_kind") or row.get("kind"))==pending["kind"]
+                    and row.get("entry_key", "")==pending["entry_key"] and type(row.get("revision")) is int),None)
+                if entry is None or context.get("availability") in {"UNAVAILABLE","MISSING","FORBIDDEN"}:
+                    result["message"]="Предишното предложение е изтекло, а записът вече не е наличен. Опиши актуалната промяна."
+                else:
+                    refreshed={**pending,"expected_revision":entry["revision"]}
+                    state["pending_command"]=refreshed
+                    state["pending_command_at"]=datetime.now(timezone.utc).isoformat()
+                    result.update(message="Проверих актуалния запис, защото предложението е от предишен разговорен момент.\n"+_preview(refreshed,entry),
+                                  suggestions=["Запиши промяната","Откажи промяната"])
             else:
                 receipt=assistant_commands.execute(repository,alias,actor,operation,pending)
-                result.update(receipt=receipt,message=_receipt_message(receipt))
+                result.update(receipt=receipt,message=_receipt_message(receipt,pending))
             state.pop("input_request",None)
         elif re.search(r"(още|добави).{0,25}(отсеч|интервал|повторени)",normalized):
             result["message"]=UNAVAILABLE_SESSION_CHANGE
         elif _provider_available(provider) and (session_entry:=_session_rating_entry(repository,alias,actor,state,input_request,message)):
             context=session_entry.pop("context")
-            result.update(session_entry)
+            direct_command=session_entry.pop("command", None)
+            if direct_command:
+                entry=session_entry.pop("entry")
+                receipt=assistant_commands.execute(repository,alias,actor,operation,direct_command)
+                result.update(receipt=receipt,message=_receipt_message(receipt,direct_command,entry))
+                state.pop("input_request",None)
+            else:
+                result.update(session_entry)
         elif input_request and _calendar_restatement(pending_change,message):
             context=_read(repository,alias,actor,{"kind":"inputs","input_kind":"CALENDAR_EVENT","key":pending_change["entry_key"]})
             if context.get("revision")!=pending_change["expected_revision"]:
@@ -632,17 +928,29 @@ def turn(repository,alias,actor,body,provider=None):
             athlete_timezone=settings.timezone if settings else "UTC"
             local_today=datetime.now(timezone.utc).astimezone(ZoneInfo(athlete_timezone)).date().isoformat()
             totals={"model_calls":0,"input_tokens":0,"output_tokens":0,"estimated_cost_usd":0.0}
-            for step in range(3):
+            for step in range(4):
+                timeout=getattr(getattr(provider,"config",None),"timeout_seconds",20)
+                if step and monotonic()-started+timeout+5>90:
+                    result["message"]=_resolved_answer(contexts,input_request)
+                    break
+                synthesis_only=step==3
+                capabilities=_capabilities(_permissions(repository,alias,actor))
+                if synthesis_only:
+                    capabilities={**capabilities,"read":[],"write":[]}
                 reply=provider.complete(messages, {"results":contexts,"confirmed_context":state.get("preferences",[]),
-                    "completed_queries":completed_queries,"remaining_model_calls":3-step,
+                    "completed_queries":completed_queries,"remaining_model_calls":max(1,3-step),
+                    "final_answer_only":synthesis_only,"read_targets":state.get("read_targets",[]),
                     "pending_change":pending_change if input_request else None,"now":datetime.now(timezone.utc).isoformat(),
                     "active_input_request":input_request,
                     "athlete_timezone":athlete_timezone,"today":local_today,
                     "new_input_keys":{"CALENDAR_EVENT":"event_"+UUID(operation).hex,
-                        "LAB":UUID(operation).hex,"MANUAL_SPEED_TEST":"manual_"+UUID(operation).hex}},_capabilities(permissions))
+                        "LAB":UUID(operation).hex,"MANUAL_SPEED_TEST":"manual_"+UUID(operation).hex}},capabilities)
                 for key in totals:
                     value=reply.get("usage",{}).get(key,0)
                     totals[key]=None if key=="estimated_cost_usd" and (totals[key] is None or value is None) else totals[key]+(value or 0)
+                if synthesis_only and (reply.get("query") or reply.get("command")):
+                    result["message"]=_resolved_answer(contexts,input_request)
+                    break
                 if reply.get("query"):
                     requested=reply["query"]
                     query_key=json.dumps({k:v for k,v in requested.items() if v is not None}
@@ -652,11 +960,21 @@ def turn(repository,alias,actor,body,provider=None):
                         # cannot consume the whole dialogue or duplicate data.
                         _permissions(repository,alias,actor)
                         context=contexts[query_keys.index(query_key)]
+                        if step==2:
+                            result["message"]=_resolved_answer(contexts,input_request)
+                            break
                         continue
                     context=_read(repository,alias,actor,requested)
                     contexts.append(context)
                     completed_queries.append(requested)
                     query_keys.append(query_key)
+                    # Keep only scoped selectors between turns. Every payload
+                    # must be freshly read, including after a plan approval.
+                    target={k:v for k,v in requested.items() if v is not None}
+                    for key in ("date", "session_id", "activity_ref"):
+                        if context.get(key) and key not in target:
+                            target[key]=context[key]
+                    state["read_targets"]=[*state.get("read_targets",[])][-3:]+[target]
                     continue
                 if reply.get("command"):
                     command=_command(reply)
@@ -669,14 +987,14 @@ def turn(repository,alias,actor,body,provider=None):
                     if entry is None:
                         raise HTTPException(409,"Първо е необходим прочит на актуалния запис и неговата версия.")
                     continuing=bool(input_request and input_request["kind"]==command["kind"])
-                    if not _write_intent(command,message) and not continuing:
+                    if _write_disallowed(message) or _read_request(message) or not _write_intent(command,message) and not continuing:
                         raise HTTPException(422,"В текущото съобщение няма изрично искане за тази промяна. Опиши стойността, която искаш да запишеш.")
                     if input_request and input_request["kind"]=="SESSION" and command["kind"]=="DAILY":
                         raise HTTPException(422,"Оценката след тренировката е усилие RPE по скала 0–10. Тя се записва към изпълнената активност, без преобразуване в дневна умора 1–5.")
                     entry={**entry,"today":contexts[-1].get("today")}
-                    if _automatic_observation(command,entry,message):
+                    if _automatic_observation(command,entry,message) or _direct_request(command,entry,input_request,message):
                         receipt=assistant_commands.execute(repository,alias,actor,operation,command)
-                        result.update(receipt=receipt,message=_receipt_message(receipt))
+                        result.update(receipt=receipt,message=_receipt_message(receipt,command,entry))
                         state.pop("input_request",None)
                     else:
                         preview=_preview(command,entry)
@@ -685,18 +1003,15 @@ def turn(repository,alias,actor,body,provider=None):
                         result.update(message=preview,suggestions=["Запиши промяната","Откажи промяната"])
                     break
                 result["message"]=str(reply.get("text") or "Липсва отговор. Опитай с по-конкретен въпрос.")[:18000]
-                if re.search(r"\b(записах|запазих|утвърдих|одобрих)\b|(?:входът|промяната|стойността|оценката|теглото|данните|резултатът)\s+(?:е|са)\s+(?:записан[аои]?|запазен[аои]?)\b|^(?:записан[аои]?|запазен[аои]?)\b",result["message"].lower()):
+                first_person_claim=re.search(r"\b(записах|запазих|утвърдих|одобрих)\b",result["message"].lower())
+                stored_claim=re.search(r"(?:входът|промяната|стойността|оценката|теглото|данните|резултатът)\s+(?:е|са)\s+(?:записан[аои]?|запазен[аои]?)\b|^(?:записан[аои]?|запазен[аои]?)\b",result["message"].lower())
+                if first_person_claim or stored_claim and (input_request or _explicit_write_request(message) or not contexts):
                     result["message"]="Няма потвърден нов запис от тази заявка. Опиши конкретната промяна или използвай съответния формуляр."
                 break
             else:
-                # A model read loop is not an ambiguous user request. Preserve
-                # an already resolved day and all its sessions, with its source.
-                if not input_request and context and context.get("query_kind") in {"day","method"} and "sessions" in context and "date" in context:
-                    result["message"]=_render_day(context)
-                else:
-                    result["message"]="Справката изисква още уточнение. Посочи конкретна дата, тренировка или стойност."
+                result["message"]=_resolved_answer(contexts,input_request)
             result["usage"]=totals
-        result["sources"]=_sources(context)
+        result["sources"]=[source for item in (contexts or [context]) for source in _sources(item)]
         # One in-app prompt per local day, only after a plan read. The current
         # observation is checked first; no background model loop is involved.
         now=datetime.now(timezone.utc)
@@ -745,6 +1060,17 @@ def turn(repository,alias,actor,body,provider=None):
     # Final authorization + persisted scope check prevent cached grants leaking
     # data after provider latency. Never invent success on a storage timeout.
     _permissions(repository,alias,actor)
+    if len(json.dumps(state,ensure_ascii=False).encode("utf-8"))>65536:
+        # No user values or preferences are silently truncated. The prior
+        # conversation remains usable after an overlarge proposed state.
+        state=original_state
+        state.pop("pending_command",None)
+        state.pop("pending_command_at",None)
+        result.update(message="Промяната е твърде обемна за едно съобщение. Изпрати по-кратко конкретните полета, които искаш да промениш.",error_code=422)
+    if len(json.dumps(result,ensure_ascii=False).encode("utf-8"))>60000:
+        state.pop("pending_command",None)
+        state.pop("pending_command_at",None)
+        result.update(message="Предложението е твърде обемно за един преглед. Посочи по-кратък период или конкретна сесия, за да покажем целия обхват преди промяната.",error_code=422)
     finished=_rpc(repository,"FINISH",alias,actor,conversation,operation,{"response":result,"state":state})
     scenario=("write_"+result["receipt"]["kind"] if isinstance(result.get("receipt"),dict) and result["receipt"].get("kind") in WRITE_KINDS
         else "read_"+context["query_kind"] if context and context.get("query_kind") in READ_KINDS else "dialogue")

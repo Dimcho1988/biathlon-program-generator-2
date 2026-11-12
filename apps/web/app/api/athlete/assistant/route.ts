@@ -47,7 +47,9 @@ async function proxy(request: Request) {
     await waitForApi(base);
     // The API rechecks database grants for every tool, write and cached receipt.
     const result = await fetch(url, {
-      method: request.method, cache: "no-store", signal: AbortSignal.timeout(request.method === "POST" ? 100_000 : 20_000),
+      // A confirmed plan action uses the same synchronous lifecycle as the
+      // management form. Model reasoning retains its separate API deadline.
+      method: request.method, cache: "no-store", signal: AbortSignal.timeout(request.method === "POST" ? 360_000 : 20_000),
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-OnFlows-Athlete-Alias": access.athleteAlias, "X-OnFlows-Actor-Id": access.actorUserId },
       ...(body ? { body } : {}),
     });

@@ -125,7 +125,7 @@ def repo(monkeypatch):
     def access(current, alias, actor):
         assert current is repository and alias == ALIAS and str(actor) == ACTOR
         return deepcopy(repository.permissions)
-    def read(current, alias, permissions, requested):
+    def read(current, alias, permissions, requested, *, actor=None):
         repository.reads.append(deepcopy(requested))
         if callable(repository.read_result):
             return repository.read_result(requested)
@@ -198,7 +198,7 @@ def test_repeated_day_reads_return_current_approved_sessions_without_repeating_s
         assert call["context"]["remaining_model_calls"] == 3-index
 
 
-def test_last_allowed_read_still_displays_resolved_day_without_fourth_model_call(repo):
+def test_distinct_reads_reserve_a_final_synthesis_call(repo):
     def read_result(requested):
         if requested["kind"] == "day":
             return {"query_kind": "day", "date": DAY, "availability": "AVAILABLE", "plan_revision": 13,
@@ -206,12 +206,15 @@ def test_last_allowed_read_still_displays_resolved_day_without_fourth_model_call
         return {"query_kind": requested["kind"], "availability": "AVAILABLE"}
     repo.read_result = read_result
     provider = ScriptedAssistantProvider([{"text": "", "query": query("status")},
-        {"text": "", "query": query("history")}, {"text": "", "query": query("day", date=DAY)}])
+        {"text": "", "query": query("history")}, {"text": "", "query": query("day", date=DAY)},
+        {"text": "Леко бягане · 45 мин. Поддържай равномерно усилие."}])
     conversation = repo.seed({"nudges_enabled": False})
     result = service.turn(repo, ALIAS, ACTOR, body("Покажи тренировката и наличния контекст.", conversation), provider)
-    assert len(provider.calls) == len(repo.reads) == 3
+    assert len(provider.calls)==4 and len(repo.reads)==3
+    assert provider.calls[-1]["context"]["final_answer_only"] is True
+    assert provider.calls[-1]["capabilities"]["read"]==provider.calls[-1]["capabilities"]["write"]==[]
     assert "Леко бягане · 45 мин" in result["message"] and not repo.writes
-    assert result["sources"][0]["kind"] == "day"
+    assert result["sources"][-1]["kind"] == "day"
 
 
 def test_repeated_read_rechecks_revoked_permissions_before_another_model_call(repo):
@@ -347,7 +350,7 @@ def test_numbers_in_questions_examples_negations_and_other_dates_do_not_auto_wri
     assert not repo.writes and "receipt" not in result
 
 
-def test_morning_weight_question_without_punctuation_requires_review(repo):
+def test_morning_weight_question_without_punctuation_cannot_propose_a_write(repo):
     repo.read_result = {"query_kind": "inputs", "availability": "AVAILABLE", "today": DAY,
                         "kind": "WEIGHT", "entry_key": DAY, "revision": 3, "payload": {"morning_kg": 72.0}}
     provider = ScriptedAssistantProvider([
@@ -356,7 +359,8 @@ def test_morning_weight_question_without_punctuation_requires_review(repo):
     ])
     result = service.turn(repo, ALIAS, ACTOR, body("Колко е сутринта 72,4 кг"), provider)
     assert not repo.writes and "receipt" not in result
-    assert "Предложена промяна" in result["message"]
+    assert "няма изрично искане" in result["message"]
+    assert not repo.conversations[result["conversation_id"]]["state"].get("pending_command")
 
 
 def test_weight_standardization_flag_false_also_requires_preview(repo):
@@ -491,7 +495,7 @@ def test_confirmation_without_pending_command_does_not_consult_model_or_write(re
     assert "Няма показана промяна" in result["message"] and not repo.writes and not provider.calls
 
 
-def test_calendar_clarifications_keep_request_until_preview_and_natural_confirmation(repo):
+def test_calendar_clarifications_complete_explicit_request_without_extra_confirmation(repo):
     repo.read_result = {"query_kind": "inputs", "kind": "CALENDAR_EVENT", "entry_key": "race-a", "revision": 7}
     patch = {"start_date": "2027-01-09", "end_date": "2027-01-10", "name": "Състезание"}
     provider = ScriptedAssistantProvider([
@@ -503,10 +507,11 @@ def test_calendar_clarifications_keep_request_until_preview_and_natural_confirma
     conversation = first["conversation_id"]
     service.turn(repo, ALIAS, ACTOR, body("Да, за 2027", conversation), provider)
     preview = service.turn(repo, ALIAS, ACTOR, body("Името да бъде Състезание", conversation), provider)
-    assert "Предложена промяна" in preview["message"] and not repo.writes
-    assert provider.calls[-1]["context"]["active_input_request"]["kind"] == "CALENDAR_EVENT"
-    saved = service.turn(repo, ALIAS, ACTOR, body("Потвърждавам", conversation), provider)
-    assert saved["receipt"]["revision"] == 8 and len(repo.writes) == 1
+    assert "Входът е записан" in preview["message"]
+    active=provider.calls[-1]["context"]["active_input_request"]
+    assert active["kind"] == "CALENDAR_EVENT"
+    assert active["answers"] == ["Да, за 2027", "Името да бъде Състезание"]
+    assert preview["receipt"]["revision"] == 8 and len(repo.writes) == 1
     assert repo.writes[0]["patch"] == patch
     assert not repo.conversations[conversation]["state"].get("input_request")
 
@@ -545,8 +550,7 @@ def test_post_workout_rating_continues_with_timing_and_never_becomes_daily_fatig
     ])
     first = service.turn(repo, ALIAS, ACTOR, body("Искам да въведа умората от днес след тренировката тя беше 3 от 10"), provider)
     preview = service.turn(repo, ALIAS, ACTOR, body("Веднага след края", first["conversation_id"]), provider)
-    assert "Усилие RPE (0–10): 3" in preview["message"] and not repo.writes
-    service.turn(repo, ALIAS, ACTOR, body("Да", first["conversation_id"]), provider)
+    assert "Усилие RPE (0–10): 3" in preview["message"] and "Входът е записан" in preview["message"]
     assert len(repo.writes) == 1 and repo.writes[0]["kind"] == "SESSION"
     assert "fatigue" not in repo.writes[0]["patch"]
 
@@ -566,8 +570,7 @@ def test_single_completed_activity_rating_asks_only_timing_without_paid_model(re
     repo.read_result["entries"][0].update(revision=1, suggested_duration_minutes=118)
     preview = service.turn(repo, ALIAS, ACTOR, body(timing_answer, first["conversation_id"]), provider)
     assert "Усилие RPE (0–10): 3" in preview["message"] and "Продължителност (мин): 118" in preview["message"]
-    assert not provider.calls and not repo.writes
-    service.turn(repo, ALIAS, ACTOR, body("Да", first["conversation_id"]), provider)
+    assert not provider.calls and "Входът е записан" in preview["message"]
     assert len(repo.writes) == 1 and repo.writes[0]["expected_revision"] == 1
     assert repo.writes[0]["patch"] == {"rpe": 3, "rpe_source": "ONFLOWS", "timing": timing, "duration_minutes": 118}
 
@@ -587,7 +590,7 @@ def test_correction_of_rating_is_retained_until_timing_answer(repo):
     first = service.turn(repo, ALIAS, ACTOR, body("Искам да въведа умора след тренировката 3 от 10"), provider)
     service.turn(repo, ALIAS, ACTOR, body("Поправка: 2 от 10", first["conversation_id"]), provider)
     preview = service.turn(repo, ALIAS, ACTOR, body("Веднага след края", first["conversation_id"]), provider)
-    assert "Усилие RPE (0–10): 2" in preview["message"] and not repo.writes
+    assert "Усилие RPE (0–10): 2" in preview["message"] and repo.writes[0]["patch"]["rpe"]==2
 
 
 def test_multiple_activities_are_not_automatically_selected_for_session_rating(repo):
@@ -900,3 +903,237 @@ def test_default_provider_receives_the_same_authorized_repository(repo, monkeypa
     service.overview(repo, ALIAS, ACTOR)
     service.turn(repo, ALIAS, ACTOR, body("Как работи приложението?"))
     assert seen == [repo, repo]
+
+
+@pytest.mark.parametrize("message", [
+    "Не променяме профила, само обсъждаме тренировките.",
+    "Не искам да запазваш промяната на старта.",
+    "Всъщност не прави промяна на датата.",
+    "Само обсъждаме дали да преместим старта.",
+    "Бих искал да знам как да променя датата на старта.",
+    'Цитат: „Премести старта на 2027-01-09“.',
+    '„Премести старта на 2027-01-09“.',
+    "Ако преместя старта на 2027-01-09, какво става?",
+])
+def test_qualified_or_cancelled_requests_never_resume_old_write(repo, message):
+    conversation=repo.seed({"input_request":{"kind":"CALENDAR_EVENT","request":"Премести старта",
+        "expires_at":(datetime.now(timezone.utc)+timedelta(minutes=15)).isoformat()}})
+    repo.read_result={"query_kind":"inputs","kind":"CALENDAR_EVENT","entry_key":"race-a","revision":7}
+    result=service.turn(repo,ALIAS,ACTOR,body(message,conversation),ScriptedAssistantProvider([
+        {"text":"","query":query("inputs",input_kind="CALENDAR_EVENT",key="race-a")},
+        {"text":"","command":command("CALENDAR_EVENT",key="race-a",revision=7,patch={"start_date":"2027-01-09"})}]))
+    assert result["error_code"]==422 and not repo.writes
+    assert not repo.conversations[conversation]["state"].get("pending_command")
+    assert not repo.conversations[conversation]["state"].get("input_request")
+
+
+@pytest.mark.parametrize("message,patch,automatic", [
+    ("Промени седмичния обем на 12 часа", {"planning_controls":{"weekly_target_hours":12}}, True),
+    ("Искам да тренирам повече", {"planning_controls":{"weekly_target_hours":12}}, False),
+    ("Промени тренировките на 8 сесии седмично", {"planning_controls":{"sessions_per_week":8}}, True),
+    ("Промени тренировките на 8 сесии седмично", {"planning_controls":{"sessions_per_week":9}}, False),
+    ("Искам да почивам в понеделник", {"planning_controls":{"training_days":[1,2,3,4,5,6]}}, True),
+    ("Искам да почивам в понеделник", {"planning_controls":{"training_days":[1,2,3,4,5,6],"double_threshold_lactate_ceiling":4}}, False),
+    ("Промени профила да тренирам повече", {"individual_learning":{"mode":"CONTROL"}}, False),
+])
+def test_profile_direct_save_requires_requested_values_and_ordinary_controls(repo,message,patch,automatic):
+    repo.read_result={"query_kind":"inputs","kind":"MANAGEMENT_PROFILE","entry_key":"management-profile","revision":7}
+    result=service.turn(repo,ALIAS,ACTOR,body(message),ScriptedAssistantProvider([
+        {"text":"","query":query("inputs",input_kind="MANAGEMENT_PROFILE",key="management-profile")},
+        {"text":"","command":command("MANAGEMENT_PROFILE",key="management-profile",revision=7,patch=patch)}]))
+    assert bool(repo.writes)==automatic
+    assert ("Предложена промяна" in result["message"]) is not automatic
+
+
+def test_direct_observation_never_uses_denominator_as_rating(repo):
+    result=service.turn(repo,ALIAS,ACTOR,body("Запиши умората ми 4 от 5"),ScriptedAssistantProvider([
+        {"text":"","query":query("inputs",input_kind="DAILY",key=DAY)},
+        {"text":"","command":command(patch={"fatigue":5})}]))
+    assert not repo.writes and "Предложена промяна" in result["message"]
+
+
+@pytest.mark.parametrize("patch", [
+    {"start_date":"2027-02-12"},
+    {"start_date":"2027-01-09","event_type":"CAMP"},
+    {"start_date":"2027-01-09","race_course":{"distance_km":10}},
+])
+def test_calendar_direct_save_does_not_add_unrequested_dates_types_or_courses(repo,patch):
+    repo.read_result={"query_kind":"inputs","kind":"CALENDAR_EVENT","entry_key":"race-a","revision":7}
+    result=service.turn(repo,ALIAS,ACTOR,body("Премести основния старт на 9 януари 2027"),ScriptedAssistantProvider([
+        {"text":"","query":query("inputs",input_kind="CALENDAR_EVENT",key="race-a")},
+        {"text":"","command":command("CALENDAR_EVENT",key="race-a",revision=7,patch=patch)}]))
+    assert not repo.writes and "Предложена промяна" in result["message"]
+
+
+def test_expired_preview_refreshes_revision_without_requiring_retyping(repo):
+    pending={"kind":"CALENDAR_EVENT","entry_key":"race-a","expected_revision":7,"patch":{"start_date":"2027-01-09"}}
+    conversation=repo.seed({"pending_command":pending,
+        "pending_command_at":(datetime.now(timezone.utc)-timedelta(hours=1)).isoformat()})
+    repo.read_result={"query_kind":"inputs","kind":"CALENDAR_EVENT","entry_key":"race-a","revision":9}
+    provider=ScriptedAssistantProvider([])
+    refreshed=service.turn(repo,ALIAS,ACTOR,body("Потвърждавам",conversation),provider)
+    assert not repo.writes and not provider.calls
+    assert "2027-01-09" in refreshed["message"] and "актуалния запис" in refreshed["message"]
+    assert repo.conversations[conversation]["state"]["pending_command"]["expected_revision"]==9
+    saved=service.turn(repo,ALIAS,ACTOR,body("Запиши промяната",conversation),provider)
+    assert saved["receipt"]["revision"]==10 and len(repo.writes)==1
+
+
+def test_typo_rich_post_workout_clarification_keeps_subject(repo):
+    provider=ScriptedAssistantProvider([{"text":"Кога направи оценката?"}, {"text":"Разбирам: оценка след тренировка по 0–10."}])
+    first=service.turn(repo,ALIAS,ACTOR,body("Искам да въведа умора след тренировката 3 от 10"),provider)
+    followup="Имах в предвид, яе във стрес и възстановяване има оценка за състоянието сед тртенировката, което се измерва от 1 до 10"
+    service.turn(repo,ALIAS,ACTOR,body(followup,first["conversation_id"]),provider)
+    active=provider.calls[-1]["context"]["active_input_request"]
+    assert active["kind"]=="SESSION" and active["answers"][-1]==followup
+    assert not repo.writes
+
+
+def test_last_read_selectors_remain_available_but_payload_is_never_reused(repo):
+    repo.read_result={"query_kind":"day","date":"2026-11-13","timezone":"UTC","sessions":[{"title":"Първа сесия"}]}
+    provider=ScriptedAssistantProvider([{"text":"","query":query("day",date="2026-11-13")},{"text":"Първа сесия."},
+        {"text":"Уточнението е за 13 ноември."}])
+    conversation=repo.seed({"nudges_enabled":False})
+    service.turn(repo,ALIAS,ACTOR,body("Каква е тренировката утре?",conversation),provider)
+    service.turn(repo,ALIAS,ACTOR,body("А защо тази доза?",conversation),provider)
+    context=provider.calls[-1]["context"]
+    assert context["read_targets"]==[{"kind":"day","date":"2026-11-13"}]
+    assert context["results"]==[]
+
+
+@pytest.mark.parametrize("last_reply", [{"text":"","query":query("day",date=DAY)}, {"text":"","command":command()}])
+def test_final_synthesis_cannot_start_new_reads_or_writes(repo,last_reply):
+    repo.read_result=lambda requested:{"query_kind":requested["kind"],"availability":"AVAILABLE","date":DAY,"sessions":[{"title":"Леко бягане"}]}
+    provider=ScriptedAssistantProvider([{"text":"","query":query("day",date=DAY)}, {"text":"","query":query("status")},
+        {"text":"","query":query("history")}, last_reply])
+    conversation=repo.seed({"nudges_enabled":False})
+    result=service.turn(repo,ALIAS,ACTOR,body("Обясни тренировката",conversation),provider)
+    assert len(repo.reads)==3 and len(provider.calls)==4 and not repo.writes
+    assert "Леко бягане" in result["message"]
+
+
+def test_turn_deadline_does_not_start_another_request_that_cannot_finish(repo,monkeypatch):
+    times=iter([0,76,77])
+    monkeypatch.setattr(service,"monotonic",lambda:next(times))
+    repo.read_result={"query_kind":"day","date":DAY,"sessions":[{"title":"Леко бягане"}]}
+    provider=ScriptedAssistantProvider([{"text":"","query":query("day",date=DAY)}])
+    conversation=repo.seed({"nudges_enabled":False})
+    result=service.turn(repo,ALIAS,ACTOR,body("Покажи програмата",conversation),provider)
+    assert len(provider.calls)==1 and "Леко бягане" in result["message"]
+
+
+def test_approval_preview_shows_exact_proposal_revision_period_and_sessions(repo):
+    repo.read_result={"query_kind":"inputs","kind":"PLAN_ACTION","entry_key":"active-plan","revision":8,
+        "preview_summary":{"revision":8,"proposal":{"start_date":"2026-11-16","end_date":"2026-11-22",
+            "days":[{"date":"2026-11-16","status":"REST","sessions":[]},
+                    {"date":"2026-11-17","sessions":[{"title":"Прагова тренировка","total_minutes":75,"zone":"Z3"}]}]}}}
+    provider=ScriptedAssistantProvider([{"text":"","query":query("inputs",input_kind="PLAN_ACTION",key="active-plan")},
+        {"text":"","command":command("PLAN_ACTION",key="active-plan",revision=8,patch={"action":"APPROVE"})}])
+    preview=service.turn(repo,ALIAS,ACTOR,body("Утвърди предложената програма"),provider)
+    assert "версия 8" in preview["message"] and "2026-11-16 – 2026-11-22" in preview["message"]
+    assert "2026-11-16: почивка" in preview["message"] and "Прагова тренировка · 75 мин · Z3" in preview["message"]
+    assert not repo.writes
+    saved=service.turn(repo,ALIAS,ACTOR,body("Да",preview["conversation_id"]),provider)
+    assert "програма е утвърдено" in saved["message"] and len(repo.writes)==1
+
+
+@pytest.mark.parametrize("summary", [{}, {"revision":7,"proposal":{"days":[{}]}}, {"revision":8,"proposal":None}])
+def test_approval_cannot_be_offered_without_a_concrete_current_proposal(repo,summary):
+    repo.read_result={"query_kind":"inputs","kind":"PLAN_ACTION","entry_key":"active-plan","revision":8,"preview_summary":summary}
+    result=service.turn(repo,ALIAS,ACTOR,body("Утвърди предложената програма"),ScriptedAssistantProvider([
+        {"text":"","query":query("inputs",input_kind="PLAN_ACTION",key="active-plan")},
+        {"text":"","command":command("PLAN_ACTION",key="active-plan",revision=8,patch={"action":"APPROVE"})}]))
+    assert result["error_code"]==409 and not repo.writes
+    assert not repo.conversations[result["conversation_id"]]["state"].get("pending_command")
+
+
+def test_activation_preview_selects_exact_draft_revision():
+    current={"revision":8,"drafts":[{"start_date":"2026-11-16","draft_revision":3,"plan":{
+        "start_date":"2026-11-16","end_date":"2026-11-22","days":[{"date":"2026-11-16","status":"REST"}]}}]}
+    proposed={"kind":"PLAN_ACTIVATE","entry_key":"active-plan","expected_revision":8,
+        "patch":{"start_date":"2026-11-16","draft_revision":3}}
+    text=service._preview(proposed,{"preview_summary":current})
+    assert "Чернова: 2026-11-16 · версия 3" in text and "версия 8" in text
+    proposed["patch"]["draft_revision"]=4
+    with pytest.raises(HTTPException):
+        service._preview(proposed,{"preview_summary":current})
+
+
+def test_queued_plan_refresh_receipt_does_not_claim_ready_or_approved_program():
+    text=service._receipt_message({"status":"SAVED","kind":"PLAN_ACTION","queued":True,"refresh_state":"QUEUED"})
+    assert "подготвя във фонов режим" in text and "остава активна" in text
+    assert "е утвърдено" not in text and "Входът е записан" not in text
+
+
+def test_capability_registry_advertises_only_granted_reads_and_all_app_settings_writes():
+    plan_editor={"is_owner":False,"can_view_plan":True,"can_view_recovery":False,"can_edit_plan":True}
+    caps=service._capabilities(plan_editor)
+    assert "day" in caps["read"] and "management" in caps["read"] and "navigation" in caps["read"]
+    assert not {"settings","activity","speed","response","learning"}&set(caps["read"])
+    assert "ATHLETE_SETTINGS" in caps["write"] and "PLAN_ACTION" in caps["write"]
+    assert not {"DAILY","SESSION","WEIGHT","RECOVERY_CONFIG","SPEED_TEST"}&set(caps["write"])
+
+
+def test_read_answer_can_describe_existing_saved_data_without_claiming_a_new_write(repo):
+    repo.read_result={"query_kind":"inputs","kind":"WEIGHT","entry_key":DAY,"revision":3,"payload":{"morning_kg":72.4}}
+    result=service.turn(repo,ALIAS,ACTOR,body("Какво тегло имам записано?"),ScriptedAssistantProvider([
+        {"text":"","query":query("inputs",input_kind="WEIGHT",key=DAY)},
+        {"text":"Теглото е записано като 72,4 кг за 11 ноември."}]))
+    assert "72,4 кг" in result["message"] and "Няма потвърден" not in result["message"]
+    assert not repo.writes
+
+
+def test_oversized_clarification_preserves_previous_values_without_silent_truncation(repo):
+    previous={"kind":"CALENDAR_EVENT","request":"Премести старта на 9 януари 2027 "+"а"*15000,
+        "expires_at":(datetime.now(timezone.utc)+timedelta(minutes=15)).isoformat(),"answers":[],"followups":0}
+    conversation=repo.seed({"input_request":previous})
+    result=service.turn(repo,ALIAS,ACTOR,body("Името е "+"б"*3000,conversation),ScriptedAssistantProvider([]))
+    assert result["error_code"]==422 and "по-кратко" in result["message"]
+    assert repo.conversations[conversation]["state"]["input_request"]==previous
+    assert not repo.writes
+
+
+def test_real_typo_rich_calendar_request_and_short_answers_stay_one_authorized_action(repo):
+    repo.read_result={"query_kind":"inputs","kind":"CALENDAR_EVENT","entry_key":"race-a","revision":7}
+    provider=ScriptedAssistantProvider([{"text":"За коя година?"},{"text":"Името на състезанието?"},
+        {"text":"","query":query("inputs",input_kind="CALENDAR_EVENT",key="race-a")},
+        {"text":"","command":command("CALENDAR_EVENT",key="race-a",revision=7,
+            patch={"start_date":"2027-01-09","end_date":"2027-01-10","name":"Светован купа в Поклюка"})}])
+    first=service.turn(repo,ALIAS,ACTOR,body("а може ли да променим дата на основния страт за сега това е 9 и 10 януари."),provider)
+    service.turn(repo,ALIAS,ACTOR,body("да, за 2027",first["conversation_id"]),provider)
+    result=service.turn(repo,ALIAS,ACTOR,body("да състезанието е Светован купа в Поклюка",first["conversation_id"]),provider)
+    assert len(repo.writes)==1 and "Входът е записан" in result["message"]
+    assert repo.writes[0]["patch"]["start_date"]=="2027-01-09"
+
+
+@pytest.mark.parametrize("message", [
+    "Разкажи как да променя лагера на 2026-12-12",
+    "Моля, обясни как да преместя старта на 2027-01-09",
+    "Сега покажи тренировката",
+    "Интересува ме как да променя профила",
+])
+def test_prefixed_how_to_questions_end_old_write_thread(repo,message):
+    conversation=repo.seed({"input_request":{"kind":"CALENDAR_EVENT","request":"Премести старта",
+        "expires_at":(datetime.now(timezone.utc)+timedelta(minutes=15)).isoformat()}})
+    repo.read_result={"query_kind":"inputs","kind":"CALENDAR_EVENT","entry_key":"race-a","revision":7}
+    result=service.turn(repo,ALIAS,ACTOR,body(message,conversation),ScriptedAssistantProvider([
+        {"text":"","query":query("inputs",input_kind="CALENDAR_EVENT",key="race-a")},
+        {"text":"","command":command("CALENDAR_EVENT",key="race-a",revision=7,patch={"start_date":"2026-12-12"})}]))
+    assert result["error_code"]==422 and not repo.writes
+    assert not repo.conversations[conversation]["state"].get("input_request")
+    assert not repo.conversations[conversation]["state"].get("pending_command")
+
+
+@pytest.mark.parametrize("patch", [
+    {"rpe":8,"timing":"IMMEDIATE","duration_minutes":60},
+    {"rpe":8,"timing":"DELAYED","duration_minutes":90},
+    {"rpe":8,"timing":"DELAYED","duration_minutes":60,"rpe_source":"INTERVALS"},
+])
+def test_session_direct_save_cannot_invent_timing_duration_or_source(repo,patch):
+    ref="act_"+"a"*32
+    repo.read_result={"query_kind":"inputs","kind":"SESSION","entry_key":ref,"revision":3,
+        "suggested_duration_minutes":60,"payload":{"timing":"DELAYED"}}
+    result=service.turn(repo,ALIAS,ACTOR,body("Запиши RPE 8 от 10 към тренировката"),ScriptedAssistantProvider([
+        {"text":"","query":query("inputs",input_kind="SESSION",key=ref)},
+        {"text":"","command":command("SESSION",key=ref,revision=3,patch=patch)}]))
+    assert not repo.writes and "Предложена промяна" in result["message"]

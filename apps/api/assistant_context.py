@@ -23,8 +23,11 @@ from .model_schemas import ManualSpeedTestInput
 from .oauth_store import PersistentStoreFailure
 from .response_monitoring import DailyReport, OptionalTest, ResponseBlock, SessionReport
 
-VERSION = "assistant-context-v1"
-QUERY_KINDS = frozenset({"day", "status", "history", "method", "inputs"})
+VERSION = "assistant-context-v2"
+from . import assistant_reads
+
+QUERY_KINDS = frozenset({"day", "status", "history", "method", "inputs", "navigation"}) | assistant_reads.KINDS
+PLAN_QUERY_KINDS = frozenset({"day", "method"}) | assistant_reads.PLAN_KINDS
 INPUT_MODELS = {"DAILY": DailyReport, "WEIGHT": WeightReport, "SESSION": SessionReport,
                 "TEST": OptionalTest, "LAB": LabReport, "BLOCK": ResponseBlock}
 CARD_FIELDS = frozenset({"id", "title", "registry_kind", "registry_version", "sports", "periods", "family",
@@ -65,10 +68,18 @@ DAILY_SCALES = {
 
 def input_contract(kind):
     """Only the selected canonical input schema, not the scientific catalog."""
+    from .assistant_app_actions import APP_COMMAND_KINDS, input_contract as app_contract
+    if kind in APP_COMMAND_KINDS:
+        return app_contract(kind)
     result = {"patch_rule": "Omitted fields are retained; null explicitly clears only nullable fields. Defaults do not authorize inferring an observation."}
     if kind == "MANAGEMENT_PROFILE":
         from .assistant_planning_commands import PROFILE_FIELDS, CONTROL_FIELDS
+        from .management_schemas import ManagementProfile
+        schema = ManagementProfile.model_json_schema()
         return {**result, "allowed_fields": sorted(PROFILE_FIELDS), "planning_controls_fields": sorted(CONTROL_FIELDS),
+            "properties": {key: value for key, value in schema.get("properties", {}).items() if key in PROFILE_FIELDS},
+            "required_for_new_record": schema.get("required", []), "$defs": schema.get("$defs", {}),
+            "reset_rule": "planning_controls:null restores the canonical default controls. method_library.overrides:{} clears all overrides; {method_id:null} removes only the named override. Non-empty partial overrides preserve unspecified controls.",
             "plan_change": "Updates inputs; does not approve or replace the saved programme."}
     if kind == "CALENDAR_EVENT":
         from .schemas import PlanningCalendarEvent
@@ -315,6 +326,10 @@ def _entry(repository, alias, kind, key):
 def _inputs(repository, alias, access, query, today):
     kind = query.get("input_kind")
     key = query.get("key") or query.get("entry_key")
+    from .assistant_app_actions import APP_COMMAND_KINDS, PLAN_KINDS, read_input
+    if kind in APP_COMMAND_KINDS:
+        _require(access, "can_edit_plan" if kind == "ATHLETE_SETTINGS" else "can_view_plan" if kind in PLAN_KINDS else "can_view_recovery")
+        return read_input(repository, alias, kind, key)
     if kind is None:
         _require(access, "can_view_recovery")
         key = key or today.isoformat()
@@ -324,7 +339,8 @@ def _inputs(repository, alias, access, query, today):
     if kind == "MANAGEMENT_PROFILE":
         _require(access, "can_view_plan")
         profile = ManagementStore(repository).profile(alias)
-        # Expert/scientific configuration is intentionally absent from chat.
+        # Same editable configuration as the application. Computed evidence is
+        # absent because only canonical ManagementProfile fields are selected.
         from .assistant_planning_commands import PROFILE_FIELDS, CONTROL_FIELDS
         shown = _pick(profile.get("profile"), PROFILE_FIELDS)
         if isinstance(shown.get("planning_controls"), dict):
@@ -368,8 +384,17 @@ def _inputs(repository, alias, access, query, today):
             raise HTTPException(422, "Оценката след тренировка изисква изпълнена активност.")
         # The same activity calendar and response entries used by the form;
         # no training engine or planned-session identifier is involved.
-        calendar = repository.active_activity_calendar(alias, selected, selected) or {}
-        activities = [a for a in calendar.get("activities", []) if a.get("local_date") == selected.isoformat()]
+        compact_reader = getattr(repository, "_rpc_row", None)
+        if callable(compact_reader):
+            # Same generation-pinned calendar as the form, without transferring
+            # the full 90-day scientific snapshot for a single RPE entry.
+            calendar = compact_reader("active_onflows_activity_calendar?select=generation_id,revision,activities", {
+                "p_athlete_alias": alias, "p_period_start": selected.isoformat(), "p_period_end": selected.isoformat()}) or {}
+        else:
+            calendar = repository.active_activity_calendar(alias, selected, selected) or {}
+        if not isinstance(calendar, dict) or not isinstance(calendar.get("activities", []), list):
+            raise PersistentStoreFailure("Invalid assistant session calendar")
+        activities = [a for a in calendar.get("activities", []) if isinstance(a, dict) and a.get("local_date") == selected.isoformat()]
         entries = []
         for activity in activities[:20]:
             entry = _entry(repository, alias, kind, activity["activity_ref"])
@@ -390,14 +415,22 @@ def _inputs(repository, alias, access, query, today):
     return {"availability": "AVAILABLE", **_entry(repository, alias, kind, key)}
 
 
-def read(repository, alias, access, query, now=None):
+def read(repository, alias, access, query, now=None, *, actor=None):
     """Read one registered capability; never accept a model-supplied scope."""
     if not isinstance(query, dict) or query.get("kind") not in QUERY_KINDS:
         raise HTTPException(422, "Неподдържана справка.")
-    allowed = {"kind", "date", "start", "end", "session_id", "method_id", "input_kind", "key", "entry_key"}
+    allowed = {"kind", "date", "start", "end", "session_id", "method_id", "input_kind", "key", "entry_key"} | assistant_reads.PARAMETERS
     if any(key not in allowed for key in query):
         raise HTTPException(422, "Неподдържани параметри на справката.")
-    if query["kind"] in {"day", "method"} or query["kind"] == "inputs" and query.get("input_kind") in {"MANAGEMENT_PROFILE", "CALENDAR_EVENT"}:
+    from .assistant_app_actions import PLAN_KINDS
+    if query["kind"] == "navigation":
+        if not (access.get("can_view_plan") or access.get("can_view_recovery")):
+            raise HTTPException(403, "Нямаш достъп до данните на този спортист.")
+        from .assistant_navigation import read as navigation
+        return {"schema_version": VERSION, "query_kind": "navigation", **navigation(access, query.get("key") or "")}
+    if query["kind"] == "inputs" and query.get("input_kind") == "ATHLETE_SETTINGS":
+        _require(access, "can_edit_plan")
+    elif query["kind"] in PLAN_QUERY_KINDS or query["kind"] == "inputs" and query.get("input_kind") in {"MANAGEMENT_PROFILE", "CALENDAR_EVENT", *PLAN_KINDS}:
         _require(access, "can_view_plan")
     else:
         _require(access, "can_view_recovery")
@@ -408,7 +441,9 @@ def read(repository, alias, access, query, now=None):
     now = now or datetime.now(timezone.utc)
     today = now.astimezone(ZoneInfo(tz)).date()
     kind = query["kind"]
-    if kind in {"day", "method"}:
+    if kind in assistant_reads.KINDS:
+        result = assistant_reads.read(repository, alias, access, query, settings, today, _date, actor=actor)
+    elif kind in {"day", "method"}:
         _require(access, "can_view_plan")
         selected = _date(query.get("date"), today)
         result = _plan_day(repository, alias, access, selected, today)

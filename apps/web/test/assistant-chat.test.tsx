@@ -9,7 +9,7 @@ const props = { athleteAlias: "athlete-a", actorUserId: "coach-a", displayName: 
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => { container = document.createElement("div"); document.body.append(container); root = createRoot(container); vi.stubGlobal("BroadcastChannel", undefined); });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const render = () => act(async () => root.render(<AssistantChat {...props}/>));
 const button = (text: string) => [...container.querySelectorAll("button")].find(item => item.textContent?.includes(text))!;
 const click = (text: string) => act(async () => button(text).click());
@@ -18,7 +18,7 @@ const response = (input: unknown, status = 200) => Response.json(input, { status
 it("keeps normal forms available while the conversational provider is not configured", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ provider_available: false })));
   await render();
-  expect(container.textContent).toContain("Разговорният модел още не е свързан");
+  expect(container.textContent).toContain("Разговорният модел в момента не е достъпен");
   expect(container.querySelector('a[href="/management"]')).not.toBeNull();
   expect(container.querySelector('a[href="/response"]')).not.toBeNull();
   expect(button("Какво тренирам днес?").disabled).toBe(false);
@@ -62,10 +62,10 @@ it("clears all conversation content after revoked access and never replays the r
   expect(container.textContent).toContain("Профилът или достъпът е променен"); expect(container.querySelector("textarea")).toBeNull(); expect(fetcher).toHaveBeenCalledTimes(2);
 });
 
-it("renders untrusted notes as text and keeps a pending computation distinct from an accepted plan", async () => {
+it("renders untrusted notes as text without claiming a pending operation has succeeded", async () => {
   const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response({})).mockResolvedValueOnce(response({ message: '<img src=x onerror="steal()">', pending: true, receipt: { status: "PENDING" } }));
   vi.stubGlobal("fetch", fetcher); await render(); await click("Какво тренирам днес?");
-  expect(container.querySelector("img")).toBeNull(); expect(container.textContent).toContain('<img src=x onerror="steal()">'); expect(container.textContent).toContain("още не означава готова или приета нова програма"); expect(container.textContent).not.toContain("Потвърден запис");
+  expect(container.querySelector("img")).toBeNull(); expect(container.textContent).toContain('<img src=x onerror="steal()">'); expect(container.textContent).toContain("Текущата заявка още се обработва"); expect(container.textContent).not.toContain("Потвърден запис");
 });
 
 it("deletes a conversation only after the user selects deletion, without touching the forms", async () => {
@@ -134,4 +134,74 @@ it("blocks sending during restoration and discards history that arrives after a 
   await act(async () => window.dispatchEvent(new Event("onflows-scope-changed")));
   await act(async () => resolve(response({ conversation_id: "02222222-2222-4333-8444-555555555555", messages: [{ role: "assistant", content: "История на предишния спортист" }] })));
   expect(container.textContent).not.toContain("История на предишния спортист"); expect(container.textContent).toContain("Профилът е променен");
+});
+
+it("renders a longer coaching answer as paragraphs, emphasis and ordered steps without executing markup", async () => {
+  const answer = "## Изпълнение\n\nПоддържайте **равномерно темпо** и *спокойно дишане*.\n\n1. Загрейте постепенно.\n2. Изпълнете основните серии.\n\n- Следете техниката.\n- Завършете леко.\n\n<script>steal()</script>\n[jump](javascript:steal())";
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response({})).mockResolvedValueOnce(response({ message: answer }));
+  vi.stubGlobal("fetch", fetcher); await render(); await click("Какво тренирам днес?");
+  const content = container.querySelector(".assistant-message-assistant .assistant-message-content")!;
+  expect(content.querySelector("strong")?.textContent).toBe("равномерно темпо");
+  expect(content.querySelector("em")?.textContent).toBe("спокойно дишане");
+  expect(content.querySelectorAll("ol li")).toHaveLength(2);
+  expect(content.querySelectorAll("ul li")).toHaveLength(2);
+  expect(content.querySelector("script")).toBeNull(); expect(content.querySelector("a")).toBeNull();
+  expect(content.textContent).toContain("<script>steal()</script>");
+  expect(content.textContent).not.toContain("**равномерно темпо**");
+});
+
+it("keeps the start of a long answer in view and collapses technical receipt details", async () => {
+  const scroll = vi.fn();
+  const previous = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = scroll;
+  try {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response({})).mockResolvedValueOnce(response({ message: "Умората е записана.", receipt: { status: "COMMITTED", revision: 4, message: "Умората е записана." } }));
+    vi.stubGlobal("fetch", fetcher); await render(); await click("Какво тренирам днес?");
+    expect(scroll).toHaveBeenLastCalledWith({ behavior: "smooth", block: "start" });
+    expect(container.textContent?.match(/Умората е записана\./g)).toHaveLength(1);
+    const details = container.querySelector(".assistant-receipt details") as HTMLDetailsElement;
+    expect(details.open).toBe(false); expect(details.textContent).toContain("Версия 4");
+  } finally { HTMLElement.prototype.scrollIntoView = previous; }
+});
+
+it("clears prior content when profile permissions change without changing the athlete", async () => {
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response({ conversation_id: "02222222-2222-4333-8444-555555555555", messages: [{ role: "assistant", content: "Лични данни за възстановяването" }] }));
+  vi.stubGlobal("fetch", fetcher); await render();
+  expect(container.textContent).toContain("Лични данни за възстановяването");
+  await act(async () => root.render(<AssistantChat {...props} canViewRecovery={false}/>));
+  expect(container.textContent).not.toContain("Лични данни за възстановяването");
+  expect(container.textContent).toContain("Профилът е променен");
+  expect(fetcher).toHaveBeenCalledOnce();
+});
+
+it("only offers plan-related links when the current profile grants plan access", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({})));
+  await act(async () => root.render(<AssistantChat {...props} canViewPlan={false} canEditPlan={false}/>));
+  expect(container.querySelector('a[href="/methods"]')).toBeNull();
+  expect(container.querySelector('a[href="/management"]')).toBeNull();
+  expect(container.querySelector('a[href="/response"]')).not.toBeNull();
+});
+
+it("makes only known internal navigation links clickable without initiating requests", async () => {
+  const answer = "[Покани](/account#invites-title) [Настройки](/?settings=edit) [Свържи Intervals](/api/integrations/intervals/connect) [Активност](/activities/known_123) [Външен](https://example.com) [Друг](//example.com) [Изтрий](/api/account/delete)";
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response({})).mockResolvedValueOnce(response({ message: answer }));
+  vi.stubGlobal("fetch", fetcher); await render(); await click("Какво тренирам днес?");
+  const links = [...container.querySelectorAll(".assistant-message-assistant a")].map(link => link.getAttribute("href"));
+  expect(links).toEqual(["/account#invites-title", "/?settings=edit", "/api/integrations/intervals/connect", "/activities/known_123"]);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});
+
+it("shows an honest wait message for a long operation without resending it", async () => {
+  vi.useFakeTimers();
+  let resolve!: (value: Response) => void;
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response({})).mockImplementationOnce(() => new Promise<Response>(done => { resolve = done; }));
+  vi.stubGlobal("fetch", fetcher); await render(); await click("Какво тренирам днес?");
+  expect(container.textContent).toContain("Обработвам заявката…");
+  await act(async () => vi.advanceTimersByTime(20_000));
+  expect(container.textContent).toContain("Заявката още се обработва");
+  expect(container.textContent).not.toContain("Потвърден запис");
+  expect(fetcher).toHaveBeenCalledTimes(2); expect(container.querySelector("textarea")?.disabled).toBe(true);
+  await act(async () => resolve(response({ message: "Програмата е обновена." })));
+  expect(container.textContent).not.toContain("Заявката още се обработва");
+  expect(container.querySelector("textarea")?.disabled).toBe(false);
 });

@@ -77,7 +77,7 @@ def test_responses_request_uses_exact_model_strict_contract_and_server_only_key(
     assert payload["model"] == "gpt-6-luna" and payload["store"] is False
     assert payload["service_tier"] == "default"
     assert payload["prompt_cache_options"] == {"mode": "explicit"}
-    assert payload["parallel_tool_calls"] is False and payload["max_output_tokens"] == 1600
+    assert payload["parallel_tool_calls"] is False and payload["max_output_tokens"] == 3072
     assert payload["tool_choice"] == {"type": "function", "name": "onflows_reply"}
     schema = payload["tools"][0]
     assert schema["strict"] is True and "function" not in schema
@@ -442,7 +442,7 @@ def test_settlement_failure_keeps_full_hold_and_never_returns_reply():
     {"input_tokens": 0, "output_tokens": 50},
     {"input_tokens": -1, "output_tokens": 50},
     {"input_tokens": 70_001, "output_tokens": 50},
-    {"input_tokens": 200, "output_tokens": 1601},
+    {"input_tokens": 200, "output_tokens": 3073},
     {"input_tokens": 200, "output_tokens": -1},
     {"input_tokens": 200, "output_tokens": 50, "input_tokens_details": []},
     {"input_tokens": 200, "output_tokens": 50, "input_tokens_details": {"cached_tokens": 201}},
@@ -534,3 +534,128 @@ def test_nonterminal_or_partial_responses_never_release_the_reservation(changes)
         provider(lambda request: httpx.Response(200, json=response(**changes)), budget=budget).complete([], {}, {})
     assert len(budget.reservations) == 1 and not budget.settlements
     assert budget.balance == 15_000_000_000 - 25_000_000
+
+
+def test_coaching_answer_can_use_the_larger_budget_without_changing_pilot_reservation():
+    budget = FakeBudget()
+    explanation = "При праговите интервали целта е устойчиво контролирано усилие. " * 65
+    seen = []
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json=response(
+            reply(message=explanation), usage={"input_tokens": 600, "output_tokens": 2400}))
+    result = provider(handler, budget=budget).complete(
+        [{"role": "user", "content": "Обясни подробно как да изпълня праговата тренировка и защо."}],
+        {"results": [{"query_kind": "day", "sessions": [{"blocks": [{"zone": "Z3", "minutes": 8}]}]}]},
+        {"read": ["day", "method"], "write": []},
+    )
+    assert result["text"] == explanation.strip()
+    assert result["usage"]["output_tokens"] == 2400
+    assert list(budget.reservations.values()) == [25_000_000]
+    assert len(budget.settlements) == 1
+    prompt = seen[0]["instructions"]
+    assert "Използвай общите си знания" in prompt
+    assert "не са промяна на утвърдения план" in prompt
+    assert "dose_evidence" in prompt
+    assert "Не измисляй автори" in prompt
+    assert "Не създавай тренировъчна програма, формули" not in prompt
+    assert "Не одобрявай план" not in prompt
+
+
+def test_extended_query_contract_preserves_activity_and_calculator_arguments():
+    query = {
+        "kind": "activity", "date": None, "start": None, "end": None,
+        "session_id": None, "input_kind": None, "key": None, "method_id": None,
+        "activity_ref": "act_" + "a" * 32, "sport": "Run", "view": "series",
+        "days": 30, "phase": None, "section": None, "offset": 0, "limit": 30,
+        "revision": None, "plan_kind": None, "test_mode": None,
+        "duration_s": 300, "distance_m": 1500, "speed_kmh": 18.0, "hr_bpm": 175,
+        "start_s": 0,
+    }
+    seen = []
+    p = provider(lambda request: seen.append(json.loads(request.content)) or
+                 httpx.Response(200, json=response(reply(query=query))))
+    assert p.complete([], {}, {"read": ["activity"]})["query"] == query
+    schema = seen[0]["tools"][0]["parameters"]["properties"]["query"]
+    assert set(schema["required"]) == set(schema["properties"]) == set(query)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("days", 0), ("days", True), ("days", 367), ("offset", -1), ("offset", 10001),
+    ("limit", 0), ("limit", 101), ("limit", 1.5), ("duration_s", 0),
+    ("distance_m", -10), ("speed_kmh", True), ("hr_bpm", "180"),
+    ("start_s", -1), ("start_s", float("nan")), ("duration_s", float("inf")),
+    ("distance_m", 10**1000), ("distance_m", -(10**1000)), ("view", ""), ("activity_ref", {}),
+    ("revision", 0), ("revision", 9007199254740992), ("plan_kind", "UNKNOWN"),
+    ("test_mode", "MAXIMAL"),
+])
+def test_extended_query_contract_rejects_invalid_parameters(field, value):
+    query = {"kind": "speed", "date": None, "start": None, "end": None,
+             "session_id": None, field: value}
+    p = provider(lambda request: httpx.Response(200, json=response(reply(query=query))))
+    with pytest.raises(AssistantProviderError, match="invalid_response"):
+        p.complete([], {}, {})
+
+
+def test_environment_default_matches_coaching_budget_and_respects_explicit_override(monkeypatch):
+    monkeypatch.setenv("ONFLOWS_ASSISTANT_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "server-only-test")
+    monkeypatch.delenv("ONFLOWS_ASSISTANT_MAX_OUTPUT_TOKENS", raising=False)
+    assert get_assistant_provider().config.max_output_tokens == 3072
+    monkeypatch.setenv("ONFLOWS_ASSISTANT_MAX_OUTPUT_TOKENS", "2048")
+    assert get_assistant_provider().config.max_output_tokens == 2048
+
+
+@pytest.mark.parametrize("kind", ["ATHLETE_SETTINGS", "RECOVERY_CONFIG", "SPEED_TEST", "PLAN_ACTION", "MANAGEMENT_PROFILE"])
+def test_real_app_contract_and_two_session_day_fit_without_losing_data(kind):
+    from apps.api.assistant_context import input_contract
+    from apps.api.assistant_service import _capabilities
+    access = {"is_owner": True, "can_view_plan": True, "can_edit_plan": True, "can_view_recovery": True}
+    guidance = {"execution": "Равномерно контролирано усилие и запазване на техниката. " * 25}
+    blocks = [{"kind": "WORK", "zone": "Z3", "duration_s": 480, "repetitions": 4,
+               "target_hr_bpm": [165, 175], "target_speed_range_kmh": [15.5, 16.1],
+               "instructions": guidance["execution"]} for _ in range(6)]
+    day = {"query_kind": "day", "availability": "AVAILABLE", "date": "2026-11-13", "plan_revision": 816,
+           "sessions": [{"session_id": f"2026-11-13:{i}", "total_minutes": 75 + i,
+                         "blocks": deepcopy(blocks), "method_library": deepcopy(guidance)} for i in (1, 2)]}
+    current = {"query_kind": "inputs", "kind": kind, "revision": 3,
+               "input_contract": input_contract(kind), "payload": {"timezone": "Europe/Sofia", "hrmax_bpm": 200}}
+    context = {"results": [day, current], "completed_queries": [{"kind": "day", "date": "2026-11-13"},
+                                                                {"kind": "inputs", "input_kind": kind}]}
+    original = deepcopy(context)
+    p = provider(lambda _: pytest.fail("size check is local and must not spend budget"))
+    payload = p._payload([{"role": "user", "content": "Обясни тренировката и настройката."}], context, _capabilities(access))
+    assert len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()) <= 64 * 1024
+    encoded_context = json.loads(payload["input"][-2]["content"])["onflows_context"]
+    restored = expand_shared_context(encoded_context) if encoded_context.get("format") == "onflows-shared-values-v1" else encoded_context
+    assert restored == original == context
+    assert payload["max_output_tokens"] == 3072
+    assert not p._budget.events
+
+
+@pytest.mark.parametrize("kind", ["PLAN_ACTION", "PLAN_ACTIVATE"])
+def test_complete_plan_preview_with_several_drafts_fits_without_losing_doses(kind):
+    from apps.api.assistant_app_actions import _plan_summary, input_contract
+    from apps.api.assistant_service import _capabilities
+    access = {"is_owner": True, "can_view_plan": True, "can_edit_plan": True, "can_view_recovery": True}
+    instructions = "Поддържай зададеното равномерно усилие; почивката е активна. " * 15
+    def plan(week):
+        return {"start_date": f"2026-11-{week:02}", "end_date": f"2026-11-{week+6:02}",
+                "days": [{"date": f"2026-11-{week+day:02}", "status": "TRAINING", "sessions": [
+                    {"title": "Прагова работа", "sport": "Run", "zone": "Z3", "total_minutes": 60+day,
+                     "blocks": [{"kind": "WORK", "duration_s": 240+30*block, "repetitions": 4,
+                                 "target_speed_kmh": 15.5+0.1*day, "instructions": instructions}
+                                for block in range(6)]} for _ in range(2)]} for day in range(7)]}
+    preview = {"revision": 816, "approved_plan": _plan_summary(plan(1)), "proposal": _plan_summary(plan(8))}
+    if kind == "PLAN_ACTIVATE":
+        preview["drafts"] = [{"start_date": f"2026-11-{week:02}", "draft_revision": week,
+                              "plan": _plan_summary(plan(week))} for week in (1, 8, 15)]
+    context = {"results": [{"query_kind": "inputs", "kind": kind, "revision": 816,
+                             "input_contract": input_contract(kind), "preview_summary": preview}]}
+    p = provider(lambda _: pytest.fail("local payload check"))
+    payload = p._payload([{"role": "user", "content": "Покажи проекта за утвърждаване."}], context, _capabilities(access))
+    assert len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()) <= 64 * 1024
+    packed = json.loads(payload["input"][-2]["content"])["onflows_context"]
+    assert packed["format"] == "onflows-shared-values-v1"
+    assert expand_shared_context(packed) == context
+    assert not p._budget.events

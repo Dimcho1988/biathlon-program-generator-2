@@ -4,29 +4,25 @@ This module never generates, activates or approves a programme.  The prepared
 payload is published by assistant_commands in one revision/receipt transaction.
 """
 from copy import deepcopy
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
 from fastapi import HTTPException
 from pydantic import ValidationError
 
 from .cloud import AthletePlanningCalendar
-from .management_schemas import ManagementProfile
+from .management_schemas import ManagementProfile, PlanningControls
 from .management_store import ManagementStore, PROFILE_KEY
 from .oauth_store import PersistentStoreFailure
 
 
-PROFILE_FIELDS = frozenset({
-    "available_minutes", "training_days", "availability_mode", "planning_controls",
-    "program_start", "program_end", "horizon_mode", "discipline", "race_duration_min",
-    "sport", "actual_sport", "max_key_sessions_per_week", "ant_references",
-})
-CONTROL_FIELDS = frozenset({
-    "sessions_per_week", "sessions_by_day", "threshold_days", "threshold_method",
-    "double_threshold_days", "double_threshold_components", "mixed_sessions_enabled",
-    "intensity_days", "strength_days", "long_session_day", "max_strength_sessions",
-    "training_sports", "weekly_target_hours", "mesocycle_anchor", "accent_mode",
-    "accent_limit", "accents", "cycles",
-})
+# The app and chat edit the same validated profile contract. Derived dose
+# fractions remain server-owned; all actual form controls are available.
+PROFILE_FIELDS = frozenset(ManagementProfile.model_fields) - {
+    "schema_version", "maintenance_fraction", "reentry_fraction",
+}
+CONTROL_FIELDS = frozenset(PlanningControls.model_fields)
 EVENT_FIELDS = frozenset({"event_type", "name", "start_date", "end_date", "race_course"})
 
 
@@ -41,7 +37,19 @@ def identical_event_ids(events, event):
 def _merge(current, patch):
     result = deepcopy(current)
     for key, value in patch.items():
-        if isinstance(value, dict) and isinstance(result.get(key), dict):
+        if key == "overrides" and isinstance(value, dict):
+            # Explicit empty map resets the catalogue overrides; null removes
+            # a named override while retaining the other method preferences.
+            overrides = deepcopy(result.get(key, {})) if value else {}
+            for name, item in value.items():
+                if item is None:
+                    overrides.pop(name, None)
+                elif isinstance(item, dict):
+                    overrides[name] = _merge(overrides.get(name, {}), item)
+                else:
+                    overrides[name] = deepcopy(item)
+            result[key] = overrides
+        elif isinstance(value, dict) and isinstance(result.get(key), dict):
             result[key] = _merge(result[key], value)
         else:
             result[key] = deepcopy(value)
@@ -87,7 +95,7 @@ def prepare(repository, alias, kind, entry_key, patch, expected_revision, actor=
             raise HTTPException(422, "Unknown planning profile key")
         if set(patch) - PROFILE_FIELDS:
             raise HTTPException(422, "This planning setting is not editable through chat")
-        if "planning_controls" in patch and (
+        if "planning_controls" in patch and patch["planning_controls"] is not None and (
             not isinstance(patch["planning_controls"], dict)
             or not patch["planning_controls"]
             or set(patch["planning_controls"]) - CONTROL_FIELDS
@@ -95,12 +103,19 @@ def prepare(repository, alias, kind, entry_key, patch, expected_revision, actor=
             raise HTTPException(422, "Only explicit planning controls are editable through chat")
         current = ManagementStore(repository).profile(alias)
         _revision(current["revision"], expected_revision)
-        if not current["configured"]:
-            raise HTTPException(409, "Configure the initial planning profile in the planning form")
-        merged = _merge(current["profile"], patch)
+        merged = _merge(current["profile"] or {}, patch)
         # Validate a complete profile, retaining every unedited current setting.
         try:
-            payload = ManagementProfile.model_validate(merged).model_dump(mode="json")
+            profile = ManagementProfile.model_validate(merged)
+            payload = profile.model_dump(mode="json")
+            if "method_library" in patch:
+                from .method_library_service import validate_preferences
+                payload["method_library"] = validate_preferences(payload["method_library"], payload)
+            if "lactate_profiles" in patch and profile.lactate_profiles:
+                settings = repository.athlete_settings(alias)
+                today = datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone if settings else "UTC")).date()
+                if any(item.assessed_on > today for item in profile.lactate_profiles):
+                    raise HTTPException(422, "A lactate observation cannot be in the future")
         except ValidationError as exc:
             raise HTTPException(422, "Planning profile values are inconsistent") from exc
         return {"kind": kind, "key": PROFILE_KEY, "payload": payload,

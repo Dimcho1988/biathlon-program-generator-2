@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 type Source = { kind?: string; label?: string; revision?: number | string; as_of?: string };
 type Receipt = { status?: string; kind?: string; revision?: number; operation_id?: string; message?: string };
@@ -24,11 +24,67 @@ const safePending = (input: unknown, conversation: string | null): Submission | 
 const safeSuggestions = (input: unknown) => Array.isArray(input) ? input.filter((value): value is string => typeof value === "string" && value.length <= 300).slice(0, 4) : [];
 const receiptLabel = (status?: string) => ({ SUCCEEDED: "Потвърден запис", SAVED: "Потвърден запис", COMMITTED: "Потвърден запис", COMPLETED: "Потвърден запис", CONFLICT: "Необходима е проверка на версията", PENDING: "Обработва се", UNKNOWN: "Резултатът се проверява" })[status?.toUpperCase() ?? ""] ?? "Резултат от операцията";
 
+const APP_LINKS = new Set(["/", "/?settings=edit", "/account", "/activities", "/management", "/management/outlook", "/planning", "/trainability", "/methods", "/speed", "/learning", "/response", "/assistant", "/api/integrations/intervals/connect"]);
+const ACCOUNT_SECTIONS = new Set(["role-profile-title", "invites-title", "athletes-title", "create-team-title", "link-athlete-title", "password-guidance"]);
+function safeAppLink(href: string) {
+  if (APP_LINKS.has(href)) return true;
+  const account = href.match(/^\/account#([a-z-]+)$/);
+  if (account && ACCOUNT_SECTIONS.has(account[1])) return true;
+  return /^\/activities\/[A-Za-z0-9_-]+(?:\/shadow)?$/.test(href);
+}
+
+// Model output never becomes HTML or image markup. Links are limited to known
+// application routes and require a user click; unsupported syntax stays text.
+function inlineText(text: string): ReactNode[] {
+  return text.split(/(\[[^\]\n]+\]\([^\s)]+\)|\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\n]+\*)/g).map((part, index) => {
+    const link = part.match(/^\[([^\]\n]+)\]\(([^\s)]+)\)$/);
+    if (link && safeAppLink(link[2])) return <a key={index} href={link[2]}>{link[1]}</a>;
+    if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith("`") && part.endsWith("`")) return <code key={index}>{part.slice(1, -1)}</code>;
+    if (part.startsWith("*") && part.endsWith("*")) return <em key={index}>{part.slice(1, -1)}</em>;
+    return <Fragment key={index}>{part}</Fragment>;
+  });
+}
+
+function AssistantText({ text }: { text: string }) {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const blocks: ReactNode[] = [];
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index];
+    if (!line.trim()) { index++; continue; }
+    if (/^\s*```/.test(line)) {
+      const content: string[] = []; index++;
+      while (index < lines.length && !/^\s*```/.test(lines[index])) content.push(lines[index++]);
+      if (index < lines.length) index++;
+      blocks.push(<pre key={blocks.length}><code>{content.join("\n")}</code></pre>); continue;
+    }
+    const heading = line.match(/^\s*#{1,6}\s+(.+)$/);
+    if (heading) { blocks.push(<p className="assistant-text-heading" key={blocks.length}>{inlineText(heading[1])}</p>); index++; continue; }
+    const bullet = line.match(/^\s*[-*•]\s+(.+)$/);
+    const numbered = line.match(/^\s*(\d+)[.)]\s+(.+)$/);
+    if (bullet || numbered) {
+      const items: ReactNode[] = [];
+      const pattern = numbered ? /^\s*\d+[.)]\s+(.+)$/ : /^\s*[-*•]\s+(.+)$/;
+      while (index < lines.length) {
+        const match = lines[index].match(pattern);
+        if (!match) break;
+        items.push(<li key={items.length}>{inlineText(match[1])}</li>); index++;
+      }
+      blocks.push(numbered ? <ol key={blocks.length} start={Number(numbered[1])}>{items}</ol> : <ul key={blocks.length}>{items}</ul>); continue;
+    }
+    const paragraph = [line]; index++;
+    while (index < lines.length && lines[index].trim() && !/^\s*(?:```|#{1,6}\s|[-*•]\s|\d+[.)]\s)/.test(lines[index])) paragraph.push(lines[index++]);
+    blocks.push(<p key={blocks.length}>{inlineText(paragraph.join("\n"))}</p>);
+  }
+  return <>{blocks}</>;
+}
+
 export function AssistantChat({ athleteAlias, actorUserId, displayName, canEditPlan, isOwner, canViewPlan, canViewRecovery }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [conversation, setConversation] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [longWait, setLongWait] = useState(false);
   const [restoring, setRestoring] = useState(true);
   const [changed, setChanged] = useState(false);
   const [error, setError] = useState("");
@@ -42,8 +98,11 @@ export function AssistantChat({ athleteAlias, actorUserId, displayName, canEditP
   const initialized = useRef(false);
   const controller = useRef<AbortController | null>(null);
   const end = useRef<HTMLDivElement>(null);
+  const latestMessage = useRef<HTMLElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const scopeKey = `${actorUserId}:${athleteAlias}`;
+  const permissionKey = `${canEditPlan}:${isOwner}:${canViewPlan}:${canViewRecovery}`;
+  const initialScope = useRef(`${scopeKey}:${permissionKey}`);
   const headers = useCallback(() => ({ "Content-Type": "application/json", "X-Onflows-Athlete": athleteAlias, "X-Onflows-Actor": actorUserId }), [athleteAlias, actorUserId]);
   const invalidate = useCallback(() => {
     invalid.current = true;
@@ -53,6 +112,7 @@ export function AssistantChat({ athleteAlias, actorUserId, displayName, canEditP
 
   useEffect(() => {
     active.current = true;
+    if (initialScope.current !== `${scopeKey}:${permissionKey}`) { invalidate(); return; }
     const channel = typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel("onflows-management-scope");
     window.addEventListener("onflows-scope-changed", invalidate);
     if (channel) {
@@ -78,14 +138,23 @@ export function AssistantChat({ athleteAlias, actorUserId, displayName, canEditP
       if (active.current && !invalid.current) { initialized.current = true; setRestoring(false); }
     });
     return () => { active.current = false; statusController.abort(); controller.current?.abort(); channel?.close(); window.removeEventListener("onflows-scope-changed", invalidate); };
-  }, [scopeKey, headers, invalidate]);
+  }, [scopeKey, permissionKey, headers, invalidate]);
 
-  useEffect(() => { end.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" }); }, [messages, busy]);
+  useEffect(() => {
+    if (messages.at(-1)?.role === "assistant" && !busy) latestMessage.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    else end.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+  }, [messages, busy]);
+
+  useEffect(() => {
+    if (!busy) return;
+    const timer = window.setTimeout(() => setLongWait(true), 20_000);
+    return () => window.clearTimeout(timer);
+  }, [busy]);
 
   async function send(text: string, previous?: Submission) {
     if (invalid.current || !active.current || !initialized.current || inFlight.current || !text.trim()) return;
     const submission = previous ?? { operation_id: crypto.randomUUID(), conversation_id: conversation, message: text.trim() };
-    inFlight.current = true; setBusy(true); setError(""); setRetry(null);
+    inFlight.current = true; setBusy(true); setLongWait(false); setError(""); setRetry(null);
     if (!previous) { setMessages(current => [...current, { id: submission.operation_id, role: "user", content: submission.message }]); setInput(""); }
     const requestController = new AbortController(); controller.current = requestController;
     try {
@@ -152,23 +221,22 @@ export function AssistantChat({ athleteAlias, actorUserId, displayName, canEditP
     {changed ? <section className="assistant-scope-notice" role="alert"><h2>Профилът е променен</h2><p>{SCOPE_MESSAGE}</p><button className="action-button" type="button" onClick={() => window.location.reload()}>Зареди актуалния профил</button></section> : <>
       <div className="assistant-layout"><section className="assistant-conversation" aria-label="Разговор с асистента">
         <div className="assistant-conversation-top"><span><span aria-hidden="true">○</span> Разговор за {displayName}</span>{conversation && <button type="button" disabled={busy || restoring || deleting} onClick={() => void removeConversation()}>{deleting ? "Изтриване…" : "Изтрий разговора"}</button>}</div>
-        {provider === false && <p className="assistant-provider-notice" role="status">Разговорният модел още не е свързан. Налични са справките от onFlows и помощта за основните действия.</p>}
+        {provider === false && <p className="assistant-provider-notice" role="status">Разговорният модел в момента не е достъпен. Налични са справките от onFlows и помощта за основните действия.</p>}
         <div className="assistant-log" role="log" aria-label="Съобщения" aria-live="polite" aria-relevant="additions text">
           {restoring && <p className="assistant-working" role="status">Зареждам разговора…</p>}
-          {!restoring && !messages.length && <div className="assistant-welcome"><span className="assistant-welcome-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M27 15a11 11 0 0 1-11 11H8l-5 4V15a12 12 0 0 1 24 0Z"/><path d="M9 13h14M9 18h9"/></svg></span><h2>С какво да започнем?</h2><p>Можете да попитате за запазената програма или да въведете наблюдение. Асистентът уточнява липсващите данни.</p></div>}
-          {messages.map(item => <article key={item.id} className={`assistant-message assistant-message-${item.role}`}><span className="assistant-message-role">{item.role === "user" ? "Вие" : "onFlows асистент"}</span><div className="assistant-message-content">{item.content}</div>
-            {item.receipt && <div className="assistant-receipt"><strong>{receiptLabel(item.receipt.status)}</strong>{item.receipt.message && <span>{item.receipt.message}</span>}{item.receipt.revision !== undefined && <small>Версия {item.receipt.revision}</small>}</div>}
-            {item.pending && <p className="assistant-processing">Данните се обработват. Това още не означава готова или приета нова програма.</p>}
+          {!restoring && !messages.length && <div className="assistant-welcome"><span className="assistant-welcome-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M27 15a11 11 0 0 1-11 11H8l-5 4V15a12 12 0 0 1 24 0Z"/><path d="M9 13h14M9 18h9"/></svg></span><h2>С какво да започнем?</h2><p>Попитайте как да изпълните тренировката, обсъдете методиката или поискайте промяна в достъпните ви настройки.</p></div>}
+          {messages.map((item, index) => <article key={item.id} ref={index === messages.length - 1 ? latestMessage : undefined} className={`assistant-message assistant-message-${item.role}`}><span className="assistant-message-role">{item.role === "user" ? "Вие" : "onFlows асистент"}</span><div className="assistant-message-content">{item.role === "assistant" ? <AssistantText text={item.content}/> : item.content}</div>
+            {item.receipt && !item.pending && <div className="assistant-receipt"><strong>{receiptLabel(item.receipt.status)}</strong>{item.receipt.message && !item.content.includes(item.receipt.message) && <span>{item.receipt.message}</span>}{item.receipt.revision !== undefined && <details><summary>Подробности за записа</summary><small>Версия {item.receipt.revision}</small></details>}</div>}
             {!!item.sources?.length && <details className="assistant-sources"><summary>Основание и версия</summary><ul>{item.sources.map((source, index) => <li key={index}>{source.label ?? source.kind ?? "Запазени данни от onFlows"}{source.revision !== undefined ? ` · версия ${source.revision}` : ""}{source.as_of ? ` · към ${source.as_of}` : ""}</li>)}</ul></details>}
           </article>)}
-          {busy && <p className="assistant-working" role="status"><span className="assistant-thinking" aria-hidden="true"/>Проверявам данните и подготвям отговора…</p>}
+          {busy && <p className="assistant-working" role="status"><span className="assistant-thinking" aria-hidden="true"/>{longWait ? "Заявката още се обработва. При промяна на програмата изчислението може да отнеме повече време. Резултатът ще се появи тук." : "Обработвам заявката…"}</p>}
           <div ref={end}/>
         </div>
         <div className="assistant-compose"><div className="assistant-suggestions" aria-label="Примерни въпроси">{quick.map(text => <button key={text} type="button" disabled={busy || restoring || !!retry} onClick={() => void send(text)}>{text}</button>)}</div>
           {error && <div className="assistant-error" role="alert"><p>{error}</p>{retry && <button type="button" disabled={busy} onClick={() => void send(retry.message, retry)}>Провери и продължи заявката</button>}</div>}
-          <form onSubmit={submit}><label htmlFor="assistant-message">Вашето съобщение</label><div className="assistant-input-row"><textarea id="assistant-message" ref={field} value={input} maxLength={4000} rows={2} disabled={busy || restoring || !!retry} placeholder="Например: Как да изпълня днешната тренировка?" onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (input.trim()) void send(input); } }}/><button className="action-button" type="submit" disabled={busy || restoring || !!retry || !input.trim()}><span>{busy ? "Изчакване…" : "Изпрати"}</span><span aria-hidden="true">↑</span></button></div><p className="assistant-compose-note">Enter изпраща · Shift + Enter добавя нов ред. Приемането на нова програма е в „Седмична програма“.</p></form>
+          <form onSubmit={submit}><label htmlFor="assistant-message">Вашето съобщение</label><div className="assistant-input-row"><textarea id="assistant-message" ref={field} value={input} maxLength={4000} rows={2} disabled={busy || restoring || !!retry} placeholder="Например: Как да изпълня днешната тренировка?" onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (input.trim()) void send(input); } }}/><button className="action-button" type="submit" disabled={busy || restoring || !!retry || !input.trim()}><span>{busy ? "Изчакване…" : "Изпрати"}</span><span aria-hidden="true">↑</span></button></div><p className="assistant-compose-note">Enter изпраща · Shift + Enter добавя нов ред.</p></form>
         </div>
-      </section><aside className="assistant-help"><h2>Връзка с вашите данни</h2><p>Точната тренировка и дозата идват от запазената програма. Промяната на входни данни следва правата ви за този спортист.</p><div className="assistant-form-links">{canViewPlan && <a href="/management"><span>Седмична програма</span><span aria-hidden="true">↗</span></a>}{canViewRecovery && <a href="/response"><span>Оценки и тегло</span><span aria-hidden="true">↗</span></a>}{canViewPlan && <a href="/planning"><span>Цели и календар</span><span aria-hidden="true">↗</span></a>}<a href="/methods"><span>Тренировъчни методи</span><span aria-hidden="true">↗</span></a></div><p className="assistant-help-note">Записът се потвърждава след успешна операция. Ако липсва информация, асистентът я уточнява.</p></aside></div>
+      </section><aside className="assistant-help"><h2>Връзка с вашите данни</h2><p>Асистентът свързва данните от профила с обяснения за тренировката и методиката. Действията следват правата ви за този спортист.</p><div className="assistant-form-links">{canViewPlan && <a href="/management"><span>Седмична програма</span><span aria-hidden="true">↗</span></a>}{canViewRecovery && <a href="/response"><span>Оценки и тегло</span><span aria-hidden="true">↗</span></a>}{canViewPlan && <a href="/planning"><span>Цели и календар</span><span aria-hidden="true">↗</span></a>}{canViewPlan && <a href="/methods"><span>Тренировъчни методи</span><span aria-hidden="true">↗</span></a>}</div><p className="assistant-help-note">След успешна промяна получавате потвърждение какво е записано.</p></aside></div>
     </>}
   </main>;
 }
