@@ -92,6 +92,7 @@ def input_contract(kind):
     elif kind == "SESSION":
         result["scales"] = {"rpe": "0–10", "feel": ["Много добре", "Добре", "Средно", "Зле", "Много зле"]}
         result["units"] = {"duration_minutes": "min", "planned_speed_kmh": "km/h", "executed_speed_kmh": "km/h"}
+        result["entry_guidance"] = "Use a completed activity, not a planned session. Reuse its saved duration or suggested_duration_minutes. Ask only which activity if ambiguous and when the rating was made if timing is unknown. Do not request optional feel, lactate, speed, method, or notes for an RPE-only entry."
     elif kind == "MANUAL_SPEED_TEST":
         result["units"] = {"duration_s": "s", "distance_m": "m", "speed_kmh": "km/h"}
         result["requires_attestation"] = ["maximal", "comparable", "flat_terrain"]
@@ -338,7 +339,9 @@ def _inputs(repository, alias, access, query, today):
         event = next((e for e in events if e.get("event_id") == key), None) if key else None
         return {"availability": "AVAILABLE", "kind": kind, "entry_key": key, "revision": state["revision"],
             "calendar_revision": state["revision"], "payload": deepcopy(event) if key else None,
-            "events": deepcopy(events) if not key else None}
+            "events": deepcopy(events) if not key else None,
+            "entries": [{"kind": kind, "entry_key": e["event_id"], "revision": state["revision"],
+                "payload": deepcopy(e)} for e in events] if not key else None}
     if kind == "MANUAL_SPEED_TEST":
         _require(access, "can_view_recovery")
         if key in (None, ""):
@@ -357,6 +360,23 @@ def _inputs(repository, alias, access, query, today):
     if kind not in INPUT_MODELS:
         raise HTTPException(422, "Неподдържан вид входни данни.")
     _require(access, "can_view_recovery")
+    if kind == "SESSION" and key in (None, ""):
+        selected = _date(query.get("date"), today)
+        if selected > today:
+            raise HTTPException(422, "Оценката след тренировка изисква изпълнена активност.")
+        # The same activity calendar and response entries used by the form;
+        # no training engine or planned-session identifier is involved.
+        calendar = repository.active_activity_calendar(alias, selected, selected) or {}
+        activities = [a for a in calendar.get("activities", []) if a.get("local_date") == selected.isoformat()]
+        entries = []
+        for activity in activities[:20]:
+            entry = _entry(repository, alias, kind, activity["activity_ref"])
+            seconds = activity.get("elapsed_time_s")
+            entry["activity"] = _pick(activity, {"activity_ref", "local_date", "name", "sport"})
+            entry["suggested_duration_minutes"] = seconds / 60 if isinstance(seconds, (int, float)) and 0 < seconds <= 86400 else None
+            entries.append(entry)
+        return {"availability": "AVAILABLE", "kind": kind, "date": selected.isoformat(), "entries": entries,
+            "activity_count": len(activities), "truncated": len(activities) > 20}
     if key is None and kind in {"DAILY", "WEIGHT"}:
         key = today.isoformat()
     if key in (None, "") and kind in {"TEST", "LAB", "BLOCK"}:

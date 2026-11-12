@@ -491,6 +491,80 @@ def test_confirmation_without_pending_command_does_not_consult_model_or_write(re
     assert "Няма показана промяна" in result["message"] and not repo.writes and not provider.calls
 
 
+def test_calendar_clarifications_keep_request_until_preview_and_natural_confirmation(repo):
+    repo.read_result = {"query_kind": "inputs", "kind": "CALENDAR_EVENT", "entry_key": "race-a", "revision": 7}
+    patch = {"start_date": "2027-01-09", "end_date": "2027-01-10", "name": "Състезание"}
+    provider = ScriptedAssistantProvider([
+        {"text": "За коя година?"}, {"text": "Как се казва състезанието?"},
+        {"text": "", "query": query("inputs", input_kind="CALENDAR_EVENT", key="race-a")},
+        {"text": "", "command": command("CALENDAR_EVENT", key="race-a", revision=7, patch=patch)},
+    ])
+    first = service.turn(repo, ALIAS, ACTOR, body("Може ли да променим датата на основния старт на 9 и 10 януари?"), provider)
+    conversation = first["conversation_id"]
+    service.turn(repo, ALIAS, ACTOR, body("Да, за 2027", conversation), provider)
+    preview = service.turn(repo, ALIAS, ACTOR, body("Името да бъде Състезание", conversation), provider)
+    assert "Предложена промяна" in preview["message"] and not repo.writes
+    assert provider.calls[-1]["context"]["active_input_request"]["kind"] == "CALENDAR_EVENT"
+    saved = service.turn(repo, ALIAS, ACTOR, body("Потвърждавам", conversation), provider)
+    assert saved["receipt"]["revision"] == 8 and len(repo.writes) == 1
+    assert repo.writes[0]["patch"] == patch
+    assert not repo.conversations[conversation]["state"].get("input_request")
+
+
+def test_post_workout_rating_continues_with_timing_and_never_becomes_daily_fatigue(repo):
+    ref = "act_" + "a" * 32
+    repo.read_result = {"query_kind": "inputs", "kind": "SESSION", "entries": [
+        {"kind": "SESSION", "entry_key": ref, "revision": 0, "suggested_duration_minutes": 60}]}
+    provider = ScriptedAssistantProvider([
+        {"text": "Кога направи оценката: веднага, 10–60 минути след края или на следващия ден?"},
+        {"text": "", "query": query("inputs", input_kind="SESSION", date=DAY)},
+        {"text": "", "command": command("SESSION", key=ref, revision=0,
+            patch={"rpe": 3, "timing": "IMMEDIATE", "duration_minutes": 60})},
+    ])
+    first = service.turn(repo, ALIAS, ACTOR, body("Искам да въведа умората от днес след тренировката тя беше 3 от 10"), provider)
+    preview = service.turn(repo, ALIAS, ACTOR, body("Веднага след края", first["conversation_id"]), provider)
+    assert "Усилие RPE (0–10): 3" in preview["message"] and not repo.writes
+    service.turn(repo, ALIAS, ACTOR, body("Да", first["conversation_id"]), provider)
+    assert len(repo.writes) == 1 and repo.writes[0]["kind"] == "SESSION"
+    assert "fatigue" not in repo.writes[0]["patch"]
+
+
+def test_post_workout_ten_point_rating_cannot_be_saved_as_daily_even_if_model_misroutes(repo):
+    result = service.turn(repo, ALIAS, ACTOR, body("Искам да запиша умората след тренировката 3 от 10"),
+        ScriptedAssistantProvider([{"text": "", "query": query("inputs", input_kind="DAILY", key=DAY)},
+            {"text": "", "command": command(patch={"fatigue": 3})}]))
+    assert result["error_code"] == 422 and not repo.writes
+    assert not repo.conversations[result["conversation_id"]]["state"].get("pending_command")
+
+
+@pytest.mark.parametrize("interruption", ["Покажи тренировката утре", "Откажи промяната"])
+def test_unrelated_question_or_cancel_clears_old_preview_and_write_thread(repo, interruption):
+    pending = {"kind": "CALENDAR_EVENT", "entry_key": "race-a", "expected_revision": 7, "patch": {"name": "Старт"}}
+    conversation = repo.seed({"pending_command": pending, "input_request": {"kind": "CALENDAR_EVENT",
+        "request": "Промени старта", "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()}})
+    provider = ScriptedAssistantProvider([{"text": "Справката е налична."}, {"text": "Какво искаш да промениш?"}])
+    service.turn(repo, ALIAS, ACTOR, body(interruption, conversation), provider)
+    service.turn(repo, ALIAS, ACTOR, body("Да", conversation), provider)
+    assert not repo.writes and not repo.conversations[conversation]["state"].get("input_request")
+    assert not repo.conversations[conversation]["state"].get("pending_command")
+
+
+def test_expired_clarification_does_not_authorize_numeric_followup(repo):
+    conversation = repo.seed({"input_request": {"kind": "DAILY", "request": "Искам да запиша умората",
+        "expires_at": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()}})
+    result = service.turn(repo, ALIAS, ACTOR, body("2", conversation), ScriptedAssistantProvider([
+        {"text": "", "query": query("inputs", input_kind="DAILY", key=DAY)},
+        {"text": "", "command": command(patch={"fatigue": 2})}]))
+    assert result["error_code"] == 422 and not repo.writes
+
+
+def test_input_read_loop_does_not_render_unrelated_planned_day(repo):
+    repo.read_result = {"query_kind": "day", "date": DAY, "sessions": [], "availability": "AVAILABLE"}
+    result = service.turn(repo, ALIAS, ACTOR, body("Искам да въведа умората след тренировката 3 от 10"),
+        ScriptedAssistantProvider([{"text": "", "query": query("day", date=DAY)} for _ in range(3)]))
+    assert "Програма за" not in result["message"] and not repo.writes
+
+
 def test_model_failure_does_not_claim_saved_input_or_expose_private_error(repo):
     class FailingProvider:
         def complete(self, *args):
