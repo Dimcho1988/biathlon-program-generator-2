@@ -155,7 +155,7 @@ def _write_intent(command, message):
         "WEIGHT":r"тегл|теж|килограм|\bкг\b", "SESSION":r"rpe|усили|оценк|лактат|трениров|изпълн",
         "TEST":r"тест|измер", "BLOCK":r"блок|натовар|период", "LAB":r"лаборатор|феритин|хемоглобин|кортизол|изследван",
         "MANUAL_SPEED_TEST":r"тест|максимал", "MANAGEMENT_PROFILE":r"искам|промени|разреш|почива|тренирам|планира|задай",
-        "CALENDAR_EVENT":r"премест|лагер|старт|състезан|събити|отмени|недостъп|добави"}
+        "CALENDAR_EVENT":r"премест|лагер|старт|страт|състезан|събити|отмени|недостъп|добави"}
     return re.search(patterns.get(command["kind"],r"(?!)"),message.lower()) is not None
 
 
@@ -175,7 +175,7 @@ def _input_request(state, message, now):
         return None
     kind = None
     if action:
-        if re.search(r"събити|старт|състезан|лагер", text):
+        if re.search(r"събити|старт|страт|състезан|лагер", text):
             kind = "CALENDAR_EVENT"
         elif re.search(r"тегл|теж|килограм|\bкг\b", text):
             kind = "WEIGHT"
@@ -190,7 +190,8 @@ def _input_request(state, message, now):
     elif pending:
         # An unrelated read/question ends the write thread. A short answer,
         # date, name, number, or corrected scale can complete its missing fields.
-        if (re.search(r"^(?:а\s+)?(?:покажи|обясни|виж|какво|каква|какви|защо|колко|как\b|дали\b|кога\b|искам да (?:разбера|видя))", text)
+        related = pending.get("kind")=="SESSION" and re.search(r"rpe|усили|скал|оценк|след.{0,30}трениров|стрес и възстанов", text)
+        if ((not related and re.search(r"^(?:а\s+)?(?:покажи|обясни|виж|какво|каква|какви|защо|колко|как\b|дали\b|кога\b|искам да (?:разбера|видя))", text))
                 or text.strip() in CANCEL or pending.get("followups", 0) >= 8):
             pending = None
         else:

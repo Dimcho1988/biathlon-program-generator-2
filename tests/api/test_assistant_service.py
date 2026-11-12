@@ -499,7 +499,7 @@ def test_calendar_clarifications_keep_request_until_preview_and_natural_confirma
         {"text": "", "query": query("inputs", input_kind="CALENDAR_EVENT", key="race-a")},
         {"text": "", "command": command("CALENDAR_EVENT", key="race-a", revision=7, patch=patch)},
     ])
-    first = service.turn(repo, ALIAS, ACTOR, body("Може ли да променим датата на основния старт на 9 и 10 януари?"), provider)
+    first = service.turn(repo, ALIAS, ACTOR, body("Може ли да променим датата на основния страт на 9 и 10 януари?"), provider)
     conversation = first["conversation_id"]
     service.turn(repo, ALIAS, ACTOR, body("Да, за 2027", conversation), provider)
     preview = service.turn(repo, ALIAS, ACTOR, body("Името да бъде Състезание", conversation), provider)
@@ -535,6 +535,14 @@ def test_post_workout_ten_point_rating_cannot_be_saved_as_daily_even_if_model_mi
             {"text": "", "command": command(patch={"fatigue": 3})}]))
     assert result["error_code"] == 422 and not repo.writes
     assert not repo.conversations[result["conversation_id"]]["state"].get("pending_command")
+
+
+def test_related_question_about_post_workout_form_preserves_clarification_thread(repo):
+    provider = ScriptedAssistantProvider([{"text": "Кога направи оценката?"}, {"text": "Усилието е по скала 0–10."}])
+    first = service.turn(repo, ALIAS, ACTOR, body("Искам да въведа умора след тренировката 3 от 10"), provider)
+    service.turn(repo, ALIAS, ACTOR, body("Виж стрес и възстановяване, после какво усилие имаше днес", first["conversation_id"]), provider)
+    assert provider.calls[-1]["context"]["active_input_request"]["kind"] == "SESSION"
+    assert not repo.writes
 
 
 @pytest.mark.parametrize("interruption", ["Покажи тренировката утре", "Откажи промяната"])
