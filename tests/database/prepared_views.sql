@@ -94,7 +94,7 @@ begin
 end $$;
 
 do $$ declare a constant text:='prepared-views-contract'; owner_id uuid:='99006000-0000-0000-0000-000000000001';
- token uuid:=gen_random_uuid(); result jsonb; n bigint; today_local date:=(clock_timestamp() at time zone 'Europe/Sofia')::date;
+ token uuid:=gen_random_uuid(); result jsonb; fixed_before jsonb; n bigint; today_local date:=(clock_timestamp() at time zone 'Europe/Sofia')::date;
 begin
  insert into public.onflows_management_plan_revisions(athlete_alias,revision,operation,actor_id,payload)
   values(a,1,'ACTIVATE',owner_id,jsonb_build_object('mode','AUTO','evaluated_on',today_local-1));
@@ -111,8 +111,15 @@ begin
  assert (result->>'revision')::bigint=n+3,'Three concurrent training changes lost the newest input';
  perform public.onflows_training_plan_update('COMPLETE',a,token);
  update public.onflows_management_plan_revisions set payload=jsonb_set(payload,'{mode}','"REVIEW"') where athlete_alias=a;
+ select payload into fixed_before from public.onflows_management_plan_revisions where athlete_alias=a and revision=1;
  update onflows_private.training_plan_updates set last_evaluated_on=today_local-1 where athlete_alias=a;
- assert public.onflows_training_plan_update('CLAIM',a,token) is null,'A new day changed a fixed program';
+ result:=public.onflows_training_plan_update('CLAIM',a,token);
+ assert result is not null,'A fixed-horizon program did not receive its daily input check';
+ assert (select payload=fixed_before from public.onflows_management_plan_revisions where athlete_alias=a and revision=1),
+  'Scheduling a fixed-horizon refresh changed the saved program';
+ perform public.onflows_training_plan_update('COMPLETE',a,token);
+ assert (select last_evaluated_on from onflows_private.training_plan_updates where athlete_alias=a)=today_local;
+ assert public.onflows_training_plan_update('CLAIM',a,gen_random_uuid()) is null,'The fixed program ran twice on the same day';
  update public.onflows_management_plan_revisions set payload=jsonb_set(payload,'{mode}','"AUTO"') where athlete_alias=a;
  update public.onflows_management_plan_state set status='PAUSED' where athlete_alias=a;
  assert public.onflows_training_plan_update('CLAIM',a,token) is null,'A calendar tick resumed a paused program';
