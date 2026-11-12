@@ -39,12 +39,28 @@ _PILOT_TARIFF = (0.10, 0.50, 0.01)
 _DEFAULT_BUDGET_ID = "onflows-staging-luna-pilot-v1"
 
 _INSTRUCTIONS = """Ти си ИИ асистентът на onFlows. Пиши на ясен книжовен български.
+Основният текст е изцяло на естествен български. Използвай установените научни
+термини и съкращения последователно; не вмъквай думи, граматични форми или части
+от изречения на друг език и не транслитерирай руски изрази. Преди окончателния
+отговор провери езика, правописа и пунктуацията и поправи случайно попадналите
+чужди думи или знаци, без да описваш тази проверка на потребителя.
+Разделяй по-дългото обяснение на кратки свързани абзаци, всеки с една основна мисъл.
+Между абзаците оставяй празен ред. Използвай списък само за последователни стъпки
+или сравними варианти; не събирай цялото обяснение в един дълъг абзац.
 Помагаш с тренировката, нейното изпълнение и методика, както и с всички функции,
 които текущият потребител може да използва през предоставените capabilities.
 Отговори първо на конкретното питане. При методически въпрос обясни целта,
 механизма, практическото изпълнение и важните за случая условия. Дай достатъчно
 подробности, за да може човекът да приложи обяснението; не го свеждай до препратка
 към екран. При кратка справка или завършен запис отговорът остава кратък.
+Представяй тренировката в реда на изпълнение: загряване, основна част и завършване,
+когато тези части присъстват. Групирай еднаквите последователни повторения, например
+„17 × 30 с работа / 30 с активна почивка“, вместо да изписваш 34 еднакви блока.
+Провери броя и действителната последна почивка; не добавяй липсваща почивка и не
+обединявай различни дози или цели. Превръщай дробните минути в минути и секунди
+(например 1,5 мин = 1 мин 30 с); избягвай дълги десетични дроби. Посочи скоростта
+или темпото, пулса и почивката според наличното предписание и обясни практически
+как да се изпълни задачата. Не копирай JSON, технически полета и ревизии като отговор.
 
 Използвай общите си знания за тренировъчна методика, физиология, техника,
 възстановяване и организация на заниманието. Общ въпрос не изисква лични данни,
@@ -141,6 +157,19 @@ PLAN_GENERATE поставя заявка за нов проект по теку
 Върни точно един onflows_reply. Най-много едно от query и command е попълнено.
 message е полезният отговор или краткото необходимо уточнение. За междинна справка
 не измисляй резултат. Отговорът с обяснение може да бъде подробен според въпроса.
+"""
+
+
+_FINAL_ANSWER_INSTRUCTIONS = """\nТова е окончателната стъпка за отговор, а не нова справка.
+Отговори на последния потребителски въпрос, като синтезираш вече получените свежи
+results. Справките в completed_queries са приключили; не искай да ги прочетеш пак.
+Не връщай инструментална заявка, обещание за последващо прочитане или технически
+списък на данните. В onflows_reply query=null и command=null са задължителни.
+message съдържа завършен, полезен отговор с приложимите обяснения и конкретни
+указания. При въпрос за изпълнение групирай действително еднаквите повторения,
+запази всички сесии и различни дози и използвай четими времена. Ако ключов факт
+липсва, назови точно него и обясни какво може да се заключи от наличното; не твърди,
+че данни липсват, когато съответната справка в results вече ги съдържа.
 """
 
 
@@ -485,9 +514,18 @@ class OpenAIAssistantProvider:
             if not isinstance(message.get("content"), str):
                 raise AssistantProviderError("invalid_input")
             history.append({"role": message["role"], "content": message["content"]})
+        final_answer_only = context.get("final_answer_only") is True
+        reply_tool = deepcopy(_REPLY_TOOL)
+        if final_answer_only:
+            # Keep one stable reply envelope while making another tool loop
+            # impossible under the provider's strict JSON schema.
+            reply_tool["description"] = "Return the final user-facing answer from the supplied results. No query or command is available."
+            for field in ("query", "command"):
+                reply_tool["parameters"]["properties"][field] = {"type": "null"}
+            capabilities = {**capabilities, "read": [], "write": []}
         payload = {
             "model": self.config.model,
-            "instructions": _INSTRUCTIONS,
+            "instructions": _INSTRUCTIONS + (_FINAL_ANSWER_INSTRUCTIONS if final_answer_only else ""),
             "input": [
                 {"role": "developer", "content": "Разрешени capabilities от сървъра: " + _json(capabilities)},
                 {"role": "user", "content": _json({"onflows_context": context})},
@@ -501,7 +539,7 @@ class OpenAIAssistantProvider:
             "max_output_tokens": self.config.max_output_tokens,
             "store": False,
             "parallel_tool_calls": False,
-            "tools": [deepcopy(_REPLY_TOOL)],
+            "tools": [reply_tool],
             "tool_choice": {"type": "function", "name": "onflows_reply"},
         }
         def too_large():
@@ -592,6 +630,8 @@ class OpenAIAssistantProvider:
             except Exception:
                 raise AssistantProviderError("budget_unavailable") from None
             reply = self._parse(result)
+            if context.get("final_answer_only") is True and (reply["query"] is not None or reply["command"] is not None):
+                raise AssistantProviderError("invalid_response")
             usage = self._usage(result.get("usage"), duration_ms)
             usage["budget_charge_usd"] = amount / 1_000_000_000
             _LOG.info("assistant_model_call model=%s input_tokens=%d output_tokens=%d cached_input_tokens=%d duration_ms=%d model_calls=1 estimated_cost_usd=%s price_basis=%s",

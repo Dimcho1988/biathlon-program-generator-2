@@ -79,6 +79,70 @@ class PlanStore:
             raise PersistentStoreFailure("Invalid active plan metadata")
         return record
 
+    def assistant_day(self, alias, selected):
+        """Read one complete approved day from a captured immutable revision.
+
+        The existing overview RPC exposes every approved day in stored order;
+        it never substitutes the proposal. A second projection is pinned to that
+        exact revision, even if another plan activates between the two reads.
+        No other days, proposal body or private scientific snapshot cross the
+        wire. Frozen blocks and dose evidence in the selected day stay intact.
+        """
+        from datetime import date
+        from .plan_storage import FORMAT, unpack
+        if type(selected) is not date:
+            raise ValueError("An exact calendar date is required")
+        overview = self.request("GET", "/rpc/read_onflows_management_overview"
+                                f"?p_alias={quote(alias, safe='')}")
+        if overview is None:
+            return None
+        if (not isinstance(overview, dict) or type(overview.get("revision")) is not int
+                or overview["revision"] < 1 or overview.get("record_revision") != overview["revision"]
+                or overview.get("plan_type") not in {None, "null", "object"}
+                or overview.get("proposal_type") not in {None, "null", "object"}
+                or type(overview.get("has_proposal")) is not bool
+                or overview["has_proposal"] != (overview.get("proposal_type") == "object")):
+            raise PersistentStoreFailure("Invalid assistant plan pointer")
+        dates = overview.get("days") or []
+        if not isinstance(dates, list) or any(not isinstance(day, dict) for day in dates):
+            raise PersistentStoreFailure("Invalid assistant plan dates")
+        index = next((i for i, day in enumerate(dates) if day.get("date") == selected.isoformat()), None)
+        metadata = ("generation_id", "analysis_revision", "analysis_as_of", "settings_fingerprint",
+                    "snapshot_fingerprint", "evaluation_date", "profile_revision", "engine_version", "speed_model_version")
+        fields = ["revision", "recorded_at", "status:payload->status"]
+        fields.extend(f"plan_{name}:payload->plan->{name}" for name in
+                      ("schema_version", "_storage", "engine_version", "fingerprint", "generated_at", "start_date", "end_date"))
+        for name in metadata:
+            fields.extend((f"input_{name}:payload->plan->input_snapshot->{name}",
+                           f"source_{name}:payload->plan->source->{name}"))
+        if index is not None:
+            fields.append(f"selected_day:payload->plan->days->{index}")
+        rows = self.request("GET", "/onflows_management_plan_revisions?select=" + ",".join(fields)
+                            + f"&athlete_alias=eq.{quote(alias, safe='')}&revision=eq.{overview['revision']}&limit=1")
+        if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
+                or type(rows[0].get("revision")) is not int or rows[0]["revision"] != overview["revision"]
+                or rows[0].get("status") != overview.get("status")):
+            raise PersistentStoreFailure("Pinned assistant plan revision is unavailable")
+        row = rows[0]
+        plan = None
+        if overview.get("plan_type") == "object":
+            plan = {name: row.get("plan_" + name) for name in
+                    ("schema_version", "engine_version", "fingerprint", "generated_at", "start_date", "end_date")}
+            marker = row.get("plan__storage")
+            if marker is not None:
+                if marker != FORMAT:
+                    raise PersistentStoreFailure("Unsupported stored planning format")
+                plan["_storage"] = marker
+            plan["input_snapshot"] = {name: row["input_" + name] for name in metadata if row.get("input_" + name) is not None}
+            plan["source"] = {name: row["source_" + name] for name in metadata if row.get("source_" + name) is not None}
+            day = row.get("selected_day")
+            if index is not None and (not isinstance(day, dict) or day.get("date") != selected.isoformat()):
+                raise PersistentStoreFailure("Pinned assistant plan day differs")
+            plan["days"] = [day] if index is not None else []
+        return unpack({"revision": row["revision"], "recorded_at": row.get("recorded_at"), "payload": {
+            "status": row.get("status"), "plan": plan,
+            "proposal": {} if overview["has_proposal"] else None}})
+
     def history(self, alias):
         result = self.request("GET", "/onflows_management_plan_revisions?select=revision,operation,recorded_at,"
                               "status:payload->status,changes:payload->changes,reason:payload->reason"

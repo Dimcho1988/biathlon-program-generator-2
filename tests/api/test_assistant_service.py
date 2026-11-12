@@ -1146,3 +1146,60 @@ def test_calendar_direct_request_uses_latest_date_correction():
     assert not service._direct_request(proposed,{},request,request["answers"][-1])
     proposed["patch"]["start_date"]="2027-01-10"
     assert service._direct_request(proposed,{},request,request["answers"][-1])
+
+
+def test_live_tomorrow_prompt_with_duplicate_day_read_finishes_with_coaching_answer(repo):
+    requested=query("day",date="2026-11-13")
+    repo.read_result={"query_kind":"day","availability":"AVAILABLE","date":"2026-11-13","plan_revision":818,
+        "sessions":[{"title":"Прагова тренировка","total_minutes":90,
+            "blocks":[{"label":"Работна част","duration_min":4.25,"zone":"Z3"} for _ in range(12)]}]}
+    explanation="Утре имаш прагова тренировка. Изпълни работните отсечки равномерно, като запазиш техниката и в последните повторения."
+    provider=ScriptedAssistantProvider([{"text":"","query":requested},
+        {"text":"","query":dict(reversed(list(requested.items())))},{"text":explanation}])
+    conversation=repo.seed({"nudges_enabled":False})
+    result=service.turn(repo,ALIAS,ACTOR,body("Каква тренировка имам утре, 13 ноември? Обясни подробно как да я изпълня и защо е подбрана тази доза.",conversation),provider)
+    assert result["message"]==explanation
+    assert len(repo.reads)==1 and len(provider.calls)==3 and not repo.writes
+    assert len(result["sources"])==1 and result["sources"][0]["revision"]==818
+    final=provider.calls[-1]
+    assert final["context"]["final_answer_only"] is True
+    assert final["context"]["synthesis_reason"]=="REPEATED_READ"
+    assert final["context"]["results"]==[repo.read_result]
+    assert final["capabilities"]["read"]==final["capabilities"]["write"]==[]
+
+
+def test_third_call_duplicate_still_reserves_fourth_answer_only_call(repo):
+    def read(requested):
+        return {"query_kind":requested["kind"],"availability":"AVAILABLE","date":DAY,
+            "sessions":[{"title":"Леко бягане","total_minutes":45}]} if requested["kind"]=="day" else {"query_kind":"status","availability":"AVAILABLE"}
+    repo.read_result=read
+    provider=ScriptedAssistantProvider([{"text":"","query":query("day",date=DAY)},
+        {"text":"","query":query("status")},{"text":"","query":query("day",date=DAY)},
+        {"text":"45 минути леко бягане; целта е нискоинтензивен обем с равномерно усилие."}])
+    conversation=repo.seed({"nudges_enabled":False})
+    result=service.turn(repo,ALIAS,ACTOR,body("Обясни тренировката и готовността ми",conversation),provider)
+    assert len(provider.calls)==4 and len(repo.reads)==2 and not repo.writes
+    assert "целта е" in result["message"] and "Програма за" not in result["message"]
+    assert provider.calls[-1]["context"]["synthesis_reason"]=="REPEATED_READ"
+    assert provider.calls[-1]["context"]["remaining_model_calls"]==1
+
+
+def test_fallback_day_formats_fractional_minutes_as_minutes_seconds():
+    rendered=service._render_day({"date":DAY,"plan_revision":8,"sessions":[{"title":"Сесия","total_minutes":70.83333333333333,
+        "blocks":[{"label":"Загряване","duration_min":9.833333333333334},
+                  {"label":"Работа","duration_min":0.5},{"label":"Почивка","duration_s":90}]}]})
+    assert "70:50 мин" in rendered and "Загряване: 9:50 мин" in rendered
+    assert "Работа: 0:30 мин" in rendered and "Почивка: 1:30 мин" in rendered
+    assert "833333" not in rendered
+
+
+def test_usage_from_completed_model_calls_is_retained_when_tool_fails(repo):
+    def fail_read(requested):
+        raise HTTPException(422,"Невалидна справка.")
+    repo.read_result=fail_read
+    class MeteredProvider:
+        def complete(self,*args):
+            return {"text":"","query":query("day"),"usage":{"model_calls":1,"input_tokens":100,"output_tokens":15,"estimated_cost_usd":0.001}}
+    result=service.turn(repo,ALIAS,ACTOR,body("Покажи програмата"),MeteredProvider())
+    assert result["error_code"]==422 and result["usage"]=={"model_calls":1,"input_tokens":100,"output_tokens":15,"estimated_cost_usd":0.001}
+    assert not repo.writes
