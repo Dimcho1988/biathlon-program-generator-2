@@ -174,6 +174,62 @@ def test_disabled_provider_reports_unavailable_and_still_renders_saved_day(repo,
     assert len(repo.reads) == 1 and not repo.writes
 
 
+def test_repeated_day_reads_return_current_approved_sessions_without_repeating_store_work(repo):
+    repo.read_result = {"query_kind": "day", "availability": "AVAILABLE", "date": "2026-11-13",
+        "plan_revision": 13, "plan_status": "ACTIVE", "prescription_active": True,
+        "sessions": [{"title": "Първа сесия", "total_minutes": 45,
+                      "blocks": [{"label": "Работна част", "duration_min": 30, "zone": "Z2"}]},
+                     {"title": "Втора сесия", "total_minutes": 30}]}
+    conversation = repo.seed({"nudges_enabled": False})
+    repo.conversations[conversation]["messages"] = [{"user_message": "Утрешната тренировка?",
+        "assistant_message": "Няма утвърден план за тази дата."}]
+    requested = query("day", date="2026-11-13")
+    provider = ScriptedAssistantProvider([{"text": "", "query": requested},
+        {"text": "", "query": dict(reversed(list(requested.items())))}, {"text": "", "query": requested}])
+    result = service.turn(repo, ALIAS, ACTOR, body("Вече утвърдих програмата. Покажи 13 ноември.", conversation), provider)
+    assert len(repo.reads) == 1 and len(provider.calls) == 3
+    assert "Първа сесия · 45 мин" in result["message"] and "Втора сесия · 30 мин" in result["message"]
+    assert "30 мин, Z2" in result["message"] and "версия 13" in result["message"]
+    assert "уточнение" not in result["message"] and "включване на езиковия модел" not in result["message"]
+    assert result["sources"][0]["revision"] == 13 and not repo.writes
+    for index, call in enumerate(provider.calls[1:], 1):
+        assert call["context"]["results"] == [repo.read_result]
+        assert call["context"]["completed_queries"] == [requested]
+        assert call["context"]["remaining_model_calls"] == 3-index
+
+
+def test_last_allowed_read_still_displays_resolved_day_without_fourth_model_call(repo):
+    def read_result(requested):
+        if requested["kind"] == "day":
+            return {"query_kind": "day", "date": DAY, "availability": "AVAILABLE", "plan_revision": 13,
+                    "sessions": [{"title": "Леко бягане", "total_minutes": 45}]}
+        return {"query_kind": requested["kind"], "availability": "AVAILABLE"}
+    repo.read_result = read_result
+    provider = ScriptedAssistantProvider([{"text": "", "query": query("status")},
+        {"text": "", "query": query("history")}, {"text": "", "query": query("day", date=DAY)}])
+    conversation = repo.seed({"nudges_enabled": False})
+    result = service.turn(repo, ALIAS, ACTOR, body("Покажи тренировката и наличния контекст.", conversation), provider)
+    assert len(provider.calls) == len(repo.reads) == 3
+    assert "Леко бягане · 45 мин" in result["message"] and not repo.writes
+    assert result["sources"][0]["kind"] == "day"
+
+
+def test_repeated_read_rechecks_revoked_permissions_before_another_model_call(repo):
+    repo.read_result = {"query_kind": "day", "date": DAY, "availability": "AVAILABLE", "sessions": []}
+    class RevokingProvider:
+        calls = 0
+        def complete(self, *args):
+            self.calls += 1
+            if self.calls == 2:
+                repo.permissions = dict.fromkeys(OWNER, False)
+            return {"query": query("day", date=DAY)}
+    provider = RevokingProvider()
+    with pytest.raises(HTTPException) as error:
+        service.turn(repo, ALIAS, ACTOR, body("Покажи деня."), provider)
+    assert error.value.status_code == 403
+    assert provider.calls == 2 and len(repo.reads) == 1 and "FINISH" not in repo.rpc_actions
+
+
 def test_overview_restores_latest_scoped_conversation_and_pending_operation(repo):
     provider = ScriptedAssistantProvider([{"text": "Обяснението е налично."}])
     result = service.turn(repo, ALIAS, ACTOR, body("Как работи приложението?"), provider)
