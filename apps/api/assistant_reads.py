@@ -164,7 +164,16 @@ def _management(repository, alias, access, query, today, parse_date, actor):
         # The overview cache owns all scientific calculation. Read the current
         # editable inputs separately so a just-saved race is not hidden behind
         # an older prepared outlook or a newly deployed worker's cold cache.
-        prepared = public_management(_prepared(repository, alias, "management-view", {"view": "overview", "projection": "overview-v1"}))
+        try:
+            prepared = public_management(_prepared(repository, alias, "management-view", {"view": "overview", "projection": "overview-v1"}))
+        except HTTPException as exc:
+            # An unavailable or busy computed outlook must not hide the saved
+            # goals. This exception is local to strategy: authorization and
+            # precondition failures still stop the read before current inputs.
+            if exc.status_code not in {409, 429}:
+                raise
+            prepared = {"availability": "UNAVAILABLE" if exc.status_code == 409 else "PENDING",
+                "reason": "PREPARED_STRATEGY_UNAVAILABLE" if exc.status_code == 409 else "PREPARED_STRATEGY_BUSY"}
         current_profile = ManagementStore(repository).profile(alias)
         if isinstance(current_profile.get("profile"), dict):
             current_profile = {**current_profile, "profile": normalize_building_profile(current_profile["profile"])}

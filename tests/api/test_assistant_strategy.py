@@ -136,6 +136,51 @@ def test_strategy_still_requires_plan_rights_before_current_input_reads():
     repository.athlete_settings.assert_not_called()
 
 
+@pytest.mark.parametrize("status,availability,reason", [
+    (409, "UNAVAILABLE", "PREPARED_STRATEGY_UNAVAILABLE"),
+    (429, "PENDING", "PREPARED_STRATEGY_BUSY"),
+])
+def test_strategy_computed_view_failure_keeps_current_goals(monkeypatch, status, availability, reason):
+    repository = repo()
+    monkeypatch.setattr(assistant_reads, "_prepared", Mock(side_effect=HTTPException(status, PRIVATE)))
+    profile_read = Mock(return_value={"configured": True, "revision": 6, "profile": {"sport": "Run", "discipline": "1500m"}})
+    monkeypatch.setattr("apps.api.management_store.ManagementStore.profile", profile_read)
+    event = {"event_id": "A1", "event_type": "MAIN_RACE", "name": "Current goal", "start_date": "2027-02-05", "end_date": "2027-02-05"}
+    repository.athlete_planning_calendar_snapshot = Mock(return_value={"revision": 9, "calendar": {"events": [event]}})
+    result = assistant_context.read(repository, "test-athlete", FULL, {"kind": "management", "view": "strategy"}, now=NOW)
+    assert result["availability"] == "AVAILABLE"
+    assert result["data"]["profile"]["revision"] == 6
+    assert result["data"]["current_calendar"]["next_main_race"] == event
+    assert result["data"]["prepared_availability"] == availability
+    assert result["data"]["prepared_reason"] == reason
+    assert "outlook" not in result["data"] and PRIVATE not in json.dumps(result)
+    profile_read.assert_called_once()
+    repository.active_analysis.assert_not_called()
+
+
+@pytest.mark.parametrize("status", [401, 403, 412, 500])
+def test_strategy_does_not_swallow_access_precondition_or_unexpected_errors(monkeypatch, status):
+    repository = repo()
+    monkeypatch.setattr(assistant_reads, "_prepared", Mock(side_effect=HTTPException(status, "Expected error")))
+    profile_read = Mock()
+    monkeypatch.setattr("apps.api.management_store.ManagementStore.profile", profile_read)
+    repository.athlete_planning_calendar_snapshot = Mock()
+    with pytest.raises(HTTPException) as error:
+        assistant_context.read(repository, "test-athlete", FULL, {"kind": "management", "view": "strategy"}, now=NOW)
+    assert error.value.status_code == status
+    profile_read.assert_not_called()
+    repository.athlete_planning_calendar_snapshot.assert_not_called()
+
+
+@pytest.mark.parametrize("status", [409, 429])
+def test_prepared_view_failure_fallback_is_scoped_to_strategy(monkeypatch, status):
+    repository = repo()
+    monkeypatch.setattr(assistant_reads, "_prepared", Mock(side_effect=HTTPException(status, "Expected error")))
+    with pytest.raises(HTTPException) as error:
+        assistant_context.read(repository, "test-athlete", FULL, {"kind": "management", "view": "outlook"}, now=NOW)
+    assert error.value.status_code == status
+
+
 def test_budget_recovery_is_pure_idempotent_and_preserves_context_identity():
     context = {"query_kind": "management", "source": "SAVED_APPLICATION_VIEW", "revision": 21,
         "timezone": "Europe/Sofia", "data": sample()}
