@@ -87,7 +87,7 @@ begin
    raise exception 'Invalid sync intent' using errcode='22023'; end if;
   current_revision := 0;
  elsif p_kind in ('PLANNING_PROFILE','MESOCYCLE_PREFERENCES') then
-  if p_key is distinct from case when p_kind='PLANNING_PROFILE' then 'planning-profile-v1' else 'mesocycle-accent-preferences-v1' end
+  if p_key is distinct from (case when p_kind='PLANNING_PROFILE' then 'planning-profile-v1' else 'mesocycle-accent-preferences-v1' end)
    or p_payload->>'schema_version' is distinct from p_key then
    raise exception 'Invalid planning settings identity' using errcode='22023'; end if;
   select settings_revision into current_revision from public.onflows_athlete_settings where athlete_alias=p_alias for update;
@@ -135,7 +135,7 @@ begin
    or args - array['schema_version','scope','as_of']::text[] <> '{}'::jsonb
    or args->>'schema_version' is distinct from 'sync-request-v1'
    or args->>'scope' is null or args->>'scope' not in ('FULL','WELLNESS','RECOVERY')
-   or p_payload->>'job_kind' is distinct from case args->>'scope' when 'FULL' then 'FULL_SYNC' when 'WELLNESS' then 'WELLNESS_SYNC' when 'RECOVERY' then 'RECOVERY_RESTORE' end
+   or p_payload->>'job_kind' is distinct from (case args->>'scope' when 'FULL' then 'FULL_SYNC' when 'WELLNESS' then 'WELLNESS_SYNC' when 'RECOVERY' then 'RECOVERY_RESTORE' end)
    or args->>'as_of' is null or args->>'as_of' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' then
    raise exception 'Invalid canonical sync request' using errcode='22023'; end if;
   perform (args->>'as_of')::date;
