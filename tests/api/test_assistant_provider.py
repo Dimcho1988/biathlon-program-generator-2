@@ -14,6 +14,30 @@ from apps.api.assistant_provider import (
     ScriptedAssistantProvider,
     get_assistant_provider,
 )
+from apps.api.assistant_budget import AssistantBudgetError
+
+
+class FakeBudget:
+    def __init__(self, balance=15_000_000_000):
+        self.balance = balance
+        self.reservations = {}
+        self.settlements = {}
+        self.events = []
+
+    def reserve(self, request_id, amount_nano_usd):
+        self.events.append(("reserve", request_id, amount_nano_usd))
+        if amount_nano_usd > self.balance:
+            raise AssistantBudgetError("budget_exhausted")
+        assert request_id not in self.reservations
+        self.balance -= amount_nano_usd
+        self.reservations[request_id] = amount_nano_usd
+
+    def settle(self, request_id, amount_nano_usd):
+        self.events.append(("settle", request_id, amount_nano_usd))
+        held = self.reservations[request_id]
+        assert 0 <= amount_nano_usd <= held
+        self.balance += held - amount_nano_usd
+        self.settlements[request_id] = amount_nano_usd
 
 
 def reply(**changes):
@@ -30,9 +54,10 @@ def response(value=None, **changes):
     }
 
 
-def provider(handler, **config):
+def provider(handler, *, budget=None, **config):
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    return OpenAIAssistantProvider(OpenAIProviderConfig(api_key="secret-server-key", **config), client=client)
+    return OpenAIAssistantProvider(OpenAIProviderConfig(api_key="secret-server-key", **config), client=client,
+                                  budget=FakeBudget() if budget is None else budget)
 
 
 def test_responses_request_uses_exact_model_strict_contract_and_server_only_key(caplog):
@@ -49,6 +74,8 @@ def test_responses_request_uses_exact_model_strict_contract_and_server_only_key(
     assert requests[0].url == "https://api.openai.com/v1/responses"
     assert requests[0].headers["authorization"] == "Bearer secret-server-key"
     assert payload["model"] == "gpt-6-luna" and payload["store"] is False
+    assert payload["service_tier"] == "default"
+    assert payload["prompt_cache_options"] == {"mode": "explicit"}
     assert payload["parallel_tool_calls"] is False and payload["max_output_tokens"] == 1600
     assert payload["tool_choice"] == {"type": "function", "name": "onflows_reply"}
     schema = payload["tools"][0]
@@ -155,8 +182,6 @@ def test_only_one_paid_request_can_run_per_process():
 
 
 @pytest.mark.parametrize("bad", [
-    response(status="incomplete"),
-    response(error={"message": "private"}),
     response(output=[{"type": "message", "content": "invented answer"}]),
     response(output=[{"type": "function_call", "name": "run_sql", "arguments": "{}"}]),
     response(output=response()["output"] * 2),
@@ -188,14 +213,16 @@ def test_excessive_response_and_bad_json_are_rejected():
 def test_no_implicit_fallback_or_price_for_other_configured_model():
     seen = []
     p = provider(lambda request: seen.append(json.loads(request.content)) or httpx.Response(200, json=response()), model="explicit-model")
-    assert p.complete([], {}, {})["usage"]["estimated_cost_usd"] is None
-    assert seen[0]["model"] == "explicit-model"
+    with pytest.raises(AssistantProviderError, match="budget_model_not_allowed"):
+        p.complete([], {}, {})
+    assert not seen
+    assert p._usage(response()["usage"], 1)["estimated_cost_usd"] is None
 
 
 def test_explicit_prices_override_reference_and_support_custom_model():
     p = provider(lambda request: httpx.Response(200, json=response()), model="custom-model",
                  input_usd_per_million=2.0, output_usd_per_million=4.0, cached_input_usd_per_million=0.5)
-    usage = p.complete([], {}, {})["usage"]
+    usage = p._usage(response()["usage"], 1)
     assert usage["estimated_cost_usd"] == pytest.approx((100 * 2 + 100 * 0.5 + 50 * 4) / 1_000_000)
     assert usage["price_basis"] == "CONFIGURED"
 
@@ -246,3 +273,165 @@ def test_environment_configuration_is_bounded_and_key_never_in_result(monkeypatc
     monkeypatch.setenv("ONFLOWS_ASSISTANT_MAX_OUTPUT_TOKENS", "100000")
     with pytest.raises(AssistantProviderError, match="invalid_configuration"):
         get_assistant_provider()
+
+
+def test_budget_reservation_precedes_request_and_conservative_settlement_returns_unused_hold():
+    budget = FakeBudget()
+    def handler(request):
+        assert [event[0] for event in budget.events] == ["reserve"]
+        assert budget.events[0][2] == 25_000_000
+        return httpx.Response(200, json=response())
+    result = provider(handler, budget=budget).complete([], {}, {})
+    request_id = budget.events[0][1]
+    # 200 input at worst 12h cache-write rate + 50 output, then 10% uplift.
+    assert budget.events == [("reserve", request_id, 25_000_000), ("settle", request_id, 82_500)]
+    assert result["usage"]["budget_charge_usd"] == pytest.approx(0.0000825)
+    assert budget.balance == 15_000_000_000 - 82_500
+
+
+def test_each_model_round_reserves_a_fresh_request_identity():
+    budget = FakeBudget()
+    p = provider(lambda request: httpx.Response(200, json=response()), budget=budget)
+    p.complete([], {}, {})
+    p.complete([], {"results": [{"query_kind": "day"}]}, {})
+    ids = [event[1] for event in budget.events if event[0] == "reserve"]
+    assert len(ids) == 2 and len(set(ids)) == 2
+    assert len(budget.settlements) == 2
+
+
+def test_exhausted_budget_never_sends_an_http_request():
+    budget = FakeBudget(balance=24_999_999)
+    calls = []
+    with pytest.raises(AssistantProviderError, match="budget_exhausted"):
+        provider(lambda request: calls.append(request), budget=budget).complete([], {}, {})
+    assert not calls and not budget.reservations
+
+
+def test_missing_budget_never_sends_an_http_request_even_with_injected_http_client():
+    calls = []
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: calls.append(request)))
+    p = OpenAIAssistantProvider(OpenAIProviderConfig(api_key="server-only"), client=client)
+    with pytest.raises(AssistantProviderError, match="budget_unavailable"):
+        p.complete([], {}, {})
+    assert not calls
+
+
+def test_budget_storage_failure_before_reservation_never_sends_an_http_request():
+    class BrokenBudget(FakeBudget):
+        def reserve(self, *args):
+            raise RuntimeError("private database connection details")
+    calls = []
+    with pytest.raises(AssistantProviderError, match="budget_unavailable"):
+        provider(lambda request: calls.append(request), budget=BrokenBudget()).complete([], {}, {})
+    assert not calls
+
+
+def test_settlement_failure_keeps_full_hold_and_never_returns_reply():
+    class BrokenSettlement(FakeBudget):
+        def settle(self, *args):
+            raise AssistantBudgetError("budget_unavailable")
+    budget = BrokenSettlement()
+    with pytest.raises(AssistantProviderError, match="budget_unavailable"):
+        provider(lambda request: httpx.Response(200, json=response()), budget=budget).complete([], {}, {})
+    assert len(budget.reservations) == 1 and not budget.settlements
+    assert budget.balance == 15_000_000_000 - 25_000_000
+
+
+@pytest.mark.parametrize("usage", [
+    None, {}, [], {"input_tokens": True, "output_tokens": 50},
+    {"input_tokens": 200, "output_tokens": True},
+    {"input_tokens": 0, "output_tokens": 50},
+    {"input_tokens": -1, "output_tokens": 50},
+    {"input_tokens": 70_001, "output_tokens": 50},
+    {"input_tokens": 200, "output_tokens": 1601},
+    {"input_tokens": 200, "output_tokens": -1},
+    {"input_tokens": 200, "output_tokens": 50, "input_tokens_details": []},
+    {"input_tokens": 200, "output_tokens": 50, "input_tokens_details": {"cached_tokens": 201}},
+    {"input_tokens": 200, "output_tokens": 50, "input_tokens_details": {"cached_tokens": True}},
+])
+def test_unknown_or_malformed_bill_retains_full_reservation_and_fails_closed(usage):
+    budget = FakeBudget()
+    with pytest.raises(AssistantProviderError, match="budget_usage_unknown"):
+        provider(lambda request: httpx.Response(200, json=response(usage=usage)), budget=budget).complete([], {}, {})
+    assert len(budget.reservations) == 1 and not budget.settlements
+    assert budget.balance == 15_000_000_000 - 25_000_000
+
+
+@pytest.mark.parametrize("failure", ["timeout", "transport", "bad_json", "oversized", "http_error"])
+def test_uncertain_failed_requests_keep_their_full_reservation(failure):
+    budget = FakeBudget()
+    calls = []
+    def handler(request):
+        calls.append(request)
+        if failure == "timeout":
+            raise httpx.ReadTimeout("private", request=request)
+        if failure == "transport":
+            raise httpx.ConnectError("private", request=request)
+        if failure == "bad_json":
+            return httpx.Response(200, text="private malformed JSON")
+        if failure == "oversized":
+            return httpx.Response(200, content=b"x" * (96 * 1024 + 1))
+        return httpx.Response(500, text="private error")
+    with pytest.raises(AssistantProviderError):
+        provider(handler, budget=budget).complete([], {}, {})
+    assert len(calls) == 1 and len(budget.reservations) == 1 and not budget.settlements
+    assert budget.balance == 15_000_000_000 - 25_000_000
+
+
+@pytest.mark.parametrize("code,expected", [
+    ("credit_balance_exhausted", "credit_balance_exhausted"),
+    ("insufficient_quota", "credit_balance_exhausted"),
+    ("project_spend_limit_exceeded", "provider_limit_exhausted"),
+    ("organization_spend_limit_exceeded", "provider_limit_exhausted"),
+    ("organization_usage_limit_exceeded", "provider_limit_exhausted"),
+    ("rate_limit_exceeded", "rate_limited"), ([], "rate_limited"),
+])
+def test_billing_limits_are_distinguished_without_retries_or_error_text(code, expected, caplog):
+    budget = FakeBudget()
+    calls = []
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(429, json={"error": {"code": code, "message": "private account data"}})
+    with pytest.raises(AssistantProviderError) as error:
+        provider(handler, budget=budget).complete([], {}, {})
+    assert error.value.code == expected and str(error.value) == expected
+    assert len(calls) == 1 and not budget.settlements
+    assert "private account data" not in caplog.text
+
+
+def test_changed_luna_tariff_requires_new_budget_review_before_http():
+    calls = []
+    p = provider(lambda request: calls.append(request), input_usd_per_million=0.2,
+                 output_usd_per_million=0.8, cached_input_usd_per_million=0.02)
+    with pytest.raises(AssistantProviderError, match="invalid_budget"):
+        p.complete([], {}, {})
+    assert not calls and not p._budget.events
+
+
+def test_environment_provider_wires_repository_and_fixed_budget_without_funding_it(monkeypatch):
+    monkeypatch.setenv("ONFLOWS_ASSISTANT_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "server-only")
+    monkeypatch.delenv("ONFLOWS_ASSISTANT_BUDGET_ID", raising=False)
+    repository = object()
+    p = get_assistant_provider(repository=repository)
+    assert p._budget.repository is repository
+    assert p._budget.budget_id == "onflows-staging-luna-pilot-v1"
+
+
+def test_maximum_pilot_usage_stays_below_reserved_amount():
+    p = provider(lambda request: httpx.Response(200, json=response()), max_output_tokens=4096,
+                 max_input_bytes=64 * 1024)
+    amount = p._budget_charge(response(usage={"input_tokens": 70_000, "output_tokens": 4096}))
+    assert amount == 21_502_800 and amount < 25_000_000
+
+
+@pytest.mark.parametrize("changes", [
+    {"status": "incomplete"}, {"status": "queued"}, {"status": "in_progress"},
+    {"error": {"message": "private"}},
+])
+def test_nonterminal_or_partial_responses_never_release_the_reservation(changes):
+    budget = FakeBudget()
+    with pytest.raises(AssistantProviderError, match="budget_usage_unknown"):
+        provider(lambda request: httpx.Response(200, json=response(**changes)), budget=budget).complete([], {}, {})
+    assert len(budget.reservations) == 1 and not budget.settlements
+    assert budget.balance == 15_000_000_000 - 25_000_000

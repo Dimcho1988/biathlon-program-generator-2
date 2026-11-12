@@ -164,7 +164,7 @@ def test_two_saved_sessions_reach_model_with_exact_revision_and_timezone(repo):
 
 
 def test_disabled_provider_reports_unavailable_and_still_renders_saved_day(repo, monkeypatch):
-    monkeypatch.setattr(service, "get_assistant_provider", lambda: DisabledAssistantProvider())
+    monkeypatch.setattr(service, "get_assistant_provider", lambda *, repository: DisabledAssistantProvider())
     repo.read_result = {"query_kind": "day", "availability": "AVAILABLE", "plan_revision": 8,
                         "sessions": [{"title": "Първа сесия"}, {"title": "Втора сесия"}]}
     assert service.overview(repo, ALIAS, ACTOR)["provider_available"] is False
@@ -615,3 +615,45 @@ def test_disabled_recovery_today_routes_to_status_before_generic_day_word(repo):
     result=service.turn(repo,ALIAS,ACTOR,body("Какво е възстановяването ми днес?"),DisabledAssistantProvider())
     assert repo.reads==[{"kind":"status"}]
     assert "Анализът се подготвя" in result["message"] and not repo.writes
+
+
+@pytest.mark.parametrize("code,expected", [
+    ("budget_exhausted", "изчерпан или спрян"),
+    ("budget_unavailable", "Не може да се провери"),
+    ("invalid_budget", "Не може да се провери"),
+    ("budget_usage_unknown", "Не може да се провери"),
+    ("budget_model_not_allowed", "Не може да се провери"),
+    ("credit_balance_exhausted", "Кредитът при доставчика"),
+    ("provider_limit_exhausted", "Достигнат е лимитът при доставчика"),
+])
+def test_budget_stop_is_saved_and_replayed_without_write_or_paid_retry(repo, code, expected):
+    class StoppedProvider:
+        calls = 0
+
+        def complete(self, *args):
+            self.calls += 1
+            raise AssistantProviderError(code)
+
+    provider = StoppedProvider()
+    request = body("Искам да добавя състезание.")
+    result = service.turn(repo, ALIAS, ACTOR, request, provider)
+    assert expected in result["message"]
+    assert "формулярите" in result["message"]
+    assert result["error_code"] == ("budget_unavailable" if code in {"invalid_budget", "budget_usage_unknown", "budget_model_not_allowed"} else code)
+    assert not repo.writes
+    assert not repo.conversations[result["conversation_id"]]["state"].get("pending_command")
+    assert service.turn(repo, ALIAS, ACTOR, request, provider) == result
+    assert provider.calls == 1
+
+
+def test_default_provider_receives_the_same_authorized_repository(repo, monkeypatch):
+    seen = []
+
+    def configured(*, repository):
+        seen.append(repository)
+        return DisabledAssistantProvider()
+
+    monkeypatch.setattr(service, "get_assistant_provider", configured)
+    service.overview(repo, ALIAS, ACTOR)
+    service.turn(repo, ALIAS, ACTOR, body("Как работи приложението?"))
+    assert seen == [repo, repo]
