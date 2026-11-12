@@ -205,3 +205,52 @@ it("shows an honest wait message for a long operation without resending it", asy
   expect(container.textContent).not.toContain("Заявката още се обработва");
   expect(container.querySelector("textarea")?.disabled).toBe(false);
 });
+
+it.each([["PLAN_GENERATE", "QUEUED"], ["SYNC_DATA", "QUEUED"], ["SYNC_DATA", "RETRY_WAIT"]])("keeps chat usable after accepting a background %s request in %s without claiming its result is ready", async (kind, jobStatus) => {
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response({})).mockResolvedValueOnce(response({
+    status: "COMPLETED", message: "Обновяването е заявено и се обработва във фонов режим.",
+    receipt: { kind, status: "SAVED", queued: true, refresh_state: "QUEUED", job: { status: jobStatus } },
+  }));
+  vi.stubGlobal("fetch", fetcher); await render(); await click("Какво тренирам днес?");
+  expect(container.querySelector(".assistant-receipt strong")?.textContent).toBe("Заявката е приета");
+  expect(container.textContent).not.toContain("Потвърден запис");
+  expect(container.querySelector("textarea")?.disabled).toBe(false);
+  expect(button("Какво тренирам днес?").disabled).toBe(false);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});
+
+it.each([
+  ["PLAN_GENERATE", "SUCCEEDED", "Черновата е подготвена"],
+  ["SYNC_DATA", "SUCCEEDED", "Данните са обновени"],
+  ["PLAN_GENERATE", "FAILED", "Обработката не е завършила успешно"],
+  ["SYNC_DATA", "CANCELLED", "Обработката не е завършила успешно"],
+])("distinguishes the %s job outcome %s from a saved input", async (kind, status, label) => {
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response({})).mockResolvedValueOnce(response({
+    message: "Резултатът е проверен.", receipt: { kind, status: "SAVED", job: { status } },
+  }));
+  vi.stubGlobal("fetch", fetcher); await render(); await click("Какво тренирам днес?");
+  expect(container.querySelector(".assistant-receipt strong")?.textContent).toBe(label);
+  expect(container.querySelector("textarea")?.disabled).toBe(false);
+});
+
+it("replaces a pending answer and its source metadata with the completed operation result", async () => {
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response({})).mockResolvedValueOnce(response({
+    status: "PENDING", pending: true, message: "Очаква се резултат.", sources: [{ label: "Предходна справка", revision: 3 }],
+  })).mockResolvedValueOnce(response({
+    status: "COMPLETED", message: "Сценарната оценка е 25 минути.", sources: [{ kind: "race_duration", label: "Сценарна оценка на onFlows", revision: 4, as_of: "2026-11-12" }],
+  }));
+  vi.stubGlobal("fetch", fetcher); await render(); await click("Какво тренирам днес?"); await click("Провери и продължи заявката");
+  expect(container.querySelectorAll(".assistant-message-assistant")).toHaveLength(1);
+  expect(container.textContent).not.toContain("Очаква се резултат."); expect(container.textContent).not.toContain("Предходна справка");
+  expect(container.querySelector(".assistant-sources")?.textContent).toContain("Сценарна оценка на onFlows · версия 4 · към 2026-11-12");
+  expect(container.querySelector("textarea")?.disabled).toBe(false);
+});
+
+it.each(["PLANNING_PROFILE", "MESOCYCLE_PREFERENCES"])("shows a confirmed %s input through the common receipt contract", async kind => {
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(response({})).mockResolvedValueOnce(response({
+    message: "Предпочитанията са записани.", receipt: { kind, status: "SAVED", revision: 8, refresh_state: "INVALIDATED" },
+  }));
+  vi.stubGlobal("fetch", fetcher); await render(); await click("Какво тренирам днес?");
+  expect(container.querySelector(".assistant-receipt strong")?.textContent).toBe("Потвърден запис");
+  expect(container.querySelector("textarea")?.disabled).toBe(false);
+});

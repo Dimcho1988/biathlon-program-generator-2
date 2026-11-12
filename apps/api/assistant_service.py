@@ -93,6 +93,7 @@ def _messages(rows):
 def _capabilities(access):
     writes = []
     reads = {"inputs", "navigation"}
+    read_views={}
     if access.get("can_view_recovery"):
         reads.update({"status", "history", "activities", "activity", "speed", "trainability", "learning", "response"})
         if access.get("is_owner"):
@@ -103,11 +104,16 @@ def _capabilities(access):
         reads.update({"day", "method", "management", "methods"})
     if access.get("can_view_recovery"):
         reads.add("settings")
+        if not access.get("can_view_plan"):
+            reads.add("management")
+            read_views["management"]=["sync-state"]
     if access.get("can_edit_plan"):
-        writes.append("ATHLETE_SETTINGS")
+        writes.extend(["ATHLETE_SETTINGS","PLANNING_PROFILE","MESOCYCLE_PREFERENCES"])
         if access.get("can_view_plan"):
             writes.extend(["MANAGEMENT_PROFILE", "CALENDAR_EVENT", "PLAN_ACTION", "PLAN_DAY", "PLAN_ACTIVATE", "PLAN_GENERATE"])
-    return {"read": sorted(reads), "write": [kind for kind in writes if kind in WRITE_KINDS],
+    if access.get("can_view_recovery") or access.get("can_view_plan") and access.get("can_edit_plan"):
+        writes.append("SYNC_DATA")
+    return {"read": sorted(reads), "read_views":read_views,"write": [kind for kind in writes if kind in WRITE_KINDS],
         "plan_approval": "Read the current proposal and show its exact revision before explicit approval.",
         "session_dose_change": "UNAVAILABLE_NO_CANONICAL_PREVIEW",
         "input_contract": "Read inputs first. command key=entry_key, expected_revision=current revision; patch only requested fields. "
@@ -118,9 +124,19 @@ def _capabilities(access):
 def _sources(context):
     if not context:
         return []
-    return [{"kind":str(context.get("query_kind","onflows")), "label":"Запазени данни на onFlows",
-             "revision":context.get("plan_revision",context.get("revision")),
-             "as_of":context.get("as_of") or (context.get("input_snapshot") or {}).get("analysis_as_of")}]
+    kind=str(context.get("query_kind","onflows"))
+    labels={"day":"Запазена тренировъчна програма", "method":"Методика на избраната тренировка",
+        "methods":"Каталог на тренировъчните методи", "status":"Тренировъчно състояние — моделна оценка",
+        "history":"История на изпълненото натоварване", "inputs":"Актуални входни данни",
+        "settings":"Настройки на профила", "activities":"Записани активности", "activity":"Анализ на избраната активност",
+        "speed":"Скоростен модел и тестове", "trainability":"Индекс на тренираност", "learning":"Резултати от самообучението",
+        "response":"Наблюдения и оценки", "management":"Управление на тренировъчната програма",
+        "navigation":"Функции на приложението"}
+    metadata=context.get("generation_metadata") or {}
+    label="Сценарна оценка на onFlows" if context.get("source")=="CANONICAL_WHAT_IF_PREVIEW" else labels.get(kind,"Данни на onFlows")
+    return [{"kind":kind, "label":label,
+             "revision":context.get("plan_revision",context.get("revision",context.get("source_revision",metadata.get("revision")))),
+             "as_of":context.get("as_of") or (context.get("input_snapshot") or {}).get("analysis_as_of") or metadata.get("analysis_as_of")}]
 
 
 def _read(repository, alias, actor, query):
@@ -195,8 +211,8 @@ def _explicit_write_request(message):
         return False
     if re.search(r"^(?:а\s+)?(?:какво|каква|какви|какъв|защо|колко|кога|къде|дали|обясни|покажи|виж|как\b)", text):
         return False
-    return bool(re.search(r"\b(?:въвед\w*|запиш\w*|записвай|промен\w*|премест\w*|създа\w*|добав\w*|задай|отмени|изтрий|премахни|утвърди|одобри|приеми|активирай|спри|възобнови|генерирай|обнови)\b", text)
-                or re.search(r"\bискам\s+(?:да\s+)?(?:почив\w*|тренирам|разреш\w*|забран\w*)", text))
+    return bool(re.search(r"\b(?:въвед\w*|запиш\w*|записвай|промен\w*|премест\w*|създа\w*|добав\w*|задай|отмени|изтрий|премахни|утвърди|одобри|приеми|активирай|спри|възобнови|генерирай|обнови(?:ш|те|м)?|синхронизира(?:й|ш|те|ме))\b", text)
+                or re.search(r"\bискам\s+(?:да\s+)?(?:почив\w*|тренирам|разреш\w*|забран\w*|обновя|синхронизирам)", text))
 
 
 def _write_intent(command, message):
@@ -207,7 +223,10 @@ def _write_intent(command, message):
         "CALENDAR_EVENT": r"старт|страт|състезан|лагер|събити|календар|недостъп",
         "ATHLETE_SETTINGS": r"пулс|hrmax|зон|настрой|профил|показател|часов", "RECOVERY_CONFIG": r"възстанов|recovery|умор|настрой",
         "SPEED_TEST": r"тест|скорост|участък", "PLAN_ACTION": r"план|програм|предлож|седмиц",
-        "PLAN_DAY": r"почив|тренир|ден|сесия", "PLAN_ACTIVATE": r"план|програм", "PLAN_GENERATE": r"план|програм|чернов"}
+        "PLAN_DAY": r"почив|тренир|ден|сесия", "PLAN_ACTIVATE": r"план|програм", "PLAN_GENERATE": r"план|програм|чернов",
+        "PLANNING_PROFILE":r"планира|профил|сезон|седмич|тренир|почив|спорт|дисциплин|период",
+        "MESOCYCLE_PREFERENCES":r"мезоцикл|акцент|компонент|период",
+        "SYNC_DATA":r"данн|синхрон|активност|възстанов|благосъстоян|wellness|recovery|intervals"}
     if _write_disallowed(message) or _read_request(message):
         return False
     if _explicit_write_request(message):
@@ -235,10 +254,23 @@ def _direct_request(command, entry, request, message):
     patch = command["patch"]
     if request and request.get("kind") != command["kind"]:
         return False
-    if command["kind"] not in {"DAILY", "WEIGHT", "SESSION", "MANAGEMENT_PROFILE", "CALENDAR_EVENT"}:
+    if command["kind"] not in {"DAILY", "WEIGHT", "SESSION", "MANAGEMENT_PROFILE", "CALENDAR_EVENT", "SYNC_DATA"}:
         return False
     if any(value is None for value in patch.values()) or patch.get("delete") or patch.get("include_identical_copies"):
         return False
+    if command["kind"]=="SYNC_DATA":
+        if set(patch)!={"scope"}:
+            return False
+        scope="FULL"
+        for part in text.lower().splitlines():
+            if re.search(r"благосъстоян|wellness",part):
+                scope="WELLNESS"
+            elif re.search(r"възстанов|recovery",part):
+                scope="RECOVERY"
+            elif re.search(r"всички|пълн|full",part):
+                scope="FULL"
+        if patch["scope"]!=scope:
+            return False
     if command["kind"] in {"DAILY", "WEIGHT"}:
         # Strip only the polite request wrapper, keeping the user's exact
         # observation labels and values. A rating's denominator is not its value.
@@ -348,7 +380,13 @@ def _input_request(state, message, now):
         return None
     kind = None
     if action:
-        if re.search(r"събити|старт|страт|състезан|лагер", text):
+        if re.search(r"обнов|синхрон",text) and re.search(r"данн|активност|възстанов|благосъстоян|wellness|recovery|intervals",text):
+            kind="SYNC_DATA"
+        elif re.search(r"мезоцикл|акцент",text):
+            kind="MESOCYCLE_PREFERENCES"
+        elif re.search(r"периодизац|сезон|седмичен профил",text):
+            kind="PLANNING_PROFILE"
+        elif re.search(r"събити|старт|страт|състезан|лагер", text):
             kind = "CALENDAR_EVENT"
         elif re.search(r"тегл|теж|килограм|\bкг\b", text):
             kind = "WEIGHT"
@@ -565,7 +603,8 @@ def _preview(command, entry=None):
     # A compact literal preview is independent of a model's description.
     labels={"DAILY":"дневна оценка","WEIGHT":"тегло","SESSION":"оценка на тренировка","TEST":"мониторингов тест", "LAB":"лабораторен резултат",
             "MANAGEMENT_PROFILE":"настройки за планиране","CALENDAR_EVENT":"календарно събитие","MANUAL_SPEED_TEST":"максимален скоростен тест",
-            "ATHLETE_SETTINGS":"настройки на спортиста","RECOVERY_CONFIG":"настройки за възстановяване","SPEED_TEST":"скоростен тест от записана активност"}
+            "ATHLETE_SETTINGS":"настройки на спортиста","RECOVERY_CONFIG":"настройки за възстановяване","SPEED_TEST":"скоростен тест от записана активност",
+            "PLANNING_PROFILE":"профил за сезонно и седмично планиране","MESOCYCLE_PREFERENCES":"предпочитания за мезоцикловите акценти", "SYNC_DATA":"синхронизиране на данните"}
     names={"day":"Дата","morning_kg":"Сутрешно тегло (кг)","morning_standardized":"Стандартизирано сутрешно измерване",
         "fatigue":"Умора (1–5)","sleep_quality":"Качество на съня (1–5)","sleep_hours":"Сън (часове)","soreness":"Болезненост (1–5)",
         "stress":"Стрес (1–5)","motivation":"Мотивация (1–5)","competition_motivation":"Състезателна мотивация (1–5)",
@@ -586,13 +625,14 @@ def _preview(command, entry=None):
         "laboratory":"Лаборатория","results":"Резултати","sample_id":"Проба","collection_time":"Час на пробата",
         "hrmax_bpm":"Максимална сърдечна честота (уд/мин)","hr_zone_bounds":"Граници на пулсовите зони (уд/мин)",
         "timezone":"Часова зона","activity_ref":"Избрана активност","start_s":"Начало на участъка (сек)",
-        "adaptation_mode":"Режим на адаптация","individual_learning":"Самообучение","method_library":"Настройки на методите"}
+        "adaptation_mode":"Режим на адаптация","individual_learning":"Самообучение","method_library":"Настройки на методите", "scope":"Данни за обновяване"}
     days=["понеделник","вторник","сряда","четвъртък","петък","събота","неделя"]
     def value(key,item):
         if item is None: return "изчистване"
         if isinstance(item,bool): return "да" if item else "не"
         if key=="timing":
             return {"IMMEDIATE":"непосредствено след края", "DELAYED":"10–60 минути след края", "NEXT_DAY":"на следващия ден", "UNKNOWN":"неуточнено"}.get(item,str(item))
+        if key=="scope": return {"FULL":"всички данни", "WELLNESS":"данни за благосъстоянието", "RECOVERY":"данни за възстановяването"}.get(item,str(item))
         if key=="rpe_source": return {"ONFLOWS":"ваша оценка", "INTERVALS":"Intervals"}.get(item,str(item))
         if key=="duration_minutes" and type(item) is float: return f"{item:.2f}".rstrip("0").rstrip(".")
         if isinstance(item,list) and (key.endswith("_days") or key=="training_days"):
@@ -627,6 +667,10 @@ def _receipt_message(receipt, command=None, entry=None):
         return "Резултатът от записа още не е потвърден. Провери статуса на същата заявка."
     kind=(command or {}).get("kind") or receipt.get("kind")
     action=((command or {}).get("patch") or {}).get("action") or receipt.get("plan_operation")
+    if kind=="SYNC_DATA":
+        scope=(receipt.get("sync") or {}).get("scope") or (receipt.get("job") or {}).get("scope") or ((command or {}).get("patch") or {}).get("scope")
+        label={"WELLNESS":"данните за благосъстоянието", "RECOVERY":"данните за възстановяването"}.get(scope,"данните")
+        return f"Синхронизирането на {label} е заявено. Данните се обновяват във фонов режим; заявката не означава, че обработката вече е приключила."
     if kind=="PLAN_GENERATE":
         status=(receipt.get("job") or {}).get("status")
         if status=="SUCCEEDED":
@@ -651,7 +695,7 @@ def _receipt_message(receipt, command=None, entry=None):
         details=_preview(summary_command,entry).splitlines()[1:-1]
         if details:
             message += "\n" + "\n".join(details)
-        if command["kind"] in {"MANAGEMENT_PROFILE", "CALENDAR_EVENT", "ATHLETE_SETTINGS", "RECOVERY_CONFIG", "SPEED_TEST", "MANUAL_SPEED_TEST"}:
+        if command["kind"] in {"MANAGEMENT_PROFILE", "CALENDAR_EVENT", "ATHLETE_SETTINGS", "RECOVERY_CONFIG", "SPEED_TEST", "MANUAL_SPEED_TEST", "PLANNING_PROFILE", "MESOCYCLE_PREFERENCES"}:
             message += "\nПромяната е във входните данни. Текущата утвърдена програма остава активна до приемане на ново предложение."
     return message
 
@@ -758,6 +802,27 @@ def _duration_label(value, *, seconds=False):
     return f"{minutes}:{remainder:02d} мин"
 
 
+def _render_blocks(blocks, prefix="• "):
+    lines=[]
+    kind_labels={"WORK":"Работна отсечка","RECOVERY":"Възстановяване","WARMUP":"Загряване",
+                 "COOLDOWN":"Заключителна част","REST":"Почивка"}
+    for block in blocks:
+        if block.get("kind")=="REPEAT_GROUP":
+            lines.append(prefix+f"{block['repeat_count']} повторения на следната последователност:")
+            lines.extend(_render_blocks(block["sequence"],prefix="  – "))
+            continue
+        title=block.get("label") or kind_labels.get(block.get("kind"),block.get("kind")) or "Част от тренировката"
+        details=[]
+        if block.get("duration_min") is not None: details.append(_duration_label(block["duration_min"]))
+        elif block.get("duration_s") is not None: details.append(_duration_label(block["duration_s"],seconds=True))
+        if block.get("zone"): details.append(str(block["zone"]))
+        if block.get("target_speed_kmh") is not None: details.append(f"{block['target_speed_kmh']} км/ч")
+        if block.get("target_hr_bpm") is not None: details.append(f"{block['target_hr_bpm']} уд/мин")
+        lines.append(prefix+str(title)+(": "+", ".join(details) if details else ""))
+        if isinstance(block.get("instructions"),str): lines.append(block["instructions"])
+    return lines
+
+
 def _render_day(context):
     # Also useful during provider outage; do not manufacture a workout.
     if context.get("availability") in {"UNAVAILABLE","PENDING"}:
@@ -771,16 +836,7 @@ def _render_day(context):
     for index,session in enumerate(sessions,1):
         duration=session.get("total_minutes")
         lines.append(f"\n{index}. {session.get('title') or session.get('method_id') or 'Тренировъчна сесия'}"+(" · "+_duration_label(duration) if isinstance(duration,(int,float)) else ""))
-        for block in session.get("blocks",[]):
-            title=block.get("label") or block.get("kind") or "Част от тренировката"
-            details=[]
-            if block.get("duration_min") is not None: details.append(_duration_label(block["duration_min"]))
-            elif block.get("duration_s") is not None: details.append(_duration_label(block["duration_s"],seconds=True))
-            if block.get("zone"): details.append(str(block["zone"]))
-            if block.get("target_speed_kmh") is not None: details.append(f"{block['target_speed_kmh']} км/ч")
-            if block.get("target_hr_bpm") is not None: details.append(f"{block['target_hr_bpm']} уд/мин")
-            lines.append("• "+str(title)+(": "+", ".join(details) if details else ""))
-            if isinstance(block.get("instructions"),str): lines.append(block["instructions"])
+        lines.extend(_render_blocks(session.get("blocks",[])))
         evidence=session.get("dose_evidence") or {}
         if isinstance(evidence.get("explanation"),str): lines.append("Основание за дозата: "+evidence["explanation"])
     lines.append("\nТочната структура остава достъпна и в „Седмична програма“.")
@@ -956,19 +1012,20 @@ def turn(repository,alias,actor,body,provider=None):
             athlete_timezone=settings.timezone if settings else "UTC"
             local_today=datetime.now(timezone.utc).astimezone(ZoneInfo(athlete_timezone)).date().isoformat()
             totals={"model_calls":0,"input_tokens":0,"output_tokens":0,"estimated_cost_usd":0.0}
-            force_synthesis=False
+            query_feedback=None
             for step in range(4):
                 timeout=getattr(getattr(provider,"config",None),"timeout_seconds",20)
                 if step and monotonic()-started+timeout+5>90:
                     result["message"]=_resolved_answer(contexts,input_request)
                     break
-                synthesis_only=force_synthesis or step==3
+                synthesis_only=step==3
                 capabilities=_capabilities(_permissions(repository,alias,actor))
                 if synthesis_only:
                     capabilities={**capabilities,"read":[],"write":[]}
                 reply=provider.complete(messages, {"results":contexts,"confirmed_context":state.get("preferences",[]),
-                    "completed_queries":completed_queries,"remaining_model_calls":1 if synthesis_only else max(1,3-step),
-                    "final_answer_only":synthesis_only,"synthesis_reason":"REPEATED_READ" if force_synthesis else "READ_BUDGET" if synthesis_only else None,"read_targets":state.get("read_targets",[]),
+                    "completed_queries":completed_queries,"remaining_model_calls":4-step,"remaining_read_calls":max(0,3-step),
+                    "query_feedback":query_feedback,
+                    "final_answer_only":synthesis_only,"synthesis_reason":"REPEATED_READ" if synthesis_only and query_feedback else "READ_BUDGET" if synthesis_only else None,"read_targets":state.get("read_targets",[]),
                     "pending_change":pending_change if input_request else None,"now":datetime.now(timezone.utc).isoformat(),
                     "active_input_request":input_request,
                     "athlete_timezone":athlete_timezone,"today":local_today,
@@ -989,12 +1046,23 @@ def turn(repository,alias,actor,body,provider=None):
                         # cannot consume the whole dialogue or duplicate data.
                         _permissions(repository,alias,actor)
                         context=contexts[query_keys.index(query_key)]
-                        # One duplicate is enough evidence of a tool loop.
-                        # Reserve the next call for explaining the data already
-                        # read, even when the duplicate was the third call.
-                        force_synthesis=True
+                        # Replay the completed call/result and explain the
+                        # duplicate without spending another store read. Keep
+                        # the next read slot available for a different domain;
+                        # the fourth model call is always answer-only.
+                        query_feedback={"status":"ALREADY_COMPLETED","query":requested,
+                            "result_index":query_keys.index(query_key),
+                            "instruction":"Use the completed result. Read another needed domain if a read slot remains; otherwise answer."}
                         continue
                     context=_read(repository,alias,actor,requested)
+                    query_feedback=None
+                    # These are separate app forms within the same planning
+                    # intent. A canonical input read resolves the form without
+                    # requiring the user to repeat an earlier clarification.
+                    planning_forms={"MANAGEMENT_PROFILE","PLANNING_PROFILE","MESOCYCLE_PREFERENCES"}
+                    if (input_request and input_request.get("kind") in planning_forms and requested.get("kind")=="inputs"
+                            and requested.get("input_kind") in planning_forms):
+                        input_request["kind"]=requested["input_kind"]
                     contexts.append(context)
                     completed_queries.append(requested)
                     query_keys.append(query_key)
@@ -1077,7 +1145,15 @@ def turn(repository,alias,actor,body,provider=None):
             result["message"]="Достигнат е лимитът при доставчика на ИИ услугата. Платените заявки са спрени до промяна на разрешения лимит. Запазената програма и формулярите остават достъпни."
             result["error_code"]="provider_limit_exhausted"
         elif exc.code == "input_too_large":
-            result["message"]="Справката е твърде обемна за една заявка. Посочи конкретна дата или сесия, за да я разгледаме подробно. Не е потвърден нов запис."
+            available=contexts or ([context] if context else [])
+            renderable=not input_request and any(item.get("query_kind")=="status" or
+                item.get("query_kind") in {"day","method"} and "sessions" in item and "date" in item for item in available)
+            if renderable:
+                result["message"]=_resolved_answer(available)+"\n\nПодробното обяснение от ИИ не е добавено, защото общият контекст е твърде обемен. По-горе е наличната справка от приложението."
+            elif available:
+                result["message"]="Данните са прочетени, но общият контекст е твърде обемен за подробен отговор. Нов запис не е потвърден. Раздели искането на по-малки части."
+            else:
+                result["message"]="Справката е твърде обемна за една заявка. Посочи конкретна дата или сесия, за да я разгледаме подробно. Не е потвърден нов запис."
             result["error_code"]="input_too_large"
         else:
             result["message"]="Разговорният модел временно не отговаря. Не е потвърден нов запис. Можеш да използваш формулярите и запазената програма."
@@ -1087,6 +1163,7 @@ def turn(repository,alias,actor,body,provider=None):
             raise
         result["message"]=str(exc.detail)
         result["error_code"]=exc.status_code
+    result["sources"]=[source for item in (contexts or [context]) for source in _sources(item)]
     if totals is not None:
         # Retain measured usage from completed calls if a later tool/provider
         # fails; do not invent token counts for an unsuccessful provider call.

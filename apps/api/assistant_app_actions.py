@@ -13,7 +13,8 @@ from pydantic import ValidationError
 
 from .management_schemas import ManagementActivateRequest, ManagementDayAction, ManagementPlanAction, ManagementGenerateRequest
 from .model_schemas import RecoveryConfigInput, SpeedTestInput
-from .schemas import AthleteSettingsInput
+from .schemas import (AthleteSettingsInput, AthletePlanningProfileInput,
+    MesocycleAccentPreferencesInput, SyncJobRequest)
 from .oauth_store import PersistentStoreFailure
 
 APP_INPUT_MODELS = {
@@ -24,9 +25,14 @@ APP_INPUT_MODELS = {
     "PLAN_DAY": ManagementDayAction,
     "PLAN_ACTIVATE": ManagementActivateRequest,
     "PLAN_GENERATE": ManagementGenerateRequest,
+    "PLANNING_PROFILE": AthletePlanningProfileInput,
+    "MESOCYCLE_PREFERENCES": MesocycleAccentPreferencesInput,
+    "SYNC_DATA": SyncJobRequest,
 }
 APP_COMMAND_KINDS = frozenset(APP_INPUT_MODELS)
 PLAN_KINDS = frozenset({"PLAN_ACTION", "PLAN_DAY", "PLAN_ACTIVATE", "PLAN_GENERATE"})
+EDIT_ONLY_KINDS = frozenset({"ATHLETE_SETTINGS", "PLANNING_PROFILE", "MESOCYCLE_PREFERENCES"})
+LEGACY_KEYS = {"PLANNING_PROFILE": "planning-profile-v1", "MESOCYCLE_PREFERENCES": "mesocycle-accent-preferences-v1"}
 
 
 def input_contract(kind):
@@ -35,7 +41,9 @@ def input_contract(kind):
         "properties": {k: v for k, v in schema.get("properties", {}).items() if k != "expected_revision"},
         "required_for_new_record": [k for k in schema.get("required", []) if k != "expected_revision"],
         **({"$defs": schema["$defs"]} if "$defs" in schema else {}),
-        "patch_rule": "Retain omitted fields; use the revision and entry_key from this read. Show one exact preview before applying.",
+        "patch_rule": ("Explicit data refresh can enqueue directly after this read; completion happens in the worker."
+            if kind == "SYNC_DATA" else "Retain omitted fields; use the revision and entry_key from this read. Show one exact preview before applying."),
+        **({"purpose": "Edits the /planning form record. For current managed-program controls use MANAGEMENT_PROFILE.planning_controls; these are separate app records."} if kind in LEGACY_KEYS else {}),
         **({"draft_selector": "To inspect a particular draft before activation, query inputs with date=start_date and revision=draft_revision. Omitting revision selects the latest saved draft for that date. The returned outer revision belongs to the active-plan pointer; keep it as command.expected_revision."} if kind == "PLAN_ACTIVATE" else {}),
     }
 
@@ -53,6 +61,19 @@ def _settings_state(repository, alias):
     from .routes.settings import _settings_response
     payload = _settings_response(settings).model_dump(mode="json")
     return rows[0]["settings_revision"], {k: v for k, v in payload.items() if k in AthleteSettingsInput.model_fields}
+
+
+def _legacy_state(repository, alias, kind):
+    rows = repository._json(repository._request("GET", "/onflows_athlete_settings?select=settings_revision,planning_profile,mesocycle_accent_preferences"
+        f"&athlete_alias=eq.{quote(alias, safe='')}&limit=1"))
+    if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
+            or type(rows[0].get("settings_revision")) is not int):
+        raise PersistentStoreFailure("Planning settings revision is unavailable")
+    from .oauth_store import _PlanningSettingsBundle
+    bundle = _PlanningSettingsBundle(rows)
+    value = (bundle.athlete_planning_profile() if kind == "PLANNING_PROFILE"
+        else bundle.athlete_mesocycle_accent_preferences())
+    return rows[0]["settings_revision"], value.to_payload() if value else {"schema_version": LEGACY_KEYS[kind]}
 
 
 
@@ -77,7 +98,21 @@ def read_input(repository, alias, kind, key=None, *, draft_date=None, draft_revi
     if kind not in APP_COMMAND_KINDS:
         raise HTTPException(422, "Неподдържано действие.")
     payload, revision, preview_summary = {}, 0, None
-    if kind == "ATHLETE_SETTINGS":
+    if kind in LEGACY_KEYS:
+        if key not in (None, "", LEGACY_KEYS[kind]):
+            raise HTTPException(422, "Невалиден ключ за настройките за планиране.")
+        revision, payload = _legacy_state(repository, alias, kind)
+        key = LEGACY_KEYS[kind]
+    elif kind == "SYNC_DATA":
+        if key not in (None, "", "intervals-sync"):
+            raise HTTPException(422, "Невалиден ключ за обновяването на данните.")
+        connection = repository.connection(alias)
+        if connection is None or connection.status != "CONNECTED":
+            raise HTTPException(409, "Профилът в Intervals.icu не е свързан.")
+        key = "intervals-sync"
+        # Queueing is an intent, not an overwrite of a domain record.
+        payload = {"scope": "FULL"}
+    elif kind == "ATHLETE_SETTINGS":
         if key not in (None, "", "athlete-settings"):
             raise HTTPException(422, "Невалиден ключ за настройките.")
         revision, payload = _settings_state(repository, alias)
@@ -189,6 +224,15 @@ class _AtomicAdapter:
     def __getattr__(self, name):
         return getattr(self.repository, name)
 
+    def enqueue_sync_job(self, *, athlete_alias, job_kind, idempotency_key, request_payload):
+        if self.kind != "SYNC_DATA" or athlete_alias != self.alias:
+            raise HTTPException(422, "Профилът за обновяване не съвпада.")
+        self.receipt = _commit(self.repository, self.alias, self.actor, self.operation_id, self.digest,
+            self.kind, self.key, self.revision, {"job_kind": job_kind, "request_payload": dict(request_payload)})
+        if self.receipt.get("conflict"):
+            raise HTTPException(409, "Заявката за обновяване е променена.")
+        return self.receipt.get("sync_job", {})
+
     def planning_job(self, operation, **arguments):
         if operation != "ENQUEUE" or self.kind != "PLAN_GENERATE":
             raise HTTPException(422, "Неподдържана операция за подготовка на програма.")
@@ -244,13 +288,25 @@ def execute(repository, alias, actor, operation_id, command, digest):
     previous = {k: v for k, v in current["payload"].items() if k in fields}
     merged = _merge(previous, patch)
     try:
-        body = model.model_validate(merged if kind in {"ATHLETE_SETTINGS", "PLAN_GENERATE"} else {**merged, "expected_revision": revision})
+        body = model.model_validate({**merged, **({"expected_revision": revision} if "expected_revision" in model.model_fields else {})})
     except (ValidationError, ValueError) as exc:
         raise HTTPException(422, "Проверете необходимите полета и стойностите за избраното действие.") from exc
     if kind == "PLAN_GENERATE" and (body.start_date.isoformat() != key or body.expected_profile_revision != revision):
         raise HTTPException(409, "Началната дата или профилът се промени; заредете актуалните входни данни.")
     if kind == "PLAN_ACTION" and body.action == "APPROVE" and not current["payload"].get("has_proposal"):
         raise HTTPException(409, "Няма актуално предложение за утвърждаване.")
+    if kind in LEGACY_KEYS:
+        from .cloud import AthletePlanningProfile, AthleteMesocycleAccentPreferences
+        try:
+            value = (AthletePlanningProfile(**body.model_dump()).validate() if kind == "PLANNING_PROFILE"
+                else AthleteMesocycleAccentPreferences(**body.model_dump()).validate())
+        except ValueError as exc:
+            raise HTTPException(422, "Стойностите за планиране са несъвместими.") from exc
+        if kind == "PLANNING_PROFILE" and repository.athlete_settings(alias) is None:
+            raise HTTPException(409, "Първо задайте пулсовите зони и часовата зона.")
+        if kind == "MESOCYCLE_PREFERENCES" and repository.athlete_planning_profile(alias) is None:
+            raise HTTPException(409, "Първо запишете профила за планиране.")
+        return _commit(repository, alias, actor, operation_id, digest, kind, key, revision, value.to_payload())
     if kind == "ATHLETE_SETTINGS":
         from .routes.settings import _resolve_settings
         connection = repository.connection(alias)
@@ -271,6 +327,10 @@ def execute(repository, alias, actor, operation_id, command, digest):
             raise HTTPException(422, "Участъкът не съвпада с избрания тест.")
         key = resolved
     adapter = _AtomicAdapter(repository, alias, actor, operation_id, digest, kind, key, revision)
+    if kind == "SYNC_DATA":
+        from .sync_service import enqueue_sync_job
+        enqueue_sync_job(repository=adapter, athlete_alias=alias, scope=body.scope)
+        return adapter.receipt
     if kind in {"RECOVERY_CONFIG", "SPEED_TEST"}:
         from . import model_service
         return (model_service.save_config if kind == "RECOVERY_CONFIG" else model_service.save_test)(adapter, alias, body, actor)

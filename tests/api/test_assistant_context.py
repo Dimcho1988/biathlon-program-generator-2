@@ -677,3 +677,157 @@ def test_strict_nullable_speed_query_uses_same_default_cache_key(repository):
     result = context.read(repository, ALIAS, FULL, strict_provider_query(kind="speed"), now=NOW)
     assert result["data"]["status"] == "READY"
     assert repository.prepared_view.call_args.kwargs["parameters"] == {}
+
+
+def interval_session(repetitions=17, work_seconds=30, rest_seconds=30):
+    """Synthetic saved prescription with the same long-interval shape as UI."""
+    value = session(1)
+    value["blocks"] = [{"kind": "WARMUP", "label": "Загрявка", "duration_s": 600,
+                        "zone": "Z1", "target_hr_bpm": 125, "instructions": "Плавно загряване."}]
+    for number in range(1, repetitions + 1):
+        value["blocks"].append({"kind": "WORK", "label": f"Отсечка {number}/{repetitions}",
+            "repetition": number, "duration_s": work_seconds, "duration_min": work_seconds / 60,
+            "target_speed_kmh": 18.25, "target_speed_range_kmh": [18.0, 18.5],
+            "target_hr_bpm": None, "primary_control": "SPEED_AND_QUALITY", "zone": "Z4",
+            "parent_method_card_ref": "method_library.components[0]",
+            "instructions": "Запази равномерната скорост и техниката. Пулсът е наблюдение; не ускорявай, за да достигнеш число. " * 2})
+        if number < repetitions:
+            value["blocks"].append({"kind": "RECOVERY", "label": "Активна почивка", "repetition": None,
+                "duration_s": rest_seconds, "duration_min": rest_seconds / 60, "zone": "Z1",
+                "target_hr_bpm": 125, "passive_rest": False,
+                "instructions": "Използвай цялата почивка с леко движение. Не добавяй почивка след последната отсечка."})
+    value["blocks"].append({"kind": "COOLDOWN", "label": "Разпускане", "duration_s": 300,
+                            "zone": "Z1", "instructions": "Постепенно намали усилието."})
+    value["main_work_minutes"] = repetitions * work_seconds / 60
+    value["total_minutes"] = sum(b["duration_s"] for b in value["blocks"]) / 60
+    return value
+
+
+def test_repetition_groups_round_trip_exact_doses_order_labels_and_missing_final_rest():
+    value = interval_session()
+    original = deepcopy(value)
+    result = context._session(value, "2026-11-11:1", FULL)
+    assert context.expand_blocks(result["blocks"]) == original["blocks"]
+    assert value == original
+    assert result["block_count"] == 35
+    group = result["blocks"][1]
+    assert group["kind"] == "REPEAT_GROUP" and group["repeat_count"] == 16
+    assert group["total_duration_s"] == 960
+    assert [block["kind"] for block in group["sequence"]] == ["WORK", "RECOVERY"]
+    assert result["blocks"][2]["kind"] == "WORK" and result["blocks"][2]["repetition"] == 17
+    assert result["blocks"][3]["kind"] == "COOLDOWN"
+    assert result["main_work_minutes"] == 8.5 and result["total_minutes"] == 31.5
+    assert result["dose_evidence"]["explanation"] == original["dose_evidence"]["explanation"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("duration_s", 25), ("target_speed_kmh", 18.1), ("target_speed_range_kmh", [17.9, 18.6]),
+    ("target_hr_bpm", 170), ("instructions", "Контролирай различната цел на тази отсечка."),
+    ("label", "Самостоятелна различна задача"), ("parent_method_card_ref", "method_library.components[1]")])
+def test_repetition_group_never_merges_different_execution_contracts(field, value):
+    blocks = interval_session()["blocks"]
+    blocks[11][field] = value
+    result = context.compact_blocks(blocks)
+    assert context.expand_blocks(result) == blocks
+    assert any(block.get(field) == value and block.get("repetition") == 6 for block in result)
+
+
+def test_changed_recovery_splits_groups_and_preserves_all_recovery_times():
+    blocks = interval_session()["blocks"]
+    blocks[12]["duration_s"] = 45
+    blocks[12]["duration_min"] = 0.75
+    result = context.compact_blocks(blocks)
+    assert context.expand_blocks(result) == blocks
+    assert sum(block["duration_s"] for block in context.expand_blocks(result) if block["kind"] == "RECOVERY") == 495
+
+
+def test_grouping_preserves_absent_null_and_nonsequential_repetition_metadata():
+    blocks = [{"kind": "WORK", "label": "Равномерна част", "duration_min": 1.5,
+               "instructions": "Запази зададеното усилие и техниката. " * 12,
+               **({"repetition": value} if index else {})} for index, value in enumerate((None, None, 8, 2))]
+    result = context.compact_blocks(blocks)
+    assert context.expand_blocks(result) == blocks
+    assert result[0]["repeat_count"] == 4 and result[0]["total_duration_s"] == 360
+
+
+def test_two_large_session_day_with_long_chat_fits_real_provider_payload_losslessly(repository):
+    from apps.api.assistant_provider import OpenAIAssistantProvider, OpenAIProviderConfig
+    from apps.api.assistant_service import _capabilities
+    from biathlon import method_library
+    first, second = interval_session(), interval_session(3, 480, 120)
+    # Real public catalog cards exercise structured scientific guidance; all
+    # athlete prescriptions and observations in this fixture are synthetic.
+    first["method_library"] = next(deepcopy(card) for card in method_library.entries() if card["id"] == "R15")
+    second["method_library"]["guidance"]["execution"] = "Контролирано изпълнение със запазена техника. " * 25
+    for number, saved in enumerate((first, second), 1):
+        saved["dose_evidence"].update({"explanation": "Основанието е запазено с утвърдения план. " * 12,
+            "limits": [{"code": f"LIMIT_{number}_{i}", "limit_minutes": 10 + i,
+                        "explanation": "Запазено ограничение на индивидуалната доза. " * 5} for i in range(6)],
+            "effort_profile": {"work_seconds": 30 if number == 1 else 480, "recovery_seconds": 30 if number == 1 else 120,
+                               "effort": "Запази усилието според индивидуалното предписание. " * 8}})
+    record = plan()
+    record["payload"]["plan"]["days"][0]["sessions"] = [first, second]
+    repository.plan_read.side_effect = lambda _: deepcopy(record)
+    result = context.read(repository, ALIAS, FULL, {"kind": "day"}, now=NOW)
+    for shown, saved in zip(result["sessions"], (first, second)):
+        assert context.expand_blocks(shown["blocks"]) == saved["blocks"]
+        for key in ("explanation", "limits", "effort_profile"):
+            assert shown["dose_evidence"][key] == saved["dose_evidence"][key]
+    data = {"results": [result], "completed_queries": [{"kind": "day", "date": "2026-11-11"}]}
+    original = deepcopy(data)
+    messages = [{"role": "user", "content": "Обясни предишната тренировка."},
+                {"role": "assistant", "content": "Подробно предишно обяснение за тренировъчната методика. " * 160},
+                {"role": "user", "content": "Как точно да изпълня двете сесии днес?"}]
+    provider = OpenAIAssistantProvider(OpenAIProviderConfig(api_key="unit-test-only"))
+    payload = provider._payload(messages, data, _capabilities(FULL))
+    assert len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()) <= 64 * 1024
+    assert len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) < 32 * 1024
+    assert data == original
+
+
+@pytest.mark.parametrize("kind", ["ATHLETE_SETTINGS", "PLANNING_PROFILE", "MESOCYCLE_PREFERENCES"])
+def test_editable_app_form_inputs_work_with_edit_permission_without_recovery(repository, monkeypatch, kind):
+    from apps.api import assistant_app_actions
+    reader = Mock(return_value={"availability": "AVAILABLE", "kind": kind, "revision": 3, "payload": {}})
+    monkeypatch.setattr(assistant_app_actions, "read_input", reader)
+    rights = {"can_edit_plan": True, "can_view_plan": False, "can_view_recovery": False}
+    result = context.read(repository, ALIAS, rights, {"kind": "inputs", "input_kind": kind}, now=NOW)
+    assert result["revision"] == 3 and result["input_kind"] == kind
+    reader.assert_called_once_with(repository, ALIAS, kind, None)
+
+
+@pytest.mark.parametrize("rights,allowed", [
+    ({"can_view_recovery": True}, True), ({"can_view_plan": True, "can_edit_plan": True}, True),
+    ({"can_view_plan": True}, False), ({"can_edit_plan": True}, False), ({}, False)])
+def test_sync_input_has_same_combined_app_access_before_data_is_read(repository, monkeypatch, rights, allowed):
+    from apps.api import assistant_app_actions
+    reader = Mock(return_value={"availability": "AVAILABLE", "kind": "SYNC_DATA", "revision": 0, "payload": {}})
+    monkeypatch.setattr(assistant_app_actions, "read_input", reader)
+    query = {"kind": "inputs", "input_kind": "SYNC_DATA"}
+    if allowed:
+        assert context.read(repository, ALIAS, rights, query, now=NOW)["input_kind"] == "SYNC_DATA"
+        reader.assert_called_once()
+    else:
+        with pytest.raises(HTTPException) as error:
+            context.read(repository, ALIAS, rights, query, now=NOW)
+        assert error.value.status_code == 403
+        reader.assert_not_called()
+        repository.athlete_settings.assert_not_called()
+
+
+@pytest.mark.parametrize("rights,allowed", [
+    ({"can_view_recovery": True}, True), ({"can_view_plan": True, "can_edit_plan": True}, True),
+    ({"can_view_plan": True}, False), ({"can_edit_plan": True}, False)])
+def test_sync_state_read_applies_same_permissions_as_app_without_requiring_plan_view(repository, monkeypatch, rights, allowed):
+    reader = Mock(return_value={"data": {"state": "IDLE"}})
+    monkeypatch.setattr(context.assistant_reads, "read", reader)
+    query = {"kind": "management", "view": "sync-state"}
+    if allowed:
+        assert context.read(repository, ALIAS, rights, query, now=NOW)["data"]["state"] == "IDLE"
+        reader.assert_called_once()
+    else:
+        with pytest.raises(HTTPException) as error:
+            context.read(repository, ALIAS, rights, query, now=NOW)
+        assert error.value.status_code == 403
+        reader.assert_not_called()
+        repository.athlete_settings.assert_not_called()
