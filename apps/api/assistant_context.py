@@ -6,6 +6,7 @@ returning a model response or performing a command.
 """
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
+import json
 from math import isfinite
 import re
 from urllib.parse import quote
@@ -131,6 +132,17 @@ def _require(access, key):
         raise HTTPException(403, "Нямаш достъп до тези данни за спортиста.")
 
 
+def _require_app_input(access, kind):
+    from .assistant_app_actions import EDIT_ONLY_KINDS, PLAN_KINDS
+    if kind == "SYNC_DATA":
+        if not (access.get("can_view_recovery") is True or
+                access.get("can_view_plan") is True and access.get("can_edit_plan") is True):
+            raise HTTPException(403, "Нямаш достъп до синхронизацията на този спортист.")
+    else:
+        _require(access, "can_edit_plan" if kind in EDIT_ONLY_KINDS else
+                 "can_view_plan" if kind in PLAN_KINDS else "can_view_recovery")
+
+
 def recovery_display_state(history):
     """The boolean policy of web/lib/recovery-display.ts, without raw numbers."""
     quality = history.get("data_quality") if isinstance(history, dict) else None
@@ -187,6 +199,78 @@ def _card(value):
     return card
 
 
+def _block_signature(block):
+    """Only the ordinal part of a label may differ inside one repeated cycle."""
+    comparable = {key: item for key, item in block.items() if key != "repetition"}
+    repetition, label = block.get("repetition"), block.get("label")
+    if type(repetition) is int and isinstance(label, str):
+        comparable["label"] = re.sub(rf"(?<!\d){repetition}(?=/\d+)", "{repetition}", label)
+    return json.dumps(comparable, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def compact_blocks(blocks):
+    """Lossless ordered cycles; no rounding of targets or invented final rest."""
+    signatures = [_block_signature(block) for block in blocks]
+    result, index = [], 0
+    while index < len(blocks):
+        best = None
+        # Includes compound recipes while keeping unlike preparation/series
+        # boundaries separate. Only byte-identical targets/instructions match.
+        for width in range(1, min(8, (len(blocks) - index) // 2) + 1):
+            count = 1
+            pattern = signatures[index:index + width]
+            while signatures[index + count * width:index + (count + 1) * width] == pattern:
+                count += 1
+            if count < 2:
+                continue
+            sequence = []
+            for position in range(width):
+                occurrences = blocks[index + position:index + count * width:width]
+                template = deepcopy(occurrences[0])
+                varying = [key for key in ("label", "repetition") if any(
+                    (key in row, row.get(key)) != (key in template, template.get(key)) for row in occurrences)]
+                if varying:
+                    for key in varying:
+                        template.pop(key, None)
+                    template["occurrences"] = [{key: row[key] for key in varying if key in row} for row in occurrences]
+                sequence.append(template)
+            group = {"kind": "REPEAT_GROUP", "repeat_count": count, "block_count": count * width,
+                     "sequence": sequence}
+            durations = [block.get("duration_s") if isinstance(block.get("duration_s"), (int, float))
+                         else block["duration_min"] * 60 if isinstance(block.get("duration_min"), (int, float))
+                         else None for block in blocks[index:index + count * width]]
+            if all(isinstance(v, (int, float)) and not isinstance(v, bool) and isfinite(v) for v in durations):
+                group["total_duration_s"] = round(sum(durations), 6)
+            original_size = sum(len(signatures[i]) for i in range(index, index + count * width))
+            saved = original_size - len(json.dumps(group, ensure_ascii=False, separators=(",", ":")))
+            if saved > 64 and (best is None or saved > best[0]):
+                best = saved, count * width, group
+        if best:
+            result.append(best[2])
+            index += best[1]
+        else:
+            result.append(deepcopy(blocks[index]))
+            index += 1
+    return result
+
+
+def expand_blocks(blocks):
+    """Restore the exact saved order for deterministic rendering or inspection."""
+    result = []
+    for block in blocks:
+        if block.get("kind") != "REPEAT_GROUP":
+            result.append(deepcopy(block))
+            continue
+        for repetition in range(block["repeat_count"]):
+            for item in block["sequence"]:
+                expanded = deepcopy(item)
+                occurrences = expanded.pop("occurrences", None)
+                if occurrences is not None:
+                    expanded.update(occurrences[repetition])
+                result.append(expanded)
+    return result
+
+
 def _session(value, identity, access):
     result = {**_pick(value, SESSION_FIELDS), "session_id": identity}
     result["blocks"] = []
@@ -198,6 +282,11 @@ def _session(value, identity, access):
             if isinstance(block.get(key), dict):
                 shown[key] = _card(block[key])
         result["blocks"].append(shown)
+    original_blocks = result["blocks"]
+    result["blocks"] = compact_blocks(original_blocks)
+    if any(block.get("kind") == "REPEAT_GROUP" for block in result["blocks"]):
+        result["block_count"] = len(original_blocks)
+        result["block_encoding"] = "ORDERED_REPEAT_GROUPS_V1: execute sequence in order repeat_count times; occurrences stores each repeat's exact label/number. A final unpaired work block has no added rest."
     if isinstance(value.get("method_library"), dict):
         result["method_library"] = _card(value["method_library"])
     if access.get("can_view_recovery") is True:
@@ -328,9 +417,9 @@ def _entry(repository, alias, kind, key):
 def _inputs(repository, alias, access, query, today):
     kind = query.get("input_kind")
     key = query.get("key") or query.get("entry_key")
-    from .assistant_app_actions import APP_COMMAND_KINDS, PLAN_KINDS, read_input
+    from .assistant_app_actions import APP_COMMAND_KINDS, read_input
     if kind in APP_COMMAND_KINDS:
-        _require(access, "can_edit_plan" if kind == "ATHLETE_SETTINGS" else "can_view_plan" if kind in PLAN_KINDS else "can_view_recovery")
+        _require_app_input(access, kind)
         selectors = {"draft_date": query.get("date") or query.get("start"), "draft_revision": query.get("revision")} if kind == "PLAN_ACTIVATE" else {}
         return read_input(repository, alias, kind, key, **selectors)
     if kind is None:
@@ -430,15 +519,17 @@ def read(repository, alias, access, query, now=None, *, actor=None):
     # interval start). This normalization must never touch command patches,
     # where null is an explicit request to clear a nullable input.
     query = {key: value for key, value in query.items() if value is not None}
-    from .assistant_app_actions import PLAN_KINDS
+    from .assistant_app_actions import APP_COMMAND_KINDS
     if query["kind"] == "navigation":
         if not (access.get("can_view_plan") or access.get("can_view_recovery")):
             raise HTTPException(403, "Нямаш достъп до данните на този спортист.")
         from .assistant_navigation import read as navigation
         return {"schema_version": VERSION, "query_kind": "navigation", **navigation(access, query.get("key") or "")}
-    if query["kind"] == "inputs" and query.get("input_kind") == "ATHLETE_SETTINGS":
-        _require(access, "can_edit_plan")
-    elif query["kind"] in PLAN_QUERY_KINDS or query["kind"] == "inputs" and query.get("input_kind") in {"MANAGEMENT_PROFILE", "CALENDAR_EVENT", *PLAN_KINDS}:
+    if query["kind"] == "management" and query.get("view") == "sync-state":
+        _require_app_input(access, "SYNC_DATA")
+    elif query["kind"] == "inputs" and query.get("input_kind") in APP_COMMAND_KINDS:
+        _require_app_input(access, query["input_kind"])
+    elif query["kind"] in PLAN_QUERY_KINDS or query["kind"] == "inputs" and query.get("input_kind") in {"MANAGEMENT_PROFILE", "CALENDAR_EVENT"}:
         _require(access, "can_view_plan")
     else:
         _require(access, "can_view_recovery")

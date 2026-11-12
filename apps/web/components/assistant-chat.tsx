@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 type Source = { kind?: string; label?: string; revision?: number | string; as_of?: string };
-type Receipt = { status?: string; kind?: string; revision?: number; operation_id?: string; message?: string };
+type Receipt = { status?: string; kind?: string; revision?: number; operation_id?: string; message?: string; queued?: boolean; refresh_state?: string; job?: { status?: string }; conflict?: boolean };
 type Reply = { status?: string; conversation_id?: string; operation_id?: string; message?: string; error?: string; sources?: Source[]; receipt?: Receipt; suggestions?: string[]; pending?: boolean; provider_available?: boolean; messages?: unknown; pending_operation?: unknown };
 type Message = { id: string; role: "user" | "assistant"; content: string; sources?: Source[]; receipt?: Receipt; pending?: boolean };
 type Submission = { operation_id: string; conversation_id: string | null; message: string };
@@ -22,7 +22,15 @@ const safePending = (input: unknown, conversation: string | null): Submission | 
   return { operation_id: value.operation_id, conversation_id: value.conversation_id, message: value.message };
 };
 const safeSuggestions = (input: unknown) => Array.isArray(input) ? input.filter((value): value is string => typeof value === "string" && value.length <= 300).slice(0, 4) : [];
-const receiptLabel = (status?: string) => ({ SUCCEEDED: "Потвърден запис", SAVED: "Потвърден запис", COMMITTED: "Потвърден запис", COMPLETED: "Потвърден запис", CONFLICT: "Необходима е проверка на версията", PENDING: "Обработва се", UNKNOWN: "Резултатът се проверява" })[status?.toUpperCase() ?? ""] ?? "Резултат от операцията";
+function receiptLabel(receipt: Receipt) {
+  const status = receipt.status?.toUpperCase();
+  const jobStatus = receipt.job?.status?.toUpperCase();
+  if (receipt.conflict || status === "CONFLICT") return "Необходима е проверка на версията";
+  if (jobStatus === "FAILED" || jobStatus === "CANCELLED") return "Обработката не е завършила успешно";
+  if (jobStatus === "SUCCEEDED") return receipt.kind === "PLAN_GENERATE" ? "Черновата е подготвена" : receipt.kind === "SYNC_DATA" ? "Данните са обновени" : "Обработката е завършена";
+  if (receipt.queued || receipt.refresh_state === "QUEUED" || jobStatus === "QUEUED" || jobStatus === "RUNNING") return "Заявката е приета";
+  return ({ SUCCEEDED: "Потвърден запис", SAVED: "Потвърден запис", COMMITTED: "Потвърден запис", COMPLETED: "Потвърден запис", PENDING: "Обработва се", UNKNOWN: "Резултатът се проверява" })[status ?? ""] ?? "Резултат от операцията";
+}
 
 const APP_LINKS = new Set(["/", "/?settings=edit", "/account", "/activities", "/management", "/management/outlook", "/planning", "/trainability", "/methods", "/speed", "/learning", "/response", "/assistant", "/api/integrations/intervals/connect"]);
 const ACCOUNT_SECTIONS = new Set(["role-profile-title", "invites-title", "athletes-title", "create-team-title", "link-athlete-title", "password-guidance"]);
@@ -226,7 +234,7 @@ export function AssistantChat({ athleteAlias, actorUserId, displayName, canEditP
           {restoring && <p className="assistant-working" role="status">Зареждам разговора…</p>}
           {!restoring && !messages.length && <div className="assistant-welcome"><span className="assistant-welcome-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M27 15a11 11 0 0 1-11 11H8l-5 4V15a12 12 0 0 1 24 0Z"/><path d="M9 13h14M9 18h9"/></svg></span><h2>С какво да започнем?</h2><p>Попитайте как да изпълните тренировката, обсъдете методиката или поискайте промяна в достъпните ви настройки.</p></div>}
           {messages.map((item, index) => <article key={item.id} ref={index === messages.length - 1 ? latestMessage : undefined} className={`assistant-message assistant-message-${item.role}`}><span className="assistant-message-role">{item.role === "user" ? "Вие" : "onFlows асистент"}</span><div className="assistant-message-content">{item.role === "assistant" ? <AssistantText text={item.content}/> : item.content}</div>
-            {item.receipt && !item.pending && <div className="assistant-receipt"><strong>{receiptLabel(item.receipt.status)}</strong>{item.receipt.message && !item.content.includes(item.receipt.message) && <span>{item.receipt.message}</span>}{item.receipt.revision !== undefined && <details><summary>Подробности за записа</summary><small>Версия {item.receipt.revision}</small></details>}</div>}
+            {item.receipt && !item.pending && <div className="assistant-receipt"><strong>{receiptLabel(item.receipt)}</strong>{item.receipt.message && !item.content.includes(item.receipt.message) && <span>{item.receipt.message}</span>}{item.receipt.revision !== undefined && <details><summary>Подробности за записа</summary><small>Версия {item.receipt.revision}</small></details>}</div>}
             {!!item.sources?.length && <details className="assistant-sources"><summary>Основание и версия</summary><ul>{item.sources.map((source, index) => <li key={index}>{source.label ?? source.kind ?? "Запазени данни от onFlows"}{source.revision !== undefined ? ` · версия ${source.revision}` : ""}{source.as_of ? ` · към ${source.as_of}` : ""}</li>)}</ul></details>}
           </article>)}
           {busy && <p className="assistant-working" role="status"><span className="assistant-thinking" aria-hidden="true"/>{longWait ? "Заявката още се обработва. При промяна на програмата изчислението може да отнеме повече време. Резултатът ще се появи тук." : "Обработвам заявката…"}</p>}

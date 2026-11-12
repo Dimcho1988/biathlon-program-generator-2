@@ -185,9 +185,10 @@ def test_repeated_day_reads_return_current_approved_sessions_without_repeating_s
         "assistant_message": "Няма утвърден план за тази дата."}]
     requested = query("day", date="2026-11-13")
     provider = ScriptedAssistantProvider([{"text": "", "query": requested},
-        {"text": "", "query": dict(reversed(list(requested.items())))}, {"text": "", "query": requested}])
+        {"text": "", "query": dict(reversed(list(requested.items())))}, {"text": "", "query": requested},
+        {"text":"Програма, версия 13: Първа сесия · 45 мин; работна част 30 мин, Z2. Втора сесия · 30 мин."}])
     result = service.turn(repo, ALIAS, ACTOR, body("Вече утвърдих програмата. Покажи 13 ноември.", conversation), provider)
-    assert len(repo.reads) == 1 and len(provider.calls) == 3
+    assert len(repo.reads) == 1 and len(provider.calls) == 4
     assert "Първа сесия · 45 мин" in result["message"] and "Втора сесия · 30 мин" in result["message"]
     assert "30 мин, Z2" in result["message"] and "версия 13" in result["message"]
     assert "уточнение" not in result["message"] and "включване на езиковия модел" not in result["message"]
@@ -195,7 +196,9 @@ def test_repeated_day_reads_return_current_approved_sessions_without_repeating_s
     for index, call in enumerate(provider.calls[1:], 1):
         assert call["context"]["results"] == [repo.read_result]
         assert call["context"]["completed_queries"] == [requested]
-        assert call["context"]["remaining_model_calls"] == 3-index
+        assert call["context"]["remaining_model_calls"] == 4-index
+    assert provider.calls[-1]["context"]["final_answer_only"] is True
+    assert provider.calls[-1]["context"]["remaining_read_calls"]==0
 
 
 def test_distinct_reads_reserve_a_final_synthesis_call(repo):
@@ -1162,10 +1165,11 @@ def test_live_tomorrow_prompt_with_duplicate_day_read_finishes_with_coaching_ans
     assert len(repo.reads)==1 and len(provider.calls)==3 and not repo.writes
     assert len(result["sources"])==1 and result["sources"][0]["revision"]==818
     final=provider.calls[-1]
-    assert final["context"]["final_answer_only"] is True
-    assert final["context"]["synthesis_reason"]=="REPEATED_READ"
+    assert final["context"]["final_answer_only"] is False
+    assert final["context"]["query_feedback"]["status"]=="ALREADY_COMPLETED"
     assert final["context"]["results"]==[repo.read_result]
-    assert final["capabilities"]["read"]==final["capabilities"]["write"]==[]
+    assert final["context"]["remaining_model_calls"]==2
+    assert final["context"]["remaining_read_calls"]==1
 
 
 def test_third_call_duplicate_still_reserves_fourth_answer_only_call(repo):
@@ -1203,3 +1207,78 @@ def test_usage_from_completed_model_calls_is_retained_when_tool_fails(repo):
     result=service.turn(repo,ALIAS,ACTOR,body("Покажи програмата"),MeteredProvider())
     assert result["error_code"]==422 and result["usage"]=={"model_calls":1,"input_tokens":100,"output_tokens":15,"estimated_cost_usd":0.001}
     assert not repo.writes
+
+
+def test_duplicate_settings_read_keeps_slot_for_speed_tests_before_final_answer(repo):
+    settings_query=query("settings")
+    speed_query=query("speed",view="tests")
+    settings={"query_kind":"settings","availability":"AVAILABLE","data":{"hrmax_bpm":195}}
+    tests={"query_kind":"speed","availability":"AVAILABLE","data":{"tests":[{"duration_s":300,"speed_kmh":20}]}}
+    repo.read_result=lambda requested:settings if requested["kind"]=="settings" else tests
+    provider=ScriptedAssistantProvider([{"text":"","query":settings_query},
+        {"text":"","query":settings_query},{"text":"","query":speed_query},
+        {"text":"Максималният пулс е 195 уд/мин. Наличен е тест за 5 минути със скорост 20 км/ч."}])
+    result=service.turn(repo,ALIAS,ACTOR,body("Покажи настройките ми и кои скоростни тестове са записани."),provider)
+    assert len(provider.calls)==4 and repo.reads==[settings_query,speed_query]
+    third=provider.calls[2]["context"]
+    assert third["final_answer_only"] is False and third["remaining_model_calls"]==2 and third["remaining_read_calls"]==1
+    assert third["query_feedback"]=={"status":"ALREADY_COMPLETED","query":settings_query,"result_index":0,
+        "instruction":"Use the completed result. Read another needed domain if a read slot remains; otherwise answer."}
+    final=provider.calls[3]["context"]
+    assert final["completed_queries"]==[settings_query,speed_query]
+    assert final["results"]==[settings,tests] and final["final_answer_only"] is True
+    assert final["query_feedback"] is None and final["remaining_model_calls"]==1
+    assert "195" in result["message"] and "20 км/ч" in result["message"] and len(result["sources"])==2
+    assert not repo.writes
+
+
+def test_sources_distinguish_scenarios_navigation_and_saved_model_revisions():
+    scenario=service._sources({"query_kind":"management","source":"CANONICAL_WHAT_IF_PREVIEW","source_revision":14})[0]
+    assert scenario["label"]=="Сценарна оценка на onFlows" and scenario["revision"]==14
+    navigation=service._sources({"query_kind":"navigation"})[0]
+    assert navigation["label"]=="Функции на приложението" and navigation["revision"] is None
+    saved=service._sources({"query_kind":"activity","generation_metadata":{"revision":25,"analysis_as_of":"2026-11-12"}})[0]
+    assert saved["revision"]==25 and saved["as_of"]=="2026-11-12"
+    assert service._sources(None)==[]
+
+
+def test_fallback_repeat_groups_show_one_sequence_and_preserve_unpaired_final_work():
+    rendered=service._render_day({"date":DAY,"plan_revision":8,"sessions":[{"title":"Интервали","blocks":[
+        {"kind":"REPEAT_GROUP","repeat_count":5,"block_count":10,"total_duration_s":300,"sequence":[
+            {"kind":"WORK","duration_s":30,"zone":"Z5","target_speed_kmh":20,"occurrences":[{"repetition":i} for i in range(1,6)]},
+            {"kind":"RECOVERY","duration_s":30,"zone":"Z1"}]},
+        {"kind":"WORK","label":"Последна отсечка","duration_s":30,"zone":"Z5","target_speed_kmh":20}]}]})
+    assert "5 повторения на следната последователност" in rendered
+    assert rendered.count("Възстановяване: 30 сек, Z1")==1
+    assert rendered.count("20 км/ч")==2 and "Последна отсечка: 30 сек, Z5" in rendered
+    assert "REPEAT_GROUP" not in rendered and "occurrences" not in rendered
+
+
+def test_recovery_viewer_can_request_same_data_sync_as_the_app(repo):
+    repo.permissions={"is_owner":False,"can_view_plan":False,"can_view_recovery":True,"can_edit_plan":False}
+    repo.read_result={"query_kind":"inputs","kind":"SYNC_DATA","entry_key":"intervals-sync","revision":0}
+    provider=ScriptedAssistantProvider([{"text":"","query":query("inputs",input_kind="SYNC_DATA",key="intervals-sync")},
+        {"text":"","command":command("SYNC_DATA",key="intervals-sync",revision=0,patch={"scope":"FULL"})}])
+    result=service.turn(repo,ALIAS,ACTOR,body("Обнови данните от Intervals"),provider)
+    assert len(repo.writes)==1 and repo.writes[0]["kind"]=="SYNC_DATA"
+    assert "Синхронизирането" in result["message"] and "не означава" in result["message"]
+
+
+def test_sync_scope_correction_does_not_authorize_a_different_scope():
+    request={"kind":"SYNC_DATA","request":"Обнови данните", "answers":["Само данните за възстановяване"]}
+    proposed={"kind":"SYNC_DATA","entry_key":"intervals-sync","expected_revision":0,"patch":{"scope":"FULL"}}
+    assert not service._direct_request(proposed,{},request,request["answers"][-1])
+    proposed["patch"]["scope"]="RECOVERY"
+    assert service._direct_request(proposed,{},request,request["answers"][-1])
+
+
+def test_canonical_planning_form_read_keeps_clarification_authorization(repo):
+    repo.read_result={"query_kind":"inputs","kind":"PLANNING_PROFILE","entry_key":"planning-profile-v1","revision":4}
+    provider=ScriptedAssistantProvider([{"text":"","query":query("inputs",input_kind="PLANNING_PROFILE",key="planning-profile-v1")},
+        {"text":"Коя е началната дата?"},{"text":"","query":query("inputs",input_kind="PLANNING_PROFILE",key="planning-profile-v1")},
+        {"text":"","command":command("PLANNING_PROFILE",key="planning-profile-v1",revision=4,patch={"start_date":"2026-12-01"})}])
+    first=service.turn(repo,ALIAS,ACTOR,body("Промени профила за планиране"),provider)
+    result=service.turn(repo,ALIAS,ACTOR,body("2026-12-01",first["conversation_id"]),provider)
+    assert "Предложена промяна" in result["message"] and "2026-12-01" in result["message"]
+    assert not repo.writes
+    assert provider.calls[-1]["context"]["active_input_request"]["kind"]=="PLANNING_PROFILE"

@@ -17,7 +17,7 @@ from .oauth_store import PersistentStoreFailure
 KINDS = frozenset({"settings", "activities", "activity", "speed", "trainability", "learning", "response", "management", "methods"})
 PLAN_KINDS = frozenset({"management", "methods"})
 PHASES = frozenset({"GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION", "RE_ENTRY", "TRANSITION"})
-PARAMETERS = frozenset({"activity_ref", "sport", "view", "days", "phase", "offset", "limit", "section", "duration_s", "distance_m", "speed_kmh", "hr_bpm", "start_s", "revision", "plan_kind", "test_mode"})
+PARAMETERS = frozenset({"activity_ref", "sport", "view", "days", "phase", "offset", "limit", "section", "duration_s", "distance_m", "speed_kmh", "hr_bpm", "start_s", "revision", "plan_kind", "test_mode", "discipline", "race_duration_min"})
 
 
 def _page(payload, query):
@@ -154,8 +154,16 @@ def _activities(repository, alias, query, today, parse_date):
 
 def _management(repository, alias, access, query, today, parse_date, actor):
     view = query.get("view") or "overview"
-    if view not in {"overview", "week", "profile", "outlook", "active", "drafts", "draft-metadata", "state", "checks", "speed-comparison", "generation-jobs"}:
+    if view not in {"overview", "week", "profile", "outlook", "active", "drafts", "draft-metadata", "state", "checks", "speed-comparison", "generation-jobs", "race-duration", "sync-state"}:
         raise HTTPException(422, "Неподдържан изглед на програмата.")
+    if view == "sync-state":
+        if not (access.get("can_view_recovery") is True or (access.get("can_view_plan") is True and access.get("can_edit_plan") is True)):
+            raise HTTPException(403, "Нямаш достъп до обновяването на данните.")
+        from .sync_service import public_sync_state
+        return {"sync": public_sync_state(repository.sync_state(alias)).model_dump(mode="json")}
+    if view == "race-duration":
+        from .assistant_race_duration import read as race_preview
+        return race_preview(repository, alias, access, query)
     if view == "generation-jobs":
         if access.get("can_edit_plan") is not True or not actor:
             raise HTTPException(403, "Нужно е право за редакция на плана.")
@@ -346,12 +354,12 @@ def read(repository, alias, access, query, settings, today, parse_date, *, actor
         raise HTTPException(422, "Неподдържана справка.")
     if access.get("can_view_recovery") is not True:
         from .assistant_read_projection import project_management, project_methods
-        if kind == "management":
+        if kind == "management" and query.get("view") not in {"race-duration", "sync-state"}:
             payload = project_management(payload, query.get("view") or "overview")
         elif kind == "methods":
             payload = project_methods(payload)
     if payload.get("availability") in {"PENDING", "UNAVAILABLE"}:
         return payload
-    return {"availability": "AVAILABLE", "source": "SAVED_APPLICATION_VIEW",
+    return {"availability": "AVAILABLE", "source": "CANONICAL_WHAT_IF_PREVIEW" if kind == "management" and query.get("view") == "race-duration" else "SAVED_APPLICATION_VIEW",
         **{key: payload[key] for key in ("as_of", "revision", "source_revision", "source_generation_id", "generation_id") if key in payload},
         **_page(payload, query)}

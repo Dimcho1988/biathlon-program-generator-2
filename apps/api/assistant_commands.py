@@ -16,7 +16,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from .body_observations import LabReport, WeightReport
-from .assistant_app_actions import APP_COMMAND_KINDS, PLAN_KINDS
+from .assistant_app_actions import APP_COMMAND_KINDS, PLAN_KINDS, EDIT_ONLY_KINDS
 from .model_schemas import ManualSpeedTestInput
 from .oauth_store import PersistentStoreFailure
 from .response_monitoring import DailyReport, OptionalTest, ResponseBlock, SessionReport
@@ -153,10 +153,12 @@ def execute(repository, alias, actor, operation_id, command):
         raise HTTPException(422, "Липсва актуалната версия на записа.")
     operation_id = UUID(str(operation_id))
     permissions = access(repository, alias, actor)
-    if kind not in PLANNING_KINDS | PLAN_KINDS | {"ATHLETE_SETTINGS"} and not permissions["can_view_recovery"]:
+    if kind == "SYNC_DATA" and not (permissions["can_view_recovery"] or (permissions["can_view_plan"] and permissions["can_edit_plan"])):
+        raise HTTPException(403, "Нямате право да обновявате данните на този спортист.")
+    if kind not in PLANNING_KINDS | PLAN_KINDS | EDIT_ONLY_KINDS | {"SYNC_DATA"} and not permissions["can_view_recovery"]:
         raise HTTPException(403, "Нямате достъп до наблюденията на този спортист.")
     if (kind in OWNER_KINDS and not permissions["is_owner"]
-            or kind not in OWNER_KINDS and not permissions["can_edit_plan"]
+            or kind not in OWNER_KINDS | {"SYNC_DATA"} and not permissions["can_edit_plan"]
             or kind in PLANNING_KINDS | PLAN_KINDS and not permissions["can_view_plan"]):
         raise HTTPException(403, "Нямате право да променяте тези данни.")
     digest = request_hash(command)
