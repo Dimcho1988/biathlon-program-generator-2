@@ -1,14 +1,14 @@
 """Bounded conversation orchestration; training decisions stay in canonical services."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 import logging
 import os
 import re
 from time import monotonic
 from uuid import UUID
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException
 
@@ -243,19 +243,66 @@ def _receipt_message(receipt):
             "Производните изгледи се обновяват по съществуващите правила. Това потвърждение не означава, че нова тренировъчна програма е готова или приета.")
 
 
+def _fallback_day_query(repository, alias, message):
+    """Resolve the fallback's small date vocabulary without changing the day."""
+    normalized=message.lower().strip()
+    explicit=set(re.findall(r"\b\d{4}-\d{2}-\d{2}\b",normalized))
+    relative=set()
+    for pattern,offset in ((r"\b(?:днес|днеш\w*)\b",0),
+                           (r"\b(?:утре|утреш\w*)\b",1),
+                           (r"\b(?:вчера|вчераш\w*)\b",-1)):
+        if re.search(pattern,normalized):
+            relative.add(offset)
+    clarification="За коя точна дата да покажа програмата? Поддържам „днес“, „утре“, „вчера“ или дата като 2026-11-15."
+    if len(explicit)>1 or len(relative)>1 or (explicit and relative):
+        return None,clarification
+    # Partial, named and offset dates require clarification. Never replace one
+    # of these unsupported expressions with today's prescription.
+    remainder=re.sub(r"\b\d{4}-\d{2}-\d{2}\b","",normalized)
+    unclear=(r"\b\d{1,4}[./-]\d{1,2}(?:[./-]\d{1,4})?\b"
+        r"|\b(?:понеделник|вторник|сряда|четвъртък|петък|събота|неделя|завчера|другиден|вдругиден)\b"
+        r"|\b(?:януари|февруари|март|април|май|юни|юли|август|септември|октомври|ноември|декември)\b"
+        r"|\b(?:след|преди)\s+\d+\s+д(?:ен|ни)\b|\bседмиц\w*\b"
+        r"|\b(?:на|за)\s+\d{1,2}\b")
+    if re.search(unclear,remainder):
+        return None,clarification
+    if explicit:
+        selected=next(iter(explicit))
+        try:
+            date.fromisoformat(selected)
+        except ValueError:
+            return None,"Посочи валидна календарна дата във формат ГГГГ-ММ-ДД."
+        return {"kind":"day","date":selected},None
+    if relative and relative!={0}:
+        reader=getattr(repository,"athlete_settings",None)
+        settings=reader(alias) if callable(reader) else None
+        if settings is None:
+            return None,"Не е налична часовата зона на спортиста. Посочи точната дата във формат ГГГГ-ММ-ДД."
+        try:
+            local_today=datetime.now(timezone.utc).astimezone(ZoneInfo(settings.timezone)).date()
+        except (AttributeError,TypeError,ValueError,ZoneInfoNotFoundError):
+            return None,"Не е налична валидна часова зона на спортиста. Посочи точната дата във формат ГГГГ-ММ-ДД."
+        return {"kind":"day","date":(local_today+timedelta(days=next(iter(relative)))).isoformat()},None
+    # The canonical day reader resolves 'today' in the athlete's timezone.
+    return {"kind":"day"},None
+
+
 def _fallback(repository,alias,actor,message):
     normalized=message.lower().strip()
     if re.search(r"(още|добави).{0,25}(отсеч|интервал|повторени)",normalized):
         return UNAVAILABLE_SESSION_CHANGE, None
     if any(word in normalized for word in ["умор", "умора"]):
         return "Оцени умората от 1 до 5: 1 — без умора, 2 — лека, 3 — умерена, 4 — силна, 5 — много силна. За запис използвай дневната форма „Стрес и възстановяване“, докато разговорният модел е изключен.",None
-    if any(word in normalized for word in ["днес","доз","изпълн","тренирам","тренировката"]):
-        context=_read(repository,alias,actor,{"kind":"day"})
-        text=_render_day(context)
-        return text,context
     if any(word in normalized for word in ["статус","възстанов","готовност"]):
         context=_read(repository,alias,actor,{"kind":"status"})
         return _render_status(context),context
+    if any(word in normalized for word in ["днес","доз","изпълн","тренирам","тренировката"]):
+        requested,clarification=_fallback_day_query(repository,alias,message)
+        if requested is None:
+            return clarification,None
+        context=_read(repository,alias,actor,requested)
+        text=_render_day(context)
+        return text,context
     return ("Мога да покажа запазената тренировка за днес и нейното изпълнение. Разговорният модел още не е включен за тази среда. Формулярите за оценки, тестове и планиране остават достъпни.",None)
 
 

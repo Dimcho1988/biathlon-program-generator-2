@@ -206,7 +206,7 @@ begin
  end if;
  return (
    with settings_rows as materialized (
-     select hr_zone_bounds,timezone,hrmax_bpm,hr_zone_source,hr_zone_percentages,
+     select hr_zone_bounds,timezone,hrmax_bpm,hr_zone_source,hr_zone_percentages,model_preferences,
        planning_profile,mesocycle_accent_preferences,planning_calendar
      from public.onflows_athlete_settings where athlete_alias=p_alias limit 1
    ), profile_rows as materialized (

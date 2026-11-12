@@ -566,3 +566,52 @@ def test_disabled_status_labels_estimated_recovery_as_modelled():
         "current":[{"zone":"Z3","readiness_percent":88.5}]}})
     assert "Z3: 88.5%" in text and "Дневна моделна оценка" in text
     assert "оценка на част от натоварването" in text
+
+
+@pytest.mark.parametrize("message,expected", [
+    ("Какво тренирам утре?", "2026-11-13"),
+    ("Какво тренирам вчера?", "2026-11-11"),
+    ("Какво тренирам на 2026-11-15?", "2026-11-15"),
+])
+def test_disabled_provider_respects_requested_day_in_athlete_timezone(repo,monkeypatch,message,expected):
+    from types import SimpleNamespace
+    class Clock(datetime):
+        @classmethod
+        def now(cls,tz=None):
+            value=cls(2026,11,11,23,30,tzinfo=timezone.utc)
+            return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+    monkeypatch.setattr(service,"datetime",Clock)
+    repo.athlete_settings=lambda _:SimpleNamespace(timezone="Europe/Sofia")
+    repo.read_result=lambda requested:{"query_kind":"day","availability":"AVAILABLE","date":requested["date"],
+        "plan_revision":8,"sessions":[{"title":"Сесия за "+requested["date"]}]}
+    result=service.turn(repo,ALIAS,ACTOR,body(message),DisabledAssistantProvider())
+    assert repo.reads==[{"kind":"day","date":expected}]
+    assert "Сесия за "+expected in result["message"] and not repo.writes
+
+
+@pytest.mark.parametrize("message", [
+    "Какво тренирам утре или вчера?",
+    "Какво тренирам на 2026-11-15 и 2026-11-16?",
+    "Какво тренирам утре, 2026-11-15?",
+    "Какво тренирам на 15.11?",
+    "Какво тренирам на 2026-02-30?",
+    "Какво тренирам в петък?",
+    "Какво тренирам след 3 дни?",
+    "Какво тренирам другиден?",
+    "Какво тренирам на 15?",
+])
+def test_disabled_provider_clarifies_ambiguous_or_unsupported_dates_without_reading_today(repo,message):
+    result=service.turn(repo,ALIAS,ACTOR,body(message),DisabledAssistantProvider())
+    assert "дата" in result["message"] and not repo.reads and not repo.writes
+
+
+def test_disabled_tomorrow_requires_timezone_instead_of_guessing_server_date(repo):
+    result=service.turn(repo,ALIAS,ACTOR,body("Какво тренирам утре?"),DisabledAssistantProvider())
+    assert "часовата зона" in result["message"] and not repo.reads
+
+
+def test_disabled_recovery_today_routes_to_status_before_generic_day_word(repo):
+    repo.read_result={"query_kind":"status","availability":"PENDING"}
+    result=service.turn(repo,ALIAS,ACTOR,body("Какво е възстановяването ми днес?"),DisabledAssistantProvider())
+    assert repo.reads==[{"kind":"status"}]
+    assert "Анализът се подготвя" in result["message"] and not repo.writes
