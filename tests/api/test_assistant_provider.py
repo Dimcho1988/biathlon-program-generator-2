@@ -653,7 +653,7 @@ def test_coaching_answer_can_use_the_larger_budget_without_changing_pilot_reserv
 def test_extended_query_contract_preserves_activity_and_calculator_arguments():
     query = {
         "kind": "activity", "date": None, "start": None, "end": None,
-        "session_id": None, "input_kind": None, "key": None, "method_id": None,
+        "session_id": None, "input_kind": None, "key": None, "method_id": None, "proposal_json": None,
         "activity_ref": "act_" + "a" * 32, "sport": "Run", "discipline": None, "view": "series",
         "days": 30, "phase": None, "section": None, "offset": 0, "limit": 30,
         "revision": None, "plan_kind": None, "test_mode": None,
@@ -666,6 +666,28 @@ def test_extended_query_contract_preserves_activity_and_calculator_arguments():
     assert p.complete([], {}, {"read": ["activity"]})["query"] == query
     schema = seen[0]["tools"][0]["parameters"]["properties"]["query"]
     assert set(schema["required"]) == set(schema["properties"]) == set(query)
+
+
+@pytest.mark.parametrize('proposal', [{}, [], {'action': float('nan')}, 'invalid'])
+def test_training_proposal_query_rejects_invalid_json_and_non_objects(proposal):
+    from apps.api.assistant_provider import _validate_reply
+    query = {'kind': 'inputs', 'date': None, 'start': None, 'end': None, 'session_id': None,
+        'input_kind': 'TRAINING_PROPOSAL', 'proposal_json': json.dumps(proposal)}
+    with pytest.raises(AssistantProviderError):
+        _validate_reply(reply(query=query))
+
+
+def test_training_proposal_is_a_bounded_read_and_cannot_be_smuggled_into_other_queries():
+    from apps.api.assistant_provider import _validate_reply
+    proposal = {'action': 'REPEAT_STRUCTURE', 'source_start': '2026-11-02',
+        'source_end': '2026-11-15', 'target_start': '2026-11-16'}
+    query = {'kind': 'inputs', 'date': None, 'start': None, 'end': None, 'session_id': None,
+        'input_kind': 'TRAINING_PROPOSAL', 'proposal_json': json.dumps(proposal)}
+    assert _validate_reply(reply(query=query))['query'] == query
+    with pytest.raises(AssistantProviderError):
+        _validate_reply(reply(query={**query, 'kind': 'management'}))
+    with pytest.raises(AssistantProviderError):
+        _validate_reply(reply(query={**query, 'proposal_json': json.dumps({'name': 'а' * 13000})}))
 
 
 @pytest.mark.parametrize("minutes", [1.5, 1440])

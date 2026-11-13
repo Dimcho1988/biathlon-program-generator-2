@@ -8,6 +8,7 @@ import { isSameOrigin } from "../../../../../lib/account-route";
 import { isCalendarDate, isRecord } from "../../../../../lib/training-status";
 import { parseManagementProfile } from "../../../../../lib/training-management";
 import { METHOD_PHASES, parseMethodPreferences } from "../../../../../lib/method-library";
+import { parseTrainingProposal } from "../../../../../lib/training-proposals";
 
 type Context = { params: Promise<{ path: string[] }> };
 const error = (message: string, status: number) => NextResponse.json({ error: message }, { status, headers: { "Cache-Control": "no-store" } });
@@ -16,8 +17,9 @@ const revision = (value: unknown) => Number.isSafeInteger(value) && Number(value
 async function proxy(request: Request, context: Context) {
   try {
     const { path } = await context.params;
-    const endpoint = path.length === 1 ? path[0] : path.length === 2 && path[0] === "methods" && path[1] === "preferences" ? "methods/preferences" : "";
-    const permitted = request.method === "GET" ? ["profile", "drafts", "draft-metadata", "generation-jobs", "active", "state", "outlook", "methods", "checks", "speed-comparison"] : request.method === "PUT" ? ["profile", "methods/preferences"] : ["generate", "generation-jobs", "activate", "action", "day", "race-duration"];
+    const endpoint = path.length === 1 ? path[0] : path.length === 2 && path[0] === "methods" && path[1] === "preferences" ? "methods/preferences"
+      : path.length === 2 && path[0] === "training-proposals" && ["preview", "apply"].includes(path[1]) ? path.join("/") : "";
+    const permitted = request.method === "GET" ? ["profile", "drafts", "draft-metadata", "generation-jobs", "active", "state", "outlook", "methods", "checks", "speed-comparison", "training-proposals"] : request.method === "PUT" ? ["profile", "methods/preferences"] : ["generate", "generation-jobs", "activate", "action", "day", "race-duration", "training-proposals/preview", "training-proposals/apply"];
     if (!permitted.includes(endpoint)) return error("Адресът не е намерен.", 404);
     const startDate = request.method === "GET" && ["drafts", "draft-metadata"].includes(endpoint) ? new URL(request.url).searchParams.get("start_date") : null;
     if (startDate !== null && !isCalendarDate(startDate)) return error("Невалидна начална дата на програмата.", 422);
@@ -55,13 +57,22 @@ async function proxy(request: Request, context: Context) {
     let body: string | undefined;
     let plansWeek = endpoint === "generate" || endpoint === "day";
     if (write) {
-      if (Number(request.headers.get("content-length") ?? 0) > 20_000) return error("Твърде голяма заявка.", 413);
+      // Full profile/preferences carry bounded athlete-owned variants and dated
+      // structures. Keep small commands bounded separately from these snapshots.
+      const bodyLimit = ["profile", "methods/preferences"].includes(endpoint) ? 262_144 : 20_000;
+      if (Number(request.headers.get("content-length") ?? 0) > bodyLimit) return error("Твърде голяма заявка.", 413);
       const raw = await request.text();
-      if (new TextEncoder().encode(raw).length > 20_000) return error("Твърде голяма заявка.", 413);
+      if (new TextEncoder().encode(raw).length > bodyLimit) return error("Твърде голяма заявка.", 413);
       let input: unknown;
       try { input = JSON.parse(raw); } catch { return error("Невалидни данни.", 422); }
       if (!isRecord(input)) return error("Невалидни данни.", 422);
-      if (endpoint === "methods/preferences") {
+      if (endpoint.startsWith("training-proposals/")) {
+        const apply = endpoint.endsWith("/apply");
+        if (Object.keys(input).some(key => !(apply ? ["proposal", "expected_revision", "operation_id"] : ["proposal"]).includes(key))) return error("Предложението съдържа неподдържани полета.", 422);
+        if (apply && (!revision(input.expected_revision) || typeof input.operation_id !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(input.operation_id))) return error("Прегледай предложението, преди да го приложиш.", 422);
+        try { body = JSON.stringify({ proposal: parseTrainingProposal(input.proposal), ...(apply ? { expected_revision: input.expected_revision, operation_id: input.operation_id } : {}) }); }
+        catch (caught) { return error(caught instanceof Error ? caught.message : "Невалидно предложение.", 422); }
+      } else if (endpoint === "methods/preferences") {
         if (!revision(input.expected_revision)) return error("Липсва версия на профила. Зареди последната версия.", 422);
         try { body = JSON.stringify({ expected_revision: input.expected_revision, preferences: parseMethodPreferences(input.preferences) }); }
         catch (caught) { return error(caught instanceof Error ? caught.message : "Невалидни настройки на методите.", 422); }
@@ -118,11 +129,16 @@ async function proxy(request: Request, context: Context) {
     if (response.status === 503 && response.headers.get("X-OnFlows-Preparation") === "pending")
       return NextResponse.json({error:PREPARED_VIEW_MESSAGE}, {status:503,
         headers:{"Cache-Control":"no-store","X-OnFlows-Preparation":"pending","Retry-After":"3"}});
+    if (!response.ok && endpoint.startsWith("training-proposals") && response.status === 422) {
+      const detail: unknown = await response.json().catch(() => null);
+      const message = isRecord(detail) ? typeof detail.detail === "string" ? detail.detail : isRecord(detail.detail) && typeof detail.detail.message === "string" ? detail.detail.message : detail.error : null;
+      return error(typeof message === "string" && message.length <= 1500 ? message : "Предложението не отговаря на правилата на основния метод или няма запазена програма за избрания период.", 422);
+    }
     if (!response.ok) return error(response.status === 409
       ? "Профилът, програмата или входните данни са променени. Презаредете и прегледайте последната версия."
       : response.status === 422 ? endpoint === "methods/preferences" ? "Провери диапазоните. Методът трябва да поддържа избраната корекция; комбинираните отсечки имат собствена структура. Настройките не бяха записани." : "Проверете профила, периода и календара. Програмата не беше записана."
         : "Управлението временно не е достъпно. Въведените стойности остават във формата.", [404, 409, 422].includes(response.status) ? response.status : 503);
-    if (request.method !== "GET" && endpoint !== "race-duration" && endpoint !== "generation-jobs") {
+    if (request.method !== "GET" && endpoint !== "race-duration" && endpoint !== "generation-jobs" && endpoint !== "training-proposals/preview") {
       revalidatePath("/planning");
       revalidatePath("/management");
       revalidatePath("/management/outlook");

@@ -8,6 +8,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 from biathlon.method_dosing import continuous_building_fraction
 from .training_observation_schemas import LactateProfile, NeuromuscularProfile
+from .personal_method_schemas import PersonalMethod
+from .training_structure_schemas import TrainingStructureDirective
 
 
 def normalize_building_profile(value):
@@ -270,6 +272,13 @@ class MethodLibraryPreferences(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     enabled: bool = Field(default=True, strict=True)
     overrides: dict[MethodIdentifier, MethodLibraryOverride] = Field(default_factory=dict, max_length=500)
+    personal_methods: list["PersonalMethod"] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def unique_personal_methods(self):
+        if len({m.id for m in self.personal_methods}) != len(self.personal_methods):
+            raise ValueError("Personal method identifiers must be unique")
+        return self
 
 
 class MethodLibraryPreferencesWrite(BaseModel):
@@ -324,6 +333,7 @@ class ManagementProfile(BaseModel):
     training_return: TrainingReturn | None = None
     individual_learning: IndividualLearning = Field(default_factory=IndividualLearning)
     method_library: MethodLibraryPreferences = Field(default_factory=MethodLibraryPreferences)
+    training_structure: list["TrainingStructureDirective"] = Field(default_factory=list, max_length=24)
     ant_references: list[AnTReference] = Field(default_factory=list, max_length=3)
     component_targets_weekly: dict[Literal["Z1", "Z2", "Z3", "Z4", "Z5", "STR"], float] = Field(default_factory=dict)
     interval_profiles: list[IntervalDoseProfile] = Field(default_factory=list, max_length=2)
@@ -344,6 +354,10 @@ class ManagementProfile(BaseModel):
 
     @model_validator(mode="after")
     def coherent(self):
+        from biathlon.training_structure import requests
+        if len({d.id for d in self.training_structure}) != len(self.training_structure):
+            raise ValueError("Training structure identifiers must be unique")
+        requests({"training_structure": [d.model_dump(mode="json") for d in self.training_structure]})
         if len({p.sport for p in self.ant_references}) != len(self.ant_references):
             raise ValueError("Keep one current explicit AnT speed reference per sport")
         if len({p.sport for p in self.lactate_profiles}) != len(self.lactate_profiles):

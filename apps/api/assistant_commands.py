@@ -24,7 +24,7 @@ from .response_monitoring import DailyReport, OptionalTest, ResponseBlock, Sessi
 OBSERVATION_MODELS = {"DAILY": DailyReport, "WEIGHT": WeightReport,
     "SESSION": SessionReport, "TEST": OptionalTest, "LAB": LabReport, "BLOCK": ResponseBlock}
 OWNER_KINDS = frozenset({"DAILY", "WEIGHT", "SESSION"})
-PLANNING_KINDS = frozenset({"MANAGEMENT_PROFILE", "CALENDAR_EVENT"})
+PLANNING_KINDS = frozenset({"MANAGEMENT_PROFILE", "CALENDAR_EVENT", "TRAINING_PROPOSAL"})
 COMMAND_KINDS = frozenset(OBSERVATION_MODELS) | PLANNING_KINDS | {"MANUAL_SPEED_TEST"} | APP_COMMAND_KINDS
 
 
@@ -107,12 +107,25 @@ def apply_prepared(repository, alias, actor, operation_id, prepared, request_has
     """Commit canonical payload and durable receipt in a single SQL transaction."""
     if origin not in {"CHAT", "FORM"}:
         raise ValueError("Unknown operation origin")
-    return _rpc(repository, "save_onflows_assistant_operation", {
+    if prepared["kind"] == "MANAGEMENT_PROFILE":
+        from .management_store import validate_profile_size
+        validate_profile_size(prepared["payload"])
+    body = {
         "p_alias": alias, "p_actor": str(actor), "p_operation_id": str(UUID(str(operation_id))),
         "p_request_hash": request_hash, "p_kind": prepared["kind"],
         "p_key": prepared["key"], "p_payload": prepared["payload"],
         "p_day": prepared.get("day"), "p_expected_revision": prepared["expected_revision"],
-        "p_origin": origin})
+        "p_origin": origin}
+    rpc = "save_onflows_assistant_operation"
+    if prepared.get("training_proposal"):
+        rpc = "save_onflows_training_proposal"
+        body["p_expected_plan_revision"] = prepared.get("expected_plan_revision")
+    result = _rpc(repository, rpc, body)
+    if prepared.get("training_proposal") and result.get("status") not in {"CONFLICT", "REJECTED", "FORBIDDEN"}:
+        result = {**result, "proposal_summary": prepared["proposal_preview"]["summary"],
+                  "corrections": prepared["proposal_preview"]["corrections"],
+                  "refresh_queued": True, "dose_status": "RECALCULATED_ON_PUBLICATION"}
+    return result
 
 
 class _ReceiptRepository:
@@ -141,7 +154,7 @@ class _ReceiptRepository:
         return self.repository._json(response)
 
 
-def execute(repository, alias, actor, operation_id, command):
+def execute(repository, alias, actor, operation_id, command, *, origin="CHAT"):
     """Apply one explicit input change. Never activates or regenerates a plan."""
     if not isinstance(command, dict) or set(command) - {"kind", "entry_key", "expected_revision", "patch"}:
         raise HTTPException(422, "Невалидна команда.")
@@ -171,9 +184,16 @@ def execute(repository, alias, actor, operation_id, command):
         from .assistant_app_actions import execute as execute_app
         return execute_app(repository, alias, actor, operation_id, command, digest)
     if kind in PLANNING_KINDS:
+        if kind == "TRAINING_PROPOSAL":
+            from .training_proposals import prepare
+            from .management_store import PROFILE_KEY
+            if key != PROFILE_KEY:
+                raise HTTPException(422, "Невалиден ключ на тренировъчния профил.")
+            prepared = prepare(repository, alias, patch, revision, actor)
+            return apply_prepared(repository, alias, actor, operation_id, prepared, digest, origin=origin)
         from .assistant_planning_commands import prepare
         prepared = prepare(repository, alias, kind, key, patch, revision, actor)
-        return apply_prepared(repository, alias, actor, operation_id, prepared, digest)
+        return apply_prepared(repository, alias, actor, operation_id, prepared, digest, origin=origin)
 
     model = ManualSpeedTestInput if kind == "MANUAL_SPEED_TEST" else OBSERVATION_MODELS[kind]
     fields = set(model.model_fields) - {"expected_revision"}

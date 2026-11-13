@@ -191,3 +191,18 @@ body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-even
 
 /* Keep conversational help visible in both navigation sizes. */
 .workspace-links a.workspace-assistant-link { border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); color: var(--accent); font-weight: 700; background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+
+/* Athlete-local method and structure proposals share the same review/apply flow. */
+.training-proposals{margin:20px 0;padding:20px;border:1px solid var(--border);border-radius:14px;background:var(--surface);line-height:1.6;overflow-wrap:anywhere}
+.training-proposals>summary{cursor:pointer;font-weight:700;color:var(--accent)}
+.training-proposals>p,.training-proposals small{color:var(--text-secondary)}
+.proposal-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;border:0;margin:20px 0;padding:0;min-width:0}
+.proposal-form label{display:grid;gap:7px;font-weight:600;font-size:14px;min-width:0}
+.proposal-form input,.proposal-form select,.proposal-form textarea{width:100%;min-width:0;min-height:44px;padding:10px;border:1px solid var(--border-strong);border-radius:8px;background:var(--surface);color:var(--text);font:inherit}
+.proposal-wide{grid-column:1/-1}.proposal-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.proposal-range{display:grid;grid-template-columns:1fr 1fr;gap:10px;border:0;padding:0;min-width:0}.proposal-range legend{font-weight:600;font-size:14px;margin-bottom:7px}.proposal-range label{font-weight:400}
+.proposal-list{list-style:none;padding:0;margin:16px 0}.proposal-list>li{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--border)}.proposal-list small{display:block;margin-top:5px}
+.proposal-preview{margin-top:20px;padding:18px;background:var(--surface-secondary);border-radius:10px;border-left:3px solid var(--accent)}.proposal-preview h3{font-size:17px;margin:0}.proposal-preview .action-button{margin-top:14px}.proposal-preview details{margin:12px 0}
+.proposal-error{color:var(--warning);background:var(--warning-surface);padding:12px;border-radius:8px}.proposal-notice{padding:12px;background:var(--surface-secondary);border-radius:8px}
+.training-proposals button:disabled{opacity:.55;cursor:not-allowed}.training-proposals :is(input,textarea,select,button,summary):focus-visible{outline:3px solid var(--focus);outline-offset:3px}
+@media(max-width:620px){.training-proposals{padding:16px}.proposal-form{grid-template-columns:1fr}.proposal-list>li{align-items:flex-start;flex-direction:column}.proposal-actions{width:100%}.proposal-actions .action-button{flex:1}.proposal-form .action-button{white-space:normal}}

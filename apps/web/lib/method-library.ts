@@ -3,7 +3,11 @@ import { durationSeconds } from "./duration-format";
 
 export type MethodRange = [number, number];
 export interface MethodOverride { enabled?: boolean; speed_multiplier?: MethodRange; work_range?: MethodRange; repetitions?: MethodRange; total_capacity_ratio?: number; speed_tolerance_fraction?: number; hr_tolerance_bpm?: number }
-export interface MethodPreferences { enabled: boolean; overrides: Record<string, MethodOverride> }
+export interface PersonalMethod {
+  id: string; name: string; base_method_id: string; work_range?: MethodRange;
+  work_unit?: "seconds" | "meters"; repetitions?: MethodRange; recovery_seconds?: MethodRange; notes?: string;
+}
+export interface MethodPreferences { enabled: boolean; overrides: Record<string, MethodOverride>; personal_methods?: PersonalMethod[] }
 export interface MethodGuidance { purpose?: string; execution?: string; recovery?: string; success?: string; errors?: string; progression?: string; adjustment?: string }
 export interface MethodPrescription {
   anchor: { type: string; distance_m?: number; duration_seconds?: number };
@@ -38,6 +42,8 @@ export interface LibraryMethod {
   prescription?: MethodPrescription | null; resolution?: MethodResolution;
   automatic_selection?: boolean;
   related_method_ids?: string[]; derived_from?: string[];
+  personal_variant_constraints?: { eligible: boolean; reason?: string; work_unit?: "seconds" | "meters"; work_range?: MethodRange; repetitions?: MethodRange; recovery_seconds?: MethodRange };
+  personal_variant?: { base_method_id: string; scope: "ATHLETE"; validation_version: string };
   [key: string]: unknown;
 }
 export interface SessionMethod {
@@ -60,7 +66,7 @@ export function isMethodRange(value: unknown): value is MethodRange {
   return Array.isArray(value) && value.length === 2 && value.every(n => typeof n === "number" && Number.isFinite(n)) && value[0] > 0 && value[1] >= value[0];
 }
 export function parseMethodPreferences(value: unknown): MethodPreferences {
-  if (!isRecord(value) || Object.keys(value).some(k => !["enabled", "overrides"].includes(k))
+  if (!isRecord(value) || Object.keys(value).some(k => !["enabled", "overrides", "personal_methods"].includes(k))
     || typeof value.enabled !== "boolean" || !isRecord(value.overrides) || Object.keys(value.overrides).length > 500)
     throw new Error("Провери настройките на базата от методи.");
   for (const [id, override] of Object.entries(value.overrides)) {
@@ -78,7 +84,29 @@ export function parseMethodPreferences(value: unknown): MethodPreferences {
         throw new Error("Диапазоните трябва да имат положителна долна и по-голяма или равна горна граница. Повторенията са цели числа.");
     }
   }
+  if (value.personal_methods !== undefined) {
+    if (!Array.isArray(value.personal_methods) || value.personal_methods.length > 100) throw new Error("Провери личните варианти на методите.");
+    const methods = value.personal_methods.map(parsePersonalMethod);
+    if (new Set(methods.map(method => method.id)).size !== methods.length) throw new Error("Личните варианти трябва да имат различни идентификатори.");
+    return { ...value, personal_methods: methods } as unknown as MethodPreferences;
+  }
   return value as unknown as MethodPreferences;
+}
+export function parsePersonalMethod(value: unknown): PersonalMethod {
+  if (!isRecord(value) || Object.keys(value).some(key => !["id", "name", "base_method_id", "work_range", "work_unit", "repetitions", "recovery_seconds", "notes"].includes(key))
+    || typeof value.id !== "string" || !/^PERSONAL-[A-Za-z0-9][A-Za-z0-9_.-]{0,89}$/.test(value.id)
+    || typeof value.name !== "string" || !value.name.trim() || value.name.length > 160
+    || typeof value.base_method_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(value.base_method_id)
+    || (value.work_unit != null && !["seconds", "meters"].includes(String(value.work_unit)))
+    || (value.notes != null && (typeof value.notes !== "string" || value.notes.length > 1000))) throw new Error("Провери името и основата на личния метод.");
+  for (const key of ["work_range", "repetitions", "recovery_seconds"] as const) {
+    const numbers = value[key];
+    const maximum = key === "repetitions" ? 100 : key === "recovery_seconds" ? 86400 : 100000;
+    if (numbers != null && (!Array.isArray(numbers) || numbers.length !== 2 || numbers.some(number => typeof number !== "number" || !Number.isFinite(number) || number < (key === "recovery_seconds" ? 0 : Number.MIN_VALUE) || number > maximum)
+      || numbers[1] < numbers[0] || (key === "repetitions" && !numbers.every(Number.isInteger))))
+      throw new Error("Въведи положителни, подредени диапазони. Повторенията са цели числа.");
+  }
+  return Object.fromEntries(Object.entries(value).filter(([, field]) => field != null)) as unknown as PersonalMethod;
 }
 export function parseMethodLibrary(value: unknown): MethodLibraryResponse {
   if (!isRecord(value) || typeof value.version !== "string" || !Number.isSafeInteger(value.revision) || Number(value.revision) < 0

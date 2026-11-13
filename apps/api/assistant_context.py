@@ -33,7 +33,8 @@ INPUT_MODELS = {"DAILY": DailyReport, "WEIGHT": WeightReport, "SESSION": Session
                 "TEST": OptionalTest, "LAB": LabReport, "BLOCK": ResponseBlock}
 CARD_FIELDS = frozenset({"id", "title", "registry_kind", "registry_version", "sports", "periods", "family",
     "source", "original", "adaptation", "guidance", "provenance", "activation_status", "non_executable_reason",
-    "automatic_selection", "prescription", "components", "coach_profile", "dosing", "dosing_ref"})
+    "automatic_selection", "prescription", "components", "coach_profile", "dosing", "dosing_ref",
+    "personal_variant_constraints", "personal_variant", "base_method_id"})
 SESSION_FIELDS = frozenset({"method_id", "title", "sport", "zone", "purpose", "main_work_minutes", "total_minutes",
     "double_threshold", "paired_session", "mixed_component", "is_key_session", "registry_version",
     "canonical_effective_load", "direct_equivalent_minutes", "execution_range_policy", "race_course_guidance",
@@ -74,6 +75,9 @@ DAILY_SCALES = {
 
 def input_contract(kind):
     """Only the selected canonical input schema, not the scientific catalog."""
+    if kind == "TRAINING_PROPOSAL":
+        from .training_proposals import input_contract as proposal_contract
+        return proposal_contract()
     from .assistant_app_actions import APP_COMMAND_KINDS, input_contract as app_contract
     if kind in APP_COMMAND_KINDS:
         return app_contract(kind)
@@ -426,6 +430,21 @@ def _inputs(repository, alias, access, query, today):
     kind = query.get("input_kind")
     key = query.get("key") or query.get("entry_key")
     from .assistant_app_actions import APP_COMMAND_KINDS, read_input
+    if kind == "TRAINING_PROPOSAL":
+        _require(access, "can_view_plan")
+        from .training_proposals import preview
+        raw = query.get("proposal_json")
+        proposal = None
+        if raw is not None:
+            if not isinstance(raw, str) or len(raw.encode("utf-8")) > 24576:
+                raise HTTPException(422, "Предложението е твърде дълго.")
+            try:
+                proposal = json.loads(raw)
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(422, "Невалидно тренировъчно предложение.") from exc
+            if not isinstance(proposal, dict) or not proposal:
+                raise HTTPException(422, "Посочи конкретно тренировъчно предложение.")
+        return preview(repository, alias, proposal)
     if kind in APP_COMMAND_KINDS:
         _require_app_input(access, kind)
         selectors = {"draft_date": query.get("date") or query.get("start"), "draft_revision": query.get("revision")} if kind == "PLAN_ACTIVATE" else {}
@@ -519,7 +538,7 @@ def read(repository, alias, access, query, now=None, *, actor=None):
     """Read one registered capability; never accept a model-supplied scope."""
     if not isinstance(query, dict) or query.get("kind") not in QUERY_KINDS:
         raise HTTPException(422, "Неподдържана справка.")
-    allowed = {"kind", "date", "start", "end", "session_id", "method_id", "input_kind", "key", "entry_key"} | assistant_reads.PARAMETERS
+    allowed = {"kind", "date", "start", "end", "session_id", "method_id", "input_kind", "key", "entry_key", "proposal_json"} | assistant_reads.PARAMETERS
     if any(key not in allowed for key in query):
         raise HTTPException(422, "Неподдържани параметри на справката.")
     # Strict provider schemas include every optional query field as null. Reads
@@ -527,6 +546,8 @@ def read(repository, alias, access, query, now=None, *, actor=None):
     # interval start). This normalization must never touch command patches,
     # where null is an explicit request to clear a nullable input.
     query = {key: value for key, value in query.items() if value is not None}
+    if "proposal_json" in query and (query["kind"] != "inputs" or query.get("input_kind") != "TRAINING_PROPOSAL"):
+        raise HTTPException(422, "Предложението изисква справка TRAINING_PROPOSAL.")
     from .assistant_app_actions import APP_COMMAND_KINDS
     if query["kind"] == "navigation":
         if not (access.get("can_view_plan") or access.get("can_view_recovery")):
@@ -537,7 +558,7 @@ def read(repository, alias, access, query, now=None, *, actor=None):
         _require_app_input(access, "SYNC_DATA")
     elif query["kind"] == "inputs" and query.get("input_kind") in APP_COMMAND_KINDS:
         _require_app_input(access, query["input_kind"])
-    elif query["kind"] in PLAN_QUERY_KINDS or query["kind"] == "inputs" and query.get("input_kind") in {"MANAGEMENT_PROFILE", "CALENDAR_EVENT"}:
+    elif query["kind"] in PLAN_QUERY_KINDS or query["kind"] == "inputs" and query.get("input_kind") in {"MANAGEMENT_PROFILE", "CALENDAR_EVENT", "TRAINING_PROPOSAL"}:
         _require(access, "can_view_plan")
     else:
         _require(access, "can_view_recovery")

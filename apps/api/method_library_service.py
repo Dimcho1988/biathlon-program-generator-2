@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from biathlon import method_library, method_registry, planning_schedule, method_dosing
 from biathlon.periodization import build_periodization
+from biathlon.personal_methods import normalize_personal_methods
 
 from . import model_service
 from .management_schemas import MethodLibraryPreferences
@@ -22,15 +23,34 @@ def validate_preferences(preferences, profile=None):
     """Validate immutable catalog membership as well as numeric schema bounds."""
     parsed = MethodLibraryPreferences.model_validate(preferences)
     payload = parsed.model_dump(mode="json", exclude_none=True)
-    entries = {entry["id"]: entry for entry in method_library.entries()}
+    current = {**(profile or {}), "method_library": payload}
+    try:
+        personal, _ = normalize_personal_methods(payload.get("personal_methods", []), current)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if personal or "personal_methods" in payload:
+        payload["personal_methods"] = personal
+    personal_ids = {m["id"] for m in personal}
+    personal_aliases = personal_ids | {identifier + "-SHORT" for identifier in personal_ids} | {
+        f"LIB-{identifier}-{phase}" for identifier in personal_ids for phase in method_library.PHASE_POSITION}
+    requested = {identifier for directive in current.get("training_structure") or []
+                 for day in directive.get("days", []) for session in day.get("sessions", [])
+                 for identifier in session.get("method_ids", [])}
+    missing = sorted(identifier for identifier in requested
+                     if identifier.startswith(("PERSONAL-", "LIB-PERSONAL-")) and identifier not in personal_aliases)
+    if missing:
+        raise HTTPException(422, "Личният метод участва в запазена структура. Първо променете съответния блок: " + ", ".join(missing))
+    entries = {entry["id"]: entry for entry in method_library.profile_entries(current)}
     from biathlon.training_methods import resolved_methods
-    entries.update({m["id"]: method_registry.coach_card(m) for m in resolved_methods(profile or {})})
+    entries.update({m["id"]: method_registry.coach_card(m) for m in resolved_methods(current)})
     for key, override in payload["overrides"].items():
         entry = entries.get(key)
         if entry is None and key in {f"ONFLOWS-RACE-{role}-{zone}-V1" for role in ("BELOW", "RACE", "ABOVE") for zone in ("Z2", "Z3", "Z4", "Z5")}:
             entry = {"id": key, "prescription": None}
         if entry is None:
             raise HTTPException(422, f"Unknown training method: {key}")
+        if entry.get("personal_variant") and set(override) - {"enabled"}:
+            raise HTTPException(422, f"Personal method {key} accepts only enabled; edit its bounded variant controls")
         prescription = entry.get("prescription")
         dose_controls = set(override) & method_dosing.DOSE_CONTROLS
         if dose_controls and not (prescription or (entry.get("coach_profile") or {}).get("zone") in {"Z1", "Z2", "Z3", "Z4", "Z5"} or key.startswith("ONFLOWS-RACE-")):
@@ -155,8 +175,13 @@ def save_preferences(repository, alias, body, actor):
         raise HTTPException(409, "Create a planning profile before saving method preferences")
     if stored["revision"] != body.expected_revision:
         raise HTTPException(409, "Planning input changed; reload before saving")
-    preferences = validate_preferences(body.preferences.model_dump(mode="json", exclude_none=True), stored["profile"])
+    proposed = body.preferences.model_dump(mode="json", exclude_none=True)
+    if "personal_methods" not in body.preferences.model_fields_set:
+        proposed["personal_methods"] = deepcopy((stored["profile"].get("method_library") or {}).get("personal_methods", []))
+    preferences = validate_preferences(proposed, stored["profile"])
+    _, validation = normalize_personal_methods(proposed.get("personal_methods", []), stored["profile"])
     profile = deepcopy(stored["profile"])
     profile["method_library"] = preferences
     saved = store.save_profile(alias, profile, body.expected_revision, actor)
-    return {"configured": True, "revision": saved["revision"], "preferences": preferences}
+    return {"configured": True, "revision": saved["revision"], "preferences": preferences,
+            "personal_method_validation": validation}

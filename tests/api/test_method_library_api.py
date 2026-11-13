@@ -94,7 +94,7 @@ def test_catalog_is_read_only_and_uses_actual_sport_once(api):
                           headers={key: value for key, value in HEADERS.items() if key != "X-OnFlows-Actor-Id"})
     assert response.status_code == 200
     payload = response.json()
-    assert payload["revision"] == 4 and payload["preferences"] == {"enabled": True, "overrides": {}}
+    assert payload["revision"] == 4 and payload["preferences"] == {"enabled": True, "overrides": {}, "personal_methods": []}
     assert payload["phase"] == "SPECIAL_PREPARATION" and payload["phase_source"] == "SELECTED_PREVIEW"
     assert payload["curve"]["sport"] == "RollerSki" and payload["curve"]["source_revision"] == 9
     assert payload["methods"][0]["source"] == CATALOG[0]["source"]
@@ -183,7 +183,7 @@ def test_preference_save_preserves_every_other_profile_field(api):
     response = client.put("/api/v2/athlete/management/methods/preferences",
                           json={"expected_revision": 4, "preferences": preferences}, headers=HEADERS)
     assert response.status_code == 200
-    expected = {**before["profile"], "method_library": preferences}
+    expected = {**before["profile"], "method_library": {**preferences, "personal_methods": []}}
     assert store.saved == [("ath-test", expected, 4, ACTOR)]
     assert store.current == before
 

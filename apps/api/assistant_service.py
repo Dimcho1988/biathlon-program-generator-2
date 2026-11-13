@@ -18,7 +18,8 @@ from . import assistant_commands, assistant_context
 from .assistant_provider import AssistantProviderError, DisabledAssistantProvider, get_assistant_provider
 
 SUGGESTIONS = ["Какво тренирам днес?", "Защо е тази доза?", "Как да изпълня тренировката?", "Искам да запиша умората си"]
-CONFIRM = {"запиши промяната", "потвърждавам промяната", "потвърждавам", "да", "да, запиши", "запиши", "създай събитието"}
+CONFIRM = {"запиши промяната", "потвърждавам промяната", "потвърждавам", "да", "да, запиши", "запиши", "създай събитието",
+           "приложи", "приложи го", "приложи предложението", "приложи промяната", "направи го"}
 CANCEL = {"откажи промяната", "отказ", "отмени"}
 WRITE_KINDS = assistant_commands.COMMAND_KINDS
 READ_KINDS = assistant_context.QUERY_KINDS
@@ -117,12 +118,12 @@ def _capabilities(access):
     if access.get("can_edit_plan"):
         writes.extend(["ATHLETE_SETTINGS","PLANNING_PROFILE","MESOCYCLE_PREFERENCES"])
         if access.get("can_view_plan"):
-            writes.extend(["MANAGEMENT_PROFILE", "CALENDAR_EVENT", "PLAN_ACTION", "PLAN_DAY", "PLAN_ACTIVATE", "PLAN_GENERATE"])
+            writes.extend(["MANAGEMENT_PROFILE", "CALENDAR_EVENT", "PLAN_ACTION", "PLAN_DAY", "PLAN_ACTIVATE", "PLAN_GENERATE", "TRAINING_PROPOSAL"])
     if access.get("can_view_recovery") or access.get("can_view_plan") and access.get("can_edit_plan"):
         writes.append("SYNC_DATA")
     return {"read": sorted(reads), "read_views":read_views,"write": [kind for kind in writes if kind in WRITE_KINDS],
         "plan_publication": "Eligible generated plans are published automatically. No separate coach approval is required. Read current inputs before any change.",
-        "session_dose_change": "Use canonical planning controls or catalog method preferences. These affect the profile and future calculations; arbitrary rewrites of one session are not available.",
+        "session_dose_change": "TRAINING_PROPOSAL previews athlete-private methods and dated session/block structures. Applying a structure recalculates doses through the central engine. Keep single-session changes scoped to that session.",
         "input_contract": "Read inputs first. command key=entry_key, expected_revision=current revision; patch only requested fields. "
                           "Explicit reversible input and planning requests can be saved directly; deletion, scientific coefficients and selecting an archived plan need one preview.",
         "scales": {"daily": "1–5, higher=worse; motivation 1=high, 5=low", "rpe": "0–10, timing required", "feel": "1–5, higher=worse"}}
@@ -178,6 +179,8 @@ def _matching_input(command, contexts):
             if ((entry.get("input_kind") or entry.get("kind")) == command["kind"]
                 and entry.get("entry_key", "") == command["entry_key"]
                 and entry.get("revision") == command["expected_revision"]):
+                if command["kind"] == "TRAINING_PROPOSAL" and _proposal_candidate(entry) != command:
+                    continue
                 return entry
     return None
 
@@ -211,7 +214,7 @@ def _rating_timing(text):
 def _write_disallowed(message):
     text=message.lower().strip()
     return bool(re.search(r"\b(?:ако|пример|примерно|представи си|цитат|само обсъждаме|само обсъждам|без запис|без промяна)\b"
-                         r"|\bне\s+(?:искам|прав\w*|запис\w*|запиш\w*|запаз\w*|промен\w*|създа\w*|премест\w*|добав\w*|отмен\w*|изтри\w*|премах\w*)"
+                         r"|\bне\s+(?:искам|прав\w*|запис\w*|запиш\w*|запаз\w*|промен\w*|създа\w*|премест\w*|добав\w*|отмен\w*|изтри\w*|премах\w*|прил\w*|фикс\w*|повтар\w*|повтор\w*)"
                          r"|(?:искам|искал|искала)\s+да\s+(?:знам|разбера|обсъдим|науча)"
                          r"|^(?:[„“«\"']|отказвам|отказах|нека да не)",text))
 
@@ -223,7 +226,7 @@ def _explicit_write_request(message):
         return False
     if re.search(r"^(?:а\s+)?(?:какво|каква|какви|какъв|защо|колко|кога|къде|дали|обясни|покажи|виж|как\b)", text):
         return False
-    return bool(re.search(r"\b(?:въвед\w*|запиш\w*|записвай|промен\w*|премест\w*|създа\w*|добав\w*|задай|направи|пропусн\w*|отмени|изтрий|премахни|утвърди|одобри|приеми|активирай|спри|възобнови|генерирай|преизчисли|обнови(?:ш|те|м)?|синхронизира(?:й|ш|те|ме))\b", text)
+    return bool(re.search(r"\b(?:въвед\w*|запиш\w*|записвай|промен\w*|премест\w*|създа\w*|добав\w*|задай|направи|приложи|фиксирай|повтори|пропусн\w*|отмени|изтрий|премахни|утвърди|одобри|приеми|активирай|спри|възобнови|генерирай|преизчисли|обнови(?:ш|те|м)?|синхронизира(?:й|ш|те|ме))\b", text)
                 or re.search(r"\bискам\s+(?:да\s+)?(?:почив\w*|тренирам|разреш\w*|забран\w*|обновя|синхронизирам)", text))
 
 
@@ -231,7 +234,8 @@ def _write_intent(command, message):
     domains = {"DAILY": r"умор|сън|спах|стрес|болезнен|мотивац|болк|болен|оценк",
         "WEIGHT": r"тегл|теж|килограм|\bкг\b", "SESSION": r"rpe|усили|оценк|лактат|трениров|изпълн",
         "TEST": r"тест|измер", "LAB": r"лаборатор|феритин|хемоглобин|изследван", "BLOCK": r"блок|период",
-        "MANUAL_SPEED_TEST": r"тест|максимал", "MANAGEMENT_PROFILE": r"почив|тренир|седмич|планира|профил|метод|обучен|спорт|програм",
+        "MANUAL_SPEED_TEST": r"тест|максимал", "MANAGEMENT_PROFILE": r"почив|тренир|седмич|планира|профил|метод|обучен|спорт|програм|акцент|мезоцикл|цикъл",
+        "TRAINING_PROPOSAL": r"метод|вариант|сесия|тренир|блок|структур|седмиц|предлож",
         "CALENDAR_EVENT": r"старт|страт|състезан|лагер|събити|календар|недостъп",
         "ATHLETE_SETTINGS": r"пулс|hrmax|зон|настрой|профил|показател|часов", "RECOVERY_CONFIG": r"възстанов|recovery|умор|настрой",
         "SPEED_TEST": r"тест|скорост|участък", "PLAN_ACTION": r"план|програм|предлож|седмиц",
@@ -324,6 +328,115 @@ def _direct_method_preferences(preferences, entry, text):
     return True
 
 
+def _proposal_candidate(entry):
+    """Only a canonical preview can nominate an executable proposal."""
+    if entry.get("availability") != "AVAILABLE" or not isinstance(entry.get("preview"), dict):
+        return None
+    candidate = entry.get("command")
+    if not isinstance(candidate, dict) or candidate.get("kind") != "TRAINING_PROPOSAL":
+        return None
+    if (candidate.get("entry_key") != entry.get("entry_key")
+            or candidate.get("expected_revision") != entry.get("revision")
+            or not isinstance(candidate.get("patch"), dict)):
+        return None
+    return candidate
+
+
+def _apply_discussed_proposal(message):
+    return bool(re.fullmatch(r"(?:да[, ]+)?(?:приложи|запиши|направи)(?:\s+(?:го|това|предложението|промяната|обсъденото предложение))?[.! ]*", message.lower().strip()))
+
+
+def _direct_training_proposal(command, entry, text):
+    candidate = _proposal_candidate(entry)
+    if candidate != command:
+        return False
+    patch = command["patch"]
+    action = patch.get("action")
+    lowered = text.lower()
+    if action in {"FIX_STRUCTURE", "REPEAT_STRUCTURE"}:
+        if not re.search(r"фикси|закреп" if action == "FIX_STRUCTURE" else r"повтор", lowered):
+            return False
+        return _requested_structure_dates(patch, entry, text)
+    if action == "SESSION_METHOD":
+        if not _requested_plan_date(patch.get("target_date"), text, entry.get("today")):
+            return False
+        # A command for one session must never silently become a profile-wide
+        # method preference. A multi-session day must be selected explicitly.
+        index = patch.get("session_index")
+        if index != 1 and not re.search(r"(?:сесия|тренировка)\s*" + str(index) + r"\b", lowered):
+            return False
+        identifiers = patch.get("method_ids") or []
+    elif action == "PERSONAL_METHOD":
+        method = patch.get("method") or {}
+        if not method.get("name"):
+            return False
+        existing = next((item for item in (entry.get("payload") or {}).get("personal_methods", [])
+                         if item.get("id") == method.get("id")), None)
+        if existing:
+            if existing.get("name", "\x00").lower() not in lowered and existing["id"].lower() not in lowered:
+                return False
+        elif method.get("id") != entry.get("new_personal_method_id"):
+            return False
+        identifiers = [method.get("base_method_id")]
+    else:
+        return False
+    cards = {card.get("id"): card for card in entry.get("catalog_methods", [])}
+    return bool(identifiers) and all(isinstance(identifier, str) and (
+        identifier.lower() in lowered or (cards.get(identifier, {}).get("title") or "\x00").lower() in lowered)
+        for identifier in identifiers)
+
+
+def _requested_structure_dates(patch, entry, text):
+    try:
+        first, last, target = (date.fromisoformat(patch[key]) for key in ("source_start", "source_end", "target_start"))
+        today = date.fromisoformat(entry["today"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    lowered = text.lower()
+    payload = entry.get("payload") or {}
+    current = payload.get("current_plan") or {}
+    grounded_source = all(_requested_plan_date(patch[field], text, entry.get("today"))
+                          for field in ("source_start", "source_end"))
+    # Ordinals are anchored to the saved programme, never guessed from model
+    # memory. The target remains independently grounded.
+    first_two = re.search(r"първите\s+(?:две|2)\s+седмици|седмиц\w*\s+1\s*(?:и|–|-)\s*2|1\s*[-а]*\s*и\s*2\s*[-ра]*\s*седмиц", lowered)
+    first_one = re.search(r"първата\s+седмица|седмица\s+1\b", lowered)
+    if (first_two or first_one) and patch["source_start"] == payload.get("program_start"):
+        grounded_source = (last-first).days == (13 if first_two else 6)
+    if re.search(r"текущ(?:ия|ият|ата)\s+(?:блок|програма)", lowered):
+        grounded_source = patch["source_start"] == current.get("start_date") and patch["source_end"] == current.get("end_date")
+    grounded_target = _requested_plan_date(patch["target_start"], text, entry.get("today"))
+    if re.search(r"следващата\s+седмица", lowered):
+        grounded_target = target == today + timedelta(days=7-today.weekday())
+    if re.search(r"веднага\s+след|след\s+(?:него|блока)", lowered):
+        grounded_target = target == last + timedelta(days=1)
+    if patch.get("action") == "FIX_STRUCTURE":
+        grounded_target = target == first
+    return bool(grounded_source and grounded_target)
+
+
+def _direct_cycle_accents(cycles, entry, text):
+    old = ((entry.get("payload") or {}).get("planning_controls") or {}).get("cycles") or []
+    if not isinstance(cycles, list) or len(cycles) != len(old):
+        return False
+    changed = [(before, after) for before, after in zip(old, cycles) if before != after]
+    if len(changed) != 1:
+        return False
+    before, after = changed[0]
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    if {key: value for key, value in before.items() if key != "accents"} != {key: value for key, value in after.items() if key != "accents"}:
+        return False
+    lowered = text.lower()
+    selected = before.get("start_date", "\x00") in text or before.get("name", "\x00").lower() in lowered
+    if not selected and len(old) != 1:
+        return False
+    zones = set(re.findall(r"\bz[1-5]\b", lowered))
+    if re.search(r"\bstr\b|силов|сила", lowered):
+        zones.add("str")
+    return bool(zones) and zones == {str(zone).lower() for zone in after.get("accents", [])}
+
+
 def _direct_request(command, entry, request, message):
     """A concrete reversible request is its authorization; a suggestion is not."""
     text = _request_text(request, message)
@@ -332,6 +445,8 @@ def _direct_request(command, entry, request, message):
     patch = command["patch"]
     if request and request.get("kind") != command["kind"]:
         return False
+    if command["kind"] == "TRAINING_PROPOSAL":
+        return _direct_training_proposal(command, entry, text)
     if command["kind"] not in {"DAILY", "WEIGHT", "SESSION", "MANAGEMENT_PROFILE", "CALENDAR_EVENT", "SYNC_DATA", "PLAN_ACTION", "PLAN_DAY", "PLAN_GENERATE"}:
         return False
     if any(value is None for value in patch.values()) or patch.get("delete") or patch.get("include_identical_copies"):
@@ -441,7 +556,10 @@ def _direct_request(command, entry, request, message):
         day_fields={"training_days":r"трени|почив", "threshold_days":r"праг", "double_threshold_days":r"двойн.{0,12}праг",
                     "intensity_days":r"интензив", "strength_days":r"сил", "long_session_day":r"продълж|дълг"}
         for field,value in controls.items():
-            if field=="weekly_target_hours":
+            if field=="cycles":
+                if not _direct_cycle_accents(value, entry, text):
+                    return False
+            elif field=="weekly_target_hours":
                 hours=re.findall(r"(\d+(?:[.,]\d+)?)\s*(?:час\w*|ч\b)",lowered)
                 if not any(float(v.replace(",","."))==value for v in hours):
                     return False
@@ -484,7 +602,10 @@ def _input_request(state, message, now):
         return None
     kind = None
     if action:
-        if re.search(r"обнов|синхрон",text) and re.search(r"данн|активност|възстанов|благосъстоян|wellness|recovery|intervals",text):
+        if (re.search(r"фикси|повтори", text) and re.search(r"седмиц|блок|структур", text)
+                or re.search(r"личен|личния|лична|вариант", text) and re.search(r"метод", text)):
+            kind="TRAINING_PROPOSAL"
+        elif re.search(r"обнов|синхрон",text) and re.search(r"данн|активност|възстанов|благосъстоян|wellness|recovery|intervals",text):
             kind="SYNC_DATA"
         elif re.search(r"генерирай|създай", text) and re.search(r"план|програм", text):
             kind="PLAN_GENERATE"
@@ -701,6 +822,33 @@ def _plan_preview(command, entry):
 
 
 def _preview(command, entry=None):
+    if command["kind"]=="TRAINING_PROPOSAL":
+        patch=command["patch"]
+        action=patch.get("action")
+        labels={"PERSONAL_METHOD":"Личен вариант: "+str((patch.get("method") or {}).get("name", "метод")),
+            "REMOVE_PERSONAL_METHOD":"Премахване на личен метод", "FIX_STRUCTURE":"Фиксиране на структурата",
+            "REPEAT_STRUCTURE":"Повторение на структурата", "SESSION_METHOD":"Метод за конкретна сесия",
+            "REMOVE_STRUCTURE":"Премахване на настройката на структурата"}
+        lines=["Предложена промяна: "+labels.get(action,"тренировъчно предложение")+"."]
+        method=patch.get("method") or {}
+        if method:
+            for field,label in (("work_range","Работна отсечка"),("repetitions","Повторения"),("recovery_seconds","Почивка")):
+                values=method.get(field)
+                if isinstance(values,(list,tuple)) and len(values)==2:
+                    shown=str(values[0]) if values[0]==values[1] else f"{values[0]}–{values[1]}"
+                    unit=" сек" if field=="recovery_seconds" or field=="work_range" and method.get("work_unit")=="seconds" else " м" if field=="work_range" and method.get("work_unit")=="meters" else ""
+                    lines.append(f"{label}: {shown}{unit}.")
+        if action=="SESSION_METHOD":
+            cards={card.get("id"):card for card in (entry or {}).get("catalog_methods",[])}
+            names=[cards.get(identifier,{}).get("title") or identifier for identifier in patch.get("method_ids",[])]
+            lines.append(f"Сесия {patch.get('session_index')}: "+", ".join(names)+".")
+        if patch.get("source_start"):
+            lines.append(f"Източник: {patch['source_start']} – {patch.get('source_end')}.")
+        if patch.get("target_start") or patch.get("target_date"):
+            lines.append("Прилагане от: "+str(patch.get("target_start") or patch.get("target_date"))+".")
+        lines.append("Обхватът е само този спортист. Алгоритъмът преизчислява дозата според актуалните данни.")
+        lines.append("Избери „Запиши промяната“ или „Откажи промяната“.")
+        return "\n".join(lines)
     if command["kind"]=="PLAN_GENERATE":
         start_date=command["patch"].get("start_date") or (entry or {}).get("payload",{}).get("start_date")
         if not start_date or command["entry_key"]!=start_date:
@@ -798,6 +946,27 @@ def _receipt_message(receipt, command=None, entry=None):
         return "Резултатът от записа още не е потвърден. Провери статуса на същата заявка."
     kind=(command or {}).get("kind") or receipt.get("kind")
     action=((command or {}).get("patch") or {}).get("action") or receipt.get("plan_operation")
+    if kind=="TRAINING_PROPOSAL":
+        labels={"PERSONAL_METHOD":"Личният вариант на метода е записан само за този спортист.",
+            "REMOVE_PERSONAL_METHOD":"Личният вариант на метода е премахнат.",
+            "FIX_STRUCTURE":"Структурата е фиксирана за избрания период.",
+            "REPEAT_STRUCTURE":"Повторението на структурата е зададено за избрания период.",
+            "SESSION_METHOD":"Методът е зададен само за избраната сесия.",
+            "REMOVE_STRUCTURE":"Избраната настройка на структурата е премахната."}
+        message=labels.get(action,"Предложението е записано за този спортист.")
+        corrections=((entry or {}).get("preview") or {}).get("corrections") or []
+        field_names={"work_range":"Работна отсечка", "repetitions":"Повторения", "recovery_seconds":"Почивка"}
+        unit=(((command or {}).get("patch") or {}).get("method") or {}).get("work_unit")
+        def range_label(value):
+            if not isinstance(value,(list,tuple)) or len(value)!=2:
+                return str(value)
+            return str(value[0]) if value[0]==value[1] else f"{value[0]}–{value[1]}"
+        for correction in corrections:
+            field=correction.get("field")
+            if field in field_names:
+                suffix=" сек" if field=="recovery_seconds" or field=="work_range" and unit=="seconds" else " м" if field=="work_range" and unit=="meters" else ""
+                message+=f"\n{field_names[field]}: {range_label(correction.get('requested'))}{suffix} → {range_label(correction.get('applied'))}{suffix}, според допустимите граници на метода."
+        return message+"\nДозата се определя от алгоритъма според актуалното състояние. Програмата се преизчислява във фонов режим и валидният резултат се прилага автоматично."
     if kind=="SYNC_DATA":
         scope=(receipt.get("sync") or {}).get("scope") or (receipt.get("job") or {}).get("scope") or ((command or {}).get("patch") or {}).get("scope")
         label={"WELLNESS":"данните за благосъстоянието", "RECOVERY":"данните за възстановяването"}.get(scope,"данните")
@@ -1060,6 +1229,10 @@ def turn(repository,alias,actor,body,provider=None):
         and p["expires_at"]>now.isoformat()]
     try:
         normalized=message.lower().strip().rstrip(".! ")
+        if not _apply_discussed_proposal(message):
+            # A bare apply refers only to the immediately preceding proposal,
+            # never to one left behind by an unrelated conversation topic.
+            state.pop("discussed_proposal",None)
         input_request=_input_request(state,message,now)
         pending_change=state.get("pending_command")
         if normalized not in CONFIRM:
@@ -1091,13 +1264,38 @@ def turn(repository,alias,actor,body,provider=None):
             state.pop("pending_command",None)
             state.pop("pending_command_at",None)
             state.pop("input_request",None)
+            state.pop("discussed_proposal",None)
             result["message"]="Предложената промяна е отказана."
+        elif _apply_discussed_proposal(message) and isinstance(state.get("discussed_proposal"),dict) and not pending_change:
+            discussed=state.pop("discussed_proposal")
+            if discussed.get("expires_at", "") <= now.isoformat():
+                result["message"]="Обсъденото предложение е от предишен разговорен момент. Опиши отново избраната промяна, за да проверя актуалните данни."
+            else:
+                if "TRAINING_PROPOSAL" not in _capabilities(_permissions(repository,alias,actor))["write"]:
+                    raise HTTPException(403,"Нямаш право за тази промяна.")
+                proposed=discussed["command"]
+                context=_read(repository,alias,actor,{"kind":"inputs","input_kind":"TRAINING_PROPOSAL",
+                    "proposal_json":json.dumps(proposed["patch"],ensure_ascii=False)})
+                candidate=_proposal_candidate(context)
+                if candidate!=proposed:
+                    raise HTTPException(409,"Данните за предложението са променени. Обсъди актуалния вариант преди прилагане.")
+                receipt=assistant_commands.execute(repository,alias,actor,operation,candidate)
+                result.update(receipt=receipt,message=_receipt_message(receipt,candidate,context))
+            state.pop("input_request",None)
         elif normalized in CONFIRM and (state.get("pending_command") or normalized in {"запиши промяната", "потвърждавам промяната"}):
             pending=state.pop("pending_command",None)
             created=state.pop("pending_command_at",None)
             expired=bool(created and datetime.now(timezone.utc)-datetime.fromisoformat(created)>timedelta(minutes=15))
             if not isinstance(pending,dict):
                 result["message"]="Няма показана промяна за запис. Опиши какво искаш да промениш."
+            elif pending.get("kind")=="TRAINING_PROPOSAL":
+                context=_read(repository,alias,actor,{"kind":"inputs","input_kind":"TRAINING_PROPOSAL",
+                    "proposal_json":json.dumps(pending["patch"],ensure_ascii=False)})
+                if _proposal_candidate(context)!=pending:
+                    raise HTTPException(409,"Данните за предложението са променени. Обсъди актуалния вариант преди прилагане.")
+                receipt=assistant_commands.execute(repository,alias,actor,operation,pending)
+                result.update(receipt=receipt,message=_receipt_message(receipt,pending,context))
+                state.pop("discussed_proposal",None)
             elif expired:
                 refresh_query={"kind":"inputs","input_kind":pending["kind"],"key":pending["entry_key"]}
                 if pending["kind"]=="PLAN_ACTIVATE":
@@ -1172,9 +1370,11 @@ def turn(repository,alias,actor,body,provider=None):
                     "synthesis_reason":"REPEATED_READ" if synthesis_only and query_feedback else "READ_BUDGET" if synthesis_only else None,"read_targets":state.get("read_targets",[]),
                     "pending_change":pending_change if input_request else None,"now":datetime.now(timezone.utc).isoformat(),
                     "active_input_request":input_request,
+                    "discussed_proposal":state.get("discussed_proposal"),
                     "athlete_timezone":athlete_timezone,"today":local_today,
                     "new_input_keys":{"CALENDAR_EVENT":"event_"+UUID(operation).hex,
-                        "LAB":UUID(operation).hex,"MANUAL_SPEED_TEST":"manual_"+UUID(operation).hex}}
+                        "LAB":UUID(operation).hex,"MANUAL_SPEED_TEST":"manual_"+UUID(operation).hex,
+                        "PERSONAL_METHOD":"PERSONAL-"+UUID(operation).hex}}
                 try:
                     reply=provider.complete(messages,model_context,capabilities)
                 except AssistantProviderError as exc:
@@ -1226,7 +1426,7 @@ def turn(repository,alias,actor,body,provider=None):
                     # These are separate app forms within the same planning
                     # intent. A canonical input read resolves the form without
                     # requiring the user to repeat an earlier clarification.
-                    planning_forms={"MANAGEMENT_PROFILE","PLANNING_PROFILE","MESOCYCLE_PREFERENCES"}
+                    planning_forms={"MANAGEMENT_PROFILE","PLANNING_PROFILE","MESOCYCLE_PREFERENCES","TRAINING_PROPOSAL"}
                     if (input_request and input_request.get("kind") in planning_forms and requested.get("kind")=="inputs"
                             and requested.get("input_kind") in planning_forms):
                         input_request["kind"]=requested["input_kind"]
@@ -1235,7 +1435,7 @@ def turn(repository,alias,actor,body,provider=None):
                     query_keys.append(query_key)
                     # Keep only scoped selectors between turns. Every payload
                     # must be freshly read, including after a plan approval.
-                    target={k:v for k,v in requested.items() if v is not None}
+                    target={k:v for k,v in requested.items() if v is not None and k!="proposal_json"}
                     for key in ("date", "session_id", "activity_ref"):
                         if context.get(key) and key not in target:
                             target[key]=context[key]
@@ -1261,11 +1461,14 @@ def turn(repository,alias,actor,body,provider=None):
                         if item.get("query_kind")=="methods":
                             data=item.get("data") or {}
                             catalog_methods.extend(row for row in [data.get("method"), *(data.get("methods") or [])] if isinstance(row,dict))
-                    entry={**entry,"today":contexts[-1].get("today"),"catalog_methods":catalog_methods}
+                    entry={**entry,"today":contexts[-1].get("today"),"catalog_methods":catalog_methods,
+                        "new_personal_method_id":"PERSONAL-"+UUID(operation).hex}
                     if _automatic_observation(command,entry,message) or _direct_request(command,entry,input_request,message):
                         receipt=assistant_commands.execute(repository,alias,actor,operation,command)
                         result.update(receipt=receipt,message=_receipt_message(receipt,command,entry))
                         state.pop("input_request",None)
+                        if command["kind"]=="TRAINING_PROPOSAL":
+                            state.pop("discussed_proposal",None)
                     else:
                         preview=_preview(command,entry)
                         state["pending_command"]=command
@@ -1277,6 +1480,11 @@ def turn(repository,alias,actor,body,provider=None):
                 stored_claim=re.search(r"(?:входът|промяната|стойността|оценката|теглото|данните|резултатът)\s+(?:е|са)\s+(?:записан[аои]?|запазен[аои]?)\b|^(?:записан[аои]?|запазен[аои]?)\b",result["message"].lower())
                 if first_person_claim or stored_claim and (input_request or _explicit_write_request(message) or not contexts):
                     result["message"]="Няма потвърден нов запис от тази заявка. Опиши конкретната промяна или използвай съответния формуляр."
+                elif reply.get("text"):
+                    candidate=next((_proposal_candidate(item) for item in reversed(contexts) if _proposal_candidate(item)),None)
+                    if candidate:
+                        state["discussed_proposal"]={"command":candidate,
+                            "expires_at":(now+timedelta(minutes=15)).isoformat()}
                 break
             else:
                 result["message"]=_resolved_answer(contexts,input_request)

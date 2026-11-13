@@ -45,6 +45,13 @@ def provenance():
             "sha256": sha256(raw).hexdigest(), "method_count": len(payload.get("methods", []))}
 
 
+def profile_entries(profile):
+    """Resolve athlete variants without changing the shared source cache."""
+    from .personal_methods import source_methods
+    bases = entries()
+    return bases + source_methods(profile, bases)
+
+
 def _positive(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0
 
@@ -256,6 +263,12 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
     phase = phase or "GENERAL_PREPARATION"
     config = profile.get("method_library") or {}
     override = (config.get("overrides") or {}).get(record["id"], {})
+    if record.get("personal_variant"):
+        # Even legacy/tampered stored data cannot turn a private selection into
+        # an expert intensity or capacity override.
+        override = {k: v for k, v in override.items() if k == "enabled"}
+        config = {**config, "overrides": {**(config.get("overrides") or {}), record["id"]: override}}
+        profile = {**profile, "method_library": config}
     dosing = method_dosing.parameters(record, profile)
     result = {"dosing": dosing, "status": "UNAVAILABLE", "reason": None, "phase": phase,
               "speed_role": "RAW_MOVING_SPEED" if (speed_view or {}).get("speed_role") == "RAW_MOVING_SPEED" else "FLAT_EQUIVALENT_REFERENCE_NOT_TERRAIN_PACE",
@@ -280,7 +293,7 @@ def resolve(record, profile, speed_view=None, *, phase=None, _prepared=None, _hr
     levels = record.get("athlete_levels") or []
     level = _athlete_level(profile)
     result.update(athlete_level=level, suitable_athlete_levels=levels)
-    if levels and level not in levels and not override.get("enabled"):
+    if levels and level not in levels and (record.get("personal_variant") or not override.get("enabled")):
         return {**result, "status": "INCOMPATIBLE", "reason": "ATHLETE_LEVEL_REQUIRED" if level in {None, "AUTO"} else "ATHLETE_LEVEL_NOT_SUPPORTED"}
     if speed_view and speed_view.get("sport") != actual_sport:
         return {**result, "reason": "SPEED_SPORT_MISMATCH"}
@@ -474,11 +487,13 @@ def catalog(profile, speed_view=None, *, phase=None, today=None):
         prepared, predictor = _prepare(speed_view)
     except (ValueError, KeyError, TypeError):
         prepared, predictor = None, None
-    return {"version": VERSION, "methods": [{**m, "resolution": resolve(m, profile, speed_view, phase=phase, _prepared=prepared, _hr_predictor=predictor)} for m in entries()]}
+    from .personal_methods import constraints
+    return {"version": VERSION, "methods": [{**m, "personal_variant_constraints": constraints(m),
+        "resolution": resolve(m, profile, speed_view, phase=phase, _prepared=prepared, _hr_predictor=predictor)} for m in profile_entries(profile)]}
 
 
 def metadata(record, resolution):
-    return {k: deepcopy(record.get(k)) for k in ("id", "title", "source", "original", "adaptation", "guidance", "prescription", "progression", "derived_from", "requirements", "athlete_levels", "provenance")} | {"resolution": deepcopy(resolution)}
+    return {k: deepcopy(record.get(k)) for k in ("id", "title", "source", "original", "adaptation", "guidance", "prescription", "progression", "derived_from", "requirements", "athlete_levels", "provenance", "personal_variant")} | {"resolution": deepcopy(resolution)}
 
 
 def executable_methods(profile, speed_view, *, phase=None):
@@ -488,7 +503,7 @@ def executable_methods(profile, speed_view, *, phase=None):
         prepared, predictor = _prepare(speed_view)
     except (ValueError, KeyError, TypeError):
         prepared, predictor = None, None
-    for record in entries():
+    for record in profile_entries(profile):
         if not automatic_intervals and (record.get("prescription") or {}).get("structure") not in {"CONTINUOUS", "PROGRESSIVE_CONTINUOUS"}:
             continue
         override = ((profile.get("method_library") or {}).get("overrides") or {}).get(record["id"], {})

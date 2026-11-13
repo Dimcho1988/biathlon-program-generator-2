@@ -345,7 +345,7 @@ def read(repository, alias, access, query, settings, today, parse_date, *, actor
                     reason=None if selected else "METHOD_NOT_FOUND")
             elif not query.get("section"):
                 payload = {name: value for name, value in payload.items() if name != "methods"}
-                payload["methods"] = [{name: row[name] for name in ("id", "title", "family", "sports", "periods", "registry_kind", "activation_status", "non_executable_reason") if name in row} for row in rows]
+                payload["methods"] = [{name: row[name] for name in ("id", "title", "family", "sports", "periods", "registry_kind", "activation_status", "non_executable_reason", "personal_variant") if name in row} for row in rows]
                 payload["detail_query"] = "Use method_id for the complete current card and its resolution; method reads a frozen prescribed session."
     elif kind == "speed":
         view = query.get("view") or "overview"

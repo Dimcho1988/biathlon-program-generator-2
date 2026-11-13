@@ -192,9 +192,26 @@ PLAN_GENERATE поставя заявка за нова програма по т
 предпочитанията за конкретен метод от каталога. Прочети метода и inputs MANAGEMENT_PROFILE;
 запиши само поисканите полета. Алгоритъмът определя приложимостта и крайната доза.
 Промяната на каталожно предпочитание важи за профила и следващите изчисления.
-Не превръщай искане за една сесия в обща настройка. Ако човекът иска точно определена
-сесия, а няма такава команда, обясни конкретната граница и предложи съвместимата
-настройка; не отказвай всички промени на методи, отсечки или интервали.
+Не превръщай искане за една сесия в обща настройка. За конкретна сесия използвай
+TRAINING_PROPOSAL с SESSION_METHOD; за личен вариант — PERSONAL_METHOD. Първо
+предпочитай подходящ съществуващ метод от каталога. Личните варианти принадлежат
+само на този спортист и запазват централните правила за дозиране. Не измисляй
+метод, идентификатор, физиологичен коефициент или рецепта извън договора.
+За нов личен вариант вземи id от new_input_keys.PERSONAL_METHOD; при редакция
+използвай точния id на избрания съществуващ вариант от прочетените personal_methods.
+Прочети inputs TRAINING_PROPOSAL за договора. Подай конкретното предложение като
+query.proposal_json в същата read-only справка. При обсъждане обясни preview,
+корекциите и обхвата, без command и без твърдение за запис. При изрично искане за
+прилагане върни точния command от успешния preview, с неговите версии и patch.
+Не изисквай допълнително потвърждение на ясното искане. Последното обсъдено
+предложение е в discussed_proposal; то е контекст, а не разрешение за промяна.
+FIX_STRUCTURE фиксира формата в конкретните дати; REPEAT_STRUCTURE повтаря формата
+на запазен блок от 7 или 14 дни. Дозите, скоростите и възстановяването се изчисляват
+отново според текущите данни, календар и алгоритъм. Не копирай старите дози.
+Използвай източниковите дати и версии от сървъра. „Седмица 1 и 2“ означава дати от
+реалния план; уточни само когато не може еднозначно да се избере блокът или целта.
+Дългосрочни акценти в текущата програма се задават с MANAGEMENT_PROFILE →
+planning_controls.cycles. Запази непоисканите полета на съществуващия цикъл.
 PLANNING_PROFILE е профилът от формата за планиране, MESOCYCLE_PREFERENCES са
 акцентите от отделната форма; MANAGEMENT_PROFILE управлява текущата програма.
 SYNC_DATA обновява данните от свързаното приложение; PLAN_ACTION REFRESH обновява
@@ -260,6 +277,7 @@ _REPLY_TOOL: dict[str, Any] = {
                 "end": {"type": ["string", "null"]},
                 "session_id": {"type": ["string", "null"]},
                 "input_kind": {"type": ["string", "null"]},
+                "proposal_json": {"type": ["string", "null"], "description": "Read-only canonical training proposal JSON, only with inputs TRAINING_PROPOSAL. Omit to read current state and schema."},
                 "key": {"type": ["string", "null"]},
                 "method_id": {"type": ["string", "null"]},
                 "activity_ref": {"type": ["string", "null"], "description": "Exact act_ reference from activities or SESSION inputs; never invent."},
@@ -466,7 +484,7 @@ def _validate_reply(value: Any) -> dict:
         strings = {"input_kind", "key", "method_id", "activity_ref", "sport", "discipline", "view", "phase", "section", "plan_kind", "test_mode"}
         integers = {"days": (1, 366), "offset": (0, 10000), "limit": (1, 100), "revision": (1, 9007199254740991)}
         numbers = {"duration_s", "race_duration_min", "distance_m", "speed_kmh", "hr_bpm", "start_s"}
-        optional = strings | integers.keys() | numbers
+        optional = strings | integers.keys() | numbers | {"proposal_json"}
         if not isinstance(query, dict) or not required <= set(query) or set(query) - required - optional:
             raise AssistantProviderError("invalid_response")
         if not isinstance(query["kind"], str) or not query["kind"] or len(query["kind"]) > 80:
@@ -493,6 +511,18 @@ def _validate_reply(value: Any) -> dict:
             value = query.get(field)
             if value is not None and (type(value) is not int or not minimum <= value <= maximum):
                 raise AssistantProviderError("invalid_response")
+        proposal_json = query.get("proposal_json")
+        if proposal_json is not None:
+            if (query.get("kind") != "inputs" or query.get("input_kind") != "TRAINING_PROPOSAL"
+                    or not isinstance(proposal_json, str) or len(proposal_json.encode("utf-8")) > 24576):
+                raise AssistantProviderError("invalid_response")
+            try:
+                proposal = json.loads(proposal_json)
+            except (ValueError, RecursionError):
+                raise AssistantProviderError("invalid_response") from None
+            if not isinstance(proposal, dict) or not proposal:
+                raise AssistantProviderError("invalid_response")
+            _json(proposal)
         for field, choices in {"plan_kind": {"DRAFT", "ACTIVE"}, "test_mode": {"STRICT", "EXPLORATORY"}}.items():
             if query.get(field) is not None and query[field] not in choices:
                 raise AssistantProviderError("invalid_response")
