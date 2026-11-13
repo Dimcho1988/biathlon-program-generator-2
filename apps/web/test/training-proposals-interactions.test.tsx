@@ -34,6 +34,27 @@ it("keeps personal method discussion read-only and applies the normalized varian
   expect(JSON.parse(applied[0][1].body)).toEqual({ proposal: normalized, expected_revision: 7, operation_id: expect.any(String) });
   expect(container.textContent).toContain("Промяната е записана"); expect(button("Приложи промяната")).toBeUndefined();
 });
+it.each([
+  { reason: "CENTRAL_DECLARED_VARIANT", field: "repetitions", requested: [8, 8], applied: [4, 4], text: "Брой повторения: 8 → 4.", explanation: "един от допустимите варианти на основния метод" },
+  { reason: "CENTRAL_METHOD_BOUNDS", field: "work_range", requested: [240, 300], applied: [120, 120], text: "Работна отсечка: 240–300 → 120 сек.", explanation: "допустимите граници на основния метод" },
+  { reason: "FUTURE_CORRECTION_RULE", field: "recovery_seconds", requested: [90, 90], applied: [60, 60], text: "Почивка: 90 → 60 сек.", explanation: "правилата на основния метод" },
+])("explains $reason and shows the exact correction before applying", async ({ reason, field, requested, applied, text, explanation }) => {
+  const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+    if (!url.endsWith("/preview")) return Response.json(state);
+    const proposal = JSON.parse(String(init?.body)).proposal;
+    expect(proposal.method[field]).toEqual(requested);
+    return Response.json({ ...state, preview: { proposal: { ...proposal, method: { ...proposal.method, [field]: applied } }, summary: "Предложението е коригирано.", corrections: [{ reason, field, requested, applied }], days: [] } });
+  }); vi.stubGlobal("fetch", fetchMock);
+  await act(async () => root.render(<PersonalMethodsPanel methods={methods} canEdit/>)); await open(); await click(button("Добави личен вариант"));
+  await enter(input("Име на личния вариант"), "Лични интервали");
+  const label = field === "repetitions" ? "Брой повторения" : field === "work_range" ? "Работна отсечка, секунди" : "Почивка, секунди";
+  await enter(container.querySelector(`[aria-label="${label} от"]`)!, String(requested[0]));
+  await enter(container.querySelector(`[aria-label="${label} до"]`)!, String(requested[1]));
+  await click(button("Прегледай предложението"));
+  const correction = container.querySelector(".proposal-preview li")?.textContent;
+  expect(correction).toContain(text); expect(correction).toContain(explanation); expect(container.textContent).not.toContain(reason);
+  expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/apply"))).toHaveLength(0);
+});
 it("previews a 14-day source across stored weeks and invalidates the preview after edits", async () => {
   const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => url.endsWith("/preview")
     ? Response.json({ ...state, preview: { proposal: { ...JSON.parse(String(init?.body)).proposal, source_revisions: [3, 4], expected_plan_revision: 4 }, summary: "Две седмици с нова доза.", corrections: [], days: [] } }) : Response.json(state)); vi.stubGlobal("fetch", fetchMock);
@@ -52,6 +73,16 @@ it("retains entered values on version conflicts and requires a fresh preview", a
   await enter(input("Име (по желание)"), "Технически блок"); await click(button("Прегледай предложението")); await click(button("Приложи промяната"));
   expect(input("Име (по желание)").value).toBe("Технически блок"); expect(container.querySelector('[role="alert"]')?.textContent).toContain("Профилът е променен");
   expect(button("Приложи промяната")).toBeUndefined(); expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/apply"))).toHaveLength(1);
+});
+it("shows a failed preview message once and retains the entered block", async () => {
+  const message = "Управлението временно не е достъпно. Въведените стойности остават във формата.";
+  const fetchMock = vi.fn().mockImplementation(async (url: string) => url.endsWith("/preview") ? Response.json({ error: message }, { status: 503 }) : Response.json(state)); vi.stubGlobal("fetch", fetchMock);
+  await act(async () => root.render(<TrainingStructurePanel today="2026-11-16" canEdit/>)); await open();
+  await enter(input("Име (по желание)"), "Блок за повторение"); await click(button("Прегледай предложението"));
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe(message);
+  expect(input("Име (по желание)").value).toBe("Блок за повторение");
+  expect(input("Начало на изходния период").value).toBe("2026-11-16");
+  expect(button("Приложи промяната")).toBeUndefined(); expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/apply"))).toHaveLength(0);
 });
 it("shows athlete variants without edit actions for read-only access", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ ...state, payload: { ...state.payload, personal_methods: [{ id: "PERSONAL-one", name: "Индивидуални интервали", base_method_id: "RUN01", work_unit: null, work_range: null, repetitions: null, recovery_seconds: null, notes: null }] } })));

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useManagementFetch } from "./management-scope";
 import { isRecord } from "../lib/training-status";
 import { type LibraryMethod, type MethodRange, type PersonalMethod } from "../lib/method-library";
-import { addProposalDays, parseTrainingProposal, parseTrainingProposalPreview, parseTrainingProposalState, type TrainingProposal, type TrainingProposalPreview, type TrainingProposalState } from "../lib/training-proposals";
+import { addProposalDays, parseTrainingProposal, parseTrainingProposalPreview, parseTrainingProposalState, trainingProposalCorrectionText, type TrainingProposal, type TrainingProposalPreview, type TrainingProposalState } from "../lib/training-proposals";
 
 const baseUrl = "/api/athlete/management/training-proposals";
 const dateLabel = (date: string) => new Date(`${date}T12:00:00Z`).toLocaleDateString("bg-BG", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
@@ -66,13 +66,13 @@ function ProposalFeedback({ control, disabled }: { control: ProposalController; 
   const checked = control.preview?.preview;
   return <>
     {control.busy && <p role="status">Обработвам предложението…</p>}
-    {control.error && <p className="proposal-error" role="alert">{control.error} Въведените стойности остават във формата.</p>}
+    {control.error && <p className="proposal-error" role="alert">{control.error}</p>}
     {control.notice && <p className="proposal-notice" role="status">{control.notice} <Link href="/management">Виж програмата →</Link></p>}
     {checked && <section className="proposal-preview" aria-label="Проверено предложение">
       <h3>Предложение за прилагане</h3><p>{checked.summary}</p>
       {(checked.proposal.action === "FIX_STRUCTURE" || checked.proposal.action === "REPEAT_STRUCTURE") && <p>Период за прилагане: <strong>{dateLabel(checked.proposal.target_start)} – {dateLabel(addProposalDays(checked.proposal.target_start, (Date.parse(checked.proposal.source_end) - Date.parse(checked.proposal.source_start)) / 86_400_000))}</strong>.</p>}
       {checked.proposal.action === "PERSONAL_METHOD" && <p><strong>{checked.proposal.method.name}</strong> · отсечка {rangeText(checked.proposal.method.work_range)} {checked.proposal.method.work_unit === "meters" ? "м" : checked.proposal.method.work_unit === "seconds" ? "сек" : ""} · повторения {rangeText(checked.proposal.method.repetitions)}{checked.proposal.method.recovery_seconds ? ` · почивка ${rangeText(checked.proposal.method.recovery_seconds)} сек` : ""}</p>}
-      {checked.corrections.length > 0 && <ul>{checked.corrections.map((correction, index) => <li key={index}>{typeof correction === "string" ? correction : isRecord(correction) && typeof (correction.reason ?? correction.message) === "string" ? String(correction.reason ?? correction.message) : "Диапазонът е съобразен с основния метод."}</li>)}</ul>}
+      {checked.corrections.length > 0 && <ul>{checked.corrections.map((correction, index) => <li key={index}>{trainingProposalCorrectionText(correction, checked.proposal.action === "PERSONAL_METHOD" ? checked.proposal.method : undefined)}</li>)}</ul>}
       {checked.days.length > 0 && <details><summary>Дни в предложението</summary><ul>{checked.days.map((day, index) => {
         if (!isRecord(day)) return null;
         const date = typeof day.date === "string" ? day.date : typeof day.target_date === "string" ? day.target_date
