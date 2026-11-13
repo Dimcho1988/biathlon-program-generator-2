@@ -52,3 +52,28 @@ it("still refreshes a normal page immediately when its generation changes", asyn
   await act(async()=>root.render(<SyncStatusPanel initialState={completed} renderedGenerationId="old-generation"/>));
   expect(refresh).toHaveBeenCalledTimes(1);
 });
+
+it("does not repeatedly refresh a legacy READY page whose cached sync was unavailable", async () => {
+  for (let n=0;n<3;n++) await act(async()=>root.render(<SyncStatusPanel
+    initialState={{...completed}} renderedGenerationId={null} renderedGenerationKnown={false}/>));
+  await act(async()=>vi.advanceTimersByTimeAsync(120_000));
+  expect(refresh).not.toHaveBeenCalled();
+});
+
+it("still polls a running job with unknown rendered source and refreshes once on success", async () => {
+  const running={...completed,state:"RUNNING" as const,progress_percent:50,finished_at:null};
+  const request=vi.fn().mockResolvedValueOnce(Response.json(running)).mockResolvedValueOnce(Response.json(completed));
+  vi.stubGlobal("fetch",request);
+  await act(async()=>root.render(<SyncStatusPanel
+    initialState={running} renderedGenerationId={null} renderedGenerationKnown={false}/>));
+  await act(async()=>vi.advanceTimersByTimeAsync(2000));
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(refresh).not.toHaveBeenCalled();
+  await act(async()=>vi.advanceTimersByTimeAsync(3000));
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  await act(async()=>root.render(<SyncStatusPanel
+    initialState={completed} renderedGenerationId={null} renderedGenerationKnown={false}/>));
+  await act(async()=>vi.advanceTimersByTimeAsync(120_000));
+  expect(refresh).toHaveBeenCalledTimes(1);
+});

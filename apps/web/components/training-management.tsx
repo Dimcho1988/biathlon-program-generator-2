@@ -400,7 +400,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     </section>}
     {syncError && <p className="management-error" role="alert">Обновяването не започна. Опитай отново или провери връзката с Intervals в настройките.</p>}
     {syncUnavailable && <p className="management-muted" role="status">Статусът на синхронизацията временно не е достъпен. Запазеният изглед остава видим.</p>}
-    {initialSyncState && <SyncStatusPanel initialState={initialSyncState} renderedGenerationId={renderedGenerationId === undefined ? initialSyncState.active_generation_id : renderedGenerationId} deferViewRefresh={preparation?.status === "UPDATING"} returnTo="/management" compact timezone={saved.timezone} />}
+    {initialSyncState && <SyncStatusPanel initialState={initialSyncState} renderedGenerationId={renderedGenerationId === undefined ? initialSyncState.active_generation_id : renderedGenerationId} renderedGenerationKnown={renderedGenerationId !== null} deferViewRefresh={preparation?.status === "UPDATING"} returnTo="/management" compact timezone={saved.timezone} />}
     <nav className="management-view-switch" aria-label="Изглед на плана"><Link href="/management" aria-current={view === "week" ? "page" : undefined}>Седмична програма</Link><Link href="/management/outlook" aria-current={view === "overview" ? "page" : undefined}>Дългосрочен план</Link></nav>
     {view === "week" && visibleWeekPlan && isAdaptivePlan(visibleWeekPlan) && <div className="management-panel">
       <label>Период<select aria-label="Период на адаптивната програма" value={selectedScheduleWindow(visibleWeekPlan,today,selectedWeek).start} onChange={event => setSelectedWeek(event.target.value)}>

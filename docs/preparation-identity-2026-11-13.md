@@ -31,6 +31,11 @@ new transitive imports, scientific catalog edits, configuration changes and
 unrelated chat/frontend deployments. New calculation entry points belong in
 `_ROOTS`; new static scientific assets belong in `_ASSETS`.
 
+SQL function bodies are not automatically fingerprinted. A migration that
+changes the numerical meaning of stored inputs or projections must also bump
+the affected prepared contract version (or add its explicit dependency).
+Queue bookkeeping and freshness-metadata migrations do not require such a bump.
+
 Granularity is intentionally conservative at module/domain level: changing a
 shared adapter contract can refresh several domains, and changing any page
 calculation refreshes the page domain. Symbol-level hashing or separate queue

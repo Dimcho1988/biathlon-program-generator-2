@@ -192,6 +192,8 @@ begin
  assert state->'preparation'->>'status'='READY' and prepared_timestamp is not null
   and state->'preparation'->>'evaluated_on'=d::text and state->'preparation'->>'reason' is null,
   'Current pages lost their actual preparation provenance';
+ assert state->>'source_generation_id'='99006000-0000-0000-0000-000000000003',
+  'READY page identity depended on an optional cached synchronization status';
  assert (prepared_timestamp::timestamptz=(select prepared_at from onflows_private.prepared_views
   where athlete_alias=a and kind='management-view' and parameters='{}')),
   'A read changed the preparation timestamp';
@@ -199,6 +201,7 @@ begin
  assert state->>'ready'='false' and state->>'saved'='true' and state->'payload'=payload,
   'A deployment hid the saved program or falsely marked it current';
  assert state->'preparation'->>'status'='UPDATING' and state->'preparation'->>'reason'='MODEL_CHANGED';
+ assert not (state ? 'source_generation_id'),'A saved page was assigned the current active analysis';
  assert state->'preparation'->>'prepared_at'=prepared_timestamp,'Deploying redated an older result';
  assert state->>'athlete_alias'=a and state->>'kind'='management-view';
  update onflows_private.prepared_views set evaluated_on=d-1 where athlete_alias=a and kind='management-view';

@@ -160,17 +160,20 @@ begin
     and (last_requested_at is null or last_requested_at<clock_timestamp()-interval '30 seconds');
   -- Observe payload, source epoch and absence of pending inputs in one snapshot.
   select v.payload,v.prepared_at,v.evaluated_on,v.model_key,v.prepared_revision,
+   active.active_generation_id as source_generation_id,
    onflows_private.prepared_view_revision(v.kind,s.model_revision,s.context_revision) as current_revision,
-   (v.payload is not null and v.prepared_revision=
+   (active.active_generation_id is not null and v.payload is not null and v.prepared_revision=
    onflows_private.prepared_view_revision(v.kind,s.model_revision,s.context_revision)
    and v.evaluated_on=today_local and v.model_key=p_model_key
    and not exists(select 1 from onflows_private.prepared_view_events e where e.athlete_alias=p_alias
     and (e.models or onflows_private.prepared_view_revision(p_kind,0,1)=1))) as ready
    into read_state from onflows_private.prepared_views v join onflows_private.prepared_view_sources s using(athlete_alias)
+   join public.onflows_athlete_analysis_state active using(athlete_alias)
    where v.athlete_alias=p_alias and v.kind=p_kind and v.parameter_key=k and v.parameters=params;
   if read_state.ready then
    return jsonb_build_object('ready',true,'athlete_alias',p_alias,'kind',p_kind,
     'payload',read_state.payload,'prepared_at',read_state.prepared_at,
+    'source_generation_id',read_state.source_generation_id,
     'preparation',jsonb_build_object('status','READY','prepared_at',read_state.prepared_at,
      'evaluated_on',read_state.evaluated_on,'reason',null));
   end if;

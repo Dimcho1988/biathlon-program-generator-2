@@ -193,6 +193,34 @@ def test_live_sync_failure_keeps_saved_page_but_does_not_replay_old_queue_state(
     assert 'private failure' not in str(result)
 
 
+@pytest.mark.parametrize('cached_sync', [None, {'active_generation_id': 'old-sync-state'}])
+def test_ready_page_source_identity_does_not_depend_on_cached_sync(cached_sync):
+    repo = SimpleNamespace(prepared_view=Mock(return_value={
+        'ready': True, 'athlete_alias': 'ath-prepared', 'kind': 'management-view',
+        'source_generation_id': 'prepared-generation',
+        'payload': {'active': {'revision': 8}, 'sync': cached_sync}}),
+        sync_state=Mock(return_value={'status': 'SUCCEEDED', 'job_kind': 'FULL_SYNC',
+            'active_generation_id': 'prepared-generation', 'active_revision': 8}))
+    result = prepared_views.read(repo, 'ath-prepared', 'management-view')
+    assert result['rendered_generation_id'] == 'prepared-generation'
+    assert result['sync']['active_generation_id'] == 'prepared-generation'
+    assert result['active']['revision'] == 8
+
+
+def test_saved_page_cannot_adopt_the_current_analysis_as_its_source():
+    repo = SimpleNamespace(prepared_view=Mock(return_value={
+        'ready': False, 'saved': True, 'athlete_alias': 'ath-prepared', 'kind': 'management-view',
+        'source_generation_id': 'new-generation',
+        'preparation': {'status': 'UPDATING', 'prepared_at': '2026-11-12T07:00:00Z',
+                        'evaluated_on': '2026-11-12', 'reason': 'INPUTS_CHANGED'},
+        'payload': {'active': {'revision': 8}, 'sync': {'active_generation_id': 'saved-generation'}}}),
+        sync_state=Mock(return_value={'status': 'SUCCEEDED', 'job_kind': 'FULL_SYNC',
+            'active_generation_id': 'new-generation', 'active_revision': 9}))
+    result = prepared_views.read(repo, 'ath-prepared', 'management-view')
+    assert result['rendered_generation_id'] == 'saved-generation'
+    assert result['sync']['active_generation_id'] == 'new-generation'
+
+
 @pytest.mark.parametrize('changes', [
     {'prepared_at': 'yesterday'}, {'prepared_at': '2026-11-12T20:00:00'},
     {'evaluated_on': '2026-02-30'}, {'reason': 'UNKNOWN'}, {'status': 'READY'},

@@ -20,6 +20,7 @@ export function SyncStatusPanel({
   compact = false,
   timezone = "UTC",
   deferViewRefresh = false,
+  renderedGenerationKnown = true,
 }: {
   initialState: SyncState;
   renderedGenerationId: string | null;
@@ -27,6 +28,7 @@ export function SyncStatusPanel({
   compact?: boolean;
   timezone?: string;
   deferViewRefresh?: boolean;
+  renderedGenerationKnown?: boolean;
 }) {
   const router = useRouter();
   const [state, setState] = useState(initialState);
@@ -40,7 +42,10 @@ export function SyncStatusPanel({
   const initialStateName = initialState.state;
 
   useEffect(() => {
-    if (!deferViewRefresh && syncRequiresViewRefresh(initialState, renderedGenerationId)) {
+    // Legacy prepared pages may lack source identity after a temporary sync
+    // read failure. Unknown is not evidence of a changed generation; a running
+    // job still polls below and refreshes once it succeeds.
+    if (!deferViewRefresh && renderedGenerationKnown && syncRequiresViewRefresh(initialState, renderedGenerationId)) {
       router.refresh();
       return;
     }
@@ -80,7 +85,7 @@ export function SyncStatusPanel({
         setState(next);
         latest = next;
         setStatusUnavailable(false);
-        if (!deferViewRefresh && syncRequiresViewRefresh(next, renderedGenerationId)) {
+        if (!deferViewRefresh && renderedGenerationKnown && syncRequiresViewRefresh(next, renderedGenerationId)) {
           router.refresh();
           return;
         }
@@ -102,7 +107,7 @@ export function SyncStatusPanel({
       if (timer !== undefined) window.clearTimeout(timer);
       request?.abort();
     };
-  }, [initialJobId, initialStateName, initialState, renderedGenerationId, deferViewRefresh, router]);
+  }, [initialJobId, initialStateName, initialState, renderedGenerationId, renderedGenerationKnown, deferViewRefresh, router]);
 
   if (state.state === "IDLE" || (state.state === "SUCCEEDED" && state.active_generation_id === renderedGenerationId))
     return null;

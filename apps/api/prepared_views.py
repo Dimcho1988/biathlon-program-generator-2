@@ -119,8 +119,11 @@ def read(repository, alias, kind, parameters=None):
                 # Queue progress is operational state, not scientific evidence.
                 # Keep it live without invalidating/rebuilding the prepared page.
                 prepared_sync = payload.get("sync")
-                payload["rendered_generation_id"] = (prepared_sync.get("active_generation_id")
-                    if isinstance(prepared_sync, dict) else None)
+                source_generation = state.get("source_generation_id") if state.get("ready") is True else None
+                # READY source identity is observed with its revision/day fences
+                # in SQL. A saved page must never adopt the newer active source.
+                payload["rendered_generation_id"] = (source_generation if isinstance(source_generation, str)
+                    else prepared_sync.get("active_generation_id") if isinstance(prepared_sync, dict) else None)
                 try:
                     payload["sync"] = jsonable_encoder(public_sync_state(sync_reader(alias)))
                     payload.pop("sync_unavailable", None)
