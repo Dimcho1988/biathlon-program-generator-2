@@ -398,8 +398,11 @@ class SupabasePilotRepository(SnapshotRepository):
         return self._json(self._request('POST', '/rpc/read_onflows_plan_preparation', json={'p_alias':alias}))
 
     def training_plan_update(self, operation, **arguments):
-        value = self._json(self._request('POST', '/rpc/onflows_training_plan_update',
-            json={'p_operation': operation, **{'p_'+key: value for key, value in arguments.items()}}))
+        rules_claim = operation == 'CLAIM' and 'rule_versions' in arguments
+        path = '/rpc/claim_onflows_training_plan_update' if rules_claim else '/rpc/onflows_training_plan_update'
+        value = self._json(self._request('POST', path,
+            json={**({} if rules_claim else {'p_operation': operation}),
+                  **{'p_'+key: value for key, value in arguments.items()}}))
         if value is not None and not isinstance(value, dict):
             raise PersistentStoreFailure('Invalid training plan update response')
         return value

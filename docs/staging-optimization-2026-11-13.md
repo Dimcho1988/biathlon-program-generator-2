@@ -27,6 +27,11 @@ The first answer was 39.47 hours with the existing data-quality qualification.
 The second read 2,095,642 bytes for the plan pointer and fetched settings three
 times. These are individual live observations, not a stable latency percentile.
 
+A live program also retained planner rule version v74 while the deployed engine
+was v75. Its profile, generation and local day matched, and its update queue was
+complete. The stale flag was valid, but the claim that work was running was not:
+the queue did not yet treat a same-day rule change as a reason to prepare a plan.
+
 ## Changes
 
 - Prepared dashboard, learning and page families identify their calculation
@@ -52,6 +57,11 @@ times. These are individual live observations, not a stable latency percentile.
 - Nine unchanged presentation functions move out of the conversation
   orchestrator into `assistant_presentation.py`. This separates rendering from
   tool execution without changing prompts, budgets or supported operations.
+- The worker and saved input snapshots share the same canonical rule-version
+  dictionary. Rule changes can request preparation on the same day, through the
+  existing queue and publication checks. Unchanged rules do not request work.
+  Stale program text describes missing updates without asserting that a job is
+  running merely because a saved fingerprint is older.
 
 ## Reproducible comparison
 

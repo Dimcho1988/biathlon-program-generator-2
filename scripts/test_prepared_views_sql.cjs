@@ -91,6 +91,8 @@ function routine(name) {
       if(start<0||end<0) throw new Error("Missing current training plan scheduler");
       await db.exec(source.slice(start,end+3));
     }
+    const rulesMigration=fs.readdirSync(migrations).find(name=>name.endsWith("_queue_planning_rule_changes.sql"));
+    if(rulesMigration) await db.exec(fs.readFileSync(path.join(migrations,rulesMigration),"utf8"));
     await db.exec("grant select on public.onflows_management_plan_state,public.onflows_management_plan_revisions to service_role;");
     // Re-run the prior contract against the upgraded queue/publication guards.
     try { await db.exec(fs.readFileSync(path.join(root, "tests/database/prepared_dashboard_and_training_events.sql"), "utf8")); }
@@ -99,6 +101,7 @@ function routine(name) {
     catch (error) { error.message="Prepared view contract: "+error.message; throw error; }
     await db.exec(fs.readFileSync(path.join(root,"tests/database/prepared_planning_source_changes.sql"),"utf8"));
     await db.exec(fs.readFileSync(path.join(root,"tests/database/prepared_learning_triggers.sql"),"utf8"));
+    await db.exec(fs.readFileSync(path.join(root,"tests/database/planning_rule_changes.sql"),"utf8"));
     await db.exec(fs.readFileSync(path.join(root,"tests/database/management_overview.sql"),"utf8"));
     const clean = await db.query("select count(*)::integer as remaining from public.onflows_intervals_connections");
     if (clean.rows[0].remaining !== 0) throw new Error("Contract fixtures did not roll back");

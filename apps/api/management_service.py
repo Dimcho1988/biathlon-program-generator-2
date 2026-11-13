@@ -240,6 +240,34 @@ def _analysis_identity(repository, alias, hints=None):
     return analysis, _hash(analysis.get("snapshot_payload"))
 
 
+def rule_versions():
+    """Canonical calculation identity shared by saved inputs and the worker queue."""
+    from . import learning_service, speed_zone_history
+    return {
+        "component_load": COMPONENT_LOAD_VERSION,
+        "component_load_context": COMPONENT_CAPACITY_VERSION,
+        "engine": training_plan_engine.VERSION,
+        "parameters": training_plan_engine.PARAMETER_VERSION,
+        "methods": training_plan_engine.METHODS_VERSION,
+        "method_library": training_plan_engine.method_library.provenance(),
+        "periodization": PERIODIZATION_VERSION,
+        "speed_duration": training_plan_engine.speed_duration.VERSION,
+        "dosing_curve": training_plan_engine.dosing_curve.VERSION,
+        "preliminary_capacity": training_plan_engine.preliminary_capacity.VERSION,
+        "hr_speed": training_plan_engine.hr_speed.VERSION,
+        "speed_anchor_policy": speed_anchor_policy.VERSION,
+        "historical_speed_policy": training_plan_engine.model_service.HISTORICAL_SPEED_POLICY,
+        "zone_profile": ZONE_PROFILE_VERSION,
+        "zone_equivalence": ZONE_EQUIVALENCE_VERSION,
+        "unified_load": UNIFIED_LOAD_VERSION,
+        "planning_history_estimate": training_plan_engine.planning_history_estimate.VERSION,
+        "speed_zone_history": speed_zone_history.VERSION,
+        "load_progression": training_plan_engine.load_progression.VERSION,
+        "recovery": training_plan_engine.recovery_v2.VERSION,
+        "individual_learning": learning_service.VERSION,
+    }
+
+
 def input_state(repository, alias, *, evaluated_at=None, include_response=False, analysis_hints=None):
     """Capture settings and source identity; never store credentials or wellness."""
     if isinstance(repository, ReadSession):
@@ -248,7 +276,6 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False,
     settings = repository.athlete_settings(alias)
     analysis, snapshot_fingerprint = _analysis_identity(repository, alias, analysis_hints)
     entries = ModelStore(repository).entries(alias)
-    from . import learning_service, speed_zone_history
     responses = sorted([
         {"kind": e["kind"], "entry_key": e["entry_key"], "revision": e["revision"]}
         for e in training_plan_engine.ResponseStore(repository).entries(alias)
@@ -256,29 +283,7 @@ def input_state(repository, alias, *, evaluated_at=None, include_response=False,
     evaluated_at = evaluated_at or datetime.now(timezone.utc)
     return {
         "evaluation_date": evaluated_at.astimezone(ZoneInfo(settings.timezone) if settings else timezone.utc).date().isoformat(),
-        "rule_versions": {
-            "component_load": COMPONENT_LOAD_VERSION,
-            "component_load_context": COMPONENT_CAPACITY_VERSION,
-            "engine": training_plan_engine.VERSION,
-            "parameters": training_plan_engine.PARAMETER_VERSION,
-            "methods": training_plan_engine.METHODS_VERSION,
-            "method_library": training_plan_engine.method_library.provenance(),
-            "periodization": PERIODIZATION_VERSION,
-            "speed_duration": training_plan_engine.speed_duration.VERSION,
-            "dosing_curve": training_plan_engine.dosing_curve.VERSION,
-            "preliminary_capacity": training_plan_engine.preliminary_capacity.VERSION,
-            "hr_speed": training_plan_engine.hr_speed.VERSION,
-            "speed_anchor_policy": speed_anchor_policy.VERSION,
-            "historical_speed_policy": training_plan_engine.model_service.HISTORICAL_SPEED_POLICY,
-            "zone_profile": ZONE_PROFILE_VERSION,
-            "zone_equivalence": ZONE_EQUIVALENCE_VERSION,
-            "unified_load": UNIFIED_LOAD_VERSION,
-            "planning_history_estimate": training_plan_engine.planning_history_estimate.VERSION,
-            "speed_zone_history": speed_zone_history.VERSION,
-            "load_progression": training_plan_engine.load_progression.VERSION,
-            "recovery": training_plan_engine.recovery_v2.VERSION,
-            "individual_learning": learning_service.VERSION,
-        },
+        "rule_versions": rule_versions(),
         "generation_id": analysis.get("generation_id"),
         "analysis_revision": analysis.get("revision"),
         "analysis_as_of": analysis.get("analysis_as_of"),

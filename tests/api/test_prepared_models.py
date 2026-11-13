@@ -12,9 +12,9 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from apps.api import dependencies, main, model_service, prepared_models as prepared
-from apps.api import management_lifecycle, management_plan_store, management_store, planning_jobs
+from apps.api import management_lifecycle, management_plan_store, management_store, management_service, planning_jobs
 from apps.api.management_plan_store import PlanStore
-from apps.api.oauth_store import PersistentStoreFailure
+from apps.api.oauth_store import PersistentStoreFailure, SupabasePilotRepository
 from tests.api.test_sync_api import _active_snapshot, AUTH
 
 
@@ -119,9 +119,14 @@ def test_main_dashboard_uses_the_same_prepared_payload_for_all_periods(monkeypat
 
 def test_background_preparation_stores_a_fenced_result_and_then_cleans_obsolete_data(repository):
     assert prepared.process_dashboard(repository)
-    calls = repository.dashboard_preparation.call_args_list
+    all_calls = repository.dashboard_preparation.call_args_list
+    # A slow test host may renew the owned lease during calculation.
+    calls = [call for call in all_calls if call.args[0] != 'RENEW']
     assert [c.args[0] for c in calls] == ["CLAIM", "STORE"]
     assert calls[0].kwargs["token"] == calls[1].kwargs["token"]
+    for call in all_calls:
+        if call.args[0] == 'RENEW':
+            assert call.kwargs == {'alias': ALIAS, 'token': calls[0].kwargs['token']}
     assert calls[1].kwargs["revision"] == 3 and calls[1].kwargs["day"] == "2026-08-09"
     assert calls[1].kwargs["envelope"] == envelope()
     repository.cleanup_prepared_data.assert_called_once_with(ALIAS)
@@ -169,6 +174,28 @@ def test_no_new_training_does_not_refresh_or_queue_an_import(monkeypatch):
     monkeypatch.setattr(management_lifecycle, "refresh", refresh)
     assert prepared.process_training(repo) is False
     refresh.assert_not_called()
+    assert repo.training_plan_update.call_args.kwargs['rule_versions'] == management_service.rule_versions()
+
+
+def test_training_claim_uses_one_rule_aware_rpc_and_legacy_lease_operations():
+    repo = SimpleNamespace(_json=lambda value: value, _request=Mock(return_value=None))
+    rules = {'engine': 'training-rules-v2'}
+    SupabasePilotRepository.training_plan_update(repo, 'CLAIM', token='worker-token', rule_versions=rules)
+    repo._request.assert_called_once_with('POST', '/rpc/claim_onflows_training_plan_update',
+        json={'p_token': 'worker-token', 'p_rule_versions': rules})
+    repo._request.reset_mock()
+    SupabasePilotRepository.training_plan_update(repo, 'COMPLETE', token='worker-token', alias=ALIAS)
+    repo._request.assert_called_once_with('POST', '/rpc/onflows_training_plan_update',
+        json={'p_operation': 'COMPLETE', 'p_token': 'worker-token', 'p_alias': ALIAS})
+
+
+def test_rule_identity_tracks_calculations_not_deploy_commit(monkeypatch):
+    monkeypatch.setenv('RENDER_GIT_COMMIT', 'chat-only-before')
+    before = management_service.rule_versions()
+    monkeypatch.setenv('RENDER_GIT_COMMIT', 'chat-only-after')
+    assert management_service.rule_versions() == before
+    monkeypatch.setattr(management_service.training_plan_engine, 'VERSION', 'changed-calculation')
+    assert management_service.rule_versions() == {**before, 'engine': 'changed-calculation'}
 
 
 def test_new_training_passes_a_claim_into_the_existing_approval_aware_lifecycle(monkeypatch):

@@ -126,7 +126,7 @@ def process_dashboard(repository, alias=None):
 
 def process_training(repository):
     """Coalesced new-training, local-day and explicit manual preparation."""
-    from . import management_lifecycle, planning_jobs
+    from . import management_lifecycle, management_service, planning_jobs
     from .management_plan_store import PlanStore
     from .management_store import ManagementStore
     from .management_schemas import ManagementGenerateRequest
@@ -134,7 +134,7 @@ def process_training(repository):
     operation = repository.training_plan_update
     token = str(uuid4())
     with MODEL_WORK:
-        claim = operation("CLAIM", token=token)
+        claim = operation("CLAIM", token=token, rule_versions=management_service.rule_versions())
         if claim is None:
             return False
         if (not isinstance(claim, dict) or not isinstance(claim.get("athlete_alias"), str)

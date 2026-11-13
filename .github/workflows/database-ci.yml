@@ -120,6 +120,11 @@ jobs:
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
           --no-psqlrc --set ON_ERROR_STOP=1
           --file tests/database/automatic_current_training_plan.sql
+      - name: Verify same-day planning rule changes and rolling worker claims
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/planning_rule_changes.sql
       - name: Verify unified estimate approval through real save RPCs
         run: >-
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
