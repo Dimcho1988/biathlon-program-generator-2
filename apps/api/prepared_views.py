@@ -7,13 +7,10 @@ reads a fenced database result instead. Authentication is never cached.
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
-from datetime import date
+from datetime import date, datetime
 from functools import wraps
-from hashlib import sha256
 from inspect import signature
-import json
 import logging
-import os
 from uuid import uuid4
 
 from fastapi import HTTPException, Response
@@ -36,15 +33,35 @@ def worker_repository():
 
 
 def model_key():
-    from . import model_service
-    return sha256(json.dumps({"version": VERSION,
-        "build": os.getenv("RENDER_GIT_COMMIT", VERSION),
-        "recovery_v2": model_service.enabled()}, sort_keys=True).encode()).hexdigest()
+    from . import model_service, preparation_identity
+    return preparation_identity.model_key("pages", VERSION, recovery_v2=model_service.enabled())
 
 
 def pending():
     return HTTPException(503, PREPARING, headers={"Retry-After": "3",
         "Cache-Control": "no-store", "X-OnFlows-Preparation": "pending"})
+
+
+def _preparation(state, *, saved):
+    """Validate persisted provenance without inventing a new preparation time."""
+    value = state.get("preparation")
+    if value is None and not saved:
+        # Older database versions have no READY metadata during rolling deploys.
+        return None
+    if not isinstance(value, dict) or value.get("status") != ("UPDATING" if saved else "READY"):
+        raise ValueError("Invalid preparation state")
+    prepared_at, evaluated_on = value.get("prepared_at"), value.get("evaluated_on")
+    if not isinstance(prepared_at, str) or not isinstance(evaluated_on, str):
+        raise ValueError("Missing preparation provenance")
+    timestamp = datetime.fromisoformat(prepared_at.replace("Z", "+00:00"))
+    if timestamp.tzinfo is None or date.fromisoformat(evaluated_on).isoformat() != evaluated_on:
+        raise ValueError("Invalid preparation date")
+    reason = value.get("reason")
+    if (saved and reason not in {"INPUTS_CHANGED", "DAY_CHANGED", "MODEL_CHANGED", "PREPARATION_PENDING"}
+            or not saved and reason is not None):
+        raise ValueError("Invalid preparation reason")
+    return {"status": value["status"], "prepared_at": prepared_at,
+            "evaluated_on": evaluated_on, "reason": reason}
 
 
 def read(repository, alias, kind, parameters=None):
@@ -56,7 +73,7 @@ def read(repository, alias, kind, parameters=None):
             parameters=parameters or {}, model_key=model_key())
         if isinstance(state, dict) and state.get("limited") is True:
             raise HTTPException(429, "Подготвят се много изгледи. Опитай отново след малко.", headers={"Retry-After":"15"})
-        saved = (isinstance(state, dict) and state.get("saved") is True
+        saved = (isinstance(state, dict) and state.get("ready") is not True and state.get("saved") is True
                  and kind in SAVED_MANAGEMENT_VIEWS)
         if not isinstance(state, dict) or (state.get("ready") is not True and not saved):
             raise pending()
@@ -89,17 +106,28 @@ def read(repository, alias, kind, parameters=None):
                 active["capabilities"] = {**(active.get("capabilities") or {}), "automatic_publication": True}
             elif payload.get("schema_version") == "management-overview-v1":
                 payload["capabilities"] = {**(payload.get("capabilities") or {}), "automatic_publication": True}
-        if saved:
-            preparation = state.get("preparation")
-            if (not isinstance(preparation, dict) or preparation.get("status") != "UPDATING"
-                    or preparation.get("reason") not in {"INPUTS_CHANGED", "DAY_CHANGED", "MODEL_CHANGED", "PREPARATION_PENDING"}
-                    or not isinstance(preparation.get("prepared_at"), str)
-                    or not isinstance(preparation.get("evaluated_on"), str)):
-                raise ValueError("Invalid saved preparation state")
-            # This is the previous immutable page, not a new prediction. Its
-            # freshness is carried to every consumer, including the assistant.
-            payload["preparation"] = {key: preparation[key] for key in
-                                      ("status", "prepared_at", "evaluated_on", "reason")}
+        if kind in SAVED_MANAGEMENT_VIEWS:
+            preparation = _preparation(state, saved=saved)
+            if preparation is not None:
+                # Both current and previous immutable pages retain their actual
+                # provenance for the screen and assistant. A read never dates it anew.
+                payload["preparation"] = preparation
+        if kind == "management-view":
+            sync_reader = getattr(repository, "sync_state", None)
+            if callable(sync_reader):
+                from .sync_service import public_sync_state
+                # Queue progress is operational state, not scientific evidence.
+                # Keep it live without invalidating/rebuilding the prepared page.
+                prepared_sync = payload.get("sync")
+                payload["rendered_generation_id"] = (prepared_sync.get("active_generation_id")
+                    if isinstance(prepared_sync, dict) else None)
+                try:
+                    payload["sync"] = jsonable_encoder(public_sync_state(sync_reader(alias)))
+                    payload.pop("sync_unavailable", None)
+                except (PersistentStoreFailure, TypeError, ValueError) as exc:
+                    payload["sync"] = None
+                    payload["sync_unavailable"] = True
+                    logger.warning("prepared_view state=sync_deferred error_type=%s", type(exc).__name__)
         return payload
     except (PersistentStoreFailure, TypeError, ValueError) as exc:
         logger.warning("prepared_view state=read_deferred error_type=%s", type(exc).__name__)

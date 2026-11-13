@@ -61,6 +61,21 @@ begin
  assert public.onflows_prepared_view('STORE',a,'trainability','{}',token,r,d,key1,payload)->>'stored'='true';
  state:=public.onflows_prepared_view('READ',a,'trainability',p_model_key=>key1);
  assert state->>'ready'='true' and state->'payload'=payload;
+ -- Re-saving identical settings or touching synchronization bookkeeping cannot
+ -- discard prepared work. Other timestamps and real source changes still count.
+ delete from onflows_private.dashboard_dirty_events where athlete_alias=a;
+ delete from onflows_private.learning_dirty_events where athlete_alias=a;
+ update public.onflows_athlete_settings set updated_at=clock_timestamp() where athlete_alias=a;
+ update public.onflows_athlete_settings set hrmax_bpm=hrmax_bpm where athlete_alias=a;
+ update public.onflows_athlete_analysis_state set updated_at=clock_timestamp(),request_sequence=request_sequence+1 where athlete_alias=a;
+ assert not exists(select 1 from onflows_private.prepared_view_events where athlete_alias=a),
+  'No-op or bookkeeping-only writes queued scientific recalculation';
+ assert not exists(select 1 from onflows_private.dashboard_dirty_events where athlete_alias=a),
+  'Queueing synchronization invalidated the prepared dashboard';
+ assert not exists(select 1 from onflows_private.learning_dirty_events where athlete_alias=a),
+  'Queueing synchronization invalidated the prepared learning view';
+ assert public.onflows_prepared_view('READ',a,'trainability',p_model_key=>key1)->>'ready'='true',
+  'Unchanged input hid a prepared result';
  assert public.onflows_prepared_view('READ',a,'trainability',jsonb_build_object('period_start',d-89,'period_end',d),p_model_key=>key1)->'payload'=payload,
   'The standard date selector missed its prepared default';
  assert (select count(*) from onflows_private.prepared_views where athlete_alias=a)=1;
@@ -69,6 +84,9 @@ begin
  perform onflows_private.request_prepared_views(a,false);
  assert public.onflows_prepared_view('READ',a,'trainability',p_model_key=>key1)->'payload'=payload;
  update public.onflows_athlete_settings set hrmax_bpm=191 where athlete_alias=a;
+ assert exists(select 1 from onflows_private.dashboard_dirty_events where athlete_alias=a)
+  and exists(select 1 from onflows_private.learning_dirty_events where athlete_alias=a),
+  'Actual settings changes did not invalidate dashboard and learning';
  assert public.onflows_prepared_view('READ',a,'trainability',p_model_key=>key1)->>'ready'='false';
  delete from onflows_private.prepared_views where athlete_alias=a and kind<>'trainability';
  claim:=public.onflows_prepared_view('CLAIM',p_alias=>a,p_token=>token,p_model_key=>key1);
@@ -78,6 +96,14 @@ begin
  delete from onflows_private.prepared_views where athlete_alias=a and kind<>'trainability';
  claim:=public.onflows_prepared_view('CLAIM',p_alias=>a,p_token=>token,p_model_key=>key1);
  assert public.onflows_prepared_view('STORE',a,'trainability','{}',token,(claim->>'revision')::bigint,d,key1,payload)->>'stored'='true';
+ -- A newly activated analysis still invalidates every prepared domain.
+ delete from onflows_private.dashboard_dirty_events where athlete_alias=a;
+ delete from onflows_private.learning_dirty_events where athlete_alias=a;
+ update public.onflows_athlete_analysis_state set active_revision=active_revision+1 where athlete_alias=a;
+ assert exists(select 1 from onflows_private.prepared_view_events where athlete_alias=a)
+  and exists(select 1 from onflows_private.dashboard_dirty_events where athlete_alias=a)
+  and exists(select 1 from onflows_private.learning_dirty_events where athlete_alias=a),
+  'A changed active analysis did not invalidate all prepared domains';
  update onflows_private.prepared_views set evaluated_on=d-1,claimed_day=d-1 where athlete_alias=a;
  assert public.onflows_prepared_view('READ',a,'trainability',p_model_key=>key1)->>'ready'='false','Yesterday was marked current';
  claim:=public.onflows_prepared_view('CLAIM',p_alias=>a,p_token=>token,p_model_key=>key1);
@@ -148,7 +174,7 @@ begin
 end $$;
 do $$ declare a constant text:='prepared-views-contract'; key1 text:=repeat('c',64); key2 text:=repeat('d',64);
  token uuid:=gen_random_uuid(); claim jsonb; state jsonb; payload jsonb:='{"active":{"revision":7,"plan":{"days":[]}}}';
- d date; r bigint; attempt integer;
+ d date; r bigint; attempt integer; prepared_timestamp text;
 begin
  delete from onflows_private.prepared_views where athlete_alias=a;
  state:=public.onflows_prepared_view('READ',a,'management-view',p_model_key=>key1);
@@ -161,10 +187,19 @@ begin
  delete from onflows_private.prepared_views where athlete_alias=a and (kind<>'management-view' or parameters<>'{}');
  d:=(claim->>'day')::date; r:=(claim->>'revision')::bigint;
  assert public.onflows_prepared_view('STORE',a,'management-view','{}',token,r,d,key1,payload)->>'stored'='true';
+ state:=public.onflows_prepared_view('READ',a,'management-view',p_model_key=>key1);
+ prepared_timestamp:=state->'preparation'->>'prepared_at';
+ assert state->'preparation'->>'status'='READY' and prepared_timestamp is not null
+  and state->'preparation'->>'evaluated_on'=d::text and state->'preparation'->>'reason' is null,
+  'Current pages lost their actual preparation provenance';
+ assert (prepared_timestamp::timestamptz=(select prepared_at from onflows_private.prepared_views
+  where athlete_alias=a and kind='management-view' and parameters='{}')),
+  'A read changed the preparation timestamp';
  state:=public.onflows_prepared_view('READ',a,'management-view',p_model_key=>key2);
  assert state->>'ready'='false' and state->>'saved'='true' and state->'payload'=payload,
   'A deployment hid the saved program or falsely marked it current';
  assert state->'preparation'->>'status'='UPDATING' and state->'preparation'->>'reason'='MODEL_CHANGED';
+ assert state->'preparation'->>'prepared_at'=prepared_timestamp,'Deploying redated an older result';
  assert state->>'athlete_alias'=a and state->>'kind'='management-view';
  update onflows_private.prepared_views set evaluated_on=d-1 where athlete_alias=a and kind='management-view';
  state:=public.onflows_prepared_view('READ',a,'management-view',p_model_key=>key1);
@@ -185,6 +220,10 @@ begin
   claim:=public.onflows_prepared_view('CLAIM',p_alias=>a,p_token=>token,p_model_key=>key1);
   assert claim is not null,'A retryable page became permanently unclaimable';
   perform public.onflows_prepared_view('FAIL',a,'management-view','{}',token);
+  state:=public.onflows_prepared_view('READ',a,'management-view',p_model_key=>key1);
+  assert state->>'saved'='true' and state->'payload'=payload
+   and state->'preparation'->>'prepared_at'=prepared_timestamp,
+   'A failed background refresh hid or redated the saved program';
   assert public.onflows_prepared_view('CLAIM',p_alias=>a,p_token=>gen_random_uuid(),p_model_key=>key1) is null,
    'A failed page bypassed its retry cooldown';
   assert (select available_at>clock_timestamp() and available_at<=clock_timestamp()+interval '5 minutes'
@@ -196,6 +235,9 @@ begin
  assert public.onflows_prepared_view('STORE',a,'management-view','{}',token,(claim->>'revision')::bigint,d,key1,payload)->>'stored'='true';
  state:=public.onflows_prepared_view('READ',a,'management-view',p_model_key=>key1);
  assert state->>'ready'='true' and not (state ? 'saved'),'A successful refresh retained stale provenance';
+ assert state->'preparation'->>'status'='READY' and state->'preparation'->>'reason' is null
+  and (state->'preparation'->>'prepared_at')::timestamptz>=prepared_timestamp::timestamptz,
+  'A completed update kept the old freshness status';
  update onflows_private.prepared_views set payload='{"prepared_error":{"status":409,"detail":"old"}}',model_key=key2
   where athlete_alias=a and kind='management-view';
  state:=public.onflows_prepared_view('READ',a,'management-view',p_model_key=>key1);

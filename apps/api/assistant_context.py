@@ -17,7 +17,7 @@ from fastapi import HTTPException
 from biathlon import method_library
 from biathlon.planning_schedule import day_sessions
 from .body_observations import LabReport, WeightReport
-from .management_plan_store import PlanStore
+from .management_plan_store import PLAN_PROVENANCE_FIELDS, PlanStore
 from .management_projection import public_management
 from .management_store import ManagementStore
 from .model_schemas import ManualSpeedTestInput
@@ -54,8 +54,7 @@ EVIDENCE_FIELDS = frozenset({"explanation", "limits", "fallback_reasons", "capac
     "method_budget_role_fraction", "nominal_dose_policy", "method_dose_factors", "unrounded_requested_work_minutes",
     "zone_tmax_minutes", "zone_tmax_sources", "resolved_role", "reentry_dose_policy", "dosing", "speed_role",
     "initial_heuristic", "calibration_source", "target_speed_source", "target_speed_model_version"})
-SNAPSHOT_FIELDS = frozenset({"generation_id", "analysis_revision", "analysis_as_of", "settings_fingerprint",
-    "snapshot_fingerprint", "evaluation_date", "profile_revision", "engine_version", "speed_model_version"})
+SNAPSHOT_FIELDS = frozenset(PLAN_PROVENANCE_FIELDS)
 # Same display names as web/lib/training-visuals.ts and planning-controls-editor.tsx.
 # The stored sport remains the identity; labels never infer another modality.
 SPORT_LABELS_BG = {"Run": "Бягане", "NordicSki": "Ски бягане", "RollerSki": "Ролкови ски",

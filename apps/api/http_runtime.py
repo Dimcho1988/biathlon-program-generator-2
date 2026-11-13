@@ -29,6 +29,10 @@ async def lifespan(app):
     global _client
     store_client()
     try:
+        # Compute immutable release identities before this instance becomes ready;
+        # prepared HTTP reads then need no source scan after a deployment.
+        from .preparation_identity import warm
+        warm()
         yield
     finally:
         with _lock:

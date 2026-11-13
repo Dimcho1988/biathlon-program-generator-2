@@ -85,11 +85,11 @@ def test_storage_failure_does_not_expose_private_values_or_calculate(monkeypatch
     compute.assert_not_called()
 
 
-def test_build_or_policy_version_changes_cache_identity(monkeypatch):
+def test_unrelated_build_keeps_learning_cache_identity(monkeypatch):
     monkeypatch.setenv("RENDER_GIT_COMMIT", "first-build")
     first = prepared.model_key()
     monkeypatch.setenv("RENDER_GIT_COMMIT", "next-build")
-    assert prepared.model_key() != first
+    assert prepared.model_key() == first
 
 
 def test_worker_computes_once_then_all_periods_read_the_same_report(monkeypatch):

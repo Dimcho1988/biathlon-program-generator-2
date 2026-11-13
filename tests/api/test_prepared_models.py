@@ -237,7 +237,7 @@ def test_new_local_day_alone_keeps_a_prepared_prescription_current():
     assert not management_lifecycle._inputs_current(today, fingerprint, "2026-11-03")
 
 
-def test_feature_flag_and_build_changes_do_not_reuse_a_prepared_view(monkeypatch):
+def test_feature_flag_changes_invalidate_but_unrelated_deploys_reuse_a_prepared_view(monkeypatch):
     monkeypatch.setenv("ONFLOWS_RECOVERY_V2_ENABLED", "true")
     monkeypatch.setenv("RENDER_GIT_COMMIT", "release-one")
     first = prepared.model_key()
@@ -245,7 +245,7 @@ def test_feature_flag_and_build_changes_do_not_reuse_a_prepared_view(monkeypatch
     assert prepared.model_key() != first
     monkeypatch.setenv("ONFLOWS_RECOVERY_V2_ENABLED", "true")
     monkeypatch.setenv("RENDER_GIT_COMMIT", "release-two")
-    assert prepared.model_key() != first
+    assert prepared.model_key() == first
 
 
 def test_periodic_import_check_enqueues_only_one_sync_and_does_not_plan(monkeypatch):

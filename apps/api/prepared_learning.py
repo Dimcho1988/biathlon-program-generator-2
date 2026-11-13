@@ -6,10 +6,7 @@ current while a new activity or observation is being processed.
 """
 from copy import deepcopy
 from datetime import date, timedelta
-from hashlib import sha256
-import json
 import logging
-import os
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -23,11 +20,8 @@ PREPARING = "Оценката на самообучението се подго�
 
 
 def model_key():
-    from .recovery_policy import VERSION as policy_version
-    from biathlon.individual_learning import VERSION as learning_version
-    return sha256(json.dumps({"version": VERSION, "policy": policy_version,
-        "learning": learning_version, "build": os.getenv("RENDER_GIT_COMMIT", VERSION)},
-        sort_keys=True).encode()).hexdigest()
+    from . import model_service, preparation_identity
+    return preparation_identity.model_key("learning", VERSION, recovery_v2=model_service.enabled())
 
 
 def _validate(value, alias):

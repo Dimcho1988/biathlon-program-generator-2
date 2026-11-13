@@ -55,7 +55,7 @@ def snapshot():
 def repository(monkeypatch):
     repo = SimpleNamespace(athlete_settings=Mock(return_value=SimpleNamespace(timezone="Europe/Sofia")),
         active_analysis=Mock(side_effect=lambda _: deepcopy(snapshot())), _request=Mock(), _json=lambda value: value)
-    repo.plan_read = Mock(side_effect=lambda _: deepcopy(plan()))
+    repo.plan_read = Mock(side_effect=lambda _, **kwargs: deepcopy(plan()))
     monkeypatch.setattr(context, "PlanStore", lambda _: SimpleNamespace(current=repo.plan_read))
     return repo
 
@@ -907,3 +907,11 @@ def test_training_proposal_rejects_invalid_payload_before_canonical_read(reposit
             'proposal_json': raw}, now=NOW)
     assert error.value.status_code == 422
     preview.assert_not_called()
+
+
+def test_week_summary_does_not_expand_full_blocks_that_are_not_returned(repository, monkeypatch):
+    monkeypatch.setattr(context, "_session", Mock(side_effect=AssertionError("Full session projection is unnecessary")))
+    result = context.read(repository, ALIAS, FULL, {"kind": "management", "view": "week"}, now=NOW)
+    assert result["data"]["plan"]["days"][0]["sessions"][0]["total_minutes"] == 21
+    repository.plan_read.assert_called_once_with(ALIAS, schedule_only=True)
+    assert "blocks" not in result["data"]["plan"]["days"][0]["sessions"][0]

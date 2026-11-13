@@ -19,12 +19,14 @@ export function SyncStatusPanel({
   returnTo,
   compact = false,
   timezone = "UTC",
+  deferViewRefresh = false,
 }: {
   initialState: SyncState;
   renderedGenerationId: string | null;
   returnTo?: string;
   compact?: boolean;
   timezone?: string;
+  deferViewRefresh?: boolean;
 }) {
   const router = useRouter();
   const [state, setState] = useState(initialState);
@@ -38,7 +40,7 @@ export function SyncStatusPanel({
   const initialStateName = initialState.state;
 
   useEffect(() => {
-    if (syncRequiresViewRefresh(initialState, renderedGenerationId)) {
+    if (!deferViewRefresh && syncRequiresViewRefresh(initialState, renderedGenerationId)) {
       router.refresh();
       return;
     }
@@ -78,12 +80,12 @@ export function SyncStatusPanel({
         setState(next);
         latest = next;
         setStatusUnavailable(false);
-        if (syncRequiresViewRefresh(next, renderedGenerationId)) {
+        if (!deferViewRefresh && syncRequiresViewRefresh(next, renderedGenerationId)) {
           router.refresh();
           return;
         }
         if (syncInProgress(next)) schedule();
-        else if (next.state === "SUCCEEDED") router.refresh();
+        else if (next.state === "SUCCEEDED" && !deferViewRefresh) router.refresh();
       } catch {
         if (!stopped) {
           setStatusUnavailable(true);
@@ -100,7 +102,7 @@ export function SyncStatusPanel({
       if (timer !== undefined) window.clearTimeout(timer);
       request?.abort();
     };
-  }, [initialJobId, initialStateName, initialState, renderedGenerationId, router]);
+  }, [initialJobId, initialStateName, initialState, renderedGenerationId, deferViewRefresh, router]);
 
   if (state.state === "IDLE" || (state.state === "SUCCEEDED" && state.active_generation_id === renderedGenerationId))
     return null;

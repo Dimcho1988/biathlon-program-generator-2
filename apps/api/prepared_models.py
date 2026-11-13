@@ -6,10 +6,7 @@ local-day checks, leases and publication fences own freshness across processes.
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
-from hashlib import sha256
-import json
 import logging
-import os
 from threading import Event, Thread
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -23,9 +20,8 @@ VERSION = "prepared-dashboard-v1-training-events-v1"
 
 
 def model_key():
-    from . import model_service
-    return sha256(json.dumps({"version": VERSION, "build": os.getenv("RENDER_GIT_COMMIT", VERSION),
-        "recovery_v2": model_service.enabled()}, sort_keys=True).encode()).hexdigest()
+    from . import model_service, preparation_identity
+    return preparation_identity.model_key("dashboard", VERSION, recovery_v2=model_service.enabled())
 
 
 def _validate_envelope(value, alias):

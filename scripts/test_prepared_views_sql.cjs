@@ -56,7 +56,7 @@ function routine(name) {
       create table public.onflows_activity_model_inputs(input_key text,athlete_alias text,activity_ref text,primary key(input_key,athlete_alias,activity_ref));
       create table public.onflows_activity_canonical_runs(run_key text,athlete_alias text,activity_ref text,primary key(run_key,athlete_alias,activity_ref));
       create table public.onflows_activity_derived_runs(run_key text,input_key text,athlete_alias text,activity_ref text,primary key(run_key,input_key,athlete_alias,activity_ref));
-      create table public.onflows_model_entries(athlete_alias text,kind text,entry_key text,revision integer,payload jsonb,recorded_at timestamptz);
+      create table public.onflows_model_entries(athlete_alias text,kind text,entry_key text,revision integer,payload jsonb,recorded_at timestamptz,actor_id uuid);
     `);
     for (const name of ["public.onflows_analysis_generation_activities", "onflows_private.planning_jobs",
       "onflows_private.load_projection_cache", "onflows_private.planning_computations"]) await db.exec(table(name));
@@ -68,6 +68,8 @@ function routine(name) {
     await db.exec(fs.readFileSync(path.join(migrations, "20261104043353_dashboard_dirty_event_invalidation.sql"), "utf8"));
     await db.exec(fs.readFileSync(path.join(root, "tests/database/prepared_dashboard_and_training_events.sql"), "utf8"));
     await db.exec(table("public.onflows_response_entries"));
+    for (const name of ["20261103210720_prepared_learning_view.sql", "20261104043525_learning_transaction_event_invalidation.sql"])
+      await db.exec(fs.readFileSync(path.join(migrations, name), "utf8"));
     await db.exec(fs.readFileSync(path.join(migrations, "20261106104212_prepared_page_views_and_daily_adaptive_horizon.sql"), "utf8"));
     await db.exec(fs.readFileSync(path.join(migrations, "20261106104859_seed_prepared_sports_from_active_recordings.sql"), "utf8"));
     const validationMigration=fs.readdirSync(migrations).find(name=>name.endsWith("_revalidate_adaptive_inputs_after_analysis.sql"));
@@ -76,6 +78,8 @@ function routine(name) {
     if(overviewMigration) await db.exec(fs.readFileSync(path.join(migrations,overviewMigration),"utf8"));
     const recoveryMigration=fs.readdirSync(migrations).find(name=>name.endsWith("_prepared_management_page_recovery.sql"));
     if(recoveryMigration) await db.exec(fs.readFileSync(path.join(migrations,recoveryMigration),"utf8"));
+    const freshnessMigration=fs.readdirSync(migrations).find(name=>name.endsWith("_prepared_view_freshness_provenance.sql"));
+    if(freshnessMigration) await db.exec(fs.readFileSync(path.join(migrations,freshnessMigration),"utf8"));
     // Use the current scheduler contract, including daily input checks in both
     // planning modes. The authoritative publication routines from this same
     // migration run separately in test_automatic_current_plan_sql.cjs.
@@ -94,6 +98,7 @@ function routine(name) {
     try { await db.exec(fs.readFileSync(path.join(root, "tests/database/prepared_views.sql"), "utf8")); }
     catch (error) { error.message="Prepared view contract: "+error.message; throw error; }
     await db.exec(fs.readFileSync(path.join(root,"tests/database/prepared_planning_source_changes.sql"),"utf8"));
+    await db.exec(fs.readFileSync(path.join(root,"tests/database/prepared_learning_triggers.sql"),"utf8"));
     await db.exec(fs.readFileSync(path.join(root,"tests/database/management_overview.sql"),"utf8"));
     const clean = await db.query("select count(*)::integer as remaining from public.onflows_intervals_connections");
     if (clean.rows[0].remaining !== 0) throw new Error("Contract fixtures did not roll back");

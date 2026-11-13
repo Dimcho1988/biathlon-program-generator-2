@@ -88,8 +88,11 @@ begin
  select coalesce(max(id),0) into previous_revision from onflows_private.learning_dirty_events where athlete_alias=a;
  delete from onflows_private.learning_dirty_events where athlete_alias=a;
  update public.onflows_athlete_analysis_state set request_sequence=request_sequence+1 where athlete_alias=a;
+ assert not exists(select 1 from onflows_private.learning_dirty_events where athlete_alias=a),
+  'Queue-only synchronization invalidated the last usable learning result';
+ update public.onflows_athlete_analysis_state set active_revision=active_revision+1 where athlete_alias=a;
  assert (select coalesce(max(id),0)>previous_revision from onflows_private.learning_dirty_events where athlete_alias=a),
-  'Analysis state UPDATE did not invalidate learning';
+  'Changed active analysis did not invalidate learning';
  select coalesce(max(id),0) into previous_revision from onflows_private.learning_dirty_events where athlete_alias=a;
  delete from onflows_private.learning_dirty_events where athlete_alias=a;
  update public.onflows_training_snapshots set payload=payload||'{"marker":1}'::jsonb where athlete_alias=a;

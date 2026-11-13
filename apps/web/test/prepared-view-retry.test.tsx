@@ -19,13 +19,26 @@ it("provides a visible retry, bounds automatic polling and lets the user restart
   await act(async()=>root.render(<PreparedViewRetry/>));
   expect(container.querySelector("button")?.textContent).toBe("Провери отново");
   await act(async()=>vi.advanceTimersByTimeAsync(120_000));
-  expect(refresh).toHaveBeenCalledTimes(23);
+  expect(refresh).toHaveBeenCalledTimes(7);
   expect(container.textContent).toContain("Подготовката отнема повече време от обичайното");
   await act(async()=>vi.advanceTimersByTimeAsync(120_000));
-  expect(refresh).toHaveBeenCalledTimes(23);
+  expect(refresh).toHaveBeenCalledTimes(7);
   await act(async()=>container.querySelector("button")!.click());
-  expect(refresh).toHaveBeenCalledTimes(24);
+  expect(refresh).toHaveBeenCalledTimes(8);
   expect(container.textContent).not.toContain("Подготовката отнема повече време от обичайното");
   await act(async()=>vi.advanceTimersByTimeAsync(5000));
-  expect(refresh).toHaveBeenCalledTimes(25);
+  expect(refresh).toHaveBeenCalledTimes(9);
+});
+
+it("does not reload hidden pages and cancels scheduled reads on unmount", async () => {
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+  await act(async()=>root.render(<PreparedViewRetry/>));
+  await act(async()=>vi.advanceTimersByTimeAsync(50_000));
+  expect(refresh).not.toHaveBeenCalled();
+  vi.restoreAllMocks();
+  await act(async()=>vi.advanceTimersByTimeAsync(20_000));
+  expect(refresh).toHaveBeenCalledTimes(1);
+  await act(async()=>root.render(null));
+  await act(async()=>vi.advanceTimersByTimeAsync(120_000));
+  expect(refresh).toHaveBeenCalledTimes(1);
 });

@@ -18,7 +18,7 @@ class Repository(BaseRepository):
         self.settings = dict(settings_revision=2, hr_zone_bounds=[90,120,140,160,180,200], timezone='UTC',
             hrmax_bpm=200, hr_zone_source='MANUAL', hr_zone_percentages=None,
             model_preferences={'leading_indicator':'HEART_RATE','age_years':25,'hrmax_source':'MANUAL'})
-        self.plan = {'revision':4, 'payload':{'status':'ACTIVE','plan':{'start_date':'2026-11-10','end_date':'2026-11-16'}}}
+        self.plan = {'revision':4, 'payload':{'status':'ACTIVE','plan':{'schema_version':'planning-draft-v1','days':[],'start_date':'2026-11-10','end_date':'2026-11-16'}}}
         self.rows[('RECOVERY','recovery-v2')] = {'kind':'RECOVERY','entry_key':'recovery-v2',
             'revision':3,'payload':{'schema_version':'recovery-config-v2','zones':initial_settings()}}
 
@@ -35,7 +35,17 @@ class Repository(BaseRepository):
         if path.startswith('/onflows_athlete_settings?select=settings_revision'):
             return [deepcopy(self.settings)]
         if path.startswith('/onflows_management_plan_state?'):
-            return [{'revision':self.plan['revision'],'record':deepcopy(self.plan)}]
+            record = deepcopy(self.plan)
+            if 'plan_schema_version:payload->plan->schema_version' in path:
+                from apps.api.management_plan_store import SCHEDULE_FIELDS, PLAN_PROVENANCE_FIELDS
+                payload = record.pop('payload')
+                record.update(status=payload.get('status'), reason=payload.get('reason'))
+                for name in ('plan', 'proposal'):
+                    plan = payload.get(name) or {}
+                    record.update({f'{name}_{field}': plan.get(field) for field in SCHEDULE_FIELDS})
+                    record.update({f'{name}_input_{field}': (plan.get('input_snapshot') or {}).get(field)
+                                   for field in PLAN_PROVENANCE_FIELDS})
+            return [{'revision':self.plan['revision'],'record':record}]
         if path == '/rpc/onflows_management_checkpoint':
             return {'models':[]}
         if path == '/rpc/save_onflows_assistant_app_operation':
@@ -170,7 +180,7 @@ def test_new_segment_requires_explicit_maximal_and_comparable_test_context():
 
 def test_approval_input_summary_has_exact_sessions_without_private_evidence():
     repo=Repository()
-    repo.plan['payload']['proposal']={'start_date':'2026-11-12','end_date':'2026-11-18',
+    repo.plan['payload']['proposal']={'schema_version':'planning-draft-v1','start_date':'2026-11-12','end_date':'2026-11-18',
         'input_snapshot':{'hidden':'secret'},'days':[{'date':'2026-11-13','status':'PLANNED','sessions':[
             {'title':'Прагова тренировка','zone':'Z3','total_minutes':60,'dose_evidence':{'readiness_percent':73},
              'blocks':[{'kind':'WORK','duration_min':10,'target_hr_bpm':[160,175],'internal':'hidden'}]}]}]}
