@@ -489,7 +489,10 @@ def _inputs(repository, alias, access, query, today):
         shown = _pick(profile.get("profile"), PROFILE_FIELDS)
         if isinstance(shown.get("planning_controls"), dict):
             shown["planning_controls"] = _pick(shown["planning_controls"], CONTROL_FIELDS)
-        return {"availability": "AVAILABLE", "kind": kind, "entry_key": "management-profile-v1", "revision": profile["revision"], "payload": shown}
+        from .assistant_read_projection import profile_availability
+        resolution = profile_availability(shown)
+        return {"availability": "AVAILABLE", "kind": kind, "entry_key": "management-profile-v1", "revision": profile["revision"], "payload": shown,
+            **({"availability_resolution": resolution} if resolution is not None else {})}
     if kind == "CALENDAR_EVENT":
         _require(access, "can_view_plan")
         from .assistant_planning_commands import calendar_state, identical_event_ids

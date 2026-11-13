@@ -421,6 +421,9 @@ def read(repository, alias, access, query, settings, today, parse_date, *, actor
     if kind == "management" and (query.get("view") or "overview") in {"overview", "outlook"} and not query.get("section"):
         from .assistant_strategy import compact_management
         payload = compact_management(payload, query.get("view") or "overview")
+    from .assistant_read_projection import profile_availability
+    availability_resolution = profile_availability(payload) if kind == "management" else None
     return {"availability": "AVAILABLE", "source": "CANONICAL_WHAT_IF_PREVIEW" if kind == "management" and query.get("view") == "race-duration" else "SAVED_APPLICATION_VIEW",
         **{key: payload[key] for key in ("as_of", "revision", "source_revision", "source_generation_id", "generation_id") if key in payload},
+        **({"availability_resolution": availability_resolution} if availability_resolution is not None else {}),
         **_page(payload, query)}
