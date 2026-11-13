@@ -1,5 +1,6 @@
 "use client";
 import {fetchPrepared} from "../lib/prepared-view";
+import { TrainingStructurePanel } from "./training-proposals";
 import {PreparedViewRetry} from "./prepared-view-retry";
 import { speedBasisLabel } from "../lib/speed-basis";
 import { SpeedEquivalenceComparison } from "./speed-equivalence-comparison";
@@ -408,6 +409,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
         {availableScheduleWindows(visibleWeekPlan,today).map((window,index) => <option key={window.start} value={window.start}>{index === 0 ? "Следващите 7 дни" : "Следващата седмица"} · {planRangeLabel(window)}</option>)}
       </select></label>
     </div>}
+    {view === "week" && saved.configured && <TrainingStructurePanel key={selectedWeek || today} today={today} defaultStart={visibleWeekPlan ? selectedScheduleWindow(visibleWeekPlan, today, selectedWeek).start : today} canEdit={canEdit} disabled={busy !== null || pendingGeneration}/>}
     {view === "week" && overviewPlan && <details className="management-panel"><summary>Цели и изпълнение по микроцикъл</summary>
     {!showDraft && active.active?.stale && <p className="management-notice">Отчетът е от последната запазена програма. Новите данни още не са отразени в дозите.</p>}
     {view === "week" && overviewPlan && !archivedDraft && <TrainingPlanReport automaticPublication={automaticPublication} plan={overviewPlan} planKind={showDraft ? "DRAFT" : "APPROVED"} today={today} selectedWeek={isAdaptivePlan(overviewPlan) ? undefined : selectedWeek} onWeekChange={isAdaptivePlan(overviewPlan) ? undefined : setSelectedWeek} showProposal={!showDraft && showProposal} onShowProposalChange={setShowProposal} proposal={showDraft ? null : active.active?.payload.proposal} qExecution={showDraft ? undefined : active.active?.payload.q_execution} outcomes={showDraft ? [] : active.active?.payload.outcomes}/>}

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 from copy import deepcopy
+import json
 from urllib.parse import quote
 
 from fastapi import HTTPException
@@ -18,6 +19,12 @@ from .oauth_store import HistoricalGenerationReferenceConflict, PersistentStoreF
 PROFILE_KEY = "management-profile-v1"
 MAX_HISTORY = 20
 _SELECT = "kind,entry_key,revision,payload,actor_id,recorded_at"
+
+
+def validate_profile_size(payload):
+    # Match the canonical PROFILE writer before making a remote request.
+    if len(json.dumps(payload, ensure_ascii=False, allow_nan=False).encode()) > 65536:
+        raise HTTPException(422, "Профилът съдържа твърде много запазени варианти. Премахнете ненужни стари структури или съкратете бележките.")
 
 
 class ManagementStore:
@@ -196,6 +203,7 @@ class ManagementStore:
         return unpack(result)
 
     def save_profile(self, alias, payload, expected_revision, actor):
+        validate_profile_size(payload)
         return self._save(alias, "PROFILE", PROFILE_KEY, payload, expected_revision, actor)
 
     def save_generated_plan(self, alias, prepared, actor, expected_profile_revision, expected_revision=0):

@@ -18,6 +18,9 @@ def parameters(method, profile=None):
     overrides = ((profile or {}).get("method_library") or {}).get("overrides") or {}
     parent = method.get("variation_parent_id")
     chosen = {**overrides.get(parent, {}), **overrides.get(method.get("method_library_id", method.get("id")), {})}
+    if method.get("personal_variant"):
+        # A private method may select structure, never invent dose coefficients.
+        chosen = overrides.get(parent, {}) if not prescription else {}
     return {"version": VERSION, "basis": "SOURCE_STANDARD_NO_CAPACITY_MULTIPLIER" if prescription else "EDITABLE_COACH_STARTING_VALUES_NOT_VALIDATED_MAXIMUM",
             "applies_to_standard_dose": not bool(prescription),
             "total_capacity_ratio": chosen.get("total_capacity_ratio", interval.get("total_capacity_ratio", prescription.get("total_capacity_ratio", default))),

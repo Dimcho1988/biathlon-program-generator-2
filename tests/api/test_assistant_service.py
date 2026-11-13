@@ -1532,6 +1532,145 @@ def test_final_write_call_cannot_bypass_missing_current_input_revision(repo):
     assert provider.calls[-1]['context']['final_answer_only'] is True
 
 
+def training_proposal_entry(patch=None):
+    patch = patch or {'action': 'REPEAT_STRUCTURE', 'source_start': '2026-11-02',
+        'source_end': '2026-11-15', 'target_start': '2026-11-16',
+        'source_revisions': [8, 9], 'expected_plan_revision': 9}
+    candidate = {'kind': 'TRAINING_PROPOSAL', 'entry_key': 'management-profile-v1',
+        'expected_revision': 3, 'patch': deepcopy(patch)}
+    return {'query_kind': 'inputs', 'availability': 'AVAILABLE', 'kind': 'TRAINING_PROPOSAL',
+        'entry_key': 'management-profile-v1', 'revision': 3, 'today': DAY, 'payload': {},
+        'preview': {'proposal': deepcopy(patch), 'corrections': []}, 'command': candidate}
+
+
+def test_training_discussion_never_writes_and_explicit_apply_rereads_exact_source(repo):
+    entry = training_proposal_entry()
+    repo.read_result = entry
+    provider = ScriptedAssistantProvider([
+        {'text': '', 'query': query('inputs', input_kind='TRAINING_PROPOSAL',
+            proposal_json=json.dumps(entry['command']['patch']))},
+        {'text': 'Предлагам повторение от 16 ноември. Структурата се запазва, а дозата се преизчислява.'},
+    ])
+    result = service.turn(repo, ALIAS, ACTOR, body('Нека обсъдим повторение на първите две седмици.'), provider)
+    assert not repo.writes and 'pending_command' not in repo.conversations[result['conversation_id']]['state']
+    assert repo.conversations[result['conversation_id']]['state']['discussed_proposal']['command'] == entry['command']
+    applied = service.turn(repo, ALIAS, ACTOR, body('Приложи предложението.', result['conversation_id']), DisabledAssistantProvider())
+    assert len(repo.writes) == 1 and repo.writes[0] == entry['command']
+    assert json.loads(repo.reads[-1]['proposal_json']) == entry['command']['patch']
+    assert applied['receipt']['status'] == 'SAVED' and 'преизчислява' in applied['message']
+
+
+def test_direct_repeat_request_uses_canonical_preview_without_extra_confirmation(repo):
+    entry = training_proposal_entry()
+    repo.read_result = entry
+    request = 'Повтори блока 2026-11-02 – 2026-11-15 от 2026-11-16.'
+    result = service.turn(repo, ALIAS, ACTOR, body(request), ScriptedAssistantProvider([
+        {'text': '', 'query': query('inputs', input_kind='TRAINING_PROPOSAL', proposal_json=json.dumps(entry['command']['patch']))},
+        {'text': '', 'command': command('TRAINING_PROPOSAL', key='management-profile-v1', revision=3, patch=entry['command']['patch'])},
+    ]))
+    assert len(repo.writes) == 1 and result['receipt']['status'] == 'SAVED'
+    assert 'pending_command' not in repo.conversations[result['conversation_id']]['state']
+
+
+@pytest.mark.parametrize('change', ['stale', 'changed_scope', 'revoked'])
+def test_discussed_proposal_cannot_apply_after_revision_scope_or_rights_change(repo, change):
+    entry = training_proposal_entry()
+    conversation = repo.seed({'discussed_proposal': {'command': deepcopy(entry['command']),
+        'expires_at': (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()}})
+    if change == 'stale':
+        entry['revision'] = entry['command']['expected_revision'] = 4
+    elif change == 'changed_scope':
+        entry['command']['patch']['target_start'] = '2026-11-23'
+    else:
+        repo.permissions['can_edit_plan'] = False
+        repo.conversations[conversation]['scope'] = deepcopy(repo.permissions)
+    repo.read_result = entry
+    if change == 'revoked':
+        with pytest.raises(HTTPException) as error:
+            service.turn(repo, ALIAS, ACTOR, body('Приложи го.', conversation), DisabledAssistantProvider())
+        assert error.value.status_code == 403
+    else:
+        result = service.turn(repo, ALIAS, ACTOR, body('Приложи го.', conversation), DisabledAssistantProvider())
+        assert result['error_code'] == 409
+    assert not repo.writes
+
+
+def test_model_cannot_substitute_unpreviewed_proposal_even_for_a_confirmable_change(repo):
+    entry = training_proposal_entry()
+    repo.read_result = entry
+    patch = {**entry['command']['patch'], 'target_start': '2026-11-23'}
+    result = service.turn(repo, ALIAS, ACTOR, body('Повтори блока 2026-11-02 – 2026-11-15 от 2026-11-16.'), ScriptedAssistantProvider([
+        {'text': '', 'query': query('inputs', input_kind='TRAINING_PROPOSAL', proposal_json=json.dumps(entry['command']['patch']))},
+        {'text': '', 'command': command('TRAINING_PROPOSAL', key='management-profile-v1', revision=3, patch=patch)},
+    ]))
+    assert not repo.writes and result['error_code'] == 409
+    assert 'pending_command' not in repo.conversations[result['conversation_id']]['state']
+
+
+@pytest.mark.parametrize('message', ['Не повтаряй блока.', 'Не фиксирай седмицата.', 'Не прилагай предложението.'])
+def test_training_negation_is_not_a_write_request(message):
+    assert not service._explicit_write_request(message)
+
+
+def test_existing_cycle_accents_apply_without_changing_other_cycle_controls():
+    cycle = {'name': 'Подготовка', 'start_date': '2026-11-16', 'end_date': '2026-11-29',
+        'kind': 'BUILD', 'target_index': 1.1, 'volume_factor': 1, 'accents': ['Z2']}
+    entry = {'payload': {'planning_controls': {'cycles': [cycle]}}}
+    patch = {'planning_controls': {'cycles': [{**cycle, 'accents': ['Z3', 'STR']}]}}
+    proposed = {'kind': 'MANAGEMENT_PROFILE', 'patch': patch}
+    assert service._direct_request(proposed, entry, None, 'Промени акцентите в Подготовка на Z3 и сила.')
+    patch['planning_controls']['cycles'][0]['target_index'] = 1.5
+    assert not service._direct_request(proposed, entry, None, 'Промени акцентите в Подготовка на Z3 и сила.')
+
+
+def test_ordinal_repeat_is_anchored_to_profile_and_next_calendar_week():
+    entry = training_proposal_entry()
+    entry['payload']['program_start'] = '2026-11-02'
+    assert service._direct_request(entry['command'], entry, None,
+        'Повтори първите две седмици от следващата седмица.')
+    entry['payload']['program_start'] = '2026-10-26'
+    assert not service._direct_request(entry['command'], entry, None,
+        'Повтори първите две седмици от следващата седмица.')
+
+
+def test_personal_variant_direct_save_uses_server_identity_and_explains_correction(repo):
+    operation = str(uuid4())
+    identifier = 'PERSONAL-' + operation.replace('-', '')
+    patch = {'action': 'PERSONAL_METHOD', 'method': {'id': identifier, 'name': 'Моят вариант',
+        'base_method_id': 'R04', 'repetitions': [6, 6], 'work_range': [120, 120], 'work_unit': 'seconds'}}
+    entry = training_proposal_entry(patch)
+    entry['preview']['corrections'] = [{'field': 'repetitions', 'requested': [8, 8], 'applied': [6, 6],
+        'reason': 'CENTRAL_DECLARED_VARIANT'}]
+    repo.read_result = entry
+    provider = ScriptedAssistantProvider([
+        {'text': '', 'query': query('inputs', input_kind='TRAINING_PROPOSAL', proposal_json=json.dumps(patch))},
+        {'text': '', 'command': command('TRAINING_PROPOSAL', key='management-profile-v1', revision=3, patch=patch)},
+    ])
+    result = service.turn(repo, ALIAS, ACTOR,
+        body('Създай личен вариант на метод R04 с 8 повторения по 2 минути.', operation=operation), provider)
+    assert provider.calls[0]['context']['new_input_keys']['PERSONAL_METHOD'] == identifier
+    assert len(repo.writes) == 1 and repo.writes[0]['patch'] == patch
+    assert 'Повторения: 8 → 6' in result['message'] and 'само за този спортист' in result['message']
+
+
+def test_new_personal_variant_cannot_silently_overwrite_an_existing_named_variant():
+    patch = {'action': 'PERSONAL_METHOD', 'method': {'id': 'PERSONAL-existing', 'name': 'Стар вариант', 'base_method_id': 'R04'}}
+    entry = training_proposal_entry(patch)
+    entry['payload']['personal_methods'] = [patch['method']]
+    assert not service._direct_request(entry['command'], entry, None, 'Създай нов личен вариант на метод R04.')
+
+
+def test_unrelated_topic_does_not_leave_an_old_discussed_proposal_ready_for_bare_apply(repo):
+    entry = training_proposal_entry()
+    conversation = repo.seed({'discussed_proposal': {'command': entry['command'],
+        'expires_at': (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()}})
+    service.turn(repo, ALIAS, ACTOR, body('Обясни общия принцип на загряването.', conversation),
+        ScriptedAssistantProvider([{'text': 'Загряването постепенно подготвя организма за основната част.'}]))
+    assert 'discussed_proposal' not in repo.conversations[conversation]['state']
+    service.turn(repo, ALIAS, ACTOR, body('Приложи го.', conversation), DisabledAssistantProvider())
+    assert not repo.writes
+
+
 @pytest.mark.parametrize('job,published', [
     ({'status': 'SUCCEEDED', 'published': True, 'result_active_revision': 12}, True),
     ({'status': 'SUCCEEDED', 'published': False, 'result_active_revision': None}, False),

@@ -1,4 +1,5 @@
 "use client";
+import { PersonalMethodsPanel } from "./training-proposals";
 import { isRawMovingSpeed, RAW_SPEED_NOTE, speedBasisLabel } from "../lib/speed-basis";
 import { speedRangeText, speedText } from "../lib/speed-format";
 import { RunningSpeedUnitControl, useRunningSpeedUnit } from "./running-speed-unit";
@@ -114,6 +115,7 @@ export function TrainingMethodLibrary({ initial, athleteName, canEdit, selectedI
   const [visibleCount, setVisibleCount] = useState(24);
   const [selected, setSelected] = useState(selectedId);
   const [busy, setBusy] = useState(false);
+  const [proposalBusy, setProposalBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [conflict, setConflict] = useState(false);
@@ -144,7 +146,7 @@ export function TrainingMethodLibrary({ initial, athleteName, canEdit, selectedI
       if (!isRecord(value) || !Number.isSafeInteger(value.revision)) throw new Error("Записът е изпратен, но потвърждението липсва. Зареди последната версия преди нов запис.");
       const saved = parseMethodPreferences(value.preferences);
       setData(current => ({ ...current, revision: Number(value.revision), preferences: saved })); setPreferences(saved);
-      setNotice("Настройките са записани. Обнови седмичната програма, за да ги приложиш към новите тренировки.");
+      setNotice("Настройките са записани. Седмичната програма се обновява автоматично.");
       try { const refreshed = await load(); setData(refreshed); setPreferences(refreshed.preferences); }
       catch { setError("Настройките са записани, но личните диапазони не можаха да се обновят. Зареди ги отново."); }
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Настройките не бяха записани."); }
@@ -162,6 +164,7 @@ export function TrainingMethodLibrary({ initial, athleteName, canEdit, selectedI
     <p className="methods-intro">КС задава критичната скорост. MAS се оценява чрез V(6 мин), когато липсва измерена опора; методите по V(5 мин) запазват петминутната опора. Състезателната скорост следва целевата продължителност и актуалната крива. Късите и дългите отсечки имат собствени диапазони. Напредъкът се отчита чрез обновената крива.</p>
     {!data.configured && <p className="methods-notice">Попълни <Link href="/planning">профила за планиране</Link>, за да получиш индивидуални диапазони и настройки.</p>}
     {!canEdit && <p className="methods-notice">Разполагаш с достъп за преглед. Настройките се променят от спортиста или треньор с права за редактиране.</p>}
+    {data.configured && <PersonalMethodsPanel methods={data.methods} canEdit={canEdit} disabled={busy || dirty || conflict} onApplied={() => reload()} onBusyChange={setProposalBusy}/>}
     <section className="methods-filter-panel" aria-label="Филтри на методите"><label className="methods-search">Търси метод, цел или автор<input type="search" value={query} onChange={e => { setQuery(e.target.value); setSelected(""); }} placeholder="Например: 30/15, 5000, техника…" /></label><div className="methods-filters">
       <label>Спорт<select value={sport} onChange={e => { setSport(e.target.value); setSelected(""); }}><option value="">Всички спортове</option>{unique(data.methods.flatMap(m => m.sports)).map(s => <option key={s} value={s}>{METHOD_SPORTS[s] ?? s}</option>)}</select></label>
       <label>Дисциплина<select value={discipline} onChange={e => { setDiscipline(e.target.value); setSelected(""); }}><option value="">Всички дисциплини</option>{unique(data.methods.flatMap(m => m.disciplines.map(String))).map(d => <option key={d} value={d}>{Number.isFinite(Number(d)) ? `${d} m` : d}</option>)}</select></label>
@@ -171,13 +174,13 @@ export function TrainingMethodLibrary({ initial, athleteName, canEdit, selectedI
     </div><label className="method-checkbox"><input type="checkbox" checked={onlyReady} onChange={e => setOnlyReady(e.target.checked)}/>Само с приложима индивидуална дозировка</label></section>
     {selected && <p className="methods-selection">Избран метод: <strong>{selected}</strong> <button className="method-text-button" type="button" onClick={() => setSelected("")}>Покажи всички методи</button></p>}
     <form onSubmit={save}>
-      {canEdit && data.configured && <div className="methods-save-bar"><label className="method-checkbox"><input type="checkbox" disabled={busy} checked={preferences.enabled} onChange={e => { setPreferences(p => ({ ...p, enabled: e.target.checked })); setNotice(""); }}/>Използвай базата в седмичната програма</label><div><span>{dirty ? "Има незаписани промени" : "Използват се записаните настройки"}</span><button className="action-button" disabled={!dirty || busy || conflict} type="submit">{busy ? "Обновяване…" : "Запази настройките"}</button></div></div>}
+      {canEdit && data.configured && <div className="methods-save-bar"><label className="method-checkbox"><input type="checkbox" disabled={busy || proposalBusy} checked={preferences.enabled} onChange={e => { setPreferences(p => ({ ...p, enabled: e.target.checked })); setNotice(""); }}/>Използвай базата в седмичната програма</label><div><span>{dirty ? "Има незаписани промени" : "Използват се записаните настройки"}</span><button className="action-button" disabled={!dirty || busy || proposalBusy || conflict} type="submit">{busy ? "Обновяване…" : "Запази настройките"}</button></div></div>}
       {error && <div className="methods-error" role="alert"><p>{error}</p>{conflict && <p>Локалните промени са запазени във формата. Зареждането на последната версия ще ги замени.</p>}<button className="method-text-button" type="button" disabled={busy} onClick={() => void reload()}>{conflict ? "Зареди последната версия и замени местните промени" : "Зареди отново"}</button></div>}
       {notice && <p className="methods-notice" role="status">{notice} <Link href="/management">Към програмата →</Link></p>}
       {dirty && <p className="method-note">Показаните лични скорости са от последните записани настройки. След запазване се преизчисляват и коригираните диапазони.</p>}
       <p className="methods-result-count" role="status">{matches.length} от {data.methods.length} метода</p>
       <label className="method-checkbox"><input type="checkbox" checked={showReferences} onChange={e => { setShowReferences(e.target.checked); setSelected(""); }}/>Покажи и научните оригинали и справочните варианти</label>
-      <fieldset className="methods-cards" disabled={busy}>{matches.slice(0, visibleCount).map(method => <MethodCard key={method.id} method={method} override={preferences.overrides[method.id]} canEdit={canEdit && data.configured} selected={method.id === selected} onChange={patchValue => patch(method.id, patchValue)} onReset={() => reset(method.id)}/>)}</fieldset>
+      <fieldset className="methods-cards" disabled={busy || proposalBusy}>{matches.slice(0, visibleCount).map(method => <MethodCard key={method.id} method={method} override={preferences.overrides[method.id]} canEdit={canEdit && data.configured} selected={method.id === selected} onChange={patchValue => patch(method.id, patchValue)} onReset={() => reset(method.id)}/>)}</fieldset>
       {matches.length > visibleCount && <button type="button" className="action-button secondary" onClick={() => setVisibleCount(n => n + 24)}>Покажи още 24 метода</button>}
     </form>
     {!matches.length && <div className="methods-empty"><h2>Няма методи за избраните условия</h2><p>Промени търсенето или филтрите, за да видиш останалите методи.</p><button className="action-button secondary" onClick={() => { setQuery(""); setSport(""); setDiscipline(""); setAnchor(""); setSource(""); setOnlyReady(false); setSelected(""); }}>Изчисти филтрите</button></div>}

@@ -867,3 +867,41 @@ def test_saved_day_stays_readable_while_current_execution_status_is_truthful(rep
     assert result['prescription_active'] is active
     assert result['plan_status_detail'] == saved['payload']['reason']
     assert result['kind'] == 'SAVED_PLAN'
+
+
+def test_training_proposal_preview_is_read_only_and_available_with_plan_read_permission(repository, monkeypatch):
+    from apps.api import training_proposals
+    preview = Mock(return_value={'availability': 'AVAILABLE', 'kind': 'TRAINING_PROPOSAL',
+        'entry_key': 'management-profile-v1', 'revision': 7, 'payload': {}, 'preview': {}})
+    monkeypatch.setattr(training_proposals, 'preview', preview)
+    proposal = {'action': 'SESSION_METHOD', 'target_date': '2026-11-11', 'session_index': 1, 'method_ids': ['R04']}
+    result = context.read(repository, ALIAS, PLAN, {'kind': 'inputs', 'input_kind': 'TRAINING_PROPOSAL',
+        'proposal_json': json.dumps(proposal)}, now=NOW)
+    preview.assert_called_once_with(repository, ALIAS, proposal)
+    assert result['input_kind'] == 'TRAINING_PROPOSAL' and result['revision'] == 7
+    assert '$defs' in result['input_contract'] and result['today'] == '2026-11-11'
+    repository._request.assert_not_called()
+
+
+def test_training_proposal_requires_plan_permission_before_reading_any_state(repository, monkeypatch):
+    from apps.api import training_proposals
+    preview = Mock()
+    monkeypatch.setattr(training_proposals, 'preview', preview)
+    with pytest.raises(HTTPException) as error:
+        context.read(repository, ALIAS, {**FULL, 'can_view_plan': False},
+            {'kind': 'inputs', 'input_kind': 'TRAINING_PROPOSAL'}, now=NOW)
+    assert error.value.status_code == 403
+    preview.assert_not_called()
+    repository.athlete_settings.assert_not_called()
+
+
+@pytest.mark.parametrize('raw', ['[]', '{}', 'null', '{broken', 'а' * 13000])
+def test_training_proposal_rejects_invalid_payload_before_canonical_read(repository, monkeypatch, raw):
+    from apps.api import training_proposals
+    preview = Mock()
+    monkeypatch.setattr(training_proposals, 'preview', preview)
+    with pytest.raises(HTTPException) as error:
+        context.read(repository, ALIAS, FULL, {'kind': 'inputs', 'input_kind': 'TRAINING_PROPOSAL',
+            'proposal_json': raw}, now=NOW)
+    assert error.value.status_code == 422
+    preview.assert_not_called()

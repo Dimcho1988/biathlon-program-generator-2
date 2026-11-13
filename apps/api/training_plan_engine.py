@@ -31,14 +31,14 @@ from biathlon import training_guidance, adaptive_methods, preliminary_capacity, 
 from .component_load_context import context_from_speed_view, read_contexts
 from .component_load_projection import project_history
 from . import model_service, load_adaptation, race_duration, planning_history_estimate, training_sessions
-from biathlon import method_registry, combined_methods, strength_methods, method_anchors
+from biathlon import method_registry, combined_methods, strength_methods, method_anchors, training_structure
 from .learning_methods import method_descriptor
 from .response_service import ResponseStore
 from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v74-shared-working-curve"
+VERSION = "training-management-v75-dated-training-structure"
 PARAMETER_VERSION = "management-parameters-v61"
 MIN_AEROBIC_DOSE_FRACTION = 0.  # Native recipes own their structural minimum; no generic Tmax floor.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
@@ -2145,6 +2145,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         horizon = (end_date-start_date).days+1
     session_limit = min(21, preferences.get("sessions_per_week", 7))
     schedule = planning_schedule.slots(profile, available, start_date, end_date)
+    structure_requests = training_structure.requests(profile)
+    schedule = training_structure.slots(schedule, structure_requests, profile, available)
     slot_counts = {d: count for d, _, count in schedule}
     threshold_days = (controls or {}).get("threshold_days", [])
     double_days = (controls or {}).get("double_threshold_days", [])
@@ -2516,7 +2518,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
 
     def candidate_catalog(d, slot=0):
         candidates, shortage = cached_candidate_catalog(d, slot, len(result_days), tuple(key_slots))
-        return list(candidates), shortage
+        return training_structure.select_candidates(list(candidates), structure_requests, d, slot), shortage
 
     @lru_cache(maxsize=128)
     def cached_candidate_catalog(d, slot, history_revision, key_dates):
@@ -2579,6 +2581,19 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                             preferred_q[(sport, parent["id"])] = (minimum/work_per_q[(sport, parent["id"])], reference)
         shortage = combined_methods.opportunities(deficits, nominal, separate)
         combos = combined_methods.candidates([(s, m) for s, m in candidates if period in m["periods"]], shortage)
+        requested = training_structure.requested_session(structure_requests, d, slot)
+        if requested and len(requested["method_ids"]) == 2:
+            # A saved pair may no longer be among the generic catalogue's first
+            # three recipe shapes. Build that exact pair through the same combiner;
+            # its work, phase, Recovery and component budgets are still evaluated below.
+            parents = [(s, m) for s, m in candidates if s == requested["sport"] and period in m["periods"]
+                       and any(identifier in training_structure.method_aliases(m) for identifier in requested["method_ids"])]
+            evidence = {**shortage, "consider_combinations": True,
+                        "sessions_by_component": {m["zone"]: 1 for _, m in parents}}
+            for candidate in combined_methods.candidates(parents, evidence):
+                if (training_structure.matching_method(candidate[1], requested["method_ids"])
+                    and all(candidate[1]["id"] != existing[1]["id"] for existing in combos)):
+                    combos.append(candidate)
         for sport, combo in combos:
             combo["combined_accents"] = sorted(building_zones)
             combo["combined_work_targets"] = {p["zone"]: deficits[p["zone"]]*work_per_q[(sport, p["id"])]
@@ -2988,6 +3003,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                         and key_limit-key_sessions >= 2
                         and (profile.get("age_years") or 0) >= 18 and (profile.get("training_experience_years") or 0) >= 1):
                         future_candidates = adaptive_methods.threshold_pairs(future_candidates, (controls or {}).get("double_threshold_components", ["Z3"])) + future_candidates
+                    future_candidates = training_structure.select_candidates(future_candidates,
+                        structure_requests, future_day, first_plannable_slot(future_day))
                     for _, future_method in future_candidates:
                         selected_future = next((r for r in preferred_future or []
                             if r["method_id"] == future_method["id"] and r["sport"] == future_sport), None)
@@ -3288,6 +3305,11 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
                     and sessions + 2 <= session_limit and key_sessions + 2 <= key_limit
                     and (profile.get("age_years") or 0) >= 18 and (profile.get("training_experience_years") or 0) >= 1):
                 candidates = adaptive_methods.threshold_pairs(candidates, controls.get("double_threshold_components", ["Z3"])) + candidates
+            candidates = training_structure.select_candidates(candidates, structure_requests, day, slot_index)
+            if training_structure.requested_session(structure_requests, day, slot_index) and not candidates:
+                item["rejected_alternatives"].append({"method_id": "STRUCTURE_REQUEST",
+                    "code": "STRUCTURE_METHOD_UNAVAILABLE",
+                    "reason": "Избраният метод, средство или комбинация не е достъпен при текущите настройки и период. Не е пренесена стара тренировъчна доза."})
             slot_allocation = allocation
             reserved_support = {z:sum(r["q"][z] for r in reserved_keys
                 if segment_keys[r["date"]] == segment_keys[day]
@@ -4493,6 +4515,16 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
         if day_spent and item["session"] is None:
             after_day = recovery_v2.simulate(forecast_rows, configs["zones"], target=day, include_details=False, include_deadlines=False, calculation_cache=recovery_calculation_cache)
             item["readiness_after"] = {r["zone"]: _round(r["readiness_percent"]) if forecast_known else None for r in after_day["current"]}
+        requested = training_structure.requested_session(structure_requests, day, slot_index)
+        if requested:
+            item["structure_outcomes"] = [{"slot": slot_index+1, "status": item["status"],
+                "reason": item["explanation"], "constraints": deepcopy(item["rejected_alternatives"])}]
+        if requested and item.get("session"):
+            selected = item["session"]
+            # Use the fresh canonical method definition, including combined
+            # parents; a lineage match must still disclose a changed short form.
+            definition = None if item.get("locked") else choice_methods.get((selected["sport"], selected["method_id"]))
+            training_structure.mark_session(selected, requested, slot_index+1, definition)
         result_days.append(item)
         # The new ledger revision makes every previously cached catalog unreachable.
         cached_candidate_catalog.cache_clear()
@@ -4510,6 +4542,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             combined["sessions"].extend(planning_schedule.day_sessions(item))
             combined["readiness_after"] = item["readiness_after"]
             combined["rejected_alternatives"].extend(item["rejected_alternatives"])
+            if item.get("structure_outcomes"):
+                combined.setdefault("structure_outcomes", []).extend(item["structure_outcomes"])
         combined = grouped[key]
         if item.get("locked"):
             combined["locked"] = True
@@ -4518,6 +4552,7 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
             combined["status"] = "TRAINING"
             combined["explanation"] = f"{len(combined['sessions'])} сесии · {sum(v['total_minutes'] for v in combined['sessions']):g} минути общо. Общ бюджет по компоненти; готовността е оценена за началото на деня."
     result_days = list(grouped.values())
+    training_structure.annotate(result_days, structure_requests)
     for item in result_days:
         # More individual repeats must not duplicate pages of identical
         # guidance. Keep the complete text/reference on its first occurrence.

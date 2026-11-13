@@ -13,6 +13,7 @@ COMBINED_STRUCTURES = {'ALTERNATING', 'CRUISE_ALTERNATING', 'THRESHOLD_HIGH', 'A
 
 
 def coach_card(method):
+    from .personal_methods import constraints
     interval = method.get('interval_template') or method.get('interval_profile') or {}
     card = {'id': method['id'], 'title': method['title'], 'sports': list(method['sports']),
         'periods': list(method['periods']), 'disciplines': [], 'registry_kind': 'COACH_PROFILE',
@@ -41,6 +42,9 @@ def coach_card(method):
             recovery=f"{p['rest_seconds']} сек между сериите; {p['transition_seconds']} сек между упражненията. Загрявката и разпускането са извън STR.",
             adjustment='Поддържащата и активиращата доза са 50–60% от изграждащите повторения за едно занимание. Запазват се всички упражнения и цели серии. ' + p['continuity'],
             progression=p['progression'])
+    card['personal_variant_constraints'] = constraints(method)
+    if method.get('personal_variant'):
+        card['personal_variant'] = deepcopy(method['personal_variant'])
     return card
 
 
@@ -144,10 +148,14 @@ def plan_catalog(profile):
     """
     legacy = training_methods.catalog(profile)
     methods = legacy.pop('methods')
+    personal_sources = [m for m in method_library.profile_entries(profile) if m.get('personal_variant')]
     source = legacy['source_catalog']
     legacy['source_catalog'] = {key: value for key, value in source.items() if key != 'methods'}
     return {**legacy, 'status': 'PINNED_REGISTRY_PROVENANCE', 'registry_version': VERSION,
             'source_method_library': method_library.provenance(),
+            'personal_method_ids': [m['id'] for m in personal_sources] + [m['id'] for m in methods if m.get('personal_variant')],
+            'personal_methods_sha256': sha256(json.dumps(personal_sources + [m for m in methods if m.get('personal_variant')],
+                sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest(),
             'resolved_profile_count': len(methods), 'method_ids': [m['id'] for m in methods],
             'resolved_profiles_sha256': sha256(json.dumps(methods, sort_keys=True,
                 ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()}

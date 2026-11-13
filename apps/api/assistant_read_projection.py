@@ -205,6 +205,8 @@ def project_methods(payload):
         # A catalog summary omitted its recipe intentionally; absence there is
         # not evidence that the actual method has no executable prescription.
         item = _card(row) if any(key in row for key in ("prescription", "guidance", "source", "provenance", "coach_profile", "resolution")) else _scalars(row, CARD_FIELDS)
+        if "personal_variant" not in item and isinstance(row.get("personal_variant"), dict):
+            item["personal_variant"] = _scalars(row["personal_variant"], {"base_method_id", "scope", "validation_version"})
         if isinstance(row.get("resolution"), dict):
             item["resolution"] = resolution(row["resolution"])
         return item

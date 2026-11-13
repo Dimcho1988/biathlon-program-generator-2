@@ -5,6 +5,7 @@ import { isCalendarDate, isRecord } from "./training-status";
 import { defaultIndividualLearning, parseIndividualLearningConfig, type IndividualLearningConfig } from "./individual-learning";
 import { parseMethodPreferences, type MethodPreferences, type SessionMethod } from "./method-library";
 import { parsePlanCheckReceipt, type PlanCheckReceipt } from "./management-checks";
+import { parseTrainingStructures, type TrainingStructureDirective } from "./training-proposals";
 
 export interface ManagementProfile {
   schema_version: "management-profile-v1";
@@ -47,6 +48,7 @@ export interface ManagementProfile {
   lactate_profiles?: LactateProfile[];
   neuromuscular?: NeuromuscularProfile;
   method_library?: MethodPreferences;
+  training_structure?: TrainingStructureDirective[];
 }
 
 export interface AnTReference {
@@ -323,6 +325,7 @@ export function parseManagementProfile(value: unknown): ManagementProfile {
   }
   normalized.individual_learning = parseIndividualLearningConfig(value.individual_learning);
   if (value.method_library !== undefined) normalized.method_library = parseMethodPreferences(value.method_library);
+  if (value.training_structure !== undefined) normalized.training_structure = parseTrainingStructures(value.training_structure);
   if (value.ant_references !== undefined) {
     const refs = value.ant_references;
     if (!Array.isArray(refs) || refs.length > 3 || refs.some(r => !isRecord(r)

@@ -309,6 +309,8 @@ def resolved_methods(profile):
             for key in ("interval_template", "interval_profile"):
                 if method.get(key):
                     method[key]["total_capacity_ratio"] = method["dosing"]["total_capacity_ratio"]
+    from .personal_methods import native_methods
+    methods.extend(native_methods(profile, methods))
     return methods
 
 

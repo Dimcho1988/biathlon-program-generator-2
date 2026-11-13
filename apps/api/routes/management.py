@@ -30,10 +30,70 @@ from .. import dependencies
 from ..sync_service import public_sync_state
 from ..management_projection import public_management
 from ..request_metrics import timed_stage
+from ..training_proposal_schemas import ProposalPreviewRequest, ProposalApplyRequest
 
 from ..prepared_views import endpoint as prepared_endpoint
 
 router = APIRouter()
+
+
+def _proposal_access(authorization, athlete_alias, actor):
+    from ..assistant_commands import access
+    alias = dependencies.model_alias(authorization, athlete_alias)
+    if actor is None:
+        raise HTTPException(401, "Actor session is required")
+    repository = dependencies.repository()
+    if not access(repository, alias, actor)["can_view_plan"]:
+        raise HTTPException(403, "Нямате достъп до тренировъчната програма.")
+    return repository, alias
+
+
+@router.get("/api/v2/athlete/management/training-proposals")
+def training_proposal_state(
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None,
+):
+    from ..training_proposals import state
+    try:
+        repository, alias = _proposal_access(authorization, athlete_alias, actor)
+        return state(repository, alias)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Предложенията временно не могат да бъдат заредени.") from exc
+
+
+@router.post("/api/v2/athlete/management/training-proposals/preview")
+def preview_training_proposal(
+    body: ProposalPreviewRequest,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None,
+):
+    from ..training_proposals import preview
+    try:
+        repository, alias = _proposal_access(authorization, athlete_alias, actor)
+        return preview(repository, alias, body.proposal.model_dump(mode="json", exclude_none=True))
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Предложението временно не може да бъде проверено.") from exc
+
+
+@router.post("/api/v2/athlete/management/training-proposals/apply")
+def apply_training_proposal(
+    body: ProposalApplyRequest,
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None,
+):
+    from ..assistant_commands import execute
+    from ..management_store import PROFILE_KEY
+    try:
+        repository, alias = _proposal_access(authorization, athlete_alias, actor)
+        return execute(repository, alias, actor, body.operation_id, {
+            "kind": "TRAINING_PROPOSAL", "entry_key": PROFILE_KEY,
+            "expected_revision": body.expected_revision,
+            "patch": body.proposal.model_dump(mode="json", exclude_none=True)}, origin="FORM")
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Записът временно не е потвърден. Повторете същата операция.") from exc
 
 
 def _active_response(value, check=None):
@@ -163,15 +223,18 @@ def save_management_profile(
         repository = dependencies.repository()
         store = ManagementStore(repository)
         payload = body.profile.model_dump(mode="json")
-        retained_profile = None
+        retained_profile = (store.profile(alias).get("profile") or {})
+        if "training_structure" in body.profile.model_fields_set and payload["training_structure"] != retained_profile.get("training_structure", []):
+            raise HTTPException(422, "Структурата се променя чрез тренировъчно предложение, за да се запази провереният източник.")
+        payload["training_structure"] = retained_profile.get("training_structure", [])
         if "method_library" in body.profile.model_fields_set:
+            if "personal_methods" not in body.profile.method_library.model_fields_set:
+                payload["method_library"]["personal_methods"] = (retained_profile.get("method_library") or {}).get("personal_methods", [])
             payload["method_library"] = method_library_service.validate_preferences(payload["method_library"], payload)
         else:
             # Older profile editors do not know the new section. Their writes
             # must not reset settings saved on the method-library page.
-            current = store.profile(alias)
-            retained_profile = current.get("profile") or {}
-            payload["method_library"] = (current.get("profile") or {}).get("method_library", payload["method_library"])
+            payload["method_library"] = retained_profile.get("method_library", payload["method_library"])
         if "ant_references" not in body.profile.model_fields_set:
             # An older editor cannot erase a measured/manual reference merely
             # by omitting a field it does not yet understand.

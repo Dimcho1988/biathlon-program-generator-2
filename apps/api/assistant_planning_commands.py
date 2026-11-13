@@ -20,7 +20,7 @@ from .oauth_store import PersistentStoreFailure
 # The app and chat edit the same validated profile contract. Derived dose
 # fractions remain server-owned; all actual form controls are available.
 PROFILE_FIELDS = frozenset(ManagementProfile.model_fields) - {
-    "schema_version", "maintenance_fraction", "reentry_fraction",
+    "schema_version", "maintenance_fraction", "reentry_fraction", "training_structure",
 }
 CONTROL_FIELDS = frozenset(PlanningControls.model_fields)
 EVENT_FIELDS = frozenset({"event_type", "name", "start_date", "end_date", "race_course"})
@@ -95,6 +95,8 @@ def prepare(repository, alias, kind, entry_key, patch, expected_revision, actor=
             raise HTTPException(422, "Unknown planning profile key")
         if set(patch) - PROFILE_FIELDS:
             raise HTTPException(422, "This planning setting is not editable through chat")
+        if isinstance(patch.get("method_library"), dict) and "personal_methods" in patch["method_library"]:
+            raise HTTPException(422, "Личните методи се променят чрез преглед на тренировъчно предложение.")
         if "planning_controls" in patch and patch["planning_controls"] is not None and (
             not isinstance(patch["planning_controls"], dict)
             or not patch["planning_controls"]
