@@ -210,6 +210,10 @@ def test_real_http_routes_preserve_authentication_and_expose_only_the_trusted_co
     monkeypatch.setattr(response_service, "save_report", publish)
     monkeypatch.setattr(model_service, "save_test", publish)
     monkeypatch.setattr(model_service, "save_manual_test", publish)
+    # Profile writes now read retained athlete-only structures before publishing.
+    # This test injects a failure at the write boundary, not at that prior read.
+    monkeypatch.setattr(ManagementStore, "profile", lambda self, alias: {
+        "configured": True, "revision": 2, "profile": deepcopy(PROFILE)})
     monkeypatch.setattr(management_lifecycle, "current", lambda *args, **kwargs: pytest.fail(
         "A failed publication must not continue with a successful current-plan response"))
     with TestClient(app) as client:
