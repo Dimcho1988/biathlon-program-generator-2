@@ -1,3 +1,4 @@
+import type {ReactNode} from "react";
 import Link from "next/link";
 import { ApiWakeRetry } from "./api-wake-retry";
 import { SyncActionForm } from "./sync-action-form";
@@ -5,7 +6,7 @@ import { API_RATE_LIMIT_MESSAGE, renderWakeHref } from "../lib/api-wake";
 import { PREPARED_VIEW_MESSAGE } from "../lib/prepared-view";
 import { PreparedViewRetry } from "./prepared-view-retry";
 
-export function ErrorState({ message, integrationActions = false, connectAvailable = true, profileSelectionAvailable = false, retryAvailable = false, retryHref = "/", refreshAvailable = true, notice }: {
+export function ErrorState({ message, integrationActions = false, connectAvailable = true, profileSelectionAvailable = false, retryAvailable = false, retryHref = "/", refreshAvailable = true, notice, preparationRetry }: {
   message: string;
   integrationActions?: boolean;
   connectAvailable?: boolean;
@@ -14,10 +15,11 @@ export function ErrorState({ message, integrationActions = false, connectAvailab
   retryHref?: string;
   refreshAvailable?: boolean;
   notice?: string;
+  preparationRetry?: ReactNode;
 }) {
   if (message === PREPARED_VIEW_MESSAGE) return <main className="state-page" role="status">
     <h1>Подготвяме данните</h1><p className="muted">{message}</p>
-    <p className="state-help">Можеш да продължиш в друг раздел. Не е необходимо да стоиш на този екран.</p><PreparedViewRetry/>
+    <p className="state-help">Можеш да продължиш в друг раздел. Не е необходимо да стоиш на този екран.</p>{preparationRetry ?? <PreparedViewRetry/>}
     {retryHref.startsWith("/management") && <div className="integration-actions"><Link className="text-action" href="/assistant">Към асистента</Link><Link className="text-action" href="/planning">Цели и настройки</Link></div>}
   </main>;
   const apiWakeTimedOut = message === "API услугата не се събуди навреме.";

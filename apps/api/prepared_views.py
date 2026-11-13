@@ -131,6 +131,11 @@ def read(repository, alias, kind, parameters=None):
                     payload["sync"] = None
                     payload["sync_unavailable"] = True
                     logger.warning("prepared_view state=sync_deferred error_type=%s", type(exc).__name__)
+        if kind in {"management-profile", "management-view", "management-outlook"}:
+            from .profile_interpretation import profile_availability
+            interpretation = profile_availability(payload)
+            if interpretation is not None:
+                payload["availability_resolution"] = interpretation
         return payload
     except (PersistentStoreFailure, TypeError, ValueError) as exc:
         logger.warning("prepared_view state=read_deferred error_type=%s", type(exc).__name__)

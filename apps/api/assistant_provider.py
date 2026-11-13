@@ -22,6 +22,7 @@ from uuid import uuid4
 
 import httpx
 
+from .request_metrics import timed_stage
 from .assistant_budget import AssistantBudgetError, PersistentAssistantBudget
 
 
@@ -780,7 +781,8 @@ class OpenAIAssistantProvider:
         return payload
 
     def complete(self, messages: list[dict], context: dict, capabilities: dict) -> dict:
-        payload = self._payload(messages, context, capabilities)
+        with timed_stage("assistant_payload"):
+            payload = self._payload(messages, context, capabilities)
         # This funded pilot permits one exact model/tier/tariff. Selecting a
         # different model cannot silently reuse Luna's reservation or credit.
         if self.config.model != "gpt-6-luna":
@@ -799,31 +801,33 @@ class OpenAIAssistantProvider:
         try:
             request_id = str(uuid4())
             try:
-                self._budget.reserve(request_id, _REQUEST_RESERVATION_NANO_USD)
+                with timed_stage("assistant_reserve"):
+                    self._budget.reserve(request_id, _REQUEST_RESERVATION_NANO_USD)
             except AssistantBudgetError as exc:
                 raise AssistantProviderError(exc.code) from None
             except Exception:
                 raise AssistantProviderError("budget_unavailable") from None
             if client is None:
                 client = httpx.Client(follow_redirects=False)
-            with client.stream(
-                "POST", _RESPONSES_URL, json=payload,
-                headers={"Authorization": "Bearer " + self.config.api_key, "Content-Type": "application/json"},
-                timeout=httpx.Timeout(self.config.timeout_seconds),
-                follow_redirects=False,
-            ) as response:
-                if response.status_code in {401, 403}:
-                    raise AssistantProviderError("not_configured")
-                if response.status_code not in {200, 429}:
-                    raise AssistantProviderError("unavailable")
-                body = bytearray()
-                for chunk in response.iter_bytes():
-                    body.extend(chunk)
-                    if time.monotonic() - started > self.config.timeout_seconds:
-                        raise AssistantProviderError("timeout")
-                    if len(body) > _MAX_RESPONSE_BYTES:
-                        raise AssistantProviderError("invalid_response")
-                status = response.status_code
+            with timed_stage("assistant_transport"):
+                with client.stream(
+                    "POST", _RESPONSES_URL, json=payload,
+                    headers={"Authorization": "Bearer " + self.config.api_key, "Content-Type": "application/json"},
+                    timeout=httpx.Timeout(self.config.timeout_seconds),
+                    follow_redirects=False,
+                ) as response:
+                    if response.status_code in {401, 403}:
+                        raise AssistantProviderError("not_configured")
+                    if response.status_code not in {200, 429}:
+                        raise AssistantProviderError("unavailable")
+                    body = bytearray()
+                    for chunk in response.iter_bytes():
+                        body.extend(chunk)
+                        if time.monotonic() - started > self.config.timeout_seconds:
+                            raise AssistantProviderError("timeout")
+                        if len(body) > _MAX_RESPONSE_BYTES:
+                            raise AssistantProviderError("invalid_response")
+                    status = response.status_code
             if status == 429:
                 # Only a small enumerated code is used; provider error bodies
                 # never enter public messages or operational logs.
@@ -837,10 +841,12 @@ class OpenAIAssistantProvider:
             # trustworthy. Unknown/partial responses retain the entire hold.
             amount = self._budget_charge(result)
             try:
-                self._budget.settle(request_id, amount)
+                with timed_stage("assistant_settle"):
+                    self._budget.settle(request_id, amount)
             except Exception:
                 raise AssistantProviderError("budget_unavailable") from None
-            reply = self._parse(result)
+            with timed_stage("assistant_parse"):
+                reply = self._parse(result)
             if context.get("final_answer_only") is True and (reply["query"] is not None or reply["command"] is not None):
                 raise AssistantProviderError("invalid_response")
             if context.get("read_only_turn") is True and reply["command"] is not None:

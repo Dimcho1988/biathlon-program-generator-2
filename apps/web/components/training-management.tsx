@@ -392,7 +392,7 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     <RunningSpeedUnitControl/>
     <header className="activities-hero"><div className="activities-title"><div><p className="eyebrow">{athleteName}</p><h1>{view === "week" ? "Седмична програма" : "Дългосрочен план"}</h1><p>Подготовката в перспектива. Конкретната задача за всеки ден.</p></div></div><Link className="text-action" href="/planning">Профил за планиране →</Link></header>
     {!canEdit && <p className="management-notice">Имате достъп за преглед. Промените изискват право за редакция на плана.</p>}
-    <ManagementPreparationNotice preparation={preparation} timezone={saved.timezone}/>
+    <ManagementPreparationNotice preparation={preparation} timezone={saved.timezone} view={initialView}/>
     {error && <p className="management-error" role="alert">{error}</p>}{notice && <p className="management-notice" role="status">{notice}</p>}
     {pendingGeneration && planningJob && <section className="management-notice" aria-label="Подготовка на програмата">
       <p role="status">{planningStageLabel(planningJob)}</p>

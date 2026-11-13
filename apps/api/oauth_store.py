@@ -364,6 +364,13 @@ class SupabasePilotRepository(SnapshotRepository):
             raise PersistentStoreFailure('Invalid prepared view response')
         return value
 
+    def management_preparation_status(self, alias, model_key, view):
+        value = self._json(self._request('POST', '/rpc/onflows_management_preparation_status',
+            json={'p_alias': alias, 'p_model_key': model_key, 'p_view': view}))
+        if not isinstance(value, dict) or type(value.get('ready')) is not bool:
+            raise PersistentStoreFailure('Invalid preparation status')
+        return value
+
     def process_next_prepared_view(self):
         from .prepared_views import process_next
         return process_next(self)

@@ -34,6 +34,8 @@ _STORE_LABELS = {
     "/rpc/read_onflows_management_checks": "check_history",
 }
 _STAGES = frozenset({
+    "assistant_read", "assistant_model", "assistant_payload", "assistant_transport",
+    "assistant_reserve", "assistant_settle", "assistant_parse",
     "profile", "current", "overview_active", "drafts", "outlook", "projection", "input_after",
     "planning_claim", "planning_shared_wait", "planning_result_copy", "planning_slot_wait",
     "planning_calculate", "planning_complete", "planning_baseline", "planning_search",

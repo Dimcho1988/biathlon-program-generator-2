@@ -936,3 +936,31 @@ def test_final_explicit_action_can_use_read_input_contract_but_cannot_read_again
     assert properties['query'] == {'type': 'null'}
     assert properties['command']['type'] != 'null'
     assert 'MANAGEMENT_PROFILE' in payload['input'][0]['content']
+
+
+def test_stage_metrics_split_transport_budget_and_payload_without_personal_data():
+    from apps.api.request_metrics import current_metrics, StoreMetrics
+    metrics = StoreMetrics()
+    token = current_metrics.set(metrics)
+    try:
+        provider(lambda request: httpx.Response(200, json=response())).complete(
+            [{"role": "user", "content": "private-note"}], {}, {})
+    finally:
+        current_metrics.reset(token)
+    assert set(metrics.stages) == {"assistant_payload", "assistant_transport", "assistant_reserve", "assistant_settle", "assistant_parse"}
+    assert all(timing.calls == 1 for timing in metrics.stages.values())
+    assert 'private-note' not in metrics.details()
+
+
+def test_stage_metrics_record_failed_transport_without_refunding_unknown_usage():
+    from apps.api.request_metrics import current_metrics, StoreMetrics
+    metrics, budget = StoreMetrics(), FakeBudget()
+    token = current_metrics.set(metrics)
+    try:
+        with pytest.raises(AssistantProviderError):
+            provider(lambda request: httpx.Response(503), budget=budget).complete([], {}, {})
+    finally:
+        current_metrics.reset(token)
+    assert metrics.stages['assistant_transport'].calls == 1
+    assert 'assistant_settle' not in metrics.stages
+    assert len(budget.reservations) == 1 and not budget.settlements

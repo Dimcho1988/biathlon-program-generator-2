@@ -52,6 +52,8 @@ begin
  delete from public.onflows_analysis_generation_activities where athlete_alias=a;
  delete from onflows_private.prepared_views where athlete_alias=a;
  state:=public.onflows_prepared_view('READ',a,'trainability',p_model_key=>key1);
+ assert public.onflows_prepared_view('STATUS',a,'trainability',p_model_key=>key1)->>'ready'=state->>'ready','Status differs from READ';
+ assert not (public.onflows_prepared_view('STATUS',a,'trainability',p_model_key=>key1) ? 'payload'),'Status exposed saved evidence';
  assert state->>'ready'='false';
  delete from onflows_private.prepared_views where athlete_alias=a and kind<>'trainability';
  claim:=public.onflows_prepared_view('CLAIM',p_alias=>a,p_token=>token,p_model_key=>key1);
@@ -60,6 +62,8 @@ begin
  assert public.onflows_prepared_view('STORE',a,'trainability','{}',gen_random_uuid(),r,d,key1,payload)->>'state'='LOST';
  assert public.onflows_prepared_view('STORE',a,'trainability','{}',token,r,d,key1,payload)->>'stored'='true';
  state:=public.onflows_prepared_view('READ',a,'trainability',p_model_key=>key1);
+ assert public.onflows_prepared_view('STATUS',a,'trainability',p_model_key=>key1)->>'ready'=state->>'ready','Status differs from READ';
+ assert not (public.onflows_prepared_view('STATUS',a,'trainability',p_model_key=>key1) ? 'payload'),'Status exposed saved evidence';
  assert state->>'ready'='true' and state->'payload'=payload;
  -- Re-saving identical settings or touching synchronization bookkeeping cannot
  -- discard prepared work. Other timestamps and real source changes still count.
@@ -178,6 +182,8 @@ do $$ declare a constant text:='prepared-views-contract'; key1 text:=repeat('c',
 begin
  delete from onflows_private.prepared_views where athlete_alias=a;
  state:=public.onflows_prepared_view('READ',a,'management-view',p_model_key=>key1);
+ assert public.onflows_prepared_view('STATUS',a,'management-view',p_model_key=>key1)->>'ready'=state->>'ready','Status differs from READ';
+ assert not (public.onflows_prepared_view('STATUS',a,'management-view',p_model_key=>key1) ? 'payload'),'Status exposed saved evidence';
  assert state->>'ready'='false' and not (state ? 'saved'),'A missing program was fabricated';
  -- An interactive read takes precedence over unrelated background defaults.
  insert into onflows_private.prepared_views(athlete_alias,kind,parameter_key,parameters,is_default)
@@ -188,6 +194,8 @@ begin
  d:=(claim->>'day')::date; r:=(claim->>'revision')::bigint;
  assert public.onflows_prepared_view('STORE',a,'management-view','{}',token,r,d,key1,payload)->>'stored'='true';
  state:=public.onflows_prepared_view('READ',a,'management-view',p_model_key=>key1);
+ assert public.onflows_prepared_view('STATUS',a,'management-view',p_model_key=>key1)->>'ready'=state->>'ready','Status differs from READ';
+ assert not (public.onflows_prepared_view('STATUS',a,'management-view',p_model_key=>key1) ? 'payload'),'Status exposed saved evidence';
  prepared_timestamp:=state->'preparation'->>'prepared_at';
  assert state->'preparation'->>'status'='READY' and prepared_timestamp is not null
   and state->'preparation'->>'evaluated_on'=d::text and state->'preparation'->>'reason' is null,
@@ -198,6 +206,8 @@ begin
   where athlete_alias=a and kind='management-view' and parameters='{}')),
   'A read changed the preparation timestamp';
  state:=public.onflows_prepared_view('READ',a,'management-view',p_model_key=>key2);
+ assert public.onflows_prepared_view('STATUS',a,'management-view',p_model_key=>key2)->>'ready'=state->>'ready','Status differs from READ';
+ assert not (public.onflows_prepared_view('STATUS',a,'management-view',p_model_key=>key2) ? 'payload'),'Status exposed saved evidence';
  assert state->>'ready'='false' and state->>'saved'='true' and state->'payload'=payload,
   'A deployment hid the saved program or falsely marked it current';
  assert state->'preparation'->>'status'='UPDATING' and state->'preparation'->>'reason'='MODEL_CHANGED';
@@ -206,6 +216,8 @@ begin
  assert state->>'athlete_alias'=a and state->>'kind'='management-view';
  update onflows_private.prepared_views set evaluated_on=d-1 where athlete_alias=a and kind='management-view';
  state:=public.onflows_prepared_view('READ',a,'management-view',p_model_key=>key1);
+ assert public.onflows_prepared_view('STATUS',a,'management-view',p_model_key=>key1)->>'ready'=state->>'ready','Status differs from READ';
+ assert not (public.onflows_prepared_view('STATUS',a,'management-view',p_model_key=>key1) ? 'payload'),'Status exposed saved evidence';
  assert state->>'ready'='false' and state->>'saved'='true' and state->'payload'=payload
   and state->'preparation'->>'reason'='DAY_CHANGED', 'Local midnight hid a saved program';
  assert state->'preparation'->>'evaluated_on'=(d-1)::text,'Saved-day provenance was silently refreshed';
@@ -215,6 +227,8 @@ begin
  delete from onflows_private.prepared_views where athlete_alias=a and parameters<>'{}';
  perform onflows_private.request_prepared_views(a,false);
  state:=public.onflows_prepared_view('READ',a,'management-view',p_model_key=>key1);
+ assert public.onflows_prepared_view('STATUS',a,'management-view',p_model_key=>key1)->>'ready'=state->>'ready','Status differs from READ';
+ assert not (public.onflows_prepared_view('STATUS',a,'management-view',p_model_key=>key1) ? 'payload'),'Status exposed saved evidence';
  assert state->'preparation'->>'reason'='INPUTS_CHANGED' and state->'payload'=payload;
  delete from onflows_private.prepared_views where athlete_alias=a and (kind<>'management-view' or parameters<>'{}');
  -- Transient failures do not exhaust into a permanent pending state. Backoff
@@ -224,6 +238,8 @@ begin
   assert claim is not null,'A retryable page became permanently unclaimable';
   perform public.onflows_prepared_view('FAIL',a,'management-view','{}',token);
   state:=public.onflows_prepared_view('READ',a,'management-view',p_model_key=>key1);
+ assert public.onflows_prepared_view('STATUS',a,'management-view',p_model_key=>key1)->>'ready'=state->>'ready','Status differs from READ';
+ assert not (public.onflows_prepared_view('STATUS',a,'management-view',p_model_key=>key1) ? 'payload'),'Status exposed saved evidence';
   assert state->>'saved'='true' and state->'payload'=payload
    and state->'preparation'->>'prepared_at'=prepared_timestamp,
    'A failed background refresh hid or redated the saved program';
@@ -237,6 +253,8 @@ begin
  claim:=public.onflows_prepared_view('CLAIM',p_alias=>a,p_token=>token,p_model_key=>key1);
  assert public.onflows_prepared_view('STORE',a,'management-view','{}',token,(claim->>'revision')::bigint,d,key1,payload)->>'stored'='true';
  state:=public.onflows_prepared_view('READ',a,'management-view',p_model_key=>key1);
+ assert public.onflows_prepared_view('STATUS',a,'management-view',p_model_key=>key1)->>'ready'=state->>'ready','Status differs from READ';
+ assert not (public.onflows_prepared_view('STATUS',a,'management-view',p_model_key=>key1) ? 'payload'),'Status exposed saved evidence';
  assert state->>'ready'='true' and not (state ? 'saved'),'A successful refresh retained stale provenance';
  assert state->'preparation'->>'status'='READY' and state->'preparation'->>'reason' is null
   and (state->'preparation'->>'prepared_at')::timestamptz>=prepared_timestamp::timestamptz,
@@ -244,6 +262,8 @@ begin
  update onflows_private.prepared_views set payload='{"prepared_error":{"status":409,"detail":"old"}}',model_key=key2
   where athlete_alias=a and kind='management-view';
  state:=public.onflows_prepared_view('READ',a,'management-view',p_model_key=>key1);
+ assert public.onflows_prepared_view('STATUS',a,'management-view',p_model_key=>key1)->>'ready'=state->>'ready','Status differs from READ';
+ assert not (public.onflows_prepared_view('STATUS',a,'management-view',p_model_key=>key1) ? 'payload'),'Status exposed saved evidence';
  assert state->>'ready'='false' and not (state ? 'saved'),'An old error was treated as a usable saved program';
 end $$;
 rollback;

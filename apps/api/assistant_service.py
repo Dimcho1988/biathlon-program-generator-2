@@ -14,6 +14,7 @@ from fastapi import HTTPException
 
 from .oauth_store import PersistentStoreFailure
 from . import assistant_commands, assistant_context
+from .request_metrics import timed_stage
 from .assistant_provider import AssistantProviderError, DisabledAssistantProvider, get_assistant_provider
 from .assistant_presentation import (
     _duration_label, _plan_preview, _preview, _receipt_message, _render_blocks,
@@ -151,6 +152,7 @@ def _sources(context):
              "as_of":context.get("as_of") or (context.get("input_snapshot") or {}).get("analysis_as_of") or metadata.get("analysis_as_of")}]
 
 
+@timed_stage("assistant_read")
 def _read(repository, alias, actor, query, *, reads=None):
     # No cached grant is reused for tool calls, including calls after a model response.
     access = _permissions(repository,alias,actor)
@@ -1056,7 +1058,8 @@ def turn(repository,alias,actor,body,provider=None):
                         "LAB":UUID(operation).hex,"MANUAL_SPEED_TEST":"manual_"+UUID(operation).hex,
                         "PERSONAL_METHOD":"PERSONAL-"+UUID(operation).hex}}
                 try:
-                    reply=provider.complete(messages,model_context,capabilities)
+                    with timed_stage("assistant_model"):
+                        reply=provider.complete(messages,model_context,capabilities)
                 except AssistantProviderError as exc:
                     # A broad explanation must not make the user manually
                     # split application data. Retry once with semantic summaries
@@ -1077,7 +1080,8 @@ def turn(repository,alias,actor,body,provider=None):
                     synthesis_only=True
                     model_context={**model_context,"results":contexts,"final_answer_only":True,
                         "synthesis_reason":"SEMANTIC_CONTEXT_SUMMARY","remaining_read_calls":0}
-                    reply=provider.complete(messages,model_context,{**capabilities,"read":[],"write":[]})
+                    with timed_stage("assistant_model"):
+                        reply=provider.complete(messages,model_context,{**capabilities,"read":[],"write":[]})
                 for key in totals:
                     value=reply.get("usage",{}).get(key,0)
                     totals[key]=None if key=="estimated_cost_usd" and (totals[key] is None or value is None) else totals[key]+(value or 0)

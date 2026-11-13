@@ -458,3 +458,18 @@ def management_day_action(body: ManagementDayAction,
     athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
     actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None):
     return _management_action("day", body, authorization, athlete_alias, actor)
+
+
+@router.get("/api/v2/athlete/management/preparation-status")
+def preparation_status(
+    view: Literal["week", "overview"] = "week",
+    authorization: Annotated[str | None, Header()] = None,
+    athlete_alias: Annotated[str | None, Header(alias="X-OnFlows-Athlete-Alias")] = None,
+    actor: Annotated[UUID | None, Header(alias="X-OnFlows-Actor-Id")] = None,
+):
+    repository, alias = _proposal_access(authorization, athlete_alias, actor)
+    from ..prepared_views import model_key
+    try:
+        return repository.management_preparation_status(alias, model_key(), view)
+    except PersistentStoreFailure as exc:
+        raise HTTPException(503, "Състоянието на подготовката временно не е достъпно.") from exc
