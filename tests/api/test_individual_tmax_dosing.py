@@ -73,7 +73,7 @@ def test_explicit_source_range_is_preserved_and_point_tolerance_is_zone_clipped(
 
 def test_native_and_source_controls_round_trip_and_reject_invalid_numbers():
     values = {'enabled':True,'overrides':{'END-Z2-PROG-01':{'total_capacity_ratio':2.5, 'speed_tolerance_fraction':.015, 'hr_tolerance_bpm':4.}}}
-    assert validate_preferences(values) == values
+    assert validate_preferences(values) == {**values, 'personal_methods': []}
     for key,value in [('total_capacity_ratio',0),('total_capacity_ratio',float('inf')),('speed_tolerance_fraction',-.02),('hr_tolerance_bpm',0)]:
         bad=deepcopy(values);bad['overrides']['END-Z2-PROG-01'][key]=value
         with pytest.raises(ValidationError):
