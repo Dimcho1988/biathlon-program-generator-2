@@ -1,5 +1,5 @@
 import type {ManagementPreparation} from "../lib/management-overview";
-import {PreparedViewRetry} from "./prepared-view-retry";
+import {ManagementPreparationRetry} from "./management-preparation-retry";
 
 const REASONS: Record<string, string> = {
   INPUTS_CHANGED: "Има нови данни или променени настройки.",
@@ -7,8 +7,8 @@ const REASONS: Record<string, string> = {
   MODEL_CHANGED: "Изчисленията се обновяват след промяна на модела.",
 };
 
-export function ManagementPreparationNotice({preparation, timezone = "UTC"}: {
-  preparation: ManagementPreparation | null; timezone?: string;
+export function ManagementPreparationNotice({preparation, timezone = "UTC", view = "week"}: {
+  preparation: ManagementPreparation | null; timezone?: string; view?: "week" | "overview";
 }) {
   if (!preparation) return null;
   const day = preparation.evaluated_on
@@ -23,6 +23,6 @@ export function ManagementPreparationNotice({preparation, timezone = "UTC"}: {
   return <section className="management-notice" aria-label="Обновяване на програмата">
     <p role="status">Показана е последната налична програма. {REASONS[preparation.reason ?? ""] ?? "Подготвя се нов изглед."} Обновяването продължава във фонов режим. Дозите може да не отразяват последните промени.</p>
     <p>{provenance}</p>
-    <PreparedViewRetry compact/>
+    <ManagementPreparationRetry view={view}/>
   </section>;
 }
