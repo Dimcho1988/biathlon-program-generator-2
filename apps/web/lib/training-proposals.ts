@@ -18,6 +18,28 @@ export interface TrainingProposalState {
 export interface TrainingProposalPreview extends TrainingProposalState {
   preview: { proposal: TrainingProposal; summary: string; corrections: unknown[]; days: unknown[] };
 }
+const CORRECTION_REASONS: Record<string, string> = {
+  CENTRAL_DECLARED_VARIANT: "Корекцията следва един от допустимите варианти на основния метод.",
+  CENTRAL_METHOD_BOUNDS: "Корекцията спазва допустимите граници на основния метод.",
+};
+const CORRECTION_FIELDS: Record<string, string> = { work_range: "Работна отсечка", repetitions: "Брой повторения", recovery_seconds: "Почивка" };
+export function trainingProposalCorrectionText(value: unknown, method?: PersonalMethod): string {
+  const correction = isRecord(value) ? value : {};
+  const reasons = typeof value === "string" ? [value] : [correction.reason, correction.message];
+  const known = reasons.find(reason => typeof reason === "string" && Object.hasOwn(CORRECTION_REASONS, reason));
+  const readable = reasons.find(reason => typeof reason === "string" && reason.trim() && !/^[A-Z][A-Z0-9_.:-]*$/.test(reason.trim()));
+  const explanation = typeof known === "string" ? CORRECTION_REASONS[known] : typeof readable === "string" ? readable : "Корекцията е съобразена с правилата на основния метод.";
+  const field = typeof correction.field === "string" ? correction.field : "";
+  const numbers = (range: unknown) => {
+    if (!Array.isArray(range) || range.length !== 2 || !range.every(number => typeof number === "number" && Number.isFinite(number))) return null;
+    const formatted = range.map(number => number.toLocaleString("bg-BG", { maximumFractionDigits: 6 }));
+    return range[0] === range[1] ? formatted[0] : formatted.join("–");
+  };
+  const requested = numbers(correction.requested), applied = numbers(correction.applied);
+  if (!Object.hasOwn(CORRECTION_FIELDS, field) || requested === null || applied === null) return explanation;
+  const unit = field === "recovery_seconds" || field === "work_range" && method?.work_unit === "seconds" ? " сек" : field === "work_range" && method?.work_unit === "meters" ? " м" : "";
+  return `${CORRECTION_FIELDS[field]}: ${requested} → ${applied}${unit}. ${explanation}`;
+}
 const revision = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0;
 const id = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(value);
 export function addProposalDays(date: string, days: number) {

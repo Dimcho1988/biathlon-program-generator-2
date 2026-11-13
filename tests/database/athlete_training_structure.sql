@@ -164,6 +164,38 @@ do $$ declare result jsonb; begin
  assert result#>>'{days,0,sessions,0,slot}'='2' and result#>>'{days,0,actual_sessions}'='1','Partial source day was renumbered';
 end $$;
 reset role;
+-- The date-only index must handle never-prescribed dates without detoasting a
+-- large revision history. Malformed/legacy records need no start/end metadata.
+insert into public.onflows_management_plan_revisions(athlete_alias,revision,operation,actor_id,payload)
+ select 'structure-source-test',100+i,'ADAPT','99113000-0000-4000-8000-000000000001',
+  jsonb_build_object('plan',jsonb_build_object('days',jsonb_build_array(
+   jsonb_build_object('date','2026-01-01','status','REST','sessions','[]'::jsonb))),
+   'private_evidence',repeat('large immutable scientific evidence ',3000))
+ from generate_series(1,300) i;
+analyze public.onflows_management_plan_revisions;
+set local role service_role;
+do $$ declare result jsonb; explain_plan json; begin
+ assert onflows_private.training_structure_date_keys(
+  '{"plan":{"days":[{"date":"2026-11-02"},{"date":"2026-11-02"},{"date":null}],"lookahead_days":[{"date":"2026-11-03"}]},"proposal":{"days":[{"date":"2026-11-04"}]}}')=array['2026-11-02'];
+ assert onflows_private.training_structure_date_keys('{"plan":{"days":{}}}')=array[]::text[];
+ assert not has_function_privilege('anon','onflows_private.training_structure_date_keys(jsonb)','EXECUTE');
+ assert not has_function_privilege('authenticated','onflows_private.training_structure_date_keys(jsonb)','EXECUTE');
+ execute $query$explain (format json) with candidates as materialized (
+  select revision from public.onflows_management_plan_revisions h
+  where h.athlete_alias='structure-source-test'
+   and onflows_private.training_structure_date_keys(h.payload) @> array['2027-01-01']
+ ) select revision from candidates order by revision desc$query$ into explain_plan;
+ assert explain_plan::text like '%onflows_management_plan_structure_dates%',
+  'Missing-source lookup no longer uses the compact date index';
+ result:=public.read_onflows_training_structure('structure-source-test','2026-11-09','2026-11-22');
+ assert jsonb_array_length(result->'days')=7 and jsonb_array_length(result->'missing_dates')=7,
+  'Partially available two-week source did not report exact missing dates';
+ assert result->'missing_dates'='["2026-11-16","2026-11-17","2026-11-18","2026-11-19","2026-11-20","2026-11-21","2026-11-22"]'::jsonb;
+ assert result->'plan_revisions'='[2]'::jsonb,'Date index selected unrelated large historical payloads';
+ result:=public.read_onflows_training_structure('structure-source-test','2027-01-01','2027-01-14');
+ assert result->'days'='[]'::jsonb and jsonb_array_length(result->'missing_dates')=14;
+end $$;
+reset role;
 set local role authenticated;
 do $$ declare denied boolean; begin
  denied:=false;

@@ -668,6 +668,26 @@ def test_extended_query_contract_preserves_activity_and_calculator_arguments():
     assert set(schema["required"]) == set(schema["properties"]) == set(query)
 
 
+@pytest.mark.parametrize('final_answer_only', [False, True])
+def test_training_discussion_keeps_technical_contracts_out_of_bulgarian_reply(final_answer_only):
+    seen = []
+    p = provider(lambda request: seen.append(json.loads(request.content)) or
+                 httpx.Response(200, json=response(reply(message='Методът е подходящ за обсъжданата тренировка.'))))
+    p.complete([{'role': 'user', 'content': 'Нека обсъдим този личен вариант.'}],
+        {'final_answer_only': final_answer_only, 'results': [{'query_kind': 'inputs',
+            'input_kind': 'TRAINING_PROPOSAL', 'revision': 7,
+            'preview': {'proposal': {'action': 'PERSONAL_METHOD', 'method': {'base_method_id': 'R04'}}}}]},
+        {'read': ['inputs', 'methods'], 'write': ['TRAINING_PROPOSAL']})
+    prompt = seen[0]['instructions']
+    assert 'Следните правила важат за потребителския message, включително след технически справки' in prompt
+    assert 'отговори изцяло на естествен книжовен български' in prompt
+    assert 'провери за руски думи и форми' in prompt
+    assert 'Не ги изписвай и не разказвай проверките' in prompt
+    assert 'Намери сам необходимите идентификатори чрез справките' in prompt
+    assert 'конкретната тренировъчна причина и приложимата' in prompt
+    assert 'не добавят потвърждения или нови стъпки' in prompt
+
+
 @pytest.mark.parametrize('proposal', [{}, [], {'action': float('nan')}, 'invalid'])
 def test_training_proposal_query_rejects_invalid_json_and_non_objects(proposal):
     from apps.api.assistant_provider import _validate_reply
