@@ -106,7 +106,8 @@ def test_legacy_pages_use_current_workflow_capabilities_without_changing_evidenc
     preparation = {'status': 'UPDATING', 'prepared_at': '2026-11-12T20:00:00+00:00',
                    'evaluated_on': '2026-11-12', 'reason': 'MODEL_CHANGED'}
     repo = SimpleNamespace(prepared_view=Mock(return_value={'ready': not saved, 'saved': saved,
-        'athlete_alias': 'ath-prepared', 'kind': kind, 'payload': payload, 'preparation': preparation}))
+        'athlete_alias': 'ath-prepared', 'kind': kind, 'payload': payload,
+        **({'preparation': preparation} if saved else {})}))
     result = prepared_views.read(repo, 'ath-prepared', kind)
     returned_active = result['overview_active'] if overview else result['active'] if kind == 'management-view' else result
     capabilities_target = result if overview or kind == 'management-active' else returned_active
@@ -141,6 +142,97 @@ def test_stale_scientific_projection_stays_unavailable():
         'athlete_alias': 'ath-prepared', 'kind': 'speed', 'payload': {'speed': 20}}))
     with pytest.raises(HTTPException) as error:
         prepared_views.read(repo, 'ath-prepared', 'speed')
+    assert error.value.status_code == 503
+
+
+@pytest.mark.parametrize('kind', ['management-view', 'management-active'])
+def test_ready_program_preserves_actual_preparation_timestamp(kind):
+    preparation = {'status': 'READY', 'prepared_at': '2026-11-13T07:00:00+00:00',
+                   'evaluated_on': '2026-11-13', 'reason': None}
+    payload = {'active': {'revision': 8}}
+    repo = SimpleNamespace(prepared_view=Mock(return_value={
+        'ready': True, 'athlete_alias': 'ath-prepared', 'kind': kind,
+        'payload': payload, 'preparation': preparation}))
+    result = prepared_views.read(repo, 'ath-prepared', kind)
+    assert result['preparation'] == preparation
+    assert 'preparation' not in payload
+    repo.prepared_view.assert_called_once()
+
+
+def test_management_page_overlays_live_queue_without_recalculating_or_redating():
+    preparation = {'status': 'READY', 'prepared_at': '2026-11-13T07:00:00Z',
+                   'evaluated_on': '2026-11-13', 'reason': None}
+    payload = {'active': {'revision': 8}, 'sync': {'state': 'IDLE', 'active_generation_id': 'generation-old'}}
+    repo = SimpleNamespace(prepared_view=Mock(return_value={
+        'ready': True, 'athlete_alias': 'ath-prepared', 'kind': 'management-view',
+        'payload': payload, 'preparation': preparation}),
+        sync_state=Mock(return_value={'status': 'RUNNING', 'job_kind': 'FULL_SYNC',
+            'active_generation_id': 'generation-new', 'active_revision': 9, 'progress_percent': 35,
+            'raw_token': 'private-token'}),
+        active_analysis=Mock(side_effect=AssertionError('HTTP calculation')))
+    result = prepared_views.read(repo, 'ath-prepared', 'management-view')
+    assert result['sync']['state'] == 'RUNNING' and result['sync']['progress_percent'] == 35
+    assert result['sync']['active_generation_id'] == 'generation-new'
+    assert result['rendered_generation_id'] == 'generation-old'
+    assert result['preparation'] == preparation
+    assert payload['sync']['state'] == 'IDLE' and 'private-token' not in str(result)
+    repo.sync_state.assert_called_once_with('ath-prepared')
+    repo.prepared_view.assert_called_once()
+    repo.active_analysis.assert_not_called()
+
+
+def test_live_sync_failure_keeps_saved_page_but_does_not_replay_old_queue_state():
+    repo = SimpleNamespace(prepared_view=Mock(return_value={
+        'ready': True, 'athlete_alias': 'ath-prepared', 'kind': 'management-view',
+        'payload': {'active': {'revision': 8}, 'sync': {'state': 'IDLE', 'active_generation_id': 'generation-old'}}}),
+        sync_state=Mock(side_effect=PersistentStoreFailure('private failure')))
+    result = prepared_views.read(repo, 'ath-prepared', 'management-view')
+    assert result['active']['revision'] == 8
+    assert result['sync'] is None and result['sync_unavailable'] is True
+    assert result['rendered_generation_id'] == 'generation-old'
+    assert 'private failure' not in str(result)
+
+
+@pytest.mark.parametrize('cached_sync', [None, {'active_generation_id': 'old-sync-state'}])
+def test_ready_page_source_identity_does_not_depend_on_cached_sync(cached_sync):
+    repo = SimpleNamespace(prepared_view=Mock(return_value={
+        'ready': True, 'athlete_alias': 'ath-prepared', 'kind': 'management-view',
+        'source_generation_id': 'prepared-generation',
+        'payload': {'active': {'revision': 8}, 'sync': cached_sync}}),
+        sync_state=Mock(return_value={'status': 'SUCCEEDED', 'job_kind': 'FULL_SYNC',
+            'active_generation_id': 'prepared-generation', 'active_revision': 8}))
+    result = prepared_views.read(repo, 'ath-prepared', 'management-view')
+    assert result['rendered_generation_id'] == 'prepared-generation'
+    assert result['sync']['active_generation_id'] == 'prepared-generation'
+    assert result['active']['revision'] == 8
+
+
+def test_saved_page_cannot_adopt_the_current_analysis_as_its_source():
+    repo = SimpleNamespace(prepared_view=Mock(return_value={
+        'ready': False, 'saved': True, 'athlete_alias': 'ath-prepared', 'kind': 'management-view',
+        'source_generation_id': 'new-generation',
+        'preparation': {'status': 'UPDATING', 'prepared_at': '2026-11-12T07:00:00Z',
+                        'evaluated_on': '2026-11-12', 'reason': 'INPUTS_CHANGED'},
+        'payload': {'active': {'revision': 8}, 'sync': {'active_generation_id': 'saved-generation'}}}),
+        sync_state=Mock(return_value={'status': 'SUCCEEDED', 'job_kind': 'FULL_SYNC',
+            'active_generation_id': 'new-generation', 'active_revision': 9}))
+    result = prepared_views.read(repo, 'ath-prepared', 'management-view')
+    assert result['rendered_generation_id'] == 'saved-generation'
+    assert result['sync']['active_generation_id'] == 'new-generation'
+
+
+@pytest.mark.parametrize('changes', [
+    {'prepared_at': 'yesterday'}, {'prepared_at': '2026-11-12T20:00:00'},
+    {'evaluated_on': '2026-02-30'}, {'reason': 'UNKNOWN'}, {'status': 'READY'},
+])
+def test_saved_program_rejects_invalid_freshness_metadata(changes):
+    preparation = {'status': 'UPDATING', 'prepared_at': '2026-11-12T20:00:00Z',
+                   'evaluated_on': '2026-11-12', 'reason': 'INPUTS_CHANGED', **changes}
+    repo = SimpleNamespace(prepared_view=Mock(return_value={
+        'ready': False, 'saved': True, 'athlete_alias': 'ath-prepared', 'kind': 'management-view',
+        'payload': {'active': {}}, 'preparation': preparation}))
+    with pytest.raises(HTTPException) as error:
+        prepared_views.read(repo, 'ath-prepared', 'management-view')
     assert error.value.status_code == 503
 
 

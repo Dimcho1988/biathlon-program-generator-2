@@ -265,9 +265,9 @@ def _management(repository, alias, access, query, today, parse_date, actor):
             raise HTTPException(422, "Невалидна страница с проверки.")
         return PlanStore(repository).checks(alias, before=int(before) if before else None, limit=min(query.get("limit", 30), 50))
     if view in {"week", "active"}:
-        from .assistant_context import PlanStore, _session, _pick, SNAPSHOT_FIELDS
+        from .assistant_context import PlanStore, _pick, SNAPSHOT_FIELDS
         from biathlon.planning_schedule import day_sessions
-        record = PlanStore(repository).current(alias)
+        record = PlanStore(repository).current(alias, schedule_only=True)
         if record is None:
             return {"availability": "UNAVAILABLE", "reason": "NO_APPROVED_PLAN"}
         payload = record["payload"]
@@ -284,8 +284,8 @@ def _management(repository, alias, access, query, today, parse_date, actor):
                 if not isinstance(day, dict):
                     continue
                 result[name]["days"].append({"date": day.get("date"), "status": day.get("status"), "sessions": [
-                    _pick(_session(session, f"{day.get('date')}:{index + 1}", access),
-                        {"session_id", "method_id", "title", "sport", "zone", "purpose", "total_minutes", "main_work_minutes", "double_threshold"})
+                    {**_pick(session, {"method_id", "title", "sport", "zone", "purpose", "total_minutes", "main_work_minutes", "double_threshold"}),
+                     "session_id": f"{day.get('date')}:{index + 1}"}
                     for index, session in enumerate(day_sessions(day)) if isinstance(session, dict)]})
         result["detail_query"] = "Use day with the selected date for full current session blocks and execution guidance. A remaining candidate is a computed alternative, not the current published plan; generation and refresh publish eligible results automatically."
         return result

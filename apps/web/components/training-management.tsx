@@ -1,7 +1,7 @@
 "use client";
 import {fetchPrepared} from "../lib/prepared-view";
 import { TrainingStructurePanel } from "./training-proposals";
-import {PreparedViewRetry} from "./prepared-view-retry";
+import {ManagementPreparationNotice} from "./management-preparation-notice";
 import { speedBasisLabel } from "../lib/speed-basis";
 import { SpeedEquivalenceComparison } from "./speed-equivalence-comparison";
 import { PreferredSpeed, RunningSpeedUnitControl } from "./running-speed-unit";
@@ -141,8 +141,8 @@ function CoachWeekReport({days, today, proposalDates = []}: {days: DraftDay[]; t
   </details>;
 }
 
-export function TrainingManagement({ initialView = "week", initialOutlook = null, athleteName, canEdit, initialProfile, initialDrafts, initialActive = EMPTY_ACTIVE, initialOverviewActive, initialSyncState = null, syncError = false, preparation = null, today: initialToday }: {
-  preparation?: ManagementPreparation | null; initialOutlook?: ManagementOutlook | null; initialOverviewActive?: ManagementOverviewActive; initialView?: "week" | "overview"; athleteName: string; canEdit: boolean; initialProfile: ManagementProfileResponse; initialDrafts: DraftRecord[]; initialActive?: ActivePlanResponse; initialSyncState?: SyncState | null; syncError?: boolean; today: string;
+export function TrainingManagement({ initialView = "week", initialOutlook = null, athleteName, canEdit, initialProfile, initialDrafts, initialActive = EMPTY_ACTIVE, initialOverviewActive, initialSyncState = null, renderedGenerationId, syncUnavailable = false, syncError = false, preparation = null, today: initialToday }: {
+  preparation?: ManagementPreparation | null; initialOutlook?: ManagementOutlook | null; initialOverviewActive?: ManagementOverviewActive; initialView?: "week" | "overview"; athleteName: string; canEdit: boolean; initialProfile: ManagementProfileResponse; initialDrafts: DraftRecord[]; initialActive?: ActivePlanResponse; initialSyncState?: SyncState | null; renderedGenerationId?: string | null; syncUnavailable?: boolean; syncError?: boolean; today: string;
 }) {
   const [today, setToday] = useState(initialToday);
   const scopedFetch = useManagementFetch();
@@ -392,17 +392,15 @@ export function TrainingManagement({ initialView = "week", initialOutlook = null
     <RunningSpeedUnitControl/>
     <header className="activities-hero"><div className="activities-title"><div><p className="eyebrow">{athleteName}</p><h1>{view === "week" ? "Седмична програма" : "Дългосрочен план"}</h1><p>Подготовката в перспектива. Конкретната задача за всеки ден.</p></div></div><Link className="text-action" href="/planning">Профил за планиране →</Link></header>
     {!canEdit && <p className="management-notice">Имате достъп за преглед. Промените изискват право за редакция на плана.</p>}
-    {preparation && <section className="management-notice" aria-label="Обновяване на програмата">
-      <p role="status">Показана е последната налична програма{preparation.evaluated_on ? ` към ${dateLabel(preparation.evaluated_on)}` : ""}. Обновяването продължава във фонов режим. Дозите може да не отразяват последните промени.</p>
-      <PreparedViewRetry compact/>
-    </section>}
+    <ManagementPreparationNotice preparation={preparation} timezone={saved.timezone}/>
     {error && <p className="management-error" role="alert">{error}</p>}{notice && <p className="management-notice" role="status">{notice}</p>}
     {pendingGeneration && planningJob && <section className="management-notice" aria-label="Подготовка на програмата">
       <p role="status">{planningStageLabel(planningJob)}</p>
       <p>Начало: {dateLabel(planningJob.start_date)}. Можеш да отвориш друг раздел и да се върнеш по-късно. Заявката остава запазена.</p>
     </section>}
     {syncError && <p className="management-error" role="alert">Обновяването не започна. Опитай отново или провери връзката с Intervals в настройките.</p>}
-    {initialSyncState && <SyncStatusPanel initialState={initialSyncState} renderedGenerationId={initialSyncState.active_generation_id} returnTo="/management" compact timezone={saved.timezone} />}
+    {syncUnavailable && <p className="management-muted" role="status">Статусът на синхронизацията временно не е достъпен. Запазеният изглед остава видим.</p>}
+    {initialSyncState && <SyncStatusPanel initialState={initialSyncState} renderedGenerationId={renderedGenerationId === undefined ? initialSyncState.active_generation_id : renderedGenerationId} renderedGenerationKnown={renderedGenerationId !== null} deferViewRefresh={preparation?.status === "UPDATING"} returnTo="/management" compact timezone={saved.timezone} />}
     <nav className="management-view-switch" aria-label="Изглед на плана"><Link href="/management" aria-current={view === "week" ? "page" : undefined}>Седмична програма</Link><Link href="/management/outlook" aria-current={view === "overview" ? "page" : undefined}>Дългосрочен план</Link></nav>
     {view === "week" && visibleWeekPlan && isAdaptivePlan(visibleWeekPlan) && <div className="management-panel">
       <label>Период<select aria-label="Период на адаптивната програма" value={selectedScheduleWindow(visibleWeekPlan,today,selectedWeek).start} onChange={event => setSelectedWeek(event.target.value)}>

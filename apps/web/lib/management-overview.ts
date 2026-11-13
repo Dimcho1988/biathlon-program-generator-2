@@ -14,10 +14,20 @@ export interface ManagementOverviewActive extends SessionVolumePlan {
 }
 
 export interface ManagementPreparation {
-  status: "UPDATING";
+  status: "READY" | "UPDATING";
   prepared_at: string | null;
   evaluated_on: string | null;
-  reason: string;
+  reason: string | null;
+}
+
+function parsePreparation(value: unknown): ManagementPreparation | null {
+  if (!isRecord(value) || (value.status !== "READY" && value.status !== "UPDATING")) return null;
+  const prepared_at = typeof value.prepared_at === "string" && Number.isFinite(Date.parse(value.prepared_at))
+    ? value.prepared_at : null;
+  const evaluated_on = isCalendarDate(value.evaluated_on) ? value.evaluated_on : null;
+  if (value.status === "READY" && (!prepared_at || !evaluated_on)) return null;
+  return {status: value.status, prepared_at, evaluated_on,
+    reason: value.status === "READY" ? null : typeof value.reason === "string" ? value.reason : "PREPARATION_PENDING"};
 }
 
 const nonnegative = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -55,17 +65,18 @@ export function parseManagementView(value: unknown) {
     ? parseManagementOverviewActive(value.overview_active) : undefined;
   const emptyActive: ActivePlanResponse = parseActivePlanResponse({active: null, history: [],
     ...(value.capabilities === undefined ? {} : {capabilities: value.capabilities})});
+  const sync = value.sync == null ? null : parseSyncState(value.sync);
   return {
     profile: parseManagementProfileResponse(value.profile),
     active: overviewActive ? emptyActive : parseActivePlanResponse(value.active),
     overviewActive,
     drafts: parseDrafts(value.drafts),
     outlook: value.outlook == null ? null : parseManagementOutlook(value.outlook),
-    sync: value.sync == null ? null : parseSyncState(value.sync),
-    preparation: isRecord(value.preparation) && value.preparation.status === "UPDATING"
-      ? {status: "UPDATING" as const, prepared_at: typeof value.preparation.prepared_at === "string" ? value.preparation.prepared_at : null,
-        evaluated_on: isCalendarDate(value.preparation.evaluated_on) ? value.preparation.evaluated_on : null,
-        reason: typeof value.preparation.reason === "string" ? value.preparation.reason : "PREPARATION_PENDING"} : null,
+    sync,
+    syncUnavailable: value.sync_unavailable === true,
+    renderedGenerationId: value.rendered_generation_id === null || typeof value.rendered_generation_id === "string"
+      ? value.rendered_generation_id : sync?.active_generation_id ?? null,
+    preparation: parsePreparation(value.preparation),
     inputFingerprint: isRecord(value.drafts) && typeof value.drafts.current_input_fingerprint === "string"
       ? value.drafts.current_input_fingerprint : "",
   };

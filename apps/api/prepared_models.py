@@ -6,10 +6,7 @@ local-day checks, leases and publication fences own freshness across processes.
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
-from hashlib import sha256
-import json
 import logging
-import os
 from threading import Event, Thread
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -23,9 +20,8 @@ VERSION = "prepared-dashboard-v1-training-events-v1"
 
 
 def model_key():
-    from . import model_service
-    return sha256(json.dumps({"version": VERSION, "build": os.getenv("RENDER_GIT_COMMIT", VERSION),
-        "recovery_v2": model_service.enabled()}, sort_keys=True).encode()).hexdigest()
+    from . import model_service, preparation_identity
+    return preparation_identity.model_key("dashboard", VERSION, recovery_v2=model_service.enabled())
 
 
 def _validate_envelope(value, alias):
@@ -130,7 +126,7 @@ def process_dashboard(repository, alias=None):
 
 def process_training(repository):
     """Coalesced new-training, local-day and explicit manual preparation."""
-    from . import management_lifecycle, planning_jobs
+    from . import management_lifecycle, management_service, planning_jobs
     from .management_plan_store import PlanStore
     from .management_store import ManagementStore
     from .management_schemas import ManagementGenerateRequest
@@ -138,7 +134,7 @@ def process_training(repository):
     operation = repository.training_plan_update
     token = str(uuid4())
     with MODEL_WORK:
-        claim = operation("CLAIM", token=token)
+        claim = operation("CLAIM", token=token, rule_versions=management_service.rule_versions())
         if claim is None:
             return False
         if (not isinstance(claim, dict) or not isinstance(claim.get("athlete_alias"), str)
@@ -148,14 +144,18 @@ def process_training(repository):
         try:
             with _lease(operation, alias, token) as lost:
                 record = PlanStore(repository).current(alias, metadata_only=True)
+                checked_plan_revision = None
                 if record is not None:
                     manual = claim.get("manual") is True
                     if manual and claim.get("expected_plan_revision") != record["revision"]:
                         raise HTTPException(409, "The queued plan revision changed")
-                    management_lifecycle.refresh(repository, alias, claim["actor_id"],
+                    checked = management_lifecycle.refresh(repository, alias, claim["actor_id"],
                         expected_revision=record["revision"], automatic=not manual, force=manual,
                         include_saved_payload=False, record_unchanged_check=claim.get("record_unchanged_check") is True,
                         _background_claim={"token": token, "revision": claim["revision"], **({"manual":True} if manual else {})})
+                    if not isinstance(checked, dict) or type(checked.get("revision")) is not int:
+                        raise PersistentStoreFailure("Invalid checked plan revision")
+                    checked_plan_revision = checked["revision"]
                 else:
                     stored = ManagementStore(repository).profile(alias)
                     if stored["configured"]:
@@ -170,7 +170,7 @@ def process_training(repository):
                             planning_jobs.enqueue(repository, alias, body, claim["actor_id"])
                 if lost.is_set():
                     raise HTTPException(409, "Training update lease changed")
-                operation("COMPLETE", alias=alias, token=token)
+                operation("COMPLETE", alias=alias, token=token, checked_plan_revision=checked_plan_revision)
                 logger.info("training_plan_update state=prepared")
         except Exception as exc:
             try:

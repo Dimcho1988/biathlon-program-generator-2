@@ -161,7 +161,7 @@ def read_input(repository, alias, kind, key=None, *, draft_date=None, draft_revi
         from .management_plan_store import PlanStore
         if key not in (None, "", "active-plan"):
             raise HTTPException(422, "Невалиден ключ на програмата.")
-        current = PlanStore(repository).current(alias)
+        current = PlanStore(repository).current(alias, schedule_only=True)
         revision = current["revision"] if current else 0
         key = "active-plan"
         # Action previews contain only visible prescriptions. Physiological

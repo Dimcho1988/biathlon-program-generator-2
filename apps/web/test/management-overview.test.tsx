@@ -75,6 +75,20 @@ async function sessionMarkup(initialActive: ActivePlanResponse, initialOverviewA
 }
 
 describe("compact management overview contract", () => {
+  it("retains actual preparation time after a successful refresh", () => {
+    const preparation={status:"READY",prepared_at:"2026-09-21T07:00:00Z",evaluated_on:"2026-09-21",reason:null};
+    const value={profile,active:activeResponse("ACTIVE"),drafts:{drafts:[]},preparation};
+    expect(parseManagementView(value).preparation).toEqual(preparation);
+    expect(parseManagementView({...value,preparation:{...preparation,prepared_at:"invalid"}}).preparation).toBeNull();
+  });
+  it("keeps the rendered generation separate from unavailable live queue progress", () => {
+    const parsed=parseManagementView({profile,active:activeResponse("ACTIVE"),drafts:{drafts:[]},
+      rendered_generation_id:"generation-old",sync:null,sync_unavailable:true});
+    expect(parsed.renderedGenerationId).toBe("generation-old");
+    expect(parsed.syncUnavailable).toBe(true);
+    expect(parsed.sync).toBeNull();
+    expect(parsed.active.active?.revision).toBe(9);
+  });
   it("retains the saved-snapshot notice and automatic publication capability", () => {
     const preparation={status:"UPDATING",prepared_at:"2026-09-20T22:00:00Z",evaluated_on:"2026-09-20",reason:"DAY_CHANGED"};
     const parsed=parseManagementView({schema_version:"management-overview-v1",profile,overview_active:compactActive(activeResponse("ACTIVE")),

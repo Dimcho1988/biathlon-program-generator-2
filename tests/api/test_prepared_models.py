@@ -12,9 +12,9 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from apps.api import dependencies, main, model_service, prepared_models as prepared
-from apps.api import management_lifecycle, management_plan_store, management_store, planning_jobs
+from apps.api import management_lifecycle, management_plan_store, management_store, management_service, planning_jobs
 from apps.api.management_plan_store import PlanStore
-from apps.api.oauth_store import PersistentStoreFailure
+from apps.api.oauth_store import PersistentStoreFailure, SupabasePilotRepository
 from tests.api.test_sync_api import _active_snapshot, AUTH
 
 
@@ -119,9 +119,14 @@ def test_main_dashboard_uses_the_same_prepared_payload_for_all_periods(monkeypat
 
 def test_background_preparation_stores_a_fenced_result_and_then_cleans_obsolete_data(repository):
     assert prepared.process_dashboard(repository)
-    calls = repository.dashboard_preparation.call_args_list
+    all_calls = repository.dashboard_preparation.call_args_list
+    # A slow test host may renew the owned lease during calculation.
+    calls = [call for call in all_calls if call.args[0] != 'RENEW']
     assert [c.args[0] for c in calls] == ["CLAIM", "STORE"]
     assert calls[0].kwargs["token"] == calls[1].kwargs["token"]
+    for call in all_calls:
+        if call.args[0] == 'RENEW':
+            assert call.kwargs == {'alias': ALIAS, 'token': calls[0].kwargs['token']}
     assert calls[1].kwargs["revision"] == 3 and calls[1].kwargs["day"] == "2026-08-09"
     assert calls[1].kwargs["envelope"] == envelope()
     repository.cleanup_prepared_data.assert_called_once_with(ALIAS)
@@ -153,7 +158,11 @@ def test_superseded_preparation_does_not_cleanup_or_claim_success(repository):
 def test_preparation_failure_does_not_expose_private_error_values(repository, caplog):
     repository.project.side_effect = RuntimeError("private-value")
     assert prepared.process_dashboard(repository)
-    assert [c.args[0] for c in repository.dashboard_preparation.call_args_list] == ["CLAIM", "FAIL"]
+    calls = repository.dashboard_preparation.call_args_list
+    assert [call.args[0] for call in calls if call.args[0] != 'RENEW'] == ["CLAIM", "FAIL"]
+    for call in calls:
+        if call.args[0] == 'RENEW':
+            assert call.kwargs == {'alias': ALIAS, 'token': calls[0].kwargs['token']}
     assert "private-value" not in caplog.text
 
 
@@ -169,13 +178,40 @@ def test_no_new_training_does_not_refresh_or_queue_an_import(monkeypatch):
     monkeypatch.setattr(management_lifecycle, "refresh", refresh)
     assert prepared.process_training(repo) is False
     refresh.assert_not_called()
+    assert repo.training_plan_update.call_args.kwargs['rule_versions'] == management_service.rule_versions()
 
 
-def test_new_training_passes_a_claim_into_the_existing_approval_aware_lifecycle(monkeypatch):
+def test_training_claim_uses_one_rule_aware_rpc_and_legacy_lease_operations():
+    repo = SimpleNamespace(_json=lambda value: value, _request=Mock(return_value=None))
+    rules = {'engine': 'training-rules-v2'}
+    SupabasePilotRepository.training_plan_update(repo, 'CLAIM', token='worker-token', rule_versions=rules)
+    repo._request.assert_called_once_with('POST', '/rpc/claim_onflows_training_plan_update',
+        json={'p_token': 'worker-token', 'p_rule_versions': rules})
+    repo._request.reset_mock()
+    SupabasePilotRepository.training_plan_update(repo, 'COMPLETE', token='worker-token', alias=ALIAS)
+    repo._request.assert_called_once_with('POST', '/rpc/onflows_training_plan_update',
+        json={'p_operation': 'COMPLETE', 'p_token': 'worker-token', 'p_alias': ALIAS})
+    repo._request.reset_mock()
+    SupabasePilotRepository.training_plan_update(repo, 'COMPLETE', token='worker-token', alias=ALIAS, checked_plan_revision=7)
+    repo._request.assert_called_once_with('POST', '/rpc/complete_onflows_training_plan_update',
+        json={'p_token': 'worker-token', 'p_alias': ALIAS, 'p_checked_plan_revision': 7})
+
+
+def test_rule_identity_tracks_calculations_not_deploy_commit(monkeypatch):
+    monkeypatch.setenv('RENDER_GIT_COMMIT', 'chat-only-before')
+    before = management_service.rule_versions()
+    monkeypatch.setenv('RENDER_GIT_COMMIT', 'chat-only-after')
+    assert management_service.rule_versions() == before
+    monkeypatch.setattr(management_service.training_plan_engine, 'VERSION', 'changed-calculation')
+    assert management_service.rule_versions() == {**before, 'engine': 'changed-calculation'}
+
+
+@pytest.mark.parametrize('checked_revision', [6, 7])
+def test_new_training_passes_a_claim_into_the_existing_approval_aware_lifecycle(monkeypatch, checked_revision):
     repo = training_repository()
     current = Mock(return_value={"revision": 6})
     monkeypatch.setattr(management_plan_store, "PlanStore", lambda repo: SimpleNamespace(current=current))
-    refresh = Mock()
+    refresh = Mock(return_value={"revision": checked_revision})
     monkeypatch.setattr(management_lifecycle, "refresh", refresh)
     assert prepared.process_training(repo)
     current.assert_called_once_with(ALIAS, metadata_only=True)
@@ -184,6 +220,7 @@ def test_new_training_passes_a_claim_into_the_existing_approval_aware_lifecycle(
     assert kwargs["expected_revision"] == 6
     assert kwargs["_background_claim"] == {"token": repo.training_plan_update.call_args_list[0].kwargs["token"], "revision": 4}
     assert [c.args[0] for c in repo.training_plan_update.call_args_list] == ["CLAIM", "COMPLETE"]
+    assert repo.training_plan_update.call_args.kwargs['checked_plan_revision'] == checked_revision
 
 
 def test_configured_athlete_without_active_plan_gets_a_reviewable_draft_job(monkeypatch):
@@ -201,6 +238,7 @@ def test_configured_athlete_without_active_plan_gets_a_reviewable_draft_job(monk
     body = enqueue.call_args.args[2]
     assert body.start_date == today and body.expected_draft_revision == 5 and body.expected_profile_revision == 2
     assert [c.args[0] for c in repo.training_plan_update.call_args_list] == ["CLAIM", "COMPLETE"]
+    assert repo.training_plan_update.call_args.kwargs['checked_plan_revision'] is None
 
 
 def test_failed_training_update_stays_retryable(monkeypatch):
@@ -237,7 +275,7 @@ def test_new_local_day_alone_keeps_a_prepared_prescription_current():
     assert not management_lifecycle._inputs_current(today, fingerprint, "2026-11-03")
 
 
-def test_feature_flag_and_build_changes_do_not_reuse_a_prepared_view(monkeypatch):
+def test_feature_flag_changes_invalidate_but_unrelated_deploys_reuse_a_prepared_view(monkeypatch):
     monkeypatch.setenv("ONFLOWS_RECOVERY_V2_ENABLED", "true")
     monkeypatch.setenv("RENDER_GIT_COMMIT", "release-one")
     first = prepared.model_key()
@@ -245,7 +283,7 @@ def test_feature_flag_and_build_changes_do_not_reuse_a_prepared_view(monkeypatch
     assert prepared.model_key() != first
     monkeypatch.setenv("ONFLOWS_RECOVERY_V2_ENABLED", "true")
     monkeypatch.setenv("RENDER_GIT_COMMIT", "release-two")
-    assert prepared.model_key() != first
+    assert prepared.model_key() == first
 
 
 def test_periodic_import_check_enqueues_only_one_sync_and_does_not_plan(monkeypatch):

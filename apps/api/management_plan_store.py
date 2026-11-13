@@ -8,6 +8,42 @@ from fastapi import HTTPException
 from .oauth_store import HistoricalGenerationReferenceConflict, PersistentStoreFailure
 
 
+PLAN_PROVENANCE_FIELDS = ("generation_id", "analysis_revision", "analysis_as_of", "settings_fingerprint",
+    "snapshot_fingerprint", "evaluation_date", "profile_revision", "engine_version", "speed_model_version")
+SCHEDULE_FIELDS = ("schema_version", "_storage", "engine_version", "fingerprint", "generated_at",
+                   "start_date", "end_date", "activation_eligible", "days")
+
+
+def _schedule_select():
+    """Select visible schedules and provenance without private model snapshots."""
+    fields = ["revision", "operation", "recorded_at", "status:payload->status", "reason:payload->reason"]
+    for name in ("plan", "proposal"):
+        fields.extend(f"{name}_{field}:payload->{name}->{field}" for field in SCHEDULE_FIELDS)
+        fields.extend(f"{name}_input_{field}:payload->{name}->input_snapshot->{field}" for field in PLAN_PROVENANCE_FIELDS)
+    return ",".join(fields)
+
+
+def _schedule_record(record):
+    from .plan_storage import unpack
+    payload = {"status": record.get("status"), "reason": record.get("reason")}
+    for name in ("plan", "proposal"):
+        schema = record.get(f"{name}_schema_version")
+        if schema is None:
+            if any(record.get(f"{name}_{field}") is not None for field in SCHEDULE_FIELDS):
+                raise PersistentStoreFailure("Invalid saved schedule projection")
+            payload[name] = None
+            continue
+        if schema != "planning-draft-v1" or not isinstance(record.get(f"{name}_days"), list):
+            raise PersistentStoreFailure("Invalid saved schedule projection")
+        plan = {field: record[f"{name}_{field}"] for field in SCHEDULE_FIELDS
+                if record.get(f"{name}_{field}") is not None}
+        plan["input_snapshot"] = {field: record[f"{name}_input_{field}"] for field in PLAN_PROVENANCE_FIELDS
+                                  if record.get(f"{name}_input_{field}") is not None}
+        payload[name] = plan
+    return unpack({"revision": record["revision"], "operation": record.get("operation"),
+                   "recorded_at": record.get("recorded_at"), "payload": payload})
+
+
 def _zoned_timestamp(value):
     if not isinstance(value, str):
         return False
@@ -41,7 +77,14 @@ class PlanStore:
             raise PersistentStoreFailure("Invalid planning checkpoint")
         return result
 
-    def current(self, alias, *, metadata_only=False):
+    def current(self, alias, *, metadata_only=False, schedule_only=False):
+        """Read one atomic publication snapshot.
+
+        Schedule projection serves display and action previews. Lifecycle writes
+        keep the complete record and their existing checkpoint/CAS validation.
+        """
+        if metadata_only and schedule_only:
+            raise ValueError("Choose one active-plan projection")
         select = (
             "revision,status:payload->status,fingerprint:payload->processed_input_fingerprint,evaluated_on:payload->evaluated_on,"
             "plan_end_date:payload->plan->end_date,proposal_end_date:payload->proposal->end_date,"
@@ -53,7 +96,7 @@ class PlanStore:
             "proposal_analysis_revision:payload->proposal->input_snapshot->analysis_revision,"
             "proposal_analysis_as_of:payload->proposal->input_snapshot->analysis_as_of,"
             "proposal_snapshot_fingerprint:payload->proposal->input_snapshot->snapshot_fingerprint"
-        ) if metadata_only else "revision,operation,payload,recorded_at"
+        ) if metadata_only else _schedule_select() if schedule_only else "revision,operation,payload,recorded_at"
         # Read the publication pointer and its immutable record in one database
         # snapshot. Keep the default LEFT embedding: an invalid/inaccessible
         # record must fail validation rather than look like a missing plan.
@@ -73,11 +116,11 @@ class PlanStore:
         record = rows[0].get("record")
         if (not isinstance(record, dict) or type(record.get("revision")) is not int
                 or record["revision"] != revision
-                or (not metadata_only and not isinstance(record.get("payload"), dict))):
+                or (not metadata_only and not schedule_only and not isinstance(record.get("payload"), dict))):
             raise PersistentStoreFailure("Invalid active plan record")
         if metadata_only and (not isinstance(record.get("fingerprint"), str) or not isinstance(record.get("status"), str)):
             raise PersistentStoreFailure("Invalid active plan metadata")
-        return record
+        return _schedule_record(record) if schedule_only else record
 
     def assistant_day(self, alias, selected):
         """Read one complete approved day from a captured immutable revision.
@@ -107,8 +150,7 @@ class PlanStore:
         if not isinstance(dates, list) or any(not isinstance(day, dict) for day in dates):
             raise PersistentStoreFailure("Invalid assistant plan dates")
         index = next((i for i, day in enumerate(dates) if day.get("date") == selected.isoformat()), None)
-        metadata = ("generation_id", "analysis_revision", "analysis_as_of", "settings_fingerprint",
-                    "snapshot_fingerprint", "evaluation_date", "profile_revision", "engine_version", "speed_model_version")
+        metadata = PLAN_PROVENANCE_FIELDS
         fields = ["revision", "recorded_at", "status:payload->status", "reason:payload->reason"]
         fields.extend(f"plan_{name}:payload->plan->{name}" for name in
                       ("schema_version", "_storage", "engine_version", "fingerprint", "generated_at", "start_date", "end_date"))
