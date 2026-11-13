@@ -144,14 +144,18 @@ def process_training(repository):
         try:
             with _lease(operation, alias, token) as lost:
                 record = PlanStore(repository).current(alias, metadata_only=True)
+                checked_plan_revision = None
                 if record is not None:
                     manual = claim.get("manual") is True
                     if manual and claim.get("expected_plan_revision") != record["revision"]:
                         raise HTTPException(409, "The queued plan revision changed")
-                    management_lifecycle.refresh(repository, alias, claim["actor_id"],
+                    checked = management_lifecycle.refresh(repository, alias, claim["actor_id"],
                         expected_revision=record["revision"], automatic=not manual, force=manual,
                         include_saved_payload=False, record_unchanged_check=claim.get("record_unchanged_check") is True,
                         _background_claim={"token": token, "revision": claim["revision"], **({"manual":True} if manual else {})})
+                    if not isinstance(checked, dict) or type(checked.get("revision")) is not int:
+                        raise PersistentStoreFailure("Invalid checked plan revision")
+                    checked_plan_revision = checked["revision"]
                 else:
                     stored = ManagementStore(repository).profile(alias)
                     if stored["configured"]:
@@ -166,7 +170,7 @@ def process_training(repository):
                             planning_jobs.enqueue(repository, alias, body, claim["actor_id"])
                 if lost.is_set():
                     raise HTTPException(409, "Training update lease changed")
-                operation("COMPLETE", alias=alias, token=token)
+                operation("COMPLETE", alias=alias, token=token, checked_plan_revision=checked_plan_revision)
                 logger.info("training_plan_update state=prepared")
         except Exception as exc:
             try:

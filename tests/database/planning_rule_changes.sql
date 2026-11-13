@@ -37,9 +37,12 @@ begin
  insert into public.onflows_management_plan_state(athlete_alias,revision,status,approved_by) values(a,1,'ACTIVE',actor);
  foreach role_name in array array['anon','authenticated'] loop
   assert not has_function_privilege(role_name,'public.claim_onflows_training_plan_update(uuid,jsonb,text)','EXECUTE');
+  assert not has_function_privilege(role_name,'public.complete_onflows_training_plan_update(text,uuid,bigint)','EXECUTE');
+  assert not has_function_privilege(role_name,'onflows_private.complete_training_plan_update(text,uuid,bigint)','EXECUTE');
   assert not has_function_privilege(role_name,'onflows_private.claim_training_plan_update(uuid,jsonb,text)','EXECUTE');
  end loop;
  assert not (select prosecdef from pg_proc where oid='public.claim_onflows_training_plan_update(uuid,jsonb,text)'::regprocedure);
+ assert not (select prosecdef from pg_proc where oid='public.complete_onflows_training_plan_update(text,uuid,bigint)'::regprocedure);
  assert public.claim_onflows_training_plan_update(token,v74,a) is null,'Unchanged rules queued a same-day plan';
  claim:=public.claim_onflows_training_plan_update(token,v75,a);
  assert claim is not null and claim->>'manual'='false','Changed rules did not queue a same-day canonical check';
@@ -47,7 +50,7 @@ begin
  assert (select claimed_rule_versions=v75 and last_checked_rule_versions is null from onflows_private.training_plan_updates where athlete_alias=a);
  assert public.claim_onflows_training_plan_update(wrong_token,v76,a) is null,'A second worker acquired a running check';
  assert (select requested_revision=n from onflows_private.training_plan_updates where athlete_alias=a),'A pending check was duplicated';
- assert public.onflows_training_plan_update('COMPLETE',a,wrong_token)->>'state'='LOST';
+ assert public.complete_onflows_training_plan_update(a,wrong_token,1)->>'state'='LOST';
  assert (select last_checked_rule_versions is null from onflows_private.training_plan_updates where athlete_alias=a),'A lost worker certified rules';
  perform public.onflows_training_plan_update('FAIL',a,token);
  assert public.claim_onflows_training_plan_update(token,v75,a) is null,'Rule checks bypassed retry cooldown';
@@ -55,8 +58,8 @@ begin
  update onflows_private.training_plan_updates set available_at=clock_timestamp()-interval '1 second' where athlete_alias=a;
  claim:=public.claim_onflows_training_plan_update(token,v75,a);
  assert (claim->>'revision')::bigint=n,'A retry created another request';
- perform public.onflows_training_plan_update('COMPLETE',a,token);
- assert (select last_checked_rule_versions=v75 from onflows_private.training_plan_updates where athlete_alias=a);
+ perform public.complete_onflows_training_plan_update(a,token,1);
+ assert (select last_checked_rule_versions=v75 and last_checked_plan_revision=1 from onflows_private.training_plan_updates where athlete_alias=a);
  assert public.claim_onflows_training_plan_update(token,v75,a) is null,'A completed same-rule check repeated';
 
  -- A rejected obsolete manual request has not evaluated new rules. Its one
@@ -68,7 +71,7 @@ begin
  assert (select last_checked_rule_versions=v75 from onflows_private.training_plan_updates where athlete_alias=a),'Rejected manual input certified uncomputed rules';
  claim:=public.claim_onflows_training_plan_update(token,v76,a);
  assert claim is not null and claim->>'manual'='false','Rejected manual request stranded rule refresh';
- perform public.onflows_training_plan_update('COMPLETE',a,token);
+ perform public.complete_onflows_training_plan_update(a,token,1);
  assert public.claim_onflows_training_plan_update(token,v76,a) is null,'Rejected manual request produced a repeat loop';
 
  update public.onflows_management_plan_state set status='PAUSED' where athlete_alias=a;
@@ -79,6 +82,32 @@ begin
  assert public.claim_onflows_training_plan_update(token,v77,a) is null,'A rule change bypassed editor authorization';
  update public.onflows_management_plan_state set approved_by=actor where athlete_alias=a;
 
+ -- A synchronous publication after a completed check must not inherit its
+ -- certificate, even when an older API still serves requests during deployment.
+ insert into public.onflows_management_plan_revisions(athlete_alias,revision,operation,actor_id,payload)
+  select athlete_alias,2,'ADAPT',actor_id,payload from public.onflows_management_plan_revisions where athlete_alias=a and revision=1;
+ update public.onflows_management_plan_state set revision=2 where athlete_alias=a;
+ claim:=public.claim_onflows_training_plan_update(token,v76,a);
+ assert claim is not null,'A new synchronous revision inherited an earlier check';
+ -- A publication between refresh returning revision 2 and COMPLETE must not be
+ -- certified by rereading the new current pointer (revision 3).
+ insert into public.onflows_management_plan_revisions(athlete_alias,revision,operation,actor_id,payload)
+  select athlete_alias,3,'ADAPT',actor_id,payload from public.onflows_management_plan_revisions where athlete_alias=a and revision=2;
+ update public.onflows_management_plan_state set revision=3 where athlete_alias=a;
+ assert public.complete_onflows_training_plan_update(a,wrong_token,3)->>'state'='LOST';
+ assert (select last_checked_plan_revision=1 from onflows_private.training_plan_updates where athlete_alias=a);
+ perform public.complete_onflows_training_plan_update(a,token,2);
+ assert (select last_checked_plan_revision=2 from onflows_private.training_plan_updates where athlete_alias=a);
+ claim:=public.claim_onflows_training_plan_update(token,v76,a);
+ assert claim is not null,'A concurrent publication was falsely certified by COMPLETE';
+ perform public.complete_onflows_training_plan_update(a,token,3);
+ assert public.claim_onflows_training_plan_update(token,v76,a) is null,'An unchanged checked revision repeated';
+ -- Restore the fixture pointer to exercise the remaining legacy/daily cases.
+ update public.onflows_management_plan_state set revision=1 where athlete_alias=a;
+ claim:=public.claim_onflows_training_plan_update(token,v76,a);
+ assert claim is not null;
+ perform public.complete_onflows_training_plan_update(a,token,1);
+
  -- An old worker can finish an existing request, but cannot certify new rules
  -- accidentally using a claimed identity left behind by another worker.
  claim:=public.claim_onflows_training_plan_update(token,v77,a);
@@ -87,11 +116,11 @@ begin
  claim:=public.onflows_training_plan_update('CLAIM',a,token);
  assert (select claimed_rule_versions is null from onflows_private.training_plan_updates where athlete_alias=a);
  perform public.onflows_training_plan_update('COMPLETE',a,token);
- assert (select last_checked_rule_versions is null from onflows_private.training_plan_updates where athlete_alias=a),
+ assert (select last_checked_rule_versions is null and last_checked_plan_revision is null from onflows_private.training_plan_updates where athlete_alias=a),
   'A legacy completion retained a certificate for unknown calculations';
  claim:=public.claim_onflows_training_plan_update(token,v77,a);
  assert claim is not null,'An old worker falsely certified a new calculation';
- perform public.onflows_training_plan_update('COMPLETE',a,token);
+ perform public.complete_onflows_training_plan_update(a,token,1);
  assert public.claim_onflows_training_plan_update(token,v77,a) is null;
 
  -- A legacy completion can still publish current rules. Clearing its unknown
@@ -111,20 +140,20 @@ begin
  perform public.onflows_training_plan_update('COMPLETE',a,token);
  claim:=public.claim_onflows_training_plan_update(token,v77,a);
  assert claim is not null,'Older legacy publication inherited a current-rule certificate';
- perform public.onflows_training_plan_update('COMPLETE',a,token);
+ perform public.complete_onflows_training_plan_update(a,token,1);
  assert public.claim_onflows_training_plan_update(token,v77,a) is null;
 
  update onflows_private.training_plan_updates set last_evaluated_on=d-1 where athlete_alias=a;
  claim:=public.claim_onflows_training_plan_update(token,v77,a);
  assert claim is not null,'Rules tracking suppressed the existing daily update';
- perform public.onflows_training_plan_update('COMPLETE',a,token);
+ perform public.complete_onflows_training_plan_update(a,token,1);
  assert public.claim_onflows_training_plan_update(token,v77,a) is null;
 
  update public.onflows_management_plan_revisions set payload=payload#-'{plan,input_snapshot,rule_versions}' where athlete_alias=a and revision=1;
  update onflows_private.training_plan_updates set last_checked_rule_versions=null where athlete_alias=a;
  claim:=public.claim_onflows_training_plan_update(token,v77,a);
  assert claim is not null,'Legacy rule provenance did not receive one canonical check';
- perform public.onflows_training_plan_update('COMPLETE',a,token);
+ perform public.complete_onflows_training_plan_update(a,token,1);
  assert public.claim_onflows_training_plan_update(token,v77,a) is null,'Missing legacy provenance created a repeated check';
  for attempt in 1..3 loop
   claim:=public.claim_onflows_training_plan_update(token,'{"engine":"v78"}',a);

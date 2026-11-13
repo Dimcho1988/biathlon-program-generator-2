@@ -93,6 +93,8 @@ function routine(name) {
     }
     const rulesMigration=fs.readdirSync(migrations).find(name=>name.endsWith("_queue_planning_rule_changes.sql"));
     if(rulesMigration) await db.exec(fs.readFileSync(path.join(migrations,rulesMigration),"utf8"));
+    const bindingMigration=fs.readdirSync(migrations).find(name=>name.endsWith("_bind_planning_rule_checks_to_revision.sql"));
+    if(bindingMigration) await db.exec(fs.readFileSync(path.join(migrations,bindingMigration),"utf8"));
     await db.exec("grant select on public.onflows_management_plan_state,public.onflows_management_plan_revisions to service_role;");
     // Re-run the prior contract against the upgraded queue/publication guards.
     try { await db.exec(fs.readFileSync(path.join(root, "tests/database/prepared_dashboard_and_training_events.sql"), "utf8")); }
