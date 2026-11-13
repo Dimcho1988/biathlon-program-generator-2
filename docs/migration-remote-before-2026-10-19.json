@@ -1,0 +1,182 @@
+{
+  "format": "onflows-migration-metadata-v1",
+  "project_ref": "xhaiawljiebclqpvyewt",
+  "observed_at_utc": "2026-10-19",
+  "rows": [
+    {
+      "version": "20260903041531",
+      "name": "working_role_profiles",
+      "statement_count": 1,
+      "joined_bytes": 12907,
+      "joined_sha256": "2bb0138591943e47fce91c93e4790eef0089cf1818da50e6c00ca503a338535e"
+    },
+    {
+      "version": "20260903041725",
+      "name": "role_profile_security_followup",
+      "statement_count": 1,
+      "joined_bytes": 1173,
+      "joined_sha256": "803417058c473cc7c651d8bd2e3977a20b0eb8c52a9487651184f3f0d76116e7"
+    },
+    {
+      "version": "20260903202048",
+      "name": "activity_shadow_publish_timeout",
+      "statement_count": 1,
+      "joined_bytes": 183,
+      "joined_sha256": "5830a65d2ef0b8893cff6e84c8a6639231eaa5e33883ffe487c7aff6fdbd9c78"
+    },
+    {
+      "version": "20260909155610",
+      "name": "response_monitoring_v1",
+      "statement_count": 1,
+      "joined_bytes": 5191,
+      "joined_sha256": "42e9df1d4f77a11412366e43009aaae641c6f3d3341780c6cc0a7cf8c70b5983"
+    },
+    {
+      "version": "20260912132158",
+      "name": "recovery_speed_models_v2",
+      "statement_count": 1,
+      "joined_bytes": 3729,
+      "joined_sha256": "aca15594781f6610398e6557e88a2a334e2c31b4ebe74476662d08c23c2eaee7"
+    },
+    {
+      "version": "20260921105852",
+      "name": "management_drafts_v1",
+      "statement_count": 1,
+      "joined_bytes": 7593,
+      "joined_sha256": "b5c8977ca3924877e2425492a5f58d0f22b53a8847fdf72f9f8831b9fea5e680"
+    },
+    {
+      "version": "20260921124704",
+      "name": "management_active_v2",
+      "statement_count": 1,
+      "joined_bytes": 14215,
+      "joined_sha256": "03a74dade7379c6a3b0cb2493dfedab168e77f91d45590bce36bac27743b7cfe"
+    },
+    {
+      "version": "20260925061426",
+      "name": "performance_read_projections",
+      "statement_count": 1,
+      "joined_bytes": 5609,
+      "joined_sha256": "3519d379651a8c97efb3fff24c3824fb4ed09c26e2505945d333dd23ce8da4d9"
+    },
+    {
+      "version": "20260927124640",
+      "name": "body_observations",
+      "statement_count": 1,
+      "joined_bytes": 4482,
+      "joined_sha256": "9ce1464a7fce5d4a2e5d79902572d949589ec20be334526be5d7cb4bc514dea7"
+    },
+    {
+      "version": "20260927141548",
+      "name": "management_response_checkpoint",
+      "statement_count": 1,
+      "joined_bytes": 13315,
+      "joined_sha256": "b91bca9cf3c77c444c09a03903098b2ba78031a7d615591347d180ecda5c8edb"
+    },
+    {
+      "version": "20260930045944",
+      "name": "athlete_hr_zone_provenance",
+      "statement_count": 1,
+      "joined_bytes": 2005,
+      "joined_sha256": "cd9aaf3ca1b19ef154fab0d27f6dbf9d25ea53a4ad3e48767d267548b3f50149"
+    },
+    {
+      "version": "20261001175538",
+      "name": "athlete_activity_sport_rules",
+      "statement_count": 1,
+      "joined_bytes": 1301,
+      "joined_sha256": "9b5cff3eb53c1cdc88f7cc6cca320206f1906d22249577ac315d2a11016e9477"
+    },
+    {
+      "version": "20261002184215",
+      "name": "lossless_shadow_compaction",
+      "statement_count": 1,
+      "joined_bytes": 4006,
+      "joined_sha256": "2ad71c8487ee420f6b1702ed04add0e301c27c1a0dc510b16b401b513371fc4e"
+    },
+    {
+      "version": "20261002204908",
+      "name": "history_archive",
+      "statement_count": 1,
+      "joined_bytes": 10766,
+      "joined_sha256": "d389645c6c835e79c396ffe133fe1860fed8994246cc734fa6aec701876eca3c"
+    },
+    {
+      "version": "20261012213317",
+      "name": "management_import_cooldown",
+      "statement_count": 1,
+      "joined_bytes": 2438,
+      "joined_sha256": "4119a5fab221748e93eff2b08a3c3c7fc7d8415046481db042342a81c5313a05"
+    },
+    {
+      "version": "20261015100739",
+      "name": "final_audit_planning_contract",
+      "statement_count": 1,
+      "joined_bytes": 12778,
+      "joined_sha256": "b36c17888c60e17fc170b069ef92e63a382ec97f04567da9645d0eaa987640c4"
+    },
+    {
+      "version": "20261015101426",
+      "name": "planning_import_fairness",
+      "statement_count": 1,
+      "joined_bytes": 955,
+      "joined_sha256": "da276a6546f667110b138def8bf1d70a2acfcd24d4fc09b15a1e744522b6318f"
+    },
+    {
+      "version": "20261018182514",
+      "name": "whole_microcycle_revision_capacity",
+      "statement_count": 1,
+      "joined_bytes": 576,
+      "joined_sha256": "5695ad0667f540a62147d5fb317cf47c955d1ce2fafcc14edbeadca26b5acae5"
+    },
+    {
+      "version": "20261019085817",
+      "name": "enforce_generation_read_contract",
+      "statement_count": 1,
+      "joined_bytes": 452,
+      "joined_sha256": "caccb6673f3cd43967f6f33a7b7932705fcb6bb5e3d1de2913721aa8e9108200"
+    },
+    {
+      "version": "20261019092624",
+      "name": "compact_management_save_response",
+      "statement_count": 1,
+      "joined_bytes": 1067,
+      "joined_sha256": "96ab5f6400059eeff8dbe505207700aa301848f4ab298e962902a9bfd52860d5"
+    },
+    {
+      "version": "20261019101004",
+      "name": "compact_management_overview",
+      "statement_count": 1,
+      "joined_bytes": 3324,
+      "joined_sha256": "d64610182c6e77517db81bc76fe51f8bbcd1b14d0dd95d25188872625cf0a2b5"
+    },
+    {
+      "version": "20261019103152",
+      "name": "materialize_management_overview",
+      "statement_count": 1,
+      "joined_bytes": 3418,
+      "joined_sha256": "5a1da130fe5e75d58fb650313a02a94234d7c4c15e5f5e6f0121769391d82c2c"
+    },
+    {
+      "version": "20261019112003",
+      "name": "unchanged_management_checks",
+      "statement_count": 1,
+      "joined_bytes": 13166,
+      "joined_sha256": "2c94a3ff92b644ed27ea095febbc61065406ccab8271dc782d7c473f8b23626a"
+    },
+    {
+      "version": "20261019163204",
+      "name": "suspend_unsafe_generation_pruning",
+      "statement_count": 1,
+      "joined_bytes": 345,
+      "joined_sha256": "e81be2b21e68c401dc51f943e629d8efb1fb450d549f2dcce1732745609e980d"
+    },
+    {
+      "version": "20261019193059",
+      "name": "protect_historical_generation_references",
+      "statement_count": 1,
+      "joined_bytes": 22139,
+      "joined_sha256": "d23d44da0b3f020c03da2636fd4d769232cfb951f0a808c2a42444d0fbc6b05e"
+    }
+  ]
+}

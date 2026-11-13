@@ -1,0 +1,78 @@
+{
+  "scope": "FIVE_CONCURRENT_PUBLIC_HEALTH_CLIENTS_NOT_DASHBOARD_CAPACITY",
+  "requests": [
+    {
+      "worker": 0,
+      "kind": "new_connection",
+      "status": 200,
+      "seconds": 5.027483329999086,
+      "ok": true
+    },
+    {
+      "worker": 0,
+      "kind": "reused_connection",
+      "status": 200,
+      "seconds": 0.13067328499892028,
+      "ok": true
+    },
+    {
+      "worker": 1,
+      "kind": "new_connection",
+      "status": 200,
+      "seconds": 4.844982398000866,
+      "ok": true
+    },
+    {
+      "worker": 1,
+      "kind": "reused_connection",
+      "status": 200,
+      "seconds": 0.13436061500033247,
+      "ok": true
+    },
+    {
+      "worker": 2,
+      "kind": "new_connection",
+      "status": 200,
+      "seconds": 4.839312612999493,
+      "ok": true
+    },
+    {
+      "worker": 2,
+      "kind": "reused_connection",
+      "status": 200,
+      "seconds": 0.1363140140019823,
+      "ok": true
+    },
+    {
+      "worker": 3,
+      "kind": "new_connection",
+      "status": 200,
+      "seconds": 4.869987794001645,
+      "ok": true
+    },
+    {
+      "worker": 3,
+      "kind": "reused_connection",
+      "status": 200,
+      "seconds": 0.1695876080011658,
+      "ok": true
+    },
+    {
+      "worker": 4,
+      "kind": "new_connection",
+      "status": 200,
+      "seconds": 4.854332220998913,
+      "ok": true
+    },
+    {
+      "worker": 4,
+      "kind": "reused_connection",
+      "status": 200,
+      "seconds": 0.14740866599822766,
+      "ok": true
+    }
+  ],
+  "all_http_200": true,
+  "warm_median_seconds": 0.1363140140019823,
+  "warm_max_seconds": 0.1695876080011658
+}

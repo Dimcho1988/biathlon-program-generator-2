@@ -1,0 +1,312 @@
+"""Immutable active-plan revisions and a compare-and-swap publication pointer."""
+from urllib.parse import quote
+from datetime import datetime
+from uuid import UUID, uuid4
+
+import httpx
+from fastapi import HTTPException
+from .oauth_store import HistoricalGenerationReferenceConflict, PersistentStoreFailure
+
+
+PLAN_PROVENANCE_FIELDS = ("generation_id", "analysis_revision", "analysis_as_of", "settings_fingerprint",
+    "snapshot_fingerprint", "evaluation_date", "profile_revision", "engine_version", "speed_model_version")
+SCHEDULE_FIELDS = ("schema_version", "_storage", "engine_version", "fingerprint", "generated_at",
+                   "start_date", "end_date", "activation_eligible", "days")
+
+
+def _schedule_select():
+    """Select visible schedules and provenance without private model snapshots."""
+    fields = ["revision", "operation", "recorded_at", "status:payload->status", "reason:payload->reason"]
+    for name in ("plan", "proposal"):
+        fields.extend(f"{name}_{field}:payload->{name}->{field}" for field in SCHEDULE_FIELDS)
+        fields.extend(f"{name}_input_{field}:payload->{name}->input_snapshot->{field}" for field in PLAN_PROVENANCE_FIELDS)
+    return ",".join(fields)
+
+
+def _schedule_record(record):
+    from .plan_storage import unpack
+    payload = {"status": record.get("status"), "reason": record.get("reason")}
+    for name in ("plan", "proposal"):
+        schema = record.get(f"{name}_schema_version")
+        if schema is None:
+            if any(record.get(f"{name}_{field}") is not None for field in SCHEDULE_FIELDS):
+                raise PersistentStoreFailure("Invalid saved schedule projection")
+            payload[name] = None
+            continue
+        if schema != "planning-draft-v1" or not isinstance(record.get(f"{name}_days"), list):
+            raise PersistentStoreFailure("Invalid saved schedule projection")
+        plan = {field: record[f"{name}_{field}"] for field in SCHEDULE_FIELDS
+                if record.get(f"{name}_{field}") is not None}
+        plan["input_snapshot"] = {field: record[f"{name}_input_{field}"] for field in PLAN_PROVENANCE_FIELDS
+                                  if record.get(f"{name}_input_{field}") is not None}
+        payload[name] = plan
+    return unpack({"revision": record["revision"], "operation": record.get("operation"),
+                   "recorded_at": record.get("recorded_at"), "payload": payload})
+
+
+def _zoned_timestamp(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        return datetime.fromisoformat(value).utcoffset() is not None
+    except ValueError:
+        return False
+
+
+def _uuid(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        return str(UUID(value)) == value.lower()
+    except ValueError:
+        return False
+
+
+class PlanStore:
+    def __init__(self, repository, *, background_claim=None):
+        self.repository = repository
+        self.background_claim = background_claim
+
+    def request(self, method, path, **kwargs):
+        from .plan_storage import unpack
+        return unpack(self.repository._json(self.repository._request(method, path, **kwargs)))
+
+    def checkpoint(self, alias):
+        result = self.request("POST", "/rpc/onflows_management_checkpoint", json={"p_alias": alias})
+        if not isinstance(result, dict) or not isinstance(result.get("models"), list):
+            raise PersistentStoreFailure("Invalid planning checkpoint")
+        return result
+
+    def current(self, alias, *, metadata_only=False, schedule_only=False):
+        """Read one atomic publication snapshot.
+
+        Schedule projection serves display and action previews. Lifecycle writes
+        keep the complete record and their existing checkpoint/CAS validation.
+        """
+        if metadata_only and schedule_only:
+            raise ValueError("Choose one active-plan projection")
+        select = (
+            "revision,status:payload->status,fingerprint:payload->processed_input_fingerprint,evaluated_on:payload->evaluated_on,"
+            "plan_end_date:payload->plan->end_date,proposal_end_date:payload->proposal->end_date,"
+            "plan_generation_id:payload->plan->input_snapshot->generation_id,"
+            "plan_analysis_revision:payload->plan->input_snapshot->analysis_revision,"
+            "plan_analysis_as_of:payload->plan->input_snapshot->analysis_as_of,"
+            "plan_snapshot_fingerprint:payload->plan->input_snapshot->snapshot_fingerprint,"
+            "proposal_generation_id:payload->proposal->input_snapshot->generation_id,"
+            "proposal_analysis_revision:payload->proposal->input_snapshot->analysis_revision,"
+            "proposal_analysis_as_of:payload->proposal->input_snapshot->analysis_as_of,"
+            "proposal_snapshot_fingerprint:payload->proposal->input_snapshot->snapshot_fingerprint"
+        ) if metadata_only else _schedule_select() if schedule_only else "revision,operation,payload,recorded_at"
+        # Read the publication pointer and its immutable record in one database
+        # snapshot. Keep the default LEFT embedding: an invalid/inaccessible
+        # record must fail validation rather than look like a missing plan.
+        rows = self.request("GET", "/onflows_management_plan_state?select=revision,"
+                            "record:onflows_management_plan_revisions!"
+                            f"onflows_management_plan_state_athlete_alias_revision_fkey({select})"
+                            f"&athlete_alias=eq.{quote(alias, safe='')}&limit=1")
+        if not isinstance(rows, list):
+            raise PersistentStoreFailure("Invalid active plan pointer")
+        if not rows:
+            return None
+        if len(rows) != 1 or not isinstance(rows[0], dict):
+            raise PersistentStoreFailure("Invalid active plan pointer")
+        revision = rows[0].get("revision")
+        if type(revision) is not int or revision < 1:
+            raise PersistentStoreFailure("Invalid active plan revision")
+        record = rows[0].get("record")
+        if (not isinstance(record, dict) or type(record.get("revision")) is not int
+                or record["revision"] != revision
+                or (not metadata_only and not schedule_only and not isinstance(record.get("payload"), dict))):
+            raise PersistentStoreFailure("Invalid active plan record")
+        if metadata_only and (not isinstance(record.get("fingerprint"), str) or not isinstance(record.get("status"), str)):
+            raise PersistentStoreFailure("Invalid active plan metadata")
+        return _schedule_record(record) if schedule_only else record
+
+    def assistant_day(self, alias, selected):
+        """Read one complete approved day from a captured immutable revision.
+
+        The existing overview RPC exposes every approved day in stored order;
+        it never substitutes the proposal. A second projection is pinned to that
+        exact revision, even if another plan activates between the two reads.
+        No other days, proposal body or private scientific snapshot cross the
+        wire. Frozen blocks and dose evidence in the selected day stay intact.
+        """
+        from datetime import date
+        from .plan_storage import FORMAT, unpack
+        if type(selected) is not date:
+            raise ValueError("An exact calendar date is required")
+        overview = self.request("GET", "/rpc/read_onflows_management_overview"
+                                f"?p_alias={quote(alias, safe='')}")
+        if overview is None:
+            return None
+        if (not isinstance(overview, dict) or type(overview.get("revision")) is not int
+                or overview["revision"] < 1 or overview.get("record_revision") != overview["revision"]
+                or overview.get("plan_type") not in {None, "null", "object"}
+                or overview.get("proposal_type") not in {None, "null", "object"}
+                or type(overview.get("has_proposal")) is not bool
+                or overview["has_proposal"] != (overview.get("proposal_type") == "object")):
+            raise PersistentStoreFailure("Invalid assistant plan pointer")
+        dates = overview.get("days") or []
+        if not isinstance(dates, list) or any(not isinstance(day, dict) for day in dates):
+            raise PersistentStoreFailure("Invalid assistant plan dates")
+        index = next((i for i, day in enumerate(dates) if day.get("date") == selected.isoformat()), None)
+        metadata = PLAN_PROVENANCE_FIELDS
+        fields = ["revision", "recorded_at", "status:payload->status", "reason:payload->reason"]
+        fields.extend(f"plan_{name}:payload->plan->{name}" for name in
+                      ("schema_version", "_storage", "engine_version", "fingerprint", "generated_at", "start_date", "end_date"))
+        for name in metadata:
+            fields.extend((f"input_{name}:payload->plan->input_snapshot->{name}",
+                           f"source_{name}:payload->plan->source->{name}"))
+        if index is not None:
+            fields.append(f"selected_day:payload->plan->days->{index}")
+        rows = self.request("GET", "/onflows_management_plan_revisions?select=" + ",".join(fields)
+                            + f"&athlete_alias=eq.{quote(alias, safe='')}&revision=eq.{overview['revision']}&limit=1")
+        if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
+                or type(rows[0].get("revision")) is not int or rows[0]["revision"] != overview["revision"]
+                or rows[0].get("status") != overview.get("status")):
+            raise PersistentStoreFailure("Pinned assistant plan revision is unavailable")
+        row = rows[0]
+        plan = None
+        if overview.get("plan_type") == "object":
+            plan = {name: row.get("plan_" + name) for name in
+                    ("schema_version", "engine_version", "fingerprint", "generated_at", "start_date", "end_date")}
+            marker = row.get("plan__storage")
+            if marker is not None:
+                if marker != FORMAT:
+                    raise PersistentStoreFailure("Unsupported stored planning format")
+                plan["_storage"] = marker
+            plan["input_snapshot"] = {name: row["input_" + name] for name in metadata if row.get("input_" + name) is not None}
+            plan["source"] = {name: row["source_" + name] for name in metadata if row.get("source_" + name) is not None}
+            day = row.get("selected_day")
+            if index is not None and (not isinstance(day, dict) or day.get("date") != selected.isoformat()):
+                raise PersistentStoreFailure("Pinned assistant plan day differs")
+            plan["days"] = [day] if index is not None else []
+        return unpack({"revision": row["revision"], "recorded_at": row.get("recorded_at"), "payload": {
+            "status": row.get("status"), "reason": row.get("reason"), "plan": plan,
+            "proposal": {} if overview["has_proposal"] else None}})
+
+    def history(self, alias):
+        result = self.request("GET", "/onflows_management_plan_revisions?select=revision,operation,recorded_at,"
+                              "status:payload->status,changes:payload->changes,reason:payload->reason"
+                              f"&athlete_alias=eq.{quote(alias, safe='')}&order=revision.desc&limit=10")
+        if not isinstance(result, list):
+            raise PersistentStoreFailure("Invalid active plan history")
+        # Full evidence remains in immutable storage; the UI gets a compact log.
+        return [{"revision": r["revision"], "operation": r["operation"], "recorded_at": r["recorded_at"],
+                 "status": r["status"], "changes": r.get("changes") or [],
+                 "reason": r.get("reason")} for r in result]
+
+    def current_overview(self, alias):
+        from .management_overview import validate_overview
+        result = self.request("GET", "/rpc/read_onflows_management_overview"
+                              f"?p_alias={quote(alias, safe='')}")
+        return None if result is None else validate_overview(result)
+
+    def record_unchanged_check(self, alias, *, expected_revision, actor_id, expected_profile_revision, checkpoint):
+        # The full candidate was compared by the lifecycle. Only its immutable
+        # revision identity and the small publication checkpoint cross the wire.
+        # POST has no transport retry; an ambiguous failure never falls back to
+        # another plan save. The nonce also makes a future same-RPC replay safe.
+        check_id = str(uuid4())
+        result = self.request("POST", "/rpc/record_onflows_management_check", json={
+            "p_alias": alias, "p_expected_revision": expected_revision, "p_actor": str(actor_id),
+            "p_expected_profile_revision": expected_profile_revision, "p_checkpoint": checkpoint,
+            "p_check_id": check_id,
+        })
+        if isinstance(result, dict) and result.get("conflict"):
+            raise HTTPException(409, "The plan or its inputs changed; reload and try again")
+        if (not isinstance(result, dict)
+                or set(result) != {"unchanged", "checked_revision", "check_id", "recorded_at", "replayed"}
+                or result["unchanged"] is not True
+                or type(result["checked_revision"]) is not int or result["checked_revision"] < 1
+                or result["checked_revision"] != expected_revision or result["check_id"] != check_id
+                or not _zoned_timestamp(result["recorded_at"]) or type(result["replayed"]) is not bool):
+            raise PersistentStoreFailure("Invalid unchanged plan check result")
+        return result
+
+    def checks(self, alias, *, before=None, limit=10):
+        if type(limit) is not int or not 1 <= limit <= 50 or (before is not None and (type(before) is not int or before < 1)):
+            raise ValueError("Invalid plan check page")
+        path = f"/rpc/read_onflows_management_checks?p_alias={quote(alias, safe='')}&p_limit={limit}"
+        if before is not None:
+            path += f"&p_before={before}"
+        result = self.request("GET", path)
+        if not isinstance(result, dict) or set(result) != {"checks", "next_before"} or not isinstance(result["checks"], list):
+            raise PersistentStoreFailure("Invalid plan check history")
+        rows = result["checks"]
+        previous, identifiers = before, set()
+        if len(rows) > limit:
+            raise PersistentStoreFailure("Invalid plan check history")
+        for row in rows:
+            if (not isinstance(row, dict)
+                    or set(row) != {"id", "sequence", "checked_revision", "operation", "recorded_at", "reason"}
+                    or not _uuid(row["id"]) or row["id"].lower() in identifiers
+                    or type(row["sequence"]) is not int or not 1 <= row["sequence"] <= 9007199254740991
+                    or (previous is not None and row["sequence"] >= previous)
+                    or type(row["checked_revision"]) is not int or not 1 <= row["checked_revision"] <= 9007199254740991
+                    or row["operation"] != "CHECK_NO_CHANGE" or not _zoned_timestamp(row["recorded_at"])
+                    or not isinstance(row["reason"], str) or not row["reason"].strip() or len(row["reason"]) > 500):
+                raise PersistentStoreFailure("Invalid plan check history")
+            identifiers.add(row["id"].lower())
+            previous = row["sequence"]
+        cursor = result["next_before"]
+        if cursor is not None and (type(cursor) is not int or not rows or len(rows) != limit or cursor != rows[-1]["sequence"]):
+            raise PersistentStoreFailure("Invalid plan check history")
+        return result
+
+    def save(self, alias, payload, expected_revision, actor, operation, profile_revision, checkpoint, *, automatic=False,
+             include_payload=True):
+        from .plan_storage import pack
+        # Only callers that discard the saved record opt out of its echo. The
+        # immutable revision and publication checks are identical in both RPCs.
+        rpc = "save_onflows_management_plan" if include_payload else "save_onflows_management_plan_compact"
+        if self.background_claim:
+            if (not automatic and not self.background_claim.get("manual")) or include_payload:
+                raise ValueError("Background training writes require an automatic compact publication")
+            rpc = "save_onflows_management_plan_after_training"
+        try:
+            result = self.request("POST", f"/rpc/{rpc}", json={
+                "p_alias": alias, "p_payload": pack(payload), "p_expected_revision": expected_revision,
+                "p_actor": str(actor), "p_operation": operation,
+                "p_expected_profile_revision": profile_revision, "p_checkpoint": checkpoint, "p_automatic": automatic,
+                **({"p_training_token": self.background_claim["token"],
+                    "p_training_revision": self.background_claim["revision"]} if self.background_claim else {}),
+            # Whole-microcycle publication has a 30 s SQL budget. Allow its
+            # response to arrive before the transport gives up; never retry a
+            # write whose commit outcome could be unknown.
+            }, timeout=httpx.Timeout(35.0, connect=5.0))
+        except HistoricalGenerationReferenceConflict as exc:
+            raise HTTPException(409, "The plan or its inputs changed; reload and try again") from exc
+        if not isinstance(result, dict):
+            raise PersistentStoreFailure("Invalid active plan save result")
+        if result.get("conflict"):
+            raise HTTPException(409, "The plan or its inputs changed; reload and try again")
+        if (result.get("saved") is not True or type(result.get("revision")) is not int
+                or (include_payload and not isinstance(result.get("payload"), dict))):
+            raise PersistentStoreFailure("Invalid active plan save result")
+        if not include_payload:
+            try:
+                recorded_at = datetime.fromisoformat(result["recorded_at"])
+            except (KeyError, TypeError, ValueError):
+                raise PersistentStoreFailure("Invalid active plan save result") from None
+            if (result["revision"] < 1 or result["revision"] != expected_revision + 1
+                    or recorded_at.utcoffset() is None or "payload" in result):
+                raise PersistentStoreFailure("Invalid active plan save result")
+        return result
+
+    def due(self, now):
+        rows = self.request("GET", "/onflows_management_plan_state?select=athlete_alias,revision,approved_by"
+                            f"&status=in.(ACTIVE,REVIEW_REQUIRED)&next_check_at=lte.{quote(now.isoformat(), safe='')}"
+                            "&order=next_check_at.asc&limit=1")
+        if not isinstance(rows, list):
+            raise PersistentStoreFailure("Invalid due plan queue")
+        return rows
+
+    def defer_check(self, alias, revision):
+        # This void RPC returns HTTP 204. Decoding JSON turns a successful
+        # deferral into a false store failure and repeats it in the error path.
+        self.repository._request("POST", "/rpc/defer_onflows_management_check",
+                                 json={"p_alias": alias, "p_revision": revision})
+
+    def queue_import(self, alias):
+        return self.request("POST", "/rpc/queue_onflows_management_import", json={"p_alias": alias})

@@ -160,6 +160,13 @@ REAL_DATASET_SESSION = "_real_history_dataset"
 REAL_CACHE_SALT_SESSION = "_real_history_cache_salt"
 REAL_TREF_CONFIGURATION_SESSION = "_real_tref_configuration"
 REAL_QREF_PLANNING_SESSION = "_real_qref_planning_settings"
+TREF_SOURCE_LABELS = {
+    "expert upper-bound fallback": "Горна експертна граница (без история)",
+    "provisional history": "Временна реална история",
+    "40-day history": "Реална 40-дневна история",
+    # Read-only compatibility for a dataset created by the previous version.
+    "initial expert setting": "Стара начална експертна стойност",
+}
 
 
 def _camp_editor_rows_for_storage(
@@ -944,8 +951,8 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
     c5.metric("Readiness", f"{readiness['readiness']:.0f}%")
     if float(row["reliability"]) < 1.0:
         st.warning(
-            "Историята още не покрива целия 40-дневен прозорец; H40 и 7/40 "
-            "са ограничени от наличните дни. Фиксираният Tref не се променя."
+            "Историята още не покрива целия 40-дневен прозорец; 7/40 и Tref "
+            "се изчисляват временно от наличните завършени календарни дни."
         )
 
     latest_tref = view["daily_zones"].loc[
@@ -956,29 +963,73 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
             "tref_effective",
             "tref_source",
             "tref_history_days",
+            "tref_min_effective",
+            "tref_max_effective",
+            "tref_bound_applied",
         ],
     ].copy()
     latest_tref["tref_source"] = latest_tref["tref_source"].replace(
-        {"initial expert setting": "Начална експертна настройка"}
+        TREF_SOURCE_LABELS
+    )
+    latest_tref["tref_bound_applied"] = latest_tref[
+        "tref_bound_applied"
+    ].replace(
+        {
+            "lower": "долна граница",
+            "upper": "горна граница",
+            "none": "без clamp",
+        }
+    )
+    current_tref = (
+        view["load_stats"]
+        .loc[list(AEROBIC_COMPONENTS), ["Tref"]]
+        .rename(columns={"Tref": "current_tref"})
+        .rename_axis("zone")
+        .reset_index()
+    )
+    latest_tref = latest_tref.merge(
+        current_tref, on="zone", how="left", validate="one_to_one"
     )
     latest_tref = latest_tref.rename(
         columns={
             "zone": "Зона",
-            "tref_history_value": "H40 (диагностично)",
-            "tref_effective": "Tref",
-            "tref_source": "Източник",
-            "tref_history_days": "Завършени дни",
+            "tref_history_value": "Raw Tref (H40) преди деня",
+            "tref_effective": "Tref за деня",
+            "current_tref": "Текущ Tref след деня",
+            "tref_source": "Източник за деня",
+            "tref_history_days": "Предходни дни",
+            "tref_min_effective": "Tref min",
+            "tref_max_effective": "Tref max",
+            "tref_bound_applied": "Приложена граница",
         }
     )
-    with st.expander("Текущ Tref по зони · Z1–Z5", expanded=True):
+    latest_tref = latest_tref[
+        [
+            "Зона",
+            "Raw Tref (H40) преди деня",
+            "Tref за деня",
+            "Текущ Tref след деня",
+            "Tref min",
+            "Tref max",
+            "Приложена граница",
+            "Източник за деня",
+            "Предходни дни",
+        ]
+    ]
+    with st.expander(
+        "Causal Tref за последния ден и текущ Tref · Z1–Z5",
+        expanded=True,
+    ):
         st.dataframe(latest_tref, width="stretch", hide_index=True)
         st.caption(
-            "H40 използва само завършени календарни дни преди текущия ден. "
-            "Почивните дни участват с ефективен товар E=0; текущи и бъдещи данни не участват."
+            "Raw Tref = 7 × средния дневен ефективен E от предходните до 40 "
+            "завършени календарни дни. Tref за деня изключва самия ден; "
+            "почивните дни участват с E=0."
         )
         st.caption(
-            "Tref е фиксирана начална експертна настройка. H40 продължава да участва "
-            "в индекса 7/40, но не променя Tref."
+            "Текущият Tref след края на периода включва последния завършен ден. "
+            "Реалната 40-дневна стойност се ограничава във фиксираните "
+            "експертни граници; без история се използва горната граница."
         )
 
     left, right = st.columns(2)
@@ -1145,7 +1196,14 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
         view["activity_zones"]["activity_ref"] == selected_ref
     ].copy()
     zones["tref_source"] = zones["tref_source"].replace(
-        {"initial expert setting": "Начална експертна настройка"}
+        TREF_SOURCE_LABELS
+    )
+    zones["tref_bound_applied"] = zones["tref_bound_applied"].replace(
+        {
+            "lower": "долна граница",
+            "upper": "горна граница",
+            "none": "без clamp",
+        }
     )
     chart_values: dict[str, float] = {}
     by_zone = zones.set_index("zone") if not zones.empty else pd.DataFrame()
@@ -1175,10 +1233,13 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
             "cascade": "Cascade",
             "spillover": "Spillover",
             "E_z": "Ефективно E",
-            "tref_history_value": "H40 (диагностично)",
+            "tref_history_value": "Raw Tref (H40)",
             "tref_effective": "Tref",
             "tref_source": "Tref източник",
             "tref_history_days": "Исторически дни",
+            "tref_min_effective": "Tref min",
+            "tref_max_effective": "Tref max",
+            "tref_bound_applied": "Приложена граница",
             "quality_status": "Качество",
         }
     )[
@@ -1192,8 +1253,11 @@ def render_real_load_page(dataset: RealHistoryDataset) -> None:
             "Cascade",
             "Spillover",
             "Ефективно E",
-            "H40 (диагностично)",
+            "Raw Tref (H40)",
             "Tref",
+            "Tref min",
+            "Tref max",
+            "Приложена граница",
             "Tref източник",
             "Исторически дни",
             "Качество",
@@ -1303,7 +1367,7 @@ def render_real_tref_settings_page(
 ) -> None:
     page_header(
         "Експертни настройки · Tref",
-        "Фиксиран начален Tref и линейно приравняване за режима с реални данни.",
+        "Фиксирани експертни граници, персонален 40-дневен Tref и линейно приравняване.",
     )
     if dataset is not None:
         _render_real_source_banner(dataset)
@@ -1314,8 +1378,10 @@ def render_real_tref_settings_page(
         )
     configuration = _real_history_configuration()
     st.warning(
-        "Tref е фиксирана начална експертна настройка. Линейният pp/bpm параметър "
-        "може да се тества само в текущата сесия; cascade и spillover остават непроменени."
+        "Tref се изчислява от реалния E за предходните до 40 завършени дни и "
+        "се ограничава във фиксираните експертни граници. Линейният pp/bpm "
+        "параметър може да се тества само в текущата сесия; cascade и "
+        "spillover остават непроменени."
     )
     st.caption(
         f"Модел: {configuration.physiology_profile_version} · "
@@ -1327,14 +1393,16 @@ def render_real_tref_settings_page(
     with st.form("real_tref_settings_form", clear_on_submit=False):
         headings = st.columns([0.7, 1.0, 1.8, 1.3])
         headings[0].markdown("**Зона**")
-        headings[1].markdown("**Tref**")
+        headings[1].markdown("**Tref граници**")
         headings[2].markdown("**Източник**")
         headings[3].markdown("**pp/bpm**")
         for zone in configuration.zones:
             columns = st.columns([0.7, 1.0, 1.8, 1.3])
             columns[0].markdown(f"**{zone.zone}**")
-            columns[1].markdown(f"{zone.tref_minutes:.0f} приравнени мин")
-            columns[2].markdown("Начална експертна настройка")
+            columns[1].markdown(
+                f"{zone.tref_min:.0f}–{zone.tref_max:.0f} приравнени мин"
+            )
+            columns[2].markdown("Реален E за до 40 дни · cold start = max")
             with columns[3]:
                 submitted_slopes[
                     f"parameter.{zone.zone}.equivalence_slope_pp_per_bpm"
