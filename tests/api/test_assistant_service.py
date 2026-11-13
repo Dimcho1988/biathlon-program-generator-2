@@ -1359,6 +1359,57 @@ def test_polite_change_requests_keep_their_write_intent(message):
     assert service._explicit_write_request(message)
 
 
+@pytest.mark.parametrize("message", [
+    "Искам да ми представиш отчет на натоварването по зони за последните 30 дни.",
+    "Трябва да промениш изисквания период например от 13 октомври до 13 ноември и да прочетеш данните в отчета.",
+    "В отчета смени периода на последните 30 дни.",
+    "Представи ми обема в часове по зони.",
+])
+def test_report_date_filters_do_not_create_or_continue_a_write(repo, message):
+    assert service._read_request(message) and not service._explicit_write_request(message)
+    conversation = repo.seed({"input_request": {"kind": "MESOCYCLE_PREFERENCES",
+        "request": "Промени периода", "answers": [], "followups": 0,
+        "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()}})
+    provider = ScriptedAssistantProvider([{"text": "Отчетът е за посочения период."}])
+    result = service.turn(repo, ALIAS, ACTOR, body(message, conversation), provider)
+    assert provider.calls[0]["context"]["read_only_turn"] is True
+    assert provider.calls[0]["context"]["active_input_request"] is None
+    assert not repo.writes and "потвърден" not in result["message"]
+
+
+@pytest.mark.parametrize("message", [
+    "Промени периода на мезоцикъла и покажи отчета.",
+    "Промени периода в програмата и прочети отчета.",
+    "Запиши новия период на лагера и покажи отчет.",
+])
+def test_report_word_does_not_hide_actual_planning_edits(message):
+    assert not service._read_request(message)
+    assert service._explicit_write_request(message)
+
+
+def test_completed_period_report_remains_readable_if_language_synthesis_exceeds_limit(repo):
+    repo.read_result = {"query_kind": "history", "availability": "AVAILABLE", "view": "summary",
+        "start": "2026-10-15", "end": "2026-11-13", "period_coverage": {"full_requested_range": True},
+        "report": {"period_start": "2026-10-15", "period_end": "2026-11-13",
+            "zones": [{"zone": "Z1", "raw_time_min": 1917.75, "raw_time_hours": 31.9625}],
+            "quality": {"modeled_activities": 40, "limited_activities": 2}}}
+    class FailureAfterRead:
+        available = True
+        calls = 0
+        def complete(self, messages, context, capabilities):
+            self.calls += 1
+            if self.calls == 1:
+                return {"query": query("history", days=30), "text": ""}
+            raise AssistantProviderError("input_too_large")
+    result = service.turn(repo, ALIAS, ACTOR, body("В отчета смени периода на последните 30 дни."), FailureAfterRead())
+    assert "31,96 ч (31 ч 58 мин)" in result["message"]
+    assert "2026-10-15 – 2026-11-13" in result["message"]
+    assert "2 от 40" in result["message"] and "Нов запис" not in result["message"]
+    assert "Раздели" not in result["message"] and not repo.writes
+    target = repo.conversations[result["conversation_id"]]["state"]["read_targets"][-1]
+    assert target["start"] == "2026-10-15" and target["end"] == "2026-11-13"
+
+
 def test_broad_question_automatically_summarizes_oversized_saved_management_context(repo):
     from apps.api.assistant_provider import OpenAIAssistantProvider, OpenAIProviderConfig
     main_race={"event_id":"race_a","event_type":"MAIN_RACE","name":"Основен старт",

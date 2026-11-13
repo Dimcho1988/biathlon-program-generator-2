@@ -151,6 +151,22 @@ URL, athlete_id, нови права или произволни команди.
 """
 
 
+_HISTORY_INSTRUCTIONS = """За изпълнен обем или отчет по зони използвай history с view=summary. Задай поискания
+период изрично: days=30 за последните 30 дни, включително днес; „последния месец“
+без други дати означава последните 30 дни, а „миналия календарен месец“ е целият
+предходен календарен месец. Използвай start/end при посочени дати. Уточнението за
+периода заменя стария период: прочети нова справка, вместо да повтаряш стар отговор
+или да приемаш стандартните 14 дни за граница на наличните данни. Смяната на
+филтъра на отчет е прочит, без запис или преизчисляване на модел. report.zones
+съдържа готовите сборове за целия report.period_start–report.period_end, независимо
+от страницираните подробности. За часове използвай raw_time_hours; equivalent_time
+е приравнен обем Q, а effective_load е E и никога не е часовниково време. Краткият
+отговор посочва стойността и точните дати. Качеството се отнася до избрания период;
+не пренасяй брой проблемни активности от цялата история към по-кратък отчет.
+При непълен period_coverage ясно посочи покритите дати. За дневна разбивка избери
+view=daily, за отделни активности view=activities; тези подробности се страницират.
+"""
+
 _ACTION_INSTRUCTIONS = """При изрично искане за действие или отговор по active_input_request върни командата,
 щом необходимите стойности са ясни. Преди нея прочети inputs за точния input_kind
 и key, използвай текущата ревизия и върни само поисканите полета в patch_json.
@@ -297,7 +313,7 @@ _REPLY_TOOL: dict[str, Any] = {
                 "sport": {"type": ["string", "null"], "description": "Exact sport from the saved data, when selecting a sport-specific model."},
                 "discipline": {"type": ["string", "null"], "description": "Discipline for the management race-duration preview, at most 100 characters."},
                 "view": {"type": ["string", "null"], "description": "Optional subview advertised in capabilities; omit for overview."},
-                "days": {"type": ["integer", "null"], "description": "History window: learning supports 14, 30, 60, 90, 366 days."},
+                "days": {"type": ["integer", "null"], "description": "Inclusive window ending at end or athlete-local today: history supports 1–90 days; learning supports 14, 30, 60, 90, 366. Use 30 for last month/last 30 days, or explicit start/end dates."},
                 "phase": {"type": ["string", "null"], "description": "Optional method catalog phase from the current catalog."},
                 "section": {"type": ["string", "null"], "description": "Exact dot-separated section from result.pagination, for detail or the next page; maximum 8 parts."},
                 "revision": {"type": ["integer", "null"], "description": "Exact positive saved plan revision when inspecting a specific version."},
@@ -712,6 +728,9 @@ class OpenAIAssistantProvider:
             "tools": [reply_tool],
             "tool_choice": {"type": "function", "name": "onflows_reply"},
         }
+        if (not queries and "history" in capabilities.get("read", []) or any(q.get("kind") == "history" for q in queries)):
+            payload["instructions"] += _HISTORY_INSTRUCTIONS
+
         def refresh_input():
             # Fresh metadata follows stale dialogue. Completed read events
             # follow the current user request, without replaying that request

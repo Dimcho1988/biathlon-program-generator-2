@@ -339,7 +339,7 @@ def _plan_day(repository, alias, access, selected, today):
     return result
 
 
-def _dashboard(repository, alias):
+def _dashboard(repository, alias, *, allow_saved=False):
     operation = getattr(repository, "dashboard_preparation", None)
     if callable(operation):
         # READ only: this does not invoke the fallback calculator used by some
@@ -348,7 +348,17 @@ def _dashboard(repository, alias):
         state = operation("READ", alias=alias, model_key=model_key())
         envelope = state.get("envelope") if isinstance(state, dict) and state.get("ready") is True else None
         if envelope is None:
-            return None
+            if not allow_saved:
+                return None
+            # A historical sum does not depend on a warm current-model view.
+            # Read the saved generation, retaining its source and freshness.
+            reader = getattr(repository, "active_analysis", None)
+            envelope = reader(alias) if callable(reader) else None
+            if envelope is None:
+                return None
+            if not isinstance(envelope, dict):
+                raise PersistentStoreFailure("Invalid saved assistant snapshot")
+            envelope = {**envelope, "preparation": {"status": "UPDATING", "source": "SAVED_ANALYSIS"}}
     else:
         operation = getattr(repository, "active_analysis", None)
         envelope = operation(alias) if callable(operation) else None
@@ -383,13 +393,23 @@ def _status(repository, alias, today):
         "units": {"raw_time_min": "CLOCK_MINUTES", "equivalent_time_min": "Q_EQUIVALENT_MINUTES", "status_7_40": "RATIO_7_TO_40"}}
 
 
-def _history(repository, alias, start, end, today):
+def _history(repository, alias, start, end, today, query):
     from biathlon.learning_provenance import heuristic_load_dates
 
-    envelope = _dashboard(repository, alias)
+    envelope = _dashboard(repository, alias, allow_saved=True)
     if envelope is None:
         return {"availability": "PENDING", "reason": "PREPARED_ANALYSIS_PENDING", "start": start.isoformat(), "end": end.isoformat()}
     source = envelope["snapshot_payload"].get("load_history") or {}
+    view = query.get("view", "summary")
+    sport = query.get("sport")
+    if sport is not None and (not isinstance(sport, str) or not sport.strip() or len(sport) > 80):
+        raise HTTPException(422, "Невалиден вид спорт.")
+    if view not in {"summary", "daily", "activities"}:
+        raise HTTPException(422, "Избери summary, daily или activities за историята.")
+    if view == "summary":
+        from .assistant_history import summary
+        return {**_source(envelope, today), **summary(source, start, end, sport),
+            **({"preparation": envelope["preparation"]} if envelope.get("preparation") else {})}
     first, last = start.isoformat(), end.isoformat()
     estimated_days = sorted(day for day in heuristic_load_dates(source) if first <= day <= last)
     fields = {"date", "zone", "raw_time_min", "equivalent_time_min", "effective_load", "e7_daily", "e40_daily", "tref_used_min", "real_time_min", "status_7_40", "coverage", "estimated", "source", "status"}
@@ -398,19 +418,25 @@ def _history(repository, alias, start, end, today):
         if row.get("date") in estimated_days:
             row.update(estimated=True, estimation_basis="INITIAL_HEURISTIC")
     strength = [_pick(row, fields) for row in (source.get("strength") or {}).get("daily", []) if isinstance(row, dict) and first <= str(row.get("date", "")) <= last]
+    if sport and view == "daily":
+        raise HTTPException(422, "За обем по вид спорт избери summary или activities.")
     activity_rows = [row for row in source.get("activities", [])
-        if isinstance(row, dict) and first <= str(row.get("date", "")) <= last]
+        if isinstance(row, dict) and first <= str(row.get("date", "")) <= last
+        and (not sport or row.get("sport") == sport)]
     activities = [_pick(row, {"activity_ref", "date", "sport", "duration_min", "quality_status", "hr_coverage_percent"})
         for row in activity_rows]
     source_fields = {"version", "equivalence_version", "leading_indicator", "profile_version", "speed_role",
         "initial_heuristic", "calibration_source", "calibration_eligible", "estimated_descent_seconds"}
     for activity, row in zip(activities, activity_rows):
+        activity["zones"] = [_pick(zone, {"zone", "raw_time_min", "equivalent_time_min", "effective_load"})
+            for zone in row.get("zones", []) if isinstance(zone, dict)]
         if isinstance(row.get("load_source"), dict):
             activity["load_source"] = _pick(row["load_source"], source_fields)
     observed = {row.get("date") for row in daily}
-    return {"availability": "AVAILABLE" if daily else "UNAVAILABLE", **_source(envelope, today), "start": first, "end": last,
+    details = {"daily": daily, "strength": strength} if view == "daily" else {"activities": activities}
+    return {"availability": "AVAILABLE" if daily or activity_rows else "UNAVAILABLE", **_source(envelope, today), "start": first, "end": last,
         "source_period_start": source.get("period_start"), "source_period_end": source.get("period_end"),
-        "quality": source.get("quality"), "daily": daily, "strength": strength, "activities": activities,
+        "view": view, **assistant_reads._page(details, query), "available_views": ["summary", "daily", "activities"],
         "estimated_days": estimated_days,
         "unobserved_days": [(start + timedelta(days=n)).isoformat() for n in range((end - start).days + 1) if (start + timedelta(days=n)).isoformat() not in observed],
         "missing_day_means_rest": False, "units": {"raw_time_min": "CLOCK_MINUTES", "equivalent_time_min": "Q_EQUIVALENT_MINUTES", "effective_load": "E_EFFECTIVE_LOAD"}}
@@ -595,10 +621,13 @@ def read(repository, alias, access, query, now=None, *, actor=None):
     elif kind == "history":
         _require(access, "can_view_recovery")
         end = _date(query.get("end"), today)
-        start = _date(query.get("start"), end - timedelta(days=13))
+        days = query.get("days", 14)
+        if type(days) is not int or not 1 <= days <= 90:
+            raise HTTPException(422, "Избери период от 1 до 90 дни.")
+        start = _date(query.get("start"), end - timedelta(days=days - 1))
         if start > end or end > today or (end - start).days >= 90:
             raise HTTPException(422, "Избери минал или текущ период до 90 дни.")
-        result = _history(repository, alias, start, end, today)
+        result = _history(repository, alias, start, end, today, query)
     else:
         result = _inputs(repository, alias, access, query, today)
     if kind == "inputs" and isinstance(result.get("kind"), str):

@@ -96,6 +96,7 @@ def _capabilities(access):
     read_views={}
     if access.get("can_view_recovery"):
         reads.update({"status", "history", "activities", "activity", "speed", "trainability", "learning", "response"})
+        read_views["history"] = ["summary", "daily", "activities"]
         if access.get("is_owner"):
             writes.extend(["DAILY", "WEIGHT", "SESSION"])
         if access.get("can_edit_plan"):
@@ -189,6 +190,14 @@ def _read_request(message):
     text=message.lower().strip()
     # Polite/discourse prefixes do not turn an explanation into an action.
     text=re.sub(r"^(?:(?:а|сега|моля(?: те)?)\b[\s,.:]*)+", "", text)
+    # Changing a report's date filter only reads data. Keep actual planning,
+    # calendar and observation edits on their existing write-intent path.
+    if (re.search(r"отчет|справк", text) and re.search(r"период", text)
+            and re.search(r"прочет|покаж|представ|извед|смен|промен", text)
+            and not re.search(r"програм|план|календар|настрой|мезоцик|лагер|състез|\bстарт\b|запи[шс]", text)):
+        return True
+    if re.search(r"^(?:искам\s+(?:да\s+)?(?:ми\s+)?(?:представиш|покажеш|изведеш)|представи|изведи)\b", text):
+        return True
     # A polite request to explain is still a question, including when a prior
     # change was awaiting clarification. Do not strip action verbs such as
     # "може ли да запишеш", which express an actual write request.
@@ -1154,12 +1163,34 @@ def _resolved_answer(contexts, input_request=None):
     """A tool budget limit does not mean the user's question was ambiguous."""
     if not input_request:
         for item in reversed(contexts):
+            if item.get("query_kind") == "history" and item.get("report"):
+                return _render_history(item)
+        for item in reversed(contexts):
             if item.get("query_kind") in {"day", "method"} and "sessions" in item and "date" in item:
                 return _render_day(item)
         for item in reversed(contexts):
             if item.get("query_kind")=="status":
                 return _render_status(item)
     return "Не успях да завърша обработката на тази заявка. Данните не са променени. Можеш да продължиш със същото искане."
+
+
+def _render_history(context):
+    """A saved arithmetic report stays usable if language synthesis fails."""
+    report = context["report"]
+    lines = [f"Изпълнен обем по зони за {report['period_start']} – {report['period_end']} включително:"]
+    for row in report["zones"]:
+        minutes = round(row["raw_time_min"])
+        hours, remainder = divmod(minutes, 60)
+        decimal = f"{row['raw_time_hours']:.2f}".replace(".", ",")
+        lines.append(f"• {row['zone']}: {decimal} ч ({hours} ч {remainder} мин).")
+    if not context.get("period_coverage", {}).get("full_requested_range", True):
+        lines.append(f"Поискан е периодът {context['start']} – {context['end']}; показаният сбор обхваща само наличните дати по-горе.")
+    quality = report.get("quality", {})
+    if quality.get("limited_activities"):
+        lines.append(f"В избрания период {quality['limited_activities']} от {quality['modeled_activities']} активности са с ограничено качество; отчетеният обем по зони може да е непълен.")
+    if context.get("freshness") == "STALE":
+        lines.append(f"Източникът е запазеният отчет към {context.get('as_of')}.")
+    return "\n".join(lines)
 
 
 def overview(repository,alias,actor,conversation_id=None,operation_id=None,provider=None):
@@ -1436,7 +1467,7 @@ def turn(repository,alias,actor,body,provider=None):
                     # Keep only scoped selectors between turns. Every payload
                     # must be freshly read, including after a plan approval.
                     target={k:v for k,v in requested.items() if v is not None and k!="proposal_json"}
-                    for key in ("date", "session_id", "activity_ref"):
+                    for key in ("date", "session_id", "activity_ref", "start", "end", "view"):
                         if context.get(key) and key not in target:
                             target[key]=context[key]
                     state["read_targets"]=[*state.get("read_targets",[])][-3:]+[target]
@@ -1528,6 +1559,7 @@ def turn(repository,alias,actor,body,provider=None):
             available=contexts or ([context] if context else [])
             write_requested=bool(input_request or _explicit_write_request(message))
             renderable=not input_request and any(item.get("query_kind")=="status" or
+                item.get("query_kind")=="history" and item.get("report") or
                 item.get("query_kind") in {"day","method"} and "sessions" in item and "date" in item for item in available)
             if renderable:
                 result["message"]=_resolved_answer(available)+"\n\nПодробното обяснение от ИИ не е добавено, защото общият контекст е твърде обемен. По-горе е наличната справка от приложението."

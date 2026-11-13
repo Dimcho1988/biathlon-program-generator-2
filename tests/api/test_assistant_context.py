@@ -186,10 +186,11 @@ def test_wrong_athlete_prepared_cache_is_rejected(repository):
 
 
 def test_history_marks_missing_days_without_filling_rest_or_zero(repository):
-    result = context.read(repository, ALIAS, FULL, {"kind": "history", "start": "2026-11-08", "end": "2026-11-10"}, now=NOW)
+    result = context.read(repository, ALIAS, FULL, {"kind": "history", "view": "daily", "start": "2026-11-08", "end": "2026-11-10"}, now=NOW)
     assert result["unobserved_days"] == ["2026-11-08"] and result["missing_day_means_rest"] is False
-    assert len(result["daily"]) == 2 and result["units"]["effective_load"] == "E_EFFECTIVE_LOAD"
-    assert "note" not in result["activities"][0]
+    assert len(result["data"]["daily"]) == 2 and result["units"]["effective_load"] == "E_EFFECTIVE_LOAD"
+    activities = context.read(repository, ALIAS, FULL, {"kind": "history", "view": "activities", "start": "2026-11-08", "end": "2026-11-10"}, now=NOW)
+    assert "note" not in activities["data"]["activities"][0]
 
 
 def test_history_keeps_canonical_quality_and_marks_heuristic_daily_load(repository):
@@ -204,17 +205,18 @@ def test_history_keeps_canonical_quality_and_marks_heuristic_daily_load(reposito
         {"date": "2026-11-07", "activity_ref": "act_outside", "load_source": {"initial_heuristic": True}},
     ]
     repository.active_analysis.side_effect = lambda _: deepcopy(data)
-    result = context.read(repository, ALIAS, FULL, {"kind": "history", "start": "2026-11-08", "end": "2026-11-10"}, now=NOW)
+    result = context.read(repository, ALIAS, FULL, {"kind": "history", "view": "daily", "start": "2026-11-08", "end": "2026-11-10"}, now=NOW)
     assert result["estimated_days"] == ["2026-11-09"]
-    assert result["daily"][0]["estimated"] is True
-    assert result["daily"][0]["estimation_basis"] == "INITIAL_HEURISTIC"
-    assert result["daily"][0]["effective_load"] == 40
-    assert "estimated" not in result["daily"][1]
-    assert result["activities"][0]["quality_status"] == "limited"
-    assert result["activities"][0]["hr_coverage_percent"] == 65
-    assert result["activities"][0]["load_source"] == {
+    assert result["data"]["daily"][0]["estimated"] is True
+    assert result["data"]["daily"][0]["estimation_basis"] == "INITIAL_HEURISTIC"
+    assert result["data"]["daily"][0]["effective_load"] == 40
+    assert "estimated" not in result["data"]["daily"][1]
+    activities = context.read(repository, ALIAS, FULL, {"kind": "history", "view": "activities", "start": "2026-11-08", "end": "2026-11-10"}, now=NOW)["data"]["activities"]
+    assert activities[0]["quality_status"] == "limited"
+    assert activities[0]["hr_coverage_percent"] == 65
+    assert activities[0]["load_source"] == {
         "initial_heuristic": False, "calibration_source": "INITIAL_HEURISTIC", "speed_role": "RAW_SPEED", "calibration_eligible": False}
-    assert "private omitted detail" not in json.dumps(result)
+    assert "private omitted detail" not in json.dumps(activities)
     assert source["daily"][0].get("estimated") is None
 
 
