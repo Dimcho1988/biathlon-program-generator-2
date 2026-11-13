@@ -295,7 +295,7 @@ describe("management API access and optimistic revision", () => {
     expect((await POST(request("POST", {}), context("profile"))).status).toBe(404);
     expect((await GET(request("GET"), context("drafts/other-athlete"))).status).toBe(404);
     expect((await POST(request("POST", { start_date: "2026-09-22" }), context("generate"))).status).toBe(422);
-    expect((await PUT(request("PUT", { profile: "а".repeat(11_000) }), context("profile"))).status).toBe(413);
+    expect((await PUT(request("PUT", { profile: "а".repeat(140_000) }), context("profile"))).status).toBe(413);
     expect(fetch).not.toHaveBeenCalled();
   });
   it("does not disclose training plans to an overview-only viewer", async () => {

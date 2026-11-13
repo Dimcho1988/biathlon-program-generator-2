@@ -46,7 +46,7 @@ function useTrainingProposals(onApplied?: () => void | Promise<void>, onBusyChan
   async function commit(result: TrainingProposalPreview, operationId: string) {
     await request("/apply", { proposal: result.preview.proposal, expected_revision: result.profile_revision, operation_id: operationId });
     setPreview(null); operation.current = "";
-    setNotice("Промяната е записана. Програмата се преизчислява с актуалната готовност и натоварване.");
+    setNotice("Промяната е записана. Следващото изчисление на програмата използва новите настройки и актуалното състояние.");
     try { setState(parseTrainingProposalState(await request(""))); await onApplied?.(); }
     catch { setError("Промяната е записана, но изгледът не се обнови. Зареди актуалните данни."); }
   }
