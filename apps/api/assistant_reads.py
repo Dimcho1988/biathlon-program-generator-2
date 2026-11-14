@@ -133,7 +133,19 @@ def _activity(repository, alias, query):
 
 def _activities(repository, alias, query, today, parse_date):
     from .activity_catalog import activity_calendar_payload
-    start, end = _period(query, today, parse_date)
+    # The model's common `date` selector means one day, not the default fortnight.
+    period_query = dict(query)
+    if query.get("date") is not None:
+        if any(query.get(key) is not None for key in ("start", "end", "days")):
+            raise HTTPException(422, "Избери конкретна дата или период, без да ги смесваш.")
+        period_query.update(start=query["date"], end=query["date"])
+    if query.get("days") is not None:
+        days = query["days"]
+        if type(days) is not int or not 1 <= days <= 90 or query.get("start") is not None:
+            raise HTTPException(422, "Избери 1–90 дни или точна начална дата.")
+    else:
+        days = 14
+    start, end = _period(period_query, today, parse_date, default=days)
     envelope = repository.active_activity_calendar(alias, start, end)
     if envelope is None:
         return {"availability": "UNAVAILABLE", "reason": "NO_ACTIVE_ACTIVITY_GENERATION"}
@@ -147,9 +159,16 @@ def _activities(repository, alias, query, today, parse_date):
     snapshot = envelope.get("snapshot_payload") or {}
     wellness = [row for row in snapshot.get("wellness_calendar", []) if isinstance(row, dict)
         and start.isoformat() <= str(row.get("date", "")) <= end.isoformat()]
-    return activity_calendar_payload(athlete_alias=alias, period_start=start, period_end=end, rows=rows,
+    payload = activity_calendar_payload(athlete_alias=alias, period_start=start, period_end=end, rows=rows,
         shadow_zones={row["activity_ref"]: row.get("hrmod_zone_summary") or [] for row in rows}, wellness_days=wellness,
         generation_metadata={name: envelope.get(name) for name in ("generation_id", "revision", "analysis_as_of", "activated_at")})
+    view = query.get("view") or "summary"
+    if view not in {"summary", "calendar"}:
+        raise HTTPException(422, "Избери summary или calendar за списъка с активности.")
+    if view == "summary" and not query.get("section"):
+        from .assistant_activity_summary import summarize
+        payload = summarize(payload)
+    return payload
 
 
 def _management(repository, alias, access, query, today, parse_date, actor):

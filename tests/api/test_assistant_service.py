@@ -1326,9 +1326,80 @@ def test_context_budget_failure_during_write_never_substitutes_an_unrelated_plan
                 raise AssistantProviderError("input_too_large")
             return {"text":"","query":query("day",date=DAY)}
     result=service.turn(repo,ALIAS,ACTOR,body("Искам да запиша дневната умора"),LargeAfterRead())
-    assert "Данните са прочетени" in result["message"] and "Нов запис не е потвърден" in result["message"]
+    assert "Няма потвърден нов запис" in result["message"] and "уточненията са запазени" in result["message"]
     assert "Леко бягане" not in result["message"] and "Посочи конкретна дата" not in result["message"]
     assert not repo.writes
+
+
+def test_manual_test_clarifications_survive_failure_and_prepare_exact_result(repo):
+    entry = {"query_kind": "inputs", "kind": "MANUAL_SPEED_TEST", "entry_key": "", "revision": 0,
+             "today": DAY, "availability": "AVAILABLE", "payload": None, "creating": True}
+    repo.read_result = entry
+    provider = ScriptedAssistantProvider([
+        {"text": "", "query": query("inputs", input_kind="MANUAL_SPEED_TEST")},
+        {"text": "Максимално ли беше усилието, на равен терен и при сравними условия?"}])
+    first = service.turn(repo, ALIAS, ACTOR, body("Днес направих контролно на 1000 м за 2:38. Обнови теста за скорост време."), provider)
+    conversation = first["conversation_id"]
+    assert provider.calls[0]["context"]["active_input_request"]["kind"] == "MANUAL_SPEED_TEST"
+    class Failure:
+        def complete(self, *args):
+            raise AssistantProviderError("input_too_large")
+    failed = service.turn(repo, ALIAS, ACTOR, body("Да, максимално, на равен терен при сравними условия.", conversation), Failure())
+    assert failed["error_code"] == "input_too_large" and not repo.writes
+    state = repo.conversations[conversation]["state"]
+    assert "2:38" in state["input_request"]["request"]
+    assert "равен терен" in state["input_request"]["answers"][-1]
+    patch = {"name": "1000 м", "day": DAY, "sport": "Run", "duration_s": 158, "distance_m": 1000,
+             "maximal": True, "flat_terrain": True, "comparable": True, "conditions": "равен терен"}
+    resumed = ScriptedAssistantProvider([
+        {"text": "", "query": query("inputs", input_kind="MANUAL_SPEED_TEST")},
+        {"text": "", "command": command("MANUAL_SPEED_TEST", key="", revision=0, patch=patch)}])
+    result = service.turn(repo, ALIAS, ACTOR, body("Продължи", conversation), resumed)
+    assert "158" in result["message"] and "Равен терен" in result["message"]
+    assert result["suggestions"] == ["Запиши промяната", "Откажи промяната"]
+    assert not repo.writes
+    saved = service.turn(repo, ALIAS, ACTOR, body("Запиши промяната", conversation), resumed)
+    assert saved["receipt"]["status"] == "SAVED" and len(repo.writes) == 1
+    assert repo.writes[0]["patch"]["duration_s"] == 158
+
+
+@pytest.mark.parametrize("message,kind", [
+    ("Въведи максимален тест на 1000 м за 2:38", "MANUAL_SPEED_TEST"),
+    ("Извлечи теста за скорост от активността", None),
+    ("Запиши скоростен тест от активността", "SPEED_TEST"),
+    ("Запиши усилие 4 от 10 след тренировката", "SESSION"),
+])
+def test_speed_test_intent_does_not_become_session_rpe(message, kind):
+    result = service._input_request({}, message, datetime.now(timezone.utc))
+    assert (result or {}).get("kind") == kind
+
+
+def test_large_activity_read_during_action_recovers_without_losing_input_contract(repo):
+    contract = {"query_kind": "inputs", "kind": "CALENDAR_EVENT", "entry_key": None, "revision": 3,
+                "today": DAY, "availability": "AVAILABLE", "events": [], "entries": []}
+    activity = {"query_kind": "activities", "revision": 9, "availability": "AVAILABLE", "data": {
+        "activities": [{"activity_ref": "act_a", "local_date": DAY, "distance_m": 10000, "duration_min": 35}],
+        "wellness_days": [{"details": "x" * 100000}]}}
+    repo.read_result = lambda q: contract if q["kind"] == "inputs" else activity
+    class Model:
+        calls = []
+        failed = False
+        def complete(self, messages, context, capabilities):
+            self.calls.append(deepcopy(context))
+            if not context["results"]:
+                return {"query": query("activities", date=DAY)}
+            if not self.failed:
+                self.failed = True
+                raise AssistantProviderError("input_too_large")
+            if len(context["results"]) == 1:
+                assert context["active_input_request"]["kind"] == "CALENDAR_EVENT"
+                assert len(json.dumps(context)) < 20000
+                return {"query": query("inputs", input_kind="CALENDAR_EVENT")}
+            assert context["results"][1] == contract
+            return {"text": "Днешната активност е 35 мин. За утре уточни дистанцията на старта; междувременно насочи времето към възстановяване."}
+    result = service.turn(repo, ALIAS, ACTOR, body("Днес се състезавах, утре пак имам старт. Промени плана и дай препоръка."), Model())
+    assert "error_code" not in result and "35 мин" in result["message"] and not repo.writes
+    assert len(repo.reads) == 2
 
 
 def test_sync_receipt_describes_effective_scope_when_canonical_queue_upgrades_to_full():
