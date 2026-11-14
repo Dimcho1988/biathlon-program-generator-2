@@ -168,6 +168,25 @@ _HISTORY_INSTRUCTIONS = """За изпълнен обем или отчет по
 view=daily, за отделни активности view=activities; тези подробности се страницират.
 """
 
+_ACTIVITY_INSTRUCTIONS = """За активности от конкретен ден подай activities с date и view=summary. Списъкът
+е кратък; за подробности избери activity_ref. Не зареждай двуседмичен календар
+за въпрос за днес. Преди да питаш какво е изпълнено, прочети наличните активности.
+При състезание днес и нов старт утре свържи изпълненото с календара; дай приложими
+указания за възстановяване още с наличните данни и уточни само липсващото за старта.
+Отговори и на препоръката, и на поисканата промяна. Почивка в плана не отменя
+съобщеното състезание. Не обещавай запис или преизчисление без потвърден резултат.
+"""
+
+_SPEED_TEST_INSTRUCTIONS = """За съобщен резултат с дистанция и време (например 1000 м за 2:38 = 158 секунди)
+използвай inputs MANUAL_SPEED_TEST. Не изисквай активност от часовник за ръчен
+тест. SPEED_TEST и speed/preview са за изрично извличане от активност/участък.
+Не подменяй заявеното време с времето от устройството. При реално противоречие
+уточни кое измерване да използваш. Прочети договора за ръчния тест и попитай
+наведнъж само за липсващите максималност, равен терен и сравними условия;
+не ги приемай за потвърдени от „контролно“ или само от името на активността.
+След уточнението продължи същото искане и подготви конкретния запис.
+"""
+
 _ACTION_INSTRUCTIONS = """При изрично искане за действие или отговор по active_input_request върни командата,
 щом необходимите стойности са ясни. Преди нея прочети inputs за точния input_kind
 и key, използвай текущата ревизия и върни само поисканите полета в patch_json.
@@ -731,6 +750,15 @@ class OpenAIAssistantProvider:
         }
         if (not queries and "history" in capabilities.get("read", []) or any(q.get("kind") == "history" for q in queries)):
             payload["instructions"] += _HISTORY_INSTRUCTIONS
+
+        # Task-specific guidance does not consume unrelated plan/input budgets.
+        current_text = str(messages[-1].get("content", "")).lower() if messages else ""
+        if any(q.get("kind") == "activities" for q in queries) or re.search(r"активност|състез|контролно|часовник|изпълнен", current_text):
+            payload["instructions"] += _ACTIVITY_INSTRUCTIONS
+        if ((context.get("active_input_request") or {}).get("kind") in {"SPEED_TEST", "MANUAL_SPEED_TEST"}
+                or any(q.get("input_kind") in {"SPEED_TEST", "MANUAL_SPEED_TEST"} for q in queries)
+                or re.search(r"тест|контролно", current_text)):
+            payload["instructions"] += _SPEED_TEST_INSTRUCTIONS
 
         def refresh_input():
             # Fresh metadata follows stale dialogue. Completed read events

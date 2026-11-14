@@ -122,7 +122,7 @@ def _preview(command, entry=None):
         "mixed_sessions_enabled":"Комбинирани сесии","weekly_target_hours":"Седмична цел (часове)","training_sports":"Видове спорт",
         "event_type":"Вид събитие","name":"Име","start_date":"Начална дата","end_date":"Крайна дата","race_course":"Състезателно трасе","delete":"Изтриване", "include_identical_copies":"Включително еднаквите копия на събитието",
         "program_start":"Начало на програмата","program_end":"Край на програмата","sport":"Спорт","actual_sport":"Реален спорт","discipline":"Дисциплина",
-        "duration_s":"Време (сек)","distance_m":"Дистанция (м)","speed_kmh":"Скорост (км/ч)","maximal":"Максимално усилие","flat":"Равен терен",
+        "duration_s":"Време (сек)","distance_m":"Дистанция (м)","speed_kmh":"Скорост (км/ч)","maximal":"Максимално усилие","flat":"Равен терен","flat_terrain":"Равен терен",
         "conditions":"Условия","protocol":"Протокол","protocol_version":"Версия на протокола","value":"Стойност","unit":"Мерна единица",
         "laboratory":"Лаборатория","results":"Резултати","sample_id":"Проба","collection_time":"Час на пробата",
         "hrmax_bpm":"Максимална сърдечна честота (уд/мин)","hr_zone_bounds":"Граници на пулсовите зони (уд/мин)",

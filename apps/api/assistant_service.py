@@ -101,6 +101,7 @@ def _capabilities(access):
     if access.get("can_view_recovery"):
         reads.update({"status", "history", "activities", "activity", "speed", "trainability", "learning", "response"})
         read_views["history"] = ["summary", "daily", "activities"]
+        read_views["activities"] = ["summary", "calendar"]
         if access.get("is_owner"):
             writes.extend(["DAILY", "WEIGHT", "SESSION"])
         if access.get("can_edit_plan"):
@@ -635,6 +636,8 @@ def _input_request(state, message, now):
             kind = "CALENDAR_EVENT"
         elif re.search(r"тегл|теж|килограм|\bкг\b", text):
             kind = "WEIGHT"
+        elif re.search(r"тест|контролно", text) and re.search(r"скорост|крива|\d+\s*(?:м\b|метр|км\b)", text):
+            kind = "SPEED_TEST" if re.search(r"от\s+(?:активност|часовник)|участък", text) else "MANUAL_SPEED_TEST"
         elif re.search(r"rpe|усили|след.{0,30}трениров|трениров.{0,30}(?:от\s*10|/\s*10)", text):
             kind = "SESSION"
         elif re.search(r"умор|сън|стрес|болезнен|мотивац|болк|болен|оценк", text):
@@ -1065,23 +1068,30 @@ def turn(repository,alias,actor,body,provider=None):
                     # split application data. Retry once with semantic summaries
                     # of already authorized reads, never with truncated write
                     # inputs, a new permission scope or a fresh model loop.
-                    if (exc.code!="input_too_large" or context_reduced or not model_context["read_only_turn"]
+                    if (exc.code!="input_too_large" or context_reduced
                             or monotonic()-started+timeout+5>90):
                         raise
                     from .assistant_strategy import compact_management_context
+                    from .assistant_activity_summary import compact_context
                     _permissions(repository,alias,actor)
-                    reduced=[compact_management_context(item) if item.get("query_kind")=="management" else item
+                    reduced=[compact_management_context(item) if item.get("query_kind")=="management"
+                        and model_context["read_only_turn"] else compact_context(item)
                         for item in contexts]
                     if len(json.dumps(reduced,ensure_ascii=False))>=len(json.dumps(contexts,ensure_ascii=False)):
                         raise
                     contexts=reduced
                     context=contexts[-1] if contexts else None
                     context_reduced=True
-                    synthesis_only=True
-                    model_context={**model_context,"results":contexts,"final_answer_only":True,
-                        "synthesis_reason":"SEMANTIC_CONTEXT_SUMMARY","remaining_read_calls":0}
+                    # Preserve action intent and exact input contracts. A compact
+                    # discovery result may still need one detail or input read.
+                    if model_context["read_only_turn"]:
+                        synthesis_only=True
+                        model_context={**model_context,"final_answer_only":True,"remaining_read_calls":0}
+                        capabilities={**capabilities,"read":[],"write":[]}
+                    model_context={**model_context,"results":contexts,
+                        "synthesis_reason":"SEMANTIC_CONTEXT_SUMMARY"}
                     with timed_stage("assistant_model"):
-                        reply=provider.complete(messages,model_context,{**capabilities,"read":[],"write":[]})
+                        reply=provider.complete(messages,model_context,capabilities)
                 for key in totals:
                     value=reply.get("usage",{}).get(key,0)
                     totals[key]=None if key=="estimated_cost_usd" and (totals[key] is None or value is None) else totals[key]+(value or 0)
@@ -1113,6 +1123,10 @@ def turn(repository,alias,actor,body,provider=None):
                     planning_forms={"MANAGEMENT_PROFILE","PLANNING_PROFILE","MESOCYCLE_PREFERENCES","TRAINING_PROPOSAL"}
                     if (input_request and input_request.get("kind") in planning_forms and requested.get("kind")=="inputs"
                             and requested.get("input_kind") in planning_forms):
+                        input_request["kind"]=requested["input_kind"]
+                    speed_forms={"SPEED_TEST", "MANUAL_SPEED_TEST"}
+                    if (input_request and input_request.get("kind") in speed_forms and requested.get("kind")=="inputs"
+                            and requested.get("input_kind") in speed_forms):
                         input_request["kind"]=requested["input_kind"]
                     contexts.append(context)
                     completed_queries.append(requested)
@@ -1217,7 +1231,7 @@ def turn(repository,alias,actor,body,provider=None):
             if renderable:
                 result["message"]=_resolved_answer(available)+"\n\nПодробното обяснение от ИИ не е добавено, защото общият контекст е твърде обемен. По-горе е наличната справка от приложението."
             elif available and write_requested:
-                result["message"]="Данните са прочетени, но общият контекст е твърде обемен за подробен отговор. Нов запис не е потвърден. Раздели искането на по-малки части."
+                result["message"]="Не успях да завърша промяната заради прекалено обемна справка. Няма потвърден нов запис. Искането и уточненията са запазени в разговора; можеш да кажеш „Продължи“, без да ги въвеждаш отново."
             elif available:
                 result["message"]="Прочетох данните, но не успях да подготвя обяснението поради проблем с обработката на контекста. Можеш да повториш същия въпрос; не е нужно да го разделяш."
             elif not write_requested:
