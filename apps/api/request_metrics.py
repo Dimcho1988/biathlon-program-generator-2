@@ -21,6 +21,8 @@ _STORE_LABELS = {
     "/onflows_analysis_generation_activities": "catalog",
     "/onflows_activity_run_summaries": "summaries",
     "/onflows_activity_catalog": "activity_catalog",
+    "/onflows_activity_derived_runs": "shadow_runs",
+    "/onflows_activity_model_inputs": "recordings",
     "/rpc/active_onflows_analysis": "analysis",
     "/rpc/read_onflows_planning_inputs": "planning_inputs",
     "/rpc/onflows_management_checkpoint": "checkpoint",
@@ -40,6 +42,7 @@ _STAGES = frozenset({
     "planning_claim", "planning_shared_wait", "planning_result_copy", "planning_slot_wait",
     "planning_calculate", "planning_complete", "planning_baseline", "planning_search",
     "planning_search_replay", "recording_wait",
+    "hr_inputs", "hr_read", "hr_model", "hr_publish", "hr_capacity", "hr_load", "hr_projection", "hr_canonical",
 })
 
 

@@ -1,13 +1,42 @@
 """Date-scoped HR calibration over immutable recordings, without provider I/O."""
 from copy import deepcopy
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 import logging
 from time import perf_counter
 
 from . import activity_shadow_pipeline as shadow_model
 from .memory_budget import serialized_model_work
+from .request_metrics import StoreMetrics, current_metrics, timed_stage
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _calibration_metrics():
+    """One bounded timing record, with no athlete identifiers or sample data."""
+    metrics = StoreMetrics()
+    token = current_metrics.set(metrics)
+    started = perf_counter()
+    try:
+        yield
+    finally:
+        current_metrics.reset(token)
+        logger.info("hr_calibration_timings elapsed_seconds=%.3f store_seconds=%.3f "
+                    "store_calls=%d store_bytes=%d decode_seconds=%.3f timings=%s",
+                    perf_counter()-started, metrics.seconds, metrics.calls, metrics.bytes,
+                    metrics.shadow_decode_seconds, metrics.details())
+
+
+def _timed_recordings(repository, alias, selected):
+    recordings = iter(repository.iter_hr_calibration_recordings(alias, selected))
+    while True:
+        with timed_stage("hr_read"):
+            try:
+                item = next(recordings)
+            except StopIteration:
+                return
+        yield item
 
 
 class StoredCalibrationUnavailable(ValueError):
@@ -112,6 +141,7 @@ def _calibration_metadata(row):
     return {k: v for k, v in row.items() if k not in derived}
 
 
+@_calibration_metrics()
 @serialized_model_work
 def refresh_hr_calibration(repository, *, athlete_alias, athlete_settings, base_generation_id):
     """Replace the affected suffix; carry earlier loads and wellness unchanged."""
@@ -136,7 +166,8 @@ def refresh_hr_calibration(repository, *, athlete_alias, athlete_settings, base_
     if ((source.get("component_load_model") or {}).get("version") != COMPONENT_VERSION
             or (source.get("load_selection") or {}).get("selection_policy") != load_policy_identity()):
         raise StoredCalibrationUnavailable("Stored history uses an older load policy")
-    inputs = model_service.speed_view_inputs(repository, athlete_alias)
+    with timed_stage("hr_inputs"):
+        inputs = model_service.speed_view_inputs(repository, athlete_alias)
     if inputs["calendar"].get("generation_id") != base_generation_id:
         raise StoredCalibrationUnavailable("Pinned calibration generation changed")
     end = date.fromisoformat(source["period_end"])
@@ -165,7 +196,7 @@ def refresh_hr_calibration(repository, *, athlete_alias, athlete_settings, base_
     report = getattr(repository, "report_sync_progress", lambda *args: None)
     report("ACTIVITIES", 0, len(selected))
     updated_hashes = {}
-    for n, (row, immutable, previous) in enumerate(repository.iter_hr_calibration_recordings(athlete_alias, selected), 1):
+    for n, (row, immutable, previous) in enumerate(_timed_recordings(repository, athlete_alias, selected), 1):
         ref, day = row["activity_ref"], date.fromisoformat(row["local_date"])
         detail, dated = _detail(row), at(athlete_settings, day)
         old = at(old_settings, day)
@@ -174,23 +205,27 @@ def refresh_hr_calibration(repository, *, athlete_alias, athlete_settings, base_
             activity_duration_s=shadow_model._activity_duration_seconds(detail, strength_activity=False))
         if previous.get("configuration_fingerprint") != previous_fingerprint:
             raise StoredCalibrationUnavailable("Stored recording uses a different model or metadata")
-        derived = recalibrate_shadow(immutable, previous, detail=detail, settings=dated)
-        run_key = repository.publish_recalibrated_shadow(athlete_alias=athlete_alias, activity_ref=ref,
-            input_key=row["input_key"], derived_payload=derived)
+        with timed_stage("hr_model"):
+            derived = recalibrate_shadow(immutable, previous, detail=detail, settings=dated)
+        with timed_stage("hr_publish"):
+            run_key = repository.publish_recalibrated_shadow(athlete_alias=athlete_alias, activity_ref=ref,
+                input_key=row["input_key"], derived_payload=derived)
         target = by_ref[ref]
         target["latest_shadow_run_key"] = run_key
         updated_hashes[ref] = immutable["input_hash"]
         identity = (row["sport"], day)
         if identity not in contexts:
-            historical = model_service.historical_speed_inputs(evidence.at(day-timedelta(days=1)), day,
-                                                               evaluation_day=inputs["today"])
-            view = model_service.speed_view(repository, athlete_alias, row["sport"],
-                                           _inputs=historical, _capacity_only=True)
-            contexts[identity] = context_from_speed_view(view)
+            with timed_stage("hr_capacity"):
+                historical = model_service.historical_speed_inputs(evidence.at(day-timedelta(days=1)), day,
+                                                                   evaluation_day=inputs["today"])
+                view = model_service.speed_view(repository, athlete_alias, row["sport"],
+                                               _inputs=historical, _capacity_only=True)
+                contexts[identity] = context_from_speed_view(view)
         context = contexts[identity]
         duration = max(detail.get("elapsed_time") or 0., detail.get("moving_time") or 0.)
-        ledger = unified_load.integrate(derived, bounds=dated.zone_bounds_bpm, sport=row["sport"],
-            parameters=context.get("comparison_parameters"), leading_indicator=dated.leading_indicator, duration_s=duration)
+        with timed_stage("hr_load"):
+            ledger = unified_load.integrate(derived, bounds=dated.zone_bounds_bpm, sport=row["sport"],
+                parameters=context.get("comparison_parameters"), leading_indicator=dated.leading_indicator, duration_s=duration)
         ledger["capacity_context"] = {k: context[k] for k in ("minutes", "sources", "references", "fingerprint")}
         activity = activities[ref]
         for zone, q in zip(activity["zones"], ledger["zones"], strict=True):
@@ -217,7 +252,8 @@ def refresh_hr_calibration(repository, *, athlete_alias, athlete_settings, base_
                 activity.get("load_source") or {}).get("capacity_context"):
             raise StoredCalibrationUnavailable("Earlier activity lacks dated capacity provenance")
     changed.pop("component_load_model", None)
-    projected = project_history(changed, current_contexts)
+    with timed_stage("hr_projection"):
+        projected = project_history(changed, current_contexts)
     # The prefix is an immutable seed, including its original Tref provenance.
     prefix = {(r["date"], r["zone"]): r for r in source["daily"] if r["date"] < first}
     projected["daily"] = [deepcopy(prefix.get((r["date"], r["zone"]), r)) for r in projected["daily"]]
@@ -265,9 +301,10 @@ def refresh_hr_calibration(repository, *, athlete_alias, athlete_settings, base_
         scientific_hash = shadow_model._canonical_hash({"schema_version": "hr-recalibration-canonical-v1",
             "source_input_hash": source_hash, "hr_revision": athlete_settings.hr_settings_revision,
             "capacity": (activity.get("load_source") or {}).get("capacity_context"), "summary": canonical})
-        row["latest_canonical_run_key"] = repository.publish_canonical_activity_result(
-            athlete_alias=athlete_alias, activity_ref=activity["activity_ref"],
-            scientific_input_hash=scientific_hash, result_payload=canonical)
+        with timed_stage("hr_canonical"):
+            row["latest_canonical_run_key"] = repository.publish_canonical_activity_result(
+                athlete_alias=athlete_alias, activity_ref=activity["activity_ref"],
+                scientific_input_hash=scientific_hash, result_payload=canonical)
         row["canonical_summary"] = canonical
         row["canonical_training_load"] = activity.get("strength_time_min") or sum(z["effective_load"] for z in activity["zones"])
     # Validate the same public snapshot contract as a full provider refresh.

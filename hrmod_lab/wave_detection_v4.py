@@ -141,6 +141,85 @@ def _weighted_local_line(
     return float(fit_value), float(slope), bool(supported)
 
 
+def _weighted_local_lines(time_s, values, config):
+    """Evaluate the same local fits in bounded batches, without resampling.
+
+    Group equal-length windows so each reduction uses exactly the scalar
+    sample order (no padding). Keep the scalar path for unusual large windows
+    and degenerate fits. At most 512 x 128 samples are expanded at once.
+    """
+    size = len(time_s)
+    fitted = np.full(size, np.nan)
+    slopes = np.full(size, np.nan)
+    supported = np.zeros(size, dtype=bool)
+    half = config.smoothing_window_s / 2.0
+    left = np.searchsorted(time_s, time_s - half, side="left")
+    right = np.searchsorted(time_s, time_s + half, side="right")
+    required = min(config.smoothing_min_points, size)
+    # Match the scalar nearest-neighbour extension, including ties to the left.
+    for index in np.flatnonzero(right - left < required):
+        while right[index] - left[index] < required:
+            lo, hi = left[index], right[index]
+            dl = time_s[index] - time_s[lo - 1] if lo > 0 else np.inf
+            dr = time_s[hi] - time_s[index] if hi < size else np.inf
+            if dl <= dr:
+                left[index] -= 1
+            else:
+                right[index] += 1
+    widths = right - left
+    iterations = config.smoothing_robust_iterations if config.smoothing_method == "robust_local_linear" else 0
+    for width in np.unique(widths):
+        indices = np.flatnonzero(widths == width)
+        if width < 2 or width > 128:
+            for index in indices:
+                fitted[index], slopes[index], supported[index] = _weighted_local_line(
+                    time_s, values, float(time_s[index]), config)
+            continue
+        for start in range(0, len(indices), 512):
+            batch = indices[start:start + 512]
+            positions = left[batch, None] + np.arange(width)
+            local_t = time_s[positions] - time_s[batch, None]
+            local_y = values[positions]
+            distance = np.maximum(np.max(np.abs(local_t), axis=1), max(half, 1e-12))
+            scaled = np.minimum(np.abs(local_t) / distance[:, None], 1.0)
+            kernel = np.maximum(np.square(1.0 - scaled**3) ** 2, 1e-12)
+            robust = np.ones_like(kernel)
+            active = np.arange(len(batch))
+            for iteration in range(iterations + 1):
+                t, y = local_t[active], local_y[active]
+                weights = kernel[active] * robust[active]
+                s0 = np.sum(weights, axis=1)
+                s1 = np.sum(weights * t, axis=1)
+                s2 = np.sum(weights * t * t, axis=1)
+                y0 = np.sum(weights * y, axis=1)
+                y1 = np.sum(weights * t * y, axis=1)
+                determinant = s0 * s2 - s1 * s1
+                valid = (s0 > 0) & (determinant > np.finfo(float).eps * np.maximum(s0 * s2, 1.0))
+                for index in batch[active[~valid]]:
+                    fitted[index], slopes[index], supported[index] = _weighted_local_line(
+                        time_s, values, float(time_s[index]), config)
+                a = active[valid]
+                fitted[batch[a]] = (y0[valid] * s2[valid] - y1[valid] * s1[valid]) / determinant[valid]
+                slopes[batch[a]] = (y1[valid] * s0[valid] - y0[valid] * s1[valid]) / determinant[valid]
+                supported[batch[a]] = ((width >= config.smoothing_min_points)
+                    & (np.max(local_t[a], axis=1) - np.min(local_t[a], axis=1) > 0)
+                    & np.isfinite(slopes[batch[a]]))
+                if iteration == iterations or not len(a):
+                    break
+                residuals = local_y[a] - (fitted[batch[a], None] + slopes[batch[a], None] * local_t[a])
+                median = np.median(residuals, axis=1)
+                mad = np.median(np.abs(residuals - median[:, None]), axis=1)
+                continuing = mad > 1e-12
+                active = a[continuing]
+                if not len(active):
+                    break
+                scaled_residual = np.abs(residuals[continuing] - median[continuing, None]) / (6.0 * 1.4826 * mad[continuing, None])
+                updated = np.square(1.0 - np.minimum(scaled_residual, 1.0) ** 2)
+                updated[scaled_residual >= 1.0] = 0.0
+                robust[active] = updated
+    return fitted, slopes, supported
+
+
 def _detection_signal(
     *,
     elapsed_s: np.ndarray,
@@ -165,19 +244,10 @@ def _detection_signal(
         segment_hr = clean_hr[indices]
         segment_start = float(segment_t[0])
         segment_end = float(segment_t[-1])
-        for index in indices:
-            value, slope, has_support = _weighted_local_line(
-                segment_t, segment_hr, float(elapsed_s[index]), config
-            )
-            h_detect[index] = value
-            trend[index] = slope
-            supported[index] = has_support
-            if (
-                not has_support
-                or elapsed_s[index] - segment_start < half_window
-                or segment_end - elapsed_s[index] < half_window
-            ):
-                edge_affected[index] = True
+        values, slopes, support = _weighted_local_lines(segment_t, segment_hr, config)
+        h_detect[indices], trend[indices], supported[indices] = values, slopes, support
+        edge_affected[indices] = (~support | (segment_t - segment_start < half_window)
+                                 | (segment_end - segment_t < half_window))
 
     return h_detect, trend, supported, edge_affected
 

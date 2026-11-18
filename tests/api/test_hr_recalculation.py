@@ -2,6 +2,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
+import numpy as np
 
 from apps.api.activity_shadow_pipeline import compute_activity_shadow
 from apps.api.hr_recalculation import recalibrate_shadow
@@ -27,8 +28,15 @@ def test_local_hr_correction_matches_full_model_without_speed_recomputation(monk
     old, new = settings(193), settings(188)
     immutable, before = compute_activity_shadow(detail=detail, normalized=normalized,
         zone_bounds_bpm=old.zone_bounds_bpm, explicit_hrmax_bpm=old.hrmax_bpm)
-    _, expected = compute_activity_shadow(detail=detail, normalized=normalized,
-        zone_bounds_bpm=new.zone_bounds_bpm, explicit_hrmax_bpm=new.hrmax_bpm)
+    # The independent full refresh retains the pre-optimization scalar fits.
+    from hrmod_lab import wave_detection_v4 as detection
+    def scalar(t, y, config):
+        return tuple(np.asarray(column) for column in zip(*[
+            detection._weighted_local_line(t, y, float(center), config) for center in t], strict=True))
+    with monkeypatch.context() as reference:
+        reference.setattr(detection, "_weighted_local_lines", scalar)
+        _, expected = compute_activity_shadow(detail=detail, normalized=normalized,
+            zone_bounds_bpm=new.zone_bounds_bpm, explicit_hrmax_bpm=new.hrmax_bpm)
     def unexpected(*args, **kwargs):
         raise AssertionError("Unchanged speed must not be recomputed")
     monkeypatch.setattr(activity_shadow_pipeline, "run_vflat_b65_shadow", unexpected)
@@ -174,3 +182,22 @@ def test_stored_recordings_are_scoped_and_pinned_and_raw_inputs_are_never_rewrit
     assert len(mutations) == 1 and mutations[0][0].startswith("/onflows_activity_derived_runs?")
     assert mutations[0][1]["json"]["input_key"] == input_key
     assert "input_payload" not in mutations[0][1]["json"]
+
+
+def test_calibration_timings_preserve_outer_context_and_failure(caplog):
+    from apps.api.hr_recalculation import _calibration_metrics
+    from apps.api.request_metrics import StoreMetrics, current_metrics, timed_stage
+    outer = StoreMetrics()
+    token = current_metrics.set(outer)
+    try:
+        with caplog.at_level("INFO"), pytest.raises(ValueError, match="expected"):
+            with _calibration_metrics(), timed_stage("hr_model"):
+                assert current_metrics.get() is not outer
+                raise ValueError("expected")
+        assert current_metrics.get() is outer
+        assert outer.stages == {}
+        assert "hr_calibration_timings" in caplog.text
+        assert '"hr_model":{"calls":1' in caplog.text
+        assert '"thread_cpu_ms":' in caplog.text
+    finally:
+        current_metrics.reset(token)
