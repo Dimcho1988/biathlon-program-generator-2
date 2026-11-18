@@ -54,10 +54,10 @@ def test_local_month_rebuild_matches_full_refresh_and_keeps_prefix(monkeypatch, 
     class Recordings(Client):
         def get_activities_result(self, *args):
             return IntervalsResponse(200, [{"id": day, "start_date_local": day+"T08:00:00"}
-                for day in ("2026-08-13", "2026-08-14", "2026-08-15")])
+                for day in (f"2026-08-{day:02d}" for day in range(7, 16))])
         def get_activity_result(self, key, **kwargs):
             return IntervalsResponse(200, {"id": key, "type": "Run", "start_date_local": key+"T08:00:00",
-                "elapsed_time": 960, "moving_time": 960, "icu_recording_time": 960})
+                "elapsed_time": 1020, "moving_time": 960, "icu_recording_time": 1020, "distance": 3840})
         def get_streams_result(self, key):
             return IntervalsResponse(200, [{"type": "time", "data": list(range(961))},
                 {"type": "heartrate", "data": [130.+(t%120)/2 for t in range(961)]},
@@ -91,7 +91,8 @@ def test_local_month_rebuild_matches_full_refresh_and_keeps_prefix(monkeypatch, 
         calendar = {"generation_id": "base", "activities": list(repository._activity_catalog.values()),
                     "snapshot_payload": repository.latest(alias)}
         return {"alias": alias, "settings": repository.settings, "today": date(2026,8,15), "calendar": calendar,
-                "entries": [], "initial_profile": {}, "history": history_from_calendar(repository, alias, calendar)}
+                "entries": [], "initial_profile": {"training_experience_years": 3},
+                "history": history_from_calendar(repository, alias, calendar)}
     monkeypatch.setattr(model_service, "speed_view_inputs", speed_inputs)
     if not personal_calibration:
         monkeypatch.setattr(model_service, "speed_view", lambda repository, alias, sport, **kwargs: {"sport": sport})
@@ -121,10 +122,23 @@ def test_local_month_rebuild_matches_full_refresh_and_keeps_prefix(monkeypatch, 
     full_repo._activity_identity = deepcopy(repo._activity_identity)
     refresh(full_repo, environ=ENV, client=Recordings(), period_end=date(2026,8,15), athlete_settings=new)
     full = full_repo.latest("pilot")
+    def same(actual, expected):
+        if isinstance(expected, float):
+            assert actual == pytest.approx(expected, rel=1e-12, abs=1e-10)
+        elif isinstance(expected, dict):
+            assert actual.keys() == expected.keys()
+            for key in expected:
+                same(actual[key], expected[key])
+        elif isinstance(expected, list):
+            assert len(actual) == len(expected)
+            for a, e in zip(actual, expected, strict=True):
+                same(a, e)
+        else:
+            assert actual == expected
     for key in ("daily", "zones", "activities"):
-        assert local["load_history"][key] == full["load_history"][key]
-    assert local["training_status"]["zones"] == full["training_status"]["zones"]
-    assert local["recovery_history"] == full["recovery_history"]
+        same(local["load_history"][key], full["load_history"][key])
+    same(local["training_status"]["zones"], full["training_status"]["zones"])
+    same(local["recovery_history"], full["recovery_history"])
 
 
 @pytest.mark.parametrize("wrong_input", [False, True])

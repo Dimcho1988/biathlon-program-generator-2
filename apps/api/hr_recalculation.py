@@ -99,6 +99,16 @@ def _detail(row):
         "distance": row.get("distance_m"), "total_elevation_gain": row.get("elevation_gain_m")}
 
 
+def _calibration_metadata(row):
+    # Match a full refresh's measured metadata. Previously calculated duration
+    # and load must not enter the initial model through a catalog summary.
+    derived = {"canonical_summary", "canonical_training_load", "latest_shadow_run_key",
+               "latest_canonical_run_key", "input_key", "quality_reason", "hr_coverage_percent"}
+    if row.get("quality_status") != "provider_missing":
+        derived.add("quality_status")
+    return {k: v for k, v in row.items() if k not in derived}
+
+
 @serialized_model_work
 def refresh_hr_calibration(repository, *, athlete_alias, athlete_settings, base_generation_id):
     """Replace the affected suffix; carry earlier loads and wellness unchanged."""
@@ -143,10 +153,11 @@ def refresh_hr_calibration(repository, *, athlete_alias, athlete_settings, base_
     for row in affected:
         expected[row["local_date"]] = expected.get(row["local_date"], 0)+1
     evidence = RefreshSpeedEvidence(inputs, date.fromisoformat(first), end, expected_activity_dates=expected)
+    evidence.catalog = {ref: _calibration_metadata(row) for ref, row in evidence.catalog.items()}
     # Strength is independent of pulse, but still contributes coverage/duration.
     for row in affected:
         if row not in selected:
-            evidence.record(row)
+            evidence.record(_calibration_metadata(row))
     contexts = {}
     report = getattr(repository, "report_sync_progress", lambda *args: None)
     report("ACTIVITIES", 0, len(selected))
@@ -188,7 +199,7 @@ def refresh_hr_calibration(repository, *, athlete_alias, athlete_settings, base_
         activity["load_source"] = {k: v for k, v in ledger.items() if k != "zones"}
         activity["quality_status"] = "limited" if ledger["unknown_seconds"] > 1e-6 else "valid"
         target["quality_status"] = activity["quality_status"]
-        evidence.record(target, derived)
+        evidence.record(_calibration_metadata(target), derived)
         report("ACTIVITIES", n, len(selected))
         del derived, previous, immutable
     report("MODELS")

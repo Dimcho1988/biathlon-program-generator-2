@@ -532,7 +532,8 @@ def _execute_pipeline(
         pinned_snapshot=pinned_snapshot,
         job=job,
     )
-    captured.report_sync_progress("MODELS" if local_hr or job.job_kind == "RECOVERY_RESTORE" else "PROVIDER")
+    if not local_hr:
+        captured.report_sync_progress("MODELS" if job.job_kind == "RECOVERY_RESTORE" else "PROVIDER")
 
     if job.job_kind == "FULL_SYNC":
         if local_hr:
