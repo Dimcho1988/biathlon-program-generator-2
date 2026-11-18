@@ -96,6 +96,8 @@ export interface LoadHistory {
   sport_hr_policy_version?: string | null;
   zone_bounds_bpm?: number[] | null;
   hrmax_bpm?: number | null;
+  hr_settings_revision?: string | null;
+  hr_calibration_history?: Record<string, unknown>[];
   quality: {
     processed_activities: number;
     limited_activities: number;
@@ -114,6 +116,7 @@ const rootKeys = [...legacyRootKeys, "strength"];
 const legacyRootKeysWithTrefProfile = [...legacyRootKeys, "tref_bounds_profile_version"];
 const rootKeysWithTrefProfile = [...rootKeys, "tref_bounds_profile_version"];
 const equivalenceKeys = ["equivalence_version", "zone_bounds_bpm", "hrmax_bpm", "sport_hr_policy_version", "load_selection"];
+const hrCalibrationKeys = ["hr_settings_revision", "hr_calibration_history"];
 const qualityKeys = ["processed_activities", "limited_activities", "excluded_activities", "no_activity_days", "warnings"];
 const summaryKeys = ["zone", "e7_daily", "e40_daily", "status_7_40", "tref_min", "history_reliability"];
 const dailyKeys = ["date", "zone", "effective_load", "e7_daily", "e40_daily", "status_7_40"];
@@ -143,12 +146,18 @@ export function parseLoadHistory(value: unknown): LoadHistory {
   if (!isRecord(value)) throw new Error("Невалидна структура на историята.");
   if (value.schema_version !== "load-history-v1" && value.schema_version !== "load-history-v2") throw new Error("Неподдържана версия на историята.");
   const version2 = value.schema_version === "load-history-v2";
-  const core = Object.fromEntries(Object.entries(value).filter(([key]) => !equivalenceKeys.includes(key) && key !== "component_load_model"));
+  const core = Object.fromEntries(Object.entries(value).filter(([key]) => !equivalenceKeys.includes(key) && !hrCalibrationKeys.includes(key) && key !== "component_load_model"));
   const validRoot = version2
     ? exactKeys(core, rootKeysWithTrefProfile)
     : exactKeys(core, rootKeys) || exactKeys(core, legacyRootKeys) ||
       exactKeys(core, rootKeysWithTrefProfile) || exactKeys(core, legacyRootKeysWithTrefProfile);
   if (!validRoot) throw new Error("Невалидна структура на историята.");
+  if ((value.hr_settings_revision != null &&
+      (typeof value.hr_settings_revision !== "string" || !value.hr_settings_revision.trim())) ||
+      (value.hr_calibration_history !== undefined &&
+      (!Array.isArray(value.hr_calibration_history) || !value.hr_calibration_history.every(isRecord)))) {
+    throw new Error("Невалидна история на настройките за пулса.");
+  }
   const validSelection = (item:unknown) => item == null || isRecord(item)
     && typeof item.version === "string" && ["HEART_RATE","SPEED"].includes(String(item.leading_indicator))
     && [item.fallback_seconds,item.unknown_seconds].every(v=>finite(v)&&v>=0);
