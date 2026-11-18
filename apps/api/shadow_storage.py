@@ -57,7 +57,7 @@ def _restore_rows(document: Any, count: int) -> list[dict[str, Any]]:
     return rows
 
 
-def _encode_main_series(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _encode_main_series(payload: Mapping[str, Any], *, fast: bool = False) -> dict[str, Any]:
     result = dict(payload)
     rows = result.get("timeseries")
     if not isinstance(rows, list) or not rows:
@@ -72,7 +72,9 @@ def _encode_main_series(payload: Mapping[str, Any]) -> dict[str, Any]:
     raw = json.dumps(_column_document(rows), ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
     if len(raw) > MAX_DECODE_BYTES:
         raise ValueError("Shadow time series exceeds the storage decoding limit")
-    packed = base64.b64encode(lzma.compress(raw, preset=3)).decode("ascii")
+    # Corrections are CPU-bound on the worker. Preset 1 uses the same lossless
+    # XZ envelope with less search work; normal imports retain preset 3.
+    packed = base64.b64encode(lzma.compress(raw, preset=1 if fast else 3)).decode("ascii")
     if len(packed) + 256 >= len(logical):
         return result
     result["timeseries"] = {
@@ -118,11 +120,11 @@ def _decode_main_series(payload: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def encode_shadow_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+def encode_shadow_payload(payload: Mapping[str, Any], *, fast: bool = False) -> dict[str, Any]:
     result = dict(payload)
     for field in SERIES_FIELDS:
         if field in payload:
-            result[field] = _encode_main_series({"timeseries": payload[field]})["timeseries"]
+            result[field] = _encode_main_series({"timeseries": payload[field]}, fast=fast)["timeseries"]
     return result
 
 

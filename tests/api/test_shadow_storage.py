@@ -30,13 +30,14 @@ def canonical(payload):
     return json.dumps(payload, sort_keys=True, ensure_ascii=False, allow_nan=False)
 
 
-def test_encoding_is_lossless_deterministic_and_leaves_sql_projections_visible():
+@pytest.mark.parametrize("fast", [False, True])
+def test_encoding_is_lossless_deterministic_and_leaves_sql_projections_visible(fast):
     original = large_payload()
     before = deepcopy(original)
-    packed = encode_shadow_payload(original)
+    packed = encode_shadow_payload(original, fast=fast)
     assert packed["timeseries"]["codec"] == CODEC
     assert len(canonical(packed)) < len(canonical(original)) / 5
-    assert encode_shadow_payload(original) == packed
+    assert encode_shadow_payload(original, fast=fast) == packed
     decoded = decode_shadow_payload(packed)
     assert canonical(decoded) == canonical(original)
     assert hashlib.sha256(canonical(decoded).encode()).digest() == hashlib.sha256(canonical(original).encode()).digest()
@@ -90,10 +91,11 @@ def test_reads_existing_gzip_rows_alongside_new_columnar_rows():
     assert canonical(decode_shadow_payload(mixed)) == canonical(expected)
 
 
-def test_irregular_rows_preserve_missing_keys_null_types_unicode_and_signed_zero():
+@pytest.mark.parametrize("fast", [False, True])
+def test_irregular_rows_preserve_missing_keys_null_types_unicode_and_signed_zero(fast):
     rows = [{"x": 1, "v": -0.0, "label": "зона", "f": False},
             {"x": 1.0, "v": None, "optional": None, "f": True}] * 2000
-    packed = encode_shadow_payload({"timeseries": rows})
+    packed = encode_shadow_payload({"timeseries": rows}, fast=fast)
     assert packed["timeseries"]["codec"] == CODEC
     restored = decode_shadow_payload(packed)["timeseries"]
     assert canonical(restored) == canonical(rows)
@@ -101,11 +103,12 @@ def test_irregular_rows_preserve_missing_keys_null_types_unicode_and_signed_zero
     assert "label" not in restored[1]
 
 
-def test_segments_and_wave_evidence_are_lossless_too():
+@pytest.mark.parametrize("fast", [False, True])
+def test_segments_and_wave_evidence_are_lossless_too(fast):
     original = large_payload()
     original["segments_15s"] = deepcopy(original["timeseries"])
     original["hrmod_waves"] = deepcopy(original["timeseries"])
-    packed = encode_shadow_payload(original)
+    packed = encode_shadow_payload(original, fast=fast)
     for field in ("timeseries", "segments_15s", "hrmod_waves"):
         assert packed[field]["codec"] == CODEC
     assert canonical(decode_shadow_payload(packed)) == canonical(original)
