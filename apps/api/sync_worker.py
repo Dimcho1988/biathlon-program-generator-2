@@ -509,7 +509,9 @@ def _execute_pipeline(
     athlete_settings = repository.athlete_settings(job.athlete_alias)
     period_end = _operation_date(job, athlete_settings, now=now)
     pinned_snapshot: Mapping[str, Any] | None = None
-    if job.job_kind != "FULL_SYNC":
+    local_hr = (job.job_kind == "FULL_SYNC" and job.request_payload.get("reason") == "HR_CALIBRATION_CHANGED"
+                and job.base_generation_id is not None)
+    if job.job_kind != "FULL_SYNC" or local_hr:
         if job.base_generation_id is None:
             raise _WorkerFailure("ACTIVE_GENERATION_REQUIRED", retryable=False)
         envelope = repository.latest_envelope(job.athlete_alias)
@@ -530,9 +532,20 @@ def _execute_pipeline(
         pinned_snapshot=pinned_snapshot,
         job=job,
     )
-    captured.report_sync_progress("PROVIDER" if job.job_kind != "RECOVERY_RESTORE" else "MODELS")
+    captured.report_sync_progress("MODELS" if local_hr or job.job_kind == "RECOVERY_RESTORE" else "PROVIDER")
 
     if job.job_kind == "FULL_SYNC":
+        if local_hr:
+            from .hr_recalculation import refresh_hr_calibration, StoredCalibrationUnavailable
+            try:
+                refresh_hr_calibration(captured, athlete_alias=job.athlete_alias,
+                    athlete_settings=athlete_settings, base_generation_id=job.base_generation_id)
+            except StoredCalibrationUnavailable as exc:
+                logger.info("hr_calibration_local_unavailable falling_back=full_refresh reason=%s", exc)
+                captured.report_sync_progress("PROVIDER")
+            else:
+                captured.report_sync_progress("PUBLISHING")
+                return captured.snapshot, captured.activities, False
         if not isinstance(access_token, str) or not access_token:
             raise _WorkerFailure("PROFILE_CONNECTION_INVALID", retryable=False)
         pipelines.full(

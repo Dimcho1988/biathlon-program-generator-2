@@ -1700,6 +1700,52 @@ class SupabasePilotRepository(SnapshotRepository):
         """Batch immutable speed/HR masks for planning; never follow latest runs."""
         return self._activity_speed_samples(athlete_alias,run_keys,hr_mask=True)
 
+    def iter_hr_calibration_recordings(self, athlete_alias, activities):
+        """Read only affected, generation-pinned inputs, decoding one at a time."""
+        alias = quote(athlete_alias, safe="")
+        for offset in range(0, len(activities), 4):
+            batch = activities[offset:offset+4]
+            keys = [r["latest_shadow_run_key"] for r in batch]
+            if any(not isinstance(k, str) or not re.fullmatch(r"[a-f0-9]{64}", k) for k in keys):
+                raise PersistentStoreFailure("Invalid pinned HR calibration key")
+            runs = self._json(self._request("GET", "/onflows_activity_derived_runs"
+                "?select=run_key,activity_ref,input_key,result_payload"
+                f"&athlete_alias=eq.{alias}&run_key=in.({','.join(keys)})&limit=4"))
+            runs = {r["run_key"]: r for r in runs}
+            if set(runs) != set(keys):
+                raise PersistentStoreFailure("Pinned HR calibration recordings are unavailable")
+            inputs = self._json(self._request("GET", "/onflows_activity_model_inputs"
+                "?select=input_key,activity_ref,input_payload"
+                f"&athlete_alias=eq.{alias}&input_key=in.({','.join(r['input_key'] for r in runs.values())})&limit=4"))
+            inputs = {r["input_key"]: r for r in inputs}
+            for activity in batch:
+                run = runs[activity["latest_shadow_run_key"]]
+                original = inputs.get(run["input_key"])
+                if (not original or original["activity_ref"] != activity["activity_ref"]
+                        or run["activity_ref"] != activity["activity_ref"]
+                        or activity.get("input_key") != run["input_key"]):
+                    raise PersistentStoreFailure("Pinned HR calibration input mismatch")
+                yield activity, self._hydrate_history(original["input_payload"], "input", run["input_key"]), \
+                    self._decode_shadow(run["result_payload"], run["run_key"])
+
+    def publish_recalibrated_shadow(self, *, athlete_alias, activity_ref, input_key, derived_payload):
+        """Append a derived result referencing the existing immutable raw input."""
+        versions = "|".join(str(derived_payload.get(name) or "") for name in (
+            "vflat_model_version", "vflat_config_version", "hrmod_model_version",
+            "hrmod_config_version", "terrain_model_version"))
+        result_hash = derived_payload["result_hash"]
+        run_key = hashlib.sha256(f"{input_key}|{versions}|{result_hash}".encode()).hexdigest()
+        self._request("POST", "/onflows_activity_derived_runs?on_conflict=run_key", json={
+            "run_key": run_key, "input_key": input_key, "athlete_alias": athlete_alias,
+            "activity_ref": activity_ref, "result_hash": result_hash,
+            "schema_version": derived_payload["schema_version"],
+            **{name: derived_payload.get(name) for name in ("vflat_model_version", "vflat_config_version",
+                "hrmod_model_version", "hrmod_config_version", "terrain_model_version")},
+            "result_payload": encode_shadow_payload(derived_payload)},
+            headers={"Prefer": "resolution=ignore-duplicates,return=minimal"},
+            timeout=httpx.Timeout(60.0, connect=5.0))
+        return run_key
+
     def activity_speed_exposure_samples(self, athlete_alias, run_keys):
         """On-demand speed exposure does not download the full HR time series."""
         return self._activity_speed_samples(athlete_alias,run_keys,hr_mask=False)

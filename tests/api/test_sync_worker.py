@@ -312,6 +312,46 @@ def test_progress_uses_the_claim_fence_and_cannot_fail_a_generation():
     assert process(repo, claim()).outcome == "ACTIVATED"
 
 
+def test_hr_change_uses_pinned_local_pipeline_without_provider(monkeypatch):
+    from apps.api import hr_recalculation
+    repo = Repository()
+    def local(captured, *, athlete_alias, athlete_settings, base_generation_id):
+        assert base_generation_id == "generation-001"
+        assert captured.latest(athlete_alias) == repo.current
+        captured.upsert_activity_catalog(athlete_alias, [])
+        captured.replace(athlete_alias, snapshot(marker="hr-local"))
+    monkeypatch.setattr(hr_recalculation, "refresh_hr_calibration", local)
+    def unexpected(*args, **kwargs):
+        raise AssertionError("HR correction must not contact the provider")
+    result = process_claimed_job(repo, claim(base_generation_id="generation-001", base_revision=1,
+        request_payload={"reason": "HR_CALIBRATION_CHANGED"}),
+        pipelines=SyncPipelines(full=unexpected, wellness=unexpected, recovery=unexpected),
+        lease_seconds=30, heartbeat_interval_seconds=30, clock=lambda: NOW)
+    assert result.outcome == "ACTIVATED"
+    assert repo.stage_calls[0]["snapshot_payload"]["load_history"]["marker"] == "hr-local"
+
+
+def test_hr_change_with_incomplete_stored_data_uses_explicit_full_fallback(monkeypatch):
+    from apps.api import hr_recalculation
+    def unavailable(*args, **kwargs):
+        raise hr_recalculation.StoredCalibrationUnavailable("old recording")
+    monkeypatch.setattr(hr_recalculation, "refresh_hr_calibration", unavailable)
+    assert process(Repository(), claim(base_generation_id="generation-001", base_revision=1,
+        request_payload={"reason": "HR_CALIBRATION_CHANGED"})).outcome == "ACTIVATED"
+
+
+def test_hr_change_never_relabels_a_different_base_generation(monkeypatch):
+    from apps.api import hr_recalculation
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Changed generation must be rejected before processing")
+    monkeypatch.setattr(hr_recalculation, "refresh_hr_calibration", unexpected)
+    repo = Repository()
+    result = process(repo, claim(base_generation_id="other-generation", base_revision=1,
+        request_payload={"reason": "HR_CALIBRATION_CHANGED"}))
+    assert result.outcome != "ACTIVATED"
+    assert not repo.stage_calls
+
+
 def test_empty_full_sync_has_an_explicit_empty_activity_set_identity():
     repo = Repository()
 
