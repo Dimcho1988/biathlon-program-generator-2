@@ -60,7 +60,7 @@ def main():
                 started = perf_counter()
                 previous = decode_shadow_payload(sample["previous"])
                 result = recalibrate_shadow(sample["immutable"], previous, detail=detail, settings=settings)
-                encoded = encode_shadow_payload(result)
+                encoded = encode_shadow_payload(result, fast=label == "batched")
                 timings[label].append(perf_counter() - started)
             if expected is None:
                 expected = result

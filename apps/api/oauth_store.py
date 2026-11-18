@@ -1741,7 +1741,7 @@ class SupabasePilotRepository(SnapshotRepository):
             "schema_version": derived_payload["schema_version"],
             **{name: derived_payload.get(name) for name in ("vflat_model_version", "vflat_config_version",
                 "hrmod_model_version", "hrmod_config_version", "terrain_model_version")},
-            "result_payload": encode_shadow_payload(derived_payload)},
+            "result_payload": encode_shadow_payload(derived_payload, fast=True)},
             headers={"Prefer": "resolution=ignore-duplicates,return=minimal"},
             timeout=httpx.Timeout(60.0, connect=5.0))
         return run_key
