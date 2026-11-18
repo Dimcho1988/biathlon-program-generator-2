@@ -42,8 +42,8 @@ const notices: Record<string, string> = {
 };
 
 const settingsNotices: Record<string, string> = {
-  saved: "Индивидуалните настройки са запазени. Обновете реалните данни, за да преизчислите анализа.",
-  invalid: "Границите трябва да са шест последователно нарастващи цели стойности между 30 и 240 уд/мин.",
+  saved: "Индивидуалните настройки са запазени. При промяна на максималния пулс или зоните анализът се преизчислява автоматично във фонов режим.",
+  invalid: "Проверете пулса и границите на зоните (нарастващи цели стойности от 30 до 240). Началната дата трябва да е в последните 180 дни, включително днес.",
   error: "Настройките не бяха запазени. Опитайте отново.",
   forbidden: "Този профил е достъпен само за преглед. Главният треньор може да даде право за редакция.",
 };
@@ -118,6 +118,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ v
       initialAge={settings.age_years}
       initialIndicator={settings.leading_indicator}
       initialHrmaxSource={settings.hrmax_source}
+      initialEffectiveFrom={settings.hrmax_effective_from}
       automaticPercentages={settings.automatic_hr_zone_percentages}
     />;
   }

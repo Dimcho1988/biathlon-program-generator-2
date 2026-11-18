@@ -20,6 +20,8 @@ export async function POST(request: Request) {
     stage = "form";
     const form = await request.formData();
     const source = String(form.get("hr_zone_source") ?? "MANUAL");
+    const applyMode = String(form.get("hrmax_apply_mode") ?? "LAST_90_DAYS");
+    const effectiveFrom = String(form.get("hrmax_effective_from") ?? "").trim();
     const bounds = fieldNames.map((name) => Number(form.get(name)));
     const timezone = String(form.get("timezone") ?? "").trim();
     const maximumText = String(form.get("hrmax_bpm") ?? "").trim();
@@ -29,7 +31,9 @@ export async function POST(request: Request) {
     const indicator = String(form.get("leading_indicator") ?? "HEART_RATE");
     const resolvedMaximum = hrmax ?? (age !== null ? Math.floor(208 - .7 * age + .5) : null);
     if (
-      !["MANUAL", "AUTOMATIC_HRMAX"].includes(source)
+      !["LAST_90_DAYS", "FROM_DATE"].includes(applyMode)
+      || (applyMode === "FROM_DATE" && !/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom))
+      || !["MANUAL", "AUTOMATIC_HRMAX"].includes(source)
       || (source === "MANUAL" && (
         bounds.some((value) => !Number.isInteger(value) || value < 30 || value > 240)
         || bounds.some((value, index) => index > 0 && bounds[index - 1] >= value)
@@ -53,7 +57,8 @@ export async function POST(request: Request) {
         "X-OnFlows-Athlete-Alias": athleteAlias,
       },
       body: JSON.stringify({ hr_zone_bounds_bpm: source === "MANUAL" ? bounds : null, timezone, hrmax_bpm: hrmax, hr_zone_source: source,
-        age_years: age, leading_indicator: indicator }),
+        age_years: age, leading_indicator: indicator, hrmax_apply_mode: applyMode,
+        hrmax_effective_from: applyMode === "FROM_DATE" ? effectiveFrom : null }),
       signal: AbortSignal.timeout(75_000),
     });
     stage = `api-response-${response.status}`;

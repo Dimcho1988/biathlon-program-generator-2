@@ -248,12 +248,20 @@ begin
  exception when invalid_parameter_value then denied := true; end;
  assert denied, 'Inconsistent current pointer was treated as unchanged';
  update public.onflows_management_plan_state set status='REVIEW_REQUIRED' where athlete_alias=athlete;
+ -- Isolate HR corrections in a subtransaction: restoring the old number now
+ -- intentionally retains a new calibration revision and cannot restore evidence.
+ begin
  update public.onflows_athlete_settings set hrmax_bpm=191 where athlete_alias=athlete;
  result := public.record_onflows_management_check(athlete,5,actor,1,checkpoint,nonce);
  assert result='{"conflict":true,"reason":"INPUTS_CHANGED"}'::jsonb, 'Replay skipped a real input change';
  result := public.record_onflows_management_check(athlete,5,actor,1,public.onflows_management_checkpoint(athlete),nonce);
  assert result='{"conflict":true,"reason":"CHECK_ID_REUSED"}'::jsonb, 'Nonce was reused with another valid checkpoint';
  update public.onflows_athlete_settings set hrmax_bpm=190 where athlete_alias=athlete;
+ result := public.record_onflows_management_check(athlete,5,actor,1,checkpoint,nonce);
+ assert result='{"conflict":true,"reason":"INPUTS_CHANGED"}'::jsonb, 'Restoring HRmax reused obsolete calibration evidence';
+ raise exception 'Roll back synthetic HR corrections' using errcode='ZX001';
+ exception when sqlstate 'ZX001' then null;
+ end;
  update public.onflows_management_plan_revisions r set payload=plan_payload || '{"different_evidence":true}'::jsonb
    where athlete_alias=athlete and revision=5;
  result := public.record_onflows_management_check(athlete,5,actor,1,checkpoint,nonce);

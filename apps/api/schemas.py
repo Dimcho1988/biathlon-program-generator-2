@@ -83,6 +83,8 @@ class SessionExchangeResponse(StrictModel):
 
 
 class AthleteSettingsInput(StrictModel):
+    hrmax_apply_mode: Literal["LAST_90_DAYS", "FROM_DATE"] = "LAST_90_DAYS"
+    hrmax_effective_from: date | None = None
     hr_zone_bounds_bpm: tuple[int, int, int, int, int, int] | None = None
     timezone: str
     hrmax_bpm: int | None = None
@@ -103,6 +105,7 @@ class AthleteSettingsResponse(StrictModel):
     leading_indicator: Literal["HEART_RATE", "SPEED"] = "HEART_RATE"
     hrmax_source: Literal["MANUAL", "TANAKA", "OBSERVED"] | None = None
     hrmax_observation: dict[str, Any] | None = None
+    hrmax_effective_from: date | None = None
 
 
 class AthletePlanningProfileInput(StrictModel):
@@ -373,6 +376,8 @@ class LoadHistoryResponse(StrictModel):
     sport_hr_policy_version: str | None = None
     zone_bounds_bpm: list[int] | None = None
     hrmax_bpm: int | None = None
+    hr_settings_revision: str | None = None
+    hr_calibration_history: list[dict[str, Any]] = Field(default_factory=list)
     quality: LoadHistoryQuality
     zones: list[ZoneLoadSummary]
     daily: list[DailyZoneLoad]

@@ -1222,7 +1222,12 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
     from intervals_inspector.shadow_model import configuration_with_hr_boundaries
     from .provider_replay import ProviderReplay
     provider = ProviderReplay(client or IntervalsClient(token, context.provider_athlete_id))
-    end = period_end or date.today(); start = end.fromordinal(end.toordinal() - days + 1)
+    from .hr_settings_history import at as hr_settings_at, history_days
+    end = period_end or date.today()
+    previous = repository.latest(context.public_alias) if getattr(athlete_settings, "hr_settings_revision", None) else None
+    if getattr(athlete_settings, "hr_settings_revision", None) != ((previous or {}).get("load_history") or {}).get("hr_settings_revision"):
+        days = history_days(athlete_settings, end, days)
+    start = end.fromordinal(end.toordinal() - days + 1)
     stage = "athlete"
     try:
         # Validate the configured profile and retrieve settings at the provider
@@ -1323,8 +1328,10 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                     "experimental": True,
                     "affects_canonical_load": False,
                 }
+            dated = hr_settings_at(athlete_settings, (detail.get("start_date_local") or detail.get("start_date"))[:10]) if athlete_settings else None
+            bounds, maximum = (dated.zone_bounds_bpm, dated.hrmax_bpm) if dated else (context.zone_bounds_bpm, context.hrmax_bpm)
             configuration_fingerprint = activity_shadow_configuration_fingerprint(
-                context.zone_bounds_bpm, context.hrmax_bpm,
+                bounds, maximum,
                 activity_duration_s=_activity_duration_seconds(detail, strength_activity=is_strength_activity(detail)),
                 activity_detail=detail,
             )
@@ -1361,8 +1368,8 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             immutable_input, derived = compute_activity_shadow(
                 detail=detail,
                 normalized=normalized,
-                zone_bounds_bpm=context.zone_bounds_bpm,
-                explicit_hrmax_bpm=context.hrmax_bpm,
+                zone_bounds_bpm=bounds,
+                explicit_hrmax_bpm=maximum,
             )
             run_key = repository.publish_activity_shadow(
                 athlete_alias=context.public_alias,
@@ -1409,7 +1416,8 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         def activity_load_context(sport, day):
             from . import model_service
             if not callable(getattr(repository, "_request", None)):
-                return load_capacity_for_sport(sport)
+                value = load_capacity_for_sport(sport)
+                return {**value, "reference_bounds_bpm": list(hr_settings_at(athlete_settings, day).zone_bounds_bpm)} if athlete_settings else value
             identity = (sport, day)
             if identity not in historical_load_contexts:
                 historical_inputs = refreshed_speed_inputs(day-timedelta(days=1))
@@ -1421,7 +1429,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 if load_evidence.supports_recording(sport):
                     value = {**value, "unified_load_version": unified_load.VERSION,
                         "selection_policy": load_policy_identity(),
-                        "reference_bounds_bpm": list(context.zone_bounds_bpm),
+                        "reference_bounds_bpm": list(hr_settings_at(athlete_settings, day).zone_bounds_bpm) if athlete_settings else list(context.zone_bounds_bpm),
                         "leading_indicator": getattr(athlete_settings, "leading_indicator", "HEART_RATE")}
                 historical_load_contexts[identity] = value
             return historical_load_contexts[identity]
@@ -1442,11 +1450,16 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                         leading_indicator=getattr(athlete_settings, "leading_indicator", "HEART_RATE"))
             return load_capacity_contexts[sport]
 
+        def dated_configuration(day):
+            dated = hr_settings_at(athlete_settings, day) if athlete_settings else None
+            return configuration_with_hr_boundaries(dated.zone_bounds_bpm, hrmax_bpm=dated.hrmax_bpm) if dated else configuration_with_hr_boundaries(context.zone_bounds_bpm, hrmax_bpm=context.hrmax_bpm)
+
         def calculate_dataset():
             return load_real_history(provider, profile_identifier=context.provider_athlete_id,
                                     session_salt=salt, parameters=parameters,
                                     period_end=end, days=days, loaded_at_utc=now,
                                     configuration=configuration_with_hr_boundaries(context.zone_bounds_bpm, hrmax_bpm=context.hrmax_bpm),
+                                    configuration_resolver=dated_configuration,
                                     load_capacity_resolver=load_capacity_for_sport,
                                     activity_load_context_resolver=activity_load_context,
                                     activity_shadow_processor=process_activity_shadow,
@@ -1458,7 +1471,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         dataset = calculate_dataset()
         candidate = max(observed_hrmax_candidates, key=lambda c: c["reference_hrmax_bpm"], default=None)
         increase = getattr(repository, "increase_athlete_hrmax", None)
-        if candidate and callable(increase) and candidate["reference_hrmax_bpm"] >= (context.hrmax_bpm or context.zone_bounds_bpm[-1])+1:
+        if candidate and getattr(athlete_settings, "hrmax_source", None) != "MANUAL" and callable(increase) and candidate["reference_hrmax_bpm"] >= (context.hrmax_bpm or context.zone_bounds_bpm[-1])+1:
             increase(context.public_alias, candidate, expected_hrmax=context.hrmax_bpm)
             updated = repository.athlete_settings(context.public_alias)
             if updated and (updated.hrmax_bpm != context.hrmax_bpm or updated.zone_bounds_bpm != context.zone_bounds_bpm):
@@ -1615,6 +1628,8 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         )
         stage = "load_history"
         load_history = dataset_to_load_history(dataset, context)
+        load_history.hr_settings_revision = getattr(athlete_settings, "hr_settings_revision", None)
+        load_history.hr_calibration_history = list(getattr(athlete_settings, "hr_history", ()))
         stage = "recovery_history"
         recovery_history = dataset_to_recovery_history(
             dataset, context, wellness, wellness_diagnostics, parameters

@@ -64,8 +64,10 @@ begin
  -- Repeated input writes append one private event per transaction without
  -- changing a ready queue row. The next consumer advances its revision once.
  old_revision:=(state->>'revision')::bigint;
- update public.onflows_athlete_settings set hrmax_bpm=hrmax_bpm+1 where athlete_alias=a;
- update public.onflows_athlete_settings set hrmax_bpm=hrmax_bpm+1 where athlete_alias=a;
+ -- These cases exercise cache invalidation after non-calibration settings.
+ -- HR changes additionally require a raw-analysis rebuild, tested separately.
+ update public.onflows_athlete_settings set model_preferences=model_preferences||'{"leading_indicator":"SPEED"}'::jsonb where athlete_alias=a;
+ update public.onflows_athlete_settings set model_preferences=model_preferences||'{"leading_indicator":"HEART_RATE"}'::jsonb where athlete_alias=a;
  assert (select requested_revision from onflows_private.prepared_dashboards where athlete_alias=a)=old_revision,
   'Input writer changed the shared dashboard queue';
  assert (select count(*) from onflows_private.dashboard_dirty_events where athlete_alias=a)=1,
@@ -91,7 +93,7 @@ begin
   p_day=>(state->>'day')::date,p_model_key=>key1,p_envelope=>payload)->>'stored'='false','Deleted/recreated source accepted an old calculation';
  assert public.onflows_dashboard_preparation('STORE',a,p_revision=>(state->>'revision')::bigint,
   p_day=>(state->>'day')::date,p_model_key=>key1,p_envelope=>payload)->>'stored'='true';
- update public.onflows_athlete_settings set hrmax_bpm=191 where athlete_alias=a;
+ update public.onflows_athlete_settings set model_preferences=model_preferences||'{"leading_indicator":"SPEED"}'::jsonb where athlete_alias=a;
  assert public.onflows_dashboard_preparation('READ',p_alias=>a,p_model_key=>key1)->>'ready'='false';
  assert public.onflows_dashboard_preparation('STORE',a,p_revision=>(state->>'revision')::bigint,
   p_day=>(state->>'day')::date,p_model_key=>key1,p_envelope=>payload)->>'stored'='false','Changed settings reused';

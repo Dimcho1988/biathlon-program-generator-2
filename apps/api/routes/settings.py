@@ -1,5 +1,6 @@
 """Settings HTTP routes."""
 
+from dataclasses import replace
 from datetime import date
 from hashlib import sha256
 import json
@@ -58,6 +59,7 @@ def _settings_response(settings):
         leading_indicator=settings.leading_indicator if settings else "HEART_RATE",
         hrmax_source=settings.hrmax_source if settings else None,
         hrmax_observation=dict(settings.hrmax_observation) if settings and settings.hrmax_observation else None,
+        hrmax_effective_from=(settings.hr_history[-1]["from"] if settings and settings.hr_history else None),
     )
 
 
@@ -98,11 +100,19 @@ def _resolve_settings(body, previous):
             # approved policy; individual interior thresholds remain personal.
             import math
             bounds = (math.floor(.45*maximum+.5), *bounds[1:5], maximum)
-    return AthleteModelSettings(
+    resolved = AthleteModelSettings(
         tuple(bounds), body.timezone.strip(), maximum, source, percentages,
         age_years=age, leading_indicator=body.leading_indicator or (previous.leading_indicator if previous else "HEART_RATE"),
         hrmax_source=maximum_source, hrmax_observation=observation,
+        hr_history=previous.hr_history if previous else (),
+        hr_settings_revision=previous.hr_settings_revision if previous else None,
+        hr_recompute_from=previous.hr_recompute_from if previous else None,
     ).validate()
+    from ..hr_settings_history import effective_date
+    if previous and (resolved.hrmax_bpm != previous.hrmax_bpm or resolved.zone_bounds_bpm != previous.zone_bounds_bpm
+                     or resolved.hr_zone_source != previous.hr_zone_source or resolved.hr_zone_percentages != previous.hr_zone_percentages):
+        resolved = replace(resolved, hrmax_apply_from=effective_date(body, resolved))
+    return resolved
 
 
 @router.get("/api/v2/athlete/settings", response_model=AthleteSettingsResponse)
@@ -139,6 +149,7 @@ def update_athlete_settings(
             raise HTTPException(status_code=409, detail="Intervals profile is not connected")
         settings = _resolve_settings(body, repository.athlete_settings(resolved_alias))
         repository.save_athlete_settings(resolved_alias, settings)
+        settings = repository.athlete_settings(resolved_alias) or settings
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except PersistentStoreFailure as exc:

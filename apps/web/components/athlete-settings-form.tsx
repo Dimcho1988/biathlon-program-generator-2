@@ -22,6 +22,7 @@ type AthleteSettingsFormProps = {
   editing?: boolean;
   initialAge?: number | null;
   initialIndicator?: "HEART_RATE" | "SPEED";
+  initialEffectiveFrom?: string | null;
   initialHrmaxSource?: "MANUAL" | "TANAKA" | "OBSERVED" | null;
 };
 
@@ -37,6 +38,7 @@ export function AthleteSettingsForm({
   initialAge = null,
   initialIndicator = "HEART_RATE",
   initialHrmaxSource = null,
+  initialEffectiveFrom = null,
 }: AthleteSettingsFormProps) {
   const percentages = initialSource === "AUTOMATIC_HRMAX" ? initialPercentages : automaticPercentages;
   const autoAvailable = percentages?.length === 6;
@@ -44,6 +46,7 @@ export function AthleteSettingsForm({
     initialSource ?? (!initialBounds && autoAvailable ? "AUTOMATIC_HRMAX" : "MANUAL")
   );
   const [hrmax, setHrmax] = useState(initialHrmaxSource === "TANAKA" ? "" : initialHrmax?.toString() ?? "");
+  const [applyMode, setApplyMode] = useState("LAST_90_DAYS");
   const [age, setAge] = useState(initialAge?.toString() ?? "");
   const predictedMaximum = age !== "" ? Math.floor(208 - 0.7 * Number(age) + 0.5) : null;
   const maximum = hrmax !== "" ? Number(hrmax) : predictedMaximum;
@@ -64,10 +67,26 @@ export function AthleteSettingsForm({
         <label className="timezone-field">
           <span>Максимален пулс (уд/мин)</span>
           <input name="hrmax_bpm" type="number" min="30" max="240" inputMode="numeric" value={hrmax} onChange={event => setHrmax(event.target.value)} />
-          <small>Въведете известния HRmax или оставете празно за начална оценка по възрастта. По-висок устойчив записан пулс може автоматично да го уточни.</small>
+          <small>Въведете известния HRmax или оставете празно за начална оценка по възрастта. Автоматичната оценка може да се уточнява от устойчив записан пулс; ръчно въведената стойност се запазва.</small>
+          {initialEffectiveFrom && <small>Текущата стойност важи от {initialEffectiveFrom.split("-").reverse().join(".")}.</small>}
           {initialHrmaxSource === "TANAKA" && <small>Текущият HRmax е начална оценка по Tanaka.</small>}
           {initialHrmaxSource === "OBSERVED" && <small>Текущият HRmax е уточнен от устойчив записан пулсов пик.</small>}
         </label>
+        {editing && <fieldset>
+          <legend>От кога важи новият максимален пулс?</legend>
+          <label className="timezone-field">
+            <span>Период за преизчисляване</span>
+            <select name="hrmax_apply_mode" value={applyMode} onChange={event => setApplyMode(event.target.value)}>
+              <option value="LAST_90_DAYS">За последните 90 дни</option>
+              <option value="FROM_DATE">От избрана дата</option>
+            </select>
+          </label>
+          {applyMode === "FROM_DATE" && <label className="timezone-field">
+            <span>Начална дата (в последните 180 дни)</span>
+            <input name="hrmax_effective_from" type="date" required />
+          </label>}
+          <small>При промяна на максималния пулс или зоните зависимите оценки се преизчисляват във фонов режим. Преди началната дата се запазват предишните стойности. Измерените данни остават непроменени.</small>
+        </fieldset>}
         <label className="timezone-field">
           <span>Възраст (години)</span>
           <input name="age_years" type="number" min="5" max="100" inputMode="numeric" value={age} onChange={event => setAge(event.target.value)} required={hrmax === ""} />

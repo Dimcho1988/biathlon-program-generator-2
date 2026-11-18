@@ -34,7 +34,9 @@ def historical_speed_inputs(inputs, activity_day, *, evaluation_day=None):
     date is never moved, and this exception never advances the HR/index window.
     """
     evaluation_day = evaluation_day or inputs.get("evaluation_day") or inputs["today"]
-    return {**inputs, "today": activity_day-timedelta(days=1),
+    from .hr_settings_history import at
+    return {**inputs, **({"settings": at(inputs["settings"], activity_day)} if "settings" in inputs else {}),
+            "today": activity_day-timedelta(days=1),
             "evaluation_day": evaluation_day,
             "test_end": min(activity_day+timedelta(days=RETROSPECTIVE_TEST_DAYS), evaluation_day),
             "historical_calibration": {"policy": HISTORICAL_SPEED_POLICY,

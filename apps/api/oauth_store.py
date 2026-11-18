@@ -169,6 +169,9 @@ class _PlanningSettingsBundle:
                 leading_indicator=preferences.get("leading_indicator", "HEART_RATE"),
                 hrmax_source=preferences.get("hrmax_source", "MANUAL"),
                 hrmax_observation=preferences.get("hrmax_observation"),
+                hr_history=tuple(preferences.get("hr_history") or ()),
+                hr_settings_revision=preferences.get("hr_settings_revision"),
+                hr_recompute_from=preferences.get("hr_recompute_from"),
             ).validate()
         except ValueError as exc:
             raise PersistentStoreFailure("Stored athlete settings are invalid") from exc
