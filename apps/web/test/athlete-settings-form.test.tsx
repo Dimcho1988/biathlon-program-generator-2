@@ -5,6 +5,15 @@ import { AthleteSettingsForm } from "../components/athlete-settings-form";
 const percentages = [50, 60, 70, 80, 90, 100]; // Synthetic test scheme, no product default.
 
 describe("athlete HR zone setup", () => {
+  it("offers explicit retrospective scope and displays the saved effective date", () => {
+    const html = renderToStaticMarkup(<AthleteSettingsForm editing initialHrmax={200} initialEffectiveFrom="2026-08-17" />);
+    expect(html).toContain('name="hrmax_apply_mode"');
+    expect(html).toContain('<option value="LAST_90_DAYS" selected=""');
+    expect(html).toContain('<option value="FROM_DATE"');
+    expect(html).toContain("17.08.2026");
+    expect(html).toContain("Измерените данни остават непроменени");
+    expect(renderToStaticMarkup(<AthleteSettingsForm />)).not.toContain('name="hrmax_apply_mode"');
+  });
   it("exposes the common indicator, relative HR endpoints and Tanaka cold start", () => {
     const html=renderToStaticMarkup(<AthleteSettingsForm initialAge={40} initialHrmax={180}
       initialHrmaxSource="TANAKA" initialIndicator="SPEED" automaticPercentages={[45,72,79,89,94,100]}/>);

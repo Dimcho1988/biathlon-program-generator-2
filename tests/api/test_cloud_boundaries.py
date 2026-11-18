@@ -548,7 +548,8 @@ def test_athlete_settings_are_scoped_to_the_authenticated_profile(monkeypatch):
     assert saved.status_code == 200
     assert loaded.json() == {"configured": True, **body, "hr_zone_bounds_bpm": [92,120,140,160,180,205], "hr_zone_source": "MANUAL",
                              "hr_zone_percentages": None, "automatic_hr_zone_percentages": [45,72,79,89,94,100],
-                             "age_years": None, "leading_indicator": "HEART_RATE", "hrmax_source": "MANUAL", "hrmax_observation": None}
+                             "age_years": None, "leading_indicator": "HEART_RATE", "hrmax_source": "MANUAL", "hrmax_observation": None,
+                             "hrmax_effective_from": None}
     assert list(repository.items) == ["ath-second-profile"]
 
 

@@ -210,7 +210,7 @@ def test_refresh_raises_maximum_from_raw_peak_and_replays_without_second_downloa
             return IntervalsResponse(200,[{"type":"time","data":list(range(61))},
                                          {"type":"heartrate","data":[200.]*61}])
     repo=InMemorySnapshotRepository()
-    current=[AthleteModelSettings((86,137,150,169,179,190),"UTC",190,"AUTOMATIC_HRMAX",zone_profile.HR_PERCENTAGES)]
+    current=[AthleteModelSettings((86,137,150,169,179,190),"UTC",190,"AUTOMATIC_HRMAX",zone_profile.HR_PERCENTAGES,hrmax_source="TANAKA")]
     repo.athlete_settings=lambda alias:current[0]
     observations=[]
     def increase(alias,observation,*,expected_hrmax):

@@ -84,7 +84,7 @@ _STRENGTH_ACTIVITY_TYPES = frozenset(
 )
 DEFAULT_HISTORY_DAYS = 90
 MIN_HISTORY_DAYS = 41
-MAX_HISTORY_DAYS = 180
+MAX_HISTORY_DAYS = 219
 _SAFE_ACTIVITY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 
@@ -403,6 +403,7 @@ def load_real_history(
     activity_detail_transformer: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
     load_capacity_resolver: Callable[[str], Mapping[str, Any]] | None = None,
     activity_load_context_resolver: Callable[[str, date], Mapping[str, Any]] | None = None,
+    configuration_resolver: Callable[[date], ShadowModelConfiguration] | None = None,
 ) -> RealHistoryDataset:
     """Load and process one bounded real history in chronological order."""
 
@@ -420,6 +421,11 @@ def load_real_history(
         configuration=selected_configuration,
         parameter_fingerprint=parameter_fingerprint,
     )
+
+    if configuration_resolver is not None:
+        calibration_keys = [(day.isoformat(), configuration_resolver(day).fingerprint)
+                            for day in pd.date_range(start, end, freq="D").date]
+        cache_key = hashlib.sha256((cache_key+json.dumps(calibration_keys)).encode()).hexdigest()
 
     listed_payload = _response_payload(
         client.get_activities_result(start.isoformat(), end.isoformat())
@@ -542,7 +548,7 @@ def load_real_history(
                             ) from exc
 
                     from intervals_inspector.shadow_model import configuration_for_sport
-                    activity_configuration=configuration_for_sport(selected_configuration,detail.get("type"))
+                    activity_configuration=configuration_for_sport(configuration_resolver(current_day) if configuration_resolver else selected_configuration,detail.get("type"))
                     capacity_sport = str(detail.get("type") or "Unknown")
                     if activity_load_context_resolver is not None:
                         component_load_contexts[capacity_sport] = deepcopy(dict(activity_load_context_resolver(capacity_sport, current_day)))

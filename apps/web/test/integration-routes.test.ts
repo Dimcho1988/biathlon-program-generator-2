@@ -389,6 +389,7 @@ describe("integration route redirects behind a reverse proxy", () => {
       timezone: "Europe/Sofia",
       hrmax_bpm: 205,
       hr_zone_source: "MANUAL", age_years: null, leading_indicator: "HEART_RATE",
+      hrmax_apply_mode: "LAST_90_DAYS", hrmax_effective_from: null,
     });
   });
 
@@ -411,6 +412,28 @@ describe("integration route redirects behind a reverse proxy", () => {
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
       hr_zone_bounds_bpm: null, timezone: "Europe/Sofia", hrmax_bpm: 200,
       hr_zone_source: "AUTOMATIC_HRMAX", age_years: null, leading_indicator: "HEART_RATE",
+      hrmax_apply_mode: "LAST_90_DAYS", hrmax_effective_from: null,
+    });
+  });
+
+  it("passes an explicit HR calibration date to the authenticated API", async () => {
+    process.env.ONFLOWS_API_BASE_URL = "https://api.example.test";
+    process.env.ONFLOWS_SERVICE_TOKEN = "server-secret";
+    process.env.ONFLOWS_PROFILE_MODE = "multi";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ status: "ok" }))
+      .mockResolvedValueOnce(Response.json({ configured: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const form = new FormData();
+    form.set("hr_zone_source", "AUTOMATIC_HRMAX");
+    form.set("hrmax_bpm", "200");
+    form.set("timezone", "Europe/Sofia");
+    form.set("hrmax_apply_mode", "FROM_DATE");
+    form.set("hrmax_effective_from", "2026-11-01");
+    const response = await saveSettings(new Request("https://web.example.test/api/athlete/settings", { method: "POST", body: form }));
+    expect(response.headers.get("location")).toBe("/?settings=saved");
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({
+      hrmax_apply_mode: "FROM_DATE", hrmax_effective_from: "2026-11-01",
     });
   });
 

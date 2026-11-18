@@ -93,6 +93,7 @@ export async function getLearningView(athleteAlias: string, days = 30, end?: str
 }
 export interface TrainingStatusResult { data: TrainingStatus; mode: DataMode }
 export interface AthleteSettings {
+  hrmax_effective_from?: string | null;
   age_years?: number | null;
   leading_indicator?: "HEART_RATE" | "SPEED";
   hrmax_source?: "MANUAL" | "TANAKA" | "OBSERVED" | null;
@@ -328,6 +329,7 @@ export async function getAthleteSettings(athleteAlias: string): Promise<AthleteS
     age_years: "age_years" in payload && typeof payload.age_years === "number" ? payload.age_years : null,
     leading_indicator: "leading_indicator" in payload && payload.leading_indicator === "SPEED" ? "SPEED" : "HEART_RATE",
     hrmax_source: "hrmax_source" in payload ? payload.hrmax_source as AthleteSettings["hrmax_source"] : null,
+    hrmax_effective_from: "hrmax_effective_from" in payload && typeof payload.hrmax_effective_from === "string" ? payload.hrmax_effective_from : null,
     hr_zone_source: source, hr_zone_percentages: percentages as number[] | null, automatic_hr_zone_percentages: automaticPercentages as number[] | null };
 }
 

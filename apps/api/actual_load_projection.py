@@ -29,6 +29,9 @@ def reconstruct_history(repository, alias, source, *, speed_inputs=None):
     settings = settings_reader(alias)
     if settings is None:
         return source
+    if getattr(settings, "hr_settings_revision", None) != source.get("hr_settings_revision"):
+        from .component_load_projection import ComponentLoadRefreshRequired
+        raise ComponentLoadRefreshRequired("HR calibration requires a full recording refresh")
     from . import model_service
     inputs = speed_inputs or model_service.speed_view_inputs(repository, alias)
     calendar = inputs["calendar"]
@@ -39,7 +42,8 @@ def reconstruct_history(repository, alias, source, *, speed_inputs=None):
     identity = {"version": VERSION, "equivalence": speed_equivalence.VERSION,
                 "alias": alias, "namespace": getattr(repository, "speed_load_cache_namespace", None),
                 "settings": {"bounds": settings.zone_bounds_bpm, "max": settings.hrmax_bpm,
-                             "leading": settings.leading_indicator},
+                             "leading": settings.leading_indicator,
+                             "hr_revision": getattr(settings, "hr_settings_revision", None)},
                 "calendar": calendar, "initial_profile": inputs.get("initial_profile"),
                 "source": original_identity, "tests": inputs["entries"],
                 "profile_policy": model_service.HISTORICAL_SPEED_POLICY,
@@ -91,10 +95,12 @@ def _reconstruct(repository, alias, source, inputs, settings, key, original_iden
                 and not load_evidence.is_strength(a) and a.get("quality_status") != "provider_missing"
                 and calendar.get(a["activity_ref"], {}).get("quality_status") != "provider_missing"
                 and calendar.get(a["activity_ref"], {}).get("latest_shadow_run_key")]
+    from .hr_settings_history import at
     models, specs = {}, []
     namespace = getattr(repository, "speed_load_cache_namespace", None)
     for activity in selected:
         ref = activity["activity_ref"]
+        dated = at(settings, activity["date"])
         recording_seconds = (max(calendar[ref].get("elapsed_time_s") or 0.,
                                  calendar[ref].get("moving_time_s") or 0.)
             or (activity.get("load_source") or {}).get("recorded_seconds")
@@ -117,7 +123,7 @@ def _reconstruct(repository, alias, source, inputs, settings, key, original_iden
         cache_key = sha256(json.dumps({"namespace": namespace, "alias": alias, "ref": ref,
             "run": calendar[ref]["latest_shadow_run_key"], "day": activity["date"],
             "sport": activity["sport"], "seconds": recording_seconds,
-            "bounds": settings.zone_bounds_bpm, "hrmax": settings.hrmax_bpm,
+            "bounds": dated.zone_bounds_bpm, "hrmax": dated.hrmax_bpm,
             "leading": settings.leading_indicator, "context": context,
             "version": VERSION, "equivalence": speed_equivalence.VERSION,
             "profile_policy": model_service.HISTORICAL_SPEED_POLICY,
@@ -139,7 +145,7 @@ def _reconstruct(repository, alias, source, inputs, settings, key, original_iden
                 # duration or retain an unresolved recording in the cache.
                 results[cache_key] = {"reason": "SPEED_RECOMPUTATION_REQUIRED"}
                 continue
-            ledger = unified_load.integrate(row["shadow_payload"], bounds=settings.zone_bounds_bpm,
+            ledger = unified_load.integrate(row["shadow_payload"], bounds=at(settings, activity["date"]).zone_bounds_bpm,
                 sport=activity["sport"], parameters=context["comparison_parameters"],
                 leading_indicator=settings.leading_indicator, duration_s=seconds)
             ledger["capacity_context"] = {k: context[k] for k in ("minutes", "sources", "references", "fingerprint")}

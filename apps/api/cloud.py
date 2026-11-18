@@ -35,6 +35,11 @@ class AthleteModelSettings:
     hrmax_source: str = "MANUAL"
     hrmax_observation: Mapping[str, Any] | None = None
 
+    hr_history: tuple[Mapping[str, Any], ...] = ()
+    hr_settings_revision: str | None = None
+    hr_recompute_from: str | None = None
+    hrmax_apply_from: str | None = None
+
     def validate(self) -> "AthleteModelSettings":
         if self.age_years is not None and (type(self.age_years) is not int or not 5 <= self.age_years <= 100):
             raise ValueError("age must be between 5 and 100 years")
@@ -68,12 +73,18 @@ class AthleteModelSettings:
                 raise ValueError("automatic zones must match their saved HRmax percentages")
         elif self.hr_zone_percentages is not None:
             raise ValueError("manual zones cannot carry automatic percentages")
+        from .hr_settings_history import validate
+        validate(self)
         return self
 
     def model_preferences(self):
         return {"version": "unified-load-preferences-v1", "age_years": self.age_years,
                 "leading_indicator": self.leading_indicator, "hrmax_source": self.hrmax_source,
-                "hrmax_observation": deepcopy(self.hrmax_observation)}
+                "hrmax_observation": deepcopy(self.hrmax_observation),
+                "hr_history": deepcopy(list(self.hr_history)),
+                "hr_settings_revision": self.hr_settings_revision,
+                "hr_recompute_from": self.hr_recompute_from,
+                **({"hrmax_apply_from": self.hrmax_apply_from} if self.hrmax_apply_from else {})}
 
 
 @dataclass(frozen=True)
