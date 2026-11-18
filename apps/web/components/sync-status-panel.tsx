@@ -9,6 +9,7 @@ import {
   syncRequiresViewRefresh,
   syncScopeLabel,
   syncRetryDescription,
+  syncWorkProgress,
   type SyncState,
 } from "../lib/sync";
 import { SyncActionForm } from "./sync-action-form";
@@ -21,6 +22,7 @@ export function SyncStatusPanel({
   timezone = "UTC",
   deferViewRefresh = false,
   renderedGenerationKnown = true,
+  preparingView = false,
 }: {
   initialState: SyncState;
   renderedGenerationId: string | null;
@@ -29,6 +31,7 @@ export function SyncStatusPanel({
   timezone?: string;
   deferViewRefresh?: boolean;
   renderedGenerationKnown?: boolean;
+  preparingView?: boolean;
 }) {
   const router = useRouter();
   const [state, setState] = useState(initialState);
@@ -120,6 +123,7 @@ export function SyncStatusPanel({
         <strong>{fullRefreshRequired ? "Необходимо е пълно обновяване" : "Обновяването не завърши"}</strong>
         <span>{fullRefreshRequired
           ? "Записаната история е от по-стара версия и не съдържа необходимите Tref данни. Последната валидна версия остава активна."
+          : preparingView ? "Преизчисляването не завърши. Може да опитате отново."
           : "Последната валидна версия остава активна. Може да опитате отново."}</span>
       </div>
       {state.scope && <SyncActionForm
@@ -133,7 +137,7 @@ export function SyncStatusPanel({
     <div><strong>Използвана е по-нова заявка</strong><span>Текущият изглед ще следва последната активирана версия.</span></div>
   </section>;
   if (state.state === "SUCCEEDED") return <section className="sync-status completed" role="status">
-    <div><strong>Новата версия е активирана</strong><span>Обновяваме показания анализ.</span></div>
+    <div><strong>Новата версия е активирана</strong><span>{preparingView ? "Подготвяме изгледа с обновените модели." : "Обновяваме показания анализ."}</span></div>
   </section>;
 
   const retry = state.state === "RETRY_WAIT";
@@ -142,18 +146,20 @@ export function SyncStatusPanel({
       {statusUnavailable && <small>Проверката на статуса ще продължи автоматично.</small>}
     </div>
   </section>;
-  if (compact) return <section className="sync-status running" role="status"><div><strong>Обновяваме тренировките</strong><span>Когато приключи, екранът ще се обнови автоматично.</span>{statusUnavailable && <small>Проверката на напредъка ще продължи автоматично.</small>}</div><progress max={100} value={state.progress_percent} aria-label="Напредък на обновяването" /></section>;
+  const progress = syncWorkProgress(state);
+  if (compact) return <section className="sync-status running" role="status"><div><strong>Обновяваме тренировките</strong><span>{progress.label}</span>{statusUnavailable && <small>Проверката на напредъка ще продължи автоматично.</small>}</div><progress max={100} value={progress.percent} aria-label="Напредък на обработката на активностите" /></section>;
   return <section className="sync-status running" role="status" aria-live="polite">
     <div>
       <strong>Обновяваме {scope}</strong>
+      <span>{progress.label}</span>
       <span>
-        {state.active_generation_id
+        {preparingView ? "Анализът ще се покаже автоматично след обновяването."
+          : state.active_generation_id
           ? `Показана остава последната валидна версия ${state.active_revision}.`
           : "Първата версия се подготвя във фонов режим."}
-        {state.stage ? ` Етап: ${state.stage}.` : ""}
       </span>
       {statusUnavailable && <small>Статусът временно не е достъпен; проверката ще продължи автоматично.</small>}
     </div>
-    <progress max={100} value={state.progress_percent} aria-label="Напредък на обновяването" />
+    <progress max={100} value={progress.percent} aria-label="Напредък на обработката на активностите" />
   </section>;
 }

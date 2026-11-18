@@ -215,6 +215,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ v
     ? <Dashboard speedCacheScope={athleteAccess?.canViewRecovery ? speedLoadCacheScope(athleteAccess) : undefined} canViewSpeed={athleteAccess?.canViewRecovery ?? false} reportSource={query.report_source === "speed" ? "speed" : "hr"} view={view} reportStart={query.report_start} reportEnd={query.report_end} {...result.value} completedWork={result.completedWork} loadHistory={result.loadHistory} recoveryHistory={result.recoveryHistory} volumeHistory={result.volumeHistory} generationId={result.generationId} generationRevision={result.generationRevision} generationActivatedAt={result.generationActivatedAt} syncState={syncState} completedWorkMessage={result.completedWorkMessage} loadHistoryMessage={result.loadHistoryMessage} recoveryHistoryMessage={result.recoveryHistoryMessage} volumeHistoryMessage={result.volumeHistoryMessage} integrationActions={integrationActions} sessionActions={multiProfile} athleteCanEdit={athleteAccess?.canEditPlan ?? false} accountDisplayName={accountDisplayName} accountRoles={accountRoles} athleteDisplayName={athleteAccess?.displayName} notice={notice} />
     : <ErrorState
       message={result.message}
+      syncState={syncState}
       integrationActions={integrationActions}
       connectAvailable={!multiProfile || !athleteAlias}
       retryAvailable={Boolean(multiProfile && athleteAlias)}

@@ -26,7 +26,7 @@ export default async function TrainabilityPage({ searchParams }: { searchParams:
   const sync = syncResult.status === "fulfilled" ? syncResult.value : null;
   if (historyResult.status === "rejected") {
     if (sync && syncInProgress(sync) && sync.active_generation_id === null) return <SyncPendingState state={sync} />;
-    return <ErrorState message={historyResult.reason instanceof Error ? historyResult.reason.message : "Индексът временно не е достъпен."} retryAvailable />;
+    return <ErrorState message={historyResult.reason instanceof Error ? historyResult.reason.message : "Индексът временно не е достъпен."} syncState={sync} retryHref="/trainability" retryAvailable />;
   }
   const history = historyResult.value;
   const returnTo = `/trainability?start=${start}&end=${end}`;
