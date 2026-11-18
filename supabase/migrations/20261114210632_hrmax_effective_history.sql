@@ -35,8 +35,8 @@ begin
       else least(effective,coalesce((old.model_preferences->>'hr_recompute_from')::date,effective)) end);
  else
   new.model_preferences:=(new.model_preferences-array['hrmax_apply_from','hr_history','hr_settings_revision','hr_recompute_from'])
-    ||jsonb_build_object('hr_history',timeline,'hr_settings_revision',old.model_preferences->'hr_settings_revision',
-      'hr_recompute_from',old.model_preferences->'hr_recompute_from');
+    ||(select coalesce(jsonb_object_agg(key,value),'{}'::jsonb) from jsonb_each(old.model_preferences)
+       where key in ('hr_history','hr_settings_revision','hr_recompute_from'));
  end if;
  return new;
 end $$;

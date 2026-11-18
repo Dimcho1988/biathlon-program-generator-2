@@ -87,14 +87,16 @@ begin
  -- Responses change stress/planning, but never invalidate the paired index.
  perform onflows_private.request_prepared_views(a,false);
  assert public.onflows_prepared_view('READ',a,'trainability',p_model_key=>key1)->'payload'=payload;
- update public.onflows_athlete_settings set hrmax_bpm=191 where athlete_alias=a;
+ -- Ordinary settings still use the existing cache fences. HR calibration
+ -- requires a new raw analysis as well (hrmax_effective_history.sql).
+ update public.onflows_athlete_settings set model_preferences=model_preferences||'{"leading_indicator":"SPEED"}'::jsonb where athlete_alias=a;
  assert exists(select 1 from onflows_private.dashboard_dirty_events where athlete_alias=a)
   and exists(select 1 from onflows_private.learning_dirty_events where athlete_alias=a),
   'Actual settings changes did not invalidate dashboard and learning';
  assert public.onflows_prepared_view('READ',a,'trainability',p_model_key=>key1)->>'ready'='false';
  delete from onflows_private.prepared_views where athlete_alias=a and kind<>'trainability';
  claim:=public.onflows_prepared_view('CLAIM',p_alias=>a,p_token=>token,p_model_key=>key1);
- update public.onflows_athlete_settings set hrmax_bpm=192 where athlete_alias=a;
+ update public.onflows_athlete_settings set model_preferences=model_preferences||'{"leading_indicator":"HEART_RATE"}'::jsonb where athlete_alias=a;
  assert public.onflows_prepared_view('STORE',a,'trainability','{}',token,(claim->>'revision')::bigint,d,key1,payload)->>'stored'='false',
   'An in-flight result survived a source change';
  delete from onflows_private.prepared_views where athlete_alias=a and kind<>'trainability';
