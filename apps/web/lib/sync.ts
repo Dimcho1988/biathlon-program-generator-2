@@ -155,3 +155,23 @@ export const syncScopeLabel = (scope: SyncScope | null) => scope === "WELLNESS"
   : scope === "RECOVERY"
     ? "Recovery модела"
     : "тренировъчните данни";
+
+export function syncWorkProgress(state: SyncState) {
+  if (state.state === "QUEUED") return {label: "Заявката изчаква обработка", percent: undefined};
+  const match = /^ACTIVITIES:(\d+):(\d+)$/.exec(state.stage ?? "");
+  if (match) {
+    const done = Number(match[1]), total = Number(match[2]);
+    if (Number.isSafeInteger(done) && Number.isSafeInteger(total) && done <= total && total > 0) {
+      const percent = Math.floor(100 * done / total);
+      return {label: `Обработени ${done} от ${total} активности · ${percent}% от активностите`, percent};
+    }
+  }
+  const labels: Record<string, string> = {
+    CLAIMED: "Задачата е започнала; очакваме данни за напредъка",
+    PROVIDER: "Зареждане на данните от Intervals",
+    MODELS: "Преизчисляване на моделите",
+    PUBLISHING: "Записване и проверка на резултатите",
+    READY: "Активиране на обновения анализ",
+  };
+  return {label: labels[state.stage ?? ""] ?? "Обработката продължава във фонов режим", percent: undefined};
+}

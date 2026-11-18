@@ -42,3 +42,13 @@ it("does not reload hidden pages and cancels scheduled reads on unmount", async 
   await act(async()=>vi.advanceTimersByTimeAsync(120_000));
   expect(refresh).toHaveBeenCalledTimes(1);
 });
+
+it("keeps refreshing beyond two minutes while real work is active", async () => {
+  await act(async()=>root.render(<PreparedViewRetry keepPolling/>));
+  await act(async()=>vi.advanceTimersByTimeAsync(180_000));
+  const before = refresh.mock.calls.length;
+  expect(before).toBeGreaterThan(7);
+  expect(container.textContent).not.toContain("Подготовката отнема повече време");
+  await act(async()=>vi.advanceTimersByTimeAsync(20_000));
+  expect(refresh.mock.calls.length).toBeGreaterThan(before);
+});

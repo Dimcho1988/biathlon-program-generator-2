@@ -404,6 +404,7 @@ def load_real_history(
     load_capacity_resolver: Callable[[str], Mapping[str, Any]] | None = None,
     activity_load_context_resolver: Callable[[str, date], Mapping[str, Any]] | None = None,
     configuration_resolver: Callable[[date], ShadowModelConfiguration] | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> RealHistoryDataset:
     """Load and process one bounded real history in chronological order."""
 
@@ -449,6 +450,10 @@ def load_real_history(
             continue
         grouped[activity_day].append(provider_id)
 
+    total_activities = sum(len(set(ids)) for ids in grouped.values())
+    if progress_callback is not None:
+        progress_callback(0, total_activities)
+
     activity_records: list[dict[str, Any]] = []
     activity_zone_records: list[dict[str, Any]] = []
     daily_zone_records: list[dict[str, Any]] = []
@@ -489,6 +494,10 @@ def load_real_history(
         day_strength_time_min = 0.0
 
         for provider_id in day_provider_ids:
+            # All preceding activities completed (including explicitly excluded
+            # recordings). Never count the recording currently being processed.
+            if progress_callback is not None:
+                progress_callback(activity_ordinal, total_activities)
             activity_ordinal += 1
             activity_ref = (
                 activity_ref_resolver(provider_id)
@@ -869,6 +878,8 @@ def load_real_history(
                         rendered["T_z"]
                     )
 
+        if progress_callback is not None:
+            progress_callback(activity_ordinal, total_activities)
         if day_reference_rows is None:
             day_reference_rows = _model_rows(
                 calculate_shadow_result(

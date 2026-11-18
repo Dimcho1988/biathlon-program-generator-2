@@ -1223,6 +1223,12 @@ class SupabasePilotRepository(SnapshotRepository):
             },
         )
 
+    def report_sync_progress(self, *, job_id, generation_id, lease_token, stage, percent):
+        return self._json(self._request("POST", "/rpc/report_onflows_sync_progress", json={
+            "p_job_id": job_id, "p_generation_id": generation_id,
+            "p_lease_token": lease_token, "p_stage": stage, "p_percent": percent,
+        }))
+
     def renew_sync_lease(
         self,
         *,

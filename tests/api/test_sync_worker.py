@@ -297,6 +297,21 @@ def test_full_sync_stages_all_mutable_outputs_then_activates_once():
     assert len(repo.activate_calls) == 1
 
 
+def test_progress_uses_the_claim_fence_and_cannot_fail_a_generation():
+    repo = Repository()
+    reports = []
+    repo.report_sync_progress = lambda **kwargs: reports.append(kwargs)
+    assert process(repo, claim()).outcome == "ACTIVATED"
+    assert [row["stage"] for row in reports] == ["PROVIDER", "PUBLISHING"]
+    assert all(row["lease_token"] == claim()["lease_token"] for row in reports)
+    assert all(row["generation_id"] == claim()["generation_id"] for row in reports)
+    def unavailable(**kwargs):
+        raise RuntimeError("progress store unavailable")
+    repo = Repository()
+    repo.report_sync_progress = unavailable
+    assert process(repo, claim()).outcome == "ACTIVATED"
+
+
 def test_empty_full_sync_has_an_explicit_empty_activity_set_identity():
     repo = Repository()
 

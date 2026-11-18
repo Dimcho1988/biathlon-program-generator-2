@@ -159,7 +159,22 @@ describe("sync UI primitives", () => {
     const html = renderToStaticMarkup(<SyncStatusPanel initialState={runningState} renderedGenerationId="gen-41" />);
     expect(html).toContain("Обновяваме тренировъчните данни");
     expect(html).toContain("последната валидна версия 41");
-    expect(html).toContain("value=\"45\"");
+    expect(html).toContain("Преизчисляване на моделите");
+    expect(html).not.toContain("value=");
+  });
+
+  it("shows measured activity counts in both layouts and no invented overall percentage", () => {
+    for (const compact of [false, true]) {
+      const html = renderToStaticMarkup(<SyncStatusPanel initialState={{...runningState, stage:"ACTIVITIES:12:30"}}
+        renderedGenerationId={null} deferViewRefresh preparingView compact={compact}/>);
+      expect(html).toContain("Обработени 12 от 30 активности · 40% от активностите");
+      expect(html).toContain('value="40"');
+      expect(html).not.toContain("Показана остава");
+    }
+    const html = renderToStaticMarkup(<SyncStatusPanel initialState={{...runningState, state:"QUEUED"}}
+      renderedGenerationId={null} deferViewRefresh preparingView/>);
+    expect(html).toContain("Заявката изчаква обработка");
+    expect(html).not.toContain("value=");
   });
 
   it("offers explicit retry after failure and disables duplicate actions while busy", () => {

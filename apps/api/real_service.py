@@ -1455,6 +1455,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
             return configuration_with_hr_boundaries(dated.zone_bounds_bpm, hrmax_bpm=dated.hrmax_bpm) if dated else configuration_with_hr_boundaries(context.zone_bounds_bpm, hrmax_bpm=context.hrmax_bpm)
 
         def calculate_dataset():
+            progress = getattr(repository, "report_sync_progress", None)
             return load_real_history(provider, profile_identifier=context.provider_athlete_id,
                                     session_salt=salt, parameters=parameters,
                                     period_end=end, days=days, loaded_at_utc=now,
@@ -1465,6 +1466,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                                     activity_shadow_processor=process_activity_shadow,
                                     activity_ref_resolver=resolve_activity_ref,
                                     activity_metadata_collector=collect_activity_metadata,
+                                    progress_callback=(lambda done, total: progress("ACTIVITIES", done, total)) if callable(progress) else None,
                                     activity_detail_transformer=(
                                         lambda detail: apply_sport_rules(detail, sport_rules)
                                     ) if sport_rules else None)
@@ -1482,6 +1484,9 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
                 speed_inputs = None
                 refresh_speed_evidence = None
                 dataset = calculate_dataset()
+        progress = getattr(repository, "report_sync_progress", None)
+        if callable(progress):
+            progress("MODELS")
         if refresh_speed_evidence is not None:
             # Export current capacities after all refreshed observations exist.
             # Per-activity ledgers above retain their prior-date contexts.

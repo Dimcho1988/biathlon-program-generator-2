@@ -155,6 +155,27 @@ def _specs(start: date, days: int) -> dict[str, dict[str, Any]]:
     return result
 
 
+def test_progress_counts_completed_activities_and_does_not_change_results():
+    end = date(2026, 11, 18)
+    events = []
+    class ObservedClient(SyntheticHistoryClient):
+        def get_activity_result(self, activity_id, **kwargs):
+            events.append(("read", activity_id))
+            return super().get_activity_result(activity_id, **kwargs)
+    specs = {"a": {"date": end, "type": "WeightTraining"},
+             "b": {"date": end, "type": "WeightTraining"}}
+    kwargs = dict(profile_identifier="progress-test", session_salt="test-session",
+                  parameters=_parameters(), period_end=end, days=41)
+    result = load_real_history(ObservedClient(specs), **kwargs,
+        progress_callback=lambda done, total: events.append(("progress", done, total)))
+    assert events.index(("read", "a")) < events.index(("progress", 1, 2)) < events.index(("read", "b"))
+    assert events.index(("read", "b")) < events.index(("progress", 2, 2))
+    assert events[-1] == ("progress", 2, 2)
+    without = load_real_history(SyntheticHistoryClient(specs), **kwargs)
+    pd.testing.assert_frame_equal(result.activities, without.activities)
+    pd.testing.assert_frame_equal(result.daily_loads, without.daily_loads)
+
+
 def _parameters() -> dict[str, Any]:
     return generate_demo_bundle()["parameters"]
 

@@ -132,6 +132,7 @@ class _GenerationCaptureRepository:
         *,
         athlete_alias: str,
         pinned_snapshot: Mapping[str, Any] | None = None,
+        job: ClaimedSyncJob | None = None,
     ) -> None:
         self._repository = repository
         self._athlete_alias = athlete_alias
@@ -143,6 +144,35 @@ class _GenerationCaptureRepository:
         self._snapshot: dict[str, Any] | None = None
         self._activities: dict[str, dict[str, Any]] = {}
         self._catalog_captured = False
+        self._job = job
+        self._last_progress = None
+        self._progress_at = 0.0
+
+    def report_sync_progress(self, stage, completed=None, total=None):
+        writer = getattr(self._repository, "report_sync_progress", None)
+        if self._job is None or not callable(writer):
+            return
+        percent = 0
+        encoded = stage
+        if stage == "ACTIVITIES":
+            encoded = f"ACTIVITIES:{completed}:{total}"
+            percent = int(90 * completed / total) if total else 0
+        elif stage in ("MODELS", "PUBLISHING"):
+            percent = 90
+        now = time.monotonic()
+        if encoded == self._last_progress:
+            return
+        if (stage == "ACTIVITIES" and completed != total
+                and str(self._last_progress).startswith("ACTIVITIES:")
+                and now - self._progress_at < 2):
+            return
+        try:
+            writer(job_id=self._job.job_id, generation_id=self._job.generation_id,
+                   lease_token=self._job.lease_token, stage=encoded, percent=percent)
+            self._last_progress, self._progress_at = encoded, now
+        except Exception as exc:
+            # Observability cannot fail a scientific calculation or expose data.
+            logger.warning("sync_progress_unavailable error_type=%s", type(exc).__name__)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._repository, name)
@@ -498,7 +528,9 @@ def _execute_pipeline(
         repository,
         athlete_alias=job.athlete_alias,
         pinned_snapshot=pinned_snapshot,
+        job=job,
     )
+    captured.report_sync_progress("PROVIDER" if job.job_kind != "RECOVERY_RESTORE" else "MODELS")
 
     if job.job_kind == "FULL_SYNC":
         if not isinstance(access_token, str) or not access_token:
@@ -514,6 +546,7 @@ def _execute_pipeline(
         )
         if not captured.catalog_captured:
             raise SyncContractError("Full sync did not produce an activity catalog")
+        captured.report_sync_progress("PUBLISHING")
         return captured.snapshot, captured.activities, False
 
     if job.job_kind == "WELLNESS_SYNC":
@@ -536,6 +569,7 @@ def _execute_pipeline(
         )
     else:  # ClaimedSyncJob already validates this; keep fail-closed.
         raise SyncContractError("Sync job kind is unsupported")
+    captured.report_sync_progress("PUBLISHING")
     return captured.snapshot, [], True
 
 
