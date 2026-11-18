@@ -13,6 +13,18 @@ ALIAS = "ath-generation-store"
 ACTIVITY_REF = "act_" + "a" * 32
 
 
+def test_coalescing_hr_correction_keeps_an_explicit_provider_refresh():
+    repository = InMemorySnapshotRepository()
+    def enqueue(seed, payload):
+        return repository.enqueue_sync_job(athlete_alias=ALIAS, job_kind="FULL_SYNC",
+            idempotency_key=seed*64, request_payload=payload)
+    original = enqueue("a", {"reason": "HR_CALIBRATION_CHANGED"})
+    assert enqueue("b", {"scope": "FULL"})["job_id"] == original["job_id"]
+    assert enqueue("c", {"reason": "HR_CALIBRATION_CHANGED"})["job_id"] == original["job_id"]
+    claimed = repository.claim_sync_job(worker_id="test", lease_seconds=300)
+    assert claimed["request_payload"]["reason"] == "COALESCED_FULL_REFRESH"
+
+
 def _snapshot(marker: str, *, with_activity: bool = True) -> dict:
     activities = [{"activity_ref": ACTIVITY_REF}] if with_activity else []
     return {

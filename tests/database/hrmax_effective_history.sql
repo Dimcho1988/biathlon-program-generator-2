@@ -33,6 +33,13 @@ begin
  assert not onflows_private.hr_analysis_current(a),'Old analysis was labelled with the new HR calibration';
  assert exists(select 1 from public.onflows_sync_jobs where athlete_alias=a and status='QUEUED'
   and request_payload->>'reason'='HR_CALIBRATION_CHANGED'),'Correction did not enqueue a durable rebuild';
+ -- A manual/provider request behind an HR correction must still import data.
+ perform public.enqueue_onflows_sync_job(a,'FULL_SYNC',repeat('d',64),'{"scope":"FULL"}');
+ assert exists(select 1 from public.onflows_sync_jobs where athlete_alias=a and status='QUEUED'
+  and request_payload->>'reason'='COALESCED_FULL_REFRESH'),'Coalescing lost the provider refresh';
+ perform public.enqueue_onflows_sync_job(a,'FULL_SYNC',repeat('e',64),'{"reason":"HR_CALIBRATION_CHANGED"}');
+ assert exists(select 1 from public.onflows_sync_jobs where athlete_alias=a and status='QUEUED'
+  and request_payload->>'reason'='COALESCED_FULL_REFRESH'),'HR correction downgraded the provider refresh';
  assert public.onflows_dashboard_preparation('READ',a,p_model_key=>repeat('c',64))->>'reason'='HR_CALIBRATION_CHANGED';
  assert public.onflows_learning_preparation('READ',a,p_model_key=>repeat('c',64))->>'reason'='HR_CALIBRATION_CHANGED';
  assert public.onflows_prepared_view('READ',a,'trainability',p_model_key=>repeat('c',64))->>'reason'='HR_CALIBRATION_CHANGED';

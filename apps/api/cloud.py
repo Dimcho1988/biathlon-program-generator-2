@@ -1340,6 +1340,11 @@ class InMemorySnapshotRepository:
                         or job["status"] in {"QUEUED", "RETRY_WAIT"}
                     )
                 ):
+                    if (job_kind == "FULL_SYNC" and job["status"] in {"QUEUED", "RETRY_WAIT"}
+                            and job["request_payload"].get("reason") == "HR_CALIBRATION_CHANGED"
+                            and request_payload.get("reason") != "HR_CALIBRATION_CHANGED"):
+                        job["request_payload"] = {**job["request_payload"], **deepcopy(dict(request_payload)),
+                                                  "reason": "COALESCED_FULL_REFRESH"}
                     return {
                         **self._public_job(job),
                         "deduplicated": True,

@@ -41,7 +41,7 @@ def ledger():
     return json.loads(sql((ROOT / "tests/database/migration_metadata_snapshot.sql").read_text()))
 
 
-def main():
+def _baseline_roundtrip():
     if len(sys.argv) != 1:
         raise SystemExit("No connection override: this acceptance runs only against local Supabase")
     migrations = list((ROOT / "supabase/migrations").glob("*_reconcile_existing_schema_baseline.sql"))
@@ -90,6 +90,23 @@ def main():
     assert catalog() == canonical and ledger() == metadata_before
     print("PASS unexpected EXECUTE grant is refused without accepting canonical code alone", flush=True)
     print("4 real local PostgreSQL schema reconciliation cases passed", flush=True)
+
+
+def main():
+    # The acceptance exercises the historical baseline's exact 18 definitions.
+    # A later migration legitimately changes enqueue semantics. Restore its
+    # reviewed baseline only for this roundtrip, then put the current body back
+    # before subsequent application-contract fixtures run.
+    current = catalog()
+    definition = json.loads(sql("select jsonb_build_object('definition',pg_get_functiondef("
+        "'public.enqueue_onflows_sync_job(text,text,text,jsonb)'::regprocedure));"))["definition"]
+    sql((ROOT / "supabase/migrations/202608270002_enqueue_sync_job_conflict_target.sql").read_text())
+    try:
+        _baseline_roundtrip()
+    finally:
+        sql(definition)
+    assert catalog() == current, "Historical roundtrip changed the current application schema"
+    print("PASS current enqueue behavior survives historical format reconciliation", flush=True)
 
 
 if __name__ == "__main__":
