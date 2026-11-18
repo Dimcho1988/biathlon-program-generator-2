@@ -15,8 +15,8 @@ insert into public.onflows_analysis_generations(generation_id,athlete_alias,job_
  0,'99009000-0000-0000-0000-000000000002',1,'ACTIVE','athlete-snapshot-v1',repeat('b',64),
  '{"schema_version":"athlete-snapshot-v1","training_status":{"athlete_id":"hr-history-contract"},"load_history":{"athlete_id":"hr-history-contract"}}',
  current_date,current_date,current_date,'{}',0,clock_timestamp(),clock_timestamp());
-insert into public.onflows_athlete_analysis_state(athlete_alias,active_generation_id,active_revision)
- values('hr-history-contract','99009000-0000-0000-0000-000000000002',1);
+insert into public.onflows_athlete_analysis_state(athlete_alias,active_generation_id,active_revision,request_sequence)
+ values('hr-history-contract','99009000-0000-0000-0000-000000000002',1,1);
 
 do $$ declare a constant text:='hr-history-contract'; prefs jsonb; revised jsonb; revision text; denied boolean;
 begin
