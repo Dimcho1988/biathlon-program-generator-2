@@ -48,7 +48,10 @@ def recalibrate_shadow(immutable, previous, *, detail, settings):
     hr = shadow_model.run_hrmod_v4_shadow(hr_samples=hr_samples, athlete_profile=profile,
                                          reference_channels=references)
     speed = {row["elapsed_s"]: row for row in speed_rows}
-    out = deepcopy(previous)
+    # Independent speed arrays remain immutable and can be shared. Copy only
+    # the HR rows and diagnostic mappings that this recalculation replaces.
+    out = {**previous, "timeseries": [dict(row) for row in old_rows],
+           "diagnostics": {**previous["diagnostics"], "vflat": dict(previous["diagnostics"]["vflat"])}}
     numeric = ("hr_clean_bpm", "hrmod_candidate_bpm", "hrmod_final_bpm", "hrmod_delta_bpm", "added_bpm", "removed_bpm")
     for i, (raw, row, h) in enumerate(zip(samples, out["timeseries"], hr["timeseries"], strict=True)):
         if raw["elapsed_s"] != row["elapsed_s"] or raw["timestamp"] != row["timestamp"]:
