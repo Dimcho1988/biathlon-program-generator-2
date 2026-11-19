@@ -43,14 +43,16 @@ class StoredCalibrationUnavailable(ValueError):
     """An older recording needs the ordinary refresh to establish its inputs."""
 
 
-def recalibrate_shadow(immutable, previous, *, detail, settings):
+def recalibrate_shadow(immutable, previous, *, detail, settings, model_upgrade=False):
     """Reuse measured speed/terrain; evaluate HRmod and paired TI exactly once."""
     samples = immutable.get("samples") or []
     old_rows = previous.get("timeseries") or []
     speed_rows = previous.get("speed_test_series")
     if (not samples or len(samples) != len(old_rows) or not isinstance(speed_rows, list)
             or immutable.get("input_hash") != previous.get("input_hash")
-            or previous.get("hrmod_model_version") != shadow_model.HRMOD_MODEL_VERSION
+            or previous.get("hrmod_model_version") not in (
+                {shadow_model.HRMOD_MODEL_VERSION, "hrmod_mirror_area_shift_v9"}
+                if model_upgrade else {shadow_model.HRMOD_MODEL_VERSION})
             or previous.get("hrmod_config_version") != shadow_model.HRMOD_CONFIG_VERSION
             or previous.get("terrain_model_version") != shadow_model.TERRAIN_MODEL_VERSION):
         raise StoredCalibrationUnavailable("Stored HR calibration inputs are incomplete or outdated")
@@ -100,6 +102,9 @@ def recalibrate_shadow(immutable, previous, *, detail, settings):
             (hr.get("exclusion_reason") if hr.get("status") == "excluded" else None) or
             speed.get(raw["elapsed_s"], {}).get("exclusion_reason"))
     duration = shadow_model._activity_duration_seconds(detail, strength_activity=False)
+    hr = shadow_model.compensate(out["timeseries"], hr, bounds=settings.zone_bounds_bpm,
+        sport=detail.get("type"), duration_s=duration, hrmax_bpm=settings.hrmax_bpm)
+    out.update(hrmod_model_version=hr["model_version"], hrmod_config_version=hr["config_version"])
     out["configuration_fingerprint"] = shadow_model.activity_shadow_configuration_fingerprint(
         settings.zone_bounds_bpm, settings.hrmax_bpm, activity_duration_s=duration, activity_detail=detail)
     paired_speed = [{**r, "timestamp": (start+timedelta(seconds=r["elapsed_s"])).isoformat(),
@@ -143,7 +148,7 @@ def _calibration_metadata(row):
 
 @_calibration_metrics()
 @serialized_model_work
-def refresh_hr_calibration(repository, *, athlete_alias, athlete_settings, base_generation_id):
+def refresh_hr_calibration(repository, *, athlete_alias, athlete_settings, base_generation_id, model_upgrade=False):
     """Replace the affected suffix; carry earlier loads and wellness unchanged."""
     from dataclasses import replace
     from biathlon import unified_load, load_evidence
@@ -159,7 +164,7 @@ def refresh_hr_calibration(repository, *, athlete_alias, athlete_settings, base_
     started = perf_counter()
     snapshot = repository.latest(athlete_alias)
     source = (snapshot or {}).get("load_history") or {}
-    first = athlete_settings.hr_recompute_from
+    first = source.get("period_start") if model_upgrade else athlete_settings.hr_recompute_from
     if (not first or not source.get("activities") or first < source.get("period_start", "9999")
             or not source.get("hr_calibration_history") or not source.get("hr_settings_revision")):
         raise StoredCalibrationUnavailable("Stored history does not cover the requested correction")
@@ -202,11 +207,12 @@ def refresh_hr_calibration(repository, *, athlete_alias, athlete_settings, base_
         old = at(old_settings, day)
         previous_fingerprint = shadow_model.activity_shadow_configuration_fingerprint(
             old.zone_bounds_bpm, old.hrmax_bpm, activity_detail=detail,
+            hrmod_model_version=previous.get("hrmod_model_version") if model_upgrade else None,
             activity_duration_s=shadow_model._activity_duration_seconds(detail, strength_activity=False))
         if previous.get("configuration_fingerprint") != previous_fingerprint:
             raise StoredCalibrationUnavailable("Stored recording uses a different model or metadata")
         with timed_stage("hr_model"):
-            derived = recalibrate_shadow(immutable, previous, detail=detail, settings=dated)
+            derived = recalibrate_shadow(immutable, previous, detail=detail, settings=dated, model_upgrade=model_upgrade)
         with timed_stage("hr_publish"):
             run_key = repository.publish_recalibrated_shadow(athlete_alias=athlete_alias, activity_ref=ref,
                 input_key=row["input_key"], derived_payload=derived)
@@ -266,7 +272,8 @@ def refresh_hr_calibration(repository, *, athlete_alias, athlete_settings, base_
         "profile_policy": model_service.HISTORICAL_SPEED_POLICY, "calibration_eligible": False,
         "unknown_seconds": sum((a.get("load_source") or {}).get("unknown_seconds", 0.) for a in projected["activities"]),
         "fallback_seconds": sum((a.get("load_source") or {}).get("fallback_seconds", 0.) for a in projected["activities"]),
-        "basis": "STORED_RECORDING_HR_CALIBRATION", "recomputed_from": first,
+        "basis": "STORED_RECORDING_MODEL_UPGRADE" if model_upgrade else "STORED_RECORDING_HR_CALIBRATION",
+        "hrmod_model_version": shadow_model.HRMOD_MODEL_VERSION, "recomputed_from": first,
         "reconstructed_activities": len(selected), "leading_indicator": athlete_settings.leading_indicator}
     projected["quality"]["limited_activities"] = sum(a["quality_status"] == "limited" for a in projected["activities"])
     from .load_metadata import coverage_warnings, with_load_metadata

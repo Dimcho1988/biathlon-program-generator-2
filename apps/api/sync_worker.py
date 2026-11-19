@@ -538,9 +538,11 @@ def _execute_pipeline(
     if job.job_kind == "FULL_SYNC":
         if local_hr:
             from .hr_recalculation import refresh_hr_calibration, StoredCalibrationUnavailable
+            from .hrmod_compensation import MODEL_VERSION as HRMOD_VERSION
             try:
                 refresh_hr_calibration(captured, athlete_alias=job.athlete_alias,
-                    athlete_settings=athlete_settings, base_generation_id=job.base_generation_id)
+                    athlete_settings=athlete_settings, base_generation_id=job.base_generation_id,
+                    model_upgrade=job.request_payload.get("hrmod_upgrade") == HRMOD_VERSION)
             except StoredCalibrationUnavailable as exc:
                 logger.info("hr_calibration_local_unavailable falling_back=full_refresh reason=%s", exc)
                 captured.report_sync_progress("PROVIDER")

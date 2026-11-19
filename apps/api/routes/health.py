@@ -1,6 +1,6 @@
 """Health HTTP routes."""
 
-from hrmod_lab.schemas import MODEL_VERSION as HRMOD_MODEL_VERSION
+from ..hrmod_compensation import MODEL_VERSION as HRMOD_MODEL_VERSION
 from vflat_b65 import MODEL_VERSION as VFLAT_MODEL_VERSION
 from vflat_b65 import SPRINT_STR_MODEL_VERSION
 from ..schemas import HealthResponse, ModelHealthResponse, TrainingStatusResponse

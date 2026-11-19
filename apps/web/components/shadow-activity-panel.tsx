@@ -106,6 +106,7 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
   const sprintSummary = (payload.sprint_str_summary && typeof payload.sprint_str_summary === "object") ? payload.sprint_str_summary as Row : {};
   const diagnostics = (payload.diagnostics && typeof payload.diagnostics === "object") ? payload.diagnostics as Row : {};
   const hrDiagnostics = (diagnostics.hrmod && typeof diagnostics.hrmod === "object") ? diagnostics.hrmod as Row : {};
+  const compensation = hrDiagnostics.compensation && typeof hrDiagnostics.compensation === "object" ? hrDiagnostics.compensation as Row : null;
   const hrDiagnosticFlags = Array.isArray(hrDiagnostics.flags) ? hrDiagnostics.flags.map(String) : [];
   const allFlags = Array.from(new Set([
     ...rows.flatMap((row) => [
@@ -163,6 +164,7 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
       </section>
 
       <TrainabilitySummary index={parseTrainabilityIndex(payload.trainability_index)} />
+      {compensation && <p>Добавките към пулса се компенсират първо от Z1, после от следващите зони в същата активност. Долна граница: {fixed(compensation.floor_bpm)} уд./мин; максимално понижение: {fixed(compensation.max_removal_bpm)} уд./мин.{compensation.capacity_limited ? " Недостатъчна площ за компенсация — добавките са ограничени." : ""}</p>}
 
       <div className="shadow-plots">
         <MiniPlot title={`Реална скорост ↔ ${vflatLabel}`} rows={rows} series={[
@@ -214,6 +216,7 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
 
       <details className="shadow-details">
         <summary><span><small>{hrmodLabel}</small>HR вълни, receiver и donor ({waves.length})</span><span className="chevron" aria-hidden="true">⌄</span></summary>
+        {compensation && <p>Таблицата показва първоначалната оценка по вълни. Крайната компенсация е разпределена по ниските зони на цялата активност.</p>}
         <div className="shadow-table-wrap shadow-scroll-table"><table><thead><tr>
           <th>ID</th><th>Status</th><th>Receiver</th><th>Donor</th><th>Added area</th><th>Removed area</th><th>Moved area</th><th>Capacity</th><th>Downhill</th><th>Flags / exclusion</th>
         </tr></thead><tbody>{waves.map((wave) => <tr key={text(wave.wave_id)}>

@@ -77,7 +77,9 @@ def test_running_configuration_changes_cache_and_comparison_without_changing_ski
     from vflat_b65.sports import speed_model_versions
     kwargs=dict(zone_bounds_bpm=(124,144,164,182,190,205),explicit_hrmax_bpm=205)
     legacy=activity_shadow_configuration_fingerprint(**kwargs)
-    assert legacy=="90b536d21b57b9d0b86f9dfc29451b856b3c9b50f53d7c93c31a47b10faebe3b"
+    old=activity_shadow_configuration_fingerprint(**kwargs, hrmod_model_version="hrmod_mirror_area_shift_v9")
+    assert old=="90b536d21b57b9d0b86f9dfc29451b856b3c9b50f53d7c93c31a47b10faebe3b"
+    assert legacy != old
     assert activity_shadow_configuration_fingerprint(**kwargs,sport="NordicSki")==legacy
     run=activity_shadow_configuration_fingerprint(**kwargs,sport="Run")
     assert run!=legacy
@@ -264,7 +266,7 @@ def test_explicit_hrmax_enables_hrmod_without_changing_immutable_input() -> None
         explicit_hrmax_bpm=200,
     )
     assert immutable_with == immutable_without
-    assert derived["hrmod_model_version"] == "hrmod_mirror_area_shift_v9"
+    assert derived["hrmod_model_version"] == "hrmod_low_zone_compensation_v10"
 
 
 def test_hr_below_z1_does_not_exclude_the_whole_activity() -> None:
