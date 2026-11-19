@@ -1592,8 +1592,9 @@ def _daily_intensity_contract(method, evidence, profile, purpose, controls, *, d
         contract["building"] |= role == "BUILDING" and (bool(library) or parent["zone"] in daily_intensity.HIGH)
         secondary = capacity.get("secondary_capacity") or {}
         if not library and secondary.get("zone") in daily_intensity.HIGH:
+            secondary_ratio = parent.get("interval_profile", {}).get("total_capacity_ratio", 1.)
             contract["references"].append({"part": part, "zones": [secondary["zone"]],
-                "minutes": secondary["capacity_minutes"] * continuous_building_fraction(profile) * factor,
+                "minutes": secondary["capacity_minutes"] * secondary_ratio * continuous_building_fraction(profile) * factor,
                 "method_id": parent["id"], "role": role, "recovery_factor": factor})
     return contract
 

@@ -103,12 +103,20 @@ def saved_contract(session):
         if not capacity or fraction is None or fraction <= 0:
             return None
         full = capacity * fraction / (.6 if reduced else 1.)
+        secondary = cap.get("secondary_capacity") or {}
+        threshold_high = cap.get("combination_high_work_cap") is not None and secondary.get("zone") in HIGH
+        if threshold_high:
+            full *= 2  # Saved primary fraction is the half allocated to threshold work.
         if role == "BUILDING":
             full = max(full * cap.get("readiness_dose_factor", 1.), cap.get("whole_role_work_minutes", 0.))
         library = cap.get("method_library")
         references.append({"part": i+1 if evidence.get("combined_budgets") else None,
             "zones": sorted(HIGH) if library else [budget["zone"]], "minutes": full,
             "method_id": budget["method_id"], "role": role})
+        if threshold_high:
+            references.append({"part": i+1 if evidence.get("combined_budgets") else None,
+                "zones": [secondary["zone"]], "minutes": secondary["capacity_minutes"] * secondary["fraction"] / (.3 if reduced else .5),
+                "method_id": budget["method_id"], "role": role})
         building |= role == "BUILDING" and (bool(library) or budget["zone"] in HIGH)
     result = {"version": VERSION, "references": references, "building": building,
               "reference_source": "PRESERVED_NOMINAL_METHOD_DOSE"}
