@@ -13,13 +13,13 @@ export function PreparedViewRetry({compact = false, keepPolling = false}: {compa
     const poll = () => {
       if (!keepPolling && Date.now() - started >= 120_000) {
         setWaitingTooLong(true);
-        return;
       }
       if (document.visibilityState === "visible") router.refresh();
       // A server refresh reloads the page's sources. Space those reads while
-      // keeping a bounded wait and an immediate manual retry.
+      // slowing down after a long wait without abandoning the pending page.
       delay = Math.min(20_000, delay + 5000);
-      timer = setTimeout(poll, keepPolling ? delay : Math.min(delay, 120_000 - (Date.now() - started)));
+      const elapsed = Date.now() - started;
+      timer = setTimeout(poll, keepPolling ? delay : elapsed >= 120_000 ? 60_000 : Math.min(delay, 120_000 - elapsed));
     };
     timer = setTimeout(poll, delay);
     return () => clearTimeout(timer);

@@ -28,9 +28,10 @@ def start(repository, stopping):
                 except Exception as exc:
                     logger.warning('management_tick_deferred error_type=%s', type(exc).__name__)
             warmer = getattr(repository, 'process_next_prepared_dashboard', None)
-            if not stopping.is_set() and not worked and callable(warmer) and monotonic() >= next_dashboard:
+            if not stopping.is_set() and callable(warmer) and monotonic() >= next_dashboard:
                 next_dashboard = monotonic()+15.
                 try:
+                    # A busy planning queue must not starve the status page.
                     warmer()
                 except Exception as exc:
                     logger.warning('dashboard_tick_deferred error_type=%s', type(exc).__name__)

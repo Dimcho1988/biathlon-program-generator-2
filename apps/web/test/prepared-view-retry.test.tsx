@@ -15,19 +15,19 @@ afterEach(async () => {
   await act(async()=>root.unmount());container.remove();vi.clearAllTimers();vi.useRealTimers();vi.unstubAllGlobals();
 });
 
-it("provides a visible retry, bounds automatic polling and lets the user restart reads", async () => {
+it("provides a visible retry, slows automatic polling and lets the user restart reads", async () => {
   await act(async()=>root.render(<PreparedViewRetry/>));
   expect(container.querySelector("button")?.textContent).toBe("Провери отново");
   await act(async()=>vi.advanceTimersByTimeAsync(120_000));
-  expect(refresh).toHaveBeenCalledTimes(7);
+  expect(refresh).toHaveBeenCalledTimes(8);
   expect(container.textContent).toContain("Подготовката отнема повече време от обичайното");
   await act(async()=>vi.advanceTimersByTimeAsync(120_000));
-  expect(refresh).toHaveBeenCalledTimes(7);
+  expect(refresh).toHaveBeenCalledTimes(10);
   await act(async()=>container.querySelector("button")!.click());
-  expect(refresh).toHaveBeenCalledTimes(8);
+  expect(refresh).toHaveBeenCalledTimes(11);
   expect(container.textContent).not.toContain("Подготовката отнема повече време от обичайното");
   await act(async()=>vi.advanceTimersByTimeAsync(5000));
-  expect(refresh).toHaveBeenCalledTimes(9);
+  expect(refresh).toHaveBeenCalledTimes(12);
 });
 
 it("does not reload hidden pages and cancels scheduled reads on unmount", async () => {

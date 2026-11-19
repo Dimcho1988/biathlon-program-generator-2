@@ -30,7 +30,7 @@ it("lets prepared-page backoff own refresh after publication while the old page 
   </>));
   expect(refresh).not.toHaveBeenCalled();
   await act(async()=>vi.advanceTimersByTimeAsync(120_000));
-  expect(refresh).toHaveBeenCalledTimes(7);
+  expect(refresh).toHaveBeenCalledTimes(8);
 });
 
 it("keeps reading queue progress without triggering an extra page refresh", async () => {

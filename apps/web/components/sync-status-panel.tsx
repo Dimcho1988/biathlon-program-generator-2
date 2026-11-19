@@ -137,7 +137,7 @@ export function SyncStatusPanel({
     <div><strong>Използвана е по-нова заявка</strong><span>Текущият изглед ще следва последната активирана версия.</span></div>
   </section>;
   if (state.state === "SUCCEEDED") return <section className="sync-status completed" role="status">
-    <div><strong>Новата версия е активирана</strong><span>{preparingView ? "Подготвяме изгледа с обновените модели." : "Обновяваме показания анализ."}</span></div>
+    <div><strong>{preparingView ? "Данните са обновени. Подготвяме анализа." : "Новата версия е активирана"}</strong><span>{preparingView ? "Подготвяме изгледа с обновените модели." : "Обновяваме показания анализ."}</span></div>
   </section>;
 
   const retry = state.state === "RETRY_WAIT";
