@@ -51,11 +51,14 @@ def test_treadmill_does_not_invent_speed_from_total_distance_or_remove_grade_lim
     assert not any(not reason for *_,reason in sample_intervals(steep))
 
 
-def test_only_treadmill_model_identity_changes():
+def test_treadmill_speed_identity_is_separate_from_hrmod_upgrade():
     kwargs = {"zone_bounds_bpm": (124,144,164,182,190,205), "explicit_hrmax_bpm":205}
-    # Includes the shared paired-HR validity v4 policy; treadmill-specific
-    # speed handling still has its own identity below.
-    assert activity_shadow_configuration_fingerprint(**kwargs,sport="NordicSki") == "90b536d21b57b9d0b86f9dfc29451b856b3c9b50f53d7c93c31a47b10faebe3b"
+    # Preserve the legacy identity for stored-history verification. HRmod v10
+    # invalidates combined results, while treadmill speed stays independent.
+    legacy = activity_shadow_configuration_fingerprint(**kwargs, sport="NordicSki",
+        hrmod_model_version="hrmod_mirror_area_shift_v9")
+    assert legacy == "90b536d21b57b9d0b86f9dfc29451b856b3c9b50f53d7c93c31a47b10faebe3b"
+    assert activity_shadow_configuration_fingerprint(**kwargs, sport="NordicSki") != legacy
     assert speed_model_versions("Run") == speed_model_versions("TrailRun")
     assert speed_model_versions("VirtualRun") != speed_model_versions("Run")
     assert speed_model_versions("TreadmillRunning") == speed_model_versions("VirtualRun")
