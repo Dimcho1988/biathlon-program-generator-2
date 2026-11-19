@@ -168,6 +168,16 @@ def test_mixed_reservation_and_prescription_share_curve_policy_and_single_recove
     secondary = evidence["secondary_capacity"]
     assert secondary["capacity_reference"] == "EXPERT_REPETITION_DURATION_COEFFICIENT_ON_CURVE"
     assert secondary["capacity_minutes"] == pytest.approx(80 / 60)
+    from biathlon import daily_intensity
+    contract = evidence["daily_intensity"]
+    high_reference = next(r for r in contract["references"] if r["zones"] == ["Z5"])
+    assert high_reference["minutes"] == pytest.approx(80 / 60 * 3 * .65 * factor)
+    legacy = deepcopy(sessions[0])
+    legacy["dose_evidence"].pop("daily_intensity")
+    restored = daily_intensity.saved_contract(legacy)
+    assert restored is not None
+    assert daily_intensity.usage(legacy["blocks"], restored["references"]) == pytest.approx(
+        daily_intensity.usage(legacy["blocks"], contract["references"]))
     high_blocks = [block for block in sessions[0]["blocks"] if block["kind"] == "WORK" and block["zone"] == "Z5"]
     assert high_blocks
     assert all(block["target_speed_kmh"] == pytest.approx(curve.speed(80) * 3.6, abs=.001)
