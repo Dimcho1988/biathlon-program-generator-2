@@ -184,7 +184,7 @@ def endpoint(kind):
 
 def _load_registry():
     # Import lazily in the worker as in the API. No separate scientific path.
-    from .routes import activities, management, management_speed_comparison, models, response  # noqa: F401
+    from .routes import activities, management, management_speed_comparison, models, response, energy  # noqa: F401
 
 
 def calculate(repository, alias, kind, parameters, *, day=None):

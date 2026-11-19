@@ -25,7 +25,7 @@ _ROOTS = {
               "apps.api.trainability_history", "apps.api.response_service", "apps.api.management_service",
               "apps.api.management_lifecycle", "apps.api.management_overview",
               "apps.api.management_speed_comparison", "apps.api.management_projection",
-              "apps.api.method_library_service", "apps.api.read_session"),
+              "apps.api.method_library_service", "apps.api.energy_service", "apps.api.read_session"),
 }
 # Keep route output/validation contracts in the identity, but their unrelated
 # write endpoints must not import the entire assistant into the model graph.
@@ -34,7 +34,7 @@ _CONTRACTS = {
     "learning": ("apps.api.prepared_learning",),
     "pages": ("apps.api.prepared_views", "apps.api.prepared_view_storage",
               "apps.api.routes.activities", "apps.api.routes.models", "apps.api.routes.response",
-              "apps.api.routes.management", "apps.api.routes.management_speed_comparison",
+              "apps.api.routes.management", "apps.api.routes.management_speed_comparison", "apps.api.routes.energy",
               "apps.api.sync_service"),
 }
 # These operate on access, transport, scheduling, or telemetry. Their values

@@ -14,7 +14,7 @@ from . import prepared_views, prepared_learning
 from .management_projection import public_management
 from .oauth_store import PersistentStoreFailure
 
-KINDS = frozenset({"settings", "activities", "activity", "speed", "trainability", "learning", "response", "management", "methods"})
+KINDS = frozenset({"settings", "activities", "activity", "speed", "trainability", "learning", "response", "energy", "management", "methods"})
 PLAN_KINDS = frozenset({"management", "methods"})
 PHASES = frozenset({"GENERAL_PREPARATION", "SPECIAL_PREPARATION", "PRECOMPETITION", "COMPETITION", "RE_ENTRY", "TRANSITION"})
 PARAMETERS = frozenset({"activity_ref", "sport", "view", "days", "phase", "offset", "limit", "section", "duration_s", "distance_m", "speed_kmh", "hr_bpm", "start_s", "revision", "plan_kind", "test_mode", "discipline", "race_duration_min"})
@@ -421,6 +421,21 @@ def read(repository, alias, access, query, settings, today, parse_date, *, actor
             if isinstance(payload.get("dosing_model"), dict):
                 payload["dosing_model"].pop("points", None)
             payload["available_views"] = ["overview", "curve", "tests", "zones", "history", "load"]
+    elif kind == "energy":
+        q = dict(query)
+        if q.get("date"):
+            q.update(start=q["date"], end=q["date"])
+        parameters = _parameters(q, today, parse_date)
+        parameters.pop("sport", None)
+        payload = _prepared(repository, alias, "energy", parameters)
+        if not query.get("section") and isinstance(payload.get("days"), list):
+            # The menu needs daily totals and targets, not hundreds of chart bins.
+            # Explicit section reads still expose the identical saved full report.
+            payload = {**payload, "days": [{**day, "activities": [
+                {key: value for key, value in activity.items() if key != "timeline"}
+                for activity in day.get("activities", [])]} for day in payload["days"]]}
+            payload.pop("profiles", None)
+            payload["detail_access"] = "Use section=days.<index>.activities for the saved per-activity timelines; indexes refer to the requested period."
     elif kind in {"trainability", "response"}:
         parameters = _parameters(query, today, parse_date)
         parameters.pop("sport", None)

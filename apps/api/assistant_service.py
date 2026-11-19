@@ -99,7 +99,7 @@ def _capabilities(access):
     reads = {"inputs", "navigation"}
     read_views={}
     if access.get("can_view_recovery"):
-        reads.update({"status", "history", "activities", "activity", "speed", "trainability", "learning", "response"})
+        reads.update({"status", "history", "activities", "activity", "speed", "trainability", "learning", "response", "energy"})
         read_views["history"] = ["summary", "daily", "activities"]
         read_views["activities"] = ["summary", "calendar"]
         if access.get("is_owner"):
