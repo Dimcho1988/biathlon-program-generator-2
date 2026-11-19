@@ -107,7 +107,7 @@ def process_dashboard(repository, alias=None):
                     raise HTTPException(409, "Dashboard preparation lease changed")
                 saved = operation("STORE", alias=alias, token=token, revision=claim["revision"],
                     day=claim["day"], model_key=key, envelope=envelope)
-                logger.info("prepared_dashboard state=%s", "prepared" if isinstance(saved, dict)
+                logger.info("prepared_dashboard athlete=%s revision=%s state=%s", alias, claim["revision"], "prepared" if isinstance(saved, dict)
                     and saved.get("stored") is True else "superseded")
                 cleanup = getattr(repository, "cleanup_prepared_data", None)
                 if isinstance(saved, dict) and saved.get("stored") is True and callable(cleanup):
@@ -120,7 +120,7 @@ def process_dashboard(repository, alias=None):
                 operation("FAIL", alias=alias, token=token)
             except Exception:
                 pass
-            logger.warning("prepared_dashboard state=deferred error_type=%s", type(exc).__name__)
+            logger.warning("prepared_dashboard athlete=%s revision=%s state=deferred error_type=%s", alias, claim["revision"], type(exc).__name__)
     return True
 
 
