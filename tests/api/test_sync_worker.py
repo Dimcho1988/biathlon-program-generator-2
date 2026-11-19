@@ -312,11 +312,14 @@ def test_progress_uses_the_claim_fence_and_cannot_fail_a_generation():
     assert process(repo, claim()).outcome == "ACTIVATED"
 
 
-def test_hr_change_uses_pinned_local_pipeline_without_provider(monkeypatch):
+@pytest.mark.parametrize("upgrade", [False, True])
+def test_hr_change_uses_pinned_local_pipeline_without_provider(monkeypatch, upgrade):
     from apps.api import hr_recalculation
+    from apps.api.hrmod_compensation import MODEL_VERSION
     repo = Repository()
-    def local(captured, *, athlete_alias, athlete_settings, base_generation_id):
+    def local(captured, *, athlete_alias, athlete_settings, base_generation_id, model_upgrade):
         assert base_generation_id == "generation-001"
+        assert model_upgrade is upgrade
         assert captured.latest(athlete_alias) == repo.current
         captured.upsert_activity_catalog(athlete_alias, [])
         captured.replace(athlete_alias, snapshot(marker="hr-local"))
@@ -324,7 +327,7 @@ def test_hr_change_uses_pinned_local_pipeline_without_provider(monkeypatch):
     def unexpected(*args, **kwargs):
         raise AssertionError("HR correction must not contact the provider")
     result = process_claimed_job(repo, claim(base_generation_id="generation-001", base_revision=1,
-        request_payload={"reason": "HR_CALIBRATION_CHANGED"}),
+        request_payload={"reason": "HR_CALIBRATION_CHANGED", "hrmod_upgrade": MODEL_VERSION if upgrade else None}),
         pipelines=SyncPipelines(full=unexpected, wellness=unexpected, recovery=unexpected),
         lease_seconds=30, heartbeat_interval_seconds=30, clock=lambda: NOW)
     assert result.outcome == "ACTIVATED"

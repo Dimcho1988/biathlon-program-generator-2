@@ -47,7 +47,8 @@ def test_local_hr_correction_matches_full_model_without_speed_recomputation(monk
 
 
 @pytest.mark.parametrize("personal_calibration", [False, True])
-def test_local_month_rebuild_matches_full_refresh_and_keeps_prefix(monkeypatch, personal_calibration):
+@pytest.mark.parametrize("model_upgrade", [False, True])
+def test_local_month_rebuild_matches_full_refresh_and_keeps_prefix(monkeypatch, personal_calibration, model_upgrade):
     from dataclasses import replace
     from datetime import date
     from apps.api.cloud import AthleteModelSettings, InMemorySnapshotRepository
@@ -95,6 +96,8 @@ def test_local_month_rebuild_matches_full_refresh_and_keeps_prefix(monkeypatch, 
     new = replace(old, hrmax_bpm=188, zone_bounds_bpm=bounds_from_hrmax(188,(45,72,79,89,94,100)),
         hr_history=(calibration(193,"0001-01-01"),calibration(188,"2026-08-14")),
         hr_recompute_from="2026-08-14", hr_settings_revision="new")
+    if model_upgrade:
+        new = old
     def speed_inputs(repository, alias):
         calendar = {"generation_id": "base", "activities": list(repository._activity_catalog.values()),
                     "snapshot_payload": repository.latest(alias)}
@@ -106,22 +109,28 @@ def test_local_month_rebuild_matches_full_refresh_and_keeps_prefix(monkeypatch, 
         monkeypatch.setattr(model_service, "speed_view", lambda repository, alias, sport, **kwargs: {"sport": sport})
     repo = Repository()
     repo.settings = old
-    refresh(repo, environ=ENV, client=Recordings(), period_end=date(2026,8,15), athlete_settings=old)
+    with monkeypatch.context() as legacy:
+        if model_upgrade:
+            from apps.api import activity_shadow_pipeline
+            legacy.setattr(activity_shadow_pipeline, "HRMOD_MODEL_VERSION", "hrmod_mirror_area_shift_v9")
+            legacy.setattr(activity_shadow_pipeline, "compensate", lambda rows, hrmod, **kwargs: hrmod)
+        refresh(repo, environ=ENV, client=Recordings(), period_end=date(2026,8,15), athlete_settings=old)
     before = repo.latest("pilot")
     old_catalog = deepcopy(repo._activity_catalog)
     for row in repo._activity_catalog.values():
         row["input_key"] = repo._activity_runs[("pilot",row["activity_ref"])][-1]["input_key"]
     repo.settings = new
-    refresh_hr_calibration(repo, athlete_alias="pilot", athlete_settings=new, base_generation_id="base")
+    refresh_hr_calibration(repo, athlete_alias="pilot", athlete_settings=new, base_generation_id="base", model_upgrade=model_upgrade)
     local = repo.latest("pilot")
-    assert repo.read_dates == ["2026-08-14", "2026-08-15"]
+    assert repo.read_dates == ([f"2026-08-{day:02d}" for day in range(7,16)] if model_upgrade else ["2026-08-14", "2026-08-15"])
     assert local["wellness_calendar"] == before["wellness_calendar"]
-    assert local["load_history"]["hr_settings_revision"] == "new"
+    assert local["load_history"]["hr_settings_revision"] == new.hr_settings_revision
+    first = before["load_history"]["period_start"] if model_upgrade else "2026-08-14"
     for key in ("daily", "activities"):
-        assert [r for r in local["load_history"][key] if r["date"] < "2026-08-14"] == [
-            r for r in before["load_history"][key] if r["date"] < "2026-08-14"]
+        assert [r for r in local["load_history"][key] if r["date"] < first] == [
+            r for r in before["load_history"][key] if r["date"] < first]
     for key, row in old_catalog.items():
-        if row["local_date"] < "2026-08-14":
+        if row["local_date"] < first:
             assert repo._activity_catalog[key]["latest_shadow_run_key"] == row["latest_shadow_run_key"]
             assert repo._activity_catalog[key]["latest_canonical_run_key"] == row["latest_canonical_run_key"]
     # Independent complete provider calculation under the same dated settings.

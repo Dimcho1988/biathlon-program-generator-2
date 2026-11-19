@@ -19,9 +19,9 @@ from vflat_b65.sports import is_running, is_cycling, is_treadmill, is_nordic, sp
 from vflat_b65.load import VERSION as SPEED_LOAD_SAMPLES_VERSION
 from biathlon.sport_heart_rate import reference_offset, policy as sport_hr_policy
 from biathlon.unified_load import HR_INTERVAL_VERSION
+from .hrmod_compensation import MODEL_VERSION as HRMOD_MODEL_VERSION, compensate
 from hrmod_lab.schemas import (
     CONFIG_VERSION as HRMOD_CONFIG_VERSION,
-    MODEL_VERSION as HRMOD_MODEL_VERSION,
     AthleteHRProfile,
     HRInputSample,
     HRZone,
@@ -101,6 +101,7 @@ def activity_shadow_configuration_fingerprint(
     *, activity_duration_s: float | None = None,
     activity_detail: Mapping[str, Any] | None = None,
     sport: str | None = None,
+    hrmod_model_version: str | None = None,
 ) -> str:
     """Identify every setting that can change a derived shadow result.
 
@@ -120,7 +121,7 @@ def activity_shadow_configuration_fingerprint(
         "vflat_config_version": versions[1],
         "sprint_str_model_version": SPRINT_STR_MODEL_VERSION,
         "sprint_str_config_version": SPRINT_STR_CONFIG_VERSION,
-        "hrmod_model_version": HRMOD_MODEL_VERSION,
+        "hrmod_model_version": hrmod_model_version or HRMOD_MODEL_VERSION,
         "hrmod_config_version": HRMOD_CONFIG_VERSION,
         "hrmod_source_commit": SOURCE_COMMIT,
         "terrain_model_version": TERRAIN_MODEL_VERSION,
@@ -476,6 +477,10 @@ def compute_activity_shadow(
                 "exclusion_reason": exclusion,
             }
         )
+    hrmod = _validated_stage("HRMOD_COMPENSATION", lambda: compensate(
+        rows, hrmod, bounds=zone_bounds_bpm, sport=detail.get("type"),
+        hrmax_bpm=explicit_hrmax_bpm,
+        duration_s=_activity_duration_seconds(detail, strength_activity=is_strength_activity(detail))))
     activity_start = _start_time(detail)[0]
     payload = {
         "schema_version": DERIVED_SCHEMA_VERSION,
