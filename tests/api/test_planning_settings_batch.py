@@ -1,5 +1,6 @@
 """One request-scoped settings row with unchanged lazy field validation."""
 from copy import deepcopy
+from datetime import date
 from types import SimpleNamespace
 
 import httpx
@@ -22,6 +23,18 @@ def settings_row():
     return {
         "hr_zone_bounds": [100, 120, 140, 160, 180, 200], "timezone": "Europe/Sofia",
         "hrmax_bpm": 200, "hr_zone_source": "MANUAL", "hr_zone_percentages": None,
+        "model_preferences": {
+            "age_years": 26, "leading_indicator": "SPEED", "hrmax_source": "MANUAL",
+            "hr_settings_revision": "calibration-2", "hr_recompute_from": "2026-08-15",
+            "hr_history": [
+                {"from": "0001-01-01", "hrmax_bpm": 190,
+                 "zone_bounds_bpm": [90, 115, 135, 155, 175, 190], "hr_zone_source": "MANUAL",
+                 "hr_zone_percentages": None},
+                {"from": "2026-08-15", "hrmax_bpm": 200,
+                 "zone_bounds_bpm": [100, 120, 140, 160, 180, 200], "hr_zone_source": "MANUAL",
+                 "hr_zone_percentages": None},
+            ],
+        },
         "planning_profile": planning_profile().to_payload(),
         "mesocycle_accent_preferences": {"schema_version": "mesocycle-accent-preferences-v1",
                                           "accent_mode": "HYBRID", "accent_limit": 3,
@@ -68,6 +81,28 @@ def test_settings_bundle_matches_all_four_individual_results_with_one_http_read(
     assert "athlete_alias=eq.ath%26one%2Ftwo%3F" in str(calls[0].url)
     assert set(calls[0].url.params["select"].split(",")) == set(settings_row())
     assert scope.athlete_settings("ath&one/two?") == expected["athlete_settings"]
+    assert len(calls) == 1
+
+
+def test_page_inputs_keep_dated_calibration_and_accept_current_load_history(monkeypatch):
+    from apps.api.actual_load_projection import reconstruct_history
+    from apps.api.hr_settings_history import at
+    repo, calls = repository({"athlete": settings_row()})
+    scope = ReadSession(repo, planning_settings_bundle=True)
+    settings = scope.athlete_settings("athlete")
+    assert at(settings, date(2026, 8, 14)).hrmax_bpm == 190
+    assert at(settings, date(2026, 8, 15)).hrmax_bpm == 200
+    assert settings.leading_indicator == "SPEED" and settings.age_years == 26
+    # Exercise the same revision guard used by the outlook, with the immutable
+    # derived ledger already cached. No provider stream is needed for this read.
+    source = {"hr_settings_revision": "calibration-2", "period_start": "2026-08-15",
+              "period_end": "2026-08-15", "activities": [], "daily": []}
+    monkeypatch.setattr(repo, "read_load_projection", lambda alias, key:
+                        {**deepcopy(source), "load_selection": {"fingerprint": key}})
+    result = reconstruct_history(scope, "athlete", source, speed_inputs={
+        "calendar": {"generation_id": "generation-2", "revision": 2},
+        "entries": [], "today": date(2026, 8, 15)})
+    assert result["hr_settings_revision"] == "calibration-2"
     assert len(calls) == 1
 
 

@@ -38,7 +38,7 @@ from .management_projection import public_learning, public_management
 from .planning_diagnostics import compact_rejections
 from . import plan_speed_comparison
 
-VERSION = "training-management-v75-dated-training-structure"
+VERSION = "training-management-v76-current-hr-prescriptions"
 PARAMETER_VERSION = "management-parameters-v61"
 MIN_AEROBIC_DOSE_FRACTION = 0.  # Native recipes own their structural minimum; no generic Tmax floor.
 Z1_WORKING_BAND_WIDTH_BPM = 20.
@@ -495,8 +495,30 @@ def capacity_for(method, settings, speed, context, today, allow_fallback=True, *
         result["effort_anchor"].update(speed_role="RAW_MOVING_SPEED", initial_heuristic=True,
                                        calibration_source="INITIAL_HEURISTIC", calibration_eligible=False)
     return {**result, "zone_tmax_minutes": basis["minutes"], "zone_tmax_sources": basis["sources"],
-            "dose_settings": {"zone_bounds_bpm": list(local.zone_bounds_bpm), "hrmax_bpm": local.hrmax_bpm,
-                              "sport_hr_offset_bpm": getattr(local, "sport_hr_offset_bpm", 0.)}}
+            "dose_settings": _dose_settings(local)}
+
+
+def _dose_settings(settings):
+    return {"zone_bounds_bpm": list(settings.zone_bounds_bpm), "hrmax_bpm": settings.hrmax_bpm,
+            "sport_hr_offset_bpm": getattr(settings, "sport_hr_offset_bpm", 0.),
+            **({"hr_settings_revision": settings.hr_settings_revision}
+               if getattr(settings, "hr_settings_revision", None) else {})}
+
+
+def _locked_hr_current(day, settings):
+    """A saved dose can survive only while its own HR calibration is current.
+
+    The plan envelope may already describe a newer calibration after preserving
+    today's old sessions. Check their dosing evidence, never just that envelope.
+    Missing legacy evidence is rebuilt through the normal remaining-slot rules.
+    """
+    from biathlon.sport_heart_rate import local_settings
+    for session in planning_schedule.day_sessions(day):
+        local = local_settings(settings, session.get("sport"))
+        expected = _dose_settings(local)
+        if (session.get("dose_evidence") or {}).get("dose_settings") != expected:
+            return False
+    return True
 
 
 def _capacity_for_impl(method, settings, speed, context, today, allow_fallback=True, *, use_model_prior=False):
@@ -1912,6 +1934,8 @@ def generate_plan(repository, alias: str, profile: dict, *, start_date: date, no
     settings = repository.athlete_settings(alias)
     if settings is None:
         raise ValueError("Настройте пулсовите граници преди генериране.")
+    if locked_day and not _locked_hr_current(locked_day, settings):
+        locked_day = None
     today = now.astimezone(ZoneInfo(settings.timezone)).date()
     if start_date < today or start_date > today + timedelta(days=7):
         raise ValueError("Началото на седемдневния проект трябва да е днес или в следващите 7 дни.")
