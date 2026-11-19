@@ -785,7 +785,7 @@ class SupabasePilotRepository(SnapshotRepository):
         response = self._request(
             "GET",
             "/onflows_athlete_settings?select=hr_zone_bounds,timezone,hrmax_bpm,"
-            "hr_zone_source,hr_zone_percentages,planning_profile,"
+            "hr_zone_source,hr_zone_percentages,model_preferences,planning_profile,"
             "mesocycle_accent_preferences,planning_calendar"
             f"&athlete_alias=eq.{quote(athlete_alias, safe='')}&limit=1",
         )
