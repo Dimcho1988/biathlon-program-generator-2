@@ -16,6 +16,8 @@ export type NutritionProfile = {
   resting_kcal: number | null;
   outside_factor: number;
   outside_cho_fraction: number;
+  strength_met?: number;
+  strength_cho_fraction?: number;
   preferences: string;
   allergies: string;
 };
@@ -25,11 +27,22 @@ export type EnergyActivity = Partial<Energy> & {
   kcal: number | null;
   duration_s: number;
   covered_seconds?: number;
+  accounted_seconds?: number;
+  estimated_seconds?: number;
+  unknown_seconds?: number;
+  paused_seconds?: number;
+  method?: "HR_OR_SPEED_REGRESSION" | "STRENGTH_MET";
+  met?: number;
+  above_rest_kcal?: number | null;
+  carbohydrate_fraction_assumption?: number;
+  protein_fraction_assumption?: number;
+  uncovered_reasons_seconds?: { missing_signal: number; outside_hr_range: number };
   coverage_percent: number;
   timeline: (Energy & { start_s: number; seconds: number })[];
   source_seconds?: {
     measured_hr: number;
     relative_intensity: number;
+    strength_met?: number;
     unknown: number;
   };
 };
@@ -42,6 +55,8 @@ export type EnergyDay = {
   total: Energy | null;
   accounted: Energy;
   coverage_percent: number | null;
+  estimated_activity_seconds?: number;
+  unknown_activity_seconds?: number;
   status: string;
   reason: string | null;
   resting_basis: string;

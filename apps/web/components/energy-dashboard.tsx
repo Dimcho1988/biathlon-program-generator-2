@@ -2,7 +2,7 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import type { Energy, EnergyHistory } from "../lib/energy";
+import type { Energy, EnergyDay, EnergyHistory } from "../lib/energy";
 const macros = [
   ["carbohydrate", "Въглехидрати", "#159b8d"],
   ["fat", "Мазнини", "#cc8a30"],
@@ -10,14 +10,21 @@ const macros = [
 ] as const;
 const n = (v: number | null | undefined, d = 0) =>
   v == null ? "—" : v.toLocaleString("bg-BG", { maximumFractionDigits: d });
+const dailyValue = (d: EnergyDay): Energy | null =>
+  d.total ?? (d.outside || d.activity.kcal > 0 ? d.accounted : null);
+const dailyLabel = (d: EnergyDay, today: string) =>
+  d.total ? "Целият ден · моделна оценка" : !dailyValue(d)
+    ? "Няма оценка" : d.day === today ? "До момента · частична сума" : "Частична сума";
 function MacroTable({
   activity,
   outside,
   total,
+  totalLabel,
 }: {
-  activity: Energy;
+  activity: Energy | null;
   outside: Energy | null;
   total: Energy | null;
+  totalLabel: string;
 }) {
   return (
     <div className="energy-table">
@@ -34,9 +41,9 @@ function MacroTable({
         </thead>
         <tbody>
           {[
-            ["В активности (покрити участъци)", activity],
+            ["В активности (оценена част)", activity],
             ["Извън активности", outside],
-            ["Целият ден", total],
+            [totalLabel, total],
           ].map(([label, e]) => (
             <tr key={String(label)}>
               <th>{String(label)}</th>
@@ -49,9 +56,9 @@ function MacroTable({
               ))}
             </tr>
           ))}
-          {total && (
+          {total && total.kcal > 0 && activity && (
             <tr>
-              <th>Дял от активности</th>
+              <th>Активности · дял от показаната сума</th>
               <td>{n((100 * activity.kcal) / total.kcal, 1)}%</td>
               {macros.map(([k]) => (
                 <td key={k}>
@@ -93,6 +100,8 @@ function ProfileForm({
         : null,
       outside_factor: Number(f.get("outside_factor")),
       outside_cho_fraction: Number(f.get("outside_cho_fraction")) / 100,
+      strength_met: Number(f.get("strength_met")),
+      strength_cho_fraction: Number(f.get("strength_cho_fraction")) / 100,
       preferences: String(f.get("preferences") || ""),
       allergies: String(f.get("allergies") || ""),
       expected_revision:
@@ -233,6 +242,18 @@ function ProfileForm({
               </small>
             </label>
             <label>
+              Силова тренировка · средни MET
+              <input name="strength_met" type="number" min="1" max="12" step="0.1"
+                required defaultValue={p?.strength_met ?? 3.5} />
+              <small>Начално 3,5 MET за сесия с почивките; 6 MET е ориентир за интензивна силова работа. Настройката важи от избраната дата.</small>
+            </label>
+            <label>
+              Въглехидрати при сила · %
+              <input name="strength_cho_fraction" type="number" min="0" max="100" step="1"
+                required defaultValue={(p?.strength_cho_fraction ?? 0.5) * 100} />
+              <small>Допускане за небелтъчната енергия, начално 50%. MET не определя разпределението по субстрати.</small>
+            </label>
+            <label>
               Алергии и непоносимости
               <textarea
                 name="allergies"
@@ -270,10 +291,13 @@ export function EnergyDashboard({
   canEdit: boolean;
 }) {
   const [selected, setSelected] = useState(
-    data.days.filter((d) => d.total).at(-1)?.day ?? data.days.at(-1)?.day ?? "",
+    data.days.filter((d) => d.day < data.today && dailyValue(d)).at(-1)?.day ?? data.days.at(-1)?.day ?? "",
   );
   const [unit, setUnit] = useState<"kcal" | "g">("kcal");
   const day = data.days.find((d) => d.day === selected) ?? data.days.at(-1);
+  const shown = day ? dailyValue(day) : null;
+  const activityShown = day && (day.activity.kcal > 0 || (day.outside && !day.activities.length))
+    ? day.activity : null;
   const quantity = (e: Energy) =>
     unit === "kcal" ? e.kcal : macros.reduce((v, [k]) => v + e[`${k}_g`], 0);
   const max = Math.max(
@@ -336,7 +360,7 @@ export function EnergyDashboard({
               key={d.day}
               type="button"
               className={`energy-daybar ${d.total ? "" : "partial"} ${selected === d.day ? "selected" : ""}`}
-              aria-label={`${d.day}: ${n(quantity(d.total ?? d.accounted))} ${unit}, ${d.total ? "моделна оценка" : "частични данни"}`}
+              aria-label={`${d.day}: ${dailyValue(d) ? `${n(quantity(dailyValue(d)!))} ${unit}` : "няма оценка"}, ${dailyLabel(d, data.today)}`}
               aria-pressed={selected === d.day}
               onClick={() => setSelected(d.day)}
             >
@@ -368,6 +392,26 @@ export function EnergyDashboard({
             </span>
           ))}
         </div>
+        <div className="energy-table energy-daily-table" tabIndex={0} aria-label="Дневни суми по макронутриенти">
+          <table>
+            <caption>За всеки ден · kcal и грамове по макронутриенти</caption>
+            <thead><tr>
+              <th>Дата</th><th>Общо kcal</th>
+              {macros.map(([k, l]) => <th key={k}>{l} · g / kcal</th>)}
+              <th>Обхват на сумата</th>
+            </tr></thead>
+            <tbody>{[...data.days].reverse().map((d) => {
+              const e = dailyValue(d);
+              return <tr key={d.day} className={selected === d.day ? "selected" : undefined}>
+                <th scope="row"><button type="button" aria-pressed={selected === d.day}
+                  onClick={() => setSelected(d.day)}>{d.day}</button></th>
+                <td>{n(e?.kcal)}</td>
+                {macros.map(([k]) => <td key={k}>{n(e?.[`${k}_g`], 1)} / {n(e?.[`${k}_kcal`])}</td>)}
+                <td>{dailyLabel(d, data.today)}{(d.estimated_activity_seconds ?? 0) > 0 ? " · включва сила по MET" : ""}</td>
+              </tr>;
+            })}</tbody>
+          </table>
+        </div>
       </section>
       {day && (
         <>
@@ -388,24 +432,25 @@ export function EnergyDashboard({
             </div>
             <div className="energy-cards">
               <article>
-                <span>Общ дневен разход</span>
+                <span>{day.total ? "Общ дневен разход" : "Сбор на оценения разход"}</span>
                 <strong>
-                  {n(day.total?.kcal)} <small>kcal</small>
+                  {n(shown?.kcal)} <small>kcal</small>
                 </strong>
                 <p>
-                  {day.total ? "Моделна оценка" : "Няма пълна дневна оценка"}
+                  {day.total ? "Моделна оценка" : shown ? dailyLabel(day, data.today) : "Няма пълна дневна оценка"}
                 </p>
               </article>
               <article>
                 <span>По време на активности</span>
                 <strong>
-                  {n(day.activity.kcal)} <small>kcal</small>
+                  {n(activityShown?.kcal)} <small>kcal</small>
                 </strong>
                 <p>
                   {day.total
                     ? `${n((100 * day.activity.kcal) / day.total.kcal, 1)}% от деня`
-                    : "Само покритите участъци"}{" "}
-                  · покритие {n(day.coverage_percent, 1)}%
+                    : "Сбор на оценените участъци"}{" "}
+                  {day.coverage_percent != null && <>· по пулс/скорост: {n(day.coverage_percent, 1)}%</>}
+                  {(day.estimated_activity_seconds ?? 0) > 0 && <> · по MET: {n(day.estimated_activity_seconds! / 60, 1)} min</>}
                 </p>
               </article>
               <article>
@@ -422,13 +467,14 @@ export function EnergyDashboard({
             </div>
             {day.reason && (
               <p className="energy-notice">
-                {day.reason} Отчетена част: {n(day.accounted.kcal)} kcal.
+                {day.reason} {shown && <>Оценена част: {n(shown.kcal)} kcal. Липсващият разход не е включен в сумата.</>}
               </p>
             )}
             <MacroTable
-              activity={day.activity}
+              activity={activityShown}
               outside={day.outside}
-              total={day.total}
+              total={shown}
+              totalLabel={dailyLabel(day, data.today)}
             />
             <p className="energy-caption">
               Това е изчислен разход. Белтъчният дял и разпределението извън
@@ -450,8 +496,10 @@ export function EnergyDashboard({
               </label>
             </div>
             <p>
-              Показани са сборове за 5 минути; изчислението използва
-              оригиналните интервали на записа.
+              Показани са сборове за 5 минути. При пулс/скорост се използват
+              оригиналните интервали; при силата средната оценка се разпределя равномерно.
+              Процентът по пулс/скорост е дял от времето с приложим модел. Паузите,
+              липсващите сигнали и пулсът извън 50–100% HRmax могат да останат без оценка.
             </p>
             {day.activities.length === 0 ? (
               <p>Няма записани активности за деня.</p>
@@ -466,16 +514,25 @@ export function EnergyDashboard({
                 return (
                   <details key={a.activity_ref}>
                     <summary>
-                      {a.sport} · {n(a.duration_s / 60)} min · {n(a.kcal)} kcal
-                      · покритие {n(a.coverage_percent, 1)}%
+                      {a.method === "STRENGTH_MET" ? "Силова тренировка" : a.sport} · {n(a.duration_s / 60)} min · {n(a.kcal)} kcal
+                      {a.method === "STRENGTH_MET" ? ` · приблизително по ${n(a.met, 1)} MET` : ` · по пулс/скорост: ${n(a.coverage_percent, 1)}%`}
                     </summary>
-                    <p>
+                    {a.method === "STRENGTH_MET" ? <p>
+                      Средна оценка за цялата сесия с почивките, включваща разхода в покой.
+                      {a.above_rest_kcal != null && <> Над личния разход в покой за това време: {n(a.above_rest_kcal)} kcal.</>}
+                      {" "}Разпределението е допускане: {n(100 * (a.carbohydrate_fraction_assumption ?? 0.5))}% въглехидрати от небелтъчната енергия
+                      и {n(100 * (a.protein_fraction_assumption ?? 0.0328), 2)}% белтъчини от общата енергия.
+                      Графиката не показва измерена интензивност на сериите.
+                    </p> : <p>
                       Измерен пулс:{" "}
                       {n((a.source_seconds?.measured_hr ?? 0) / 60, 1)} min;
                       относителна интензивност:{" "}
                       {n((a.source_seconds?.relative_intensity ?? 0) / 60, 1)}{" "}
-                      min.
-                    </p>
+                      min. Без оценка: {n((a.unknown_seconds ?? a.duration_s - (a.covered_seconds ?? 0)) / 60, 1)} min.
+                      {(a.paused_seconds ?? 0) > 0 && <> От тях паузи в записа: {n(a.paused_seconds! / 60, 1)} min.</>}
+                      {(a.uncovered_reasons_seconds?.outside_hr_range ?? 0) > 0 && <> Извън обхвата на регресията: {n(a.uncovered_reasons_seconds!.outside_hr_range / 60, 1)} min.</>}
+                    </p>}
+                    <p>{macros.map(([k, l]) => `${l}: ${n(a.kcal == null ? null : a[`${k}_g`], 1)} g / ${n(a.kcal == null ? null : a[`${k}_kcal`])} kcal`).join(" · ")}</p>
                     <div className="energy-bars energy-segments">
                       {a.timeline.map((t) => (
                         <span
