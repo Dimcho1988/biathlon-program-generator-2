@@ -75,11 +75,32 @@ export type EnergyDay = {
     activity_kcal: number | null;
   };
   outside_factor?: number;
+  nutrition_basis?: {
+    version: string;
+    status: "AVAILABLE" | "LIMITED_HISTORY" | "UNAVAILABLE";
+    target_day: string;
+    provisional: boolean;
+    window_start: string;
+    window_end: string;
+    available_days: number;
+    missing_days: string[];
+    mean_expenditure_kcal: number | null;
+    last_day_expenditure_kcal: number | null;
+    deviation_kcal: number | null;
+    deviation_percent: number | null;
+    correction_factor: number;
+    correction_kcal: number | null;
+    nonprotein_carbohydrate_fraction: number | null;
+    weight_kg: number | null;
+    history: (Energy & { day: string })[];
+    notes: string[];
+    food_preferences: { preferences: string; allergies: string };
+  };
   targets: {
     kcal: number | null;
     protein_g_per_kg: number;
     energy_kcal_per_kg: number | null;
-    protein_basis: "DAILY_ENERGY_RULE" | "INCOMPLETE_DAY_FALLBACK";
+    protein_basis: "DAILY_ENERGY_RULE" | "SEVEN_DAY_ENERGY_RULE" | "INCOMPLETE_DAY_FALLBACK";
     protein_g: number;
     carbohydrate_g: number | null;
     fat_g: number | null;
@@ -91,6 +112,8 @@ export type EnergyHistory = {
   period_start: string;
   period_end: string;
   today: string;
+  tomorrow?: string;
+  nutrition_version?: string;
   timezone: string;
   profile: NutritionProfile | null;
   profile_revision: number;

@@ -425,7 +425,8 @@ def read(repository, alias, access, query, settings, today, parse_date, *, actor
         q = dict(query)
         if q.get("date"):
             q.update(start=q["date"], end=q["date"])
-        parameters = _parameters(q, today, parse_date)
+        # Only energy supports tomorrow, as a labelled nutritional forecast.
+        parameters = _parameters(q, today + timedelta(days=1), parse_date)
         parameters.pop("sport", None)
         payload = _prepared(repository, alias, "energy", parameters)
         if not query.get("section") and isinstance(payload.get("days"), list):
