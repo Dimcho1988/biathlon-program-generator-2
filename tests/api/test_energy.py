@@ -49,17 +49,20 @@ def test_segments_not_average_and_conservation():
 
 def test_missing_hr_never_filled_by_hrmod_or_zero():
     r = report([{"elapsed_s": i, "hrmod_final_bpm": 150} for i in range(20)])
-    assert r["coverage_percent"] == 0 and r["unknown_seconds"] == 20
+    assert r["coverage_percent"] == 0 and r["unknown_seconds"] == 0
     assert r["source_seconds"]["measured_hr"] == 0
-    assert r["kcal"] is None
+    assert r["source_seconds"]["sport_met"] == 20
+    assert r["estimated_seconds"] == r["accounted_seconds"] == 20
+    assert r["kcal"] == pytest.approx(7.5 * 3.5 * 75 / 200 * 20 / 60)
 
 
 def test_missing_signal_and_outside_regression_range_are_explained():
     r = report([{"elapsed_s": 0, "hr_raw_bpm": 80}, {"elapsed_s": 1},
                 {"elapsed_s": 2, "hr_raw_bpm": 150}])
-    assert r["uncovered_reasons_seconds"] == {"missing_signal": 1, "outside_hr_range": 1}
-    assert r["accounted_seconds"] == 1
-    assert r["unknown_seconds"] == 2
+    assert r["fallback_reasons_seconds"] == {"missing_signal": 1, "outside_hr_range": 1}
+    assert r["accounted_seconds"] == 3
+    assert r["estimated_seconds"] == 2
+    assert r["unknown_seconds"] == 0
 
 
 def test_strength_estimate_conserves_energy_without_claiming_sensor_coverage():
@@ -121,6 +124,13 @@ def test_speed_fallback_reuses_zone_position_and_marks_estimation():
         -0.09354289849186385 + 0.3984908361869844 * 0.65 - 0.04590881586125497
     )
     assert r["kcal"] == pytest.approx(expected_rate)
+    slow = m.activity({"timeseries": [{"elapsed_s": i, "load_speed_kmh": 4,
+                         "load_status": "ACTIVE"} for i in range(60)]},
+                     sex="FEMALE", weight=60, hrmax=200, bounds=BOUNDS,
+                     sport="Run", parameters=params, duration_s=60, resting_kcal=1440)
+    assert slow["source_seconds"]["low_intensity"] == 60
+    assert slow["source_seconds"]["rest"] == 0
+    assert 1 < slow["kcal"] < r["kcal"]
 
 
 def test_measured_hr_wins_over_speed_and_hrmod():
@@ -299,22 +309,95 @@ def test_strength_assumptions_are_dated_and_do_not_read_sensor_streams():
     assert d["activities"][0]["carbohydrate_fraction_assumption"] == 0.7
 
 
-def test_unknown_activity_keeps_day_partial_with_available_macros():
+def test_catalog_only_activity_completes_day_and_dietary_targets():
     d = strength_day(second_activity=True)
-    assert d["total"] is None and d["targets"]["kcal"] is None
-    assert d["unknown_activity_seconds"] == 1800
-    assert d["accounted"]["kcal"] > 0
+    assert d["total"]["kcal"] == d["targets"]["kcal"]
+    assert d["unknown_activity_seconds"] == 0
+    assert d["estimated_activity_seconds"] == 5400
+    assert d["outside"]["kcal"] == pytest.approx(1800 * 1.2 * 22.5 / 24)
+    assert d["activities"][1]["source_seconds"]["sport_met"] == 1800
     assert all(d["accounted"][k + "_g"] > 0 for k in m.MACROS)
-    assert "30.0 min" in d["reason"]
+    assert all(d["targets"][k + "_g"] > 0 for k in m.MACROS)
+    assert sum(d["targets"][k + "_g"] * m.FACTORS[k] for k in m.MACROS) == pytest.approx(d["total"]["kcal"])
+    assert "90.0 min" in d["reason"]
 
 
 @pytest.mark.parametrize("sport,duration,entries", [
-    ("WeightTraining", 3600, []), ("WeightTraining", 0, None), ("Swim", 3600, None)])
-def test_no_strength_estimate_for_missing_profile_duration_or_other_sport(sport, duration, entries):
+    ("WeightTraining", 3600, []), ("WeightTraining", 0, None)])
+def test_no_estimate_without_weight_or_duration(sport, duration, entries):
     d = strength_day(sport=sport, duration=duration, entries=entries)
     assert d["activities"][0]["kcal"] is None
     assert d["total"] is None
     assert d["targets"] is None if entries == [] else d["targets"]["kcal"] is None
+
+
+@pytest.mark.parametrize("sport", ["Run", "Ride", "NordicSki", "Swim", "Yoga", "Other"])
+def test_every_catalog_activity_with_weight_and_duration_has_energy(sport):
+    d = strength_day(sport=sport)
+    assert d["activities"][0]["kcal"] > 0
+    assert d["activities"][0]["unknown_seconds"] == 0
+    assert d["total"] is not None
+
+
+def test_pauses_and_sensor_gaps_are_different_estimates_and_do_not_change_load():
+    from biathlon.unified_load import integrate
+    shadow = {"timeseries": [
+        {"elapsed_s": 0, "hr_raw_bpm": 140},
+        {"elapsed_s": 1, "hr_interval_classification": "recording_stop", "hr_interval_end_s": 61},
+        {"elapsed_s": 61, "hr_raw_bpm": 160},
+        {"elapsed_s": 70, "hr_raw_bpm": 160},
+    ]}
+    before = integrate(shadow, bounds=BOUNDS, sport="Run", duration_s=71, hr_signal="hr_raw_bpm")
+    r = m.activity(shadow, sex="MALE", weight=75, hrmax=200, bounds=BOUNDS,
+                   sport="Run", parameters=None, duration_s=71, resting_kcal=1440)
+    after = integrate(shadow, bounds=BOUNDS, sport="Run", duration_s=71, hr_signal="hr_raw_bpm")
+    assert before == after
+    assert r["source_seconds"]["pause_rest"] == 60
+    assert r["source_seconds"]["sport_met"] == 8
+    assert r["covered_seconds"] == 3
+    assert r["accounted_seconds"] == sum(r["source_seconds"].values()) == 71
+    assert r["unknown_seconds"] == 0
+    assert sum(b["seconds"] for b in r["timeline"]) == 71
+    for key in m.empty():
+        assert sum(b[key] for b in r["timeline"]) == pytest.approx(r[key])
+
+
+def test_raw_speed_only_is_estimated_and_stationary_outdoor_time_is_rest():
+    slow = report([{"elapsed_s": i, "speed_raw_kmh": 6.5} for i in range(60)], resting_kcal=1440)
+    fast = report([{"elapsed_s": i, "speed_raw_kmh": 12} for i in range(60)], resting_kcal=1440)
+    stopped = report([{"elapsed_s": i, "speed_raw_kmh": 0} for i in range(60)], resting_kcal=1440)
+    assert 0 < slow["kcal"] < fast["kcal"]
+    assert fast["source_seconds"]["pace_met"] == 60
+    assert stopped["source_seconds"]["rest"] == 60
+    assert stopped["kcal"] == pytest.approx(1)
+    for r in [slow, fast, stopped]:
+        assert r["unknown_seconds"] == 0
+        assert sum(r[k + "_kcal"] for k in m.MACROS) == pytest.approx(r["kcal"])
+
+
+@pytest.mark.parametrize("sport", ["VirtualRide", "VirtualRun", "Swim"])
+def test_zero_gps_does_not_imply_rest_for_indoor_or_water_activity(sport):
+    r = m.activity({"timeseries": [{"elapsed_s": i, "speed_raw_kmh": 0} for i in range(60)]},
+                   sex="MALE", weight=75, hrmax=200, bounds=BOUNDS,
+                   sport=sport, parameters=None, duration_s=60)
+    assert r["source_seconds"]["rest"] == 0
+    assert r["source_seconds"]["sport_met"] == 60
+
+
+def test_low_and_above_max_hr_are_accounted_and_missing_sex_uses_prior():
+    low = report([{"elapsed_s": i, "hr_raw_bpm": 60} for i in range(60)], resting_kcal=1440)
+    middle = report([{"elapsed_s": i, "hr_raw_bpm": 80} for i in range(60)], resting_kcal=1440)
+    edge = report([{"elapsed_s": i, "hr_raw_bpm": 100} for i in range(60)], resting_kcal=1440)
+    high = report([{"elapsed_s": i, "hr_raw_bpm": 205} for i in range(60)])
+    max_hr = report([{"elapsed_s": i, "hr_raw_bpm": 200} for i in range(60)])
+    assert low["kcal"] == pytest.approx(1)
+    assert low["kcal"] < middle["kcal"] < edge["kcal"]
+    assert high["kcal"] == max_hr["kcal"]
+    assert high["source_seconds"]["bounded_hr"] == 60
+    r = m.activity({}, sex=None, weight=75, hrmax=None, bounds=BOUNDS,
+                   sport="Run", parameters=None, duration_s=60)
+    assert r["source_seconds"]["sport_met"] == 60
+    assert r["unknown_seconds"] == 0
 
 
 def test_dst_day_uses_actual_elapsed_seconds():

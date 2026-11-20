@@ -190,7 +190,14 @@ export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdi
         {day.activities.length === 0 ? <p>Няма записани активности за деня.</p> : day.activities.map(a => <details key={a.activity_ref}>
           <summary>{a.method === "STRENGTH_MET" ? "Силова тренировка" : a.sport} · {n(a.duration_s / 60)} min · {n(a.kcal)} kcal
             {a.method === "STRENGTH_MET" ? ` · приблизително по ${n(a.met, 1)} MET` : ""}</summary>
-          <p>{a.method === "STRENGTH_MET" ? "Средна оценка за цялата сесия с почивките." : `По пулс/скорост: ${n(a.coverage_percent, 1)}% от времето. Без оценка: ${n((a.unknown_seconds ?? a.duration_s - (a.covered_seconds ?? 0)) / 60, 1)} min.`}</p>
+          <p>{a.method === "STRENGTH_MET" ? "Средна оценка за цялата сесия с почивките." : `По пулс/скорост: ${n(a.coverage_percent, 1)}% от времето. Резервна оценка: ${n((a.estimated_seconds ?? 0) / 60, 1)} min. Без оценка: ${n((a.unknown_seconds ?? a.duration_s - (a.accounted_seconds ?? a.covered_seconds ?? 0)) / 60, 1)} min.`}</p>
+          {!!a.source_seconds && a.method !== "STRENGTH_MET" && (a.estimated_seconds ?? 0) > 0 && <p className="energy-caption">
+            Покой/паузи: {n(((a.source_seconds.rest ?? 0) + (a.source_seconds.pause_rest ?? 0)) / 60, 1)} min;
+            извън обхвата на регресията: {n(((a.source_seconds.low_intensity ?? 0) + (a.source_seconds.bounded_hr ?? 0)) / 60, 1)} min;
+            по темпо: {n((a.source_seconds.pace_met ?? 0) / 60, 1)} min;
+            по вида активност: {n((a.source_seconds.sport_met ?? 0) / 60, 1)} min.
+            При резервна оценка по темпо или вид активност разпределението е допускане от профила.
+          </p>}
           <p>Оценка на окислени субстрати: въглехидрати {n(a.kcal == null ? null : a.carbohydrate_g, 1)} g; мазнини {n(a.kcal == null ? null : a.fat_g, 1)} g. Това са енергийни еквиваленти, отделни от целите за прием.</p>
           <div className="energy-table"><table><caption>Разпределение през 5 минути · оценен разход</caption>
             <thead><tr><th>Минути</th><th>kcal</th><th>Въглехидрати · g</th><th>Мазнини · g</th></tr></thead>

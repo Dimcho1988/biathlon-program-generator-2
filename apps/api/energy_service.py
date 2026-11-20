@@ -165,10 +165,9 @@ def history(repository, alias, start=None, end=None, now=None):
     selected = {
         r["latest_shadow_run_key"]: r
         for r in catalog
-        if supports_speed_load(r.get("sport"))
+        if not model.is_strength(r.get("sport"))
         and r.get("latest_shadow_run_key")
         and r.get("local_date") in days
-        and days[r["local_date"]]["profile"].get("sex")
         and days[r["local_date"]]["weight_kg"]
     }
     from hashlib import sha256
@@ -184,10 +183,10 @@ def history(repository, alias, start=None, end=None, now=None):
         day = date.fromisoformat(d["day"])
         dated = at(settings, day)
         duration = max(meta.get("elapsed_time_s") or 0, meta.get("moving_time_s") or 0)
-        if not duration or not dated.hrmax_bpm:
+        if not duration:
             continue
         identity = (meta["sport"], day)
-        if identity not in contexts:
+        if identity not in contexts and supports_speed_load(meta.get("sport")):
             if inputs is None:
                 inputs = model_service.speed_view_inputs(repository, alias)
             if inputs["calendar"].get("generation_id") != calendar.get("generation_id"):
@@ -203,13 +202,15 @@ def history(repository, alias, start=None, end=None, now=None):
                 "comparison_parameters"
             )
         args = dict(
-            sex=p["sex"],
+            sex=p.get("sex"),
             weight=d["weight_kg"],
             hrmax=dated.hrmax_bpm,
             bounds=dated.zone_bounds_bpm,
             sport=meta["sport"],
-            parameters=contexts[identity],
+            parameters=contexts.get(identity),
             duration_s=duration,
+            resting_kcal=resting(p, d["weight_kg"], day)[0],
+            fallback_cho=p["outside_cho_fraction"],
         )
         fingerprint = sha256(
             json.dumps(
@@ -257,6 +258,20 @@ def history(repository, alias, start=None, end=None, now=None):
                         met=p.get("strength_met", 3.5),
                         cho=p.get("strength_cho_fraction", 0.5), resting_kcal=rmr,
                     ),
+                    "activity_ref": meta["activity_ref"], "sport": meta["sport"],
+                    "start_at_utc": meta.get("start_at_utc"),
+                }
+            elif meta["activity_ref"] not in reports and d["weight_kg"] and duration > 0:
+                # A catalog-only activity still gets a transparent sport/time prior.
+                # Absence of a pinned recording is not evidence of rest.
+                day = date.fromisoformat(d["day"])
+                dated = at(settings, day)
+                reports[meta["activity_ref"]] = {
+                    **model.activity({}, sex=p.get("sex"), weight=d["weight_kg"],
+                        hrmax=dated.hrmax_bpm, bounds=dated.zone_bounds_bpm,
+                        sport=meta["sport"], parameters=None, duration_s=duration,
+                        resting_kcal=resting(p, d["weight_kg"], day)[0],
+                        fallback_cho=p["outside_cho_fraction"]),
                     "activity_ref": meta["activity_ref"], "sport": meta["sport"],
                     "start_at_utc": meta.get("start_at_utc"),
                 }
@@ -375,6 +390,8 @@ def history(repository, alias, start=None, end=None, now=None):
             reasons.append("Липсват данни за разхода в покой.")
         if unknown > 1e-6:
             reasons.append(f"Без оценка остават {unknown / 60:.1f} min от активностите.")
+        if estimated > 1e-6:
+            reasons.append(f"За {estimated / 60:.1f} min е използвана резервна оценка за покой, ниска интензивност или вида активност.")
         if any(a["duration_s"] <= 0 for a in d["activities"]):
             reasons.append("Има активност без валидна продължителност.")
         if invalid_time or duration > day_seconds:
@@ -438,7 +455,10 @@ def history(repository, alias, start=None, end=None, now=None):
         "days": list(days.values()),
         "assumptions": [
             "Измерен пулс по участъци; при липса — позиция в същата зона по наличния скоростен модел. Това преобразуване не е независимо валидирано за енергоразход.",
-            "Кубичният модел се прилага при 50–100% HRmax. Извън обхвата разходът остава непокрит. HRmod не заменя измерения пулс в тази регресия.",
+            "Кубичният модел се прилага при 50–100% HRmax. Под 50% се използва работен преход от покоя при 30% HRmax до долната граница на регресията; над 100% се използва горната граница. Тези участъци са резервни оценки. HRmod не заменя измерения пулс.",
+            "Всяка записана активност с тегло и продължителност получава оценка. При липса на приложим пулс/скорост се използва ориентир по вида активност (MET); при налична само сурова скорост — груби скоростни диапазони за бягане, ходене и колоездене. Това не е индивидуално измерен разход.",
+            "Записаните паузи без други данни се оценяват като покой. Нулева скорост при бягане навън, ходене или ски без пулс се оценява като покой; сама по себе си нулевата GPS скорост при тренажор или сила не доказва покой. Липсващият сигнал получава оценка за вида активност.",
+            "При резервна MET оценка въглехидратният дял следва допускането в профила; MET не измерва субстратното разпределение. При ски и ролкови ски резервният ориентир е 8,5 MET; при неразпознат вид активност — работно допускане 3,5 MET.",
             "Сила: средна оценка за цялата записана сесия, включително почивките. По подразбиране 3,5 MET (2024 Adult Compendium, код 02054); kcal = MET × 3,5 × kg / 200 × min. Коефициентът се коригира в профила. Разходът включва покоя за същото време, който не се добавя повторно.",
             "При силата въглехидратният дял от небелтъчната енергия е отделно допускане (начално 50%); белтъчният дял 3,28% е екстраполация от упражнения за издръжливост. Това разпределение не е измерено и не се извежда от MET.",
             "Белтъчини: 3,28% от енергията при активност и 0,81 mg/kg/min извън нея са групови ориентири, не индивидуални измервания. Прилагането им към кратки/интервални активности е екстраполация.",
@@ -452,5 +472,10 @@ def history(repository, alias, start=None, end=None, now=None):
             "https://pubmed.ncbi.nlm.nih.gov/40117058/",
             "https://pubmed.ncbi.nlm.nih.gov/2305711/",
             "https://pacompendium.com/conditioning-exercise/",
+            "https://pacompendium.com/running/",
+            "https://pacompendium.com/walking/",
+            "https://pacompendium.com/bicycling/",
+            "https://pacompendium.com/winter-activities/",
+            "https://pacompendium.com/water-activities/",
         ],
     }

@@ -92,7 +92,7 @@ def _hr_origin(row, signal, compatible):
 
 
 def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEART_RATE", duration_s=None,
-              hr_signal="MODEL", segment_observer=None):
+              hr_signal="MODEL", segment_observer=None, signal_observer=None):
     if leading_indicator not in {"HEART_RATE", "SPEED"}:
         raise ValueError("Unsupported leading indicator")
     if hr_signal not in HR_SIGNALS:
@@ -170,6 +170,8 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
                     top = parameters["zones"][-1]["high_kmh"]
                     estimate = {**evaluate_speed(top), "saturated_above_v10": True}
             speeds.append((left, right, {**(estimate or {"status": "UNAVAILABLE"}),
+                "_speed_kmh": value if reason in {None, "REST"} else None,
+                "_raw_speed_kmh": value if reason in {None, "REST"} else None,
                 "_speed_origin": raw_speed.ROLE,
                 "_speed_reason": reason or (estimate or {}).get("reason") or "INVALID_RAW_SPEED"}))
         speed_rows = []
@@ -206,6 +208,10 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
         # Preserve rejection provenance for coverage only. Rejected speeds
         # still cannot contribute Q or become calibration observations.
         estimate = {**(estimate or {"status": "UNAVAILABLE"}),
+                    "_speed_kmh": value if eligible else None,
+                    "_raw_speed_kmh": (row.get("speed_raw_kmh") if finite(row.get("speed_raw_kmh"))
+                        and row["speed_raw_kmh"] >= 0 and not row.get("is_estimated")
+                        and not row.get("generated") else None),
                     "_speed_origin": row.get("load_source") or "VFLAT",
                     "_speed_reason": row.get("load_reason") or (estimate or {}).get("reason") or "INVALID_OR_UNSUPPORTED_SPEED"}
         speeds.append((left, right, estimate))
@@ -249,7 +255,11 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
             segment_observer(left, right, chosen)
         while pi < len(pauses) and pauses[pi][1] <= left:
             pi += 1
-        if not chosen and pi < len(pauses) and pauses[pi][0] <= left < pauses[pi][1]:
+        in_pause = pi < len(pauses) and pauses[pi][0] <= left < pauses[pi][1]
+        if signal_observer is not None:
+            # Optional accounting observer; training/Q selection stays unchanged.
+            signal_observer(left, right, h, s, in_pause)
+        if not chosen and in_pause:
             # This is an unobserved timer pause, not measured physiological
             # rest and not an inferred training dose. Keep elapsed time intact.
             paused += dt
