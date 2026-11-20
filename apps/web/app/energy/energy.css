@@ -168,6 +168,27 @@
   font-weight: 600;
   margin: 1rem 0;
 }
+.energy-daily-table {
+  max-height: 26rem;
+  margin-top: 1rem;
+}
+.energy-daily-table thead {
+  position: sticky;
+  top: 0;
+  background: var(--surface, #fff);
+}
+.energy-daily-table tr.selected {
+  background: var(--surface-secondary, #f2f7f9);
+}
+.energy-daily-table button {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0.3rem 0;
+}
 .energy-notice {
   padding: 1rem;
   border-left: 3px solid #cc8a30;

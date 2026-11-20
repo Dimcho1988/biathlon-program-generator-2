@@ -21,6 +21,8 @@ class NutritionProfile(InputModel):
     )
     outside_factor: float = Field(default=1.2, ge=1, le=1.8, allow_inf_nan=False)
     outside_cho_fraction: float = Field(default=0.5, ge=0, le=1, allow_inf_nan=False)
+    strength_met: float = Field(default=3.5, ge=1, le=12, allow_inf_nan=False)
+    strength_cho_fraction: float = Field(default=0.5, ge=0, le=1, allow_inf_nan=False)
     preferences: str = Field(default="", max_length=1000)
     allergies: str = Field(default="", max_length=1000)
 
@@ -184,7 +186,7 @@ def history(repository, alias, start=None, end=None, now=None):
         )
         fingerprint = sha256(
             json.dumps(
-                [calculation_key, model.VERSION, key, args],
+                [calculation_key, model.CALCULATION_VERSION, key, args],
                 sort_keys=True,
                 allow_nan=False,
             ).encode()
@@ -217,6 +219,20 @@ def history(repository, alias, start=None, end=None, now=None):
 
     for meta in catalog:
         if meta.get("local_date") in days:
+            d = days[meta["local_date"]]
+            p = d["profile"]
+            duration = max(meta.get("elapsed_time_s") or 0, meta.get("moving_time_s") or 0)
+            if model.is_strength(meta.get("sport")) and p and duration > 0:
+                rmr, _ = resting(p, d["weight_kg"], date.fromisoformat(d["day"]))
+                reports[meta["activity_ref"]] = {
+                    **model.strength_activity(
+                        weight=d["weight_kg"], duration_s=duration,
+                        met=p.get("strength_met", 3.5),
+                        cho=p.get("strength_cho_fraction", 0.5), resting_kcal=rmr,
+                    ),
+                    "activity_ref": meta["activity_ref"], "sport": meta["sport"],
+                    "start_at_utc": meta.get("start_at_utc"),
+                }
             days[meta["local_date"]]["activities"].append(
                 reports.get(meta["activity_ref"])
                 or {
@@ -255,11 +271,14 @@ def history(repository, alias, start=None, end=None, now=None):
         act = model.empty()
         duration = sum(a["duration_s"] for a in d["activities"])
         known = sum(a.get("covered_seconds", 0) for a in d["activities"])
+        estimated = sum(a.get("estimated_seconds", 0) for a in d["activities"])
+        unknown = max(0.0, duration - known - estimated)
         for a in d["activities"]:
             if a["kcal"] is not None:
                 model.add(act, a)
         complete = all(
-            a["kcal"] is not None and a["coverage_percent"] >= 99.9
+            a["kcal"] is not None and a["duration_s"] > 0
+            and a["duration_s"] - a.get("accounted_seconds", a.get("covered_seconds", 0)) <= 1e-6
             for a in d["activities"]
         )
         # Reject overlapping/cross-midnight records instead of double-counting a day.
@@ -320,19 +339,32 @@ def history(repository, alias, start=None, end=None, now=None):
         ready = bool(
             p and outside and complete and in_range and not invalid_time and day < today
         )
+        reasons = []
+        if day == today:
+            reasons.append("Текущ ден: показана е сумата до момента.")
+        if not p:
+            reasons.append("Липсва личен профил за тази дата.")
+        elif not rmr:
+            reasons.append("Липсват данни за разхода в покой.")
+        if unknown > 1e-6:
+            reasons.append(f"Без оценка остават {unknown / 60:.1f} min от активностите.")
+        if any(a["duration_s"] <= 0 for a in d["activities"]):
+            reasons.append("Има активност без валидна продължителност.")
+        if invalid_time or duration > day_seconds:
+            reasons.append("Проверете припокриващи се записи или активности през полунощ; дневният сбор може да е неточен.")
+        if not in_range:
+            reasons.append("Датата е извън обработената история.")
         d.update(
             activity=model.grams(act),
             outside=outside,
             total=model.grams(total) if ready else None,
             accounted=model.grams(total),
             coverage_percent=100 * known / duration if duration else None,
+            estimated_activity_seconds=estimated,
+            unknown_activity_seconds=unknown,
             status="MODELLED" if ready else "PARTIAL",
             resting_basis=basis,
-            reason=(
-                None
-                if ready
-                else "Текущ ден, липсващ профил/покритие, неподдържан участък или припокриващи се записи."
-            ),
+            reason=" ".join(reasons) or None,
             targets=model.dietary_targets(
                 total["kcal"] if ready else None,
                 d["weight_kg"],
@@ -344,6 +376,7 @@ def history(repository, alias, start=None, end=None, now=None):
     return {
         "menu_guidance": "За хранителен режим първо прочети energy за избрания ден. Разграничавай окислени\nсубстрати от препоръчителен прием; белтъчният прием не е равен на окислените белтъчини.\nИзползвай targets като ориентир за поддържане на теглото, не задавай автоматичен\nдефицит. Ако targets липсват или денят е частичен, обясни липсата и не измисляй\nточен дневен прием. Преди конкретно меню провери посочени алергии, непоносимости\nи хранителни предпочитания; ако не са уточнени, попитай. Дай конкретни храни,\nграмажи, сурово/сготвено тегло, разпределение преди/след тренировка и сбор на\nориентировъчните kcal и макронутриенти за всяко хранене и деня. Провери сумите\nспрямо целта, обозначи хранителните стойности като приблизителни. Това е\nпредложено меню, не отчетен прием или доказан енергиен баланс. Не екстраполирай\nмодела за покой или за непокрити активности. За лица под 18 г. не предписвай\nавтоматични количествени диети; насочи към индивидуален преглед от специалист.\n",
         "schema_version": model.VERSION,
+        "calculation_version": model.CALCULATION_VERSION,
         "period_start": str(start),
         "period_end": str(end),
         "today": str(today),
@@ -365,6 +398,8 @@ def history(repository, alias, start=None, end=None, now=None):
         "assumptions": [
             "Измерен пулс по участъци; при липса — позиция в същата зона по наличния скоростен модел. Това преобразуване не е независимо валидирано за енергоразход.",
             "Кубичният модел се прилага при 50–100% HRmax. Извън обхвата разходът остава непокрит. HRmod не заменя измерения пулс в тази регресия.",
+            "Сила: средна оценка за цялата записана сесия, включително почивките. По подразбиране 3,5 MET (2024 Adult Compendium, код 02054); kcal = MET × 3,5 × kg / 200 × min. Коефициентът се коригира в профила. Разходът включва покоя за същото време, който не се добавя повторно.",
+            "При силата въглехидратният дял от небелтъчната енергия е отделно допускане (начално 50%); белтъчният дял 3,28% е екстраполация от упражнения за издръжливост. Това разпределение не е измерено и не се извежда от MET.",
             "Белтъчини: 3,28% от енергията при активност и 0,81 mg/kg/min извън нея са групови ориентири, не индивидуални измервания. Прилагането им към кратки/интервални активности е екстраполация.",
             "Извън активности: разходът в покой × оставащото време × избрания фактор. Въглехидратният дял е допускане от профила. Крачките не се добавят втори път.",
             "Грамовете са енергийни еквиваленти (4/9/4 kcal/g), не измерена загуба на тъкани. Хранителният прием се препоръчва отделно.",
@@ -374,5 +409,6 @@ def history(repository, alias, start=None, end=None, now=None):
             "https://pubmed.ncbi.nlm.nih.gov/40135445/",
             "https://pubmed.ncbi.nlm.nih.gov/40117058/",
             "https://pubmed.ncbi.nlm.nih.gov/2305711/",
+            "https://pacompendium.com/conditioning-exercise/",
         ],
     }

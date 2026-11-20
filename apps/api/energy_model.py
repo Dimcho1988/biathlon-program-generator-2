@@ -6,6 +6,7 @@ from math import isfinite
 from biathlon.unified_load import integrate
 
 VERSION = "energy-constrained-cubic-v1"
+CALCULATION_VERSION = "energy-accounting-v2-strength-met"
 COEFFICIENTS = {
     "MALE": (
         0.5966452238309221,
@@ -68,11 +69,13 @@ def activity(shadow, *, sex, weight, hrmax, bounds, sport, parameters, duration_
     total = empty()
     bins = {}
     sources = {"measured_hr": 0.0, "relative_intensity": 0.0, "unknown": 0.0}
+    uncovered = {"missing_signal": 0.0, "outside_hr_range": 0.0}
 
     def observe(left, right, chosen):
         dt = right - left
         if not chosen:
             sources["unknown"] += dt
+            uncovered["missing_signal"] += dt
             return
         kind, value = chosen
         hr = value.get("hr_bpm") if kind == "HEART_RATE" else None
@@ -91,6 +94,7 @@ def activity(shadow, *, sex, weight, hrmax, bounds, sport, parameters, duration_
         cho = cho_fraction(fraction, sex)
         if cho is None:
             sources["unknown"] += dt
+            uncovered["outside_hr_range" if number(fraction) else "missing_signal"] += dt
             return
         rate = weight * (
             -0.09354289849186385
@@ -126,14 +130,61 @@ def activity(shadow, *, sex, weight, hrmax, bounds, sport, parameters, duration_
     known = sources["measured_hr"] + sources["relative_intensity"]
     return {
         **grams(total),
+        "kcal": total["kcal"] if known > 0 else None,
         "covered_seconds": known,
+        "accounted_seconds": known,
+        "estimated_seconds": 0.0,
         "duration_s": duration_s,
         "unknown_seconds": max(0.0, duration_s - known),
         "source_seconds": sources,
+        "uncovered_reasons_seconds": uncovered,
+        "method": "HR_OR_SPEED_REGRESSION",
         "coverage_percent": min(100.0, 100 * known / duration_s) if duration_s else 0.0,
         "timeline": [grams(b) for _, b in sorted(bins.items())],
         "paused_seconds": ledger["paused_seconds"],
         "speed_initial_heuristic": bool((parameters or {}).get("initial_heuristic")),
+    }
+
+
+def is_strength(sport):
+    from biathlon.sport_heart_rate import sport_key
+
+    return sport_key(sport) in {"weighttraining", "strengthtraining", "strength", "weights"}
+
+
+def strength_activity(*, weight, duration_s, met=3.5, cho=0.5, resting_kcal=None):
+    """Gross session estimate, including rests; no endurance HR regression.
+
+    2024 Adult Compendium, code 02054: 3.5 MET. Standard oxygen equivalent
+    (3.5 ml/kg/min, 5 kcal/l); a session average, not measured set intensity.
+    Substrates use explicit profile assumptions, not the Compendium.
+    """
+    kcal = met * 3.5 * weight / 200 * duration_s / 60
+    part = allocate(kcal, cho, kcal * 0.0328)
+    timeline = []
+    cursor = 0.0
+    while cursor < duration_s:
+        seconds = min(300.0, duration_s - cursor)
+        timeline.append({"start_s": cursor, "seconds": seconds,
+                         **grams({k: v * seconds / duration_s for k, v in part.items()})})
+        cursor += seconds
+    return {
+        **grams(part),
+        "method": "STRENGTH_MET",
+        "met": met,
+        "carbohydrate_fraction_assumption": cho,
+        "protein_fraction_assumption": 0.0328,
+        "above_rest_kcal": (kcal - resting_kcal * duration_s / 86400
+                            if resting_kcal is not None else None),
+        "duration_s": duration_s,
+        "covered_seconds": 0.0,
+        "accounted_seconds": duration_s,
+        "estimated_seconds": duration_s,
+        "unknown_seconds": 0.0,
+        "coverage_percent": 0.0,
+        "source_seconds": {"measured_hr": 0.0, "relative_intensity": 0.0,
+                           "strength_met": duration_s, "unknown": 0.0},
+        "timeline": timeline,
     }
 
 

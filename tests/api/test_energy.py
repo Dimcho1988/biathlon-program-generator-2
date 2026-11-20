@@ -51,6 +51,33 @@ def test_missing_hr_never_filled_by_hrmod_or_zero():
     r = report([{"elapsed_s": i, "hrmod_final_bpm": 150} for i in range(20)])
     assert r["coverage_percent"] == 0 and r["unknown_seconds"] == 20
     assert r["source_seconds"]["measured_hr"] == 0
+    assert r["kcal"] is None
+
+
+def test_missing_signal_and_outside_regression_range_are_explained():
+    r = report([{"elapsed_s": 0, "hr_raw_bpm": 80}, {"elapsed_s": 1},
+                {"elapsed_s": 2, "hr_raw_bpm": 150}])
+    assert r["uncovered_reasons_seconds"] == {"missing_signal": 1, "outside_hr_range": 1}
+    assert r["accounted_seconds"] == 1
+    assert r["unknown_seconds"] == 2
+
+
+def test_strength_estimate_conserves_energy_without_claiming_sensor_coverage():
+    r = m.strength_activity(weight=70, duration_s=3670, resting_kcal=1680)
+    expected = 3.5 * 3.5 * 70 / 200 * 3670 / 60
+    assert r["kcal"] == pytest.approx(expected)
+    assert r["above_rest_kcal"] == pytest.approx(expected - 1680 * 3670 / 86400)
+    assert r["coverage_percent"] == 0
+    assert r["accounted_seconds"] == r["estimated_seconds"] == 3670
+    assert sum(r["source_seconds"].values()) == 3670
+    assert r["unknown_seconds"] == 0
+    assert sum(t["seconds"] for t in r["timeline"]) == 3670
+    for key in m.empty():
+        assert sum(t[key] for t in r["timeline"]) == pytest.approx(r[key])
+    assert sum(r[k + "_g"] * m.FACTORS[k] for k in m.MACROS) == pytest.approx(expected)
+    changed = m.strength_activity(weight=70, duration_s=3670, met=6, cho=0.7)
+    assert changed["kcal"] / r["kcal"] == pytest.approx(6 / 3.5)
+    assert changed["carbohydrate_kcal"] / (changed["kcal"] - changed["protein_kcal"]) == pytest.approx(0.7)
 
 
 def test_speed_fallback_reuses_zone_position_and_marks_estimation():
@@ -230,6 +257,62 @@ def test_rest_day_total_and_today_partial():
     assert rest["targets"]["protein_g"] == 136
     assert current["total"] is None and current["targets"] is None
     assert current["outside"]["kcal"] == pytest.approx(1800 * 1.2 * 13 / 24)
+
+
+def strength_day(sport="WeightTraining", duration=3600, entries=None, second_activity=False):
+    repo = RestRepository()
+    if entries is not None:
+        repo.entries = entries
+    calendar = repo.active_activity_calendar("a", None, None)
+    calendar["activities"] = [{"activity_ref": "strength", "sport": sport,
+        "local_date": "2026-11-18", "elapsed_time_s": duration,
+        "start_at_utc": "2026-11-18T09:00:00Z"}]
+    if second_activity:
+        calendar["activities"].append({"activity_ref": "missing", "sport": "Swim",
+            "local_date": "2026-11-18", "elapsed_time_s": 1800,
+            "start_at_utc": "2026-11-18T15:00:00Z"})
+    repo.active_activity_calendar = lambda *args: calendar
+    return s.history(repo, "a", date(2026, 11, 18), date(2026, 11, 18),
+                     now=datetime(2026, 11, 19, 12, tzinfo=timezone.utc))["days"][0]
+
+
+def test_strength_daily_gross_energy_does_not_double_count_resting_time():
+    d = strength_day()
+    assert d["total"] is not None
+    assert d["coverage_percent"] == 0  # data coverage stays distinct from estimated duration
+    assert d["estimated_activity_seconds"] == 3600
+    assert d["unknown_activity_seconds"] == 0
+    assert d["outside"]["kcal"] == pytest.approx(1800 * 1.2 * 23 / 24)
+    assert d["total"]["kcal"] == pytest.approx(1800 * 1.2 * 23 / 24 + 3.5 * 3.5 * 68 / 200 * 60)
+    for key in (*m.empty(), *(k + "_g" for k in m.MACROS)):
+        assert d["total"][key] == pytest.approx(d["activity"][key] + d["outside"][key])
+
+
+def test_strength_assumptions_are_dated_and_do_not_read_sensor_streams():
+    entries = RestRepository().entries
+    entries[0]["payload"].update(strength_met=6, strength_cho_fraction=0.7)
+    entries.append({"kind": "NUTRITION", "observed_date": "2026-11-19", "revision": 2,
+                    "payload": {**entries[0]["payload"], "strength_met": 12}})
+    d = strength_day(entries=entries)
+    assert d["activities"][0]["met"] == 6
+    assert d["activities"][0]["carbohydrate_fraction_assumption"] == 0.7
+
+
+def test_unknown_activity_keeps_day_partial_with_available_macros():
+    d = strength_day(second_activity=True)
+    assert d["total"] is None and d["targets"] is None
+    assert d["unknown_activity_seconds"] == 1800
+    assert d["accounted"]["kcal"] > 0
+    assert all(d["accounted"][k + "_g"] > 0 for k in m.MACROS)
+    assert "30.0 min" in d["reason"]
+
+
+@pytest.mark.parametrize("sport,duration,entries", [
+    ("WeightTraining", 3600, []), ("WeightTraining", 0, None), ("Swim", 3600, None)])
+def test_no_strength_estimate_for_missing_profile_duration_or_other_sport(sport, duration, entries):
+    d = strength_day(sport=sport, duration=duration, entries=entries)
+    assert d["activities"][0]["kcal"] is None
+    assert d["total"] is None and d["targets"] is None
 
 
 def test_dst_day_uses_actual_elapsed_seconds():
