@@ -92,7 +92,7 @@ def _hr_origin(row, signal, compatible):
 
 
 def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEART_RATE", duration_s=None,
-              hr_signal="MODEL"):
+              hr_signal="MODEL", segment_observer=None):
     if leading_indicator not in {"HEART_RATE", "SPEED"}:
         raise ValueError("Unsupported leading indicator")
     if hr_signal not in HR_SIGNALS:
@@ -245,6 +245,8 @@ def integrate(shadow, *, bounds, sport, parameters=None, leading_indicator="HEAR
         order = (("HEART_RATE", h), ("SPEED", s)) if leading_indicator == "HEART_RATE" else (("SPEED", s), ("HEART_RATE", h))
         chosen = next(((kind, value) for kind, value in order if value and value.get("status") in {"AVAILABLE", "REST"}), None)
         dt = right-left
+        if segment_observer is not None:
+            segment_observer(left, right, chosen)
         while pi < len(pauses) and pauses[pi][1] <= left:
             pi += 1
         if not chosen and pi < len(pauses) and pauses[pi][0] <= left < pauses[pi][1]:

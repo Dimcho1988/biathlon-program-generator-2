@@ -53,7 +53,7 @@ def evaluate_hr(parameters, hr_bpm, *, bounds=None, offset_bpm=0., zone=None):
     if value is None:
         return {"status": "UNAVAILABLE", "reason": "INVALID_HR"}
     if value < edges[0]:
-        return {"status": "REST", "coefficient": 0., "zone": None}
+        return {"status": "REST", "coefficient": 0., "zone": None, "hr_bpm": hr_bpm}
     index = ZONES.index(zone) if zone in ZONES else min(4, bisect_right(edges[1:5], value))
     zone = ZONES[index]
     value = min(value, edges[-1])
@@ -63,6 +63,7 @@ def evaluate_hr(parameters, hr_bpm, *, bounds=None, offset_bpm=0., zone=None):
         expert_coefficient=row.get("coefficient") if ratio is not None else None)
     return {"status": "AVAILABLE" if coefficient is not None else "UNAVAILABLE",
             "zone": zone, "coefficient": coefficient,
+            "hr_bpm": hr_bpm, "relative_position": (value-edges[index])/(edges[index+1]-edges[index]),
             "basis": "COMMON_SPEED_PROFILE" if ratio is not None else "HR_ONLY_RELATIVE_BOUNDS"}
 
 
@@ -211,6 +212,7 @@ def evaluate(parameters, speed_kmh, *, zone=None):
     baseline = speed_kmh/(low if zone == "Z5" else high)
     return {"status": "AVAILABLE", "reason": None, "zone": zone, "weight": weight,
             "coefficient": k, "baseline_coefficient": baseline,
+            "relative_position": (speed_kmh-low)/(high-low),
             "reference_speed_kmh": row["reference_speed_kmh"]}
 
 

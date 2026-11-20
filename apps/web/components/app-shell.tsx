@@ -16,6 +16,7 @@ const sections = [
   { href: "/activities", label: "Активности", icon: "calendar" },
   { href: "/trainability", label: "Индекс на тренираност", icon: "trend" },
   { href: "/speed", label: "Скорост и време", icon: "speed" },
+  { href: "/energy", label: "Енергия и хранене", icon: "trend" },
   { href: "/response", label: "Стрес и възстановяване", icon: "response" },
   { href: "/learning", label: "Самообучение", icon: "trend" },
   { href: "/planning", label: "Профил за планиране", icon: "overview" },

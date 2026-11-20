@@ -7,7 +7,7 @@ type Receipt = { status?: string; kind?: string; revision?: number; operation_id
 type Reply = { status?: string; conversation_id?: string; operation_id?: string; message?: string; error?: string; sources?: Source[]; receipt?: Receipt; suggestions?: string[]; pending?: boolean; provider_available?: boolean; messages?: unknown; pending_operation?: unknown };
 type Message = { id: string; role: "user" | "assistant"; content: string; sources?: Source[]; receipt?: Receipt; pending?: boolean };
 type Submission = { operation_id: string; conversation_id: string | null; message: string };
-type Props = { athleteAlias: string; actorUserId: string; displayName: string; canEditPlan: boolean; isOwner: boolean; canViewPlan: boolean; canViewRecovery: boolean };
+type Props = { initialPrompt?:string; athleteAlias: string; actorUserId: string; displayName: string; canEditPlan: boolean; isOwner: boolean; canViewPlan: boolean; canViewRecovery: boolean };
 
 const SCOPE_MESSAGE = "Профилът или достъпът е променен. Заредете актуалния профил, за да продължите.";
 const validUuid = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -32,7 +32,7 @@ function receiptLabel(receipt: Receipt) {
   return ({ SUCCEEDED: "Потвърден запис", SAVED: "Потвърден запис", COMMITTED: "Потвърден запис", COMPLETED: "Потвърден запис", PENDING: "Обработва се", UNKNOWN: "Резултатът се проверява" })[status ?? ""] ?? "Резултат от операцията";
 }
 
-const APP_LINKS = new Set(["/", "/?settings=edit", "/account", "/activities", "/management", "/management/outlook", "/planning", "/trainability", "/methods", "/speed", "/learning", "/response", "/assistant", "/api/integrations/intervals/connect"]);
+const APP_LINKS = new Set(["/", "/?settings=edit", "/account", "/activities", "/management", "/management/outlook", "/planning", "/trainability", "/methods", "/speed", "/learning", "/response", "/energy", "/assistant", "/api/integrations/intervals/connect"]);
 const ACCOUNT_SECTIONS = new Set(["role-profile-title", "invites-title", "athletes-title", "create-team-title", "link-athlete-title", "password-guidance"]);
 function safeAppLink(href: string) {
   if (APP_LINKS.has(href)) return true;
@@ -87,9 +87,9 @@ function AssistantText({ text }: { text: string }) {
   return <>{blocks}</>;
 }
 
-export function AssistantChat({ athleteAlias, actorUserId, displayName, canEditPlan, isOwner, canViewPlan, canViewRecovery }: Props) {
+export function AssistantChat({ athleteAlias, actorUserId, displayName, canEditPlan, isOwner, canViewPlan, canViewRecovery, initialPrompt="" }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(initialPrompt);
   const [conversation, setConversation] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [longWait, setLongWait] = useState(false);

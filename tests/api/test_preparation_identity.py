@@ -66,6 +66,16 @@ def test_chat_and_frontend_files_are_not_scientific_dependencies(sources):
     assert identity.source_manifest("pages", root=root) == first
 
 
+def test_energy_calculation_changes_invalidate_prepared_pages(sources):
+    root, write = sources
+    write("apps.api.energy_service", "from . import energy_model\n")
+    write("apps.api.energy_model", "PROTEIN_FRACTION = .0328\n")
+    first = identity.source_manifest("pages", root=root)
+    assert "apps.api.energy_model" in first
+    write("apps.api.energy_model", "PROTEIN_FRACTION = .04\n")
+    assert identity.source_manifest("pages", root=root) != first
+
+
 def test_missing_declared_source_fails_closed(sources):
     root, _ = sources
     root.joinpath("apps/api/model_service.py").unlink()

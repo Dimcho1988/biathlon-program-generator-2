@@ -47,6 +47,11 @@ jobs:
           path: migration-catalog.json
           if-no-files-found: error
           retention-days: 30
+      - name: Verify energy inputs, permissions and caches
+        run: >-
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+          --no-psqlrc --set ON_ERROR_STOP=1
+          --file tests/database/energy_nutrition.sql
       - name: Verify response-aware plan publication
         run: >-
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres"

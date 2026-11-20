@@ -536,3 +536,9 @@ export async function getPlanningCalendar(
     ),
   );
 }
+
+export async function getEnergyHistory(athleteAlias:string,start?:string,end?:string){
+ const {parseEnergy}=await import('./energy');
+ const params=new URLSearchParams();if(start)params.set('period_start',start);if(end)params.set('period_end',end);
+ return parseEnergy(await fetchApiResource(`/api/v2/athlete/energy?${params}`,process.env.ONFLOWS_SERVICE_TOKEN,athleteAlias));
+}
