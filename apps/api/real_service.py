@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import hashlib
 import json
 import logging
@@ -1224,15 +1225,19 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
     provider = ProviderReplay(client or IntervalsClient(token, context.provider_athlete_id))
     from .hr_settings_history import at as hr_settings_at, history_days
     end = period_end or date.today()
-    previous = repository.latest(context.public_alias) if getattr(athlete_settings, "hr_settings_revision", None) else None
+    previous = repository.latest(context.public_alias)
     if getattr(athlete_settings, "hr_settings_revision", None) != ((previous or {}).get("load_history") or {}).get("hr_settings_revision"):
         days = history_days(athlete_settings, end, days)
     start = end.fromordinal(end.toordinal() - days + 1)
     stage = "athlete"
     try:
-        # Validate the configured profile and retrieve settings at the provider
-        # boundary; payloads are deliberately discarded and never persisted.
-        provider.get_athlete_result()
+        # Reuse this existing request; retain only validated nutrition inputs.
+        from .nutrition_inputs import provider_body_inputs
+        body_inputs = provider_body_inputs(
+            provider.get_athlete_result().payload,
+            (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(context.timezone)).date(),
+            (previous or {}).get("nutrition_body_inputs"),
+        )
         stage = "sport_settings"
         provider.get_sport_settings_result()
         stage = "wellness"
@@ -1659,6 +1664,7 @@ def refresh(repository: SnapshotRepository, *, environ: Mapping[str, str] | None
         load_history=load_history,
         recovery_history=recovery_history,
         wellness_calendar=wellness_calendar,
+        nutrition_body_inputs=body_inputs,
     )
     repository.replace(context.public_alias, persisted.model_dump(mode="json"))
     return RefreshResult(

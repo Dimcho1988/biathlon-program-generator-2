@@ -194,20 +194,35 @@ def outside_energy(seconds, weight, resting_kcal, factor, cho):
     return grams(allocate(kcal, cho, 0.00081 * weight * seconds / 60 * 4))
 
 
-def dietary_targets(total, weight, training_hours, adult):
-    if not adult or total is None or total <= 0 or not number(weight) or weight <= 0:
+def dietary_targets(total, weight, training_hours, adult, cho_fraction=0.65):
+    """App policy, not a validated physiological kcal-to-protein regression.
+
+    Retain training_hours for older callers; the policy deliberately ignores it.
+    Partial expenditure must never determine the full-day protein coefficient.
+    """
+    if not adult or not number(weight) or weight <= 0:
         return None
-    protein = weight * (2.0 if training_hours < 0.25 else 1.8)
-    if total <= protein * 4:
-        return None
-    carbohydrate = (total - 4 * protein) * 0.65 / 4
-    fat = (total - 4 * protein - 4 * carbohydrate) / 9
+    complete = number(total) and total > 0
+    per_kg = total / weight if complete else None
+    coefficient = min(1.9, max(1.6, 1.6 + 0.0075 * (per_kg - 40))) if complete else 1.8
+    protein = weight * coefficient
+    full = complete and total > protein * 4
+    fraction = min(1.0, max(0.0, cho_fraction))
+    remaining = total - protein * 4 if full else None
     return {
-        "kcal": total,
+        "kcal": total if full else None,
         "protein_g": protein,
-        "carbohydrate_g": carbohydrate,
-        "fat_g": fat,
+        "protein_g_per_kg": coefficient,
+        "energy_kcal_per_kg": per_kg,
+        "protein_basis": "DAILY_ENERGY_RULE" if complete else "INCOMPLETE_DAY_FALLBACK",
+        "carbohydrate_g": remaining * fraction / 4 if full else None,
+        "fat_g": remaining * (1 - fraction) / 9 if full else None,
         "purpose": "MAINTENANCE_STARTING_ESTIMATE",
-        "protein_reference": "Witard, Hearris & Morgan 2025; doi:10.1007/s40279-025-02203-8",
-        "allocation_note": "Ориентир за поддържане: белтъчини 1,8 g/kg в тренировъчен и 2,0 g/kg в почивен ден; 65% от останалата енергия за въглехидрати. Последното е работно допускане за индивидуален преглед, а не валидирана оптимална диета.",
+        "allocation_note": (
+            "Работно правило: 1,6–1,9 g/kg при 40–80 kcal/kg общ дневен разход, с ограничение до тези граници. "
+            "Останалата енергия следва оцененото съотношение въглехидрати/мазнини. "
+            "Това е ориентир за поддържане, не индивидуално валидирана хранителна норма."
+            if complete else
+            "Непълен ден: резервна цел 1,8 g/kg. Калориите, въглехидратите и мазнините за целия ден още не са определени."
+        ),
     }
