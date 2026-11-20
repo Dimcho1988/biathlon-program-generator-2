@@ -1,10 +1,11 @@
 import { durationSeconds } from "./duration-format";
 import { isCalendarDate, isRecord } from "./training-status";
 
-export const TRAINABILITY_MODEL_VERSION = "trainability_paired_raw_lag20_v4_observed_validity";
+export const TRAINABILITY_MODEL_VERSION = "trainability_paired_raw_lag20_v5_measured_motion";
 export const MINIMUM_SECONDS_BY_BAND: Record<string, number> = { Z1: 420, Z2: 420, Z3: 420, Z4: 420, Z5: 300, GENERAL: 420 };
 
 export interface IndexBand {
+  candidate_index?: number | null;
   mean_hr_raw_bpm?:number|null;
   lower_raw_bpm?:number|null;
   upper_raw_bpm?:number|null;
@@ -29,7 +30,7 @@ export interface TrainabilityIndex {
   hr_source: "raw";
   lag_seconds: 20;
   signal_quality: {status: "EXCLUDED" | "PASSED_SCREEN"; reason: string | null; rapid_change_episodes: number};
-  admission?: {status: "EXCLUDED" | "ACCEPTED"; reason: string | null; reference_status: string; flagged_bands: Array<{zone: string; deviation_fraction: number; reference_index: number}>};
+  admission?: {status: "EXCLUDED" | "ACCEPTED" | "PARTIAL"; reason: string | null; reference_status: string; flagged_bands: Array<{zone: string; deviation_fraction: number; reference_index: number}>};
   normalization: "percent_hrmax";
   comparison_key: string;
   source_versions: Record<string, string>;
@@ -44,6 +45,7 @@ export interface TrainabilityIndex {
   eligible_speed_seconds: number;
   downhill_excluded_seconds: number;
   unavailable_speed_seconds: number;
+  confirmed_stop_excluded_seconds?: number;
   zones: IndexBand[];
   general: IndexBand;
 }
@@ -75,6 +77,7 @@ export function parseIndexBand(v: unknown): IndexBand {
     !["hr_seconds", "hr_percent", "speed_seconds"].every(k => finite(v[k]) && v[k] >= 0) ||
     Math.abs(Number(v.hr_seconds) - Number(v.speed_seconds)) > 1e-8 ||
     !(v.invalid_reason === null || typeof v.invalid_reason === "string") ||
+    (v.candidate_index !== undefined && !nullableNumber(v.candidate_index)) ||
     (v.valid && (!finite(v.index) || v.invalid_reason !== null || Number(v.hr_seconds) < Number(v.minimum_seconds) - 1e-9 || Number(v.speed_seconds) < Number(v.minimum_seconds) - 1e-9)) ||
     (!v.valid && (v.index !== null || v.invalid_reason === null))) throw bad();
   return v as unknown as IndexBand;
@@ -82,6 +85,7 @@ export function parseIndexBand(v: unknown): IndexBand {
 export function parseTrainabilityIndex(v: unknown): TrainabilityIndex | null {
   if (v === null || v === undefined) return null;
   if (isRecord(v) && ["trainability-index-v1", "trainability-index-v2"].includes(String(v.schema_version))) return null;
+  if (isRecord(v) && v.schema_version === "trainability-index-v3" && v.model_version !== TRAINABILITY_MODEL_VERSION) return null;
   if (!isRecord(v) || v.schema_version !== "trainability-index-v3" ||
     v.model_version !== TRAINABILITY_MODEL_VERSION || v.hr_source !== "raw" || v.lag_seconds !== 20 ||
     !isRecord(v.signal_quality) || !["EXCLUDED", "PASSED_SCREEN"].includes(String(v.signal_quality.status)) ||
@@ -96,6 +100,11 @@ export function parseTrainabilityIndex(v: unknown): TrainabilityIndex | null {
     !["hr_seconds", "eligible_speed_seconds", "downhill_excluded_seconds", "unavailable_speed_seconds"].every(k => finite(v[k]) && v[k] >= 0) ||
     !Array.isArray(v.zones) || v.zones.length !== 5) throw bad();
   const zones = v.zones.map(parseIndexBand);
+  if (v.admission !== undefined && (!isRecord(v.admission) ||
+    !["ACCEPTED", "PARTIAL", "EXCLUDED"].includes(String(v.admission.status)) ||
+    !Array.isArray(v.admission.flagged_bands) || !v.admission.flagged_bands.every(b => isRecord(b) &&
+      typeof b.zone === "string" && Object.hasOwn(MINIMUM_SECONDS_BY_BAND, b.zone) && finite(b.deviation_fraction) && finite(b.reference_index)))) throw bad();
+  if (v.confirmed_stop_excluded_seconds !== undefined && (!finite(v.confirmed_stop_excluded_seconds) || v.confirmed_stop_excluded_seconds < 0)) throw bad();
   if(v.hr_reference_offset_bpm!==undefined&&v.hr_reference_offset_bpm!==0&&v.hr_reference_offset_bpm!==7)throw bad();
   const general = parseIndexBand(v.general);
   if ((v.signal_quality.status === "EXCLUDED" || (isRecord(v.admission) && v.admission.status === "EXCLUDED")) && [...zones, general].some(b => b.valid)) throw bad();
@@ -129,7 +138,7 @@ export function parseTrainabilityHistory(v: unknown): TrainabilityHistory {
 export const indexNumber = (value: number | null, digits = 2) => value === null ? "—" : value.toLocaleString("bg-BG", { maximumFractionDigits: digits, minimumFractionDigits: digits });
 export const indexTime = durationSeconds;
 export const invalidLabel = (reason: string | null, minimumSeconds: number) => ({
-  HR_SIGNAL_SUSPECT: "Цялата тренировка е изключена: съмнителен пулс", INDEX_OUTLIER: "Цялата тренировка е изключена: отклонение на ТИ над 20%",
+  HR_SIGNAL_SUSPECT: "Цялата тренировка е изключена: съмнителен пулс", INDEX_OUTLIER: "Индексът в този диапазон не участва: отклонение над 20%",
   PAIRED_TIME_BELOW_MINIMUM: `Под ${minimumSeconds / 60} мин съпоставени пулс и скорост`,
   HR_TIME_BELOW_MINIMUM: `Под ${minimumSeconds / 60} мин HRmod`, SPEED_TIME_BELOW_MINIMUM: `Под ${minimumSeconds / 60} мин разпределени скорости`,
   HRMAX_MISSING: "Липсва HRmax", ZERO_SPEED: "Нулева средна скорост",

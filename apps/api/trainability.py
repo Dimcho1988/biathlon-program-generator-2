@@ -8,13 +8,15 @@ from biathlon.sport_heart_rate import validate_offset
 from biathlon.unified_load import observed_hr_valid
 
 SCHEMA_VERSION = "trainability-index-v3"
-MODEL_VERSION = "trainability_paired_raw_lag20_v4_observed_validity"
+MODEL_VERSION = "trainability_paired_raw_lag20_v5_measured_motion"
 MIN_SECONDS_BY_BAND = {"Z1":420.,"Z2":420.,"Z3":420.,"Z4":420.,"Z5":300.,"GENERAL":420.}
 MIN_ACTIVITY_SECONDS = 420.
 GENERAL_RANGE = (.75,.92)
 MIN_GRADE_PCT = -3.
 LAG_SECONDS = 20.
 MAX_GAP_SECONDS = 10.
+STOP_SPEED_KMH = 1.
+STOP_DURATION_SECONDS = 3.
 
 
 def _number(value: Any) -> float | None:
@@ -45,6 +47,33 @@ def signal_quality(hr_rows):
             "minimum_episodes":3,"validated":False}
 
 
+def _confirmed_stops(speed_rows):
+    """Mark low-speed observations spanning >=3 seconds without a recording gap.
+
+    Brief slowdowns remain usable, including genuine slow climbing. Missing
+    raw speed and zero-duration boundary rows split episodes. Duration is time
+    between observations, not sample count, matching the existing stop policy.
+    """
+    stopped=set(); episode=[]; first=previous=None
+    def finish():
+        if episode and previous-first >= STOP_DURATION_SECONDS-1e-9:
+            stopped.update(episode)
+    for i,row in enumerate(speed_rows):
+        end=_time(row);dt=_number(row.get("dt_s"));raw=_number(row.get("speed_raw_kmh"))
+        low=(end is not None and dt is not None and 0<dt<=MAX_GAP_SECONDS
+             and raw is not None and 0<=raw<=STOP_SPEED_KMH)
+        contiguous=(low and previous is not None and 0<end-previous<=MAX_GAP_SECONDS
+                    and abs(end-dt-previous)<=1e-6)
+        if not contiguous:
+            finish();episode=[];first=None
+        if low:
+            if not episode:first=end
+            episode.append(i);previous=end
+        else:previous=None
+    finish()
+    return stopped
+
+
 def compute_trainability(hr_rows: Sequence[Mapping[str,Any]], speed_rows: Sequence[Mapping[str,Any]], *,
     zone_bounds_bpm: Sequence[int],hrmax_bpm:int|None,activity_duration_s:float|None,
     comparison_key:str,source_versions:Mapping[str,str],hr_reference_offset_bpm:float=0.) -> dict[str,Any]:
@@ -64,14 +93,18 @@ def compute_trainability(hr_rows: Sequence[Mapping[str,Any]], speed_rows: Sequen
     # Shared observed_hr_valid already applies 30–300 bpm and explicit flags.
     # HRmax is a normalization setting, not a sensor-validity cutoff.
     good=np.isfinite(hrs)
-    pairs=[];downhill=unavailable=0.
-    for row in speed_rows:
+    pairs=[];downhill=unavailable=stopped_seconds=0.
+    stopped=_confirmed_stops(speed_rows)
+    for i,row in enumerate(speed_rows):
         dt=_number(row.get("dt_s"));end=_time(row)
         if dt is None or dt<=0: continue
         v=_number(row.get("vflat_b65_kmh"));grade=_number(row.get("grade_raw_pct"))
+        raw=_number(row.get("speed_raw_kmh"))
         if (end is None or dt>MAX_GAP_SECONDS or v is None or v<=0 or grade is None or row.get("exclusion_reason")
+                or raw is None or raw<0
                 or row.get("is_estimated") or row.get("generated") or row.get("source") in {"MODEL", "ESTIMATED"}):
             unavailable+=dt;continue
+        if i in stopped: stopped_seconds+=dt;continue
         if grade<MIN_GRADE_PCT: downhill+=dt;continue
         pairs.append((end-dt/2,dt,v))
     h=np.asarray([],float);v=h.copy();weights=h.copy()
@@ -124,5 +157,7 @@ def compute_trainability(hr_rows: Sequence[Mapping[str,Any]], speed_rows: Sequen
             "minimum_seconds_by_band":dict(MIN_SECONDS_BY_BAND),"minimum_grade_pct":MIN_GRADE_PCT,
             "general_range_percent":[75,92],"hr_seconds":total,"eligible_speed_seconds":total,
             "downhill_excluded_seconds":downhill,"unavailable_speed_seconds":unavailable,
+            "confirmed_stop_excluded_seconds":stopped_seconds,
+            "stop_speed_kmh":STOP_SPEED_KMH,"stop_duration_seconds":STOP_DURATION_SECONDS,
             "zones":[band(f"Z{i+1}",bounds[i],bounds[i+1],i==4) for i in range(5)],
             "general":band("GENERAL",*(tuple(hrmax_bpm*p for p in GENERAL_RANGE) if hrmax_bpm else (None,None)),True)}

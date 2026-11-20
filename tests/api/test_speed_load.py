@@ -62,7 +62,7 @@ class Repository:
         self.activities=[];self.summaries={};self.shadows={}
     def add(self,key,sport,day,hr,speed):
         self.activities.append({"activity_ref":key,"sport":sport,"local_date":day.isoformat(),"duration_min":10.,"latest_shadow_run_key":key})
-        series=[{"elapsed_s":t,"dt_s":1.,"vflat_b65_kmh":speed,"grade_smoothed_pct":0.,"grade_raw_pct":0.,"exclusion_reason":None} for t in range(1,601)]
+        series=[{"elapsed_s":t,"dt_s":1.,"speed_raw_kmh":speed,"vflat_b65_kmh":speed,"grade_smoothed_pct":0.,"grade_raw_pct":0.,"exclusion_reason":None} for t in range(1,601)]
         index=compute_trainability([{"elapsed_s":t,"hr_raw_bpm":hr} for t in range(622)],series,
             zone_bounds_bpm=BOUNDS,hrmax_bpm=200,activity_duration_s=600,hr_reference_offset_bpm=model.reference_offset(sport),
             comparison_key=model.activity_shadow_configuration_fingerprint(BOUNDS,200,sport=sport),
@@ -78,6 +78,18 @@ class Repository:
     def activity_speed_exposure_samples(self,alias,keys):
         assert alias=="authorized-athlete"
         return deepcopy({k:self.shadows[k] for k in keys})
+
+
+def test_partial_activity_contributes_only_valid_bands_to_later_speed_load():
+    repo=Repository();repo.add("partial","NordicSki",TODAY-timedelta(days=1),150,15)
+    index=repo.summaries['partial']['trainability_index']
+    index['admission']={'status':'PARTIAL'}
+    band=index['zones'][2]
+    band.update(valid=False,index=None,candidate_index=99.,invalid_reason='INDEX_OUTLIER')
+    row={**repo.activities[0],'index':index}
+    indices=model.prior_indices([row],'NordicSki',TODAY,SETTINGS)
+    assert indices['GENERAL']['count']==1 and indices['GENERAL']['index']==index['general']['index']
+    assert indices['Z3']['count']==0 and indices['Z3']['index'] is None
 
 
 def test_speed_load_is_causal_independent_and_preserves_uncovered_history():

@@ -6,6 +6,26 @@ import { TrainabilitySummary } from "../components/trainability-summary";
 import { TrainabilityHistoryView } from "../components/trainability-history";
 
 describe("trainability", () => {
+  it("keeps good bands on partially admitted workouts and displays excluded candidates", () => {
+    const index = structuredClone(trainabilityFixture.activities[0].index!);
+    const band = index.zones[0];
+    band.candidate_index = band.index;
+    band.index = null; band.valid = false; band.invalid_reason = "INDEX_OUTLIER";
+    index.admission = {status: "PARTIAL", reason: "INDEX_OUTLIER", reference_status: "CHECKED",
+      flagged_bands: [{zone: "Z1", deviation_fraction: .3, reference_index: 4}]};
+    const parsed = parseTrainabilityIndex(index)!;
+    expect(parsed.general.valid).toBe(true);
+    expect(parsed.zones[0].candidate_index).not.toBeNull();
+    const html = renderToStaticMarkup(<TrainabilitySummary index={parsed} />);
+    expect(html).toContain("Частично участие");
+    expect(html).toContain("Индексът в този диапазон не участва");
+    expect(html).not.toContain("Цялата тренировка е изключена");
+  });
+  it("treats the preceding TI model as pending refresh during rollout", () => {
+    const index = structuredClone(trainabilityFixture.activities[0].index!);
+    index.model_version = "trainability_paired_raw_lag20_v4_observed_validity";
+    expect(parseTrainabilityIndex(index)).toBeNull();
+  });
   it("validates the stored contract and rejects fabricated values for short activities", () => {
     expect(parseTrainabilityHistory(trainabilityFixture).activities).toHaveLength(12);
     const malformed = structuredClone(trainabilityFixture);

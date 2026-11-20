@@ -1,4 +1,4 @@
-"""Causal, whole-workout admission shared by history and prediction."""
+"""Causal per-band admission shared by history and prediction."""
 from copy import deepcopy
 from datetime import date,timedelta
 import numpy as np
@@ -9,6 +9,10 @@ from biathlon.sport_heart_rate import reference_offset
 HISTORY_DAYS=40
 MIN_REFERENCE_ACTIVITIES=7
 MAX_INDEX_DEVIATION=.20
+
+
+def usable_admission(index):
+    return index.get('admission',{}).get('status') in {'ACCEPTED','PARTIAL'}
 
 
 def window_start(end,days=HISTORY_DAYS):
@@ -53,15 +57,20 @@ def admit_activities(activities):
             item={'zone':band['name'],'reference_index':reference,'deviation_fraction':deviation,'reference_count':len(observations)}
             checked.append(item)
             if abs(deviation)>MAX_INDEX_DEVIATION+1e-12:flags.append(item)
-        index['admission']={'status':'EXCLUDED' if flags or index.get('signal_quality',{}).get('status')=='EXCLUDED' else 'ACCEPTED',
-                            'reason':'INDEX_OUTLIER' if flags else index.get('signal_quality',{}).get('reason'),
+        signal_reason=index.get('signal_quality',{}).get('reason') if index.get('signal_quality',{}).get('status')=='EXCLUDED' else None
+        flagged_names={item['zone'] for item in flags}
+        for band in [*index['zones'],index['general']]:
+            if signal_reason or band['name'] in flagged_names:
+                band['candidate_index']=band['index'];band['index']=None;band['valid']=False
+                band['invalid_reason']=signal_reason or 'INDEX_OUTLIER'
+        has_valid=any(b['valid'] for b in [*index['zones'],index['general']])
+        status='EXCLUDED' if signal_reason or (flags and not has_valid) else 'PARTIAL' if flags else 'ACCEPTED'
+        index['admission']={'status':status,
+                            'reason':signal_reason or ('INDEX_OUTLIER' if flags else None),
                             'reference_days':HISTORY_DAYS,'minimum_reference_activities':MIN_REFERENCE_ACTIVITIES,
                             'max_deviation_fraction':MAX_INDEX_DEVIATION,'checked_bands':checked,'flagged_bands':flags,
                             'reference_status':'CHECKED' if checked else 'INSUFFICIENT_HISTORY'}
-        if flags:
-            for band in [*index['zones'],index['general']]:
-                band['candidate_index']=band['index'];band['index']=None;band['valid']=False;band['invalid_reason']='INDEX_OUTLIER'
-        if index['admission']['status']=='ACCEPTED':accepted.append(row)
+        if usable_admission(index):accepted.append(row)
     return rows
 
 

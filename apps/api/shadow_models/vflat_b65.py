@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+import math
 import pandas as pd
 
 from vflat_b65 import (
@@ -19,6 +20,23 @@ from vflat_b65.sports import is_running, is_cycling, is_treadmill, speed_model_v
 from vflat_b65.cycling import CyclingConfig, apply_cycling_grade
 from vflat_b65.treadmill import TreadmillConfig, apply_treadmill_speed
 from vflat_b65.load import complete_load_speed
+
+
+def speed_comparison(rows):
+    """Time-weighted speeds on the same supported independent speed intervals.
+
+    This whole-recording comparison includes stops and descents. TI applies its
+    own motion, terrain and paired-HR selection and has different coverage.
+    """
+    seconds=raw_sum=flat_sum=0.
+    for row in rows:
+        raw,flat,dt=(row.get(k) for k in ("speed_raw_kmh","vflat_b65_kmh","dt_s"))
+        if (row.get("exclusion_reason") or not all(isinstance(x,(int,float)) and not isinstance(x,bool)
+                and math.isfinite(x) for x in (raw,flat,dt)) or not 0<dt<=1 or raw<0 or flat<0):
+            continue
+        seconds+=dt;raw_sum+=raw*dt;flat_sum+=flat*dt
+    return {"seconds":seconds,"mean_raw_kmh":raw_sum/seconds if seconds else None,
+            "mean_vflat_kmh":flat_sum/seconds if seconds else None}
 
 
 def run_vflat_b65_shadow(
@@ -105,6 +123,7 @@ def run_vflat_b65_shadow(
         "config": selected.to_dict(),
         "terrain_correction": result.attrs["terrain_correction"],
         "speed_load_summary": load_summary,
+        "speed_comparison": speed_comparison(rows),
         "sprint_str_summary": sprint_detection.summary,
         "sprint_str_intervals": list(sprint_detection.intervals),
         "timeseries": rows,

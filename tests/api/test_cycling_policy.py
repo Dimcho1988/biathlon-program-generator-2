@@ -32,7 +32,7 @@ def test_cycling_pipeline_uses_own_speed_and_shifted_index_without_mutating_obse
 
 
 def test_index_equivalent_reference_and_cycle_raw_hr_give_identical_zone_and_ti():
-    speed=[{"elapsed_s":t,"dt_s":1.,"vflat_b65_kmh":25.,"grade_raw_pct":0.} for t in range(1,601)]
+    speed=[{"elapsed_s":t,"dt_s":1.,"speed_raw_kmh":25.,"vflat_b65_kmh":25.,"grade_raw_pct":0.} for t in range(1,601)]
     def compute(hr,offset):
         rows=[{"elapsed_s":t,"hr_raw_bpm":hr} for t in range(622)]
         return compute_trainability(rows,speed,zone_bounds_bpm=BOUNDS,hrmax_bpm=200,activity_duration_s=620,

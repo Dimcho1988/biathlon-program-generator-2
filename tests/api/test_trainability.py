@@ -1,6 +1,7 @@
 """Synthetic time-aligned inputs: no private athlete samples in the repository."""
 from copy import deepcopy
 import math
+import numpy as np
 import pytest
 from apps.api.trainability import MIN_SECONDS_BY_BAND, compute_trainability, signal_quality
 
@@ -9,7 +10,7 @@ BOUNDS = [80,137,148,160,170,180]
 def samples(seconds=600, hr=150, speed=20, grade=0):
     hrs=[{'elapsed_s':t,'hr_raw_bpm':hr,'hrmod_final_bpm':100} for t in range(math.ceil(seconds)+22)]
     speeds=[{'elapsed_s':min(t+1,seconds),'dt_s':min(1,seconds-t),
-             'vflat_b65_kmh':speed,'grade_raw_pct':grade} for t in range(math.ceil(seconds))]
+             'speed_raw_kmh':speed,'vflat_b65_kmh':speed,'grade_raw_pct':grade} for t in range(math.ceil(seconds))]
     return hrs,speeds
 
 def calculate(hrs,speeds,**kwargs):
@@ -56,7 +57,7 @@ def test_downhill_excludes_both_members_of_pair_and_keeps_exact_minus_three():
 
 def test_lag_uses_seconds_with_irregular_sampling_and_has_no_end_extrapolation():
     hrs=[{'elapsed_s':t,'hr_raw_bpm':100+t/10} for t in range(0,701,4)]
-    speeds=[{'elapsed_s':t,'dt_s':2,'vflat_b65_kmh':20,'grade_raw_pct':0} for t in range(2,701,2)]
+    speeds=[{'elapsed_s':t,'dt_s':2,'speed_raw_kmh':20,'vflat_b65_kmh':20,'grade_raw_pct':0} for t in range(2,701,2)]
     r=calculate(hrs,speeds)
     assert r['hr_seconds']==680  # midpoint 679 + 20 is in range; 681 + 20 is not.
     weighted=sum(z['mean_hr_bpm']*z['hr_seconds'] for z in r['zones'] if z['hr_seconds'])/680
@@ -121,3 +122,37 @@ def test_excluded_speed_never_steals_another_zones_hr_and_hrmod_flags_do_not_exc
     r=calculate(hrs,speeds)
     assert r['general']['hr_seconds']==420
     assert r['general']['index']==pytest.approx(100*150/180/20)
+
+
+@pytest.mark.parametrize('raw',[None,float('nan'),-1,True])
+def test_positive_model_speed_without_valid_raw_speed_cannot_enter_index(raw):
+    hrs,speeds=samples()
+    for row in speeds[:100]:row['speed_raw_kmh']=raw
+    r=calculate(hrs,speeds)
+    assert r['eligible_speed_seconds']==500
+    assert r['unavailable_speed_seconds']==100
+
+
+def test_sustained_stop_is_excluded_but_slow_climbing_and_brief_slowdown_survive():
+    hrs,speeds=samples()
+    for row in speeds[:100]:row.update(speed_raw_kmh=.5,vflat_b65_kmh=5)
+    for row in speeds[100:200]:row.update(speed_raw_kmh=2,grade_raw_pct=12)
+    for row in speeds[200:203]:row['speed_raw_kmh']=.5  # Only two seconds between observations.
+    before=deepcopy(speeds)
+    result=calculate(hrs,speeds)
+    assert result['confirmed_stop_excluded_seconds']==100
+    assert result['eligible_speed_seconds']==500
+    assert result['general']['mean_vflat_kmh']==20
+    assert speeds==before
+
+
+def test_recording_gap_missing_speed_and_boundary_split_stop_episodes():
+    from apps.api.trainability import _confirmed_stops
+    rows=[{'elapsed_s':t,'dt_s':1,'speed_raw_kmh':.5} for t in [1,2,3,100,101,102]]
+    assert not _confirmed_stops(rows)
+    rows=[{'elapsed_s':t,'dt_s':1,'speed_raw_kmh':.5} for t in range(1,8)]
+    rows[3]['speed_raw_kmh']=None
+    assert not _confirmed_stops(rows)
+    rows[3].update(speed_raw_kmh=.5,dt_s=0)
+    assert not _confirmed_stops(rows)
+    assert _confirmed_stops([{'elapsed_s':t,'dt_s':.5,'speed_raw_kmh':1.} for t in np.arange(.5,4,.5)])==set(range(7))

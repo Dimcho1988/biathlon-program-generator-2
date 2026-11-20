@@ -48,7 +48,10 @@ def recalibrate_shadow(immutable, previous, *, detail, settings, model_upgrade=F
     samples = immutable.get("samples") or []
     old_rows = previous.get("timeseries") or []
     speed_rows = previous.get("speed_test_series")
+    from vflat_b65.sports import speed_model_versions
+    expected_speed = speed_model_versions(detail.get("type"))
     if (not samples or len(samples) != len(old_rows) or not isinstance(speed_rows, list)
+            or (previous.get("vflat_model_version"),previous.get("vflat_config_version")) != expected_speed
             or immutable.get("input_hash") != previous.get("input_hash")
             or previous.get("hrmod_model_version") not in (
                 {shadow_model.HRMOD_MODEL_VERSION, "hrmod_mirror_area_shift_v9"}
@@ -116,7 +119,7 @@ def recalibrate_shadow(immutable, previous, *, detail, settings, model_upgrade=F
             settings.zone_bounds_bpm, settings.hrmax_bpm, sport=detail.get("type")),
         source_versions={"vflat": out["vflat_model_version"], "hrmod": shadow_model.HRMOD_MODEL_VERSION})
     out.update(hrmod_waves=hr.get("waves", []), zone_summary=hr.get("zones", []),
-               segments_15s=shadow_model._segments_15s(out["timeseries"]))
+               segments_15s=shadow_model._segments_15s(out["timeseries"],speed_rows))
     out["diagnostics"]["hrmod"] = hr.get("diagnostics", {})
     if offset:
         out["diagnostics"]["vflat"]["hr_policy"] = shadow_model.sport_hr_policy(

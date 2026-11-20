@@ -122,8 +122,9 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
   const firstRow = rows[0] ?? {};
   const lastRow = rows.at(-1) ?? {};
   const activityDuration = (number(lastRow.elapsed_s) ?? rows.length - 1) - (number(firstRow.elapsed_s) ?? 0);
-  const rawSpeed = mean(rows, "speed_raw_kmh");
-  const vflatSpeed = mean(rows, "vflat_b65_kmh");
+  const comparison = payload.speed_comparison && typeof payload.speed_comparison === "object" ? payload.speed_comparison as Row : {};
+  const rawSpeed = number(comparison.mean_raw_kmh);
+  const vflatSpeed = number(comparison.mean_vflat_kmh);
   const cleanHr = mean(rows, "hr_clean_bpm");
   const finalHr = mean(rows, "hrmod_final_bpm");
   const rawHrValues = rows.map((row) => number(row.hr_raw_bpm)).filter((value): value is number => value !== null);
@@ -155,7 +156,7 @@ export function ShadowActivityPanel({ payload, activityRef, profileHrRange }: { 
       </section>
 
       <section className="shadow-summary" aria-label="Обобщение на сравнението">
-        <article><span>Средна скорост</span><strong>{fixed(rawSpeed)} → {vflatEnabled ? fixed(vflatSpeed) : "off"} km/h</strong><small>Δ {vflatEnabled && rawSpeed !== null && vflatSpeed !== null ? signed(vflatSpeed - rawSpeed) : "—"}</small></article>
+        <article><span>Средна скорост</span><strong>{fixed(rawSpeed)} → {vflatEnabled ? fixed(vflatSpeed) : "off"} km/h</strong><small>Реална → Vflat · Δ {vflatEnabled && rawSpeed !== null && vflatSpeed !== null ? signed(vflatSpeed - rawSpeed) : "—"}</small><small>{number(comparison.seconds) !== null ? `Еднакви валидни интервали: ${duration(comparison.seconds)} · претеглено по време, включително спускания и спирания` : "Нужно е обновяване за съпоставимо усредняване"}</small></article>
         <article><span>Среден пулс</span><strong>{fixed(cleanHr)} → {hrmodEnabled ? fixed(finalHr) : "off"} bpm</strong><small>Δ {hrmodEnabled && cleanHr !== null && finalHr !== null ? signed(finalHr - cleanHr) : "—"}</small></article>
         <article><span>Преразпределено по зони</span><strong>{duration(redistributedZoneSeconds)}</strong><small>½ Σ |HRmod final − Clean|</small></article>
         <article><span>HR вълни</span><strong>{text(hrDiagnostics.corrected_wave_count ?? 0)} коригирани</strong><small>{waves.length} открити общо</small></article>

@@ -60,7 +60,7 @@ def test_history_fails_closed_if_pinned_summary_belongs_to_other_activity(monkey
 def test_history_serves_only_the_current_normalized_model(monkeypatch, legacy):
     index = compute_trainability(
         [{"elapsed_s":t,"hr_raw_bpm":154} for t in range(442)],
-        [{"elapsed_s":t,"vflat_b65_kmh":20,"dt_s":1,"grade_raw_pct":0} for t in range(1,421)],
+        [{"elapsed_s":t,"speed_raw_kmh":20,"vflat_b65_kmh":20,"dt_s":1,"grade_raw_pct":0} for t in range(1,421)],
         zone_bounds_bpm=[50,137,147,158,170,178], hrmax_bpm=178,
         activity_duration_s=420, comparison_key="current", source_versions={},
     )
@@ -139,14 +139,20 @@ def test_causal_screen_uses_prior_same_sport_and_rejects_whole_activity_without_
     assert admit_activities(rows+[history_row(11,100)])[:len(rows)]==out
 
 
-def test_exact_twenty_percent_is_allowed_and_one_bad_zone_excludes_all():
+def test_exact_twenty_percent_is_allowed_and_one_bad_zone_preserves_other_bands():
     from apps.api.trainability_history import admit_activities
     base=[history_row(i) for i in range(1,8)]
     assert admit_activities(base+[history_row(8,6)])[-1]['index']['admission']['status']=='ACCEPTED'
     last=history_row(8);last['index']['zones'][0]['index']=3.99
     result=admit_activities(base+[last])[-1]['index']
     assert [b['zone'] for b in result['admission']['flagged_bands']]==['Z1']
-    assert not result['general']['valid']
+    assert result['general']['valid']
+    assert result['admission']['status']=='PARTIAL'
+    assert result['zones'][0]['candidate_index']==3.99
+    assert result['zones'][0]['index'] is None
+    next_index=admit_activities(base+[last,history_row(9)])[-1]['index']
+    checked={b['zone']:b['reference_count'] for b in next_index['admission']['checked_bands']}
+    assert checked['Z1']==7 and checked['GENERAL']==8
 
 
 def test_reference_excludes_signal_failures_other_settings_and_old_days():
