@@ -49,6 +49,31 @@ const data: EnergyHistory = {
   ],
 };
 describe("energy review", () => {
+  it.each([277.5, -277.5])("shows tomorrow's target and signed correction %s without future expenditure", (correction) => {
+    const tomorrow = "2026-11-20";
+    const forecast = { ...data.days[0], day: tomorrow, status: "FORECAST", weight_kg: 70,
+      targets: { kcal: 3000 + correction, protein_g: 112, protein_g_per_kg: 1.6,
+        energy_kcal_per_kg: (3000 + correction) / 70, protein_basis: "SEVEN_DAY_ENERGY_RULE" as const,
+        carbohydrate_g: 350, fat_g: 130, allocation_note: "Работна препоръка" },
+      nutrition_basis: { version: "nutrition-seven-day-quarter-v1", status: "AVAILABLE" as const,
+        target_day: tomorrow, provisional: true, window_start: "2026-11-12", window_end: "2026-11-18",
+        available_days: 7, missing_days: [], mean_expenditure_kcal: 3000,
+        last_day_expenditure_kcal: 3000 + correction * 4, deviation_percent: correction / 7.5,
+        deviation_kcal: correction * 4, nonprotein_carbohydrate_fraction: .6, weight_kg: 70, history: [],
+        correction_factor: .25, correction_kcal: correction, notes: ["Предварителна цел"],
+        food_preferences: { preferences: "", allergies: "" } } };
+    const html = renderToStaticMarkup(<EnergyDashboard canEdit data={{ ...data, tomorrow,
+      period_end: tomorrow, days: [...data.days, forecast] }} />);
+    expect(html).toContain("Хранителна цел за утре");
+    expect(html).toContain((3000 + correction).toLocaleString("bg-BG", {maximumFractionDigits: 0}));
+    expect(html).toContain(`корекция: ${correction > 0 ? "+" : ""}${correction.toLocaleString("bg-BG", {maximumFractionDigits: 0})} kcal`);
+    expect(html).toContain("7/7 дни");
+    expect(html).toContain("Предварителна цел");
+    expect(html).toContain(`/assistant?energy_date=${tomorrow}`);
+    expect(html).toMatch(/name="effective_from"[^>]*value="2026-11-19"/);
+    expect(html).not.toContain("Оценен разход до момента");
+    expect(html).not.toContain("Подробности за тренировките");
+  });
   it("does not display incomplete totals as zero or offer calorie targets", () => {
     const html = renderToStaticMarkup(
       <EnergyDashboard data={data} canEdit={false} />,

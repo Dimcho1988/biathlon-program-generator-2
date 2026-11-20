@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from .response_monitoring import InputModel
 from .response_service import ResponseStore
 from . import energy_model as model
+from . import nutrition_recommendations as nutrition
 
 
 class NutritionProfile(InputModel):
@@ -136,25 +137,28 @@ def history(repository, alias, start=None, end=None, now=None):
         ZoneInfo(settings.timezone)
     )
     today = evaluated_at.date()
-    end = end or today
+    tomorrow = today + timedelta(days=1)
+    end = end or tomorrow
     start = start or end - timedelta(days=29)
-    if start <= date.min or start > end or (end - start).days >= 90 or end > today:
-        raise HTTPException(422, "Изберете период от 1 до 90 дни до днес.")
+    if start <= date.min + timedelta(days=8) or start > end or (end - start).days >= 90 or end > tomorrow:
+        raise HTTPException(422, "Изберете период от 1 до 90 дни до утре включително.")
+    # Fetch the same donors even for a single-day request or a changed chart range.
+    history_start = min(start, today) - timedelta(days=7)
     entries = ResponseStore(repository).entries(alias)
     calendar = repository.active_activity_calendar(
-        alias, start - timedelta(days=1), end
+        alias, history_start - timedelta(days=1), min(end, today)
     )
     if not calendar:
         raise HTTPException(409, "Липсва обработена история на активностите.")
     snapshot = calendar.get("snapshot_payload") or {}
     wellness = snapshot.get("wellness_calendar") or []
     imported = snapshot.get("nutrition_body_inputs") or {}
-    catalog = calendar["activities"]
+    catalog = [r for r in calendar["activities"] if r.get("local_date", "9999") <= str(today)]
     days = {}
     contexts = {}
     inputs = None
-    for i in range((end - start).days + 1):
-        day = start + timedelta(days=i)
+    for i in range((end - history_start).days + 1):
+        day = history_start + timedelta(days=i)
         p = resolved_profile(entries, wellness, imported, day)
         days[str(day)] = {
             "day": str(day),
@@ -366,7 +370,7 @@ def history(repository, alias, start=None, end=None, now=None):
                 p["outside_factor"],
                 p["outside_cho_fraction"],
             )
-            if rmr and d["weight_kg"] and duration <= day_seconds and not invalid_time
+            if day <= today and rmr and d["weight_kg"] and duration <= day_seconds and not invalid_time
             else None
         )
         model.add(total, act)
@@ -382,6 +386,8 @@ def history(repository, alias, start=None, end=None, now=None):
             p and outside and complete and in_range and not invalid_time and day < today
         )
         reasons = []
+        if day > today:
+            reasons.append("Бъдещ ден: хранителната цел е предварителна; няма отчетен енергоразход.")
         if day == today:
             reasons.append("Текущ ден: показана е сумата до момента.")
         if not d["weight_kg"]:
@@ -396,7 +402,7 @@ def history(repository, alias, start=None, end=None, now=None):
             reasons.append("Има активност без валидна продължителност.")
         if invalid_time or duration > day_seconds:
             reasons.append("Проверете припокриващи се записи или активности през полунощ; дневният сбор може да е неточен.")
-        if not in_range:
+        if not in_range and day <= today:
             reasons.append("Датата е извън обработената история.")
         d.update(
             activity=model.grams(act),
@@ -406,7 +412,7 @@ def history(repository, alias, start=None, end=None, now=None):
             coverage_percent=100 * known / duration if duration else None,
             estimated_activity_seconds=estimated,
             unknown_activity_seconds=unknown,
-            status="MODELLED" if ready else "PARTIAL",
+            status="FORECAST" if day > today else "MODELLED" if ready else "PARTIAL",
             resting_basis=basis,
             reason=" ".join(reasons) or None,
             outside_factor=p["outside_factor"],
@@ -415,14 +421,12 @@ def history(repository, alias, start=None, end=None, now=None):
                 "movement_outside_kcal": outside["kcal"] * (1 - 1 / p["outside_factor"]) if outside else None,
                 "activity_kcal": act["kcal"] if any(a["kcal"] is not None for a in d["activities"]) or outside else None,
             },
-            targets=model.dietary_targets(
-                total["kcal"] if ready else None,
-                d["weight_kg"],
-                duration / 3600,
-                bool(p.get("birth_year") and day.year - p["birth_year"] - 1 >= 18),
-                total["carbohydrate_kcal"] / (total["carbohydrate_kcal"] + total["fat_kcal"])
-                if total["carbohydrate_kcal"] + total["fat_kcal"] > 0 else 0.5,
-            ),
+        )
+    visible_days = [d for key, d in days.items() if key >= str(start)]
+    for d in visible_days:
+        day = date.fromisoformat(d["day"])
+        d["targets"], d["nutrition_basis"] = nutrition.recommend(
+            day, today, days, resolved_profile(entries, wellness, imported, day)
         )
     latest = profile_on(entries, end)
     profile = resolved_profile(entries, wellness, imported, end)
@@ -430,12 +434,14 @@ def history(repository, alias, start=None, end=None, now=None):
     if not profile.get("height_cm") and not profile.get("resting_kcal"):
         missing.append("height_cm")
     return {
-        "menu_guidance": "За хранителен режим първо прочети energy за избрания ден. Разграничавай окислени\nсубстрати от препоръчителен прием; белтъчният прием не е равен на окислените белтъчини.\nИзползвай targets като ориентир за поддържане на теглото, не задавай автоматичен\nдефицит. При частичен ден използвай само резервната белтъчна цел от targets; не измисляй калории или други макронутриенти за целия ден. Ако targets липсват, не задавай количествена цел. Преди конкретно меню провери посочени алергии, непоносимости\nи хранителни предпочитания; ако не са уточнени, попитай. Дай конкретни храни,\nграмажи, сурово/сготвено тегло, разпределение преди/след тренировка и сбор на\nориентировъчните kcal и макронутриенти за всяко хранене и деня. Провери сумите\nспрямо целта, обозначи хранителните стойности като приблизителни. Това е\nпредложено меню, не отчетен прием или доказан енергиен баланс. Не екстраполирай\nмодела за покой или за непокрити активности. За лица под 18 г. не предписвай\nавтоматични количествени диети; насочи към индивидуален преглед от специалист.\n",
+        "menu_guidance": nutrition.MENU_GUIDANCE,
+        "nutrition_version": nutrition.VERSION,
         "schema_version": model.VERSION,
         "calculation_version": model.CALCULATION_VERSION,
         "period_start": str(start),
         "period_end": str(end),
         "today": str(today),
+        "tomorrow": str(tomorrow),
         "timezone": settings.timezone,
         "evaluated_at": evaluated_at.isoformat(),
         "generation_id": calendar.get("generation_id"),
@@ -452,7 +458,7 @@ def history(repository, alias, start=None, end=None, now=None):
             }
             for r in profile_entries(entries)
         ],
-        "days": list(days.values()),
+        "days": visible_days,
         "assumptions": [
             "Измерен пулс по участъци; при липса — позиция в същата зона по наличния скоростен модел. Това преобразуване не е независимо валидирано за енергоразход.",
             "Кубичният модел се прилага при 50–100% HRmax. Под 50% се използва работен преход от покоя при 30% HRmax до долната граница на регресията; над 100% се използва горната граница. Тези участъци са резервни оценки. HRmod не заменя измерения пулс.",
@@ -464,10 +470,13 @@ def history(repository, alias, start=None, end=None, now=None):
             "Белтъчини: 3,28% от енергията при активност и 0,81 mg/kg/min извън нея са групови ориентири, не индивидуални измервания. Прилагането им към кратки/интервални активности е екстраполация.",
             "Извън активности: разходът в покой × оставащото време × избрания фактор. Въглехидратният дял е допускане от профила. Крачките не се добавят втори път.",
             "Грамовете са енергийни еквиваленти (4/9/4 kcal/g), не измерена загуба на тъкани. Хранителният прием се препоръчва отделно.",
-            "Дневният разход предполага, че всички активности са записани. Текущият ден има само резервна белтъчна цел, когато има тегло и потвърден пълнолетен профил.",
-            "Хранителни белтъчини: 1,6 g/kg до 40 kcal/kg; линейно до 1,9 g/kg при 80 kcal/kg; над това 1,9 g/kg. При непълен ден — 1,8 g/kg. Това е работно правило на приложението, не валидирана зависимост. Останалите калории следват оцененото съотношение въглехидрати/мазнини.",
+            "Дневният разход предполага, че всички активности са записани. Хранителната цел е отделна прогноза от предходните 7 завършени дни: среден разход плюс 25% от положителното или отрицателното отклонение на последния ден. Текущите частични данни не участват. За утре целта е предварителна до приключване на днешния ден.",
+            "При липсващи дни се използват наличните пълни дни в същия седемдневен период, без нулево попълване. При липса на пълен последен ден няма корекция. Коефициентът 0,25 не гарантира точност и не е физиологично валидиран. Бъдещата тренировъчна програма не променя автоматично тази цел.",
+            "Хранителни белтъчини: 1,6 g/kg до 40 целеви kcal/kg; линейно до 1,9 g/kg при 80 kcal/kg; над това 1,9 g/kg. Без завършена история — резервни 1,8 g/kg. Това е работно правило. След белтъчините останалата енергия следва съотношението от сумарните въглехидратни и мастни kcal за използваните дни, не средното на дневните проценти.",
         ],
         "references": [
+            "https://pmc.ncbi.nlm.nih.gov/articles/PMC6839090/",
+            "https://pubmed.ncbi.nlm.nih.gov/21660838/",
             "https://pubmed.ncbi.nlm.nih.gov/40135445/",
             "https://pubmed.ncbi.nlm.nih.gov/40117058/",
             "https://pubmed.ncbi.nlm.nih.gov/2305711/",

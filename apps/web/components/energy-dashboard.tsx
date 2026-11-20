@@ -16,7 +16,8 @@ const sources = [
 const n = (v: number | null | undefined, d = 0) =>
   v == null ? "—" : v.toLocaleString("bg-BG", { maximumFractionDigits: d });
 const dailyValue = (d: EnergyDay) => d.total ?? (d.outside || d.activity.kcal > 0 ? d.accounted : null);
-const dailyLabel = (d: EnergyDay, today: string) => d.total ? "Целият ден · моделна оценка"
+const dailyLabel = (d: EnergyDay, today: string) => d.status === "FORECAST" ? "Предварителна хранителна цел"
+  : d.total ? "Целият ден · моделна оценка"
   : !dailyValue(d) ? "Няма оценка" : d.day === today ? "До момента · частична сума" : "Частична сума";
 const inputLabels = { sex: "пол", weight_kg: "тегло", height_cm: "ръст", birth_year: "година на раждане" };
 
@@ -24,7 +25,7 @@ function ProfileForm({ data, day, canEdit }: { data: EnergyHistory; day: EnergyD
   const router = useRouter();
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const [effective, setEffective] = useState(day.day);
+  const [effective, setEffective] = useState(day.day > data.today ? data.today : day.day);
   const manual = data.profiles.filter(p => p.effective_from <= effective).at(-1);
   const p = data.profile;
   const missing = data.profile_missing ?? (!p ? ["sex", "weight_kg", "birth_year", "height_cm"] : []);
@@ -104,7 +105,8 @@ function ProfileForm({ data, day, canEdit }: { data: EnergyHistory; day: EnergyD
 }
 
 export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdit: boolean }) {
-  const [selected, setSelected] = useState(data.days.filter(d => d.day < data.today && dailyValue(d)).at(-1)?.day ?? data.days.at(-1)?.day ?? "");
+  const [selected, setSelected] = useState(data.days.find(d => d.day === data.tomorrow)?.day
+    ?? data.days.filter(d => d.day < data.today && dailyValue(d)).at(-1)?.day ?? data.days.at(-1)?.day ?? "");
   const [view, setView] = useState<"energy" | "g" | "kcal" | "fuel_g" | "fuel_kcal">("energy");
   const day = data.days.find(d => d.day === selected) ?? data.days.at(-1);
   const fuel = view === "fuel_g" || view === "fuel_kcal";
@@ -121,7 +123,7 @@ export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdi
     <section className="energy-panel">
       <form method="get" className="energy-period">
         <label>От<input type="date" name="start" required defaultValue={data.period_start} /></label>
-        <label>До<input type="date" name="end" max={data.today} required defaultValue={data.period_end} /></label>
+        <label>До<input type="date" name="end" max={data.tomorrow ?? data.today} required defaultValue={data.period_end} /></label>
         <button className="action-button secondary">Покажи</button>
       </form>
       <div className="energy-heading"><h2>Дневна динамика</h2>
@@ -136,9 +138,9 @@ export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdi
       <p className="energy-caption">{view === "energy"
         ? "Щрихованите колони показват само оценената част. Липсващ разход не означава нула."
         : fuel ? "Оценени окислени въглехидрати и мазнини за отчетената част от деня. Белтъчините са показани отделно като цел за прием."
-        : "Разпределение на хранителните цели. При непълен ден е налична само резервната белтъчна цел."}</p>
+        : "Цели за прием според предходните 7 завършени дни с корекция 25% от отклонението на последния ден. За утре целта е предварителна."}</p>
       <div className="energy-bars" role="group" aria-label="Избери ден от графиката">
-        {data.days.map(d => <button key={d.day} type="button" className={`energy-daybar ${d.total ? "" : "partial"} ${selected === d.day ? "selected" : ""}`}
+        {data.days.map(d => <button key={d.day} type="button" className={`energy-daybar ${(view === "energy" || fuel ? d.total : d.targets?.kcal) ? "" : "partial"} ${selected === d.day ? "selected" : ""}`}
           aria-label={`${d.day}: ${view === "energy" ? `${n(dailyValue(d)?.kcal)} kcal, ${dailyLabel(d, data.today)}` : fuel ? fuelLabel(d) : macros.map(([k, label]) => `${label} ${n(d.targets?.[`${k}_g`])} g`).join(", ")}`}
           title={fuel ? `${d.day}: ${fuelLabel(d)}` : undefined}
           aria-pressed={selected === d.day} onClick={() => setSelected(d.day)}>
@@ -152,10 +154,10 @@ export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdi
       <details><summary>Дневни стойности</summary>
         <div className="energy-table energy-daily-table" tabIndex={0} aria-label="Дневни калории и хранителни цели">
           <table><caption>Разход и цели за прием · избери ден за подробности</caption>
-            <thead><tr><th>Дата</th><th>Разход · kcal</th>{macros.map(([k, label]) => <th key={k}>{label} · g</th>)}<th>Обхват</th></tr></thead>
+            <thead><tr><th>Дата</th><th>Разход · kcal</th><th>Цел за прием · kcal</th>{macros.map(([k, label]) => <th key={k}>{label} · g</th>)}<th>Обхват</th></tr></thead>
             <tbody>{[...data.days].reverse().map(d => <tr key={d.day} className={selected === d.day ? "selected" : undefined}>
               <th scope="row"><button type="button" onClick={() => setSelected(d.day)}>{d.day}</button></th>
-              <td>{n(dailyValue(d)?.kcal)}</td>{macros.map(([k]) => <td key={k}>{n(d.targets?.[`${k}_g`])}</td>)}
+              <td>{n(dailyValue(d)?.kcal)}</td><td>{n(d.targets?.kcal)}</td>{macros.map(([k]) => <td key={k}>{n(d.targets?.[`${k}_g`])}</td>)}
               <td>{dailyLabel(d, data.today)}{d.targets?.protein_basis === "INCOMPLETE_DAY_FALLBACK" ? " · резервни белтъчини" : ""}</td>
             </tr>)}</tbody>
           </table>
@@ -166,27 +168,35 @@ export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdi
       <section className="energy-panel">
         <div className="energy-heading"><h2>{day.day}</h2><label>Избери ден<select value={day.day} onChange={e => setSelected(e.target.value)}>
           {data.days.map(d => <option key={d.day}>{d.day}</option>)}</select></label></div>
-        <div className="energy-total"><span>{day.total ? "Общ дневен разход" : "Оценен разход до момента"}</span>
+        {day.status !== "FORECAST" && <><div className="energy-total"><span>{day.total ? "Общ дневен разход" : "Оценен разход до момента"}</span>
           <strong>{n(dailyValue(day)?.kcal)} <small>kcal</small></strong>
           <p>{dailyValue(day) ? dailyLabel(day, data.today) : "Няма пълна дневна оценка"}</p></div>
         <div className="energy-cards">{sources.map(([k, label]) => <article key={k}><span>{label}</span>
           <strong>{n(day.energy_sources?.[k])} <small>kcal</small></strong></article>)}</div>
-        <p className="energy-caption">Тренировките включват разхода в покой за същото време. Той е изключен от останалите две стойности, така че няма двойно броене.</p>
+        <p className="energy-caption">Тренировките включват разхода в покой за същото време. Той е изключен от останалите две стойности, така че няма двойно броене.</p></>}
         {day.reason && <p className="energy-notice">{day.reason}</p>}
-        <h3>Хранителни цели</h3>
+        <h3>{day.day === data.tomorrow ? "Хранителна цел за утре" : "Хранителни цели"}</h3>
+        {day.targets?.kcal != null && <div className="energy-total"><span>Препоръчителен прием</span>
+          <strong>{n(day.targets.kcal)} <small>kcal</small></strong></div>}
+        {day.nutrition_basis && <>
+          <p>Среден разход: {n(day.nutrition_basis.mean_expenditure_kcal)} kcal · корекция: {(day.nutrition_basis.correction_kcal ?? 0) > 0 ? "+" : ""}{n(day.nutrition_basis.correction_kcal)} kcal.</p>
+          <p className="energy-caption">История: {day.nutrition_basis.window_start} – {day.nutrition_basis.window_end} · {day.nutrition_basis.available_days}/7 дни.
+            {day.nutrition_basis.deviation_percent != null && <> Последният ден: {day.nutrition_basis.deviation_percent > 0 ? "+" : ""}{n(day.nutrition_basis.deviation_percent, 1)}% спрямо средното; използвани са 25% от отклонението.</>}</p>
+          {day.nutrition_basis.notes.map(note => <p key={note} className="energy-caption">{note}</p>)}
+        </>}
         {day.targets ? <>
           <div className="energy-cards">{macros.map(([k, label, color, factor]) => <article key={k} style={{ borderTop: `3px solid ${color}` }}>
             <span>{label}</span><strong>{n(day.targets?.[`${k}_g`])} <small>g</small></strong>
-            <p>{day.targets?.[`${k}_g`] != null ? `${n(day.targets[`${k}_g`]! * factor)} kcal` : "Изчаква пълен дневен отчет"}</p>
+            <p>{day.targets?.[`${k}_g`] != null ? `${n(day.targets[`${k}_g`]! * factor)} kcal` : day.nutrition_basis ? "Необходима е завършена история" : "Изчаква пълен дневен отчет"}</p>
           </article>)}</div>
           <p>Белтъчини: {n(day.targets.protein_g_per_kg, 2)} g/kg · тегло {n(day.weight_kg, 1)} kg.
-            {day.targets.energy_kcal_per_kg != null && <> Дневен разход: {n(day.targets.energy_kcal_per_kg, 1)} kcal/kg.</>}</p>
+            {day.targets.energy_kcal_per_kg != null && <> Цел за прием: {n(day.targets.energy_kcal_per_kg, 1)} kcal/kg.</>}</p>
           <p className="energy-caption">{day.targets.allocation_note}</p>
         </> : <p>За хранителна цел са необходими тегло и данни за възрастта. При непълнолетни целите се определят индивидуално.</p>}
         <Link className="action-button secondary" href={`/assistant?energy_date=${encodeURIComponent(day.day)}`}>Обсъди меню с ИИ</Link>
       </section>
       <ProfileForm key={`${day.day}-${data.profile_revision}`} data={data} day={day} canEdit={canEdit} />
-      <details className="energy-panel"><summary>Подробности за тренировките</summary>
+      {day.status !== "FORECAST" && <details className="energy-panel"><summary>Подробности за тренировките</summary>
         {day.activities.length === 0 ? <p>Няма записани активности за деня.</p> : day.activities.map(a => <details key={a.activity_ref}>
           <summary>{a.method === "STRENGTH_MET" ? "Силова тренировка" : a.sport} · {n(a.duration_s / 60)} min · {n(a.kcal)} kcal
             {a.method === "STRENGTH_MET" ? ` · приблизително по ${n(a.met, 1)} MET` : ""}</summary>
@@ -205,7 +215,7 @@ export function EnergyDashboard({ data, canEdit }: { data: EnergyHistory; canEdi
               <td>{n(t.kcal)}</td><td>{n(t.carbohydrate_g, 1)}</td><td>{n(t.fat_g, 1)}</td></tr>)}</tbody>
           </table></div>
         </details>)}
-      </details>
+      </details>}
     </>}
     <details className="energy-panel"><summary>Методика и ограничения</summary>
       <ul>{data.assumptions.map(t => <li key={t}>{t}</li>)}</ul>

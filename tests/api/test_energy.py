@@ -265,8 +265,9 @@ def test_rest_day_total_and_today_partial():
     assert rest["total"]["kcal"] == 2160
     assert rest["activity"]["kcal"] == 0
     assert rest["targets"]["protein_g"] == pytest.approx(108.8)
-    assert current["total"] is None and current["targets"]["kcal"] is None
-    assert current["targets"]["protein_g"] == pytest.approx(122.4)
+    assert current["total"] is None and current["targets"]["kcal"] == 2160
+    assert current["targets"]["protein_g"] == pytest.approx(108.8)
+    assert current["nutrition_basis"]["window_end"] == "2026-11-18"
     assert current["outside"]["kcal"] == pytest.approx(1800 * 1.2 * 13 / 24)
 
 
@@ -311,14 +312,14 @@ def test_strength_assumptions_are_dated_and_do_not_read_sensor_streams():
 
 def test_catalog_only_activity_completes_day_and_dietary_targets():
     d = strength_day(second_activity=True)
-    assert d["total"]["kcal"] == d["targets"]["kcal"]
+    assert d["total"]["kcal"] > d["targets"]["kcal"] == 2160
     assert d["unknown_activity_seconds"] == 0
     assert d["estimated_activity_seconds"] == 5400
     assert d["outside"]["kcal"] == pytest.approx(1800 * 1.2 * 22.5 / 24)
     assert d["activities"][1]["source_seconds"]["sport_met"] == 1800
     assert all(d["accounted"][k + "_g"] > 0 for k in m.MACROS)
     assert all(d["targets"][k + "_g"] > 0 for k in m.MACROS)
-    assert sum(d["targets"][k + "_g"] * m.FACTORS[k] for k in m.MACROS) == pytest.approx(d["total"]["kcal"])
+    assert sum(d["targets"][k + "_g"] * m.FACTORS[k] for k in m.MACROS) == pytest.approx(d["targets"]["kcal"])
     assert "90.0 min" in d["reason"]
 
 
@@ -328,7 +329,7 @@ def test_no_estimate_without_weight_or_duration(sport, duration, entries):
     d = strength_day(sport=sport, duration=duration, entries=entries)
     assert d["activities"][0]["kcal"] is None
     assert d["total"] is None
-    assert d["targets"] is None if entries == [] else d["targets"]["kcal"] is None
+    assert d["targets"] is None if entries == [] else d["targets"]["kcal"] == 2160
 
 
 @pytest.mark.parametrize("sport", ["Run", "Ride", "NordicSki", "Swim", "Yoga", "Other"])
